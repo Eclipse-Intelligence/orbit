@@ -31,6 +31,10 @@ npm run dev
 
 `npm run db:reset` drops the `crm` and `private` schemas and the local auth users, then sets up again. It refuses to run when it detects hosted Supabase Auth.
 
+## Microsoft inbox
+
+Set `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, and the redirect URI registered on the Entra app. Delegated permissions are `Mail.Read`, `User.Read`, and `offline_access`. Restart the server, open Inbox, and connect the mailbox. Received mail is attached to a contact by email address, or to a company by domain.
+
 ## Hosted Supabase
 
 Set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`. Do not run `supabase/bootstrap/local-auth.sql` there. Apply the files in `supabase/migrations` in order with a role that can create schemas. Point `DATABASE_URL` at the `crm_app` role (or another role that can `SET ROLE authenticated` and `SET ROLE crm_agent`). Keep the service role on the server. Do not put it in an agent token or a `NEXT_PUBLIC_` variable.

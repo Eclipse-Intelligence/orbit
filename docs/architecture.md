@@ -50,7 +50,9 @@ Company, contact, opportunity, and task references must belong to the same works
 
 ## Conversations
 
-`record_email` and `record_meeting` file an interaction on a contact matched by email, or on a company matched by the email's domain. When that company has no open next action, the CRM adds a follow-up due in two days. Gmail, Outlook, and calendar OAuth are not connected here. Those providers need an OAuth app of your own, separate from Supabase.
+`record_email` and `record_meeting` file an interaction on a contact matched by email, or on a company matched by the email's domain. When that company has no open next action, the CRM adds a follow-up due in two days.
+
+The inbox connects one Microsoft mailbox per user. `MICROSOFT_CLIENT_ID` and `MICROSOFT_CLIENT_SECRET` come from an Entra app with delegated `Mail.Read`, `User.Read`, and `offline_access`. The refresh token is encrypted with `APP_SECRET`. Opening the inbox, or choosing Sync, reads messages received since the last sync (the first sync looks back 14 days, up to 100 messages). A message attaches to a contact by email address, otherwise to a company by domain. The mailbox's own address is not the contact. A match from the last 48 hours files an email activity and, when the company has no open next action, suggests a follow-up. Mail that matches neither stays in the inbox as not attached. Gmail and calendar sync are not connected.
 
 ## Quiet relationships
 
@@ -58,4 +60,4 @@ A company is quiet when its latest activity is older than 21 days, or it has nev
 
 ## What is left for you
 
-Hosted Supabase is not provisioned from this environment. Point the app at your project when you have one, and do not run `supabase/bootstrap/local-auth.sql` there. Direct mailbox and calendar sync waits on your Google or Microsoft OAuth app.
+Hosted Supabase is not provisioned from this environment. Point the app at your project when you have one, and do not run `supabase/bootstrap/local-auth.sql` there. The Microsoft inbox starts once the Entra app credentials are in the environment. Gmail and calendar sync are still separate.

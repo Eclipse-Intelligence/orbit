@@ -11,6 +11,7 @@ import BuildingIcon from "@/public/assets/images/companies/sidebar/building.svg"
 import ClipboardIcon from "@/public/assets/images/companies/sidebar/clipboard.svg";
 import ListIcon from "@/public/assets/images/companies/sidebar/list.svg";
 import BookClosedIcon from "@/public/assets/images/companies/sidebar/book-closed.svg";
+import MailIcon from "@/public/assets/images/companies/sidebar/mail.svg";
 import TargetIcon from "@/public/assets/images/companies/sidebar/target-05.svg";
 import AlertIcon from "@/public/assets/images/companies/sidebar/alert-triangle.svg";
 import MessageIcon from "@/public/assets/images/companies/sidebar/message-question.svg";
@@ -60,6 +61,12 @@ export default function SidebarContent({
               icon={BookClosedIcon}
               label="Contacts"
               active={current("/contacts")}
+            />
+            <SidebarNavItem
+              href="/inbox"
+              icon={MailIcon}
+              label="Inbox"
+              active={current("/inbox")}
             />
             <SidebarNavItem
               href="/opportunities"
