@@ -7,6 +7,7 @@ import {
   upsertCompany,
 } from "@/lib/crm/companies";
 import { LIFECYCLES, type Actor, type CompanyWrite } from "@/lib/crm/types";
+import { registerOperationTools } from "@/server/mcp/operations";
 import { registerRelationshipTools } from "@/server/mcp/relationships";
 
 const writeShape = {
@@ -70,7 +71,7 @@ export function createCrmMcpServer(actor: Actor) {
     { name: "crm", version: "1.0.0" },
     {
       instructions:
-        "Workspace CRM tools. Companies match by domain, then by name when no domain is known. Contacts match by email, then LinkedIn, then the same name at the same company. Use add_lead to record a company, person, note, opportunity, and next action together. Activities are append-only.",
+        "Workspace CRM tools. Companies match by domain, then by name when no domain is known. Contacts match by email, then LinkedIn, then the same name at the same company. Use add_lead to record a company, person, note, opportunity, and next action together. Use record_email or record_meeting to file a conversation and suggest a follow-up. Activities are append-only.",
     },
   );
 
@@ -142,5 +143,6 @@ export function createCrmMcpServer(actor: Actor) {
   );
 
   registerRelationshipTools(server, actor);
+  registerOperationTools(server, actor);
   return server;
 }

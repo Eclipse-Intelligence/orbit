@@ -11,6 +11,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/_ui/sheet";
+import RecordTransfer from "@/components/crm/record-transfer";
 import SectionHeader from "@/components/crm/section-header";
 import { RecordList, RecordRow, RecordSelect } from "@/components/crm/record-form";
 import type { Viewer } from "@/components/crm/viewer";
@@ -52,16 +53,19 @@ export default function ContactsScreen({
         title="Contacts"
         viewer={viewer}
         action={
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={() => {
-              setEditing(null);
-              setOpen(true);
-            }}
-          >
-            Add contact
-          </Button>
+          <div className="flex items-center gap-1">
+            <RecordTransfer resource="contacts" />
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => {
+                setEditing(null);
+                setOpen(true);
+              }}
+            >
+              Add contact
+            </Button>
+          </div>
         }
       />
       <form action="/contacts" className="flex items-center gap-2 px-4 py-4">

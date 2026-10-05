@@ -7,6 +7,7 @@ import type { Viewer } from "@/components/crm/viewer";
 import { displayInitials } from "@/lib/companies";
 import { useCompaniesStore } from "@/stores/companies-store";
 import MenuIcon from "@/public/assets/images/_common/menu.svg";
+import SearchIcon from "@/public/assets/images/_common/search.svg";
 
 export default function SectionHeader({
   title,
@@ -18,11 +19,12 @@ export default function SectionHeader({
   action?: ReactNode;
 }) {
   const setSidebarOpen = useCompaniesStore((state) => state.setSidebarOpen);
+  const setSearchOpen = useCompaniesStore((state) => state.setSearchOpen);
   const openProfile = useCompaniesStore((state) => state.openProfile);
 
   return (
     <header className="border-border shrink-0 border-b">
-      <div className="flex items-center justify-between gap-2 px-4 py-[14px]">
+      <div className="flex flex-col gap-3 px-4 py-[14px] sm:flex-row sm:items-center sm:justify-between">
         <div className="flex min-w-0 items-center gap-2">
           <Button
             variant="secondary"
@@ -40,8 +42,17 @@ export default function SectionHeader({
             </span>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex flex-wrap items-center justify-start gap-2 sm:justify-end">
           {action}
+          <Button
+            variant="secondary"
+            size="icon"
+            aria-label="Search"
+            aria-keyshortcuts="Meta+K Control+K"
+            onClick={() => setSearchOpen(true)}
+          >
+            <SearchIcon aria-hidden className="size-3.5" />
+          </Button>
           <Notifications />
           <Button
             variant="secondary"

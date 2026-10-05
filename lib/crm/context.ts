@@ -1,5 +1,6 @@
 import type { Db } from "@/lib/db/pool";
 import { getPool } from "@/lib/db/pool";
+import { deliverDueWebhooks } from "@/lib/crm/webhooks";
 import type { Actor } from "@/lib/crm/types";
 
 export async function withActor<T>(
@@ -26,6 +27,7 @@ export async function withActor<T>(
     }
     const result = await fn(client);
     await client.query("commit");
+    void deliverDueWebhooks().catch(() => undefined);
     return result;
   } catch (error) {
     try {

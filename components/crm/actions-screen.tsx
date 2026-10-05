@@ -4,6 +4,7 @@ import { useActionState, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Input } from "@/components/_ui/input";
+import RecordTransfer from "@/components/crm/record-transfer";
 import SectionHeader from "@/components/crm/section-header";
 import { RecordList, RecordRow, RecordSelect } from "@/components/crm/record-form";
 import type { Viewer } from "@/components/crm/viewer";
@@ -51,7 +52,7 @@ export default function ActionsScreen({
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <SectionHeader title="Next actions" viewer={viewer} />
+      <SectionHeader title="Next actions" viewer={viewer} action={<RecordTransfer resource="tasks" />} />
       <div className="flex flex-wrap gap-2 px-4 pt-4">
         {VIEWS.map((item) => (
           <Button

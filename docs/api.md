@@ -116,6 +116,32 @@ Codes include `unauthorized` (401), `forbidden` (403), `not_found` (404), `inval
 
 ## Context
 
-`GET /api/v1/companies/:id/context` returns the company, its contacts, opportunities, recent activities, open next actions, `lastInteraction`, and `openTaskCount`.
+`GET /api/v1/companies/:id/context` returns the company, its contacts, opportunities, recent activities, open next actions, `lastInteraction`, `openTaskCount`, and `relationshipStatus` (`new`, `active`, `quiet`, or `needs_action`).
 
-`GET /api/v1/relationships/stale?days=21` returns companies whose latest activity is older than that many days, or that have no activity. `days` defaults to 21.
+`GET /api/v1/relationships/stale` lists companies with no interaction in the last 21 days. `days` and `limit` are optional.
+
+## Import and export
+
+`GET /api/v1/export/companies`, `/contacts`, `/opportunities`, `/activities`, and `/tasks` return CSV.
+
+`POST /api/v1/import/companies` and `POST /api/v1/import/contacts` accept `text/csv` or `{ "csv": "..." }`. Up to 50 rows. Companies match by domain. Contacts match by the usual contact rules and attach to a company with the same domain or name. A column that is absent stays as it is. An empty cell clears that field.
+
+## Communications
+
+`POST /api/v1/communications` accepts `{ "kind": "email" | "meeting", "title", "body", "participantEmails", "companyId", "contactId" }`. It files the activity and, when the company has no open next action, creates a suggested follow-up. Requires `activities:write`. The follow-up also requires `tasks:write`.
+
+## Bulk leads
+
+`POST /api/v1/leads/bulk` accepts `{ "leads": [ ... ], "provenance": {} }` with 1–50 leads. Each lead uses the single-lead rules and is saved on its own. The response is `{ "results": [ { "index": 0, "status": "created", "lead": {} } ] }`. `status` is `created` or `error`.
+
+## Pipeline
+
+`PUT /api/v1/pipeline` replaces the default pipeline stages. Send every stage to keep, with exactly one `isWon` and one `isLost`. Include `id` to update an existing stage. A stage that still has opportunities cannot be removed. Requires `opportunities:write`.
+
+## Webhooks
+
+`POST /api/v1/webhooks` requires `admin`. Body: `{ "url", "events": ["lead.created"], "description" }`. `201` returns `{ "endpoint", "secret" }`. The secret is shown once. URLs must be `https`, except `http://127.0.0.1` and `http://localhost` for development.
+
+`GET /api/v1/webhooks` lists endpoints without the secret. `DELETE /api/v1/webhooks/:id` archives one. `GET /api/v1/webhooks/deliveries` lists recent attempts.
+
+A delivery is `POST` JSON with headers `X-CRM-Event`, `X-CRM-Event-Id`, `X-CRM-Timestamp`, and `X-CRM-Signature: v1=<hex>`. The signature is HMAC SHA-256 of `{timestamp}.{body}` using the endpoint secret. A non-2xx response is retried for about three hours.

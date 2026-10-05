@@ -11,6 +11,7 @@ import type {
   Actor,
   CompanyContext,
   DueActions,
+  RelationshipStatus,
   StaleRelationship,
   TaskView,
 } from "@/lib/crm/types";
@@ -41,7 +42,19 @@ export async function getCompanyContext(actor: Actor, id: string): Promise<Compa
     tasks: openTasks,
     lastInteraction: activities.data[0] ?? null,
     openTaskCount: openTasks.length,
+    relationshipStatus: relationshipStatus(activities.data[0] ?? null, openTasks.length),
   };
+}
+
+function relationshipStatus(
+  last: { occurredAt: string } | null,
+  openTaskCount: number,
+): RelationshipStatus {
+  if (!last) return openTaskCount > 0 ? "active" : "new";
+  const days = (Date.now() - new Date(last.occurredAt).getTime()) / 86_400_000;
+  if (days > 21) return "quiet";
+  if (openTaskCount === 0) return "needs_action";
+  return "active";
 }
 
 export async function findStaleRelationships(
@@ -94,6 +107,17 @@ export async function findStaleRelationships(
     }
     return rows;
   });
+}
+
+export async function listAttention(actor: Actor) {
+  const [overdue, today] = await Promise.all([
+    getDueActions(actor, "overdue"),
+    getDueActions(actor, "today"),
+  ]);
+  return {
+    overdue: overdue.tasks.slice(0, 8),
+    today: today.tasks.slice(0, 8),
+  };
 }
 
 export async function getDueActions(actor: Actor, view: TaskView = "today"): Promise<DueActions> {

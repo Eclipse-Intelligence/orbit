@@ -36,7 +36,7 @@ Deletes archive. `archived_at` is set and the row stays. There is no hard delete
 
 ## Audit
 
-`crm.audit_events` is append-only. A trigger rejects updates and deletes, and those grants are not given out. Company create, update, and archive write an event with the actor type (`user` or `agent`), agent id, credential id, source, and source URL when the caller provides them. That table is also the future webhook outbox. Delivery, signatures, and retries are not built yet.
+`crm.audit_events` is append-only. A trigger rejects updates and deletes, and those grants are not given out. Mutations write an event with the actor type (`user` or `agent`), agent id, credential id, source, and source URL when the caller provides them. Each event also queues a delivery for every enabled webhook subscribed to that event type. Delivery signs the body with HMAC SHA-256 and retries a failed attempt for about three hours.
 
 ## People, opportunities, activity, and next actions
 
@@ -48,6 +48,14 @@ Activities are append-only. A company timeline reads activities stored against t
 
 Company, contact, opportunity, and task references must belong to the same workspace. That check is a trigger, so a foreign id cannot be attached even when the caller's row-level policy would otherwise hide it.
 
-## What this milestone does not do
+## Conversations
 
-Email and calendar sync, webhook delivery, and reporting beyond due and stale lists are not built. An empty timeline means no interaction has been recorded.
+`record_email` and `record_meeting` file an interaction on a contact matched by email, or on a company matched by the email's domain. When that company has no open next action, the CRM adds a follow-up due in two days. Gmail, Outlook, and calendar OAuth are not connected here. Those providers need an OAuth app of your own, separate from Supabase.
+
+## Quiet relationships
+
+A company is quiet when its latest activity is older than 21 days, or it has never had one. Company context also reports a relationship status: `new`, `active`, `quiet`, or `needs_action`.
+
+## What is left for you
+
+Hosted Supabase is not provisioned from this environment. Point the app at your project when you have one, and do not run `supabase/bootstrap/local-auth.sql` there. Direct mailbox and calendar sync waits on your Google or Microsoft OAuth app.

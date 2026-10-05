@@ -339,6 +339,8 @@ export type LeadResult = {
   contactMatchedOn: ContactMatch | null;
 };
 
+export type RelationshipStatus = "new" | "active" | "quiet" | "needs_action";
+
 export type CompanyContext = {
   company: Company;
   contacts: Contact[];
@@ -347,6 +349,7 @@ export type CompanyContext = {
   tasks: Task[];
   lastInteraction: Activity | null;
   openTaskCount: number;
+  relationshipStatus: RelationshipStatus;
 };
 
 export type StaleRelationship = {

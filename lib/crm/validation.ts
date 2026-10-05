@@ -196,6 +196,52 @@ export const leadSchema = z
   })
   .strict();
 
+export const bulkLeadSchema = z
+  .object({
+    leads: z.array(leadSchema.omit({ provenance: true })).min(1).max(50),
+    provenance: provenanceSchema.optional(),
+  })
+  .strict();
+
+export const communicationSchema = z
+  .object({
+    kind: z.enum(["email", "meeting"]),
+    title: nullableText,
+    body: nullableText,
+    occurredAt: nullableText,
+    participantEmails: z.array(z.string().max(200)).max(20).optional(),
+    companyId: z.uuid().nullable().optional(),
+    contactId: z.uuid().nullable().optional(),
+  })
+  .strict();
+
+export const webhookSchema = z
+  .object({
+    url: z.string().max(500),
+    events: z.array(z.string().max(80)).min(1).max(30),
+    description: nullableText,
+  })
+  .strict();
+
+export const pipelineStagesSchema = z
+  .object({
+    stages: z
+      .array(
+        z
+          .object({
+            id: z.uuid().optional(),
+            name: z.string(),
+            probability: z.number().int().optional(),
+            isWon: z.boolean().optional(),
+            isLost: z.boolean().optional(),
+          })
+          .strict(),
+      )
+      .min(2)
+      .max(20),
+  })
+  .strict();
+
 export function takeProvenance<T extends { provenance?: { source?: string | null; sourceUrl?: string | null } }>(
   input: T,
   operation: string,

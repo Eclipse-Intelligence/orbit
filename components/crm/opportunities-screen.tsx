@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useState } from "react";
+import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Input } from "@/components/_ui/input";
 import Tag from "@/components/_ui/tag";
@@ -12,10 +13,11 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/_ui/sheet";
+import RecordTransfer from "@/components/crm/record-transfer";
 import SectionHeader from "@/components/crm/section-header";
 import { RecordList, RecordRow, RecordSelect } from "@/components/crm/record-form";
 import type { Viewer } from "@/components/crm/viewer";
-import { saveOpportunityAction, type RecordActionState } from "@/app/(crm)/records";
+import { moveOpportunityStageAction, saveOpportunityAction, type RecordActionState } from "@/app/(crm)/records";
 import { formatMoney } from "@/lib/companies";
 import type { Company, Contact, Opportunity, PipelineStage } from "@/lib/crm/types";
 
@@ -27,6 +29,7 @@ export default function OpportunitiesScreen({
   companies,
   contacts,
   stages,
+  view,
 }: {
   viewer: Viewer;
   opportunities: Opportunity[];
@@ -35,7 +38,9 @@ export default function OpportunitiesScreen({
   companies: Company[];
   contacts: Contact[];
   stages: PipelineStage[];
+  view: "list" | "board";
 }) {
+  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Opportunity | null>(null);
   const [state, action, pending] = useActionState(saveOpportunityAction, {} as RecordActionState);
@@ -51,16 +56,25 @@ export default function OpportunitiesScreen({
         title="Opportunities"
         viewer={viewer}
         action={
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={() => {
-              setEditing(null);
-              setOpen(true);
-            }}
-          >
-            Add opportunity
-          </Button>
+          <div className="flex items-center gap-1">
+            <Button variant={view === "list" ? "secondary" : "ghost"} size="sm" href="/opportunities">
+              List
+            </Button>
+            <Button variant={view === "board" ? "secondary" : "ghost"} size="sm" href="/opportunities?view=board">
+              Board
+            </Button>
+            <RecordTransfer resource="opportunities" />
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => {
+                setEditing(null);
+                setOpen(true);
+              }}
+            >
+              Add opportunity
+            </Button>
+          </div>
         }
       />
       <form action="/opportunities" className="flex items-center gap-2 px-4 py-4">
@@ -78,6 +92,45 @@ export default function OpportunitiesScreen({
       <p className="caption-style text-subtle px-4 pb-2">
         {total} {total === 1 ? "opportunity" : "opportunities"}
       </p>
+      {view === "board" ? (
+        <div className="flex min-h-0 flex-1 gap-3 overflow-auto px-4 pb-4">
+          {stages.map((stage) => {
+            const cards = opportunities.filter((opportunity) => opportunity.stageId === stage.id);
+            return (
+              <section key={stage.id} className="bg-card flex w-64 shrink-0 flex-col gap-2 rounded-xl p-3">
+                <h2 className="text-[14px] leading-5">{stage.name}</h2>
+                <p className="caption-style text-subtle">{cards.length}</p>
+                {cards.map((opportunity) => (
+                  <div key={opportunity.id} className="border-border flex flex-col gap-2 rounded-lg border p-3">
+                    <span className="text-[14px] leading-5">{opportunity.name}</span>
+                    <span className="caption-style text-subtle">
+                      {opportunity.companyName ?? "No company"} · {formatMoney(opportunity.value, opportunity.currency)}
+                    </span>
+                    <label className="sr-only" htmlFor={`move-${opportunity.id}`}>
+                      Move {opportunity.name}
+                    </label>
+                    <select
+                      id={`move-${opportunity.id}`}
+                      className="border-line-strong bg-secondary h-9 rounded-lg border px-2 text-[14px]"
+                      value={opportunity.stageId ?? stage.id}
+                      onChange={async (event) => {
+                        await moveOpportunityStageAction(opportunity.id, event.target.value);
+                        router.refresh();
+                      }}
+                    >
+                      {stages.map((option) => (
+                        <option key={option.id} value={option.id}>
+                          {option.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ))}
+              </section>
+            );
+          })}
+        </div>
+      ) : (
       <RecordList count={opportunities.length} empty="No opportunities yet.">
         {opportunities.map((opportunity) => (
           <RecordRow
@@ -96,6 +149,7 @@ export default function OpportunitiesScreen({
           />
         ))}
       </RecordList>
+      )}
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent side="right" className="sm:w-[480px] sm:max-w-[480px]">
           <SheetHeader>

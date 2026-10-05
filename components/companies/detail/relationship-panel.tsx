@@ -76,6 +76,15 @@ export default function RelationshipPanel({
     <>
       <DetailSection title="Relationship">
         <p className="caption-style text-soft">
+          {context.relationshipStatus === "quiet"
+            ? "Quiet relationship"
+            : context.relationshipStatus === "needs_action"
+              ? "Needs a next action"
+              : context.relationshipStatus === "new"
+                ? "New relationship"
+                : "Active relationship"}
+        </p>
+        <p className="caption-style text-soft">
           {last
             ? `Last interaction ${formatWhen(last.occurredAt)}${last.title ? `: ${last.title}` : ""}`
             : "No interaction recorded."}

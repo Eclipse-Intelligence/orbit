@@ -44,6 +44,7 @@ export default async function OpportunitiesPage({
       companies={companies.data}
       contacts={contacts.data}
       stages={pipeline.stages}
+      view={params.get("view") === "board" ? "board" : "list"}
     />
   );
 }

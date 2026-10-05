@@ -4,6 +4,7 @@ import { upsertContactInDb } from "@/lib/crm/contacts";
 import { createActivityInDb } from "@/lib/crm/activities";
 import { CrmError } from "@/lib/crm/errors";
 import {
+  recordAudit,
   replayOrRun,
   requestHash,
   type MutationOptions,
@@ -13,6 +14,7 @@ import { createOpportunityInDb } from "@/lib/crm/opportunities";
 import { assertScope } from "@/lib/crm/scopes";
 import { createTaskInDb } from "@/lib/crm/tasks";
 import type { Actor, LeadInput, LeadResult, Provenance } from "@/lib/crm/types";
+import type { Db } from "@/lib/db/pool";
 
 function assertLeadScopes(actor: Actor, input: LeadInput) {
   assertScope(actor.scopes, "leads:write");
@@ -42,7 +44,26 @@ export async function ingestLead(
   const provenance: Provenance = options.provenance ?? { operation: "ingest_lead" };
   const hash = requestHash("ingest_lead", { input, provenance });
   return withActor(actor, (db) =>
-    replayOrRun(db, actor, options.idempotencyKey, hash, 200, async () => {
+    replayOrRun(db, actor, options.idempotencyKey, hash, 200, () =>
+      ingestLeadInDb(db, actor, input, provenance, note),
+    ),
+  );
+}
+
+export async function ingestLeadInDb(
+  db: Db,
+  actor: Actor,
+  input: LeadInput,
+  provenance: Provenance,
+  note = input.note?.trim() ?? "",
+) {
+  if (!input.company && !input.contact && !input.activity && !input.opportunity && !input.task && !note) {
+    throw new CrmError(
+      "invalid_input",
+      "A lead needs a company, contact, note, opportunity, or next action.",
+      400,
+    );
+  }
       const result: LeadResult = {
         company: null,
         contact: null,
@@ -161,7 +182,70 @@ export async function ingestLead(
         );
       }
 
+      const entityId =
+        result.company?.id ??
+        result.contact?.id ??
+        result.opportunity?.id ??
+        result.activity?.id ??
+        result.task?.id;
+      if (entityId) {
+        await recordAudit(db, actor, "lead.created", "lead", entityId, provenance, {
+          companyId: result.company?.id ?? null,
+          contactId: result.contact?.id ?? null,
+          companyCreated: result.companyCreated,
+          contactCreated: result.contactCreated,
+          opportunityId: result.opportunity?.id ?? null,
+          activityId: result.activity?.id ?? null,
+          taskId: result.task?.id ?? null,
+        });
+      }
+
       return result;
+}
+
+export async function bulkIngestLeads(
+  actor: Actor,
+  items: LeadInput[],
+  options: MutationOptions = {},
+): Promise<MutationOutcome<{ results: { index: number; status: "created" | "error"; lead?: LeadResult; error?: { code: string; message: string } }[] }>> {
+  if (!Array.isArray(items) || items.length === 0) {
+    throw new CrmError("invalid_input", "Provide at least one lead.", 400);
+  }
+  if (items.length > 50) {
+    throw new CrmError("invalid_input", "Submit at most 50 leads at a time.", 400);
+  }
+  for (const item of items) assertLeadScopes(actor, item);
+  const provenance = options.provenance ?? { operation: "bulk_ingest_leads" };
+  const hash = requestHash("bulk_ingest_leads", { items, provenance });
+  return withActor(actor, (db) =>
+    replayOrRun(db, actor, options.idempotencyKey, hash, 200, async () => {
+      const results: {
+        index: number;
+        status: "created" | "error";
+        lead?: LeadResult;
+        error?: { code: string; message: string };
+      }[] = [];
+      for (let index = 0; index < items.length; index += 1) {
+        await db.query("savepoint bulk_lead");
+        try {
+          const lead = await ingestLeadInDb(db, actor, items[index], provenance);
+          await db.query("release savepoint bulk_lead");
+          results.push({ index, status: "created", lead });
+        } catch (error) {
+          await db.query("rollback to savepoint bulk_lead");
+          await db.query("release savepoint bulk_lead");
+          if (error instanceof CrmError) {
+            results.push({
+              index,
+              status: "error",
+              error: { code: error.code, message: error.message },
+            });
+            continue;
+          }
+          throw error;
+        }
+      }
+      return { results };
     }),
   );
 }

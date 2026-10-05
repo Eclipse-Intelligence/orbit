@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   Command,
   CommandDialog,
@@ -12,19 +13,25 @@ import {
   CommandSeparator,
   Kbd,
 } from "@/components/_ui/command";
-import { CommandCompanyRow, CommandTableHeader } from "./command-table";
-import { searchCompaniesAction } from "@/app/(crm)/actions";
-import type { Company } from "@/lib/crm/types";
+import { searchWorkspaceAction } from "@/app/(crm)/search";
+import type { Company, Contact, Opportunity } from "@/lib/crm/types";
 import { useCompaniesStore } from "@/stores/companies-store";
 import PlusIcon from "@/public/assets/images/_common/plus.svg";
 
-export default function CommandMenu({ companies: pageCompanies }: { companies: Company[] }) {
+type Results = {
+  query: string;
+  companies: Company[];
+  contacts: Contact[];
+  opportunities: Opportunity[];
+};
+
+export default function CommandMenu() {
+  const router = useRouter();
   const open = useCompaniesStore((state) => state.searchOpen);
   const setOpen = useCompaniesStore((state) => state.setSearchOpen);
-  const openCompany = useCompaniesStore((state) => state.openCompany);
   const setNewCompanyOpen = useCompaniesStore((state) => state.setNewCompanyOpen);
   const [query, setQuery] = useState("");
-  const [remote, setRemote] = useState<{ query: string; rows: Company[] } | null>(null);
+  const [remote, setRemote] = useState<Results | null>(null);
   const actionRan = useRef(false);
 
   useEffect(() => {
@@ -53,18 +60,14 @@ export default function CommandMenu({ companies: pageCompanies }: { companies: C
 
   const trimmed = query.trim();
   const searching = Boolean(open && trimmed && remote?.query !== trimmed);
-  const companies = !trimmed
-    ? pageCompanies
-    : remote?.query === trimmed
-      ? remote.rows
-      : [];
+  const results = remote?.query === trimmed ? remote : null;
 
   useEffect(() => {
     if (!open || !trimmed) return;
     let cancelled = false;
     const handle = window.setTimeout(() => {
-      searchCompaniesAction(trimmed).then((rows) => {
-        if (!cancelled) setRemote({ query: trimmed, rows });
+      searchWorkspaceAction(trimmed).then((rows) => {
+        if (!cancelled) setRemote({ query: trimmed, ...rows });
       });
     }, 200);
     return () => {
@@ -79,13 +82,17 @@ export default function CommandMenu({ companies: pageCompanies }: { companies: C
     action();
   }
 
+  const empty = results
+    ? results.companies.length + results.contacts.length + results.opportunities.length === 0
+    : true;
+
   return (
     <CommandDialog
       open={open}
       onOpenChange={setOpen}
       title="Search"
-      description="Search companies by name, domain, or industry"
-      className="max-w-[960px]"
+      description="Search companies, people, and opportunities"
+      className="max-w-[640px]"
       onCloseAutoFocus={(event) => {
         if (actionRan.current) event.preventDefault();
         actionRan.current = false;
@@ -97,34 +104,83 @@ export default function CommandMenu({ companies: pageCompanies }: { companies: C
         <CommandInput
           value={query}
           onValueChange={setQuery}
-          placeholder="Search companies by name or domain"
+          placeholder="Search companies, people, and opportunities"
           trailing={<Kbd>Esc</Kbd>}
         />
-        <CommandTableHeader />
         <CommandList>
-          {companies.length === 0 && (
-            <p className="caption-style text-subtle px-4 py-6">
-              {searching
-                ? "Searching…"
-                : query.trim()
-                  ? `No companies for “${query.trim()}”`
-                  : "No companies yet."}
-            </p>
+          {searching && <p className="caption-style text-subtle px-4 py-6">Searching…</p>}
+          {!searching && trimmed && empty && (
+            <p className="caption-style text-subtle px-4 py-6">No records for “{trimmed}”</p>
           )}
-          <CommandGroup>
-            {companies.map((company) => (
-              <CommandCompanyRow
-                key={company.id}
-                company={company}
-                onSelect={() => run(() => openCompany(company))}
-              />
-            ))}
-          </CommandGroup>
+          {!trimmed && <p className="caption-style text-subtle px-4 py-6">Type a name, email, or domain.</p>}
+          {results && results.companies.length > 0 && (
+            <CommandGroup heading="Companies">
+              {results.companies.map((company) => (
+                <CommandItem
+                  key={company.id}
+                  value={company.id}
+                  onSelect={() => run(() => router.push(`/?record=${company.id}`))}
+                >
+                  <span className="flex min-w-0 flex-col">
+                    <span className="truncate">{company.name}</span>
+                    <span className="caption-style text-subtle truncate">{company.domain ?? "No domain"}</span>
+                  </span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          )}
+          {results && results.contacts.length > 0 && (
+            <CommandGroup heading="People">
+              {results.contacts.map((contact) => (
+                <CommandItem
+                  key={contact.id}
+                  value={contact.id}
+                  onSelect={() =>
+                    run(() =>
+                      router.push(`/contacts?q=${encodeURIComponent(contact.email || contact.name)}`),
+                    )
+                  }
+                >
+                  <span className="flex min-w-0 flex-col">
+                    <span className="truncate">{contact.name}</span>
+                    <span className="caption-style text-subtle truncate">
+                      {[contact.jobTitle, contact.companyName].filter(Boolean).join(" · ") || "No company"}
+                    </span>
+                  </span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          )}
+          {results && results.opportunities.length > 0 && (
+            <CommandGroup heading="Opportunities">
+              {results.opportunities.map((opportunity) => (
+                <CommandItem
+                  key={opportunity.id}
+                  value={opportunity.id}
+                  onSelect={() =>
+                    run(() => router.push(`/opportunities?q=${encodeURIComponent(opportunity.name)}`))
+                  }
+                >
+                  <span className="flex min-w-0 flex-col">
+                    <span className="truncate">{opportunity.name}</span>
+                    <span className="caption-style text-subtle truncate">
+                      {opportunity.companyName ?? "No company"}
+                    </span>
+                  </span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          )}
           <CommandSeparator />
           <CommandGroup heading="Actions">
             <CommandItem
               value="new-company"
-              onSelect={() => run(() => setNewCompanyOpen(true))}
+              onSelect={() =>
+                run(() => {
+                  setNewCompanyOpen(true);
+                  router.push("/");
+                })
+              }
             >
               <span className="bg-muted flex size-6 shrink-0 items-center justify-center rounded-md shadow-[0px_0px_0px_1px_#232323]">
                 <PlusIcon aria-hidden className="text-soft size-3" />

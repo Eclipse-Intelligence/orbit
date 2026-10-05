@@ -107,6 +107,22 @@ export async function saveOpportunityAction(
   }
 }
 
+export async function moveOpportunityStageAction(id: string, stageId: string): Promise<RecordActionState> {
+  const user = await requireUser();
+  try {
+    await updateOpportunity(
+      user,
+      id,
+      { stageId },
+      { provenance: { operation: "move_opportunity", source: "web" } },
+    );
+    refresh();
+    return { ok: true };
+  } catch (error) {
+    return actionError(error);
+  }
+}
+
 export async function saveActivityAction(
   _state: RecordActionState,
   formData: FormData,

@@ -17,9 +17,9 @@ The starting point was a Next.js 16 company table. The screens were useful. The 
 - Logo upload on create. There is no storage-backed logo yet.
 - The duplicate `app/page.tsx` that rendered the sample list with no session.
 
-## Left unavailable on purpose
+## Now recorded
 
-Contacts, opportunities, activities, and next actions are in the database schema so later work does not need a breaking redesign. They are not in the navigation as working pages. The sidebar marks them unavailable. Notifications say they are not recorded yet.
+Contacts, opportunities, activities, and next actions are real records. Notifications list due and overdue follow-ups. Quiet lists companies with no recent interaction. CSV import and export cover the core records. Webhooks deliver the audit events. Direct Gmail, Outlook, and calendar sync still needs an OAuth app you provide.
 
 ## Security notes from the prototype
 

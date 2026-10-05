@@ -51,4 +51,20 @@ That reads `CRM_AGENT_TOKEN` from the environment or `.env.local` and speaks MCP
 
 `find_stale_relationships` — companies with no recent interaction. `days` defaults to 21.
 
+`search_opportunities` — name, company, or stage.
+
+`archive_company`, `archive_contact`, `archive_opportunity`, `archive_next_action` — soft archive.
+
+`update_next_action` — partial update. `completed: true` marks it done.
+
+`record_email`, `record_meeting` — file a conversation by participant email or company, and suggest a follow-up when none is open.
+
+`bulk_add_leads` — up to 50 leads. Each result says `created` or `error`.
+
+`create_webhook` — admin only. Returns the signing secret once.
+
+`list_webhook_deliveries` — recent attempts and the last error.
+
+`configure_pipeline` — replace default stages. Keep one won stage and one lost stage.
+
 Matching is the domain and name rules in `docs/architecture.md`. An agent that calls `upsert_company` twice with the same domain gets one company. An agent that calls `add_lead` twice with the same email gets one contact.

@@ -3,6 +3,7 @@ import type { Db } from "@/lib/db/pool";
 import { actorKey } from "@/lib/crm/context";
 import { CrmError, isPgError } from "@/lib/crm/errors";
 import { stableStringify } from "@/lib/crm/normalize";
+import { enqueueWebhookDeliveries } from "@/lib/crm/webhooks";
 import type { Actor, Provenance } from "@/lib/crm/types";
 
 export type MutationOutcome<T> = {
@@ -69,12 +70,13 @@ export async function recordAudit(
   provenance: Provenance | undefined,
   changes: Record<string, unknown>,
 ) {
-  await db.query(
+  const inserted = await db.query<{ id: string }>(
     `insert into crm.audit_events (
       workspace_id, event_type, entity_type, entity_id, actor_type,
       actor_user_id, actor_agent_id, credential_id, source, source_url,
       operation, changes
-    ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb)`,
+    ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb)
+    returning id`,
     [
       actor.workspaceId,
       eventType,
@@ -90,6 +92,23 @@ export async function recordAudit(
       JSON.stringify(changes),
     ],
   );
+  const eventId = inserted.rows[0]?.id;
+  if (!eventId) return;
+  await enqueueWebhookDeliveries(db, actor.workspaceId, eventId, eventType, {
+    id: eventId,
+    type: eventType,
+    createdAt: new Date().toISOString(),
+    workspaceId: actor.workspaceId,
+    entity: { type: entityType, id: entityId },
+    actor: {
+      type: actor.type,
+      userId: actor.type === "user" ? actor.userId : null,
+      agentId: actor.type === "agent" ? actor.agentId : null,
+    },
+    source: provenance?.source ?? null,
+    sourceUrl: provenance?.sourceUrl ?? null,
+    data: changes,
+  });
 }
 
 export async function replayOrRun<T>(

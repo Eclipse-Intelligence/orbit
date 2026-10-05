@@ -6,7 +6,6 @@ import CompaniesToolbar from "./toolbar/toolbar";
 import CompaniesTable from "./table/companies-table";
 import CompanyDetail from "./detail/company-detail";
 import NewCompanyDialog from "./new-company/new-company-dialog";
-import CommandMenu from "./command-menu/command-menu";
 import { activeFilterCount } from "@/lib/companies";
 import { useCompaniesStore } from "@/stores/companies-store";
 import type { Viewer } from "@/components/crm/viewer";
@@ -74,7 +73,6 @@ export default function Companies({
         onArchived={removeLocal}
       />
       <NewCompanyDialog members={members} viewerId={viewer.id} onCreated={upsertLocal} />
-      <CommandMenu companies={rows} />
     </section>
   );
 }

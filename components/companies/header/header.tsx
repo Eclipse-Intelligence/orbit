@@ -15,7 +15,7 @@ export default function CompaniesHeader({ viewer }: { viewer: Viewer }) {
 
   return (
     <header className="border-border shrink-0 border-b">
-      <div className="flex items-center justify-between gap-2 px-4 py-[14px]">
+      <div className="flex flex-col gap-3 px-4 py-[14px] sm:flex-row sm:items-center sm:justify-between">
         <div className="flex min-w-0 items-center gap-2">
           <Button
             variant="secondary"
@@ -34,7 +34,7 @@ export default function CompaniesHeader({ viewer }: { viewer: Viewer }) {
           </div>
         </div>
 
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex flex-wrap items-center justify-start gap-2 sm:justify-end">
           <Button
             variant="secondary"
             size="icon"

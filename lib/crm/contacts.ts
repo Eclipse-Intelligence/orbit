@@ -237,6 +237,11 @@ async function readContact(db: Db, id: string) {
   return result.rows[0] ?? null;
 }
 
+export async function readContactInDb(db: Db, id: string) {
+  const row = await readContact(db, id);
+  return row ? mapContact(row) : null;
+}
+
 async function findMatch(db: Db, workspaceId: string, write: PreparedContact) {
   if (write.normalizedEmail) {
     const byEmail = await db.query<ContactRow>(
@@ -589,7 +594,7 @@ export async function upsertContact(
   actor: Actor,
   input: ContactWrite,
   options: MutationOptions = {},
-): Promise<MutationOutcome<{ contact: Contact; created: boolean; matchedOn: ContactMatch | null }>> {
+): Promise<MutationOutcome<{ contact: Contact; created: boolean; matchedOn: ContactMatch | null; changed: boolean }>> {
   assertScope(actor.scopes, "contacts:write");
   const provenance = options.provenance ?? { operation: "upsert_contact" };
   const hash = requestHash("upsert_contact", { input, provenance });
@@ -600,6 +605,7 @@ export async function upsertContact(
         contact: result.contact,
         created: result.created,
         matchedOn: result.matchedOn,
+        changed: result.changed,
       };
     }),
   );

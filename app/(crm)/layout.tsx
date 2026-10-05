@@ -3,6 +3,7 @@ import Sidebar from "@/components/_common/sidebar/sidebar";
 import CrmChrome from "@/components/crm/chrome";
 import { getUserActor } from "@/lib/auth/user";
 import { countCompanies } from "@/lib/crm/companies";
+import { listAttention } from "@/lib/crm/relationships";
 import { countOpenTasks } from "@/lib/crm/tasks";
 
 export const dynamic = "force-dynamic";
@@ -10,9 +11,10 @@ export const dynamic = "force-dynamic";
 export default async function CrmLayout({ children }: { children: React.ReactNode }) {
   const user = await getUserActor();
   if (!user) redirect("/login");
-  const [companyCount, openActionCount] = await Promise.all([
+  const [companyCount, openActionCount, attention] = await Promise.all([
     countCompanies(user),
     countOpenTasks(user),
+    listAttention(user),
   ]);
 
   return (
@@ -28,9 +30,11 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
           name: user.fullName || user.email,
           email: user.email,
           role: user.role,
-          workspaceName: user.workspaceName,
-        }}
-      >
+        workspaceName: user.workspaceName,
+      }}
+      overdue={attention.overdue}
+      today={attention.today}
+    >
         {children}
       </CrmChrome>
     </main>

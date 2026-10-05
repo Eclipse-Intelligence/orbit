@@ -16,6 +16,7 @@ import {
   parseSortValue,
   sortValue,
 } from "@/lib/companies";
+import RecordTransfer from "@/components/crm/record-transfer";
 import { downloadCsv } from "@/lib/csv";
 import type { CompanyListQuery, Member } from "@/lib/crm/types";
 import { useCompaniesStore } from "@/stores/companies-store";
@@ -138,6 +139,7 @@ export default function CompaniesToolbar({ filters, members = [] }: ToolbarProps
       </div>
 
       <div className="flex shrink-0 items-center gap-1">
+        <RecordTransfer resource="companies" mode="import" />
         <Button variant="secondary" size="sm" onClick={exportCsv} disabled={exporting}>
           <ShareIcon aria-hidden className="size-3" />
           {exporting ? "Exporting…" : "Export"}

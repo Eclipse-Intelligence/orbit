@@ -12,6 +12,8 @@ import ClipboardIcon from "@/public/assets/images/companies/sidebar/clipboard.sv
 import ListIcon from "@/public/assets/images/companies/sidebar/list.svg";
 import BookClosedIcon from "@/public/assets/images/companies/sidebar/book-closed.svg";
 import TargetIcon from "@/public/assets/images/companies/sidebar/target-05.svg";
+import AlertIcon from "@/public/assets/images/companies/sidebar/alert-triangle.svg";
+import MessageIcon from "@/public/assets/images/companies/sidebar/message-question.svg";
 
 type SidebarContentProps = {
   companyCount: number;
@@ -78,11 +80,23 @@ export default function SidebarContent({
               count={openActionCount}
               active={current("/actions")}
             />
+            <SidebarNavItem
+              href="/quiet"
+              icon={AlertIcon}
+              label="Quiet"
+              active={current("/quiet")}
+            />
           </SidebarSection>
         </nav>
       </ScrollArea>
 
       <SidebarSection className="border-sidebar-border shrink-0 border-t">
+        <SidebarNavItem
+          href="/settings"
+          icon={MessageIcon}
+          label="Settings"
+          active={current("/settings")}
+        />
         <Button
           variant="nav"
           size="md"
