@@ -1,6 +1,6 @@
-# Sales CRM
+# Orbit
 
-A workspace CRM for companies, people, opportunities, conversations, and next actions. The web app, versioned API, and MCP server share one domain service backed by PostgreSQL.
+Orbit is a workspace CRM for companies, people, opportunities, conversations, and next actions. The web app, versioned API, and MCP server share one domain service backed by PostgreSQL.
 
 ## Requirements
 

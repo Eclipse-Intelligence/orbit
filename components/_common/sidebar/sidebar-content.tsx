@@ -37,7 +37,7 @@ export default function SidebarContent({
         <Logo aria-hidden className="size-8 shrink-0 overflow-visible" />
         <div className="flex min-w-0 flex-col gap-1">
           <span className="lead-style block truncate font-medium tracking-[-0.01em]">
-            Sales CRM
+            Orbit
           </span>
           <span className="caption-style text-subtle block truncate">
             {workspaceName}

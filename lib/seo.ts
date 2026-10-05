@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 
-export const SITE_NAME = "Sales CRM";
+export const SITE_NAME = "Orbit";
 export const SITE_URL =
   process.env.NEXT_PUBLIC_SITE_URL ?? "https://example.com";
 export const SITE_DESCRIPTION =
