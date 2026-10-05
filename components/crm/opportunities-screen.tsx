@@ -24,7 +24,7 @@ import { moveOpportunityStageAction, saveOpportunityAction, type RecordActionSta
 import { saveStagesAction } from "@/app/(crm)/settings/actions";
 import type { StageDraft } from "@/lib/crm/pipeline";
 import { formatMoney } from "@/lib/companies";
-import type { Company, Contact, Opportunity, PipelineStage } from "@/lib/crm/types";
+import type { Company, Contact, Opportunity, OpportunityStatus, PipelineStage } from "@/lib/crm/types";
 
 export default function OpportunitiesScreen({
   viewer,
@@ -56,10 +56,18 @@ export default function OpportunitiesScreen({
   const [stageSource, setStageSource] = useState(stages);
   const [preview, setPreview] = useState<PipelineStage[] | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
+  const [placed, setPlaced] = useState(opportunities);
+  const [placedSource, setPlacedSource] = useState(opportunities);
+  const [cardPreview, setCardPreview] = useState<Opportunity[] | null>(null);
+  const [cardDragId, setCardDragId] = useState<string | null>(null);
+  const [dropStageId, setDropStageId] = useState<string | null>(null);
   const [savingOrder, setSavingOrder] = useState(false);
   const orderedRef = useRef(stages);
   const previewRef = useRef<PipelineStage[] | null>(null);
   const dragRef = useRef(false);
+  const placedRef = useRef(opportunities);
+  const cardPreviewRef = useRef<Opportunity[] | null>(null);
+  const cardDragRef = useRef(false);
   const boardRef = useRef<HTMLDivElement>(null);
   const saveChain = useRef(Promise.resolve());
   const saveGen = useRef(0);
@@ -68,11 +76,20 @@ export default function OpportunitiesScreen({
     setStageSource(stages);
     setOrdered(stages);
   }
+  if (placedSource !== opportunities && cardDragId === null) {
+    setPlacedSource(opportunities);
+    setPlaced(opportunities);
+  }
   const shown = preview ?? ordered;
+  const boardCards = cardPreview ?? placed;
 
   useEffect(() => {
     if (!dragRef.current) orderedRef.current = ordered;
   }, [ordered]);
+
+  useEffect(() => {
+    if (!cardDragRef.current) placedRef.current = placed;
+  }, [placed]);
 
   function enqueueStageSave(drafts: StageDraft[]) {
     const generation = ++saveGen.current;
@@ -108,7 +125,7 @@ export default function OpportunitiesScreen({
   }
 
   function beginDrag(event: ReactPointerEvent<HTMLElement>, stageId: string) {
-    if (event.button !== 0 || namingId) return;
+    if (event.button !== 0 || namingId || cardDragRef.current) return;
     const startX = event.clientX;
     const startY = event.clientY;
     let active = false;
@@ -191,6 +208,139 @@ export default function OpportunitiesScreen({
 
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+  }
+
+  function stageAt(clientX: number, clientY: number) {
+    const nodes = [...document.querySelectorAll<HTMLElement>("[data-stage-column]")];
+    for (const node of nodes) {
+      const rect = node.getBoundingClientRect();
+      const inside =
+        clientX >= rect.left &&
+        clientX <= rect.right &&
+        clientY >= rect.top &&
+        clientY <= rect.bottom;
+      if (inside) return node.dataset.stageId ?? null;
+    }
+    let nearest: { id: string; distance: number } | null = null;
+    for (const node of nodes) {
+      const rect = node.getBoundingClientRect();
+      if (clientY < rect.top - 24 || clientY > rect.bottom + 24) continue;
+      const distance = Math.abs(clientX - (rect.left + rect.width / 2));
+      const id = node.dataset.stageId;
+      if (!id) continue;
+      if (!nearest || distance < nearest.distance) nearest = { id, distance };
+    }
+    return nearest?.id ?? null;
+  }
+
+  function beginCardDrag(event: ReactPointerEvent<HTMLElement>, opportunityId: string) {
+    if (event.button !== 0 || dragRef.current || cardDragRef.current) return;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    let active = false;
+    let lastX = startX;
+    let lastY = startY;
+    let frame = 0;
+
+    function applyPoint(clientX: number, clientY: number) {
+      const target = stageAt(clientX, clientY);
+      setDropStageId(target);
+      if (!target) return;
+      const current = cardPreviewRef.current ?? placedRef.current;
+      const next = placeOpportunity(current, orderedRef.current, opportunityId, target);
+      if (!next || next === current) return;
+      cardPreviewRef.current = next;
+      setCardPreview(next);
+    }
+
+    function tick() {
+      if (!cardDragRef.current) return;
+      const board = boardRef.current;
+      if (board) {
+        const rect = board.getBoundingClientRect();
+        if (lastX > rect.right - 56) board.scrollLeft += 18;
+        else if (lastX < rect.left + 56) board.scrollLeft -= 18;
+      }
+      applyPoint(lastX, lastY);
+      frame = window.requestAnimationFrame(tick);
+    }
+
+    function onMove(move: PointerEvent) {
+      lastX = move.clientX;
+      lastY = move.clientY;
+      if (!active) {
+        if (Math.hypot(move.clientX - startX, move.clientY - startY) < 4) return;
+        active = true;
+        cardDragRef.current = true;
+        cardPreviewRef.current = placedRef.current.slice();
+        setCardDragId(opportunityId);
+        setCardPreview(cardPreviewRef.current);
+        frame = window.requestAnimationFrame(tick);
+      }
+      applyPoint(move.clientX, move.clientY);
+    }
+
+    function onUp() {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.cancelAnimationFrame(frame);
+      const preview = cardPreviewRef.current;
+      const previous = placedRef.current;
+      cardPreviewRef.current = null;
+      cardDragRef.current = false;
+      setCardDragId(null);
+      setDropStageId(null);
+      setCardPreview(null);
+      if (!active) {
+        const opportunity = previous.find((item) => item.id === opportunityId);
+        if (opportunity) {
+          setEditing(opportunity);
+          setOpen(true);
+        }
+        return;
+      }
+      const moved = preview?.find((item) => item.id === opportunityId);
+      const before = previous.find((item) => item.id === opportunityId);
+      if (!moved?.stageId || !before || moved.stageId === before.stageId || !preview) return;
+      placedRef.current = preview;
+      setPlaced(preview);
+      void moveOpportunityStageAction(opportunityId, moved.stageId).then((result) => {
+        if (!result.error) {
+          router.refresh();
+          return;
+        }
+        placedRef.current = previous;
+        setPlaced(previous);
+        setBoardError(result.error);
+      });
+    }
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
+  function moveCard(opportunityId: string, direction: -1 | 1) {
+    if (dragRef.current || cardDragRef.current) return;
+    const current = placedRef.current;
+    const opportunity = current.find((item) => item.id === opportunityId);
+    if (!opportunity) return;
+    const index = orderedRef.current.findIndex((stage) => stage.id === opportunity.stageId);
+    const target = orderedRef.current[index + direction];
+    if (!target) return;
+    const next = placeOpportunity(current, orderedRef.current, opportunityId, target.id);
+    if (!next || next === current) return;
+    placedRef.current = next;
+    setPlaced(next);
+    setBoardError(null);
+    void moveOpportunityStageAction(opportunityId, target.id).then((result) => {
+      if (!result.error) {
+        router.refresh();
+        return;
+      }
+      placedRef.current = current;
+      setPlaced(current);
+      setBoardError(result.error);
+    });
   }
 
   function moveStage(stageId: string, direction: -1 | 1) {
@@ -289,7 +439,7 @@ export default function OpportunitiesScreen({
           onMouseLeave={() => setHovered(null)}
         >
           {shown.map((stage, index) => {
-            const cards = opportunities.filter((opportunity) => opportunity.stageId === stage.id);
+            const cards = boardCards.filter((opportunity) => opportunity.stageId === stage.id);
             return (
               <div
                 key={stage.id}
@@ -311,12 +461,13 @@ export default function OpportunitiesScreen({
                   onPointerDown={(event) => {
                     const target = event.target;
                     if (!(target instanceof Element)) return;
-                    if (target.closest("select, input, textarea, a, label, [data-opportunity]")) return;
+                    if (target.closest("input, textarea, a, label, [data-opportunity]")) return;
                     beginDrag(event, stage.id);
                   }}
                   className={cn(
                     "border-sidebar-border bg-sidebar-accent flex w-64 cursor-grab touch-none flex-col gap-2 rounded-xl border p-3 select-none",
                     dragId === stage.id && "cursor-grabbing opacity-70 ring-1 ring-white/15",
+                    cardDragId && dropStageId === stage.id && "ring-1 ring-white/25",
                   )}
                 >
                   {namingId === stage.id ? (
@@ -353,30 +504,24 @@ export default function OpportunitiesScreen({
                     <div
                       key={opportunity.id}
                       data-opportunity=""
-                      className="border-border bg-card flex cursor-auto flex-col gap-2 rounded-lg border p-3 select-text"
+                      tabIndex={0}
+                      aria-label={`${opportunity.name}, ${stage.name}`}
+                      aria-keyshortcuts="ArrowLeft ArrowRight"
+                      onPointerDown={(event) => beginCardDrag(event, opportunity.id)}
+                      onKeyDown={(event) => {
+                        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+                        event.preventDefault();
+                        moveCard(opportunity.id, event.key === "ArrowLeft" ? -1 : 1);
+                      }}
+                      className={cn(
+                        "border-border bg-card flex cursor-grab touch-none flex-col gap-2 rounded-lg border p-3 focus-visible:ring-2 focus-visible:ring-ring/60",
+                        cardDragId === opportunity.id && "cursor-grabbing opacity-70",
+                      )}
                     >
                       <span className="text-[14px] leading-5">{opportunity.name}</span>
                       <span className="caption-style text-subtle">
                         {opportunity.companyName ?? "No company"} · {formatMoney(opportunity.value, opportunity.currency)}
                       </span>
-                      <label className="sr-only" htmlFor={`move-${opportunity.id}`}>
-                        Move {opportunity.name}
-                      </label>
-                      <select
-                        id={`move-${opportunity.id}`}
-                        className="border-line-strong bg-secondary h-9 rounded-lg border px-2 text-[14px]"
-                        value={opportunity.stageId ?? stage.id}
-                        onChange={async (event) => {
-                          await moveOpportunityStageAction(opportunity.id, event.target.value);
-                          router.refresh();
-                        }}
-                      >
-                        {shown.map((option) => (
-                          <option key={option.id} value={option.id}>
-                            {option.name}
-                          </option>
-                        ))}
-                      </select>
                     </div>
                   ))}
                 </section>
@@ -511,6 +656,29 @@ export default function OpportunitiesScreen({
         </SheetContent>
       </Sheet>
     </section>
+  );
+}
+
+function placeOpportunity(
+  opportunities: Opportunity[],
+  stages: PipelineStage[],
+  id: string,
+  stageId: string,
+) {
+  const stage = stages.find((item) => item.id === stageId);
+  const current = opportunities.find((item) => item.id === id);
+  if (!stage || !current || current.stageId === stageId) return opportunities;
+  const status: OpportunityStatus = stage.isWon ? "won" : stage.isLost ? "lost" : "open";
+  return opportunities.map((item) =>
+    item.id === id
+      ? {
+          ...item,
+          stageId,
+          stageName: stage.name,
+          pipelineId: stage.pipelineId,
+          status,
+        }
+      : item,
   );
 }
 
