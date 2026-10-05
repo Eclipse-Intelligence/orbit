@@ -1,12 +1,15 @@
 "use client";
 
 import type { MouseEvent } from "react";
-import Button from "@/components/_ui/button";
 import { Checkbox } from "@/components/_ui/checkbox";
-import Tag from "@/components/_ui/tag";
 import { TableCell, TableRow } from "@/components/_ui/table";
-import { LIFECYCLE_LABELS } from "@/lib/companies";
-import { formatDate } from "@/lib/companies";
+import {
+  ConnectionMark,
+  lifecycleTagBase,
+  Monogram,
+  RecordTag,
+} from "@/components/beautifui/record-marks";
+import { LIFECYCLE_LABELS, relativeWhen } from "@/lib/companies";
 import type { Company } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
 import {
@@ -15,23 +18,15 @@ import {
   columnClass,
   type TableColumnKey,
 } from "./table-columns";
-import CalendarIcon from "@/public/assets/images/_common/calendar.svg";
-import DotsIcon from "@/public/assets/images/companies/table/dots-horizontal.svg";
 
 type CompanyRowProps = {
   company: Company;
+  index: number;
   selected: boolean;
   active: boolean;
   onToggle: () => void;
   onOpen: () => void;
 };
-
-const LIFECYCLE_TONE = {
-  lead: "amber",
-  prospect: "blue",
-  customer: "green",
-  churned: "neutral",
-} as const;
 
 function cellClass(key: TableColumnKey) {
   return cn(TABLE_CELL_CLASS, columnClass(key));
@@ -43,11 +38,19 @@ function stop(event: MouseEvent) {
 
 export default function CompanyRow({
   company,
+  index,
   selected,
   active,
   onToggle,
   onOpen,
 }: CompanyRowProps) {
+  const revealed = selected || active;
+  const tags = [
+    { label: LIFECYCLE_LABELS[company.lifecycle], base: lifecycleTagBase(company.lifecycle) },
+    ...(company.industry ? [{ label: company.industry, base: undefined }] : []),
+    ...(company.sizeCategory ? [{ label: company.sizeCategory, base: undefined }] : []),
+  ];
+
   return (
     <TableRow
       role="row"
@@ -55,52 +58,65 @@ export default function CompanyRow({
       data-active={active || selected}
       className={cn(
         TABLE_ROW_CLASS,
-        "hover:bg-card/60 data-[active=true]:border-card data-[active=true]:bg-card cursor-pointer",
+        "group hover:bg-card/60 data-[active=true]:bg-card cursor-pointer",
       )}
     >
       <TableCell role="cell" className={cellClass("name")}>
-        <span className="flex items-center gap-5">
-          <Checkbox
-            checked={selected}
-            onCheckedChange={onToggle}
-            onClick={stop}
-            aria-label={`Select ${company.name}`}
-          />
-          <span className="flex min-w-0 flex-col">
-            <span className="truncate">{company.name}</span>
+        <span className="flex min-w-[240px] items-center gap-2">
+          <span className="relative flex size-6 shrink-0 items-center justify-center">
+            <span
+              className={cn(
+                "text-faint text-[11.5px] tabular-nums",
+                revealed && "invisible",
+                "group-focus-within:invisible group-hover:invisible",
+              )}
+            >
+              {index + 1}
+            </span>
+            <Checkbox
+              checked={selected}
+              onCheckedChange={onToggle}
+              onClick={stop}
+              aria-label={`Select ${company.name}`}
+              className={cn(
+                "absolute",
+                !revealed && "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100",
+              )}
+            />
           </span>
+          <Monogram name={company.name} />
+          <span className="max-w-[220px] truncate text-[13px] font-medium">{company.name}</span>
         </span>
       </TableCell>
-      <TableCell role="cell" className={cellClass("domain")}>
-        {company.domain ?? "—"}
+      <TableCell role="cell" className={cellClass("categories")}>
+        <span className="flex max-w-[280px] items-center gap-1 overflow-hidden">
+          {tags.map((tag) => (
+            <RecordTag key={tag.label} label={tag.label} base={tag.base} />
+          ))}
+        </span>
       </TableCell>
-      <TableCell role="cell" className={cellClass("industry")}>
-        {company.industry ?? "—"}
+      <TableCell role="cell" className={cn(cellClass("last"), "text-subtle text-[13px]")}>
+        {relativeWhen(company.lastInteractionAt)}
       </TableCell>
-      <TableCell role="cell" className={cellClass("lifecycle")}>
-        <Tag tone={LIFECYCLE_TONE[company.lifecycle]} size="sm">
-          {LIFECYCLE_LABELS[company.lifecycle]}
-        </Tag>
+      <TableCell role="cell" className={cellClass("strength")}>
+        <ConnectionMark at={company.lastInteractionAt} />
       </TableCell>
-      <TableCell role="cell" className={cellClass("owner")}>
+      <TableCell role="cell" className={cellClass("domain")} onClick={stop}>
+        {company.domain ? (
+          <a
+            href={`https://${company.domain}`}
+            target="_blank"
+            rel="noreferrer"
+            className="max-w-[180px] truncate text-[13px] underline decoration-white/35 underline-offset-[3px] hover:decoration-current"
+          >
+            {company.domain}
+          </a>
+        ) : (
+          <span className="text-faint">—</span>
+        )}
+      </TableCell>
+      <TableCell role="cell" className={cn(cellClass("owner"), "text-subtle text-[13px]")}>
         {company.ownerName ?? "Unassigned"}
-      </TableCell>
-      <TableCell role="cell" className={cellClass("updated")}>
-        <span className="flex items-center gap-1">
-          <CalendarIcon aria-hidden className="text-foreground size-3.5 shrink-0" />
-          <span className="tabular-nums">{formatDate(company.updatedAt)}</span>
-        </span>
-      </TableCell>
-      <TableCell role="cell" className={cellClass("action")} onClick={stop}>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          className={cn("text-foreground", active && "bg-white/6")}
-          aria-label={`Open ${company.name} details`}
-          onClick={onOpen}
-        >
-          <DotsIcon aria-hidden className="size-3" />
-        </Button>
       </TableCell>
     </TableRow>
   );

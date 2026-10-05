@@ -11,6 +11,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/_ui/sheet";
+import { EntityChip, Monogram } from "@/components/beautifui/record-marks";
 import RecordTransfer from "@/components/crm/record-transfer";
 import SectionHeader from "@/components/crm/section-header";
 import { RecordList, RecordRow, RecordSelect } from "@/components/crm/record-form";
@@ -87,9 +88,15 @@ export default function ContactsScreen({
         {contacts.map((contact) => (
           <RecordRow
             key={contact.id}
+            mark={<Monogram name={contact.name} />}
             title={contact.name}
-            meta={[contact.jobTitle, contact.email, contact.companyName].filter(Boolean).join(" · ") || "No company"}
+            meta={[contact.jobTitle, contact.email].filter(Boolean).join(" · ") || "No title"}
             onClick={() => edit(contact)}
+            action={
+              contact.companyName && contact.companyId ? (
+                <EntityChip name={contact.companyName} href={`/?record=${contact.companyId}`} />
+              ) : null
+            }
           />
         ))}
       </RecordList>

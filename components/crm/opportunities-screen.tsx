@@ -15,12 +15,14 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/_ui/sheet";
+import { EntityChip, Monogram } from "@/components/beautifui/record-marks";
 import RecordTransfer from "@/components/crm/record-transfer";
 import SectionHeader from "@/components/crm/section-header";
 import { RecordList, RecordRow, RecordSelect } from "@/components/crm/record-form";
 import type { Viewer } from "@/components/crm/viewer";
 import { moveOpportunityStageAction, saveOpportunityAction, type RecordActionState } from "@/app/(crm)/records";
 import { saveStagesAction } from "@/app/(crm)/settings/actions";
+import type { StageDraft } from "@/lib/crm/pipeline";
 import { formatMoney } from "@/lib/companies";
 import type { Company, Contact, Opportunity, PipelineStage } from "@/lib/crm/types";
 
@@ -72,7 +74,7 @@ export default function OpportunitiesScreen({
     if (!dragRef.current) orderedRef.current = ordered;
   }, [ordered]);
 
-  function enqueueStageSave(drafts: ReturnType<typeof stageDraft>[]) {
+  function enqueueStageSave(drafts: StageDraft[]) {
     const generation = ++saveGen.current;
     setSavingOrder(true);
     setBoardError(null);
@@ -396,16 +398,22 @@ export default function OpportunitiesScreen({
         {opportunities.map((opportunity) => (
           <RecordRow
             key={opportunity.id}
+            mark={<Monogram name={opportunity.companyName || opportunity.name} />}
             title={opportunity.name}
-            meta={`${opportunity.companyName ?? "No company"} · ${opportunity.stageName ?? "No stage"} · ${formatMoney(opportunity.value, opportunity.currency)}`}
+            meta={`${opportunity.stageName ?? "No stage"} · ${formatMoney(opportunity.value, opportunity.currency)}`}
             onClick={() => {
               setEditing(opportunity);
               setOpen(true);
             }}
             action={
-              <Tag tone={opportunity.status === "won" ? "green" : opportunity.status === "lost" ? "red" : "blue"}>
-                {opportunity.status}
-              </Tag>
+              <span className="flex items-center gap-2">
+                {opportunity.companyName && opportunity.companyId ? (
+                  <EntityChip name={opportunity.companyName} href={`/?record=${opportunity.companyId}`} />
+                ) : null}
+                <Tag tone={opportunity.status === "won" ? "green" : opportunity.status === "lost" ? "red" : "blue"}>
+                  {opportunity.status}
+                </Tag>
+              </span>
             }
           />
         ))}
@@ -513,7 +521,7 @@ function reorderStages(stages: PipelineStage[], from: number, to: number) {
   return next;
 }
 
-function stageDraft(stage: PipelineStage) {
+function stageDraft(stage: PipelineStage): StageDraft {
   return {
     id: stage.id,
     name: stage.name,

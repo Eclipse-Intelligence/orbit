@@ -7,7 +7,8 @@ import { Input } from "@/components/_ui/input";
 import Tag from "@/components/_ui/tag";
 import { addCompanyNoteAction, addCompanyTaskAction } from "@/app/(crm)/records";
 import DetailSection from "@/components/companies/detail/detail-section";
-import { formatDate, formatMoney, formatWhen } from "@/lib/companies";
+import { ConnectionMark } from "@/components/beautifui/record-marks";
+import { formatDate, formatMoney, formatWhen, relativeWhen } from "@/lib/companies";
 import type { CompanyContext } from "@/lib/crm/types";
 
 const ACTIVITY_LABELS: Record<string, string> = {
@@ -75,6 +76,7 @@ export default function RelationshipPanel({
   return (
     <>
       <DetailSection title="Relationship">
+        <ConnectionMark at={last?.occurredAt ?? null} />
         <p className="caption-style text-soft">
           {context.relationshipStatus === "quiet"
             ? "Quiet relationship"
@@ -86,8 +88,8 @@ export default function RelationshipPanel({
         </p>
         <p className="caption-style text-soft">
           {last
-            ? `Last interaction ${formatWhen(last.occurredAt)}${last.title ? `: ${last.title}` : ""}`
-            : "No interaction recorded."}
+            ? `Last interaction ${relativeWhen(last.occurredAt)}${last.title ? `: ${last.title}` : ""}`
+            : "No contact"}
         </p>
         <p className="caption-style text-subtle">
           {context.openTaskCount > 0

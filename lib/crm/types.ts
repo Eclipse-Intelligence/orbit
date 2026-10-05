@@ -51,6 +51,8 @@ export type Company = {
   archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  lastInteractionAt: string | null;
+  openTaskCount: number;
 };
 
 export type CompanyWrite = {

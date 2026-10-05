@@ -1,9 +1,10 @@
 import { redirect } from "next/navigation";
 import Button from "@/components/_ui/button";
+import { ConnectionMark, Monogram } from "@/components/beautifui/record-marks";
 import SectionHeader from "@/components/crm/section-header";
 import { RecordList, RecordRow } from "@/components/crm/record-form";
 import { getUserActor } from "@/lib/auth/user";
-import { formatWhen } from "@/lib/companies";
+import { relativeWhen } from "@/lib/companies";
 import { findStaleRelationships } from "@/lib/crm/relationships";
 
 export const dynamic = "force-dynamic";
@@ -32,16 +33,16 @@ export default async function QuietPage() {
         {rows.map((row) => (
           <RecordRow
             key={row.company.id}
+            mark={<Monogram name={row.company.name} />}
             title={row.company.name}
-            meta={
-              row.lastActivityAt
-                ? `Last interaction ${formatWhen(row.lastActivityAt)} · ${row.openTaskCount} open next action${row.openTaskCount === 1 ? "" : "s"}`
-                : "No interaction recorded"
-            }
+            meta={`${relativeWhen(row.lastActivityAt)} · ${row.openTaskCount} open next action${row.openTaskCount === 1 ? "" : "s"}`}
             action={
-              <Button variant="ghost" size="sm" href={`/?record=${row.company.id}`}>
-                Open
-              </Button>
+              <span className="flex items-center gap-3">
+                <ConnectionMark at={row.lastActivityAt} />
+                <Button variant="ghost" size="sm" href={`/?record=${row.company.id}`}>
+                  Open
+                </Button>
+              </span>
             }
           />
         ))}

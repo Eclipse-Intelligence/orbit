@@ -61,14 +61,16 @@ export default function CompaniesTable({
                   className={cn(TABLE_CELL_CLASS, column.className)}
                 >
                   {column.key === "name" ? (
-                    <span className="flex items-center gap-5">
-                      <Checkbox
-                        checked={
-                          allSelected ? true : someSelected ? "indeterminate" : false
-                        }
-                        onCheckedChange={toggleAll}
-                        aria-label="Select all companies"
-                      />
+                    <span className="flex items-center gap-2">
+                      <span className="flex size-6 items-center justify-center">
+                        <Checkbox
+                          checked={
+                            allSelected ? true : someSelected ? "indeterminate" : false
+                          }
+                          onCheckedChange={toggleAll}
+                          aria-label="Select all companies"
+                        />
+                      </span>
                       {column.label}
                     </span>
                   ) : (
@@ -79,10 +81,11 @@ export default function CompaniesTable({
             </TableRow>
           </TableHeader>
           <TableBody role="rowgroup" className="contents">
-            {companies.map((company) => (
+            {companies.map((company, index) => (
               <CompanyRow
                 key={company.id}
                 company={company}
+                index={index}
                 selected={selectedIds.includes(company.id)}
                 active={detailOpen && detailId === company.id}
                 onToggle={() => toggleSelected(company.id)}
