@@ -1,10 +1,10 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import Avatar from "@/components/_ui/avatar";
+import { useState } from "react";
 import Button from "@/components/_ui/button";
 import CountBadge from "@/components/_ui/count-badge";
 import Field from "@/components/_ui/field";
+import { Input } from "@/components/_ui/input";
 import { ScrollArea } from "@/components/_ui/scroll-area";
 import {
   Select,
@@ -23,49 +23,50 @@ import {
   SheetTitle,
 } from "@/components/_ui/sheet";
 import {
-  ACTIVITY_OPTIONS,
-  OWNER_OPTIONS,
-  SORT_MENU_OPTIONS,
-  STAGE_OPTIONS,
-} from "./filter-options";
-import { ownerByName, type SortKey } from "@/data/companies";
-import {
   ALL_OWNERS,
+  ANY_LIFECYCLE,
+  LIFECYCLE_LABELS,
+  SORT_OPTIONS,
+  UNASSIGNED_OWNER,
   activeFilterCount,
-  filterCompanies,
+  sortValue,
 } from "@/lib/companies";
+import type { CompanyListQuery, Member } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
-import { useCompaniesStore } from "@/stores/companies-store";
 import FilterIcon from "@/public/assets/images/_common/filter.svg";
 import XIcon from "@/public/assets/images/companies/detail/x.svg";
 
 type MobileFiltersProps = {
   className?: string;
+  filters: CompanyListQuery;
+  members: Member[];
+  onChange: (updates: Record<string, string | null>) => void;
 };
 
-export default function MobileFilters({ className }: MobileFiltersProps) {
+export default function MobileFilters({
+  className,
+  filters,
+  members,
+  onChange,
+}: MobileFiltersProps) {
   const [open, setOpen] = useState(false);
-  const companies = useCompaniesStore((state) => state.companies);
-  const sortBy = useCompaniesStore((state) => state.sortBy);
-  const owner = useCompaniesStore((state) => state.owner);
-  const stage = useCompaniesStore((state) => state.stage);
-  const activityWindow = useCompaniesStore((state) => state.activityWindow);
-  const setSortBy = useCompaniesStore((state) => state.setSortBy);
-  const setOwner = useCompaniesStore((state) => state.setOwner);
-  const setStage = useCompaniesStore((state) => state.setStage);
-  const setActivityWindow = useCompaniesStore(
-    (state) => state.setActivityWindow,
-  );
-  const resetFilters = useCompaniesStore((state) => state.resetFilters);
-
-  const filters = { sortBy, owner, stage, activityWindow };
+  const [query, setQuery] = useState(filters.query ?? "");
   const activeCount = activeFilterCount(filters);
-  const resultCount = useMemo(
-    () =>
-      filterCompanies(companies, { sortBy, owner, stage, activityWindow })
-        .length,
-    [companies, sortBy, owner, stage, activityWindow],
-  );
+
+  function applySearch() {
+    onChange({ q: query.trim() || null });
+  }
+
+  function reset() {
+    setQuery("");
+    onChange({
+      q: null,
+      owner: null,
+      lifecycle: null,
+      sort: null,
+      order: null,
+    });
+  }
 
   return (
     <Sheet open={open} onOpenChange={setOpen}>
@@ -73,9 +74,7 @@ export default function MobileFilters({ className }: MobileFiltersProps) {
         variant="secondary"
         size="sm"
         onClick={() => setOpen(true)}
-        aria-label={
-          activeCount > 0 ? `Filters, ${activeCount} active` : "Filters"
-        }
+        aria-label={activeCount > 0 ? `Filters, ${activeCount} active` : "Filters"}
         className={cn("data-[active=true]:bg-muted", className)}
         data-active={activeCount > 0}
       >
@@ -88,15 +87,10 @@ export default function MobileFilters({ className }: MobileFiltersProps) {
         <SheetHeader className="px-4">
           <SheetTitle>Filters</SheetTitle>
           <SheetDescription className="sr-only">
-            Sort and filter the companies table
+            Search, sort, and filter companies
           </SheetDescription>
           <SheetClose asChild>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className="-mr-1"
-              aria-label="Close filters"
-            >
+            <Button variant="ghost" size="icon-sm" className="-mr-1" aria-label="Close filters">
               <XIcon aria-hidden className="text-foreground size-4" />
             </Button>
           </SheetClose>
@@ -104,16 +98,38 @@ export default function MobileFilters({ className }: MobileFiltersProps) {
 
         <ScrollArea viewportClassName="max-h-[calc(85dvh-118px)]">
           <div className="flex flex-col gap-4 p-4">
+            <Field label="Search" htmlFor="mobile-search">
+              <Input
+                id="mobile-search"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                onBlur={applySearch}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    applySearch();
+                  }
+                }}
+                placeholder="Name or domain"
+              />
+            </Field>
+
             <Field label="Sort by" htmlFor="mobile-sort">
               <Select
-                value={sortBy}
-                onValueChange={(value) => setSortBy(value as SortKey)}
+                value={sortValue(filters.sort, filters.order)}
+                onValueChange={(value) => {
+                  const next = SORT_OPTIONS.find((option) => option.value === value);
+                  onChange({
+                    sort: !next || next.sort === "updated" ? null : next.sort,
+                    order: !next || next.order === "desc" ? null : next.order,
+                  });
+                }}
               >
                 <SelectTrigger id="mobile-sort">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {SORT_MENU_OPTIONS.map((option) => (
+                  {SORT_OPTIONS.map((option) => (
                     <SelectItem key={option.value} value={option.value}>
                       {option.label}
                     </SelectItem>
@@ -122,58 +138,43 @@ export default function MobileFilters({ className }: MobileFiltersProps) {
               </Select>
             </Field>
 
-            <Field label="Account owner" htmlFor="mobile-owner">
-              <Select value={owner} onValueChange={setOwner}>
+            <Field label="Owner" htmlFor="mobile-owner">
+              <Select
+                value={filters.ownerId ?? ALL_OWNERS}
+                onValueChange={(value) =>
+                  onChange({ owner: value === ALL_OWNERS ? null : value })
+                }
+              >
                 <SelectTrigger id="mobile-owner">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {OWNER_OPTIONS.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.value === ALL_OWNERS ? (
-                        option.label
-                      ) : (
-                        <span className="flex items-center gap-2">
-                          <Avatar
-                            src={ownerByName(option.value).avatar}
-                            alt=""
-                          />
-                          {option.label}
-                        </span>
-                      )}
+                  <SelectItem value={ALL_OWNERS}>All owners</SelectItem>
+                  <SelectItem value={UNASSIGNED_OWNER}>Unassigned</SelectItem>
+                  {members.map((member) => (
+                    <SelectItem key={member.id} value={member.id}>
+                      {member.name}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </Field>
 
-            <Field label="Stage" htmlFor="mobile-stage">
-              <Select value={stage} onValueChange={setStage}>
-                <SelectTrigger id="mobile-stage">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {STAGE_OPTIONS.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </Field>
-
-            <Field label="Last activity" htmlFor="mobile-activity">
+            <Field label="Lifecycle" htmlFor="mobile-lifecycle">
               <Select
-                value={String(activityWindow)}
-                onValueChange={(value) => setActivityWindow(Number(value))}
+                value={filters.lifecycle ?? ANY_LIFECYCLE}
+                onValueChange={(value) =>
+                  onChange({ lifecycle: value === ANY_LIFECYCLE ? null : value })
+                }
               >
-                <SelectTrigger id="mobile-activity">
+                <SelectTrigger id="mobile-lifecycle">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {ACTIVITY_OPTIONS.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
+                  <SelectItem value={ANY_LIFECYCLE}>Any lifecycle</SelectItem>
+                  {Object.entries(LIFECYCLE_LABELS).map(([value, label]) => (
+                    <SelectItem key={value} value={value}>
+                      {label}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -186,15 +187,15 @@ export default function MobileFilters({ className }: MobileFiltersProps) {
           <Button
             variant="ghost"
             size="sm"
-            onClick={resetFilters}
-            disabled={activeCount === 0 && sortBy === "pipelineValue"}
+            onClick={reset}
+            disabled={activeCount === 0}
             className="-ml-1.5"
           >
             Reset
           </Button>
           <SheetClose asChild>
-            <Button variant="primary" size="sm">
-              Show {resultCount} {resultCount === 1 ? "company" : "companies"}
+            <Button variant="primary" size="sm" onClick={applySearch}>
+              Done
             </Button>
           </SheetClose>
         </SheetFooter>

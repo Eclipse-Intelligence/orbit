@@ -1,88 +1,148 @@
 "use client";
 
+import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import FilterMenu from "@/components/_common/filter-menu";
+import { Input } from "@/components/_ui/input";
 import MobileFilters from "./mobile-filters";
+import { exportCompaniesAction } from "@/app/(crm)/actions";
 import {
-  ACTIVITY_OPTIONS,
-  OWNER_OPTIONS,
-  SORT_MENU_OPTIONS,
-  STAGE_OPTIONS,
-} from "./filter-options";
-import type { SortKey } from "@/data/companies";
-import { TODAY, companiesCsvRows, filterCompanies } from "@/lib/companies";
+  ALL_OWNERS,
+  ANY_LIFECYCLE,
+  LIFECYCLE_LABELS,
+  SORT_OPTIONS,
+  UNASSIGNED_OWNER,
+  parseSortValue,
+  sortValue,
+} from "@/lib/companies";
 import { downloadCsv } from "@/lib/csv";
+import type { CompanyListQuery, Member } from "@/lib/crm/types";
 import { useCompaniesStore } from "@/stores/companies-store";
 import ShareIcon from "@/public/assets/images/companies/toolbar/share.svg";
 import PlusIcon from "@/public/assets/images/_common/plus.svg";
 
-export default function CompaniesToolbar() {
-  const sortBy = useCompaniesStore((state) => state.sortBy);
-  const owner = useCompaniesStore((state) => state.owner);
-  const stage = useCompaniesStore((state) => state.stage);
-  const activityWindow = useCompaniesStore((state) => state.activityWindow);
-  const setSortBy = useCompaniesStore((state) => state.setSortBy);
-  const setOwner = useCompaniesStore((state) => state.setOwner);
-  const setStage = useCompaniesStore((state) => state.setStage);
-  const setActivityWindow = useCompaniesStore(
-    (state) => state.setActivityWindow,
-  );
-  const setNewCompanyOpen = useCompaniesStore(
-    (state) => state.setNewCompanyOpen,
+type ToolbarProps = {
+  filters: CompanyListQuery;
+  members?: Member[];
+};
+
+export default function CompaniesToolbar({ filters, members = [] }: ToolbarProps) {
+  const router = useRouter();
+  const setNewCompanyOpen = useCompaniesStore((state) => state.setNewCompanyOpen);
+  const filterQuery = filters.query ?? "";
+  const [query, setQuery] = useState(filterQuery);
+  const [syncedQuery, setSyncedQuery] = useState(filterQuery);
+  const [exporting, setExporting] = useState(false);
+  if (filterQuery !== syncedQuery) {
+    setSyncedQuery(filterQuery);
+    setQuery(filterQuery);
+  }
+
+  const replaceParams = useCallback(
+    (updates: Record<string, string | null>) => {
+      const params = new URLSearchParams(window.location.search);
+      for (const [key, value] of Object.entries(updates)) {
+        if (!value) params.delete(key);
+        else params.set(key, value);
+      }
+      const next = params.toString();
+      router.replace(next ? `/?${next}` : "/", { scroll: false });
+    },
+    [router],
   );
 
-  function exportCsv() {
-    const { companies } = useCompaniesStore.getState();
-    const visible = filterCompanies(companies, {
-      sortBy,
-      owner,
-      stage,
-      activityWindow,
-    });
-    downloadCsv(`companies-${TODAY}.csv`, companiesCsvRows(visible));
+  useEffect(() => {
+    const handle = window.setTimeout(() => {
+      const current = filters.query ?? "";
+      if (query.trim() === current) return;
+      replaceParams({ q: query.trim() || null });
+    }, 250);
+    return () => window.clearTimeout(handle);
+  }, [query, filters.query, replaceParams]);
+
+  async function exportCsv() {
+    setExporting(true);
+    try {
+      const rows = await exportCompaniesAction(filters);
+      const day = new Date().toISOString().slice(0, 10);
+      downloadCsv(`companies-${day}.csv`, rows);
+    } finally {
+      setExporting(false);
+    }
   }
+
+  const ownerOptions = [
+    { value: ALL_OWNERS, label: "All owners" },
+    { value: UNASSIGNED_OWNER, label: "Unassigned" },
+    ...members.map((member) => ({ value: member.id, label: member.name })),
+  ];
 
   return (
     <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 px-4 py-4">
-      <MobileFilters className="sm:hidden" />
+      <MobileFilters
+        className="sm:hidden"
+        filters={filters}
+        members={members}
+        onChange={replaceParams}
+      />
 
-      <div className="hidden min-w-0 flex-wrap gap-2 sm:flex">
+      <div className="hidden min-w-0 flex-wrap items-center gap-2 sm:flex">
+        <label className="sr-only" htmlFor="company-search">
+          Search companies
+        </label>
+        <Input
+          id="company-search"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Search name or domain"
+          className="w-[220px]"
+        />
         <FilterMenu
           label="Sort by"
-          value={sortBy}
-          options={SORT_MENU_OPTIONS}
-          onChange={(value) => setSortBy(value as SortKey)}
+          value={sortValue(filters.sort, filters.order)}
+          options={SORT_OPTIONS.map((option) => ({
+            value: option.value,
+            label: option.label,
+          }))}
+          onChange={(value) => {
+            const next = parseSortValue(value);
+            replaceParams({
+              sort: next.sort === "updated" ? null : next.sort,
+              order: next.order === "desc" ? null : next.order,
+            });
+          }}
         />
         <FilterMenu
-          label="Filter"
-          value={owner}
-          options={OWNER_OPTIONS}
-          onChange={setOwner}
+          label="Owner"
+          value={filters.ownerId ?? ALL_OWNERS}
+          options={ownerOptions}
+          onChange={(value) =>
+            replaceParams({ owner: value === ALL_OWNERS ? null : value })
+          }
         />
         <FilterMenu
-          label="Stage"
-          value={stage}
-          options={STAGE_OPTIONS}
-          onChange={setStage}
-        />
-        <FilterMenu
-          label="Last Activity"
-          value={String(activityWindow)}
-          options={ACTIVITY_OPTIONS}
-          onChange={(value) => setActivityWindow(Number(value))}
+          label="Lifecycle"
+          value={filters.lifecycle ?? ANY_LIFECYCLE}
+          options={[
+            { value: ANY_LIFECYCLE, label: "Any lifecycle" },
+            ...Object.entries(LIFECYCLE_LABELS).map(([value, label]) => ({
+              value,
+              label,
+            })),
+          ]}
+          onChange={(value) =>
+            replaceParams({ lifecycle: value === ANY_LIFECYCLE ? null : value })
+          }
         />
       </div>
 
       <div className="flex shrink-0 items-center gap-1">
-        <Button variant="secondary" size="sm" onClick={exportCsv}>
+        <Button variant="secondary" size="sm" onClick={exportCsv} disabled={exporting}>
           <ShareIcon aria-hidden className="size-3" />
-          Export
+          {exporting ? "Exporting…" : "Export"}
         </Button>
-        <Button
-          variant="primary"
-          size="sm"
-          onClick={() => setNewCompanyOpen(true)}
-        >
+        <Button variant="primary" size="sm" onClick={() => setNewCompanyOpen(true)}>
           <PlusIcon aria-hidden className="size-3" />
           New Company
         </Button>

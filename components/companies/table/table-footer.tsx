@@ -1,27 +1,17 @@
-import PlusIcon from "@/public/assets/images/_common/plus.svg";
-
 type TableFooterProps = {
   count: number;
+  total: number;
 };
 
-const CALCULATIONS = ["Sum of pipeline", "Avg win probality", "Add Calculation"];
+export default function TableFooter({ count, total }: TableFooterProps) {
+  const label =
+    total > count
+      ? `Showing ${count} of ${total} companies`
+      : `${count} ${count === 1 ? "company" : "companies"}`;
 
-export default function TableFooter({ count }: TableFooterProps) {
   return (
-    <div className="caption-style grid shrink-0 grid-cols-2 gap-px border-b border-border bg-background p-px sm:grid-cols-4">
-      <div className="flex items-center gap-2 p-3 outline-1 outline-border">
-        <span className="text-foreground">{count}</span>
-        <span className="text-muted-foreground">Companies in view</span>
-      </div>
-      {CALCULATIONS.map((label) => (
-        <div
-          key={label}
-          className="flex items-center gap-2 p-3 text-muted-foreground outline-1 outline-border"
-        >
-          <PlusIcon aria-hidden className="size-3 text-muted-foreground" />
-          {label}
-        </div>
-      ))}
+    <div className="caption-style border-border flex shrink-0 items-center border-b px-4 py-3">
+      <span className="text-foreground">{label}</span>
     </div>
   );
 }

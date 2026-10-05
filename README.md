@@ -1,37 +1,59 @@
-# Kargul Starter
+# Sales CRM
 
-Next.js 16 + React 19 + Tailwind CSS 4 boilerplate. Read `CONVENTIONS.md` before writing any component, section, or page — it is the whole spec for how this repo is built.
+A workspace CRM for companies. People, conversations, opportunities, and next actions are the direction of the product. This milestone stores companies in PostgreSQL and exposes them to the web app, a versioned API, and an MCP server through one domain service.
 
-## Getting started
+## Requirements
+
+- Node.js 20+
+- PostgreSQL 16, local or hosted
+
+Docker is not required. Hosted Supabase Auth is optional.
+
+## Local setup
+
+Create a database and a login the app can use:
+
+```sql
+create role crm_app login password 'crm_app_dev' nosuperuser nocreatedb nocreaterole noinherit;
+create database crm owner crm_app;
+```
+
+The migration also creates `crm_app` when it is missing, with the local development password above. Change that password outside local development.
 
 ```bash
 npm install
+cp .env.example .env.local
+npm run db:setup
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+`db:setup` applies `supabase/bootstrap/local-auth.sql` only when `auth.users` does not already exist, applies the CRM migration, and writes a local user plus an agent token into `.env.local`. Sign in with `DEV_USER_EMAIL` and `DEV_USER_PASSWORD`.
 
-| Script                 | What it does                                                       |
-| ---------------------- | ------------------------------------------------------------------ |
-| `npm run dev`          | Start the dev server                                               |
-| `npm run build`        | Production build                                                   |
-| `npm run start`        | Serve the production build                                         |
-| `npm run lint`         | ESLint                                                             |
-| `npm run to:avif`      | Convert an image to AVIF and report its inline cost — rule 11      |
-| `npm run extract:avif` | Pull the first frame of every `.webm` under `public/` as a poster  |
-| `npm run frame:rive`   | Render a still from a `.riv` file for use as its poster            |
+`npm run db:reset` drops the `crm` and `private` schemas and the local auth users, then sets up again. It refuses to run when it detects hosted Supabase Auth.
 
-## First things to set on a new project
+## Hosted Supabase
 
-1. **`lib/seo.ts`** — `SITE_NAME`, `SITE_URL`, `SITE_DESCRIPTION`, `SITE_ROUTES`. Everything in `app/robots.ts`, `app/sitemap.ts`, `app/llms.txt/route.ts` and every page's metadata derives from these (rule 18). Set `NEXT_PUBLIC_SITE_URL` in the environment to override the URL per deploy.
-2. **`app/globals.css`** — match the `@layer base` type scale and the `--padding-section-*` tokens to the design before building anything (rules 1 and 3).
-3. **`app/opengraph-image.jpg`** — 1200×630, with an `opengraph-image.alt.txt` beside it.
-4. **Fonts** — `app/layout.tsx` ships Inter + a local Inter Display; swap them for the design's typeface.
+Set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`. Do not run `supabase/bootstrap/local-auth.sql` there. Apply `supabase/migrations/20261005140000_crm_foundation.sql` with a role that can create schemas. Point `DATABASE_URL` at the `crm_app` role (or another role that can `SET ROLE authenticated` and `SET ROLE crm_agent`). Keep the service role on the server. Do not put it in an agent token or a `NEXT_PUBLIC_` variable.
 
-## Docs
+## Agents
 
-| File               | What's in it                                                        |
-| ------------------ | ------------------------------------------------------------------- |
-| `CONVENTIONS.md`   | The build rules. Read first.                                        |
-| `AGENTS.md`        | Next.js version notes for agents                                    |
-| `OPTIMIZATION.md`  | Why `Asset`'s Rive loading is gated behind LCP, with the measurements |
+```bash
+npm run agent:create -- --name "Research" --scopes crm:read,companies:write
+```
+
+The token is printed once. Store it. Revoke a credential by setting `crm.agent_credentials.revoked_at`.
+
+API: `docs/api.md`. MCP: `docs/mcp.md`. Schema and tenancy: `docs/architecture.md`. What was removed from the prototype: `docs/audit.md`.
+
+## Scripts
+
+| Script | What it does |
+| --- | --- |
+| `npm run dev` | Next.js dev server |
+| `npm run build` | Production build |
+| `npm run lint` | ESLint |
+| `npm test` | Company service, API, and MCP tests against the `crm_test` database |
+| `npm run db:setup` | Apply schema and seed a local user |
+| `npm run db:reset` | Drop local CRM data and set up again |
+| `npm run agent:create` | Issue a revocable agent token |
+| `npm run mcp` | MCP server over stdio |

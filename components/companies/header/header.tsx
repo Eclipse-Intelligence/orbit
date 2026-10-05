@@ -1,30 +1,20 @@
 "use client";
 
-import Avatar from "@/components/_ui/avatar";
 import Button from "@/components/_ui/button";
-import { Tabs, TabsList, TabsTrigger } from "@/components/_ui/tabs";
 import Notifications from "./notifications/notifications";
-import { CURRENT_USER } from "@/data/companies";
+import { displayInitials } from "@/lib/companies";
 import { useCompaniesStore } from "@/stores/companies-store";
+import type { Viewer } from "@/components/companies/companies";
 import MenuIcon from "@/public/assets/images/_common/menu.svg";
-import ActiveDot from "@/public/assets/images/companies/header/active-dot.svg";
 import SearchIcon from "@/public/assets/images/_common/search.svg";
 
-const TABS = [
-  { value: "companies", label: "Companies" },
-  { value: "deals", label: "Deals" },
-  { value: "forecast", label: "Forecast" },
-];
-
-export default function CompaniesHeader() {
-  const activeTab = useCompaniesStore((state) => state.activeTab);
-  const setActiveTab = useCompaniesStore((state) => state.setActiveTab);
+export default function CompaniesHeader({ viewer }: { viewer: Viewer }) {
   const setSidebarOpen = useCompaniesStore((state) => state.setSidebarOpen);
   const setSearchOpen = useCompaniesStore((state) => state.setSearchOpen);
   const openProfile = useCompaniesStore((state) => state.openProfile);
 
   return (
-    <header className="shrink-0">
+    <header className="border-border shrink-0 border-b">
       <div className="flex items-center justify-between gap-2 px-4 py-[14px]">
         <div className="flex min-w-0 items-center gap-2">
           <Button
@@ -36,11 +26,12 @@ export default function CompaniesHeader() {
           >
             <MenuIcon aria-hidden className="size-3.5" />
           </Button>
-          <h1 className="truncate">Companies</h1>
-          <span className="caption-style bg-muted inline-flex shrink-0 items-center gap-0.5 rounded-full border border-[#363636] py-[3px] pr-[5px] pl-[3px]">
-            <ActiveDot aria-hidden className="size-3" />
-            Active
-          </span>
+          <div className="flex min-w-0 flex-col">
+            <h1 className="truncate">Companies</h1>
+            <span className="caption-style text-subtle hidden truncate sm:block">
+              {viewer.workspaceName}
+            </span>
+          </div>
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
@@ -58,24 +49,19 @@ export default function CompaniesHeader() {
             variant="secondary"
             size="none"
             className="caption-style h-[30px] gap-1.5 py-[5px] pr-[7px] pl-[5px] font-normal"
-            aria-label={`Open profile for ${CURRENT_USER.name}`}
-            onClick={() => openProfile(CURRENT_USER.name)}
+            aria-label={`Open account for ${viewer.name}`}
+            onClick={openProfile}
           >
-            <Avatar src={CURRENT_USER.avatar} alt="" />
-            <span className="hidden sm:inline">{CURRENT_USER.name}</span>
+            <span
+              aria-hidden
+              className="bg-muted text-foreground flex size-5 items-center justify-center rounded-full text-[10px] leading-none"
+            >
+              {displayInitials(viewer.name)}
+            </span>
+            <span className="hidden max-w-[12rem] truncate sm:inline">{viewer.name}</span>
           </Button>
         </div>
       </div>
-
-      <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="border-border border-b px-4">
-          {TABS.map((tab) => (
-            <TabsTrigger key={tab.value} value={tab.value}>
-              {tab.label}
-            </TabsTrigger>
-          ))}
-        </TabsList>
-      </Tabs>
     </header>
   );
 }
