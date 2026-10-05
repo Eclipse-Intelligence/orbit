@@ -1,6 +1,5 @@
 "use client";
 
-import { useMemo } from "react";
 import { Checkbox } from "@/components/_ui/checkbox";
 import { ScrollArea } from "@/components/_ui/scroll-area";
 import {
@@ -18,38 +17,35 @@ import {
   TABLE_GRID_CLASS,
   TABLE_ROW_CLASS,
 } from "./table-columns";
-import { filterCompanies } from "@/lib/companies";
+import type { Company } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
 import { useCompaniesStore } from "@/stores/companies-store";
 
-export default function CompaniesTable() {
-  const companies = useCompaniesStore((state) => state.companies);
-  const sortBy = useCompaniesStore((state) => state.sortBy);
-  const owner = useCompaniesStore((state) => state.owner);
-  const stage = useCompaniesStore((state) => state.stage);
-  const activityWindow = useCompaniesStore((state) => state.activityWindow);
+export default function CompaniesTable({
+  companies,
+  total,
+  filtered,
+}: {
+  companies: Company[];
+  total: number;
+  filtered: boolean;
+}) {
   const selectedIds = useCompaniesStore((state) => state.selectedIds);
   const detailId = useCompaniesStore((state) => state.detailId);
   const detailOpen = useCompaniesStore((state) => state.detailOpen);
   const toggleSelected = useCompaniesStore((state) => state.toggleSelected);
   const setSelected = useCompaniesStore((state) => state.setSelected);
   const openDetail = useCompaniesStore((state) => state.openDetail);
-  const openProfile = useCompaniesStore((state) => state.openProfile);
 
-  const visible = useMemo(
-    () => filterCompanies(companies, { sortBy, owner, stage, activityWindow }),
-    [companies, sortBy, owner, stage, activityWindow],
-  );
-
-  const selectedVisible = visible.filter((company) =>
+  const selectedVisible = companies.filter((company) =>
     selectedIds.includes(company.id),
   );
   const allSelected =
-    visible.length > 0 && selectedVisible.length === visible.length;
+    companies.length > 0 && selectedVisible.length === companies.length;
   const someSelected = selectedVisible.length > 0 && !allSelected;
 
   function toggleAll() {
-    setSelected(allSelected ? [] : visible.map((company) => company.id));
+    setSelected(allSelected ? [] : companies.map((company) => company.id));
   }
 
   return (
@@ -65,18 +61,16 @@ export default function CompaniesTable() {
                   className={cn(TABLE_CELL_CLASS, column.className)}
                 >
                   {column.key === "name" ? (
-                    <span className="flex items-center gap-5">
-                      <Checkbox
-                        checked={
-                          allSelected
-                            ? true
-                            : someSelected
-                              ? "indeterminate"
-                              : false
-                        }
-                        onCheckedChange={toggleAll}
-                        aria-label="Select all companies"
-                      />
+                    <span className="flex items-center gap-2">
+                      <span className="flex size-6 items-center justify-center">
+                        <Checkbox
+                          checked={
+                            allSelected ? true : someSelected ? "indeterminate" : false
+                          }
+                          onCheckedChange={toggleAll}
+                          aria-label="Select all companies"
+                        />
+                      </span>
                       {column.label}
                     </span>
                   ) : (
@@ -87,31 +81,33 @@ export default function CompaniesTable() {
             </TableRow>
           </TableHeader>
           <TableBody role="rowgroup" className="contents">
-            {visible.map((company) => (
+            {companies.map((company, index) => (
               <CompanyRow
                 key={company.id}
                 company={company}
+                index={index}
                 selected={selectedIds.includes(company.id)}
                 active={detailOpen && detailId === company.id}
                 onToggle={() => toggleSelected(company.id)}
                 onOpen={() => openDetail(company.id)}
-                onOpenOwner={() => openProfile(company.owner)}
               />
             ))}
-            {visible.length === 0 && (
+            {companies.length === 0 && (
               <TableRow role="row" className={TABLE_ROW_CLASS}>
                 <td
                   role="cell"
                   className="caption-style text-muted-foreground col-span-full flex h-[120px] items-center justify-center"
                 >
-                  No companies match the current filters.
+                  {filtered
+                    ? "No companies match the current filters."
+                    : "No companies yet."}
                 </td>
               </TableRow>
             )}
           </TableBody>
         </Table>
       </ScrollArea>
-      <TableFooter count={visible.length} />
+      <TableFooter count={companies.length} total={total} />
     </div>
   );
 }

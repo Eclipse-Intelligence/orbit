@@ -1,149 +1,194 @@
-import type { Company, SortKey } from "@/data/companies";
+import { CrmError } from "@/lib/crm/errors";
+import {
+  COMPANY_SORTS,
+  LIFECYCLES,
+  type CompanyListQuery,
+  type CompanySort,
+  type Lifecycle,
+} from "@/lib/crm/types";
 
-export type CompanyFilters = {
-  sortBy: SortKey;
-  owner: string;
-  stage: string;
-  activityWindow: number;
-};
-
-export const TODAY = "2026-09-14";
-
+export const ANY_LIFECYCLE = "any";
 export const ALL_OWNERS = "all";
-export const ANY_STAGE = "any";
+export const UNASSIGNED_OWNER = "unassigned";
 
-export const DEFAULT_FILTERS: CompanyFilters = {
-  sortBy: "pipelineValue",
-  owner: ALL_OWNERS,
-  stage: ANY_STAGE,
-  activityWindow: 90,
+export const LIFECYCLE_LABELS: Record<Lifecycle, string> = {
+  lead: "Lead",
+  prospect: "Prospect",
+  customer: "Customer",
+  churned: "Churned",
 };
 
-export function activeFilterCount({
-  owner,
-  stage,
-  activityWindow,
-}: CompanyFilters) {
+export const SIZE_OPTIONS = ["1-10", "11-50", "51-200", "201-1000", "1000+"];
+
+export const SORT_OPTIONS: { value: string; label: string; sort: CompanySort; order: "asc" | "desc" }[] = [
+  { value: "updated:desc", label: "Recently updated", sort: "updated", order: "desc" },
+  { value: "created:desc", label: "Newest", sort: "created", order: "desc" },
+  { value: "name:asc", label: "Name", sort: "name", order: "asc" },
+  { value: "domain:asc", label: "Domain", sort: "domain", order: "asc" },
+];
+
+export function sortValue(sort: CompanySort = "updated", order: "asc" | "desc" = "desc") {
+  const match = SORT_OPTIONS.find((option) => option.sort === sort && option.order === order);
+  return match?.value ?? "updated:desc";
+}
+
+export function parseSortValue(value: string) {
+  const match = SORT_OPTIONS.find((option) => option.value === value);
+  return { sort: match?.sort ?? "updated", order: match?.order ?? "desc" };
+}
+
+export function activeFilterCount(filters: CompanyListQuery) {
+  const defaultSort =
+    (filters.sort ?? "updated") === "updated" && (filters.order ?? "desc") === "desc";
   return [
-    owner !== DEFAULT_FILTERS.owner,
-    stage !== DEFAULT_FILTERS.stage,
-    activityWindow !== DEFAULT_FILTERS.activityWindow,
+    Boolean(filters.query),
+    Boolean(filters.lifecycle),
+    Boolean(filters.ownerId),
+    !defaultSort,
   ].filter(Boolean).length;
 }
 
-const TAG_CHAR_BUDGET = 20;
-
-export function filterCompanies(
-  companies: Company[],
-  { sortBy, owner, stage, activityWindow }: CompanyFilters,
-): Company[] {
-  const filtered = companies.filter((company) => {
-    if (owner !== ALL_OWNERS && company.owner !== owner) return false;
-    if (stage !== ANY_STAGE && !company.tags.some((tag) => tag === stage)) {
-      return false;
-    }
-    return company.activityDays <= activityWindow;
-  });
-
-  return filtered.sort((a, b) => {
-    switch (sortBy) {
-      case "name":
-        return a.name.localeCompare(b.name);
-      case "lastInteraction":
-        return b.lastInteraction.date.localeCompare(a.lastInteraction.date);
-      case "openDeals":
-        return b.openDeals - a.openDeals;
-      case "winProbability":
-        return b.winProbability - a.winProbability;
-      default:
-        return b.pipelineValue - a.pipelineValue;
-    }
-  });
+export function displayInitials(name: string) {
+  const parts = name.trim().split(/\s+/).slice(0, 2);
+  const letters = parts.map((part) => part[0]?.toUpperCase() ?? "").join("");
+  return letters || "?";
 }
 
-export function companiesCsvRows(companies: Company[]) {
+export function formatDate(iso: string) {
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(iso));
+}
+
+export type ConnectionStrength = "strong" | "weak" | "veryweak" | "none";
+
+export const CONNECTION_STRENGTH: Record<
+  ConnectionStrength,
+  { label: string; color: string }
+> = {
+  strong: { label: "Very strong", color: "var(--success)" },
+  weak: { label: "Weak", color: "var(--warning)" },
+  veryweak: { label: "Very weak", color: "var(--danger)" },
+  none: { label: "No communication", color: "var(--faint)" },
+};
+
+export function connectionStrength(
+  iso: string | null | undefined,
+  now = Date.now(),
+): ConnectionStrength {
+  if (!iso) return "none";
+  const days = (now - new Date(iso).getTime()) / 86_400_000;
+  if (!Number.isFinite(days) || days < 0) return "strong";
+  if (days <= 14) return "strong";
+  if (days <= 45) return "weak";
+  return "veryweak";
+}
+
+export function relativeWhen(iso: string | null | undefined, now = Date.now()) {
+  if (!iso) return "No contact";
+  const days = (now - new Date(iso).getTime()) / 86_400_000;
+  if (!Number.isFinite(days)) return "No contact";
+  if (days < 0) return "Upcoming";
+  if (days < 1) return "Today";
+  if (days < 2) return "Yesterday";
+  if (days < 14) return `${Math.floor(days)} days ago`;
+  if (days < 45) {
+    const weeks = Math.max(1, Math.round(days / 7));
+    return weeks === 1 ? "1 week ago" : `${weeks} weeks ago`;
+  }
+  if (days < 365) {
+    const months = Math.max(1, Math.round(days / 30));
+    return months === 1 ? "about 1 month ago" : `${months} months ago`;
+  }
+  const years = Math.max(1, Math.round(days / 365));
+  return years === 1 ? "about 1 year ago" : `${years} years ago`;
+}
+
+export function formatWhen(iso: string | null) {
+  if (!iso) return "No date";
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: "UTC",
+  }).format(new Date(iso));
+}
+
+export function formatMoney(value: string | null, currency: string) {
+  if (!value) return "No amount";
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return value;
+  try {
+    return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(amount);
+  } catch {
+    return `${currency} ${value}`;
+  }
+}
+
+export function companiesCsvRows(
+  companies: {
+    name: string;
+    domain: string | null;
+    website: string | null;
+    industry: string | null;
+    sizeCategory: string | null;
+    lifecycle: string;
+    ownerName: string | null;
+    source: string | null;
+    description: string | null;
+    createdAt: string;
+    updatedAt: string;
+  }[],
+) {
   return [
     [
       "Company",
-      "Segment & Stage",
-      "Account Owner",
-      "Open Deals",
-      "Pipeline Value",
-      "Win Probability (%)",
-      "Last Interaction Date",
-      "Last Interaction",
+      "Domain",
+      "Website",
+      "Industry",
+      "Size",
+      "Lifecycle",
+      "Owner",
+      "Source",
+      "Description",
+      "Created",
+      "Updated",
     ],
     ...companies.map((company) => [
       company.name,
-      company.tags.join("; "),
-      company.owner,
-      company.openDeals,
-      company.pipelineValue,
-      company.winProbability,
-      company.lastInteraction.date,
-      company.lastInteraction.label,
+      company.domain ?? "",
+      company.website ?? "",
+      company.industry ?? "",
+      company.sizeCategory ?? "",
+      company.lifecycle,
+      company.ownerName ?? "",
+      company.source ?? "",
+      company.description ?? "",
+      company.createdAt,
+      company.updatedAt,
     ]),
   ];
 }
 
-export function splitTags(tags: Company["tags"]) {
-  let used = 0;
-  const visible: Company["tags"] = [];
-
-  for (const tag of tags) {
-    if (visible.length === 2 || used + tag.length > TAG_CHAR_BUDGET) break;
-    visible.push(tag);
-    used += tag.length;
+export function actionError(error: unknown) {
+  if (error instanceof CrmError) {
+    return {
+      error: error.message,
+      field: typeof error.details?.field === "string" ? error.details.field : undefined,
+    };
   }
-
-  if (visible.length === 0 && tags.length > 0) visible.push(tags[0]);
-
-  return { visible, hidden: tags.length - visible.length };
+  return { error: "Something went wrong." };
 }
 
-export function companyHealth(company: Company) {
-  return {
-    discovery: Math.round(company.winProbability * 0.372),
-    evaluation: Math.round(company.winProbability * 0.651),
-    procurement: Math.round(company.winProbability * 0.372),
-  };
+export function isLifecycle(value: string): value is Lifecycle {
+  return (LIFECYCLES as readonly string[]).includes(value);
 }
 
-export function companyActivity(company: Company) {
-  const deals = company.openDeals;
-  return {
-    total: deals * 15,
-    touches: deals * 4,
-    emails: deals + 4,
-    meetings: Math.ceil(deals / 2),
-    calls: deals + 1,
-  };
-}
-
-export function formatDate(iso: string) {
-  const [, month, day] = iso.split("-").map(Number);
-  const names = [
-    "Jan",
-    "Feb",
-    "Mar",
-    "Apr",
-    "May",
-    "Jun",
-    "Jul",
-    "Aug",
-    "Sept",
-    "Oct",
-    "Nov",
-    "Dec",
-  ];
-  return `${names[month - 1]} ${day}`;
-}
-
-export function formatMoney(value: number) {
-  return value.toLocaleString("en-US");
-}
-
-export function daysSince(iso: string) {
-  const day = 24 * 60 * 60 * 1000;
-  return Math.max(0, Math.round((Date.parse(TODAY) - Date.parse(iso)) / day));
+export function isCompanySort(value: string): value is CompanySort {
+  return (COMPANY_SORTS as readonly string[]).includes(value);
 }

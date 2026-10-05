@@ -10,14 +10,24 @@ import SidebarContent from "./sidebar-content";
 import SidebarResizer from "./sidebar-resizer";
 import { useCompaniesStore } from "@/stores/companies-store";
 
-export default function Sidebar() {
+type SidebarProps = {
+  companyCount: number;
+  openActionCount: number;
+  workspaceName: string;
+};
+
+export default function Sidebar({ companyCount, openActionCount, workspaceName }: SidebarProps) {
   const sidebarOpen = useCompaniesStore((state) => state.sidebarOpen);
   const setSidebarOpen = useCompaniesStore((state) => state.setSidebarOpen);
 
   return (
     <>
       <aside className="relative hidden w-(--sidebar-width) shrink-0 border-r border-sidebar-border bg-sidebar lg:flex lg:flex-col">
-        <SidebarContent />
+        <SidebarContent
+          companyCount={companyCount}
+          openActionCount={openActionCount}
+          workspaceName={workspaceName}
+        />
         <SidebarResizer />
       </aside>
 
@@ -28,9 +38,13 @@ export default function Sidebar() {
         >
           <SheetTitle className="sr-only">Navigation</SheetTitle>
           <SheetDescription className="sr-only">
-            Sales CRM sections and pipelines
+            Companies, contacts, opportunities, activities, and next actions.
           </SheetDescription>
-          <SidebarContent />
+          <SidebarContent
+            companyCount={companyCount}
+            openActionCount={openActionCount}
+            workspaceName={workspaceName}
+          />
         </SheetContent>
       </Sheet>
     </>

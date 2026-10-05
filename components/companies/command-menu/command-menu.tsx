@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   Command,
   CommandDialog,
-  CommandEmpty,
   CommandFooter,
   CommandGroup,
   CommandInput,
@@ -13,29 +13,44 @@ import {
   CommandSeparator,
   Kbd,
 } from "@/components/_ui/command";
-import { CommandCompanyRow, CommandTableHeader } from "./command-table";
+import { searchWorkspaceAction } from "@/app/(crm)/search";
+import type { Company, Contact, Opportunity } from "@/lib/crm/types";
 import { useCompaniesStore } from "@/stores/companies-store";
 import PlusIcon from "@/public/assets/images/_common/plus.svg";
 
+type Results = {
+  query: string;
+  companies: Company[];
+  contacts: Contact[];
+  opportunities: Opportunity[];
+};
+
 export default function CommandMenu() {
+  const router = useRouter();
   const open = useCompaniesStore((state) => state.searchOpen);
   const setOpen = useCompaniesStore((state) => state.setSearchOpen);
-  const companies = useCompaniesStore((state) => state.companies);
-  const openDetail = useCompaniesStore((state) => state.openDetail);
-  const setNewCompanyOpen = useCompaniesStore(
-    (state) => state.setNewCompanyOpen,
-  );
+  const setNewCompanyOpen = useCompaniesStore((state) => state.setNewCompanyOpen);
   const [query, setQuery] = useState("");
+  const [remote, setRemote] = useState<Results | null>(null);
   const actionRan = useRef(false);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key.toLowerCase() !== "k") return;
-      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+      const { searchOpen, setSearchOpen } = useCompaniesStore.getState();
+      const target = event.target;
+      if (
+        !searchOpen &&
+        target instanceof HTMLElement &&
+        (target.isContentEditable ||
+          target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT")
+      ) {
         return;
       }
       event.preventDefault();
-      const { searchOpen, setSearchOpen } = useCompaniesStore.getState();
       setSearchOpen(!searchOpen);
     }
 
@@ -43,50 +58,129 @@ export default function CommandMenu() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
+  const trimmed = query.trim();
+  const searching = Boolean(open && trimmed && remote?.query !== trimmed);
+  const results = remote?.query === trimmed ? remote : null;
+
+  useEffect(() => {
+    if (!open || !trimmed) return;
+    let cancelled = false;
+    const handle = window.setTimeout(() => {
+      searchWorkspaceAction(trimmed).then((rows) => {
+        if (!cancelled) setRemote({ query: trimmed, ...rows });
+      });
+    }, 200);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(handle);
+    };
+  }, [trimmed, open]);
+
   function run(action: () => void) {
     actionRan.current = true;
     setOpen(false);
     action();
   }
 
+  const empty = results
+    ? results.companies.length + results.contacts.length + results.opportunities.length === 0
+    : true;
+
   return (
     <CommandDialog
       open={open}
       onOpenChange={setOpen}
       title="Search"
-      description="Search companies by name, owner, segment or stage"
-      className="max-w-[960px]"
+      description="Search companies, people, and opportunities"
+      className="max-w-[640px]"
       onCloseAutoFocus={(event) => {
         if (actionRan.current) event.preventDefault();
         actionRan.current = false;
         setQuery("");
+        setRemote(null);
       }}
     >
-      <Command>
+      <Command shouldFilter={false}>
         <CommandInput
           value={query}
           onValueChange={setQuery}
-          placeholder="Search companies, owners, stages…"
+          placeholder="Search companies, people, and opportunities"
           trailing={<Kbd>Esc</Kbd>}
         />
-        <CommandTableHeader />
         <CommandList>
-          <CommandEmpty>No results for “{query}”</CommandEmpty>
-          <CommandGroup>
-            {companies.map((company) => (
-              <CommandCompanyRow
-                key={company.id}
-                company={company}
-                onSelect={() => run(() => openDetail(company.id))}
-              />
-            ))}
-          </CommandGroup>
+          {searching && <p className="caption-style text-subtle px-4 py-6">Searching…</p>}
+          {!searching && trimmed && empty && (
+            <p className="caption-style text-subtle px-4 py-6">No records for “{trimmed}”</p>
+          )}
+          {!trimmed && <p className="caption-style text-subtle px-4 py-6">Type a name, email, or domain.</p>}
+          {results && results.companies.length > 0 && (
+            <CommandGroup heading="Companies">
+              {results.companies.map((company) => (
+                <CommandItem
+                  key={company.id}
+                  value={company.id}
+                  onSelect={() => run(() => router.push(`/?record=${company.id}`))}
+                >
+                  <span className="flex min-w-0 flex-col">
+                    <span className="truncate">{company.name}</span>
+                    <span className="caption-style text-subtle truncate">{company.domain ?? "No domain"}</span>
+                  </span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          )}
+          {results && results.contacts.length > 0 && (
+            <CommandGroup heading="People">
+              {results.contacts.map((contact) => (
+                <CommandItem
+                  key={contact.id}
+                  value={contact.id}
+                  onSelect={() =>
+                    run(() =>
+                      router.push(`/contacts?q=${encodeURIComponent(contact.email || contact.name)}`),
+                    )
+                  }
+                >
+                  <span className="flex min-w-0 flex-col">
+                    <span className="truncate">{contact.name}</span>
+                    <span className="caption-style text-subtle truncate">
+                      {[contact.jobTitle, contact.companyName].filter(Boolean).join(" · ") || "No company"}
+                    </span>
+                  </span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          )}
+          {results && results.opportunities.length > 0 && (
+            <CommandGroup heading="Opportunities">
+              {results.opportunities.map((opportunity) => (
+                <CommandItem
+                  key={opportunity.id}
+                  value={opportunity.id}
+                  onSelect={() =>
+                    run(() => router.push(`/opportunities?q=${encodeURIComponent(opportunity.name)}`))
+                  }
+                >
+                  <span className="flex min-w-0 flex-col">
+                    <span className="truncate">{opportunity.name}</span>
+                    <span className="caption-style text-subtle truncate">
+                      {opportunity.companyName ?? "No company"}
+                    </span>
+                  </span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          )}
           <CommandSeparator />
           <CommandGroup heading="Actions">
             <CommandItem
               value="new-company"
-              keywords={["New Company", "Add", "Create"]}
-              onSelect={() => run(() => setNewCompanyOpen(true))}
+              onSelect={() =>
+                run(() => {
+                  setNewCompanyOpen(true);
+                  router.push("/");
+                })
+              }
             >
               <span className="bg-muted flex size-6 shrink-0 items-center justify-center rounded-md shadow-[0px_0px_0px_1px_#232323]">
                 <PlusIcon aria-hidden className="text-soft size-3" />

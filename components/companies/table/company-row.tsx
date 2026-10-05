@@ -1,15 +1,16 @@
 "use client";
 
 import type { MouseEvent } from "react";
-import Avatar from "@/components/_ui/avatar";
-import Button from "@/components/_ui/button";
 import { Checkbox } from "@/components/_ui/checkbox";
-import Tag from "@/components/_ui/tag";
 import { TableCell, TableRow } from "@/components/_ui/table";
-import SegmentBar from "@/components/_common/segment-bar";
-import Sparkline from "@/components/_common/sparkline";
-import { TAG_TONES, ownerByName, type Company } from "@/data/companies";
-import { formatDate, formatMoney, splitTags } from "@/lib/companies";
+import {
+  ConnectionMark,
+  lifecycleTagBase,
+  Monogram,
+  RecordTag,
+} from "@/components/beautifui/record-marks";
+import { LIFECYCLE_LABELS, relativeWhen } from "@/lib/companies";
+import type { Company } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
 import {
   TABLE_CELL_CLASS,
@@ -17,16 +18,14 @@ import {
   columnClass,
   type TableColumnKey,
 } from "./table-columns";
-import CalendarIcon from "@/public/assets/images/_common/calendar.svg";
-import DotsIcon from "@/public/assets/images/companies/table/dots-horizontal.svg";
 
 type CompanyRowProps = {
   company: Company;
+  index: number;
   selected: boolean;
   active: boolean;
   onToggle: () => void;
   onOpen: () => void;
-  onOpenOwner: () => void;
 };
 
 function cellClass(key: TableColumnKey) {
@@ -39,14 +38,18 @@ function stop(event: MouseEvent) {
 
 export default function CompanyRow({
   company,
+  index,
   selected,
   active,
   onToggle,
   onOpen,
-  onOpenOwner,
 }: CompanyRowProps) {
-  const owner = ownerByName(company.owner);
-  const { visible, hidden } = splitTags(company.tags);
+  const revealed = selected || active;
+  const tags = [
+    { label: LIFECYCLE_LABELS[company.lifecycle], base: lifecycleTagBase(company.lifecycle) },
+    ...(company.industry ? [{ label: company.industry, base: undefined }] : []),
+    ...(company.sizeCategory ? [{ label: company.sizeCategory, base: undefined }] : []),
+  ];
 
   return (
     <TableRow
@@ -55,87 +58,66 @@ export default function CompanyRow({
       data-active={active || selected}
       className={cn(
         TABLE_ROW_CLASS,
-        "hover:bg-card/60 data-[active=true]:border-card data-[active=true]:bg-card cursor-pointer",
+        "group hover:bg-card/60 data-[active=true]:bg-card cursor-pointer",
       )}
     >
       <TableCell role="cell" className={cellClass("name")}>
-        <span className="flex items-center gap-5">
-          <Checkbox
-            checked={selected}
-            onCheckedChange={onToggle}
-            onClick={stop}
-            aria-label={`Select ${company.name}`}
-          />
-          {company.name}
-        </span>
-      </TableCell>
-      <TableCell role="cell" className={cellClass("segment")}>
-        <span className="flex items-center gap-[3px]">
-          {visible.map((tag) => (
-            <Tag key={tag} tone={TAG_TONES[tag]}>
-              {tag}
-            </Tag>
-          ))}
-          {hidden > 0 && (
-            <Tag tone="neutral" size="sm">
-              +{hidden}
-            </Tag>
-          )}
-        </span>
-      </TableCell>
-      <TableCell role="cell" className={cellClass("owner")} onClick={stop}>
-        <Button
-          variant="ghost"
-          size="none"
-          onClick={onOpenOwner}
-          aria-label={`Open ${owner.name} profile`}
-          className="text-foreground -mx-1.5 gap-1.5 px-1.5 py-1 font-normal"
-        >
-          <Avatar src={owner.avatar} alt="" />
-          {owner.name}
-        </Button>
-      </TableCell>
-      <TableCell role="cell" className={cellClass("openDeals")}>
-        {company.openDeals}
-      </TableCell>
-      <TableCell role="cell" className={cellClass("pipelineValue")}>
-        <span className="flex items-center gap-1">
-          <span className="text-muted-foreground">$</span>
-          {formatMoney(company.pipelineValue)}
-        </span>
-      </TableCell>
-      <TableCell role="cell" className={cellClass("winProbability")}>
-        <span className="flex items-center gap-2">
-          <SegmentBar percent={company.winProbability} className="w-[74px]" />
-          <span className="w-[4ch] text-right">{company.winProbability}%</span>
-        </span>
-      </TableCell>
-      <TableCell role="cell" className={cellClass("trend")}>
-        <Sparkline values={company.trend} />
-      </TableCell>
-      <TableCell role="cell" className={cellClass("lastInteraction")}>
-        <span className="flex items-center gap-1">
-          <CalendarIcon
-            aria-hidden
-            className="text-foreground size-3.5 shrink-0"
-          />
-          <span className="tabular-nums">
-            {formatDate(company.lastInteraction.date)}
+        <span className="flex min-w-[240px] items-center gap-2">
+          <span className="relative flex size-6 shrink-0 items-center justify-center">
+            <span
+              className={cn(
+                "text-faint text-[11.5px] tabular-nums opacity-0 [@media(hover:hover)]:opacity-100",
+                "[@media(hover:hover)]:group-hover:opacity-0! [@media(hover:hover)]:group-focus-within:opacity-0!",
+                revealed && "opacity-0!",
+              )}
+            >
+              {index + 1}
+            </span>
+            <Checkbox
+              checked={selected}
+              onCheckedChange={onToggle}
+              onClick={stop}
+              aria-label={`Select ${company.name}`}
+              className={cn(
+                "absolute [@media(hover:hover)]:opacity-0",
+                "[@media(hover:hover)]:group-hover:opacity-100! [@media(hover:hover)]:group-focus-within:opacity-100!",
+                revealed && "opacity-100!",
+              )}
+            />
           </span>
-          <span aria-hidden className="mx-[3px] h-2 w-px bg-white/15" />
-          {company.lastInteraction.label}
+          <Monogram name={company.name} />
+          <span className="max-w-[220px] truncate text-[13px] font-medium">{company.name}</span>
         </span>
       </TableCell>
-      <TableCell role="cell" className={cellClass("action")} onClick={stop}>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          className={cn("text-foreground", active && "bg-white/6")}
-          aria-label={`Open ${company.name} details`}
-          onClick={onOpen}
-        >
-          <DotsIcon aria-hidden className="size-3" />
-        </Button>
+      <TableCell role="cell" className={cellClass("categories")}>
+        <span className="flex max-w-[280px] items-center gap-1 overflow-hidden">
+          {tags.map((tag) => (
+            <RecordTag key={tag.label} label={tag.label} base={tag.base} />
+          ))}
+        </span>
+      </TableCell>
+      <TableCell role="cell" className={cn(cellClass("last"), "text-subtle text-[13px]")}>
+        {relativeWhen(company.lastInteractionAt)}
+      </TableCell>
+      <TableCell role="cell" className={cellClass("strength")}>
+        <ConnectionMark at={company.lastInteractionAt} />
+      </TableCell>
+      <TableCell role="cell" className={cellClass("domain")} onClick={stop}>
+        {company.domain ? (
+          <a
+            href={`https://${company.domain}`}
+            target="_blank"
+            rel="noreferrer"
+            className="max-w-[180px] truncate text-[13px] underline decoration-white/35 underline-offset-[3px] hover:decoration-current"
+          >
+            {company.domain}
+          </a>
+        ) : (
+          <span className="text-faint">—</span>
+        )}
+      </TableCell>
+      <TableCell role="cell" className={cn(cellClass("owner"), "text-subtle text-[13px]")}>
+        {company.ownerName ?? "Unassigned"}
       </TableCell>
     </TableRow>
   );
