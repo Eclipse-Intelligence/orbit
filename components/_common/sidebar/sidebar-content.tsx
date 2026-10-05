@@ -1,5 +1,6 @@
 "use client";
 
+import { usePathname } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { ScrollArea } from "@/components/_ui/scroll-area";
 import SidebarNavItem from "./sidebar-nav-item";
@@ -14,14 +15,19 @@ import TargetIcon from "@/public/assets/images/companies/sidebar/target-05.svg";
 
 type SidebarContentProps = {
   companyCount: number;
+  openActionCount: number;
   workspaceName: string;
 };
 
 export default function SidebarContent({
   companyCount,
+  openActionCount,
   workspaceName,
 }: SidebarContentProps) {
+  const pathname = usePathname();
   const openProfile = useCompaniesStore((state) => state.openProfile);
+  const current = (href: string) =>
+    href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(`${href}/`);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -41,15 +47,37 @@ export default function SidebarContent({
         <nav aria-label="Primary">
           <SidebarSection className="border-sidebar-border border-b">
             <SidebarNavItem
+              href="/"
               icon={BuildingIcon}
               label="Companies"
               count={companyCount}
-              active
+              active={current("/")}
             />
-            <SidebarNavItem icon={BookClosedIcon} label="Contacts" disabled />
-            <SidebarNavItem icon={ClipboardIcon} label="Opportunities" disabled />
-            <SidebarNavItem icon={ListIcon} label="Activities" disabled />
-            <SidebarNavItem icon={TargetIcon} label="Next actions" disabled />
+            <SidebarNavItem
+              href="/contacts"
+              icon={BookClosedIcon}
+              label="Contacts"
+              active={current("/contacts")}
+            />
+            <SidebarNavItem
+              href="/opportunities"
+              icon={ClipboardIcon}
+              label="Opportunities"
+              active={current("/opportunities")}
+            />
+            <SidebarNavItem
+              href="/activities"
+              icon={ListIcon}
+              label="Activities"
+              active={current("/activities")}
+            />
+            <SidebarNavItem
+              href="/actions"
+              icon={TargetIcon}
+              label="Next actions"
+              count={openActionCount}
+              active={current("/actions")}
+            />
           </SidebarSection>
         </nav>
       </ScrollArea>

@@ -26,14 +26,18 @@ export function databaseUrl() {
 }
 
 export function getPool() {
-  if (!globalPools.__crmPool) globalPools.__crmPool = createPool(databaseUrl());
+  if (!globalPools.__crmPool || globalPools.__crmPool.ending || globalPools.__crmPool.ended) {
+    globalPools.__crmPool = createPool(databaseUrl());
+  }
   return globalPools.__crmPool;
 }
 
 export function getAdminPool() {
   const url = process.env.DATABASE_ADMIN_URL;
   if (!url) throw new Error("DATABASE_ADMIN_URL is not set");
-  if (!globalPools.__crmAdminPool) globalPools.__crmAdminPool = createPool(url);
+  if (!globalPools.__crmAdminPool || globalPools.__crmAdminPool.ending || globalPools.__crmAdminPool.ended) {
+    globalPools.__crmAdminPool = createPool(url);
+  }
   return globalPools.__crmAdminPool;
 }
 

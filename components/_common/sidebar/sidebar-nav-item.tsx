@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 type SidebarNavItemProps = {
   icon: ComponentType<SVGProps<SVGSVGElement>>;
   label: string;
+  href?: string;
   count?: number;
   active?: boolean;
   disabled?: boolean;
@@ -18,6 +19,7 @@ type SidebarNavItemProps = {
 export default function SidebarNavItem({
   icon: Icon,
   label,
+  href,
   count,
   active = false,
   disabled = false,
@@ -29,6 +31,7 @@ export default function SidebarNavItem({
       <Button
         variant="nav"
         size="md"
+        href={disabled ? undefined : href}
         data-active={active}
         aria-current={active ? "page" : undefined}
         aria-disabled={disabled || undefined}

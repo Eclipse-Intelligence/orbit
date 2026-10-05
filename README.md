@@ -1,6 +1,6 @@
 # Sales CRM
 
-A workspace CRM for companies. People, conversations, opportunities, and next actions are the direction of the product. This milestone stores companies in PostgreSQL and exposes them to the web app, a versioned API, and an MCP server through one domain service.
+A workspace CRM for companies, people, opportunities, conversations, and next actions. The web app, versioned API, and MCP server share one domain service backed by PostgreSQL.
 
 ## Requirements
 
@@ -27,13 +27,13 @@ npm run db:setup
 npm run dev
 ```
 
-`db:setup` applies `supabase/bootstrap/local-auth.sql` only when `auth.users` does not already exist, applies the CRM migration, and writes a local user plus an agent token into `.env.local`. Sign in with `DEV_USER_EMAIL` and `DEV_USER_PASSWORD`.
+`db:setup` applies `supabase/bootstrap/local-auth.sql` only when `auth.users` does not already exist, applies each CRM migration once, and writes a local user plus an agent token into `.env.local`. Sign in with `DEV_USER_EMAIL` and `DEV_USER_PASSWORD`. The local agent can read and write companies, contacts, leads, activities, opportunities, and next actions.
 
 `npm run db:reset` drops the `crm` and `private` schemas and the local auth users, then sets up again. It refuses to run when it detects hosted Supabase Auth.
 
 ## Hosted Supabase
 
-Set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`. Do not run `supabase/bootstrap/local-auth.sql` there. Apply `supabase/migrations/20261005140000_crm_foundation.sql` with a role that can create schemas. Point `DATABASE_URL` at the `crm_app` role (or another role that can `SET ROLE authenticated` and `SET ROLE crm_agent`). Keep the service role on the server. Do not put it in an agent token or a `NEXT_PUBLIC_` variable.
+Set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`. Do not run `supabase/bootstrap/local-auth.sql` there. Apply the files in `supabase/migrations` in order with a role that can create schemas. Point `DATABASE_URL` at the `crm_app` role (or another role that can `SET ROLE authenticated` and `SET ROLE crm_agent`). Keep the service role on the server. Do not put it in an agent token or a `NEXT_PUBLIC_` variable.
 
 ## Agents
 
@@ -52,7 +52,7 @@ API: `docs/api.md`. MCP: `docs/mcp.md`. Schema and tenancy: `docs/architecture.m
 | `npm run dev` | Next.js dev server |
 | `npm run build` | Production build |
 | `npm run lint` | ESLint |
-| `npm test` | Company service, API, and MCP tests against the `crm_test` database |
+| `npm test` | Domain, API, and MCP tests against the `crm_test` database |
 | `npm run db:setup` | Apply schema and seed a local user |
 | `npm run db:reset` | Drop local CRM data and set up again |
 | `npm run agent:create` | Issue a revocable agent token |

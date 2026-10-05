@@ -1,7 +1,7 @@
-export default function CompaniesLoading() {
+export default function CrmLoading() {
   return (
-    <main className="flex h-dvh items-center justify-center">
-      <p className="text-muted-foreground">Loading companies…</p>
-    </main>
+    <section className="flex min-h-0 flex-1 items-center justify-center">
+      <p className="text-muted-foreground">Loading…</p>
+    </section>
   );
 }

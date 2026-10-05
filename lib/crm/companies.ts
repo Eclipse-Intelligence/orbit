@@ -1,8 +1,20 @@
-import { createHash } from "node:crypto";
+export type { MutationOptions, MutationOutcome } from "@/lib/crm/mutate";
+
 import type { Db } from "@/lib/db/pool";
+import { withActor } from "@/lib/crm/context";
 import { CrmError, isPgError } from "@/lib/crm/errors";
-import { actorKey, withActor } from "@/lib/crm/context";
-import { likePattern, normalizeCompanyName, normalizeCompanyWrite, stableStringify } from "@/lib/crm/normalize";
+import {
+  assertOwner,
+  iso,
+  isUuid,
+  lockNamespace,
+  recordAudit,
+  replayOrRun,
+  requestHash,
+  type MutationOptions,
+  type MutationOutcome,
+} from "@/lib/crm/mutate";
+import { likePattern, normalizeCompanyName, normalizeCompanyWrite } from "@/lib/crm/normalize";
 import { assertScope } from "@/lib/crm/scopes";
 import type {
   Actor,
@@ -67,28 +79,12 @@ type CompanyRow = {
   updated_at: Date | string;
 };
 
-export type MutationOutcome<T> = {
-  status: number;
-  body: T;
-  replayed: boolean;
-};
-
-export type MutationOptions = {
-  idempotencyKey?: string | null;
-  provenance?: Provenance;
-};
-
 const SORT_COLUMNS: Record<CompanySort, string> = {
   name: "c.name",
   domain: "c.domain",
   updated: "c.updated_at",
   created: "c.created_at",
 };
-
-function iso(value: Date | string | null) {
-  if (!value) return null;
-  return new Date(value).toISOString();
-}
 
 function mapCompany(row: CompanyRow): Company {
   return {
@@ -115,27 +111,17 @@ function mapCompany(row: CompanyRow): Company {
   };
 }
 
-function requestHash(operation: string, payload: unknown) {
-  return createHash("sha256")
-    .update(stableStringify({ operation, payload }))
-    .digest("hex");
-}
-
-function isUuid(value: string) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-    value,
-  );
-}
-
-async function readCompany(db: Db, id: string) {
+export async function readCompanyInDb(db: Db, id: string) {
   const result = await db.query<CompanyRow>(`${COMPANY_SQL} where c.id = $1`, [id]);
   return result.rows[0] ? mapCompany(result.rows[0]) : null;
 }
 
-async function lockCompanies(db: Db, workspaceId: string) {
-  await db.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [
-    `${workspaceId}:companies`,
-  ]);
+async function readCompany(db: Db, id: string) {
+  return readCompanyInDb(db, id);
+}
+
+function lockCompanies(db: Db, workspaceId: string) {
+  return lockNamespace(db, workspaceId, "companies");
 }
 
 async function findMatch(
@@ -162,52 +148,6 @@ async function findMatch(
   if (!row) return null;
   const matchedOn = domain && row.domain === domain ? "domain" : "name";
   return { company: mapCompany(row), matchedOn } as const;
-}
-
-async function assertOwner(db: Db, workspaceId: string, ownerId: string | null | undefined) {
-  if (!ownerId) return;
-  const result = await db.query(
-    "select 1 from crm.workspace_members where workspace_id = $1 and user_id = $2",
-    [workspaceId, ownerId],
-  );
-  if (result.rowCount === 0) {
-    throw new CrmError(
-      "invalid_input",
-      "Owner is not a member of this workspace.",
-      400,
-      { field: "ownerId" },
-    );
-  }
-}
-
-async function recordAudit(
-  db: Db,
-  actor: Actor,
-  eventType: string,
-  company: Company,
-  provenance: Provenance | undefined,
-  changes: Record<string, unknown>,
-) {
-  await db.query(
-    `insert into crm.audit_events (
-      workspace_id, event_type, entity_type, entity_id, actor_type,
-      actor_user_id, actor_agent_id, credential_id, source, source_url,
-      operation, changes
-    ) values ($1, $2, 'company', $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)`,
-    [
-      actor.workspaceId,
-      eventType,
-      company.id,
-      actor.type,
-      actor.type === "user" ? actor.userId : null,
-      actor.type === "agent" ? actor.agentId : null,
-      actor.type === "agent" ? actor.credentialId : null,
-      provenance?.source ?? null,
-      provenance?.sourceUrl ?? null,
-      provenance?.operation ?? eventType,
-      JSON.stringify(changes),
-    ],
-  );
 }
 
 async function insertCompany(
@@ -250,7 +190,7 @@ async function insertCompany(
     );
     const company = await readCompany(db, inserted.rows[0].id);
     if (!company) throw new CrmError("internal_error", "Company was not saved.", 500);
-    await recordAudit(db, actor, "company.created", company, provenance, {
+    await recordAudit(db, actor, "company.created", "company", company.id, provenance, {
       after: company,
     });
     return company;
@@ -339,7 +279,7 @@ async function applyUpdate(
     before[field] = current[field as keyof Company];
     after[field] = company[field as keyof Company];
   }
-  await recordAudit(db, actor, eventType, company, provenance, {
+  await recordAudit(db, actor, eventType, "company", company.id, provenance, {
     fields: change.fields,
     before,
     after,
@@ -410,49 +350,14 @@ async function upsertInTransaction(
   };
 }
 
-async function replayOrRun<T>(
+export async function upsertCompanyInDb(
   db: Db,
   actor: Actor,
-  key: string | null | undefined,
-  hash: string,
-  status: number,
-  run: () => Promise<T>,
-): Promise<MutationOutcome<T>> {
-  if (!key) {
-    return { status, body: await run(), replayed: false };
-  }
-  await db.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [
-    `${actor.workspaceId}:${actorKey(actor)}:${key}`,
-  ]);
-  const existing = await db.query<{
-    status_code: number;
-    request_hash: string;
-    response: T;
-  }>(
-    `select status_code, request_hash, response
-     from crm.idempotency_keys
-     where workspace_id = $1 and actor_key = $2 and idempotency_key = $3`,
-    [actor.workspaceId, actorKey(actor), key],
-  );
-  const row = existing.rows[0];
-  if (row) {
-    if (row.request_hash !== hash) {
-      throw new CrmError(
-        "idempotency_conflict",
-        "This idempotency key was already used for a different request.",
-        409,
-      );
-    }
-    return { status: row.status_code, body: row.response, replayed: true };
-  }
-  const body = await run();
-  await db.query(
-    `insert into crm.idempotency_keys (
-      workspace_id, actor_key, idempotency_key, request_hash, status_code, response
-    ) values ($1, $2, $3, $4, $5, $6::jsonb)`,
-    [actor.workspaceId, actorKey(actor), key, hash, status, JSON.stringify(body)],
-  );
-  return { status, body, replayed: false };
+  input: CompanyWrite,
+  provenance?: Provenance,
+) {
+  const write = normalizeCompanyWrite(input, "upsert");
+  return upsertInTransaction(db, actor, write, provenance);
 }
 
 export async function listCompanies(actor: Actor, query: CompanyListQuery = {}) {
@@ -646,7 +551,7 @@ export async function archiveCompany(
       );
       const company = await readCompany(db, id);
       if (!company) throw new CrmError("not_found", "Company not found.", 404);
-      await recordAudit(db, actor, "company.archived", company, provenance, {
+      await recordAudit(db, actor, "company.archived", "company", company.id, provenance, {
         before: { archivedAt: null },
         after: { archivedAt: company.archivedAt },
       });

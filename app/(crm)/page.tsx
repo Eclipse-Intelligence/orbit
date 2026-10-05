@@ -1,8 +1,9 @@
 import { redirect } from "next/navigation";
-import Sidebar from "@/components/_common/sidebar/sidebar";
 import Companies from "@/components/companies/companies";
 import { getUserActor } from "@/lib/auth/user";
-import { countCompanies, listCompanies, listMembers } from "@/lib/crm/companies";
+import { listCompanies, listMembers } from "@/lib/crm/companies";
+import { CrmError } from "@/lib/crm/errors";
+import { getCompanyContext } from "@/lib/crm/relationships";
 import { companyQueryFromSearchParams } from "@/lib/crm/validation";
 
 export const dynamic = "force-dynamic";
@@ -23,28 +24,32 @@ export default async function CompaniesPage({
   const filters = companyQueryFromSearchParams(params);
   filters.limit = 200;
 
-  const [listed, companyCount, members] = await Promise.all([
+  const record = params.get("record");
+  const [listed, members, context] = await Promise.all([
     listCompanies(user, filters),
-    countCompanies(user),
     listMembers(user),
+    record
+      ? getCompanyContext(user, record).catch((error: unknown) => {
+          if (error instanceof CrmError && error.code === "not_found") return null;
+          throw error;
+        })
+      : Promise.resolve(null),
   ]);
 
   return (
-    <main className="flex h-dvh max-w-full overflow-hidden">
-      <Sidebar companyCount={companyCount} workspaceName={user.workspaceName} />
-      <Companies
-        companies={listed.data}
-        total={listed.total}
-        filters={filters}
-        members={members}
-        viewer={{
-          id: user.userId,
-          name: user.fullName || user.email,
-          email: user.email,
-          role: user.role,
-          workspaceName: user.workspaceName,
-        }}
-      />
-    </main>
+    <Companies
+      companies={listed.data}
+      total={listed.total}
+      filters={filters}
+      members={members}
+      context={context}
+      viewer={{
+        id: user.userId,
+        name: user.fullName || user.email,
+        email: user.email,
+        role: user.role,
+        workspaceName: user.workspaceName,
+      }}
+    />
   );
 }

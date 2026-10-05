@@ -63,6 +63,29 @@ export function formatDate(iso: string) {
   }).format(new Date(iso));
 }
 
+export function formatWhen(iso: string | null) {
+  if (!iso) return "No date";
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: "UTC",
+  }).format(new Date(iso));
+}
+
+export function formatMoney(value: string | null, currency: string) {
+  if (!value) return "No amount";
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return value;
+  try {
+    return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(amount);
+  } catch {
+    return `${currency} ${value}`;
+  }
+}
+
 export function companiesCsvRows(
   companies: {
     name: string;

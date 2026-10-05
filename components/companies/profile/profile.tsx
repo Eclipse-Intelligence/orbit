@@ -16,7 +16,7 @@ import DetailSection from "../detail/detail-section";
 import { signOutAction } from "@/app/(crm)/actions";
 import { displayInitials } from "@/lib/companies";
 import { useCompaniesStore } from "@/stores/companies-store";
-import type { Viewer } from "@/components/companies/companies";
+import type { Viewer } from "@/components/crm/viewer";
 import UsersIcon from "@/public/assets/images/companies/sidebar/users.svg";
 import XIcon from "@/public/assets/images/companies/detail/x.svg";
 

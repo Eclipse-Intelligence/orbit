@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { loadEnvFile, writeEnvFile } from "./load-env";
 
@@ -67,11 +67,34 @@ if (!authUsers.rows[0]?.users) {
   await applySql("supabase/bootstrap/local-auth.sql");
 }
 
+const foundation = "20261005140000_crm_foundation.sql";
 const companies = await admin.query<{ companies: string | null }>(
   "select to_regclass('crm.companies')::text as companies",
 );
 if (!companies.rows[0]?.companies) {
-  await applySql("supabase/migrations/20261005140000_crm_foundation.sql");
+  await applySql(`supabase/migrations/${foundation}`);
+}
+
+await admin.query(`
+  create table if not exists private.schema_migrations (
+    filename text primary key,
+    applied_at timestamptz not null default now()
+  )
+`);
+await admin.query(
+  "insert into private.schema_migrations (filename) values ($1) on conflict do nothing",
+  [foundation],
+);
+const migrations = readdirSync("supabase/migrations")
+  .filter((file) => file.endsWith(".sql"))
+  .sort();
+for (const file of migrations) {
+  const seen = await admin.query("select 1 from private.schema_migrations where filename = $1", [
+    file,
+  ]);
+  if ((seen.rowCount ?? 0) > 0) continue;
+  await applySql(`supabase/migrations/${file}`);
+  await admin.query("insert into private.schema_migrations (filename) values ($1)", [file]);
 }
 
 const supabaseConfigured = Boolean(
@@ -96,6 +119,26 @@ if (!hosted && !supabaseConfigured) {
   await admin.query("select private.ensure_personal_workspace($1)", [userId]);
 }
 
+const localScopes = [
+  "crm:read",
+  "companies:write",
+  "contacts:write",
+  "leads:write",
+  "activities:write",
+  "opportunities:write",
+  "tasks:write",
+];
+if (userId) {
+  await admin.query(
+    `update crm.agents
+     set scopes = $2::text[]
+     where name = 'Local agent'
+       and workspace_id in (
+         select workspace_id from crm.workspace_members where user_id = $1
+       )`,
+    [userId, localScopes],
+  );
+}
 let token = process.env.CRM_AGENT_TOKEN;
 if (!token && userId) {
   const workspace = await admin.query<{ id: string }>(
@@ -113,7 +156,7 @@ if (!token && userId) {
       `insert into crm.agents (workspace_id, name, description, scopes, created_by_user_id)
        values ($1, 'Local agent', 'Local development agent', $2, $3)
        returning id`,
-      [workspaceId, ["crm:read", "companies:write"], userId],
+      [workspaceId, localScopes, userId],
     );
     await admin.query(
       `insert into crm.agent_credentials (agent_id, token_prefix, token_hash)

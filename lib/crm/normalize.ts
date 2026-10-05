@@ -75,7 +75,46 @@ export function canonicalWebsite(value: string): string | null {
   }
 }
 
-function cleanText(value: string | null | undefined, max: number, field: string) {
+export function normalizePersonName(value: string) {
+  return value
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+export function canonicalEmail(value: string): string | null {
+  const email = value.trim().toLowerCase();
+  if (!email) return null;
+  if (email.length > 200 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return null;
+  return email;
+}
+
+export function canonicalLinkedin(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  let url: URL;
+  try {
+    url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`);
+  } catch {
+    return null;
+  }
+  const host = url.hostname.replace(/\.$/, "").replace(/^www\./, "").toLowerCase();
+  if (host !== "linkedin.com") return null;
+  const parts = url.pathname.split("/").filter(Boolean);
+  if (parts.length < 2 || parts[0].toLowerCase() !== "in") return null;
+  const slug = decodeURIComponent(parts[1]).toLowerCase();
+  if (!/^[a-z0-9_-]{2,100}$/.test(slug)) return null;
+  return `https://www.linkedin.com/in/${slug}`;
+}
+
+export function normalizedLinkedin(url: string) {
+  return url.replace(/^https:\/\/www\./, "");
+}
+
+export function cleanText(value: string | null | undefined, max: number, field: string) {
   if (value == null) return null;
   const trimmed = value.trim();
   if (!trimmed) return null;

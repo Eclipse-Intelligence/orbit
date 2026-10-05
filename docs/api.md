@@ -1,4 +1,4 @@
-# Company API
+# CRM API
 
 Base path: `/api/v1`
 
@@ -12,10 +12,15 @@ Optional `Idempotency-Key` header (printable ASCII, up to 200 characters). Reuse
 
 | Operation | Scope |
 | --- | --- |
-| List, get | `crm:read` |
-| Create, update, upsert, archive | `companies:write` |
+| List, get, context, due actions, stale relationships | `crm:read` |
+| Company create, update, upsert, archive | `companies:write` |
+| Contact create, update, upsert, archive | `contacts:write` |
+| Opportunity create, update, archive | `opportunities:write` |
+| Activity create | `activities:write` |
+| Next action create, update, complete, archive | `tasks:write` |
+| Lead ingestion | `leads:write`, plus the write scope of each record included |
 
-`admin` satisfies either scope.
+`admin` satisfies any of these.
 
 ## Companies
 
@@ -67,4 +72,50 @@ It is stored on the audit event. It is not a company column.
 { "error": { "code": "forbidden", "message": "Missing scope companies:write.", "details": {} } }
 ```
 
-Codes include `unauthorized` (401), `forbidden` (403), `not_found` (404), `invalid_input` (400), `duplicate_company` (409), `idempotency_conflict` (409), `rate_limited` (429), and `internal_error` (500).
+Codes include `unauthorized` (401), `forbidden` (403), `not_found` (404), `invalid_input` (400), `duplicate_company` (409), `duplicate_contact` (409), `idempotency_conflict` (409), `rate_limited` (429), and `internal_error` (500).
+
+## Contacts
+
+`GET /api/v1/contacts` with `q`, `company_id`, `owner`, `limit`, `offset`, `include_archived=true`.
+
+`POST /api/v1/contacts` creates a person. A name, email, phone, or LinkedIn profile is required. Matching email or LinkedIn returns 409 `duplicate_contact`.
+
+`POST /api/v1/contacts/upsert` matches email, then LinkedIn, then the same name at the same company. `200` with `{ "contact", "created", "matchedOn" }`. `matchedOn` is `email`, `linkedin`, `name`, or `null`.
+
+`GET`, `PATCH`, and `DELETE /api/v1/contacts/:id` read, partially update, and archive. `DELETE` sets `archived_at`.
+
+## Opportunities
+
+`GET /api/v1/opportunities` with `q`, `company_id`, `status` (`open`, `won`, `lost`).
+
+`POST /api/v1/opportunities` requires `companyId` and `name`. Omitting `stageId` uses the first stage of the default pipeline. A won or lost stage sets `status`. Setting `status` to `won` or `lost` moves the opportunity to that stage. Value is a non-negative amount with up to two decimal places. Currency is a three-letter code and defaults to `USD`.
+
+`GET /api/v1/pipeline` returns the default pipeline and its stages.
+
+`GET`, `PATCH`, and `DELETE /api/v1/opportunities/:id` read, partially update, and archive. A stage change writes an `opportunity.stage_changed` audit event.
+
+## Activities
+
+`GET /api/v1/activities` with `q`, `company_id`, `contact_id`, `opportunity_id`, `type`.
+
+`POST /api/v1/activities` appends an interaction. Types are `email`, `meeting`, `call`, `note`, `research`, `linkedin`, `agent_update`, and `other`. A title or body is required, and the row must point at a company, contact, or opportunity. There is no update or delete.
+
+## Next actions
+
+`GET /api/v1/tasks` with `q`, `company_id`, `owner`, and `view` (`overdue`, `today`, `upcoming`, `completed`). `today` includes open actions with no due date. `completed` is the last 14 days.
+
+`GET /api/v1/actions?view=` returns the same tasks. `view=none` returns companies that have no open next action.
+
+`POST /api/v1/tasks` creates one. `PATCH /api/v1/tasks/:id` updates it. `completed: true` sets `completed_at` without moving an existing completion time. `completed: false` reopens it.
+
+`POST /api/v1/tasks/:id/complete` marks it complete. `DELETE /api/v1/tasks/:id` archives it.
+
+## Leads
+
+`POST /api/v1/leads` accepts any of `company`, `contact`, `note`, `activity`, `opportunity`, and `task`. Company and contact use the upsert rules. The note becomes a research activity when `activity` is omitted. The opportunity and next action attach to the company and contact from the same request. The response is one object with `company`, `contact`, `activity`, `opportunity`, `task`, and the created/matched flags. The whole request is one transaction.
+
+## Context
+
+`GET /api/v1/companies/:id/context` returns the company, its contacts, opportunities, recent activities, open next actions, `lastInteraction`, and `openTaskCount`.
+
+`GET /api/v1/relationships/stale?days=21` returns companies whose latest activity is older than that many days, or that have no activity. `days` defaults to 21.

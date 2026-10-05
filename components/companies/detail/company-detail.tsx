@@ -18,7 +18,8 @@ import DetailSection from "./detail-section";
 import { archiveCompanyAction, updateCompanyAction } from "@/app/(crm)/actions";
 import type { CompanyActionState } from "@/app/(crm)/actions";
 import { formatDate } from "@/lib/companies";
-import type { Company, Member } from "@/lib/crm/types";
+import type { Company, CompanyContext, Member } from "@/lib/crm/types";
+import RelationshipPanel from "./relationship-panel";
 import { useCompaniesStore } from "@/stores/companies-store";
 import BuildingIcon from "@/public/assets/images/companies/detail/building.svg";
 import XIcon from "@/public/assets/images/companies/detail/x.svg";
@@ -26,6 +27,7 @@ import XIcon from "@/public/assets/images/companies/detail/x.svg";
 type CompanyDetailProps = {
   companies: Company[];
   members: Member[];
+  context: CompanyContext | null;
   onSaved: (company: Company) => void;
   onArchived: (id: string) => void;
 };
@@ -47,15 +49,35 @@ function valuesFromCompany(company: Company): CompanyFormValues {
 export default function CompanyDetail({
   companies,
   members,
+  context,
   onSaved,
   onArchived,
 }: CompanyDetailProps) {
+  const router = useRouter();
   const detailId = useCompaniesStore((state) => state.detailId);
   const detailOpen = useCompaniesStore((state) => state.detailOpen);
   const detailCompany = useCompaniesStore((state) => state.detailCompany);
   const closeDetail = useCompaniesStore((state) => state.closeDetail);
   const listed = companies.find((item) => item.id === detailId);
-  const company = listed ?? (detailCompany?.id === detailId ? detailCompany : undefined);
+  const company =
+    listed ??
+    (detailCompany?.id === detailId ? detailCompany : undefined) ??
+    (context?.company.id === detailId ? context.company : undefined);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const current = params.get("record");
+    if (detailOpen && detailId) {
+      if (current === detailId) return;
+      params.set("record", detailId);
+    } else if (!detailOpen && current) {
+      params.delete("record");
+    } else {
+      return;
+    }
+    const next = params.toString();
+    router.replace(next ? `/?${next}` : "/", { scroll: false });
+  }, [detailOpen, detailId, router]);
 
   return (
     <Sheet open={detailOpen && company !== undefined} onOpenChange={(open) => !open && closeDetail()}>
@@ -79,6 +101,7 @@ export default function CompanyDetail({
             key={company.id}
             company={company}
             members={members}
+            context={context}
             onSaved={onSaved}
             onArchived={onArchived}
           />
@@ -91,11 +114,13 @@ export default function CompanyDetail({
 function CompanyEditor({
   company,
   members,
+  context,
   onSaved,
   onArchived,
 }: {
   company: Company;
   members: Member[];
+  context: CompanyContext | null;
   onSaved: (company: Company) => void;
   onArchived: (id: string) => void;
 }) {
@@ -169,12 +194,7 @@ function CompanyEditor({
           />
         </DetailSection>
 
-        <DetailSection title="Relationship" className="shadow-none">
-          <p className="caption-style text-subtle">
-            Contacts, conversations, opportunities, and next actions are not available yet.
-            This record keeps the company so those can attach later.
-          </p>
-        </DetailSection>
+        <RelationshipPanel companyId={company.id} context={context} />
       </ScrollArea>
 
       <SheetFooter>

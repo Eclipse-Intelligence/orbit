@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { scopesForRole, type Scope } from "@/lib/crm/scopes";
 import { generateAgentToken } from "@/lib/crm/tokens";
@@ -17,9 +17,12 @@ export async function resetDatabase() {
   `);
   await admin.query(readFileSync("supabase/bootstrap/local-auth.sql", "utf8"));
   await admin.query("truncate auth.users cascade");
-  await admin.query(
-    readFileSync("supabase/migrations/20261005140000_crm_foundation.sql", "utf8"),
-  );
+  const migrations = readdirSync("supabase/migrations")
+    .filter((file) => file.endsWith(".sql"))
+    .sort();
+  for (const file of migrations) {
+    await admin.query(readFileSync(`supabase/migrations/${file}`, "utf8"));
+  }
 }
 
 export async function createUser(email: string, name = "Test User") {

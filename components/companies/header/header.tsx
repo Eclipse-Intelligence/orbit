@@ -4,7 +4,7 @@ import Button from "@/components/_ui/button";
 import Notifications from "./notifications/notifications";
 import { displayInitials } from "@/lib/companies";
 import { useCompaniesStore } from "@/stores/companies-store";
-import type { Viewer } from "@/components/companies/companies";
+import type { Viewer } from "@/components/crm/viewer";
 import MenuIcon from "@/public/assets/images/_common/menu.svg";
 import SearchIcon from "@/public/assets/images/_common/search.svg";
 

@@ -3,12 +3,12 @@
 PostgreSQL is the source of truth. The web UI, REST API, and MCP server call the same company service in `lib/crm/companies.ts`. Matching, partial updates, idempotency, and audit writes are not reimplemented in each client.
 
 ```
-Browser  -> server actions -> company service -> PostgreSQL
-Agent    -> /api/v1        -> company service -> PostgreSQL
-Agent    -> /api/mcp       -> company service -> PostgreSQL
+Browser  -> server actions -> domain services -> PostgreSQL
+Agent    -> /api/v1        -> domain services -> PostgreSQL
+Agent    -> /api/mcp       -> domain services -> PostgreSQL
 ```
 
-Zustand holds the open row and the latest page of companies so the table can update before the next refresh. It is not persistence. A reload reads the database.
+Zustand holds which panel is open. Lists are rendered from the database. A reload reads PostgreSQL again.
 
 ## Tenancy
 
@@ -20,7 +20,7 @@ Business tables are in the `crm` schema so the Supabase Data API does not expose
 
 Humans sign in with Supabase Auth when `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` are set. Without those, a local password session is used. `supabase/bootstrap/local-auth.sql` creates a small `auth.users` table and `auth.uid()`. Do not run that file on a hosted Supabase project.
 
-Agents are rows in `crm.agents`, not user accounts. A credential is a random token stored as a SHA-256 hash. The plaintext is shown once. Revoke it by setting `revoked_at`. Scopes are `crm:read`, `companies:write`, `contacts:write`, `leads:write`, `activities:write`, `opportunities:write`, `tasks:write`, and `admin`. `admin` implies the others. This milestone's API enforces `crm:read` and `companies:write`.
+Agents are rows in `crm.agents`, not user accounts. A credential is a random token stored as a SHA-256 hash. The plaintext is shown once. Revoke it by setting `revoked_at`. Scopes are `crm:read`, `companies:write`, `contacts:write`, `leads:write`, `activities:write`, `opportunities:write`, `tasks:write`, and `admin`. `admin` implies the others. A lead ingestion checks `leads:write` and the write scope of each record it actually creates or updates.
 
 The service role key is never given to an agent. Agents use their own bearer token against this application's API.
 
@@ -38,6 +38,16 @@ Deletes archive. `archived_at` is set and the row stays. There is no hard delete
 
 `crm.audit_events` is append-only. A trigger rejects updates and deletes, and those grants are not given out. Company create, update, and archive write an event with the actor type (`user` or `agent`), agent id, credential id, source, and source URL when the caller provides them. That table is also the future webhook outbox. Delivery, signatures, and retries are not built yet.
 
+## People, opportunities, activity, and next actions
+
+Contacts match an active email, then an active LinkedIn profile, then the same normalised name at the same company. Opportunities use the workspace default pipeline. Omitting the stage picks the first stage. A won or lost stage sets the status, and setting the status to won or lost moves the opportunity to that stage. `opportunity.stage_changed` is written when the stage or status changes.
+
+Activities are append-only. A company timeline reads activities stored against that company. Next actions are tasks. Completing one sets `completed_at` and leaves that timestamp in place if it is completed again.
+
+`POST /api/v1/leads` and the `add_lead` tool run company, contact, activity, opportunity, and next-action writes in one transaction, through the same functions the individual endpoints use. A second lead with the same domain and email updates those rows instead of creating new ones.
+
+Company, contact, opportunity, and task references must belong to the same workspace. That check is a trigger, so a foreign id cannot be attached even when the caller's row-level policy would otherwise hide it.
+
 ## What this milestone does not do
 
-Contacts, opportunities, activities, tasks, lead ingestion, and email sync have tables or a place to land, and no product behaviour yet. Do not treat empty relationship sections as recorded history.
+Email and calendar sync, webhook delivery, and reporting beyond due and stale lists are not built. An empty timeline means no interaction has been recorded.

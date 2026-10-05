@@ -12,17 +12,22 @@ import { useCompaniesStore } from "@/stores/companies-store";
 
 type SidebarProps = {
   companyCount: number;
+  openActionCount: number;
   workspaceName: string;
 };
 
-export default function Sidebar({ companyCount, workspaceName }: SidebarProps) {
+export default function Sidebar({ companyCount, openActionCount, workspaceName }: SidebarProps) {
   const sidebarOpen = useCompaniesStore((state) => state.sidebarOpen);
   const setSidebarOpen = useCompaniesStore((state) => state.setSidebarOpen);
 
   return (
     <>
       <aside className="relative hidden w-(--sidebar-width) shrink-0 border-r border-sidebar-border bg-sidebar lg:flex lg:flex-col">
-        <SidebarContent companyCount={companyCount} workspaceName={workspaceName} />
+        <SidebarContent
+          companyCount={companyCount}
+          openActionCount={openActionCount}
+          workspaceName={workspaceName}
+        />
         <SidebarResizer />
       </aside>
 
@@ -33,9 +38,13 @@ export default function Sidebar({ companyCount, workspaceName }: SidebarProps) {
         >
           <SheetTitle className="sr-only">Navigation</SheetTitle>
           <SheetDescription className="sr-only">
-            CRM sections. Contacts, opportunities, activities and next actions are not available yet.
+            Companies, contacts, opportunities, activities, and next actions.
           </SheetDescription>
-          <SidebarContent companyCount={companyCount} workspaceName={workspaceName} />
+          <SidebarContent
+            companyCount={companyCount}
+            openActionCount={openActionCount}
+            workspaceName={workspaceName}
+          />
         </SheetContent>
       </Sheet>
     </>
