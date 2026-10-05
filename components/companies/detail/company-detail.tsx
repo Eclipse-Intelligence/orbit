@@ -64,13 +64,17 @@ export default function CompanyDetail({
     (detailCompany?.id === detailId ? detailCompany : undefined) ??
     (context?.company.id === detailId ? context.company : undefined);
 
+  const openedFromStore = useRef(false);
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const current = params.get("record");
     if (detailOpen && detailId) {
+      openedFromStore.current = true;
       if (current === detailId) return;
       params.set("record", detailId);
-    } else if (!detailOpen && current) {
+    } else if (openedFromStore.current && current) {
+      openedFromStore.current = false;
       params.delete("record");
     } else {
       return;

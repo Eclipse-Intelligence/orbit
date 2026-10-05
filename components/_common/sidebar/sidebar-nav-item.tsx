@@ -3,6 +3,7 @@
 import type { ComponentType, SVGProps } from "react";
 import Button from "@/components/_ui/button";
 import CountBadge from "@/components/_ui/count-badge";
+import { useCompaniesStore } from "@/stores/companies-store";
 import { cn } from "@/lib/utils";
 
 type SidebarNavItemProps = {
@@ -26,12 +27,15 @@ export default function SidebarNavItem({
   tone = "default",
   iconClassName,
 }: SidebarNavItemProps) {
+  const setSidebarOpen = useCompaniesStore((state) => state.setSidebarOpen);
+
   return (
     <li className={cn(active && "mb-0.75")}>
       <Button
         variant="nav"
         size="md"
         href={disabled ? undefined : href}
+        onClick={() => setSidebarOpen(false)}
         data-active={active}
         aria-current={active ? "page" : undefined}
         aria-disabled={disabled || undefined}
