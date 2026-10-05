@@ -63,6 +63,50 @@ export function formatDate(iso: string) {
   }).format(new Date(iso));
 }
 
+export type ConnectionStrength = "strong" | "weak" | "veryweak" | "none";
+
+export const CONNECTION_STRENGTH: Record<
+  ConnectionStrength,
+  { label: string; color: string }
+> = {
+  strong: { label: "Very strong", color: "var(--success)" },
+  weak: { label: "Weak", color: "var(--warning)" },
+  veryweak: { label: "Very weak", color: "var(--danger)" },
+  none: { label: "No communication", color: "var(--faint)" },
+};
+
+export function connectionStrength(
+  iso: string | null | undefined,
+  now = Date.now(),
+): ConnectionStrength {
+  if (!iso) return "none";
+  const days = (now - new Date(iso).getTime()) / 86_400_000;
+  if (!Number.isFinite(days) || days < 0) return "strong";
+  if (days <= 14) return "strong";
+  if (days <= 45) return "weak";
+  return "veryweak";
+}
+
+export function relativeWhen(iso: string | null | undefined, now = Date.now()) {
+  if (!iso) return "No contact";
+  const days = (now - new Date(iso).getTime()) / 86_400_000;
+  if (!Number.isFinite(days)) return "No contact";
+  if (days < 0) return "Upcoming";
+  if (days < 1) return "Today";
+  if (days < 2) return "Yesterday";
+  if (days < 14) return `${Math.floor(days)} days ago`;
+  if (days < 45) {
+    const weeks = Math.max(1, Math.round(days / 7));
+    return weeks === 1 ? "1 week ago" : `${weeks} weeks ago`;
+  }
+  if (days < 365) {
+    const months = Math.max(1, Math.round(days / 30));
+    return months === 1 ? "about 1 month ago" : `${months} months ago`;
+  }
+  const years = Math.max(1, Math.round(days / 365));
+  return years === 1 ? "about 1 year ago" : `${years} years ago`;
+}
+
 export function formatWhen(iso: string | null) {
   if (!iso) return "No date";
   return new Intl.DateTimeFormat("en-US", {

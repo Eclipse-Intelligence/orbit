@@ -1,4 +1,5 @@
 import Button from "@/components/_ui/button";
+import { EntityChip, Monogram } from "@/components/beautifui/record-marks";
 import SectionHeader from "@/components/crm/section-header";
 import type { Viewer } from "@/components/crm/viewer";
 import { disconnectInboxAction, syncInboxAction } from "@/app/(crm)/inbox/actions";
@@ -98,8 +99,9 @@ export default function InboxScreen({
           {messages.map((message) => {
             const attached = message.contactName || message.companyName;
             return (
-              <li key={message.id} className="border-border flex items-center gap-3 border-b px-4 py-3">
-                <span className="flex min-w-0 flex-1 flex-col gap-1">
+              <li key={message.id} className="border-border flex min-h-11 items-center gap-2.5 border-b px-2.5 py-2">
+                <Monogram name={message.fromName || message.fromEmail || message.subject || "Email"} />
+                <span className="flex min-w-0 flex-1 flex-col">
                   <span className="truncate text-[14px] leading-5">{message.subject || "Email"}</span>
                   <span className="caption-style text-subtle truncate">
                     {message.fromName || message.fromEmail || "Unknown sender"}
@@ -107,9 +109,7 @@ export default function InboxScreen({
                   </span>
                 </span>
                 {attached && message.companyId ? (
-                  <Button variant="link" size="sm" href={`/?record=${message.companyId}`}>
-                    {attached}
-                  </Button>
+                  <EntityChip name={attached} href={`/?record=${message.companyId}`} />
                 ) : (
                   <span className="caption-style text-subtle shrink-0">
                     {attached || "Not attached"}

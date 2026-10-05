@@ -6,10 +6,12 @@ import Button from "@/components/_ui/button";
 import { Input } from "@/components/_ui/input";
 import RecordTransfer from "@/components/crm/record-transfer";
 import SectionHeader from "@/components/crm/section-header";
+import ActionTask from "@/components/beautifui/action-task";
+import { ConnectionMark, Monogram } from "@/components/beautifui/record-marks";
 import { RecordList, RecordRow, RecordSelect } from "@/components/crm/record-form";
 import type { Viewer } from "@/components/crm/viewer";
 import { completeTaskAction, saveTaskAction, type RecordActionState } from "@/app/(crm)/records";
-import { formatWhen } from "@/lib/companies";
+import { relativeWhen } from "@/lib/companies";
 import type { Company, Company as CompanyRow, Task, TaskView } from "@/lib/crm/types";
 
 const VIEWS: { id: TaskView; label: string }[] = [
@@ -100,12 +102,16 @@ export default function ActionsScreen({
           {companies.map((company) => (
             <RecordRow
               key={company.id}
+              mark={<Monogram name={company.name} />}
               title={company.name}
-              meta={company.domain ?? "No domain"}
+              meta={`${relativeWhen(company.lastInteractionAt)} · ${company.domain ?? "No domain"}`}
               action={
-                <Button variant="ghost" size="sm" href={`/?record=${company.id}`}>
-                  Open
-                </Button>
+                <span className="flex items-center gap-3">
+                  <ConnectionMark at={company.lastInteractionAt} />
+                  <Button variant="ghost" size="sm" href={`/?record=${company.id}`}>
+                    Open
+                  </Button>
+                </span>
               }
             />
           ))}
@@ -113,19 +119,11 @@ export default function ActionsScreen({
       ) : (
         <RecordList count={tasks.length} empty="Nothing in this view.">
           {tasks.map((task) => (
-            <RecordRow
+            <ActionTask
               key={task.id}
-              title={task.title}
-              meta={[task.companyName, task.dueAt ? formatWhen(task.dueAt) : "No due date", task.priority]
-                .filter(Boolean)
-                .join(" · ")}
-              action={
-                view === "completed" ? null : (
-                  <Button variant="secondary" size="sm" onClick={() => complete(task.id)}>
-                    Done
-                  </Button>
-                )
-              }
+              task={task}
+              completed={view === "completed"}
+              onComplete={view === "completed" ? undefined : () => complete(task.id)}
             />
           ))}
         </RecordList>

@@ -3,7 +3,8 @@ import { after, before, describe, it } from "node:test";
 import { POST as leadRoute } from "@/app/api/v1/leads/route";
 import { POST as mcpRoute } from "@/app/api/mcp/route";
 import { getPool } from "@/lib/db/pool";
-import { createCompany } from "@/lib/crm/companies";
+import { connectionStrength } from "@/lib/companies";
+import { createCompany, listCompanies } from "@/lib/crm/companies";
 import { createContact, getContact, updateContact, upsertContact } from "@/lib/crm/contacts";
 import { createActivity, listActivities } from "@/lib/crm/activities";
 import { CrmError } from "@/lib/crm/errors";
@@ -180,6 +181,10 @@ describe("contacts, opportunities, and next actions", () => {
       companyId: quiet.body.company.id,
       occurredAt: new Date(Date.now() - 40 * 86_400_000).toISOString(),
     });
+    const listed = await listCompanies(owner, { query: "Quiet" });
+    assert.equal(listed.data[0]?.openTaskCount, 0);
+    assert.equal(connectionStrength(listed.data[0]?.lastInteractionAt), "weak");
+
     const stale = await findStaleRelationships(owner, 21);
     assert.equal(stale.some((item) => item.company.id === quiet.body.company.id), true);
     assert.equal(stale.some((item) => item.company.id === first.body.company?.id), false);

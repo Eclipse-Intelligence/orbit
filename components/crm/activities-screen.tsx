@@ -4,6 +4,7 @@ import { useActionState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Input } from "@/components/_ui/input";
+import { EntityChip, Monogram } from "@/components/beautifui/record-marks";
 import RecordTransfer from "@/components/crm/record-transfer";
 import SectionHeader from "@/components/crm/section-header";
 import { RecordList, RecordRow, RecordSelect } from "@/components/crm/record-form";
@@ -116,10 +117,14 @@ export default function ActivitiesScreen({
         {activities.map((activity) => (
           <RecordRow
             key={activity.id}
+            mark={<Monogram name={activity.companyName || activity.contactName || LABELS[activity.type] || activity.type} />}
             title={`${LABELS[activity.type] ?? activity.type}${activity.title ? ` · ${activity.title}` : ""}`}
-            meta={[activity.companyName, activity.contactName, activity.body, formatWhen(activity.occurredAt)]
-              .filter(Boolean)
-              .join(" · ")}
+            meta={[activity.contactName, activity.body, formatWhen(activity.occurredAt)].filter(Boolean).join(" · ")}
+            action={
+              activity.companyName && activity.companyId ? (
+                <EntityChip name={activity.companyName} href={`/?record=${activity.companyId}`} />
+              ) : null
+            }
           />
         ))}
       </RecordList>

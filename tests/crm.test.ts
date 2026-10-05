@@ -42,6 +42,8 @@ describe("company service", () => {
     assert.equal(created.status, 201);
     assert.equal(created.body.company.domain, "northwind.io");
     assert.equal(created.body.company.createdByUserId, owner.userId);
+    assert.equal(created.body.company.lastInteractionAt, null);
+    assert.equal(created.body.company.openTaskCount, 0);
 
     await createCompany(owner, { name: "Fabrikam", lifecycle: "lead" });
     const searched = await listCompanies(owner, {

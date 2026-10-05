@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popover";
 import { useAttention } from "@/components/crm/attention";
-import { formatWhen } from "@/lib/companies";
+import { relativeWhen } from "@/lib/companies";
 import BellIcon from "@/public/assets/images/companies/header/bell.svg";
 
 export default function Notifications() {
@@ -45,7 +45,7 @@ export default function Notifications() {
                     <span className="flex min-w-0 flex-col gap-1">
                       <span className="truncate text-[14px] leading-5">{item.title}</span>
                       <span className="caption-style text-subtle">
-                        {[item.overdue ? "Overdue" : "Due", item.companyName, item.dueAt ? formatWhen(item.dueAt) : "No due date"]
+                        {[item.overdue ? "Overdue" : "Due", item.companyName, item.dueAt ? relativeWhen(item.dueAt) : "No due date"]
                           .filter(Boolean)
                           .join(" · ")}
                       </span>

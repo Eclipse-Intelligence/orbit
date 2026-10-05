@@ -51,7 +51,19 @@ const COMPANY_SQL = `
     c.created_by_agent_id,
     c.archived_at,
     c.created_at,
-    c.updated_at
+    c.updated_at,
+    (
+      select max(a.occurred_at)
+      from crm.activities a
+      where a.company_id = c.id
+    ) as last_interaction_at,
+    (
+      select count(*)::int
+      from crm.tasks t
+      where t.company_id = c.id
+        and t.archived_at is null
+        and t.completed_at is null
+    ) as open_task_count
   from crm.companies c
   left join crm.profiles p on p.id = c.owner_id
 `;
@@ -77,6 +89,8 @@ type CompanyRow = {
   archived_at: Date | string | null;
   created_at: Date | string;
   updated_at: Date | string;
+  last_interaction_at: Date | string | null;
+  open_task_count: number;
 };
 
 const SORT_COLUMNS: Record<CompanySort, string> = {
@@ -108,6 +122,8 @@ function mapCompany(row: CompanyRow): Company {
     archivedAt: iso(row.archived_at),
     createdAt: iso(row.created_at) ?? new Date(0).toISOString(),
     updatedAt: iso(row.updated_at) ?? new Date(0).toISOString(),
+    lastInteractionAt: iso(row.last_interaction_at),
+    openTaskCount: row.open_task_count ?? 0,
   };
 }
 

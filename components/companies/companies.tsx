@@ -30,7 +30,12 @@ export default function Companies({
   viewer,
   context,
 }: CompaniesProps) {
-  const serverKey = companies.map((company) => `${company.id}:${company.updatedAt}`).join("|");
+  const serverKey = companies
+    .map(
+      (company) =>
+        `${company.id}:${company.updatedAt}:${company.lastInteractionAt ?? ""}:${company.openTaskCount}`,
+    )
+    .join("|");
   const [overlay, setOverlay] = useState<{ key: string; rows: Company[] } | null>(null);
   const rows = overlay?.key === serverKey ? overlay.rows : companies;
   const openDetail = useCompaniesStore((state) => state.openDetail);
