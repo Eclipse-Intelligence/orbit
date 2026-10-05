@@ -66,9 +66,9 @@ export default function CompanyRow({
           <span className="relative flex size-6 shrink-0 items-center justify-center">
             <span
               className={cn(
-                "text-faint text-[11.5px] tabular-nums",
-                revealed && "invisible",
-                "group-focus-within:invisible group-hover:invisible",
+                "text-faint text-[11.5px] tabular-nums opacity-0 [@media(hover:hover)]:opacity-100",
+                "[@media(hover:hover)]:group-hover:opacity-0! [@media(hover:hover)]:group-focus-within:opacity-0!",
+                revealed && "opacity-0!",
               )}
             >
               {index + 1}
@@ -79,8 +79,9 @@ export default function CompanyRow({
               onClick={stop}
               aria-label={`Select ${company.name}`}
               className={cn(
-                "absolute",
-                !revealed && "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100",
+                "absolute [@media(hover:hover)]:opacity-0",
+                "[@media(hover:hover)]:group-hover:opacity-100! [@media(hover:hover)]:group-focus-within:opacity-100!",
+                revealed && "opacity-100!",
               )}
             />
           </span>
