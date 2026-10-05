@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { getUserActor } from "@/lib/auth/user";
 import { CrmError } from "@/lib/crm/errors";
 import { savePipelineStages, type StageDraft } from "@/lib/crm/pipeline";
+import type { PipelineStage } from "@/lib/crm/types";
 import { archiveWebhook, createWebhook } from "@/lib/crm/webhooks";
 
 async function requireUser() {
@@ -35,13 +36,15 @@ export async function archiveWebhookAction(id: string) {
   }
 }
 
-export async function saveStagesAction(stages: StageDraft[]) {
+export async function saveStagesAction(
+  stages: StageDraft[],
+): Promise<{ error?: string; stages?: PipelineStage[] }> {
   const user = await requireUser();
   try {
-    await savePipelineStages(user, stages);
+    const saved = await savePipelineStages(user, stages);
     revalidatePath("/settings");
     revalidatePath("/opportunities");
-    return {};
+    return { stages: saved };
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Could not save the pipeline." };
   }
