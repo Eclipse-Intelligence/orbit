@@ -22,7 +22,7 @@ export default function Sidebar({ companyCount, openActionCount, workspaceName }
 
   return (
     <>
-      <aside className="relative hidden w-(--sidebar-width) shrink-0 border-r border-sidebar-border bg-sidebar lg:flex lg:flex-col">
+      <aside className="relative hidden w-(--sidebar-width) shrink-0 border-r border-sidebar-border bg-sidebar sidebar-collapsed:lg:hidden lg:flex lg:flex-col">
         <SidebarContent
           companyCount={companyCount}
           openActionCount={openActionCount}

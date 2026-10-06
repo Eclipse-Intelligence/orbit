@@ -6,6 +6,7 @@ import Notifications from "@/components/companies/header/notifications/notificat
 import type { Viewer } from "@/components/crm/viewer";
 import { displayInitials } from "@/lib/companies";
 import { useCompaniesStore } from "@/stores/companies-store";
+import { ExpandSidebarButton } from "@/components/_common/sidebar/sidebar-toggle";
 import MenuIcon from "@/public/assets/images/_common/menu.svg";
 import SearchIcon from "@/public/assets/images/_common/search.svg";
 
@@ -35,6 +36,7 @@ export default function SectionHeader({
           >
             <MenuIcon aria-hidden className="size-3.5" />
           </Button>
+          <ExpandSidebarButton />
           <div className="flex min-w-0 flex-col">
             <h1 className="truncate">{title}</h1>
             <span className="caption-style text-subtle hidden truncate sm:block">
