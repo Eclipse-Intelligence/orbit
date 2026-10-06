@@ -1,18 +1,22 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { appSecret } from "@/lib/auth/config";
 
-export const MICROSOFT_SCOPES = "offline_access Mail.Read User.Read";
+export const MICROSOFT_SCOPES = "offline_access Mail.Read Mail.Send User.Read";
 
 const STATE_MAX_AGE_MS = 10 * 60 * 1000;
 
 export function microsoftConfigured() {
-  return Boolean(process.env.MICROSOFT_CLIENT_ID?.trim() && process.env.MICROSOFT_CLIENT_SECRET?.trim());
+  return Boolean(
+    process.env.MICROSOFT_CLIENT_ID?.trim() &&
+    process.env.MICROSOFT_CLIENT_SECRET?.trim(),
+  );
 }
 
 function microsoftCredentials() {
   const id = process.env.MICROSOFT_CLIENT_ID?.trim();
   const secret = process.env.MICROSOFT_CLIENT_SECRET?.trim();
-  if (!id || !secret) throw new Error("Add the Microsoft app credentials before connecting.");
+  if (!id || !secret)
+    throw new Error("Add the Microsoft app credentials before connecting.");
   return { id, secret };
 }
 
@@ -21,7 +25,8 @@ export function microsoftTenant() {
 }
 
 export function originFrom(request: Request) {
-  const host = request.headers.get("x-forwarded-host") ?? request.headers.get("host");
+  const host =
+    request.headers.get("x-forwarded-host") ?? request.headers.get("host");
   if (!host) return new URL(request.url).origin;
   const proto = request.headers.get("x-forwarded-proto") ?? "http";
   return `${proto}://${host}`;
@@ -33,31 +38,46 @@ export function microsoftRedirectUri(origin: string) {
   return `${origin.replace(/\/$/, "")}/api/microsoft/callback`;
 }
 
-export function signMicrosoftState(userId: string, workspaceId: string, now = Date.now()) {
+export function signMicrosoftState(
+  userId: string,
+  workspaceId: string,
+  now = Date.now(),
+) {
   const body = Buffer.from(
     JSON.stringify({ userId, workspaceId, exp: now + STATE_MAX_AGE_MS }),
   ).toString("base64url");
-  const signature = createHmac("sha256", appSecret()).update(body).digest("base64url");
+  const signature = createHmac("sha256", appSecret())
+    .update(body)
+    .digest("base64url");
   return `${body}.${signature}`;
 }
 
-export function readMicrosoftState(state: string | undefined, now = Date.now()) {
+export function readMicrosoftState(
+  state: string | undefined,
+  now = Date.now(),
+) {
   if (!state) return null;
   const separator = state.lastIndexOf(".");
   if (separator <= 0) return null;
   const body = state.slice(0, separator);
   const signature = state.slice(separator + 1);
-  const expected = createHmac("sha256", appSecret()).update(body).digest("base64url");
+  const expected = createHmac("sha256", appSecret())
+    .update(body)
+    .digest("base64url");
   const left = Buffer.from(signature);
   const right = Buffer.from(expected);
-  if (left.length !== right.length || !timingSafeEqual(left, right)) return null;
+  if (left.length !== right.length || !timingSafeEqual(left, right))
+    return null;
   try {
-    const parsed = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as {
+    const parsed = JSON.parse(
+      Buffer.from(body, "base64url").toString("utf8"),
+    ) as {
       userId?: string;
       workspaceId?: string;
       exp?: number;
     };
-    if (!parsed.userId || !parsed.workspaceId || typeof parsed.exp !== "number") return null;
+    if (!parsed.userId || !parsed.workspaceId || typeof parsed.exp !== "number")
+      return null;
     if (parsed.exp < now) return null;
     return { userId: parsed.userId, workspaceId: parsed.workspaceId };
   } catch {
@@ -105,7 +125,10 @@ async function tokenRequest(body: URLSearchParams, fetchImpl: typeof fetch) {
   );
   const parsed = (await response.json().catch(() => ({}))) as TokenResponse;
   if (!response.ok || !parsed.access_token) {
-    const reason = parsed.error_description || parsed.error || "Microsoft did not return a token.";
+    const reason =
+      parsed.error_description ||
+      parsed.error ||
+      "Microsoft did not return a token.";
     throw new Error(sanitizeMicrosoftError(reason));
   }
   return parsed;
@@ -126,7 +149,8 @@ export async function exchangeAuthorizationCode(
     scope: MICROSOFT_SCOPES,
   });
   const parsed = await tokenRequest(body, fetchImpl);
-  if (!parsed.refresh_token) throw new Error("Microsoft did not return a refresh token.");
+  if (!parsed.refresh_token)
+    throw new Error("Microsoft did not return a refresh token.");
   return tokenFrom(parsed.refresh_token, parsed);
 }
 
@@ -146,7 +170,10 @@ export async function refreshMicrosoftToken(
   return tokenFrom(parsed.refresh_token || refreshToken, parsed);
 }
 
-function tokenFrom(refreshToken: string, parsed: TokenResponse): MicrosoftToken {
+function tokenFrom(
+  refreshToken: string,
+  parsed: TokenResponse,
+): MicrosoftToken {
   const expiresIn = parsed.expires_in ?? 3600;
   return {
     accessToken: parsed.access_token!,
@@ -155,7 +182,10 @@ function tokenFrom(refreshToken: string, parsed: TokenResponse): MicrosoftToken 
   };
 }
 
-export async function fetchMicrosoftProfile(accessToken: string, fetchImpl: typeof fetch = fetch) {
+export async function fetchMicrosoftProfile(
+  accessToken: string,
+  fetchImpl: typeof fetch = fetch,
+) {
   const response = await fetchImpl(
     "https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName",
     {
@@ -169,7 +199,11 @@ export async function fetchMicrosoftProfile(accessToken: string, fetchImpl: type
     error?: { message?: string };
   };
   if (!response.ok) {
-    throw new Error(sanitizeMicrosoftError(body.error?.message || "Could not read the Microsoft account."));
+    throw new Error(
+      sanitizeMicrosoftError(
+        body.error?.message || "Could not read the Microsoft account.",
+      ),
+    );
   }
   return body.mail || body.userPrincipalName || "";
 }
@@ -213,22 +247,30 @@ export async function fetchInboxMessages(
       "@odata.nextLink"?: string;
     };
     for (const message of body.value ?? []) {
-      if (message.receivedDateTime && new Date(message.receivedDateTime) < since) {
+      if (
+        message.receivedDateTime &&
+        new Date(message.receivedDateTime) < since
+      ) {
         next = null;
         break;
       }
       collected.push(message);
       if (collected.length >= 100) break;
     }
-    next = next ? body["@odata.nextLink"] ?? null : null;
+    next = next ? (body["@odata.nextLink"] ?? null) : null;
   }
   return collected;
 }
 
 function inboxUrl(since: Date, order: boolean) {
-  const url = new URL("https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages");
+  const url = new URL(
+    "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages",
+  );
   url.searchParams.set("$top", "50");
-  url.searchParams.set("$filter", `receivedDateTime ge ${since.toISOString().replace(/\.\d{3}Z$/, "Z")}`);
+  url.searchParams.set(
+    "$filter",
+    `receivedDateTime ge ${since.toISOString().replace(/\.\d{3}Z$/, "Z")}`,
+  );
   url.searchParams.set(
     "$select",
     "id,conversationId,internetMessageId,subject,bodyPreview,from,toRecipients,ccRecipients,receivedDateTime,isDraft",
@@ -237,7 +279,57 @@ function inboxUrl(since: Date, order: boolean) {
   return url.toString();
 }
 
-async function graphGet(url: string, accessToken: string, fetchImpl: typeof fetch) {
+export async function sendGraphMail(
+  accessToken: string,
+  message: {
+    to: string;
+    toName?: string | null;
+    subject: string;
+    body: string;
+  },
+  fetchImpl: typeof fetch = fetch,
+) {
+  const response = await fetchImpl(
+    "https://graph.microsoft.com/v1.0/me/sendMail",
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        message: {
+          subject: message.subject,
+          body: { contentType: "Text", content: message.body },
+          toRecipients: [
+            {
+              emailAddress: {
+                address: message.to,
+                ...(message.toName ? { name: message.toName } : {}),
+              },
+            },
+          ],
+        },
+        saveToSentItems: true,
+      }),
+      signal: AbortSignal.timeout(15000),
+    },
+  );
+  if (response.ok) return;
+  const detail = await graphError(response);
+  if (response.status === 403) {
+    throw new Error(
+      "Microsoft has not allowed sending yet. Add Mail.Send, then disconnect and connect the mailbox again.",
+    );
+  }
+  throw new Error(sanitizeMicrosoftError(detail));
+}
+
+async function graphGet(
+  url: string,
+  accessToken: string,
+  fetchImpl: typeof fetch,
+) {
   return fetchImpl(url, {
     headers: {
       authorization: `Bearer ${accessToken}`,
@@ -251,7 +343,10 @@ async function graphError(response: Response) {
   const body = (await response.json().catch(() => ({}))) as {
     error?: { message?: string; code?: string };
   };
-  if (response.status === 401 || body.error?.code === "InvalidAuthenticationToken") {
+  if (
+    response.status === 401 ||
+    body.error?.code === "InvalidAuthenticationToken"
+  ) {
     return "Microsoft rejected the mailbox connection. Connect it again.";
   }
   return body.error?.message || "Microsoft could not list the inbox.";

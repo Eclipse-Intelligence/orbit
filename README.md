@@ -33,7 +33,7 @@ npm run dev
 
 ## Microsoft inbox
 
-Set `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, and the redirect URI registered on the Entra app. Delegated permissions are `Mail.Read`, `User.Read`, and `offline_access`. Restart the server, open Inbox, and connect the mailbox. Received mail is attached to a contact by email address, or to a company by domain.
+Set `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, and the redirect URI registered on the Entra app. Delegated permissions are `Mail.Read`, `Mail.Send`, `User.Read`, and `offline_access`. Restart the server, open Inbox, and connect the mailbox. Received mail is attached to a contact by email address, or to a company by domain. From a contact, Send email delivers through that mailbox. A mailbox connected before Mail.Send was granted has to be disconnected and connected again.
 
 ## Hosted Supabase
 
@@ -53,13 +53,13 @@ API: `docs/api.md`. MCP: `docs/mcp.md`. Schema and tenancy: `docs/architecture.m
 
 ## Scripts
 
-| Script | What it does |
-| --- | --- |
-| `npm run dev` | Next.js dev server |
-| `npm run build` | Production build |
-| `npm run lint` | ESLint |
-| `npm test` | Domain, API, and MCP tests against the `crm_test` database |
-| `npm run db:setup` | Apply schema and seed a local user |
-| `npm run db:reset` | Drop local CRM data and set up again |
-| `npm run agent:create` | Issue a revocable agent token |
-| `npm run mcp` | MCP server over stdio |
+| Script                 | What it does                                               |
+| ---------------------- | ---------------------------------------------------------- |
+| `npm run dev`          | Next.js dev server                                         |
+| `npm run build`        | Production build                                           |
+| `npm run lint`         | ESLint                                                     |
+| `npm test`             | Domain, API, and MCP tests against the `crm_test` database |
+| `npm run db:setup`     | Apply schema and seed a local user                         |
+| `npm run db:reset`     | Drop local CRM data and set up again                       |
+| `npm run agent:create` | Issue a revocable agent token                              |
+| `npm run mcp`          | MCP server over stdio                                      |

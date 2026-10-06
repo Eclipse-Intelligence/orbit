@@ -10,10 +10,15 @@ import {
   getMailbox,
   listInbox,
   saveMailbox,
+  sendContactEmail,
   syncMailbox,
 } from "@/lib/crm/inbox";
 import { listTasks } from "@/lib/crm/tasks";
-import { originFrom, readMicrosoftState, signMicrosoftState } from "@/lib/microsoft/oauth";
+import {
+  originFrom,
+  readMicrosoftState,
+  signMicrosoftState,
+} from "@/lib/microsoft/oauth";
 import type { GraphInboxMessage } from "@/lib/microsoft/oauth";
 import { getPool } from "@/lib/db/pool";
 import { createUser, resetDatabase } from "./helpers";
@@ -89,7 +94,9 @@ describe("microsoft inbox", () => {
         subject: "Notes from March",
         preview: "Old thread",
         fromEmail: "ada@harbor-inbox.test",
-        receivedAt: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(),
+        receivedAt: new Date(
+          Date.now() - 10 * 24 * 60 * 60 * 1000,
+        ).toISOString(),
       },
       {
         providerMessageId: "msg-stranger",
@@ -127,13 +134,19 @@ describe("microsoft inbox", () => {
     assert.equal(ada?.contactId, contact.body.contact.id);
     assert.equal(ada?.contactName, "Ada Harbor");
     assert.equal(ada?.companyId, company.body.company.id);
-    const stranger = messages.find((message) => message.subject === "Newsletter");
+    const stranger = messages.find(
+      (message) => message.subject === "Newsletter",
+    );
     assert.equal(stranger?.contactId, null);
     assert.equal(stranger?.companyId, null);
 
-    const activities = await listActivities(owner, { companyId: company.body.company.id });
+    const activities = await listActivities(owner, {
+      companyId: company.body.company.id,
+    });
     assert.equal(activities.total, 3);
-    const tasks = await listTasks(owner, { companyId: company.body.company.id });
+    const tasks = await listTasks(owner, {
+      companyId: company.body.company.id,
+    });
     assert.equal(tasks.total, 1);
     assert.match(tasks.data[0]?.title ?? "", /Ada Harbor/);
   });
@@ -155,7 +168,9 @@ describe("microsoft inbox", () => {
         providerMessageId: "msg-domain",
         subject: "Hello",
         fromEmail: "sam@domain-inbox.test",
-        receivedAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
+        receivedAt: new Date(
+          Date.now() - 5 * 24 * 60 * 60 * 1000,
+        ).toISOString(),
       },
     ]);
     assert.equal(filed.attached, 1);
@@ -208,5 +223,95 @@ describe("microsoft inbox", () => {
     const [message] = await listInbox(owner);
     assert.equal(message?.subject, "Intro");
     assert.equal(message?.contactName, "Bea");
+  });
+
+  it("sends a contact email through the connected mailbox and files it", async () => {
+    const owner = await createUser("send-inbox@example.com", "Send Inbox");
+    const contact = await createContact(owner, {
+      firstName: "Cara",
+      email: "cara@send-inbox.test",
+    });
+    await saveMailbox(owner, {
+      email: "owner@send-inbox.test",
+      refreshToken: "stored-refresh",
+      accessToken: "stored-access",
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    });
+    let sentBody = "";
+    const fetchImpl: typeof fetch = async (input, init) => {
+      assert.equal(
+        String(input),
+        "https://graph.microsoft.com/v1.0/me/sendMail",
+      );
+      sentBody = String(init?.body ?? "");
+      return new Response(null, { status: 202 });
+    };
+    await sendContactEmail(
+      owner,
+      contact.body.contact.id,
+      { subject: "Hello Cara", body: "Following up on the proposal." },
+      fetchImpl,
+    );
+    assert.match(sentBody, /cara@send-inbox\.test/);
+    assert.match(sentBody, /Hello Cara/);
+    const activities = await listActivities(owner, {
+      contactId: contact.body.contact.id,
+    });
+    assert.equal(activities.data[0]?.type, "email");
+    assert.equal(activities.data[0]?.title, "Hello Cara");
+  });
+
+  it("tells the user to grant Mail.Send when Microsoft refuses the send", async () => {
+    const owner = await createUser("send-denied@example.com", "Send Denied");
+    const contact = await createContact(owner, {
+      firstName: "Dara",
+      email: "dara@send-denied.test",
+    });
+    await saveMailbox(owner, {
+      email: "owner@send-denied.test",
+      refreshToken: "stored-refresh",
+      accessToken: "stored-access",
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    });
+    const fetchImpl: typeof fetch = async () =>
+      Response.json(
+        { error: { code: "ErrorAccessDenied", message: "Access is denied." } },
+        { status: 403 },
+      );
+    await assert.rejects(
+      () =>
+        sendContactEmail(
+          owner,
+          contact.body.contact.id,
+          {
+            subject: "Hello",
+            body: "Checking in.",
+          },
+          fetchImpl,
+        ),
+      /Mail\.Send/,
+    );
+  });
+
+  it("refuses to send when the contact has no email", async () => {
+    const owner = await createUser("send-empty@example.com", "Send Empty");
+    const contact = await createContact(owner, {
+      firstName: "No",
+      lastName: "Mail",
+    });
+    await saveMailbox(owner, {
+      email: "owner@send-empty.test",
+      refreshToken: "stored-refresh",
+      accessToken: "stored-access",
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    });
+    await assert.rejects(
+      () =>
+        sendContactEmail(owner, contact.body.contact.id, {
+          subject: "Hi",
+          body: "Hello",
+        }),
+      /Add an email address/,
+    );
   });
 });
