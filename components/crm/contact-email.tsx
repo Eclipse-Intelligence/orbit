@@ -39,7 +39,7 @@ export default function ContactEmail({
     setLogged(false);
     try {
       const result = await sendContactEmailAction(contactId, subject, message);
-      if (result.error) {
+      if ("error" in result && result.error) {
         setError(result.error);
         setSent(false);
         return;
