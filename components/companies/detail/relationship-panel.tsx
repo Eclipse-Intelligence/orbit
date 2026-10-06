@@ -5,10 +5,19 @@ import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Input } from "@/components/_ui/input";
 import Tag from "@/components/_ui/tag";
-import { addCompanyNoteAction, addCompanyTaskAction } from "@/app/(crm)/records";
+import {
+  addCompanyNoteAction,
+  addCompanyTaskAction,
+} from "@/app/(crm)/records";
 import DetailSection from "@/components/companies/detail/detail-section";
+import ContactEmail from "@/components/crm/contact-email";
 import { ConnectionMark } from "@/components/beautifui/record-marks";
-import { formatDate, formatMoney, formatWhen, relativeWhen } from "@/lib/companies";
+import {
+  formatDate,
+  formatMoney,
+  formatWhen,
+  relativeWhen,
+} from "@/lib/companies";
 import type { CompanyContext } from "@/lib/crm/types";
 
 const ACTIVITY_LABELS: Record<string, string> = {
@@ -25,9 +34,11 @@ const ACTIVITY_LABELS: Record<string, string> = {
 export default function RelationshipPanel({
   companyId,
   context,
+  mailboxConnected,
 }: {
   companyId: string;
   context: CompanyContext | null;
+  mailboxConnected: boolean;
 }) {
   const router = useRouter();
   const [note, setNote] = useState("");
@@ -102,7 +113,10 @@ export default function RelationshipPanel({
           </p>
         )}
         <div className="flex flex-col gap-2">
-          <label className="caption-style text-subtle" htmlFor={`note-${companyId}`}>
+          <label
+            className="caption-style text-subtle"
+            htmlFor={`note-${companyId}`}
+          >
             Add a note
           </label>
           <textarea
@@ -124,7 +138,10 @@ export default function RelationshipPanel({
           </Button>
         </div>
         <div className="flex flex-col gap-2">
-          <label className="caption-style text-subtle" htmlFor={`task-${companyId}`}>
+          <label
+            className="caption-style text-subtle"
+            htmlFor={`task-${companyId}`}
+          >
             Next action
           </label>
           <Input
@@ -157,15 +174,24 @@ export default function RelationshipPanel({
 
       <DetailSection title="People">
         {context.contacts.length === 0 ? (
-          <p className="caption-style text-subtle">No contacts on this company.</p>
+          <p className="caption-style text-subtle">
+            No contacts on this company.
+          </p>
         ) : (
           <ul className="flex flex-col gap-3">
             {context.contacts.map((contact) => (
               <li key={contact.id} className="flex flex-col gap-1">
                 <span className="text-[14px] leading-5">{contact.name}</span>
                 <span className="caption-style text-subtle">
-                  {[contact.jobTitle, contact.email].filter(Boolean).join(" · ") || "No email"}
+                  {[contact.jobTitle, contact.email]
+                    .filter(Boolean)
+                    .join(" · ") || "No email"}
                 </span>
+                <ContactEmail
+                  contactId={contact.id}
+                  email={contact.email}
+                  mailboxConnected={mailboxConnected}
+                />
               </li>
             ))}
           </ul>
@@ -178,14 +204,28 @@ export default function RelationshipPanel({
         ) : (
           <ul className="flex flex-col gap-3">
             {context.opportunities.map((opportunity) => (
-              <li key={opportunity.id} className="flex items-start justify-between gap-3">
+              <li
+                key={opportunity.id}
+                className="flex items-start justify-between gap-3"
+              >
                 <span className="min-w-0">
-                  <span className="block truncate text-[14px] leading-5">{opportunity.name}</span>
+                  <span className="block truncate text-[14px] leading-5">
+                    {opportunity.name}
+                  </span>
                   <span className="caption-style text-subtle block">
-                    {opportunity.stageName ?? "No stage"} · {formatMoney(opportunity.value, opportunity.currency)}
+                    {opportunity.stageName ?? "No stage"} ·{" "}
+                    {formatMoney(opportunity.value, opportunity.currency)}
                   </span>
                 </span>
-                <Tag tone={opportunity.status === "won" ? "green" : opportunity.status === "lost" ? "red" : "blue"}>
+                <Tag
+                  tone={
+                    opportunity.status === "won"
+                      ? "green"
+                      : opportunity.status === "lost"
+                        ? "red"
+                        : "blue"
+                  }
+                >
                   {opportunity.status}
                 </Tag>
               </li>
@@ -222,8 +262,14 @@ export default function RelationshipPanel({
                   {ACTIVITY_LABELS[activity.type] ?? activity.type}
                   {activity.title ? ` · ${activity.title}` : ""}
                 </span>
-                {activity.body && <span className="caption-style text-soft">{activity.body}</span>}
-                <span className="caption-style text-subtle">{formatDate(activity.occurredAt)}</span>
+                {activity.body && (
+                  <span className="caption-style text-soft">
+                    {activity.body}
+                  </span>
+                )}
+                <span className="caption-style text-subtle">
+                  {formatDate(activity.occurredAt)}
+                </span>
               </li>
             ))}
           </ul>

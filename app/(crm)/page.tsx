@@ -3,6 +3,7 @@ import Companies from "@/components/companies/companies";
 import { getUserActor } from "@/lib/auth/user";
 import { listCompanies, listMembers } from "@/lib/crm/companies";
 import { CrmError } from "@/lib/crm/errors";
+import { getMailbox } from "@/lib/crm/inbox";
 import { getCompanyContext } from "@/lib/crm/relationships";
 import { companyQueryFromSearchParams } from "@/lib/crm/validation";
 
@@ -25,15 +26,17 @@ export default async function CompaniesPage({
   filters.limit = 200;
 
   const record = params.get("record");
-  const [listed, members, context] = await Promise.all([
+  const [listed, members, context, mailbox] = await Promise.all([
     listCompanies(user, filters),
     listMembers(user),
     record
       ? getCompanyContext(user, record).catch((error: unknown) => {
-          if (error instanceof CrmError && error.code === "not_found") return null;
+          if (error instanceof CrmError && error.code === "not_found")
+            return null;
           throw error;
         })
       : Promise.resolve(null),
+    getMailbox(user),
   ]);
 
   return (
@@ -43,6 +46,7 @@ export default async function CompaniesPage({
       filters={filters}
       members={members}
       context={context}
+      mailboxConnected={mailbox?.status === "connected"}
       viewer={{
         id: user.userId,
         name: user.fullName || user.email,

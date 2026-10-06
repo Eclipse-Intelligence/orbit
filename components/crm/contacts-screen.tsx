@@ -12,9 +12,14 @@ import {
   SheetTitle,
 } from "@/components/_ui/sheet";
 import { EntityChip, Monogram } from "@/components/beautifui/record-marks";
+import ContactEmail from "@/components/crm/contact-email";
 import RecordTransfer from "@/components/crm/record-transfer";
 import SectionHeader from "@/components/crm/section-header";
-import { RecordList, RecordRow, RecordSelect } from "@/components/crm/record-form";
+import {
+  RecordList,
+  RecordRow,
+  RecordSelect,
+} from "@/components/crm/record-form";
 import type { Viewer } from "@/components/crm/viewer";
 import { saveContactAction, type RecordActionState } from "@/app/(crm)/records";
 import type { Company, Contact, Member } from "@/lib/crm/types";
@@ -26,6 +31,7 @@ export default function ContactsScreen({
   query,
   companies,
   members,
+  mailboxConnected,
 }: {
   viewer: Viewer;
   contacts: Contact[];
@@ -33,10 +39,14 @@ export default function ContactsScreen({
   query: string;
   companies: Company[];
   members: Member[];
+  mailboxConnected: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Contact | null>(null);
-  const [state, action, pending] = useActionState(saveContactAction, {} as RecordActionState);
+  const [state, action, pending] = useActionState(
+    saveContactAction,
+    {} as RecordActionState,
+  );
   const [closedFor, setClosedFor] = useState<RecordActionState | null>(null);
   if (state.ok && closedFor !== state) {
     setClosedFor(state);
@@ -84,17 +94,26 @@ export default function ContactsScreen({
       <p className="caption-style text-subtle px-4 pb-2">
         {total} {total === 1 ? "person" : "people"}
       </p>
-      <RecordList count={contacts.length} empty="No contacts yet. Add the person you need to speak with.">
+      <RecordList
+        count={contacts.length}
+        empty="No contacts yet. Add the person you need to speak with."
+      >
         {contacts.map((contact) => (
           <RecordRow
             key={contact.id}
             mark={<Monogram name={contact.name} />}
             title={contact.name}
-            meta={[contact.jobTitle, contact.email].filter(Boolean).join(" · ") || "No title"}
+            meta={
+              [contact.jobTitle, contact.email].filter(Boolean).join(" · ") ||
+              "No title"
+            }
             onClick={() => edit(contact)}
             action={
               contact.companyName && contact.companyId ? (
-                <EntityChip name={contact.companyName} href={`/?record=${contact.companyId}`} />
+                <EntityChip
+                  name={contact.companyName}
+                  href={`/?record=${contact.companyId}`}
+                />
               ) : null
             }
           />
@@ -104,9 +123,15 @@ export default function ContactsScreen({
         <SheetContent side="right" className="sm:w-[480px] sm:max-w-[480px]">
           <SheetHeader>
             <SheetTitle>{editing ? "Edit contact" : "New contact"}</SheetTitle>
-            <SheetDescription className="sr-only">Contact details</SheetDescription>
+            <SheetDescription className="sr-only">
+              Contact details
+            </SheetDescription>
           </SheetHeader>
-          <form key={editing?.id ?? "new"} action={action} className="flex min-h-0 flex-1 flex-col">
+          <form
+            key={editing?.id ?? "new"}
+            action={action}
+            className="flex min-h-0 flex-1 flex-col"
+          >
             <input type="hidden" name="id" value={editing?.id ?? ""} />
             <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto p-5">
               {state.error && !state.ok && (
@@ -115,12 +140,37 @@ export default function ContactsScreen({
                 </p>
               )}
               <div className="grid gap-4 sm:grid-cols-2">
-                <Field id="contact-first" name="firstName" label="First name" defaultValue={editing?.firstName ?? ""} />
-                <Field id="contact-last" name="lastName" label="Last name" defaultValue={editing?.lastName ?? ""} />
+                <Field
+                  id="contact-first"
+                  name="firstName"
+                  label="First name"
+                  defaultValue={editing?.firstName ?? ""}
+                />
+                <Field
+                  id="contact-last"
+                  name="lastName"
+                  label="Last name"
+                  defaultValue={editing?.lastName ?? ""}
+                />
               </div>
-              <Field id="contact-email" name="email" label="Email" defaultValue={editing?.email ?? ""} />
-              <Field id="contact-title" name="jobTitle" label="Title" defaultValue={editing?.jobTitle ?? ""} />
-              <Field id="contact-phone" name="phone" label="Phone" defaultValue={editing?.phone ?? ""} />
+              <Field
+                id="contact-email"
+                name="email"
+                label="Email"
+                defaultValue={editing?.email ?? ""}
+              />
+              <Field
+                id="contact-title"
+                name="jobTitle"
+                label="Title"
+                defaultValue={editing?.jobTitle ?? ""}
+              />
+              <Field
+                id="contact-phone"
+                name="phone"
+                label="Phone"
+                defaultValue={editing?.phone ?? ""}
+              />
               <Field
                 id="contact-linkedin"
                 name="linkedinUrl"
@@ -153,7 +203,20 @@ export default function ContactsScreen({
                   </option>
                 ))}
               </RecordSelect>
-              <Field id="contact-source" name="source" label="Source" defaultValue={editing?.source ?? ""} />
+              <Field
+                id="contact-source"
+                name="source"
+                label="Source"
+                defaultValue={editing?.source ?? ""}
+              />
+              {editing && (
+                <ContactEmail
+                  key={editing.id}
+                  contactId={editing.id}
+                  email={editing.email}
+                  mailboxConnected={mailboxConnected}
+                />
+              )}
               <label className="flex flex-col gap-2" htmlFor="contact-notes">
                 <span className="caption-style text-subtle">Notes</span>
                 <textarea
@@ -165,10 +228,20 @@ export default function ContactsScreen({
               </label>
             </div>
             <SheetFooter>
-              <Button variant="subtle" size="sm" type="button" onClick={() => setOpen(false)}>
+              <Button
+                variant="subtle"
+                size="sm"
+                type="button"
+                onClick={() => setOpen(false)}
+              >
                 Cancel
               </Button>
-              <Button variant="primary" size="sm" type="submit" disabled={pending}>
+              <Button
+                variant="primary"
+                size="sm"
+                type="submit"
+                disabled={pending}
+              >
                 {pending ? "Saving…" : "Save"}
               </Button>
             </SheetFooter>

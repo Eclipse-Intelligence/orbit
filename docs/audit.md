@@ -19,7 +19,7 @@ The starting point was a Next.js 16 company table. The screens were useful. The 
 
 ## Now recorded
 
-Contacts, opportunities, activities, and next actions are real records. Notifications list due and overdue follow-ups. Quiet lists companies with no recent interaction. CSV import and export cover the core records. Webhooks deliver the audit events. The Microsoft inbox files received mail once the Entra app credentials are set. Gmail and calendar sync still need an OAuth app you provide.
+Contacts, opportunities, activities, and next actions are real records. Notifications list due and overdue follow-ups. Quiet lists companies with no recent interaction. CSV import and export cover the core records. Webhooks deliver the audit events. The Microsoft inbox files received mail, and a contact can send through the connected mailbox, once the Entra app credentials are set. Gmail and calendar sync still need an OAuth app you provide.
 
 ## Security notes from the prototype
 

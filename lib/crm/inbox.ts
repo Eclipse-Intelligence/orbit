@@ -11,6 +11,7 @@ import {
   fetchInboxMessages,
   refreshMicrosoftToken,
   sanitizeMicrosoftError,
+  sendGraphMail,
   type GraphInboxMessage,
   type MicrosoftToken,
 } from "@/lib/microsoft/oauth";
@@ -79,7 +80,11 @@ export function counterpartEmails(input: {
   const mailbox = canonicalEmail(input.mailboxEmail);
   const seen = new Set<string>();
   const emails: string[] = [];
-  for (const value of [input.fromEmail, ...(input.toEmails ?? []), ...(input.ccEmails ?? [])]) {
+  for (const value of [
+    input.fromEmail,
+    ...(input.toEmails ?? []),
+    ...(input.ccEmails ?? []),
+  ]) {
     const email = value ? canonicalEmail(value) : null;
     if (!email || email === mailbox || seen.has(email)) continue;
     seen.add(email);
@@ -88,7 +93,10 @@ export function counterpartEmails(input: {
   return emails;
 }
 
-export function shouldSyncMailbox(lastAttemptAt: string | null, now = Date.now()) {
+export function shouldSyncMailbox(
+  lastAttemptAt: string | null,
+  now = Date.now(),
+) {
   if (!lastAttemptAt) return true;
   const time = new Date(lastAttemptAt).getTime();
   if (Number.isNaN(time)) return true;
@@ -145,7 +153,9 @@ export async function listInbox(actor: UserActor) {
       preview: row.preview,
       fromName: row.from_name,
       fromEmail: row.from_email,
-      receivedAt: row.received_at ? new Date(row.received_at).toISOString() : null,
+      receivedAt: row.received_at
+        ? new Date(row.received_at).toISOString()
+        : null,
       contactId: row.contact_id,
       contactName: row.contact_name,
       companyId: row.company_id,
@@ -156,13 +166,23 @@ export async function listInbox(actor: UserActor) {
 
 export async function saveMailbox(
   actor: UserActor,
-  input: { email: string; refreshToken: string; accessToken: string; expiresAt: string },
+  input: {
+    email: string;
+    refreshToken: string;
+    accessToken: string;
+    expiresAt: string;
+  },
 ) {
   const email = canonicalEmail(input.email);
   if (!email) {
-    throw new CrmError("invalid_input", "Microsoft did not return an email address.", 400, {
-      field: "email",
-    });
+    throw new CrmError(
+      "invalid_input",
+      "Microsoft did not return an email address.",
+      400,
+      {
+        field: "email",
+      },
+    );
   }
   await withActor(actor, async (db) => {
     await db.query(
@@ -189,6 +209,131 @@ export async function saveMailbox(
   });
 }
 
+export async function sendContactEmail(
+  actor: UserActor,
+  contactId: string,
+  input: { subject: string; body: string },
+  fetchImpl: typeof fetch = fetch,
+) {
+  const subject = input.subject.replace(/\s+/g, " ").trim();
+  const body = input.body.trim();
+  if (!subject || !body) {
+    throw new CrmError("invalid_input", "Add a subject and a message.", 400);
+  }
+  if (subject.length > 200) {
+    throw new CrmError(
+      "invalid_input",
+      "Keep the subject under 200 characters.",
+      400,
+      {
+        field: "subject",
+      },
+    );
+  }
+  if (body.length > 8000) {
+    throw new CrmError(
+      "invalid_input",
+      "Keep the message under 8000 characters.",
+      400,
+      {
+        field: "body",
+      },
+    );
+  }
+  if (!hasScope(actor.scopes, "activities:write")) {
+    throw new CrmError("forbidden", "Missing scope activities:write.", 403, {
+      scope: "activities:write",
+    });
+  }
+
+  const prepared = await withActor(actor, async (db) => {
+    const found = await db.query<{
+      id: string;
+      email: string | null;
+      name: string | null;
+      company_id: string | null;
+    }>(
+      `select
+         id,
+         email,
+         coalesce(nullif(trim(concat_ws(' ', first_name, last_name)), ''), email) as name,
+         company_id
+       from crm.contacts
+       where id = $1 and workspace_id = $2 and archived_at is null`,
+      [contactId, actor.workspaceId],
+    );
+    return {
+      contact: found.rows[0] ?? null,
+      mailbox: await readStored(db, actor),
+    };
+  });
+  const contact = prepared.contact;
+  if (!contact) throw new CrmError("not_found", "Contact not found.", 404);
+  const to = canonicalEmail(contact.email ?? "");
+  if (!to) {
+    throw new CrmError(
+      "invalid_input",
+      "Add an email address before sending.",
+      400,
+      {
+        field: "email",
+      },
+    );
+  }
+  const mailbox = prepared.mailbox;
+  if (!mailbox || mailbox.status !== "connected" || !mailbox.refreshToken) {
+    throw new CrmError(
+      "invalid_input",
+      "Connect Microsoft in Inbox before sending.",
+      400,
+    );
+  }
+
+  const token = await currentToken(mailbox, fetchImpl);
+  try {
+    await sendGraphMail(
+      token.accessToken,
+      { to, toName: contact.name, subject, body },
+      fetchImpl,
+    );
+  } catch (error) {
+    throw new CrmError(
+      "upstream_error",
+      sanitizeMicrosoftError(
+        error instanceof Error ? error.message : "Could not send the email.",
+      ),
+      502,
+    );
+  }
+
+  await withActor(actor, async (db) => {
+    await storeToken(db, mailbox.id, token);
+  });
+  try {
+    await withActor(actor, async (db) => {
+      await createActivityInDb(
+        db,
+        actor,
+        {
+          type: "email",
+          title: subject,
+          body,
+          companyId: contact.company_id,
+          contactId: contact.id,
+          metadata: { source: "microsoft", direction: "outbound", to },
+        },
+        { operation: "send_email", source: "microsoft" },
+      );
+    });
+  } catch {
+    throw new CrmError(
+      "internal_error",
+      "The email was sent, but Orbit could not file it on the contact.",
+      500,
+    );
+  }
+}
+
 export async function disconnectMailbox(actor: UserActor) {
   await withActor(actor, async (db) => {
     await db.query(
@@ -210,15 +355,27 @@ export async function syncMailbox(
 ): Promise<SyncCounts> {
   const stored = await withActor(actor, async (db) => readStored(db, actor));
   if (!stored || stored.status !== "connected" || !stored.refreshToken) {
-    return { attached: 0, unattached: 0, skipped: 0, followUps: 0, error: "Connect Microsoft to sync this inbox." };
+    return {
+      attached: 0,
+      unattached: 0,
+      skipped: 0,
+      followUps: 0,
+      error: "Connect Microsoft to sync this inbox.",
+    };
   }
   try {
     const token = await currentToken(stored, fetchImpl);
     const since = stored.lastSyncedAt
       ? new Date(new Date(stored.lastSyncedAt).getTime() - OVERLAP_MS)
       : new Date(Date.now() - LOOKBACK_MS);
-    const graphMessages = await fetchInboxMessages(token.accessToken, since, fetchImpl);
-    const inbound = graphMessages.map(graphToInbound).filter((message) => message.providerMessageId);
+    const graphMessages = await fetchInboxMessages(
+      token.accessToken,
+      since,
+      fetchImpl,
+    );
+    const inbound = graphMessages
+      .map(graphToInbound)
+      .filter((message) => message.providerMessageId);
     return await withActor(actor, async (db) => {
       await storeToken(db, stored.id, token);
       const counts = await fileMessages(db, actor, stored, inbound);
@@ -242,7 +399,13 @@ export async function syncMailbox(
         [stored.id, message, actor.userId],
       );
     });
-    return { attached: 0, unattached: 0, skipped: 0, followUps: 0, error: message };
+    return {
+      attached: 0,
+      unattached: 0,
+      skipped: 0,
+      followUps: 0,
+      error: message,
+    };
   }
 }
 
@@ -253,7 +416,11 @@ export async function fileInboundMessages(
   return withActor(actor, async (db) => {
     const stored = await readStored(db, actor);
     if (!stored) {
-      throw new CrmError("invalid_input", "Connect Microsoft before filing mail.", 400);
+      throw new CrmError(
+        "invalid_input",
+        "Connect Microsoft before filing mail.",
+        400,
+      );
     }
     return fileMessages(db, actor, stored, messages);
   });
@@ -265,7 +432,12 @@ async function fileMessages(
   mailbox: StoredConnection,
   messages: InboundEmail[],
 ): Promise<SyncCounts> {
-  const counts: SyncCounts = { attached: 0, unattached: 0, skipped: 0, followUps: 0 };
+  const counts: SyncCounts = {
+    attached: 0,
+    unattached: 0,
+    skipped: 0,
+    followUps: 0,
+  };
   for (const message of messages) {
     const providerMessageId = message.providerMessageId.trim().slice(0, 400);
     if (!providerMessageId || message.isDraft) {
@@ -369,7 +541,11 @@ async function fileMessages(
 
 async function matchParties(db: Db, workspaceId: string, emails: string[]) {
   for (const email of emails) {
-    const found = await db.query<{ id: string; company_id: string | null; name: string | null }>(
+    const found = await db.query<{
+      id: string;
+      company_id: string | null;
+      name: string | null;
+    }>(
       `select
          id,
          company_id,
@@ -385,7 +561,9 @@ async function matchParties(db: Db, workspaceId: string, emails: string[]) {
       contactId: contact.id,
       contactName: contact.name,
       companyId: contact.company_id,
-      companyName: contact.company_id ? await companyName(db, contact.company_id) : null,
+      companyName: contact.company_id
+        ? await companyName(db, contact.company_id)
+        : null,
     };
   }
   for (const email of emails) {
@@ -399,15 +577,26 @@ async function matchParties(db: Db, workspaceId: string, emails: string[]) {
     );
     const company = found.rows[0];
     if (!company) continue;
-    return { contactId: null, contactName: null, companyId: company.id, companyName: company.name };
+    return {
+      contactId: null,
+      contactName: null,
+      companyId: company.id,
+      companyName: company.name,
+    };
   }
-  return { contactId: null, contactName: null, companyId: null, companyName: null };
+  return {
+    contactId: null,
+    contactName: null,
+    companyId: null,
+    companyName: null,
+  };
 }
 
 async function companyName(db: Db, companyId: string) {
-  const result = await db.query<{ name: string }>("select name from crm.companies where id = $1", [
-    companyId,
-  ]);
+  const result = await db.query<{ name: string }>(
+    "select name from crm.companies where id = $1",
+    [companyId],
+  );
   return result.rows[0]?.name ?? null;
 }
 
@@ -464,7 +653,9 @@ function addresses(recipients: GraphInboxMessage["toRecipients"]) {
 }
 
 async function currentToken(stored: StoredConnection, fetchImpl: typeof fetch) {
-  const expires = stored.accessTokenExpiresAt ? new Date(stored.accessTokenExpiresAt).getTime() : 0;
+  const expires = stored.accessTokenExpiresAt
+    ? new Date(stored.accessTokenExpiresAt).getTime()
+    : 0;
   if (stored.accessToken && expires > Date.now() + 60_000) {
     return {
       accessToken: stored.accessToken,
@@ -480,7 +671,12 @@ async function storeToken(db: Db, connectionId: string, token: MicrosoftToken) {
     `update crm.mailbox_connections
      set refresh_token = $2, access_token = $3, access_token_expires_at = $4
      where id = $1`,
-    [connectionId, encryptSecret(token.refreshToken), encryptSecret(token.accessToken), token.expiresAt],
+    [
+      connectionId,
+      encryptSecret(token.refreshToken),
+      encryptSecret(token.accessToken),
+      token.expiresAt,
+    ],
   );
 }
 
@@ -490,7 +686,10 @@ async function readSummary(db: Db, actor: UserActor) {
   return summary(stored);
 }
 
-async function readStored(db: Db, actor: UserActor): Promise<StoredConnection | null> {
+async function readStored(
+  db: Db,
+  actor: UserActor,
+): Promise<StoredConnection | null> {
   const result = await db.query<{
     id: string;
     email: string;

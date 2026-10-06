@@ -13,7 +13,9 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/_ui/sheet";
-import CompanyFields, { type CompanyFormValues } from "@/components/companies/company-fields";
+import CompanyFields, {
+  type CompanyFormValues,
+} from "@/components/companies/company-fields";
 import DetailSection from "./detail-section";
 import { archiveCompanyAction, updateCompanyAction } from "@/app/(crm)/actions";
 import type { CompanyActionState } from "@/app/(crm)/actions";
@@ -28,6 +30,7 @@ type CompanyDetailProps = {
   companies: Company[];
   members: Member[];
   context: CompanyContext | null;
+  mailboxConnected: boolean;
   onSaved: (company: Company) => void;
   onArchived: (id: string) => void;
 };
@@ -50,6 +53,7 @@ export default function CompanyDetail({
   companies,
   members,
   context,
+  mailboxConnected,
   onSaved,
   onArchived,
 }: CompanyDetailProps) {
@@ -84,7 +88,10 @@ export default function CompanyDetail({
   }, [detailOpen, detailId, router]);
 
   return (
-    <Sheet open={detailOpen && company !== undefined} onOpenChange={(open) => !open && closeDetail()}>
+    <Sheet
+      open={detailOpen && company !== undefined}
+      onOpenChange={(open) => !open && closeDetail()}
+    >
       <SheetContent side="right" className="sm:w-[560px] sm:max-w-[560px]">
         <SheetHeader>
           <div className="flex items-center gap-2">
@@ -95,7 +102,12 @@ export default function CompanyDetail({
             Edit the company record
           </SheetDescription>
           <SheetClose asChild>
-            <Button variant="ghost" size="icon-sm" className="-mr-1" aria-label="Close details">
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="-mr-1"
+              aria-label="Close details"
+            >
               <XIcon aria-hidden className="text-foreground size-4" />
             </Button>
           </SheetClose>
@@ -106,6 +118,7 @@ export default function CompanyDetail({
             company={company}
             members={members}
             context={context}
+            mailboxConnected={mailboxConnected}
             onSaved={onSaved}
             onArchived={onArchived}
           />
@@ -119,19 +132,24 @@ function CompanyEditor({
   company,
   members,
   context,
+  mailboxConnected,
   onSaved,
   onArchived,
 }: {
   company: Company;
   members: Member[];
   context: CompanyContext | null;
+  mailboxConnected: boolean;
   onSaved: (company: Company) => void;
   onArchived: (id: string) => void;
 }) {
   const router = useRouter();
   const closeDetail = useCompaniesStore((state) => state.closeDetail);
   const [values, setValues] = useState(() => valuesFromCompany(company));
-  const [state, action, pending] = useActionState(updateCompanyAction, {} as CompanyActionState);
+  const [state, action, pending] = useActionState(
+    updateCompanyAction,
+    {} as CompanyActionState,
+  );
   const saved = useRef<string | null>(null);
   const [archiveState, setArchiveState] = useState<CompanyActionState>({});
   const [confirmArchive, setConfirmArchive] = useState(false);
@@ -162,7 +180,9 @@ function CompanyEditor({
 
   const fieldErrors =
     state.field && state.error
-      ? ({ [state.field]: state.error } as Partial<Record<keyof CompanyFormValues, string>>)
+      ? ({ [state.field]: state.error } as Partial<
+          Record<keyof CompanyFormValues, string>
+        >)
       : undefined;
   const banner = archiveState.error ?? (state.field ? undefined : state.error);
 
@@ -172,7 +192,9 @@ function CompanyEditor({
       <ScrollArea className="min-h-0 flex-1">
         <div className="flex items-start gap-3 p-5 shadow-[inset_0_-1px_0_var(--line-strong)]">
           <span className="bg-muted flex size-[50px] shrink-0 items-center justify-center rounded-[12.5px] shadow-[0px_6.25px_6.25px_0px_rgba(15,15,15,0.24),0px_0px_0px_1.563px_#232323]">
-            <span className="h2-style text-soft">{company.name.slice(0, 1).toUpperCase()}</span>
+            <span className="h2-style text-soft">
+              {company.name.slice(0, 1).toUpperCase()}
+            </span>
           </span>
           <div className="flex min-w-0 flex-col gap-2">
             <h2 className="truncate">{company.name}</h2>
@@ -198,7 +220,11 @@ function CompanyEditor({
           />
         </DetailSection>
 
-        <RelationshipPanel companyId={company.id} context={context} />
+        <RelationshipPanel
+          companyId={company.id}
+          context={context}
+          mailboxConnected={mailboxConnected}
+        />
       </ScrollArea>
 
       <SheetFooter>
@@ -230,7 +256,12 @@ function CompanyEditor({
               Cancel
             </Button>
           </SheetClose>
-          <Button variant="primary" size="sm" type="submit" disabled={pending || archiving}>
+          <Button
+            variant="primary"
+            size="sm"
+            type="submit"
+            disabled={pending || archiving}
+          >
             {pending ? "Saving…" : "Save"}
           </Button>
         </div>
