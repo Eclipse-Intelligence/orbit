@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Input } from "@/components/_ui/input";
 import { sendContactEmailAction } from "@/app/(crm)/inbox/actions";
+import { addContactActivityAction } from "@/app/(crm)/records";
 
 export default function ContactEmail({
   contactId,
@@ -21,30 +22,21 @@ export default function ContactEmail({
   const [message, setMessage] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
-  const [pending, setPending] = useState(false);
-
-  if (!email) {
-    return (
-      <p className="caption-style text-subtle">
-        Save an email address on this contact before sending.
-      </p>
-    );
-  }
-
-  if (!mailboxConnected) {
-    return (
-      <p className="caption-style text-subtle">
-        Connect Microsoft in Inbox before sending to {email}.
-      </p>
-    );
-  }
+  const [logged, setLogged] = useState(false);
+  const [pending, setPending] = useState<"send" | "log" | null>(null);
 
   async function send() {
-    if (sending.current || subject.trim() === "" || message.trim() === "")
+    if (
+      sending.current ||
+      pending ||
+      subject.trim() === "" ||
+      message.trim() === ""
+    )
       return;
     sending.current = true;
-    setPending(true);
+    setPending("send");
     setError(null);
+    setLogged(false);
     try {
       const result = await sendContactEmailAction(contactId, subject, message);
       if (result.error) {
@@ -58,13 +50,60 @@ export default function ContactEmail({
       router.refresh();
     } finally {
       sending.current = false;
-      setPending(false);
+      setPending(null);
+    }
+  }
+
+  async function logEmail() {
+    if (
+      sending.current ||
+      pending ||
+      subject.trim() === "" ||
+      message.trim() === ""
+    )
+      return;
+    sending.current = true;
+    setPending("log");
+    setError(null);
+    setSent(false);
+    try {
+      const result = await addContactActivityAction(
+        contactId,
+        "email",
+        subject,
+        message,
+      );
+      if (result.error) {
+        setError(result.error);
+        setLogged(false);
+        return;
+      }
+      setSubject("");
+      setMessage("");
+      setLogged(true);
+      router.refresh();
+    } finally {
+      sending.current = false;
+      setPending(null);
     }
   }
 
   return (
     <div className="flex flex-col gap-2">
-      <p className="caption-style text-subtle">Email {email}</p>
+      <p className="caption-style text-subtle">
+        {email ? `Email ${email}` : "Log an email on this contact"}
+      </p>
+      {!email && (
+        <p className="caption-style text-subtle">
+          Save an email address on this contact before sending.
+        </p>
+      )}
+      {email && !mailboxConnected && (
+        <p className="caption-style text-subtle">
+          Connect Microsoft in Inbox before sending to {email}. You can still
+          log the email here.
+        </p>
+      )}
       {error && (
         <p role="alert" className="caption-style text-danger">
           {error}
@@ -73,6 +112,11 @@ export default function ContactEmail({
       {sent && !error && (
         <p className="caption-style text-subtle" role="status">
           Sent from your Microsoft mailbox.
+        </p>
+      )}
+      {logged && !error && (
+        <p className="caption-style text-subtle" role="status">
+          Email recorded on this contact.
         </p>
       )}
       <label className="sr-only" htmlFor={`email-subject-${contactId}`}>
@@ -86,7 +130,6 @@ export default function ContactEmail({
         onKeyDown={(event) => {
           if (event.key !== "Enter") return;
           event.preventDefault();
-          void send();
         }}
         placeholder="Subject"
         maxLength={200}
@@ -103,16 +146,34 @@ export default function ContactEmail({
         maxLength={8000}
         className="border-line-strong bg-secondary min-h-24 w-full rounded-lg border px-3 py-2 text-[14px] leading-5 outline-none"
       />
-      <Button
-        variant="primary"
-        size="sm"
-        type="button"
-        className="self-start"
-        disabled={pending || subject.trim() === "" || message.trim() === ""}
-        onClick={send}
-      >
-        {pending ? "Sending…" : "Send email"}
-      </Button>
+      <div className="flex flex-wrap gap-2">
+        <Button
+          variant="primary"
+          size="sm"
+          type="button"
+          disabled={
+            pending !== null ||
+            !email ||
+            !mailboxConnected ||
+            subject.trim() === "" ||
+            message.trim() === ""
+          }
+          onClick={send}
+        >
+          {pending === "send" ? "Sending…" : "Send email"}
+        </Button>
+        <Button
+          variant="secondary"
+          size="sm"
+          type="button"
+          disabled={
+            pending !== null || subject.trim() === "" || message.trim() === ""
+          }
+          onClick={logEmail}
+        >
+          {pending === "log" ? "Saving…" : "Log email"}
+        </Button>
+      </div>
     </div>
   );
 }

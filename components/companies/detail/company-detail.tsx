@@ -20,7 +20,12 @@ import DetailSection from "./detail-section";
 import { archiveCompanyAction, updateCompanyAction } from "@/app/(crm)/actions";
 import type { CompanyActionState } from "@/app/(crm)/actions";
 import { formatDate } from "@/lib/companies";
-import type { Company, CompanyContext, Member } from "@/lib/crm/types";
+import type {
+  Activity,
+  Company,
+  CompanyContext,
+  Member,
+} from "@/lib/crm/types";
 import RelationshipPanel from "./relationship-panel";
 import { useCompaniesStore } from "@/stores/companies-store";
 import BuildingIcon from "@/public/assets/images/companies/detail/building.svg";
@@ -31,6 +36,7 @@ type CompanyDetailProps = {
   members: Member[];
   context: CompanyContext | null;
   mailboxConnected: boolean;
+  activitiesByContact: Record<string, Activity[]>;
   onSaved: (company: Company) => void;
   onArchived: (id: string) => void;
 };
@@ -54,6 +60,7 @@ export default function CompanyDetail({
   members,
   context,
   mailboxConnected,
+  activitiesByContact,
   onSaved,
   onArchived,
 }: CompanyDetailProps) {
@@ -119,6 +126,7 @@ export default function CompanyDetail({
             members={members}
             context={context}
             mailboxConnected={mailboxConnected}
+            activitiesByContact={activitiesByContact}
             onSaved={onSaved}
             onArchived={onArchived}
           />
@@ -133,6 +141,7 @@ function CompanyEditor({
   members,
   context,
   mailboxConnected,
+  activitiesByContact,
   onSaved,
   onArchived,
 }: {
@@ -140,6 +149,7 @@ function CompanyEditor({
   members: Member[];
   context: CompanyContext | null;
   mailboxConnected: boolean;
+  activitiesByContact: Record<string, Activity[]>;
   onSaved: (company: Company) => void;
   onArchived: (id: string) => void;
 }) {
@@ -224,6 +234,7 @@ function CompanyEditor({
           companyId={company.id}
           context={context}
           mailboxConnected={mailboxConnected}
+          activitiesByContact={activitiesByContact}
         />
       </ScrollArea>
 
