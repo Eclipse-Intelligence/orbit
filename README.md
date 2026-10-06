@@ -37,7 +37,9 @@ Set `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, and the redirect URI regis
 
 ## Hosted Supabase
 
-Set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`. Do not run `supabase/bootstrap/local-auth.sql` there. Apply the files in `supabase/migrations` in order with a role that can create schemas. Point `DATABASE_URL` at the `crm_app` role (or another role that can `SET ROLE authenticated` and `SET ROLE crm_agent`). Keep the service role on the server. Do not put it in an agent token or a `NEXT_PUBLIC_` variable.
+The Orbit project is `xuvofoydyewbloybrmas` in `eu-west-1`: `https://xuvofoydyewbloybrmas.supabase.co`.
+
+Set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` to the project URL and the publishable key. Point `DATABASE_URL` at `crm_app` and `DATABASE_ADMIN_URL` at `crm_admin` on the session pooler (`aws-0-eu-west-1.pooler.supabase.com`, port 5432), with `sslmode=require`. The database name is `postgres`. Do not run `supabase/bootstrap/local-auth.sql` there. The CRM migrations are already applied. Keep the service role on the server. Do not put it in an agent token or a `NEXT_PUBLIC_` variable.
 
 ## Agents
 

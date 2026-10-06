@@ -3,6 +3,7 @@
 @plugin "tailwind-scrollbar";
 
 @custom-variant dark (&:is(.dark *));
+@custom-variant sidebar-collapsed (&:is(html[data-sidebar-collapsed] *));
 
 @theme inline {
   --color-background: var(--background);
