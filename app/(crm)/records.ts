@@ -6,12 +6,14 @@ import { getUserActor } from "@/lib/auth/user";
 import { createActivity } from "@/lib/crm/activities";
 import { actionError } from "@/lib/companies";
 import { createContact, updateContact } from "@/lib/crm/contacts";
-import {
-  createOpportunity,
-  updateOpportunity,
-} from "@/lib/crm/opportunities";
+import { createOpportunity, updateOpportunity } from "@/lib/crm/opportunities";
 import { completeTask, createTask, updateTask } from "@/lib/crm/tasks";
-import type { ActivityType, OpportunityStatus, TaskPriority } from "@/lib/crm/types";
+import type {
+  Activity,
+  ActivityType,
+  OpportunityStatus,
+  TaskPriority,
+} from "@/lib/crm/types";
 
 export type RecordActionState = {
   error?: string;
@@ -61,8 +63,14 @@ export async function saveContactAction(
     notes: text(formData, "notes") || null,
   };
   try {
-    if (id) await updateContact(user, id, write, { provenance: { operation: "update_contact", source: "web" } });
-    else await createContact(user, write, { provenance: { operation: "create_contact", source: "web" } });
+    if (id)
+      await updateContact(user, id, write, {
+        provenance: { operation: "update_contact", source: "web" },
+      });
+    else
+      await createContact(user, write, {
+        provenance: { operation: "create_contact", source: "web" },
+      });
     refresh();
     return { ok: true };
   } catch (error) {
@@ -87,7 +95,9 @@ export async function saveOpportunityAction(
     currency: text(formData, "currency") || undefined,
     probability: probability ? Number(probability) : null,
     expectedCloseDate: text(formData, "expectedCloseDate") || null,
-    status: (text(formData, "status") || undefined) as OpportunityStatus | undefined,
+    status: (text(formData, "status") || undefined) as
+      | OpportunityStatus
+      | undefined,
     source: text(formData, "source") || null,
   };
   try {
@@ -107,7 +117,10 @@ export async function saveOpportunityAction(
   }
 }
 
-export async function moveOpportunityStageAction(id: string, stageId: string): Promise<RecordActionState> {
+export async function moveOpportunityStageAction(
+  id: string,
+  stageId: string,
+): Promise<RecordActionState> {
   const user = await requireUser();
   try {
     await updateOpportunity(
@@ -164,8 +177,14 @@ export async function saveTaskAction(
     contactId: optionalId(text(formData, "contactId")),
   };
   try {
-    if (id) await updateTask(user, id, write, { provenance: { operation: "update_task", source: "web" } });
-    else await createTask(user, write, { provenance: { operation: "create_task", source: "web" } });
+    if (id)
+      await updateTask(user, id, write, {
+        provenance: { operation: "update_task", source: "web" },
+      });
+    else
+      await createTask(user, write, {
+        provenance: { operation: "create_task", source: "web" },
+      });
     refresh();
     return { ok: true };
   } catch (error) {
@@ -173,10 +192,14 @@ export async function saveTaskAction(
   }
 }
 
-export async function completeTaskAction(id: string): Promise<RecordActionState> {
+export async function completeTaskAction(
+  id: string,
+): Promise<RecordActionState> {
   const user = await requireUser();
   try {
-    await completeTask(user, id, { provenance: { operation: "complete_task", source: "web" } });
+    await completeTask(user, id, {
+      provenance: { operation: "complete_task", source: "web" },
+    });
     refresh();
     return { ok: true };
   } catch (error) {
@@ -184,7 +207,47 @@ export async function completeTaskAction(id: string): Promise<RecordActionState>
   }
 }
 
-export async function addCompanyNoteAction(companyId: string, body: string): Promise<RecordActionState> {
+export async function addContactActivityAction(
+  contactId: string,
+  type: "note" | "call" | "email",
+  title: string,
+  body: string,
+): Promise<RecordActionState & { activity?: Activity }> {
+  const user = await requireUser();
+  const trimmedTitle = title.trim();
+  const trimmedBody = body.trim();
+  if (type === "note" && !trimmedBody)
+    return { error: "Write the note.", field: "body" };
+  if (type === "call" && !trimmedTitle && !trimmedBody) {
+    return { error: "Describe the call.", field: "title" };
+  }
+  if (type === "email" && !trimmedTitle)
+    return { error: "Add a subject.", field: "title" };
+  if (type === "email" && !trimmedBody)
+    return { error: "Write the email.", field: "body" };
+  try {
+    const saved = await createActivity(
+      user,
+      {
+        type,
+        title: trimmedTitle || null,
+        body: trimmedBody || null,
+        contactId,
+        metadata: type === "email" ? { source: "manual" } : { source: "web" },
+      },
+      { provenance: { operation: "add_contact_activity", source: "web" } },
+    );
+    refresh();
+    return { ok: true, activity: saved.body.activity };
+  } catch (error) {
+    return actionError(error);
+  }
+}
+
+export async function addCompanyNoteAction(
+  companyId: string,
+  body: string,
+): Promise<RecordActionState> {
   const user = await requireUser();
   try {
     await createActivity(

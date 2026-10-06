@@ -106,12 +106,21 @@ function prepareActivity(input: ActivityWrite): {
 } {
   const type = input.type ?? "note";
   if (!(ACTIVITY_TYPES as readonly string[]).includes(type)) {
-    throw new CrmError("invalid_input", "Activity type is not recognised.", 400, { field: "type" });
+    throw new CrmError(
+      "invalid_input",
+      "Activity type is not recognised.",
+      400,
+      { field: "type" },
+    );
   }
-  const title = input.title === undefined ? null : cleanText(input.title, 200, "title");
-  const body = input.body === undefined ? null : cleanText(input.body, 10000, "body");
+  const title =
+    input.title === undefined ? null : cleanText(input.title, 200, "title");
+  const body =
+    input.body === undefined ? null : cleanText(input.body, 10000, "body");
   if (!title && !body) {
-    throw new CrmError("invalid_input", "Enter a title or a note.", 400, { field: "body" });
+    throw new CrmError("invalid_input", "Enter a title or a note.", 400, {
+      field: "body",
+    });
   }
   let occurredAt: string | null = null;
   if (input.occurredAt) {
@@ -126,15 +135,25 @@ function prepareActivity(input: ActivityWrite): {
   let metadata: Record<string, unknown> = {};
   if (input.metadata) {
     if (typeof input.metadata !== "object" || Array.isArray(input.metadata)) {
-      throw new CrmError("invalid_input", "Activity metadata must be an object.", 400, {
-        field: "metadata",
-      });
+      throw new CrmError(
+        "invalid_input",
+        "Activity metadata must be an object.",
+        400,
+        {
+          field: "metadata",
+        },
+      );
     }
     const encoded = JSON.stringify(input.metadata);
     if (encoded.length > 8000) {
-      throw new CrmError("invalid_input", "Activity metadata is too large.", 400, {
-        field: "metadata",
-      });
+      throw new CrmError(
+        "invalid_input",
+        "Activity metadata is too large.",
+        400,
+        {
+          field: "metadata",
+        },
+      );
     }
     metadata = input.metadata;
   }
@@ -189,22 +208,39 @@ export async function createActivityInDb(
         JSON.stringify(write.metadata),
       ],
     );
-    const saved = await db.query<ActivityRow>(`${ACTIVITY_SQL} where a.id = $1`, [
-      inserted.rows[0].id,
-    ]);
+    const saved = await db.query<ActivityRow>(
+      `${ACTIVITY_SQL} where a.id = $1`,
+      [inserted.rows[0].id],
+    );
     const row = saved.rows[0];
-    if (!row) throw new CrmError("internal_error", "Activity was not saved.", 500);
+    if (!row)
+      throw new CrmError("internal_error", "Activity was not saved.", 500);
     const activity = mapActivity(row);
-    await recordAudit(db, actor, "activity.created", "activity", activity.id, provenance, {
-      after: activity,
-    });
+    await recordAudit(
+      db,
+      actor,
+      "activity.created",
+      "activity",
+      activity.id,
+      provenance,
+      {
+        after: activity,
+      },
+    );
     return activity;
   } catch (error) {
-    constraintError(error, "duplicate_activity", "That activity already exists.");
+    constraintError(
+      error,
+      "duplicate_activity",
+      "That activity already exists.",
+    );
   }
 }
 
-export async function listActivities(actor: Actor, query: ActivityListQuery = {}) {
+export async function listActivities(
+  actor: Actor,
+  query: ActivityListQuery = {},
+) {
   assertScope(actor.scopes, "crm:read");
   const page = pageWindow(query.limit, query.offset);
   return withActor(actor, async (db) => {
@@ -261,11 +297,73 @@ export async function listActivities(actor: Actor, query: ActivityListQuery = {}
   });
 }
 
+export async function listActivitiesByContact(
+  actor: Actor,
+  contactIds: string[],
+) {
+  assertScope(actor.scopes, "crm:read");
+  const ids = [...new Set(contactIds.filter((id) => isUuid(id)))];
+  const grouped: Record<string, Activity[]> = {};
+  for (const id of ids) grouped[id] = [];
+  if (ids.length === 0) return grouped;
+  return withActor(actor, async (db) => {
+    const rows = await db.query<ActivityRow>(
+      `select
+         id, workspace_id, type, title, body, occurred_at, company_id, company_name,
+         contact_id, contact_name, opportunity_id, opportunity_name,
+         actor_user_id, actor_agent_id, metadata, created_at
+       from (
+         select
+           a.id,
+           a.workspace_id,
+           a.type,
+           a.title,
+           a.body,
+           a.occurred_at,
+           a.company_id,
+           co.name as company_name,
+           a.contact_id,
+           coalesce(
+             nullif(trim(concat_ws(' ', ct.first_name, ct.last_name)), ''),
+             ct.email,
+             ct.phone
+           ) as contact_name,
+           a.opportunity_id,
+           op.name as opportunity_name,
+           a.actor_user_id,
+           a.actor_agent_id,
+           a.metadata,
+           a.created_at,
+           row_number() over (
+             partition by a.contact_id
+             order by a.occurred_at desc, a.id desc
+           ) as rn
+         from crm.activities a
+         left join crm.companies co on co.id = a.company_id
+         left join crm.contacts ct on ct.id = a.contact_id
+         left join crm.opportunities op on op.id = a.opportunity_id
+         where a.workspace_id = $1 and a.contact_id = any($2::uuid[])
+       ) ranked
+       where rn <= 40
+       order by occurred_at desc, id desc`,
+      [actor.workspaceId, ids],
+    );
+    for (const row of rows.rows) {
+      const activity = mapActivity(row);
+      if (activity.contactId) grouped[activity.contactId]?.push(activity);
+    }
+    return grouped;
+  });
+}
+
 export async function getActivity(actor: Actor, id: string) {
   assertScope(actor.scopes, "crm:read");
   if (!isUuid(id)) throw new CrmError("not_found", "Activity not found.", 404);
   return withActor(actor, async (db) => {
-    const result = await db.query<ActivityRow>(`${ACTIVITY_SQL} where a.id = $1`, [id]);
+    const result = await db.query<ActivityRow>(
+      `${ACTIVITY_SQL} where a.id = $1`,
+      [id],
+    );
     const row = result.rows[0];
     if (!row) throw new CrmError("not_found", "Activity not found.", 404);
     return mapActivity(row);

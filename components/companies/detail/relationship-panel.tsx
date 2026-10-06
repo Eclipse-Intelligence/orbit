@@ -10,7 +10,7 @@ import {
   addCompanyTaskAction,
 } from "@/app/(crm)/records";
 import DetailSection from "@/components/companies/detail/detail-section";
-import ContactEmail from "@/components/crm/contact-email";
+import ContactActivities from "@/components/crm/contact-activities";
 import { ConnectionMark } from "@/components/beautifui/record-marks";
 import {
   formatDate,
@@ -18,7 +18,7 @@ import {
   formatWhen,
   relativeWhen,
 } from "@/lib/companies";
-import type { CompanyContext } from "@/lib/crm/types";
+import type { Activity, CompanyContext } from "@/lib/crm/types";
 
 const ACTIVITY_LABELS: Record<string, string> = {
   email: "Email",
@@ -35,10 +35,12 @@ export default function RelationshipPanel({
   companyId,
   context,
   mailboxConnected,
+  activitiesByContact,
 }: {
   companyId: string;
   context: CompanyContext | null;
   mailboxConnected: boolean;
+  activitiesByContact: Record<string, Activity[]>;
 }) {
   const router = useRouter();
   const [note, setNote] = useState("");
@@ -187,10 +189,12 @@ export default function RelationshipPanel({
                     .filter(Boolean)
                     .join(" · ") || "No email"}
                 </span>
-                <ContactEmail
+                <ContactActivities
                   contactId={contact.id}
                   email={contact.email}
                   mailboxConnected={mailboxConnected}
+                  profileNote={contact.notes}
+                  activities={activitiesByContact[contact.id] ?? []}
                 />
               </li>
             ))}

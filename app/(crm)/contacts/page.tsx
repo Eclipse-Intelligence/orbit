@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import ContactsScreen from "@/components/crm/contacts-screen";
 import { getUserActor } from "@/lib/auth/user";
 import { listCompanies, listMembers } from "@/lib/crm/companies";
+import { listActivitiesByContact } from "@/lib/crm/activities";
 import { listContacts } from "@/lib/crm/contacts";
 import { getMailbox } from "@/lib/crm/inbox";
 import { contactQueryFromSearchParams } from "@/lib/crm/validation";
@@ -28,6 +29,10 @@ export default async function ContactsPage({
     listMembers(user),
     getMailbox(user),
   ]);
+  const activitiesByContact = await listActivitiesByContact(
+    user,
+    listed.data.map((contact) => contact.id),
+  );
 
   return (
     <ContactsScreen
@@ -44,6 +49,7 @@ export default async function ContactsPage({
       companies={companies.data}
       members={members}
       mailboxConnected={mailbox?.status === "connected"}
+      activitiesByContact={activitiesByContact}
     />
   );
 }
