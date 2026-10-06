@@ -1,7 +1,19 @@
+import { after } from "next/server";
 import type { Db } from "@/lib/db/pool";
 import { getPool } from "@/lib/db/pool";
 import { deliverDueWebhooks } from "@/lib/crm/webhooks";
 import type { Actor } from "@/lib/crm/types";
+
+function scheduleWebhooks() {
+  const run = () => {
+    void deliverDueWebhooks().catch(() => undefined);
+  };
+  try {
+    after(run);
+  } catch {
+    run();
+  }
+}
 
 export async function withActor<T>(
   actor: Actor,
@@ -27,7 +39,7 @@ export async function withActor<T>(
     }
     const result = await fn(client);
     await client.query("commit");
-    void deliverDueWebhooks().catch(() => undefined);
+    scheduleWebhooks();
     return result;
   } catch (error) {
     try {
