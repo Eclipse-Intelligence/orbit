@@ -5,6 +5,7 @@ import Button from "@/components/_ui/button";
 import { ScrollArea } from "@/components/_ui/scroll-area";
 import SidebarNavItem from "./sidebar-nav-item";
 import SidebarSection from "./sidebar-section";
+import { CollapseSidebarButton } from "./sidebar-toggle";
 import { useCompaniesStore } from "@/stores/companies-store";
 import Logo from "@/public/assets/images/_common/logo.svg";
 import BuildingIcon from "@/public/assets/images/companies/sidebar/building.svg";
@@ -36,7 +37,7 @@ export default function SidebarContent({
     <div className="flex h-full min-h-0 flex-col">
       <div className="border-sidebar-border bg-sidebar-accent flex shrink-0 items-center gap-2 border-b p-3">
         <Logo aria-hidden className="size-8 shrink-0 overflow-visible" />
-        <div className="flex min-w-0 flex-col gap-1">
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
           <span className="lead-style block truncate font-medium tracking-[-0.01em]">
             Orbit
           </span>
@@ -44,6 +45,7 @@ export default function SidebarContent({
             {workspaceName}
           </span>
         </div>
+        <CollapseSidebarButton />
       </div>
 
       <ScrollArea className="min-h-0 flex-1">

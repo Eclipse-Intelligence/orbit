@@ -5,6 +5,7 @@ import Notifications from "./notifications/notifications";
 import { displayInitials } from "@/lib/companies";
 import { useCompaniesStore } from "@/stores/companies-store";
 import type { Viewer } from "@/components/crm/viewer";
+import { ExpandSidebarButton } from "@/components/_common/sidebar/sidebar-toggle";
 import MenuIcon from "@/public/assets/images/_common/menu.svg";
 import SearchIcon from "@/public/assets/images/_common/search.svg";
 
@@ -26,6 +27,7 @@ export default function CompaniesHeader({ viewer }: { viewer: Viewer }) {
           >
             <MenuIcon aria-hidden className="size-3.5" />
           </Button>
+          <ExpandSidebarButton />
           <div className="flex min-w-0 flex-col">
             <h1 className="truncate">Companies</h1>
             <span className="caption-style text-subtle hidden truncate sm:block">
