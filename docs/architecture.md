@@ -60,4 +60,4 @@ A company is quiet when its latest activity is older than 21 days, or it has nev
 
 ## What is left for you
 
-Hosted Supabase is not provisioned from this environment. Point the app at your project when you have one, and do not run `supabase/bootstrap/local-auth.sql` there. The Microsoft inbox starts once the Entra app credentials are in the environment. Gmail and calendar sync are still separate.
+The hosted project is Orbit (`xuvofoydyewbloybrmas`) in `eu-west-1`. The app connects through the session pooler as `crm_app`, and webhook delivery uses `crm_admin`. Do not run `supabase/bootstrap/local-auth.sql` there. The Microsoft inbox starts once the Entra app credentials are in the environment. Gmail and calendar sync are still separate.

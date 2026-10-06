@@ -11,6 +11,9 @@ function createPool(connectionString: string) {
   if (!options.includes("statement_timeout")) {
     url.searchParams.set("options", `${options} -c statement_timeout=10000`.trim());
   }
+  if (url.searchParams.get("sslmode") === "require" && !url.searchParams.has("uselibpqcompat")) {
+    url.searchParams.set("uselibpqcompat", "true");
+  }
   return new Pool({
     connectionString: url.toString(),
     max: 10,
