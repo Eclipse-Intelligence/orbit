@@ -1,6 +1,6 @@
 import { withActor } from "@/lib/crm/context";
 import { readCompanyInDb } from "@/lib/crm/companies";
-import { listActivities } from "@/lib/crm/activities";
+import { listActivities, listCompanyTimeline } from "@/lib/crm/activities";
 import { listContacts } from "@/lib/crm/contacts";
 import { CrmError } from "@/lib/crm/errors";
 import { iso, isUuid } from "@/lib/crm/mutate";
@@ -27,10 +27,11 @@ export async function getCompanyContext(actor: Actor, id: string): Promise<Compa
     }
     return row;
   });
-  const [contacts, opportunities, activities, tasks] = await Promise.all([
+  const [contacts, opportunities, activities, timeline, tasks] = await Promise.all([
     listContacts(actor, { companyId: id, limit: 50 }),
     listOpportunities(actor, { companyId: id, limit: 50 }),
     listActivities(actor, { companyId: id, limit: 30 }),
+    listCompanyTimeline(actor, id, 100),
     listTasks(actor, { companyId: id, limit: 50 }),
   ]);
   const openTasks = tasks.data.filter((task) => !task.completedAt && !task.archivedAt);
@@ -39,6 +40,7 @@ export async function getCompanyContext(actor: Actor, id: string): Promise<Compa
     contacts: contacts.data,
     opportunities: opportunities.data,
     activities: activities.data,
+    timeline,
     tasks: openTasks,
     lastInteraction: activities.data[0] ?? null,
     openTaskCount: openTasks.length,

@@ -348,6 +348,7 @@ export type CompanyContext = {
   contacts: Contact[];
   opportunities: Opportunity[];
   activities: Activity[];
+  timeline: Activity[];
   tasks: Task[];
   lastInteraction: Activity | null;
   openTaskCount: number;

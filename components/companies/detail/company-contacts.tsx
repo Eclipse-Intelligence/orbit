@@ -13,9 +13,8 @@ import {
 import { searchContactsToLinkAction } from "@/app/(crm)/search";
 import DetailSection from "@/components/companies/detail/detail-section";
 import { Monogram } from "@/components/beautifui/record-marks";
-import ContactActivities from "@/components/crm/contact-activities";
 import { CallLink } from "@/components/crm/record-form";
-import type { Activity, Contact } from "@/lib/crm/types";
+import type { Contact } from "@/lib/crm/types";
 import PlusIcon from "@/public/assets/images/_common/plus.svg";
 
 type Draft = {
@@ -60,14 +59,10 @@ function draftFromQuery(query: string): Draft {
 export default function CompanyContacts({
   companyId,
   contacts,
-  mailboxConnected,
-  activitiesByContact,
   onNavigate,
 }: {
   companyId: string;
   contacts: Contact[];
-  mailboxConnected: boolean;
-  activitiesByContact: Record<string, Activity[]>;
   onNavigate?: () => void;
 }) {
   const router = useRouter();
@@ -186,13 +181,6 @@ export default function CompanyContacts({
                   Remove {contact.name} from this company? The contact is kept.
                 </p>
               )}
-              <ContactActivities
-                contactId={contact.id}
-                email={contact.email}
-                mailboxConnected={mailboxConnected}
-                profileNote={contact.notes}
-                activities={activitiesByContact[contact.id] ?? []}
-              />
             </li>
           ))}
         </ul>

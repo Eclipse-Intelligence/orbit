@@ -357,6 +357,96 @@ export async function listActivitiesByContact(
   });
 }
 
+export async function listCompanyTimeline(
+  actor: Actor,
+  companyId: string,
+  limit = 100,
+) {
+  assertScope(actor.scopes, "crm:read");
+  if (!isUuid(companyId)) return [];
+  const rowLimit = Math.min(200, Math.max(1, Math.trunc(limit) || 100));
+  return withActor(actor, async (db) => {
+    const rows = await db.query<ActivityRow>(
+      `${ACTIVITY_SQL}
+       where a.workspace_id = $1
+         and (
+           a.company_id = $2
+           or a.contact_id in (
+             select c.id
+             from crm.contacts c
+             where c.workspace_id = $1
+               and c.company_id = $2
+               and c.archived_at is null
+           )
+         )
+       order by a.occurred_at desc, a.id desc
+       limit $3`,
+      [actor.workspaceId, companyId, rowLimit],
+    );
+    return rows.rows.map(mapActivity);
+  });
+}
+
+export type LoggedActivityType = "note" | "call" | "email";
+
+export async function logActivity(
+  actor: Actor,
+  target: { companyId?: string | null; contactId?: string | null },
+  type: LoggedActivityType,
+  title: string,
+  body: string,
+  options: MutationOptions = {},
+) {
+  const trimmedTitle = title.trim();
+  const trimmedBody = body.trim();
+  if (type === "note" && !trimmedBody) {
+    throw new CrmError("invalid_input", "Write the note.", 400, {
+      field: "body",
+    });
+  }
+  if (type === "call" && !trimmedTitle && !trimmedBody) {
+    throw new CrmError("invalid_input", "Describe the call.", 400, {
+      field: "title",
+    });
+  }
+  if (type === "email" && !trimmedTitle) {
+    throw new CrmError("invalid_input", "Add a subject.", 400, {
+      field: "title",
+    });
+  }
+  if (type === "email" && !trimmedBody) {
+    throw new CrmError("invalid_input", "Write the email.", 400, {
+      field: "body",
+    });
+  }
+  const companyId = target.companyId || null;
+  const contactId = target.contactId || null;
+  if (!companyId && !contactId) {
+    throw new CrmError(
+      "invalid_input",
+      "Attach the activity to a company or contact.",
+      400,
+      { field: "contactId" },
+    );
+  }
+  if ((companyId && !isUuid(companyId)) || (contactId && !isUuid(contactId))) {
+    throw new CrmError("not_found", "Record not found.", 404);
+  }
+  const saved = await createActivity(
+    actor,
+    {
+      type,
+      title: trimmedTitle || null,
+      body: trimmedBody || null,
+      ...(companyId ? { companyId } : {}),
+      contactId,
+      metadata: type === "email" ? { source: "manual" } : { source: "web" },
+    },
+    options,
+  );
+  return saved.body.activity;
+}
+
 export async function getActivity(actor: Actor, id: string) {
   assertScope(actor.scopes, "crm:read");
   if (!isUuid(id)) throw new CrmError("not_found", "Activity not found.", 404);

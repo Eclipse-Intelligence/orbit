@@ -5,16 +5,22 @@ import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Input } from "@/components/_ui/input";
 import { sendContactEmailAction } from "@/app/(crm)/inbox/actions";
-import { addContactActivityAction } from "@/app/(crm)/records";
+import { addActivityAction } from "@/app/(crm)/records";
 
 export default function ContactEmail({
   contactId,
+  companyId,
   email,
   mailboxConnected,
+  idPrefix = contactId ?? "none",
+  unavailable,
 }: {
-  contactId: string;
+  contactId: string | null;
+  companyId?: string;
   email: string | null;
   mailboxConnected: boolean;
+  idPrefix?: string;
+  unavailable?: string;
 }) {
   const router = useRouter();
   const sending = useRef(false);
@@ -28,6 +34,7 @@ export default function ContactEmail({
 
   async function send() {
     if (
+      !contactId ||
       sending.current ||
       pending ||
       subject.trim() === "" ||
@@ -59,6 +66,7 @@ export default function ContactEmail({
 
   async function logEmail() {
     if (
+      !contactId ||
       sending.current ||
       pending ||
       subject.trim() === "" ||
@@ -71,8 +79,8 @@ export default function ContactEmail({
     setWarning(null);
     setSent(false);
     try {
-      const result = await addContactActivityAction(
-        contactId,
+      const result = await addActivityAction(
+        { contactId, companyId },
         "email",
         subject,
         message,
@@ -94,10 +102,14 @@ export default function ContactEmail({
 
   return (
     <div className="flex flex-col gap-2">
-      <p className="caption-style text-subtle">
-        {email ? `Email ${email}` : "Log an email on this contact"}
-      </p>
-      {!email && (
+      {!contactId ? (
+        <p className="caption-style text-subtle">{unavailable}</p>
+      ) : (
+        <p className="caption-style text-subtle">
+          {email ? `Email ${email}` : "Log an email on this contact"}
+        </p>
+      )}
+      {contactId && !email && (
         <p className="caption-style text-subtle">
           Save an email address on this contact before sending.
         </p>
@@ -128,11 +140,11 @@ export default function ContactEmail({
           Email recorded on this contact.
         </p>
       )}
-      <label className="sr-only" htmlFor={`email-subject-${contactId}`}>
+      <label className="sr-only" htmlFor={`email-subject-${idPrefix}`}>
         Subject
       </label>
       <Input
-        id={`email-subject-${contactId}`}
+        id={`email-subject-${idPrefix}`}
         value={subject}
         autoComplete="off"
         onChange={(event) => setSubject(event.target.value)}
@@ -143,11 +155,11 @@ export default function ContactEmail({
         placeholder="Subject"
         maxLength={200}
       />
-      <label className="sr-only" htmlFor={`email-body-${contactId}`}>
+      <label className="sr-only" htmlFor={`email-body-${idPrefix}`}>
         Message
       </label>
       <textarea
-        id={`email-body-${contactId}`}
+        id={`email-body-${idPrefix}`}
         value={message}
         autoComplete="off"
         onChange={(event) => setMessage(event.target.value)}
@@ -162,6 +174,7 @@ export default function ContactEmail({
           type="button"
           disabled={
             pending !== null ||
+            !contactId ||
             !email ||
             !mailboxConnected ||
             subject.trim() === "" ||
@@ -176,7 +189,10 @@ export default function ContactEmail({
           size="sm"
           type="button"
           disabled={
-            pending !== null || subject.trim() === "" || message.trim() === ""
+            pending !== null ||
+            !contactId ||
+            subject.trim() === "" ||
+            message.trim() === ""
           }
           onClick={logEmail}
         >
