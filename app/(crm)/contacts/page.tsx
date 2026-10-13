@@ -50,7 +50,7 @@ export default async function ContactsPage({
     user,
     Object.values(activitiesByContact)
       .flat()
-      .filter((activity) => activity.type === "call")
+      .filter((activity) => activity.type === "call" || activity.type === "meeting")
       .map((activity) => activity.id),
   );
 

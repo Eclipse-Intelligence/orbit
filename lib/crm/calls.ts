@@ -1,6 +1,7 @@
 import type { Db } from "@/lib/db/pool";
 import { createActivityInDb } from "@/lib/crm/activities";
 import { withActor } from "@/lib/crm/context";
+import { attachTeamsTranscripts, summarisePendingImports } from "@/lib/crm/conversations";
 import {
   currentToken,
   readSecret,
@@ -42,6 +43,7 @@ export type CallSyncResult = {
   logged: number;
   unmatched: number;
   skipped: number;
+  transcripts?: number;
   error?: string;
 };
 
@@ -53,6 +55,7 @@ type ContactPhone = {
 
 type CallRow = {
   providerCallId: string;
+  teamsCallId?: string | null;
   direction: CallDirection;
   counterpartNumber: string | null;
   startedAt: string | null;
@@ -127,6 +130,7 @@ export function toCallRow(row: PstnCallRow): CallRow | null {
       : null;
   return {
     providerCallId,
+    teamsCallId: row.callId?.trim().slice(0, 200) || null,
     direction,
     counterpartNumber: counterpart,
     startedAt:
@@ -175,7 +179,7 @@ export async function getCallSync(
 
 export async function syncCalls(
   actor: UserActor,
-  options: { force?: boolean; fetchImpl?: typeof fetch } = {},
+  options: { force?: boolean; fetchImpl?: typeof fetch; deadline?: number } = {},
 ): Promise<CallSyncResult> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const idle: CallSyncResult = {
@@ -226,13 +230,14 @@ export async function syncCalls(
     }
     const watermark = fetched.complete ? to.toISOString() : null;
 
-    return await withActor(actor, async (db) => {
+    const result: CallSyncResult = await withActor(actor, async (db) => {
       await lockCalls(db, stored.id);
       if (identity.refreshed)
         await storeToken(db, stored.id, identity.refreshed);
       const phones = await contactPhones(db, actor.workspaceId);
       const counts = await fileCalls(db, actor, stored.id, rows, phones);
       counts.logged += await rematchCalls(db, actor, stored.id, phones);
+      const transcripts = await attachTeamsTranscripts(db, actor.workspaceId);
       await db.query(
         `update crm.call_sync_state
          set tenant_id = $2,
@@ -246,8 +251,17 @@ export async function syncCalls(
         logged: counts.logged,
         unmatched: counts.unmatched,
         skipped: skipped + counts.skipped,
+        transcripts,
       };
     });
+    if (result.transcripts) {
+      try {
+        await summarisePendingImports(actor, { fetchImpl, deadline: options.deadline });
+      } catch (error) {
+        console.error("Teams transcript summary failed", error);
+      }
+    }
+    return result;
   } catch (error) {
     const message = sanitizeCallError(
       error instanceof Error ? error.message : "Could not sync Teams calls.",
@@ -313,6 +327,40 @@ async function resolveIdentity(
   return { tenantId, objectId: claims?.objectId ?? null, refreshed };
 }
 
+export async function teamsIdentity(actor: UserActor, fetchImpl: typeof fetch = fetch) {
+  const prepared = await withActor(actor, async (db) => {
+    const stored = await readStored(db, actor);
+    if (!stored || stored.status !== "connected" || !stored.refreshTokenCipher) return null;
+    const state = await db.query<{ tenant_id: string | null }>(
+      "select tenant_id from crm.call_sync_state where connection_id = $1",
+      [stored.id],
+    );
+    return { stored, tenantId: state.rows[0]?.tenant_id ?? null };
+  });
+  if (!prepared) return null;
+  const { stored } = prepared;
+  const identity = await resolveIdentity(
+    stored,
+    { tenantId: prepared.tenantId, lastSyncedAt: null },
+    fetchImpl,
+  );
+  let { objectId, refreshed } = identity;
+  if (!objectId) {
+    refreshed = await currentToken({ ...stored, accessTokenCipher: null }, fetchImpl);
+    objectId = tokenClaims(refreshed.accessToken)?.objectId ?? null;
+  }
+  if (refreshed) {
+    const token = refreshed;
+    await withActor(actor, (db) => storeToken(db, stored.id, token));
+  }
+  if (!objectId) {
+    throw new Error(
+      "Orbit could not work out the Microsoft user for Teams transcripts. Connect Microsoft again.",
+    );
+  }
+  return { tenantId: identity.tenantId, objectId, connectionId: stored.id };
+}
+
 async function lockCalls(db: Db, connectionId: string) {
   await db.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [
     `calls:${connectionId}`,
@@ -364,19 +412,49 @@ async function fileCalls(
       [actor.workspaceId, call.providerCallId],
     );
     if ((existing.rowCount ?? 0) > 0) {
+      if (call.teamsCallId) {
+        await db.query(
+          `update crm.call_records set teams_call_id = $3
+           where workspace_id = $1 and provider_call_id = $2 and teams_call_id is null`,
+          [actor.workspaceId, call.providerCallId, call.teamsCallId],
+        );
+        const filed = await filedTranscript(db, actor, call.teamsCallId);
+        if (filed) {
+          await db.query(
+            `update crm.call_records
+             set activity_id = $3, contact_id = $4, company_id = $5
+             where workspace_id = $1 and provider_call_id = $2
+               and activity_id is null and contact_id is null and company_id is null`,
+            [
+              actor.workspaceId,
+              call.providerCallId,
+              filed.activity_id,
+              filed.contact_id,
+              filed.company_id,
+            ],
+          );
+        }
+      }
       counts.skipped += 1;
       continue;
     }
-    const contact = call.counterpartNumber
-      ? (phones.get(call.counterpartNumber) ?? null)
-      : null;
-    const activityId = contact ? await logCall(db, actor, call, contact) : null;
+    const filed = call.teamsCallId ? await filedTranscript(db, actor, call.teamsCallId) : null;
+    const contact = filed
+      ? { id: filed.contact_id, name: "", companyId: filed.company_id }
+      : call.counterpartNumber
+        ? (phones.get(call.counterpartNumber) ?? null)
+        : null;
+    const activityId = filed
+      ? filed.activity_id
+      : contact
+        ? await logCall(db, actor, call, contact)
+        : null;
     const inserted = await db.query(
       `insert into crm.call_records (
          workspace_id, connection_id, provider_call_id, direction,
          counterpart_number, started_at, duration_seconds,
-         contact_id, company_id, activity_id
-       ) values ($1, $2, $3, $4, $5, $6::timestamptz, $7, $8, $9, $10)
+         contact_id, company_id, activity_id, teams_call_id
+       ) values ($1, $2, $3, $4, $5, $6::timestamptz, $7, $8, $9, $10, $11)
        on conflict (workspace_id, provider_call_id) do nothing`,
       [
         actor.workspaceId,
@@ -389,6 +467,7 @@ async function fileCalls(
         contact?.id ?? null,
         contact?.companyId ?? null,
         activityId,
+        call.teamsCallId ?? null,
       ],
     );
     if ((inserted.rowCount ?? 0) === 0) {
@@ -399,6 +478,23 @@ async function fileCalls(
     else counts.unmatched += 1;
   }
   return counts;
+}
+
+async function filedTranscript(db: Db, actor: UserActor, teamsCallId: string) {
+  const result = await db.query<{
+    activity_id: string;
+    contact_id: string;
+    company_id: string | null;
+  }>(
+    `select activity_id, contact_id, company_id
+     from crm.conversation_imports
+     where workspace_id = $1 and source = 'teams' and user_id = $2 and call_id = $3
+       and status = 'filed' and activity_id is not null and contact_id is not null
+     order by updated_at desc
+     limit 1`,
+    [actor.workspaceId, actor.userId, teamsCallId],
+  );
+  return result.rows[0] ?? null;
 }
 
 async function rematchCalls(

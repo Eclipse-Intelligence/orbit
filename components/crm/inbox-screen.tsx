@@ -1,15 +1,34 @@
 import Button from "@/components/_ui/button";
 import { EntityChip, Monogram } from "@/components/beautifui/record-marks";
 import SectionHeader from "@/components/crm/section-header";
+import UnfiledConversations from "@/components/crm/unfiled-conversations";
 import type { Viewer } from "@/components/crm/viewer";
 import {
   disconnectInboxAction,
+  enableGranolaWebhookAction,
   syncCallsAction,
+  syncGranolaAction,
   syncInboxAction,
+  syncTranscriptsAction,
 } from "@/app/(crm)/inbox/actions";
 import { formatWhen } from "@/lib/companies";
 import type { CallSyncSummary } from "@/lib/crm/calls";
+import type { ConversationImport } from "@/lib/crm/conversations";
+import type { GranolaStatus } from "@/lib/crm/granola";
 import type { InboxMessage, MailboxSummary } from "@/lib/crm/inbox";
+import type { TeamsTranscriptStatus } from "@/lib/crm/teams-transcripts";
+
+function syncedLine(lastSyncedAt: string | null) {
+  return lastSyncedAt ? `Last synced ${formatWhen(lastSyncedAt)}` : "Not synced yet";
+}
+
+function subscriptionLine(status: TeamsTranscriptStatus) {
+  if (!status.instant) return "Instant updates need NEXT_PUBLIC_SITE_URL on https";
+  if (status.subscriptionId && status.subscriptionExpiresAt) {
+    return `Instant updates on until ${formatWhen(status.subscriptionExpiresAt)}`;
+  }
+  return "Instant updates not set up yet";
+}
 
 export default function InboxScreen({
   viewer,
@@ -18,7 +37,11 @@ export default function InboxScreen({
   mailbox,
   messages,
   calls,
+  unfiled,
+  granola,
+  transcripts,
   notice,
+  info,
   connected,
 }: {
   viewer: Viewer;
@@ -27,7 +50,11 @@ export default function InboxScreen({
   mailbox: MailboxSummary | null;
   messages: InboxMessage[];
   calls: CallSyncSummary | null;
+  unfiled: ConversationImport[];
+  granola: GranolaStatus;
+  transcripts: TeamsTranscriptStatus | null;
   notice: string | null;
+  info: string | null;
   connected: boolean;
 }) {
   const live = mailbox?.status === "connected";
@@ -70,6 +97,11 @@ export default function InboxScreen({
             {notice}
           </p>
         )}
+        {info && (
+          <p className="caption-style text-subtle" role="status">
+            {info}
+          </p>
+        )}
         {!notice && mailbox?.lastError && (
           <p className="caption-style text-danger" role="alert">
             {mailbox.lastError}
@@ -80,8 +112,9 @@ export default function InboxScreen({
             <h2>Microsoft app</h2>
             <p className="caption-style text-subtle">
               Register an app in Microsoft Entra with delegated Mail.Read,
-              Mail.Send, User.Read, and offline_access. To log Teams calls, also
-              add the CallRecords.Read.All application permission with admin
+              Mail.Send, User.Read, and offline_access. To log Teams calls and
+              their transcripts, also add the CallRecords.Read.All and
+              CallTranscripts.Read.All application permissions with admin
               consent. Put the client id and secret in the server environment,
               then restart Orbit.
             </p>
@@ -131,7 +164,75 @@ export default function InboxScreen({
             </form>
           </div>
         )}
+        {live && configured && transcripts && (
+          <div className="border-border flex max-w-[640px] items-center gap-3 rounded-xl border p-3">
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="text-[14px] leading-5">Teams transcripts</span>
+              <span className="caption-style text-subtle">
+                {syncedLine(transcripts.lastSyncedAt)}
+                {transcripts.pending
+                  ? ` · ${transcripts.pending} waiting for the call log`
+                  : ""}
+              </span>
+              <span className="caption-style text-subtle">
+                {subscriptionLine(transcripts)}
+              </span>
+              {transcripts.lastError && (
+                <span className="caption-style text-danger" role="alert">
+                  {transcripts.lastError}
+                </span>
+              )}
+            </span>
+            <form action={syncTranscriptsAction}>
+              <Button variant="secondary" size="sm" type="submit">
+                Sync now
+              </Button>
+            </form>
+          </div>
+        )}
+        <div className="border-border flex max-w-[640px] items-center gap-3 rounded-xl border p-3">
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span className="text-[14px] leading-5">Granola</span>
+            {granola.configured ? (
+              <>
+                <span className="caption-style text-subtle">
+                  {syncedLine(granola.lastSyncedAt)}
+                  {granola.webhookEnabled
+                    ? " · Instant sync on"
+                    : " · Checked every 10 minutes"}
+                </span>
+                {granola.lastError && (
+                  <span className="caption-style text-danger" role="alert">
+                    {granola.lastError}
+                  </span>
+                )}
+              </>
+            ) : (
+              <span className="caption-style text-subtle">
+                Set GRANOLA_API_KEY in the server environment to import
+                Granola meetings, then restart Orbit.
+              </span>
+            )}
+          </span>
+          {granola.configured && (
+            <div className="flex items-center gap-2">
+              {!granola.webhookEnabled && viewer.role !== "member" && (
+                <form action={enableGranolaWebhookAction}>
+                  <Button variant="ghost" size="sm" type="submit">
+                    Enable instant Granola sync
+                  </Button>
+                </form>
+              )}
+              <form action={syncGranolaAction}>
+                <Button variant="secondary" size="sm" type="submit">
+                  Sync now
+                </Button>
+              </form>
+            </div>
+          )}
+        </div>
       </div>
+      <UnfiledConversations conversations={unfiled} />
       {messages.length === 0 ? (
         <p className="caption-style text-subtle px-4">No mail filed yet.</p>
       ) : (

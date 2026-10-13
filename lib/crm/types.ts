@@ -343,9 +343,10 @@ export type LeadResult = {
 
 export type RelationshipStatus = "new" | "active" | "quiet" | "needs_action";
 
-export const CALL_INSIGHT_SOURCES = ["teams", "manual"] as const;
+export const CALL_INSIGHT_SOURCES = ["teams", "manual", "granola"] as const;
 export type CallInsightSource = (typeof CALL_INSIGHT_SOURCES)[number];
 export type CallInsightStatus = "pending" | "ready" | "failed";
+export const CALL_INSIGHT_STALE_MS = 3 * 60 * 1000;
 export type CallActionOwner = "me" | "them";
 export type CallActionStatus = "suggested" | "accepted" | "dismissed";
 

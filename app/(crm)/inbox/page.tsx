@@ -3,7 +3,10 @@ import { redirect } from "next/navigation";
 import InboxScreen from "@/components/crm/inbox-screen";
 import { getUserActor } from "@/lib/auth/user";
 import { getCallSync } from "@/lib/crm/calls";
+import { listUnfiledImports } from "@/lib/crm/conversations";
+import { getGranolaStatus } from "@/lib/crm/granola";
 import { getMailbox, listInbox, shouldSyncMailbox, syncMailbox } from "@/lib/crm/inbox";
+import { getTeamsTranscriptStatus } from "@/lib/crm/teams-transcripts";
 import { microsoftConfigured, microsoftRedirectUri } from "@/lib/microsoft/oauth";
 
 export const dynamic = "force-dynamic";
@@ -17,6 +20,7 @@ export default async function InboxPage({
   if (!user) redirect("/login");
   const resolved = await searchParams;
   const notice = typeof resolved.error === "string" ? resolved.error : null;
+  const info = typeof resolved.info === "string" ? resolved.info : null;
   const connected = resolved.connected === "1";
 
   let mailbox = await getMailbox(user);
@@ -29,9 +33,14 @@ export default async function InboxPage({
     await syncMailbox(user);
     mailbox = await getMailbox(user);
   }
-  const [messages, calls] = mailbox
-    ? await Promise.all([listInbox(user), getCallSync(user)])
-    : [[], null];
+  const live = mailbox?.status === "connected";
+  const [messages, calls, unfiled, granola, transcripts] = await Promise.all([
+    mailbox ? listInbox(user) : Promise.resolve([]),
+    mailbox ? getCallSync(user) : Promise.resolve(null),
+    listUnfiledImports(user),
+    getGranolaStatus(user),
+    live ? getTeamsTranscriptStatus(user) : Promise.resolve(null),
+  ]);
   const headerStore = await headers();
   const host = headerStore.get("x-forwarded-host") ?? headerStore.get("host") ?? "localhost:4173";
   const proto = headerStore.get("x-forwarded-proto") ?? "http";
@@ -50,7 +59,11 @@ export default async function InboxPage({
       mailbox={mailbox}
       messages={messages}
       calls={calls}
+      unfiled={unfiled}
+      granola={granola}
+      transcripts={transcripts}
       notice={notice}
+      info={info}
       connected={connected}
     />
   );

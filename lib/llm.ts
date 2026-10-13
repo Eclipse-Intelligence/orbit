@@ -4,6 +4,8 @@ const DEFAULT_BASE_URL = "https://api.llmapi.ai/v1";
 const DEFAULT_MODEL = "claude-haiku-5-5";
 const TIMEOUT_MS = 25_000;
 const MAX_ATTEMPTS = 2;
+const DEADLINE_MARGIN_MS = 2_000;
+const MIN_ATTEMPT_MS = 5_000;
 
 export class LlmError extends Error {
   readonly retryable: boolean;
@@ -22,6 +24,7 @@ export type LlmJsonRequest<T> = {
   maxTokens?: number;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
+  deadline?: number;
 };
 
 export type LlmJsonResult<T> = {
@@ -83,7 +86,12 @@ async function gatewayDetail(response: Response) {
   }
 }
 
-async function attempt<T>(request: LlmJsonRequest<T>, apiKey: string, model: string) {
+async function attempt<T>(
+  request: LlmJsonRequest<T>,
+  apiKey: string,
+  model: string,
+  timeoutMs: number,
+) {
   const fetchImpl = request.fetchImpl ?? fetch;
   let response: Response;
   try {
@@ -101,7 +109,7 @@ async function attempt<T>(request: LlmJsonRequest<T>, apiKey: string, model: str
           { role: "user", content: request.user },
         ],
       }),
-      signal: AbortSignal.timeout(request.timeoutMs ?? TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (error) {
     if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
@@ -149,8 +157,16 @@ export async function completeJson<T>(request: LlmJsonRequest<T>): Promise<LlmJs
   const model = llmModel();
   let last: unknown;
   for (let index = 0; index < MAX_ATTEMPTS; index += 1) {
+    const limit = request.timeoutMs ?? TIMEOUT_MS;
+    const remaining = request.deadline
+      ? request.deadline - Date.now() - DEADLINE_MARGIN_MS
+      : limit;
+    if (remaining < MIN_ATTEMPT_MS) {
+      if (last) throw last;
+      throw new LlmError("There was not enough time left to summarise. Try again.", true);
+    }
     try {
-      return await attempt(request, apiKey, model);
+      return await attempt(request, apiKey, model, Math.min(limit, remaining));
     } catch (error) {
       last = error;
       if (!(error instanceof LlmError) || !error.retryable) throw error;

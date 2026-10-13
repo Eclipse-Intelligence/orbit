@@ -38,7 +38,7 @@ export async function getCompanyContext(actor: Actor, id: string): Promise<Compa
   const openTasks = tasks.data.filter((task) => !task.completedAt && !task.archivedAt);
   const insights = await getInsightsForActivities(
     actor,
-    timeline.filter((activity) => activity.type === "call").map((activity) => activity.id),
+    timeline.filter((activity) => activity.type === "call" || activity.type === "meeting").map((activity) => activity.id),
   );
   return {
     company,

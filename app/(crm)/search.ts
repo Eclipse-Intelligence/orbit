@@ -25,3 +25,9 @@ export async function searchContactsToLinkAction(companyId: string, query: strin
   if (!user) return { contacts: [] };
   return { contacts: await findContactsToLink(user, companyId, query, 8) };
 }
+
+export async function searchContactsToFileAction(query: string) {
+  const user = await getUserActor();
+  if (!user) return { contacts: [] };
+  return { contacts: await findContactsToLink(user, null, query, 8) };
+}

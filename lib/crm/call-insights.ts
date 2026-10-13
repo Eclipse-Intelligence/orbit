@@ -8,6 +8,7 @@ import { assertScope } from "@/lib/crm/scopes";
 import { createTaskInDb } from "@/lib/crm/tasks";
 import {
   CALL_INSIGHT_SOURCES,
+  CALL_INSIGHT_STALE_MS,
   type Actor,
   type CallActionItem,
   type CallActionOwner,
@@ -22,7 +23,7 @@ import { appTimeZone, zonedParts, zonedTimeToDate } from "@/lib/time";
 
 export const TRANSCRIPT_MAX_LENGTH = 200_000;
 const RAW_TRANSCRIPT_MAX_LENGTH = 1_000_000;
-const PENDING_STALE_MS = 3 * 60 * 1000;
+export const PENDING_STALE_MS = CALL_INSIGHT_STALE_MS;
 const DAY_MS = 86_400_000;
 const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
 
@@ -250,7 +251,7 @@ function shortDay(date: Date) {
   }).format(date);
 }
 
-const SYSTEM_PROMPT = `You summarise sales and relationship phone calls for a personal CRM called Orbit.
+const SYSTEM_PROMPT = `You summarise sales and relationship calls and meetings for a personal CRM called Orbit.
 
 Read the call transcript and reply with a single JSON object and nothing else: no prose, no Markdown, no code fences. Use exactly this shape:
 {"summary": string, "keyPoints": string[], "actionItems": [{"title": string, "owner": "me" | "them" | null, "dueDate": "YYYY-MM-DD" | null}]}
@@ -290,9 +291,10 @@ function buildPrompt(call: CallRow, transcript: string, actorName: string | null
   ]
     .filter(Boolean)
     .join(" ");
+  const kind = call.type === "meeting" ? "Meeting" : "Call";
   return [
-    "Call details:",
-    `- Call date: ${longDay(day)} (${dayString(day)}), London time`,
+    `${kind} details:`,
+    `- ${kind} date: ${longDay(day)} (${dayString(day)}), London time`,
     `- The Orbit user ("me"): ${actorName || "the Orbit user"}`,
     `- The other party ("them"): ${them || "unknown"}`,
     call.title ? `- Logged as: ${call.title}` : null,
@@ -427,7 +429,7 @@ export async function summariseCall(
   actor: Actor,
   activityId: string,
   transcript: string,
-  options: { source?: CallInsightSource; fetchImpl?: typeof fetch } = {},
+  options: { source?: CallInsightSource; fetchImpl?: typeof fetch; deadline?: number } = {},
 ): Promise<CallInsight> {
   assertScope(actor.scopes, "activities:write");
   if (!isUuid(activityId)) throw new CrmError("not_found", "Call not found.", 404);
@@ -454,8 +456,8 @@ export async function summariseCall(
   const prepared = await withActor(actor, async (db) => {
     const call = await readCall(db, actor, activityId);
     if (!call) throw new CrmError("not_found", "Call not found.", 404);
-    if (call.type !== "call") {
-      throw new CrmError("invalid_input", "Only calls can be summarised.", 400, {
+    if (call.type !== "call" && call.type !== "meeting") {
+      throw new CrmError("invalid_input", "Only calls and meetings can be summarised.", 400, {
         field: "activityId",
       });
     }
@@ -501,6 +503,7 @@ export async function summariseCall(
       schema: llmSchema,
       maxTokens: 4000,
       fetchImpl: options.fetchImpl,
+      deadline: options.deadline,
     });
     outcome = {
       status: "ready",
