@@ -232,13 +232,18 @@ function prepareContact(input: ContactWrite, mode: "create" | "patch" | "upsert"
   return next;
 }
 
-async function readContact(db: Db, id: string) {
-  const result = await db.query<ContactRow>(`${CONTACT_SQL} where c.id = $1`, [id]);
+async function readContact(db: Db, id: string, workspaceId?: string) {
+  const result = workspaceId
+    ? await db.query<ContactRow>(`${CONTACT_SQL} where c.id = $1 and c.workspace_id = $2`, [
+        id,
+        workspaceId,
+      ])
+    : await db.query<ContactRow>(`${CONTACT_SQL} where c.id = $1`, [id]);
   return result.rows[0] ?? null;
 }
 
-export async function readContactInDb(db: Db, id: string) {
-  const row = await readContact(db, id);
+export async function readContactInDb(db: Db, id: string, workspaceId?: string) {
+  const row = await readContact(db, id, workspaceId);
   return row ? mapContact(row) : null;
 }
 
@@ -292,6 +297,10 @@ async function findMatch(db: Db, workspaceId: string, write: PreparedContact) {
   return row ? { row, matchedOn: "name" as const } : null;
 }
 
+function differs<T>(value: T | null | undefined, existing: T | null) {
+  return value !== undefined && (value ?? null) !== existing;
+}
+
 function hasIdentity(row: ContactRow, write: PreparedContact) {
   const first = write.firstName === undefined ? row.first_name : write.firstName;
   const last = write.lastName === undefined ? row.last_name : write.lastName;
@@ -317,31 +326,35 @@ async function applyContact(
     );
   }
   await assertOwner(db, actor.workspaceId, write.ownerId);
-  if (write.companyId) await requireCompany(db, actor.workspaceId, write.companyId);
+  const companyChanged = differs(write.companyId, current.company_id);
+  if (companyChanged && write.companyId) {
+    await requireCompany(db, actor.workspaceId, write.companyId);
+  }
+  const emailChanged =
+    differs(write.email, current.email) ||
+    differs(write.normalizedEmail, current.normalized_email);
+  const linkedinChanged =
+    differs(write.linkedinUrl, current.linkedin_url) ||
+    differs(write.normalizedLinkedin, current.normalized_linkedin);
   const change = assignColumns([
-    [write.companyId !== undefined, "company_id", "companyId", write.companyId ?? null],
-    [write.firstName !== undefined, "first_name", "firstName", write.firstName ?? null],
-    [write.lastName !== undefined, "last_name", "lastName", write.lastName ?? null],
-    [write.email !== undefined, "email", "email", write.email ?? null],
-    [write.email !== undefined, "normalized_email", "email", write.normalizedEmail ?? null],
-    [write.phone !== undefined, "phone", "phone", write.phone ?? null],
-    [write.jobTitle !== undefined, "job_title", "jobTitle", write.jobTitle ?? null],
-    [write.linkedinUrl !== undefined, "linkedin_url", "linkedinUrl", write.linkedinUrl ?? null],
+    [companyChanged, "company_id", "companyId", write.companyId ?? null],
+    [differs(write.firstName, current.first_name), "first_name", "firstName", write.firstName ?? null],
+    [differs(write.lastName, current.last_name), "last_name", "lastName", write.lastName ?? null],
+    [emailChanged, "email", "email", write.email ?? null],
+    [emailChanged, "normalized_email", "email", write.normalizedEmail ?? null],
+    [differs(write.phone, current.phone), "phone", "phone", write.phone ?? null],
+    [differs(write.jobTitle, current.job_title), "job_title", "jobTitle", write.jobTitle ?? null],
+    [linkedinChanged, "linkedin_url", "linkedinUrl", write.linkedinUrl ?? null],
+    [linkedinChanged, "normalized_linkedin", "linkedinUrl", write.normalizedLinkedin ?? null],
+    [differs(write.ownerId, current.owner_id), "owner_id", "ownerId", write.ownerId ?? null],
+    [differs(write.source, current.source), "source", "source", write.source ?? null],
     [
-      write.linkedinUrl !== undefined,
-      "normalized_linkedin",
-      "linkedinUrl",
-      write.normalizedLinkedin ?? null,
-    ],
-    [write.ownerId !== undefined, "owner_id", "ownerId", write.ownerId ?? null],
-    [write.source !== undefined, "source", "source", write.source ?? null],
-    [
-      write.sourceReference !== undefined,
+      differs(write.sourceReference, current.source_reference),
       "source_reference",
       "sourceReference",
       write.sourceReference ?? null,
     ],
-    [write.notes !== undefined, "notes", "notes", write.notes ?? null],
+    [differs(write.notes, current.notes), "notes", "notes", write.notes ?? null],
   ]);
   const before = mapContact(current);
   if (change.sets.length === 0) return { contact: before, changed: false };
@@ -354,7 +367,7 @@ async function applyContact(
   } catch (error) {
     constraintError(error, "duplicate_contact", "A matching contact already exists.");
   }
-  const saved = await readContact(db, current.id);
+  const saved = await readContact(db, current.id, actor.workspaceId);
   if (!saved) throw new CrmError("not_found", "Contact not found.", 404);
   const contact = mapContact(saved);
   await recordAudit(
@@ -410,7 +423,7 @@ async function insertContact(
         actorRef.agentId,
       ],
     );
-    const saved = await readContact(db, inserted.rows[0].id);
+    const saved = await readContact(db, inserted.rows[0].id, actor.workspaceId);
     if (!saved) throw new CrmError("internal_error", "Contact was not saved.", 500);
     const contact = mapContact(saved);
     await recordAudit(db, actor, "contact.created", "contact", contact.id, provenance, {
@@ -483,8 +496,7 @@ export async function listContacts(actor: Actor, query: ContactListQuery = {}) {
       values.push(likePattern(text.slice(0, 200)));
       const ref = `$${values.length}`;
       where.push(`(
-        coalesce(c.first_name, '') ilike ${ref} escape '\\'
-        or coalesce(c.last_name, '') ilike ${ref} escape '\\'
+        lower(coalesce(c.first_name, '') || ' ' || coalesce(c.last_name, '')) ilike ${ref} escape '\\'
         or coalesce(c.email, '') ilike ${ref} escape '\\'
         or coalesce(c.job_title, '') ilike ${ref} escape '\\'
         or coalesce(c.phone, '') ilike ${ref} escape '\\'
@@ -520,7 +532,7 @@ export async function getContact(actor: Actor, id: string) {
   assertScope(actor.scopes, "crm:read");
   if (!isUuid(id)) throw new CrmError("not_found", "Contact not found.", 404);
   return withActor(actor, async (db) => {
-    const row = await readContact(db, id);
+    const row = await readContact(db, id, actor.workspaceId);
     if (!row) throw new CrmError("not_found", "Contact not found.", 404);
     return mapContact(row);
   });
@@ -554,7 +566,7 @@ export async function updateContact(
   return withActor(actor, (db) =>
     replayOrRun(db, actor, options.idempotencyKey, hash, 200, async () => {
       await lockNamespace(db, actor.workspaceId, "contacts");
-      const current = await readContact(db, id);
+      const current = await readContact(db, id, actor.workspaceId);
       if (!current) throw new CrmError("not_found", "Contact not found.", 404);
       const write = prepareContact(input, "patch");
       const updated = await applyContact(db, actor, current, write, provenance);
@@ -574,11 +586,14 @@ export async function archiveContact(
   const hash = requestHash("archive_contact", { id, provenance });
   return withActor(actor, (db) =>
     replayOrRun(db, actor, options.idempotencyKey, hash, 200, async () => {
-      const current = await readContact(db, id);
+      const current = await readContact(db, id, actor.workspaceId);
       if (!current) throw new CrmError("not_found", "Contact not found.", 404);
       if (current.archived_at) return { contact: mapContact(current) };
-      await db.query("update crm.contacts set archived_at = now() where id = $1", [id]);
-      const saved = await readContact(db, id);
+      await db.query(
+        "update crm.contacts set archived_at = now() where id = $1 and workspace_id = $2",
+        [id, actor.workspaceId],
+      );
+      const saved = await readContact(db, id, actor.workspaceId);
       if (!saved) throw new CrmError("not_found", "Contact not found.", 404);
       const contact = mapContact(saved);
       await recordAudit(db, actor, "contact.archived", "contact", contact.id, provenance, {

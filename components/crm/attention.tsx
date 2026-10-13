@@ -24,9 +24,14 @@ export function AttentionProvider({
   children: ReactNode;
 }) {
   const items: AttentionItem[] = [
-    ...overdue.map((task) => toItem(task, true)),
+    ...overdue
+      .filter((task) => task.dueAt !== null)
+      .map((task) => toItem(task, true)),
     ...today
-      .filter((task) => !overdue.some((item) => item.id === task.id))
+      .filter(
+        (task) =>
+          task.dueAt !== null && !overdue.some((item) => item.id === task.id),
+      )
       .map((task) => toItem(task, false)),
   ].slice(0, 8);
   return <AttentionContext.Provider value={items}>{children}</AttentionContext.Provider>;

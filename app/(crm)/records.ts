@@ -93,7 +93,7 @@ export async function saveOpportunityAction(
     primaryContactId: optionalId(text(formData, "primaryContactId")),
     value: value ? value : null,
     currency: text(formData, "currency") || undefined,
-    probability: probability ? Number(probability) : null,
+    probability: probability ? Number(probability) : undefined,
     expectedCloseDate: text(formData, "expectedCloseDate") || null,
     status: (text(formData, "status") || undefined) as
       | OpportunityStatus
@@ -171,7 +171,7 @@ export async function saveTaskAction(
   const write = {
     title: text(formData, "title"),
     description: text(formData, "description") || null,
-    dueAt: due ? new Date(due).toISOString() : null,
+    dueAt: due || null,
     priority: (text(formData, "priority") || "normal") as TaskPriority,
     companyId: optionalId(text(formData, "companyId")),
     contactId: optionalId(text(formData, "contactId")),
@@ -274,7 +274,7 @@ export async function addCompanyTaskAction(
       {
         title,
         companyId,
-        dueAt: dueAt ? new Date(dueAt).toISOString() : null,
+        dueAt: dueAt.trim() || null,
       },
       { provenance: { operation: "create_task", source: "web" } },
     );

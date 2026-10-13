@@ -23,6 +23,7 @@ type Results = {
   companies: Company[];
   contacts: Contact[];
   opportunities: Opportunity[];
+  failed?: boolean;
 };
 
 export default function CommandMenu() {
@@ -66,9 +67,21 @@ export default function CommandMenu() {
     if (!open || !trimmed) return;
     let cancelled = false;
     const handle = window.setTimeout(() => {
-      searchWorkspaceAction(trimmed).then((rows) => {
-        if (!cancelled) setRemote({ query: trimmed, ...rows });
-      });
+      searchWorkspaceAction(trimmed).then(
+        (rows) => {
+          if (!cancelled) setRemote({ query: trimmed, ...rows });
+        },
+        () => {
+          if (!cancelled)
+            setRemote({
+              query: trimmed,
+              companies: [],
+              contacts: [],
+              opportunities: [],
+              failed: true,
+            });
+        },
+      );
     }, 200);
     return () => {
       cancelled = true;
@@ -109,7 +122,12 @@ export default function CommandMenu() {
         />
         <CommandList>
           {searching && <p className="caption-style text-subtle px-4 py-6">Searching…</p>}
-          {!searching && trimmed && empty && (
+          {!searching && results?.failed && (
+            <p role="alert" className="caption-style text-danger px-4 py-6">
+              Search is unavailable right now. Try again in a moment.
+            </p>
+          )}
+          {!searching && trimmed && empty && !results?.failed && (
             <p className="caption-style text-subtle px-4 py-6">No records for “{trimmed}”</p>
           )}
           {!trimmed && <p className="caption-style text-subtle px-4 py-6">Type a name, email, or domain.</p>}

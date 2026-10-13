@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import ActivitiesScreen from "@/components/crm/activities-screen";
+import { PAGE_SIZE, pageFromParams, pageOffset } from "@/components/crm/paging";
 import { getUserActor } from "@/lib/auth/user";
 import { listActivities } from "@/lib/crm/activities";
 import { listCompanies } from "@/lib/crm/companies";
@@ -21,7 +22,9 @@ export default async function ActivitiesPage({
     if (typeof value === "string") params.set(key, value);
   }
   const filters = activityQueryFromSearchParams(params);
-  filters.limit = 100;
+  const page = pageFromParams(params);
+  filters.limit = PAGE_SIZE;
+  filters.offset = pageOffset(page);
   const [listed, companies, contacts] = await Promise.all([
     listActivities(user, filters),
     listCompanies(user, { limit: 100, sort: "name", order: "asc" }),
@@ -39,6 +42,7 @@ export default async function ActivitiesPage({
       }}
       activities={listed.data}
       total={listed.total}
+      page={page}
       query={filters.query ?? ""}
       companies={companies.data}
       contacts={contacts.data}

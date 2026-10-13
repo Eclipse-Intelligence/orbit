@@ -7,6 +7,10 @@ import { TASK_VIEWS, type TaskView } from "@/lib/crm/types";
 
 export const dynamic = "force-dynamic";
 
+function requestTime() {
+  return Date.now();
+}
+
 export default async function ActionsPage({
   searchParams,
 }: {
@@ -37,6 +41,7 @@ export default async function ActionsPage({
       tasks={due.tasks}
       companies={due.companies}
       companyChoices={companies.data}
+      now={requestTime()}
     />
   );
 }

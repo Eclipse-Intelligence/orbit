@@ -10,6 +10,10 @@ function iso(value: Date | string | null) {
   return new Date(value).toISOString();
 }
 
+function isUuid(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+}
+
 export const WEBHOOK_EVENTS = [
   "company.created",
   "company.updated",
@@ -154,6 +158,7 @@ export async function listWebhooks(actor: Actor): Promise<WebhookEndpoint[]> {
 
 export async function archiveWebhook(actor: Actor, id: string) {
   assertScope(actor.scopes, "admin");
+  if (!isUuid(id)) throw new CrmError("not_found", "Webhook not found.", 404);
   const { withActor } = await import("@/lib/crm/context");
   await withActor(actor, async (db) => {
     const updated = await db.query(
@@ -224,12 +229,14 @@ export async function deliverDueWebhooks(limit = 20) {
      set attempts = delivery.attempts + 1,
          next_attempt_at = now() + interval '5 minutes'
      where delivery.id in (
-       select id
-       from crm.webhook_deliveries
-       where status = 'pending' and next_attempt_at <= now()
-       order by created_at
+       select pending.id
+       from crm.webhook_deliveries pending
+       join crm.webhook_endpoints endpoint on endpoint.id = pending.endpoint_id
+       where pending.status = 'pending' and pending.next_attempt_at <= now()
+         and endpoint.archived_at is null and endpoint.enabled
+       order by pending.created_at
        limit $1
-       for update skip locked
+       for update of pending skip locked
      )
      returning delivery.id, delivery.event_type, delivery.event_id, delivery.payload, delivery.attempts,
        (select secret from crm.webhook_endpoints endpoint where endpoint.id = delivery.endpoint_id) as secret,

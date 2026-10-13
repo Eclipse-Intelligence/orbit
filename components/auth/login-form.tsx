@@ -20,9 +20,6 @@ export default function LoginForm({ hintEmail }: { hintEmail?: string }) {
         </p>
       </div>
       <div className="flex flex-col gap-4">
-        <Field label="Name" htmlFor="login-name" hint="Used when you create an account.">
-          <Input id="login-name" name="name" autoComplete="name" placeholder="Ada Lovelace" />
-        </Field>
         <Field label="Email" htmlFor="login-email" required error={state.error}>
           <Input
             id="login-email"
@@ -30,6 +27,7 @@ export default function LoginForm({ hintEmail }: { hintEmail?: string }) {
             type="email"
             autoComplete="email"
             required
+            defaultValue={state.email ?? ""}
             placeholder="you@company.com"
             aria-invalid={state.error ? true : undefined}
             aria-describedby={state.error ? "login-email-error" : undefined}
@@ -52,11 +50,8 @@ export default function LoginForm({ hintEmail }: { hintEmail?: string }) {
         </p>
       )}
       <div className="mt-6 flex flex-wrap gap-2">
-        <Button type="submit" name="mode" value="signin" variant="primary" size="md" disabled={pending}>
-          {pending ? "Working…" : "Sign in"}
-        </Button>
-        <Button type="submit" name="mode" value="signup" variant="secondary" size="md" disabled={pending}>
-          Create account
+        <Button type="submit" variant="primary" size="md" disabled={pending}>
+          {pending ? "Signing in…" : "Sign in"}
         </Button>
       </div>
     </form>

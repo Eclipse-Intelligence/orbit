@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import ContactsScreen from "@/components/crm/contacts-screen";
+import { PAGE_SIZE, pageFromParams, pageOffset } from "@/components/crm/paging";
 import { getUserActor } from "@/lib/auth/user";
 import { listCompanies, listMembers } from "@/lib/crm/companies";
 import { listActivitiesByContact } from "@/lib/crm/activities";
@@ -22,7 +23,9 @@ export default async function ContactsPage({
     if (typeof value === "string") params.set(key, value);
   }
   const filters = contactQueryFromSearchParams(params);
-  filters.limit = 100;
+  const page = pageFromParams(params);
+  filters.limit = PAGE_SIZE;
+  filters.offset = pageOffset(page);
   const [listed, companies, members, mailbox] = await Promise.all([
     listContacts(user, filters),
     listCompanies(user, { limit: 100, sort: "name", order: "asc" }),
@@ -45,6 +48,7 @@ export default async function ContactsPage({
       }}
       contacts={listed.data}
       total={listed.total}
+      page={page}
       query={filters.query ?? ""}
       companies={companies.data}
       members={members}

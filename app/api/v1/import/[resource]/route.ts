@@ -1,5 +1,5 @@
 import { requireAgent } from "@/lib/api/agent";
-import { withApi } from "@/lib/api/http";
+import { readJson, withApi } from "@/lib/api/http";
 import { CrmError } from "@/lib/crm/errors";
 import { importCompaniesCsv, importContactsCsv } from "@/lib/crm/spreadsheet";
 
@@ -9,7 +9,7 @@ export async function POST(request: Request, context: { params: Promise<{ resour
     const { resource } = await context.params;
     const type = request.headers.get("content-type") ?? "";
     const csv = type.includes("application/json")
-      ? stringField(await request.json(), "csv")
+      ? stringField(await readJson(request), "csv")
       : await request.text();
     if (resource === "companies") return Response.json(await importCompaniesCsv(actor, csv));
     if (resource === "contacts") return Response.json(await importContactsCsv(actor, csv));

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Input } from "@/components/_ui/input";
 import { EntityChip, Monogram } from "@/components/beautifui/record-marks";
+import Pager from "@/components/crm/pager";
 import RecordTransfer from "@/components/crm/record-transfer";
 import SectionHeader from "@/components/crm/section-header";
 import { RecordList, RecordRow, RecordSelect } from "@/components/crm/record-form";
@@ -28,6 +29,7 @@ export default function ActivitiesScreen({
   viewer,
   activities,
   total,
+  page,
   query,
   companies,
   contacts,
@@ -35,6 +37,7 @@ export default function ActivitiesScreen({
   viewer: Viewer;
   activities: Activity[];
   total: number;
+  page: number;
   query: string;
   companies: Company[];
   contacts: Contact[];
@@ -128,6 +131,12 @@ export default function ActivitiesScreen({
           />
         ))}
       </RecordList>
+      <Pager
+        page={page}
+        count={activities.length}
+        total={total}
+        noun={["activity", "activities"]}
+      />
     </section>
   );
 }

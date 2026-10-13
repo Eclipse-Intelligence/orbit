@@ -21,6 +21,7 @@ process.env.DEV_USER_PASSWORD ??= generatedPassword ?? "";
 async function main() {
 const { getAdminPool } = await import("@/lib/db/pool");
 const { generateAgentToken } = await import("@/lib/crm/tokens");
+const { normalizeCompanyName } = await import("@/lib/crm/normalize");
 
 const admin = getAdminPool();
 
@@ -95,6 +96,36 @@ for (const file of migrations) {
   if ((seen.rowCount ?? 0) > 0) continue;
   await applySql(`supabase/migrations/${file}`);
   await admin.query("insert into private.schema_migrations (filename) values ($1)", [file]);
+}
+
+if (!hosted) {
+  const appUrl = new URL(process.env.DATABASE_URL!);
+  const appUser = decodeURIComponent(appUrl.username);
+  const appPassword = decodeURIComponent(appUrl.password);
+  if (appUser === "crm_app" && appPassword) {
+    const statement = await admin.query<{ sql: string }>(
+      "select format('alter role crm_app password %L', $1::text) as sql",
+      [appPassword],
+    );
+    await admin.query(statement.rows[0].sql);
+  }
+}
+
+const storedNames = await admin.query<{ id: string; name: string; normalized_name: string }>(
+  "select id, name, normalized_name from crm.companies",
+);
+for (const row of storedNames.rows) {
+  const normalized = normalizeCompanyName(row.name);
+  if (!normalized || normalized === row.normalized_name) continue;
+  try {
+    await admin.query("update crm.companies set normalized_name = $2 where id = $1", [
+      row.id,
+      normalized,
+    ]);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`Kept the old match key for company ${row.id}: ${message}`);
+  }
 }
 
 const supabaseConfigured = Boolean(

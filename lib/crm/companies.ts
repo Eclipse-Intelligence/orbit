@@ -127,13 +127,18 @@ function mapCompany(row: CompanyRow): Company {
   };
 }
 
-export async function readCompanyInDb(db: Db, id: string) {
-  const result = await db.query<CompanyRow>(`${COMPANY_SQL} where c.id = $1`, [id]);
+export async function readCompanyInDb(db: Db, id: string, workspaceId?: string) {
+  const result = workspaceId
+    ? await db.query<CompanyRow>(`${COMPANY_SQL} where c.id = $1 and c.workspace_id = $2`, [
+        id,
+        workspaceId,
+      ])
+    : await db.query<CompanyRow>(`${COMPANY_SQL} where c.id = $1`, [id]);
   return result.rows[0] ? mapCompany(result.rows[0]) : null;
 }
 
-async function readCompany(db: Db, id: string) {
-  return readCompanyInDb(db, id);
+async function readCompany(db: Db, workspaceId: string, id: string) {
+  return readCompanyInDb(db, id, workspaceId);
 }
 
 function lockCompanies(db: Db, workspaceId: string) {
@@ -145,8 +150,10 @@ async function findMatch(
   workspaceId: string,
   domain: string | null,
   normalizedName: string | null,
+  nameWithDomain = false,
 ) {
-  if (!domain && !normalizedName) return null;
+  const name = domain && !nameWithDomain ? null : normalizedName;
+  if (!domain && !name) return null;
   const result = await db.query<CompanyRow>(
     `${COMPANY_SQL}
      where c.workspace_id = $1
@@ -158,7 +165,7 @@ async function findMatch(
      order by case when $2::text is not null and c.domain = $2 then 0 else 1 end,
               c.updated_at desc
      limit 1`,
-    [workspaceId, domain, normalizedName],
+    [workspaceId, domain, name],
   );
   const row = result.rows[0];
   if (!row) return null;
@@ -204,7 +211,7 @@ async function insertCompany(
         actor.type === "agent" ? actor.agentId : null,
       ],
     );
-    const company = await readCompany(db, inserted.rows[0].id);
+    const company = await readCompany(db, actor.workspaceId, inserted.rows[0].id);
     if (!company) throw new CrmError("internal_error", "Company was not saved.", 500);
     await recordAudit(db, actor, "company.created", "company", company.id, provenance, {
       after: company,
@@ -219,19 +226,26 @@ async function insertCompany(
   }
 }
 
-function assignments(write: CompanyWrite & { normalizedName?: string }) {
+function assignments(write: CompanyWrite & { normalizedName?: string }, current: Company) {
   const sets: string[] = [];
   const values: unknown[] = [];
   const fields: string[] = [];
 
-  function add(column: string, field: string, value: unknown) {
+  function add(column: string, field: keyof Company, value: unknown) {
+    if (current[field] === value) return;
     values.push(value);
     sets.push(`${column} = $${values.length}`);
     fields.push(field);
   }
 
-  if (write.name !== undefined && write.normalizedName) {
-    add("name", "name", write.name);
+  if (
+    write.name !== undefined &&
+    write.normalizedName &&
+    (write.name !== current.name || write.normalizedName !== current.normalizedName)
+  ) {
+    values.push(write.name);
+    sets.push(`name = $${values.length}`);
+    fields.push("name");
     values.push(write.normalizedName);
     sets.push(`normalized_name = $${values.length}`);
   }
@@ -271,7 +285,7 @@ async function applyUpdate(
     });
   }
 
-  const change = assignments(write);
+  const change = assignments(write, current);
   if (change.sets.length === 0) return { company: current, changed: false };
 
   try {
@@ -287,7 +301,7 @@ async function applyUpdate(
     throw error;
   }
 
-  const company = await readCompany(db, current.id);
+  const company = await readCompany(db, actor.workspaceId, current.id);
   if (!company) throw new CrmError("not_found", "Company not found.", 404);
   const before: Record<string, unknown> = {};
   const after: Record<string, unknown> = {};
@@ -337,6 +351,7 @@ async function upsertInTransaction(
     actor.workspaceId,
     write.domain ?? null,
     write.normalizedName ?? null,
+    true,
   );
   if (!match) {
     const toInsert =
@@ -474,7 +489,7 @@ export async function getCompany(actor: Actor, id: string) {
   assertScope(actor.scopes, "crm:read");
   if (!isUuid(id)) throw new CrmError("not_found", "Company not found.", 404);
   return withActor(actor, async (db) => {
-    const company = await readCompany(db, id);
+    const company = await readCompany(db, actor.workspaceId, id);
     if (!company) throw new CrmError("not_found", "Company not found.", 404);
     return company;
   });
@@ -531,7 +546,7 @@ export async function updateCompany(
   return withActor(actor, (db) =>
     replayOrRun(db, actor, options.idempotencyKey, hash, 200, async () => {
       await lockCompanies(db, actor.workspaceId);
-      const current = await readCompany(db, id);
+      const current = await readCompany(db, actor.workspaceId, id);
       if (!current) throw new CrmError("not_found", "Company not found.", 404);
       const updated = await applyUpdate(
         db,
@@ -558,14 +573,14 @@ export async function archiveCompany(
   return withActor(actor, (db) =>
     replayOrRun(db, actor, options.idempotencyKey, hash, 200, async () => {
       await lockCompanies(db, actor.workspaceId);
-      const current = await readCompany(db, id);
+      const current = await readCompany(db, actor.workspaceId, id);
       if (!current) throw new CrmError("not_found", "Company not found.", 404);
       if (current.archivedAt) return { company: current };
       await db.query(
-        "update crm.companies set archived_at = now() where id = $1",
-        [id],
+        "update crm.companies set archived_at = now() where id = $1 and workspace_id = $2",
+        [id, actor.workspaceId],
       );
-      const company = await readCompany(db, id);
+      const company = await readCompany(db, actor.workspaceId, id);
       if (!company) throw new CrmError("not_found", "Company not found.", 404);
       await recordAudit(db, actor, "company.archived", "company", company.id, provenance, {
         before: { archivedAt: null },

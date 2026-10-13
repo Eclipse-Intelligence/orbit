@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import Companies from "@/components/companies/companies";
+import { PAGE_SIZE, pageFromParams, pageOffset } from "@/components/crm/paging";
 import { getUserActor } from "@/lib/auth/user";
 import { listCompanies, listMembers } from "@/lib/crm/companies";
 import { CrmError } from "@/lib/crm/errors";
@@ -9,6 +10,10 @@ import { getCompanyContext } from "@/lib/crm/relationships";
 import { companyQueryFromSearchParams } from "@/lib/crm/validation";
 
 export const dynamic = "force-dynamic";
+
+function requestTime() {
+  return Date.now();
+}
 
 export default async function CompaniesPage({
   searchParams,
@@ -24,7 +29,9 @@ export default async function CompaniesPage({
     if (typeof value === "string") params.set(key, value);
   }
   const filters = companyQueryFromSearchParams(params);
-  filters.limit = 200;
+  const page = pageFromParams(params);
+  filters.limit = PAGE_SIZE;
+  filters.offset = pageOffset(page);
 
   const record = params.get("record");
   const [listed, members, context, mailbox] = await Promise.all([
@@ -50,6 +57,8 @@ export default async function CompaniesPage({
     <Companies
       companies={listed.data}
       total={listed.total}
+      page={page}
+      now={requestTime()}
       filters={filters}
       members={members}
       context={context}

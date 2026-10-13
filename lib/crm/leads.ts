@@ -86,7 +86,7 @@ export async function ingestLeadInDb(
       if (input.contact) {
         const companyId =
           input.contact.companyId === undefined
-            ? (result.company?.id ?? null)
+            ? result.company?.id
             : input.contact.companyId;
         if (
           input.contact.companyId &&

@@ -26,9 +26,11 @@ The service role key is never given to an agent. Agents use their own bearer tok
 
 ## Companies
 
-Active companies in a workspace are unique by canonical domain. A company with no domain can also match another company with the same normalised name and no domain. The same display name with two different domains stays two companies. Writes take a workspace advisory lock, then unique indexes stop a race.
+Active companies in a workspace are unique by canonical domain. When neither has a domain, a company also matches another company with the same normalised name. Create and update follow exactly that rule, so creating "Mercury" with `mercury.com` succeeds even when a "Mercury" without a domain exists. Upsert is the one exception: an upsert with a domain that matches no company falls back to a company with the same normalised name and no domain, and attaches the domain to it. The same display name with two different domains stays two companies. Writes take a workspace advisory lock, then unique indexes stop a race.
 
-`PATCH` and upsert leave omitted fields alone. An explicit `null` clears an optional field. A domain-only upsert does not replace an existing name.
+Name normalisation lowercases, strips accents, keeps letters and digits in any script plus `+` and `#`, and drops a trailing legal suffix such as Inc or GmbH. When an upsert or create gives a website but no domain, the domain comes from the website host, unless that host is a shared one such as LinkedIn, Facebook, Instagram, X, GitHub, Medium, Google Sites, Notion, Wix, Squarespace, or YouTube.
+
+`PATCH` and upsert leave omitted fields alone. An explicit `null` clears an optional field. A domain-only upsert does not replace an existing name. A company or contact write whose values all equal the stored ones changes nothing: no audit event, no webhook, and `updated_at` stays put.
 
 `Idempotency-Key` is stored per workspace and actor. The same key and body replays the stored response. The same key and a different body returns 409.
 
@@ -42,11 +44,11 @@ Deletes archive. `archived_at` is set and the row stays. There is no hard delete
 
 Contacts match an active email, then an active LinkedIn profile, then the same normalised name at the same company. Opportunities use the workspace default pipeline. Omitting the stage picks the first stage. A won or lost stage sets the status, and setting the status to won or lost moves the opportunity to that stage. `opportunity.stage_changed` is written when the stage or status changes.
 
-Activities are append-only. A company timeline reads activities stored against that company. Next actions are tasks. Completing one sets `completed_at` and leaves that timestamp in place if it is completed again.
+Activities are append-only: `authenticated` and `crm_agent` can insert them but not update them. A company timeline reads activities stored against that company. Next actions are tasks. Completing one sets `completed_at` and leaves that timestamp in place if it is completed again.
 
 `POST /api/v1/leads` and the `add_lead` tool run company, contact, activity, opportunity, and next-action writes in one transaction, through the same functions the individual endpoints use. A second lead with the same domain and email updates those rows instead of creating new ones.
 
-Company, contact, opportunity, and task references must belong to the same workspace. That check is a trigger, so a foreign id cannot be attached even when the caller's row-level policy would otherwise hide it.
+Company, contact, opportunity, and task references must belong to the same workspace. That check is a trigger, so a foreign id cannot be attached even when the caller's row-level policy would otherwise hide it. It checks a reference only when that reference, the row's company, or its workspace changes, so moving a contact to another company leaves its existing next actions and opportunities editable.
 
 ## Conversations
 

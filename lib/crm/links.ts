@@ -27,6 +27,14 @@ export async function resolveLinks(
   },
   current?: LinkRefs,
 ): Promise<LinkRefs> {
+  if (
+    current &&
+    input.companyId === undefined &&
+    input.contactId === undefined &&
+    input.opportunityId === undefined
+  ) {
+    return current;
+  }
   const contactId = input.contactId === undefined ? (current?.contactId ?? null) : input.contactId;
   const opportunityId =
     input.opportunityId === undefined ? (current?.opportunityId ?? null) : input.opportunityId;
@@ -57,7 +65,16 @@ export async function resolveLinks(
   }
   if (companyId) await requireCompany(db, workspaceId, companyId);
 
-  if (companyId && contactCompany && companyId !== contactCompany) {
+  const companyChanged = !current || companyId !== current.companyId;
+  const contactChanged = !current || contactId !== current.contactId;
+  const opportunityChanged = !current || opportunityId !== current.opportunityId;
+
+  if (
+    (companyChanged || contactChanged) &&
+    companyId &&
+    contactCompany &&
+    companyId !== contactCompany
+  ) {
     throw new CrmError(
       "invalid_input",
       "That contact belongs to a different company.",
@@ -65,7 +82,12 @@ export async function resolveLinks(
       { field: "contactId" },
     );
   }
-  if (companyId && opportunityCompany && companyId !== opportunityCompany) {
+  if (
+    (companyChanged || opportunityChanged) &&
+    companyId &&
+    opportunityCompany &&
+    companyId !== opportunityCompany
+  ) {
     throw new CrmError(
       "invalid_input",
       "That opportunity belongs to a different company.",

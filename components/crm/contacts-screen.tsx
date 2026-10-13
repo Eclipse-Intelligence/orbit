@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useCallback, useEffect, useState } from "react";
 import Button from "@/components/_ui/button";
 import { Input } from "@/components/_ui/input";
 import {
@@ -13,6 +13,7 @@ import {
 } from "@/components/_ui/sheet";
 import { EntityChip, Monogram } from "@/components/beautifui/record-marks";
 import ContactActivities from "@/components/crm/contact-activities";
+import Pager from "@/components/crm/pager";
 import RecordTransfer from "@/components/crm/record-transfer";
 import SectionHeader from "@/components/crm/section-header";
 import {
@@ -28,6 +29,7 @@ export default function ContactsScreen({
   viewer,
   contacts,
   total,
+  page,
   query,
   companies,
   members,
@@ -37,6 +39,7 @@ export default function ContactsScreen({
   viewer: Viewer;
   contacts: Contact[];
   total: number;
+  page: number;
   query: string;
   companies: Company[];
   members: Member[];
@@ -45,18 +48,12 @@ export default function ContactsScreen({
 }) {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Contact | null>(null);
-  const [state, action, pending] = useActionState(
-    saveContactAction,
-    {} as RecordActionState,
-  );
-  const [closedFor, setClosedFor] = useState<RecordActionState | null>(null);
-  if (state.ok && closedFor !== state) {
-    setClosedFor(state);
-    setOpen(false);
-  }
+  const [session, setSession] = useState(0);
+  const close = useCallback(() => setOpen(false), []);
 
-  function edit(contact: Contact) {
+  function edit(contact: Contact | null) {
     setEditing(contact);
+    setSession((current) => current + 1);
     setOpen(true);
   }
 
@@ -68,14 +65,7 @@ export default function ContactsScreen({
         action={
           <div className="flex items-center gap-1">
             <RecordTransfer resource="contacts" />
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={() => {
-                setEditing(null);
-                setOpen(true);
-              }}
-            >
+            <Button variant="primary" size="sm" onClick={() => edit(null)}>
               Add contact
             </Button>
           </div>
@@ -98,7 +88,11 @@ export default function ContactsScreen({
       </p>
       <RecordList
         count={contacts.length}
-        empty="No contacts yet. Add the person you need to speak with."
+        empty={
+          page > 1
+            ? "No contacts on this page."
+            : "No contacts yet. Add the person you need to speak with."
+        }
       >
         {contacts.map((contact) => (
           <RecordRow
@@ -121,6 +115,12 @@ export default function ContactsScreen({
           />
         ))}
       </RecordList>
+      <Pager
+        page={page}
+        count={contacts.length}
+        total={total}
+        noun={["person", "people"]}
+      />
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent side="right" className="sm:w-[480px] sm:max-w-[480px]">
           <SheetHeader>
@@ -129,134 +129,172 @@ export default function ContactsScreen({
               Contact details
             </SheetDescription>
           </SheetHeader>
-          <div className="flex min-h-0 flex-1 flex-col">
-            <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto p-5">
-              <form
-            key={`fields-${editing?.id ?? "new"}`}
-            id={`contact-form-${editing?.id ?? "new"}`}
-                action={action}
-                className="flex flex-col gap-4"
-              >
-                <input type="hidden" name="id" value={editing?.id ?? ""} />
-                {state.error && !state.ok && (
-                  <p role="alert" className="caption-style text-danger">
-                    {state.error}
-                  </p>
-                )}
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <Field
-                    id="contact-first"
-                    name="firstName"
-                    label="First name"
-                    defaultValue={editing?.firstName ?? ""}
-                  />
-                  <Field
-                    id="contact-last"
-                    name="lastName"
-                    label="Last name"
-                    defaultValue={editing?.lastName ?? ""}
-                  />
-                </div>
-                <Field
-                  id="contact-email"
-                  name="email"
-                  label="Email"
-                  defaultValue={editing?.email ?? ""}
-                />
-                <Field
-                  id="contact-title"
-                  name="jobTitle"
-                  label="Title"
-                  defaultValue={editing?.jobTitle ?? ""}
-                />
-                <Field
-                  id="contact-phone"
-                  name="phone"
-                  label="Phone"
-                  defaultValue={editing?.phone ?? ""}
-                />
-                <Field
-                  id="contact-linkedin"
-                  name="linkedinUrl"
-                  label="LinkedIn"
-                  defaultValue={editing?.linkedinUrl ?? ""}
-                />
-                <RecordSelect
-                  id="contact-company"
-                  name="companyId"
-                  label="Company"
-                  defaultValue={editing?.companyId ?? "none"}
-                >
-                  <option value="none">No company</option>
-                  {companies.map((company) => (
-                    <option key={company.id} value={company.id}>
-                      {company.name}
-                    </option>
-                  ))}
-                </RecordSelect>
-                <RecordSelect
-                  id="contact-owner"
-                  name="ownerId"
-                  label="Owner"
-                  defaultValue={editing?.ownerId ?? "unassigned"}
-                >
-                  <option value="unassigned">Unassigned</option>
-                  {members.map((member) => (
-                    <option key={member.id} value={member.id}>
-                      {member.name}
-                    </option>
-                  ))}
-                </RecordSelect>
-                <Field
-                  id="contact-source"
-                  name="source"
-                  label="Source"
-                  defaultValue={editing?.source ?? ""}
-                />
-                <label className="flex flex-col gap-2" htmlFor="contact-notes">
-                  <span className="caption-style text-subtle">Notes</span>
-                  <textarea
-                    id="contact-notes"
-                    name="notes"
-                    defaultValue={editing?.notes ?? ""}
-                    className="border-line-strong bg-secondary min-h-24 w-full rounded-lg border px-3 py-2 text-[14px] leading-5 outline-none"
-                  />
-                </label>
-              </form>
-              {editing && (
-                <ContactActivities
-                  key={`activities-${editing.id}`}
-                  contactId={editing.id}
-                  email={editing.email}
-                  mailboxConnected={mailboxConnected}
-                  profileNote={editing.notes}
-                  activities={activitiesByContact[editing.id] ?? []}
-                />
-              )}
-            </div>
-            <SheetFooter>
-              <Button
-                variant="subtle"
-                size="sm"
-                type="button"
-                onClick={() => setOpen(false)}
-              >
-                Cancel
-              </Button>
-              <Button
-                variant="primary"
-                size="sm"
-                type="submit"
-                form={`contact-form-${editing?.id ?? "new"}`}
-                disabled={pending}
-              >
-                {pending ? "Saving…" : "Save"}
-              </Button>
-            </SheetFooter>
-          </div>
+          <ContactEditor
+            key={`${editing?.id ?? "new"}-${session}`}
+            editing={editing}
+            companies={companies}
+            members={members}
+            mailboxConnected={mailboxConnected}
+            activitiesByContact={activitiesByContact}
+            onClose={close}
+          />
         </SheetContent>
       </Sheet>
     </section>
+  );
+}
+
+function ContactEditor({
+  editing,
+  companies,
+  members,
+  mailboxConnected,
+  activitiesByContact,
+  onClose,
+}: {
+  editing: Contact | null;
+  companies: Company[];
+  members: Member[];
+  mailboxConnected: boolean;
+  activitiesByContact: Record<string, Activity[]>;
+  onClose: () => void;
+}) {
+  const [state, action, pending] = useActionState(
+    saveContactAction,
+    {} as RecordActionState,
+  );
+  useEffect(() => {
+    if (state.ok) onClose();
+  }, [state, onClose]);
+
+  const formId = `contact-form-${editing?.id ?? "new"}`;
+  const companyOptions =
+    editing?.companyId &&
+    !companies.some((company) => company.id === editing.companyId)
+      ? [
+          {
+            id: editing.companyId,
+            name: editing.companyName ?? "Current company",
+          },
+          ...companies,
+        ]
+      : companies;
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto p-5">
+        <form id={formId} action={action} className="flex flex-col gap-4">
+          <input type="hidden" name="id" value={editing?.id ?? ""} />
+          {state.error && !state.ok && (
+            <p role="alert" className="caption-style text-danger">
+              {state.error}
+            </p>
+          )}
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field
+              id="contact-first"
+              name="firstName"
+              label="First name"
+              defaultValue={editing?.firstName ?? ""}
+            />
+            <Field
+              id="contact-last"
+              name="lastName"
+              label="Last name"
+              defaultValue={editing?.lastName ?? ""}
+            />
+          </div>
+          <Field
+            id="contact-email"
+            name="email"
+            label="Email"
+            defaultValue={editing?.email ?? ""}
+          />
+          <Field
+            id="contact-title"
+            name="jobTitle"
+            label="Title"
+            defaultValue={editing?.jobTitle ?? ""}
+          />
+          <Field
+            id="contact-phone"
+            name="phone"
+            label="Phone"
+            defaultValue={editing?.phone ?? ""}
+          />
+          <Field
+            id="contact-linkedin"
+            name="linkedinUrl"
+            label="LinkedIn"
+            defaultValue={editing?.linkedinUrl ?? ""}
+          />
+          <RecordSelect
+            id="contact-company"
+            name="companyId"
+            label="Company"
+            defaultValue={editing?.companyId ?? "none"}
+          >
+            <option value="none">No company</option>
+            {companyOptions.map((company) => (
+              <option key={company.id} value={company.id}>
+                {company.name}
+              </option>
+            ))}
+          </RecordSelect>
+          <RecordSelect
+            id="contact-owner"
+            name="ownerId"
+            label="Owner"
+            defaultValue={editing?.ownerId ?? "unassigned"}
+          >
+            <option value="unassigned">Unassigned</option>
+            {members.map((member) => (
+              <option key={member.id} value={member.id}>
+                {member.name}
+              </option>
+            ))}
+          </RecordSelect>
+          <Field
+            id="contact-source"
+            name="source"
+            label="Source"
+            defaultValue={editing?.source ?? ""}
+          />
+          <label className="flex flex-col gap-2" htmlFor="contact-notes">
+            <span className="caption-style text-subtle">Notes</span>
+            <textarea
+              id="contact-notes"
+              name="notes"
+              defaultValue={editing?.notes ?? ""}
+              className="border-line-strong bg-secondary min-h-24 w-full rounded-lg border px-3 py-2 text-[14px] leading-5 outline-none"
+            />
+          </label>
+        </form>
+        {editing && (
+          <ContactActivities
+            contactId={editing.id}
+            email={editing.email}
+            mailboxConnected={mailboxConnected}
+            profileNote={editing.notes}
+            activities={activitiesByContact[editing.id] ?? []}
+          />
+        )}
+      </div>
+      <SheetFooter>
+        <Button variant="subtle" size="sm" type="button" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button
+          variant="primary"
+          size="sm"
+          type="submit"
+          form={formId}
+          disabled={pending}
+        >
+          {pending ? "Saving…" : "Save"}
+        </Button>
+      </SheetFooter>
+    </div>
   );
 }
 

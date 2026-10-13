@@ -437,7 +437,7 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
     "get_company_context",
     {
       description:
-        "Return a company with its people, open opportunities, recent interactions, open next actions, and the last interaction.",
+        "Return a company with its people, opportunities (open, won, and lost), recent interactions, open next actions, and the last interaction.",
       inputSchema: { id: z.uuid() },
     },
     async (args) => run(() => getCompanyContext(actor, args.id)),

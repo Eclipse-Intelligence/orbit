@@ -5,7 +5,7 @@ import { PATCH, GET as getRoute } from "@/app/api/v1/companies/[id]/route";
 import { POST as upsertRoute } from "@/app/api/v1/companies/upsert/route";
 import { POST as bulkRoute } from "@/app/api/v1/companies/bulk/route";
 import { POST as mcpRoute } from "@/app/api/mcp/route";
-import { getPool } from "@/lib/db/pool";
+import { getAdminPool, getPool } from "@/lib/db/pool";
 import {
   archiveCompany,
   createCompany,
@@ -118,6 +118,25 @@ describe("company service", () => {
     const other = await upsertCompany(owner, { name: "Globex", domain: "globex.org" });
     assert.equal(other.body.created, true);
     assert.notEqual(other.body.company.id, named.body.company.id);
+
+    const bare = await createCompany(owner, { name: "Mercury" });
+    const withDomain = await createCompany(owner, { name: "Mercury", domain: "mercury.com" });
+    assert.notEqual(withDomain.body.company.id, bare.body.company.id);
+    const patched = await updateCompany(owner, withDomain.body.company.id, { industry: "Banking" });
+    assert.equal(patched.body.company.industry, "Banking");
+    await assert.rejects(
+      () => createCompany(owner, { name: "Mercury Inc" }),
+      (error: unknown) => error instanceof CrmError && error.code === "duplicate_company",
+    );
+
+    const same = await upsertCompany(owner, { domain: "mercury.com", industry: "Banking" });
+    assert.equal(same.body.created, false);
+    assert.equal(same.body.company.updatedAt, patched.body.company.updatedAt);
+    const audits = await getAdminPool().query<{ total: number }>(
+      "select count(*)::int as total from crm.audit_events where entity_id = $1",
+      [withDomain.body.company.id],
+    );
+    assert.equal(audits.rows[0].total, 2);
   });
 
   it("replays idempotent creates and rejects a reused key", async () => {
@@ -317,6 +336,13 @@ describe("HTTP API", () => {
     const searchedBody = (await searched.json()) as { total: number };
     assert.equal(searchedBody.total, 1);
 
+    const badOwner = await listCompaniesRoute(
+      new Request("http://crm.test/api/v1/companies?owner_id=nope", { headers }),
+    );
+    assert.equal(badOwner.status, 400);
+    const badOwnerBody = (await badOwner.json()) as { error: { code: string } };
+    assert.equal(badOwnerBody.error.code, "invalid_input");
+
     const outsider = await createUser("outsider@example.com");
     const { token: otherToken } = await createAgent(outsider.workspaceId, [
       "crm:read",
@@ -350,6 +376,7 @@ describe("HTTP API", () => {
             { name: "Existing Bulk", domain: "existing-bulk.test", industry: "Added" },
             { name: "Fresh Bulk", domain: "fresh-bulk.test" },
             { domain: "not a domain" },
+            { name: "Existing Bulk", domain: "existing-bulk.test", industry: "Added" },
           ],
         }),
       }),
@@ -362,6 +389,7 @@ describe("HTTP API", () => {
     assert.equal(body.results[0].company?.industry, "Added");
     assert.equal(body.results[1].status, "created");
     assert.equal(body.results[2].status, "error");
+    assert.equal(body.results[3].status, "matched");
   });
 });
 

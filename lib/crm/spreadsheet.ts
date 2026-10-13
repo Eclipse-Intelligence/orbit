@@ -7,6 +7,7 @@ import { listOpportunities } from "@/lib/crm/opportunities";
 import { listTasks } from "@/lib/crm/tasks";
 import { CrmError } from "@/lib/crm/errors";
 import { canonicalDomain } from "@/lib/crm/normalize";
+import { assertScope } from "@/lib/crm/scopes";
 import type { Actor, Activity, Company, CompanyWrite, Contact, Opportunity, Task } from "@/lib/crm/types";
 import { withActor } from "@/lib/crm/context";
 
@@ -34,7 +35,8 @@ export function parseCsv(text: string): string[][] {
       } else cell += char;
       continue;
     }
-    if (char === '"' && cell === "") {
+    if (char === '"' && cell.trim() === "") {
+      cell = "";
       quoted = true;
       continue;
     }
@@ -74,20 +76,24 @@ function cell(row: string[], index: number) {
   return row[index]?.trim() ?? "";
 }
 
-function columnValue(row: string[], index: number): string | null | undefined {
+function columnValue(row: string[], index: number): string | undefined {
   if (index < 0) return undefined;
-  return cell(row, index) || null;
+  const value = cell(row, index).replace(/^'(?=[=+\-@])/, "");
+  return value || undefined;
 }
 
 export async function importCompaniesCsv(actor: Actor, csv: string): Promise<ImportResult> {
+  assertScope(actor.scopes, "companies:write");
   const rows = parseCsv(csv);
   if (rows.length < 2) throw new CrmError("invalid_input", "The CSV needs a header and one row.", 400);
   const pick = headerIndex(rows[0]);
   const nameAt = pick(["company", "name", "company name"]);
   const domainAt = pick(["domain"]);
   const items: CompanyWrite[] = [];
+  const itemRows: number[] = [];
   const errors: ImportResult["errors"] = [];
-  for (let index = 1; index < rows.length && items.length < 50; index += 1) {
+  if (rows.length > 51) errors.push({ row: 52, message: "Only the first 50 rows are imported at a time." });
+  for (let index = 1; index < rows.length && index <= 50; index += 1) {
     const row = rows[index];
     const name = columnValue(row, nameAt);
     const domain = columnValue(row, domainAt);
@@ -114,16 +120,17 @@ export async function importCompaniesCsv(actor: Actor, csv: string): Promise<Imp
       if (parsed) item.lifecycle = parsed;
     }
     items.push(item);
+    itemRows.push(index + 1);
   }
-  if (rows.length > 51) errors.push({ row: 52, message: "Only the first 50 rows are imported at a time." });
   if (items.length === 0) return { created: 0, updated: 0, matched: 0, errors };
   const result = await bulkUpsertCompanies(actor, items, {
     provenance: { operation: "import_companies", source: "csv" },
   });
-  return countBulk(result.body.results, errors);
+  return countBulk(result.body.results, itemRows, errors);
 }
 
 export async function importContactsCsv(actor: Actor, csv: string): Promise<ImportResult> {
+  assertScope(actor.scopes, "contacts:write");
   const rows = parseCsv(csv);
   if (rows.length < 2) throw new CrmError("invalid_input", "The CSV needs a header and one row.", 400);
   const pick = headerIndex(rows[0]);
@@ -220,6 +227,7 @@ function lifecycleOf(value: string): CompanyWrite["lifecycle"] {
 
 function countBulk(
   results: { status: string; error?: { message: string } }[],
+  rowNumbers: number[],
   errors: ImportResult["errors"],
 ): ImportResult {
   const summary: ImportResult = { created: 0, updated: 0, matched: 0, errors };
@@ -227,7 +235,7 @@ function countBulk(
     if (result.status === "created") summary.created += 1;
     else if (result.status === "updated") summary.updated += 1;
     else if (result.status === "matched") summary.matched += 1;
-    else summary.errors.push({ row: index + 2, message: result.error?.message ?? "That row failed." });
+    else summary.errors.push({ row: rowNumbers[index] ?? index + 2, message: result.error?.message ?? "That row failed." });
   });
   return summary;
 }

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { CrmError } from "@/lib/crm/errors";
+import { isUuid } from "@/lib/crm/mutate";
 import {
   ACTIVITY_TYPES,
   COMPANY_SORTS,
@@ -81,13 +82,32 @@ export function splitProvenance(input: {
   };
 }
 
+function uuidParam(params: URLSearchParams, name: string) {
+  const value = params.get(name);
+  if (!value) return undefined;
+  if (!isUuid(value)) {
+    throw new CrmError("invalid_input", `${name} must be a UUID.`, 400, { field: name });
+  }
+  return value;
+}
+
+function ownerParam(params: URLSearchParams) {
+  const owner = params.get("owner_id") ?? params.get("owner");
+  if (!owner || owner === "all") return undefined;
+  if (owner === "unassigned") return owner;
+  if (!isUuid(owner)) {
+    throw new CrmError("invalid_input", "owner_id must be a UUID.", 400, { field: "owner_id" });
+  }
+  return owner;
+}
+
 export function companyQueryFromSearchParams(
   params: URLSearchParams,
 ): CompanyListQuery {
   const lifecycle = params.get("lifecycle") ?? undefined;
   const sort = params.get("sort") ?? undefined;
   const order = params.get("order") ?? undefined;
-  const owner = params.get("owner_id") ?? params.get("owner") ?? undefined;
+  const owner = ownerParam(params);
   const limit = params.get("limit");
   const offset = params.get("offset");
   const query: CompanyListQuery = {};
@@ -101,8 +121,7 @@ export function companyQueryFromSearchParams(
     query.sort = sort as CompanyListQuery["sort"];
   }
   if (order === "asc" || order === "desc") query.order = order;
-  if (owner === "unassigned") query.ownerId = "unassigned";
-  else if (owner && owner !== "all") query.ownerId = owner;
+  if (owner) query.ownerId = owner;
   if (params.get("include_archived") === "true") query.includeArchived = true;
   if (limit && Number.isFinite(Number(limit))) query.limit = Number(limit);
   if (offset && Number.isFinite(Number(offset))) query.offset = Number(offset);
@@ -270,11 +289,10 @@ export function contactQueryFromSearchParams(params: URLSearchParams): ContactLi
   const query: ContactListQuery = {};
   const text = params.get("q")?.trim();
   if (text) query.query = text;
-  const companyId = params.get("company_id");
+  const companyId = uuidParam(params, "company_id");
   if (companyId) query.companyId = companyId;
-  const owner = params.get("owner_id") ?? params.get("owner");
-  if (owner === "unassigned") query.ownerId = "unassigned";
-  else if (owner && owner !== "all") query.ownerId = owner;
+  const owner = ownerParam(params);
+  if (owner) query.ownerId = owner;
   if (params.get("include_archived") === "true") query.includeArchived = true;
   return { ...query, ...paging(params) };
 }
@@ -283,7 +301,7 @@ export function opportunityQueryFromSearchParams(params: URLSearchParams): Oppor
   const query: OpportunityListQuery = {};
   const text = params.get("q")?.trim();
   if (text) query.query = text;
-  const companyId = params.get("company_id");
+  const companyId = uuidParam(params, "company_id");
   if (companyId) query.companyId = companyId;
   const status = params.get("status");
   if (status && (OPPORTUNITY_STATUSES as readonly string[]).includes(status)) {
@@ -297,11 +315,11 @@ export function activityQueryFromSearchParams(params: URLSearchParams): Activity
   const query: ActivityListQuery = {};
   const text = params.get("q")?.trim();
   if (text) query.query = text;
-  const companyId = params.get("company_id");
+  const companyId = uuidParam(params, "company_id");
   if (companyId) query.companyId = companyId;
-  const contactId = params.get("contact_id");
+  const contactId = uuidParam(params, "contact_id");
   if (contactId) query.contactId = contactId;
-  const opportunityId = params.get("opportunity_id");
+  const opportunityId = uuidParam(params, "opportunity_id");
   if (opportunityId) query.opportunityId = opportunityId;
   const type = params.get("type");
   if (type && (ACTIVITY_TYPES as readonly string[]).includes(type)) {
@@ -314,11 +332,10 @@ export function taskQueryFromSearchParams(params: URLSearchParams): TaskListQuer
   const query: TaskListQuery = {};
   const text = params.get("q")?.trim();
   if (text) query.query = text;
-  const companyId = params.get("company_id");
+  const companyId = uuidParam(params, "company_id");
   if (companyId) query.companyId = companyId;
-  const owner = params.get("owner_id") ?? params.get("owner");
-  if (owner === "unassigned") query.ownerId = "unassigned";
-  else if (owner && owner !== "all") query.ownerId = owner;
+  const owner = ownerParam(params);
+  if (owner) query.ownerId = owner;
   const view = params.get("view");
   if (view && (TASK_VIEWS as readonly string[]).includes(view)) query.view = view as TaskView;
   if (params.get("include_archived") === "true") query.includeArchived = true;

@@ -3,16 +3,19 @@ import { createHmac } from "node:crypto";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { after, before, describe, it } from "node:test";
+import { toCsv } from "@/lib/csv";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { createCompany, getCompany } from "@/lib/crm/companies";
 import { recordCommunication } from "@/lib/crm/communications";
 import { createContact, getContact } from "@/lib/crm/contacts";
-import { listPipeline } from "@/lib/crm/opportunities";
+import { CrmError } from "@/lib/crm/errors";
+import { archiveOpportunity, createOpportunity, getOpportunity, listPipeline } from "@/lib/crm/opportunities";
 import { savePipelineStages } from "@/lib/crm/pipeline";
 import { getCompanyContext } from "@/lib/crm/relationships";
 import { importCompaniesCsv, importContactsCsv, parseCsv } from "@/lib/crm/spreadsheet";
-import { createWebhook, deliverDueWebhooks } from "@/lib/crm/webhooks";
-import { createUser, resetDatabase } from "./helpers";
+import { createTask, listTasks } from "@/lib/crm/tasks";
+import { archiveWebhook, createWebhook, deliverDueWebhooks } from "@/lib/crm/webhooks";
+import { createAgent, createUser, resetDatabase } from "./helpers";
 
 before(async () => {
   await resetDatabase();
@@ -71,6 +74,45 @@ describe("imports, pipeline, communications, and webhooks", () => {
     assert.equal(contact.companyId, company.body.company.id);
   });
 
+  it("round-trips guarded csv cells and keeps blank cells from clearing data", async () => {
+    assert.deepEqual(parseCsv('Name,Company\nAda, "Big, Co"\n')[1], ["Ada", "Big, Co"]);
+    assert.equal(toCsv([["+44 20 7946 0958", "-12.5", "=SUM(A1)", "@cmd"]]), "+44 20 7946 0958,-12.5,'=SUM(A1),'@cmd");
+    const owner = await createUser("csv-guard@example.com", "Guard");
+    const person = await createContact(owner, {
+      firstName: "Lin",
+      email: "lin@guard.example",
+      phone: "+441234567890",
+      jobTitle: "CTO",
+    });
+    const result = await importContactsCsv(
+      owner,
+      "Email,Title,Notes\nlin@guard.example,,'=not a formula\n",
+    );
+    assert.equal(result.errors.length, 0);
+    const contact = await getContact(owner, person.body.contact.id);
+    assert.equal(contact.jobTitle, "CTO");
+    assert.equal(contact.phone, "+441234567890");
+    assert.equal(contact.notes, "=not a formula");
+    const { actor: reader } = await createAgent(owner.workspaceId, ["crm:read"]);
+    await assert.rejects(
+      () => importContactsCsv(reader, "Email\nnobody@guard.example\n"),
+      (error: unknown) => error instanceof CrmError && error.status === 403,
+    );
+  });
+
+  it("reports company import errors against the source row", async () => {
+    const owner = await createUser("csv-rows@example.com", "Rows");
+    const result = await importCompaniesCsv(
+      owner,
+      `Company,Domain,Industry\n,,Analytics\n${"x".repeat(300)},,Research\nRow Four,rowfour.example,Retail\n`,
+    );
+    assert.equal(result.created, 1);
+    assert.deepEqual(
+      result.errors.map((error) => error.row),
+      [2, 3],
+    );
+  });
+
   it("renames a pipeline stage without dropping won and lost", async () => {
     const owner = await createUser("pipeline@example.com", "Pipeline");
     const current = await listPipeline(owner);
@@ -100,6 +142,110 @@ describe("imports, pipeline, communications, and webhooks", () => {
         })),
     );
     assert.equal(removed.some((stage) => stage.name === "Working"), false);
+  });
+
+  it("moves archived deals off a removed stage and resyncs status when won changes", async () => {
+    const owner = await createUser("pipeline-sync@example.com", "Sync");
+    const company = await createCompany(owner, { name: "Sync Co", domain: "sync.example" });
+    const current = await listPipeline(owner);
+    const working = current.stages.find((stage) => stage.name === "Working")!;
+    const proposal = current.stages.find((stage) => stage.name === "Proposal")!;
+    const parked = await createOpportunity(owner, {
+      companyId: company.body.company.id,
+      name: "Parked deal",
+      stageId: working.id,
+    });
+    await archiveOpportunity(owner, parked.body.opportunity.id);
+    const live = await createOpportunity(owner, {
+      companyId: company.body.company.id,
+      name: "Live deal",
+      stageId: proposal.id,
+    });
+    assert.equal(live.body.opportunity.probability, proposal.probability);
+    const saved = await savePipelineStages(
+      owner,
+      current.stages
+        .filter((stage) => stage.id !== working.id)
+        .map((stage) => ({
+          id: stage.id,
+          name: stage.name,
+          probability: stage.probability,
+          isWon: stage.id === proposal.id,
+          isLost: stage.isLost,
+        })),
+    );
+    assert.equal(saved.some((stage) => stage.id === working.id), false);
+    const admin = getAdminPool();
+    const moved = await admin.query<{ stage_id: string; status: string }>(
+      "select stage_id, status from crm.opportunities where id = $1",
+      [parked.body.opportunity.id],
+    );
+    const firstOpen = saved.find((stage) => !stage.isWon && !stage.isLost)!;
+    assert.equal(moved.rows[0].stage_id, firstOpen.id);
+    assert.equal(moved.rows[0].status, "open");
+    const won = await getOpportunity(owner, live.body.opportunity.id);
+    assert.equal(won.status, "won");
+    const blocked = await createOpportunity(owner, {
+      companyId: company.body.company.id,
+      name: "Blocking deal",
+      stageId: saved.find((stage) => stage.name === "New")!.id,
+    });
+    assert.ok(blocked.body.opportunity.id);
+    await assert.rejects(
+      () =>
+        savePipelineStages(
+          owner,
+          saved
+            .filter((stage) => stage.name !== "New")
+            .map((stage) => ({ ...stage })),
+        ),
+      /Move opportunities off a stage/,
+    );
+  });
+
+  it("keeps an archived won deal won when its stage is replaced", async () => {
+    const owner = await createUser("pipeline-won@example.com", "Won");
+    const company = await createCompany(owner, { name: "Won Co", domain: "won.example" });
+    const current = await listPipeline(owner);
+    const wonStage = current.stages.find((stage) => stage.isWon)!;
+    const deal = await createOpportunity(owner, {
+      companyId: company.body.company.id,
+      name: "Closed deal",
+      stageId: wonStage.id,
+    });
+    await archiveOpportunity(owner, deal.body.opportunity.id);
+    const saved = await savePipelineStages(owner, [
+      ...current.stages
+        .filter((stage) => stage.id !== wonStage.id)
+        .map((stage) => ({
+          id: stage.id,
+          name: stage.name,
+          probability: stage.probability,
+          isWon: false,
+          isLost: stage.isLost,
+        })),
+      { name: "Closed won", probability: 100, isWon: true, isLost: false },
+    ]);
+    const replacement = saved.find((stage) => stage.isWon)!;
+    const moved = await getAdminPool().query<{ stage_id: string; status: string }>(
+      "select stage_id, status from crm.opportunities where id = $1",
+      [deal.body.opportunity.id],
+    );
+    assert.equal(moved.rows[0].stage_id, replacement.id);
+    assert.equal(moved.rows[0].status, "won");
+  });
+
+  it("orders next actions by due date then high, normal, low priority", async () => {
+    const owner = await createUser("priority@example.com", "Priority");
+    const dueAt = new Date(Date.now() + 3 * 86_400_000).toISOString();
+    for (const priority of ["low", "high", "normal"] as const) {
+      await createTask(owner, { title: `Priority ${priority}`, dueAt, priority });
+    }
+    const listed = await listTasks(owner, { view: "upcoming" });
+    assert.deepEqual(
+      listed.data.map((task) => task.priority),
+      ["high", "normal", "low"],
+    );
   });
 
   it("files an email on the company domain and suggests a follow-up", async () => {
@@ -193,6 +339,17 @@ describe("imports, pipeline, communications, and webhooks", () => {
       );
       await deliverDueWebhooks();
       assert.equal(hits.length, 2);
+      await admin.query(
+        "update crm.webhook_deliveries set next_attempt_at = now(), status = 'pending' where event_id = $1",
+        [payload.id],
+      );
+      await archiveWebhook(owner, created.endpoint.id);
+      await deliverDueWebhooks();
+      assert.equal(hits.length, 2);
+      await assert.rejects(
+        () => archiveWebhook(owner, "not-a-uuid"),
+        (error: unknown) => error instanceof CrmError && error.status === 404,
+      );
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
     }

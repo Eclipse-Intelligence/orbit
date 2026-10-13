@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import CompaniesHeader from "./header/header";
 import CompaniesToolbar from "./toolbar/toolbar";
 import CompaniesTable from "./table/companies-table";
@@ -22,6 +22,8 @@ export type { Viewer };
 type CompaniesProps = {
   companies: Company[];
   total: number;
+  page: number;
+  now: number;
   filters: CompanyListQuery;
   members: Member[];
   viewer: Viewer;
@@ -33,6 +35,8 @@ type CompaniesProps = {
 export default function Companies({
   companies,
   total,
+  page,
+  now,
   filters,
   members,
   viewer,
@@ -52,12 +56,22 @@ export default function Companies({
   } | null>(null);
   const rows = overlay?.key === serverKey ? overlay.rows : companies;
   const openDetail = useCompaniesStore((state) => state.openDetail);
-  const detailId = useCompaniesStore((state) => state.detailId);
+  const setSelected = useCompaniesStore((state) => state.setSelected);
+  const filterKey = JSON.stringify(filters);
+  const handledRecord = useRef<string | null>(null);
 
   useEffect(() => {
-    if (context && detailId !== context.company.id)
-      openDetail(context.company.id);
-  }, [context, detailId, openDetail]);
+    const id = context?.company.id ?? null;
+    if (handledRecord.current === id) return;
+    handledRecord.current = id;
+    if (!id) return;
+    const { detailId, detailOpen } = useCompaniesStore.getState();
+    if (!detailOpen || detailId !== id) openDetail(id);
+  }, [context, openDetail]);
+
+  useEffect(() => {
+    setSelected([]);
+  }, [filterKey, setSelected]);
 
   function upsertLocal(company: Company) {
     const current = overlay?.key === serverKey ? overlay.rows : companies;
@@ -82,6 +96,8 @@ export default function Companies({
       <CompaniesTable
         companies={rows}
         total={total}
+        page={page}
+        now={now}
         filtered={activeFilterCount(filters) > 0}
       />
       <CompanyDetail

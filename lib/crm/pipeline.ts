@@ -63,7 +63,7 @@ export async function savePipelineStages(actor: Actor, drafts: StageDraft[]): Pr
     const removed = [...existingIds].filter((id) => !kept.has(id));
     if (removed.length > 0) {
       const used = await db.query(
-        "select 1 from crm.opportunities where stage_id = any($1::uuid[]) limit 1",
+        "select 1 from crm.opportunities where stage_id = any($1::uuid[]) and archived_at is null limit 1",
         [removed],
       );
       if ((used.rowCount ?? 0) > 0) {
@@ -81,10 +81,6 @@ export async function savePipelineStages(actor: Actor, drafts: StageDraft[]): Pr
        where pipeline_id = $1`,
       [pipelineId],
     );
-    if (removed.length > 0) {
-      await db.query("delete from crm.pipeline_stages where id = any($1::uuid[])", [removed]);
-    }
-
     const saved: PipelineStage[] = [];
     for (const stage of stages) {
       if (stage.id) {
@@ -130,6 +126,31 @@ export async function savePipelineStages(actor: Actor, drafts: StageDraft[]): Pr
         isLost: stage.isLost,
       });
     }
+
+    if (removed.length > 0) {
+      const open = saved.find((stage) => !stage.isWon && !stage.isLost) ?? saved[0];
+      const won = saved.find((stage) => stage.isWon) ?? open;
+      const lost = saved.find((stage) => stage.isLost) ?? open;
+      await db.query(
+        `update crm.opportunities
+         set stage_id = case status when 'won' then $2::uuid when 'lost' then $3::uuid else $4::uuid end,
+             pipeline_id = $5
+         where stage_id = any($1::uuid[]) and archived_at is not null`,
+        [removed, won.id, lost.id, open.id, pipelineId],
+      );
+      await db.query("delete from crm.pipeline_stages where id = any($1::uuid[])", [removed]);
+    }
+    await db.query(
+      `update crm.opportunities o
+       set status = next.status
+       from (
+         select id, case when is_won then 'won' when is_lost then 'lost' else 'open' end as status
+         from crm.pipeline_stages
+         where pipeline_id = $1
+       ) next
+       where o.stage_id = next.id and o.status <> next.status`,
+      [pipelineId],
+    );
     return saved;
   });
 }

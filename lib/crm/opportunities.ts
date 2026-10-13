@@ -377,7 +377,9 @@ async function applyOpportunity(
   await assertOwner(db, actor.workspaceId, write.ownerId);
   const contactId =
     write.primaryContactId === undefined ? current.primary_contact_id : write.primaryContactId;
-  await assertContactCompany(db, actor.workspaceId, contactId, companyId);
+  if (companyId !== current.company_id || contactId !== current.primary_contact_id) {
+    await assertContactCompany(db, actor.workspaceId, contactId, companyId);
+  }
 
   let stage: StageRow | null = null;
   if (write.stageId || write.status === "won" || write.status === "lost" || (write.status === "open" && current.status !== "open")) {
