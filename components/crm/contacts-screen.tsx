@@ -25,7 +25,7 @@ import {
 } from "@/components/crm/record-form";
 import type { Viewer } from "@/components/crm/viewer";
 import { saveContactAction, type ContactActionState } from "@/app/(crm)/records";
-import type { Activity, Company, Contact, Member } from "@/lib/crm/types";
+import type { Activity, CallInsight, Company, Contact, Member } from "@/lib/crm/types";
 
 export default function ContactsScreen({
   viewer,
@@ -38,6 +38,7 @@ export default function ContactsScreen({
   members,
   mailboxConnected,
   activitiesByContact,
+  insights,
 }: {
   viewer: Viewer;
   contacts: Contact[];
@@ -49,6 +50,7 @@ export default function ContactsScreen({
   members: Member[];
   mailboxConnected: boolean;
   activitiesByContact: Record<string, Activity[]>;
+  insights: Record<string, CallInsight>;
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(Boolean(linkedContact));
@@ -186,6 +188,7 @@ export default function ContactsScreen({
               members={members}
               mailboxConnected={mailboxConnected}
               activities={activitiesByContact[current.id] ?? []}
+              insights={insights}
               onEdit={() => setMode("edit")}
               onClose={close}
             />
@@ -210,6 +213,7 @@ function ContactPreview({
   members,
   mailboxConnected,
   activities,
+  insights,
   onEdit,
   onClose,
 }: {
@@ -217,6 +221,7 @@ function ContactPreview({
   members: Member[];
   mailboxConnected: boolean;
   activities: Activity[];
+  insights: Record<string, CallInsight>;
   onEdit: () => void;
   onClose: () => void;
 }) {
@@ -285,6 +290,7 @@ function ContactPreview({
           mailboxConnected={mailboxConnected}
           profileNote={contact.notes}
           activities={activities}
+          insights={insights}
         />
       </div>
       <SheetFooter>

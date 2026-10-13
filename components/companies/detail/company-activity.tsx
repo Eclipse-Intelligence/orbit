@@ -17,7 +17,7 @@ import {
   useActivityDraft,
 } from "@/components/crm/contact-activities";
 import ContactEmail from "@/components/crm/contact-email";
-import type { Activity, Contact } from "@/lib/crm/types";
+import type { Activity, CallInsight, Contact } from "@/lib/crm/types";
 
 const NONE = "none";
 const ALL = "all";
@@ -26,11 +26,13 @@ export default function CompanyActivity({
   companyId,
   contacts,
   timeline,
+  insights,
   mailboxConnected,
 }: {
   companyId: string;
   contacts: Contact[];
   timeline: Activity[];
+  insights: Record<string, CallInsight>;
   mailboxConnected: boolean;
 }) {
   const [picked, setPicked] = useState<string | null>(null);
@@ -173,6 +175,7 @@ export default function CompanyActivity({
       )}
       <ActivityTimeline
         activities={shown}
+        insights={insights}
         showContact
         empty="No activity yet."
       />

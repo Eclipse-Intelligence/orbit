@@ -4,12 +4,14 @@ import { PAGE_SIZE, pageFromParams, pageOffset } from "@/components/crm/paging";
 import { getUserActor } from "@/lib/auth/user";
 import { listCompanies, listMembers } from "@/lib/crm/companies";
 import { listActivitiesByContact } from "@/lib/crm/activities";
+import { getInsightsForActivities } from "@/lib/crm/call-insights";
 import { getContact, listContacts } from "@/lib/crm/contacts";
 import { CrmError } from "@/lib/crm/errors";
 import { getMailbox } from "@/lib/crm/inbox";
 import { contactQueryFromSearchParams } from "@/lib/crm/validation";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 export default async function ContactsPage({
   searchParams,
@@ -44,6 +46,13 @@ export default async function ContactsPage({
   const contactIds = listed.data.map((contact) => contact.id);
   if (linked && !contactIds.includes(linked.id)) contactIds.push(linked.id);
   const activitiesByContact = await listActivitiesByContact(user, contactIds);
+  const insights = await getInsightsForActivities(
+    user,
+    Object.values(activitiesByContact)
+      .flat()
+      .filter((activity) => activity.type === "call")
+      .map((activity) => activity.id),
+  );
 
   return (
     <ContactsScreen
@@ -63,6 +72,7 @@ export default async function ContactsPage({
       members={members}
       mailboxConnected={mailbox?.status === "connected"}
       activitiesByContact={activitiesByContact}
+      insights={insights}
     />
   );
 }
