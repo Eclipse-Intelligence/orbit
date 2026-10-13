@@ -24,7 +24,7 @@ import {
   RecordSelect,
 } from "@/components/crm/record-form";
 import type { Viewer } from "@/components/crm/viewer";
-import { saveContactAction, type RecordActionState } from "@/app/(crm)/records";
+import { saveContactAction, type ContactActionState } from "@/app/(crm)/records";
 import type { Activity, Company, Contact, Member } from "@/lib/crm/types";
 
 export default function ContactsScreen({
@@ -52,17 +52,24 @@ export default function ContactsScreen({
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(Boolean(linkedContact));
-  const [editing, setEditing] = useState<Contact | null>(linkedContact);
+  const [selected, setSelected] = useState<Contact | null>(linkedContact);
+  const [mode, setMode] = useState<"view" | "edit">("view");
   const [session, setSession] = useState(0);
   const [linkedId, setLinkedId] = useState(linkedContact?.id ?? null);
   if ((linkedContact?.id ?? null) !== linkedId) {
     setLinkedId(linkedContact?.id ?? null);
     if (linkedContact) {
-      setEditing(linkedContact);
+      setSelected(linkedContact);
+      setMode("view");
       setSession((current) => current + 1);
       setOpen(true);
     }
   }
+  const current = selected
+    ? (contacts.find((contact) => contact.id === selected.id) ??
+      (linkedContact?.id === selected.id ? linkedContact : null) ??
+      selected)
+    : null;
   const close = useCallback(() => {
     setOpen(false);
     const params = new URLSearchParams(window.location.search);
@@ -72,11 +79,24 @@ export default function ContactsScreen({
     router.replace(next ? `/contacts?${next}` : "/contacts", { scroll: false });
   }, [router]);
 
-  function edit(contact: Contact | null) {
-    setEditing(contact);
+  function show(contact: Contact | null) {
+    setSelected(contact);
+    setMode(contact ? "view" : "edit");
     setSession((current) => current + 1);
     setOpen(true);
   }
+
+  const saved = useCallback(
+    (contact: Contact | undefined) => {
+      if (!contact) {
+        close();
+        return;
+      }
+      setSelected(contact);
+      setMode("view");
+    },
+    [close],
+  );
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -86,7 +106,7 @@ export default function ContactsScreen({
         action={
           <div className="flex items-center gap-1">
             <RecordTransfer resource="contacts" />
-            <Button variant="primary" size="sm" onClick={() => edit(null)}>
+            <Button variant="primary" size="sm" onClick={() => show(null)}>
               Add contact
             </Button>
           </div>
@@ -125,7 +145,7 @@ export default function ContactsScreen({
                 .filter(Boolean)
                 .join(" · ") || "No title"
             }
-            onClick={() => edit(contact)}
+            onClick={() => show(contact)}
             action={
               <>
                 <CallLink phone={contact.phone} />
@@ -152,23 +172,139 @@ export default function ContactsScreen({
       >
         <SheetContent side="right" className="sm:w-[480px] sm:max-w-[480px]">
           <SheetHeader>
-            <SheetTitle>{editing ? "Edit contact" : "New contact"}</SheetTitle>
+            <SheetTitle>
+              {!current ? "New contact" : mode === "edit" ? "Edit contact" : "Contact"}
+            </SheetTitle>
             <SheetDescription className="sr-only">
               Contact details
             </SheetDescription>
           </SheetHeader>
-          <ContactEditor
-            key={`${editing?.id ?? "new"}-${session}`}
-            editing={editing}
-            companies={companies}
-            members={members}
-            mailboxConnected={mailboxConnected}
-            activitiesByContact={activitiesByContact}
-            onClose={close}
-          />
+          {current && mode === "view" ? (
+            <ContactPreview
+              key={`${current.id}-${session}`}
+              contact={current}
+              members={members}
+              mailboxConnected={mailboxConnected}
+              activities={activitiesByContact[current.id] ?? []}
+              onEdit={() => setMode("edit")}
+              onClose={close}
+            />
+          ) : (
+            <ContactEditor
+              key={`${current?.id ?? "new"}-${session}-edit`}
+              editing={current}
+              companies={companies}
+              members={members}
+              onSaved={saved}
+              onCancel={current ? () => setMode("view") : close}
+            />
+          )}
         </SheetContent>
       </Sheet>
     </section>
+  );
+}
+
+function ContactPreview({
+  contact,
+  members,
+  mailboxConnected,
+  activities,
+  onEdit,
+  onClose,
+}: {
+  contact: Contact;
+  members: Member[];
+  mailboxConnected: boolean;
+  activities: Activity[];
+  onEdit: () => void;
+  onClose: () => void;
+}) {
+  const owner = members.find((member) => member.id === contact.ownerId);
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-auto p-5">
+        <div className="flex items-start gap-3">
+          <Monogram name={contact.name} className="size-10 rounded-full text-[14px]" />
+          <div className="flex min-w-0 flex-1 flex-col gap-1">
+            <p className="text-[16px] leading-6 font-medium">{contact.name}</p>
+            {(contact.jobTitle || contact.companyName) && (
+              <div className="caption-style text-subtle flex flex-wrap items-center gap-1.5">
+                {contact.jobTitle && <span>{contact.jobTitle}</span>}
+                {contact.jobTitle && contact.companyName && <span>at</span>}
+                {contact.companyName && contact.companyId && (
+                  <EntityChip
+                    name={contact.companyName}
+                    href={`/?record=${contact.companyId}`}
+                  />
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+        <dl className="grid grid-cols-[6em_1fr] gap-x-3 gap-y-2 text-[14px] leading-5">
+          <Detail label="Phone">
+            {contact.phone ? (
+              <span className="flex items-center gap-1">
+                <span>{contact.phone}</span>
+                <CallLink phone={contact.phone} />
+              </span>
+            ) : null}
+          </Detail>
+          <Detail label="Email">
+            {contact.email ? (
+              <a href={`mailto:${contact.email}`} className="hover:underline">
+                {contact.email}
+              </a>
+            ) : null}
+          </Detail>
+          <Detail label="LinkedIn">
+            {contact.linkedinUrl ? (
+              <a
+                href={contact.linkedinUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="block truncate hover:underline"
+              >
+                {contact.linkedinUrl.replace(/^https?:\/\/(www\.)?/, "")}
+              </a>
+            ) : null}
+          </Detail>
+          <Detail label="Owner">{owner?.name ?? null}</Detail>
+          <Detail label="Source">{contact.source}</Detail>
+        </dl>
+        {contact.notes && (
+          <div className="flex flex-col gap-1">
+            <span className="caption-style text-subtle">Notes</span>
+            <p className="text-[14px] leading-5 whitespace-pre-wrap">{contact.notes}</p>
+          </div>
+        )}
+        <ContactActivities
+          contactId={contact.id}
+          email={contact.email}
+          mailboxConnected={mailboxConnected}
+          profileNote={contact.notes}
+          activities={activities}
+        />
+      </div>
+      <SheetFooter>
+        <Button variant="subtle" size="sm" type="button" onClick={onClose}>
+          Close
+        </Button>
+        <Button variant="primary" size="sm" type="button" onClick={onEdit}>
+          Edit
+        </Button>
+      </SheetFooter>
+    </div>
+  );
+}
+
+function Detail({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <>
+      <dt className="caption-style text-subtle leading-5">{label}</dt>
+      <dd className="min-w-0">{children ?? <span className="text-subtle">—</span>}</dd>
+    </>
   );
 }
 
@@ -176,25 +312,23 @@ function ContactEditor({
   editing,
   companies,
   members,
-  mailboxConnected,
-  activitiesByContact,
-  onClose,
+  onSaved,
+  onCancel,
 }: {
   editing: Contact | null;
   companies: Company[];
   members: Member[];
-  mailboxConnected: boolean;
-  activitiesByContact: Record<string, Activity[]>;
-  onClose: () => void;
+  onSaved: (contact: Contact | undefined) => void;
+  onCancel: () => void;
 }) {
   const [state, action, pending] = useActionState(
     saveContactAction,
-    {} as RecordActionState,
+    {} as ContactActionState,
   );
   const [phone, setPhone] = useState(editing?.phone ?? "");
   useEffect(() => {
-    if (state.ok) onClose();
-  }, [state, onClose]);
+    if (state.ok) onSaved(editing ? state.contact : undefined);
+  }, [state, onSaved, editing]);
 
   const formId = `contact-form-${editing?.id ?? "new"}`;
   const companyOptions =
@@ -307,18 +441,9 @@ function ContactEditor({
             />
           </label>
         </form>
-        {editing && (
-          <ContactActivities
-            contactId={editing.id}
-            email={editing.email}
-            mailboxConnected={mailboxConnected}
-            profileNote={editing.notes}
-            activities={activitiesByContact[editing.id] ?? []}
-          />
-        )}
       </div>
       <SheetFooter>
-        <Button variant="subtle" size="sm" type="button" onClick={onClose}>
+        <Button variant="subtle" size="sm" type="button" onClick={onCancel}>
           Cancel
         </Button>
         <Button

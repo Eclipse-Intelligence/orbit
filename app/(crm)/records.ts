@@ -26,6 +26,8 @@ export type RecordActionState = {
   ok?: boolean;
 };
 
+export type ContactActionState = RecordActionState & { contact?: Contact };
+
 async function requireUser() {
   const user = await getUserActor();
   if (!user) redirect("/login");
@@ -50,9 +52,9 @@ function refresh() {
 }
 
 export async function saveContactAction(
-  _state: RecordActionState,
+  _state: ContactActionState,
   formData: FormData,
-): Promise<RecordActionState> {
+): Promise<ContactActionState> {
   const user = await requireUser();
   const id = text(formData, "id");
   const write = {
@@ -68,16 +70,15 @@ export async function saveContactAction(
     notes: text(formData, "notes") || null,
   };
   try {
-    if (id)
-      await updateContact(user, id, write, {
-        provenance: { operation: "update_contact", source: "web" },
-      });
-    else
-      await createContact(user, write, {
-        provenance: { operation: "create_contact", source: "web" },
-      });
+    const saved = id
+      ? await updateContact(user, id, write, {
+          provenance: { operation: "update_contact", source: "web" },
+        })
+      : await createContact(user, write, {
+          provenance: { operation: "create_contact", source: "web" },
+        });
     refresh();
-    return { ok: true };
+    return { ok: true, contact: saved.body.contact };
   } catch (error) {
     return actionError(error);
   }
