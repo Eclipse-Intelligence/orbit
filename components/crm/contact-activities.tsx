@@ -5,9 +5,10 @@ import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Input } from "@/components/_ui/input";
 import { addActivityAction, type RecordActionState } from "@/app/(crm)/records";
+import CallInsightPanel from "@/components/crm/call-insight";
 import ContactEmail from "@/components/crm/contact-email";
 import { formatDate } from "@/lib/companies";
-import type { Activity } from "@/lib/crm/types";
+import type { Activity, CallInsight } from "@/lib/crm/types";
 
 const KINDS = [
   { id: "note", label: "Note" },
@@ -207,11 +208,13 @@ export function ActivityComposer({
 
 export function ActivityTimeline({
   activities,
+  insights,
   showContact,
   lead,
   empty,
 }: {
   activities: Activity[];
+  insights?: Record<string, CallInsight>;
   showContact?: boolean;
   lead?: ReactNode;
   empty: string;
@@ -229,6 +232,7 @@ export function ActivityTimeline({
         <ActivityItem
           key={activity.id}
           activity={activity}
+          insight={insights?.[activity.id] ?? null}
           showContact={showContact}
           open={openId === activity.id}
           onToggle={() =>
@@ -246,12 +250,14 @@ export default function ContactActivities({
   mailboxConnected,
   profileNote,
   activities,
+  insights,
 }: {
   contactId: string;
   email: string | null;
   mailboxConnected: boolean;
   profileNote: string | null;
   activities: Activity[];
+  insights?: Record<string, CallInsight>;
 }) {
   const draft = useActivityDraft((kind, title, body) =>
     addActivityAction({ contactId }, kind, title, body),
@@ -282,6 +288,7 @@ export default function ContactActivities({
       />
       <ActivityTimeline
         activities={listed}
+        insights={insights}
         empty="No activity yet."
         lead={
           showProfileNote && (
@@ -303,11 +310,13 @@ export default function ContactActivities({
 
 function ActivityItem({
   activity,
+  insight,
   showContact,
   open,
   onToggle,
 }: {
   activity: Activity;
+  insight: CallInsight | null;
   showContact?: boolean;
   open: boolean;
   onToggle: () => void;
@@ -359,6 +368,9 @@ function ActivityItem({
         </p>
       )}
       <span className="caption-style text-subtle">{meta}</span>
+      {activity.type === "call" && (
+        <CallInsightPanel activityId={activity.id} insight={insight} />
+      )}
     </li>
   );
 }

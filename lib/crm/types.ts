@@ -343,12 +343,46 @@ export type LeadResult = {
 
 export type RelationshipStatus = "new" | "active" | "quiet" | "needs_action";
 
+export const CALL_INSIGHT_SOURCES = ["teams", "manual"] as const;
+export type CallInsightSource = (typeof CALL_INSIGHT_SOURCES)[number];
+export type CallInsightStatus = "pending" | "ready" | "failed";
+export type CallActionOwner = "me" | "them";
+export type CallActionStatus = "suggested" | "accepted" | "dismissed";
+
+export type CallActionItem = {
+  id: string;
+  title: string;
+  owner: CallActionOwner | null;
+  dueDate: string | null;
+  status: CallActionStatus;
+  taskId: string | null;
+};
+
+export type CallInsight = {
+  id: string;
+  workspaceId: string;
+  activityId: string;
+  contactId: string | null;
+  companyId: string | null;
+  source: CallInsightSource;
+  summary: string | null;
+  keyPoints: string[];
+  actionItems: CallActionItem[];
+  model: string | null;
+  status: CallInsightStatus;
+  error: string | null;
+  transcriptLength: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type CompanyContext = {
   company: Company;
   contacts: Contact[];
   opportunities: Opportunity[];
   activities: Activity[];
   timeline: Activity[];
+  insights: Record<string, CallInsight>;
   tasks: Task[];
   lastInteraction: Activity | null;
   openTaskCount: number;

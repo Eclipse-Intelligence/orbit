@@ -116,7 +116,7 @@ Codes include `unauthorized` (401), `forbidden` (403), `not_found` (404), `inval
 
 ## Context
 
-`GET /api/v1/companies/:id/context` returns the company, its contacts, opportunities, recent activities, open next actions, `lastInteraction`, `openTaskCount`, `relationshipStatus` (`new`, `active`, `quiet`, or `needs_action`), and `timeline`: the company's activities plus those of its current contacts, newest first.
+`GET /api/v1/companies/:id/context` returns the company, its contacts, opportunities, recent activities, open next actions, `lastInteraction`, `openTaskCount`, `relationshipStatus` (`new`, `active`, `quiet`, or `needs_action`), and `timeline`: the company's activities plus those of its current contacts, newest first. `insights` maps the id of each call in the timeline that has a summary to its summary, key points, suggested actions, and status (the transcript is not included).
 
 `GET /api/v1/relationships/stale` lists companies with no interaction in the last 21 days. `days` and `limit` are optional.
 

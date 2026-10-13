@@ -9,6 +9,7 @@ import { getCompanyContext } from "@/lib/crm/relationships";
 import { companyQueryFromSearchParams } from "@/lib/crm/validation";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 function requestTime() {
   return Date.now();

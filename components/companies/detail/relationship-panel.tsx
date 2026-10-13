@@ -183,6 +183,7 @@ export default function RelationshipPanel({
         companyId={companyId}
         contacts={context.contacts}
         timeline={context.timeline}
+        insights={context.insights}
         mailboxConnected={mailboxConnected}
       />
     </>

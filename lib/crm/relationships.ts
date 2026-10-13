@@ -1,3 +1,4 @@
+import { getInsightsForActivities } from "@/lib/crm/call-insights";
 import { withActor } from "@/lib/crm/context";
 import { readCompanyInDb } from "@/lib/crm/companies";
 import { listActivities, listCompanyTimeline } from "@/lib/crm/activities";
@@ -35,12 +36,17 @@ export async function getCompanyContext(actor: Actor, id: string): Promise<Compa
     listTasks(actor, { companyId: id, limit: 50 }),
   ]);
   const openTasks = tasks.data.filter((task) => !task.completedAt && !task.archivedAt);
+  const insights = await getInsightsForActivities(
+    actor,
+    timeline.filter((activity) => activity.type === "call").map((activity) => activity.id),
+  );
   return {
     company,
     contacts: contacts.data,
     opportunities: opportunities.data,
     activities: activities.data,
     timeline,
+    insights,
     tasks: openTasks,
     lastInteraction: activities.data[0] ?? null,
     openTaskCount: openTasks.length,
