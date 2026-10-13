@@ -871,6 +871,7 @@ describe("teams transcripts", () => {
     const created = await ensureTranscriptSubscription(owner, { fetchImpl });
     assert.equal(created.status, "created");
     const post = requests.find((request) => request.method === "POST" && request.url.endsWith("/subscriptions"))!;
+    assert.ok(post.url.startsWith("https://graph.microsoft.com/beta/"));
     const body = JSON.parse(post.body);
     assert.equal(body.changeType, "created");
     assert.equal(body.resource, "users/user-oid-1/adhocCalls/getAllTranscripts");

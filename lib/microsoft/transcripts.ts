@@ -6,6 +6,7 @@ export const TRANSCRIPTS_DISABLED_MESSAGE =
   "Your Microsoft 365 admin has turned off API access to Teams transcripts.";
 
 const GRAPH = "https://graph.microsoft.com/v1.0";
+const GRAPH_BETA = "https://graph.microsoft.com/beta";
 const MAX_PAGES = 20;
 const TIMEOUT_MS = 20_000;
 
@@ -189,7 +190,7 @@ export async function createSubscription(
   },
   fetchImpl: typeof fetch = fetch,
 ): Promise<GraphSubscription> {
-  const response = await fetchImpl(`${GRAPH}/subscriptions`, {
+  const response = await fetchImpl(`${GRAPH_BETA}/subscriptions`, {
     method: "POST",
     headers: { authorization: `Bearer ${accessToken}`, "content-type": "application/json" },
     body: JSON.stringify({
@@ -213,7 +214,7 @@ export async function renewSubscription(
   expiresAt: Date,
   fetchImpl: typeof fetch = fetch,
 ): Promise<GraphSubscription | null> {
-  const response = await fetchImpl(`${GRAPH}/subscriptions/${encodeURIComponent(subscriptionId)}`, {
+  const response = await fetchImpl(`${GRAPH_BETA}/subscriptions/${encodeURIComponent(subscriptionId)}`, {
     method: "PATCH",
     headers: { authorization: `Bearer ${accessToken}`, "content-type": "application/json" },
     body: JSON.stringify({ expirationDateTime: expiresAt.toISOString() }),
