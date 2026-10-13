@@ -23,7 +23,7 @@ function syncedLine(lastSyncedAt: string | null) {
 }
 
 function subscriptionLine(status: TeamsTranscriptStatus) {
-  if (!status.instant) return "Instant updates need NEXT_PUBLIC_SITE_URL on https";
+  if (!status.instant) return "Instant updates need SITE_URL on https";
   if (status.subscriptionId && status.subscriptionExpiresAt) {
     return `Instant updates on until ${formatWhen(status.subscriptionExpiresAt)}`;
   }

@@ -64,7 +64,7 @@ beforeEach(() => {
   process.env.LLM_API_KEY = "test-llm-key";
   process.env.GRANOLA_API_KEY = "grn_test_key";
   delete process.env.LLM_API_BASE_URL;
-  delete process.env.NEXT_PUBLIC_SITE_URL;
+  delete process.env.SITE_URL;
   delete process.env.CRON_SECRET;
 });
 
@@ -417,7 +417,7 @@ describe("granola transcripts", () => {
     const unavailable = await enableGranolaWebhook(owner, "https://orbit.test", { fetchImpl: missing.fetchImpl });
     assert.deepEqual(unavailable, { enabled: false, message: GRANOLA_WEBHOOK_UNAVAILABLE });
 
-    process.env.NEXT_PUBLIC_SITE_URL = "https://orbit.example.com/inbox";
+    process.env.SITE_URL = "https://orbit.example.com/inbox";
     const { fetchImpl, requests } = granola({ notes });
     const enabled = await enableGranolaWebhook(owner, "http://localhost:4173", { fetchImpl });
     assert.equal(enabled.enabled, true);
@@ -865,9 +865,9 @@ describe("teams transcripts", () => {
   it("creates, renews and recreates the transcript subscription", async () => {
     const { fetchImpl, requests } = graph(state);
     assert.deepEqual(await ensureTranscriptSubscription(owner, { fetchImpl }), { status: "skipped" });
-    process.env.NEXT_PUBLIC_SITE_URL = "http://orbit.example.com";
+    process.env.SITE_URL = "http://orbit.example.com";
     assert.deepEqual(await ensureTranscriptSubscription(owner, { fetchImpl }), { status: "skipped" });
-    process.env.NEXT_PUBLIC_SITE_URL = "https://orbit.example.com";
+    process.env.SITE_URL = "https://orbit.example.com";
     const created = await ensureTranscriptSubscription(owner, { fetchImpl });
     assert.equal(created.status, "created");
     const post = requests.find((request) => request.method === "POST" && request.url.endsWith("/subscriptions"))!;
@@ -913,7 +913,7 @@ describe("teams transcripts", () => {
     );
     assert.equal(await lifecycleValidation.text(), "xyz");
 
-    process.env.NEXT_PUBLIC_SITE_URL = "https://orbit.example.com";
+    process.env.SITE_URL = "https://orbit.example.com";
     const { fetchImpl, requests } = graph(state);
     await getAdminPool().query(
       "update crm.integration_state set subscription_id = null where workspace_id = $1 and source = 'teams_transcripts'",

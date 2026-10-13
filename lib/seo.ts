@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 
 export const SITE_NAME = "Orbit";
 export const SITE_URL =
-  process.env.NEXT_PUBLIC_SITE_URL ?? "https://example.com";
+  process.env.SITE_URL ?? process.env.NEXT_PUBLIC_SITE_URL ?? "https://example.com";
 export const SITE_DESCRIPTION =
   "A focused CRM for companies, relationships, and next actions.";
 export const DEFAULT_OG_IMAGE = "/opengraph-image.jpg";

@@ -124,7 +124,7 @@ const SUMMARY_ATTEMPTS = 3;
 export const SUMMARY_RESERVE_MS = 25_000;
 
 export function configuredSiteOrigin() {
-  const raw = process.env.NEXT_PUBLIC_SITE_URL?.trim();
+  const raw = (process.env.SITE_URL ?? process.env.NEXT_PUBLIC_SITE_URL)?.trim();
   if (!raw) return null;
   try {
     return new URL(raw).origin;

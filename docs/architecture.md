@@ -81,4 +81,4 @@ A company is quiet when its latest activity is older than 21 days, or it has nev
 
 ## What is left for you
 
-The hosted project is Orbit (`xuvofoydyewbloybrmas`) in `eu-west-1`. The app connects through the session pooler as `crm_app`, and webhook delivery uses `crm_admin`. Do not run `supabase/bootstrap/local-auth.sql` there. The Microsoft inbox starts once the Entra app credentials are in the environment. Automatic transcripts need `GRANOLA_API_KEY`, `CallTranscripts.Read.All`, `NEXT_PUBLIC_SITE_URL`, `CRON_SECRET`, and the Supabase `pg_cron` job in the README. Gmail and calendar sync are still separate.
+The hosted project is Orbit (`xuvofoydyewbloybrmas`) in `eu-west-1`. The app connects through the session pooler as `crm_app`, and webhook delivery uses `crm_admin`. Do not run `supabase/bootstrap/local-auth.sql` there. The Microsoft inbox starts once the Entra app credentials are in the environment. Automatic transcripts need `GRANOLA_API_KEY`, `CallTranscripts.Read.All`, `SITE_URL`, `CRON_SECRET`, and the Supabase `pg_cron` job in the README. Gmail and calendar sync are still separate.
