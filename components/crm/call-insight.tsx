@@ -10,7 +10,11 @@ import {
   summariseCallAction,
   type CallInsightActionState,
 } from "@/app/(crm)/call-insights";
-import type { CallActionItem, CallInsight } from "@/lib/crm/types";
+import {
+  CALL_INSIGHT_STALE_MS,
+  type CallActionItem,
+  type CallInsight,
+} from "@/lib/crm/types";
 
 function newest(server: CallInsight | null, local: CallInsight | null) {
   if (!local) return server;
@@ -54,6 +58,7 @@ export default function CallInsightPanel({
   const [error, setError] = useState<string | null>(null);
   const [transcriptOpen, setTranscriptOpen] = useState(false);
   const [transcript, setTranscript] = useState<string | null>(null);
+  const [loadedAt] = useState(() => Date.now());
   const insight = newest(initial, saved);
 
   async function run(key: string, action: () => Promise<CallInsightActionState>) {
@@ -158,19 +163,24 @@ export default function CallInsightPanel({
 
   const panelId = `call-transcript-panel-${insight.id}`;
   const retrying = pending === "summarise";
+  const stalled =
+    insight.status === "pending" &&
+    loadedAt - new Date(insight.updatedAt).getTime() > CALL_INSIGHT_STALE_MS;
   const shown = insight.actionItems.filter((item) => item.status !== "dismissed");
 
   return (
     <div className="border-line-strong flex flex-col gap-3 rounded-lg border px-3 py-2">
-      {(insight.status === "pending" || retrying) && (
+      {((insight.status === "pending" && !stalled) || retrying) && (
         <p className="caption-style text-subtle" role="status">
           Summarising…
         </p>
       )}
-      {insight.status === "failed" && !retrying && (
+      {(insight.status === "failed" || stalled) && !retrying && (
         <div className="flex flex-col gap-2">
           <p role="alert" className="caption-style text-danger">
-            {insight.error ?? "Could not summarise the call."}
+            {stalled
+              ? "The summary stopped before it finished."
+              : (insight.error ?? "Could not summarise the call.")}
           </p>
           <Button
             variant="secondary"

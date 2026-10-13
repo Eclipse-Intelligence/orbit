@@ -2,12 +2,13 @@
 
 import { useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import Button from "@/components/_ui/button";
+import Button, { buttonVariants } from "@/components/_ui/button";
 import { Input } from "@/components/_ui/input";
 import { addActivityAction, type RecordActionState } from "@/app/(crm)/records";
 import CallInsightPanel from "@/components/crm/call-insight";
 import ContactEmail from "@/components/crm/contact-email";
 import { formatDate } from "@/lib/companies";
+import { cn } from "@/lib/utils";
 import type { Activity, CallInsight } from "@/lib/crm/types";
 
 const KINDS = [
@@ -368,11 +369,27 @@ function ActivityItem({
         </p>
       )}
       <span className="caption-style text-subtle">{meta}</span>
-      {activity.type === "call" && (
+      {granolaUrl(activity) && (
+        <a
+          href={granolaUrl(activity)!}
+          target="_blank"
+          rel="noreferrer"
+          className={cn(buttonVariants({ variant: "link", size: "none" }), "caption-style self-start")}
+        >
+          Open in Granola
+        </a>
+      )}
+      {(activity.type === "call" || activity.type === "meeting") && (
         <CallInsightPanel activityId={activity.id} insight={insight} />
       )}
     </li>
   );
+}
+
+function granolaUrl(activity: Activity) {
+  const url = activity.metadata.externalUrl;
+  if (activity.metadata.source !== "granola" || typeof url !== "string") return null;
+  return /^https:\/\//.test(url) ? url : null;
 }
 
 function activityLabel(activity: Activity) {

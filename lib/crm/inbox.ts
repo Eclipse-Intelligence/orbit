@@ -80,7 +80,7 @@ export type StoredConnection = MailboxSummary & {
   accessTokenExpiresAt: string | null;
 };
 
-type PartyMatch = {
+export type PartyMatch = {
   contactId: string | null;
   contactName: string | null;
   companyId: string | null;
@@ -700,7 +700,7 @@ async function fileMessages(
   return counts;
 }
 
-async function matchParties(
+export async function matchParties(
   db: Db,
   workspaceId: string,
   emails: string[],

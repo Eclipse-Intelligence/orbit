@@ -393,7 +393,7 @@ describe("call insights", () => {
     const { fetchImpl, requests } = gateway([{ content: JSON.stringify(GOOD) }]);
     await assert.rejects(
       summariseCall(owner, note.body.activity.id, "Me: hi", { fetchImpl }),
-      /Only calls can be summarised/,
+      /Only calls and meetings can be summarised/,
     );
     await assert.rejects(summariseCall(owner, "not-a-uuid", "Me: hi", { fetchImpl }), /Call not found/);
     assert.equal(requests.length, 0);

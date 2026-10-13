@@ -5,8 +5,11 @@ import CrmChrome from "@/components/crm/chrome";
 import { getUserActor } from "@/lib/auth/user";
 import { syncCalls } from "@/lib/crm/calls";
 import { countCompanies } from "@/lib/crm/companies";
+import { syncGranola } from "@/lib/crm/granola";
 import { listAttention } from "@/lib/crm/relationships";
 import { countOpenTasks } from "@/lib/crm/tasks";
+import { syncTeamsTranscripts } from "@/lib/crm/teams-transcripts";
+import { granolaApiKey } from "@/lib/granola";
 import { microsoftConfigured } from "@/lib/microsoft/oauth";
 
 export const dynamic = "force-dynamic";
@@ -21,6 +24,22 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
         if (result.ran && result.error) console.error("Teams call sync failed", result.error);
       } catch (error) {
         console.error("Teams call sync failed", error);
+      }
+      try {
+        const result = await syncTeamsTranscripts(user);
+        if (result.ran && result.error) console.error("Teams transcript sync failed", result.error);
+      } catch (error) {
+        console.error("Teams transcript sync failed", error);
+      }
+    });
+  }
+  if (granolaApiKey()) {
+    after(async () => {
+      try {
+        const result = await syncGranola();
+        if (result.ran && result.error) console.error("Granola sync failed", result.error);
+      } catch (error) {
+        console.error("Granola sync failed", error);
       }
     });
   }

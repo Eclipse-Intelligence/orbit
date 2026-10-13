@@ -530,19 +530,21 @@ export async function listContacts(actor: Actor, query: ContactListQuery = {}) {
 
 export async function findContactsToLink(
   actor: Actor,
-  companyId: string,
+  companyId: string | null,
   query = "",
   limit = 8,
 ) {
   assertScope(actor.scopes, "crm:read");
-  if (!isUuid(companyId)) throw new CrmError("not_found", "Company not found.", 404);
+  if (companyId !== null && !isUuid(companyId)) {
+    throw new CrmError("not_found", "Company not found.", 404);
+  }
   return withActor(actor, async (db) => {
-    const values: unknown[] = [actor.workspaceId, companyId];
-    const where = [
-      "c.workspace_id = $1",
-      "c.archived_at is null",
-      "c.company_id is distinct from $2",
-    ];
+    const values: unknown[] = [actor.workspaceId];
+    const where = ["c.workspace_id = $1", "c.archived_at is null"];
+    if (companyId) {
+      values.push(companyId);
+      where.push(`c.company_id is distinct from $${values.length}`);
+    }
     const text = query.trim();
     if (text) {
       values.push(likePattern(text.slice(0, 200)));
