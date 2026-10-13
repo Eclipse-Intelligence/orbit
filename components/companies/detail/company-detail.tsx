@@ -1,6 +1,12 @@
 "use client";
 
-import { useActionState, useEffect, useRef, useState } from "react";
+import {
+  useActionState,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { ScrollArea } from "@/components/_ui/scroll-area";
@@ -76,6 +82,10 @@ export default function CompanyDetail({
     (context?.company.id === detailId ? context.company : undefined);
 
   const openedFromStore = useRef(false);
+  const leave = useCallback(() => {
+    openedFromStore.current = false;
+    closeDetail();
+  }, [closeDetail]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -129,6 +139,7 @@ export default function CompanyDetail({
             activitiesByContact={activitiesByContact}
             onSaved={onSaved}
             onArchived={onArchived}
+            onNavigate={leave}
           />
         )}
       </SheetContent>
@@ -144,6 +155,7 @@ function CompanyEditor({
   activitiesByContact,
   onSaved,
   onArchived,
+  onNavigate,
 }: {
   company: Company;
   members: Member[];
@@ -152,6 +164,7 @@ function CompanyEditor({
   activitiesByContact: Record<string, Activity[]>;
   onSaved: (company: Company) => void;
   onArchived: (id: string) => void;
+  onNavigate: () => void;
 }) {
   const router = useRouter();
   const closeDetail = useCompaniesStore((state) => state.closeDetail);
@@ -235,6 +248,7 @@ function CompanyEditor({
           context={context}
           mailboxConnected={mailboxConnected}
           activitiesByContact={activitiesByContact}
+          onNavigate={onNavigate}
         />
       </ScrollArea>
 

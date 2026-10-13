@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getUserActor } from "@/lib/auth/user";
+import { syncCalls } from "@/lib/crm/calls";
 import {
   disconnectMailbox,
   sendContactEmail,
@@ -21,6 +22,18 @@ export async function syncInboxAction() {
   const result = await syncMailbox(user);
   revalidatePath("/inbox");
   revalidatePath("/");
+  if (result.error)
+    redirect(`/inbox?error=${encodeURIComponent(result.error)}`);
+  redirect("/inbox");
+}
+
+export async function syncCallsAction() {
+  const user = await requireUser();
+  const result = await syncCalls(user, { force: true });
+  revalidatePath("/inbox");
+  revalidatePath("/");
+  revalidatePath("/activities");
+  revalidatePath("/contacts");
   if (result.error)
     redirect(`/inbox?error=${encodeURIComponent(result.error)}`);
   redirect("/inbox");

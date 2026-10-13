@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
+import { teamsCallUrl } from "@/lib/phone";
 import { cn } from "@/lib/utils";
+import PhoneIcon from "@/public/assets/images/_common/phone.svg";
 
 export const recordSelectClass =
   "flex h-9 w-full rounded-lg border border-line-strong bg-secondary px-3 text-[14px] leading-none text-foreground outline-none";
@@ -83,5 +85,29 @@ export function RecordRow({
       )}
       {action}
     </li>
+  );
+}
+
+export function CallLink({
+  phone,
+  className,
+}: {
+  phone: string | null | undefined;
+  className?: string;
+}) {
+  const href = teamsCallUrl(phone);
+  if (!href) return null;
+  return (
+    <a
+      href={href}
+      title="Call in Teams"
+      aria-label="Call in Teams"
+      className={cn(
+        "text-subtle hover:text-foreground inline-flex size-6 shrink-0 items-center justify-center rounded-full transition-colors duration-150 hover:bg-white/6",
+        className,
+      )}
+    >
+      <PhoneIcon aria-hidden className="size-3.5" />
+    </a>
   );
 }

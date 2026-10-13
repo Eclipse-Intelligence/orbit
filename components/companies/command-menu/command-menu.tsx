@@ -153,11 +153,7 @@ export default function CommandMenu() {
                 <CommandItem
                   key={contact.id}
                   value={contact.id}
-                  onSelect={() =>
-                    run(() =>
-                      router.push(`/contacts?q=${encodeURIComponent(contact.email || contact.name)}`),
-                    )
-                  }
+                  onSelect={() => run(() => router.push(`/contacts?contact=${contact.id}`))}
                 >
                   <span className="flex min-w-0 flex-col">
                     <span className="truncate">{contact.name}</span>
