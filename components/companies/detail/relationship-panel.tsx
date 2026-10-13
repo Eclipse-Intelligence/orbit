@@ -10,7 +10,7 @@ import {
   addCompanyTaskAction,
 } from "@/app/(crm)/records";
 import DetailSection from "@/components/companies/detail/detail-section";
-import ContactActivities from "@/components/crm/contact-activities";
+import CompanyContacts from "@/components/companies/detail/company-contacts";
 import { ConnectionMark } from "@/components/beautifui/record-marks";
 import {
   formatDate,
@@ -36,11 +36,13 @@ export default function RelationshipPanel({
   context,
   mailboxConnected,
   activitiesByContact,
+  onNavigate,
 }: {
   companyId: string;
   context: CompanyContext | null;
   mailboxConnected: boolean;
   activitiesByContact: Record<string, Activity[]>;
+  onNavigate?: () => void;
 }) {
   const router = useRouter();
   const [note, setNote] = useState("");
@@ -177,33 +179,13 @@ export default function RelationshipPanel({
         </div>
       </DetailSection>
 
-      <DetailSection title="People">
-        {context.contacts.length === 0 ? (
-          <p className="caption-style text-subtle">
-            No contacts on this company.
-          </p>
-        ) : (
-          <ul className="flex flex-col gap-3">
-            {context.contacts.map((contact) => (
-              <li key={contact.id} className="flex flex-col gap-1">
-                <span className="text-[14px] leading-5">{contact.name}</span>
-                <span className="caption-style text-subtle">
-                  {[contact.jobTitle, contact.email]
-                    .filter(Boolean)
-                    .join(" · ") || "No email"}
-                </span>
-                <ContactActivities
-                  contactId={contact.id}
-                  email={contact.email}
-                  mailboxConnected={mailboxConnected}
-                  profileNote={contact.notes}
-                  activities={activitiesByContact[contact.id] ?? []}
-                />
-              </li>
-            ))}
-          </ul>
-        )}
-      </DetailSection>
+      <CompanyContacts
+        companyId={companyId}
+        contacts={context.contacts}
+        mailboxConnected={mailboxConnected}
+        activitiesByContact={activitiesByContact}
+        onNavigate={onNavigate}
+      />
 
       <DetailSection title="Opportunities">
         {context.opportunities.length === 0 ? (

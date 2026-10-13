@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import Button from "@/components/_ui/button";
 import { EntityChip } from "@/components/beautifui/record-marks";
 import { relativeWhen } from "@/lib/companies";
@@ -21,9 +22,7 @@ export default function ActionTask({
   const [open, setOpen] = useState(false);
   const overdue =
     Boolean(task.dueAt) && !task.completedAt && new Date(task.dueAt ?? 0).getTime() < now;
-  const details = [task.description, task.contactName, task.opportunityName].filter(
-    (item): item is string => Boolean(item),
-  );
+  const hasDetail = Boolean(task.description || task.contactName || task.opportunityName);
 
   return (
     <li className="border-border overflow-hidden border-b">
@@ -94,11 +93,23 @@ export default function ActionTask({
       >
         <div className="overflow-hidden">
           <div className="text-subtle flex flex-col gap-1 px-11 pt-0.5 pb-3 text-[13px]">
-            {details.length > 0 ? (
-              details.map((detail) => <p key={detail}>{detail}</p>)
-            ) : (
-              <p>No extra detail.</p>
+            {task.description && <p>{task.description}</p>}
+            {task.contactName && (
+              <p>
+                {task.contactId ? (
+                  <Link
+                    href={`/contacts?contact=${task.contactId}`}
+                    className="hover:text-foreground underline-offset-2 hover:underline"
+                  >
+                    {task.contactName}
+                  </Link>
+                ) : (
+                  task.contactName
+                )}
+              </p>
             )}
+            {task.opportunityName && <p>{task.opportunityName}</p>}
+            {!hasDetail && <p>No extra detail.</p>}
             {task.priority !== "normal" && <p>Priority {task.priority}</p>}
           </div>
         </div>

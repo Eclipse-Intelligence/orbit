@@ -528,6 +528,42 @@ export async function listContacts(actor: Actor, query: ContactListQuery = {}) {
   });
 }
 
+export async function findContactsToLink(
+  actor: Actor,
+  companyId: string,
+  query = "",
+  limit = 8,
+) {
+  assertScope(actor.scopes, "crm:read");
+  if (!isUuid(companyId)) throw new CrmError("not_found", "Company not found.", 404);
+  return withActor(actor, async (db) => {
+    const values: unknown[] = [actor.workspaceId, companyId];
+    const where = [
+      "c.workspace_id = $1",
+      "c.archived_at is null",
+      "c.company_id is distinct from $2",
+    ];
+    const text = query.trim();
+    if (text) {
+      values.push(likePattern(text.slice(0, 200)));
+      const ref = `$${values.length}`;
+      where.push(`(
+        (coalesce(c.first_name, '') || ' ' || coalesce(c.last_name, '')) ilike ${ref} escape '\\'
+        or coalesce(c.email, '') ilike ${ref} escape '\\'
+      )`);
+    }
+    values.push(Math.min(Math.max(Math.trunc(limit) || 8, 1), 20));
+    const rows = await db.query<ContactRow>(
+      `${CONTACT_SQL}
+       where ${where.join(" and ")}
+       order by c.updated_at desc, c.id asc
+       limit $${values.length}`,
+      values,
+    );
+    return rows.rows.map(mapContact);
+  });
+}
+
 export async function getContact(actor: Actor, id: string) {
   assertScope(actor.scopes, "crm:read");
   if (!isUuid(id)) throw new CrmError("not_found", "Contact not found.", 404);

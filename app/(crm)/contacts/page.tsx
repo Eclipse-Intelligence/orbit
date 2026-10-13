@@ -4,7 +4,8 @@ import { PAGE_SIZE, pageFromParams, pageOffset } from "@/components/crm/paging";
 import { getUserActor } from "@/lib/auth/user";
 import { listCompanies, listMembers } from "@/lib/crm/companies";
 import { listActivitiesByContact } from "@/lib/crm/activities";
-import { listContacts } from "@/lib/crm/contacts";
+import { getContact, listContacts } from "@/lib/crm/contacts";
+import { CrmError } from "@/lib/crm/errors";
 import { getMailbox } from "@/lib/crm/inbox";
 import { contactQueryFromSearchParams } from "@/lib/crm/validation";
 
@@ -26,16 +27,23 @@ export default async function ContactsPage({
   const page = pageFromParams(params);
   filters.limit = PAGE_SIZE;
   filters.offset = pageOffset(page);
-  const [listed, companies, members, mailbox] = await Promise.all([
+  const contactId = params.get("contact");
+  const [listed, companies, members, mailbox, linked] = await Promise.all([
     listContacts(user, filters),
     listCompanies(user, { limit: 100, sort: "name", order: "asc" }),
     listMembers(user),
     getMailbox(user),
+    contactId
+      ? getContact(user, contactId).catch((error: unknown) => {
+          if (error instanceof CrmError && error.code === "not_found")
+            return null;
+          throw error;
+        })
+      : Promise.resolve(null),
   ]);
-  const activitiesByContact = await listActivitiesByContact(
-    user,
-    listed.data.map((contact) => contact.id),
-  );
+  const contactIds = listed.data.map((contact) => contact.id);
+  if (linked && !contactIds.includes(linked.id)) contactIds.push(linked.id);
+  const activitiesByContact = await listActivitiesByContact(user, contactIds);
 
   return (
     <ContactsScreen
@@ -47,6 +55,7 @@ export default async function ContactsPage({
         workspaceName: user.workspaceName,
       }}
       contacts={listed.data}
+      linkedContact={linked}
       total={listed.total}
       page={page}
       query={filters.query ?? ""}

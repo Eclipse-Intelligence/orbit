@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { connectionStrength, formatWhen, relativeWhen } from "@/lib/companies";
+import { teamsCallUrl } from "@/lib/phone";
 import { appTimeZone, dateTimeInputValue, dayWindow, startOfDay, toIsoInstant } from "@/lib/time";
 
 const now = Date.parse("2026-10-05T12:00:00Z");
@@ -66,5 +67,15 @@ describe("configured time zone", () => {
     const lateEvening = dayWindow(new Date("2026-07-02T05:00:00Z"), "America/Los_Angeles");
     assert.equal(lateEvening.start.toISOString(), "2026-07-01T07:00:00.000Z");
     assert.equal(startOfDay(new Date("2026-07-02T05:00:00Z"), "UTC").toISOString(), "2026-07-02T00:00:00.000Z");
+  });
+});
+
+describe("call links", () => {
+  it("builds a Teams call link only for a usable number", () => {
+    assert.equal(teamsCallUrl("07700 900123"), "msteams:/l/call/0/0?users=4:%2B447700900123");
+    assert.equal(teamsCallUrl("+1 (555) 010-0100"), "msteams:/l/call/0/0?users=4:%2B15550100100");
+    assert.equal(teamsCallUrl("ext 12"), null);
+    assert.equal(teamsCallUrl(""), null);
+    assert.equal(teamsCallUrl(null), null);
   });
 });

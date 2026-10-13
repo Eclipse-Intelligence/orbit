@@ -2,7 +2,7 @@
 
 import { getUserActor } from "@/lib/auth/user";
 import { listCompanies } from "@/lib/crm/companies";
-import { listContacts } from "@/lib/crm/contacts";
+import { findContactsToLink, listContacts } from "@/lib/crm/contacts";
 import { listOpportunities } from "@/lib/crm/opportunities";
 
 export async function searchWorkspaceAction(query: string) {
@@ -18,4 +18,10 @@ export async function searchWorkspaceAction(query: string) {
     contacts: contacts.data,
     opportunities: opportunities.data,
   };
+}
+
+export async function searchContactsToLinkAction(companyId: string, query: string) {
+  const user = await getUserActor();
+  if (!user) return { contacts: [] };
+  return { contacts: await findContactsToLink(user, companyId, query, 8) };
 }

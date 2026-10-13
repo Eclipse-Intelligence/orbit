@@ -2,6 +2,7 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import InboxScreen from "@/components/crm/inbox-screen";
 import { getUserActor } from "@/lib/auth/user";
+import { getCallSync } from "@/lib/crm/calls";
 import { getMailbox, listInbox, shouldSyncMailbox, syncMailbox } from "@/lib/crm/inbox";
 import { microsoftConfigured, microsoftRedirectUri } from "@/lib/microsoft/oauth";
 
@@ -28,7 +29,9 @@ export default async function InboxPage({
     await syncMailbox(user);
     mailbox = await getMailbox(user);
   }
-  const messages = mailbox ? await listInbox(user) : [];
+  const [messages, calls] = mailbox
+    ? await Promise.all([listInbox(user), getCallSync(user)])
+    : [[], null];
   const headerStore = await headers();
   const host = headerStore.get("x-forwarded-host") ?? headerStore.get("host") ?? "localhost:4173";
   const proto = headerStore.get("x-forwarded-proto") ?? "http";
@@ -46,6 +49,7 @@ export default async function InboxPage({
       redirectUri={microsoftRedirectUri(`${proto}://${host}`)}
       mailbox={mailbox}
       messages={messages}
+      calls={calls}
       notice={notice}
       connected={connected}
     />

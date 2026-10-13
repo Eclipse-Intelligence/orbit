@@ -5,12 +5,13 @@ import { redirect } from "next/navigation";
 import { getUserActor } from "@/lib/auth/user";
 import { createActivity } from "@/lib/crm/activities";
 import { actionError } from "@/lib/companies";
-import { createContact, updateContact } from "@/lib/crm/contacts";
+import { createContact, getContact, updateContact } from "@/lib/crm/contacts";
 import { createOpportunity, updateOpportunity } from "@/lib/crm/opportunities";
 import { completeTask, createTask, updateTask } from "@/lib/crm/tasks";
 import type {
   Activity,
   ActivityType,
+  Contact,
   OpportunityStatus,
   TaskPriority,
 } from "@/lib/crm/types";
@@ -280,6 +281,80 @@ export async function addCompanyTaskAction(
     );
     refresh();
     return { ok: true };
+  } catch (error) {
+    return actionError(error);
+  }
+}
+
+export async function linkCompanyContactAction(
+  companyId: string,
+  contactId: string,
+): Promise<RecordActionState> {
+  const user = await requireUser();
+  try {
+    await updateContact(
+      user,
+      contactId,
+      { companyId },
+      { provenance: { operation: "link_contact", source: "web" } },
+    );
+    refresh();
+    return { ok: true };
+  } catch (error) {
+    return actionError(error);
+  }
+}
+
+export async function unlinkCompanyContactAction(
+  companyId: string,
+  contactId: string,
+): Promise<RecordActionState> {
+  const user = await requireUser();
+  try {
+    const contact = await getContact(user, contactId);
+    if (contact.companyId !== companyId) {
+      refresh();
+      return { ok: true };
+    }
+    await updateContact(
+      user,
+      contactId,
+      { companyId: null },
+      { provenance: { operation: "unlink_contact", source: "web" } },
+    );
+    refresh();
+    return { ok: true };
+  } catch (error) {
+    return actionError(error);
+  }
+}
+
+export async function createCompanyContactAction(
+  companyId: string,
+  input: {
+    firstName: string;
+    lastName: string;
+    email: string;
+    phone: string;
+    jobTitle: string;
+  },
+): Promise<RecordActionState & { contact?: Contact }> {
+  const user = await requireUser();
+  try {
+    const created = await createContact(
+      user,
+      {
+        companyId,
+        firstName: input.firstName.trim() || null,
+        lastName: input.lastName.trim() || null,
+        email: input.email.trim() || null,
+        phone: input.phone.trim() || null,
+        jobTitle: input.jobTitle.trim() || null,
+      },
+      { provenance: { operation: "create_contact", source: "web" } },
+    );
+    refresh();
+    return { ok: true, contact: created.body.contact };
   } catch (error) {
     return actionError(error);
   }

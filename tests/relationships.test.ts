@@ -7,6 +7,7 @@ import { connectionStrength } from "@/lib/companies";
 import { createCompany, listCompanies } from "@/lib/crm/companies";
 import {
   createContact,
+  findContactsToLink,
   getContact,
   listContacts,
   updateContact,
@@ -17,7 +18,7 @@ import { CrmError } from "@/lib/crm/errors";
 import { ingestLead } from "@/lib/crm/leads";
 import { createOpportunity, updateOpportunity } from "@/lib/crm/opportunities";
 import { findStaleRelationships, getCompanyContext, getDueActions } from "@/lib/crm/relationships";
-import { archiveTask, completeTask, createTask } from "@/lib/crm/tasks";
+import { archiveTask, completeTask, createTask, getTask } from "@/lib/crm/tasks";
 import { createAgent, createUser, queryAsUser, resetDatabase } from "./helpers";
 
 before(async () => {
@@ -189,6 +190,99 @@ describe("contacts, opportunities, and next actions", () => {
     assert.equal(lead.body.contact?.id, contact.body.contact.id);
     assert.equal(lead.body.contact?.jobTitle, "CTO");
     assert.equal(lead.body.contact?.companyId, second.body.company.id);
+  });
+
+  it("links, moves, and unlinks contacts from a company without deleting them", async () => {
+    const owner = await createUser("link-people@example.com", "Linker");
+    const other = await createUser("link-other@example.com", "Other");
+    const home = await createCompany(owner, { name: "Link Home", domain: "link-home.example" });
+    const away = await createCompany(owner, { name: "Link Away", domain: "link-away.example" });
+    const homeId = home.body.company.id;
+    const resident = await createContact(owner, {
+      companyId: homeId,
+      firstName: "Rita",
+      lastName: "Resident",
+      email: "rita@link-home.example",
+    });
+    const visitor = await createContact(owner, {
+      companyId: away.body.company.id,
+      firstName: "Vic",
+      lastName: "Visitor",
+      email: "vic@link-away.example",
+      phone: "07700 900123",
+    });
+    const loose = await createContact(owner, { firstName: "Lou", lastName: "Loose" });
+    await createContact(other, { firstName: "Vic", lastName: "Stranger" });
+
+    const all = await findContactsToLink(owner, homeId);
+    const ids = all.map((item) => item.id);
+    assert.equal(ids.includes(resident.body.contact.id), false);
+    assert.equal(ids.includes(visitor.body.contact.id), true);
+    assert.equal(ids.includes(loose.body.contact.id), true);
+    assert.equal(all.length, 2);
+
+    const byName = await findContactsToLink(owner, homeId, "vic vis");
+    assert.deepEqual(byName.map((item) => item.id), [visitor.body.contact.id]);
+    assert.equal(byName[0].companyName, "Link Away");
+    const byEmail = await findContactsToLink(owner, homeId, "VIC@link-away");
+    assert.deepEqual(byEmail.map((item) => item.id), [visitor.body.contact.id]);
+    assert.deepEqual(await findContactsToLink(owner, homeId, "rita"), []);
+
+    const task = await createTask(owner, {
+      title: "Call Vic",
+      companyId: away.body.company.id,
+      contactId: visitor.body.contact.id,
+    });
+    const deal = await createOpportunity(owner, {
+      companyId: away.body.company.id,
+      primaryContactId: visitor.body.contact.id,
+      name: "Vic deal",
+    });
+
+    const moved = await updateContact(owner, visitor.body.contact.id, { companyId: homeId });
+    assert.equal(moved.body.contact.companyName, "Link Home");
+    const context = await getCompanyContext(owner, homeId);
+    assert.deepEqual(
+      context.contacts.map((item) => item.id).sort(),
+      [resident.body.contact.id, visitor.body.contact.id].sort(),
+    );
+    assert.equal(
+      (await findContactsToLink(owner, homeId)).some((item) => item.id === visitor.body.contact.id),
+      false,
+    );
+
+    const unlinked = await updateContact(owner, visitor.body.contact.id, { companyId: null });
+    assert.equal(unlinked.body.contact.companyId, null);
+    assert.equal(unlinked.body.contact.phone, "07700 900123");
+    const kept = await getContact(owner, visitor.body.contact.id);
+    assert.equal(kept.archivedAt, null);
+    assert.equal((await getCompanyContext(owner, homeId)).contacts.length, 1);
+    const keptTask = await getTask(owner, task.body.task.id);
+    assert.equal(keptTask.contactId, visitor.body.contact.id);
+    assert.equal(keptTask.companyId, away.body.company.id);
+    const won = await updateOpportunity(owner, deal.body.opportunity.id, { status: "won" });
+    assert.equal(won.body.opportunity.primaryContactId, visitor.body.contact.id);
+
+    const created = await createContact(owner, {
+      companyId: homeId,
+      firstName: "Nia",
+      lastName: "New",
+      phone: "+44 20 7946 0000",
+      jobTitle: "Buyer",
+    });
+    assert.equal(created.body.contact.companyName, "Link Home");
+
+    await assert.rejects(
+      () => updateContact(other, resident.body.contact.id, { companyId: null }),
+      (error: unknown) => error instanceof CrmError && error.code === "not_found",
+    );
+    const theirs = await createCompany(other, { name: "Theirs", domain: "theirs-link.example" });
+    await assert.rejects(
+      () => updateContact(owner, loose.body.contact.id, { companyId: theirs.body.company.id }),
+      (error: unknown) => error instanceof CrmError,
+    );
+    const foreign = await findContactsToLink(other, homeId, "vic");
+    assert.deepEqual(foreign.map((item) => item.lastName), ["Stranger"]);
   });
 
   it("ingests a lead once per company and contact, including context and stale relationships", async () => {

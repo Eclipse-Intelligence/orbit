@@ -4,9 +4,11 @@ import SectionHeader from "@/components/crm/section-header";
 import type { Viewer } from "@/components/crm/viewer";
 import {
   disconnectInboxAction,
+  syncCallsAction,
   syncInboxAction,
 } from "@/app/(crm)/inbox/actions";
 import { formatWhen } from "@/lib/companies";
+import type { CallSyncSummary } from "@/lib/crm/calls";
 import type { InboxMessage, MailboxSummary } from "@/lib/crm/inbox";
 
 export default function InboxScreen({
@@ -15,6 +17,7 @@ export default function InboxScreen({
   redirectUri,
   mailbox,
   messages,
+  calls,
   notice,
   connected,
 }: {
@@ -23,6 +26,7 @@ export default function InboxScreen({
   redirectUri: string;
   mailbox: MailboxSummary | null;
   messages: InboxMessage[];
+  calls: CallSyncSummary | null;
   notice: string | null;
   connected: boolean;
 }) {
@@ -76,8 +80,10 @@ export default function InboxScreen({
             <h2>Microsoft app</h2>
             <p className="caption-style text-subtle">
               Register an app in Microsoft Entra with delegated Mail.Read,
-              Mail.Send, User.Read, and offline_access. Put the client id and
-              secret in the server environment, then restart Orbit.
+              Mail.Send, User.Read, and offline_access. To log Teams calls, also
+              add the CallRecords.Read.All application permission with admin
+              consent. Put the client id and secret in the server environment,
+              then restart Orbit.
             </p>
             <p className="caption-style text-subtle">
               Redirect URI to register: {redirectUri}
@@ -98,6 +104,32 @@ export default function InboxScreen({
               ? ` · Last synced ${formatWhen(mailbox.lastSyncedAt)}`
               : " · Not synced yet"}
           </p>
+        )}
+        {live && configured && (
+          <div className="border-border flex max-w-[640px] items-center gap-3 rounded-xl border p-3">
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="text-[14px] leading-5">Teams calls</span>
+              <span className="caption-style text-subtle">
+                {calls?.lastSyncedAt
+                  ? `Last synced ${formatWhen(calls.lastSyncedAt)}`
+                  : "Not synced yet"}
+                {` · ${calls?.logged ?? 0} ${calls?.logged === 1 ? "call" : "calls"} logged`}
+                {calls?.unmatched
+                  ? ` · ${calls.unmatched} with no matching contact`
+                  : ""}
+              </span>
+              {calls?.lastError && (
+                <span className="caption-style text-danger" role="alert">
+                  {calls.lastError}
+                </span>
+              )}
+            </span>
+            <form action={syncCallsAction}>
+              <Button variant="secondary" size="sm" type="submit">
+                Sync calls
+              </Button>
+            </form>
+          </div>
         )}
       </div>
       {messages.length === 0 ? (

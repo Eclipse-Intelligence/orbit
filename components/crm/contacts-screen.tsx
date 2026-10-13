@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Input } from "@/components/_ui/input";
 import {
@@ -17,6 +18,7 @@ import Pager from "@/components/crm/pager";
 import RecordTransfer from "@/components/crm/record-transfer";
 import SectionHeader from "@/components/crm/section-header";
 import {
+  CallLink,
   RecordList,
   RecordRow,
   RecordSelect,
@@ -28,6 +30,7 @@ import type { Activity, Company, Contact, Member } from "@/lib/crm/types";
 export default function ContactsScreen({
   viewer,
   contacts,
+  linkedContact,
   total,
   page,
   query,
@@ -38,6 +41,7 @@ export default function ContactsScreen({
 }: {
   viewer: Viewer;
   contacts: Contact[];
+  linkedContact: Contact | null;
   total: number;
   page: number;
   query: string;
@@ -46,10 +50,27 @@ export default function ContactsScreen({
   mailboxConnected: boolean;
   activitiesByContact: Record<string, Activity[]>;
 }) {
-  const [open, setOpen] = useState(false);
-  const [editing, setEditing] = useState<Contact | null>(null);
+  const router = useRouter();
+  const [open, setOpen] = useState(Boolean(linkedContact));
+  const [editing, setEditing] = useState<Contact | null>(linkedContact);
   const [session, setSession] = useState(0);
-  const close = useCallback(() => setOpen(false), []);
+  const [linkedId, setLinkedId] = useState(linkedContact?.id ?? null);
+  if ((linkedContact?.id ?? null) !== linkedId) {
+    setLinkedId(linkedContact?.id ?? null);
+    if (linkedContact) {
+      setEditing(linkedContact);
+      setSession((current) => current + 1);
+      setOpen(true);
+    }
+  }
+  const close = useCallback(() => {
+    setOpen(false);
+    const params = new URLSearchParams(window.location.search);
+    if (!params.has("contact")) return;
+    params.delete("contact");
+    const next = params.toString();
+    router.replace(next ? `/contacts?${next}` : "/contacts", { scroll: false });
+  }, [router]);
 
   function edit(contact: Contact | null) {
     setEditing(contact);
@@ -100,17 +121,21 @@ export default function ContactsScreen({
             mark={<Monogram name={contact.name} />}
             title={contact.name}
             meta={
-              [contact.jobTitle, contact.email].filter(Boolean).join(" · ") ||
-              "No title"
+              [contact.jobTitle, contact.email, contact.phone]
+                .filter(Boolean)
+                .join(" · ") || "No title"
             }
             onClick={() => edit(contact)}
             action={
-              contact.companyName && contact.companyId ? (
-                <EntityChip
-                  name={contact.companyName}
-                  href={`/?record=${contact.companyId}`}
-                />
-              ) : null
+              <>
+                <CallLink phone={contact.phone} />
+                {contact.companyName && contact.companyId ? (
+                  <EntityChip
+                    name={contact.companyName}
+                    href={`/?record=${contact.companyId}`}
+                  />
+                ) : null}
+              </>
             }
           />
         ))}
@@ -121,7 +146,10 @@ export default function ContactsScreen({
         total={total}
         noun={["person", "people"]}
       />
-      <Sheet open={open} onOpenChange={setOpen}>
+      <Sheet
+        open={open}
+        onOpenChange={(next) => (next ? setOpen(true) : close())}
+      >
         <SheetContent side="right" className="sm:w-[480px] sm:max-w-[480px]">
           <SheetHeader>
             <SheetTitle>{editing ? "Edit contact" : "New contact"}</SheetTitle>
@@ -163,6 +191,7 @@ function ContactEditor({
     saveContactAction,
     {} as RecordActionState,
   );
+  const [phone, setPhone] = useState(editing?.phone ?? "");
   useEffect(() => {
     if (state.ok) onClose();
   }, [state, onClose]);
@@ -216,12 +245,20 @@ function ContactEditor({
             label="Title"
             defaultValue={editing?.jobTitle ?? ""}
           />
-          <Field
-            id="contact-phone"
-            name="phone"
-            label="Phone"
-            defaultValue={editing?.phone ?? ""}
-          />
+          <div className="flex flex-col gap-2">
+            <label className="caption-style text-subtle" htmlFor="contact-phone">
+              Phone
+            </label>
+            <div className="flex items-center gap-2">
+              <Input
+                id="contact-phone"
+                name="phone"
+                value={phone}
+                onChange={(event) => setPhone(event.target.value)}
+              />
+              <CallLink phone={phone} className="size-9" />
+            </div>
+          </div>
           <Field
             id="contact-linkedin"
             name="linkedinUrl"

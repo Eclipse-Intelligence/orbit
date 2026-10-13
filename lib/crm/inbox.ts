@@ -74,7 +74,7 @@ export type SyncCounts = {
   error?: string;
 };
 
-type StoredConnection = MailboxSummary & {
+export type StoredConnection = MailboxSummary & {
   refreshTokenCipher: string | null;
   accessTokenCipher: string | null;
   accessTokenExpiresAt: string | null;
@@ -809,7 +809,7 @@ function addresses(recipients: GraphInboxMessage["toRecipients"]) {
     .filter(Boolean);
 }
 
-function readSecret(value: string | null) {
+export function readSecret(value: string | null) {
   if (!value) return null;
   try {
     return decryptSecret(value);
@@ -818,7 +818,7 @@ function readSecret(value: string | null) {
   }
 }
 
-async function currentToken(
+export async function currentToken(
   stored: StoredConnection,
   fetchImpl: typeof fetch,
 ): Promise<MicrosoftToken> {
@@ -838,7 +838,7 @@ async function currentToken(
   return refreshMicrosoftToken(refreshToken, fetchImpl);
 }
 
-async function storeToken(db: Db, connectionId: string, token: MicrosoftToken) {
+export async function storeToken(db: Db, connectionId: string, token: MicrosoftToken) {
   await db.query(
     `update crm.mailbox_connections
      set refresh_token = $2, access_token = $3, access_token_expires_at = $4
@@ -858,7 +858,7 @@ async function readSummary(db: Db, actor: UserActor) {
   return summary(stored);
 }
 
-async function readStored(
+export async function readStored(
   db: Db,
   actor: UserActor,
 ): Promise<StoredConnection | null> {
