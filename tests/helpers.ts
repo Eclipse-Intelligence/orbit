@@ -23,6 +23,12 @@ export async function resetDatabase() {
   for (const file of migrations) {
     await admin.query(readFileSync(`supabase/migrations/${file}`, "utf8"));
   }
+  const password = decodeURIComponent(new URL(process.env.DATABASE_URL!).password);
+  const statement = await admin.query<{ sql: string }>(
+    "select format('alter role crm_app password %L', $1::text) as sql",
+    [password],
+  );
+  await admin.query(statement.rows[0].sql);
 }
 
 export async function createUser(email: string, name = "Test User") {

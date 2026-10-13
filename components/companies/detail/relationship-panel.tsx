@@ -160,6 +160,9 @@ export default function RelationshipPanel({
             aria-label="Due date"
             value={dueAt}
             onChange={(event) => setDueAt(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") event.preventDefault();
+            }}
           />
           <Button
             variant="secondary"

@@ -17,13 +17,37 @@ const NAME_SUFFIXES = new Set([
   "llp",
 ]);
 
-export function normalizeCompanyName(name: string) {
-  const stripped = name
+const SHARED_HOSTS = [
+  "linkedin.com",
+  "facebook.com",
+  "instagram.com",
+  "twitter.com",
+  "x.com",
+  "github.com",
+  "medium.com",
+  "sites.google.com",
+  "notion.site",
+  "wixsite.com",
+  "squarespace.com",
+  "youtube.com",
+];
+
+function foldText(value: string) {
+  return value
     .toLowerCase()
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
+    .normalize("NFC");
+}
+
+export function isSharedHost(host: string) {
+  return SHARED_HOSTS.some((shared) => host === shared || host.endsWith(`.${shared}`));
+}
+
+export function normalizeCompanyName(name: string) {
+  const stripped = foldText(name)
     .replace(/&/g, " and ")
-    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/[^\p{L}\p{M}\p{N}+#]+/gu, " ")
     .trim()
     .replace(/\s+/g, " ");
 
@@ -76,11 +100,8 @@ export function canonicalWebsite(value: string): string | null {
 }
 
 export function normalizePersonName(value: string) {
-  return value
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, " ")
+  return foldText(value)
+    .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
     .trim()
     .replace(/\s+/g, " ");
 }
@@ -102,10 +123,15 @@ export function canonicalLinkedin(value: string): string | null {
     return null;
   }
   const host = url.hostname.replace(/\.$/, "").replace(/^www\./, "").toLowerCase();
-  if (host !== "linkedin.com") return null;
+  if (host !== "linkedin.com" && !host.endsWith(".linkedin.com")) return null;
   const parts = url.pathname.split("/").filter(Boolean);
   if (parts.length < 2 || parts[0].toLowerCase() !== "in") return null;
-  const slug = decodeURIComponent(parts[1]).toLowerCase();
+  let slug: string;
+  try {
+    slug = decodeURIComponent(parts[1]).toLowerCase();
+  } catch {
+    return null;
+  }
   if (!/^[a-z0-9_-]{2,100}$/.test(slug)) return null;
   return `https://www.linkedin.com/in/${slug}`;
 }
@@ -188,7 +214,8 @@ export function normalizeCompanyWrite(
       }
       next.website = website;
       if (next.domain === undefined && input.domain === undefined && mode !== "patch") {
-        next.domain = canonicalDomain(website);
+        const host = canonicalDomain(website);
+        if (host && !isSharedHost(host)) next.domain = host;
       }
     }
   }

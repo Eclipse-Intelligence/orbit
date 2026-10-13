@@ -106,7 +106,7 @@ Codes include `unauthorized` (401), `forbidden` (403), `not_found` (404), `inval
 
 `GET /api/v1/actions?view=` returns the same tasks. `view=none` returns companies that have no open next action.
 
-`POST /api/v1/tasks` creates one. `PATCH /api/v1/tasks/:id` updates it. `completed: true` sets `completed_at` without moving an existing completion time. `completed: false` reopens it.
+`POST /api/v1/tasks` creates one. A `dueAt` without a `Z` or offset is read as London time, and `today` and `overdue` are cut at midnight London time. `PATCH /api/v1/tasks/:id` updates it. `completed: true` sets `completed_at` without moving an existing completion time. `completed: false` reopens it.
 
 `POST /api/v1/tasks/:id/complete` marks it complete. `DELETE /api/v1/tasks/:id` archives it.
 
@@ -124,11 +124,11 @@ Codes include `unauthorized` (401), `forbidden` (403), `not_found` (404), `inval
 
 `GET /api/v1/export/companies`, `/contacts`, `/opportunities`, `/activities`, and `/tasks` return CSV.
 
-`POST /api/v1/import/companies` and `POST /api/v1/import/contacts` accept `text/csv` or `{ "csv": "..." }`. Up to 50 rows. Companies match by domain. Contacts match by the usual contact rules and attach to a company with the same domain or name. A column that is absent stays as it is. An empty cell clears that field.
+`POST /api/v1/import/companies` and `POST /api/v1/import/contacts` accept `text/csv` or `{ "csv": "..." }`. Up to 50 rows. Companies match by domain. Contacts match by the usual contact rules and attach to a company with the same domain or name. A column that is absent, or a cell that is empty, leaves that field as it is. Without the matching write scope the import returns 403.
 
 ## Communications
 
-`POST /api/v1/communications` accepts `{ "kind": "email" | "meeting", "title", "body", "participantEmails", "companyId", "contactId" }`. It files the activity and, when the company has no open next action, creates a suggested follow-up. Requires `activities:write`. The follow-up also requires `tasks:write`.
+`POST /api/v1/communications` accepts `{ "kind": "email" | "meeting", "title", "body", "participantEmails", "companyId", "contactId" }`. It files the activity and, when it happened in the last 48 hours and the company has no open next action, creates a suggested follow-up. Requires `activities:write`. The follow-up also requires `tasks:write`.
 
 ## Bulk leads
 

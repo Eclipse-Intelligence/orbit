@@ -21,8 +21,8 @@ export async function getCompanyContext(actor: Actor, id: string): Promise<Compa
   assertScope(actor.scopes, "crm:read");
   if (!isUuid(id)) throw new CrmError("not_found", "Company not found.", 404);
   const company = await withActor(actor, async (db) => {
-    const row = await readCompanyInDb(db, id);
-    if (!row || row.workspaceId !== actor.workspaceId) {
+    const row = await readCompanyInDb(db, id, actor.workspaceId);
+    if (!row) {
       throw new CrmError("not_found", "Company not found.", 404);
     }
     return row;
@@ -93,7 +93,7 @@ export async function findStaleRelationships(
     const now = Date.now();
     const rows: StaleRelationship[] = [];
     for (const item of stale.rows) {
-      const company = await readCompanyInDb(db, item.id);
+      const company = await readCompanyInDb(db, item.id, actor.workspaceId);
       if (!company) continue;
       const lastActivityAt = iso(item.last_at);
       rows.push({
@@ -147,7 +147,7 @@ export async function getDueActions(actor: Actor, view: TaskView = "today"): Pro
       );
       const companies = [];
       for (const item of listed.rows) {
-        const company = await readCompanyInDb(db, item.id);
+        const company = await readCompanyInDb(db, item.id, actor.workspaceId);
         if (company) companies.push(company);
       }
       return { view, tasks: [], companies };

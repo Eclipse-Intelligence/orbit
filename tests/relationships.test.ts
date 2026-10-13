@@ -5,13 +5,19 @@ import { POST as mcpRoute } from "@/app/api/mcp/route";
 import { getPool } from "@/lib/db/pool";
 import { connectionStrength } from "@/lib/companies";
 import { createCompany, listCompanies } from "@/lib/crm/companies";
-import { createContact, getContact, updateContact, upsertContact } from "@/lib/crm/contacts";
+import {
+  createContact,
+  getContact,
+  listContacts,
+  updateContact,
+  upsertContact,
+} from "@/lib/crm/contacts";
 import { createActivity, listActivities } from "@/lib/crm/activities";
 import { CrmError } from "@/lib/crm/errors";
 import { ingestLead } from "@/lib/crm/leads";
 import { createOpportunity, updateOpportunity } from "@/lib/crm/opportunities";
 import { findStaleRelationships, getCompanyContext, getDueActions } from "@/lib/crm/relationships";
-import { completeTask, createTask } from "@/lib/crm/tasks";
+import { archiveTask, completeTask, createTask } from "@/lib/crm/tasks";
 import { createAgent, createUser, queryAsUser, resetDatabase } from "./helpers";
 
 before(async () => {
@@ -121,6 +127,68 @@ describe("contacts, opportunities, and next actions", () => {
     assert.equal(overdue.tasks.length, 0);
     const completed = await getDueActions(owner, "completed");
     assert.equal(completed.tasks.some((item) => item.id === task.body.task.id), true);
+  });
+
+  it("keeps existing tasks and opportunities editable after a contact changes company", async () => {
+    const owner = await createUser("moves@example.com", "Moves");
+    const first = await createCompany(owner, { name: "First Move", domain: "first-move.example" });
+    const second = await createCompany(owner, { name: "Second Move", domain: "second-move.example" });
+    const contact = await createContact(owner, {
+      companyId: first.body.company.id,
+      firstName: "Jane",
+      lastName: "Doe",
+      email: "jane@first-move.example",
+    });
+    const deal = await createOpportunity(owner, {
+      companyId: first.body.company.id,
+      primaryContactId: contact.body.contact.id,
+      name: "Move deal",
+    });
+    const call = await createTask(owner, {
+      title: "Call Jane",
+      companyId: first.body.company.id,
+      contactId: contact.body.contact.id,
+    });
+    const email = await createTask(owner, {
+      title: "Email Jane",
+      companyId: first.body.company.id,
+      contactId: contact.body.contact.id,
+    });
+
+    await updateContact(owner, contact.body.contact.id, { companyId: second.body.company.id });
+
+    const done = await completeTask(owner, call.body.task.id);
+    assert.ok(done.body.task.completedAt);
+    const archived = await archiveTask(owner, email.body.task.id);
+    assert.ok(archived.body.task.archivedAt);
+    const moved = await updateOpportunity(owner, deal.body.opportunity.id, { status: "won" });
+    assert.equal(moved.body.opportunity.stageName, "Won");
+
+    await assert.rejects(
+      () => createTask(owner, {
+        title: "Wrong company",
+        companyId: first.body.company.id,
+        contactId: contact.body.contact.id,
+      }),
+      (error: unknown) => error instanceof CrmError && error.code === "invalid_input",
+    );
+
+    const found = await listContacts(owner, { query: "Jane Doe" });
+    assert.equal(found.data.some((item) => item.id === contact.body.contact.id), true);
+
+    const unchanged = await upsertContact(owner, {
+      email: "jane@first-move.example",
+      firstName: "Jane",
+      lastName: "Doe",
+    });
+    assert.equal(unchanged.body.changed, false);
+
+    const lead = await ingestLead(owner, {
+      contact: { email: "jane@first-move.example", jobTitle: "CTO" },
+    });
+    assert.equal(lead.body.contact?.id, contact.body.contact.id);
+    assert.equal(lead.body.contact?.jobTitle, "CTO");
+    assert.equal(lead.body.contact?.companyId, second.body.company.id);
   });
 
   it("ingests a lead once per company and contact, including context and stale relationships", async () => {

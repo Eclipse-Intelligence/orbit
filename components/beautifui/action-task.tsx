@@ -10,14 +10,15 @@ import { cn } from "@/lib/utils";
 export default function ActionTask({
   task,
   completed,
+  now,
   onComplete,
 }: {
   task: Task;
   completed: boolean;
+  now: number;
   onComplete?: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [now] = useState(() => Date.now());
   const overdue =
     Boolean(task.dueAt) && !task.completedAt && new Date(task.dueAt ?? 0).getTime() < now;
   const details = [task.description, task.contactName, task.opportunityName].filter(
@@ -54,7 +55,7 @@ export default function ActionTask({
           </span>
           <span className="min-w-0 flex-1 truncate text-[14px] leading-5">{task.title}</span>
           <span className="text-subtle shrink-0 text-[13px]">
-            {task.dueAt ? relativeWhen(task.dueAt) : "No due date"}
+            {task.dueAt ? relativeWhen(task.dueAt, now) : "No due date"}
           </span>
           <svg
             aria-hidden

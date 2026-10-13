@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import OpportunitiesScreen from "@/components/crm/opportunities-screen";
+import { PAGE_SIZE, pageFromParams, pageOffset } from "@/components/crm/paging";
 import { getUserActor } from "@/lib/auth/user";
 import { listCompanies } from "@/lib/crm/companies";
 import { listContacts } from "@/lib/crm/contacts";
@@ -21,7 +22,9 @@ export default async function OpportunitiesPage({
     if (typeof value === "string") params.set(key, value);
   }
   const filters = opportunityQueryFromSearchParams(params);
-  filters.limit = 100;
+  const page = pageFromParams(params);
+  filters.limit = PAGE_SIZE;
+  filters.offset = pageOffset(page);
   const [listed, companies, contacts, pipeline] = await Promise.all([
     listOpportunities(user, filters),
     listCompanies(user, { limit: 100, sort: "name", order: "asc" }),
@@ -40,6 +43,7 @@ export default async function OpportunitiesPage({
       }}
       opportunities={listed.data}
       total={listed.total}
+      page={page}
       query={filters.query ?? ""}
       companies={companies.data}
       contacts={contacts.data}

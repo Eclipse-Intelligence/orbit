@@ -82,12 +82,14 @@ export function lifecycleTagBase(lifecycle: Lifecycle) {
 
 export function ConnectionMark({
   at,
+  now,
   className,
 }: {
   at: string | null | undefined;
+  now?: number;
   className?: string;
 }) {
-  const key: ConnectionStrength = connectionStrength(at);
+  const key: ConnectionStrength = connectionStrength(at, now);
   const item = CONNECTION_STRENGTH[key];
   return (
     <span className={cn("text-subtle inline-flex items-center gap-2 text-[13px]", className)}>

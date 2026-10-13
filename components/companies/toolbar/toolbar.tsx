@@ -34,15 +34,17 @@ export default function CompaniesToolbar({ filters, members = [] }: ToolbarProps
   const filterQuery = filters.query ?? "";
   const [query, setQuery] = useState(filterQuery);
   const [syncedQuery, setSyncedQuery] = useState(filterQuery);
+  const [pushedQuery, setPushedQuery] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   if (filterQuery !== syncedQuery) {
     setSyncedQuery(filterQuery);
-    setQuery(filterQuery);
+    if (filterQuery !== pushedQuery) setQuery(filterQuery);
   }
 
   const replaceParams = useCallback(
     (updates: Record<string, string | null>) => {
       const params = new URLSearchParams(window.location.search);
+      params.delete("page");
       for (const [key, value] of Object.entries(updates)) {
         if (!value) params.delete(key);
         else params.set(key, value);
@@ -56,8 +58,10 @@ export default function CompaniesToolbar({ filters, members = [] }: ToolbarProps
   useEffect(() => {
     const handle = window.setTimeout(() => {
       const current = filters.query ?? "";
-      if (query.trim() === current) return;
-      replaceParams({ q: query.trim() || null });
+      const next = query.trim();
+      if (next === current) return;
+      setPushedQuery(next);
+      replaceParams({ q: next || null });
     }, 250);
     return () => window.clearTimeout(handle);
   }, [query, filters.query, replaceParams]);

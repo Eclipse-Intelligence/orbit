@@ -22,6 +22,7 @@ export default function ContactEmail({
   const [message, setMessage] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
+  const [warning, setWarning] = useState<string | null>(null);
   const [logged, setLogged] = useState(false);
   const [pending, setPending] = useState<"send" | "log" | null>(null);
 
@@ -36,6 +37,7 @@ export default function ContactEmail({
     sending.current = true;
     setPending("send");
     setError(null);
+    setWarning(null);
     setLogged(false);
     try {
       const result = await sendContactEmailAction(contactId, subject, message);
@@ -47,6 +49,7 @@ export default function ContactEmail({
       setSubject("");
       setMessage("");
       setSent(true);
+      setWarning("warning" in result ? (result.warning ?? null) : null);
       router.refresh();
     } finally {
       sending.current = false;
@@ -65,6 +68,7 @@ export default function ContactEmail({
     sending.current = true;
     setPending("log");
     setError(null);
+    setWarning(null);
     setSent(false);
     try {
       const result = await addContactActivityAction(
@@ -109,7 +113,12 @@ export default function ContactEmail({
           {error}
         </p>
       )}
-      {sent && !error && (
+      {sent && !error && warning && (
+        <p className="caption-style text-danger" role="alert">
+          {warning}
+        </p>
+      )}
+      {sent && !error && !warning && (
         <p className="caption-style text-subtle" role="status">
           Sent from your Microsoft mailbox.
         </p>

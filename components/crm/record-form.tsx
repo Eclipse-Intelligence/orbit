@@ -9,18 +9,26 @@ export function RecordSelect({
   name,
   label,
   defaultValue,
+  required,
   children,
 }: {
   id: string;
   name: string;
   label: string;
   defaultValue?: string;
+  required?: boolean;
   children: ReactNode;
 }) {
   return (
     <label className="flex flex-col gap-2" htmlFor={id}>
       <span className="caption-style text-subtle">{label}</span>
-      <select id={id} name={name} defaultValue={defaultValue} className={recordSelectClass}>
+      <select
+        id={id}
+        name={name}
+        defaultValue={defaultValue}
+        required={required}
+        className={recordSelectClass}
+      >
         {children}
       </select>
     </label>

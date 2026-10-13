@@ -17,7 +17,7 @@ function createPool(connectionString: string) {
   const serverless = Boolean(process.env.VERCEL);
   return new Pool({
     connectionString: url.toString(),
-    max: serverless ? 1 : 10,
+    max: serverless ? 2 : 10,
     idleTimeoutMillis: 10_000,
     connectionTimeoutMillis: 5_000,
     allowExitOnIdle: serverless,

@@ -2,6 +2,11 @@ import type { Db } from "@/lib/db/pool";
 import { decryptSecret, encryptSecret } from "@/lib/crypto/secret";
 import { withActor } from "@/lib/crm/context";
 import { createActivityInDb } from "@/lib/crm/activities";
+import {
+  FREE_MAIL_DOMAINS,
+  isFreeMailDomain,
+  isRecent,
+} from "@/lib/crm/communications";
 import { CrmError } from "@/lib/crm/errors";
 import { canonicalDomain, canonicalEmail } from "@/lib/crm/normalize";
 import { hasScope } from "@/lib/crm/scopes";
@@ -13,13 +18,17 @@ import {
   sanitizeMicrosoftError,
   sendGraphMail,
   type GraphInboxMessage,
+  type InboxFetch,
   type MicrosoftToken,
 } from "@/lib/microsoft/oauth";
 
 const LOOKBACK_MS = 14 * 24 * 60 * 60 * 1000;
 const OVERLAP_MS = 10 * 60 * 1000;
-const RECENT_MS = 48 * 60 * 60 * 1000;
 const SYNC_GAP_MS = 2 * 60 * 1000;
+const RECONNECT_MESSAGE =
+  "Orbit could not read the saved Microsoft connection. Disconnect, then connect Microsoft again.";
+const UNFILED_WARNING =
+  "The email was sent, but Orbit could not file it on the contact.";
 
 export type MailboxSummary = {
   id: string;
@@ -66,9 +75,16 @@ export type SyncCounts = {
 };
 
 type StoredConnection = MailboxSummary & {
-  refreshToken: string | null;
-  accessToken: string | null;
+  refreshTokenCipher: string | null;
+  accessTokenCipher: string | null;
   accessTokenExpiresAt: string | null;
+};
+
+type PartyMatch = {
+  contactId: string | null;
+  contactName: string | null;
+  companyId: string | null;
+  companyName: string | null;
 };
 
 export function counterpartEmails(input: {
@@ -214,7 +230,7 @@ export async function sendContactEmail(
   contactId: string,
   input: { subject: string; body: string },
   fetchImpl: typeof fetch = fetch,
-) {
+): Promise<{ warning: string | null }> {
   const subject = input.subject.replace(/\s+/g, " ").trim();
   const body = input.body.trim();
   if (!subject || !body) {
@@ -281,7 +297,11 @@ export async function sendContactEmail(
     );
   }
   const mailbox = prepared.mailbox;
-  if (!mailbox || mailbox.status !== "connected" || !mailbox.refreshToken) {
+  if (
+    !mailbox ||
+    mailbox.status !== "connected" ||
+    !mailbox.refreshTokenCipher
+  ) {
     throw new CrmError(
       "invalid_input",
       "Connect Microsoft in Inbox before sending.",
@@ -289,8 +309,9 @@ export async function sendContactEmail(
     );
   }
 
-  const token = await currentToken(mailbox, fetchImpl);
+  let token: MicrosoftToken;
   try {
+    token = await currentToken(mailbox, fetchImpl);
     await sendGraphMail(
       token.accessToken,
       { to, toName: contact.name, subject, body },
@@ -306,9 +327,11 @@ export async function sendContactEmail(
     );
   }
 
-  await withActor(actor, async (db) => {
-    await storeToken(db, mailbox.id, token);
-  });
+  try {
+    await withActor(actor, async (db) => {
+      await storeToken(db, mailbox.id, token);
+    });
+  } catch {}
   try {
     await withActor(actor, async (db) => {
       await createActivityInDb(
@@ -326,12 +349,9 @@ export async function sendContactEmail(
       );
     });
   } catch {
-    throw new CrmError(
-      "internal_error",
-      "The email was sent, but Orbit could not file it on the contact.",
-      500,
-    );
+    return { warning: UNFILED_WARNING };
   }
+  return { warning: null };
 }
 
 export async function disconnectMailbox(actor: UserActor) {
@@ -354,7 +374,11 @@ export async function syncMailbox(
   fetchImpl: typeof fetch = fetch,
 ): Promise<SyncCounts> {
   const stored = await withActor(actor, async (db) => readStored(db, actor));
-  if (!stored || stored.status !== "connected" || !stored.refreshToken) {
+  if (
+    !stored ||
+    stored.status !== "connected" ||
+    !stored.refreshTokenCipher
+  ) {
     return {
       attached: 0,
       unattached: 0,
@@ -368,22 +392,34 @@ export async function syncMailbox(
     const since = stored.lastSyncedAt
       ? new Date(new Date(stored.lastSyncedAt).getTime() - OVERLAP_MS)
       : new Date(Date.now() - LOOKBACK_MS);
-    const graphMessages = await fetchInboxMessages(
+    const fetched = await fetchInboxMessages(
       token.accessToken,
       since,
       fetchImpl,
     );
-    const inbound = graphMessages
+    const inbound = fetched.messages
       .map(graphToInbound)
       .filter((message) => message.providerMessageId);
+    const watermark = syncWatermark(stored, since, fetched);
     return await withActor(actor, async (db) => {
+      await lockMailbox(db, stored.id);
       await storeToken(db, stored.id, token);
       const counts = await fileMessages(db, actor, stored, inbound);
+      await db.query("savepoint attach_unmatched");
+      try {
+        counts.attached += await attachUnmatched(db, actor, stored);
+        await db.query("release savepoint attach_unmatched");
+      } catch (error) {
+        await db.query("rollback to savepoint attach_unmatched");
+        console.error("Could not attach earlier inbox mail", error);
+      }
       await db.query(
         `update crm.mailbox_connections
-         set last_synced_at = now(), last_attempt_at = now(), last_error = null
+         set last_synced_at = least(coalesce($2::timestamptz, now()), now()),
+             last_attempt_at = now(),
+             last_error = null
          where id = $1`,
-        [stored.id],
+        [stored.id, watermark],
       );
       return counts;
     });
@@ -409,6 +445,28 @@ export async function syncMailbox(
   }
 }
 
+function syncWatermark(
+  stored: StoredConnection,
+  since: Date,
+  fetched: InboxFetch,
+) {
+  if (fetched.complete) return null;
+  if (fetched.ordered) {
+    let newest = Number.NEGATIVE_INFINITY;
+    for (const message of fetched.messages) {
+      const time = message.receivedDateTime
+        ? new Date(message.receivedDateTime).getTime()
+        : Number.NaN;
+      if (!Number.isNaN(time) && time > newest) newest = time;
+    }
+    if (Number.isFinite(newest))
+      return new Date(newest + OVERLAP_MS).toISOString();
+  }
+  return (
+    stored.lastSyncedAt ?? new Date(since.getTime() + OVERLAP_MS).toISOString()
+  );
+}
+
 export async function fileInboundMessages(
   actor: UserActor,
   messages: InboundEmail[],
@@ -422,8 +480,124 @@ export async function fileInboundMessages(
         400,
       );
     }
+    await lockMailbox(db, stored.id);
     return fileMessages(db, actor, stored, messages);
   });
+}
+
+async function lockMailbox(db: Db, connectionId: string) {
+  await db.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [
+    connectionId,
+  ]);
+}
+
+async function fileActivity(
+  db: Db,
+  actor: UserActor,
+  message: Pick<
+    InboundEmail,
+    "providerMessageId" | "subject" | "preview" | "fromEmail" | "receivedAt"
+  >,
+  match: PartyMatch,
+) {
+  const activity = await createActivityInDb(
+    db,
+    actor,
+    {
+      type: "email",
+      title: clip(message.subject, 200) || "Email",
+      body: clip(message.preview, 4000),
+      occurredAt: validTime(message.receivedAt),
+      companyId: match.companyId,
+      contactId: match.contactId,
+      metadata: {
+        source: "microsoft",
+        providerMessageId: message.providerMessageId,
+        from: canonicalEmail(message.fromEmail ?? "") ?? null,
+      },
+    },
+    { operation: "sync_inbox", source: "microsoft" },
+  );
+  return activity.id;
+}
+
+async function attachUnmatched(
+  db: Db,
+  actor: UserActor,
+  mailbox: StoredConnection,
+) {
+  const pending = await db.query<{
+    id: string;
+    provider_message_id: string;
+    subject: string | null;
+    preview: string | null;
+    from_email: string;
+    received_at: Date | string | null;
+  }>(
+    `select m.id, m.provider_message_id, m.subject, m.preview, m.from_email, m.received_at
+     from crm.email_messages m
+     where m.connection_id = $1
+       and m.workspace_id = $2
+       and m.contact_id is null
+       and m.company_id is null
+       and m.activity_id is null
+       and m.from_email is not null
+       and m.from_email <> $3
+       and (
+         exists (
+           select 1 from crm.contacts c
+           where c.workspace_id = m.workspace_id
+             and c.archived_at is null
+             and c.normalized_email = m.from_email
+         )
+         or (
+           split_part(m.from_email, '@', 2) <> all($4::text[])
+           and exists (
+             select 1 from crm.companies co
+             where co.workspace_id = m.workspace_id
+               and co.archived_at is null
+               and co.domain = split_part(m.from_email, '@', 2)
+           )
+         )
+       )
+     order by m.received_at asc nulls last
+     limit 200`,
+    [
+      mailbox.id,
+      actor.workspaceId,
+      canonicalEmail(mailbox.email) ?? mailbox.email,
+      [...FREE_MAIL_DOMAINS],
+    ],
+  );
+  let attached = 0;
+  for (const row of pending.rows) {
+    const parties = counterpartEmails({
+      mailboxEmail: mailbox.email,
+      fromEmail: row.from_email,
+    });
+    const match = await matchParties(db, actor.workspaceId, parties);
+    if (!match.contactId && !match.companyId) continue;
+    const activityId = await fileActivity(
+      db,
+      actor,
+      {
+        providerMessageId: row.provider_message_id,
+        subject: row.subject,
+        preview: row.preview,
+        fromEmail: row.from_email,
+        receivedAt: iso(row.received_at),
+      },
+      match,
+    );
+    await db.query(
+      `update crm.email_messages
+       set contact_id = $2, company_id = $3, activity_id = $4
+       where id = $1`,
+      [row.id, match.contactId, match.companyId, activityId],
+    );
+    attached += 1;
+  }
+  return attached;
 }
 
 async function fileMessages(
@@ -462,25 +636,12 @@ async function fileMessages(
     const match = await matchParties(db, actor.workspaceId, parties);
     let activityId: string | null = null;
     if (match.contactId || match.companyId) {
-      const activity = await createActivityInDb(
+      activityId = await fileActivity(
         db,
         actor,
-        {
-          type: "email",
-          title: clip(message.subject, 200) || "Email",
-          body: clip(message.preview, 4000),
-          occurredAt: validTime(message.receivedAt),
-          companyId: match.companyId,
-          contactId: match.contactId,
-          metadata: {
-            source: "microsoft",
-            providerMessageId,
-            from: canonicalEmail(message.fromEmail ?? "") ?? null,
-          },
-        },
-        { operation: "sync_inbox", source: "microsoft" },
+        { ...message, providerMessageId },
+        match,
       );
-      activityId = activity.id;
       if (
         match.companyId &&
         isRecent(message.receivedAt) &&
@@ -539,7 +700,11 @@ async function fileMessages(
   return counts;
 }
 
-async function matchParties(db: Db, workspaceId: string, emails: string[]) {
+async function matchParties(
+  db: Db,
+  workspaceId: string,
+  emails: string[],
+): Promise<PartyMatch> {
   for (const email of emails) {
     const found = await db.query<{
       id: string;
@@ -568,7 +733,7 @@ async function matchParties(db: Db, workspaceId: string, emails: string[]) {
   }
   for (const email of emails) {
     const domain = canonicalDomain(email.split("@")[1] ?? "");
-    if (!domain) continue;
+    if (!domain || isFreeMailDomain(domain)) continue;
     const found = await db.query<{ id: string; name: string }>(
       `select id, name from crm.companies
        where workspace_id = $1 and archived_at is null and domain = $2
@@ -616,14 +781,6 @@ function validTime(value: string | null | undefined) {
   return new Date(time).toISOString();
 }
 
-function isRecent(receivedAt: string | null | undefined) {
-  if (!receivedAt) return false;
-  const time = new Date(receivedAt).getTime();
-  if (Number.isNaN(time)) return false;
-  const age = Date.now() - time;
-  return age <= RECENT_MS && age >= -5 * 60 * 1000;
-}
-
 function clip(value: string | null | undefined, max: number) {
   const trimmed = value?.replace(/\s+/g, " ").trim() ?? "";
   if (!trimmed) return null;
@@ -652,18 +809,33 @@ function addresses(recipients: GraphInboxMessage["toRecipients"]) {
     .filter(Boolean);
 }
 
-async function currentToken(stored: StoredConnection, fetchImpl: typeof fetch) {
+function readSecret(value: string | null) {
+  if (!value) return null;
+  try {
+    return decryptSecret(value);
+  } catch {
+    return null;
+  }
+}
+
+async function currentToken(
+  stored: StoredConnection,
+  fetchImpl: typeof fetch,
+): Promise<MicrosoftToken> {
+  const refreshToken = readSecret(stored.refreshTokenCipher);
+  if (!refreshToken) throw new Error(RECONNECT_MESSAGE);
+  const accessToken = readSecret(stored.accessTokenCipher);
   const expires = stored.accessTokenExpiresAt
     ? new Date(stored.accessTokenExpiresAt).getTime()
     : 0;
-  if (stored.accessToken && expires > Date.now() + 60_000) {
+  if (accessToken && expires > Date.now() + 60_000) {
     return {
-      accessToken: stored.accessToken,
-      refreshToken: stored.refreshToken!,
+      accessToken,
+      refreshToken,
       expiresAt: stored.accessTokenExpiresAt!,
-    } satisfies MicrosoftToken;
+    };
   }
-  return refreshMicrosoftToken(stored.refreshToken!, fetchImpl);
+  return refreshMicrosoftToken(refreshToken, fetchImpl);
 }
 
 async function storeToken(db: Db, connectionId: string, token: MicrosoftToken) {
@@ -716,8 +888,8 @@ async function readStored(
     lastSyncedAt: iso(row.last_synced_at),
     lastAttemptAt: iso(row.last_attempt_at),
     lastError: row.last_error,
-    refreshToken: row.refresh_token ? decryptSecret(row.refresh_token) : null,
-    accessToken: row.access_token ? decryptSecret(row.access_token) : null,
+    refreshTokenCipher: row.refresh_token,
+    accessTokenCipher: row.access_token,
     accessTokenExpiresAt: iso(row.access_token_expires_at),
   };
 }

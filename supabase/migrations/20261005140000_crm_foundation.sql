@@ -19,7 +19,7 @@ begin
     create role crm_agent nologin;
   end if;
   if not exists (select 1 from pg_roles where rolname = 'crm_app') then
-    create role crm_app login password 'crm_app_dev' nosuperuser nocreatedb nocreaterole noinherit;
+    create role crm_app login nosuperuser nocreatedb nocreaterole noinherit;
   end if;
 end
 $$;

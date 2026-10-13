@@ -6,7 +6,7 @@ import type { Actor } from "@/lib/crm/types";
 
 function scheduleWebhooks() {
   const run = () => {
-    void deliverDueWebhooks().catch(() => undefined);
+    void deliverDueWebhooks().catch((error) => console.error("Webhook delivery failed", error));
   };
   try {
     after(run);

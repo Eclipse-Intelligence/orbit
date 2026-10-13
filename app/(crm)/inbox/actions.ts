@@ -33,8 +33,9 @@ export async function sendContactEmailAction(
 ) {
   const user = await getUserActor();
   if (!user) return { error: "Sign in to send mail." };
+  let warning: string | null;
   try {
-    await sendContactEmail(user, contactId, { subject, body });
+    ({ warning } = await sendContactEmail(user, contactId, { subject, body }));
   } catch (error) {
     return actionError(error);
   }
@@ -42,7 +43,7 @@ export async function sendContactEmailAction(
   revalidatePath("/");
   revalidatePath("/inbox");
   revalidatePath("/activities");
-  return { ok: true as const };
+  return { ok: true as const, warning };
 }
 
 export async function disconnectInboxAction() {

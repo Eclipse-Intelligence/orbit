@@ -32,6 +32,16 @@ export function originFrom(request: Request) {
   return `${proto}://${host}`;
 }
 
+export function microsoftRedirectOrigin() {
+  const configured = process.env.MICROSOFT_REDIRECT_URI?.trim();
+  if (!configured) return null;
+  try {
+    return new URL(configured).origin;
+  } catch {
+    return null;
+  }
+}
+
 export function microsoftRedirectUri(origin: string) {
   const configured = process.env.MICROSOFT_REDIRECT_URI?.trim();
   if (configured) return configured;
@@ -164,7 +174,6 @@ export async function refreshMicrosoftToken(
     client_secret: credentials.secret,
     grant_type: "refresh_token",
     refresh_token: refreshToken,
-    scope: MICROSOFT_SCOPES,
   });
   const parsed = await tokenRequest(body, fetchImpl);
   return tokenFrom(parsed.refresh_token || refreshToken, parsed);
@@ -223,18 +232,34 @@ export type GraphInboxMessage = {
   ccRecipients?: GraphRecipient[];
 };
 
+const INBOX_LIMIT = 100;
+const INBOX_PAGES = 4;
+
+export type InboxFetch = {
+  messages: GraphInboxMessage[];
+  complete: boolean;
+  ordered: boolean;
+};
+
 export async function fetchInboxMessages(
   accessToken: string,
   since: Date,
   fetchImpl: typeof fetch = fetch,
-) {
+): Promise<InboxFetch> {
   const collected: GraphInboxMessage[] = [];
+  let ordered = true;
+  let truncated = false;
   let next: string | null = inboxUrl(since, true);
   let pages = 0;
-  while (next && collected.length < 100 && pages < 4) {
+  while (next) {
+    if (collected.length >= INBOX_LIMIT || pages >= INBOX_PAGES) {
+      truncated = true;
+      break;
+    }
     pages += 1;
     const response = await graphGet(next, accessToken, fetchImpl);
-    if (response.status === 400 && pages === 1 && next.includes("%24orderby")) {
+    if (response.status === 400 && ordered && pages === 1) {
+      ordered = false;
       next = inboxUrl(since, false);
       pages = 0;
       continue;
@@ -247,19 +272,21 @@ export async function fetchInboxMessages(
       "@odata.nextLink"?: string;
     };
     for (const message of body.value ?? []) {
+      if (collected.length >= INBOX_LIMIT) {
+        truncated = true;
+        break;
+      }
       if (
         message.receivedDateTime &&
         new Date(message.receivedDateTime) < since
       ) {
-        next = null;
-        break;
+        continue;
       }
       collected.push(message);
-      if (collected.length >= 100) break;
     }
-    next = next ? (body["@odata.nextLink"] ?? null) : null;
+    next = truncated ? null : (body["@odata.nextLink"] ?? null);
   }
-  return collected;
+  return { messages: collected, complete: !truncated, ordered };
 }
 
 function inboxUrl(since: Date, order: boolean) {
@@ -275,7 +302,7 @@ function inboxUrl(since: Date, order: boolean) {
     "$select",
     "id,conversationId,internetMessageId,subject,bodyPreview,from,toRecipients,ccRecipients,receivedDateTime,isDraft",
   );
-  if (order) url.searchParams.set("$orderby", "receivedDateTime desc");
+  if (order) url.searchParams.set("$orderby", "receivedDateTime asc");
   return url.toString();
 }
 

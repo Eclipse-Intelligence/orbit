@@ -29,6 +29,7 @@ import {
   type TaskView,
   type TaskWrite,
 } from "@/lib/crm/types";
+import { dayWindow, parseDateTime } from "@/lib/time";
 
 const TASK_SQL = `
   select
@@ -126,8 +127,8 @@ function mapTask(row: TaskRow): Task {
 function timestamp(value: string | null | undefined, field: string) {
   if (value === undefined) return undefined;
   if (value === null || value.trim() === "") return null;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
+  const date = parseDateTime(value);
+  if (!date) {
     throw new CrmError("invalid_input", "Enter a valid date and time.", 400, { field });
   }
   return date.toISOString();
@@ -161,12 +162,6 @@ function prepareTask(input: TaskWrite, mode: "create" | "patch"): PreparedTask {
 async function readTask(db: Db, id: string) {
   const result = await db.query<TaskRow>(`${TASK_SQL} where t.id = $1`, [id]);
   return result.rows[0] ?? null;
-}
-
-function dayWindow(now = new Date()) {
-  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
-  return { start, end };
 }
 
 export async function createTaskInDb(
@@ -354,7 +349,9 @@ export async function listTasks(actor: Actor, query: TaskListQuery = {}) {
     const order =
       view === "completed"
         ? "t.completed_at desc"
-        : "t.due_at asc nulls last, t.priority desc, t.created_at asc";
+        : `t.due_at asc nulls last,
+           case t.priority when 'high' then 0 when 'normal' then 1 else 2 end,
+           t.created_at asc`;
     const listed = [...values, page.limit, page.offset];
     const rows = await db.query<TaskRow>(
       `${TASK_SQL}

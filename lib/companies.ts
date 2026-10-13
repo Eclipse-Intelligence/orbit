@@ -6,6 +6,7 @@ import {
   type CompanySort,
   type Lifecycle,
 } from "@/lib/crm/types";
+import { appTimeZone } from "@/lib/time";
 
 export const ANY_LIFECYCLE = "any";
 export const ALL_OWNERS = "all";
@@ -59,7 +60,7 @@ export function formatDate(iso: string) {
     month: "short",
     day: "numeric",
     year: "numeric",
-    timeZone: "UTC",
+    timeZone: appTimeZone(),
   }).format(new Date(iso));
 }
 
@@ -115,7 +116,7 @@ export function formatWhen(iso: string | null) {
     year: "numeric",
     hour: "numeric",
     minute: "2-digit",
-    timeZone: "UTC",
+    timeZone: appTimeZone(),
   }).format(new Date(iso));
 }
 

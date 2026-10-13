@@ -8,6 +8,49 @@ import { assertScope, hasScope } from "@/lib/crm/scopes";
 import { createTaskInDb } from "@/lib/crm/tasks";
 import type { Activity, Actor, Company, Contact, Task } from "@/lib/crm/types";
 
+const RECENT_MS = 48 * 60 * 60 * 1000;
+
+export const FREE_MAIL_DOMAINS = new Set([
+  "gmail.com",
+  "googlemail.com",
+  "outlook.com",
+  "hotmail.com",
+  "hotmail.co.uk",
+  "live.com",
+  "msn.com",
+  "yahoo.com",
+  "yahoo.co.uk",
+  "ymail.com",
+  "icloud.com",
+  "me.com",
+  "mac.com",
+  "aol.com",
+  "proton.me",
+  "protonmail.com",
+  "pm.me",
+  "gmx.com",
+  "gmx.net",
+  "gmx.de",
+  "web.de",
+  "mail.com",
+  "zoho.com",
+  "yandex.com",
+  "fastmail.com",
+  "hey.com",
+]);
+
+export function isFreeMailDomain(domain: string) {
+  return FREE_MAIL_DOMAINS.has(domain.toLowerCase());
+}
+
+export function isRecent(at: string | null | undefined) {
+  if (!at) return false;
+  const time = new Date(at).getTime();
+  if (Number.isNaN(time)) return false;
+  const age = Date.now() - time;
+  return age <= RECENT_MS && age >= -5 * 60 * 1000;
+}
+
 export type CommunicationInput = {
   kind: "email" | "meeting";
   title?: string | null;
@@ -50,17 +93,20 @@ export async function recordCommunication(
         [actor.workspaceId, email],
       );
       if (!found.rows[0]) continue;
-      const contact = await readContactInDb(db, found.rows[0].id);
+      const contact = await readContactInDb(db, found.rows[0].id, actor.workspaceId);
       if (contact) contacts.push(contact);
     }
 
     let companyId = input.companyId ?? null;
-    const contactId = input.contactId ?? contacts[0]?.id ?? null;
+    const participant = companyId
+      ? contacts.find((contact) => contact.companyId === companyId || contact.companyId === null)
+      : contacts[0];
+    const contactId = input.contactId ?? participant?.id ?? null;
     if (!companyId) companyId = contacts.find((contact) => contact.companyId)?.companyId ?? null;
     if (!companyId) {
       for (const email of emails) {
         const domain = canonicalDomain(email.split("@")[1] ?? "");
-        if (!domain) continue;
+        if (!domain || isFreeMailDomain(domain)) continue;
         const company = await db.query<{ id: string }>(
           `select id from crm.companies
            where workspace_id = $1 and archived_at is null and domain = $2
@@ -89,10 +135,10 @@ export async function recordCommunication(
       { operation: input.kind === "email" ? "record_email" : "record_meeting", source: "communication" },
     );
 
-    const company = companyId ? await readCompanyInDb(db, companyId) : null;
+    const company = companyId ? await readCompanyInDb(db, companyId, actor.workspaceId) : null;
     let task: Task | null = null;
     let suggested = false;
-    if (company && hasScope(actor.scopes, "tasks:write")) {
+    if (company && isRecent(activity.occurredAt) && hasScope(actor.scopes, "tasks:write")) {
       const open = await db.query<{ total: number }>(
         `select count(*)::int as total from crm.tasks
          where company_id = $1 and archived_at is null and completed_at is null`,
@@ -100,7 +146,7 @@ export async function recordCommunication(
       );
       if ((open.rows[0]?.total ?? 0) === 0) {
         const due = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString();
-        const who = contacts[0]?.name || company.name;
+        const who = contacts.find((contact) => contact.id === contactId)?.name || company.name;
         task = await createTaskInDb(
           db,
           actor,

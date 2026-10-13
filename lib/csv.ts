@@ -1,8 +1,12 @@
 export type CsvCell = string | number;
 
+function isPlainNumber(value: string) {
+  return /^[+-]?[\d\s().-]+$/.test(value) && /\d/.test(value);
+}
+
 function escapeCell(cell: CsvCell) {
   let value = String(cell);
-  if (/^[=+\-@\t\r]/.test(value)) value = `'${value}`;
+  if (/^[=+\-@\t\r]/.test(value) && !isPlainNumber(value)) value = `'${value}`;
   if (/[",\r\n]/.test(value)) value = `"${value.replace(/"/g, '""')}"`;
   return value;
 }

@@ -22,6 +22,7 @@ import {
 type CompanyRowProps = {
   company: Company;
   index: number;
+  now: number;
   selected: boolean;
   active: boolean;
   onToggle: () => void;
@@ -39,6 +40,7 @@ function stop(event: MouseEvent) {
 export default function CompanyRow({
   company,
   index,
+  now,
   selected,
   active,
   onToggle,
@@ -97,10 +99,10 @@ export default function CompanyRow({
         </span>
       </TableCell>
       <TableCell role="cell" className={cn(cellClass("last"), "text-subtle text-[13px]")}>
-        {relativeWhen(company.lastInteractionAt)}
+        {relativeWhen(company.lastInteractionAt, now)}
       </TableCell>
       <TableCell role="cell" className={cellClass("strength")}>
-        <ConnectionMark at={company.lastInteractionAt} />
+        <ConnectionMark at={company.lastInteractionAt} now={now} />
       </TableCell>
       <TableCell role="cell" className={cellClass("domain")} onClick={stop}>
         {company.domain ? (

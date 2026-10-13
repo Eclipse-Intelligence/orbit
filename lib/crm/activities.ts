@@ -25,6 +25,7 @@ import {
   type Actor,
   type Provenance,
 } from "@/lib/crm/types";
+import { parseDateTime } from "@/lib/time";
 
 const ACTIVITY_SQL = `
   select
@@ -124,8 +125,8 @@ function prepareActivity(input: ActivityWrite): {
   }
   let occurredAt: string | null = null;
   if (input.occurredAt) {
-    const date = new Date(input.occurredAt);
-    if (Number.isNaN(date.getTime())) {
+    const date = parseDateTime(input.occurredAt);
+    if (!date) {
       throw new CrmError("invalid_input", "Enter a valid date and time.", 400, {
         field: "occurredAt",
       });

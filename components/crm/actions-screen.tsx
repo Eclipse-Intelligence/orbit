@@ -28,12 +28,14 @@ export default function ActionsScreen({
   tasks,
   companies,
   companyChoices,
+  now,
 }: {
   viewer: Viewer;
   view: TaskView;
   tasks: Task[];
   companies: Company[];
   companyChoices: CompanyRow[];
+  now: number;
 }) {
   const router = useRouter();
   const [state, action, pending] = useActionState(saveTaskAction, {} as RecordActionState);
@@ -104,10 +106,10 @@ export default function ActionsScreen({
               key={company.id}
               mark={<Monogram name={company.name} />}
               title={company.name}
-              meta={`${relativeWhen(company.lastInteractionAt)} · ${company.domain ?? "No domain"}`}
+              meta={`${relativeWhen(company.lastInteractionAt, now)} · ${company.domain ?? "No domain"}`}
               action={
                 <span className="flex items-center gap-3">
-                  <ConnectionMark at={company.lastInteractionAt} />
+                  <ConnectionMark at={company.lastInteractionAt} now={now} />
                   <Button variant="ghost" size="sm" href={`/?record=${company.id}`}>
                     Open
                   </Button>
@@ -123,6 +125,7 @@ export default function ActionsScreen({
               key={task.id}
               task={task}
               completed={view === "completed"}
+              now={now}
               onComplete={view === "completed" ? undefined : () => complete(task.id)}
             />
           ))}
