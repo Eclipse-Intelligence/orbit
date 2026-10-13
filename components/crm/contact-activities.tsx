@@ -1,10 +1,10 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Input } from "@/components/_ui/input";
-import { addContactActivityAction } from "@/app/(crm)/records";
+import { addActivityAction, type RecordActionState } from "@/app/(crm)/records";
 import ContactEmail from "@/components/crm/contact-email";
 import { formatDate } from "@/lib/companies";
 import type { Activity } from "@/lib/crm/types";
@@ -15,7 +15,13 @@ const KINDS = [
   { id: "email", label: "Email" },
 ] as const;
 
-type Kind = (typeof KINDS)[number]["id"];
+export type ActivityKind = (typeof KINDS)[number]["id"];
+
+type SaveActivity = (
+  kind: "note" | "call",
+  title: string,
+  body: string,
+) => Promise<RecordActionState & { activity?: Activity }>;
 
 const LABELS: Record<string, string> = {
   email: "Email",
@@ -28,42 +34,29 @@ const LABELS: Record<string, string> = {
   other: "Other",
 };
 
-export default function ContactActivities({
-  contactId,
-  email,
-  mailboxConnected,
-  profileNote,
-  activities,
-}: {
-  contactId: string;
-  email: string | null;
-  mailboxConnected: boolean;
-  profileNote: string | null;
-  activities: Activity[];
-}) {
+export function useActivityDraft(save: SaveActivity) {
   const router = useRouter();
   const saving = useRef(false);
-  const [kind, setKind] = useState<Kind>("note");
+  const [kind, setKindState] = useState<ActivityKind>("note");
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [added, setAdded] = useState<Activity[]>([]);
-  const [openId, setOpenId] = useState<string | null>(null);
 
-  const listed = [
-    ...added.filter(
-      (item) => !activities.some((activity) => activity.id === item.id),
-    ),
-    ...activities,
-  ];
-  const savedNote = profileNote?.trim() ?? "";
-  const showProfileNote =
-    savedNote !== "" &&
-    !listed.some(
-      (activity) =>
-        activity.type === "note" && activity.body?.trim() === savedNote,
-    );
+  function setKind(next: ActivityKind) {
+    setKindState(next);
+    setError(null);
+  }
+
+  function withAdded(activities: Activity[]) {
+    return [
+      ...added.filter(
+        (item) => !activities.some((activity) => activity.id === item.id),
+      ),
+      ...activities,
+    ];
+  }
 
   async function add(nextKind: "note" | "call") {
     if (saving.current || pending) return;
@@ -71,12 +64,7 @@ export default function ContactActivities({
     setPending(true);
     setError(null);
     try {
-      const result = await addContactActivityAction(
-        contactId,
-        nextKind,
-        title,
-        body,
-      );
+      const result = await save(nextKind, title, body);
       if (result.error) {
         setError(result.error);
         return;
@@ -94,9 +82,36 @@ export default function ContactActivities({
     }
   }
 
+  return {
+    kind,
+    setKind,
+    title,
+    setTitle,
+    body,
+    setBody,
+    error,
+    pending,
+    add,
+    withAdded,
+  };
+}
+
+export type ActivityDraft = ReturnType<typeof useActivityDraft>;
+
+export function ActivityComposer({
+  idPrefix,
+  draft,
+  about,
+  email,
+}: {
+  idPrefix: string;
+  draft: ActivityDraft;
+  about?: ReactNode;
+  email: ReactNode;
+}) {
+  const { kind, title, body, pending } = draft;
   return (
-    <section className="border-line-strong flex flex-col gap-3 border-t pt-4">
-      <h2>Activities</h2>
+    <>
       <div
         className="flex flex-wrap gap-1"
         role="group"
@@ -109,29 +124,27 @@ export default function ContactActivities({
             size="sm"
             type="button"
             aria-pressed={kind === item.id}
-            onClick={() => {
-              setKind(item.id);
-              setError(null);
-            }}
+            onClick={() => draft.setKind(item.id)}
           >
             {item.label}
           </Button>
         ))}
       </div>
-      {error && (
+      {about}
+      {draft.error && (
         <p role="alert" className="caption-style text-danger">
-          {error}
+          {draft.error}
         </p>
       )}
       {kind === "note" && (
         <div className="flex flex-col gap-2">
-          <label className="sr-only" htmlFor={`activity-note-${contactId}`}>
+          <label className="sr-only" htmlFor={`activity-note-${idPrefix}`}>
             Note
           </label>
           <textarea
-            id={`activity-note-${contactId}`}
+            id={`activity-note-${idPrefix}`}
             value={body}
-            onChange={(event) => setBody(event.target.value)}
+            onChange={(event) => draft.setBody(event.target.value)}
             placeholder="Write a note"
             maxLength={10000}
             className="border-line-strong bg-secondary min-h-20 w-full rounded-lg border px-3 py-2 text-[14px] leading-5 outline-none"
@@ -142,7 +155,7 @@ export default function ContactActivities({
             type="button"
             className="self-start"
             disabled={pending || body.trim() === ""}
-            onClick={() => add("note")}
+            onClick={() => draft.add("note")}
           >
             {pending ? "Saving…" : "Add note"}
           </Button>
@@ -150,30 +163,27 @@ export default function ContactActivities({
       )}
       {kind === "call" && (
         <div className="flex flex-col gap-2">
-          <label className="sr-only" htmlFor={`activity-call-${contactId}`}>
+          <label className="sr-only" htmlFor={`activity-call-${idPrefix}`}>
             Call summary
           </label>
           <Input
-            id={`activity-call-${contactId}`}
+            id={`activity-call-${idPrefix}`}
             value={title}
             autoComplete="off"
-            onChange={(event) => setTitle(event.target.value)}
+            onChange={(event) => draft.setTitle(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter") event.preventDefault();
             }}
             placeholder="What was the call about?"
             maxLength={200}
           />
-          <label
-            className="sr-only"
-            htmlFor={`activity-call-body-${contactId}`}
-          >
+          <label className="sr-only" htmlFor={`activity-call-body-${idPrefix}`}>
             Call details
           </label>
           <textarea
-            id={`activity-call-body-${contactId}`}
+            id={`activity-call-body-${idPrefix}`}
             value={body}
-            onChange={(event) => setBody(event.target.value)}
+            onChange={(event) => draft.setBody(event.target.value)}
             placeholder="Details"
             maxLength={10000}
             className="border-line-strong bg-secondary min-h-20 w-full rounded-lg border px-3 py-2 text-[14px] leading-5 outline-none"
@@ -184,24 +194,97 @@ export default function ContactActivities({
             type="button"
             className="self-start"
             disabled={pending || (title.trim() === "" && body.trim() === "")}
-            onClick={() => add("call")}
+            onClick={() => draft.add("call")}
           >
             {pending ? "Saving…" : "Add call"}
           </Button>
         </div>
       )}
-      {kind === "email" && (
-        <ContactEmail
-          contactId={contactId}
-          email={email}
-          mailboxConnected={mailboxConnected}
+      {kind === "email" && email}
+    </>
+  );
+}
+
+export function ActivityTimeline({
+  activities,
+  showContact,
+  lead,
+  empty,
+}: {
+  activities: Activity[];
+  showContact?: boolean;
+  lead?: ReactNode;
+  empty: string;
+}) {
+  const [openId, setOpenId] = useState<string | null>(null);
+
+  if (activities.length === 0 && !lead) {
+    return <p className="caption-style text-subtle">{empty}</p>;
+  }
+
+  return (
+    <ul className="flex flex-col gap-3">
+      {lead}
+      {activities.map((activity) => (
+        <ActivityItem
+          key={activity.id}
+          activity={activity}
+          showContact={showContact}
+          open={openId === activity.id}
+          onToggle={() =>
+            setOpenId(openId === activity.id ? null : activity.id)
+          }
         />
-      )}
-      {listed.length === 0 && !showProfileNote ? (
-        <p className="caption-style text-subtle">No activity yet.</p>
-      ) : (
-        <ul className="flex flex-col gap-3">
-          {showProfileNote && (
+      ))}
+    </ul>
+  );
+}
+
+export default function ContactActivities({
+  contactId,
+  email,
+  mailboxConnected,
+  profileNote,
+  activities,
+}: {
+  contactId: string;
+  email: string | null;
+  mailboxConnected: boolean;
+  profileNote: string | null;
+  activities: Activity[];
+}) {
+  const draft = useActivityDraft((kind, title, body) =>
+    addActivityAction({ contactId }, kind, title, body),
+  );
+
+  const listed = draft.withAdded(activities);
+  const savedNote = profileNote?.trim() ?? "";
+  const showProfileNote =
+    savedNote !== "" &&
+    !listed.some(
+      (activity) =>
+        activity.type === "note" && activity.body?.trim() === savedNote,
+    );
+
+  return (
+    <section className="border-line-strong flex flex-col gap-3 border-t pt-4">
+      <h2>Activities</h2>
+      <ActivityComposer
+        idPrefix={contactId}
+        draft={draft}
+        email={
+          <ContactEmail
+            contactId={contactId}
+            email={email}
+            mailboxConnected={mailboxConnected}
+          />
+        }
+      />
+      <ActivityTimeline
+        activities={listed}
+        empty="No activity yet."
+        lead={
+          showProfileNote && (
             <li className="flex flex-col gap-1">
               <span className="text-[14px] leading-5">Note</span>
               <p className="text-[14px] leading-5 whitespace-pre-wrap">
@@ -211,35 +294,31 @@ export default function ContactActivities({
                 Saved on the contact
               </span>
             </li>
-          )}
-          {listed.map((activity) => (
-            <ActivityItem
-              key={activity.id}
-              activity={activity}
-              open={openId === activity.id}
-              onToggle={() =>
-                setOpenId(openId === activity.id ? null : activity.id)
-              }
-            />
-          ))}
-        </ul>
-      )}
+          )
+        }
+      />
     </section>
   );
 }
 
 function ActivityItem({
   activity,
+  showContact,
   open,
   onToggle,
 }: {
   activity: Activity;
+  showContact?: boolean;
   open: boolean;
   onToggle: () => void;
 }) {
   const label = activityLabel(activity);
   const heading = activity.title ? `${label} · ${activity.title}` : label;
   const when = formatDate(activity.occurredAt);
+  const meta =
+    showContact && activity.contactName
+      ? `${activity.contactName} · ${when}`
+      : when;
 
   if (activity.type === "email" && activity.body) {
     const panelId = `activity-email-${activity.id}`;
@@ -256,7 +335,7 @@ function ActivityItem({
         >
           <span className="flex w-full flex-col gap-1">
             <span>{heading}</span>
-            <span className="caption-style text-subtle">{when}</span>
+            <span className="caption-style text-subtle">{meta}</span>
           </span>
         </Button>
         {open && (
@@ -279,7 +358,7 @@ function ActivityItem({
           {activity.body}
         </p>
       )}
-      <span className="caption-style text-subtle">{when}</span>
+      <span className="caption-style text-subtle">{meta}</span>
     </li>
   );
 }

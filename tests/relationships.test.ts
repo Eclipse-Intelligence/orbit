@@ -13,7 +13,12 @@ import {
   updateContact,
   upsertContact,
 } from "@/lib/crm/contacts";
-import { createActivity, listActivities } from "@/lib/crm/activities";
+import {
+  createActivity,
+  listActivities,
+  listCompanyTimeline,
+  logActivity,
+} from "@/lib/crm/activities";
 import { CrmError } from "@/lib/crm/errors";
 import { ingestLead } from "@/lib/crm/leads";
 import { createOpportunity, updateOpportunity } from "@/lib/crm/opportunities";
@@ -283,6 +288,112 @@ describe("contacts, opportunities, and next actions", () => {
     );
     const foreign = await findContactsToLink(other, homeId, "vic");
     assert.deepEqual(foreign.map((item) => item.lastName), ["Stranger"]);
+  });
+
+  it("merges company and contact activity into one company timeline", async () => {
+    const owner = await createUser("timeline@example.com", "Timeline");
+    const other = await createUser("timeline-other@example.com", "Other");
+    const home = await createCompany(owner, { name: "Time Home", domain: "time-home.example" });
+    const away = await createCompany(owner, { name: "Time Away", domain: "time-away.example" });
+    const homeId = home.body.company.id;
+    const awayId = away.body.company.id;
+    const resident = await createContact(owner, {
+      companyId: homeId,
+      firstName: "Rae",
+      lastName: "Resident",
+      email: "rae@time-home.example",
+    });
+    const mover = await createContact(owner, {
+      companyId: awayId,
+      firstName: "Mo",
+      lastName: "Mover",
+    });
+    const before = await createActivity(owner, {
+      type: "call",
+      title: "Call before joining",
+      contactId: mover.body.contact.id,
+      occurredAt: "2026-01-01T09:00:00.000Z",
+    });
+    assert.equal(before.body.activity.companyId, awayId);
+    const elsewhere = await createActivity(owner, {
+      type: "note",
+      body: "Only about Away",
+      companyId: awayId,
+    });
+    await updateContact(owner, mover.body.contact.id, { companyId: homeId });
+
+    const companyCall = await logActivity(owner, { companyId: homeId }, "call", "Quarterly check-in", "");
+    assert.equal(companyCall.type, "call");
+    assert.equal(companyCall.companyId, homeId);
+    assert.equal(companyCall.contactId, null);
+    assert.equal(companyCall.metadata.source, "web");
+    const companyNote = await logActivity(owner, { companyId: homeId, contactId: null }, "note", "", "Board approved");
+    assert.equal(companyNote.contactId, null);
+    assert.equal(companyNote.companyId, homeId);
+    const residentNote = await logActivity(
+      owner,
+      { companyId: homeId, contactId: resident.body.contact.id },
+      "note",
+      "",
+      "Rae is the buyer",
+    );
+    assert.equal(residentNote.contactId, resident.body.contact.id);
+    assert.equal(residentNote.companyId, homeId);
+
+    await assert.rejects(
+      () => logActivity(owner, { companyId: homeId }, "note", "", "  "),
+      (error: unknown) => error instanceof CrmError && error.code === "invalid_input",
+    );
+    await assert.rejects(
+      () => logActivity(owner, {}, "call", "No target", ""),
+      (error: unknown) => error instanceof CrmError && error.code === "invalid_input",
+    );
+    const stranger = await createContact(owner, { companyId: awayId, firstName: "Sam" });
+    await assert.rejects(
+      () => logActivity(owner, { companyId: homeId, contactId: stranger.body.contact.id }, "note", "", "Wrong"),
+      (error: unknown) => error instanceof CrmError && error.code === "invalid_input",
+    );
+    await assert.rejects(
+      () => logActivity(other, { companyId: homeId }, "note", "", "Not mine"),
+      (error: unknown) => error instanceof CrmError && error.code === "not_found",
+    );
+
+    const theirs = await createCompany(other, { name: "Time Theirs", domain: "time-theirs.example" });
+    const theirNote = await logActivity(other, { companyId: theirs.body.company.id }, "note", "", "Theirs");
+
+    const context = await getCompanyContext(owner, homeId);
+    const ids = context.timeline.map((item) => item.id);
+    assert.deepEqual(new Set(ids), new Set([
+      companyCall.id,
+      companyNote.id,
+      residentNote.id,
+      before.body.activity.id,
+    ]));
+    assert.equal(ids.includes(elsewhere.body.activity.id), false);
+    assert.equal(ids.includes(theirNote.id), false);
+    assert.equal(ids.at(-1), before.body.activity.id);
+    const times = context.timeline.map((item) => Date.parse(item.occurredAt));
+    assert.deepEqual(times, [...times].sort((a, b) => b - a));
+    const old = context.timeline.find((item) => item.id === before.body.activity.id);
+    assert.equal(old?.contactName, "Mo Mover");
+    assert.equal(old?.companyId, awayId);
+    assert.equal(context.activities.some((item) => item.id === before.body.activity.id), false);
+
+    assert.deepEqual(await listCompanyTimeline(other, homeId), []);
+    assert.deepEqual(await listCompanyTimeline(owner, "not-a-uuid"), []);
+    assert.deepEqual(
+      (await listCompanyTimeline(other, theirs.body.company.id)).map((item) => item.id),
+      [theirNote.id],
+    );
+    await assert.rejects(
+      () => getCompanyContext(other, homeId),
+      (error: unknown) => error instanceof CrmError && error.code === "not_found",
+    );
+
+    await updateContact(owner, mover.body.contact.id, { companyId: null });
+    const after = await listCompanyTimeline(owner, homeId);
+    assert.equal(after.some((item) => item.id === before.body.activity.id), false);
+    assert.equal(after.some((item) => item.id === companyCall.id), true);
   });
 
   it("ingests a lead once per company and contact, including context and stale relationships", async () => {

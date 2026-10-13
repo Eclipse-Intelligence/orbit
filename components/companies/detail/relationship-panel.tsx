@@ -5,51 +5,30 @@ import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Input } from "@/components/_ui/input";
 import Tag from "@/components/_ui/tag";
-import {
-  addCompanyNoteAction,
-  addCompanyTaskAction,
-} from "@/app/(crm)/records";
+import { addCompanyTaskAction } from "@/app/(crm)/records";
 import DetailSection from "@/components/companies/detail/detail-section";
+import CompanyActivity from "@/components/companies/detail/company-activity";
 import CompanyContacts from "@/components/companies/detail/company-contacts";
 import { ConnectionMark } from "@/components/beautifui/record-marks";
-import {
-  formatDate,
-  formatMoney,
-  formatWhen,
-  relativeWhen,
-} from "@/lib/companies";
-import type { Activity, CompanyContext } from "@/lib/crm/types";
-
-const ACTIVITY_LABELS: Record<string, string> = {
-  email: "Email",
-  meeting: "Meeting",
-  call: "Call",
-  note: "Note",
-  research: "Research",
-  linkedin: "LinkedIn",
-  agent_update: "Agent update",
-  other: "Other",
-};
+import { formatMoney, formatWhen, relativeWhen } from "@/lib/companies";
+import type { CompanyContext } from "@/lib/crm/types";
 
 export default function RelationshipPanel({
   companyId,
   context,
   mailboxConnected,
-  activitiesByContact,
   onNavigate,
 }: {
   companyId: string;
   context: CompanyContext | null;
   mailboxConnected: boolean;
-  activitiesByContact: Record<string, Activity[]>;
   onNavigate?: () => void;
 }) {
   const router = useRouter();
-  const [note, setNote] = useState("");
   const [taskTitle, setTaskTitle] = useState("");
   const [dueAt, setDueAt] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState<"note" | "task" | null>(null);
+  const [pending, setPending] = useState(false);
 
   if (!context || context.company.id !== companyId) {
     return (
@@ -61,23 +40,10 @@ export default function RelationshipPanel({
 
   const last = context.lastInteraction;
 
-  async function saveNote() {
-    setPending("note");
-    const result = await addCompanyNoteAction(companyId, note);
-    setPending(null);
-    if (result.error) {
-      setError(result.error);
-      return;
-    }
-    setNote("");
-    setError(null);
-    router.refresh();
-  }
-
   async function saveTask() {
-    setPending("task");
+    setPending(true);
     const result = await addCompanyTaskAction(companyId, taskTitle, dueAt);
-    setPending(null);
+    setPending(false);
     if (result.error) {
       setError(result.error);
       return;
@@ -119,31 +85,6 @@ export default function RelationshipPanel({
         <div className="flex flex-col gap-2">
           <label
             className="caption-style text-subtle"
-            htmlFor={`note-${companyId}`}
-          >
-            Add a note
-          </label>
-          <textarea
-            id={`note-${companyId}`}
-            value={note}
-            onChange={(event) => setNote(event.target.value)}
-            placeholder="What did you discuss?"
-            className="border-line-strong bg-secondary min-h-20 w-full rounded-lg border px-3 py-2 text-[14px] leading-5 outline-none"
-          />
-          <Button
-            variant="secondary"
-            size="sm"
-            type="button"
-            className="self-start"
-            disabled={pending !== null || note.trim() === ""}
-            onClick={saveNote}
-          >
-            {pending === "note" ? "Saving…" : "Save note"}
-          </Button>
-        </div>
-        <div className="flex flex-col gap-2">
-          <label
-            className="caption-style text-subtle"
             htmlFor={`task-${companyId}`}
           >
             Next action
@@ -171,10 +112,10 @@ export default function RelationshipPanel({
             size="sm"
             type="button"
             className="self-start"
-            disabled={pending !== null || taskTitle.trim() === ""}
+            disabled={pending || taskTitle.trim() === ""}
             onClick={saveTask}
           >
-            {pending === "task" ? "Saving…" : "Add next action"}
+            {pending ? "Saving…" : "Add next action"}
           </Button>
         </div>
       </DetailSection>
@@ -182,8 +123,6 @@ export default function RelationshipPanel({
       <CompanyContacts
         companyId={companyId}
         contacts={context.contacts}
-        mailboxConnected={mailboxConnected}
-        activitiesByContact={activitiesByContact}
         onNavigate={onNavigate}
       />
 
@@ -240,30 +179,12 @@ export default function RelationshipPanel({
         )}
       </DetailSection>
 
-      <DetailSection title="Timeline" className="shadow-none">
-        {context.activities.length === 0 ? (
-          <p className="caption-style text-subtle">No interactions yet.</p>
-        ) : (
-          <ul className="flex flex-col gap-3">
-            {context.activities.map((activity) => (
-              <li key={activity.id} className="flex flex-col gap-1">
-                <span className="text-[14px] leading-5">
-                  {ACTIVITY_LABELS[activity.type] ?? activity.type}
-                  {activity.title ? ` · ${activity.title}` : ""}
-                </span>
-                {activity.body && (
-                  <span className="caption-style text-soft">
-                    {activity.body}
-                  </span>
-                )}
-                <span className="caption-style text-subtle">
-                  {formatDate(activity.occurredAt)}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </DetailSection>
+      <CompanyActivity
+        companyId={companyId}
+        contacts={context.contacts}
+        timeline={context.timeline}
+        mailboxConnected={mailboxConnected}
+      />
     </>
   );
 }

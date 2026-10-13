@@ -10,7 +10,6 @@ import { activeFilterCount } from "@/lib/companies";
 import { useCompaniesStore } from "@/stores/companies-store";
 import type { Viewer } from "@/components/crm/viewer";
 import type {
-  Activity,
   Company,
   CompanyContext,
   CompanyListQuery,
@@ -29,7 +28,6 @@ type CompaniesProps = {
   viewer: Viewer;
   context: CompanyContext | null;
   mailboxConnected: boolean;
-  activitiesByContact: Record<string, Activity[]>;
 };
 
 export default function Companies({
@@ -42,7 +40,6 @@ export default function Companies({
   viewer,
   context,
   mailboxConnected,
-  activitiesByContact,
 }: CompaniesProps) {
   const serverKey = companies
     .map(
@@ -105,7 +102,6 @@ export default function Companies({
         members={members}
         context={context}
         mailboxConnected={mailboxConnected}
-        activitiesByContact={activitiesByContact}
         onSaved={upsertLocal}
         onArchived={removeLocal}
       />

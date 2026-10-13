@@ -4,7 +4,6 @@ import { PAGE_SIZE, pageFromParams, pageOffset } from "@/components/crm/paging";
 import { getUserActor } from "@/lib/auth/user";
 import { listCompanies, listMembers } from "@/lib/crm/companies";
 import { CrmError } from "@/lib/crm/errors";
-import { listActivitiesByContact } from "@/lib/crm/activities";
 import { getMailbox } from "@/lib/crm/inbox";
 import { getCompanyContext } from "@/lib/crm/relationships";
 import { companyQueryFromSearchParams } from "@/lib/crm/validation";
@@ -46,12 +45,6 @@ export default async function CompaniesPage({
       : Promise.resolve(null),
     getMailbox(user),
   ]);
-  const activitiesByContact = context
-    ? await listActivitiesByContact(
-        user,
-        context.contacts.map((contact) => contact.id),
-      )
-    : {};
 
   return (
     <Companies
@@ -63,7 +56,6 @@ export default async function CompaniesPage({
       members={members}
       context={context}
       mailboxConnected={mailbox?.status === "connected"}
-      activitiesByContact={activitiesByContact}
       viewer={{
         id: user.userId,
         name: user.fullName || user.email,

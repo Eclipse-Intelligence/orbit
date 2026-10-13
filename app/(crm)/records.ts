@@ -3,7 +3,11 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getUserActor } from "@/lib/auth/user";
-import { createActivity } from "@/lib/crm/activities";
+import {
+  createActivity,
+  logActivity,
+  type LoggedActivityType,
+} from "@/lib/crm/activities";
 import { actionError } from "@/lib/companies";
 import { createContact, getContact, updateContact } from "@/lib/crm/contacts";
 import { createOpportunity, updateOpportunity } from "@/lib/crm/opportunities";
@@ -208,56 +212,24 @@ export async function completeTaskAction(
   }
 }
 
-export async function addContactActivityAction(
-  contactId: string,
-  type: "note" | "call" | "email",
+export async function addActivityAction(
+  target: { companyId?: string | null; contactId?: string | null },
+  type: LoggedActivityType,
   title: string,
   body: string,
 ): Promise<RecordActionState & { activity?: Activity }> {
   const user = await requireUser();
-  const trimmedTitle = title.trim();
-  const trimmedBody = body.trim();
-  if (type === "note" && !trimmedBody)
-    return { error: "Write the note.", field: "body" };
-  if (type === "call" && !trimmedTitle && !trimmedBody) {
-    return { error: "Describe the call.", field: "title" };
-  }
-  if (type === "email" && !trimmedTitle)
-    return { error: "Add a subject.", field: "title" };
-  if (type === "email" && !trimmedBody)
-    return { error: "Write the email.", field: "body" };
   try {
-    const saved = await createActivity(
-      user,
-      {
-        type,
-        title: trimmedTitle || null,
-        body: trimmedBody || null,
-        contactId,
-        metadata: type === "email" ? { source: "manual" } : { source: "web" },
+    const activity = await logActivity(user, target, type, title, body, {
+      provenance: {
+        operation: target.contactId
+          ? "add_contact_activity"
+          : "add_company_activity",
+        source: "web",
       },
-      { provenance: { operation: "add_contact_activity", source: "web" } },
-    );
+    });
     refresh();
-    return { ok: true, activity: saved.body.activity };
-  } catch (error) {
-    return actionError(error);
-  }
-}
-
-export async function addCompanyNoteAction(
-  companyId: string,
-  body: string,
-): Promise<RecordActionState> {
-  const user = await requireUser();
-  try {
-    await createActivity(
-      user,
-      { type: "note", body, companyId },
-      { provenance: { operation: "add_note", source: "web" } },
-    );
-    refresh();
-    return { ok: true };
+    return { ok: true, activity };
   } catch (error) {
     return actionError(error);
   }
