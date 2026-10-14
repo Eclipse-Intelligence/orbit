@@ -27,6 +27,15 @@ import {
 } from "@/lib/crm/types";
 import { parseDateTime } from "@/lib/time";
 
+const ACTOR_NAME_SQL = `coalesce(
+      nullif(trim(pr.full_name), ''),
+      nullif(trim(pr.email), ''),
+      nullif(trim(ag.name), '')
+    )`;
+
+const ACTOR_JOIN_SQL = `left join crm.profiles pr on pr.id = a.actor_user_id
+  left join crm.agents ag on ag.id = a.actor_agent_id`;
+
 const ACTIVITY_SQL = `
   select
     a.id,
@@ -47,12 +56,14 @@ const ACTIVITY_SQL = `
     op.name as opportunity_name,
     a.actor_user_id,
     a.actor_agent_id,
+    ${ACTOR_NAME_SQL} as actor_name,
     a.metadata,
     a.created_at
   from crm.activities a
   left join crm.companies co on co.id = a.company_id
   left join crm.contacts ct on ct.id = a.contact_id
   left join crm.opportunities op on op.id = a.opportunity_id
+  ${ACTOR_JOIN_SQL}
 `;
 
 type ActivityRow = {
@@ -70,6 +81,7 @@ type ActivityRow = {
   opportunity_name: string | null;
   actor_user_id: string | null;
   actor_agent_id: string | null;
+  actor_name: string | null;
   metadata: Record<string, unknown> | null;
   created_at: Date | string;
 };
@@ -90,6 +102,7 @@ function mapActivity(row: ActivityRow): Activity {
     opportunityName: row.opportunity_name,
     actorUserId: row.actor_user_id,
     actorAgentId: row.actor_agent_id,
+    actorName: row.actor_name,
     metadata: row.metadata ?? {},
     createdAt: iso(row.created_at) ?? new Date(0).toISOString(),
   };
@@ -312,7 +325,7 @@ export async function listActivitiesByContact(
       `select
          id, workspace_id, type, title, body, occurred_at, company_id, company_name,
          contact_id, contact_name, opportunity_id, opportunity_name,
-         actor_user_id, actor_agent_id, metadata, created_at
+         actor_user_id, actor_agent_id, actor_name, metadata, created_at
        from (
          select
            a.id,
@@ -333,6 +346,7 @@ export async function listActivitiesByContact(
            op.name as opportunity_name,
            a.actor_user_id,
            a.actor_agent_id,
+           ${ACTOR_NAME_SQL} as actor_name,
            a.metadata,
            a.created_at,
            row_number() over (
@@ -343,6 +357,7 @@ export async function listActivitiesByContact(
          left join crm.companies co on co.id = a.company_id
          left join crm.contacts ct on ct.id = a.contact_id
          left join crm.opportunities op on op.id = a.opportunity_id
+         ${ACTOR_JOIN_SQL}
          where a.workspace_id = $1 and a.contact_id = any($2::uuid[])
        ) ranked
        where rn <= 40

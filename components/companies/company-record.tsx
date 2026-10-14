@@ -221,6 +221,7 @@ export default function CompanyRecord({
             timeline={context.timeline}
             insights={context.insights}
             mailboxConnected={mailboxConnected}
+            viewerId={viewer.id}
           />
         }
       />

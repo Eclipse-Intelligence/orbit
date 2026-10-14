@@ -10,6 +10,7 @@ import {
   type StoredConnection,
 } from "@/lib/crm/inbox";
 import { canonicalEmail } from "@/lib/crm/normalize";
+import { formatCallDuration } from "@/lib/crm/timeline";
 import type { UserActor } from "@/lib/crm/types";
 import {
   appAccessToken,
@@ -74,17 +75,7 @@ export function callDirection(callType: string | null | undefined) {
   return null;
 }
 
-export function formatCallDuration(seconds: number | null | undefined) {
-  const total = Math.max(0, Math.round(seconds ?? 0));
-  const hours = Math.floor(total / 3600);
-  const minutes = Math.floor((total % 3600) / 60);
-  const rest = total % 60;
-  const parts: string[] = [];
-  if (hours) parts.push(`${hours} h`);
-  if (minutes) parts.push(`${minutes} min`);
-  if (rest || parts.length === 0) parts.push(`${rest} s`);
-  return parts.join(" ");
-}
+export { formatCallDuration };
 
 export function callTitle(direction: CallDirection, name: string) {
   return `${direction === "outbound" ? "Call with" : "Call from"} ${name}`.slice(

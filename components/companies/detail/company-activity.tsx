@@ -28,12 +28,14 @@ export default function CompanyActivity({
   timeline,
   insights,
   mailboxConnected,
+  viewerId,
 }: {
   companyId: string;
   contacts: Contact[];
   timeline: Activity[];
   insights: Record<string, CallInsight>;
   mailboxConnected: boolean;
+  viewerId?: string | null;
 }) {
   const [picked, setPicked] = useState<string | null>(null);
   const [filter, setFilter] = useState(ALL);
@@ -85,99 +87,100 @@ export default function CompanyActivity({
 
   return (
     <DetailSection title="Activity" className="shadow-none">
-      <div className="flex flex-col gap-3">
-        <ActivityComposer
-          idPrefix={companyId}
-          draft={draft}
-          about={
-            <div className="flex flex-col gap-2">
-              <label className="caption-style text-subtle" htmlFor={aboutId}>
-                About
-              </label>
-              {emailing ? (
-                <Select
-                  value={recipient?.id ?? ""}
-                  onValueChange={setPicked}
-                  disabled={reachable.length === 0}
-                >
-                  <SelectTrigger id={aboutId}>
-                    <SelectValue placeholder="Choose a contact" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {reachable.map((item) => (
-                      <SelectItem key={item.id} value={item.id}>
-                        {item.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              ) : (
-                <Select value={about} onValueChange={setPicked}>
-                  <SelectTrigger id={aboutId}>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={NONE}>No specific contact</SelectItem>
-                    {contacts.map((item) => (
-                      <SelectItem key={item.id} value={item.id}>
-                        {item.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
-            </div>
-          }
-          email={
-            <ContactEmail
-              contactId={recipient?.id ?? null}
-              companyId={companyId}
-              email={recipient?.email ?? null}
-              mailboxConnected={mailboxConnected}
-              idPrefix={companyId}
-              unavailable={
-                reachable.length === 0
-                  ? "No one at this company has an email address yet."
-                  : "Choose who to email."
-              }
-            />
-          }
-        />
-      </div>
-      {people.length > 0 && (
-        <div
-          className="flex flex-wrap gap-1"
-          role="group"
-          aria-label="Filter activity by contact"
-        >
-          <Button
-            variant={active === ALL ? "primary" : "subtle"}
-            size="sm"
-            type="button"
-            aria-pressed={active === ALL}
-            onClick={() => setFilter(ALL)}
-          >
-            All
-          </Button>
-          {people.map((person) => (
-            <Button
-              key={person.id}
-              variant={active === person.id ? "primary" : "subtle"}
-              size="sm"
-              type="button"
-              aria-pressed={active === person.id}
-              onClick={() => setFilter(person.id)}
-            >
-              {person.name}
-            </Button>
-          ))}
-        </div>
-      )}
+      <ActivityComposer
+        idPrefix={companyId}
+        draft={draft}
+        about={
+          <div className="flex flex-col gap-2">
+            <label className="caption-style text-subtle" htmlFor={aboutId}>
+              About
+            </label>
+            {emailing ? (
+              <Select
+                value={recipient?.id ?? ""}
+                onValueChange={setPicked}
+                disabled={reachable.length === 0}
+              >
+                <SelectTrigger id={aboutId}>
+                  <SelectValue placeholder="Choose a contact" />
+                </SelectTrigger>
+                <SelectContent>
+                  {reachable.map((item) => (
+                    <SelectItem key={item.id} value={item.id}>
+                      {item.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : (
+              <Select value={about} onValueChange={setPicked}>
+                <SelectTrigger id={aboutId}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NONE}>No specific contact</SelectItem>
+                  {contacts.map((item) => (
+                    <SelectItem key={item.id} value={item.id}>
+                      {item.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
+        }
+        email={
+          <ContactEmail
+            contactId={recipient?.id ?? null}
+            companyId={companyId}
+            email={recipient?.email ?? null}
+            mailboxConnected={mailboxConnected}
+            idPrefix={companyId}
+            unavailable={
+              reachable.length === 0
+                ? "No one at this company has an email address yet."
+                : "Choose who to email."
+            }
+          />
+        }
+      />
       <ActivityTimeline
         activities={shown}
         insights={insights}
         showContact
+        viewerId={viewerId}
         empty="No activity yet."
+        filters={
+          people.length > 0 && (
+            <div
+              className="flex flex-wrap gap-1"
+              role="group"
+              aria-label="Filter activity by contact"
+            >
+              <Button
+                variant={active === ALL ? "primary" : "subtle"}
+                size="sm"
+                type="button"
+                aria-pressed={active === ALL}
+                onClick={() => setFilter(ALL)}
+              >
+                Everyone
+              </Button>
+              {people.map((person) => (
+                <Button
+                  key={person.id}
+                  variant={active === person.id ? "primary" : "subtle"}
+                  size="sm"
+                  type="button"
+                  aria-pressed={active === person.id}
+                  onClick={() => setFilter(person.id)}
+                >
+                  {person.name}
+                </Button>
+              ))}
+            </div>
+          )
+        }
       />
     </DetailSection>
   );
