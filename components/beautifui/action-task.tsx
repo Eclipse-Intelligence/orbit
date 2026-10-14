@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import Button from "@/components/_ui/button";
 import { EntityChip } from "@/components/beautifui/record-marks";
+import { ClickUpBadge } from "@/components/crm/clickup";
 import { relativeWhen } from "@/lib/companies";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import type { Task } from "@/lib/crm/types";
@@ -23,7 +24,9 @@ export default function ActionTask({
   const [open, setOpen] = useState(false);
   const overdue =
     Boolean(task.dueAt) && !task.completedAt && new Date(task.dueAt ?? 0).getTime() < now;
-  const hasDetail = Boolean(task.description || task.contactName || task.opportunityName);
+  const hasDetail = Boolean(
+    task.description || task.contactName || task.opportunityName || task.clickupError,
+  );
 
   return (
     <li className="border-border overflow-hidden border-b">
@@ -72,6 +75,7 @@ export default function ActionTask({
             <path d="m6 9 6 6 6-6" />
           </svg>
         </button>
+        <ClickUpBadge task={task} />
         {task.companyName && (
           <EntityChip
             name={task.companyName}
@@ -110,6 +114,7 @@ export default function ActionTask({
               </p>
             )}
             {task.opportunityName && <p>{task.opportunityName}</p>}
+            {task.clickupError && <p className="text-danger">ClickUp: {task.clickupError}</p>}
             {!hasDetail && <p>No extra detail.</p>}
             {task.priority !== "normal" && <p>Priority {task.priority}</p>}
           </div>

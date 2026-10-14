@@ -20,7 +20,7 @@ import type { ActivityWrite, UserActor, WorkspaceRole } from "@/lib/crm/types";
 export type ConversationSource = "granola" | "teams";
 export type ConversationKind = "meeting" | "call";
 export type ConversationStatus = "pending" | "filed" | "unfiled" | "ignored";
-export type IntegrationSource = "granola" | "teams_transcripts";
+export type IntegrationSource = "granola" | "teams_transcripts" | "clickup";
 
 export type Participant = { name: string | null; email: string | null };
 

@@ -3,6 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { cache } from "react";
 import CompanyRecord from "@/components/companies/company-record";
 import { getUserActor } from "@/lib/auth/user";
+import { getClickUpPicker } from "@/lib/crm/clickup";
 import { listMembers } from "@/lib/crm/companies";
 import { CrmError } from "@/lib/crm/errors";
 import { getMailbox } from "@/lib/crm/inbox";
@@ -41,7 +42,11 @@ export default async function CompanyPage({
   if (!user) redirect("/login");
   if (!context) notFound();
 
-  const [members, mailbox] = await Promise.all([listMembers(user), getMailbox(user)]);
+  const [members, mailbox, clickup] = await Promise.all([
+    listMembers(user),
+    getMailbox(user),
+    getClickUpPicker(user),
+  ]);
 
   return (
     <CompanyRecord
@@ -55,6 +60,7 @@ export default async function CompanyPage({
       context={context}
       members={members}
       mailboxConnected={mailbox?.status === "connected"}
+      clickup={clickup}
     />
   );
 }

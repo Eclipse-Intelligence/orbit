@@ -1,4 +1,5 @@
 import { syncCalls } from "@/lib/crm/calls";
+import { clickupActorFor, syncClickUp } from "@/lib/crm/clickup";
 import {
   backgroundTargets,
   errorText,
@@ -18,7 +19,10 @@ const STEP_MIN_MS = 3_000;
 
 export type CronAuth = "ok" | "unauthorized" | "unconfigured";
 
-export type SyncTarget = BackgroundTarget & { granola: UserActor | null };
+export type SyncTarget = BackgroundTarget & {
+  granola: UserActor | null;
+  clickup?: UserActor | null;
+};
 
 export type StepContext = { deadline: number; fetchImpl?: typeof fetch };
 
@@ -94,6 +98,16 @@ export const DEFAULT_STEPS: SyncStep[] = [
       }),
   },
   {
+    name: "clickup",
+    applies: (target) => Boolean(target.clickup),
+    run: (target, context) =>
+      syncClickUp({
+        actor: target.clickup ?? target.actor,
+        fetchImpl: context.fetchImpl,
+        deadline: context.deadline,
+      }),
+  },
+  {
     name: "summaries",
     applies: (target) => target.mailbox || Boolean(target.granola),
     run: async (target, context) => ({
@@ -122,13 +136,23 @@ export async function syncTargets(options: { fetchImpl?: typeof fetch } = {}) {
     }
   }
   let assigned = false;
-  const list: SyncTarget[] = targets
-    .map((target) => {
-      const mine = !assigned && granola && granola.workspaceId === target.actor.workspaceId;
-      if (mine) assigned = true;
-      return { ...target, granola: mine ? granola : null };
-    })
-    .filter((target) => target.mailbox || target.granola);
+  const clickupDone = new Set<string>();
+  const list: SyncTarget[] = [];
+  for (const target of targets) {
+    const mine = !assigned && granola && granola.workspaceId === target.actor.workspaceId;
+    if (mine) assigned = true;
+    let clickup: UserActor | null = null;
+    if (!clickupDone.has(target.actor.workspaceId)) {
+      clickupDone.add(target.actor.workspaceId);
+      try {
+        clickup = await clickupActorFor(target.members);
+      } catch (error) {
+        console.error("ClickUp target lookup failed", error);
+      }
+    }
+    const entry = { ...target, granola: mine ? granola : null, clickup };
+    if (entry.mailbox || entry.granola || entry.clickup) list.push(entry);
+  }
   return { targets: list, granolaError };
 }
 

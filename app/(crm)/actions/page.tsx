@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import ActionsScreen from "@/components/crm/actions-screen";
 import { getUserActor } from "@/lib/auth/user";
+import { getClickUpPicker } from "@/lib/crm/clickup";
 import { listCompanies } from "@/lib/crm/companies";
 import { getDueActions } from "@/lib/crm/relationships";
 import { TASK_VIEWS, type TaskView } from "@/lib/crm/types";
@@ -23,9 +24,10 @@ export default async function ActionsPage({
   const view = (TASK_VIEWS as readonly string[]).includes(requested)
     ? (requested as TaskView)
     : "today";
-  const [due, companies] = await Promise.all([
+  const [due, companies, clickup] = await Promise.all([
     getDueActions(user, view),
     listCompanies(user, { limit: 100, sort: "name", order: "asc" }),
+    getClickUpPicker(user),
   ]);
 
   return (
@@ -41,6 +43,7 @@ export default async function ActionsPage({
       tasks={due.tasks}
       companies={due.companies}
       companyChoices={companies.data}
+      clickup={clickup}
       now={requestTime()}
     />
   );

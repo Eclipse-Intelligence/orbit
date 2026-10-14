@@ -110,7 +110,7 @@ Every activity includes `actorUserId`, `actorAgentId`, and `actorName`: the full
 
 `POST /api/v1/tasks` creates one. A `dueAt` without a `Z` or offset is read as London time, and `today` and `overdue` are cut at midnight London time. `PATCH /api/v1/tasks/:id` updates it. `completed: true` sets `completed_at` without moving an existing completion time. `completed: false` reopens it.
 
-`POST /api/v1/tasks/:id/complete` marks it complete. `DELETE /api/v1/tasks/:id` archives it.
+`POST /api/v1/tasks/:id/complete` marks it complete. `DELETE /api/v1/tasks/:id` archives it. Each task also carries `clickupTaskId`, `clickupListId`, `clickupUrl`, and `clickupError` (null when it is not linked to ClickUp). Changes made through the API reach ClickUp on the next sync.
 
 ## Leads
 

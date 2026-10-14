@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Input } from "@/components/_ui/input";
+import ClickUpSettings from "@/components/crm/clickup-settings";
 import SectionHeader from "@/components/crm/section-header";
 import type { Viewer } from "@/components/crm/viewer";
 import {
@@ -11,6 +12,7 @@ import {
   createWebhookAction,
   saveStagesAction,
 } from "@/app/(crm)/settings/actions";
+import type { ClickUpSettingsView } from "@/lib/crm/clickup";
 import type { PipelineStage } from "@/lib/crm/types";
 import type { WebhookDelivery, WebhookEndpoint } from "@/lib/crm/webhooks";
 
@@ -32,12 +34,14 @@ export default function SettingsScreen({
   stages,
   endpoints,
   deliveries,
+  clickup,
 }: {
   viewer: Viewer;
   canAdmin: boolean;
   stages: PipelineStage[];
   endpoints: WebhookEndpoint[];
   deliveries: WebhookDelivery[];
+  clickup: ClickUpSettingsView;
 }) {
   const router = useRouter();
   const [drafts, setDrafts] = useState(stages);
@@ -202,6 +206,8 @@ export default function SettingsScreen({
             </Button>
           </div>
         </div>
+
+        <ClickUpSettings view={clickup} canAdmin={canAdmin} />
 
         <div className="flex max-w-[640px] flex-col gap-3">
           <h2>Webhooks</h2>

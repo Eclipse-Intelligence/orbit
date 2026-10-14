@@ -120,7 +120,7 @@ async function setup(email: string) {
 
 async function readyInsight(owner: UserActor, callId: string) {
   const { fetchImpl } = gateway([{ content: "```json\n" + JSON.stringify(GOOD) + "\n```" }]);
-  return summariseCall(owner, callId, VTT, { source: "manual", fetchImpl });
+  return summariseCall(owner, callId, VTT, { source: "manual", fetchImpl, autoAccept: false });
 }
 
 describe("call insights", () => {
@@ -178,19 +178,27 @@ describe("call insights", () => {
     assert.equal(insight.model, "claude-haiku-5-5");
     assert.equal(insight.source, "manual");
     assert.deepEqual(
-      insight.actionItems.map(({ title, owner: who, dueDate, status, taskId }) => ({
+      insight.actionItems.map(({ title, owner: who, dueDate, status }) => ({
         title,
         owner: who,
         dueDate,
         status,
-        taskId,
       })),
       [
-        { title: "Send the revised quote", owner: "me", dueDate: "2026-10-16", status: "suggested", taskId: null },
-        { title: "Jane to send the signed order form", owner: "them", dueDate: "2026-10-16", status: "suggested", taskId: null },
-        { title: "Book a follow-up", owner: null, dueDate: null, status: "suggested", taskId: null },
+        { title: "Send the revised quote", owner: "me", dueDate: "2026-10-16", status: "accepted" },
+        { title: "Jane to send the signed order form", owner: "them", dueDate: "2026-10-16", status: "accepted" },
+        { title: "Book a follow-up", owner: null, dueDate: null, status: "accepted" },
       ],
     );
+    const autoTasks = await getAdminPool().query<{ title: string; contact_id: string | null }>(
+      "select title, contact_id from crm.tasks where id = any($1::uuid[]) order by title",
+      [insight.actionItems.map((item) => item.taskId)],
+    );
+    assert.deepEqual(
+      autoTasks.rows.map((row) => row.title),
+      ["Book a follow-up", "Jane to send the signed order form", "Send the revised quote"],
+    );
+    assert.ok(autoTasks.rows.every((row) => row.contact_id === contactId));
 
     assert.equal(requests.length, 1);
     const request = requests[0];

@@ -9,26 +9,38 @@ import { addCompanyTaskAction } from "@/app/(crm)/records";
 import DetailSection from "@/components/companies/detail/detail-section";
 import CompanyContacts from "@/components/companies/detail/company-contacts";
 import { ConnectionMark } from "@/components/beautifui/record-marks";
+import { ClickUpBadge, ClickUpPickerField } from "@/components/crm/clickup";
 import { formatMoney, formatWhen, relativeWhen } from "@/lib/companies";
+import type { ClickUpPicker } from "@/lib/crm/clickup";
 import type { CompanyContext } from "@/lib/crm/types";
 
 export default function RelationshipPanel({
   context,
+  clickup,
 }: {
   context: CompanyContext;
+  clickup: ClickUpPicker | null;
 }) {
   const companyId = context.company.id;
   const router = useRouter();
   const [taskTitle, setTaskTitle] = useState("");
   const [dueAt, setDueAt] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [toClickUp, setToClickUp] = useState(true);
+  const [clickupListId, setClickupListId] = useState(clickup?.listId ?? "");
 
   const last = context.lastInteraction;
 
   async function saveTask() {
     setPending(true);
-    const result = await addCompanyTaskAction(companyId, taskTitle, dueAt);
+    const result = await addCompanyTaskAction(
+      companyId,
+      taskTitle,
+      dueAt,
+      clickup && toClickUp ? clickupListId : null,
+    );
     setPending(false);
     if (result.error) {
       setError(result.error);
@@ -37,6 +49,7 @@ export default function RelationshipPanel({
     setTaskTitle("");
     setDueAt("");
     setError(null);
+    setWarning(result.warning ?? null);
     router.refresh();
   }
 
@@ -93,6 +106,21 @@ export default function RelationshipPanel({
               if (event.key === "Enter") event.preventDefault();
             }}
           />
+          {clickup && (
+            <ClickUpPickerField
+              picker={clickup}
+              id={`task-${companyId}-clickup`}
+              checked={toClickUp}
+              onCheckedChange={setToClickUp}
+              listId={clickupListId}
+              onListChange={setClickupListId}
+            />
+          )}
+          {warning && (
+            <p role="status" className="caption-style text-soft">
+              {warning}
+            </p>
+          )}
           <Button
             variant="secondary"
             size="sm"
@@ -152,8 +180,9 @@ export default function RelationshipPanel({
             {context.tasks.map((task) => (
               <li key={task.id} className="flex flex-col gap-1">
                 <span className="text-[14px] leading-5">{task.title}</span>
-                <span className="caption-style text-subtle">
+                <span className="caption-style text-subtle flex flex-wrap items-center gap-2">
                   {task.dueAt ? `Due ${formatWhen(task.dueAt)}` : "No due date"}
+                  <ClickUpBadge task={task} />
                 </span>
               </li>
             ))}
