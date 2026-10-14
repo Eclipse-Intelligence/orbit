@@ -613,7 +613,7 @@ export async function acceptAllActionItems(
   if (insight.status !== "ready" || !actor.scopes.includes("tasks:write")) return insight;
   let latest = insight;
   for (const item of insight.actionItems) {
-    if (item.status !== "suggested") continue;
+    if (item.status !== "suggested" || item.owner !== "me") continue;
     try {
       latest = (await acceptActionItem(actor, insight.id, item.id, {}, {
         provenance: { operation: "auto_accept_call_action" },

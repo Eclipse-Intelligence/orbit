@@ -186,17 +186,17 @@ describe("call insights", () => {
       })),
       [
         { title: "Send the revised quote", owner: "me", dueDate: "2026-10-16", status: "accepted" },
-        { title: "Jane to send the signed order form", owner: "them", dueDate: "2026-10-16", status: "accepted" },
-        { title: "Book a follow-up", owner: null, dueDate: null, status: "accepted" },
+        { title: "Jane to send the signed order form", owner: "them", dueDate: "2026-10-16", status: "suggested" },
+        { title: "Book a follow-up", owner: null, dueDate: null, status: "suggested" },
       ],
     );
     const autoTasks = await getAdminPool().query<{ title: string; contact_id: string | null }>(
       "select title, contact_id from crm.tasks where id = any($1::uuid[]) order by title",
-      [insight.actionItems.map((item) => item.taskId)],
+      [insight.actionItems.map((item) => item.taskId).filter(Boolean)],
     );
     assert.deepEqual(
       autoTasks.rows.map((row) => row.title),
-      ["Book a follow-up", "Jane to send the signed order form", "Send the revised quote"],
+      ["Send the revised quote"],
     );
     assert.ok(autoTasks.rows.every((row) => row.contact_id === contactId));
 
