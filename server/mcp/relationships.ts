@@ -62,10 +62,12 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
   server.registerTool(
     "search_contacts",
     {
-      description: "Search people in the workspace by name, email, title, phone, or company.",
+      description:
+        "Search people in the workspace by name, email, title, phone, or company, optionally limited to one tag.",
       inputSchema: {
         query: z.string().optional(),
         company_id: z.uuid().optional(),
+        tag: z.string().optional(),
         limit: z.number().int().min(1).max(100).optional(),
       },
     },
@@ -74,6 +76,7 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
         listContacts(actor, {
           query: args.query,
           companyId: args.company_id,
+          tag: args.tag,
           limit: args.limit,
         }),
       ),
@@ -105,6 +108,11 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
         source: z.string().nullable().optional(),
         sourceReference: z.string().nullable().optional(),
         notes: z.string().nullable().optional(),
+        tags: z
+          .array(z.string())
+          .max(20)
+          .optional()
+          .describe("Replaces the contact's tags. Lowercased; up to 20, each up to 40 characters."),
         ...provenanceFields,
       },
     },
@@ -122,6 +130,7 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
           source: args.source,
           sourceReference: args.sourceReference,
           notes: args.notes,
+          tags: args.tags,
         };
         const result = await upsertContact(actor, write, {
           provenance: provenance(args, "upsert_contact"),
@@ -147,6 +156,8 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
         contactPhone: z.string().nullable().optional(),
         contactTitle: z.string().nullable().optional(),
         contactLinkedin: z.string().nullable().optional(),
+        companyTags: z.array(z.string()).max(20).optional(),
+        contactTags: z.array(z.string()).max(20).optional(),
         note: z.string().nullable().optional(),
         opportunityName: z.string().optional(),
         opportunityValue: z.number().nullable().optional(),
@@ -166,6 +177,7 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
                 website: args.website,
                 industry: args.industry,
                 lifecycle: args.lifecycle,
+                tags: args.companyTags,
               }
             : undefined;
         const contact =
@@ -181,6 +193,7 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
                 phone: args.contactPhone,
                 jobTitle: args.contactTitle,
                 linkedinUrl: args.contactLinkedin,
+                tags: args.contactTags,
               }
             : undefined;
         const result = await ingestLead(

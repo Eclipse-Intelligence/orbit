@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
+import { normalizeTag } from "@/lib/crm/normalize";
 import {
   ACTIVITY_TYPES,
   COMPANY_SORTS,
@@ -19,6 +20,7 @@ import {
 } from "@/lib/crm/types";
 
 const nullableText = z.string().nullable().optional();
+const tagList = z.array(z.string().max(200)).max(100).nullable().optional();
 
 export const companyWriteSchema = z
   .object({
@@ -32,6 +34,7 @@ export const companyWriteSchema = z
     ownerId: z.uuid().nullable().optional(),
     source: nullableText,
     sourceReference: nullableText,
+    tags: tagList,
   })
   .strict();
 
@@ -101,6 +104,11 @@ function ownerParam(params: URLSearchParams) {
   return owner;
 }
 
+function tagParam(params: URLSearchParams) {
+  const tag = normalizeTag(params.get("tag") ?? "").slice(0, 200);
+  return tag || undefined;
+}
+
 export function companyQueryFromSearchParams(
   params: URLSearchParams,
 ): CompanyListQuery {
@@ -122,6 +130,8 @@ export function companyQueryFromSearchParams(
   }
   if (order === "asc" || order === "desc") query.order = order;
   if (owner) query.ownerId = owner;
+  const tag = tagParam(params);
+  if (tag) query.tag = tag;
   if (params.get("include_archived") === "true") query.includeArchived = true;
   if (limit && Number.isFinite(Number(limit))) query.limit = Number(limit);
   if (offset && Number.isFinite(Number(offset))) query.offset = Number(offset);
@@ -141,6 +151,7 @@ export const contactWriteSchema = z
     source: nullableText,
     sourceReference: nullableText,
     notes: nullableText,
+    tags: tagList,
   })
   .strict();
 
@@ -293,6 +304,8 @@ export function contactQueryFromSearchParams(params: URLSearchParams): ContactLi
   if (companyId) query.companyId = companyId;
   const owner = ownerParam(params);
   if (owner) query.ownerId = owner;
+  const tag = tagParam(params);
+  if (tag) query.tag = tag;
   if (params.get("include_archived") === "true") query.includeArchived = true;
   return { ...query, ...paging(params) };
 }

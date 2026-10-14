@@ -155,6 +155,52 @@ export function cleanText(value: string | null | undefined, max: number, field: 
   return trimmed;
 }
 
+export const TAG_LIMIT = 20;
+export const TAG_MAX_LENGTH = 40;
+
+export function normalizeTag(value: string) {
+  return value.normalize("NFC").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+export function normalizeTags(values: readonly string[] | null | undefined, field = "tags") {
+  const tags: string[] = [];
+  for (const value of values ?? []) {
+    const tag = normalizeTag(value);
+    if (!tag) continue;
+    if (tag.length > TAG_MAX_LENGTH) {
+      throw new CrmError(
+        "invalid_input",
+        `Tags must be ${TAG_MAX_LENGTH} characters or fewer.`,
+        400,
+        { field },
+      );
+    }
+    if (tag.includes(";")) {
+      throw new CrmError("invalid_input", "Tags can't contain a semicolon.", 400, { field });
+    }
+    if (!tags.includes(tag)) tags.push(tag);
+  }
+  if (tags.length > TAG_LIMIT) {
+    throw new CrmError(
+      "invalid_input",
+      `A record can have at most ${TAG_LIMIT} tags.`,
+      400,
+      { field },
+    );
+  }
+  return tags;
+}
+
+export function sameTags(left: readonly string[], right: readonly string[]) {
+  if (left.length !== right.length) return false;
+  const set = new Set(left);
+  return set.size === new Set(right).size && right.every((tag) => set.has(tag));
+}
+
+export function parseTagList(value: string) {
+  return value.split(";");
+}
+
 export function normalizeCompanyWrite(
   input: CompanyWrite,
   mode: "create" | "patch" | "upsert",
@@ -247,6 +293,7 @@ export function normalizeCompanyWrite(
     if (input.ownerId === null || input.ownerId === "") next.ownerId = null;
     else next.ownerId = input.ownerId;
   }
+  if (input.tags !== undefined) next.tags = normalizeTags(input.tags);
 
   if (mode === "upsert" && next.name === undefined && next.domain === undefined) {
     throw new CrmError(

@@ -8,7 +8,7 @@ import { RememberList } from "@/components/crm/list-memory";
 import { useBulkSelection } from "@/hooks/use-bulk-selection";
 import { activeFilterCount } from "@/lib/companies";
 import type { Viewer } from "@/components/crm/viewer";
-import type { Company, CompanyListQuery, Member } from "@/lib/crm/types";
+import type { Company, CompanyListQuery, Member, TagCount } from "@/lib/crm/types";
 
 export type { Viewer };
 
@@ -19,6 +19,7 @@ type CompaniesProps = {
   now: number;
   filters: CompanyListQuery;
   members: Member[];
+  tags: TagCount[];
   viewer: Viewer;
   mailboxConnected: boolean;
 };
@@ -30,6 +31,7 @@ export default function Companies({
   now,
   filters,
   members,
+  tags,
   viewer,
   mailboxConnected,
 }: CompaniesProps) {
@@ -42,7 +44,12 @@ export default function Companies({
     <section id="companies" className="flex min-h-0 min-w-0 flex-1 flex-col">
       <RememberList list="companies" />
       <CompaniesHeader viewer={viewer} />
-      <CompaniesToolbar filters={filters} members={members} selection={selection} />
+      <CompaniesToolbar
+        filters={filters}
+        members={members}
+        tags={tags}
+        selection={selection}
+      />
       <CompaniesTable
         companies={companies}
         total={total}
@@ -51,6 +58,7 @@ export default function Companies({
         filtered={activeFilterCount(filters) > 0}
         selection={selection}
         mailboxConnected={mailboxConnected}
+        tags={tags}
       />
       <NewCompanyDialog members={members} viewerId={viewer.id} />
     </section>

@@ -16,12 +16,13 @@ import MeetingsCard from "@/components/crm/meetings-card";
 import RecordLayout from "@/components/crm/record-layout";
 import { Detail, DetailList } from "@/components/crm/record-form";
 import SectionHeader from "@/components/crm/section-header";
+import RecordTags from "@/components/crm/tags";
 import type { Viewer } from "@/components/crm/viewer";
 import { archiveCompanyAction } from "@/app/(crm)/actions";
 import { formatDate, LIFECYCLE_LABELS } from "@/lib/companies";
 import type { MeetingsSummary } from "@/lib/crm/calendar";
 import type { ClickUpPicker } from "@/lib/crm/clickup";
-import type { Company, CompanyContext, Member } from "@/lib/crm/types";
+import type { Company, CompanyContext, Member, TagCount } from "@/lib/crm/types";
 
 function externalUrl(value: string) {
   return /^https?:\/\//i.test(value) ? value : `https://${value}`;
@@ -38,6 +39,7 @@ export default function CompanyRecord({
   mailboxConnected,
   clickup,
   meetings,
+  tags,
 }: {
   viewer: Viewer;
   context: CompanyContext;
@@ -45,6 +47,7 @@ export default function CompanyRecord({
   mailboxConnected: boolean;
   clickup: ClickUpPicker | null;
   meetings: MeetingsSummary | null;
+  tags: TagCount[];
 }) {
   const router = useRouter();
   const listHref = useListHref("companies");
@@ -144,7 +147,7 @@ export default function CompanyRecord({
                   {company.name.slice(0, 1).toUpperCase()}
                 </span>
               </span>
-              <div className="flex min-w-0 flex-col gap-2 pt-1">
+              <div className="flex min-w-0 flex-1 flex-col gap-2 pt-1">
                 <h2 className="truncate leading-6">{company.name}</h2>
                 <span className="caption-style text-soft flex flex-wrap items-center gap-x-2 gap-y-1">
                   {company.domain && (
@@ -163,6 +166,12 @@ export default function CompanyRecord({
                       : `Updated ${formatDate(company.updatedAt)}`}
                   </span>
                 </span>
+                <RecordTags
+                  kind="company"
+                  id={company.id}
+                  tags={company.tags}
+                  suggestions={tags}
+                />
               </div>
             </div>
 

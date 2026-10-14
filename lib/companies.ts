@@ -45,6 +45,7 @@ export function activeFilterCount(filters: CompanyListQuery) {
     Boolean(filters.query),
     Boolean(filters.lifecycle),
     Boolean(filters.ownerId),
+    Boolean(filters.tag),
     !defaultSort,
   ].filter(Boolean).length;
 }
@@ -159,6 +160,7 @@ export function companiesCsvRows(
     ownerName: string | null;
     source: string | null;
     description: string | null;
+    tags: string[];
     createdAt: string;
     updatedAt: string;
   }[],
@@ -174,6 +176,7 @@ export function companiesCsvRows(
       "Owner",
       "Source",
       "Description",
+      "Tags",
       "Created",
       "Updated",
     ],
@@ -187,6 +190,7 @@ export function companiesCsvRows(
       company.ownerName ?? "",
       company.source ?? "",
       company.description ?? "",
+      company.tags.join("; "),
       company.createdAt,
       company.updatedAt,
     ]),

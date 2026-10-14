@@ -3,6 +3,7 @@
 import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import FilterMenu from "@/components/_common/filter-menu";
 import Button from "@/components/_ui/button";
 import {
   Dialog,
@@ -24,16 +25,18 @@ import Pager from "@/components/crm/pager";
 import RecordTransfer from "@/components/crm/record-transfer";
 import SectionHeader from "@/components/crm/section-header";
 import { CallLink, RecordList } from "@/components/crm/record-form";
+import { ANY_TAG, RowTags, tagFilterOptions, useTagHref } from "@/components/crm/tags";
 import type { Viewer } from "@/components/crm/viewer";
 import {
   archiveContactsAction,
   exportSelectedContactsAction,
   unarchiveContactsAction,
 } from "@/app/(crm)/bulk";
+import { bulkAddTagAction, bulkRemoveTagAction } from "@/app/(crm)/tags";
 import { useBulkSelection } from "@/hooks/use-bulk-selection";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import type { Recipient } from "@/lib/crm/personalise";
-import type { Company, Contact, Member } from "@/lib/crm/types";
+import type { Company, Contact, Member, TagCount } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
 
 const GRID_CLASS =
@@ -56,6 +59,8 @@ export default function ContactsScreen({
   total,
   page,
   query,
+  tag,
+  tags,
   companies,
   members,
   mailboxConnected,
@@ -65,15 +70,19 @@ export default function ContactsScreen({
   total: number;
   page: number;
   query: string;
+  tag: string;
+  tags: TagCount[];
   companies: Company[];
   members: Member[];
   mailboxConnected: boolean;
 }) {
   const router = useRouter();
+  const tagHref = useTagHref();
   const selection = useBulkSelection(
     contacts.map((contact) => contact.id),
-    `${page}|${query}`,
+    `${page}|${query}|${tag}`,
   );
+  const tagOptions = tagFilterOptions(tags, "contact", tag || undefined);
   const [creating, setCreating] = useState(false);
   const created = useCallback(
     (contact: Contact | undefined) => {
@@ -118,6 +127,17 @@ export default function ContactsScreen({
             placeholder="Search name, email, or company"
             className="w-[240px] max-w-full"
           />
+          {tag && <input type="hidden" name="tag" value={tag} />}
+          {tagOptions.length > 1 && (
+            <FilterMenu
+              label="Tag"
+              value={tag || ANY_TAG}
+              options={tagOptions}
+              onChange={(value) =>
+                router.replace(tagHref(value === ANY_TAG ? null : value), { scroll: false })
+              }
+            />
+          )}
         </form>
         <SelectToggle selection={selection} />
       </div>
@@ -129,7 +149,9 @@ export default function ContactsScreen({
         empty={
           page > 1
             ? "No contacts on this page."
-            : "No contacts yet. Add the person you need to speak with."
+            : tag || query
+              ? "No contacts match the current filters."
+              : "No contacts yet. Add the person you need to speak with."
         }
       >
         <li
@@ -176,6 +198,18 @@ export default function ContactsScreen({
             .map(recipientOf)
         }
         mailboxConnected={mailboxConnected}
+        tagging={{
+          tags,
+          selectedTags: (ids) => [
+            ...new Set(
+              contacts
+                .filter((contact) => ids.includes(contact.id))
+                .flatMap((contact) => contact.tags),
+            ),
+          ],
+          add: (ids, name) => bulkAddTagAction("contact", ids, name),
+          remove: (ids, name) => bulkRemoveTagAction("contact", ids, name),
+        }}
       />
       <Pager
         page={page}
@@ -270,6 +304,7 @@ function ContactRow({
           <span className="caption-style text-subtle truncate">
             {contact.jobTitle || "No title"}
           </span>
+          <RowTags tags={contact.tags} className="mt-0.5" />
         </span>
       </span>
       <span className="hidden min-w-0 md:block">

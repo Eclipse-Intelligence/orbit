@@ -29,15 +29,15 @@ That reads `CRM_AGENT_TOKEN` from the environment or `.env.local` and speaks MCP
 
 ## Tools
 
-`search_companies` — `query`, `lifecycle`, `owner_id`, `limit`.
+`search_companies` — `query`, `lifecycle`, `owner_id`, `tag`, `limit`.
 
 `get_company` — `id`.
 
-`upsert_company` — any company field. Omitted fields stay as they are. `provenanceSource` and `provenanceUrl` are written to the audit event.
+`upsert_company` — any company field, including `tags`. Omitted fields stay as they are; `tags` replaces the whole list. `provenanceSource` and `provenanceUrl` are written to the audit event.
 
-`search_contacts`, `get_contact`, `upsert_contact` — people. Matching is email, then LinkedIn, then the same name at the same company.
+`search_contacts`, `get_contact`, `upsert_contact` — people. `search_contacts` takes `tag`; `upsert_contact` takes `tags`, which replaces the whole list. Matching is email, then LinkedIn, then the same name at the same company.
 
-`add_lead` — one transaction for a company, contact, note, optional opportunity, and optional next action. A repeated domain or email updates the existing rows.
+`add_lead` — one transaction for a company, contact, note, optional opportunity, and optional next action. `companyTags` and `contactTags` replace those records' tags. A repeated domain or email updates the existing rows.
 
 `add_activity`, `add_note` — append an interaction. Notes are activities of type `note`.
 

@@ -9,6 +9,7 @@ import { listMembers } from "@/lib/crm/companies";
 import { CrmError } from "@/lib/crm/errors";
 import { getMailbox } from "@/lib/crm/inbox";
 import { getCompanyContext } from "@/lib/crm/relationships";
+import { listTags } from "@/lib/crm/tags";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -43,11 +44,12 @@ export default async function CompanyPage({
   if (!user) redirect("/login");
   if (!context) notFound();
 
-  const [members, mailbox, clickup, meetings] = await Promise.all([
+  const [members, mailbox, clickup, meetings, tags] = await Promise.all([
     listMembers(user),
     getMailbox(user),
     getClickUpPicker(user),
     getMeetings(user, { companyId: context.company.id }),
+    listTags(user),
   ]);
 
   return (
@@ -64,6 +66,7 @@ export default async function CompanyPage({
       mailboxConnected={mailbox?.status === "connected"}
       clickup={clickup}
       meetings={meetings}
+      tags={tags}
     />
   );
 }

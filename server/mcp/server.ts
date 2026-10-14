@@ -21,6 +21,11 @@ const writeShape = {
   ownerId: z.uuid().nullable().optional(),
   source: z.string().nullable().optional(),
   sourceReference: z.string().nullable().optional(),
+  tags: z
+    .array(z.string())
+    .max(20)
+    .optional()
+    .describe("Replaces the company's tags. Lowercased; up to 20, each up to 40 characters."),
   provenanceSource: z.string().nullable().optional(),
   provenanceUrl: z.string().nullable().optional(),
 };
@@ -51,6 +56,7 @@ function writeFromArgs(args: {
   ownerId?: string | null;
   source?: string | null;
   sourceReference?: string | null;
+  tags?: string[];
 }): CompanyWrite {
   return {
     name: args.name,
@@ -63,6 +69,7 @@ function writeFromArgs(args: {
     ownerId: args.ownerId,
     source: args.source,
     sourceReference: args.sourceReference,
+    tags: args.tags,
   };
 }
 
@@ -79,11 +86,12 @@ export function createCrmMcpServer(actor: Actor) {
     "search_companies",
     {
       description:
-        "Search companies in the authenticated workspace by name, domain, or industry.",
+        "Search companies in the authenticated workspace by name, domain, or industry, optionally limited to one tag.",
       inputSchema: {
         query: z.string().optional(),
         lifecycle: z.enum(LIFECYCLES).optional(),
         owner_id: z.uuid().optional(),
+        tag: z.string().optional(),
         limit: z.number().int().min(1).max(100).optional(),
       },
     },
@@ -93,6 +101,7 @@ export function createCrmMcpServer(actor: Actor) {
           query: args.query,
           lifecycle: args.lifecycle,
           ownerId: args.owner_id,
+          tag: args.tag,
           limit: args.limit,
           sort: "updated",
           order: "desc",

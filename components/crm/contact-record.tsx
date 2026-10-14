@@ -11,10 +11,18 @@ import MeetingsCard from "@/components/crm/meetings-card";
 import RecordLayout from "@/components/crm/record-layout";
 import { CallLink, Detail, DetailList } from "@/components/crm/record-form";
 import SectionHeader from "@/components/crm/section-header";
+import RecordTags from "@/components/crm/tags";
 import type { Viewer } from "@/components/crm/viewer";
 import type { MeetingsSummary } from "@/lib/crm/calendar";
 import { companyHref } from "@/lib/crm/hrefs";
-import type { Activity, CallInsight, Company, Contact, Member } from "@/lib/crm/types";
+import type {
+  Activity,
+  CallInsight,
+  Company,
+  Contact,
+  Member,
+  TagCount,
+} from "@/lib/crm/types";
 import { teamsCallUrl } from "@/lib/phone";
 import PhoneIcon from "@/public/assets/images/_common/phone.svg";
 
@@ -27,6 +35,7 @@ export default function ContactRecord({
   activities,
   insights,
   meetings,
+  tags,
 }: {
   viewer: Viewer;
   contact: Contact;
@@ -36,6 +45,7 @@ export default function ContactRecord({
   activities: Activity[];
   insights: Record<string, CallInsight>;
   meetings: MeetingsSummary | null;
+  tags: TagCount[];
 }) {
   const router = useRouter();
   const [editing, setEditing] = useState(false);
@@ -103,6 +113,12 @@ export default function ContactRecord({
                     )}
                   </div>
                 )}
+                <RecordTags
+                  kind="contact"
+                  id={shown.id}
+                  tags={shown.tags}
+                  suggestions={tags}
+                />
               </div>
             </div>
             {editing ? (

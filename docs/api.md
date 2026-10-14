@@ -26,7 +26,7 @@ Optional `Idempotency-Key` header (printable ASCII, up to 200 characters). Reuse
 
 `GET /api/v1/companies`
 
-Query: `q`, `lifecycle` (`lead`, `prospect`, `customer`, `churned`), `owner` (a user id or `unassigned`), `sort` (`name`, `domain`, `updated`, `created`), `order` (`asc` or `desc`), `limit` (1–100, default 50), `offset` (max 10000), `include_archived=true`.
+Query: `q`, `lifecycle` (`lead`, `prospect`, `customer`, `churned`), `owner` (a user id or `unassigned`), `tag` (one tag; matching ignores case and extra spaces), `sort` (`name`, `domain`, `updated`, `created`), `order` (`asc` or `desc`), `limit` (1–100, default 50), `offset` (max 10000), `include_archived=true`.
 
 Response:
 
@@ -54,7 +54,7 @@ Response:
 
 ## Company fields
 
-`name`, `domain`, `website`, `description`, `industry`, `sizeCategory`, `lifecycle`, `ownerId`, `source`, `sourceReference`.
+`name`, `domain`, `website`, `description`, `industry`, `sizeCategory`, `lifecycle`, `ownerId`, `source`, `sourceReference`, `tags`.
 
 `ownerId` must be a member of the workspace. Domain and website are canonicalised (`https://www.acme.com/about` becomes domain `acme.com`).
 
@@ -66,6 +66,10 @@ Provenance, when sent, is an object:
 
 It is stored on the audit event. It is not a company column.
 
+## Tags
+
+Companies and contacts carry `tags`, an array of strings, in every response. Sending `tags` on create, `PATCH`, upsert, or bulk replaces the whole list; omit it to leave the tags as they are, and send `[]` or `null` to clear them. Each tag is trimmed, inner whitespace is collapsed to one space, and it is lowercased, so `" Recruit  Lead "` is stored as `"recruit lead"`. Duplicates are dropped. A record holds at most 20 tags of up to 40 characters each, and a tag can't contain `;`. A change that only reorders the same tags is not an update. Tag changes are audited and fire `company.updated` or `contact.updated` webhooks like any other field.
+
 ## Errors
 
 ```json
@@ -76,7 +80,9 @@ Codes include `unauthorized` (401), `forbidden` (403), `not_found` (404), `inval
 
 ## Contacts
 
-`GET /api/v1/contacts` with `q`, `company_id`, `owner`, `limit`, `offset`, `include_archived=true`.
+`GET /api/v1/contacts` with `q`, `company_id`, `owner`, `tag`, `limit`, `offset`, `include_archived=true`.
+
+Contact fields: `companyId`, `firstName`, `lastName`, `email`, `phone`, `jobTitle`, `linkedinUrl`, `ownerId`, `source`, `sourceReference`, `notes`, `tags`. Tags follow the rules in [Tags](#tags).
 
 `POST /api/v1/contacts` creates a person. A name, email, phone, or LinkedIn profile is required. Matching email or LinkedIn returns 409 `duplicate_contact`.
 
@@ -126,7 +132,7 @@ Every activity includes `actorUserId`, `actorAgentId`, and `actorName`: the full
 
 `GET /api/v1/export/companies`, `/contacts`, `/opportunities`, `/activities`, and `/tasks` return CSV.
 
-`POST /api/v1/import/companies` and `POST /api/v1/import/contacts` accept `text/csv` or `{ "csv": "..." }`. Up to 50 rows. Companies match by domain. Contacts match by the usual contact rules and attach to a company with the same domain or name. A column that is absent, or a cell that is empty, leaves that field as it is. Without the matching write scope the import returns 403.
+`POST /api/v1/import/companies` and `POST /api/v1/import/contacts` accept `text/csv` or `{ "csv": "..." }`. Up to 50 rows. Companies match by domain. Contacts match by the usual contact rules and attach to a company with the same domain or name. A column that is absent, or a cell that is empty, leaves that field as it is. Exports include a `Tags` column with tags separated by `; `. On import a non-empty `Tags` cell (split on `;`) replaces that record's tags. Without the matching write scope the import returns 403.
 
 ## Communications
 

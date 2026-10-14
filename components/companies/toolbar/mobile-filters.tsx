@@ -31,6 +31,8 @@ import {
   activeFilterCount,
   sortValue,
 } from "@/lib/companies";
+import { ANY_TAG } from "@/components/crm/tags";
+import type { FilterOption } from "@/components/_common/filter-menu";
 import type { CompanyListQuery, Member } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
 import FilterIcon from "@/public/assets/images/_common/filter.svg";
@@ -40,6 +42,7 @@ type MobileFiltersProps = {
   className?: string;
   filters: CompanyListQuery;
   members: Member[];
+  tagOptions: FilterOption[];
   onChange: (updates: Record<string, string | null>) => void;
 };
 
@@ -47,6 +50,7 @@ export default function MobileFilters({
   className,
   filters,
   members,
+  tagOptions,
   onChange,
 }: MobileFiltersProps) {
   const [open, setOpen] = useState(false);
@@ -63,6 +67,7 @@ export default function MobileFilters({
       q: null,
       owner: null,
       lifecycle: null,
+      tag: null,
       sort: null,
       order: null,
     });
@@ -180,6 +185,26 @@ export default function MobileFilters({
                 </SelectContent>
               </Select>
             </Field>
+
+            {tagOptions.length > 1 && (
+              <Field label="Tag" htmlFor="mobile-tag">
+                <Select
+                  value={filters.tag ?? ANY_TAG}
+                  onValueChange={(value) => onChange({ tag: value === ANY_TAG ? null : value })}
+                >
+                  <SelectTrigger id="mobile-tag">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {tagOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+            )}
           </div>
         </ScrollArea>
 
