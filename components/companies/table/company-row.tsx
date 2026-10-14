@@ -1,6 +1,8 @@
 "use client";
 
 import type { MouseEvent } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Checkbox } from "@/components/_ui/checkbox";
 import { TableCell, TableRow } from "@/components/_ui/table";
 import {
@@ -10,6 +12,7 @@ import {
   RecordTag,
 } from "@/components/beautifui/record-marks";
 import { LIFECYCLE_LABELS, relativeWhen } from "@/lib/companies";
+import { companyHref } from "@/lib/crm/hrefs";
 import type { Company } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
 import {
@@ -24,9 +27,7 @@ type CompanyRowProps = {
   index: number;
   now: number;
   selected: boolean;
-  active: boolean;
   onToggle: () => void;
-  onOpen: () => void;
 };
 
 function cellClass(key: TableColumnKey) {
@@ -42,11 +43,11 @@ export default function CompanyRow({
   index,
   now,
   selected,
-  active,
   onToggle,
-  onOpen,
 }: CompanyRowProps) {
-  const revealed = selected || active;
+  const router = useRouter();
+  const href = companyHref(company.id);
+  const revealed = selected;
   const tags = [
     { label: LIFECYCLE_LABELS[company.lifecycle], base: lifecycleTagBase(company.lifecycle) },
     ...(company.industry ? [{ label: company.industry, base: undefined }] : []),
@@ -56,8 +57,15 @@ export default function CompanyRow({
   return (
     <TableRow
       role="row"
-      onClick={onOpen}
-      data-active={active || selected}
+      onClick={(event) => {
+        if (event.target instanceof Element && event.target.closest("a, button, input")) return;
+        if (event.metaKey || event.ctrlKey) {
+          window.open(href, "_blank", "noopener");
+          return;
+        }
+        router.push(href);
+      }}
+      data-active={selected}
       className={cn(
         TABLE_ROW_CLASS,
         "group hover:bg-card/60 data-[active=true]:bg-card cursor-pointer",
@@ -88,7 +96,12 @@ export default function CompanyRow({
             />
           </span>
           <Monogram name={company.name} />
-          <span className="max-w-[220px] truncate text-[13px] font-medium">{company.name}</span>
+          <Link
+            href={href}
+            className="max-w-[220px] truncate text-[13px] font-medium underline-offset-[3px] rounded-sm outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/60"
+          >
+            {company.name}
+          </Link>
         </span>
       </TableCell>
       <TableCell role="cell" className={cellClass("categories")}>

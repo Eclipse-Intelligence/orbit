@@ -12,6 +12,7 @@ import {
   syncTranscriptsAction,
 } from "@/app/(crm)/inbox/actions";
 import { formatWhen } from "@/lib/companies";
+import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import type { CallSyncSummary } from "@/lib/crm/calls";
 import type { ConversationImport } from "@/lib/crm/conversations";
 import type { GranolaStatus } from "@/lib/crm/granola";
@@ -239,6 +240,12 @@ export default function InboxScreen({
         <ul className="min-h-0 flex-1 overflow-auto">
           {messages.map((message) => {
             const attached = message.contactName || message.companyName;
+            const attachedHref =
+              message.contactName && message.contactId
+                ? contactHref(message.contactId)
+                : message.companyId
+                  ? companyHref(message.companyId)
+                  : null;
             return (
               <li
                 key={message.id}
@@ -263,11 +270,8 @@ export default function InboxScreen({
                       : ""}
                   </span>
                 </span>
-                {attached && message.companyId ? (
-                  <EntityChip
-                    name={attached}
-                    href={`/?record=${message.companyId}`}
-                  />
+                {attached && attachedHref ? (
+                  <EntityChip name={attached} href={attachedHref} />
                 ) : (
                   <span className="caption-style text-subtle shrink-0">
                     {attached || "Not attached"}

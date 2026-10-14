@@ -252,6 +252,7 @@ export default function ContactActivities({
   profileNote,
   activities,
   insights,
+  className,
 }: {
   contactId: string;
   email: string | null;
@@ -259,6 +260,7 @@ export default function ContactActivities({
   profileNote: string | null;
   activities: Activity[];
   insights?: Record<string, CallInsight>;
+  className?: string;
 }) {
   const draft = useActivityDraft((kind, title, body) =>
     addActivityAction({ contactId }, kind, title, body),
@@ -274,7 +276,12 @@ export default function ContactActivities({
     );
 
   return (
-    <section className="border-line-strong flex flex-col gap-3 border-t pt-4">
+    <section
+      className={cn(
+        "border-line-strong flex flex-col gap-3 border-t pt-4",
+        className,
+      )}
+    >
       <h2>Activities</h2>
       <ActivityComposer
         idPrefix={contactId}

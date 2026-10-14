@@ -15,6 +15,7 @@ import {
   importContactsCsv,
   type ImportResult,
 } from "@/lib/crm/spreadsheet";
+import { revalidateRecordPages } from "@/lib/revalidate";
 
 export type TransferResource = "companies" | "contacts" | "opportunities" | "activities" | "tasks";
 
@@ -59,6 +60,7 @@ export async function importRecordsAction(
           : null;
     if (!result) return { error: "That import is not available." };
     revalidatePath("/");
+    revalidateRecordPages();
     revalidatePath("/contacts");
     return result;
   } catch (error) {

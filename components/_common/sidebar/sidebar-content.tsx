@@ -31,7 +31,9 @@ export default function SidebarContent({
   const pathname = usePathname();
   const openProfile = useCompaniesStore((state) => state.openProfile);
   const current = (href: string) =>
-    href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(`${href}/`);
+    href === "/"
+      ? pathname === "/" || pathname.startsWith("/companies/")
+      : pathname === href || pathname.startsWith(`${href}/`);
 
   return (
     <div className="flex h-full min-h-0 flex-col">

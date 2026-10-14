@@ -12,6 +12,7 @@ import { RecordList, RecordRow, RecordSelect } from "@/components/crm/record-for
 import type { Viewer } from "@/components/crm/viewer";
 import { saveActivityAction, type RecordActionState } from "@/app/(crm)/records";
 import { formatWhen } from "@/lib/companies";
+import { companyHref } from "@/lib/crm/hrefs";
 import { ACTIVITY_TYPES, type Activity, type Company, type Contact } from "@/lib/crm/types";
 
 const LABELS: Record<string, string> = {
@@ -125,7 +126,7 @@ export default function ActivitiesScreen({
             meta={[activity.contactName, activity.body, formatWhen(activity.occurredAt)].filter(Boolean).join(" · ")}
             action={
               activity.companyName && activity.companyId ? (
-                <EntityChip name={activity.companyName} href={`/?record=${activity.companyId}`} />
+                <EntityChip name={activity.companyName} href={companyHref(activity.companyId)} />
               ) : null
             }
           />

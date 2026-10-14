@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { connectionStrength, formatWhen, relativeWhen } from "@/lib/companies";
+import { companyHref, contactHref, legacyRecordHref, listHref, listQuery } from "@/lib/crm/hrefs";
 import { teamsCallUrl } from "@/lib/phone";
 import { appTimeZone, dateTimeInputValue, dayWindow, startOfDay, toIsoInstant } from "@/lib/time";
 
@@ -77,5 +78,31 @@ describe("call links", () => {
     assert.equal(teamsCallUrl("ext 12"), null);
     assert.equal(teamsCallUrl(""), null);
     assert.equal(teamsCallUrl(null), null);
+  });
+});
+
+describe("record links", () => {
+  it("points records at their own pages", () => {
+    const id = "6f1c2a4e-0b7d-4c55-9a3e-2d8f1b6c7e90";
+    assert.equal(companyHref(id), `/companies/${id}`);
+    assert.equal(contactHref(id), `/contacts/${id}`);
+    assert.equal(contactHref("a/b?c"), "/contacts/a%2Fb%3Fc");
+  });
+
+  it("returns to the list with its last query, minus old sheet params", () => {
+    assert.equal(listHref("companies"), "/");
+    assert.equal(listHref("contacts", null), "/contacts");
+    assert.equal(listHref("companies", "?q=acme&page=2"), "/?q=acme&page=2");
+    assert.equal(listHref("contacts", "q=jane&contact=abc"), "/contacts?q=jane");
+    assert.equal(listQuery("?record=abc"), "");
+    assert.equal(listQuery("owner=me&record=abc&lifecycle=lead"), "?owner=me&lifecycle=lead");
+  });
+
+  it("redirects the old sheet links to the record pages", () => {
+    assert.equal(legacyRecordHref("/", new URLSearchParams("record=abc&q=x")), "/companies/abc");
+    assert.equal(legacyRecordHref("/contacts", new URLSearchParams("contact=xyz")), "/contacts/xyz");
+    assert.equal(legacyRecordHref("/", new URLSearchParams("contact=xyz")), null);
+    assert.equal(legacyRecordHref("/contacts", new URLSearchParams("record=abc")), null);
+    assert.equal(legacyRecordHref("/inbox", new URLSearchParams("record=abc")), null);
   });
 });

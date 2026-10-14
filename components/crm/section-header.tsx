@@ -1,12 +1,17 @@
 "use client";
 
 import type { ReactNode } from "react";
+import Link from "next/link";
 import Button from "@/components/_ui/button";
 import Notifications from "@/components/companies/header/notifications/notifications";
+import { useListHref } from "@/components/crm/list-memory";
 import type { Viewer } from "@/components/crm/viewer";
 import { displayInitials } from "@/lib/companies";
+import { RECORD_LISTS, type RecordListKey } from "@/lib/crm/hrefs";
 import { useCompaniesStore } from "@/stores/companies-store";
 import { ExpandSidebarButton } from "@/components/_common/sidebar/sidebar-toggle";
+import ChevronLeftIcon from "@/public/assets/images/_common/chevron-left.svg";
+import ChevronRightIcon from "@/public/assets/images/_common/chevron-right.svg";
 import MenuIcon from "@/public/assets/images/_common/menu.svg";
 import SearchIcon from "@/public/assets/images/_common/search.svg";
 
@@ -14,10 +19,12 @@ export default function SectionHeader({
   title,
   viewer,
   action,
+  list,
 }: {
   title: string;
   viewer: Viewer;
   action?: ReactNode;
+  list?: RecordListKey;
 }) {
   const setSidebarOpen = useCompaniesStore((state) => state.setSidebarOpen);
   const setSearchOpen = useCompaniesStore((state) => state.setSearchOpen);
@@ -37,12 +44,16 @@ export default function SectionHeader({
             <MenuIcon aria-hidden className="size-3.5" />
           </Button>
           <ExpandSidebarButton />
-          <div className="flex min-w-0 flex-col">
-            <h1 className="truncate">{title}</h1>
-            <span className="caption-style text-subtle hidden truncate sm:block">
-              {viewer.workspaceName}
-            </span>
-          </div>
+          {list ? (
+            <RecordBreadcrumb list={list} title={title} />
+          ) : (
+            <div className="flex min-w-0 flex-col">
+              <h1 className="truncate">{title}</h1>
+              <span className="caption-style text-subtle hidden truncate sm:block">
+                {viewer.workspaceName}
+              </span>
+            </div>
+          )}
         </div>
         <div className="flex flex-wrap items-center justify-start gap-2 sm:justify-end">
           {action}
@@ -74,5 +85,33 @@ export default function SectionHeader({
         </div>
       </div>
     </header>
+  );
+}
+
+function RecordBreadcrumb({ list, title }: { list: RecordListKey; title: string }) {
+  const href = useListHref(list);
+  const label = RECORD_LISTS[list].label;
+  return (
+    <nav aria-label="Breadcrumb" className="min-w-0">
+      <ol className="flex min-w-0 items-center gap-1.5">
+        <li className="shrink-0">
+          <Link
+            href={href}
+            className="text-subtle hover:text-foreground flex h-[30px] items-center gap-1 rounded-full text-[14px] leading-5 transition-colors duration-150 max-sm:-ml-1 max-sm:pr-2.5 max-sm:pl-1.5 max-sm:hover:bg-white/6"
+          >
+            <ChevronLeftIcon aria-hidden className="size-3 sm:hidden" />
+            {label}
+          </Link>
+        </li>
+        <li aria-hidden className="text-faint hidden sm:block">
+          <ChevronRightIcon className="size-3" />
+        </li>
+        <li className="min-w-0">
+          <h1 aria-current="page" className="truncate max-sm:sr-only">
+            {title}
+          </h1>
+        </li>
+      </ol>
+    </nav>
   );
 }

@@ -11,6 +11,7 @@ import {
   summariseCall,
 } from "@/lib/crm/call-insights";
 import type { CallInsight } from "@/lib/crm/types";
+import { revalidateRecordPages } from "@/lib/revalidate";
 
 export type CallInsightActionState = {
   error?: string;
@@ -27,6 +28,7 @@ async function requireUser() {
 
 function refresh() {
   revalidatePath("/");
+  revalidateRecordPages();
   revalidatePath("/contacts");
   revalidatePath("/activities");
   revalidatePath("/actions");

@@ -40,11 +40,8 @@ export default function CompaniesTable({
   filtered: boolean;
 }) {
   const selectedIds = useCompaniesStore((state) => state.selectedIds);
-  const detailId = useCompaniesStore((state) => state.detailId);
-  const detailOpen = useCompaniesStore((state) => state.detailOpen);
   const toggleSelected = useCompaniesStore((state) => state.toggleSelected);
   const setSelected = useCompaniesStore((state) => state.setSelected);
-  const openDetail = useCompaniesStore((state) => state.openDetail);
   const router = useRouter();
   const [archiving, setArchiving] = useState(false);
   const [bulkError, setBulkError] = useState<string | null>(null);
@@ -126,9 +123,7 @@ export default function CompaniesTable({
                 index={(page - 1) * PAGE_SIZE + index}
                 now={now}
                 selected={selectedIds.includes(company.id)}
-                active={detailOpen && detailId === company.id}
                 onToggle={() => toggleSelected(company.id)}
-                onOpen={() => openDetail(company.id)}
               />
             ))}
             {companies.length === 0 && (

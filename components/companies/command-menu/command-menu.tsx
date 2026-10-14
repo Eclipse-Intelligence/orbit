@@ -14,6 +14,7 @@ import {
   Kbd,
 } from "@/components/_ui/command";
 import { searchWorkspaceAction } from "@/app/(crm)/search";
+import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import type { Company, Contact, Opportunity } from "@/lib/crm/types";
 import { useCompaniesStore } from "@/stores/companies-store";
 import PlusIcon from "@/public/assets/images/_common/plus.svg";
@@ -30,7 +31,9 @@ export default function CommandMenu() {
   const router = useRouter();
   const open = useCompaniesStore((state) => state.searchOpen);
   const setOpen = useCompaniesStore((state) => state.setSearchOpen);
-  const setNewCompanyOpen = useCompaniesStore((state) => state.setNewCompanyOpen);
+  const setNewCompanyOpen = useCompaniesStore(
+    (state) => state.setNewCompanyOpen,
+  );
   const [query, setQuery] = useState("");
   const [remote, setRemote] = useState<Results | null>(null);
   const actionRan = useRef(false);
@@ -38,7 +41,8 @@ export default function CommandMenu() {
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key.toLowerCase() !== "k") return;
-      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey)
+        return;
       const { searchOpen, setSearchOpen } = useCompaniesStore.getState();
       const target = event.target;
       if (
@@ -96,7 +100,10 @@ export default function CommandMenu() {
   }
 
   const empty = results
-    ? results.companies.length + results.contacts.length + results.opportunities.length === 0
+    ? results.companies.length +
+        results.contacts.length +
+        results.opportunities.length ===
+      0
     : true;
 
   return (
@@ -121,27 +128,39 @@ export default function CommandMenu() {
           trailing={<Kbd>Esc</Kbd>}
         />
         <CommandList>
-          {searching && <p className="caption-style text-subtle px-4 py-6">Searching…</p>}
+          {searching && (
+            <p className="caption-style text-subtle px-4 py-6">Searching…</p>
+          )}
           {!searching && results?.failed && (
             <p role="alert" className="caption-style text-danger px-4 py-6">
               Search is unavailable right now. Try again in a moment.
             </p>
           )}
           {!searching && trimmed && empty && !results?.failed && (
-            <p className="caption-style text-subtle px-4 py-6">No records for “{trimmed}”</p>
+            <p className="caption-style text-subtle px-4 py-6">
+              No records for “{trimmed}”
+            </p>
           )}
-          {!trimmed && <p className="caption-style text-subtle px-4 py-6">Type a name, email, or domain.</p>}
+          {!trimmed && (
+            <p className="caption-style text-subtle px-4 py-6">
+              Type a name, email, or domain.
+            </p>
+          )}
           {results && results.companies.length > 0 && (
             <CommandGroup heading="Companies">
               {results.companies.map((company) => (
                 <CommandItem
                   key={company.id}
                   value={company.id}
-                  onSelect={() => run(() => router.push(`/?record=${company.id}`))}
+                  onSelect={() =>
+                    run(() => router.push(companyHref(company.id)))
+                  }
                 >
                   <span className="flex min-w-0 flex-col">
                     <span className="truncate">{company.name}</span>
-                    <span className="caption-style text-subtle truncate">{company.domain ?? "No domain"}</span>
+                    <span className="caption-style text-subtle truncate">
+                      {company.domain ?? "No domain"}
+                    </span>
                   </span>
                 </CommandItem>
               ))}
@@ -153,12 +172,16 @@ export default function CommandMenu() {
                 <CommandItem
                   key={contact.id}
                   value={contact.id}
-                  onSelect={() => run(() => router.push(`/contacts?contact=${contact.id}`))}
+                  onSelect={() =>
+                    run(() => router.push(contactHref(contact.id)))
+                  }
                 >
                   <span className="flex min-w-0 flex-col">
                     <span className="truncate">{contact.name}</span>
                     <span className="caption-style text-subtle truncate">
-                      {[contact.jobTitle, contact.companyName].filter(Boolean).join(" · ") || "No company"}
+                      {[contact.jobTitle, contact.companyName]
+                        .filter(Boolean)
+                        .join(" · ") || "No company"}
                     </span>
                   </span>
                 </CommandItem>
@@ -172,7 +195,11 @@ export default function CommandMenu() {
                   key={opportunity.id}
                   value={opportunity.id}
                   onSelect={() =>
-                    run(() => router.push(`/opportunities?q=${encodeURIComponent(opportunity.name)}`))
+                    run(() =>
+                      router.push(
+                        `/opportunities?q=${encodeURIComponent(opportunity.name)}`,
+                      ),
+                    )
                   }
                 >
                   <span className="flex min-w-0 flex-col">
@@ -185,23 +212,25 @@ export default function CommandMenu() {
               ))}
             </CommandGroup>
           )}
-          <CommandSeparator />
-          <CommandGroup heading="Actions">
-            <CommandItem
-              value="new-company"
-              onSelect={() =>
-                run(() => {
-                  setNewCompanyOpen(true);
-                  router.push("/");
-                })
-              }
-            >
-              <span className="bg-muted flex size-6 shrink-0 items-center justify-center rounded-md shadow-[0px_0px_0px_1px_#232323]">
-                <PlusIcon aria-hidden className="text-soft size-3" />
-              </span>
-              New Company
-            </CommandItem>
-          </CommandGroup>
+          {!searching && <CommandSeparator />}
+          {!searching && (
+            <CommandGroup heading="Actions">
+              <CommandItem
+                value="new-company"
+                onSelect={() =>
+                  run(() => {
+                    setNewCompanyOpen(true);
+                    router.push("/");
+                  })
+                }
+              >
+                <span className="bg-muted flex size-6 shrink-0 items-center justify-center rounded-md shadow-[0px_0px_0px_1px_#232323]">
+                  <PlusIcon aria-hidden className="text-soft size-3" />
+                </span>
+                New Company
+              </CommandItem>
+            </CommandGroup>
+          )}
         </CommandList>
         <CommandFooter>
           <span className="flex items-center gap-1.5">

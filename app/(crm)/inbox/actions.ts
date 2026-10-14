@@ -15,6 +15,7 @@ import {
 } from "@/lib/crm/inbox";
 import { ensureTranscriptSubscription, syncTeamsTranscripts } from "@/lib/crm/teams-transcripts";
 import { actionError } from "@/lib/companies";
+import { revalidateRecordPages } from "@/lib/revalidate";
 
 async function requireUser() {
   const user = await getUserActor();
@@ -25,6 +26,7 @@ async function requireUser() {
 function refreshRecords() {
   revalidatePath("/inbox");
   revalidatePath("/");
+  revalidateRecordPages();
   revalidatePath("/activities");
   revalidatePath("/contacts");
 }
@@ -38,6 +40,7 @@ export async function syncInboxAction() {
   const result = await syncMailbox(user);
   revalidatePath("/inbox");
   revalidatePath("/");
+  revalidateRecordPages();
   if (result.error)
     redirect(`/inbox?error=${encodeURIComponent(result.error)}`);
   redirect("/inbox");
@@ -48,6 +51,7 @@ export async function syncCallsAction() {
   const result = await syncCalls(user, { force: true });
   revalidatePath("/inbox");
   revalidatePath("/");
+  revalidateRecordPages();
   revalidatePath("/activities");
   revalidatePath("/contacts");
   if (result.error)
@@ -146,6 +150,7 @@ export async function sendContactEmailAction(
   }
   revalidatePath("/contacts");
   revalidatePath("/");
+  revalidateRecordPages();
   revalidatePath("/inbox");
   revalidatePath("/activities");
   return { ok: true as const, warning };

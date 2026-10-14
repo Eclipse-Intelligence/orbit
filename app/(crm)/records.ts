@@ -19,6 +19,7 @@ import type {
   OpportunityStatus,
   TaskPriority,
 } from "@/lib/crm/types";
+import { revalidateRecordPages } from "@/lib/revalidate";
 
 export type RecordActionState = {
   error?: string;
@@ -45,6 +46,7 @@ function optionalId(value: string) {
 
 function refresh() {
   revalidatePath("/");
+  revalidateRecordPages();
   revalidatePath("/contacts");
   revalidatePath("/opportunities");
   revalidatePath("/activities");

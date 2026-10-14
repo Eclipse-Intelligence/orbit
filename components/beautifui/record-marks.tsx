@@ -1,4 +1,5 @@
 import type { MouseEvent } from "react";
+import Link from "next/link";
 import {
   CONNECTION_STRENGTH,
   connectionStrength,
@@ -122,8 +123,8 @@ export function EntityChip({
     "bg-secondary text-foreground inline-flex shrink-0 items-center gap-1 rounded-full py-px pr-2 pl-0.5 align-middle text-[12px] leading-5";
   if (!href) return <span className={className}>{body}</span>;
   return (
-    <a href={href} onClick={onClick} className={className}>
+    <Link href={href} onClick={onClick} className={className}>
       {body}
-    </a>
+    </Link>
   );
 }

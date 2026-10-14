@@ -5,6 +5,7 @@ import Link from "next/link";
 import Button from "@/components/_ui/button";
 import { EntityChip } from "@/components/beautifui/record-marks";
 import { relativeWhen } from "@/lib/companies";
+import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import type { Task } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
 
@@ -74,7 +75,7 @@ export default function ActionTask({
         {task.companyName && (
           <EntityChip
             name={task.companyName}
-            href={task.companyId ? `/?record=${task.companyId}` : undefined}
+            href={task.companyId ? companyHref(task.companyId) : undefined}
           />
         )}
         {!completed && onComplete && (
@@ -98,7 +99,7 @@ export default function ActionTask({
               <p>
                 {task.contactId ? (
                   <Link
-                    href={`/contacts?contact=${task.contactId}`}
+                    href={contactHref(task.contactId)}
                     className="hover:text-foreground underline-offset-2 hover:underline"
                   >
                     {task.contactName}
