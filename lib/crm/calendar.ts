@@ -4,6 +4,9 @@ import {
   finishAccount,
   readAccounts,
   storeAccountToken,
+  storeFeedState,
+  type CalendarProvider,
+  type StoredFeed,
 } from "@/lib/crm/calendar-accounts";
 import { isFreeMailDomain } from "@/lib/crm/communications";
 import { withActor } from "@/lib/crm/context";
@@ -21,17 +24,27 @@ import { isUuid } from "@/lib/crm/mutate";
 import { canonicalDomain, canonicalEmail } from "@/lib/crm/normalize";
 import { assertScope } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
+import { decryptSecret } from "@/lib/crypto/secret";
+import { readFeed } from "@/lib/ical/events";
+import { FeedError, fetchFeed, type Lookup } from "@/lib/ical/fetch";
+import { IcsParseError } from "@/lib/ical/parse";
 import {
   CalendarScopeError,
   fetchCalendars,
   fetchCalendarView,
+  paletteColor,
   type CalendarEvent,
   type CalendarFetch,
   type CalendarInfo,
   type CalendarListFetch,
   type CalendarPerson,
 } from "@/lib/microsoft/calendar";
-import { grantsCalendar, sanitizeMicrosoftError, type MicrosoftToken } from "@/lib/microsoft/oauth";
+import {
+  grantsCalendar,
+  microsoftConfigured,
+  sanitizeMicrosoftError,
+  type MicrosoftToken,
+} from "@/lib/microsoft/oauth";
 
 const DAY_MS = 86_400_000;
 export const CALENDAR_BACK_MS = 30 * DAY_MS;
@@ -39,13 +52,16 @@ export const CALENDAR_AHEAD_MS = 60 * DAY_MS;
 const SYNC_GAP_MS = 5 * 60 * 1000;
 const SYNC_BUDGET_MS = 45_000;
 const CALENDAR_RESERVE_MS = 5_000;
+const FEED_REFRESH_MS = 6 * 60 * 60 * 1000;
+export const FEED_CALENDAR_ID = "feed";
 const SAVE_BATCH = 200;
 const MEETINGS_SHOWN = 5;
 const PEOPLE_SHOWN = 25;
 export const DEFAULT_CALENDAR_PLACEHOLDER = "__default__";
 export const CALENDAR_RECONNECT = "Reconnect Microsoft to include your calendar.";
 export const CALENDAR_NO_ACCESS = "Microsoft didn't let Orbit read this calendar.";
-const NOT_CONNECTED = "Connect Microsoft to read your calendar.";
+const NOT_CONNECTED = "Connect Microsoft or add a calendar link to sync your calendar.";
+const FEED_FAILED = "Couldn't sync this calendar link. Orbit will try again later.";
 const REJECTED = /rejected the mailbox connection|could not read the saved Microsoft connection/i;
 
 export type CalendarSyncResult = {
@@ -113,11 +129,22 @@ type EventRow = {
 
 type SyncSource = {
   kind: "connection" | "account";
+  provider: CalendarProvider;
   id: string;
-  email: string;
+  email: string | null;
+  label: string | null;
   tokens: StoredTokens;
+  feed: StoredFeed | null;
   lastAttemptAt: string | null;
   colorOffset: number;
+};
+
+type SyncContext = {
+  fetchImpl: typeof fetch;
+  feedFetch?: typeof fetch;
+  lookup?: Lookup;
+  deadline: number;
+  now: number;
 };
 
 type SyncTarget = { id: string; providerCalendarId: string };
@@ -379,7 +406,7 @@ function sameIds(left: string[], right: string[]) {
 
 export async function ownAddresses(db: Db, actor: UserActor) {
   const stored = await readStored(db, actor);
-  const accounts = await db.query<{ email: string }>(
+  const accounts = await db.query<{ email: string | null }>(
     "select email from crm.calendar_accounts where user_id = $1 and workspace_id = $2",
     [actor.userId, actor.workspaceId],
   );
@@ -483,7 +510,8 @@ export async function relinkCalendar(actor: UserActor) {
 async function readSources(actor: UserActor, accountId?: string) {
   return withActor(actor, async (db) => {
     const sources: SyncSource[] = [];
-    if (!accountId) {
+    const microsoft = microsoftConfigured();
+    if (!accountId && microsoft) {
       const stored = await readStored(db, actor);
       if (stored && stored.status === "connected" && stored.refreshTokenCipher) {
         const state = await db.query<{ last_attempt_at: Date | string | null }>(
@@ -492,9 +520,12 @@ async function readSources(actor: UserActor, accountId?: string) {
         );
         sources.push({
           kind: "connection",
+          provider: "microsoft",
           id: stored.id,
           email: stored.email,
+          label: null,
           tokens: stored,
+          feed: null,
           lastAttemptAt: iso(state.rows[0]?.last_attempt_at ?? null),
           colorOffset: 0,
         });
@@ -503,12 +534,16 @@ async function readSources(actor: UserActor, accountId?: string) {
     const accounts = await readAccounts(db, actor);
     for (const [index, account] of accounts.entries()) {
       if (accountId && account.id !== accountId) continue;
-      if (account.status !== "connected" || !account.refreshTokenCipher) continue;
+      if (account.status !== "connected") continue;
+      if (account.provider === "ics" ? !account.feed : !account.refreshTokenCipher || !microsoft) continue;
       sources.push({
         kind: "account",
+        provider: account.provider,
         id: account.id,
         email: account.email,
+        label: account.displayName,
         tokens: account,
+        feed: account.feed,
         lastAttemptAt: account.lastAttemptAt,
         colorOffset: (index + 1) * 3,
       });
@@ -547,11 +582,7 @@ async function saveSourceToken(actor: UserActor, source: SyncSource, token: Micr
   );
 }
 
-async function syncSource(
-  actor: UserActor,
-  source: SyncSource,
-  context: { fetchImpl: typeof fetch; deadline: number; now: number },
-): Promise<SourceOutcome> {
+async function syncGraphSource(actor: UserActor, source: SyncSource, context: SyncContext): Promise<SourceOutcome> {
   const outcome: SourceOutcome = { saved: 0, removed: 0, calendars: 0, complete: true, scopeMissing: false };
   const window = calendarWindow(context.now);
   const missing = async () => {
@@ -613,10 +644,133 @@ async function syncSource(
   }
 }
 
+async function feedWanted(actor: UserActor, source: SyncSource) {
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ wanted: boolean }>(
+      "select (is_visible or use_for_crm) as wanted from crm.calendars where account_id = $1",
+      [source.id],
+    );
+    return result.rows.length === 0 || result.rows.some((row) => row.wanted);
+  });
+}
+
+async function syncFeedSource(actor: UserActor, source: SyncSource, context: SyncContext): Promise<SourceOutcome> {
+  const outcome: SourceOutcome = { saved: 0, removed: 0, calendars: 0, complete: true, scopeMissing: false };
+  const feed = source.feed;
+  const nowIso = new Date(context.now).toISOString();
+  try {
+    if (!feed) throw new FeedError(FEED_FAILED);
+    if (!(await feedWanted(actor, source))) {
+      await finishSource(actor, source, { error: null, scopeMissing: false });
+      return outcome;
+    }
+    let url: URL;
+    try {
+      url = new URL(decryptSecret(feed.urlCipher));
+    } catch {
+      throw new FeedError("Orbit couldn't read the saved calendar link. Remove it and add it again.");
+    }
+    const recent = feed.fetchedAt !== null && context.now - new Date(feed.fetchedAt).getTime() < FEED_REFRESH_MS;
+    const fetched = await fetchFeed(url, {
+      etag: recent ? feed.etag : null,
+      lastModified: recent ? feed.lastModified : null,
+      fetchImpl: context.feedFetch,
+      lookup: context.lookup,
+      timeoutMs: context.deadline - Date.now() - CALENDAR_RESERVE_MS,
+    });
+    if (fetched.status === "not_modified") {
+      await withActor(actor, (db) =>
+        db.query(
+          `update crm.calendars
+           set last_attempt_at = now(), last_synced_at = $2, last_error = null
+           where account_id = $1`,
+          [source.id, nowIso],
+        ),
+      );
+      outcome.calendars = 1;
+      await finishSource(actor, source, { syncedAt: nowIso, error: null, scopeMissing: false });
+      return outcome;
+    }
+    const window = calendarWindow(context.now);
+    const parsed = readFeed(fetched.text, window);
+    const listed: CalendarListFetch = {
+      calendars: [
+        {
+          providerCalendarId: FEED_CALENDAR_ID,
+          name: source.label ?? parsed.name ?? feed.host ?? "Calendar",
+          color: parsed.color ?? paletteColor(source.colorOffset),
+          colorExplicit: parsed.color !== null,
+          isDefault: false,
+          canEdit: false,
+          ownerEmail: null,
+        },
+      ],
+      complete: true,
+    };
+    const targets = await withActor(actor, (db) => saveCalendarList(db, actor, source, listed));
+    for (const calendar of targets) {
+      const saved = await withActor(actor, (db) =>
+        saveCalendarEvents(
+          db,
+          actor,
+          source,
+          calendar,
+          { events: parsed.events, complete: parsed.complete, pages: 1 },
+          window,
+          context.now,
+        ),
+      );
+      outcome.saved += saved.saved;
+      outcome.removed += saved.removed;
+      outcome.calendars += 1;
+    }
+    if (targets.length > 0) {
+      await withActor(actor, (db) =>
+        storeFeedState(db, source.id, { etag: fetched.etag, lastModified: fetched.lastModified, fetchedAt: nowIso }),
+      );
+    }
+    outcome.complete = parsed.complete;
+    await finishSource(actor, source, {
+      syncedAt: parsed.complete ? nowIso : null,
+      error: null,
+      scopeMissing: false,
+    });
+    return outcome;
+  } catch (error) {
+    const message =
+      error instanceof FeedError || error instanceof IcsParseError ? error.message : FEED_FAILED;
+    if (!(error instanceof FeedError || error instanceof IcsParseError)) {
+      console.error("Calendar link sync failed", errorText(error, FEED_FAILED));
+    }
+    await withActor(actor, (db) =>
+      db.query("update crm.calendars set last_attempt_at = now(), last_error = $2 where account_id = $1", [
+        source.id,
+        message.slice(0, 500),
+      ]),
+    );
+    await finishSource(actor, source, { error: message, scopeMissing: false });
+    return { ...outcome, complete: false, error: message };
+  }
+}
+
+const PROVIDERS: Record<
+  CalendarProvider,
+  (actor: UserActor, source: SyncSource, context: SyncContext) => Promise<SourceOutcome>
+> = {
+  microsoft: syncGraphSource,
+  ics: syncFeedSource,
+};
+
+function syncSource(actor: UserActor, source: SyncSource, context: SyncContext) {
+  return PROVIDERS[source.provider](actor, source, context);
+}
+
 export async function syncCalendar(
   actor: UserActor,
   options: {
     fetchImpl?: typeof fetch;
+    feedFetch?: typeof fetch;
+    lookup?: Lookup;
     deadline?: number;
     force?: boolean;
     now?: number;
@@ -647,7 +801,13 @@ export async function syncCalendar(
     const claimed = await claimSource(actor, source, Boolean(options.force));
     if (!claimed) continue;
     result.ran = true;
-    const outcome = await syncSource(actor, source, { fetchImpl, deadline, now });
+    const outcome = await syncSource(actor, source, {
+      fetchImpl,
+      feedFetch: options.feedFetch,
+      lookup: options.lookup,
+      deadline,
+      now,
+    });
     result.saved += outcome.saved;
     result.removed += outcome.removed;
     result.calendars = (result.calendars ?? 0) + outcome.calendars;

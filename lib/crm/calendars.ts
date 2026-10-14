@@ -1,4 +1,4 @@
-import { readAccounts } from "@/lib/crm/calendar-accounts";
+import { readAccounts, type CalendarProvider } from "@/lib/crm/calendar-accounts";
 import {
   createContactFromPerson,
   ownAddresses,
@@ -14,6 +14,7 @@ import { CrmError } from "@/lib/crm/errors";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import { readStored } from "@/lib/crm/inbox";
 import { isUuid } from "@/lib/crm/mutate";
+import { maskFeedUrl } from "@/lib/ical/fetch";
 import { assertScope } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
 
@@ -35,8 +36,10 @@ export type CalendarEntry = {
 
 export type CalendarGroup = {
   kind: "primary" | "account";
+  provider: CalendarProvider;
   id: string;
-  email: string;
+  email: string | null;
+  label: string;
   displayName: string | null;
   connected: boolean;
   scopeMissing: boolean;
@@ -129,8 +132,10 @@ export async function listCalendarGroups(actor: UserActor): Promise<CalendarGrou
       );
       groups.push({
         kind: "primary",
+        provider: "microsoft",
         id: stored.id,
         email: stored.email,
+        label: stored.email,
         displayName: null,
         connected: stored.status === "connected" && Boolean(stored.refreshTokenCipher),
         scopeMissing: Boolean(state.rows[0]?.scope_missing),
@@ -142,10 +147,14 @@ export async function listCalendarGroups(actor: UserActor): Promise<CalendarGrou
     for (const account of accounts) {
       groups.push({
         kind: "account",
+        provider: account.provider,
         id: account.id,
         email: account.email,
+        label: account.feed ? maskFeedUrl(account.feed.host) : (account.email ?? "Calendar"),
         displayName: account.displayName,
-        connected: account.status === "connected" && Boolean(account.refreshTokenCipher),
+        connected:
+          account.status === "connected" &&
+          (account.provider === "ics" ? Boolean(account.feed) : Boolean(account.refreshTokenCipher)),
         scopeMissing: account.scopeMissing,
         lastSyncedAt: account.lastSyncedAt,
         lastError: account.lastError,

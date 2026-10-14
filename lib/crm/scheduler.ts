@@ -58,7 +58,7 @@ function microsoftStep(target: SyncTarget) {
 }
 
 function calendarStep(target: SyncTarget) {
-  return (target.mailbox || Boolean(target.calendarAccounts)) && microsoftConfigured();
+  return ((target.mailbox || Boolean(target.calendarAccounts)) && microsoftConfigured()) || Boolean(target.calendarFeeds);
 }
 
 export const DEFAULT_STEPS: SyncStep[] = [
@@ -162,7 +162,9 @@ export async function syncTargets(options: { fetchImpl?: typeof fetch } = {}) {
       }
     }
     const entry = { ...target, granola: mine ? granola : null, clickup };
-    if (entry.mailbox || entry.calendarAccounts || entry.granola || entry.clickup) list.push(entry);
+    if (entry.mailbox || entry.calendarAccounts || entry.calendarFeeds || entry.granola || entry.clickup) {
+      list.push(entry);
+    }
   }
   return { targets: list, granolaError };
 }
