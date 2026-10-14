@@ -85,7 +85,7 @@ Orbit syncs in the background after a CRM page loads, at most once every five mi
 
 ### Call summaries
 
-Orbit can turn a call or meeting transcript into a short summary, key points, and suggested tasks, stored against the activity. Each action item becomes a task on the contact automatically and, when ClickUp is set up with a default list, a ClickUp task too; dismiss or complete any you don't need. It uses the llmapi.ai gateway (OpenAI-compatible chat completions). Set `LLM_API_KEY`. Optionally set `LLM_MODEL` (default `claude-haiku-5-5`) and `LLM_API_BASE_URL` (default `https://api.llmapi.ai/v1`).
+Orbit can turn a call or meeting transcript into a short summary, key points, and suggested tasks, stored against the activity. Action items that are yours become tasks on the contact automatically and, when ClickUp is set up with a default list, ClickUp tasks too. Items for the other person, or with no clear owner, stay in the summary with an "Add as task" button. It uses the llmapi.ai gateway (OpenAI-compatible chat completions). Set `LLM_API_KEY`. Optionally set `LLM_MODEL` (default `claude-haiku-5-5`) and `LLM_API_BASE_URL` (default `https://api.llmapi.ai/v1`).
 
 On a call in a contact's or company's activity, choose Add transcript, paste the transcript (plain text or the Teams `.vtt` text), and choose Summarise. Teams `.vtt` files are reduced to `Speaker: line` text first. Each suggested task has Add as task, which creates a task on the call's contact and company due at 09:00 London time on the stated day, and Dismiss. The transcript stays on the call under Transcript. A summary that fails keeps the transcript and shows the error with Try again.
 
