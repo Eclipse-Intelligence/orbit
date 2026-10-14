@@ -429,7 +429,12 @@ export async function summariseCall(
   actor: Actor,
   activityId: string,
   transcript: string,
-  options: { source?: CallInsightSource; fetchImpl?: typeof fetch; deadline?: number } = {},
+  options: {
+    source?: CallInsightSource;
+    fetchImpl?: typeof fetch;
+    deadline?: number;
+    autoAccept?: boolean;
+  } = {},
 ): Promise<CallInsight> {
   assertScope(actor.scopes, "activities:write");
   if (!isUuid(activityId)) throw new CrmError("not_found", "Call not found.", 404);
@@ -514,7 +519,8 @@ export async function summariseCall(
   } catch (error) {
     outcome = { status: "failed", error: failureMessage(error) };
   }
-  return withActor(actor, (db) => finishInsight(db, prepared.insight.id, outcome));
+  const finished = await withActor(actor, (db) => finishInsight(db, prepared.insight.id, outcome));
+  return options.autoAccept === false ? finished : acceptAllActionItems(actor, finished);
 }
 
 async function readItem(db: Db, actor: Actor, insightId: string, itemId: string) {
@@ -548,7 +554,7 @@ export async function acceptActionItem(
   options: { provenance?: Provenance } = {},
 ): Promise<{ insight: CallInsight; task: Task | null }> {
   assertScope(actor.scopes, "tasks:write");
-  return withActor(actor, async (db) => {
+  const result = await withActor(actor, async (db) => {
     const { current, items, item } = await readItem(db, actor, insightId, itemId);
     if (item.status === "accepted" && item.taskId) {
       return { insight: mapInsight(current), task: null };
@@ -589,6 +595,34 @@ export async function acceptActionItem(
     );
     return { insight: await saveItems(db, current.id, next), task };
   });
+  if (result.task && actor.type === "user") {
+    try {
+      const { sendTaskToDefaultList } = await import("@/lib/crm/clickup");
+      await sendTaskToDefaultList(actor, result.task.id);
+    } catch (error) {
+      console.error("Could not send the next action to ClickUp", error);
+    }
+  }
+  return result;
+}
+
+export async function acceptAllActionItems(
+  actor: Actor,
+  insight: CallInsight,
+): Promise<CallInsight> {
+  if (insight.status !== "ready" || !actor.scopes.includes("tasks:write")) return insight;
+  let latest = insight;
+  for (const item of insight.actionItems) {
+    if (item.status !== "suggested") continue;
+    try {
+      latest = (await acceptActionItem(actor, insight.id, item.id, {}, {
+        provenance: { operation: "auto_accept_call_action" },
+      })).insight;
+    } catch (error) {
+      console.error("Could not add a next action from the call", error);
+    }
+  }
+  return latest;
 }
 
 export async function dismissActionItem(

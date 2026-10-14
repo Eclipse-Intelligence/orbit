@@ -4,11 +4,13 @@ import Sidebar from "@/components/_common/sidebar/sidebar";
 import CrmChrome from "@/components/crm/chrome";
 import { getUserActor } from "@/lib/auth/user";
 import { syncCalls } from "@/lib/crm/calls";
+import { syncClickUp } from "@/lib/crm/clickup";
 import { countCompanies } from "@/lib/crm/companies";
 import { syncGranola } from "@/lib/crm/granola";
 import { listAttention } from "@/lib/crm/relationships";
 import { countOpenTasks } from "@/lib/crm/tasks";
 import { syncTeamsTranscripts } from "@/lib/crm/teams-transcripts";
+import { clickupToken } from "@/lib/clickup";
 import { granolaApiKey } from "@/lib/granola";
 import { microsoftConfigured } from "@/lib/microsoft/oauth";
 
@@ -40,6 +42,16 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
         if (result.ran && result.error) console.error("Granola sync failed", result.error);
       } catch (error) {
         console.error("Granola sync failed", error);
+      }
+    });
+  }
+  if (clickupToken()) {
+    after(async () => {
+      try {
+        const result = await syncClickUp({ actor: user });
+        if (result.ran && result.error) console.error("ClickUp sync failed", result.error);
+      } catch (error) {
+        console.error("ClickUp sync failed", error);
       }
     });
   }

@@ -295,6 +295,10 @@ export type Task = {
   createdByUserId: string | null;
   createdByAgentId: string | null;
   archivedAt: string | null;
+  clickupTaskId: string | null;
+  clickupListId: string | null;
+  clickupUrl: string | null;
+  clickupError: string | null;
   createdAt: string;
   updatedAt: string;
 };

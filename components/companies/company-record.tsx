@@ -18,6 +18,7 @@ import SectionHeader from "@/components/crm/section-header";
 import type { Viewer } from "@/components/crm/viewer";
 import { archiveCompanyAction } from "@/app/(crm)/actions";
 import { formatDate, LIFECYCLE_LABELS } from "@/lib/companies";
+import type { ClickUpPicker } from "@/lib/crm/clickup";
 import type { Company, CompanyContext, Member } from "@/lib/crm/types";
 
 function externalUrl(value: string) {
@@ -33,11 +34,13 @@ export default function CompanyRecord({
   context,
   members,
   mailboxConnected,
+  clickup,
 }: {
   viewer: Viewer;
   context: CompanyContext;
   members: Member[];
   mailboxConnected: boolean;
+  clickup: ClickUpPicker | null;
 }) {
   const router = useRouter();
   const listHref = useListHref("companies");
@@ -211,7 +214,7 @@ export default function CompanyRecord({
               </DetailSection>
             )}
 
-            <RelationshipPanel context={context} />
+            <RelationshipPanel context={context} clickup={clickup} />
           </>
         }
         activity={

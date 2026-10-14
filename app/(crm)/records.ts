@@ -1,7 +1,9 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import { after } from "next/server";
 import { getUserActor } from "@/lib/auth/user";
 import {
   createActivity,
@@ -9,9 +11,10 @@ import {
   type LoggedActivityType,
 } from "@/lib/crm/activities";
 import { actionError } from "@/lib/companies";
+import { createTaskWithClickUp, pushClickUpTask } from "@/lib/crm/clickup";
 import { createContact, getContact, updateContact } from "@/lib/crm/contacts";
 import { createOpportunity, updateOpportunity } from "@/lib/crm/opportunities";
-import { completeTask, createTask, updateTask } from "@/lib/crm/tasks";
+import { completeTask, updateTask } from "@/lib/crm/tasks";
 import type {
   Activity,
   ActivityType,
@@ -19,12 +22,14 @@ import type {
   OpportunityStatus,
   TaskPriority,
 } from "@/lib/crm/types";
+import { clickupToken } from "@/lib/clickup";
 import { revalidateRecordPages } from "@/lib/revalidate";
 
 export type RecordActionState = {
   error?: string;
   field?: string;
   ok?: boolean;
+  warning?: string;
 };
 
 export type ContactActionState = RecordActionState & { contact?: Contact };
@@ -42,6 +47,28 @@ function text(formData: FormData, key: string) {
 
 function optionalId(value: string) {
   return value && value !== "none" && value !== "unassigned" ? value : null;
+}
+
+async function requestOrigin() {
+  const headerStore = await headers();
+  const host = headerStore.get("x-forwarded-host") ?? headerStore.get("host");
+  if (!host) return null;
+  return `${headerStore.get("x-forwarded-proto") ?? "http"}://${host}`;
+}
+
+function pushLater(user: Parameters<typeof pushClickUpTask>[0], id: string) {
+  if (!clickupToken()) return;
+  after(async () => {
+    try {
+      await pushClickUpTask(user, id);
+    } catch (error) {
+      console.error("ClickUp push failed", error);
+    }
+  });
+}
+
+function clickupWarning(error: string | null) {
+  return error ? `Saved in Orbit, but ClickUp said: ${error} Orbit will try again.` : undefined;
 }
 
 function refresh() {
@@ -185,16 +212,22 @@ export async function saveTaskAction(
     contactId: optionalId(text(formData, "contactId")),
   };
   try {
-    if (id)
+    if (id) {
       await updateTask(user, id, write, {
         provenance: { operation: "update_task", source: "web" },
       });
-    else
-      await createTask(user, write, {
-        provenance: { operation: "create_task", source: "web" },
-      });
+      pushLater(user, id);
+      refresh();
+      return { ok: true };
+    }
+    const listId =
+      formData.get("clickup") === "on" ? optionalId(text(formData, "clickupListId")) : null;
+    const created = await createTaskWithClickUp(user, write, listId, {
+      origin: await requestOrigin(),
+      provenance: { operation: "create_task", source: "web" },
+    });
     refresh();
-    return { ok: true };
+    return { ok: true, warning: clickupWarning(created.clickupError) };
   } catch (error) {
     return actionError(error);
   }
@@ -208,6 +241,7 @@ export async function completeTaskAction(
     await completeTask(user, id, {
       provenance: { operation: "complete_task", source: "web" },
     });
+    pushLater(user, id);
     refresh();
     return { ok: true };
   } catch (error) {
@@ -242,20 +276,25 @@ export async function addCompanyTaskAction(
   companyId: string,
   title: string,
   dueAt: string,
+  clickupListId: string | null = null,
 ): Promise<RecordActionState> {
   const user = await requireUser();
   try {
-    await createTask(
+    const created = await createTaskWithClickUp(
       user,
       {
         title,
         companyId,
         dueAt: dueAt.trim() || null,
       },
-      { provenance: { operation: "create_task", source: "web" } },
+      clickupListId,
+      {
+        origin: await requestOrigin(),
+        provenance: { operation: "create_task", source: "web" },
+      },
     );
     refresh();
-    return { ok: true };
+    return { ok: true, warning: clickupWarning(created.clickupError) };
   } catch (error) {
     return actionError(error);
   }

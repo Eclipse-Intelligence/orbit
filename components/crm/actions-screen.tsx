@@ -7,11 +7,13 @@ import { Input } from "@/components/_ui/input";
 import RecordTransfer from "@/components/crm/record-transfer";
 import SectionHeader from "@/components/crm/section-header";
 import ActionTask from "@/components/beautifui/action-task";
+import { ClickUpPickerField } from "@/components/crm/clickup";
 import { ConnectionMark, Monogram } from "@/components/beautifui/record-marks";
 import { RecordList, RecordRow, RecordSelect } from "@/components/crm/record-form";
 import type { Viewer } from "@/components/crm/viewer";
 import { completeTaskAction, saveTaskAction, type RecordActionState } from "@/app/(crm)/records";
 import { relativeWhen } from "@/lib/companies";
+import type { ClickUpPicker } from "@/lib/crm/clickup";
 import { companyHref } from "@/lib/crm/hrefs";
 import type { Company, Company as CompanyRow, Task, TaskView } from "@/lib/crm/types";
 
@@ -29,6 +31,7 @@ export default function ActionsScreen({
   tasks,
   companies,
   companyChoices,
+  clickup,
   now,
 }: {
   viewer: Viewer;
@@ -36,11 +39,14 @@ export default function ActionsScreen({
   tasks: Task[];
   companies: Company[];
   companyChoices: CompanyRow[];
+  clickup: ClickUpPicker | null;
   now: number;
 }) {
   const router = useRouter();
   const [state, action, pending] = useActionState(saveTaskAction, {} as RecordActionState);
   const [message, setMessage] = useState<string | null>(null);
+  const [toClickUp, setToClickUp] = useState(true);
+  const [clickupListId, setClickupListId] = useState(clickup?.listId ?? "");
   useEffect(() => {
     if (state.ok) router.refresh();
   }, [state, router]);
@@ -91,10 +97,26 @@ export default function ActionsScreen({
           {pending ? "Saving…" : "Add"}
         </Button>
         <input type="hidden" name="priority" value="normal" />
+        {clickup && (
+          <ClickUpPickerField
+            picker={clickup}
+            id="task-clickup"
+            checked={toClickUp}
+            onCheckedChange={setToClickUp}
+            listId={clickupListId}
+            onListChange={setClickupListId}
+            className="sm:col-span-4"
+          />
+        )}
       </form>
       {(state.error || message) && (
         <p role="alert" className="caption-style text-danger px-4 pt-3">
           {state.error ?? message}
+        </p>
+      )}
+      {state.warning && !state.error && (
+        <p role="status" className="caption-style text-soft px-4 pt-3">
+          {state.warning}
         </p>
       )}
       {view === "none" ? (

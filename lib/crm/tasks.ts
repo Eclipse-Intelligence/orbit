@@ -55,6 +55,10 @@ const TASK_SQL = `
     t.created_by_user_id,
     t.created_by_agent_id,
     t.archived_at,
+    t.clickup_task_id,
+    t.clickup_list_id,
+    t.clickup_url,
+    t.clickup_error,
     t.created_at,
     t.updated_at
   from crm.tasks t
@@ -83,6 +87,10 @@ type TaskRow = {
   created_by_user_id: string | null;
   created_by_agent_id: string | null;
   archived_at: Date | string | null;
+  clickup_task_id: string | null;
+  clickup_list_id: string | null;
+  clickup_url: string | null;
+  clickup_error: string | null;
   created_at: Date | string;
   updated_at: Date | string;
 };
@@ -119,6 +127,10 @@ function mapTask(row: TaskRow): Task {
     createdByUserId: row.created_by_user_id,
     createdByAgentId: row.created_by_agent_id,
     archivedAt: iso(row.archived_at),
+    clickupTaskId: row.clickup_task_id,
+    clickupListId: row.clickup_list_id,
+    clickupUrl: row.clickup_url,
+    clickupError: row.clickup_error,
     createdAt: iso(row.created_at) ?? new Date(0).toISOString(),
     updatedAt: iso(row.updated_at) ?? new Date(0).toISOString(),
   };
@@ -277,6 +289,18 @@ async function applyTask(
     ),
   );
   return { task, changed: true };
+}
+
+export async function updateTaskInDb(
+  db: Db,
+  actor: Actor,
+  id: string,
+  input: TaskWrite,
+  provenance?: Provenance,
+) {
+  const current = await readTask(db, id);
+  if (!current) throw new CrmError("not_found", "Next action not found.", 404);
+  return applyTask(db, actor, current, prepareTask(input, "patch"), provenance);
 }
 
 export async function countOpenTasks(actor: Actor) {
