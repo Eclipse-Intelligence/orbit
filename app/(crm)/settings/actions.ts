@@ -13,6 +13,7 @@ import {
 import { CrmError } from "@/lib/crm/errors";
 import { savePipelineStages, type StageDraft } from "@/lib/crm/pipeline";
 import { saveOtherEmails, type MyEmails } from "@/lib/crm/profile";
+import { TASKS_PATH } from "@/lib/crm/task-views";
 import type { PipelineStage } from "@/lib/crm/types";
 import { archiveWebhook, createWebhook } from "@/lib/crm/webhooks";
 
@@ -86,7 +87,7 @@ function clickupFailure(error: unknown, fallback: string): ClickUpActionState {
 
 function refreshClickUp() {
   revalidatePath("/settings");
-  revalidatePath("/actions");
+  revalidatePath(TASKS_PATH);
   revalidatePath("/");
 }
 

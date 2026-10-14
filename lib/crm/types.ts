@@ -127,7 +127,7 @@ export type OpportunityStatus = (typeof OPPORTUNITY_STATUSES)[number];
 export const TASK_PRIORITIES = ["low", "normal", "high"] as const;
 export type TaskPriority = (typeof TASK_PRIORITIES)[number];
 
-export const TASK_VIEWS = ["overdue", "today", "upcoming", "completed", "none"] as const;
+export const TASK_VIEWS = ["all", "overdue", "today", "upcoming", "completed", "none"] as const;
 export type TaskView = (typeof TASK_VIEWS)[number];
 
 export type Contact = {

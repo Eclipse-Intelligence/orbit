@@ -291,7 +291,7 @@ describe("call insights", () => {
     assert.equal(missing.error, "Set LLM_API_KEY to summarise calls.");
   });
 
-  it("accepts a suggested action as a next action exactly once", async () => {
+  it("accepts a suggested action as a task exactly once", async () => {
     const { owner, callId, contactId, companyId } = await setup("accept@example.com");
     const insight = await readyInsight(owner, callId);
     const item = insight.actionItems[0];

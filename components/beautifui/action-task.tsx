@@ -3,27 +3,32 @@
 import { useState } from "react";
 import Link from "next/link";
 import Button from "@/components/_ui/button";
+import Tag from "@/components/_ui/tag";
 import { EntityChip } from "@/components/beautifui/record-marks";
 import { ClickUpBadge } from "@/components/crm/clickup";
 import { relativeWhen } from "@/lib/companies";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
+import { taskDueState } from "@/lib/crm/task-views";
 import type { Task } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
 
 export default function ActionTask({
   task,
   completed,
+  dueBadge = false,
   now,
   onComplete,
 }: {
   task: Task;
   completed: boolean;
+  dueBadge?: boolean;
   now: number;
   onComplete?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const overdue =
     Boolean(task.dueAt) && !task.completedAt && new Date(task.dueAt ?? 0).getTime() < now;
+  const due = dueBadge ? taskDueState(task.dueAt, now) : null;
   const hasDetail = Boolean(
     task.description || task.contactName || task.opportunityName || task.clickupError,
   );
@@ -57,9 +62,19 @@ export default function ActionTask({
             )}
           </span>
           <span className="min-w-0 flex-1 truncate text-[14px] leading-5">{task.title}</span>
-          <span className="text-subtle shrink-0 text-[13px]">
-            {task.dueAt ? relativeWhen(task.dueAt, now) : "No due date"}
-          </span>
+          {due ? (
+            <Tag
+              size="sm"
+              tone={due.kind === "overdue" ? "red" : due.kind === "today" ? "amber" : "neutral"}
+              className="text-[12px]"
+            >
+              {due.label}
+            </Tag>
+          ) : (
+            <span className="text-subtle shrink-0 text-[13px]">
+              {task.dueAt ? relativeWhen(task.dueAt, now) : "No due date"}
+            </span>
+          )}
           <svg
             aria-hidden
             width="15"

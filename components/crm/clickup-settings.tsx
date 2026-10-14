@@ -45,7 +45,7 @@ export default function ClickUpSettings({
       <div className="flex max-w-[640px] flex-col gap-2">
         <h2>ClickUp</h2>
         <p className="caption-style text-subtle">
-          To sync next actions with ClickUp, create a personal token in ClickUp under Settings › Apps › API Token, add it as CLICKUP_API_TOKEN in the server environment (in Vercel, Settings › Environment Variables), then redeploy.
+          To sync tasks with ClickUp, create a personal token in ClickUp under Settings › Apps › API Token, add it as CLICKUP_API_TOKEN in the server environment (in Vercel, Settings › Environment Variables), then redeploy.
         </p>
       </div>
     );
@@ -128,7 +128,7 @@ export default function ClickUpSettings({
           {sameTeam && lists.length > 0 && (
             <>
               <label className="flex flex-col gap-2" htmlFor="clickup-default-list">
-                <span className="caption-style text-subtle">Default list for new next actions</span>
+                <span className="caption-style text-subtle">Default list for new tasks</span>
                 <select
                   id="clickup-default-list"
                   value={defaultListId}
@@ -141,7 +141,7 @@ export default function ClickUpSettings({
               </label>
               <fieldset className="flex flex-col gap-2">
                 <legend className="caption-style text-subtle pb-2">
-                  Watched lists. Their tasks become next actions when Orbit can tell which contact or company they are for.
+                  Watched lists. Their tasks become Orbit tasks when Orbit can tell which contact or company they are for.
                 </legend>
                 <div className="border-border flex max-h-[18em] flex-col gap-3 overflow-auto rounded-xl border p-3">
                   {listGroups(lists).map((group) => (

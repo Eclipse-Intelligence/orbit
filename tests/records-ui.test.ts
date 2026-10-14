@@ -2,6 +2,12 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { connectionStrength, formatWhen, relativeWhen } from "@/lib/companies";
 import { companyHref, contactHref, legacyRecordHref, listHref, listQuery } from "@/lib/crm/hrefs";
+import {
+  legacyTasksHref,
+  taskDueState,
+  taskViewFromParam,
+  tasksHref,
+} from "@/lib/crm/task-views";
 import { teamsCallUrl } from "@/lib/phone";
 import { appTimeZone, dateTimeInputValue, dayWindow, startOfDay, toIsoInstant } from "@/lib/time";
 
@@ -104,5 +110,42 @@ describe("record links", () => {
     assert.equal(legacyRecordHref("/", new URLSearchParams("contact=xyz")), null);
     assert.equal(legacyRecordHref("/contacts", new URLSearchParams("record=abc")), null);
     assert.equal(legacyRecordHref("/inbox", new URLSearchParams("record=abc")), null);
+  });
+});
+
+describe("tasks page links", () => {
+  it("redirects /actions to /tasks and keeps the query string", () => {
+    assert.equal(legacyTasksHref("/actions", new URLSearchParams()), "/tasks");
+    assert.equal(legacyTasksHref("/actions/", new URLSearchParams()), "/tasks");
+    assert.equal(legacyTasksHref("/actions", new URLSearchParams("view=today")), "/tasks?view=today");
+    assert.equal(legacyTasksHref("/actions", new URLSearchParams("view=overdue&q=deck")), "/tasks?view=overdue&q=deck");
+    assert.equal(legacyTasksHref("/actions", new URLSearchParams("view=none")), "/tasks?view=without-tasks");
+    assert.equal(legacyTasksHref("/actions", new URLSearchParams("view=all")), "/tasks");
+    assert.equal(legacyTasksHref("/actions", new URLSearchParams("view=bogus&q=x")), "/tasks?q=x");
+    assert.equal(legacyTasksHref("/tasks", new URLSearchParams("view=none")), null);
+    assert.equal(legacyTasksHref("/actionsx", new URLSearchParams()), null);
+  });
+
+  it("reads and writes the view in the tasks URL", () => {
+    assert.equal(tasksHref(), "/tasks");
+    assert.equal(tasksHref("all"), "/tasks");
+    assert.equal(tasksHref("today"), "/tasks?view=today");
+    assert.equal(tasksHref("none"), "/tasks?view=without-tasks");
+    assert.equal(taskViewFromParam("without-tasks"), "none");
+    assert.equal(taskViewFromParam("none"), "none");
+    assert.equal(taskViewFromParam("upcoming"), "upcoming");
+    assert.equal(taskViewFromParam("later"), null);
+    assert.equal(taskViewFromParam(undefined), null);
+  });
+
+  it("labels a task's due state in London time", () => {
+    const at = Date.parse("2026-10-05T12:00:00Z");
+    const zone = "Europe/London";
+    assert.deepEqual(taskDueState(null, at, zone), { kind: "none", label: "No date" });
+    assert.deepEqual(taskDueState("2026-10-04T22:59:00Z", at, zone), { kind: "overdue", label: "Overdue" });
+    assert.deepEqual(taskDueState("2026-10-04T23:00:00Z", at, zone), { kind: "today", label: "Today" });
+    assert.deepEqual(taskDueState("2026-10-05T22:59:00Z", at, zone), { kind: "today", label: "Today" });
+    assert.deepEqual(taskDueState("2026-10-08T09:00:00Z", at, zone), { kind: "later", label: "Thu 8 Oct" });
+    assert.deepEqual(taskDueState("2027-01-12T09:00:00Z", at, zone), { kind: "later", label: "12 Jan 2027" });
   });
 });

@@ -302,7 +302,7 @@ export default function SettingsScreen({
         <div className="flex max-w-[640px] flex-col gap-2">
           <h2>Email and calendar</h2>
           <p className="caption-style text-subtle">
-            Agents file emails and meetings with record_email and record_meeting. The CRM matches the person by email and the company by domain, then suggests a follow-up when none is open. To file Outlook mail automatically and send from a contact, go to Inbox and choose Connect Microsoft.
+            Agents file emails and meetings with record_email and record_meeting. The CRM matches the person by email and the company by domain, then suggests a follow-up task when the company has no open task. To file Outlook mail automatically and send from a contact, go to Inbox and choose Connect Microsoft.
           </p>
         </div>
       </div>

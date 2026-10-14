@@ -10,6 +10,7 @@ import {
   getInsightTranscript,
   summariseCall,
 } from "@/lib/crm/call-insights";
+import { TASKS_PATH } from "@/lib/crm/task-views";
 import type { CallInsight } from "@/lib/crm/types";
 import { revalidateRecordPages } from "@/lib/revalidate";
 
@@ -31,7 +32,7 @@ function refresh() {
   revalidateRecordPages();
   revalidatePath("/contacts");
   revalidatePath("/activities");
-  revalidatePath("/actions");
+  revalidatePath(TASKS_PATH);
 }
 
 export async function summariseCallAction(

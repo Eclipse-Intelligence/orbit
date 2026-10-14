@@ -36,7 +36,7 @@ export default async function QuietPage() {
             key={row.company.id}
             mark={<Monogram name={row.company.name} />}
             title={row.company.name}
-            meta={`${relativeWhen(row.lastActivityAt)} · ${row.openTaskCount} open next action${row.openTaskCount === 1 ? "" : "s"}`}
+            meta={`${relativeWhen(row.lastActivityAt)} · ${row.openTaskCount} open task${row.openTaskCount === 1 ? "" : "s"}`}
             action={
               <span className="flex items-center gap-3">
                 <ConnectionMark at={row.lastActivityAt} />

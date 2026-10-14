@@ -17,7 +17,7 @@ Optional `Idempotency-Key` header (printable ASCII, up to 200 characters). Reuse
 | Contact create, update, upsert, archive | `contacts:write` |
 | Opportunity create, update, archive | `opportunities:write` |
 | Activity create | `activities:write` |
-| Next action create, update, complete, archive | `tasks:write` |
+| Task create, update, complete, archive | `tasks:write` |
 | Lead ingestion | `leads:write`, plus the write scope of each record included |
 
 `admin` satisfies any of these.
@@ -108,11 +108,11 @@ Every activity includes `actorUserId`, `actorAgentId`, and `actorName`: the full
 
 `POST /api/v1/activities` appends an interaction. Types are `email`, `meeting`, `call`, `note`, `research`, `linkedin`, `agent_update`, and `other`. A title or body is required, and the row must point at a company, contact, or opportunity. There is no update or delete.
 
-## Next actions
+## Tasks
 
-`GET /api/v1/tasks` with `q`, `company_id`, `owner`, and `view` (`overdue`, `today`, `upcoming`, `completed`). `today` includes open actions with no due date. `completed` is the last 14 days.
+`GET /api/v1/tasks` with `q`, `company_id`, `owner`, and `view` (`all`, `overdue`, `today`, `upcoming`, `completed`). Without `view` it returns every open task. `all` is every open task (not completed, not archived) whatever its due date: overdue first, then by due date, undated last, then high, normal, low priority and oldest first. `today` includes open tasks with no due date. `completed` is the last 14 days.
 
-`GET /api/v1/actions?view=` returns the same tasks. `view=none` returns companies that have no open next action.
+`GET /api/v1/actions?view=` returns the same tasks, up to 100, and defaults to `today` when `view` is missing or not recognised. `view=all` returns every open task in the order above. `view=none` returns companies that have no open task.
 
 `POST /api/v1/tasks` creates one. A `dueAt` without a `Z` or offset is read as London time, and `today` and `overdue` are cut at midnight London time. `PATCH /api/v1/tasks/:id` updates it. `completed: true` sets `completed_at` without moving an existing completion time. `completed: false` reopens it.
 
@@ -120,11 +120,11 @@ Every activity includes `actorUserId`, `actorAgentId`, and `actorName`: the full
 
 ## Leads
 
-`POST /api/v1/leads` accepts any of `company`, `contact`, `note`, `activity`, `opportunity`, and `task`. Company and contact use the upsert rules. The note becomes a research activity when `activity` is omitted. The opportunity and next action attach to the company and contact from the same request. The response is one object with `company`, `contact`, `activity`, `opportunity`, `task`, and the created/matched flags. The whole request is one transaction.
+`POST /api/v1/leads` accepts any of `company`, `contact`, `note`, `activity`, `opportunity`, and `task`. Company and contact use the upsert rules. The note becomes a research activity when `activity` is omitted. The opportunity and task attach to the company and contact from the same request. The response is one object with `company`, `contact`, `activity`, `opportunity`, `task`, and the created/matched flags. The whole request is one transaction.
 
 ## Context
 
-`GET /api/v1/companies/:id/context` returns the company, its contacts, opportunities, recent activities, open next actions, `lastInteraction`, `openTaskCount`, `relationshipStatus` (`new`, `active`, `quiet`, or `needs_action`), and `timeline`: the company's activities plus those of its current contacts, newest first. `insights` maps the id of each call in the timeline that has a summary to its summary, key points, suggested actions, and status (the transcript is not included).
+`GET /api/v1/companies/:id/context` returns the company, its contacts, opportunities, recent activities, open tasks, `lastInteraction`, `openTaskCount`, `relationshipStatus` (`new`, `active`, `quiet`, or `needs_action`), and `timeline`: the company's activities plus those of its current contacts, newest first. `insights` maps the id of each call in the timeline that has a summary to its summary, key points, suggested actions, and status (the transcript is not included).
 
 `GET /api/v1/relationships/stale` lists companies with no interaction in the last 21 days. `days` and `limit` are optional.
 
@@ -136,7 +136,7 @@ Every activity includes `actorUserId`, `actorAgentId`, and `actorName`: the full
 
 ## Communications
 
-`POST /api/v1/communications` accepts `{ "kind": "email" | "meeting", "title", "body", "participantEmails", "companyId", "contactId" }`. It files the activity and, when it happened in the last 48 hours and the company has no open next action, creates a suggested follow-up. Requires `activities:write`. The follow-up also requires `tasks:write`.
+`POST /api/v1/communications` accepts `{ "kind": "email" | "meeting", "title", "body", "participantEmails", "companyId", "contactId" }`. It files the activity and, when it happened in the last 48 hours and the company has no open task, creates a suggested follow-up task. Requires `activities:write`. The follow-up also requires `tasks:write`.
 
 ## Bulk leads
 

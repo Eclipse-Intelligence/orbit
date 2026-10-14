@@ -4,7 +4,7 @@ export const SITE_NAME = "Orbit";
 export const SITE_URL =
   process.env.SITE_URL ?? process.env.NEXT_PUBLIC_SITE_URL ?? "https://example.com";
 export const SITE_DESCRIPTION =
-  "A focused CRM for companies, relationships, and next actions.";
+  "A focused CRM for companies, relationships, and tasks.";
 export const DEFAULT_OG_IMAGE = "/opengraph-image.jpg";
 
 export function absoluteUrl(path: string) {

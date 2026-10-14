@@ -61,7 +61,7 @@ export default function RelationshipPanel({
           {context.relationshipStatus === "quiet"
             ? "Quiet relationship"
             : context.relationshipStatus === "needs_action"
-              ? "Needs a next action"
+              ? "Needs a task"
               : context.relationshipStatus === "new"
                 ? "New relationship"
                 : "Active relationship"}
@@ -73,8 +73,8 @@ export default function RelationshipPanel({
         </p>
         <p className="caption-style text-subtle">
           {context.openTaskCount > 0
-            ? `${context.openTaskCount} open next action${context.openTaskCount === 1 ? "" : "s"}`
-            : "No next action."}
+            ? `${context.openTaskCount} open task${context.openTaskCount === 1 ? "" : "s"}`
+            : "No open tasks."}
         </p>
         {error && (
           <p role="alert" className="caption-style text-danger">
@@ -86,7 +86,7 @@ export default function RelationshipPanel({
             className="caption-style text-subtle"
             htmlFor={`task-${companyId}`}
           >
-            Next action
+            Task
           </label>
           <Input
             id={`task-${companyId}`}
@@ -129,7 +129,7 @@ export default function RelationshipPanel({
             disabled={pending || taskTitle.trim() === ""}
             onClick={saveTask}
           >
-            {pending ? "Saving…" : "Add next action"}
+            {pending ? "Saving…" : "Add task"}
           </Button>
         </div>
       </DetailSection>
@@ -172,9 +172,9 @@ export default function RelationshipPanel({
         )}
       </DetailSection>
 
-      <DetailSection title="Next actions" className="shadow-none">
+      <DetailSection title="Tasks" className="shadow-none">
         {context.tasks.length === 0 ? (
-          <p className="caption-style text-subtle">Nothing scheduled.</p>
+          <p className="caption-style text-subtle">No open tasks.</p>
         ) : (
           <ul className="flex flex-col gap-3">
             {context.tasks.map((task) => (

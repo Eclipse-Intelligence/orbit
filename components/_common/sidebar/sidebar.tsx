@@ -38,7 +38,7 @@ export default function Sidebar({ companyCount, openActionCount, workspaceName }
         >
           <SheetTitle className="sr-only">Navigation</SheetTitle>
           <SheetDescription className="sr-only">
-            Companies, contacts, opportunities, activities, and next actions.
+            Companies, contacts, opportunities, activities, and tasks.
           </SheetDescription>
           <SidebarContent
             companyCount={companyCount}

@@ -59,7 +59,7 @@ const LINK_FIELD_NAMES = ["orbit", "crm"];
 const LINK_FIELD_TYPES = ["short_text", "text", "url", "email"];
 
 export const CLICKUP_NOT_CONFIGURED =
-  "Set CLICKUP_API_TOKEN to sync next actions with ClickUp.";
+  "Set CLICKUP_API_TOKEN to sync tasks with ClickUp.";
 const CLICKUP_NOT_SET_UP = "Choose a ClickUp workspace and lists in Settings first.";
 
 export type ClickUpSyncResult = {

@@ -1,6 +1,6 @@
 # Orbit
 
-Orbit is a workspace CRM for companies, people, opportunities, conversations, and next actions. The web app, versioned API, and MCP server share one domain service backed by PostgreSQL.
+Orbit is a workspace CRM for companies, people, opportunities, conversations, and tasks. The web app, versioned API, and MCP server share one domain service backed by PostgreSQL.
 
 ## Requirements
 
@@ -27,7 +27,7 @@ npm run db:setup
 npm run dev
 ```
 
-`db:setup` applies `supabase/bootstrap/local-auth.sql` only when `auth.users` does not already exist, applies each CRM migration once, and writes a local user plus an agent token into `.env.local`. Sign in with `DEV_USER_EMAIL` and `DEV_USER_PASSWORD`. The local agent can read and write companies, contacts, leads, activities, opportunities, and next actions. It can also file emails and meetings, import CSV, and register webhooks when the token includes `admin`.
+`db:setup` applies `supabase/bootstrap/local-auth.sql` only when `auth.users` does not already exist, applies each CRM migration once, and writes a local user plus an agent token into `.env.local`. Sign in with `DEV_USER_EMAIL` and `DEV_USER_PASSWORD`. The local agent can read and write companies, contacts, leads, activities, opportunities, and tasks. It can also file emails and meetings, import CSV, and register webhooks when the token includes `admin`.
 
 `npm run db:reset` drops the `crm` and `private` schemas and the local auth users, then sets up again. It refuses to run when it detects hosted Supabase Auth.
 
@@ -61,9 +61,9 @@ Orbit syncs in the background after a CRM page loads, at most once every five mi
 
 ### Call summaries
 
-Orbit can turn a call or meeting transcript into a short summary, key points, and next actions, stored against the activity. Each action item becomes a next action on the contact automatically and, when ClickUp is set up with a default list, a ClickUp task too; dismiss or complete any you don't need. It uses the llmapi.ai gateway (OpenAI-compatible chat completions). Set `LLM_API_KEY`. Optionally set `LLM_MODEL` (default `claude-haiku-5-5`) and `LLM_API_BASE_URL` (default `https://api.llmapi.ai/v1`).
+Orbit can turn a call or meeting transcript into a short summary, key points, and suggested tasks, stored against the activity. Each action item becomes a task on the contact automatically and, when ClickUp is set up with a default list, a ClickUp task too; dismiss or complete any you don't need. It uses the llmapi.ai gateway (OpenAI-compatible chat completions). Set `LLM_API_KEY`. Optionally set `LLM_MODEL` (default `claude-haiku-5-5`) and `LLM_API_BASE_URL` (default `https://api.llmapi.ai/v1`).
 
-On a call in a contact's or company's activity, choose Add transcript, paste the transcript (plain text or the Teams `.vtt` text), and choose Summarise. Teams `.vtt` files are reduced to `Speaker: line` text first. Each suggested action has Add as next action, which creates a next action on the call's contact and company due at 09:00 London time on the stated day, and Dismiss. The transcript stays on the call under Transcript. A summary that fails keeps the transcript and shows the error with Try again.
+On a call in a contact's or company's activity, choose Add transcript, paste the transcript (plain text or the Teams `.vtt` text), and choose Summarise. Teams `.vtt` files are reduced to `Speaker: line` text first. Each suggested task has Add as task, which creates a task on the call's contact and company due at 09:00 London time on the stated day, and Dismiss. The transcript stays on the call under Transcript. A summary that fails keeps the transcript and shows the error with Try again.
 
 What is sent to the gateway: the transcript, the call or meeting date, your name, the contact's name, job title and company, and the activity's title. Nothing else from the CRM is sent. Meetings get the same panel as calls, and pasting a transcript still works for anything Orbit did not import itself.
 
@@ -96,11 +96,11 @@ Each mailbox owner's transcripts, sync state, and subscription are their own: ot
 
 ## ClickUp
 
-Orbit keeps next actions and ClickUp tasks in step, both ways.
+Orbit keeps its tasks and ClickUp tasks in step, both ways.
 
 1. In ClickUp, open your avatar › Settings › Apps, and under API Token choose Generate (or Regenerate), then Copy. The token starts with `pk_`.
 2. In Vercel, add it as `CLICKUP_API_TOKEN` under Settings › Environment Variables and redeploy. Locally, put it in `.env.local` and restart.
-3. In Orbit, open Settings › ClickUp. Pick the default list for new next actions, tick the lists to watch, and choose Save ClickUp settings.
+3. In Orbit, open Settings › ClickUp. Pick the default list for new tasks, tick the lists to watch, and choose Save ClickUp settings.
 4. On each list where you create tasks for contacts, add a text custom field named `Orbit` (or `CRM`). Put the contact's email, the company's domain, or the Orbit link to the record in it.
 5. Optional: with `SITE_URL` set to Orbit's https address, choose Enable instant ClickUp sync. Without it, Orbit checks ClickUp every 10 minutes and whenever a page loads (at most every 5 minutes).
 
@@ -109,9 +109,9 @@ Orbit keeps next actions and ClickUp tasks in step, both ways.
 | `CLICKUP_API_TOKEN`     | ClickUp personal API token (`pk_…`). Leave empty to turn ClickUp off.                                         |
 | `CLICKUP_API_BASE_URL`  | Optional. Overrides the ClickUp API base URL (default `https://api.clickup.com/api/v2`), for tests or a local fake. |
 
-From Orbit to ClickUp: the add-next-action forms on a company page and on Next actions have Add to ClickUp, on by default once ClickUp is set up, with a list picker that remembers the last list used. The ClickUp task gets the title, the due date (London time; a due time of exactly midnight is sent as a date without a time), you as assignee, and a description with the contact or company name and a line `Orbit: <SITE_URL>/contacts/<id>` (or `/companies/<id>`). If the list has a text, URL, or email field named Orbit or CRM, Orbit fills it with that link (an email field gets the contact's email). Later changes to the title, due date, and done state are sent too: done picks the list's first status of type done or closed, reopening picks its first open status. Archiving in Orbit leaves the ClickUp task alone. If ClickUp fails, the next action is still saved, the error shows on the task, and Orbit tries again on the next sync. Linked next actions show a ClickUp link.
+From Orbit to ClickUp: the add-task forms on a company page and on Tasks have Add to ClickUp, on by default once ClickUp is set up, with a list picker that remembers the last list used. The ClickUp task gets the title, the due date (London time; a due time of exactly midnight is sent as a date without a time), you as assignee, and a description with the contact or company name and a line `Orbit: <SITE_URL>/contacts/<id>` (or `/companies/<id>`). If the list has a text, URL, or email field named Orbit or CRM, Orbit fills it with that link (an email field gets the contact's email). Later changes to the title, due date, and done state are sent too: done picks the list's first status of type done or closed, reopening picks its first open status. Archiving in Orbit leaves the ClickUp task alone. If ClickUp fails, the Orbit task is still saved, the error shows on the task, and Orbit tries again on the next sync. Linked tasks show a ClickUp link.
 
-From ClickUp to Orbit: a new task in a watched list becomes a next action when Orbit can tell who it is for, checked in this order: the Orbit or CRM field holds an Orbit record link, a contact's email, or a company's domain; the description holds an Orbit record link; the description holds a contact's email (your own and other members' addresses are skipped). Tasks Orbit cannot place are left alone. Linked tasks keep their title, due date, and done state in step; when the same field changed on both sides, the later edit wins. Deleting the task in ClickUp archives the next action.
+From ClickUp to Orbit: a new task in a watched list becomes an Orbit task when Orbit can tell who it is for, checked in this order: the Orbit or CRM field holds an Orbit record link, a contact's email, or a company's domain; the description holds an Orbit record link; the description holds a contact's email (your own and other members' addresses are skipped). Tasks Orbit cannot place are left alone. Linked tasks keep their title, due date, and done state in step; when the same field changed on both sides, the later edit wins. Deleting the task in ClickUp archives the Orbit task.
 
 Instant sync registers one ClickUp webhook for task created, updated, deleted, status, due date, and moved events. It covers a single list or space when everything you chose lives there, otherwise the whole workspace, and Orbit ignores tasks outside your lists. The route checks `X-Signature` (HMAC SHA-256 of the body with the webhook's secret, stored encrypted) before doing anything else, ignores deliveries it has already seen and events more than a day old, and answers straight away; the task is fetched afterwards. Changing the lists in Settings moves the webhook to match.
 

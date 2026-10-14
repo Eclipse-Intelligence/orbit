@@ -14,6 +14,7 @@ import { actionError } from "@/lib/companies";
 import { createTaskWithClickUp, pushClickUpTask } from "@/lib/crm/clickup";
 import { createContact, getContact, updateContact } from "@/lib/crm/contacts";
 import { createOpportunity, updateOpportunity } from "@/lib/crm/opportunities";
+import { TASKS_PATH } from "@/lib/crm/task-views";
 import { completeTask, updateTask } from "@/lib/crm/tasks";
 import type {
   Activity,
@@ -77,7 +78,7 @@ function refresh() {
   revalidatePath("/contacts");
   revalidatePath("/opportunities");
   revalidatePath("/activities");
-  revalidatePath("/actions");
+  revalidatePath(TASKS_PATH);
 }
 
 export async function saveContactAction(

@@ -143,7 +143,7 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
     "add_lead",
     {
       description:
-        "Ingest a lead in one step: match or create the company and contact, then optionally record a note, opportunity, and next action. Reuses the same company and contact when the domain or email already exists.",
+        "Ingest a lead in one step: match or create the company and contact, then optionally record a note, opportunity, and task. Reuses the same company and contact when the domain or email already exists.",
       inputSchema: {
         companyName: z.string().optional(),
         domain: z.string().nullable().optional(),
@@ -370,7 +370,7 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
   server.registerTool(
     "create_next_action",
     {
-      description: "Create a next action, with an optional due date and company, contact, or opportunity.",
+      description: "Create a task, with an optional due date and company, contact, or opportunity.",
       inputSchema: {
         title: z.string(),
         description: z.string().nullable().optional(),
@@ -404,7 +404,7 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
   server.registerTool(
     "complete_next_action",
     {
-      description: "Mark a next action complete. The completed time is kept if it was already set.",
+      description: "Mark a task complete. The completed time is kept if it was already set.",
       inputSchema: { id: z.uuid(), ...provenanceFields },
     },
     async (args) =>
@@ -420,7 +420,7 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
     "get_due_actions",
     {
       description:
-        "List next actions for overdue, today (including undated), upcoming, recently completed, or companies with no open next action (view none).",
+        "List tasks: all open tasks (overdue first, then by due date, undated last), overdue, today (including undated, the default), upcoming, recently completed, or companies with no open task (view none).",
       inputSchema: { view: z.enum(TASK_VIEWS).optional() },
     },
     async (args) => run(() => getDueActions(actor, args.view ?? "today")),
@@ -450,7 +450,7 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
     "get_company_context",
     {
       description:
-        "Return a company with its people, opportunities (open, won, and lost), recent interactions, open next actions, and the last interaction.",
+        "Return a company with its people, opportunities (open, won, and lost), recent interactions, open tasks, and the last interaction.",
       inputSchema: { id: z.uuid() },
     },
     async (args) => run(() => getCompanyContext(actor, args.id)),

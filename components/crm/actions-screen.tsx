@@ -15,19 +15,22 @@ import { completeTaskAction, saveTaskAction, type RecordActionState } from "@/ap
 import { relativeWhen } from "@/lib/companies";
 import type { ClickUpPicker } from "@/lib/crm/clickup";
 import { companyHref } from "@/lib/crm/hrefs";
+import { tasksHref } from "@/lib/crm/task-views";
 import type { Company, Company as CompanyRow, Task, TaskView } from "@/lib/crm/types";
 
 const VIEWS: { id: TaskView; label: string }[] = [
+  { id: "all", label: "All" },
   { id: "overdue", label: "Overdue" },
   { id: "today", label: "Today" },
   { id: "upcoming", label: "Upcoming" },
   { id: "completed", label: "Completed" },
-  { id: "none", label: "No next action" },
+  { id: "none", label: "Companies without tasks" },
 ];
 
 export default function ActionsScreen({
   viewer,
   view,
+  counts,
   tasks,
   companies,
   companyChoices,
@@ -36,6 +39,7 @@ export default function ActionsScreen({
 }: {
   viewer: Viewer;
   view: TaskView;
+  counts: Record<TaskView, number>;
   tasks: Task[];
   companies: Company[];
   companyChoices: CompanyRow[];
@@ -63,22 +67,24 @@ export default function ActionsScreen({
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <SectionHeader title="Next actions" viewer={viewer} action={<RecordTransfer resource="tasks" />} />
+      <SectionHeader title="Tasks" viewer={viewer} action={<RecordTransfer resource="tasks" />} />
       <div className="flex flex-wrap gap-2 px-4 pt-4">
         {VIEWS.map((item) => (
           <Button
             key={item.id}
             variant={item.id === view ? "secondary" : "ghost"}
             size="sm"
-            href={`/actions?view=${item.id}`}
+            href={tasksHref(item.id)}
+            aria-current={item.id === view ? "page" : undefined}
           >
             {item.label}
+            <span className="text-subtle tabular-nums">{counts[item.id]}</span>
           </Button>
         ))}
       </div>
       <form action={action} className="border-border grid gap-3 border-b px-4 py-4 sm:grid-cols-[1fr_180px_180px_auto] sm:items-end">
         <label className="flex flex-col gap-2" htmlFor="task-title">
-          <span className="caption-style text-subtle">Next action</span>
+          <span className="caption-style text-subtle">Task</span>
           <Input id="task-title" name="title" required placeholder="Send the follow-up" />
         </label>
         <label className="flex flex-col gap-2" htmlFor="task-due">
@@ -122,7 +128,7 @@ export default function ActionsScreen({
       {view === "none" ? (
         <RecordList
           count={companies.length}
-          empty="Every company has an open next action."
+          empty="Every company has an open task."
         >
           {companies.map((company) => (
             <RecordRow
@@ -142,12 +148,13 @@ export default function ActionsScreen({
           ))}
         </RecordList>
       ) : (
-        <RecordList count={tasks.length} empty="Nothing in this view.">
+        <RecordList count={tasks.length} empty={view === "all" ? "No open tasks." : "Nothing in this view."}>
           {tasks.map((task) => (
             <ActionTask
               key={task.id}
               task={task}
               completed={view === "completed"}
+              dueBadge={view === "all"}
               now={now}
               onComplete={view === "completed" ? undefined : () => complete(task.id)}
             />

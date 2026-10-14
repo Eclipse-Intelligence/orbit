@@ -34,7 +34,7 @@ after(async () => {
   await getPool().end();
 });
 
-describe("contacts, opportunities, and next actions", () => {
+describe("contacts, opportunities, and tasks", () => {
   it("dedupes contacts, keeps omitted fields, and rejects another workspace", async () => {
     const owner = await createUser("people@example.com", "People Owner");
     const other = await createUser("people-other@example.com", "Other");
@@ -96,7 +96,7 @@ describe("contacts, opportunities, and next actions", () => {
     );
   });
 
-  it("defaults an opportunity stage and completes a next action", async () => {
+  it("defaults an opportunity stage and completes a task", async () => {
     const owner = await createUser("deals@example.com", "Deals");
     const company = await createCompany(owner, { name: "Deal Co", domain: "deal.example" });
     const created = await createOpportunity(owner, {

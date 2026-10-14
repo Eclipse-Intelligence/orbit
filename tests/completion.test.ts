@@ -11,10 +11,11 @@ import { createContact, getContact } from "@/lib/crm/contacts";
 import { CrmError } from "@/lib/crm/errors";
 import { archiveOpportunity, createOpportunity, getOpportunity, listPipeline } from "@/lib/crm/opportunities";
 import { savePipelineStages } from "@/lib/crm/pipeline";
-import { getCompanyContext } from "@/lib/crm/relationships";
+import { countTaskViews, getCompanyContext, getDueActions } from "@/lib/crm/relationships";
 import { importCompaniesCsv, importContactsCsv, parseCsv } from "@/lib/crm/spreadsheet";
-import { createTask, listTasks } from "@/lib/crm/tasks";
+import { archiveTask, completeTask, createTask, listTasks } from "@/lib/crm/tasks";
 import { archiveWebhook, createWebhook, deliverDueWebhooks } from "@/lib/crm/webhooks";
+import { dayWindow } from "@/lib/time";
 import { createAgent, createUser, resetDatabase } from "./helpers";
 
 before(async () => {
@@ -235,7 +236,7 @@ describe("imports, pipeline, communications, and webhooks", () => {
     assert.equal(moved.rows[0].status, "won");
   });
 
-  it("orders next actions by due date then high, normal, low priority", async () => {
+  it("orders tasks by due date then high, normal, low priority", async () => {
     const owner = await createUser("priority@example.com", "Priority");
     const dueAt = new Date(Date.now() + 3 * 86_400_000).toISOString();
     for (const priority of ["low", "high", "normal"] as const) {
@@ -246,6 +247,41 @@ describe("imports, pipeline, communications, and webhooks", () => {
       listed.data.map((task) => task.priority),
       ["high", "normal", "low"],
     );
+  });
+
+  it("lists every open task in the all view, overdue first and undated last", async () => {
+    const owner = await createUser("all-view@example.com", "All View");
+    const company = await createCompany(owner, { name: "All View Co", domain: "all-view.example" });
+    await createCompany(owner, { name: "Taskless Co", domain: "taskless.example" });
+    const today = dayWindow();
+    const midday = new Date((today.start.getTime() + today.end.getTime()) / 2).toISOString();
+    const add = async (title: string, dueAt: string | null, priority: "low" | "normal" | "high" = "normal") =>
+      (await createTask(owner, { title, dueAt, priority, companyId: company.body.company.id })).body.task;
+    await add("Undated low", null, "low");
+    await add("Upcoming", new Date(today.end.getTime() + 2 * 86_400_000).toISOString());
+    await add("Undated high", null, "high");
+    await add("Today", midday);
+    await add("Overdue", new Date(today.start.getTime() - 3 * 86_400_000).toISOString());
+    await add("Undated normal", null);
+    const done = await add("Done", new Date(today.start.getTime() - 86_400_000).toISOString());
+    await completeTask(owner, done.id);
+    const archived = await add("Archived", null);
+    await archiveTask(owner, archived.id);
+
+    const expected = ["Overdue", "Today", "Upcoming", "Undated high", "Undated normal", "Undated low"];
+    const listed = await listTasks(owner, { view: "all" });
+    assert.deepEqual(listed.data.map((task) => task.title), expected);
+    assert.equal(listed.total, 6);
+    const due = await getDueActions(owner, "all");
+    assert.deepEqual(due.tasks.map((task) => task.title), expected);
+    assert.deepEqual(await countTaskViews(owner), {
+      all: 6,
+      overdue: 1,
+      today: 4,
+      upcoming: 1,
+      completed: 1,
+      none: 1,
+    });
   });
 
   it("files an email on the company domain and suggests a follow-up", async () => {
