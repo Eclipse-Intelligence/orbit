@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popover";
 import CalendarEventDetails, {
   eventTitle,
@@ -12,10 +12,12 @@ import { allDayKeys, DAY_MINUTES, daySpan, packColumns, wallMinutes } from "@/li
 import type { CalendarItem } from "@/lib/crm/calendars";
 import { cn } from "@/lib/utils";
 
-const HOUR_HEIGHT = 48;
-const PIXELS_PER_MINUTE = HOUR_HEIGHT / 60;
+const MIN_HOUR_HEIGHT = 64;
+const MAX_HOUR_HEIGHT = 120;
+const FOCUS_START_HOUR = 8;
+const FOCUS_HOURS = 12;
 const MIN_MINUTES = 20;
-const SCROLL_TO_HOUR = 7;
+const COMPACT_BELOW_PX = 44;
 const HOURS = Array.from({ length: 24 }, (_, hour) => hour);
 
 export function eventStyle(color: string, showAs: string | null): CSSProperties {
@@ -73,12 +75,12 @@ function EventBlock({
           )}
           style={{ ...eventStyle(color, item.showAs), ...style }}
         >
-          <span className="truncate text-[12px] leading-4 font-medium">
+          <span className="truncate text-[13px] leading-[18px] font-medium">
             {eventTitle(item)}
             {compact && !allDay && <span className="text-soft font-normal"> {formatTime(item.startsAt)}</span>}
           </span>
           {!allDay && !compact && (
-            <span className="caption-style text-soft truncate leading-4">{formatTimeRange(item)}</span>
+            <span className="text-soft truncate text-[12px] leading-4">{formatTimeRange(item)}</span>
           )}
         </button>
       </PopoverTrigger>
@@ -103,13 +105,32 @@ export default function CalendarGrid({
   now: number;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
+  const scrolled = useRef(false);
   const [current, setCurrent] = useState(now);
+  const [hourHeight, setHourHeight] = useState(MIN_HOUR_HEIGHT);
+  const perMinute = hourHeight / 60;
   useEffect(() => {
     const timer = window.setInterval(() => setCurrent(Date.now()), 60_000);
     return () => window.clearInterval(timer);
   }, []);
-  useEffect(() => {
-    if (scroller.current) scroller.current.scrollTop = SCROLL_TO_HOUR * HOUR_HEIGHT - HOUR_HEIGHT / 3;
+  useLayoutEffect(() => {
+    const element = scroller.current;
+    if (!element) return;
+    const measure = () => {
+      const fitted = Math.floor(element.clientHeight / FOCUS_HOURS);
+      const next = Math.min(MAX_HOUR_HEIGHT, Math.max(MIN_HOUR_HEIGHT, fitted));
+      setHourHeight(next);
+      if (!scrolled.current && element.clientHeight > 0) {
+        scrolled.current = true;
+        requestAnimationFrame(() => {
+          element.scrollTop = FOCUS_START_HOUR * next - 8;
+        });
+      }
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
   }, []);
 
   const allDay = new Map<string, CalendarItem[]>();
@@ -176,14 +197,14 @@ export default function CalendarGrid({
         )}
       </div>
       <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]" data-calendar-scroller="">
-        <div className="relative grid" style={{ ...columns, height: DAY_MINUTES * PIXELS_PER_MINUTE }}>
+        <div className="relative grid" style={{ ...columns, height: DAY_MINUTES * perMinute }}>
           <div className="relative">
             {HOURS.map((hour) =>
               hour === 0 ? null : (
                 <span
                   key={hour}
                   className="caption-style text-subtle absolute right-2 -translate-y-1/2 tabular-nums"
-                  style={{ top: hour * HOUR_HEIGHT }}
+                  style={{ top: hour * hourHeight }}
                 >
                   {hourLabel(hour)}
                 </span>
@@ -199,23 +220,24 @@ export default function CalendarGrid({
             return (
               <div key={key} className="border-border relative border-l" data-day={key}>
                 {HOURS.map((hour) => (
-                  <div key={hour} aria-hidden className="absolute inset-x-0" style={{ top: hour * HOUR_HEIGHT }}>
+                  <div key={hour} aria-hidden className="absolute inset-x-0" style={{ top: hour * hourHeight }}>
                     <div className={cn("border-border border-t", hour === 0 && "border-transparent")} />
-                    <div className="border-border/60 border-t border-dashed" style={{ marginTop: HOUR_HEIGHT / 2 - 1 }} />
+                    <div className="border-border/60 border-t border-dashed" style={{ marginTop: hourHeight / 2 - 1 }} />
                   </div>
                 ))}
                 {entries.map((entry) => {
                   const slot = slots.get(entry.item.id) ?? { column: 0, columns: 1 };
                   const minutes = Math.max(entry.bottom - entry.top, MIN_MINUTES);
+                  const height = minutes * perMinute - 2;
                   return (
                     <EventBlock
                       key={entry.item.id}
                       item={entry.item}
                       calendar={calendars.get(entry.item.calendarId) ?? null}
-                      compact={minutes < 50}
+                      compact={height < COMPACT_BELOW_PX}
                       style={{
-                        top: entry.top * PIXELS_PER_MINUTE + 1,
-                        height: minutes * PIXELS_PER_MINUTE - 2,
+                        top: entry.top * perMinute + 1,
+                        height,
                         left: `calc(${(slot.column / slot.columns) * 100}% + 2px)`,
                         width: `calc(${100 / slot.columns}% - 4px)`,
                       }}
@@ -226,7 +248,7 @@ export default function CalendarGrid({
                   <div
                     aria-hidden
                     className="pointer-events-none absolute inset-x-0 z-10 flex items-center"
-                    style={{ top: nowMinutes * PIXELS_PER_MINUTE }}
+                    style={{ top: nowMinutes * perMinute }}
                     data-now-line=""
                   >
                     <span className="bg-danger -ml-1 size-2 rounded-full" />
