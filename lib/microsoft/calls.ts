@@ -115,7 +115,7 @@ export async function appAccessToken(
   }
   appTokens.set(key, {
     token: parsed.access_token,
-    expiresAt: now + (parsed.expires_in ?? 3600) * 1000,
+    expiresAt: now + Math.min(parsed.expires_in ?? 3600, 600) * 1000,
   });
   return parsed.access_token;
 }
@@ -163,7 +163,7 @@ async function callError(response: Response) {
     response.status === 403 ||
     body.error?.code === "Authorization_RequestDenied"
   ) {
-    return CALL_PERMISSION_MESSAGE;
+    return withMicrosoftDetail(CALL_PERMISSION_MESSAGE, body.error);
   }
   if (response.status === 401) {
     return "Microsoft rejected the app token for call records. Check the Microsoft app credentials.";
@@ -171,4 +171,17 @@ async function callError(response: Response) {
   return sanitizeCallError(
     body.error?.message || "Microsoft could not list Teams calls.",
   );
+}
+
+export function withMicrosoftDetail(
+  message: string,
+  error: { code?: string; message?: string } | undefined,
+) {
+  const detail = [error?.code, error?.message]
+    .filter(Boolean)
+    .join(": ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 240);
+  return detail ? `${message} Microsoft said: ${detail}` : message;
 }

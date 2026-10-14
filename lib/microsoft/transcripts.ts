@@ -1,4 +1,5 @@
 import { sanitizeMicrosoftError } from "@/lib/microsoft/oauth";
+import { withMicrosoftDetail } from "@/lib/microsoft/calls";
 
 export const TRANSCRIPT_PERMISSION_MESSAGE =
   "Grant Orbit the CallTranscripts.Read.All application permission with admin consent in Microsoft Entra.";
@@ -88,7 +89,13 @@ async function graphError(response: Response, fallback: string) {
     return new GraphError(TRANSCRIPTS_DISABLED_MESSAGE, response.status);
   }
   if (response.status === 403 || /Authorization_RequestDenied/i.test(codes)) {
-    return new GraphError(TRANSCRIPT_PERMISSION_MESSAGE, response.status);
+    return new GraphError(
+      withMicrosoftDetail(TRANSCRIPT_PERMISSION_MESSAGE, {
+        code: body.error?.innerError?.code ?? body.error?.innererror?.code ?? body.error?.code,
+        message: body.error?.message,
+      }),
+      response.status,
+    );
   }
   if (response.status === 401) {
     return new GraphError(
