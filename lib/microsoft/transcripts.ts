@@ -63,6 +63,7 @@ export function transcriptResource(userId: string) {
 
 export function sanitizeTranscriptError(message: string) {
   const compact = message.replace(/\s+/g, " ").trim();
+  if (compact.startsWith(TRANSCRIPT_PERMISSION_MESSAGE)) return compact.slice(0, 500);
   if (/GraphAccessToTranscriptsDisabled/i.test(compact)) return TRANSCRIPTS_DISABLED_MESSAGE;
   if (/Authorization_RequestDenied|Forbidden|insufficient privileges|CallTranscripts\.Read/i.test(compact)) {
     return TRANSCRIPT_PERMISSION_MESSAGE;
