@@ -57,6 +57,10 @@ function microsoftStep(target: SyncTarget) {
   return target.mailbox && microsoftConfigured();
 }
 
+function calendarStep(target: SyncTarget) {
+  return (target.mailbox || Boolean(target.calendarAccounts)) && microsoftConfigured();
+}
+
 export const DEFAULT_STEPS: SyncStep[] = [
   {
     name: "mail",
@@ -72,7 +76,7 @@ export const DEFAULT_STEPS: SyncStep[] = [
   },
   {
     name: "calendar",
-    applies: microsoftStep,
+    applies: calendarStep,
     run: (target, context) =>
       syncCalendar(target.actor, { fetchImpl: context.fetchImpl, deadline: context.deadline }),
   },
@@ -158,7 +162,7 @@ export async function syncTargets(options: { fetchImpl?: typeof fetch } = {}) {
       }
     }
     const entry = { ...target, granola: mine ? granola : null, clickup };
-    if (entry.mailbox || entry.granola || entry.clickup) list.push(entry);
+    if (entry.mailbox || entry.calendarAccounts || entry.granola || entry.clickup) list.push(entry);
   }
   return { targets: list, granolaError };
 }

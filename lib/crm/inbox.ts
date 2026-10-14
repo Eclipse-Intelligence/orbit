@@ -818,8 +818,13 @@ export function readSecret(value: string | null) {
   }
 }
 
+export type StoredTokens = Pick<
+  StoredConnection,
+  "refreshTokenCipher" | "accessTokenCipher" | "accessTokenExpiresAt"
+>;
+
 export async function currentToken(
-  stored: StoredConnection,
+  stored: StoredTokens,
   fetchImpl: typeof fetch,
 ): Promise<MicrosoftToken> {
   const refreshToken = readSecret(stored.refreshTokenCipher);

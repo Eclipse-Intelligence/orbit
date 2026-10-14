@@ -41,12 +41,26 @@ Set `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, and the redirect URI regis
 
 ### Outlook calendar
 
-Orbit reads the connected user's Outlook calendar (the default calendar, 30 days back to 60 days ahead) and shows meetings on the matching contacts and companies.
+Orbit reads the connected user's Outlook calendars (30 days back to 60 days ahead) and shows meetings from the calendars marked Use for CRM (the default calendar unless you change it) on the matching contacts and companies.
 
 1. On the Entra app, add the Microsoft Graph delegated permission `Calendars.Read` (API permissions, Add a permission, Microsoft Graph, Delegated permissions). Grant admin consent if your tenant requires it.
 2. A mailbox connected before this permission was added keeps syncing mail, but Inbox shows "Reconnect Microsoft to include your calendar". Choose Reconnect Microsoft there and accept the new permission. There is no need to disconnect first.
 
 Contact and company pages then show a Meetings card with the next meeting, up to five upcoming and five recent ones (London time), an Open in Outlook link, and a Join link for online meetings. A past meeting that has Granola notes for the same contact within two hours links to those notes on the timeline instead. Inbox lists People you've met who aren't in Orbit: outside attendees from those meetings with no contact yet. Create contact adds them, with a company made from their email domain unless it is a free-mail domain, and Hide removes someone from the list for you. Calendars are private: other workspace members never see your meetings.
+
+### More calendars and the Calendar page
+
+The Calendar page shows a day or week (London time) across every connected calendar, with a checkbox per calendar to show or hide it. On a phone it shows the selected day as a list. Click an event for its time, calendar, location, organiser and attendees (each linked to their contact, or with Create contact), Join, Open in Outlook, and Granola notes when a Granola meeting overlaps it.
+
+Your main calendars come from the Microsoft account connected in Inbox; nothing needs reconnecting. To add calendars from other Microsoft accounts (another work tenant, or a personal Outlook.com account), open Settings, Calendars, and choose Connect another Microsoft account. That account only grants `User.Read` and `Calendars.Read` (plus `openid` and `offline_access`), never mail. It reuses the same redirect URI, so there is nothing new to register. Settings lists every account with its calendars: Show controls the Calendar page, and Use for CRM decides which calendars feed the Meetings cards and People you've met (only the main account's default calendar is on at first). Disconnect removes an extra account with its calendars and events.
+
+Accounts outside the Entra app's own tenant only work when the app allows them:
+
+1. In Entra, App registrations, Orbit, Authentication (or Manifest), set Supported account types to accounts in any organisational directory, and also personal Microsoft accounts if you want Outlook.com calendars (`signInAudience` `AzureADMultipleOrgs` or `AzureADandPersonalMicrosoftAccount`).
+2. Keep `MICROSOFT_TENANT` unset or `common` so other tenants and personal accounts can sign in. A single tenant id there limits every connection to that tenant.
+3. If the other organisation blocks user consent, its admin has to consent to Orbit in that tenant first.
+
+Until then the connection ends with "This Microsoft account's organisation doesn't allow Orbit yet", and nothing is saved. Connecting the main mailbox's own address as an extra account is refused.
 
 ### Teams calls
 
@@ -117,7 +131,7 @@ Instant sync registers one ClickUp webhook for task created, updated, deleted, s
 
 ### Scheduling
 
-`GET` or `POST /api/cron/sync` with `Authorization: Bearer <CRON_SECRET>` runs, for each workspace with a connected mailbox, Granola, or ClickUp: mail sync, Teams call sync, Outlook calendar sync, Teams transcript sync and subscription upkeep, Granola sync, ClickUp sync (watched lists since the last sync less five minutes, then pending and failed pushes), and pending summaries. Each step runs on its own, so one failing does not stop the rest, and the run stops starting new steps after about 50 seconds. Mail sync only starts with at least 15 seconds left, and model calls, Graph, Granola and ClickUp requests are cut short so the run fits. It returns a JSON report of counts and errors per mailbox owner. CRM pages also sync in the background after they load.
+`GET` or `POST /api/cron/sync` with `Authorization: Bearer <CRON_SECRET>` runs, for each workspace with a connected mailbox, extra calendar account, Granola, or ClickUp: mail sync, Teams call sync, Outlook calendar sync (every connected account), Teams transcript sync and subscription upkeep, Granola sync, ClickUp sync (watched lists since the last sync less five minutes, then pending and failed pushes), and pending summaries. Each step runs on its own, so one failing does not stop the rest, and the run stops starting new steps after about 50 seconds. Mail sync only starts with at least 15 seconds left, and model calls, Graph, Granola and ClickUp requests are cut short so the run fits. It returns a JSON report of counts and errors per mailbox owner. CRM pages also sync in the background after they load.
 
 `vercel.json` has a daily Vercel cron as a backstop (Hobby plans allow one run a day; Vercel sends `CRON_SECRET` as the bearer token). For every 10 minutes, schedule it from Supabase with `pg_cron` and `pg_net`. Run this in the SQL editor, replacing `<CRON_SECRET>` with the value set on Vercel:
 

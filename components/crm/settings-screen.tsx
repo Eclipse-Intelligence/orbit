@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Input } from "@/components/_ui/input";
+import CalendarsSettings from "@/components/crm/calendars-settings";
 import ClickUpSettings from "@/components/crm/clickup-settings";
 import MyEmailsSettings from "@/components/crm/my-emails-settings";
 import SectionHeader from "@/components/crm/section-header";
@@ -14,6 +15,7 @@ import {
   createWebhookAction,
   saveStagesAction,
 } from "@/app/(crm)/settings/actions";
+import type { CalendarGroup } from "@/lib/crm/calendars";
 import type { ClickUpSettingsView } from "@/lib/crm/clickup";
 import type { MyEmails } from "@/lib/crm/profile";
 import type { PipelineStage, TagCount } from "@/lib/crm/types";
@@ -40,6 +42,7 @@ export default function SettingsScreen({
   clickup,
   myEmails,
   tags,
+  calendars,
 }: {
   viewer: Viewer;
   canAdmin: boolean;
@@ -49,6 +52,12 @@ export default function SettingsScreen({
   clickup: ClickUpSettingsView;
   myEmails: MyEmails;
   tags: TagCount[];
+  calendars: {
+    groups: CalendarGroup[];
+    configured: boolean;
+    connectedEmail: string | null;
+    connectError: string | null;
+  };
 }) {
   const router = useRouter();
   const [drafts, setDrafts] = useState(stages);
@@ -108,6 +117,8 @@ export default function SettingsScreen({
           </p>
         )}
         <MyEmailsSettings emails={myEmails} />
+
+        <CalendarsSettings {...calendars} />
 
         <TagsSettings tags={tags} />
 

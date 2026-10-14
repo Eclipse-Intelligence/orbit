@@ -74,14 +74,28 @@ function graphEvent(
   };
 }
 
-function graphStub(pages: () => GraphEvent[][], calls: Call[], options: { status?: number; code?: string } = {}) {
+export const MAIN_CALENDARS = [
+  { id: "cal-main", name: "Calendar", isDefaultCalendar: true, hexColor: "", color: "auto", canEdit: true },
+];
+
+function isCalendarList(url: string) {
+  return new URL(url).pathname.endsWith("/me/calendars");
+}
+
+function graphStub(
+  pages: () => GraphEvent[][],
+  calls: Call[],
+  options: { status?: number; code?: string; calendars?: unknown[] } = {},
+) {
   return (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     calls.push({ url, init });
     if (options.status) return json({ error: { code: options.code, message: "Access is denied." } }, options.status);
+    const parsed = new URL(url);
+    if (isCalendarList(url)) return json({ value: options.calendars ?? MAIN_CALENDARS });
     const list = pages();
-    const page = Number(new URL(url).searchParams.get("page") ?? "0");
-    const next = page + 1 < list.length ? `https://graph.microsoft.com/v1.0/me/calendarView?page=${page + 1}` : undefined;
+    const page = Number(parsed.searchParams.get("page") ?? "0");
+    const next = page + 1 < list.length ? `${parsed.origin}${parsed.pathname}?page=${page + 1}` : undefined;
     return json({ value: list[page] ?? [], ...(next ? { "@odata.nextLink": next } : {}) });
   }) as typeof fetch;
 }
@@ -274,7 +288,9 @@ describe("calendar sync", () => {
     assert.equal(result.error, undefined);
     assert.equal(result.complete, true);
     assert.equal(result.saved, 4);
-    const url = new URL(calls[0].url);
+    assert.ok(isCalendarList(calls[0].url));
+    const url = new URL(calls[1].url);
+    assert.equal(url.pathname, "/v1.0/me/calendars/cal-main/calendarView");
     assert.equal(url.searchParams.get("startDateTime"), new Date(now - 30 * DAY).toISOString());
     assert.equal(url.searchParams.get("endDateTime"), new Date(now + 60 * DAY).toISOString());
 
@@ -311,6 +327,7 @@ describe("calendar sync", () => {
     ];
     const failing = await syncCalendar(owner, {
       fetchImpl: (async (input: RequestInfo | URL) => {
+        if (isCalendarList(String(input))) return json({ value: MAIN_CALENDARS });
         if (new URL(String(input)).searchParams.get("page")) return json({ error: { message: "Page two failed" } }, 503);
         return json({ value: pages[0], "@odata.nextLink": "https://graph.microsoft.com/v1.0/me/calendarView?page=1" });
       }) as typeof fetch,
@@ -387,17 +404,19 @@ describe("calendar sync", () => {
       "select count(*)::int as total from crm.calendar_events",
     );
     assert.equal(mine[0].total, 3);
-    const connection = await getAdminPool().query<{ id: string }>(
-      "select id from crm.mailbox_connections where user_id = $1",
+    const connection = await getAdminPool().query<{ id: string; calendar_id: string }>(
+      `select m.id, c.id as calendar_id from crm.mailbox_connections m
+       join crm.calendars c on c.connection_id = m.id
+       where m.user_id = $1`,
       [owner.userId],
     );
     for (const userId of [teammate.userId, owner.userId]) {
       await assert.rejects(
         queryAsUser(
           teammate.userId,
-          `insert into crm.calendar_events (workspace_id, connection_id, user_id, provider_event_id, starts_at, ends_at)
-           values ($1, $2, $3, 'sneaky', now(), now())`,
-          [owner.workspaceId, connection.rows[0].id, userId],
+          `insert into crm.calendar_events (workspace_id, calendar_id, connection_id, user_id, provider_event_id, starts_at, ends_at)
+           values ($1, $2, $3, $4, 'sneaky', now(), now())`,
+          [owner.workspaceId, connection.rows[0].calendar_id, connection.rows[0].id, userId],
         ),
         /row-level security/,
       );
@@ -565,8 +584,12 @@ describe("calendar sync", () => {
 
   it("re-applies the migration and keeps transcript and calendar state side by side", async () => {
     const sql = readFileSync("supabase/migrations/20261020100000_calendar.sql", "utf8");
+    const multi = readFileSync("supabase/migrations/20261022100000_multi_calendar.sql", "utf8");
+    const before = await eventRows(owner.userId);
     await getAdminPool().query(sql);
-    await getAdminPool().query(sql);
+    await getAdminPool().query(multi);
+    await getAdminPool().query(multi);
+    assert.deepEqual([...(await eventRows(owner.userId)).keys()], [...before.keys()]);
     const connection = await getAdminPool().query<{ id: string }>(
       "select id from crm.mailbox_connections where user_id = $1",
       [owner.userId],
