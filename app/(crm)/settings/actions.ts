@@ -12,6 +12,7 @@ import {
 } from "@/lib/crm/clickup";
 import { CrmError } from "@/lib/crm/errors";
 import { savePipelineStages, type StageDraft } from "@/lib/crm/pipeline";
+import { saveOtherEmails, type MyEmails } from "@/lib/crm/profile";
 import type { PipelineStage } from "@/lib/crm/types";
 import { archiveWebhook, createWebhook } from "@/lib/crm/webhooks";
 
@@ -54,6 +55,20 @@ export async function saveStagesAction(
     return { stages: saved };
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Could not save the pipeline." };
+  }
+}
+
+export async function saveOtherEmailsAction(
+  emails: string[],
+): Promise<{ error?: string; emails?: MyEmails }> {
+  const user = await requireUser();
+  try {
+    const saved = await saveOtherEmails(user, emails);
+    revalidatePath("/settings");
+    revalidatePath("/inbox");
+    return { emails: saved };
+  } catch (error) {
+    return { error: error instanceof CrmError ? error.message : "Could not save your email addresses." };
   }
 }
 

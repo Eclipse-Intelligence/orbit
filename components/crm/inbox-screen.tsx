@@ -14,7 +14,7 @@ import {
 import { formatWhen } from "@/lib/companies";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import type { CallSyncSummary } from "@/lib/crm/calls";
-import type { ConversationImport } from "@/lib/crm/conversations";
+import type { UnfiledImport } from "@/lib/crm/conversations";
 import type { GranolaStatus } from "@/lib/crm/granola";
 import type { InboxMessage, MailboxSummary } from "@/lib/crm/inbox";
 import type { TeamsTranscriptStatus } from "@/lib/crm/teams-transcripts";
@@ -51,7 +51,7 @@ export default function InboxScreen({
   mailbox: MailboxSummary | null;
   messages: InboxMessage[];
   calls: CallSyncSummary | null;
-  unfiled: ConversationImport[];
+  unfiled: UnfiledImport[];
   granola: GranolaStatus;
   transcripts: TeamsTranscriptStatus | null;
   notice: string | null;
