@@ -29,7 +29,6 @@ export default function Pager({
 
   function href(target: number) {
     const params = new URLSearchParams(searchParams.toString());
-    params.delete("record");
     if (target > 1) params.set("page", String(target));
     else params.delete("page");
     const query = params.toString();

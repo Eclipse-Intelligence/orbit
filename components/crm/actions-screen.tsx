@@ -12,6 +12,7 @@ import { RecordList, RecordRow, RecordSelect } from "@/components/crm/record-for
 import type { Viewer } from "@/components/crm/viewer";
 import { completeTaskAction, saveTaskAction, type RecordActionState } from "@/app/(crm)/records";
 import { relativeWhen } from "@/lib/companies";
+import { companyHref } from "@/lib/crm/hrefs";
 import type { Company, Company as CompanyRow, Task, TaskView } from "@/lib/crm/types";
 
 const VIEWS: { id: TaskView; label: string }[] = [
@@ -110,7 +111,7 @@ export default function ActionsScreen({
               action={
                 <span className="flex items-center gap-3">
                   <ConnectionMark at={company.lastInteractionAt} now={now} />
-                  <Button variant="ghost" size="sm" href={`/?record=${company.id}`}>
+                  <Button variant="ghost" size="sm" href={companyHref(company.id)}>
                     Open
                   </Button>
                 </span>

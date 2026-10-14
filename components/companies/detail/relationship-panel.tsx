@@ -7,36 +7,22 @@ import { Input } from "@/components/_ui/input";
 import Tag from "@/components/_ui/tag";
 import { addCompanyTaskAction } from "@/app/(crm)/records";
 import DetailSection from "@/components/companies/detail/detail-section";
-import CompanyActivity from "@/components/companies/detail/company-activity";
 import CompanyContacts from "@/components/companies/detail/company-contacts";
 import { ConnectionMark } from "@/components/beautifui/record-marks";
 import { formatMoney, formatWhen, relativeWhen } from "@/lib/companies";
 import type { CompanyContext } from "@/lib/crm/types";
 
 export default function RelationshipPanel({
-  companyId,
   context,
-  mailboxConnected,
-  onNavigate,
 }: {
-  companyId: string;
-  context: CompanyContext | null;
-  mailboxConnected: boolean;
-  onNavigate?: () => void;
+  context: CompanyContext;
 }) {
+  const companyId = context.company.id;
   const router = useRouter();
   const [taskTitle, setTaskTitle] = useState("");
   const [dueAt, setDueAt] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-
-  if (!context || context.company.id !== companyId) {
-    return (
-      <DetailSection title="Relationship" className="shadow-none">
-        <p className="caption-style text-subtle">Loading the relationship…</p>
-      </DetailSection>
-    );
-  }
 
   const last = context.lastInteraction;
 
@@ -120,11 +106,7 @@ export default function RelationshipPanel({
         </div>
       </DetailSection>
 
-      <CompanyContacts
-        companyId={companyId}
-        contacts={context.contacts}
-        onNavigate={onNavigate}
-      />
+      <CompanyContacts companyId={companyId} contacts={context.contacts} />
 
       <DetailSection title="Opportunities">
         {context.opportunities.length === 0 ? (
@@ -162,7 +144,7 @@ export default function RelationshipPanel({
         )}
       </DetailSection>
 
-      <DetailSection title="Next actions">
+      <DetailSection title="Next actions" className="shadow-none">
         {context.tasks.length === 0 ? (
           <p className="caption-style text-subtle">Nothing scheduled.</p>
         ) : (
@@ -179,13 +161,6 @@ export default function RelationshipPanel({
         )}
       </DetailSection>
 
-      <CompanyActivity
-        companyId={companyId}
-        contacts={context.contacts}
-        timeline={context.timeline}
-        insights={context.insights}
-        mailboxConnected={mailboxConnected}
-      />
     </>
   );
 }

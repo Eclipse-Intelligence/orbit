@@ -6,6 +6,7 @@ import Button from "@/components/_ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popover";
 import { useAttention } from "@/components/crm/attention";
 import { relativeWhen } from "@/lib/companies";
+import { companyHref } from "@/lib/crm/hrefs";
 import BellIcon from "@/public/assets/images/companies/header/bell.svg";
 
 export default function Notifications() {
@@ -38,7 +39,7 @@ export default function Notifications() {
                     className="h-auto w-full items-start justify-start rounded-lg px-2 py-2 text-left whitespace-normal"
                     onClick={() => {
                       setOpen(false);
-                      if (item.companyId) router.push(`/?record=${item.companyId}`);
+                      if (item.companyId) router.push(companyHref(item.companyId));
                       else router.push("/actions?view=today");
                     }}
                   >

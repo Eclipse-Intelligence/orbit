@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import Link from "next/link";
 import { teamsCallUrl } from "@/lib/phone";
 import { cn } from "@/lib/utils";
 import PhoneIcon from "@/public/assets/images/_common/phone.svg";
@@ -56,12 +57,14 @@ export function RecordRow({
   title,
   meta,
   mark,
+  href,
   onClick,
   action,
 }: {
   title: string;
   meta: string;
   mark?: ReactNode;
+  href?: string;
   onClick?: () => void;
   action?: ReactNode;
 }) {
@@ -76,7 +79,11 @@ export function RecordRow({
   );
   return (
     <li className={cn("border-border flex min-h-11 items-center gap-3 border-b px-2.5 py-2")}>
-      {onClick ? (
+      {href ? (
+        <Link href={href} className="flex min-w-0 flex-1">
+          {body}
+        </Link>
+      ) : onClick ? (
         <button type="button" className="min-w-0 flex-1 cursor-pointer" onClick={onClick}>
           {body}
         </button>
@@ -109,5 +116,22 @@ export function CallLink({
     >
       <PhoneIcon aria-hidden className="size-3.5" />
     </a>
+  );
+}
+
+export function DetailList({ children }: { children: ReactNode }) {
+  return (
+    <dl className="grid grid-cols-[6em_1fr] gap-x-3 gap-y-2 text-[14px] leading-5">
+      {children}
+    </dl>
+  );
+}
+
+export function Detail({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <>
+      <dt className="caption-style text-subtle leading-5">{label}</dt>
+      <dd className="min-w-0 break-words">{children || <span className="text-subtle">—</span>}</dd>
+    </>
   );
 }

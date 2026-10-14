@@ -1,20 +1,15 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect } from "react";
 import CompaniesHeader from "./header/header";
 import CompaniesToolbar from "./toolbar/toolbar";
 import CompaniesTable from "./table/companies-table";
-import CompanyDetail from "./detail/company-detail";
 import NewCompanyDialog from "./new-company/new-company-dialog";
+import { RememberList } from "@/components/crm/list-memory";
 import { activeFilterCount } from "@/lib/companies";
 import { useCompaniesStore } from "@/stores/companies-store";
 import type { Viewer } from "@/components/crm/viewer";
-import type {
-  Company,
-  CompanyContext,
-  CompanyListQuery,
-  Member,
-} from "@/lib/crm/types";
+import type { Company, CompanyListQuery, Member } from "@/lib/crm/types";
 
 export type { Viewer };
 
@@ -26,8 +21,6 @@ type CompaniesProps = {
   filters: CompanyListQuery;
   members: Member[];
   viewer: Viewer;
-  context: CompanyContext | null;
-  mailboxConnected: boolean;
 };
 
 export default function Companies({
@@ -38,78 +31,27 @@ export default function Companies({
   filters,
   members,
   viewer,
-  context,
-  mailboxConnected,
 }: CompaniesProps) {
-  const serverKey = companies
-    .map(
-      (company) =>
-        `${company.id}:${company.updatedAt}:${company.lastInteractionAt ?? ""}:${company.openTaskCount}`,
-    )
-    .join("|");
-  const [overlay, setOverlay] = useState<{
-    key: string;
-    rows: Company[];
-  } | null>(null);
-  const rows = overlay?.key === serverKey ? overlay.rows : companies;
-  const openDetail = useCompaniesStore((state) => state.openDetail);
   const setSelected = useCompaniesStore((state) => state.setSelected);
   const filterKey = JSON.stringify(filters);
-  const handledRecord = useRef<string | null>(null);
-
-  useEffect(() => {
-    const id = context?.company.id ?? null;
-    if (handledRecord.current === id) return;
-    handledRecord.current = id;
-    if (!id) return;
-    const { detailId, detailOpen } = useCompaniesStore.getState();
-    if (!detailOpen || detailId !== id) openDetail(id);
-  }, [context, openDetail]);
 
   useEffect(() => {
     setSelected([]);
   }, [filterKey, setSelected]);
 
-  function upsertLocal(company: Company) {
-    const current = overlay?.key === serverKey ? overlay.rows : companies;
-    setOverlay({
-      key: serverKey,
-      rows: [company, ...current.filter((item) => item.id !== company.id)],
-    });
-  }
-
-  function removeLocal(id: string) {
-    const current = overlay?.key === serverKey ? overlay.rows : companies;
-    setOverlay({
-      key: serverKey,
-      rows: current.filter((item) => item.id !== id),
-    });
-  }
-
   return (
     <section id="companies" className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <RememberList list="companies" />
       <CompaniesHeader viewer={viewer} />
       <CompaniesToolbar filters={filters} members={members} />
       <CompaniesTable
-        companies={rows}
+        companies={companies}
         total={total}
         page={page}
         now={now}
         filtered={activeFilterCount(filters) > 0}
       />
-      <CompanyDetail
-        companies={rows}
-        members={members}
-        context={context}
-        mailboxConnected={mailboxConnected}
-        onSaved={upsertLocal}
-        onArchived={removeLocal}
-      />
-      <NewCompanyDialog
-        members={members}
-        viewerId={viewer.id}
-        onCreated={upsertLocal}
-      />
+      <NewCompanyDialog members={members} viewerId={viewer.id} />
     </section>
   );
 }

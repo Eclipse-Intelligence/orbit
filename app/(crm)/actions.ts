@@ -14,6 +14,7 @@ import {
   updateCompany,
 } from "@/lib/crm/companies";
 import type { Company, CompanyListQuery, CompanyWrite, Lifecycle } from "@/lib/crm/types";
+import { revalidateRecordPages } from "@/lib/revalidate";
 
 export type CompanyActionState = {
   error?: string;
@@ -58,6 +59,7 @@ export async function createCompanyAction(
       provenance: { operation: "create_company", source: "web" },
     });
     revalidatePath("/");
+    revalidateRecordPages();
     return { company: result.body.company };
   } catch (error) {
     return actionError(error);
@@ -75,6 +77,7 @@ export async function updateCompanyAction(
       provenance: { operation: "update_company", source: "web" },
     });
     revalidatePath("/");
+    revalidateRecordPages();
     return { company: result.body.company };
   } catch (error) {
     return actionError(error);
@@ -88,6 +91,7 @@ export async function archiveCompanyAction(id: string): Promise<CompanyActionSta
       provenance: { operation: "archive_company", source: "web" },
     });
     revalidatePath("/");
+    revalidateRecordPages();
     return {};
   } catch (error) {
     return actionError(error);

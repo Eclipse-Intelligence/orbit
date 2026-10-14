@@ -5,6 +5,7 @@ import SectionHeader from "@/components/crm/section-header";
 import { RecordList, RecordRow } from "@/components/crm/record-form";
 import { getUserActor } from "@/lib/auth/user";
 import { relativeWhen } from "@/lib/companies";
+import { companyHref } from "@/lib/crm/hrefs";
 import { findStaleRelationships } from "@/lib/crm/relationships";
 
 export const dynamic = "force-dynamic";
@@ -39,7 +40,7 @@ export default async function QuietPage() {
             action={
               <span className="flex items-center gap-3">
                 <ConnectionMark at={row.lastActivityAt} />
-                <Button variant="ghost" size="sm" href={`/?record=${row.company.id}`}>
+                <Button variant="ghost" size="sm" href={companyHref(row.company.id)}>
                   Open
                 </Button>
               </span>

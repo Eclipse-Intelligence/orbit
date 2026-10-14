@@ -32,6 +32,7 @@ import { moveOpportunityStageAction, saveOpportunityAction, type RecordActionSta
 import { saveStagesAction } from "@/app/(crm)/settings/actions";
 import type { StageDraft } from "@/lib/crm/pipeline";
 import { formatMoney } from "@/lib/companies";
+import { companyHref } from "@/lib/crm/hrefs";
 import type { Company, Contact, Opportunity, OpportunityStatus, PipelineStage } from "@/lib/crm/types";
 
 export default function OpportunitiesScreen({
@@ -555,7 +556,7 @@ export default function OpportunitiesScreen({
             action={
               <span className="flex items-center gap-2">
                 {opportunity.companyName && opportunity.companyId ? (
-                  <EntityChip name={opportunity.companyName} href={`/?record=${opportunity.companyId}`} />
+                  <EntityChip name={opportunity.companyName} href={companyHref(opportunity.companyId)} />
                 ) : null}
                 <Tag tone={opportunity.status === "won" ? "green" : opportunity.status === "lost" ? "red" : "blue"}>
                   {opportunity.status}

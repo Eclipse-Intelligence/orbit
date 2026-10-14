@@ -3,9 +3,7 @@ import Companies from "@/components/companies/companies";
 import { PAGE_SIZE, pageFromParams, pageOffset } from "@/components/crm/paging";
 import { getUserActor } from "@/lib/auth/user";
 import { listCompanies, listMembers } from "@/lib/crm/companies";
-import { CrmError } from "@/lib/crm/errors";
-import { getMailbox } from "@/lib/crm/inbox";
-import { getCompanyContext } from "@/lib/crm/relationships";
+import { companyHref } from "@/lib/crm/hrefs";
 import { companyQueryFromSearchParams } from "@/lib/crm/validation";
 
 export const dynamic = "force-dynamic";
@@ -28,23 +26,16 @@ export default async function CompaniesPage({
   for (const [key, value] of Object.entries(resolved)) {
     if (typeof value === "string") params.set(key, value);
   }
+  const record = params.get("record");
+  if (record) redirect(companyHref(record));
   const filters = companyQueryFromSearchParams(params);
   const page = pageFromParams(params);
   filters.limit = PAGE_SIZE;
   filters.offset = pageOffset(page);
 
-  const record = params.get("record");
-  const [listed, members, context, mailbox] = await Promise.all([
+  const [listed, members] = await Promise.all([
     listCompanies(user, filters),
     listMembers(user),
-    record
-      ? getCompanyContext(user, record).catch((error: unknown) => {
-          if (error instanceof CrmError && error.code === "not_found")
-            return null;
-          throw error;
-        })
-      : Promise.resolve(null),
-    getMailbox(user),
   ]);
 
   return (
@@ -55,8 +46,6 @@ export default async function CompaniesPage({
       now={requestTime()}
       filters={filters}
       members={members}
-      context={context}
-      mailboxConnected={mailbox?.status === "connected"}
       viewer={{
         id: user.userId,
         name: user.fullName || user.email,

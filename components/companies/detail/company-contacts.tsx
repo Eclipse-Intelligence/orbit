@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type KeyboardEvent, type MouseEvent } from "react";
+import { useEffect, useState, type KeyboardEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
@@ -14,6 +14,7 @@ import { searchContactsToLinkAction } from "@/app/(crm)/search";
 import DetailSection from "@/components/companies/detail/detail-section";
 import { Monogram } from "@/components/beautifui/record-marks";
 import { CallLink } from "@/components/crm/record-form";
+import { contactHref } from "@/lib/crm/hrefs";
 import type { Contact } from "@/lib/crm/types";
 import PlusIcon from "@/public/assets/images/_common/plus.svg";
 
@@ -33,20 +34,6 @@ const DRAFT_FIELDS: { key: keyof Draft; label: string; type?: string }[] = [
   { key: "jobTitle", label: "Job title" },
 ];
 
-function contactHref(id: string) {
-  return `/contacts?contact=${id}`;
-}
-
-function plainClick(event: MouseEvent<HTMLAnchorElement>) {
-  return (
-    event.button === 0 &&
-    !event.metaKey &&
-    !event.ctrlKey &&
-    !event.shiftKey &&
-    !event.altKey
-  );
-}
-
 function draftFromQuery(query: string): Draft {
   const empty = { firstName: "", lastName: "", email: "", phone: "", jobTitle: "" };
   const text = query.trim();
@@ -59,11 +46,9 @@ function draftFromQuery(query: string): Draft {
 export default function CompanyContacts({
   companyId,
   contacts,
-  onNavigate,
 }: {
   companyId: string;
   contacts: Contact[];
-  onNavigate?: () => void;
 }) {
   const router = useRouter();
   const [adding, setAdding] = useState(false);
@@ -122,9 +107,6 @@ export default function CompanyContacts({
                 <div className="flex min-w-0 flex-col gap-1">
                   <Link
                     href={contactHref(contact.id)}
-                    onClick={(event) => {
-                      if (plainClick(event)) onNavigate?.();
-                    }}
                     className="hover:text-soft truncate text-[14px] leading-5 underline-offset-2 hover:underline"
                   >
                     {contact.name}
