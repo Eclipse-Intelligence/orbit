@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Input } from "@/components/_ui/input";
 import ClickUpSettings from "@/components/crm/clickup-settings";
+import MyEmailsSettings from "@/components/crm/my-emails-settings";
 import SectionHeader from "@/components/crm/section-header";
 import type { Viewer } from "@/components/crm/viewer";
 import {
@@ -13,6 +14,7 @@ import {
   saveStagesAction,
 } from "@/app/(crm)/settings/actions";
 import type { ClickUpSettingsView } from "@/lib/crm/clickup";
+import type { MyEmails } from "@/lib/crm/profile";
 import type { PipelineStage } from "@/lib/crm/types";
 import type { WebhookDelivery, WebhookEndpoint } from "@/lib/crm/webhooks";
 
@@ -35,6 +37,7 @@ export default function SettingsScreen({
   endpoints,
   deliveries,
   clickup,
+  myEmails,
 }: {
   viewer: Viewer;
   canAdmin: boolean;
@@ -42,6 +45,7 @@ export default function SettingsScreen({
   endpoints: WebhookEndpoint[];
   deliveries: WebhookDelivery[];
   clickup: ClickUpSettingsView;
+  myEmails: MyEmails;
 }) {
   const router = useRouter();
   const [drafts, setDrafts] = useState(stages);
@@ -100,6 +104,8 @@ export default function SettingsScreen({
             {error}
           </p>
         )}
+        <MyEmailsSettings emails={myEmails} />
+
         <div className="flex max-w-[640px] flex-col gap-3">
           <h2>Pipeline</h2>
           <p className="caption-style text-subtle">

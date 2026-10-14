@@ -6,7 +6,12 @@ import { redirect } from "next/navigation";
 import { after } from "next/server";
 import { getUserActor } from "@/lib/auth/user";
 import { syncCalls } from "@/lib/crm/calls";
-import { fileImport, ignoreImport, summariseImport } from "@/lib/crm/conversations";
+import {
+  createContactAndFile,
+  fileImport,
+  ignoreImport,
+  summariseImport,
+} from "@/lib/crm/conversations";
 import { enableGranolaWebhook, syncGranolaFor } from "@/lib/crm/granola";
 import {
   disconnectMailbox,
@@ -119,6 +124,36 @@ export async function fileConversationAction(
   });
   refreshRecords();
   return { ok: true };
+}
+
+export type CreateAndFileState = {
+  error?: string;
+  ok?: boolean;
+  contactId?: string;
+  contactName?: string;
+};
+
+export async function createContactAndFileAction(
+  importId: string,
+  email: string,
+): Promise<CreateAndFileState> {
+  const user = await getUserActor();
+  if (!user) return { error: "Sign in to file conversations." };
+  let filed: Awaited<ReturnType<typeof createContactAndFile>>;
+  try {
+    filed = await createContactAndFile(user, importId, email, { summarise: false });
+  } catch (error) {
+    return actionError(error);
+  }
+  after(async () => {
+    try {
+      await summariseImport(user, importId);
+    } catch (error) {
+      console.error("Conversation summary failed", error);
+    }
+  });
+  refreshRecords();
+  return { ok: true, contactId: filed.contactId, contactName: filed.contactName };
 }
 
 export async function ignoreConversationAction(

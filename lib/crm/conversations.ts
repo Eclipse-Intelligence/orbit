@@ -8,6 +8,8 @@ import {
   transcriptToText,
   TRANSCRIPT_MAX_LENGTH,
 } from "@/lib/crm/call-insights";
+import { upsertCompanyInDb } from "@/lib/crm/companies";
+import { upsertContactInDb } from "@/lib/crm/contacts";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { isFreeMailDomain } from "@/lib/crm/communications";
@@ -15,7 +17,13 @@ import { readStored } from "@/lib/crm/inbox";
 import { iso, isUuid } from "@/lib/crm/mutate";
 import { canonicalEmail } from "@/lib/crm/normalize";
 import { assertScope, scopesForRole } from "@/lib/crm/scopes";
-import type { ActivityWrite, UserActor, WorkspaceRole } from "@/lib/crm/types";
+import type {
+  ActivityWrite,
+  ContactWrite,
+  Provenance,
+  UserActor,
+  WorkspaceRole,
+} from "@/lib/crm/types";
 
 export type ConversationSource = "granola" | "teams";
 export type ConversationKind = "meeting" | "call";
@@ -98,6 +106,8 @@ type ImportRow = {
   transcript_length: number;
   created_at: Date | string;
 };
+
+type LockedImport = ImportRow & { transcript: string | null; attempts: number };
 
 const IMPORT_COLUMNS = `
   i.id,
@@ -446,15 +456,16 @@ export async function recordImportFailure(
 }
 
 export async function internalAddresses(db: Db, workspaceId: string, extra: (string | null | undefined)[]) {
-  const result = await db.query<{ email: string | null }>(
-    `select p.email from crm.workspace_members m
+  const result = await db.query<{ email: string | null; other_emails: string[] | null }>(
+    `select p.email, p.other_emails from crm.workspace_members m
      join crm.profiles p on p.id = m.user_id
      where m.workspace_id = $1`,
     [workspaceId],
   );
   const emails = new Set<string>();
   const domains = new Set<string>();
-  for (const value of [...result.rows.map((row) => row.email), ...extra]) {
+  const known = result.rows.flatMap((row) => [row.email, ...(row.other_emails ?? [])]);
+  for (const value of [...known, ...extra]) {
     const email = value ? canonicalEmail(value) : null;
     if (!email) continue;
     emails.add(email);
@@ -476,7 +487,28 @@ export async function lockImportKey(db: Db, workspaceId: string, source: Convers
   ]);
 }
 
-export async function listUnfiledImports(actor: UserActor, limit = 50) {
+export type NewPerson = { name: string | null; email: string };
+export type UnfiledImport = ConversationImport & { newPeople: NewPerson[] };
+
+function personName(person: Participant) {
+  const name = person.name?.trim();
+  if (!name || canonicalEmail(name)) return null;
+  return name;
+}
+
+function outsideAttendees(people: Participant[], isInternal: (email: string) => boolean) {
+  const found = new Map<string, NewPerson>();
+  for (const person of people) {
+    const email = person.email ? canonicalEmail(person.email) : null;
+    if (!email || isInternal(email)) continue;
+    const current = found.get(email);
+    if (!current) found.set(email, { name: personName(person), email });
+    else if (!current.name) current.name = personName(person);
+  }
+  return [...found.values()];
+}
+
+export async function listUnfiledImports(actor: UserActor, limit = 50): Promise<UnfiledImport[]> {
   assertScope(actor.scopes, "crm:read");
   return withActor(actor, async (db) => {
     const result = await db.query<ImportRow>(
@@ -487,7 +519,27 @@ export async function listUnfiledImports(actor: UserActor, limit = 50) {
        limit $2`,
       [actor.workspaceId, Math.min(Math.max(limit, 1), 200)],
     );
-    return result.rows.map(mapImport);
+    const imports = result.rows.map(mapImport);
+    if (imports.length === 0) return [];
+    const internal = await internalAddresses(db, actor.workspaceId, [actor.email]);
+    const candidates = imports.map((item) => outsideAttendees(item.participants, internal.isInternal));
+    const emails = [...new Set(candidates.flat().map((person) => person.email))];
+    const existing =
+      emails.length === 0
+        ? new Set<string>()
+        : new Set(
+            (
+              await db.query<{ normalized_email: string }>(
+                `select normalized_email from crm.contacts
+                 where workspace_id = $1 and archived_at is null and normalized_email = any($2::text[])`,
+                [actor.workspaceId, emails],
+              )
+            ).rows.map((row) => row.normalized_email),
+          );
+    return imports.map((item, index) => ({
+      ...item,
+      newPeople: candidates[index].filter((person) => !existing.has(person.email)),
+    }));
   });
 }
 
@@ -558,7 +610,7 @@ export function importActivityInput(
 }
 
 async function lockImport(db: Db, actor: UserActor, importId: string) {
-  const result = await db.query<ImportRow & { transcript: string | null; attempts: number }>(
+  const result = await db.query<LockedImport>(
     `select ${IMPORT_COLUMNS}, i.transcript, i.attempts
      from crm.conversation_imports i
      where i.id = $1 and i.workspace_id = $2
@@ -566,6 +618,53 @@ async function lockImport(db: Db, actor: UserActor, importId: string) {
     [importId, actor.workspaceId],
   );
   return result.rows[0] ?? null;
+}
+
+async function fileLockedImport(db: Db, actor: UserActor, row: LockedImport, contactId: string) {
+  const found = await db.query<{ id: string; company_id: string | null; name: string | null }>(
+    `select id, company_id,
+            coalesce(nullif(trim(concat_ws(' ', first_name, last_name)), ''), email, phone) as name
+     from crm.contacts
+     where id = $1 and workspace_id = $2 and archived_at is null`,
+    [contactId, actor.workspaceId],
+  );
+  const contact = found.rows[0];
+  if (!contact) throw new CrmError("not_found", "Contact not found.", 404);
+  const activity = await createActivityInDb(
+    db,
+    actor,
+    importActivityInput(row, {
+      contactId: contact.id,
+      companyId: contact.company_id,
+      contactName: contact.name,
+    }),
+    { operation: "file_conversation", source: row.source === "granola" ? "granola" : "microsoft" },
+  );
+  await db.query(
+    `update crm.conversation_imports
+     set status = 'filed', activity_id = $2, contact_id = $3, company_id = $4, error = null
+     where id = $1`,
+    [row.id, activity.id, contact.id, contact.company_id],
+  );
+  if (row.source === "teams" && row.call_id) {
+    await db.query(
+      `update crm.call_records
+       set activity_id = $3, contact_id = $4, company_id = $5
+       where workspace_id = $1 and teams_call_id = $2
+         and activity_id is null and contact_id is null and company_id is null`,
+      [actor.workspaceId, row.call_id, activity.id, contact.id, contact.company_id],
+    );
+  }
+  return { activityId: activity.id, contactName: contact.name };
+}
+
+async function lockUnfiled(db: Db, actor: UserActor, importId: string) {
+  const row = await lockImport(db, actor, importId);
+  if (!row) throw new CrmError("not_found", "Conversation not found.", 404);
+  if (row.status === "filed") {
+    throw new CrmError("conflict", "This conversation is already filed.", 409);
+  }
+  return row;
 }
 
 export async function fileImport(
@@ -578,46 +677,132 @@ export async function fileImport(
   if (!isUuid(importId)) throw new CrmError("not_found", "Conversation not found.", 404);
   if (!isUuid(contactId)) throw new CrmError("not_found", "Contact not found.", 404);
   const filed = await withActor(actor, async (db) => {
-    const row = await lockImport(db, actor, importId);
-    if (!row) throw new CrmError("not_found", "Conversation not found.", 404);
-    if (row.status === "filed") {
-      throw new CrmError("conflict", "This conversation is already filed.", 409);
+    const row = await lockUnfiled(db, actor, importId);
+    const result = await fileLockedImport(db, actor, row, contactId);
+    return { activityId: result.activityId };
+  });
+  if (options.summarise ?? true) {
+    await summariseImport(actor, importId, { fetchImpl: options.fetchImpl });
+  }
+  return filed;
+}
+
+export function companyNameFromDomain(domain: string) {
+  const label = domain.trim().toLowerCase().split(".")[0] ?? "";
+  const words = label.split(/[-_]+/).filter(Boolean);
+  const name = words
+    .map((word) => (word.length <= 2 ? word.toUpperCase() : word[0].toUpperCase() + word.slice(1)))
+    .join(" ");
+  return name || domain;
+}
+
+function splitName(name: string | null) {
+  if (!name) return { firstName: null, lastName: null };
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  return {
+    firstName: parts[0]?.slice(0, 80) ?? null,
+    lastName: parts.slice(1).join(" ").slice(0, 80) || null,
+  };
+}
+
+const ATTENDEE_PROVENANCE: Provenance = { operation: "create_from_attendee", source: "meeting" };
+
+export async function createContactAndFile(
+  actor: UserActor,
+  importId: string,
+  email: string,
+  options: { summarise?: boolean; fetchImpl?: typeof fetch } = {},
+) {
+  assertScope(actor.scopes, "activities:write");
+  assertScope(actor.scopes, "contacts:write");
+  assertScope(actor.scopes, "companies:write");
+  if (!isUuid(importId)) throw new CrmError("not_found", "Conversation not found.", 404);
+  const wanted = canonicalEmail(typeof email === "string" ? email : "");
+  if (!wanted) {
+    throw new CrmError("invalid_input", "Enter a valid email address.", 400, { field: "email" });
+  }
+  const filed = await withActor(actor, async (db) => {
+    const row = await lockUnfiled(db, actor, importId);
+    const person = mapParticipants(row.participants).find(
+      (item) => item.email && canonicalEmail(item.email) === wanted,
+    );
+    if (!person) {
+      throw new CrmError("invalid_input", "That person wasn't in this conversation.", 400, {
+        field: "email",
+      });
     }
-    const found = await db.query<{ id: string; company_id: string | null; name: string | null }>(
-      `select id, company_id,
-              coalesce(nullif(trim(concat_ws(' ', first_name, last_name)), ''), email, phone) as name
-       from crm.contacts
-       where id = $1 and workspace_id = $2 and archived_at is null`,
-      [contactId, actor.workspaceId],
-    );
-    const contact = found.rows[0];
-    if (!contact) throw new CrmError("not_found", "Contact not found.", 404);
-    const activity = await createActivityInDb(
-      db,
-      actor,
-      importActivityInput(row, {
-        contactId: contact.id,
-        companyId: contact.company_id,
-        contactName: contact.name,
-      }),
-      { operation: "file_conversation", source: row.source === "granola" ? "granola" : "microsoft" },
-    );
-    await db.query(
-      `update crm.conversation_imports
-       set status = 'filed', activity_id = $2, contact_id = $3, company_id = $4, error = null
-       where id = $1`,
-      [row.id, activity.id, contact.id, contact.company_id],
-    );
-    if (row.source === "teams" && row.call_id) {
-      await db.query(
-        `update crm.call_records
-         set activity_id = $3, contact_id = $4, company_id = $5
-         where workspace_id = $1 and teams_call_id = $2
-           and activity_id is null and contact_id is null and company_id is null`,
-        [actor.workspaceId, row.call_id, activity.id, contact.id, contact.company_id],
+    const internal = await internalAddresses(db, actor.workspaceId, [actor.email]);
+    if (internal.isInternal(wanted)) {
+      throw new CrmError(
+        "invalid_input",
+        "That address belongs to you or your workspace, so it can't become a contact.",
+        400,
+        { field: "email" },
       );
     }
-    return { activityId: activity.id };
+    const existing = await db.query<{
+      id: string;
+      company_id: string | null;
+      first_name: string | null;
+      last_name: string | null;
+    }>(
+      `select id, company_id, first_name, last_name from crm.contacts
+       where workspace_id = $1 and archived_at is null and normalized_email = $2
+       limit 1`,
+      [actor.workspaceId, wanted],
+    );
+    const current = existing.rows[0];
+    const names = splitName(personName(person));
+    let contactId = current?.id ?? null;
+    let createdContact = false;
+    if (!current?.company_id) {
+      const domain = wanted.split("@")[1] ?? "";
+      let companyId: string | null = null;
+      if (domain && !isFreeMailDomain(domain)) {
+        const byDomain = await db.query<{ id: string }>(
+          `select id from crm.companies
+           where workspace_id = $1 and archived_at is null and domain = $2
+           order by updated_at desc
+           limit 1`,
+          [actor.workspaceId, domain],
+        );
+        companyId =
+          byDomain.rows[0]?.id ??
+          (
+            await upsertCompanyInDb(
+              db,
+              actor,
+              { name: companyNameFromDomain(domain), domain, source: "meeting" },
+              ATTENDEE_PROVENANCE,
+            )
+          ).company.id;
+      }
+      if (current) {
+        const fill: ContactWrite = { email: wanted };
+        if (companyId) fill.companyId = companyId;
+        if (!current.first_name && !current.last_name && names.firstName) Object.assign(fill, names);
+        if (Object.keys(fill).length > 1) {
+          await upsertContactInDb(db, actor, fill, ATTENDEE_PROVENANCE);
+        }
+      } else {
+        const result = await upsertContactInDb(
+          db,
+          actor,
+          { ...names, email: wanted, companyId, source: "meeting" },
+          ATTENDEE_PROVENANCE,
+        );
+        contactId = result.contact.id;
+        createdContact = result.created;
+      }
+    }
+    if (!contactId) throw new CrmError("internal_error", "Contact was not saved.", 500);
+    const result = await fileLockedImport(db, actor, row, contactId);
+    return {
+      contactId,
+      contactName: result.contactName ?? wanted,
+      activityId: result.activityId,
+      created: createdContact,
+    };
   });
   if (options.summarise ?? true) {
     await summariseImport(actor, importId, { fetchImpl: options.fetchImpl });
@@ -629,11 +814,7 @@ export async function ignoreImport(actor: UserActor, importId: string) {
   assertScope(actor.scopes, "activities:write");
   if (!isUuid(importId)) throw new CrmError("not_found", "Conversation not found.", 404);
   await withActor(actor, async (db) => {
-    const row = await lockImport(db, actor, importId);
-    if (!row) throw new CrmError("not_found", "Conversation not found.", 404);
-    if (row.status === "filed") {
-      throw new CrmError("conflict", "This conversation is already filed.", 409);
-    }
+    const row = await lockUnfiled(db, actor, importId);
     await db.query(
       "update crm.conversation_imports set status = 'ignored' where id = $1",
       [row.id],

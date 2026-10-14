@@ -3,6 +3,7 @@ import SettingsScreen from "@/components/crm/settings-screen";
 import { getUserActor } from "@/lib/auth/user";
 import { getClickUpSettings } from "@/lib/crm/clickup";
 import { listPipeline } from "@/lib/crm/opportunities";
+import { getMyEmails } from "@/lib/crm/profile";
 import { listWebhookDeliveries, listWebhooks } from "@/lib/crm/webhooks";
 
 export const dynamic = "force-dynamic";
@@ -10,11 +11,12 @@ export const dynamic = "force-dynamic";
 export default async function SettingsPage() {
   const user = await getUserActor();
   if (!user) redirect("/login");
-  const [pipeline, endpoints, deliveries, clickup] = await Promise.all([
+  const [pipeline, endpoints, deliveries, clickup, myEmails] = await Promise.all([
     listPipeline(user),
     listWebhooks(user),
     listWebhookDeliveries(user, 20),
     getClickUpSettings(user),
+    getMyEmails(user),
   ]);
 
   return (
@@ -31,6 +33,7 @@ export default async function SettingsPage() {
       endpoints={endpoints}
       deliveries={deliveries}
       clickup={clickup}
+      myEmails={myEmails}
     />
   );
 }

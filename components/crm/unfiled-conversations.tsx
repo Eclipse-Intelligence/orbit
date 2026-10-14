@@ -7,12 +7,14 @@ import { Input } from "@/components/_ui/input";
 import Tag from "@/components/_ui/tag";
 import { Monogram } from "@/components/beautifui/record-marks";
 import {
+  createContactAndFileAction,
   fileConversationAction,
   ignoreConversationAction,
 } from "@/app/(crm)/inbox/actions";
 import { searchContactsToFileAction } from "@/app/(crm)/search";
 import { formatWhen } from "@/lib/companies";
-import type { ConversationImport } from "@/lib/crm/conversations";
+import type { ConversationImport, NewPerson, UnfiledImport } from "@/lib/crm/conversations";
+import { contactHref } from "@/lib/crm/hrefs";
 import type { Contact } from "@/lib/crm/types";
 
 const SOURCE_LABELS: Record<ConversationImport["source"], string> = {
@@ -36,14 +38,27 @@ function participantNames(conversation: ConversationImport) {
     .join(", ");
 }
 
+type FiledNotice = { contactId: string; name: string };
+
 export default function UnfiledConversations({
   conversations,
 }: {
-  conversations: ConversationImport[];
+  conversations: UnfiledImport[];
 }) {
+  const [notice, setNotice] = useState<FiledNotice | null>(null);
   return (
     <section className="flex flex-col gap-2 px-4 pb-4" aria-labelledby="unfiled-heading">
       <h2 id="unfiled-heading">Unfiled conversations</h2>
+      <p role="status" className={notice ? "caption-style text-soft" : "sr-only"}>
+        {notice && (
+          <>
+            Filed to{" "}
+            <Button variant="link" size="none" href={contactHref(notice.contactId)}>
+              {notice.name}
+            </Button>
+          </>
+        )}
+      </p>
       {conversations.length === 0 ? (
         <p className="caption-style text-subtle">
           Every imported meeting and call is filed on a contact.
@@ -51,7 +66,7 @@ export default function UnfiledConversations({
       ) : (
         <ul className="flex max-w-[640px] flex-col gap-2">
           {conversations.map((conversation) => (
-            <UnfiledItem key={conversation.id} conversation={conversation} />
+            <UnfiledItem key={conversation.id} conversation={conversation} onFiled={setNotice} />
           ))}
         </ul>
       )}
@@ -59,12 +74,24 @@ export default function UnfiledConversations({
   );
 }
 
-function UnfiledItem({ conversation }: { conversation: ConversationImport }) {
+function personLabel(person: NewPerson) {
+  return person.name ?? person.email;
+}
+
+function UnfiledItem({
+  conversation,
+  onFiled,
+}: {
+  conversation: UnfiledImport;
+  onFiled: (notice: FiledNotice) => void;
+}) {
   const router = useRouter();
   const [filing, setFiling] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [pending, setPending] = useState(false);
+  const [creating, setCreating] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const busy = pending || creating !== null;
   const people = participantNames(conversation);
   const summary = conversation.sourceSummary ? plainSummary(conversation.sourceSummary) : null;
   const summaryId = `unfiled-summary-${conversation.id}`;
@@ -79,6 +106,20 @@ function UnfiledItem({ conversation }: { conversation: ConversationImport }) {
       setError(result.error);
       return;
     }
+    router.refresh();
+  }
+
+  async function createAndFile(person: NewPerson) {
+    if (busy) return;
+    setCreating(person.email);
+    setError(null);
+    const result = await createContactAndFileAction(conversation.id, person.email);
+    setCreating(null);
+    if (result.error || !result.contactId) {
+      setError(result.error ?? "Could not file this conversation.");
+      return;
+    }
+    onFiled({ contactId: result.contactId, name: result.contactName ?? personLabel(person) });
     router.refresh();
   }
 
@@ -133,11 +174,26 @@ function UnfiledItem({ conversation }: { conversation: ConversationImport }) {
           }}
         />
       ) : (
-        <div className="flex items-center gap-2">
-          <Button variant="secondary" size="sm" disabled={pending} onClick={() => setFiling(true)}>
+        <div className="flex flex-wrap items-center gap-2">
+          {conversation.newPeople.map((person) => (
+            <Button
+              key={person.email}
+              variant="secondary"
+              size="sm"
+              className="max-w-full"
+              disabled={busy}
+              title={person.name ? person.email : undefined}
+              onClick={() => createAndFile(person)}
+            >
+              <span className="truncate">
+                {creating === person.email ? "Creating…" : `Create ${personLabel(person)} & file`}
+              </span>
+            </Button>
+          ))}
+          <Button variant="secondary" size="sm" disabled={busy} onClick={() => setFiling(true)}>
             File to…
           </Button>
-          <Button variant="ghost" size="sm" disabled={pending} onClick={ignore}>
+          <Button variant="ghost" size="sm" disabled={busy} onClick={ignore}>
             {pending ? "Ignoring…" : "Ignore"}
           </Button>
         </div>
