@@ -6,11 +6,12 @@ import Button, { buttonVariants } from "@/components/_ui/button";
 import { createContactFromEventAction } from "@/app/(crm)/calendar/actions";
 import { appTimeZone } from "@/lib/time";
 import { contactHref } from "@/lib/crm/hrefs";
+import type { CalendarProvider } from "@/lib/crm/calendar-accounts";
 import type { CalendarItem, EventPerson } from "@/lib/crm/calendars";
 
 const ATTENDEES_SHOWN = 25;
 
-export type CalendarMeta = { name: string; color: string; account: string };
+export type CalendarMeta = { name: string; color: string; account: string; provider: CalendarProvider };
 
 const RESPONSES: Record<string, string> = {
   accepted: "Accepted",
@@ -154,7 +155,13 @@ export default function CalendarEventDetails({
   const status = showAsLabel(item.showAs);
   const links = [
     item.joinUrl ? { href: item.joinUrl, label: "Join", variant: "primary" as const } : null,
-    item.webLink ? { href: item.webLink, label: "Open in Outlook", variant: "secondary" as const } : null,
+    item.webLink
+      ? {
+          href: item.webLink,
+          label: calendar?.provider === "ics" ? "Open event" : "Open in Outlook",
+          variant: "secondary" as const,
+        }
+      : null,
   ].filter((link): link is { href: string; label: string; variant: "primary" | "secondary" } => link !== null);
 
   return (

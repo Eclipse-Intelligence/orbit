@@ -74,7 +74,7 @@ function CalendarList({
         <Button variant="link" size="none" href="/inbox">
           Inbox
         </Button>{" "}
-        or add a calendar account in{" "}
+        or add a calendar in{" "}
         <Button variant="link" size="none" href="/settings#calendars">
           Settings
         </Button>
@@ -86,8 +86,8 @@ function CalendarList({
     <div className="flex flex-col gap-5">
       {groups.map((group) => (
         <div key={`${group.kind}-${group.id}`} className="flex flex-col gap-2">
-          <span className="caption-style text-subtle truncate px-1" title={group.email}>
-            {group.email}
+          <span className="caption-style text-subtle truncate px-1" title={group.label}>
+            {group.label}
           </span>
           {group.calendars.length === 0 ? (
             <span className="caption-style text-faint px-1">Not synced yet</span>
@@ -163,7 +163,8 @@ export default function CalendarScreen({
         map.set(calendar.id, {
           name: calendar.name,
           color: calendar.color,
-          account: group.email,
+          account: group.label,
+          provider: group.provider,
           visible: calendar.isVisible,
         });
       }

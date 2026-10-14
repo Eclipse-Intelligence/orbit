@@ -18,9 +18,21 @@ import {
 
 export const SAME_AS_PRIMARY = "That Microsoft account is already connected as your main account.";
 
+export type CalendarProvider = "microsoft" | "ics";
+
+export type StoredFeed = {
+  urlCipher: string;
+  host: string;
+  etag: string | null;
+  lastModified: string | null;
+  fetchedAt: string | null;
+};
+
 export type StoredAccount = StoredTokens & {
   id: string;
-  email: string;
+  provider: CalendarProvider;
+  email: string | null;
+  feed: StoredFeed | null;
   displayName: string | null;
   tenantId: string | null;
   status: "connected" | "disconnected";
@@ -32,7 +44,13 @@ export type StoredAccount = StoredTokens & {
 
 type AccountRow = {
   id: string;
-  email: string;
+  provider: CalendarProvider;
+  email: string | null;
+  feed_url_cipher: string | null;
+  feed_host: string | null;
+  feed_etag: string | null;
+  feed_last_modified: string | null;
+  feed_fetched_at: Date | string | null;
   display_name: string | null;
   tenant_id: string | null;
   status: "connected" | "disconnected";
@@ -53,7 +71,18 @@ function iso(value: Date | string | null) {
 function mapAccount(row: AccountRow): StoredAccount {
   return {
     id: row.id,
+    provider: row.provider,
     email: row.email,
+    feed:
+      row.provider === "ics" && row.feed_url_cipher
+        ? {
+            urlCipher: row.feed_url_cipher,
+            host: row.feed_host ?? "",
+            etag: row.feed_etag,
+            lastModified: row.feed_last_modified,
+            fetchedAt: iso(row.feed_fetched_at),
+          }
+        : null,
     displayName: row.display_name,
     tenantId: row.tenant_id,
     status: row.status,
@@ -69,11 +98,12 @@ function mapAccount(row: AccountRow): StoredAccount {
 
 export async function readAccounts(db: Db, actor: UserActor): Promise<StoredAccount[]> {
   const result = await db.query<AccountRow>(
-    `select id, email, display_name, tenant_id, status, scope_missing, refresh_token, access_token,
-            access_token_expires_at, last_synced_at, last_attempt_at, last_error
+    `select id, provider, email, display_name, tenant_id, status, scope_missing, refresh_token, access_token,
+            access_token_expires_at, last_synced_at, last_attempt_at, last_error,
+            feed_url_cipher, feed_host, feed_etag, feed_last_modified, feed_fetched_at
      from crm.calendar_accounts
      where user_id = $1 and workspace_id = $2
-     order by created_at, email`,
+     order by created_at, email nulls last, id`,
     [actor.userId, actor.workspaceId],
   );
   return result.rows.map(mapAccount);
@@ -202,7 +232,7 @@ export async function removeAccountsForEmail(actor: UserActor, email: string) {
   if (!canonical) return;
   await withActor(actor, async (db) => {
     await db.query(
-      "delete from crm.calendar_accounts where user_id = $1 and workspace_id = $2 and email = $3",
+      "delete from crm.calendar_accounts where user_id = $1 and workspace_id = $2 and provider = 'microsoft' and email = $3",
       [actor.userId, actor.workspaceId, canonical],
     );
   });
@@ -211,9 +241,50 @@ export async function removeAccountsForEmail(actor: UserActor, email: string) {
 export async function hasCalendarAccounts(db: Db, actor: UserActor) {
   const result = await db.query(
     `select 1 from crm.calendar_accounts
-     where user_id = $1 and workspace_id = $2 and status = 'connected' and refresh_token is not null
+     where user_id = $1 and workspace_id = $2 and provider = 'microsoft'
+       and status = 'connected' and refresh_token is not null
      limit 1`,
     [actor.userId, actor.workspaceId],
   );
   return (result.rowCount ?? 0) > 0;
+}
+
+export async function hasCalendarFeeds(db: Db, actor: UserActor) {
+  const result = await db.query(
+    `select 1 from crm.calendar_accounts
+     where user_id = $1 and workspace_id = $2 and provider = 'ics'
+       and status = 'connected' and feed_url_cipher is not null
+     limit 1`,
+    [actor.userId, actor.workspaceId],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+export async function insertFeedAccount(
+  db: Db,
+  actor: UserActor,
+  feed: { urlCipher: string; urlHash: string; host: string; label: string | null },
+) {
+  const result = await db.query<{ id: string }>(
+    `insert into crm.calendar_accounts (
+       workspace_id, user_id, provider, email, display_name, status, feed_url_cipher, feed_url_hash, feed_host
+     ) values ($1, $2, 'ics', null, $3, 'connected', $4, $5, $6)
+     on conflict do nothing
+     returning id`,
+    [actor.workspaceId, actor.userId, feed.label, feed.urlCipher, feed.urlHash, feed.host],
+  );
+  return result.rows[0]?.id ?? null;
+}
+
+export async function storeFeedState(
+  db: Db,
+  accountId: string,
+  state: { etag: string | null; lastModified: string | null; fetchedAt: string },
+) {
+  await db.query(
+    `update crm.calendar_accounts
+     set feed_etag = $2, feed_last_modified = $3, feed_fetched_at = $4
+     where id = $1 and provider = 'ics'`,
+    [accountId, state.etag, state.lastModified, state.fetchedAt],
+  );
 }

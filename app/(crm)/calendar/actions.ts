@@ -6,6 +6,7 @@ import { getUserActor } from "@/lib/auth/user";
 import { actionError } from "@/lib/companies";
 import { syncCalendar } from "@/lib/crm/calendar";
 import { disconnectCalendarAccount } from "@/lib/crm/calendar-accounts";
+import { addCalendarFeed } from "@/lib/crm/calendar-feeds";
 import { createContactFromEvent, setCalendarForCrm, setCalendarVisible } from "@/lib/crm/calendars";
 import type { UserActor } from "@/lib/crm/types";
 import { revalidateRecordPages } from "@/lib/revalidate";
@@ -78,6 +79,21 @@ export async function disconnectCalendarAccountAction(accountId: string): Promis
   }
   refreshRecords();
   return { ok: true };
+}
+
+export async function addCalendarFeedAction(url: string, name: string): Promise<CalendarActionState> {
+  const user = await getUserActor();
+  if (!user) return { error: "Sign in to add a calendar." };
+  try {
+    const added = await addCalendarFeed(user, {
+      url: typeof url === "string" ? url : "",
+      name: typeof name === "string" ? name : null,
+    });
+    refreshRecords();
+    return { ok: true, message: `Added ${added.name}.` };
+  } catch (error) {
+    return actionError(error);
+  }
 }
 
 export async function syncCalendarsAction(): Promise<CalendarActionState> {
