@@ -480,7 +480,7 @@ function ActivityRow({
     !details.body && !details.attendees && !granola && !party && !insightful;
 
   return (
-    <li className="flex flex-col">
+    <li id={`activity-${activity.id}`} className="flex scroll-mt-10 flex-col">
       <Button
         variant="item"
         size="none"

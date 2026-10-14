@@ -1,3 +1,4 @@
+import { syncCalendar } from "@/lib/crm/calendar";
 import { syncCalls } from "@/lib/crm/calls";
 import { clickupActorFor, syncClickUp } from "@/lib/crm/clickup";
 import {
@@ -68,6 +69,12 @@ export const DEFAULT_STEPS: SyncStep[] = [
     applies: microsoftStep,
     run: (target, context) =>
       syncCalls(target.actor, { fetchImpl: context.fetchImpl, deadline: context.deadline }),
+  },
+  {
+    name: "calendar",
+    applies: microsoftStep,
+    run: (target, context) =>
+      syncCalendar(target.actor, { fetchImpl: context.fetchImpl, deadline: context.deadline }),
   },
   {
     name: "teams_transcripts",

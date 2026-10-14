@@ -120,6 +120,23 @@ export function formatWhen(iso: string | null) {
   }).format(new Date(iso));
 }
 
+export function formatMeetingWhen(iso: string, allDay = false) {
+  return new Intl.DateTimeFormat(
+    "en-GB",
+    allDay
+      ? { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" }
+      : {
+          weekday: "short",
+          day: "numeric",
+          month: "short",
+          hour: "2-digit",
+          minute: "2-digit",
+          hourCycle: "h23",
+          timeZone: appTimeZone(),
+        },
+  ).format(new Date(iso));
+}
+
 export function formatMoney(value: string | null, currency: string) {
   if (!value) return "No amount";
   const amount = Number(value);

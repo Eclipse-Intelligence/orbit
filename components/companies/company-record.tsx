@@ -12,12 +12,14 @@ import CompanyEditor from "@/components/companies/detail/company-editor";
 import DetailSection from "@/components/companies/detail/detail-section";
 import RelationshipPanel from "@/components/companies/detail/relationship-panel";
 import { useListHref } from "@/components/crm/list-memory";
+import MeetingsCard from "@/components/crm/meetings-card";
 import RecordLayout from "@/components/crm/record-layout";
 import { Detail, DetailList } from "@/components/crm/record-form";
 import SectionHeader from "@/components/crm/section-header";
 import type { Viewer } from "@/components/crm/viewer";
 import { archiveCompanyAction } from "@/app/(crm)/actions";
 import { formatDate, LIFECYCLE_LABELS } from "@/lib/companies";
+import type { MeetingsSummary } from "@/lib/crm/calendar";
 import type { ClickUpPicker } from "@/lib/crm/clickup";
 import type { Company, CompanyContext, Member } from "@/lib/crm/types";
 
@@ -35,12 +37,14 @@ export default function CompanyRecord({
   members,
   mailboxConnected,
   clickup,
+  meetings,
 }: {
   viewer: Viewer;
   context: CompanyContext;
   members: Member[];
   mailboxConnected: boolean;
   clickup: ClickUpPicker | null;
+  meetings: MeetingsSummary | null;
 }) {
   const router = useRouter();
   const listHref = useListHref("companies");
@@ -213,6 +217,8 @@ export default function CompanyRecord({
                 )}
               </DetailSection>
             )}
+
+            <MeetingsCard meetings={meetings} />
 
             <RelationshipPanel context={context} clickup={clickup} />
           </>

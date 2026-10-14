@@ -7,10 +7,12 @@ import { EntityChip, Monogram } from "@/components/beautifui/record-marks";
 import DetailSection from "@/components/companies/detail/detail-section";
 import ContactActivities from "@/components/crm/contact-activities";
 import ContactEditor from "@/components/crm/contact-editor";
+import MeetingsCard from "@/components/crm/meetings-card";
 import RecordLayout from "@/components/crm/record-layout";
 import { CallLink, Detail, DetailList } from "@/components/crm/record-form";
 import SectionHeader from "@/components/crm/section-header";
 import type { Viewer } from "@/components/crm/viewer";
+import type { MeetingsSummary } from "@/lib/crm/calendar";
 import { companyHref } from "@/lib/crm/hrefs";
 import type { Activity, CallInsight, Company, Contact, Member } from "@/lib/crm/types";
 import { teamsCallUrl } from "@/lib/phone";
@@ -24,6 +26,7 @@ export default function ContactRecord({
   mailboxConnected,
   activities,
   insights,
+  meetings,
 }: {
   viewer: Viewer;
   contact: Contact;
@@ -32,6 +35,7 @@ export default function ContactRecord({
   mailboxConnected: boolean;
   activities: Activity[];
   insights: Record<string, CallInsight>;
+  meetings: MeetingsSummary | null;
 }) {
   const router = useRouter();
   const [editing, setEditing] = useState(false);
@@ -153,6 +157,10 @@ export default function ContactRecord({
                 )}
               </DetailSection>
             )}
+            <MeetingsCard
+              meetings={meetings}
+              className="shadow-[inset_0_1px_0_var(--line-strong)]"
+            />
           </>
         }
         activity={

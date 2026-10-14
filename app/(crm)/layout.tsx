@@ -3,6 +3,7 @@ import { after } from "next/server";
 import Sidebar from "@/components/_common/sidebar/sidebar";
 import CrmChrome from "@/components/crm/chrome";
 import { getUserActor } from "@/lib/auth/user";
+import { syncCalendar } from "@/lib/crm/calendar";
 import { syncCalls } from "@/lib/crm/calls";
 import { syncClickUp } from "@/lib/crm/clickup";
 import { countCompanies } from "@/lib/crm/companies";
@@ -26,6 +27,12 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
         if (result.ran && result.error) console.error("Teams call sync failed", result.error);
       } catch (error) {
         console.error("Teams call sync failed", error);
+      }
+      try {
+        const result = await syncCalendar(user);
+        if (result.ran && result.error) console.error("Calendar sync failed", result.error);
+      } catch (error) {
+        console.error("Calendar sync failed", error);
       }
       try {
         const result = await syncTeamsTranscripts(user);

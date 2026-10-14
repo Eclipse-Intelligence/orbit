@@ -8,6 +8,7 @@ import {
   ensureIntegration,
   errorText,
   finishIntegration,
+  internalAddresses,
   memberActor,
   timeLeft,
   type IntegrationKey,
@@ -608,15 +609,6 @@ async function companyByDomain(db: Db, workspaceId: string, domain: string): Pro
   return result.rows[0] ? { contactId: null, companyId: result.rows[0].id } : null;
 }
 
-async function memberEmails(db: Db, workspaceId: string) {
-  const result = await db.query<{ email: string | null }>(
-    `select p.email from crm.workspace_members m join crm.profiles p on p.id = m.user_id
-     where m.workspace_id = $1`,
-    [workspaceId],
-  );
-  return new Set(result.rows.map((row) => (row.email ? canonicalEmail(row.email) : null)).filter(Boolean));
-}
-
 export async function findClickUpLink(db: Db, workspaceId: string, task: ClickUpTask): Promise<Link | null> {
   for (const value of customFieldText(task)) {
     const byUrl = await recordFromUrls(db, workspaceId, value);
@@ -640,11 +632,11 @@ export async function findClickUpLink(db: Db, workspaceId: string, task: ClickUp
   if (!text) return null;
   const byUrl = await recordFromUrls(db, workspaceId, text);
   if (byUrl) return byUrl;
-  const members = await memberEmails(db, workspaceId);
+  const members = await internalAddresses(db, workspaceId, []);
   const seen = new Set<string>();
   for (const match of text.matchAll(EMAIL_PATTERN)) {
     const email = canonicalEmail(match[0]);
-    if (!email || seen.has(email) || members.has(email)) continue;
+    if (!email || seen.has(email) || members.isInternal(email)) continue;
     seen.add(email);
     const contact = await contactByEmail(db, workspaceId, email);
     if (contact) return contact;

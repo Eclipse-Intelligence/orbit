@@ -1,7 +1,8 @@
 import { cookies } from "next/headers";
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import { sessionCookieOptions } from "@/lib/auth/config";
 import { getUserActor } from "@/lib/auth/user";
+import { resetCalendarSync, syncCalendar } from "@/lib/crm/calendar";
 import { saveMailbox, syncMailbox } from "@/lib/crm/inbox";
 import {
   exchangeAuthorizationCode,
@@ -53,11 +54,20 @@ export async function GET(request: Request) {
       accessToken: token.accessToken,
       expiresAt: token.expiresAt,
     });
+    await resetCalendarSync(user);
     await syncMailbox(user);
   } catch (error) {
     return finish(
       sanitizeMicrosoftError(error instanceof Error ? error.message : "Could not connect Microsoft."),
     );
   }
+  after(async () => {
+    try {
+      const result = await syncCalendar(user, { force: true });
+      if (result.error) console.error("Calendar sync failed", result.error);
+    } catch (error) {
+      console.error("Calendar sync failed", error);
+    }
+  });
   return finish();
 }

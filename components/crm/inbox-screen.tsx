@@ -1,11 +1,13 @@
-import Button from "@/components/_ui/button";
+import Button, { buttonVariants } from "@/components/_ui/button";
 import { EntityChip, Monogram } from "@/components/beautifui/record-marks";
+import PeopleMet from "@/components/crm/people-met";
 import SectionHeader from "@/components/crm/section-header";
 import UnfiledConversations from "@/components/crm/unfiled-conversations";
 import type { Viewer } from "@/components/crm/viewer";
 import {
   disconnectInboxAction,
   enableGranolaWebhookAction,
+  syncCalendarAction,
   syncCallsAction,
   syncGranolaAction,
   syncInboxAction,
@@ -13,6 +15,7 @@ import {
 } from "@/app/(crm)/inbox/actions";
 import { formatWhen } from "@/lib/companies";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
+import type { CalendarStatus, MetPerson } from "@/lib/crm/calendar";
 import type { CallSyncSummary } from "@/lib/crm/calls";
 import type { UnfiledImport } from "@/lib/crm/conversations";
 import type { GranolaStatus } from "@/lib/crm/granola";
@@ -41,6 +44,8 @@ export default function InboxScreen({
   unfiled,
   granola,
   transcripts,
+  calendar,
+  people,
   notice,
   info,
   connected,
@@ -54,6 +59,8 @@ export default function InboxScreen({
   unfiled: UnfiledImport[];
   granola: GranolaStatus;
   transcripts: TeamsTranscriptStatus | null;
+  calendar: CalendarStatus | null;
+  people: MetPerson[];
   notice: string | null;
   info: string | null;
   connected: boolean;
@@ -113,7 +120,7 @@ export default function InboxScreen({
             <h2>Microsoft app</h2>
             <p className="caption-style text-subtle">
               Register an app in Microsoft Entra with delegated Mail.Read,
-              Mail.Send, User.Read, and offline_access. To log Teams calls and
+              Mail.Send, User.Read, Calendars.Read, and offline_access. To log Teams calls and
               their transcripts, also add the CallRecords.Read.All and
               CallTranscripts.Read.All application permissions with admin
               consent. Put the client id and secret in the server environment,
@@ -163,6 +170,43 @@ export default function InboxScreen({
                 Sync calls
               </Button>
             </form>
+          </div>
+        )}
+        {live && configured && calendar && (
+          <div className="border-border flex max-w-[640px] items-center gap-3 rounded-xl border p-3">
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="text-[14px] leading-5">Outlook calendar</span>
+              {calendar.scopeMissing ? (
+                <span className="caption-style text-subtle">
+                  Reconnect Microsoft to include your calendar. Mail keeps working
+                  in the meantime.
+                </span>
+              ) : (
+                <span className="caption-style text-subtle">
+                  {syncedLine(calendar.lastSyncedAt)} · Meetings from the last 30
+                  days and the next 60
+                </span>
+              )}
+              {!calendar.scopeMissing && calendar.lastError && (
+                <span className="caption-style text-danger" role="alert">
+                  {calendar.lastError}
+                </span>
+              )}
+            </span>
+            {calendar.scopeMissing ? (
+              <a
+                href="/api/microsoft/connect"
+                className={buttonVariants({ variant: "primary", size: "sm" })}
+              >
+                Reconnect Microsoft
+              </a>
+            ) : (
+              <form action={syncCalendarAction}>
+                <Button variant="secondary" size="sm" type="submit">
+                  Sync calendar
+                </Button>
+              </form>
+            )}
           </div>
         )}
         {live && configured && transcripts && (
@@ -234,6 +278,7 @@ export default function InboxScreen({
         </div>
       </div>
       <UnfiledConversations conversations={unfiled} />
+      <PeopleMet people={people} />
       {messages.length === 0 ? (
         <p className="caption-style text-subtle px-4">No mail filed yet.</p>
       ) : (
