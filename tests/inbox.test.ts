@@ -40,6 +40,7 @@ describe("microsoft inbox", () => {
     assert.deepEqual(readMicrosoftState(state, 1_000), {
       userId: "user-1",
       workspaceId: "workspace-1",
+      purpose: "mailbox",
     });
     assert.equal(readMicrosoftState(state, 1_000 + 11 * 60 * 1000), null);
     assert.equal(readMicrosoftState(`${state}x`, 1_000), null);

@@ -12,6 +12,33 @@ const SCOPE_ERRORS = new Set([
   "Authorization_RequestDenied",
 ]);
 const UTC_NAMES = new Set(["utc", "etc/utc", "gmt", "coordinated universal time", "z"]);
+const CALENDAR_PAGE_LIMIT = 5;
+const SHOW_AS = new Set(["free", "tentative", "busy", "oof", "workingelsewhere", "unknown"]);
+
+export const CALENDAR_PALETTE = [
+  "#4f9be8",
+  "#5fb760",
+  "#f0913a",
+  "#a77de8",
+  "#3fb7b0",
+  "#e46aa6",
+  "#e3c440",
+  "#e5584f",
+];
+
+const NAMED_COLORS: Record<string, string> = {
+  lightblue: "#4f9be8",
+  lightgreen: "#5fb760",
+  lightorange: "#f0913a",
+  lightgray: "#9aa1ab",
+  lightyellow: "#e3c440",
+  lightteal: "#3fb7b0",
+  lightpink: "#e46aa6",
+  lightbrown: "#b0835a",
+  lightred: "#e5584f",
+};
+
+const CALENDAR_FIELDS = ["id", "name", "color", "hexColor", "isDefaultCalendar", "canEdit", "owner"].join(",");
 
 const EVENT_FIELDS = [
   "id",
@@ -27,6 +54,7 @@ const EVENT_FIELDS = [
   "onlineMeetingUrl",
   "organizer",
   "attendees",
+  "showAs",
 ].join(",");
 
 type GraphDateTime = { dateTime?: string | null; timeZone?: string | null };
@@ -46,7 +74,30 @@ export type GraphEvent = {
   onlineMeetingUrl?: string | null;
   organizer?: GraphAddress | null;
   attendees?: (GraphAddress & { type?: string | null; status?: { response?: string | null } | null })[] | null;
+  showAs?: string | null;
 };
+
+export type GraphCalendar = {
+  id?: string | null;
+  name?: string | null;
+  color?: string | null;
+  hexColor?: string | null;
+  isDefaultCalendar?: boolean | null;
+  canEdit?: boolean | null;
+  owner?: { name?: string | null; address?: string | null } | null;
+};
+
+export type CalendarInfo = {
+  providerCalendarId: string;
+  name: string;
+  color: string;
+  colorExplicit: boolean;
+  isDefault: boolean;
+  canEdit: boolean;
+  ownerEmail: string | null;
+};
+
+export type CalendarListFetch = { calendars: CalendarInfo[]; complete: boolean };
 
 export type CalendarPerson = { name: string | null; email: string };
 export type CalendarAttendee = CalendarPerson & { response: string | null };
@@ -64,6 +115,7 @@ export type CalendarEvent = {
   onlineMeetingUrl: string | null;
   organizer: CalendarPerson | null;
   attendees: CalendarAttendee[];
+  showAs: string | null;
 };
 
 export type CalendarFetch = { events: CalendarEvent[]; complete: boolean; pages: number };
@@ -75,8 +127,82 @@ export class CalendarScopeError extends Error {
   }
 }
 
-export function calendarViewUrl(start: Date, end: Date) {
-  const url = new URL("https://graph.microsoft.com/v1.0/me/calendarView");
+export function explicitCalendarColor(calendar: Pick<GraphCalendar, "hexColor" | "color">) {
+  const hex = calendar.hexColor?.trim().toLowerCase() ?? "";
+  const short = /^#([0-9a-f])([0-9a-f])([0-9a-f])$/.exec(hex);
+  if (short) return `#${short[1]}${short[1]}${short[2]}${short[2]}${short[3]}${short[3]}`;
+  if (/^#[0-9a-f]{6}$/.test(hex)) return hex;
+  return NAMED_COLORS[calendar.color?.trim().toLowerCase() ?? ""] ?? null;
+}
+
+export function paletteColor(index: number) {
+  return CALENDAR_PALETTE[((index % CALENDAR_PALETTE.length) + CALENDAR_PALETTE.length) % CALENDAR_PALETTE.length];
+}
+
+export function calendarColor(calendar: Pick<GraphCalendar, "hexColor" | "color">, fallbackIndex = 0) {
+  return explicitCalendarColor(calendar) ?? paletteColor(fallbackIndex);
+}
+
+export function toCalendarInfo(calendar: GraphCalendar, fallbackIndex = 0): CalendarInfo | null {
+  const providerCalendarId = calendar.id?.trim();
+  if (!providerCalendarId || providerCalendarId.length > 400) return null;
+  return {
+    providerCalendarId,
+    name: clip(calendar.name, 200) ?? "Calendar",
+    color: calendarColor(calendar, fallbackIndex),
+    colorExplicit: explicitCalendarColor(calendar) !== null,
+    isDefault: Boolean(calendar.isDefaultCalendar),
+    canEdit: Boolean(calendar.canEdit),
+    ownerEmail: canonicalEmail(calendar.owner?.address ?? ""),
+  };
+}
+
+export function calendarsUrl() {
+  const url = new URL("https://graph.microsoft.com/v1.0/me/calendars");
+  url.searchParams.set("$top", "100");
+  url.searchParams.set("$select", CALENDAR_FIELDS);
+  return url.toString();
+}
+
+export async function fetchCalendars(
+  accessToken: string,
+  options: { fetchImpl?: typeof fetch; deadline?: number; colorOffset?: number } = {},
+): Promise<CalendarListFetch> {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const calendars: CalendarInfo[] = [];
+  const seen = new Set<string>();
+  let next: string | null = calendarsUrl();
+  let pages = 0;
+  let complete = true;
+  while (next) {
+    if (pages >= CALENDAR_PAGE_LIMIT || (options.deadline && options.deadline - Date.now() < PAGE_RESERVE_MS)) {
+      complete = false;
+      break;
+    }
+    pages += 1;
+    const response = await fetchImpl(next, {
+      headers: { authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!response.ok) throw await calendarError(response, "Microsoft could not list the calendars.");
+    const body = (await response.json()) as { value?: GraphCalendar[]; "@odata.nextLink"?: string };
+    for (const item of body.value ?? []) {
+      const calendar = toCalendarInfo(item, (options.colorOffset ?? 0) + calendars.length);
+      if (!calendar || seen.has(calendar.providerCalendarId)) continue;
+      seen.add(calendar.providerCalendarId);
+      calendars.push(calendar);
+    }
+    next = graphLink(body["@odata.nextLink"]);
+    if (body["@odata.nextLink"] && !next) complete = false;
+  }
+  return { calendars, complete };
+}
+
+export function calendarViewUrl(start: Date, end: Date, calendarId?: string | null) {
+  const path = calendarId
+    ? `https://graph.microsoft.com/v1.0/me/calendars/${encodeURIComponent(calendarId)}/calendarView`
+    : "https://graph.microsoft.com/v1.0/me/calendarView";
+  const url = new URL(path);
   url.searchParams.set("startDateTime", start.toISOString());
   url.searchParams.set("endDateTime", end.toISOString());
   url.searchParams.set("$top", String(PAGE_SIZE));
@@ -145,7 +271,14 @@ export function toCalendarEvent(event: GraphEvent): CalendarEvent | null {
     onlineMeetingUrl: safeUrl(event.onlineMeeting?.joinUrl) ?? safeUrl(event.onlineMeetingUrl),
     organizer: person(event.organizer),
     attendees,
+    showAs: showAs(event.showAs),
   };
+}
+
+function showAs(value: string | null | undefined) {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized || !SHOW_AS.has(normalized)) return null;
+  return normalized === "workingelsewhere" ? "workingElsewhere" : normalized;
 }
 
 function graphLink(value: string | undefined) {
@@ -158,7 +291,7 @@ function graphLink(value: string | undefined) {
   }
 }
 
-async function calendarError(response: Response) {
+async function calendarError(response: Response, fallback = "Microsoft could not list the calendar.") {
   const body = (await response.json().catch(() => ({}))) as {
     error?: { message?: string; code?: string };
   };
@@ -167,19 +300,24 @@ async function calendarError(response: Response) {
   if (response.status === 401 || code === "InvalidAuthenticationToken") {
     return new Error("Microsoft rejected the mailbox connection. Connect it again.");
   }
-  return new Error(sanitizeMicrosoftError(body.error?.message || "Microsoft could not list the calendar."));
+  return new Error(sanitizeMicrosoftError(body.error?.message || fallback));
 }
 
 export async function fetchCalendarView(
   accessToken: string,
   window: { start: Date; end: Date },
-  options: { fetchImpl?: typeof fetch; deadline?: number; pageLimit?: number } = {},
+  options: {
+    fetchImpl?: typeof fetch;
+    deadline?: number;
+    pageLimit?: number;
+    calendarId?: string | null;
+  } = {},
 ): Promise<CalendarFetch> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const pageLimit = options.pageLimit ?? PAGE_LIMIT;
   const events: CalendarEvent[] = [];
   const seen = new Set<string>();
-  let next: string | null = calendarViewUrl(window.start, window.end);
+  let next: string | null = calendarViewUrl(window.start, window.end, options.calendarId);
   let pages = 0;
   let complete = true;
   while (next) {

@@ -2,6 +2,12 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { appSecret } from "@/lib/auth/config";
 
 export const MICROSOFT_SCOPES = "offline_access Mail.Read Mail.Send User.Read Calendars.Read";
+export const CALENDAR_ACCOUNT_SCOPES = "openid offline_access User.Read Calendars.Read";
+export const ORGANISATION_BLOCKED =
+  "This Microsoft account's organisation doesn't allow Orbit yet — in Entra, set Orbit's Supported account types to include other organisations (and personal accounts if needed), or ask that organisation's admin to consent.";
+export const SIGN_IN_CANCELLED = "Microsoft sign-in was cancelled. Try again when you're ready.";
+
+export type MicrosoftPurpose = "mailbox" | "calendar_account";
 
 const STATE_MAX_AGE_MS = 10 * 60 * 1000;
 
@@ -52,9 +58,10 @@ export function signMicrosoftState(
   userId: string,
   workspaceId: string,
   now = Date.now(),
+  purpose: MicrosoftPurpose = "mailbox",
 ) {
   const body = Buffer.from(
-    JSON.stringify({ userId, workspaceId, exp: now + STATE_MAX_AGE_MS }),
+    JSON.stringify({ userId, workspaceId, purpose, exp: now + STATE_MAX_AGE_MS }),
   ).toString("base64url");
   const signature = createHmac("sha256", appSecret())
     .update(body)
@@ -84,18 +91,29 @@ export function readMicrosoftState(
     ) as {
       userId?: string;
       workspaceId?: string;
+      purpose?: string;
       exp?: number;
     };
     if (!parsed.userId || !parsed.workspaceId || typeof parsed.exp !== "number")
       return null;
     if (parsed.exp < now) return null;
-    return { userId: parsed.userId, workspaceId: parsed.workspaceId };
+    const purpose: MicrosoftPurpose =
+      parsed.purpose === "calendar_account" ? "calendar_account" : "mailbox";
+    return { userId: parsed.userId, workspaceId: parsed.workspaceId, purpose };
   } catch {
     return null;
   }
 }
 
-export function microsoftAuthorizationUrl(origin: string, state: string) {
+export function scopesFor(purpose: MicrosoftPurpose) {
+  return purpose === "calendar_account" ? CALENDAR_ACCOUNT_SCOPES : MICROSOFT_SCOPES;
+}
+
+export function microsoftAuthorizationUrl(
+  origin: string,
+  state: string,
+  options: { purpose?: MicrosoftPurpose; loginHint?: string | null } = {},
+) {
   const url = new URL(
     `https://login.microsoftonline.com/${microsoftTenant()}/oauth2/v2.0/authorize`,
   );
@@ -103,15 +121,17 @@ export function microsoftAuthorizationUrl(origin: string, state: string) {
   url.searchParams.set("response_type", "code");
   url.searchParams.set("redirect_uri", microsoftRedirectUri(origin));
   url.searchParams.set("response_mode", "query");
-  url.searchParams.set("scope", MICROSOFT_SCOPES);
+  url.searchParams.set("scope", scopesFor(options.purpose ?? "mailbox"));
   url.searchParams.set("state", state);
   url.searchParams.set("prompt", "select_account");
+  if (options.loginHint) url.searchParams.set("login_hint", options.loginHint);
   return url;
 }
 
 type TokenResponse = {
   access_token?: string;
   refresh_token?: string;
+  id_token?: string;
   expires_in?: number;
   scope?: string;
   error?: string;
@@ -123,6 +143,7 @@ export type MicrosoftToken = {
   refreshToken: string;
   expiresAt: string;
   scope?: string | null;
+  tenantId?: string | null;
 };
 
 export function grantsCalendar(scope: string | null | undefined) {
@@ -135,6 +156,30 @@ export function grantsCalendar(scope: string | null | undefined) {
     .split(/\s+/)
     .map((item) => item.split("/").pop()?.toLowerCase() ?? "")
     .some((item) => item === "calendars.read" || item === "calendars.readwrite");
+}
+
+export function consentProblem(message: string | null | undefined) {
+  const text = message ?? "";
+  if (/AADSTS65004|\b(user_)?cancel(led)?\b/i.test(text)) return SIGN_IN_CANCELLED;
+  if (
+    /AADSTS(50020|700016|65001|90094|50194|90008|500011)\b|consent_required|admin (approval|consent)|need admin|not enabled for consumers|unauthorized_client/i.test(
+      text,
+    )
+  ) {
+    return ORGANISATION_BLOCKED;
+  }
+  return null;
+}
+
+export function idTokenTenant(idToken: string | null | undefined) {
+  const payload = idToken?.split(".")[1];
+  if (!payload) return null;
+  try {
+    const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { tid?: unknown };
+    return typeof claims.tid === "string" && /^[0-9a-f-]{36}$/i.test(claims.tid) ? claims.tid.toLowerCase() : null;
+  } catch {
+    return null;
+  }
 }
 
 async function tokenRequest(body: URLSearchParams, fetchImpl: typeof fetch) {
@@ -153,15 +198,25 @@ async function tokenRequest(body: URLSearchParams, fetchImpl: typeof fetch) {
       parsed.error_description ||
       parsed.error ||
       "Microsoft did not return a token.";
-    throw new Error(sanitizeMicrosoftError(reason));
+    throw new MicrosoftTokenError(reason);
   }
   return parsed;
+}
+
+export class MicrosoftTokenError extends Error {
+  readonly detail: string;
+  constructor(detail: string) {
+    super(sanitizeMicrosoftError(detail));
+    this.name = "MicrosoftTokenError";
+    this.detail = detail;
+  }
 }
 
 export async function exchangeAuthorizationCode(
   origin: string,
   code: string,
   fetchImpl: typeof fetch = fetch,
+  purpose: MicrosoftPurpose = "mailbox",
 ) {
   const credentials = microsoftCredentials();
   const body = new URLSearchParams({
@@ -170,7 +225,7 @@ export async function exchangeAuthorizationCode(
     grant_type: "authorization_code",
     code,
     redirect_uri: microsoftRedirectUri(origin),
-    scope: MICROSOFT_SCOPES,
+    scope: scopesFor(purpose),
   });
   const parsed = await tokenRequest(body, fetchImpl);
   if (!parsed.refresh_token)
@@ -203,6 +258,7 @@ function tokenFrom(
     refreshToken,
     expiresAt: new Date(Date.now() + expiresIn * 1000).toISOString(),
     scope: parsed.scope ?? null,
+    tenantId: idTokenTenant(parsed.id_token),
   };
 }
 
@@ -210,8 +266,15 @@ export async function fetchMicrosoftProfile(
   accessToken: string,
   fetchImpl: typeof fetch = fetch,
 ) {
+  return (await fetchMicrosoftIdentity(accessToken, fetchImpl)).email;
+}
+
+export async function fetchMicrosoftIdentity(
+  accessToken: string,
+  fetchImpl: typeof fetch = fetch,
+) {
   const response = await fetchImpl(
-    "https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName",
+    "https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName,displayName",
     {
       headers: { authorization: `Bearer ${accessToken}` },
       signal: AbortSignal.timeout(15000),
@@ -220,6 +283,7 @@ export async function fetchMicrosoftProfile(
   const body = (await response.json().catch(() => ({}))) as {
     mail?: string | null;
     userPrincipalName?: string | null;
+    displayName?: string | null;
     error?: { message?: string };
   };
   if (!response.ok) {
@@ -229,7 +293,10 @@ export async function fetchMicrosoftProfile(
       ),
     );
   }
-  return body.mail || body.userPrincipalName || "";
+  return {
+    email: body.mail || body.userPrincipalName || "",
+    displayName: body.displayName?.replace(/\s+/g, " ").trim().slice(0, 200) || null,
+  };
 }
 
 type GraphRecipient = { emailAddress?: { address?: string; name?: string } };

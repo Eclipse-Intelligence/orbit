@@ -13,6 +13,7 @@ import { upsertContactInDb } from "@/lib/crm/contacts";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { isFreeMailDomain } from "@/lib/crm/communications";
+import { hasCalendarAccounts } from "@/lib/crm/calendar-accounts";
 import { readStored } from "@/lib/crm/inbox";
 import { iso, isUuid } from "@/lib/crm/mutate";
 import { canonicalEmail } from "@/lib/crm/normalize";
@@ -74,6 +75,7 @@ export type IntegrationRow = {
 export type BackgroundTarget = {
   actor: UserActor;
   mailbox: boolean;
+  calendarAccounts?: boolean;
   members: UserActor[];
 };
 
@@ -229,15 +231,21 @@ export async function backgroundTargets(): Promise<BackgroundTarget[]> {
   }
   const targets: BackgroundTarget[] = [];
   for (const members of groups.values()) {
-    let connected = 0;
+    let added = 0;
     for (const member of members) {
-      const stored = await withActor(member, (db) => readStored(db, member));
-      if (stored?.status === "connected" && stored.refreshTokenCipher) {
-        targets.push({ actor: member, mailbox: true, members });
-        connected += 1;
+      const { mailbox, calendarAccounts } = await withActor(member, async (db) => {
+        const stored = await readStored(db, member);
+        return {
+          mailbox: stored?.status === "connected" && Boolean(stored.refreshTokenCipher),
+          calendarAccounts: await hasCalendarAccounts(db, member),
+        };
+      });
+      if (mailbox || calendarAccounts) {
+        targets.push({ actor: member, mailbox, calendarAccounts, members });
+        added += 1;
       }
     }
-    if (connected === 0) targets.push({ actor: members[0], mailbox: false, members });
+    if (added === 0) targets.push({ actor: members[0], mailbox: false, members });
   }
   return targets;
 }

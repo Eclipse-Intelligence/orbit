@@ -1,4 +1,10 @@
 import type { Db } from "@/lib/db/pool";
+import {
+  claimAccount,
+  finishAccount,
+  readAccounts,
+  storeAccountToken,
+} from "@/lib/crm/calendar-accounts";
 import { isFreeMailDomain } from "@/lib/crm/communications";
 import { withActor } from "@/lib/crm/context";
 import {
@@ -10,28 +16,37 @@ import {
   type IntegrationKey,
 } from "@/lib/crm/conversations";
 import { CrmError } from "@/lib/crm/errors";
-import { currentToken, readStored, storeToken, type StoredConnection } from "@/lib/crm/inbox";
+import { currentToken, readStored, storeToken, type StoredTokens } from "@/lib/crm/inbox";
 import { isUuid } from "@/lib/crm/mutate";
 import { canonicalDomain, canonicalEmail } from "@/lib/crm/normalize";
 import { assertScope } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
 import {
   CalendarScopeError,
+  fetchCalendars,
   fetchCalendarView,
   type CalendarEvent,
+  type CalendarFetch,
+  type CalendarInfo,
+  type CalendarListFetch,
   type CalendarPerson,
 } from "@/lib/microsoft/calendar";
-import { grantsCalendar, sanitizeMicrosoftError } from "@/lib/microsoft/oauth";
+import { grantsCalendar, sanitizeMicrosoftError, type MicrosoftToken } from "@/lib/microsoft/oauth";
 
 const DAY_MS = 86_400_000;
 export const CALENDAR_BACK_MS = 30 * DAY_MS;
 export const CALENDAR_AHEAD_MS = 60 * DAY_MS;
 const SYNC_GAP_MS = 5 * 60 * 1000;
+const SYNC_BUDGET_MS = 45_000;
+const CALENDAR_RESERVE_MS = 5_000;
 const SAVE_BATCH = 200;
 const MEETINGS_SHOWN = 5;
 const PEOPLE_SHOWN = 25;
+export const DEFAULT_CALENDAR_PLACEHOLDER = "__default__";
 export const CALENDAR_RECONNECT = "Reconnect Microsoft to include your calendar.";
+export const CALENDAR_NO_ACCESS = "Microsoft didn't let Orbit read this calendar.";
 const NOT_CONNECTED = "Connect Microsoft to read your calendar.";
+const REJECTED = /rejected the mailbox connection|could not read the saved Microsoft connection/i;
 
 export type CalendarSyncResult = {
   ran: boolean;
@@ -40,6 +55,7 @@ export type CalendarSyncResult = {
   linked: number;
   complete: boolean;
   scopeMissing: boolean;
+  calendars?: number;
   error?: string;
 };
 
@@ -95,6 +111,26 @@ type EventRow = {
   granola_activity_id: string | null;
 };
 
+type SyncSource = {
+  kind: "connection" | "account";
+  id: string;
+  email: string;
+  tokens: StoredTokens;
+  lastAttemptAt: string | null;
+  colorOffset: number;
+};
+
+type SyncTarget = { id: string; providerCalendarId: string };
+
+type SourceOutcome = {
+  saved: number;
+  removed: number;
+  calendars: number;
+  complete: boolean;
+  scopeMissing: boolean;
+  error?: string;
+};
+
 function iso(value: Date | string | null) {
   if (!value) return null;
   return new Date(value).toISOString();
@@ -113,7 +149,7 @@ function calendarKey(actor: UserActor, connectionId: string): IntegrationKey {
   };
 }
 
-function readPerson(value: unknown): CalendarPerson | null {
+export function readPerson(value: unknown): CalendarPerson | null {
   if (!value || typeof value !== "object") return null;
   const item = value as Record<string, unknown>;
   const email = typeof item.email === "string" ? canonicalEmail(item.email) : null;
@@ -122,7 +158,7 @@ function readPerson(value: unknown): CalendarPerson | null {
   return { name: name && !canonicalEmail(name) ? name : null, email };
 }
 
-function readPeople(value: unknown) {
+export function readPeople(value: unknown) {
   if (!Array.isArray(value)) return [];
   return value.map(readPerson).filter((person): person is CalendarPerson => person !== null);
 }
@@ -135,7 +171,17 @@ async function setScopeMissing(db: Db, key: IntegrationKey, missing: boolean) {
   );
 }
 
-async function saveEvents(db: Db, actor: UserActor, connectionId: string, events: CalendarEvent[]) {
+function sourceColumn(source: Pick<SyncSource, "kind">) {
+  return source.kind === "connection" ? "connection_id" : "account_id";
+}
+
+async function saveEvents(
+  db: Db,
+  actor: UserActor,
+  source: SyncSource,
+  calendarId: string,
+  events: CalendarEvent[],
+) {
   let saved = 0;
   for (let index = 0; index < events.length; index += SAVE_BATCH) {
     const batch = events.slice(index, index + SAVE_BATCH).map((event) => ({
@@ -151,22 +197,23 @@ async function saveEvents(db: Db, actor: UserActor, connectionId: string, events
       online_meeting_url: event.onlineMeetingUrl,
       organizer: event.organizer,
       attendees: event.attendees,
+      show_as: event.showAs,
     }));
     const result = await db.query(
       `insert into crm.calendar_events (
-         workspace_id, connection_id, user_id, provider_event_id, ical_uid, subject,
-         starts_at, ends_at, is_all_day, is_cancelled, location, web_link,
-         online_meeting_url, organizer, attendees
+         workspace_id, calendar_id, connection_id, account_id, user_id, provider_event_id, ical_uid,
+         subject, starts_at, ends_at, is_all_day, is_cancelled, location, web_link,
+         online_meeting_url, organizer, attendees, show_as
        )
-       select $1, $2, $3, e.provider_event_id, e.ical_uid, e.subject,
-              e.starts_at, e.ends_at, e.is_all_day, e.is_cancelled, e.location, e.web_link,
-              e.online_meeting_url, e.organizer, coalesce(e.attendees, '[]'::jsonb)
-       from jsonb_to_recordset($4::jsonb) as e(
+       select $1, $2, $3::uuid, $4::uuid, $5, e.provider_event_id, e.ical_uid,
+              e.subject, e.starts_at, e.ends_at, e.is_all_day, e.is_cancelled, e.location, e.web_link,
+              e.online_meeting_url, e.organizer, coalesce(e.attendees, '[]'::jsonb), e.show_as
+       from jsonb_to_recordset($6::jsonb) as e(
          provider_event_id text, ical_uid text, subject text, starts_at timestamptz,
          ends_at timestamptz, is_all_day boolean, is_cancelled boolean, location text,
-         web_link text, online_meeting_url text, organizer jsonb, attendees jsonb
+         web_link text, online_meeting_url text, organizer jsonb, attendees jsonb, show_as text
        )
-       on conflict (connection_id, provider_event_id) do update set
+       on conflict (calendar_id, provider_event_id) do update set
          ical_uid = excluded.ical_uid,
          subject = excluded.subject,
          starts_at = excluded.starts_at,
@@ -177,26 +224,151 @@ async function saveEvents(db: Db, actor: UserActor, connectionId: string, events
          web_link = excluded.web_link,
          online_meeting_url = excluded.online_meeting_url,
          organizer = excluded.organizer,
-         attendees = excluded.attendees`,
-      [actor.workspaceId, connectionId, actor.userId, JSON.stringify(batch)],
+         attendees = excluded.attendees,
+         show_as = excluded.show_as`,
+      [
+        actor.workspaceId,
+        calendarId,
+        source.kind === "connection" ? source.id : null,
+        source.kind === "account" ? source.id : null,
+        actor.userId,
+        JSON.stringify(batch),
+      ],
     );
     saved += result.rowCount ?? 0;
   }
   return saved;
 }
 
-async function removeEvents(db: Db, connectionId: string, keep: string[] | null, windowStart: Date) {
+async function removeEvents(db: Db, calendarId: string, keep: string[] | null, windowStart: Date) {
   const result = keep
     ? await db.query(
         `delete from crm.calendar_events
-         where connection_id = $1 and provider_event_id <> all($2::text[])`,
-        [connectionId, keep],
+         where calendar_id = $1 and provider_event_id <> all($2::text[])`,
+        [calendarId, keep],
       )
-    : await db.query(
-        "delete from crm.calendar_events where connection_id = $1 and ends_at <= $2",
-        [connectionId, windowStart.toISOString()],
-      );
+    : await db.query("delete from crm.calendar_events where calendar_id = $1 and ends_at <= $2", [
+        calendarId,
+        windowStart.toISOString(),
+      ]);
   return result.rowCount ?? 0;
+}
+
+async function saveCalendarList(
+  db: Db,
+  actor: UserActor,
+  source: SyncSource,
+  listed: CalendarListFetch,
+): Promise<SyncTarget[]> {
+  const column = sourceColumn(source);
+  await db.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [`calendars:${source.id}`]);
+  const primaryDefault = listed.calendars.find((calendar) => calendar.isDefault);
+  if (source.kind === "connection" && primaryDefault) {
+    const existing = await db.query<{ id: string; provider_calendar_id: string }>(
+      `select id, provider_calendar_id from crm.calendars
+       where connection_id = $1 and provider_calendar_id = any($2::text[])`,
+      [source.id, [DEFAULT_CALENDAR_PLACEHOLDER, primaryDefault.providerCalendarId]],
+    );
+    const placeholder = existing.rows.find((row) => row.provider_calendar_id === DEFAULT_CALENDAR_PLACEHOLDER);
+    if (placeholder) {
+      const taken = existing.rows.some((row) => row.provider_calendar_id === primaryDefault.providerCalendarId);
+      if (taken) await db.query("delete from crm.calendars where id = $1", [placeholder.id]);
+      else
+        await db.query("update crm.calendars set provider_calendar_id = $2 where id = $1", [
+          placeholder.id,
+          primaryDefault.providerCalendarId,
+        ]);
+    }
+  }
+  if (listed.calendars.length > 0) {
+    const rows = JSON.stringify(
+      listed.calendars.map((calendar: CalendarInfo) => ({
+        provider_calendar_id: calendar.providerCalendarId,
+        name: calendar.name,
+        color: calendar.color,
+        color_explicit: calendar.colorExplicit,
+        owner_email: calendar.ownerEmail,
+        is_default: calendar.isDefault,
+        can_edit: calendar.canEdit,
+      })),
+    );
+    await db.query(
+      `insert into crm.calendars (
+         workspace_id, user_id, ${column}, provider_calendar_id, name, color, owner_email,
+         is_default, can_edit, use_for_crm
+       )
+       select $1, $2, $3, c.provider_calendar_id, c.name, c.color, c.owner_email,
+              c.is_default, c.can_edit, $4::boolean and c.is_default
+       from jsonb_to_recordset($5::jsonb) as c(
+         provider_calendar_id text, name text, color text, owner_email text,
+         is_default boolean, can_edit boolean
+       )
+       on conflict (user_id, coalesce(account_id, connection_id), provider_calendar_id) do update set
+         name = excluded.name,
+         owner_email = excluded.owner_email,
+         is_default = excluded.is_default,
+         can_edit = excluded.can_edit`,
+      [actor.workspaceId, actor.userId, source.id, source.kind === "connection", rows],
+    );
+    await db.query(
+      `update crm.calendars c
+       set color = x.color
+       from jsonb_to_recordset($2::jsonb) as x(provider_calendar_id text, color text, color_explicit boolean)
+       where c.${column} = $1 and c.provider_calendar_id = x.provider_calendar_id
+         and x.color_explicit and c.color <> x.color`,
+      [source.id, rows],
+    );
+  }
+  if (listed.complete) {
+    await db.query(
+      `delete from crm.calendars
+       where ${column} = $1 and provider_calendar_id <> all($2::text[])`,
+      [source.id, listed.calendars.map((calendar) => calendar.providerCalendarId)],
+    );
+  }
+  const targets = await db.query<{ id: string; provider_calendar_id: string }>(
+    `select id, provider_calendar_id from crm.calendars
+     where ${column} = $1 and (is_visible or use_for_crm)
+       and provider_calendar_id <> $2
+     order by last_attempt_at asc nulls first, is_default desc, name`,
+    [source.id, DEFAULT_CALENDAR_PLACEHOLDER],
+  );
+  return targets.rows.map((row) => ({ id: row.id, providerCalendarId: row.provider_calendar_id }));
+}
+
+async function saveCalendarEvents(
+  db: Db,
+  actor: UserActor,
+  source: SyncSource,
+  calendar: SyncTarget,
+  fetched: CalendarFetch,
+  window: { start: Date },
+  now: number,
+) {
+  await db.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [`calendar:${calendar.id}`]);
+  const saved = await saveEvents(db, actor, source, calendar.id, fetched.events);
+  const removed = await removeEvents(
+    db,
+    calendar.id,
+    fetched.complete ? fetched.events.map((event) => event.providerEventId) : null,
+    window.start,
+  );
+  await db.query(
+    `update crm.calendars
+     set last_attempt_at = now(),
+         last_synced_at = coalesce($2::timestamptz, last_synced_at),
+         last_error = null
+     where id = $1`,
+    [calendar.id, fetched.complete ? new Date(now).toISOString() : null],
+  );
+  return { saved, removed };
+}
+
+async function markCalendarError(db: Db, calendarId: string, error: string) {
+  await db.query(
+    "update crm.calendars set last_attempt_at = now(), last_error = $2 where id = $1",
+    [calendarId, error.slice(0, 500)],
+  );
 }
 
 function sameIds(left: string[], right: string[]) {
@@ -205,7 +377,25 @@ function sameIds(left: string[], right: string[]) {
   return right.every((id) => set.has(id));
 }
 
-async function linkEvents(db: Db, actor: UserActor, mailbox: Pick<StoredConnection, "id" | "email">) {
+export async function ownAddresses(db: Db, actor: UserActor) {
+  const stored = await readStored(db, actor);
+  const accounts = await db.query<{ email: string }>(
+    "select email from crm.calendar_accounts where user_id = $1 and workspace_id = $2",
+    [actor.userId, actor.workspaceId],
+  );
+  return [actor.email, stored?.email, ...accounts.rows.map((row) => row.email)];
+}
+
+async function linkEvents(db: Db, actor: UserActor) {
+  await db.query(
+    `update crm.calendar_events e
+     set contact_ids = '{}', company_ids = '{}'
+     from crm.calendars c
+     where c.id = e.calendar_id and not c.use_for_crm
+       and e.user_id = $1 and e.workspace_id = $2
+       and (cardinality(e.contact_ids) > 0 or cardinality(e.company_ids) > 0)`,
+    [actor.userId, actor.workspaceId],
+  );
   const events = await db.query<{
     id: string;
     organizer: unknown;
@@ -213,13 +403,14 @@ async function linkEvents(db: Db, actor: UserActor, mailbox: Pick<StoredConnecti
     contact_ids: string[];
     company_ids: string[];
   }>(
-    `select id, organizer, attendees, contact_ids, company_ids
-     from crm.calendar_events
-     where connection_id = $1`,
-    [mailbox.id],
+    `select e.id, e.organizer, e.attendees, e.contact_ids, e.company_ids
+     from crm.calendar_events e
+     join crm.calendars c on c.id = e.calendar_id and c.use_for_crm
+     where e.user_id = $1 and e.workspace_id = $2`,
+    [actor.userId, actor.workspaceId],
   );
   if (events.rows.length === 0) return 0;
-  const internal = await internalAddresses(db, actor.workspaceId, [actor.email, mailbox.email]);
+  const internal = await internalAddresses(db, actor.workspaceId, await ownAddresses(db, actor));
   const perEvent = events.rows.map((row) => {
     const emails = new Set<string>();
     for (const person of [readPerson(row.organizer), ...readPeople(row.attendees)]) {
@@ -286,77 +477,193 @@ async function linkEvents(db: Db, actor: UserActor, mailbox: Pick<StoredConnecti
 }
 
 export async function relinkCalendar(actor: UserActor) {
+  return withActor(actor, (db) => linkEvents(db, actor));
+}
+
+async function readSources(actor: UserActor, accountId?: string) {
   return withActor(actor, async (db) => {
-    const stored = await readStored(db, actor);
-    if (!stored) return 0;
-    return linkEvents(db, actor, stored);
+    const sources: SyncSource[] = [];
+    if (!accountId) {
+      const stored = await readStored(db, actor);
+      if (stored && stored.status === "connected" && stored.refreshTokenCipher) {
+        const state = await db.query<{ last_attempt_at: Date | string | null }>(
+          "select last_attempt_at from crm.integration_state where connection_id = $1 and source = 'calendar'",
+          [stored.id],
+        );
+        sources.push({
+          kind: "connection",
+          id: stored.id,
+          email: stored.email,
+          tokens: stored,
+          lastAttemptAt: iso(state.rows[0]?.last_attempt_at ?? null),
+          colorOffset: 0,
+        });
+      }
+    }
+    const accounts = await readAccounts(db, actor);
+    for (const [index, account] of accounts.entries()) {
+      if (accountId && account.id !== accountId) continue;
+      if (account.status !== "connected" || !account.refreshTokenCipher) continue;
+      sources.push({
+        kind: "account",
+        id: account.id,
+        email: account.email,
+        tokens: account,
+        lastAttemptAt: account.lastAttemptAt,
+        colorOffset: (index + 1) * 3,
+      });
+    }
+    sources.sort((left, right) => (left.lastAttemptAt ?? "").localeCompare(right.lastAttemptAt ?? ""));
+    return sources;
   });
+}
+
+async function claimSource(actor: UserActor, source: SyncSource, force: boolean) {
+  return withActor(actor, async (db) => {
+    if (source.kind === "account") return claimAccount(db, source.id, force, SYNC_GAP_MS);
+    return Boolean(await claimIntegration(db, calendarKey(actor, source.id), force, SYNC_GAP_MS));
+  });
+}
+
+async function finishSource(
+  actor: UserActor,
+  source: SyncSource,
+  values: { syncedAt?: string | null; error: string | null; scopeMissing: boolean },
+) {
+  await withActor(actor, async (db) => {
+    if (source.kind === "account") {
+      await finishAccount(db, source.id, values);
+      return;
+    }
+    const key = calendarKey(actor, source.id);
+    await finishIntegration(db, key, { syncedAt: values.syncedAt, error: values.error });
+    await setScopeMissing(db, key, values.scopeMissing);
+  });
+}
+
+async function saveSourceToken(actor: UserActor, source: SyncSource, token: MicrosoftToken) {
+  await withActor(actor, (db) =>
+    source.kind === "account" ? storeAccountToken(db, source.id, token) : storeToken(db, source.id, token),
+  );
+}
+
+async function syncSource(
+  actor: UserActor,
+  source: SyncSource,
+  context: { fetchImpl: typeof fetch; deadline: number; now: number },
+): Promise<SourceOutcome> {
+  const outcome: SourceOutcome = { saved: 0, removed: 0, calendars: 0, complete: true, scopeMissing: false };
+  const window = calendarWindow(context.now);
+  const missing = async () => {
+    await finishSource(actor, source, { error: null, scopeMissing: true });
+    return { ...outcome, complete: false, scopeMissing: true };
+  };
+  try {
+    const token = await currentToken(source.tokens, context.fetchImpl);
+    if (token.expiresAt !== source.tokens.accessTokenExpiresAt) await saveSourceToken(actor, source, token);
+    if (grantsCalendar(token.scope) === false) return await missing();
+    const listed = await fetchCalendars(token.accessToken, {
+      fetchImpl: context.fetchImpl,
+      deadline: context.deadline,
+      colorOffset: source.colorOffset,
+    });
+    if (!listed.complete) outcome.complete = false;
+    const targets = await withActor(actor, (db) => saveCalendarList(db, actor, source, listed));
+    for (const calendar of targets) {
+      if (context.deadline - Date.now() < CALENDAR_RESERVE_MS) {
+        outcome.complete = false;
+        break;
+      }
+      try {
+        const fetched = await fetchCalendarView(token.accessToken, window, {
+          fetchImpl: context.fetchImpl,
+          deadline: context.deadline,
+          calendarId: calendar.providerCalendarId,
+        });
+        const saved = await withActor(actor, (db) =>
+          saveCalendarEvents(db, actor, source, calendar, fetched, window, context.now),
+        );
+        outcome.saved += saved.saved;
+        outcome.removed += saved.removed;
+        outcome.calendars += 1;
+        if (!fetched.complete) outcome.complete = false;
+      } catch (error) {
+        if (error instanceof CalendarScopeError) {
+          await withActor(actor, (db) => markCalendarError(db, calendar.id, CALENDAR_NO_ACCESS));
+          continue;
+        }
+        const message = sanitizeMicrosoftError(errorText(error, "Could not sync the calendar."));
+        await withActor(actor, (db) => markCalendarError(db, calendar.id, message));
+        outcome.complete = false;
+        outcome.error ??= message;
+        if (REJECTED.test(message)) break;
+      }
+    }
+    await finishSource(actor, source, {
+      syncedAt: outcome.complete ? new Date(context.now).toISOString() : null,
+      error: outcome.error ?? null,
+      scopeMissing: false,
+    });
+    return outcome;
+  } catch (error) {
+    if (error instanceof CalendarScopeError) return missing();
+    const message = sanitizeMicrosoftError(errorText(error, "Could not sync the calendar."));
+    await finishSource(actor, source, { error: message, scopeMissing: false });
+    return { ...outcome, complete: false, error: message };
+  }
 }
 
 export async function syncCalendar(
   actor: UserActor,
-  options: { fetchImpl?: typeof fetch; deadline?: number; force?: boolean; now?: number } = {},
+  options: {
+    fetchImpl?: typeof fetch;
+    deadline?: number;
+    force?: boolean;
+    now?: number;
+    accountId?: string;
+  } = {},
 ): Promise<CalendarSyncResult> {
   const fetchImpl = options.fetchImpl ?? fetch;
-  const idle: CalendarSyncResult = {
+  const deadline = options.deadline ?? Date.now() + SYNC_BUDGET_MS;
+  const result: CalendarSyncResult = {
     ran: false,
     saved: 0,
     removed: 0,
     linked: 0,
     complete: false,
     scopeMissing: false,
+    calendars: 0,
   };
-  const stored = await withActor(actor, (db) => readStored(db, actor));
-  if (!stored || stored.status !== "connected" || !stored.refreshTokenCipher) {
-    return { ...idle, error: NOT_CONNECTED };
-  }
-  const key = calendarKey(actor, stored.id);
-  const claim = await withActor(actor, (db) =>
-    claimIntegration(db, key, Boolean(options.force), SYNC_GAP_MS),
-  );
-  if (!claim) return idle;
+  const sources = await readSources(actor, options.accountId);
+  if (sources.length === 0) return { ...result, error: NOT_CONNECTED };
   const now = options.now ?? Date.now();
-  const window = calendarWindow(now);
-  const missing = async () => {
-    await withActor(actor, async (db) => {
-      await finishIntegration(db, key, { error: null });
-      await setScopeMissing(db, key, true);
-    });
-    return { ...idle, ran: true, scopeMissing: true };
-  };
-  try {
-    const token = await currentToken(stored, fetchImpl);
-    if (token.expiresAt !== stored.accessTokenExpiresAt) {
-      await withActor(actor, (db) => storeToken(db, stored.id, token));
+  let complete = true;
+  let firstError: string | undefined;
+  for (const source of sources) {
+    if (deadline - Date.now() < CALENDAR_RESERVE_MS) {
+      complete = false;
+      break;
     }
-    if (grantsCalendar(token.scope) === false) return await missing();
-    const fetched = await fetchCalendarView(token.accessToken, window, {
-      fetchImpl,
-      deadline: options.deadline,
-    });
-    return await withActor(actor, async (db) => {
-      await db.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [`calendar:${stored.id}`]);
-      const saved = await saveEvents(db, actor, stored.id, fetched.events);
-      const removed = await removeEvents(
-        db,
-        stored.id,
-        fetched.complete ? fetched.events.map((event) => event.providerEventId) : null,
-        window.start,
-      );
-      const linked = await linkEvents(db, actor, stored);
-      await finishIntegration(db, key, {
-        syncedAt: fetched.complete ? new Date(now).toISOString() : null,
-        error: null,
-      });
-      await setScopeMissing(db, key, false);
-      return { ran: true, saved, removed, linked, complete: fetched.complete, scopeMissing: false };
-    });
-  } catch (error) {
-    if (error instanceof CalendarScopeError) return missing();
-    const message = sanitizeMicrosoftError(errorText(error, "Could not sync the calendar."));
-    await withActor(actor, (db) => finishIntegration(db, key, { error: message }));
-    return { ...idle, ran: true, error: message };
+    const claimed = await claimSource(actor, source, Boolean(options.force));
+    if (!claimed) continue;
+    result.ran = true;
+    const outcome = await syncSource(actor, source, { fetchImpl, deadline, now });
+    result.saved += outcome.saved;
+    result.removed += outcome.removed;
+    result.calendars = (result.calendars ?? 0) + outcome.calendars;
+    if (!outcome.complete) complete = false;
+    if (source.kind === "connection" && outcome.scopeMissing) result.scopeMissing = true;
+    if (outcome.error && (!firstError || source.kind === "connection")) firstError = outcome.error;
   }
+  if (!result.ran) return { ...result, complete: false };
+  try {
+    result.linked = await relinkCalendar(actor);
+  } catch (error) {
+    console.error("Could not relink calendar events", error);
+  }
+  result.complete = complete && !result.scopeMissing;
+  if (firstError) result.error = firstError;
+  return result;
 }
 
 export async function resetCalendarSync(actor: UserActor) {
@@ -433,28 +740,33 @@ export async function getMeetings(
     const column = byContact ? "contact_ids" : "company_ids";
     const notes = byContact
       ? "a.contact_id = $3"
-      : "(a.company_id = $3 or a.contact_id = any(e.contact_ids))";
+      : "(a.company_id = $3 or a.contact_id = any(m.contact_ids))";
     const select = (upcoming: boolean) =>
       db.query<EventRow>(
-        `select e.id, e.subject, e.starts_at, e.ends_at, e.is_all_day, e.location, e.web_link,
-                e.online_meeting_url, e.organizer, jsonb_array_length(e.attendees)::int as attendee_count,
+        `select m.id, m.subject, m.starts_at, m.ends_at, m.is_all_day, m.location, m.web_link,
+                m.online_meeting_url, m.organizer, jsonb_array_length(m.attendees)::int as attendee_count,
                 g.id as granola_activity_id
-         from crm.calendar_events e
+         from (
+           select distinct on (coalesce(e.ical_uid, e.id::text)) e.*
+           from crm.calendar_events e
+           join crm.calendars c on c.id = e.calendar_id and c.use_for_crm
+           where e.user_id = $1 and e.workspace_id = $2
+             and e.${column} @> array[$3]::uuid[]
+             and not e.is_cancelled
+             and ${upcoming ? "e.ends_at > $4" : "e.ends_at <= $4"}
+           order by coalesce(e.ical_uid, e.id::text), (e.connection_id is not null) desc, c.is_default desc, e.id
+         ) m
          left join lateral (
            select a.id from crm.activities a
-           where a.workspace_id = e.workspace_id
+           where a.workspace_id = m.workspace_id
              and a.type = 'meeting'
              and a.metadata->>'source' = 'granola'
-             and a.occurred_at between e.starts_at - interval '2 hours' and e.starts_at + interval '2 hours'
+             and a.occurred_at between m.starts_at - interval '2 hours' and m.starts_at + interval '2 hours'
              and ${notes}
-           order by abs(extract(epoch from a.occurred_at - e.starts_at))
+           order by abs(extract(epoch from a.occurred_at - m.starts_at))
            limit 1
          ) g on true
-         where e.user_id = $1 and e.workspace_id = $2
-           and e.${column} @> array[$3]::uuid[]
-           and not e.is_cancelled
-           and ${upcoming ? "e.ends_at > $4" : "e.ends_at <= $4"}
-         order by e.starts_at ${upcoming ? "asc" : "desc"}
+         order by m.starts_at ${upcoming ? "asc" : "desc"}
          limit ${MEETINGS_SHOWN}`,
         [actor.userId, actor.workspaceId, id, new Date(now).toISOString()],
       );
@@ -471,24 +783,31 @@ export async function getMeetings(
 export async function listPeopleMet(actor: UserActor, now = Date.now()): Promise<MetPerson[]> {
   assertScope(actor.scopes, "crm:read");
   return withActor(actor, async (db) => {
-    const stored = await readStored(db, actor);
     const events = await db.query<{
+      ical_uid: string | null;
       subject: string | null;
       starts_at: Date | string;
       organizer: unknown;
       attendees: unknown;
     }>(
-      `select subject, starts_at, organizer, attendees
-       from crm.calendar_events
-       where user_id = $1 and workspace_id = $2 and not is_cancelled
-       order by starts_at desc`,
+      `select e.ical_uid, e.subject, e.starts_at, e.organizer, e.attendees
+       from crm.calendar_events e
+       join crm.calendars c on c.id = e.calendar_id and c.use_for_crm
+       where e.user_id = $1 and e.workspace_id = $2 and not e.is_cancelled
+       order by e.starts_at desc`,
       [actor.userId, actor.workspaceId],
     );
     if (events.rows.length === 0) return [];
-    const internal = await internalAddresses(db, actor.workspaceId, [actor.email, stored?.email]);
+    const internal = await internalAddresses(db, actor.workspaceId, await ownAddresses(db, actor));
     const people = new Map<string, MetPerson>();
+    const meetings = new Set<string>();
     for (const row of events.rows) {
       const startsAt = iso(row.starts_at)!;
+      if (row.ical_uid) {
+        const key = `${row.ical_uid}|${startsAt}`;
+        if (meetings.has(key)) continue;
+        meetings.add(key);
+      }
       const ref = { subject: row.subject, startsAt };
       const past = new Date(startsAt).getTime() <= now;
       const seen = new Set<string>();
@@ -532,7 +851,7 @@ export async function listPeopleMet(actor: UserActor, now = Date.now()): Promise
   });
 }
 
-function wantedEmail(email: unknown) {
+export function wantedEmail(email: unknown) {
   const wanted = typeof email === "string" ? canonicalEmail(email) : null;
   if (!wanted) {
     throw new CrmError("invalid_input", "Enter a valid email address.", 400, { field: "email" });
@@ -553,10 +872,23 @@ export async function hideAttendee(actor: UserActor, email: string) {
   });
 }
 
+export async function createContactFromPerson(
+  actor: UserActor,
+  person: { name: string | null; email: string },
+  own: (string | null | undefined)[],
+) {
+  const created = await createContactFromAttendee(actor, person, own);
+  try {
+    await relinkCalendar(actor);
+  } catch (error) {
+    console.error("Could not relink calendar events", error);
+  }
+  return created;
+}
+
 export async function createContactFromMeeting(actor: UserActor, email: string) {
   const wanted = wantedEmail(email);
   const found = await withActor(actor, async (db) => {
-    const stored = await readStored(db, actor);
     const result = await db.query<{ organizer: unknown; attendees: unknown }>(
       `select organizer, attendees from crm.calendar_events
        where user_id = $1 and workspace_id = $2
@@ -574,20 +906,10 @@ export async function createContactFromMeeting(actor: UserActor, email: string) 
         name ??= person.name;
       }
     }
-    return { present, name, mailboxEmail: stored?.email ?? null };
+    return { present, name, own: await ownAddresses(db, actor) };
   });
   if (!found.present) {
     throw new CrmError("invalid_input", "That person isn't in your calendar.", 400, { field: "email" });
   }
-  const created = await createContactFromAttendee(
-    actor,
-    { name: found.name, email: wanted },
-    [found.mailboxEmail],
-  );
-  try {
-    await relinkCalendar(actor);
-  } catch (error) {
-    console.error("Could not relink calendar events", error);
-  }
-  return created;
+  return createContactFromPerson(actor, { name: found.name, email: wanted }, found.own);
 }

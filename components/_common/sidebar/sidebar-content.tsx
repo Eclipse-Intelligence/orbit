@@ -14,6 +14,7 @@ import ClipboardIcon from "@/public/assets/images/companies/sidebar/clipboard.sv
 import ListIcon from "@/public/assets/images/companies/sidebar/list.svg";
 import BookClosedIcon from "@/public/assets/images/companies/sidebar/book-closed.svg";
 import MailIcon from "@/public/assets/images/companies/sidebar/mail.svg";
+import CalendarIcon from "@/public/assets/images/companies/sidebar/calendar.svg";
 import TargetIcon from "@/public/assets/images/companies/sidebar/target-05.svg";
 import AlertIcon from "@/public/assets/images/companies/sidebar/alert-triangle.svg";
 import MessageIcon from "@/public/assets/images/companies/sidebar/message-question.svg";
@@ -72,6 +73,12 @@ export default function SidebarContent({
               icon={MailIcon}
               label="Inbox"
               active={current("/inbox")}
+            />
+            <SidebarNavItem
+              href="/calendar"
+              icon={CalendarIcon}
+              label="Calendar"
+              active={current("/calendar")}
             />
             <SidebarNavItem
               href="/opportunities"
