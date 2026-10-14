@@ -16,7 +16,9 @@ import {
   parseSortValue,
   sortValue,
 } from "@/lib/companies";
+import { SelectToggle } from "@/components/crm/bulk-bar";
 import RecordTransfer from "@/components/crm/record-transfer";
+import type { BulkSelection } from "@/hooks/use-bulk-selection";
 import { downloadCsv } from "@/lib/csv";
 import type { CompanyListQuery, Member } from "@/lib/crm/types";
 import { useCompaniesStore } from "@/stores/companies-store";
@@ -26,9 +28,14 @@ import PlusIcon from "@/public/assets/images/_common/plus.svg";
 type ToolbarProps = {
   filters: CompanyListQuery;
   members?: Member[];
+  selection: BulkSelection;
 };
 
-export default function CompaniesToolbar({ filters, members = [] }: ToolbarProps) {
+export default function CompaniesToolbar({
+  filters,
+  members = [],
+  selection,
+}: ToolbarProps) {
   const router = useRouter();
   const setNewCompanyOpen = useCompaniesStore((state) => state.setNewCompanyOpen);
   const filterQuery = filters.query ?? "";
@@ -143,6 +150,7 @@ export default function CompaniesToolbar({ filters, members = [] }: ToolbarProps
       </div>
 
       <div className="flex shrink-0 items-center gap-1">
+        <SelectToggle selection={selection} />
         <RecordTransfer resource="companies" mode="import" />
         <Button variant="secondary" size="sm" onClick={exportCsv} disabled={exporting}>
           <ShareIcon aria-hidden className="size-3" />

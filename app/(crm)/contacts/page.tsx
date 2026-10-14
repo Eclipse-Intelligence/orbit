@@ -5,6 +5,7 @@ import { getUserActor } from "@/lib/auth/user";
 import { listCompanies, listMembers } from "@/lib/crm/companies";
 import { listContacts } from "@/lib/crm/contacts";
 import { contactHref } from "@/lib/crm/hrefs";
+import { getMailbox } from "@/lib/crm/inbox";
 import { contactQueryFromSearchParams } from "@/lib/crm/validation";
 
 export const dynamic = "force-dynamic";
@@ -28,10 +29,11 @@ export default async function ContactsPage({
   const page = pageFromParams(params);
   filters.limit = PAGE_SIZE;
   filters.offset = pageOffset(page);
-  const [listed, companies, members] = await Promise.all([
+  const [listed, companies, members, mailbox] = await Promise.all([
     listContacts(user, filters),
     listCompanies(user, { limit: 100, sort: "name", order: "asc" }),
     listMembers(user),
+    getMailbox(user),
   ]);
 
   return (
@@ -49,6 +51,7 @@ export default async function ContactsPage({
       query={filters.query ?? ""}
       companies={companies.data}
       members={members}
+      mailboxConnected={mailbox?.status === "connected"}
     />
   );
 }

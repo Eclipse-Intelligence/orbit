@@ -1,13 +1,12 @@
 "use client";
 
-import { useEffect } from "react";
 import CompaniesHeader from "./header/header";
 import CompaniesToolbar from "./toolbar/toolbar";
 import CompaniesTable from "./table/companies-table";
 import NewCompanyDialog from "./new-company/new-company-dialog";
 import { RememberList } from "@/components/crm/list-memory";
+import { useBulkSelection } from "@/hooks/use-bulk-selection";
 import { activeFilterCount } from "@/lib/companies";
-import { useCompaniesStore } from "@/stores/companies-store";
 import type { Viewer } from "@/components/crm/viewer";
 import type { Company, CompanyListQuery, Member } from "@/lib/crm/types";
 
@@ -21,6 +20,7 @@ type CompaniesProps = {
   filters: CompanyListQuery;
   members: Member[];
   viewer: Viewer;
+  mailboxConnected: boolean;
 };
 
 export default function Companies({
@@ -31,25 +31,26 @@ export default function Companies({
   filters,
   members,
   viewer,
+  mailboxConnected,
 }: CompaniesProps) {
-  const setSelected = useCompaniesStore((state) => state.setSelected);
-  const filterKey = JSON.stringify(filters);
-
-  useEffect(() => {
-    setSelected([]);
-  }, [filterKey, setSelected]);
+  const selection = useBulkSelection(
+    companies.map((company) => company.id),
+    JSON.stringify(filters),
+  );
 
   return (
     <section id="companies" className="flex min-h-0 min-w-0 flex-1 flex-col">
       <RememberList list="companies" />
       <CompaniesHeader viewer={viewer} />
-      <CompaniesToolbar filters={filters} members={members} />
+      <CompaniesToolbar filters={filters} members={members} selection={selection} />
       <CompaniesTable
         companies={companies}
         total={total}
         page={page}
         now={now}
         filtered={activeFilterCount(filters) > 0}
+        selection={selection}
+        mailboxConnected={mailboxConnected}
       />
       <NewCompanyDialog members={members} viewerId={viewer.id} />
     </section>

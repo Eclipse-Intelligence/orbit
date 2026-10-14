@@ -13,6 +13,11 @@ import {
 } from "@/components/_ui/dialog";
 import { Input } from "@/components/_ui/input";
 import { EntityChip, Monogram } from "@/components/beautifui/record-marks";
+import BulkActions, {
+  RowCheckbox,
+  SelectAllCheckbox,
+  SelectToggle,
+} from "@/components/crm/bulk-bar";
 import ContactEditor from "@/components/crm/contact-editor";
 import { RememberList } from "@/components/crm/list-memory";
 import Pager from "@/components/crm/pager";
@@ -20,8 +25,30 @@ import RecordTransfer from "@/components/crm/record-transfer";
 import SectionHeader from "@/components/crm/section-header";
 import { CallLink, RecordList } from "@/components/crm/record-form";
 import type { Viewer } from "@/components/crm/viewer";
+import {
+  archiveContactsAction,
+  exportSelectedContactsAction,
+  unarchiveContactsAction,
+} from "@/app/(crm)/bulk";
+import { useBulkSelection } from "@/hooks/use-bulk-selection";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
+import type { Recipient } from "@/lib/crm/personalise";
 import type { Company, Contact, Member } from "@/lib/crm/types";
+import { cn } from "@/lib/utils";
+
+const GRID_CLASS =
+  "md:grid md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,1fr)] md:gap-4";
+
+function recipientOf(contact: Contact): Recipient {
+  return {
+    id: contact.id,
+    firstName: contact.firstName,
+    lastName: contact.lastName,
+    name: contact.name,
+    email: contact.email,
+    company: contact.companyName,
+  };
+}
 
 export default function ContactsScreen({
   viewer,
@@ -31,6 +58,7 @@ export default function ContactsScreen({
   query,
   companies,
   members,
+  mailboxConnected,
 }: {
   viewer: Viewer;
   contacts: Contact[];
@@ -39,8 +67,13 @@ export default function ContactsScreen({
   query: string;
   companies: Company[];
   members: Member[];
+  mailboxConnected: boolean;
 }) {
   const router = useRouter();
+  const selection = useBulkSelection(
+    contacts.map((contact) => contact.id),
+    `${page}|${query}`,
+  );
   const [creating, setCreating] = useState(false);
   const created = useCallback(
     (contact: Contact | undefined) => {
@@ -73,18 +106,21 @@ export default function ContactsScreen({
           </div>
         }
       />
-      <form action="/contacts" className="flex items-center gap-2 px-4 py-4">
-        <label className="sr-only" htmlFor="contact-search">
-          Search contacts
-        </label>
-        <Input
-          id="contact-search"
-          name="q"
-          defaultValue={query}
-          placeholder="Search name, email, or company"
-          className="w-[240px]"
-        />
-      </form>
+      <div className="flex items-center justify-between gap-2 px-4 py-4">
+        <form action="/contacts" className="flex min-w-0 items-center gap-2">
+          <label className="sr-only" htmlFor="contact-search">
+            Search contacts
+          </label>
+          <Input
+            id="contact-search"
+            name="q"
+            defaultValue={query}
+            placeholder="Search name, email, or company"
+            className="w-[240px] max-w-full"
+          />
+        </form>
+        <SelectToggle selection={selection} />
+      </div>
       <p className="caption-style text-subtle px-4 pb-2">
         {total} {total === 1 ? "person" : "people"}
       </p>
@@ -97,18 +133,50 @@ export default function ContactsScreen({
         }
       >
         <li
-          aria-hidden
-          className="caption-style text-subtle border-border hidden border-b px-2.5 py-2 md:grid md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,1fr)] md:gap-4"
+          className={cn(
+            "caption-style text-subtle border-border group hidden border-b px-2.5 py-2",
+            GRID_CLASS,
+          )}
         >
-          <span>Name</span>
-          <span>Company</span>
-          <span>Email</span>
-          <span>Phone</span>
+          <span className="flex items-center gap-2.5">
+            <span className="flex size-5 shrink-0 items-center justify-center">
+              <SelectAllCheckbox
+                selection={selection}
+                label="Select all contacts on this page"
+              />
+            </span>
+            <span aria-hidden>Name</span>
+          </span>
+          <span aria-hidden>Company</span>
+          <span aria-hidden>Email</span>
+          <span aria-hidden>Phone</span>
         </li>
         {contacts.map((contact) => (
-          <ContactRow key={contact.id} contact={contact} />
+          <ContactRow
+            key={contact.id}
+            contact={contact}
+            selected={selection.isSelected(contact.id)}
+            revealed={selection.revealed}
+            selecting={selection.selecting}
+            onToggle={(range) => selection.toggle(contact.id, range)}
+          />
         ))}
       </RecordList>
+      <BulkActions
+        selection={selection}
+        noun={["contact", "contacts"]}
+        archive={archiveContactsAction}
+        unarchive={unarchiveContactsAction}
+        exportRows={exportSelectedContactsAction}
+        exportName="contacts"
+        emailLabel="Email"
+        recipients={(ids) =>
+          contacts
+            .filter((contact) => ids.includes(contact.id))
+            .map(recipientOf)
+        }
+        mailboxConnected={mailboxConnected}
+      />
       <Pager
         page={page}
         count={contacts.length}
@@ -140,7 +208,19 @@ export default function ContactsScreen({
   );
 }
 
-function ContactRow({ contact }: { contact: Contact }) {
+function ContactRow({
+  contact,
+  selected,
+  revealed,
+  selecting,
+  onToggle,
+}: {
+  contact: Contact;
+  selected: boolean;
+  revealed: boolean;
+  selecting: boolean;
+  onToggle: (range: boolean) => void;
+}) {
   const company =
     contact.companyName && contact.companyId ? (
       <span className="relative z-10 min-w-0">
@@ -151,12 +231,38 @@ function ContactRow({ contact }: { contact: Contact }) {
       </span>
     ) : null;
   return (
-    <li className="border-border relative flex min-h-12 items-center gap-3 border-b px-2.5 py-2 transition-colors duration-150 hover:bg-white/3 md:grid md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,1fr)] md:gap-4">
+    <li
+      data-selected={selected}
+      className={cn(
+        "border-border group relative flex min-h-12 items-center gap-3 border-b px-2.5 py-2 transition-colors duration-150 hover:bg-white/3 data-[selected=true]:bg-white/5",
+        GRID_CLASS,
+      )}
+    >
       <span className="flex min-w-0 flex-1 items-center gap-2.5">
-        <Monogram name={contact.name} />
+        <span className="relative flex size-5 shrink-0 items-center justify-center">
+          <Monogram
+            name={contact.name}
+            className={cn(
+              "transition-opacity duration-150 group-focus-within:opacity-0 [@media(hover:hover)]:group-hover:opacity-0",
+              revealed && "opacity-0",
+            )}
+          />
+          <RowCheckbox
+            checked={selected}
+            label={`Select ${contact.name}`}
+            revealed={revealed}
+            onToggle={onToggle}
+            className="absolute z-10"
+          />
+        </span>
         <span className="flex min-w-0 flex-col gap-0.5">
           <Link
             href={contactHref(contact.id)}
+            onClick={(event) => {
+              if (!selecting) return;
+              event.preventDefault();
+              onToggle(event.shiftKey);
+            }}
             className="truncate text-[14px] leading-5 after:absolute after:inset-0"
           >
             {contact.name}

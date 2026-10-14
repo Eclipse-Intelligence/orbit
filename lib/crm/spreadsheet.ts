@@ -263,6 +263,10 @@ export async function exportCompaniesCsv(actor: Actor) {
 
 export async function exportContactsCsv(actor: Actor) {
   const rows = await collect<Contact>((offset) => listContacts(actor, { limit: 100, offset }));
+  return contactsCsvRows(rows);
+}
+
+export function contactsCsvRows(rows: Contact[]) {
   return [
     ["First name", "Last name", "Email", "Phone", "Title", "LinkedIn", "Company", "Source", "Notes"],
     ...rows.map((contact) => [

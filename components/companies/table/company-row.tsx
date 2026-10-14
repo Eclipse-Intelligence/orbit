@@ -3,7 +3,7 @@
 import type { MouseEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Checkbox } from "@/components/_ui/checkbox";
+import { RowCheckbox } from "@/components/crm/bulk-bar";
 import { TableCell, TableRow } from "@/components/_ui/table";
 import {
   ConnectionMark,
@@ -27,7 +27,9 @@ type CompanyRowProps = {
   index: number;
   now: number;
   selected: boolean;
-  onToggle: () => void;
+  revealed: boolean;
+  selecting: boolean;
+  onToggle: (range: boolean) => void;
 };
 
 function cellClass(key: TableColumnKey) {
@@ -43,11 +45,12 @@ export default function CompanyRow({
   index,
   now,
   selected,
+  revealed,
+  selecting,
   onToggle,
 }: CompanyRowProps) {
   const router = useRouter();
   const href = companyHref(company.id);
-  const revealed = selected;
   const tags = [
     { label: LIFECYCLE_LABELS[company.lifecycle], base: lifecycleTagBase(company.lifecycle) },
     ...(company.industry ? [{ label: company.industry, base: undefined }] : []),
@@ -59,6 +62,10 @@ export default function CompanyRow({
       role="row"
       onClick={(event) => {
         if (event.target instanceof Element && event.target.closest("a, button, input")) return;
+        if (selecting) {
+          onToggle(event.shiftKey);
+          return;
+        }
         if (event.metaKey || event.ctrlKey) {
           window.open(href, "_blank", "noopener");
           return;
@@ -76,28 +83,28 @@ export default function CompanyRow({
           <span className="relative flex size-6 shrink-0 items-center justify-center">
             <span
               className={cn(
-                "text-faint text-[11.5px] tabular-nums opacity-0 [@media(hover:hover)]:opacity-100",
-                "[@media(hover:hover)]:group-hover:opacity-0! [@media(hover:hover)]:group-focus-within:opacity-0!",
-                revealed && "opacity-0!",
+                "text-faint text-[11.5px] tabular-nums transition-opacity duration-150 group-focus-within:opacity-0 [@media(hover:hover)]:group-hover:opacity-0",
+                revealed && "opacity-0",
               )}
             >
               {index + 1}
             </span>
-            <Checkbox
+            <RowCheckbox
               checked={selected}
-              onCheckedChange={onToggle}
-              onClick={stop}
-              aria-label={`Select ${company.name}`}
-              className={cn(
-                "absolute [@media(hover:hover)]:opacity-0",
-                "[@media(hover:hover)]:group-hover:opacity-100! [@media(hover:hover)]:group-focus-within:opacity-100!",
-                revealed && "opacity-100!",
-              )}
+              label={`Select ${company.name}`}
+              revealed={revealed}
+              onToggle={onToggle}
+              className="absolute"
             />
           </span>
           <Monogram name={company.name} />
           <Link
             href={href}
+            onClick={(event) => {
+              if (!selecting) return;
+              event.preventDefault();
+              onToggle(event.shiftKey);
+            }}
             className="max-w-[220px] truncate text-[13px] font-medium underline-offset-[3px] rounded-sm outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/60"
           >
             {company.name}

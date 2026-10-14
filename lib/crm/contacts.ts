@@ -643,6 +643,78 @@ export async function archiveContact(
   );
 }
 
+export async function unarchiveContact(
+  actor: Actor,
+  id: string,
+  options: MutationOptions = {},
+): Promise<MutationOutcome<{ contact: Contact }>> {
+  assertScope(actor.scopes, "contacts:write");
+  if (!isUuid(id)) throw new CrmError("not_found", "Contact not found.", 404);
+  const provenance = options.provenance ?? { operation: "unarchive_contact" };
+  const hash = requestHash("unarchive_contact", { id, provenance });
+  return withActor(actor, (db) =>
+    replayOrRun(db, actor, options.idempotencyKey, hash, 200, async () => {
+      await lockNamespace(db, actor.workspaceId, "contacts");
+      const current = await readContact(db, id, actor.workspaceId);
+      if (!current) throw new CrmError("not_found", "Contact not found.", 404);
+      if (!current.archived_at) return { contact: mapContact(current) };
+      try {
+        await db.query(
+          "update crm.contacts set archived_at = null where id = $1 and workspace_id = $2",
+          [id, actor.workspaceId],
+        );
+      } catch (error) {
+        constraintError(
+          error,
+          "duplicate_contact",
+          "Another contact already uses this email or LinkedIn profile.",
+        );
+      }
+      const saved = await readContact(db, id, actor.workspaceId);
+      if (!saved) throw new CrmError("not_found", "Contact not found.", 404);
+      const contact = mapContact(saved);
+      await recordAudit(db, actor, "contact.updated", "contact", contact.id, provenance, {
+        fields: ["archivedAt"],
+        before: { archivedAt: iso(current.archived_at) },
+        after: { archivedAt: null },
+      });
+      return { contact };
+    }),
+  );
+}
+
+export async function getContactsByIds(actor: Actor, ids: string[]) {
+  assertScope(actor.scopes, "crm:read");
+  const wanted = [...new Set(ids.filter(isUuid))].slice(0, 100);
+  if (wanted.length === 0) return [];
+  return withActor(actor, async (db) => {
+    const rows = await db.query<ContactRow>(
+      `${CONTACT_SQL} where c.workspace_id = $1 and c.id = any($2::uuid[])`,
+      [actor.workspaceId, wanted],
+    );
+    const byId = new Map(rows.rows.map((row) => [row.id, mapContact(row)]));
+    return wanted.flatMap((id) => byId.get(id) ?? []);
+  });
+}
+
+export async function listContactsAtCompanies(actor: Actor, companyIds: string[]) {
+  assertScope(actor.scopes, "crm:read");
+  const wanted = [...new Set(companyIds.filter(isUuid))].slice(0, 100);
+  if (wanted.length === 0) return [];
+  return withActor(actor, async (db) => {
+    const rows = await db.query<ContactRow>(
+      `${CONTACT_SQL}
+       where c.workspace_id = $1
+         and c.archived_at is null
+         and c.company_id = any($2::uuid[])
+       order by co.name asc, c.first_name asc nulls last, c.last_name asc nulls last, c.id asc
+       limit 500`,
+      [actor.workspaceId, wanted],
+    );
+    return rows.rows.map(mapContact);
+  });
+}
+
 export async function upsertContact(
   actor: Actor,
   input: ContactWrite,
