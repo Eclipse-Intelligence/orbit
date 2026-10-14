@@ -2,6 +2,7 @@
 
 import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import Button from "@/components/_ui/button";
 import {
   Dialog,
@@ -17,7 +18,7 @@ import { RememberList } from "@/components/crm/list-memory";
 import Pager from "@/components/crm/pager";
 import RecordTransfer from "@/components/crm/record-transfer";
 import SectionHeader from "@/components/crm/section-header";
-import { CallLink, RecordList, RecordRow } from "@/components/crm/record-form";
+import { CallLink, RecordList } from "@/components/crm/record-form";
 import type { Viewer } from "@/components/crm/viewer";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import type { Company, Contact, Member } from "@/lib/crm/types";
@@ -62,7 +63,11 @@ export default function ContactsScreen({
         action={
           <div className="flex items-center gap-1">
             <RecordTransfer resource="contacts" />
-            <Button variant="primary" size="sm" onClick={() => setCreating(true)}>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => setCreating(true)}
+            >
               Add contact
             </Button>
           </div>
@@ -91,29 +96,17 @@ export default function ContactsScreen({
             : "No contacts yet. Add the person you need to speak with."
         }
       >
+        <li
+          aria-hidden
+          className="caption-style text-subtle border-border hidden border-b px-2.5 py-2 md:grid md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,1fr)] md:gap-4"
+        >
+          <span>Name</span>
+          <span>Company</span>
+          <span>Email</span>
+          <span>Phone</span>
+        </li>
         {contacts.map((contact) => (
-          <RecordRow
-            key={contact.id}
-            mark={<Monogram name={contact.name} />}
-            title={contact.name}
-            meta={
-              [contact.jobTitle, contact.email, contact.phone]
-                .filter(Boolean)
-                .join(" · ") || "No title"
-            }
-            href={contactHref(contact.id)}
-            action={
-              <>
-                <CallLink phone={contact.phone} />
-                {contact.companyName && contact.companyId ? (
-                  <EntityChip
-                    name={contact.companyName}
-                    href={companyHref(contact.companyId)}
-                  />
-                ) : null}
-              </>
-            }
-          />
+          <ContactRow key={contact.id} contact={contact} />
         ))}
       </RecordList>
       <Pager
@@ -144,5 +137,70 @@ export default function ContactsScreen({
         </DialogContent>
       </Dialog>
     </section>
+  );
+}
+
+function ContactRow({ contact }: { contact: Contact }) {
+  const company =
+    contact.companyName && contact.companyId ? (
+      <span className="relative z-10 min-w-0">
+        <EntityChip
+          name={contact.companyName}
+          href={companyHref(contact.companyId)}
+        />
+      </span>
+    ) : null;
+  return (
+    <li className="border-border relative flex min-h-12 items-center gap-3 border-b px-2.5 py-2 transition-colors duration-150 hover:bg-white/3 md:grid md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,1fr)] md:gap-4">
+      <span className="flex min-w-0 flex-1 items-center gap-2.5">
+        <Monogram name={contact.name} />
+        <span className="flex min-w-0 flex-col gap-0.5">
+          <Link
+            href={contactHref(contact.id)}
+            className="truncate text-[14px] leading-5 after:absolute after:inset-0"
+          >
+            {contact.name}
+          </Link>
+          <span className="caption-style text-subtle truncate">
+            {contact.jobTitle || "No title"}
+          </span>
+        </span>
+      </span>
+      <span className="hidden min-w-0 md:block">
+        {company ?? <span className="caption-style text-subtle">—</span>}
+      </span>
+      <span className="hidden min-w-0 md:block">
+        {contact.email ? (
+          <a
+            href={`mailto:${contact.email}`}
+            className="relative z-10 block truncate text-[14px] leading-5 hover:underline"
+          >
+            {contact.email}
+          </a>
+        ) : (
+          <span className="caption-style text-subtle">—</span>
+        )}
+      </span>
+      <span className="hidden min-w-0 items-center gap-1 md:flex">
+        {contact.phone ? (
+          <>
+            <span className="truncate text-[14px] leading-5">
+              {contact.phone}
+            </span>
+            <span className="relative z-10">
+              <CallLink phone={contact.phone} />
+            </span>
+          </>
+        ) : (
+          <span className="caption-style text-subtle">—</span>
+        )}
+      </span>
+      <span className="flex shrink-0 items-center gap-1 md:hidden">
+        <span className="relative z-10">
+          <CallLink phone={contact.phone} />
+        </span>
+        {company}
+      </span>
+    </li>
   );
 }
