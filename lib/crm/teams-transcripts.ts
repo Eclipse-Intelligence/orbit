@@ -392,7 +392,7 @@ async function storeSubscription(
        set subscription_id = $2,
            subscription_expires_at = $3::timestamptz,
            client_state = case when $4::boolean then $5 else client_state end
-       where connection_id = $1`,
+       where connection_id = $1 and source = 'teams_transcripts'`,
       [
         key.connectionId,
         values.id ? values.id.slice(0, 200) : null,

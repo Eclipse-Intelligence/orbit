@@ -17,6 +17,7 @@ import type {
   TaskView,
 } from "@/lib/crm/types";
 import { TASK_VIEWS } from "@/lib/crm/types";
+import { dayWindow } from "@/lib/time";
 
 export async function getCompanyContext(actor: Actor, id: string): Promise<CompanyContext> {
   assertScope(actor.scopes, "crm:read");
@@ -128,10 +129,53 @@ export async function listAttention(actor: Actor) {
   };
 }
 
+export async function countTaskViews(actor: Actor): Promise<Record<TaskView, number>> {
+  assertScope(actor.scopes, "crm:read");
+  const window = dayWindow();
+  return withActor(actor, async (db) => {
+    const result = await db.query<Record<TaskView, number>>(
+      `select
+         count(*) filter (where t.completed_at is null)::int as "all",
+         count(*) filter (where t.completed_at is null and t.due_at < $2)::int as overdue,
+         count(*) filter (
+           where t.completed_at is null and (t.due_at is null or (t.due_at >= $2 and t.due_at < $3))
+         )::int as today,
+         count(*) filter (where t.completed_at is null and t.due_at >= $3)::int as upcoming,
+         count(*) filter (where t.completed_at >= $4)::int as completed,
+         (
+           select count(*)::int
+           from crm.companies c
+           where c.workspace_id = $1
+             and c.archived_at is null
+             and not exists (
+               select 1
+               from crm.tasks open_task
+               where open_task.company_id = c.id
+                 and open_task.archived_at is null
+                 and open_task.completed_at is null
+             )
+         ) as none
+       from crm.tasks t
+       where t.workspace_id = $1 and t.archived_at is null`,
+      [
+        actor.workspaceId,
+        window.start.toISOString(),
+        window.end.toISOString(),
+        new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString(),
+      ],
+    );
+    const row = result.rows[0];
+    return Object.fromEntries(TASK_VIEWS.map((view) => [view, row?.[view] ?? 0])) as Record<
+      TaskView,
+      number
+    >;
+  });
+}
+
 export async function getDueActions(actor: Actor, view: TaskView = "today"): Promise<DueActions> {
   assertScope(actor.scopes, "crm:read");
   if (!(TASK_VIEWS as readonly string[]).includes(view)) {
-    throw new CrmError("invalid_input", "That next-action view is not recognised.", 400, {
+    throw new CrmError("invalid_input", "That task view is not recognised.", 400, {
       field: "view",
     });
   }

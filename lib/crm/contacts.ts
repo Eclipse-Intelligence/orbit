@@ -25,6 +25,9 @@ import {
   likePattern,
   normalizedLinkedin,
   normalizePersonName,
+  normalizeTag,
+  normalizeTags,
+  sameTags,
 } from "@/lib/crm/normalize";
 import { assertScope } from "@/lib/crm/scopes";
 import type {
@@ -55,6 +58,7 @@ const CONTACT_SQL = `
     c.source,
     c.source_reference,
     c.notes,
+    c.tags,
     c.created_by_user_id,
     c.created_by_agent_id,
     c.archived_at,
@@ -83,6 +87,7 @@ type ContactRow = {
   source: string | null;
   source_reference: string | null;
   notes: string | null;
+  tags: string[] | null;
   created_by_user_id: string | null;
   created_by_agent_id: string | null;
   archived_at: Date | string | null;
@@ -104,6 +109,7 @@ type PreparedContact = {
   source?: string | null;
   sourceReference?: string | null;
   notes?: string | null;
+  tags?: string[];
   personKey: string | null;
 };
 
@@ -130,6 +136,7 @@ function mapContact(row: ContactRow): Contact {
     source: row.source,
     sourceReference: row.source_reference,
     notes: row.notes,
+    tags: row.tags ?? [],
     createdByUserId: row.created_by_user_id,
     createdByAgentId: row.created_by_agent_id,
     archivedAt: iso(row.archived_at),
@@ -195,6 +202,7 @@ function prepareContact(input: ContactWrite, mode: "create" | "patch" | "upsert"
   }
   if (input.notes !== undefined) next.notes = cleanText(input.notes, 10000, "notes");
   if (input.companyId !== undefined) next.companyId = input.companyId || null;
+  if (input.tags !== undefined) next.tags = normalizeTags(input.tags);
 
   const named =
     input.firstName !== undefined || input.lastName !== undefined
@@ -355,6 +363,12 @@ async function applyContact(
       write.sourceReference ?? null,
     ],
     [differs(write.notes, current.notes), "notes", "notes", write.notes ?? null],
+    [
+      write.tags !== undefined && !sameTags(write.tags, current.tags ?? []),
+      "tags",
+      "tags",
+      write.tags ?? [],
+    ],
   ]);
   const before = mapContact(current);
   if (change.sets.length === 0) return { contact: before, changed: false };
@@ -400,9 +414,9 @@ async function insertContact(
       `insert into crm.contacts (
         workspace_id, company_id, first_name, last_name, email, normalized_email,
         phone, job_title, linkedin_url, normalized_linkedin, owner_id, source,
-        source_reference, notes, created_by_user_id, created_by_agent_id
+        source_reference, notes, tags, created_by_user_id, created_by_agent_id
       ) values (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
       ) returning id`,
       [
         actor.workspaceId,
@@ -419,6 +433,7 @@ async function insertContact(
         write.source ?? null,
         write.sourceReference ?? null,
         write.notes ?? null,
+        write.tags ?? [],
         actorRef.userId,
         actorRef.agentId,
       ],
@@ -490,6 +505,11 @@ export async function listContacts(actor: Actor, query: ContactListQuery = {}) {
     else if (query.ownerId) {
       values.push(query.ownerId);
       where.push(`c.owner_id = $${values.length}`);
+    }
+    const tag = query.tag ? normalizeTag(query.tag) : "";
+    if (tag) {
+      values.push([tag]);
+      where.push(`c.tags @> $${values.length}::text[]`);
     }
     const text = query.query?.trim();
     if (text) {
@@ -611,6 +631,34 @@ export async function updateContact(
       return { contact: updated.contact };
     }),
   );
+}
+
+export async function editContactTagsInDb(
+  db: Db,
+  actor: Actor,
+  id: string,
+  edit: (tags: string[]) => string[],
+  provenance: Provenance,
+) {
+  const current = await readContact(db, id, actor.workspaceId);
+  if (!current) throw new CrmError("not_found", "Contact not found.", 404);
+  const write = prepareContact({ tags: edit(current.tags ?? []) }, "patch");
+  return applyContact(db, actor, current, write, provenance);
+}
+
+export async function editContactTags(
+  actor: Actor,
+  id: string,
+  edit: (tags: string[]) => string[],
+  provenance: Provenance,
+) {
+  assertScope(actor.scopes, "contacts:write");
+  if (!isUuid(id)) throw new CrmError("not_found", "Contact not found.", 404);
+  return withActor(actor, async (db) => {
+    await lockNamespace(db, actor.workspaceId, "contacts");
+    const updated = await editContactTagsInDb(db, actor, id, edit, provenance);
+    return updated.contact;
+  });
 }
 
 export async function archiveContact(

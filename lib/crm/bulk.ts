@@ -26,7 +26,7 @@ export function bulkIds(ids: unknown) {
   return unique;
 }
 
-async function runBulk(
+export async function runBulk(
   actor: Actor,
   scope: Scope,
   ids: unknown,

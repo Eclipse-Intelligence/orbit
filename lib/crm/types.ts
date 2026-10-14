@@ -53,6 +53,7 @@ export type Company = {
   updatedAt: string;
   lastInteractionAt: string | null;
   openTaskCount: number;
+  tags: string[];
 };
 
 export type CompanyWrite = {
@@ -66,6 +67,7 @@ export type CompanyWrite = {
   ownerId?: string | null;
   source?: string | null;
   sourceReference?: string | null;
+  tags?: string[] | null;
 };
 
 export type Provenance = {
@@ -78,6 +80,7 @@ export type CompanyListQuery = {
   query?: string;
   lifecycle?: Lifecycle;
   ownerId?: string | "unassigned";
+  tag?: string;
   includeArchived?: boolean;
   sort?: CompanySort;
   order?: "asc" | "desc";
@@ -124,7 +127,7 @@ export type OpportunityStatus = (typeof OPPORTUNITY_STATUSES)[number];
 export const TASK_PRIORITIES = ["low", "normal", "high"] as const;
 export type TaskPriority = (typeof TASK_PRIORITIES)[number];
 
-export const TASK_VIEWS = ["overdue", "today", "upcoming", "completed", "none"] as const;
+export const TASK_VIEWS = ["all", "overdue", "today", "upcoming", "completed", "none"] as const;
 export type TaskView = (typeof TASK_VIEWS)[number];
 
 export type Contact = {
@@ -144,6 +147,7 @@ export type Contact = {
   source: string | null;
   sourceReference: string | null;
   notes: string | null;
+  tags: string[];
   createdByUserId: string | null;
   createdByAgentId: string | null;
   archivedAt: string | null;
@@ -163,6 +167,7 @@ export type ContactWrite = {
   source?: string | null;
   sourceReference?: string | null;
   notes?: string | null;
+  tags?: string[] | null;
 };
 
 export type ContactMatch = "email" | "linkedin" | "name";
@@ -171,6 +176,7 @@ export type ContactListQuery = {
   query?: string;
   companyId?: string;
   ownerId?: string | "unassigned";
+  tag?: string;
   includeArchived?: boolean;
   limit?: number;
   offset?: number;
@@ -400,6 +406,14 @@ export type StaleRelationship = {
   lastActivityAt: string | null;
   openTaskCount: number;
   daysSinceActivity: number | null;
+};
+
+export type TagKind = "contact" | "company";
+
+export type TagCount = {
+  name: string;
+  contacts: number;
+  companies: number;
 };
 
 export type DueActions = {

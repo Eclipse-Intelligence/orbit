@@ -62,10 +62,12 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
   server.registerTool(
     "search_contacts",
     {
-      description: "Search people in the workspace by name, email, title, phone, or company.",
+      description:
+        "Search people in the workspace by name, email, title, phone, or company, optionally limited to one tag.",
       inputSchema: {
         query: z.string().optional(),
         company_id: z.uuid().optional(),
+        tag: z.string().optional(),
         limit: z.number().int().min(1).max(100).optional(),
       },
     },
@@ -74,6 +76,7 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
         listContacts(actor, {
           query: args.query,
           companyId: args.company_id,
+          tag: args.tag,
           limit: args.limit,
         }),
       ),
@@ -105,6 +108,11 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
         source: z.string().nullable().optional(),
         sourceReference: z.string().nullable().optional(),
         notes: z.string().nullable().optional(),
+        tags: z
+          .array(z.string())
+          .max(20)
+          .optional()
+          .describe("Replaces the contact's tags. Lowercased; up to 20, each up to 40 characters."),
         ...provenanceFields,
       },
     },
@@ -122,6 +130,7 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
           source: args.source,
           sourceReference: args.sourceReference,
           notes: args.notes,
+          tags: args.tags,
         };
         const result = await upsertContact(actor, write, {
           provenance: provenance(args, "upsert_contact"),
@@ -134,7 +143,7 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
     "add_lead",
     {
       description:
-        "Ingest a lead in one step: match or create the company and contact, then optionally record a note, opportunity, and next action. Reuses the same company and contact when the domain or email already exists.",
+        "Ingest a lead in one step: match or create the company and contact, then optionally record a note, opportunity, and task. Reuses the same company and contact when the domain or email already exists.",
       inputSchema: {
         companyName: z.string().optional(),
         domain: z.string().nullable().optional(),
@@ -147,6 +156,8 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
         contactPhone: z.string().nullable().optional(),
         contactTitle: z.string().nullable().optional(),
         contactLinkedin: z.string().nullable().optional(),
+        companyTags: z.array(z.string()).max(20).optional(),
+        contactTags: z.array(z.string()).max(20).optional(),
         note: z.string().nullable().optional(),
         opportunityName: z.string().optional(),
         opportunityValue: z.number().nullable().optional(),
@@ -166,6 +177,7 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
                 website: args.website,
                 industry: args.industry,
                 lifecycle: args.lifecycle,
+                tags: args.companyTags,
               }
             : undefined;
         const contact =
@@ -181,6 +193,7 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
                 phone: args.contactPhone,
                 jobTitle: args.contactTitle,
                 linkedinUrl: args.contactLinkedin,
+                tags: args.contactTags,
               }
             : undefined;
         const result = await ingestLead(
@@ -357,7 +370,7 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
   server.registerTool(
     "create_next_action",
     {
-      description: "Create a next action, with an optional due date and company, contact, or opportunity.",
+      description: "Create a task, with an optional due date and company, contact, or opportunity.",
       inputSchema: {
         title: z.string(),
         description: z.string().nullable().optional(),
@@ -391,7 +404,7 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
   server.registerTool(
     "complete_next_action",
     {
-      description: "Mark a next action complete. The completed time is kept if it was already set.",
+      description: "Mark a task complete. The completed time is kept if it was already set.",
       inputSchema: { id: z.uuid(), ...provenanceFields },
     },
     async (args) =>
@@ -407,7 +420,7 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
     "get_due_actions",
     {
       description:
-        "List next actions for overdue, today (including undated), upcoming, recently completed, or companies with no open next action (view none).",
+        "List tasks: all open tasks (overdue first, then by due date, undated last), overdue, today (including undated, the default), upcoming, recently completed, or companies with no open task (view none).",
       inputSchema: { view: z.enum(TASK_VIEWS).optional() },
     },
     async (args) => run(() => getDueActions(actor, args.view ?? "today")),
@@ -437,7 +450,7 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
     "get_company_context",
     {
       description:
-        "Return a company with its people, opportunities (open, won, and lost), recent interactions, open next actions, and the last interaction.",
+        "Return a company with its people, opportunities (open, won, and lost), recent interactions, open tasks, and the last interaction.",
       inputSchema: { id: z.uuid() },
     },
     async (args) => run(() => getCompanyContext(actor, args.id)),

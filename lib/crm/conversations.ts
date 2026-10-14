@@ -28,7 +28,7 @@ import type {
 export type ConversationSource = "granola" | "teams";
 export type ConversationKind = "meeting" | "call";
 export type ConversationStatus = "pending" | "filed" | "unfiled" | "ignored";
-export type IntegrationSource = "granola" | "teams_transcripts" | "clickup";
+export type IntegrationSource = "granola" | "teams_transcripts" | "clickup" | "calendar";
 
 export type Participant = { name: string | null; email: string | null };
 
@@ -279,7 +279,7 @@ export const ITEM_ATTEMPTS = 3;
 
 function conflictTarget(key: IntegrationKey) {
   return key.connectionId
-    ? "(connection_id) where connection_id is not null"
+    ? "(connection_id, source) where connection_id is not null"
     : "(workspace_id, source) where connection_id is null";
 }
 
@@ -707,6 +707,112 @@ function splitName(name: string | null) {
 
 const ATTENDEE_PROVENANCE: Provenance = { operation: "create_from_attendee", source: "meeting" };
 
+export type AttendeePerson = { name?: string | null; email: string };
+
+export async function createContactFromAttendeeInDb(
+  db: Db,
+  actor: UserActor,
+  person: AttendeePerson,
+  extraInternal: (string | null | undefined)[] = [],
+) {
+  const wanted = canonicalEmail(typeof person.email === "string" ? person.email : "");
+  if (!wanted) {
+    throw new CrmError("invalid_input", "Enter a valid email address.", 400, { field: "email" });
+  }
+  const internal = await internalAddresses(db, actor.workspaceId, [actor.email, ...extraInternal]);
+  if (internal.isInternal(wanted)) {
+    throw new CrmError(
+      "invalid_input",
+      "That address belongs to you or your workspace, so it can't become a contact.",
+      400,
+      { field: "email" },
+    );
+  }
+  const existing = await db.query<{
+    id: string;
+    company_id: string | null;
+    first_name: string | null;
+    last_name: string | null;
+  }>(
+    `select id, company_id, first_name, last_name from crm.contacts
+     where workspace_id = $1 and archived_at is null and normalized_email = $2
+     limit 1`,
+    [actor.workspaceId, wanted],
+  );
+  const current = existing.rows[0];
+  const names = splitName(personName({ name: person.name ?? null, email: wanted }));
+  let contactId = current?.id ?? null;
+  let created = false;
+  if (!current?.company_id) {
+    const domain = wanted.split("@")[1] ?? "";
+    let companyId: string | null = null;
+    if (domain && !isFreeMailDomain(domain)) {
+      const byDomain = await db.query<{ id: string }>(
+        `select id from crm.companies
+         where workspace_id = $1 and archived_at is null and domain = $2
+         order by updated_at desc
+         limit 1`,
+        [actor.workspaceId, domain],
+      );
+      companyId =
+        byDomain.rows[0]?.id ??
+        (
+          await upsertCompanyInDb(
+            db,
+            actor,
+            { name: companyNameFromDomain(domain), domain, source: "meeting" },
+            ATTENDEE_PROVENANCE,
+          )
+        ).company.id;
+    }
+    if (current) {
+      const fill: ContactWrite = { email: wanted };
+      if (companyId) fill.companyId = companyId;
+      if (!current.first_name && !current.last_name && names.firstName) Object.assign(fill, names);
+      if (Object.keys(fill).length > 1) {
+        await upsertContactInDb(db, actor, fill, ATTENDEE_PROVENANCE);
+      }
+    } else {
+      const result = await upsertContactInDb(
+        db,
+        actor,
+        { ...names, email: wanted, companyId, source: "meeting" },
+        ATTENDEE_PROVENANCE,
+      );
+      contactId = result.contact.id;
+      created = result.created;
+    }
+  }
+  if (!contactId) throw new CrmError("internal_error", "Contact was not saved.", 500);
+  return { contactId, email: wanted, created };
+}
+
+async function contactLabel(db: Db, contactId: string) {
+  const result = await db.query<{ name: string | null }>(
+    `select coalesce(nullif(trim(concat_ws(' ', first_name, last_name)), ''), email, phone) as name
+     from crm.contacts where id = $1`,
+    [contactId],
+  );
+  return result.rows[0]?.name ?? null;
+}
+
+export async function createContactFromAttendee(
+  actor: UserActor,
+  person: AttendeePerson,
+  extraInternal: (string | null | undefined)[] = [],
+) {
+  assertScope(actor.scopes, "contacts:write");
+  assertScope(actor.scopes, "companies:write");
+  return withActor(actor, async (db) => {
+    const saved = await createContactFromAttendeeInDb(db, actor, person, extraInternal);
+    return {
+      contactId: saved.contactId,
+      contactName: (await contactLabel(db, saved.contactId)) ?? saved.email,
+      created: saved.created,
+    };
+  });
+}
+
 export async function createContactAndFile(
   actor: UserActor,
   importId: string,
@@ -731,77 +837,13 @@ export async function createContactAndFile(
         field: "email",
       });
     }
-    const internal = await internalAddresses(db, actor.workspaceId, [actor.email]);
-    if (internal.isInternal(wanted)) {
-      throw new CrmError(
-        "invalid_input",
-        "That address belongs to you or your workspace, so it can't become a contact.",
-        400,
-        { field: "email" },
-      );
-    }
-    const existing = await db.query<{
-      id: string;
-      company_id: string | null;
-      first_name: string | null;
-      last_name: string | null;
-    }>(
-      `select id, company_id, first_name, last_name from crm.contacts
-       where workspace_id = $1 and archived_at is null and normalized_email = $2
-       limit 1`,
-      [actor.workspaceId, wanted],
-    );
-    const current = existing.rows[0];
-    const names = splitName(personName(person));
-    let contactId = current?.id ?? null;
-    let createdContact = false;
-    if (!current?.company_id) {
-      const domain = wanted.split("@")[1] ?? "";
-      let companyId: string | null = null;
-      if (domain && !isFreeMailDomain(domain)) {
-        const byDomain = await db.query<{ id: string }>(
-          `select id from crm.companies
-           where workspace_id = $1 and archived_at is null and domain = $2
-           order by updated_at desc
-           limit 1`,
-          [actor.workspaceId, domain],
-        );
-        companyId =
-          byDomain.rows[0]?.id ??
-          (
-            await upsertCompanyInDb(
-              db,
-              actor,
-              { name: companyNameFromDomain(domain), domain, source: "meeting" },
-              ATTENDEE_PROVENANCE,
-            )
-          ).company.id;
-      }
-      if (current) {
-        const fill: ContactWrite = { email: wanted };
-        if (companyId) fill.companyId = companyId;
-        if (!current.first_name && !current.last_name && names.firstName) Object.assign(fill, names);
-        if (Object.keys(fill).length > 1) {
-          await upsertContactInDb(db, actor, fill, ATTENDEE_PROVENANCE);
-        }
-      } else {
-        const result = await upsertContactInDb(
-          db,
-          actor,
-          { ...names, email: wanted, companyId, source: "meeting" },
-          ATTENDEE_PROVENANCE,
-        );
-        contactId = result.contact.id;
-        createdContact = result.created;
-      }
-    }
-    if (!contactId) throw new CrmError("internal_error", "Contact was not saved.", 500);
-    const result = await fileLockedImport(db, actor, row, contactId);
+    const saved = await createContactFromAttendeeInDb(db, actor, { name: person.name, email: wanted });
+    const result = await fileLockedImport(db, actor, row, saved.contactId);
     return {
-      contactId,
+      contactId: saved.contactId,
       contactName: result.contactName ?? wanted,
       activityId: result.activityId,
-      created: createdContact,
+      created: saved.created,
     };
   });
   if (options.summarise ?? true) {

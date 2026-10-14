@@ -600,7 +600,7 @@ export async function acceptActionItem(
       const { sendTaskToDefaultList } = await import("@/lib/crm/clickup");
       await sendTaskToDefaultList(actor, result.task.id);
     } catch (error) {
-      console.error("Could not send the next action to ClickUp", error);
+      console.error("Could not send the task to ClickUp", error);
     }
   }
   return result;
@@ -619,7 +619,7 @@ export async function acceptAllActionItems(
         provenance: { operation: "auto_accept_call_action" },
       })).insight;
     } catch (error) {
-      console.error("Could not add a next action from the call", error);
+      console.error("Could not add a task from the call", error);
     }
   }
   return latest;

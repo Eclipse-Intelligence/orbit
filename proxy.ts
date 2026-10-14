@@ -2,6 +2,7 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { SESSION_COOKIE, supabaseConfigured } from "@/lib/auth/config";
 import { legacyRecordHref } from "@/lib/crm/hrefs";
+import { legacyTasksHref } from "@/lib/crm/task-views";
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -11,6 +12,8 @@ export async function proxy(request: NextRequest) {
 
   const legacy = legacyRecordHref(pathname, request.nextUrl.searchParams);
   if (legacy) return NextResponse.redirect(new URL(legacy, request.url));
+  const tasks = legacyTasksHref(pathname, request.nextUrl.searchParams);
+  if (tasks) return NextResponse.redirect(new URL(tasks, request.url), 308);
 
   if (supabaseConfigured()) {
     let response = NextResponse.next({ request });

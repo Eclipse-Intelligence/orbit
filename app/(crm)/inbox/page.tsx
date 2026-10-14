@@ -2,6 +2,7 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import InboxScreen from "@/components/crm/inbox-screen";
 import { getUserActor } from "@/lib/auth/user";
+import { getCalendarStatus, listPeopleMet } from "@/lib/crm/calendar";
 import { getCallSync } from "@/lib/crm/calls";
 import { listUnfiledImports } from "@/lib/crm/conversations";
 import { getGranolaStatus } from "@/lib/crm/granola";
@@ -34,12 +35,14 @@ export default async function InboxPage({
     mailbox = await getMailbox(user);
   }
   const live = mailbox?.status === "connected";
-  const [messages, calls, unfiled, granola, transcripts] = await Promise.all([
+  const [messages, calls, unfiled, granola, transcripts, calendar, people] = await Promise.all([
     mailbox ? listInbox(user) : Promise.resolve([]),
     mailbox ? getCallSync(user) : Promise.resolve(null),
     listUnfiledImports(user),
     getGranolaStatus(user),
     live ? getTeamsTranscriptStatus(user) : Promise.resolve(null),
+    live ? getCalendarStatus(user) : Promise.resolve(null),
+    mailbox ? listPeopleMet(user) : Promise.resolve([]),
   ]);
   const headerStore = await headers();
   const host = headerStore.get("x-forwarded-host") ?? headerStore.get("host") ?? "localhost:4173";
@@ -62,6 +65,8 @@ export default async function InboxPage({
       unfiled={unfiled}
       granola={granola}
       transcripts={transcripts}
+      calendar={calendar}
+      people={people}
       notice={notice}
       info={info}
       connected={connected}

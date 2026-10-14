@@ -29,25 +29,25 @@ That reads `CRM_AGENT_TOKEN` from the environment or `.env.local` and speaks MCP
 
 ## Tools
 
-`search_companies` — `query`, `lifecycle`, `owner_id`, `limit`.
+`search_companies` — `query`, `lifecycle`, `owner_id`, `tag`, `limit`.
 
 `get_company` — `id`.
 
-`upsert_company` — any company field. Omitted fields stay as they are. `provenanceSource` and `provenanceUrl` are written to the audit event.
+`upsert_company` — any company field, including `tags`. Omitted fields stay as they are; `tags` replaces the whole list. `provenanceSource` and `provenanceUrl` are written to the audit event.
 
-`search_contacts`, `get_contact`, `upsert_contact` — people. Matching is email, then LinkedIn, then the same name at the same company.
+`search_contacts`, `get_contact`, `upsert_contact` — people. `search_contacts` takes `tag`; `upsert_contact` takes `tags`, which replaces the whole list. Matching is email, then LinkedIn, then the same name at the same company.
 
-`add_lead` — one transaction for a company, contact, note, optional opportunity, and optional next action. A repeated domain or email updates the existing rows.
+`add_lead` — one transaction for a company, contact, note, optional opportunity, and optional task. `companyTags` and `contactTags` replace those records' tags. A repeated domain or email updates the existing rows.
 
 `add_activity`, `add_note` — append an interaction. Notes are activities of type `note`.
 
 `create_opportunity`, `update_opportunity`, `list_pipeline_stages` — deals on the default pipeline.
 
-`create_next_action`, `complete_next_action`, `get_due_actions` — tasks. `get_due_actions` takes `view`: `overdue`, `today`, `upcoming`, `completed`, or `none`.
+`create_next_action`, `complete_next_action`, `get_due_actions` — tasks. `get_due_actions` takes `view`: `all` (every open task, overdue first, undated last), `overdue`, `today` (the default), `upcoming`, `completed`, or `none` (companies with no open task).
 
 `get_recent_activity` — latest interactions.
 
-`get_company_context` — company, people, opportunities, timeline, and open next actions.
+`get_company_context` — company, people, opportunities, timeline, and open tasks.
 
 `find_stale_relationships` — companies with no recent interaction. `days` defaults to 21.
 
@@ -55,7 +55,7 @@ That reads `CRM_AGENT_TOKEN` from the environment or `.env.local` and speaks MCP
 
 `archive_company`, `archive_contact`, `archive_opportunity`, `archive_next_action` — soft archive.
 
-`update_next_action` — partial update. `completed: true` marks it done.
+`update_next_action` — partial update of a task. `completed: true` marks it done.
 
 `record_email`, `record_meeting` — file a conversation by participant email or company, and suggest a follow-up when none is open.
 

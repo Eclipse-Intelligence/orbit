@@ -454,7 +454,7 @@ describe("clickup sync", () => {
     );
   });
 
-  it("creates the ClickUp task when a next action is added", async () => {
+  it("creates the ClickUp task when an Orbit task is added", async () => {
     const created = await createTaskWithClickUp(
       owner,
       { title: "Send the proposal", description: "Pricing v2", contactId: janeId, dueAt: "2026-11-03T14:30" },
@@ -614,7 +614,7 @@ describe("clickup sync", () => {
     assert.equal(remote.name, "Newest Orbit title");
   });
 
-  it("archives the Orbit next action when the ClickUp task is deleted", async () => {
+  it("archives the Orbit task when the ClickUp task is deleted", async () => {
     const linked = await importedTask(owner.workspaceId, "bydomain");
     fake.tasks.delete("bydomain");
     const outcome = await processClickUpEvent(owner, { event: "taskDeleted", taskId: "bydomain", newestAt: null }, { fetchImpl });
@@ -641,7 +641,7 @@ describe("clickup sync", () => {
     assert.ok(fake.tasks.has(remoteId));
   });
 
-  it("records a failed push without blocking the next action and retries it", async () => {
+  it("records a failed push without blocking the Orbit task and retries it", async () => {
     fake.failCreate = 1;
     const created = await createTaskWithClickUp(owner, { title: "Flaky push", contactId: janeId }, RELATIONSHIPS, { fetchImpl });
     assert.match(created.clickupError ?? "", /ClickUp returned 500/);

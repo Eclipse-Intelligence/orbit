@@ -5,6 +5,12 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { after } from "next/server";
 import { getUserActor } from "@/lib/auth/user";
+import {
+  createContactFromMeeting,
+  hideAttendee,
+  relinkCalendar,
+  syncCalendar,
+} from "@/lib/crm/calendar";
 import { syncCalls } from "@/lib/crm/calls";
 import {
   createContactAndFile,
@@ -61,6 +67,14 @@ export async function syncCallsAction() {
   revalidatePath("/contacts");
   if (result.error)
     redirect(`/inbox?error=${encodeURIComponent(result.error)}`);
+  redirect("/inbox");
+}
+
+export async function syncCalendarAction() {
+  const user = await requireUser();
+  const result = await syncCalendar(user, { force: true });
+  refreshRecords();
+  if (result.error) inboxWith("error", result.error);
   redirect("/inbox");
 }
 
@@ -152,8 +166,38 @@ export async function createContactAndFileAction(
       console.error("Conversation summary failed", error);
     }
   });
+  try {
+    await relinkCalendar(user);
+  } catch (error) {
+    console.error("Could not relink calendar events", error);
+  }
   refreshRecords();
   return { ok: true, contactId: filed.contactId, contactName: filed.contactName };
+}
+
+export async function createContactFromMeetingAction(email: string): Promise<CreateAndFileState> {
+  const user = await getUserActor();
+  if (!user) return { error: "Sign in to add contacts." };
+  let created: Awaited<ReturnType<typeof createContactFromMeeting>>;
+  try {
+    created = await createContactFromMeeting(user, email);
+  } catch (error) {
+    return actionError(error);
+  }
+  refreshRecords();
+  return { ok: true, contactId: created.contactId, contactName: created.contactName };
+}
+
+export async function hideAttendeeAction(email: string): Promise<ConversationActionState> {
+  const user = await getUserActor();
+  if (!user) return { error: "Sign in to change this list." };
+  try {
+    await hideAttendee(user, email);
+  } catch (error) {
+    return actionError(error);
+  }
+  revalidatePath("/inbox");
+  return { ok: true };
 }
 
 export async function ignoreConversationAction(

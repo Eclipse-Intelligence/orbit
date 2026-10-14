@@ -6,7 +6,7 @@ import { listContacts } from "@/lib/crm/contacts";
 import { listOpportunities } from "@/lib/crm/opportunities";
 import { listTasks } from "@/lib/crm/tasks";
 import { CrmError } from "@/lib/crm/errors";
-import { canonicalDomain } from "@/lib/crm/normalize";
+import { canonicalDomain, parseTagList } from "@/lib/crm/normalize";
 import { assertScope } from "@/lib/crm/scopes";
 import type { Actor, Activity, Company, CompanyWrite, Contact, Opportunity, Task } from "@/lib/crm/types";
 import { withActor } from "@/lib/crm/context";
@@ -110,11 +110,13 @@ export async function importCompaniesCsv(actor: Actor, csv: string): Promise<Imp
     const source = columnValue(row, pick(["source"]));
     const description = columnValue(row, pick(["description"]));
     const lifecycle = columnValue(row, pick(["lifecycle"]));
+    const tags = columnValue(row, pick(["tags", "tag"]));
     if (website !== undefined) item.website = website;
     if (industry !== undefined) item.industry = industry;
     if (sizeCategory !== undefined) item.sizeCategory = sizeCategory;
     if (source !== undefined) item.source = source;
     if (description !== undefined) item.description = description;
+    if (tags !== undefined) item.tags = parseTagList(tags);
     if (typeof lifecycle === "string") {
       const parsed = lifecycleOf(lifecycle);
       if (parsed) item.lifecycle = parsed;
@@ -160,9 +162,11 @@ export async function importContactsCsv(actor: Actor, csv: string): Promise<Impo
       const jobTitle = columnValue(row, pick(["title", "job title"]));
       const source = columnValue(row, pick(["source"]));
       const notes = columnValue(row, pick(["notes"]));
+      const tags = columnValue(row, pick(["tags", "tag"]));
       if (jobTitle !== undefined) input.jobTitle = jobTitle;
       if (source !== undefined) input.source = source;
       if (notes !== undefined) input.notes = notes;
+      if (tags !== undefined) input.tags = parseTagList(tags);
       const companyDomain = columnValue(row, pick(["company domain", "domain"]));
       const companyName = columnValue(row, pick(["company", "company name"]));
       if (companyDomain || companyName) {
@@ -268,7 +272,7 @@ export async function exportContactsCsv(actor: Actor) {
 
 export function contactsCsvRows(rows: Contact[]) {
   return [
-    ["First name", "Last name", "Email", "Phone", "Title", "LinkedIn", "Company", "Source", "Notes"],
+    ["First name", "Last name", "Email", "Phone", "Title", "LinkedIn", "Company", "Source", "Notes", "Tags"],
     ...rows.map((contact) => [
       contact.firstName ?? "",
       contact.lastName ?? "",
@@ -279,6 +283,7 @@ export function contactsCsvRows(rows: Contact[]) {
       contact.companyName ?? "",
       contact.source ?? "",
       contact.notes ?? "",
+      contact.tags.join("; "),
     ]),
   ];
 }

@@ -4,11 +4,13 @@ import { cache } from "react";
 import ContactRecord from "@/components/crm/contact-record";
 import { getUserActor } from "@/lib/auth/user";
 import { listActivitiesByContact } from "@/lib/crm/activities";
+import { getMeetings } from "@/lib/crm/calendar";
 import { getInsightsForActivities } from "@/lib/crm/call-insights";
 import { listCompanies, listMembers } from "@/lib/crm/companies";
 import { getContact } from "@/lib/crm/contacts";
 import { CrmError } from "@/lib/crm/errors";
 import { getMailbox } from "@/lib/crm/inbox";
+import { listTags } from "@/lib/crm/tags";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -43,11 +45,13 @@ export default async function ContactPage({
   if (!user) redirect("/login");
   if (!contact) notFound();
 
-  const [companies, members, mailbox, activitiesByContact] = await Promise.all([
+  const [companies, members, mailbox, activitiesByContact, meetings, tags] = await Promise.all([
     listCompanies(user, { limit: 100, sort: "name", order: "asc" }),
     listMembers(user),
     getMailbox(user),
     listActivitiesByContact(user, [contact.id]),
+    getMeetings(user, { contactId: contact.id }),
+    listTags(user),
   ]);
   const activities = activitiesByContact[contact.id] ?? [];
   const insights = await getInsightsForActivities(
@@ -75,6 +79,8 @@ export default async function ContactPage({
       mailboxConnected={mailbox?.status === "connected"}
       activities={activities}
       insights={insights}
+      meetings={meetings}
+      tags={tags}
     />
   );
 }

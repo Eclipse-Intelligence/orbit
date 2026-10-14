@@ -7,6 +7,7 @@ import { Input } from "@/components/_ui/input";
 import ClickUpSettings from "@/components/crm/clickup-settings";
 import MyEmailsSettings from "@/components/crm/my-emails-settings";
 import SectionHeader from "@/components/crm/section-header";
+import TagsSettings from "@/components/crm/tags-settings";
 import type { Viewer } from "@/components/crm/viewer";
 import {
   archiveWebhookAction,
@@ -15,7 +16,7 @@ import {
 } from "@/app/(crm)/settings/actions";
 import type { ClickUpSettingsView } from "@/lib/crm/clickup";
 import type { MyEmails } from "@/lib/crm/profile";
-import type { PipelineStage } from "@/lib/crm/types";
+import type { PipelineStage, TagCount } from "@/lib/crm/types";
 import type { WebhookDelivery, WebhookEndpoint } from "@/lib/crm/webhooks";
 
 const EVENT_CHOICES = [
@@ -38,6 +39,7 @@ export default function SettingsScreen({
   deliveries,
   clickup,
   myEmails,
+  tags,
 }: {
   viewer: Viewer;
   canAdmin: boolean;
@@ -46,6 +48,7 @@ export default function SettingsScreen({
   deliveries: WebhookDelivery[];
   clickup: ClickUpSettingsView;
   myEmails: MyEmails;
+  tags: TagCount[];
 }) {
   const router = useRouter();
   const [drafts, setDrafts] = useState(stages);
@@ -105,6 +108,8 @@ export default function SettingsScreen({
           </p>
         )}
         <MyEmailsSettings emails={myEmails} />
+
+        <TagsSettings tags={tags} />
 
         <div className="flex max-w-[640px] flex-col gap-3">
           <h2>Pipeline</h2>
@@ -297,7 +302,7 @@ export default function SettingsScreen({
         <div className="flex max-w-[640px] flex-col gap-2">
           <h2>Email and calendar</h2>
           <p className="caption-style text-subtle">
-            Agents file emails and meetings with record_email and record_meeting. The CRM matches the person by email and the company by domain, then suggests a follow-up when none is open. To file Outlook mail automatically and send from a contact, go to Inbox and choose Connect Microsoft.
+            Agents file emails and meetings with record_email and record_meeting. The CRM matches the person by email and the company by domain, then suggests a follow-up task when the company has no open task. To file Outlook mail automatically and send from a contact, go to Inbox and choose Connect Microsoft.
           </p>
         </div>
       </div>

@@ -14,7 +14,13 @@ import {
   type MutationOptions,
   type MutationOutcome,
 } from "@/lib/crm/mutate";
-import { likePattern, normalizeCompanyName, normalizeCompanyWrite } from "@/lib/crm/normalize";
+import {
+  likePattern,
+  normalizeCompanyName,
+  normalizeCompanyWrite,
+  normalizeTag,
+  sameTags,
+} from "@/lib/crm/normalize";
 import { assertScope } from "@/lib/crm/scopes";
 import type {
   Actor,
@@ -47,6 +53,7 @@ const COMPANY_SQL = `
     p.email as owner_email,
     c.source,
     c.source_reference,
+    c.tags,
     c.created_by_user_id,
     c.created_by_agent_id,
     c.archived_at,
@@ -84,6 +91,7 @@ type CompanyRow = {
   owner_email: string | null;
   source: string | null;
   source_reference: string | null;
+  tags: string[] | null;
   created_by_user_id: string | null;
   created_by_agent_id: string | null;
   archived_at: Date | string | null;
@@ -124,6 +132,7 @@ function mapCompany(row: CompanyRow): Company {
     updatedAt: iso(row.updated_at) ?? new Date(0).toISOString(),
     lastInteractionAt: iso(row.last_interaction_at),
     openTaskCount: row.open_task_count ?? 0,
+    tags: row.tags ?? [],
   };
 }
 
@@ -190,9 +199,9 @@ async function insertCompany(
       `insert into crm.companies (
         workspace_id, name, normalized_name, domain, website, description,
         industry, size_category, lifecycle, owner_id, source, source_reference,
-        created_by_user_id, created_by_agent_id
+        tags, created_by_user_id, created_by_agent_id
       ) values (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
       ) returning id`,
       [
         actor.workspaceId,
@@ -207,6 +216,7 @@ async function insertCompany(
         write.ownerId ?? null,
         write.source ?? null,
         write.sourceReference ?? null,
+        write.tags ?? [],
         actor.type === "user" ? actor.userId : null,
         actor.type === "agent" ? actor.agentId : null,
       ],
@@ -262,6 +272,11 @@ function assignments(write: CompanyWrite & { normalizedName?: string }, current:
   if (write.sourceReference !== undefined) {
     add("source_reference", "sourceReference", write.sourceReference);
   }
+  if (write.tags !== undefined && !sameTags(write.tags ?? [], current.tags)) {
+    values.push(write.tags ?? []);
+    sets.push(`tags = $${values.length}`);
+    fields.push("tags");
+  }
 
   return { sets, values, fields };
 }
@@ -284,7 +299,17 @@ async function applyUpdate(
       matchedOn: conflict.matchedOn,
     });
   }
+  return writeChanges(db, actor, current, write, provenance, eventType);
+}
 
+async function writeChanges(
+  db: Db,
+  actor: Actor,
+  current: Company,
+  write: CompanyWrite & { normalizedName?: string },
+  provenance: Provenance | undefined,
+  eventType: string,
+) {
   const change = assignments(write, current);
   if (change.sets.length === 0) return { company: current, changed: false };
 
@@ -413,6 +438,11 @@ export async function listCompanies(actor: Actor, query: CompanyListQuery = {}) 
     else if (query.ownerId) {
       values.push(query.ownerId);
       where.push(`c.owner_id = $${values.length}`);
+    }
+    const tag = query.tag ? normalizeTag(query.tag) : "";
+    if (tag) {
+      values.push([tag]);
+      where.push(`c.tags @> $${values.length}::text[]`);
     }
     const text = query.query?.trim();
     if (text) {
@@ -559,6 +589,34 @@ export async function updateCompany(
       return { company: updated.company };
     }),
   );
+}
+
+export async function editCompanyTagsInDb(
+  db: Db,
+  actor: Actor,
+  id: string,
+  edit: (tags: string[]) => string[],
+  provenance: Provenance,
+) {
+  const current = await readCompany(db, actor.workspaceId, id);
+  if (!current) throw new CrmError("not_found", "Company not found.", 404);
+  const write = normalizeCompanyWrite({ tags: edit(current.tags) }, "patch");
+  return writeChanges(db, actor, current, write, provenance, "company.updated");
+}
+
+export async function editCompanyTags(
+  actor: Actor,
+  id: string,
+  edit: (tags: string[]) => string[],
+  provenance: Provenance,
+) {
+  assertScope(actor.scopes, "companies:write");
+  if (!isUuid(id)) throw new CrmError("not_found", "Company not found.", 404);
+  return withActor(actor, async (db) => {
+    await lockCompanies(db, actor.workspaceId);
+    const updated = await editCompanyTagsInDb(db, actor, id, edit, provenance);
+    return updated.company;
+  });
 }
 
 export async function archiveCompany(

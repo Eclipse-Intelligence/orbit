@@ -17,10 +17,11 @@ import {
   sortValue,
 } from "@/lib/companies";
 import { SelectToggle } from "@/components/crm/bulk-bar";
+import { ANY_TAG, tagFilterOptions } from "@/components/crm/tags";
 import RecordTransfer from "@/components/crm/record-transfer";
 import type { BulkSelection } from "@/hooks/use-bulk-selection";
 import { downloadCsv } from "@/lib/csv";
-import type { CompanyListQuery, Member } from "@/lib/crm/types";
+import type { CompanyListQuery, Member, TagCount } from "@/lib/crm/types";
 import { useCompaniesStore } from "@/stores/companies-store";
 import ShareIcon from "@/public/assets/images/companies/toolbar/share.svg";
 import PlusIcon from "@/public/assets/images/_common/plus.svg";
@@ -28,12 +29,14 @@ import PlusIcon from "@/public/assets/images/_common/plus.svg";
 type ToolbarProps = {
   filters: CompanyListQuery;
   members?: Member[];
+  tags?: TagCount[];
   selection: BulkSelection;
 };
 
 export default function CompaniesToolbar({
   filters,
   members = [],
+  tags = [],
   selection,
 }: ToolbarProps) {
   const router = useRouter();
@@ -84,6 +87,7 @@ export default function CompaniesToolbar({
     }
   }
 
+  const tagOptions = tagFilterOptions(tags, "company", filters.tag);
   const ownerOptions = [
     { value: ALL_OWNERS, label: "All owners" },
     { value: UNASSIGNED_OWNER, label: "Unassigned" },
@@ -96,6 +100,7 @@ export default function CompaniesToolbar({
         className="sm:hidden"
         filters={filters}
         members={members}
+        tagOptions={tagOptions}
         onChange={replaceParams}
       />
 
@@ -147,6 +152,14 @@ export default function CompaniesToolbar({
             replaceParams({ lifecycle: value === ANY_LIFECYCLE ? null : value })
           }
         />
+        {tagOptions.length > 1 && (
+          <FilterMenu
+            label="Tag"
+            value={filters.tag ?? ANY_TAG}
+            options={tagOptions}
+            onChange={(value) => replaceParams({ tag: value === ANY_TAG ? null : value })}
+          />
+        )}
       </div>
 
       <div className="flex shrink-0 items-center gap-1">

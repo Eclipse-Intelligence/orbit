@@ -37,7 +37,7 @@ export async function ingestLead(
   if (!input.company && !input.contact && !input.activity && !input.opportunity && !input.task && !note) {
     throw new CrmError(
       "invalid_input",
-      "A lead needs a company, contact, note, opportunity, or next action.",
+      "A lead needs a company, contact, note, opportunity, or task.",
       400,
     );
   }
@@ -60,7 +60,7 @@ export async function ingestLeadInDb(
   if (!input.company && !input.contact && !input.activity && !input.opportunity && !input.task && !note) {
     throw new CrmError(
       "invalid_input",
-      "A lead needs a company, contact, note, opportunity, or next action.",
+      "A lead needs a company, contact, note, opportunity, or task.",
       400,
     );
   }

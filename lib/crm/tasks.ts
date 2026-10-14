@@ -150,10 +150,10 @@ function prepareTask(input: TaskWrite, mode: "create" | "patch"): PreparedTask {
   const next: PreparedTask = {};
   if (input.title !== undefined) {
     const title = cleanText(input.title, 200, "title");
-    if (!title) throw new CrmError("invalid_input", "Enter a next action.", 400, { field: "title" });
+    if (!title) throw new CrmError("invalid_input", "Enter a task.", 400, { field: "title" });
     next.title = title;
   } else if (mode === "create") {
-    throw new CrmError("invalid_input", "Enter a next action.", 400, { field: "title" });
+    throw new CrmError("invalid_input", "Enter a task.", 400, { field: "title" });
   }
   if (input.description !== undefined) next.description = cleanText(input.description, 10000, "description");
   if (input.dueAt !== undefined) next.dueAt = timestamp(input.dueAt, "dueAt");
@@ -183,7 +183,7 @@ export async function createTaskInDb(
   provenance?: Provenance,
 ) {
   const write = prepareTask(input, "create");
-  if (!write.title) throw new CrmError("invalid_input", "Enter a next action.", 400, { field: "title" });
+  if (!write.title) throw new CrmError("invalid_input", "Enter a task.", 400, { field: "title" });
   await assertOwner(db, actor.workspaceId, write.ownerId);
   const links = await resolveLinks(db, actor.workspaceId, write);
   const actorRef = actorIds(actor);
@@ -211,12 +211,12 @@ export async function createTaskInDb(
       ],
     );
     const saved = await readTask(db, inserted.rows[0].id);
-    if (!saved) throw new CrmError("internal_error", "Next action was not saved.", 500);
+    if (!saved) throw new CrmError("internal_error", "Task was not saved.", 500);
     const task = mapTask(saved);
     await recordAudit(db, actor, "task.created", "task", task.id, provenance, { after: task });
     return task;
   } catch (error) {
-    constraintError(error, "duplicate_task", "That next action already exists.");
+    constraintError(error, "duplicate_task", "That task already exists.");
   }
 }
 
@@ -264,10 +264,10 @@ async function applyTask(
       change.values,
     );
   } catch (error) {
-    constraintError(error, "duplicate_task", "That next action already exists.");
+    constraintError(error, "duplicate_task", "That task already exists.");
   }
   const saved = await readTask(db, current.id);
-  if (!saved) throw new CrmError("not_found", "Next action not found.", 404);
+  if (!saved) throw new CrmError("not_found", "Task not found.", 404);
   const task = mapTask(saved);
   const event =
     before.completedAt !== task.completedAt
@@ -299,7 +299,7 @@ export async function updateTaskInDb(
   provenance?: Provenance,
 ) {
   const current = await readTask(db, id);
-  if (!current) throw new CrmError("not_found", "Next action not found.", 404);
+  if (!current) throw new CrmError("not_found", "Task not found.", 404);
   return applyTask(db, actor, current, prepareTask(input, "patch"), provenance);
 }
 
@@ -395,10 +395,10 @@ export async function listTasks(actor: Actor, query: TaskListQuery = {}) {
 
 export async function getTask(actor: Actor, id: string) {
   assertScope(actor.scopes, "crm:read");
-  if (!isUuid(id)) throw new CrmError("not_found", "Next action not found.", 404);
+  if (!isUuid(id)) throw new CrmError("not_found", "Task not found.", 404);
   return withActor(actor, async (db) => {
     const row = await readTask(db, id);
-    if (!row) throw new CrmError("not_found", "Next action not found.", 404);
+    if (!row) throw new CrmError("not_found", "Task not found.", 404);
     return mapTask(row);
   });
 }
@@ -425,13 +425,13 @@ export async function updateTask(
   options: MutationOptions = {},
 ): Promise<MutationOutcome<{ task: Task }>> {
   assertScope(actor.scopes, "tasks:write");
-  if (!isUuid(id)) throw new CrmError("not_found", "Next action not found.", 404);
+  if (!isUuid(id)) throw new CrmError("not_found", "Task not found.", 404);
   const provenance = options.provenance ?? { operation: "update_task" };
   const hash = requestHash("update_task", { id, input, provenance });
   return withActor(actor, (db) =>
     replayOrRun(db, actor, options.idempotencyKey, hash, 200, async () => {
       const current = await readTask(db, id);
-      if (!current) throw new CrmError("not_found", "Next action not found.", 404);
+      if (!current) throw new CrmError("not_found", "Task not found.", 404);
       const updated = await applyTask(db, actor, current, prepareTask(input, "patch"), provenance);
       return { task: updated.task };
     }),
@@ -455,17 +455,17 @@ export async function archiveTask(
   options: MutationOptions = {},
 ): Promise<MutationOutcome<{ task: Task }>> {
   assertScope(actor.scopes, "tasks:write");
-  if (!isUuid(id)) throw new CrmError("not_found", "Next action not found.", 404);
+  if (!isUuid(id)) throw new CrmError("not_found", "Task not found.", 404);
   const provenance = options.provenance ?? { operation: "archive_task" };
   const hash = requestHash("archive_task", { id, provenance });
   return withActor(actor, (db) =>
     replayOrRun(db, actor, options.idempotencyKey, hash, 200, async () => {
       const current = await readTask(db, id);
-      if (!current) throw new CrmError("not_found", "Next action not found.", 404);
+      if (!current) throw new CrmError("not_found", "Task not found.", 404);
       if (current.archived_at) return { task: mapTask(current) };
       await db.query("update crm.tasks set archived_at = now() where id = $1", [id]);
       const saved = await readTask(db, id);
-      if (!saved) throw new CrmError("not_found", "Next action not found.", 404);
+      if (!saved) throw new CrmError("not_found", "Task not found.", 404);
       const task = mapTask(saved);
       await recordAudit(db, actor, "task.archived", "task", task.id, provenance, {
         before: { archivedAt: null },

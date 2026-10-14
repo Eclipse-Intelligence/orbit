@@ -211,7 +211,7 @@ export default function CallInsightPanel({
       )}
       {insight.status === "ready" && shown.length > 0 && (
         <div className="flex flex-col gap-2">
-          <span className="caption-style text-subtle">Next actions from this conversation</span>
+          <span className="caption-style text-subtle">Tasks from this conversation</span>
           <ul className="flex flex-col gap-3">
             {shown.map((item) => {
               const meta = itemMeta(item);
@@ -234,7 +234,7 @@ export default function CallInsightPanel({
                           )
                         }
                       >
-                        {pending === `accept:${item.id}` ? "Adding…" : "Add as next action"}
+                        {pending === `accept:${item.id}` ? "Adding…" : "Add as task"}
                       </Button>
                       <Button
                         variant="ghost"

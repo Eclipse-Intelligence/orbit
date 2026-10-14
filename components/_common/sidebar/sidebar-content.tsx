@@ -7,6 +7,7 @@ import SidebarNavItem from "./sidebar-nav-item";
 import SidebarSection from "./sidebar-section";
 import { CollapseSidebarButton } from "./sidebar-toggle";
 import { useCompaniesStore } from "@/stores/companies-store";
+import { TASKS_PATH } from "@/lib/crm/task-views";
 import Logo from "@/public/assets/images/_common/logo.svg";
 import BuildingIcon from "@/public/assets/images/companies/sidebar/building.svg";
 import ClipboardIcon from "@/public/assets/images/companies/sidebar/clipboard.svg";
@@ -85,11 +86,11 @@ export default function SidebarContent({
               active={current("/activities")}
             />
             <SidebarNavItem
-              href="/actions"
+              href={TASKS_PATH}
               icon={TargetIcon}
-              label="Next actions"
+              label="Tasks"
               count={openActionCount}
-              active={current("/actions")}
+              active={current(TASKS_PATH)}
             />
             <SidebarNavItem
               href="/quiet"

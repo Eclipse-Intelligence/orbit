@@ -45,6 +45,7 @@ export function activeFilterCount(filters: CompanyListQuery) {
     Boolean(filters.query),
     Boolean(filters.lifecycle),
     Boolean(filters.ownerId),
+    Boolean(filters.tag),
     !defaultSort,
   ].filter(Boolean).length;
 }
@@ -120,6 +121,23 @@ export function formatWhen(iso: string | null) {
   }).format(new Date(iso));
 }
 
+export function formatMeetingWhen(iso: string, allDay = false) {
+  return new Intl.DateTimeFormat(
+    "en-GB",
+    allDay
+      ? { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" }
+      : {
+          weekday: "short",
+          day: "numeric",
+          month: "short",
+          hour: "2-digit",
+          minute: "2-digit",
+          hourCycle: "h23",
+          timeZone: appTimeZone(),
+        },
+  ).format(new Date(iso));
+}
+
 export function formatMoney(value: string | null, currency: string) {
   if (!value) return "No amount";
   const amount = Number(value);
@@ -142,6 +160,7 @@ export function companiesCsvRows(
     ownerName: string | null;
     source: string | null;
     description: string | null;
+    tags: string[];
     createdAt: string;
     updatedAt: string;
   }[],
@@ -157,6 +176,7 @@ export function companiesCsvRows(
       "Owner",
       "Source",
       "Description",
+      "Tags",
       "Created",
       "Updated",
     ],
@@ -170,6 +190,7 @@ export function companiesCsvRows(
       company.ownerName ?? "",
       company.source ?? "",
       company.description ?? "",
+      company.tags.join("; "),
       company.createdAt,
       company.updatedAt,
     ]),

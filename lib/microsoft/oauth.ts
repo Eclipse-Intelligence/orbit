@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { appSecret } from "@/lib/auth/config";
 
-export const MICROSOFT_SCOPES = "offline_access Mail.Read Mail.Send User.Read";
+export const MICROSOFT_SCOPES = "offline_access Mail.Read Mail.Send User.Read Calendars.Read";
 
 const STATE_MAX_AGE_MS = 10 * 60 * 1000;
 
@@ -113,6 +113,7 @@ type TokenResponse = {
   access_token?: string;
   refresh_token?: string;
   expires_in?: number;
+  scope?: string;
   error?: string;
   error_description?: string;
 };
@@ -121,7 +122,20 @@ export type MicrosoftToken = {
   accessToken: string;
   refreshToken: string;
   expiresAt: string;
+  scope?: string | null;
 };
+
+export function grantsCalendar(scope: string | null | undefined) {
+  if (typeof scope !== "string" || !scope.trim()) return null;
+  let decoded = scope;
+  try {
+    decoded = decodeURIComponent(scope);
+  } catch {}
+  return decoded
+    .split(/\s+/)
+    .map((item) => item.split("/").pop()?.toLowerCase() ?? "")
+    .some((item) => item === "calendars.read" || item === "calendars.readwrite");
+}
 
 async function tokenRequest(body: URLSearchParams, fetchImpl: typeof fetch) {
   const response = await fetchImpl(
@@ -188,6 +202,7 @@ function tokenFrom(
     accessToken: parsed.access_token!,
     refreshToken,
     expiresAt: new Date(Date.now() + expiresIn * 1000).toISOString(),
+    scope: parsed.scope ?? null,
   };
 }
 

@@ -13,10 +13,12 @@ import {
   DialogTitle,
 } from "@/components/_ui/dialog";
 import BulkEmailDialog from "@/components/crm/bulk-email-dialog";
+import { TagOptions, TagPopover } from "@/components/crm/tags";
 import type { BulkActionResult } from "@/app/(crm)/bulk";
 import type { BulkSelection } from "@/hooks/use-bulk-selection";
 import { downloadCsv, type CsvCell } from "@/lib/csv";
 import type { Recipient } from "@/lib/crm/personalise";
+import type { TagCount } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
 
 const NOTICE_MS = 10_000;
@@ -113,6 +115,13 @@ function failureText(results: { ok: boolean; error?: string }[], verb: string) {
   return ` · ${failed.length} could not be ${verb}${first ? `: ${first}` : "."}`;
 }
 
+export type BulkTagging = {
+  tags: TagCount[];
+  selectedTags: (ids: string[]) => string[];
+  add: (ids: string[], tag: string) => Promise<BulkActionResult>;
+  remove: (ids: string[], tag: string) => Promise<BulkActionResult>;
+};
+
 export default function BulkActions({
   selection,
   noun,
@@ -123,6 +132,7 @@ export default function BulkActions({
   emailLabel,
   recipients,
   mailboxConnected,
+  tagging,
 }: {
   selection: BulkSelection;
   noun: [string, string];
@@ -133,10 +143,14 @@ export default function BulkActions({
   emailLabel: string;
   recipients: (ids: string[]) => Recipient[] | Promise<Recipient[]>;
   mailboxConnected: boolean;
+  tagging?: BulkTagging;
 }) {
   const router = useRouter();
   const [confirming, setConfirming] = useState(false);
-  const [busy, setBusy] = useState<"archive" | "undo" | "export" | "email" | null>(null);
+  const [tagMenu, setTagMenu] = useState(false);
+  const [busy, setBusy] = useState<"archive" | "undo" | "export" | "email" | "tag" | null>(
+    null,
+  );
   const [notice, setNotice] = useState<Notice | null>(null);
   const [composing, setComposing] = useState<Recipient[] | null>(null);
   const ids = selection.selectedIds;
@@ -195,6 +209,33 @@ export default function BulkActions({
       router.refresh();
     } catch {
       show("Undo failed. Try again.", "error");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function runTag(tag: string, mode: "add" | "remove") {
+    const chosen = ids;
+    setTagMenu(false);
+    if (!tagging || chosen.length === 0) return;
+    setBusy("tag");
+    try {
+      const result = await (mode === "add" ? tagging.add : tagging.remove)(chosen, tag);
+      if ("error" in result) {
+        show(result.error, "error");
+        return;
+      }
+      const done = result.results.filter((item) => item.ok).length;
+      const tail = failureText(result.results, mode === "add" ? "tagged" : "updated");
+      show(
+        mode === "add"
+          ? `Tagged ${count(done, noun)} “${tag}”${tail}`
+          : `Removed “${tag}” from ${count(done, noun)}${tail}`,
+        tail ? "error" : "status",
+      );
+      router.refresh();
+    } catch {
+      show("Tagging failed. Try again.", "error");
     } finally {
       setBusy(null);
     }
@@ -302,6 +343,26 @@ export default function BulkActions({
                   >
                     {busy === "email" ? "Loading…" : emailLabel}
                   </Button>
+                  {tagging && (
+                    <TagPopover
+                      open={tagMenu}
+                      onOpenChange={setTagMenu}
+                      align="end"
+                      trigger={
+                        <Button variant="secondary" size="sm" disabled={busy !== null}>
+                          {busy === "tag" ? "Tagging…" : "Tag"}
+                        </Button>
+                      }
+                    >
+                      <TagOptions
+                        suggestions={tagging.tags}
+                        onPick={(tag) => runTag(tag, "add")}
+                        removable={tagging.selectedTags(ids)}
+                        onRemove={(tag) => runTag(tag, "remove")}
+                        placeholder="Add or remove a tag"
+                      />
+                    </TagPopover>
+                  )}
                   <Button
                     variant="secondary"
                     size="sm"

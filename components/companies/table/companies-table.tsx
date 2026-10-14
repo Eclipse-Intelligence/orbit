@@ -24,8 +24,9 @@ import {
   exportSelectedCompaniesAction,
   unarchiveCompaniesAction,
 } from "@/app/(crm)/bulk";
+import { bulkAddTagAction, bulkRemoveTagAction } from "@/app/(crm)/tags";
 import type { BulkSelection } from "@/hooks/use-bulk-selection";
-import type { Company } from "@/lib/crm/types";
+import type { Company, TagCount } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
 
 export default function CompaniesTable({
@@ -36,6 +37,7 @@ export default function CompaniesTable({
   filtered,
   selection,
   mailboxConnected,
+  tags,
 }: {
   companies: Company[];
   total: number;
@@ -44,6 +46,7 @@ export default function CompaniesTable({
   filtered: boolean;
   selection: BulkSelection;
   mailboxConnected: boolean;
+  tags: TagCount[];
 }) {
   return (
     <div className="border-border flex min-h-0 flex-1 flex-col border-t">
@@ -112,6 +115,18 @@ export default function CompaniesTable({
         emailLabel="Email people"
         recipients={companyRecipientsAction}
         mailboxConnected={mailboxConnected}
+        tagging={{
+          tags,
+          selectedTags: (ids) => [
+            ...new Set(
+              companies
+                .filter((company) => ids.includes(company.id))
+                .flatMap((company) => company.tags),
+            ),
+          ],
+          add: (ids, name) => bulkAddTagAction("company", ids, name),
+          remove: (ids, name) => bulkRemoveTagAction("company", ids, name),
+        }}
       />
       <TableFooter page={page} count={companies.length} total={total} />
     </div>

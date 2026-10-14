@@ -4,6 +4,7 @@ import type { MouseEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { RowCheckbox } from "@/components/crm/bulk-bar";
+import { RowTags } from "@/components/crm/tags";
 import { TableCell, TableRow } from "@/components/_ui/table";
 import {
   ConnectionMark,
@@ -109,6 +110,7 @@ export default function CompanyRow({
           >
             {company.name}
           </Link>
+          <RowTags tags={company.tags} className="flex-nowrap" />
         </span>
       </TableCell>
       <TableCell role="cell" className={cellClass("categories")}>

@@ -7,6 +7,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popove
 import { useAttention } from "@/components/crm/attention";
 import { relativeWhen } from "@/lib/companies";
 import { companyHref } from "@/lib/crm/hrefs";
+import { tasksHref } from "@/lib/crm/task-views";
 import BellIcon from "@/public/assets/images/companies/header/bell.svg";
 
 export default function Notifications() {
@@ -28,7 +29,7 @@ export default function Notifications() {
         <div className="flex flex-col gap-3 px-4 py-5">
           <h2>Notifications</h2>
           {items.length === 0 ? (
-            <p className="caption-style text-subtle">No follow-ups are due.</p>
+            <p className="caption-style text-subtle">No tasks are due.</p>
           ) : (
             <ul className="flex flex-col gap-2">
               {items.map((item) => (
@@ -40,7 +41,7 @@ export default function Notifications() {
                     onClick={() => {
                       setOpen(false);
                       if (item.companyId) router.push(companyHref(item.companyId));
-                      else router.push("/actions?view=today");
+                      else router.push(tasksHref("today"));
                     }}
                   >
                     <span className="flex min-w-0 flex-col gap-1">
@@ -56,8 +57,8 @@ export default function Notifications() {
               ))}
             </ul>
           )}
-          <Button variant="subtle" size="sm" href="/actions?view=today" className="self-start">
-            Open next actions
+          <Button variant="subtle" size="sm" href={tasksHref("today")} className="self-start">
+            Open tasks
           </Button>
         </div>
       </PopoverContent>

@@ -101,7 +101,7 @@ export function registerOperationTools(server: McpServer, actor: Actor) {
   server.registerTool(
     "update_next_action",
     {
-      description: "Update a next action. Omitted fields stay unchanged. completed true marks it done.",
+      description: "Update a task. Omitted fields stay unchanged. completed true marks it done.",
       inputSchema: {
         id: z.uuid(),
         title: z.string().optional(),
@@ -140,7 +140,7 @@ export function registerOperationTools(server: McpServer, actor: Actor) {
   server.registerTool(
     "archive_next_action",
     {
-      description: "Archive a next action without marking it complete.",
+      description: "Archive a task without marking it complete.",
       inputSchema: { id: z.uuid(), ...provenanceFields },
     },
     async (args) =>
@@ -153,7 +153,7 @@ export function registerOperationTools(server: McpServer, actor: Actor) {
     "record_email",
     {
       description:
-        "File an email on the matching contact or company domain, and suggest a follow-up when that company has no open next action.",
+        "File an email on the matching contact or company domain, and suggest a follow-up when that company has no open task.",
       inputSchema: communicationShape("email"),
     },
     async (args) =>
@@ -174,7 +174,7 @@ export function registerOperationTools(server: McpServer, actor: Actor) {
     "record_meeting",
     {
       description:
-        "File a meeting on the matching contact or company, and suggest a follow-up when that company has no open next action.",
+        "File a meeting on the matching contact or company, and suggest a follow-up when that company has no open task.",
       inputSchema: communicationShape("meeting"),
     },
     async (args) =>
