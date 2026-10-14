@@ -160,7 +160,7 @@ export default function ContactRecord({
             contactId={shown.id}
             email={shown.email}
             mailboxConnected={mailboxConnected}
-            profileNote={shown.notes}
+            viewerId={viewer.id}
             activities={activities}
             insights={insights}
             className="border-t-0 p-5"

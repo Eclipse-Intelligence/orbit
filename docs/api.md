@@ -98,6 +98,8 @@ Codes include `unauthorized` (401), `forbidden` (403), `not_found` (404), `inval
 
 `GET /api/v1/activities` with `q`, `company_id`, `contact_id`, `opportunity_id`, `type`.
 
+Every activity includes `actorUserId`, `actorAgentId`, and `actorName`: the full name (or email) of the workspace member who logged it, or the name of the agent that created it. `actorName` is `null` when neither can be resolved, for example after the member leaves the workspace.
+
 `POST /api/v1/activities` appends an interaction. Types are `email`, `meeting`, `call`, `note`, `research`, `linkedin`, `agent_update`, and `other`. A title or body is required, and the row must point at a company, contact, or opportunity. There is no update or delete.
 
 ## Next actions

@@ -250,6 +250,7 @@ export type Activity = {
   opportunityName: string | null;
   actorUserId: string | null;
   actorAgentId: string | null;
+  actorName: string | null;
   metadata: Record<string, unknown>;
   createdAt: string;
 };

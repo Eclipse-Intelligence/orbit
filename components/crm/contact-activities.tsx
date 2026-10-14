@@ -1,15 +1,35 @@
 "use client";
 
-import { useRef, useState, type ReactNode } from "react";
+import { useId, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import Button, { buttonVariants } from "@/components/_ui/button";
 import { Input } from "@/components/_ui/input";
+import Tag from "@/components/_ui/tag";
 import { addActivityAction, type RecordActionState } from "@/app/(crm)/records";
 import CallInsightPanel from "@/components/crm/call-insight";
 import ContactEmail from "@/components/crm/contact-email";
-import { formatDate } from "@/lib/companies";
+import {
+  activityByline,
+  activityDetails,
+  activityDirection,
+  activitySource,
+  activityTitle,
+  activityWhen,
+  callDuration,
+  countKinds,
+  granolaUrl,
+  groupByDay,
+  timelineKind,
+  type TimelineFilter,
+  type TimelineKind,
+} from "@/lib/crm/timeline";
 import { cn } from "@/lib/utils";
 import type { Activity, CallInsight } from "@/lib/crm/types";
+import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
+import CallIcon from "@/public/assets/images/crm/activity/call.svg";
+import EmailIcon from "@/public/assets/images/crm/activity/email.svg";
+import MeetingIcon from "@/public/assets/images/crm/activity/meeting.svg";
+import NoteIcon from "@/public/assets/images/crm/activity/note.svg";
 
 const KINDS = [
   { id: "note", label: "Note" },
@@ -25,15 +45,41 @@ type SaveActivity = (
   body: string,
 ) => Promise<RecordActionState & { activity?: Activity }>;
 
-const LABELS: Record<string, string> = {
-  email: "Email",
-  meeting: "Meeting",
-  call: "Call",
-  note: "Note",
-  research: "Research",
-  linkedin: "LinkedIn",
-  agent_update: "Agent update",
-  other: "Other",
+const FILTERS: { id: TimelineFilter; label: string }[] = [
+  { id: "all", label: "All" },
+  { id: "call", label: "Calls" },
+  { id: "email", label: "Emails" },
+  { id: "meeting", label: "Meetings" },
+  { id: "note", label: "Notes" },
+];
+
+const MARKS: Record<TimelineKind, { icon: typeof NoteIcon; tone: string }> = {
+  call: {
+    icon: CallIcon,
+    tone: "bg-(--tag-green-bg) text-(--tag-green-text) shadow-[inset_0_0_0_1px_var(--tag-green-border)]",
+  },
+  email: {
+    icon: EmailIcon,
+    tone: "bg-(--tag-blue-bg) text-(--tag-blue-text) shadow-[inset_0_0_0_1px_var(--tag-blue-border)]",
+  },
+  meeting: {
+    icon: MeetingIcon,
+    tone: "bg-(--tag-purple-bg) text-(--tag-purple-text) shadow-[inset_0_0_0_1px_var(--tag-purple-border)]",
+  },
+  note: {
+    icon: NoteIcon,
+    tone: "bg-(--tag-amber-bg) text-(--tag-amber-text) shadow-[inset_0_0_0_1px_var(--tag-amber-border)]",
+  },
+};
+
+const OTHER_MARK = {
+  icon: NoteIcon,
+  tone: "bg-(--tag-neutral-bg) text-(--tag-neutral-text) shadow-[inset_0_0_0_1px_var(--tag-neutral-border)]",
+};
+
+type Badge = {
+  label: string;
+  tone: "neutral" | "purple" | "blue" | "green" | "amber";
 };
 
 export function useActivityDraft(save: SaveActivity) {
@@ -113,7 +159,7 @@ export function ActivityComposer({
 }) {
   const { kind, title, body, pending } = draft;
   return (
-    <>
+    <div className="border-line-strong bg-card flex flex-col gap-3 rounded-xl border p-3">
       <div
         className="flex flex-wrap gap-1"
         role="group"
@@ -203,7 +249,7 @@ export function ActivityComposer({
         </div>
       )}
       {kind === "email" && email}
-    </>
+    </div>
   );
 }
 
@@ -211,37 +257,103 @@ export function ActivityTimeline({
   activities,
   insights,
   showContact,
-  lead,
+  viewerId,
+  filters,
   empty,
 }: {
   activities: Activity[];
   insights?: Record<string, CallInsight>;
   showContact?: boolean;
-  lead?: ReactNode;
+  viewerId?: string | null;
+  filters?: ReactNode;
   empty: string;
 }) {
-  const [openId, setOpenId] = useState<string | null>(null);
-
-  if (activities.length === 0 && !lead) {
-    return <p className="caption-style text-subtle">{empty}</p>;
-  }
+  const baseId = useId();
+  const [now] = useState(() => Date.now());
+  const [filter, setFilter] = useState<TimelineFilter>("all");
+  const [open, setOpen] = useState<Record<string, boolean>>({});
+  const counts = countKinds(activities);
+  const active = counts[filter] > 0 ? filter : "all";
+  const shown =
+    active === "all"
+      ? activities
+      : activities.filter((activity) => timelineKind(activity) === active);
+  const groups = groupByDay(shown, now);
 
   return (
-    <ul className="flex flex-col gap-3">
-      {lead}
-      {activities.map((activity) => (
-        <ActivityItem
-          key={activity.id}
-          activity={activity}
-          insight={insights?.[activity.id] ?? null}
-          showContact={showContact}
-          open={openId === activity.id}
-          onToggle={() =>
-            setOpenId(openId === activity.id ? null : activity.id)
-          }
-        />
-      ))}
-    </ul>
+    <div className="flex flex-col gap-3">
+      {activities.length > 0 && (
+        <div
+          className="bg-secondary flex max-w-full gap-0.5 self-start overflow-x-auto rounded-full p-0.5 shadow-[0_0_0_1px_var(--line-strong)]"
+          role="group"
+          aria-label="Filter activity by type"
+        >
+          {FILTERS.filter(
+            (item) => item.id === "all" || counts[item.id] > 0,
+          ).map((item) => (
+            <Button
+              key={item.id}
+              variant={active === item.id ? "muted" : "ghost"}
+              size="sm"
+              type="button"
+              className="px-2 sm:px-3"
+              aria-pressed={active === item.id}
+              onClick={() => setFilter(item.id)}
+            >
+              {item.label}
+              <span
+                className={cn(
+                  "tabular-nums",
+                  active === item.id ? "text-soft" : "text-subtle",
+                )}
+              >
+                {counts[item.id]}
+              </span>
+            </Button>
+          ))}
+        </div>
+      )}
+      {filters}
+      {groups.length === 0 ? (
+        <p className="caption-style text-subtle">{empty}</p>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {groups.map((group) => {
+            const headingId = `${baseId}-day-${group.key}`;
+            return (
+              <section key={group.key} aria-labelledby={headingId}>
+                <h3
+                  id={headingId}
+                  className="caption-style text-subtle bg-background sticky top-0 z-10 px-2 py-2"
+                >
+                  {group.label}
+                </h3>
+                <ul className="divide-border flex flex-col divide-y">
+                  {group.items.map((activity) => (
+                    <ActivityRow
+                      key={activity.id}
+                      panelId={`${baseId}-panel-${activity.id}`}
+                      activity={activity}
+                      insight={insights?.[activity.id] ?? null}
+                      showContact={showContact}
+                      viewerId={viewerId}
+                      now={now}
+                      open={open[activity.id] ?? false}
+                      onToggle={() =>
+                        setOpen((current) => ({
+                          ...current,
+                          [activity.id]: !current[activity.id],
+                        }))
+                      }
+                    />
+                  ))}
+                </ul>
+              </section>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -249,7 +361,7 @@ export default function ContactActivities({
   contactId,
   email,
   mailboxConnected,
-  profileNote,
+  viewerId,
   activities,
   insights,
   className,
@@ -257,7 +369,7 @@ export default function ContactActivities({
   contactId: string;
   email: string | null;
   mailboxConnected: boolean;
-  profileNote: string | null;
+  viewerId?: string | null;
   activities: Activity[];
   insights?: Record<string, CallInsight>;
   className?: string;
@@ -266,19 +378,10 @@ export default function ContactActivities({
     addActivityAction({ contactId }, kind, title, body),
   );
 
-  const listed = draft.withAdded(activities);
-  const savedNote = profileNote?.trim() ?? "";
-  const showProfileNote =
-    savedNote !== "" &&
-    !listed.some(
-      (activity) =>
-        activity.type === "note" && activity.body?.trim() === savedNote,
-    );
-
   return (
     <section
       className={cn(
-        "border-line-strong flex flex-col gap-3 border-t pt-4",
+        "border-line-strong flex flex-col gap-4 border-t pt-4",
         className,
       )}
     >
@@ -295,113 +398,181 @@ export default function ContactActivities({
         }
       />
       <ActivityTimeline
-        activities={listed}
+        activities={draft.withAdded(activities)}
         insights={insights}
+        viewerId={viewerId}
         empty="No activity yet."
-        lead={
-          showProfileNote && (
-            <li className="flex flex-col gap-1">
-              <span className="text-[14px] leading-5">Note</span>
-              <p className="text-[14px] leading-5 whitespace-pre-wrap">
-                {savedNote}
-              </p>
-              <span className="caption-style text-subtle">
-                Saved on the contact
-              </span>
-            </li>
-          )
-        }
       />
     </section>
   );
 }
 
-function ActivityItem({
+function activityBadges(activity: Activity, insight: CallInsight | null) {
+  const badges: Badge[] = [];
+  if (insight?.status === "ready" && insight.summary) {
+    badges.push({ label: "Summary", tone: "purple" });
+  }
+  if (insight && insight.transcriptLength > 0) {
+    badges.push({ label: "Transcript", tone: "neutral" });
+  }
+  const source = activitySource(activity);
+  if (source) {
+    badges.push({ label: source, tone: source === "Teams" ? "blue" : "green" });
+  }
+  const direction = activityDirection(activity);
+  if (direction) badges.push({ label: direction, tone: "neutral" });
+  const duration = callDuration(activity);
+  if (duration) badges.push({ label: duration, tone: "neutral" });
+  return badges;
+}
+
+function emailParty(activity: Activity) {
+  const value =
+    activity.metadata.direction === "outbound"
+      ? activity.metadata.to
+      : activity.metadata.from;
+  const list = (Array.isArray(value) ? value : [value]).filter(
+    (item): item is string => typeof item === "string" && item.trim() !== "",
+  );
+  if (list.length === 0) return null;
+  return `${activity.metadata.direction === "outbound" ? "To" : "From"} ${list.join(", ")}`;
+}
+
+function ActivityRow({
+  panelId,
   activity,
   insight,
   showContact,
+  viewerId,
+  now,
   open,
   onToggle,
 }: {
+  panelId: string;
   activity: Activity;
   insight: CallInsight | null;
   showContact?: boolean;
+  viewerId?: string | null;
+  now: number;
   open: boolean;
   onToggle: () => void;
 }) {
-  const label = activityLabel(activity);
-  const heading = activity.title ? `${label} · ${activity.title}` : label;
-  const when = formatDate(activity.occurredAt);
-  const meta =
-    showContact && activity.contactName
-      ? `${activity.contactName} · ${when}`
-      : when;
-
-  if (activity.type === "email" && activity.body) {
-    const panelId = `activity-email-${activity.id}`;
-    return (
-      <li className="flex flex-col gap-1">
-        <Button
-          variant="item"
-          size="sm"
-          type="button"
-          className="h-auto py-2 leading-5"
-          aria-expanded={open}
-          aria-controls={panelId}
-          onClick={onToggle}
-        >
-          <span className="flex w-full flex-col gap-1">
-            <span>{heading}</span>
-            <span className="caption-style text-subtle">{meta}</span>
-          </span>
-        </Button>
-        {open && (
-          <p
-            id={panelId}
-            className="px-2 text-[14px] leading-5 whitespace-pre-wrap"
-          >
-            {activity.body}
-          </p>
-        )}
-      </li>
-    );
-  }
+  const kind = timelineKind(activity);
+  const mark = kind ? MARKS[kind] : OTHER_MARK;
+  const Icon = mark.icon;
+  const title = activityTitle(activity);
+  const badges = activityBadges(activity, insight);
+  const byline = activityByline(activity, viewerId);
+  const contact =
+    showContact &&
+    activity.contactName &&
+    byline !== `from ${activity.contactName}`
+      ? activity.contactName
+      : null;
+  const meta = [byline, contact, activityWhen(activity.occurredAt, now)]
+    .filter(Boolean)
+    .join(" · ");
+  const details = activityDetails(activity);
+  const granola = granolaUrl(activity);
+  const party = activity.type === "email" ? emailParty(activity) : null;
+  const insightful = activity.type === "call" || activity.type === "meeting";
+  const emptyPanel =
+    !details.body && !details.attendees && !granola && !party && !insightful;
 
   return (
-    <li className="flex flex-col gap-1">
-      <span className="text-[14px] leading-5">{heading}</span>
-      {activity.body && (
-        <p className="text-[14px] leading-5 whitespace-pre-wrap">
-          {activity.body}
-        </p>
-      )}
-      <span className="caption-style text-subtle">{meta}</span>
-      {granolaUrl(activity) && (
-        <a
-          href={granolaUrl(activity)!}
-          target="_blank"
-          rel="noreferrer"
-          className={cn(buttonVariants({ variant: "link", size: "none" }), "caption-style self-start")}
+    <li className="flex flex-col">
+      <Button
+        variant="item"
+        size="none"
+        type="button"
+        className="group gap-3 px-2 py-2.5"
+        aria-expanded={open}
+        aria-controls={panelId}
+        onClick={onToggle}
+      >
+        <span
+          className={cn(
+            "flex size-7 shrink-0 items-center justify-center rounded-full",
+            mark.tone,
+          )}
         >
-          Open in Granola
-        </a>
-      )}
-      {(activity.type === "call" || activity.type === "meeting") && (
-        <CallInsightPanel activityId={activity.id} insight={insight} />
-      )}
+          <Icon aria-hidden className="size-3.5" />
+        </span>
+        <span className="flex min-w-0 flex-1 flex-col gap-1.5 pt-px">
+          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+            <span
+              className={cn(
+                "max-w-full min-w-0 text-[14px] leading-5",
+                open ? "break-words" : "truncate",
+              )}
+            >
+              {title}
+            </span>
+            {badges.map((badge) => (
+              <Tag
+                key={badge.label}
+                tone={badge.tone}
+                size="sm"
+                className="h-[18px] text-[11px]"
+              >
+                {badge.label}
+              </Tag>
+            ))}
+          </span>
+          {meta && (
+            <span
+              className="caption-style text-subtle leading-4"
+              suppressHydrationWarning
+            >
+              {meta}
+            </span>
+          )}
+        </span>
+        <ChevronDownIcon
+          aria-hidden
+          className={cn(
+            "text-subtle ease-power3-out mt-2 size-3 shrink-0 transition-transform duration-150",
+            open && "rotate-180",
+          )}
+        />
+      </Button>
+      <div
+        id={panelId}
+        hidden={!open}
+        className="flex flex-col gap-3 pr-2 pb-3 pl-12"
+      >
+        {party && <span className="caption-style text-subtle">{party}</span>}
+        {details.attendees && (
+          <div className="flex flex-col gap-1">
+            <span className="caption-style text-subtle">Attendees</span>
+            <p className="text-[14px] leading-5">{details.attendees}</p>
+          </div>
+        )}
+        {details.body && (
+          <p className="text-[14px] leading-5 break-words whitespace-pre-wrap">
+            {details.body}
+          </p>
+        )}
+        {granola && (
+          <a
+            href={granola}
+            target="_blank"
+            rel="noreferrer"
+            className={cn(
+              buttonVariants({ variant: "link", size: "none" }),
+              "caption-style self-start",
+            )}
+          >
+            Open in Granola
+          </a>
+        )}
+        {insightful && (
+          <CallInsightPanel activityId={activity.id} insight={insight} />
+        )}
+        {emptyPanel && (
+          <p className="caption-style text-subtle">No details recorded.</p>
+        )}
+      </div>
     </li>
   );
-}
-
-function granolaUrl(activity: Activity) {
-  const url = activity.metadata.externalUrl;
-  if (activity.metadata.source !== "granola" || typeof url !== "string") return null;
-  return /^https:\/\//.test(url) ? url : null;
-}
-
-function activityLabel(activity: Activity) {
-  if (activity.type === "email" && activity.metadata.source === "microsoft") {
-    return activity.metadata.direction === "outbound" ? "Sent" : "Received";
-  }
-  return LABELS[activity.type] ?? activity.type;
 }
