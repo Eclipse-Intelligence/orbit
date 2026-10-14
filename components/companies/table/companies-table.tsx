@@ -1,9 +1,5 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
-import Button from "@/components/_ui/button";
-import { Checkbox } from "@/components/_ui/checkbox";
 import { ScrollArea } from "@/components/_ui/scroll-area";
 import {
   Table,
@@ -12,6 +8,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/_ui/table";
+import BulkActions, { SelectAllCheckbox } from "@/components/crm/bulk-bar";
 import CompanyRow from "./company-row";
 import TableFooter from "./table-footer";
 import { PAGE_SIZE } from "@/components/crm/paging";
@@ -21,10 +18,15 @@ import {
   TABLE_GRID_CLASS,
   TABLE_ROW_CLASS,
 } from "./table-columns";
-import { archiveCompanyAction } from "@/app/(crm)/actions";
+import {
+  archiveCompaniesAction,
+  companyRecipientsAction,
+  exportSelectedCompaniesAction,
+  unarchiveCompaniesAction,
+} from "@/app/(crm)/bulk";
+import type { BulkSelection } from "@/hooks/use-bulk-selection";
 import type { Company } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
-import { useCompaniesStore } from "@/stores/companies-store";
 
 export default function CompaniesTable({
   companies,
@@ -32,63 +34,23 @@ export default function CompaniesTable({
   page,
   now,
   filtered,
+  selection,
+  mailboxConnected,
 }: {
   companies: Company[];
   total: number;
   page: number;
   now: number;
   filtered: boolean;
+  selection: BulkSelection;
+  mailboxConnected: boolean;
 }) {
-  const selectedIds = useCompaniesStore((state) => state.selectedIds);
-  const toggleSelected = useCompaniesStore((state) => state.toggleSelected);
-  const setSelected = useCompaniesStore((state) => state.setSelected);
-  const router = useRouter();
-  const [archiving, setArchiving] = useState(false);
-  const [bulkError, setBulkError] = useState<string | null>(null);
-
-  const selectedVisible = companies.filter((company) =>
-    selectedIds.includes(company.id),
-  );
-  const allSelected =
-    companies.length > 0 && selectedVisible.length === companies.length;
-  const someSelected = selectedVisible.length > 0 && !allSelected;
-
-  function toggleAll() {
-    setSelected(allSelected ? [] : companies.map((company) => company.id));
-  }
-
-  async function archiveSelected() {
-    const ids = selectedVisible.map((company) => company.id);
-    if (ids.length === 0) return;
-    const label = ids.length === 1 ? "1 company" : `${ids.length} companies`;
-    if (!window.confirm(`Archive ${label}?`)) return;
-    setArchiving(true);
-    setBulkError(null);
-    const failed: string[] = [];
-    let firstError: string | undefined;
-    for (const id of ids) {
-      const result = await archiveCompanyAction(id);
-      if (result.error) {
-        failed.push(id);
-        firstError ??= result.error;
-      }
-    }
-    setArchiving(false);
-    setSelected(failed);
-    if (firstError) {
-      setBulkError(
-        `${failed.length} of ${ids.length} could not be archived. ${firstError}`,
-      );
-    }
-    router.refresh();
-  }
-
   return (
     <div className="border-border flex min-h-0 flex-1 flex-col border-t">
       <ScrollArea orientation="both" className="min-h-0 flex-1">
         <Table role="table" className={cn(TABLE_GRID_CLASS, "w-full")}>
           <TableHeader role="rowgroup" className="contents">
-            <TableRow role="row" className={TABLE_ROW_CLASS}>
+            <TableRow role="row" className={cn(TABLE_ROW_CLASS, "group")}>
               {TABLE_COLUMNS.map((column) => (
                 <TableHead
                   key={column.key}
@@ -98,12 +60,9 @@ export default function CompaniesTable({
                   {column.key === "name" ? (
                     <span className="flex items-center gap-2">
                       <span className="flex size-6 items-center justify-center">
-                        <Checkbox
-                          checked={
-                            allSelected ? true : someSelected ? "indeterminate" : false
-                          }
-                          onCheckedChange={toggleAll}
-                          aria-label="Select all companies"
+                        <SelectAllCheckbox
+                          selection={selection}
+                          label="Select all companies on this page"
                         />
                       </span>
                       {column.label}
@@ -122,8 +81,10 @@ export default function CompaniesTable({
                 company={company}
                 index={(page - 1) * PAGE_SIZE + index}
                 now={now}
-                selected={selectedIds.includes(company.id)}
-                onToggle={() => toggleSelected(company.id)}
+                selected={selection.isSelected(company.id)}
+                revealed={selection.revealed}
+                selecting={selection.selecting}
+                onToggle={(range) => selection.toggle(company.id, range)}
               />
             ))}
             {companies.length === 0 && (
@@ -141,42 +102,17 @@ export default function CompaniesTable({
           </TableBody>
         </Table>
       </ScrollArea>
-      {(selectedVisible.length > 0 || bulkError) && (
-        <div className="caption-style border-border flex shrink-0 flex-wrap items-center justify-between gap-3 border-t px-4 py-2">
-          {bulkError ? (
-            <span role="alert" className="text-danger">
-              {bulkError}
-            </span>
-          ) : (
-            <span className="text-foreground">
-              {selectedVisible.length} selected
-            </span>
-          )}
-          <span className="flex items-center gap-1">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                setSelected([]);
-                setBulkError(null);
-              }}
-              disabled={archiving}
-            >
-              Clear
-            </Button>
-            {selectedVisible.length > 0 && (
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={archiveSelected}
-                disabled={archiving}
-              >
-                {archiving ? "Archiving…" : "Archive"}
-              </Button>
-            )}
-          </span>
-        </div>
-      )}
+      <BulkActions
+        selection={selection}
+        noun={["company", "companies"]}
+        archive={archiveCompaniesAction}
+        unarchive={unarchiveCompaniesAction}
+        exportRows={exportSelectedCompaniesAction}
+        exportName="companies"
+        emailLabel="Email people"
+        recipients={companyRecipientsAction}
+        mailboxConnected={mailboxConnected}
+      />
       <TableFooter page={page} count={companies.length} total={total} />
     </div>
   );

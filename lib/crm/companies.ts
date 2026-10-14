@@ -591,6 +591,62 @@ export async function archiveCompany(
   );
 }
 
+export async function unarchiveCompany(
+  actor: Actor,
+  id: string,
+  options: MutationOptions = {},
+): Promise<MutationOutcome<{ company: Company }>> {
+  assertScope(actor.scopes, "companies:write");
+  if (!isUuid(id)) throw new CrmError("not_found", "Company not found.", 404);
+  const provenance = options.provenance ?? { operation: "unarchive_company" };
+  const hash = requestHash("unarchive_company", { id, provenance });
+  return withActor(actor, (db) =>
+    replayOrRun(db, actor, options.idempotencyKey, hash, 200, async () => {
+      await lockCompanies(db, actor.workspaceId);
+      const current = await readCompany(db, actor.workspaceId, id);
+      if (!current) throw new CrmError("not_found", "Company not found.", 404);
+      if (!current.archivedAt) return { company: current };
+      try {
+        await db.query(
+          "update crm.companies set archived_at = null where id = $1 and workspace_id = $2",
+          [id, actor.workspaceId],
+        );
+      } catch (error) {
+        if (isPgError(error) && error.code === "23505") {
+          throw new CrmError(
+            "duplicate_company",
+            "Another company already uses this domain or name.",
+            409,
+          );
+        }
+        throw error;
+      }
+      const company = await readCompany(db, actor.workspaceId, id);
+      if (!company) throw new CrmError("not_found", "Company not found.", 404);
+      await recordAudit(db, actor, "company.updated", "company", company.id, provenance, {
+        fields: ["archivedAt"],
+        before: { archivedAt: current.archivedAt },
+        after: { archivedAt: null },
+      });
+      return { company };
+    }),
+  );
+}
+
+export async function getCompaniesByIds(actor: Actor, ids: string[]) {
+  assertScope(actor.scopes, "crm:read");
+  const wanted = [...new Set(ids.filter(isUuid))].slice(0, 100);
+  if (wanted.length === 0) return [];
+  return withActor(actor, async (db) => {
+    const rows = await db.query<CompanyRow>(
+      `${COMPANY_SQL} where c.workspace_id = $1 and c.id = any($2::uuid[])`,
+      [actor.workspaceId, wanted],
+    );
+    const byId = new Map(rows.rows.map((row) => [row.id, mapCompany(row)]));
+    return wanted.flatMap((id) => byId.get(id) ?? []);
+  });
+}
+
 export async function bulkUpsertCompanies(
   actor: Actor,
   items: CompanyWrite[],

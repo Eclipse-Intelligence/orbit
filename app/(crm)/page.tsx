@@ -4,6 +4,7 @@ import { PAGE_SIZE, pageFromParams, pageOffset } from "@/components/crm/paging";
 import { getUserActor } from "@/lib/auth/user";
 import { listCompanies, listMembers } from "@/lib/crm/companies";
 import { companyHref } from "@/lib/crm/hrefs";
+import { getMailbox } from "@/lib/crm/inbox";
 import { companyQueryFromSearchParams } from "@/lib/crm/validation";
 
 export const dynamic = "force-dynamic";
@@ -33,9 +34,10 @@ export default async function CompaniesPage({
   filters.limit = PAGE_SIZE;
   filters.offset = pageOffset(page);
 
-  const [listed, members] = await Promise.all([
+  const [listed, members, mailbox] = await Promise.all([
     listCompanies(user, filters),
     listMembers(user),
+    getMailbox(user),
   ]);
 
   return (
@@ -46,6 +48,7 @@ export default async function CompaniesPage({
       now={requestTime()}
       filters={filters}
       members={members}
+      mailboxConnected={mailbox?.status === "connected"}
       viewer={{
         id: user.userId,
         name: user.fullName || user.email,
