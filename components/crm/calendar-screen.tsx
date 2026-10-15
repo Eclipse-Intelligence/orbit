@@ -1,18 +1,34 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Checkbox } from "@/components/_ui/checkbox";
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/_ui/sheet";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/_ui/sheet";
 import CalendarAgenda from "@/components/crm/calendar-agenda";
 import type { CalendarMeta } from "@/components/crm/calendar-event-details";
 import CalendarGrid from "@/components/crm/calendar-grid";
-import InviteDialog, { InviteNotice, NoticeContext, type InvitePrefill } from "@/components/crm/invite-dialog";
+import InviteDialog, {
+  InviteNotice,
+  NoticeContext,
+  type InvitePrefill,
+} from "@/components/crm/invite-dialog";
 import SectionHeader from "@/components/crm/section-header";
 import type { Viewer } from "@/components/crm/viewer";
 import { setCalendarVisibleAction } from "@/app/(crm)/calendar/actions";
-import { rangeDays, shiftDateKey, stepDays, type CalendarMode } from "@/lib/calendar-view";
+import {
+  mergeDuplicateEvents,
+  rangeDays,
+  shiftDateKey,
+  stepDays,
+  type CalendarMode,
+} from "@/lib/calendar-view";
 import type { CalendarGroup, CalendarItem } from "@/lib/crm/calendars";
 import type { InviteSetup } from "@/lib/crm/invites";
 import { cn } from "@/lib/utils";
@@ -89,11 +105,16 @@ function CalendarList({
     <div className="flex flex-col gap-5">
       {groups.map((group) => (
         <div key={`${group.kind}-${group.id}`} className="flex flex-col gap-2">
-          <span className="caption-style text-subtle truncate px-1" title={group.label}>
+          <span
+            className="caption-style text-subtle truncate px-1"
+            title={group.label}
+          >
             {group.label}
           </span>
           {group.calendars.length === 0 ? (
-            <span className="caption-style text-faint px-1">Not synced yet</span>
+            <span className="caption-style text-faint px-1">
+              Not synced yet
+            </span>
           ) : (
             <ul className="flex flex-col">
               {group.calendars.map((calendar) => {
@@ -103,7 +124,9 @@ function CalendarList({
                     <label className="flex cursor-pointer items-center gap-2 rounded-lg px-1 py-1.5 hover:bg-white/4">
                       <Checkbox
                         checked={checked}
-                        onCheckedChange={(next) => onToggle(calendar.id, next === true)}
+                        onCheckedChange={(next) =>
+                          onToggle(calendar.id, next === true)
+                        }
                         aria-label={`Show ${calendar.name}`}
                       />
                       <span
@@ -111,7 +134,12 @@ function CalendarList({
                         className="size-2.5 shrink-0 rounded-full"
                         style={{ backgroundColor: calendar.color }}
                       />
-                      <span className={cn("truncate text-[14px] leading-5", !checked && "text-subtle")}>
+                      <span
+                        className={cn(
+                          "truncate text-[14px] leading-5",
+                          !checked && "text-subtle",
+                        )}
+                      >
                         {calendar.name}
                       </span>
                     </label>
@@ -122,7 +150,12 @@ function CalendarList({
           )}
         </div>
       ))}
-      <Button variant="link" size="none" className="caption-style text-subtle self-start px-1" href="/settings#calendars">
+      <Button
+        variant="link"
+        size="none"
+        className="caption-style text-subtle self-start px-1"
+        href="/settings#calendars"
+      >
         Manage calendars
       </Button>
     </div>
@@ -158,10 +191,14 @@ export default function CalendarScreen({
   const [panelOpen, setPanelOpen] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [inviting, setInviting] = useState<{ prefill: InvitePrefill; at: number } | null>(null);
+  const [inviting, setInviting] = useState<{
+    prefill: InvitePrefill;
+    at: number;
+  } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const clearNotice = useCallback(() => setNotice(null), []);
-  const startInvite = (prefill: InvitePrefill = {}) => setInviting({ prefill, at: Date.now() });
+  const startInvite = (prefill: InvitePrefill = {}) =>
+    setInviting({ prefill, at: Date.now() });
   const desktopMode = mode ?? "week";
   const days = rangeDays(date, desktopMode);
 
@@ -182,10 +219,26 @@ export default function CalendarScreen({
   }, [groups]);
 
   const visible = (id: string, fallback: boolean) => overrides[id] ?? fallback;
-  const shown = items.filter((item) => {
-    const calendar = calendars.get(item.calendarId);
-    return calendar ? visible(item.calendarId, calendar.visible) : false;
-  });
+  const shown = mergeDuplicateEvents(
+    items.filter((item) => {
+      const calendar = calendars.get(item.calendarId);
+      return calendar ? visible(item.calendarId, calendar.visible) : false;
+    }),
+  );
+
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState === "visible") router.refresh();
+    };
+    const timer = window.setInterval(refresh, 60_000);
+    document.addEventListener("visibilitychange", refresh);
+    window.addEventListener("focus", refresh);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
+      window.removeEventListener("focus", refresh);
+    };
+  }, [router]);
 
   async function toggle(id: string, value: boolean) {
     setError(null);
@@ -200,7 +253,9 @@ export default function CalendarScreen({
   }
 
   const step = stepDays(desktopMode);
-  const list = <CalendarList groups={groups} visible={visible} onToggle={toggle} />;
+  const list = (
+    <CalendarList groups={groups} visible={visible} onToggle={toggle} />
+  );
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -243,7 +298,9 @@ export default function CalendarScreen({
             variant="ghost"
             size="icon"
             className="hidden lg:inline-flex"
-            aria-label={desktopMode === "week" ? "Previous week" : "Previous day"}
+            aria-label={
+              desktopMode === "week" ? "Previous week" : "Previous day"
+            }
             href={calendarHref(shiftDateKey(date, -step), mode)}
           >
             <ChevronLeftIcon aria-hidden className="size-3.5" />
@@ -276,8 +333,13 @@ export default function CalendarScreen({
             <ChevronRightIcon aria-hidden className="size-3.5" />
           </Button>
         </span>
-        <h2 className="min-w-0 truncate text-[14px] leading-5 font-medium" aria-live="polite">
-          <span className="hidden lg:inline">{desktopMode === "week" ? weekLabel(days) : dayLabel(date)}</span>
+        <h2
+          className="min-w-0 truncate text-[14px] leading-5 font-medium"
+          aria-live="polite"
+        >
+          <span className="hidden lg:inline">
+            {desktopMode === "week" ? weekLabel(days) : dayLabel(date)}
+          </span>
           <span className="lg:hidden">{dayLabel(date)}</span>
         </h2>
         <span
@@ -352,7 +414,9 @@ export default function CalendarScreen({
           <SheetHeader className="px-4">
             <SheetTitle>Calendars</SheetTitle>
           </SheetHeader>
-          <SheetDescription className="sr-only">Choose which calendars to show</SheetDescription>
+          <SheetDescription className="sr-only">
+            Choose which calendars to show
+          </SheetDescription>
           <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4">{list}</div>
         </SheetContent>
       </Sheet>

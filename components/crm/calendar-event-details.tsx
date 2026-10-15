@@ -4,7 +4,10 @@ import { useContext, useState } from "react";
 import { useRouter } from "next/navigation";
 import Button, { buttonVariants } from "@/components/_ui/button";
 import { NoticeContext } from "@/components/crm/invite-dialog";
-import { cancelInviteAction, createContactFromEventAction } from "@/app/(crm)/calendar/actions";
+import {
+  cancelInviteAction,
+  createContactFromEventAction,
+} from "@/app/(crm)/calendar/actions";
 import { appTimeZone } from "@/lib/time";
 import { contactHref } from "@/lib/crm/hrefs";
 import type { CalendarProvider } from "@/lib/crm/calendar-accounts";
@@ -13,7 +16,12 @@ import { INVITE_COMMENT_MAX } from "@/lib/invite-rules";
 
 const ATTENDEES_SHOWN = 25;
 
-export type CalendarMeta = { name: string; color: string; account: string; provider: CalendarProvider };
+export type CalendarMeta = {
+  name: string;
+  color: string;
+  account: string;
+  provider: CalendarProvider;
+};
 
 const RESPONSES: Record<string, string> = {
   accepted: "Accepted",
@@ -38,7 +46,9 @@ export function formatTime(iso: string) {
   }).format(new Date(iso));
 }
 
-export function formatTimeRange(item: Pick<CalendarItem, "startsAt" | "endsAt" | "isAllDay">) {
+export function formatTimeRange(
+  item: Pick<CalendarItem, "startsAt" | "endsAt" | "isAllDay">,
+) {
   if (item.isAllDay) return "All day";
   return `${formatTime(item.startsAt)} – ${formatTime(item.endsAt)}`;
 }
@@ -91,7 +101,9 @@ function PersonRow({
   const [error, setError] = useState<string | null>(null);
   const contactId = person.contactId ?? created[person.email] ?? null;
   const name = person.name ?? person.email;
-  const detail = [label, person.response ? RESPONSES[person.response] : null].filter(Boolean).join(" · ");
+  const detail = [label, person.response ? RESPONSES[person.response] : null]
+    .filter(Boolean)
+    .join(" · ");
 
   async function create() {
     if (pending) return;
@@ -112,7 +124,12 @@ function PersonRow({
       <span className="flex items-center justify-between gap-3">
         <span className="flex min-w-0 flex-col gap-1">
           {contactId ? (
-            <Button variant="link" size="none" className="justify-start truncate" href={contactHref(contactId)}>
+            <Button
+              variant="link"
+              size="none"
+              className="justify-start truncate"
+              href={contactHref(contactId)}
+            >
               {name}
             </Button>
           ) : (
@@ -159,7 +176,9 @@ function CancelMeeting({ item }: { item: CalendarItem }) {
       setError(result.error);
       return;
     }
-    const message = result.warning ?? `Cancelled ${eventTitle(item)}. Outlook let your guests know.`;
+    const message =
+      result.warning ??
+      `Cancelled ${eventTitle(item)}. Outlook let your guests know.`;
     setDone(message);
     notify(message);
     router.refresh();
@@ -174,7 +193,12 @@ function CancelMeeting({ item }: { item: CalendarItem }) {
   }
   if (!confirming) {
     return (
-      <Button variant="ghost" size="sm" className="text-danger self-start" onClick={() => setConfirming(true)}>
+      <Button
+        variant="ghost"
+        size="sm"
+        className="text-danger self-start"
+        onClick={() => setConfirming(true)}
+      >
         Cancel meeting
       </Button>
     );
@@ -198,10 +222,21 @@ function CancelMeeting({ item }: { item: CalendarItem }) {
         </p>
       )}
       <div className="flex flex-wrap items-center gap-2">
-        <Button variant="secondary" size="sm" className="text-danger" disabled={pending} onClick={cancel}>
+        <Button
+          variant="secondary"
+          size="sm"
+          className="text-danger"
+          disabled={pending}
+          onClick={cancel}
+        >
           {pending ? "Cancelling…" : "Cancel meeting"}
         </Button>
-        <Button variant="ghost" size="sm" disabled={pending} onClick={() => setConfirming(false)}>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={pending}
+          onClick={() => setConfirming(false)}
+        >
           Keep meeting
         </Button>
       </div>
@@ -212,29 +247,44 @@ function CancelMeeting({ item }: { item: CalendarItem }) {
 export default function CalendarEventDetails({
   item,
   calendar,
+  others,
   headingId,
 }: {
   item: CalendarItem;
   calendar: CalendarMeta | null;
+  others?: CalendarMeta[];
   headingId?: string;
 }) {
   const [created, setCreated] = useState<Record<string, string>>({});
   const onCreated = (email: string, contactId: string) =>
     setCreated((current) => ({ ...current, [email]: contactId }));
   const organizerEmail = item.organizer?.email ?? null;
-  const attendees = item.attendees.filter((person) => person.email !== organizerEmail);
+  const attendees = item.attendees.filter(
+    (person) => person.email !== organizerEmail,
+  );
   const shown = attendees.slice(0, ATTENDEES_SHOWN);
   const status = showAsLabel(item.showAs);
   const links = [
-    item.joinUrl ? { href: item.joinUrl, label: "Join", variant: "primary" as const } : null,
+    item.joinUrl
+      ? { href: item.joinUrl, label: "Join", variant: "primary" as const }
+      : null,
     item.webLink
       ? {
           href: item.webLink,
-          label: calendar?.provider === "ics" ? "Open event" : "Open in Outlook",
+          label:
+            calendar?.provider === "ics" ? "Open event" : "Open in Outlook",
           variant: "secondary" as const,
         }
       : null,
-  ].filter((link): link is { href: string; label: string; variant: "primary" | "secondary" } => link !== null);
+  ].filter(
+    (
+      link,
+    ): link is {
+      href: string;
+      label: string;
+      variant: "primary" | "secondary";
+    } => link !== null,
+  );
 
   return (
     <div className="flex flex-col gap-4">
@@ -246,15 +296,25 @@ export default function CalendarEventDetails({
           {whenLine(item)}
           {status ? ` · ${status}` : ""}
         </p>
-        {calendar && (
-          <p className="caption-style text-subtle flex items-center gap-1.5">
-            <span aria-hidden className="size-2 shrink-0 rounded-full" style={{ backgroundColor: calendar.color }} />
-            <span className="truncate">
-              {calendar.name} · {calendar.account}
-            </span>
-          </p>
+        {calendar &&
+          [calendar, ...(others ?? [])].map((entry, index) => (
+            <p
+              key={`${entry.account}-${entry.name}-${index}`}
+              className="caption-style text-subtle flex items-center gap-1.5"
+            >
+              <span
+                aria-hidden
+                className="size-2 shrink-0 rounded-full"
+                style={{ backgroundColor: entry.color }}
+              />
+              <span className="truncate">
+                {entry.name} · {entry.account}
+              </span>
+            </p>
+          ))}
+        {item.location && (
+          <p className="caption-style text-subtle">{item.location}</p>
         )}
-        {item.location && <p className="caption-style text-subtle">{item.location}</p>}
       </div>
       {(links.length > 0 || item.granolaHref) && (
         <div className="flex flex-wrap items-center gap-2">
@@ -281,22 +341,36 @@ export default function CalendarEventDetails({
         <div className="flex flex-col gap-2">
           <span className="caption-style text-subtle">Organiser</span>
           <ul>
-            <PersonRow eventId={item.id} person={item.organizer} created={created} onCreated={onCreated} />
+            <PersonRow
+              eventId={item.id}
+              person={item.organizer}
+              created={created}
+              onCreated={onCreated}
+            />
           </ul>
         </div>
       )}
       {shown.length > 0 && (
         <div className="flex flex-col gap-2">
           <span className="caption-style text-subtle">
-            {attendees.length} {attendees.length === 1 ? "attendee" : "attendees"}
+            {attendees.length}{" "}
+            {attendees.length === 1 ? "attendee" : "attendees"}
           </span>
           <ul className="flex flex-col gap-2.5">
             {shown.map((person) => (
-              <PersonRow key={person.email} eventId={item.id} person={person} created={created} onCreated={onCreated} />
+              <PersonRow
+                key={person.email}
+                eventId={item.id}
+                person={person}
+                created={created}
+                onCreated={onCreated}
+              />
             ))}
           </ul>
           {attendees.length > shown.length && (
-            <span className="caption-style text-subtle">and {attendees.length - shown.length} more</span>
+            <span className="caption-style text-subtle">
+              and {attendees.length - shown.length} more
+            </span>
           )}
         </div>
       )}

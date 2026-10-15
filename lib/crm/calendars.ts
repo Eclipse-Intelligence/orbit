@@ -73,6 +73,8 @@ export type CalendarItem = {
   granolaHref: string | null;
   createdByOrbit: boolean;
   canCancel: boolean;
+  icalUid: string | null;
+  alsoIn: string[];
 };
 
 type CalendarRow = {
@@ -204,6 +206,7 @@ export async function setCalendarForCrm(actor: UserActor, calendarId: string, us
 type ItemRow = {
   id: string;
   calendar_id: string;
+  ical_uid: string | null;
   subject: string | null;
   starts_at: Date | string;
   ends_at: Date | string;
@@ -243,7 +246,7 @@ export async function listCalendarItems(
     const result = await db.query<ItemRow>(
       `select e.id, e.calendar_id, e.subject, e.starts_at, e.ends_at, e.is_all_day, e.show_as,
               e.location, e.web_link, e.online_meeting_url, e.organizer, e.attendees,
-              e.connection_id, e.created_by_orbit,
+              e.connection_id, e.created_by_orbit, e.ical_uid,
               g.id as granola_id, g.contact_id as granola_contact_id, g.company_id as granola_company_id
        from crm.calendar_events e
        join crm.calendars c on c.id = e.calendar_id and c.is_visible
@@ -329,6 +332,8 @@ export async function listCalendarItems(
         granolaHref,
         createdByOrbit: row.created_by_orbit,
         canCancel: cancellable(row),
+        icalUid: row.ical_uid,
+        alsoIn: [],
       };
     });
   });

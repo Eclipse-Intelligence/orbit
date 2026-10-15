@@ -827,3 +827,23 @@ describe("multi-calendar sync", () => {
     await assert.rejects(disconnectCalendarAccount(owner, accountId), /isn't connected/);
   });
 });
+
+describe("merging the same meeting across calendars", () => {
+  it("shows one entry per meeting and lists the other calendars", async () => {
+    const { mergeDuplicateEvents } = await import("@/lib/calendar-view");
+    const base = { subject: "Intro", startsAt: "2026-10-16T12:15:00.000Z", endsAt: "2026-10-16T12:45:00.000Z", canCancel: false, granolaHref: null, alsoIn: [] as string[] };
+    const merged = mergeDuplicateEvents([
+      { ...base, calendarId: "work", icalUid: "uid-1" },
+      { ...base, calendarId: "personal", icalUid: "uid-1", canCancel: true },
+      { ...base, calendarId: "work", icalUid: "uid-2", subject: "Other" },
+      { ...base, calendarId: "feed", icalUid: null },
+      { ...base, calendarId: "feed-2", icalUid: null },
+    ]);
+    assert.equal(merged.length, 3);
+    const intro = merged.find((item) => item.icalUid === "uid-1")!;
+    assert.equal(intro.calendarId, "personal");
+    assert.deepEqual(intro.alsoIn, ["work"]);
+    const noUid = merged.find((item) => item.icalUid === null)!;
+    assert.deepEqual(noUid.alsoIn, ["feed-2"]);
+  });
+});

@@ -1,14 +1,30 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popover";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/_ui/popover";
 import CalendarEventDetails, {
   eventTitle,
   formatTime,
   formatTimeRange,
   type CalendarMeta,
 } from "@/components/crm/calendar-event-details";
-import { allDayKeys, DAY_MINUTES, daySpan, packColumns, wallMinutes } from "@/lib/calendar-view";
+import {
+  allDayKeys,
+  DAY_MINUTES,
+  daySpan,
+  packColumns,
+  wallMinutes,
+} from "@/lib/calendar-view";
 import { snapTime } from "@/lib/invite-rules";
 import type { CalendarItem } from "@/lib/crm/calendars";
 import { cn } from "@/lib/utils";
@@ -21,9 +37,16 @@ const MIN_MINUTES = 20;
 const COMPACT_BELOW_PX = 44;
 const HOURS = Array.from({ length: 24 }, (_, hour) => hour);
 
-export function eventStyle(color: string, showAs: string | null): CSSProperties {
+export function eventStyle(
+  color: string,
+  showAs: string | null,
+): CSSProperties {
   if (showAs === "free") {
-    return { backgroundColor: `${color}14`, borderColor: `${color}80`, borderStyle: "dashed" };
+    return {
+      backgroundColor: `${color}14`,
+      borderColor: `${color}80`,
+      borderStyle: "dashed",
+    };
   }
   if (showAs === "tentative") {
     return {
@@ -38,7 +61,10 @@ export function eventStyle(color: string, showAs: string | null): CSSProperties 
 function dayHeading(key: string) {
   const date = new Date(`${key}T12:00:00Z`);
   return {
-    weekday: new Intl.DateTimeFormat("en-GB", { weekday: "short", timeZone: "UTC" }).format(date),
+    weekday: new Intl.DateTimeFormat("en-GB", {
+      weekday: "short",
+      timeZone: "UTC",
+    }).format(date),
     day: date.getUTCDate(),
   };
 }
@@ -50,6 +76,7 @@ function hourLabel(hour: number) {
 function EventBlock({
   item,
   calendar,
+  others,
   style,
   compact,
   allDay,
@@ -57,6 +84,7 @@ function EventBlock({
 }: {
   item: CalendarItem;
   calendar: CalendarMeta | null;
+  others: CalendarMeta[];
   style: CSSProperties;
   compact: boolean;
   allDay?: boolean;
@@ -76,19 +104,43 @@ function EventBlock({
             !allDay && (compact ? "py-0.5" : "py-1"),
             muted ? "text-soft" : "text-foreground",
           )}
-          style={{ ...eventStyle(color, item.showAs), ...style }}
+          style={{
+            ...eventStyle(color, item.showAs),
+            ...(others.length > 0
+              ? {
+                  boxShadow: others
+                    .map(
+                      (other, index) =>
+                        `inset -${(index + 1) * 3}px 0 0 ${other.color}`,
+                    )
+                    .join(", "),
+                }
+              : {}),
+            ...style,
+          }}
         >
           <span className="truncate text-[13px] leading-[18px] font-medium">
             {eventTitle(item)}
-            {compact && !allDay && <span className="text-soft font-normal"> {formatTime(item.startsAt)}</span>}
+            {compact && !allDay && (
+              <span className="text-soft font-normal">
+                {" "}
+                {formatTime(item.startsAt)}
+              </span>
+            )}
           </span>
           {!allDay && !compact && (
-            <span className="text-soft truncate text-[12px] leading-4">{formatTimeRange(item)}</span>
+            <span className="text-soft truncate text-[12px] leading-4">
+              {formatTimeRange(item)}
+            </span>
           )}
         </button>
       </PopoverTrigger>
-      <PopoverContent align="start" side="right" className="max-h-[min(70dvh,560px)] w-[360px] overflow-y-auto p-4">
-        <CalendarEventDetails item={item} calendar={calendar} />
+      <PopoverContent
+        align="start"
+        side="right"
+        className="max-h-[min(70dvh,560px)] w-[360px] overflow-y-auto p-4"
+      >
+        <CalendarEventDetails item={item} calendar={calendar} others={others} />
       </PopoverContent>
     </Popover>
   );
@@ -144,14 +196,18 @@ export default function CalendarGrid({
   }, []);
 
   const allDay = new Map<string, CalendarItem[]>();
-  const timed = new Map<string, { item: CalendarItem; top: number; bottom: number }[]>();
+  const timed = new Map<
+    string,
+    { item: CalendarItem; top: number; bottom: number }[]
+  >();
   for (const key of days) {
     allDay.set(key, []);
     timed.set(key, []);
   }
   for (const item of items) {
     if (item.isAllDay) {
-      for (const key of allDayKeys(item.startsAt, item.endsAt)) allDay.get(key)?.push(item);
+      for (const key of allDayKeys(item.startsAt, item.endsAt))
+        allDay.get(key)?.push(item);
       continue;
     }
     for (const key of days) {
@@ -161,22 +217,34 @@ export default function CalendarGrid({
   }
   const hasAllDay = days.some((key) => (allDay.get(key)?.length ?? 0) > 0);
   const nowMinutes = wallMinutes(current);
-  const columns = { gridTemplateColumns: `56px repeat(${days.length}, minmax(0, 1fr))` };
+  const columns = {
+    gridTemplateColumns: `56px repeat(${days.length}, minmax(0, 1fr))`,
+  };
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <div className="border-border grid shrink-0 overflow-y-hidden border-b [scrollbar-gutter:stable]" style={columns}>
+      <div
+        className="border-border grid shrink-0 overflow-y-hidden border-b [scrollbar-gutter:stable]"
+        style={columns}
+      >
         <div aria-hidden />
         {days.map((key) => {
           const heading = dayHeading(key);
           const isToday = key === today;
           return (
-            <div key={key} className="border-border flex items-center gap-1.5 border-l px-2 py-2.5">
-              <span className="caption-style text-subtle">{heading.weekday}</span>
+            <div
+              key={key}
+              className="border-border flex items-center gap-1.5 border-l px-2 py-2.5"
+            >
+              <span className="caption-style text-subtle">
+                {heading.weekday}
+              </span>
               <span
                 className={cn(
                   "flex h-6 min-w-6 items-center justify-center rounded-full px-1 text-[14px] leading-none",
-                  isToday ? "bg-primary text-primary-foreground" : "text-foreground",
+                  isToday
+                    ? "bg-primary text-primary-foreground"
+                    : "text-foreground",
                 )}
               >
                 {heading.day}
@@ -190,12 +258,18 @@ export default function CalendarGrid({
               All day
             </div>
             {days.map((key) => (
-              <div key={key} className="border-border flex min-w-0 flex-col gap-1 border-t border-l p-1">
+              <div
+                key={key}
+                className="border-border flex min-w-0 flex-col gap-1 border-t border-l p-1"
+              >
                 {(allDay.get(key) ?? []).map((item) => (
                   <EventBlock
                     key={item.id}
                     item={item}
                     calendar={calendars.get(item.calendarId) ?? null}
+                    others={item.alsoIn.flatMap(
+                      (id) => calendars.get(id) ?? [],
+                    )}
                     style={{}}
                     compact
                     allDay
@@ -207,8 +281,15 @@ export default function CalendarGrid({
           </>
         )}
       </div>
-      <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]" data-calendar-scroller="">
-        <div className="relative grid" style={{ ...columns, height: DAY_MINUTES * perMinute }}>
+      <div
+        ref={scroller}
+        className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"
+        data-calendar-scroller=""
+      >
+        <div
+          className="relative grid"
+          style={{ ...columns, height: DAY_MINUTES * perMinute }}
+        >
           <div className="relative">
             {HOURS.map((hour) =>
               hour === 0 ? null : (
@@ -225,13 +306,20 @@ export default function CalendarGrid({
           {days.map((key) => {
             const entries = timed.get(key) ?? [];
             const slots = packColumns(
-              entries.map((entry) => ({ id: entry.item.id, top: entry.top, bottom: entry.bottom })),
+              entries.map((entry) => ({
+                id: entry.item.id,
+                top: entry.top,
+                bottom: entry.bottom,
+              })),
               MIN_MINUTES,
             );
             return (
               <div
                 key={key}
-                className={cn("border-border relative border-l", onSlot && "cursor-copy")}
+                className={cn(
+                  "border-border relative border-l",
+                  onSlot && "cursor-copy",
+                )}
                 data-day={key}
                 onPointerDownCapture={() => {
                   dismissing.current = openPopovers.current > 0;
@@ -239,28 +327,57 @@ export default function CalendarGrid({
                 onClick={
                   onSlot
                     ? (event) => {
-                        if (dismissing.current || (event.target as HTMLElement).closest("button, a")) return;
+                        if (
+                          dismissing.current ||
+                          (event.target as HTMLElement).closest("button, a")
+                        )
+                          return;
                         const box = event.currentTarget.getBoundingClientRect();
-                        onSlot(key, snapTime((event.clientY - box.top) / perMinute));
+                        onSlot(
+                          key,
+                          snapTime((event.clientY - box.top) / perMinute),
+                        );
                       }
                     : undefined
                 }
               >
                 {HOURS.map((hour) => (
-                  <div key={hour} aria-hidden className="absolute inset-x-0" style={{ top: hour * hourHeight }}>
-                    <div className={cn("border-border border-t", hour === 0 && "border-transparent")} />
-                    <div className="border-border/60 border-t border-dashed" style={{ marginTop: hourHeight / 2 - 1 }} />
+                  <div
+                    key={hour}
+                    aria-hidden
+                    className="absolute inset-x-0"
+                    style={{ top: hour * hourHeight }}
+                  >
+                    <div
+                      className={cn(
+                        "border-border border-t",
+                        hour === 0 && "border-transparent",
+                      )}
+                    />
+                    <div
+                      className="border-border/60 border-t border-dashed"
+                      style={{ marginTop: hourHeight / 2 - 1 }}
+                    />
                   </div>
                 ))}
                 {entries.map((entry) => {
-                  const slot = slots.get(entry.item.id) ?? { column: 0, columns: 1 };
-                  const minutes = Math.max(entry.bottom - entry.top, MIN_MINUTES);
+                  const slot = slots.get(entry.item.id) ?? {
+                    column: 0,
+                    columns: 1,
+                  };
+                  const minutes = Math.max(
+                    entry.bottom - entry.top,
+                    MIN_MINUTES,
+                  );
                   const height = minutes * perMinute - 2;
                   return (
                     <EventBlock
                       key={entry.item.id}
                       item={entry.item}
                       calendar={calendars.get(entry.item.calendarId) ?? null}
+                      others={entry.item.alsoIn.flatMap(
+                        (id) => calendars.get(id) ?? [],
+                      )}
                       compact={height < COMPACT_BELOW_PX}
                       onOpenChange={trackPopover}
                       style={{
