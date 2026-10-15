@@ -5,6 +5,7 @@ import Button from "@/components/_ui/button";
 import { ScrollArea } from "@/components/_ui/scroll-area";
 import SidebarNavItem from "./sidebar-nav-item";
 import SidebarSection from "./sidebar-section";
+import SidebarShortcuts from "./sidebar-shortcuts";
 import { CollapseSidebarButton } from "./sidebar-toggle";
 import { useCompaniesStore } from "@/stores/companies-store";
 import { TASKS_PATH } from "@/lib/crm/task-views";
@@ -116,6 +117,7 @@ export default function SidebarContent({
           label="Settings"
           active={current("/settings")}
         />
+        <SidebarShortcuts />
         <Button
           variant="nav"
           size="md"

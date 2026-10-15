@@ -156,6 +156,7 @@ export function ShortcutsProvider({ children }: { children: ReactNode }) {
   const [helpOpen, setHelpOpen] = useState(false);
   const [listSearch, setListSearch] = useState<ListSearchConfig | null>(null);
   const handlers = useRef(new Map<string, Handler[]>());
+  const fallbacks = useRef(new WeakSet<Handler>());
   const state = useRef({ singleKeys: true, mac: true, overlayAtDown: false });
 
   useEffect(() => {
@@ -245,7 +246,7 @@ export function ShortcutsProvider({ children }: { children: ReactNode }) {
   const available = useCallback((id: string) => {
     const def = SHORTCUT_BY_ID.get(id);
     if (!def) return false;
-    if ((handlers.current.get(id) ?? []).length > 0) return true;
+    if ((handlers.current.get(id) ?? []).some((handler) => !fallbacks.current.has(handler))) return true;
     if (def.rowKey && document.querySelector(`[data-row-key="${def.rowKey}"]`)) return true;
     if (def.target && shortcutTarget(def.target)) return true;
     return Boolean(def.href);
@@ -254,25 +255,33 @@ export function ShortcutsProvider({ children }: { children: ReactNode }) {
   const hint = useCallback((id: string) => shortcutHint(id, mac), [mac]);
 
   useEffect(() => {
+    const fallback = (id: string, handler: Handler) => {
+      fallbacks.current.add(handler);
+      return register(id, handler);
+    };
     const cleanups = [
-      register("palette", () => {
+      fallback("palette", () => {
         setPaletteMode("global");
         setPaletteOpenState((open) => !open);
       }),
-      register("search-list", () => openPalette("global")),
-      register("help", () => setHelpOpen(true)),
-      register("sidebar", () => {
+      fallback("search-list", () => openPalette("global")),
+      fallback("help", () => {
+        const panel = window.matchMedia("(min-width: 64rem)").matches ? shortcutTarget("shortcuts-panel") : null;
+        if (panel) panel.click();
+        else setHelpOpen(true);
+      }),
+      fallback("sidebar", () => {
         if (!window.matchMedia("(min-width: 64rem)").matches) return false;
         setSidebarCollapsed(!("sidebarCollapsed" in document.documentElement.dataset));
       }),
-      register("submit", () => submitFrom(document.activeElement)),
-      register("save", () => {
+      fallback("submit", () => submitFrom(document.activeElement)),
+      fallback("save", () => {
         if (submitFrom(document.activeElement)) return;
         const button = shortcutTarget("save");
         if (button && overlayOpen() && !button.closest('[role="dialog"]')) return;
         if (button) button.click();
       }),
-      register("create-event", () => {
+      fallback("create-event", () => {
         const button = shortcutTarget("new-event") ?? shortcutTarget("invite");
         if (button) {
           button.click();
@@ -280,8 +289,8 @@ export function ShortcutsProvider({ children }: { children: ReactNode }) {
         }
         router.push("/calendar?new=1");
       }),
-      register("create-activity", () => router.push("/activities?add=1")),
-      register("record-edit", () => {
+      fallback("create-activity", () => router.push("/activities?add=1")),
+      fallback("record-edit", () => {
         const button = shortcutTarget("edit");
         if (!button) return false;
         button.click();
@@ -294,7 +303,7 @@ export function ShortcutsProvider({ children }: { children: ReactNode }) {
           field?.focus();
         }, 60);
       }),
-      register("back", () => {
+      fallback("back", () => {
         const cancel = shortcutTarget("cancel-edit");
         if (!cancel) return false;
         cancel.click();
