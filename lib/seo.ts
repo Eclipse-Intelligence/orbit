@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
+import { siteOrigin } from "@/lib/site-url";
 
 export const SITE_NAME = "Orbit";
-export const SITE_URL =
-  process.env.SITE_URL ?? process.env.NEXT_PUBLIC_SITE_URL ?? "https://example.com";
+export const SITE_URL = siteOrigin() ?? "https://example.com";
 export const SITE_DESCRIPTION =
   "A focused CRM for companies, relationships, and tasks.";
 export const DEFAULT_OG_IMAGE = "/opengraph-image.jpg";
