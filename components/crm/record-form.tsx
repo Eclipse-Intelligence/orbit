@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { teamsCallUrl } from "@/lib/phone";
+import { KEYBOARD_ROW_CLASS } from "@/lib/shortcuts";
 import { cn } from "@/lib/utils";
 import PhoneIcon from "@/public/assets/images/_common/phone.svg";
 
@@ -78,13 +79,13 @@ export function RecordRow({
     </span>
   );
   return (
-    <li className={cn("border-border flex min-h-11 items-center gap-3 border-b px-2.5 py-2")}>
+    <li data-list-row="" className={cn(KEYBOARD_ROW_CLASS, "border-border flex min-h-11 items-center gap-3 border-b px-2.5 py-2")}>
       {href ? (
         <Link href={href} className="flex min-w-0 flex-1">
           {body}
         </Link>
       ) : onClick ? (
-        <button type="button" className="min-w-0 flex-1 cursor-pointer" onClick={onClick}>
+        <button type="button" data-row-open="" className="min-w-0 flex-1 cursor-pointer" onClick={onClick}>
           {body}
         </button>
       ) : (

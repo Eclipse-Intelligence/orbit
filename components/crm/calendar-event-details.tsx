@@ -197,6 +197,8 @@ function CancelMeeting({ item }: { item: CalendarItem }) {
         variant="ghost"
         size="sm"
         className="text-danger self-start"
+        data-shortcut="cancel-meeting"
+        title="Cancel meeting (Delete)"
         onClick={() => setConfirming(true)}
       >
         Cancel meeting
@@ -227,6 +229,7 @@ function CancelMeeting({ item }: { item: CalendarItem }) {
           size="sm"
           className="text-danger"
           disabled={pending}
+          autoFocus
           onClick={cancel}
         >
           {pending ? "Cancelling…" : "Cancel meeting"}
@@ -324,6 +327,8 @@ export default function CalendarEventDetails({
               href={link.href}
               target="_blank"
               rel="noreferrer"
+              data-shortcut={link.label === "Join" ? "join" : undefined}
+              title={link.label === "Join" ? "Join (J)" : undefined}
               className={buttonVariants({ variant: link.variant, size: "sm" })}
             >
               {link.label}

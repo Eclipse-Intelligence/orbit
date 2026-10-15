@@ -77,6 +77,8 @@ export default function CompanyContacts({
           variant="ghost"
           size="sm"
           aria-expanded={adding}
+          data-shortcut="add-person"
+          title="Add or link a person (A)"
           onClick={() => setAdding((current) => !current)}
         >
           {adding ? "Close" : "Add contact"}

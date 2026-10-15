@@ -7,6 +7,7 @@ import { DateTimePicker } from "@/components/_ui/date-picker";
 import { Input } from "@/components/_ui/input";
 import RecordTransfer from "@/components/crm/record-transfer";
 import SectionHeader from "@/components/crm/section-header";
+import KeyboardList from "@/components/shortcuts/keyboard-list";
 import ActionTask from "@/components/beautifui/action-task";
 import { ClickUpPickerField } from "@/components/crm/clickup";
 import ReminderSelect from "@/components/crm/reminder-select";
@@ -81,13 +82,15 @@ export default function ActionsScreen({
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
       <SectionHeader title="Tasks" viewer={viewer} action={<RecordTransfer resource="tasks" />} />
       <div className="flex flex-wrap gap-2 px-4 pt-4">
-        {VIEWS.map((item) => (
+        {VIEWS.map((item, index) => (
           <Button
             key={item.id}
             variant={item.id === view ? "secondary" : "ghost"}
             size="sm"
             href={tasksHref(item.id)}
             aria-current={item.id === view ? "page" : undefined}
+            data-shortcut={`tab-${index + 1}`}
+            title={`${item.label} (${index + 1})`}
           >
             {item.label}
             <span className="text-subtle tabular-nums">{counts[item.id]}</span>
@@ -97,7 +100,7 @@ export default function ActionsScreen({
       <form action={action} className="border-border grid gap-3 border-b px-4 py-4 sm:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_14em_12em_12em_auto] lg:items-end">
         <label className="flex flex-col gap-2" htmlFor="task-title">
           <span className="caption-style text-subtle">Task</span>
-          <Input id="task-title" name="title" required placeholder="Send the follow-up" />
+          <Input id="task-title" name="title" required placeholder="Send the follow-up" data-shortcut="add-record" />
         </label>
         <div className="flex min-w-0 flex-col gap-2">
           <label className="caption-style text-subtle" htmlFor="task-due">
@@ -151,6 +154,7 @@ export default function ActionsScreen({
           {state.warning}
         </p>
       )}
+      <KeyboardList className="flex min-h-0 flex-1 flex-col">
       {view === "none" ? (
         <RecordList
           count={companies.length}
@@ -187,6 +191,7 @@ export default function ActionsScreen({
           ))}
         </RecordList>
       )}
+      </KeyboardList>
     </section>
   );
 }

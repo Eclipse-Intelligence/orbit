@@ -326,6 +326,8 @@ export default function RecordTags({
               variant="ghost"
               size="none"
               aria-label="Add a tag"
+              data-shortcut="add-tag"
+              title="Add a tag (T)"
               className="h-[22px] gap-1 px-2 text-[12px]"
             >
               <PlusIcon aria-hidden className="size-3" />

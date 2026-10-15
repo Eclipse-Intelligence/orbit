@@ -11,6 +11,7 @@ import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import { reminderLabel } from "@/lib/crm/reminder-options";
 import { taskDueState } from "@/lib/crm/task-views";
 import type { Task } from "@/lib/crm/types";
+import { KEYBOARD_ROW_CLASS } from "@/lib/shortcuts";
 import { cn } from "@/lib/utils";
 
 export default function ActionTask({
@@ -36,10 +37,12 @@ export default function ActionTask({
   );
 
   return (
-    <li className="border-border overflow-hidden border-b">
+    <li data-list-row="" className={cn(KEYBOARD_ROW_CLASS, "border-border overflow-hidden border-b")}>
       <div className="flex h-11 items-center gap-2.5 px-2.5">
         <button
           type="button"
+          data-row-open=""
+          data-row-key="space"
           aria-expanded={open}
           onClick={() => setOpen((current) => !current)}
           className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 text-left"
@@ -100,7 +103,7 @@ export default function ActionTask({
           />
         )}
         {!completed && onComplete && (
-          <Button variant="secondary" size="sm" onClick={onComplete}>
+          <Button variant="secondary" size="sm" onClick={onComplete} data-row-key="d" title="Mark done (D)">
             Done
           </Button>
         )}

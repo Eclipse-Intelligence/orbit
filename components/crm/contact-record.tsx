@@ -14,6 +14,7 @@ import { useQuickAddRecord } from "@/components/crm/quick-add";
 import RecordLayout from "@/components/crm/record-layout";
 import { CallLink, Detail, DetailList } from "@/components/crm/record-form";
 import SectionHeader from "@/components/crm/section-header";
+import RecordSequence from "@/components/shortcuts/record-sequence";
 import RecordTags from "@/components/crm/tags";
 import type { Viewer } from "@/components/crm/viewer";
 import type { MeetingsSummary } from "@/lib/crm/calendar";
@@ -92,6 +93,7 @@ export default function ContactRecord({
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <RecordSequence />
       <SectionHeader
         title={shown.name}
         viewer={viewer}
@@ -109,8 +111,9 @@ export default function ContactRecord({
                 variant="secondary"
                 size="icon"
                 aria-label="Invite to a meeting"
-                title={shown.email ? "Invite to a meeting" : undefined}
+                title={shown.email ? "Invite to a meeting (I)" : undefined}
                 disabled={!shown.email}
+                data-shortcut="invite"
                 onClick={() => setInvitingAt(Date.now())}
               >
                 <CalendarIcon aria-hidden className="size-3.5" />
@@ -119,6 +122,8 @@ export default function ContactRecord({
             {callUrl && (
               <a
                 href={callUrl}
+                data-shortcut="call"
+                title="Call in Teams (⇧C)"
                 className={buttonVariants({ variant: "secondary", size: "sm" })}
               >
                 <PhoneIcon aria-hidden className="size-3" />
@@ -129,6 +134,8 @@ export default function ContactRecord({
               <Button
                 variant="primary"
                 size="sm"
+                data-shortcut="edit"
+                title="Edit (E)"
                 onClick={() => setEditing(true)}
               >
                 Edit

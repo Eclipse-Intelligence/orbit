@@ -18,7 +18,7 @@ export default function Notifications() {
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button variant="secondary" size="icon" aria-label="Notifications" className="data-[state=open]:bg-muted relative">
+        <Button variant="secondary" size="icon" aria-label="Notifications" data-shortcut="notifications" title="Notifications (⇧N)" className="data-[state=open]:bg-muted relative">
           <BellIcon aria-hidden className="size-3.5" />
           {items.length > 0 && (
             <span className="bg-danger absolute top-1 right-1 size-1.5 rounded-full" />

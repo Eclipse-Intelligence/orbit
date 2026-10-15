@@ -1,13 +1,15 @@
 "use client";
 
 import { useActionState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Input } from "@/components/_ui/input";
 import { EntityChip, Monogram } from "@/components/beautifui/record-marks";
 import Pager from "@/components/crm/pager";
 import RecordTransfer from "@/components/crm/record-transfer";
 import SectionHeader from "@/components/crm/section-header";
+import KeyboardList from "@/components/shortcuts/keyboard-list";
+import ListSearch from "@/components/shortcuts/list-search";
 import { RecordList, RecordRow, RecordSelect } from "@/components/crm/record-form";
 import type { Viewer } from "@/components/crm/viewer";
 import { saveActivityAction, type RecordActionState } from "@/app/(crm)/records";
@@ -44,6 +46,7 @@ export default function ActivitiesScreen({
   contacts: Contact[];
 }) {
   const router = useRouter();
+  const adding = useSearchParams().get("add") === "1";
   const [state, action, pending] = useActionState(saveActivityAction, {} as RecordActionState);
   useEffect(() => {
     if (state.ok) router.refresh();
@@ -63,7 +66,13 @@ export default function ActivitiesScreen({
           </RecordSelect>
           <label className="flex flex-col gap-2" htmlFor="activity-title">
             <span className="caption-style text-subtle">Title</span>
-            <Input id="activity-title" name="title" placeholder="Intro call" />
+            <Input
+              id="activity-title"
+              name="title"
+              placeholder="Intro call"
+              autoFocus={adding}
+              data-shortcut="add-record"
+            />
           </label>
         </div>
         <label className="flex flex-col gap-2" htmlFor="activity-body">
@@ -102,22 +111,14 @@ export default function ActivitiesScreen({
           {pending ? "Saving…" : "Add activity"}
         </Button>
       </form>
-      <form action="/activities" className="flex items-center gap-2 px-4 py-4">
-        <label className="sr-only" htmlFor="activity-search">
-          Search activities
-        </label>
-        <Input
-          id="activity-search"
-          name="q"
-          defaultValue={query}
-          placeholder="Search notes"
-          className="w-[240px]"
-        />
-      </form>
+      <div className="flex items-center gap-2 px-4 py-4">
+        <ListSearch noun="activities" />
+      </div>
       <p className="caption-style text-subtle px-4 pb-2">
         {total} {total === 1 ? "activity" : "activities"}
       </p>
-      <RecordList count={activities.length} empty="No interactions recorded yet.">
+      <KeyboardList className="flex min-h-0 flex-1 flex-col">
+      <RecordList count={activities.length} empty={query ? "No activities match the search." : "No interactions recorded yet."}>
         {activities.map((activity) => (
           <RecordRow
             key={activity.id}
@@ -132,6 +133,7 @@ export default function ActivitiesScreen({
           />
         ))}
       </RecordList>
+      </KeyboardList>
       <Pager
         page={page}
         count={activities.length}

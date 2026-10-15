@@ -80,11 +80,12 @@ export default function CompanyEditor({
             size="sm"
             type="button"
             onClick={onCancel}
+            data-shortcut="cancel-edit"
             disabled={pending}
           >
             Cancel
           </Button>
-          <Button variant="primary" size="sm" type="submit" disabled={pending}>
+          <Button variant="primary" size="sm" type="submit" disabled={pending} data-shortcut="save" title="Save (⌘S)">
             {pending ? "Saving…" : "Save"}
           </Button>
         </div>

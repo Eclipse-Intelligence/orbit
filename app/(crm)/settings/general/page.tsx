@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import AccountSettings from "@/components/crm/account-settings";
 import MeetingLinkSettings from "@/components/crm/meeting-link-settings";
 import MyEmailsSettings from "@/components/crm/my-emails-settings";
+import ShortcutSettings from "@/components/crm/shortcut-settings";
 import SettingsHashRedirect from "@/components/crm/settings-hash-redirect";
 import { SettingsPage } from "@/components/crm/settings-ui";
 import { getUserActor } from "@/lib/auth/user";
@@ -20,7 +21,7 @@ export default async function GeneralSettingsPage() {
   return (
     <SettingsPage
       title="General"
-      description="Your account, the addresses Orbit treats as you, and your meeting link."
+      description="Your account, the addresses Orbit treats as you, your meeting link and keyboard shortcuts."
     >
       <SettingsHashRedirect />
       <AccountSettings
@@ -31,6 +32,7 @@ export default async function GeneralSettingsPage() {
       />
       <MyEmailsSettings emails={myEmails} />
       <MeetingLinkSettings meetingLink={meetingLink} />
+      <ShortcutSettings />
     </SettingsPage>
   );
 }

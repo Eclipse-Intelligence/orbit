@@ -12,7 +12,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/_ui/dialog";
-import { Input } from "@/components/_ui/input";
 import { EntityChip, Monogram } from "@/components/beautifui/record-marks";
 import BulkActions, {
   RowCheckbox,
@@ -24,6 +23,8 @@ import { RememberList } from "@/components/crm/list-memory";
 import Pager from "@/components/crm/pager";
 import RecordTransfer from "@/components/crm/record-transfer";
 import SectionHeader from "@/components/crm/section-header";
+import KeyboardList from "@/components/shortcuts/keyboard-list";
+import ListSearch from "@/components/shortcuts/list-search";
 import { CallLink, RecordList } from "@/components/crm/record-form";
 import { ANY_TAG, RowTags, tagFilterOptions, useTagHref } from "@/components/crm/tags";
 import type { Viewer } from "@/components/crm/viewer";
@@ -37,6 +38,7 @@ import { useBulkSelection } from "@/hooks/use-bulk-selection";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import type { Recipient } from "@/lib/crm/personalise";
 import type { Company, Contact, Member, TagCount } from "@/lib/crm/types";
+import { KEYBOARD_ROW_CLASS } from "@/lib/shortcuts";
 import { cn } from "@/lib/utils";
 
 const GRID_CLASS =
@@ -108,6 +110,8 @@ export default function ContactsScreen({
             <Button
               variant="primary"
               size="sm"
+              data-shortcut="add-record"
+              title="Add contact (C then C)"
               onClick={() => setCreating(true)}
             >
               Add contact
@@ -116,21 +120,12 @@ export default function ContactsScreen({
         }
       />
       <div className="flex items-center justify-between gap-2 px-4 py-4">
-        <form action="/contacts" className="flex min-w-0 items-center gap-2">
-          <label className="sr-only" htmlFor="contact-search">
-            Search contacts
-          </label>
-          <Input
-            id="contact-search"
-            name="q"
-            defaultValue={query}
-            placeholder="Search name, email, or company"
-            className="w-[240px] max-w-full"
-          />
-          {tag && <input type="hidden" name="tag" value={tag} />}
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <ListSearch noun="contacts" />
           {tagOptions.length > 1 && (
             <FilterMenu
               label="Tag"
+              shortcut="filter"
               value={tag || ANY_TAG}
               options={tagOptions}
               onChange={(value) =>
@@ -138,12 +133,13 @@ export default function ContactsScreen({
               }
             />
           )}
-        </form>
+        </div>
         <SelectToggle selection={selection} />
       </div>
       <p className="caption-style text-subtle px-4 pb-2">
         {total} {total === 1 ? "person" : "people"}
       </p>
+      <KeyboardList sequence className="flex min-h-0 flex-1 flex-col">
       <RecordList
         count={contacts.length}
         empty={
@@ -184,6 +180,7 @@ export default function ContactsScreen({
           />
         ))}
       </RecordList>
+      </KeyboardList>
       <BulkActions
         selection={selection}
         noun={["contact", "contacts"]}
@@ -267,7 +264,10 @@ function ContactRow({
   return (
     <li
       data-selected={selected}
+      data-list-row=""
+      data-row-href={contactHref(contact.id)}
       className={cn(
+        KEYBOARD_ROW_CLASS,
         "border-border group relative flex min-h-12 items-center gap-3 border-b px-2.5 py-2 transition-colors duration-150 hover:bg-white/3 data-[selected=true]:bg-white/5",
         GRID_CLASS,
       )}

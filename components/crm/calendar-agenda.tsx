@@ -79,6 +79,7 @@ export default function CalendarAgenda({
               <li key={item.id}>
                 <button
                   type="button"
+                  data-list-row=""
                   onClick={() => setOpen(item)}
                   className={cn(
                     "focus-visible:ring-ring/60 flex w-full cursor-pointer items-stretch gap-3 rounded-xl border-l-[3px] p-3 text-left outline-none focus-visible:ring-2",

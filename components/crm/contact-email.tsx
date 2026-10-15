@@ -247,6 +247,7 @@ export default function ContactEmail({
       <Input
         id={`email-subject-${idPrefix}`}
         ref={subjectRef}
+        data-compose-focus=""
         value={subject}
         autoComplete="off"
         onFocus={() => {
@@ -292,6 +293,8 @@ export default function ContactEmail({
             subject.trim() === "" ||
             message.trim() === ""
           }
+          data-shortcut-submit=""
+          title="Send (⌘ Enter)"
           onClick={send}
         >
           {pending === "send" ? "Sending…" : "Send email"}

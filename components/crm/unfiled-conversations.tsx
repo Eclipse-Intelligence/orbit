@@ -2,6 +2,8 @@
 
 import { useEffect, useState, type KeyboardEvent } from "react";
 import { useRouter } from "next/navigation";
+import { KEYBOARD_ROW_CLASS } from "@/lib/shortcuts";
+import { cn } from "@/lib/utils";
 import Button from "@/components/_ui/button";
 import { Input } from "@/components/_ui/input";
 import Tag from "@/components/_ui/tag";
@@ -124,7 +126,7 @@ function UnfiledItem({
   }
 
   return (
-    <li className="border-border flex flex-col gap-2 rounded-xl border p-3">
+    <li data-list-row="" className={cn(KEYBOARD_ROW_CLASS, "border-border flex flex-col gap-2 rounded-xl border p-3")}>
       <div className="flex items-start gap-2">
         <Tag tone={conversation.source === "granola" ? "teal" : "purple"} size="sm" className="text-[12px]">
           {SOURCE_LABELS[conversation.source]}
@@ -175,11 +177,12 @@ function UnfiledItem({
         />
       ) : (
         <div className="flex flex-wrap items-center gap-2">
-          {conversation.newPeople.map((person) => (
+          {conversation.newPeople.map((person, index) => (
             <Button
               key={person.email}
               variant="secondary"
               size="sm"
+              data-row-key={index === 0 ? "a" : undefined}
               className="max-w-full"
               disabled={busy}
               title={person.name ? person.email : undefined}
@@ -190,10 +193,10 @@ function UnfiledItem({
               </span>
             </Button>
           ))}
-          <Button variant="secondary" size="sm" disabled={busy} onClick={() => setFiling(true)}>
+          <Button variant="secondary" size="sm" disabled={busy} onClick={() => setFiling(true)} data-row-key="f" title="File to… (F)">
             File to…
           </Button>
-          <Button variant="ghost" size="sm" disabled={busy} onClick={ignore}>
+          <Button variant="ghost" size="sm" disabled={busy} onClick={ignore} data-row-key="i" title="Ignore (I)">
             {pending ? "Ignoring…" : "Ignore"}
           </Button>
         </div>

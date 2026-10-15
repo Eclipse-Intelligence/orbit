@@ -54,12 +54,12 @@ export default function Pager({
       {(hasPrevious || hasNext) && (
         <span className="flex items-center gap-1">
           {hasPrevious && (
-            <Button variant="ghost" size="sm" href={href(page - 1)}>
+            <Button variant="ghost" size="sm" href={href(page - 1)} data-shortcut="page-prev" title="Previous page ([)">
               Previous
             </Button>
           )}
           {hasNext && (
-            <Button variant="ghost" size="sm" href={href(page + 1)}>
+            <Button variant="ghost" size="sm" href={href(page + 1)} data-shortcut="page-next" title="Next page (])">
               Next
             </Button>
           )}

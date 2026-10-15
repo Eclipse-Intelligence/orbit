@@ -4,6 +4,7 @@ import Button from "@/components/_ui/button";
 import Notifications from "./notifications/notifications";
 import { displayInitials } from "@/lib/companies";
 import { useCompaniesStore } from "@/stores/companies-store";
+import { useShortcuts } from "@/components/shortcuts/shortcuts-provider";
 import type { Viewer } from "@/components/crm/viewer";
 import { ExpandSidebarButton } from "@/components/_common/sidebar/sidebar-toggle";
 import MenuIcon from "@/public/assets/images/_common/menu.svg";
@@ -11,7 +12,7 @@ import SearchIcon from "@/public/assets/images/_common/search.svg";
 
 export default function CompaniesHeader({ viewer }: { viewer: Viewer }) {
   const setSidebarOpen = useCompaniesStore((state) => state.setSidebarOpen);
-  const setSearchOpen = useCompaniesStore((state) => state.setSearchOpen);
+  const { setPaletteOpen } = useShortcuts();
   const openProfile = useCompaniesStore((state) => state.openProfile);
 
   return (
@@ -40,9 +41,10 @@ export default function CompaniesHeader({ viewer }: { viewer: Viewer }) {
           <Button
             variant="secondary"
             size="icon"
-            aria-label="Search"
+            aria-label="Search and commands"
             aria-keyshortcuts="Meta+K Control+K"
-            onClick={() => setSearchOpen(true)}
+            title="Search and commands (⌘K)"
+            onClick={() => setPaletteOpen(true)}
           >
             <SearchIcon aria-hidden className="size-3.5" />
           </Button>
@@ -52,6 +54,7 @@ export default function CompaniesHeader({ viewer }: { viewer: Viewer }) {
             size="none"
             className="caption-style h-[30px] gap-1.5 py-[5px] pr-[7px] pl-[5px] font-normal"
             aria-label={`Open account for ${viewer.name}`}
+            data-shortcut="account"
             onClick={openProfile}
           >
             <span

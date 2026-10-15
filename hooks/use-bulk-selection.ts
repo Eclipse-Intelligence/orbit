@@ -85,6 +85,7 @@ export function useBulkSelection(ids: string[], resetKey: string): BulkSelection
     function onKey(event: KeyboardEvent) {
       if (event.key !== "Escape" || event.defaultPrevented || typing(event.target)) return;
       if (document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+      event.preventDefault();
       clear();
     }
     document.addEventListener("keydown", onKey);

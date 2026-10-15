@@ -141,6 +141,8 @@ export function UseTemplateButton({
           size="sm"
           disabled={disabled}
           aria-haspopup="dialog"
+          data-shortcut="use-template"
+          title="Use a template (⌘⇧T)"
         >
           Use template
         </Button>
