@@ -149,3 +149,21 @@ describe("tasks page links", () => {
     assert.deepEqual(taskDueState("2027-01-12T09:00:00Z", at, zone), { kind: "later", label: "12 Jan 2027" });
   });
 });
+
+describe("site address", () => {
+  it("accepts SITE_URL with or without https://", async () => {
+    const { siteOrigin } = await import("@/lib/site-url");
+    const previous = process.env.SITE_URL;
+    try {
+      process.env.SITE_URL = "orbit.geteclipse.co";
+      assert.equal(siteOrigin(), "https://orbit.geteclipse.co");
+      process.env.SITE_URL = "https://orbit.geteclipse.co/";
+      assert.equal(siteOrigin(), "https://orbit.geteclipse.co");
+      process.env.SITE_URL = "not a url";
+      assert.equal(siteOrigin(), null);
+    } finally {
+      if (previous === undefined) delete process.env.SITE_URL;
+      else process.env.SITE_URL = previous;
+    }
+  });
+});

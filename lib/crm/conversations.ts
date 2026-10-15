@@ -1,3 +1,4 @@
+import { siteOrigin } from "@/lib/site-url";
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { Db } from "@/lib/db/pool";
 import { query } from "@/lib/db/pool";
@@ -137,13 +138,7 @@ const SUMMARY_ATTEMPTS = 3;
 export const SUMMARY_RESERVE_MS = 25_000;
 
 export function configuredSiteOrigin() {
-  const raw = (process.env.SITE_URL ?? process.env.NEXT_PUBLIC_SITE_URL)?.trim();
-  if (!raw) return null;
-  try {
-    return new URL(raw).origin;
-  } catch {
-    return null;
-  }
+  return siteOrigin();
 }
 
 export function safeEqual(a: string, b: string) {
