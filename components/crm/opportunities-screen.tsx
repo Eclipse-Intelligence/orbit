@@ -33,6 +33,7 @@ import { moveOpportunityStageAction, saveOpportunityAction, type RecordActionSta
 import { saveStagesAction } from "@/app/(crm)/settings/actions";
 import type { StageDraft } from "@/lib/crm/pipeline";
 import { formatMoney } from "@/lib/companies";
+import { startPointerGesture, type GestureResult } from "@/lib/pointer-gesture";
 import { companyHref } from "@/lib/crm/hrefs";
 import type { Company, Contact, Opportunity, OpportunityStatus, PipelineStage } from "@/lib/crm/types";
 
@@ -139,10 +140,7 @@ export default function OpportunitiesScreen({
 
   function beginDrag(event: ReactPointerEvent<HTMLElement>, stageId: string) {
     if (event.button !== 0 || namingId || cardDragRef.current) return;
-    const startX = event.clientX;
-    const startY = event.clientY;
-    let active = false;
-    let lastX = startX;
+    let lastX = event.clientX;
     let frame = 0;
 
     function columnNodes() {
@@ -191,36 +189,30 @@ export default function OpportunitiesScreen({
       frame = window.requestAnimationFrame(tick);
     }
 
-    function onMove(move: PointerEvent) {
-      lastX = move.clientX;
-      if (!active) {
-        if (Math.hypot(move.clientX - startX, move.clientY - startY) < 4) return;
-        active = true;
+    startPointerGesture(event, {
+      start() {
         dragRef.current = true;
         previewRef.current = orderedRef.current.slice();
         setDragId(stageId);
         setPreview(previewRef.current);
         frame = window.requestAnimationFrame(tick);
-      }
-      applyIndex(move.clientX);
-    }
-
-    function onUp() {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.cancelAnimationFrame(frame);
-      const next = previewRef.current;
-      const previous = orderedRef.current;
-      previewRef.current = null;
-      dragRef.current = false;
-      setDragId(null);
-      setPreview(null);
-      if (!active || !next) return;
-      commitOrder(next, previous);
-    }
-
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
+      },
+      move(clientX) {
+        lastX = clientX;
+        applyIndex(clientX);
+      },
+      end(result) {
+        window.cancelAnimationFrame(frame);
+        const next = previewRef.current;
+        const previous = orderedRef.current;
+        previewRef.current = null;
+        dragRef.current = false;
+        setDragId(null);
+        setPreview(null);
+        if (result !== "drop" || !next) return;
+        commitOrder(next, previous);
+      },
+    });
   }
 
   function stageAt(clientX: number, clientY: number) {
@@ -248,11 +240,8 @@ export default function OpportunitiesScreen({
 
   function beginCardDrag(event: ReactPointerEvent<HTMLElement>, opportunityId: string) {
     if (event.button !== 0 || dragRef.current || cardDragRef.current) return;
-    const startX = event.clientX;
-    const startY = event.clientY;
-    let active = false;
-    let lastX = startX;
-    let lastY = startY;
+    let lastX = event.clientX;
+    let lastY = event.clientY;
     let frame = 0;
 
     function applyPoint(clientX: number, clientY: number) {
@@ -278,24 +267,7 @@ export default function OpportunitiesScreen({
       frame = window.requestAnimationFrame(tick);
     }
 
-    function onMove(move: PointerEvent) {
-      lastX = move.clientX;
-      lastY = move.clientY;
-      if (!active) {
-        if (Math.hypot(move.clientX - startX, move.clientY - startY) < 4) return;
-        active = true;
-        cardDragRef.current = true;
-        cardPreviewRef.current = placedRef.current.slice();
-        setCardDragId(opportunityId);
-        setCardPreview(cardPreviewRef.current);
-        frame = window.requestAnimationFrame(tick);
-      }
-      applyPoint(move.clientX, move.clientY);
-    }
-
-    function onUp() {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
+    function finish(result: GestureResult) {
       window.cancelAnimationFrame(frame);
       const preview = cardPreviewRef.current;
       const previous = placedRef.current;
@@ -304,11 +276,12 @@ export default function OpportunitiesScreen({
       setCardDragId(null);
       setDropStageId(null);
       setCardPreview(null);
-      if (!active) {
+      if (result === "tap") {
         const opportunity = previous.find((item) => item.id === opportunityId);
         if (opportunity) edit(opportunity);
         return;
       }
+      if (result !== "drop") return;
       const moved = preview?.find((item) => item.id === opportunityId);
       const before = previous.find((item) => item.id === opportunityId);
       if (!moved?.stageId || !before || moved.stageId === before.stageId || !preview) return;
@@ -325,8 +298,21 @@ export default function OpportunitiesScreen({
       });
     }
 
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
+    startPointerGesture(event, {
+      start() {
+        cardDragRef.current = true;
+        cardPreviewRef.current = placedRef.current.slice();
+        setCardDragId(opportunityId);
+        setCardPreview(cardPreviewRef.current);
+        frame = window.requestAnimationFrame(tick);
+      },
+      move(clientX, clientY) {
+        lastX = clientX;
+        lastY = clientY;
+        applyPoint(clientX, clientY);
+      },
+      end: finish,
+    });
   }
 
   function moveCard(opportunityId: string, direction: -1 | 1) {
@@ -442,7 +428,7 @@ export default function OpportunitiesScreen({
       {view === "board" ? (
         <div
           ref={boardRef}
-          className="flex min-h-0 flex-1 items-stretch overflow-auto px-4 pb-4"
+          className="flex min-h-0 flex-1 items-stretch overflow-x-auto overflow-y-hidden overscroll-x-contain px-4 pb-4"
           onMouseLeave={() => setHovered(null)}
         >
           {shown.map((stage, index) => {
@@ -472,7 +458,7 @@ export default function OpportunitiesScreen({
                     beginDrag(event, stage.id);
                   }}
                   className={cn(
-                    "border-sidebar-border bg-sidebar-accent flex w-64 cursor-grab touch-none flex-col gap-2 rounded-xl border p-3 select-none",
+                    "border-sidebar-border bg-sidebar-accent flex min-h-0 w-64 cursor-grab flex-col gap-2 rounded-xl border p-3 select-none [-webkit-touch-callout:none]",
                     dragId === stage.id && "cursor-grabbing opacity-70 ring-1 ring-white/15",
                     cardDragId && dropStageId === stage.id && "ring-1 ring-white/25",
                   )}
@@ -507,30 +493,32 @@ export default function OpportunitiesScreen({
                     </h2>
                   )}
                   <p className="caption-style text-subtle">{cards.length}</p>
-                  {cards.map((opportunity) => (
-                    <div
-                      key={opportunity.id}
-                      data-opportunity=""
-                      tabIndex={0}
-                      aria-label={`${opportunity.name}, ${stage.name}`}
-                      aria-keyshortcuts="ArrowLeft ArrowRight"
-                      onPointerDown={(event) => beginCardDrag(event, opportunity.id)}
-                      onKeyDown={(event) => {
-                        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-                        event.preventDefault();
-                        moveCard(opportunity.id, event.key === "ArrowLeft" ? -1 : 1);
-                      }}
-                      className={cn(
-                        "border-border bg-card flex cursor-grab touch-none flex-col gap-2 rounded-lg border p-3 focus-visible:ring-2 focus-visible:ring-ring/60",
-                        cardDragId === opportunity.id && "cursor-grabbing opacity-70",
-                      )}
-                    >
-                      <span className="text-[14px] leading-5">{opportunity.name}</span>
-                      <span className="caption-style text-subtle">
-                        {opportunity.companyName ?? "No company"} · {formatMoney(opportunity.value, opportunity.currency)}
-                      </span>
-                    </div>
-                  ))}
+                  <div className="-mx-1 flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto overscroll-y-contain px-1 pb-1">
+                    {cards.map((opportunity) => (
+                      <div
+                        key={opportunity.id}
+                        data-opportunity=""
+                        tabIndex={0}
+                        aria-label={`${opportunity.name}, ${stage.name}`}
+                        aria-keyshortcuts="ArrowLeft ArrowRight"
+                        onPointerDown={(event) => beginCardDrag(event, opportunity.id)}
+                        onKeyDown={(event) => {
+                          if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+                          event.preventDefault();
+                          moveCard(opportunity.id, event.key === "ArrowLeft" ? -1 : 1);
+                        }}
+                        className={cn(
+                          "border-border bg-card flex shrink-0 cursor-grab flex-col gap-2 rounded-lg border p-3 select-none focus-visible:ring-2 focus-visible:ring-ring/60 [-webkit-touch-callout:none]",
+                          cardDragId === opportunity.id && "cursor-grabbing opacity-70",
+                        )}
+                      >
+                        <span className="text-[14px] leading-5">{opportunity.name}</span>
+                        <span className="caption-style text-subtle">
+                          {opportunity.companyName ?? "No company"} · {formatMoney(opportunity.value, opportunity.currency)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
                 </section>
               </div>
             );
