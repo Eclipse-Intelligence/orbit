@@ -50,7 +50,7 @@ export function RecordList({
   if (count === 0) {
     return <p className="caption-style text-subtle px-4 py-8">{empty}</p>;
   }
-  return <ul className="min-h-0 flex-1 overflow-auto">{children}</ul>;
+  return <ul className="min-h-0 flex-1 overflow-auto pb-20">{children}</ul>;
 }
 
 export function RecordRow({

@@ -94,7 +94,7 @@ Contact fields: `companyId`, `firstName`, `lastName`, `email`, `phone`, `jobTitl
 
 `GET /api/v1/opportunities` with `q`, `company_id`, `status` (`open`, `won`, `lost`).
 
-`POST /api/v1/opportunities` requires `companyId` and `name`. Omitting `stageId` uses the first stage of the default pipeline. A won or lost stage sets `status`. Setting `status` to `won` or `lost` moves the opportunity to that stage. Value is a non-negative amount with up to two decimal places. Currency is a three-letter code and defaults to `USD`.
+`POST /api/v1/opportunities` requires `companyId` and `name`. Omitting `stageId` uses the first stage of the default pipeline. A won or lost stage sets `status`. Setting `status` to `won` or `lost` moves the opportunity to that stage. Value is a non-negative amount with up to two decimal places. Currency is a three-letter code and defaults to `GBP`.
 
 `GET /api/v1/pipeline` returns the default pipeline and its stages.
 

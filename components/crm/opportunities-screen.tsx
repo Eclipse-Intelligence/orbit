@@ -685,7 +685,7 @@ function OpportunityEditor({
           </label>
           <label className="flex flex-col gap-2" htmlFor="opp-currency">
             <span className="caption-style text-subtle">Currency</span>
-            <Input id="opp-currency" name="currency" defaultValue={editing?.currency ?? "USD"} maxLength={3} />
+            <Input id="opp-currency" name="currency" defaultValue={editing?.currency ?? "GBP"} maxLength={3} />
           </label>
         </div>
         <label className="flex flex-col gap-2" htmlFor="opp-close">

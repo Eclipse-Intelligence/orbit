@@ -1,3 +1,4 @@
+import { listTasks } from "@/lib/crm/tasks";
 import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import { cache } from "react";
@@ -46,7 +47,16 @@ export default async function ContactPage({
   if (!user) redirect("/login");
   if (!contact) notFound();
 
-  const [companies, members, mailbox, activitiesByContact, meetings, tags, invite] = await Promise.all([
+  const [
+    companies,
+    members,
+    mailbox,
+    activitiesByContact,
+    meetings,
+    tags,
+    invite,
+    openTasks,
+  ] = await Promise.all([
     listCompanies(user, { limit: 100, sort: "name", order: "asc" }),
     listMembers(user),
     getMailbox(user),
@@ -54,12 +64,15 @@ export default async function ContactPage({
     getMeetings(user, { contactId: contact.id }),
     listTags(user),
     getInviteSetup(user),
+    listTasks(user, { contactId: contact.id, view: "all", limit: 50 }),
   ]);
   const activities = activitiesByContact[contact.id] ?? [];
   const insights = await getInsightsForActivities(
     user,
     activities
-      .filter((activity) => activity.type === "call" || activity.type === "meeting")
+      .filter(
+        (activity) => activity.type === "call" || activity.type === "meeting",
+      )
       .map((activity) => activity.id),
   );
 
@@ -73,6 +86,7 @@ export default async function ContactPage({
         workspaceName: user.workspaceName,
       }}
       contact={contact}
+      tasks={openTasks.data}
       companies={companies.data.map((company) => ({
         id: company.id,
         name: company.name,

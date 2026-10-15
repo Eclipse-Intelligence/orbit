@@ -19,6 +19,7 @@ import { revalidateRecordPages } from "@/lib/revalidate";
 export type CompanyActionState = {
   error?: string;
   field?: string;
+  existingId?: string;
   company?: Company;
 };
 
@@ -31,6 +32,11 @@ async function requireUser() {
 function text(formData: FormData, key: string) {
   const value = formData.get(key);
   return typeof value === "string" ? value.trim() : "";
+}
+
+function tagsFromForm(formData: FormData) {
+  if (!formData.has("tags")) return undefined;
+  return formData.getAll("tags").filter((value): value is string => typeof value === "string");
 }
 
 function writeFromForm(formData: FormData): CompanyWrite {
@@ -46,6 +52,7 @@ function writeFromForm(formData: FormData): CompanyWrite {
     source: text(formData, "source") || null,
     lifecycle: (lifecycle || "lead") as Lifecycle,
     ownerId: ownerId && ownerId !== "unassigned" ? ownerId : null,
+    tags: tagsFromForm(formData),
   };
 }
 

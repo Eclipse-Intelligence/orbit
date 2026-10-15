@@ -113,7 +113,7 @@ export default function SettingsScreen({
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
       <SectionHeader title="Settings" viewer={viewer} />
-      <div className="flex min-h-0 flex-1 flex-col gap-8 overflow-auto px-4 py-5">
+      <div className="flex min-h-0 flex-1 flex-col gap-8 overflow-auto px-4 pt-5 pb-20">
         {error && (
           <p role="alert" className="caption-style text-danger">
             {error}

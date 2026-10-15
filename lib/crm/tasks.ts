@@ -328,6 +328,10 @@ export async function listTasks(actor: Actor, query: TaskListQuery = {}) {
       values.push(query.companyId);
       where.push(`t.company_id = $${values.length}`);
     }
+    if (query.contactId) {
+      values.push(query.contactId);
+      where.push(`t.contact_id = $${values.length}`);
+    }
     if (query.ownerId === "unassigned") where.push("t.owner_id is null");
     else if (query.ownerId) {
       values.push(query.ownerId);

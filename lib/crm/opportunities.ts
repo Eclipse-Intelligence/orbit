@@ -337,7 +337,7 @@ async function insertOpportunity(
         stage.id,
         name,
         write.value ?? null,
-        write.currency ?? "USD",
+        write.currency ?? "GBP",
         write.probability === undefined ? stage.probability : write.probability,
         write.expectedCloseDate ?? null,
         write.ownerId ?? null,
