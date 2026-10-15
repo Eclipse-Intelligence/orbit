@@ -80,6 +80,9 @@ export default function InboxScreen({
                   Sync
                 </Button>
               </form>
+              <Button variant="ghost" size="sm" href="/api/microsoft/connect">
+                Reconnect
+              </Button>
               <form action={disconnectInboxAction}>
                 <Button variant="ghost" size="sm" type="submit">
                   Disconnect
