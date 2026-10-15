@@ -17,6 +17,7 @@ import BarChartIcon from "@/public/assets/images/companies/sidebar/bar-chart.svg
 import CalendarIcon from "@/public/assets/images/companies/sidebar/calendar.svg";
 import CodeIcon from "@/public/assets/images/settings/code.svg";
 import FileTextIcon from "@/public/assets/images/settings/file-text.svg";
+import LinkIcon from "@/public/assets/images/settings/link.svg";
 import PlugIcon from "@/public/assets/images/settings/plug.svg";
 import SlidersIcon from "@/public/assets/images/settings/sliders.svg";
 import TagIcon from "@/public/assets/images/settings/tag.svg";
@@ -35,6 +36,7 @@ const NAV: NavItem[] = [
     icon: FileTextIcon,
   },
   { href: SETTINGS_PATHS.calendars, label: "Calendars", icon: CalendarIcon },
+  { href: SETTINGS_PATHS.bookingPage, label: "Booking page", icon: LinkIcon },
   { href: SETTINGS_PATHS.integrations, label: "Integrations", icon: PlugIcon },
   { href: SETTINGS_PATHS.pipeline, label: "Pipeline", icon: BarChartIcon },
   { href: SETTINGS_PATHS.tags, label: "Tags", icon: TagIcon },

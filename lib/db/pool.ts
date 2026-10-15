@@ -1,11 +1,11 @@
-import { Pool, type PoolClient, type QueryResult, type QueryResultRow } from "pg";
+import { Client, Pool, type PoolClient, type QueryResult, type QueryResultRow } from "pg";
 
 const globalPools = globalThis as typeof globalThis & {
   __crmPool?: Pool;
   __crmAdminPool?: Pool;
 };
 
-function createPool(connectionString: string) {
+function connectionUrl(connectionString: string) {
   const url = new URL(connectionString);
   const options = url.searchParams.get("options") ?? "";
   if (!options.includes("statement_timeout")) {
@@ -14,9 +14,13 @@ function createPool(connectionString: string) {
   if (url.searchParams.get("sslmode") === "require" && !url.searchParams.has("uselibpqcompat")) {
     url.searchParams.set("uselibpqcompat", "true");
   }
+  return url.toString();
+}
+
+function createPool(connectionString: string) {
   const serverless = Boolean(process.env.VERCEL);
   return new Pool({
-    connectionString: url.toString(),
+    connectionString: connectionUrl(connectionString),
     max: serverless ? 2 : 10,
     idleTimeoutMillis: 10_000,
     connectionTimeoutMillis: 5_000,
@@ -44,6 +48,12 @@ export function getAdminPool() {
     globalPools.__crmAdminPool = createPool(url);
   }
   return globalPools.__crmAdminPool;
+}
+
+export async function openClient() {
+  const client = new Client({ connectionString: connectionUrl(databaseUrl()), connectionTimeoutMillis: 5_000 });
+  await client.connect();
+  return client;
 }
 
 export async function query<T extends QueryResultRow = QueryResultRow>(

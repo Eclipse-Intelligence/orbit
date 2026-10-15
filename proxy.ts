@@ -7,7 +7,12 @@ import { legacySettingsHref } from "@/lib/settings-nav";
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
-  if (pathname.startsWith("/api") || pathname === "/login") {
+  if (
+    pathname.startsWith("/api") ||
+    pathname === "/login" ||
+    pathname === "/book" ||
+    pathname.startsWith("/book/")
+  ) {
     return NextResponse.next();
   }
 

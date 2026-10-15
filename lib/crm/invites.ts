@@ -11,11 +11,12 @@ import {
   storeGrantedScopes,
 } from "@/lib/crm/calendar";
 import { withActor } from "@/lib/crm/context";
+import { createContactFromAttendeeInDb } from "@/lib/crm/conversations";
 import { CrmError } from "@/lib/crm/errors";
 import { currentToken, readStored, storeToken, type StoredConnection } from "@/lib/crm/inbox";
 import { isUuid } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
-import type { UserActor } from "@/lib/crm/types";
+import type { Provenance, UserActor } from "@/lib/crm/types";
 import {
   checkMeetingLink,
   guestEmail,
@@ -439,6 +440,211 @@ async function saveCreatedEvent(
   return result.rows[0].id;
 }
 
+export type InviteSender = {
+  stored: StoredConnection;
+  own: Set<string>;
+  meetingLink: string | null;
+  scopes: string | null;
+  calendar: { id: string; provider_calendar_id: string } | null;
+};
+
+export type OpenInviteSender = InviteSender & { token: MicrosoftToken; calendarId: string | null };
+
+export type InviteActivity = (
+  contact: { id: string; name: string; companyId: string | null },
+  details: {
+    eventId: string;
+    providerEventId: string;
+    startsAt: string;
+    when: string;
+    subject: string;
+    link: string | null;
+    notes: string | null;
+  },
+) => { title: string; body: string; metadata: Record<string, unknown> };
+
+export type InviteSend = {
+  subject: string;
+  start: Date;
+  end: Date;
+  timeZone: string;
+  guests: InviteGuest[];
+  notes: string | null;
+  link: string | null;
+  transactionId: string;
+  contactIds?: string[];
+  createContacts?: boolean;
+  activity?: InviteActivity;
+  provenance?: Provenance;
+  fetchImpl?: typeof fetch;
+};
+
+async function loadInviteSender(actor: UserActor): Promise<InviteSender> {
+  const prepared = await withActor(actor, async (db) => {
+    const stored = await readStored(db, actor);
+    return {
+      stored,
+      own: await myAddresses(db, actor),
+      meetingLink: await readMeetingLink(db, actor),
+      scopes: stored ? await readGrantedScopes(db, stored.id) : null,
+      calendar: stored ? await defaultCalendar(db, stored.id) : null,
+    };
+  });
+  const stored = prepared.stored;
+  if (!isConnected(stored)) throw new CrmError("not_connected", INVITE_NOT_CONNECTED, 400);
+  return { ...prepared, stored };
+}
+
+function providerCalendarId(calendar: InviteSender["calendar"]) {
+  return calendar && calendar.provider_calendar_id !== DEFAULT_CALENDAR_PLACEHOLDER
+    ? calendar.provider_calendar_id
+    : null;
+}
+
+export async function openInviteSender(
+  actor: UserActor,
+  options: { fetchImpl?: typeof fetch } = {},
+): Promise<OpenInviteSender> {
+  assertScope(actor.scopes, "activities:write");
+  if (!microsoftConfigured()) throw new CrmError("not_connected", INVITE_NOT_CONNECTED, 400);
+  const sender = await loadInviteSender(actor);
+  const token = await writableToken(actor, sender.stored, sender.scopes, options.fetchImpl ?? fetch);
+  return { ...sender, token, calendarId: providerCalendarId(sender.calendar) };
+}
+
+const defaultActivity: InviteActivity = (contact, details) => ({
+  title: `Invited ${contact.name} to ${details.subject}`,
+  body: [details.when, details.link ? `Join: ${details.link}` : null, details.notes ? `\n${details.notes}` : null]
+    .filter(Boolean)
+    .join("\n"),
+  metadata: {
+    source: "orbit",
+    kind: "invite",
+    eventId: details.eventId,
+    providerEventId: details.providerEventId,
+    startsAt: details.startsAt,
+  },
+});
+
+async function ensureGuestContacts(db: Db, actor: UserActor, guests: InviteGuest[], own: string[]) {
+  const ids: string[] = [];
+  for (const guest of guests) {
+    await db.query("savepoint invite_contact");
+    try {
+      const saved = await createContactFromAttendeeInDb(db, actor, guest, own);
+      ids.push(saved.contactId);
+      await db.query("release savepoint invite_contact");
+    } catch (error) {
+      await db.query("rollback to savepoint invite_contact");
+      if (!(error instanceof CrmError)) throw error;
+    }
+  }
+  return ids;
+}
+
+export async function sendInvite(
+  actor: UserActor,
+  sender: OpenInviteSender,
+  input: InviteSend,
+): Promise<InviteResult> {
+  assertScope(actor.scopes, "activities:write");
+  if (input.createContacts) {
+    assertScope(actor.scopes, "contacts:write");
+    assertScope(actor.scopes, "companies:write");
+  }
+  const fetchImpl = input.fetchImpl ?? fetch;
+  const { stored, token } = sender;
+  const { subject, guests, notes, link } = input;
+  const draft = inviteDraft({
+    subject,
+    start: input.start,
+    end: input.end,
+    timeZone: input.timeZone,
+    guests,
+    notes,
+    link,
+    transactionId: input.transactionId,
+  });
+  let created: Awaited<ReturnType<typeof createGraphEvent>>;
+  try {
+    created = await createGraphEvent(token.accessToken, draft, { calendarId: sender.calendarId, fetchImpl });
+  } catch (error) {
+    throw writeFailure(error);
+  }
+
+  const result: InviteResult = {
+    eventId: null,
+    providerEventId: typeof created.id === "string" ? created.id : "",
+    subject,
+    startsAt: input.start.toISOString(),
+    endsAt: input.end.toISOString(),
+    guests,
+    loggedOn: 0,
+    warning: null,
+  };
+  const providerEventId = created.id?.trim();
+  if (!providerEventId || providerEventId.length > 400) return { ...result, warning: SAVE_WARNING };
+  const parsed = toCalendarEvent(created);
+  const event = parsed
+    ? { ...parsed, startsAt: input.start.toISOString(), endsAt: input.end.toISOString() }
+    : fallbackEvent(providerEventId, created, {
+      subject,
+      start: input.start,
+      end: input.end,
+      link,
+      organizer: { name: actor.fullName, email: stored.email },
+      guests,
+    });
+  const when = formatWhen(new Date(event.startsAt), new Date(event.endsAt), input.timeZone);
+  const activity = input.activity ?? defaultActivity;
+  try {
+    const saved = await withActor(actor, async (db) => {
+      const calendarRow = sender.calendar?.id ?? (await ensureDefaultCalendar(db, actor, stored.id));
+      const eventId = await saveCreatedEvent(db, actor, calendarRow, stored.id, event);
+      const preferred = [...(input.contactIds ?? [])];
+      if (input.createContacts) {
+        preferred.push(...(await ensureGuestContacts(db, actor, guests, [stored.email, ...sender.own])));
+      }
+      await linkEvents(db, actor, [eventId]);
+      const contacts = await matchContacts(
+        db,
+        actor,
+        guests.map((guest) => guest.email),
+        preferred,
+      );
+      for (const contact of contacts) {
+        const written = activity(contact, {
+          eventId,
+          providerEventId,
+          startsAt: event.startsAt,
+          when,
+          subject,
+          link,
+          notes,
+        });
+        await createActivityInDb(
+          db,
+          actor,
+          {
+            type: "meeting",
+            title: clip(written.title, 200),
+            body: written.body,
+            contactId: contact.id,
+            companyId: contact.companyId,
+            metadata: written.metadata,
+          },
+          input.provenance ?? { operation: "send_invite", source: "microsoft" },
+        );
+      }
+      return { eventId, loggedOn: contacts.length };
+    });
+    return { ...result, eventId: saved.eventId, loggedOn: saved.loggedOn };
+  } catch (error) {
+    console.error("Invite sent but not saved", error);
+    return { ...result, warning: SAVE_WARNING };
+  }
+}
+
 export async function createInvite(
   actor: UserActor,
   input: InviteInput,
@@ -457,109 +663,29 @@ export async function createInvite(
   }
   if (!microsoftConfigured()) throw new CrmError("not_connected", INVITE_NOT_CONNECTED, 400);
 
-  const prepared = await withActor(actor, async (db) => {
-    const stored = await readStored(db, actor);
-    return {
-      stored,
-      own: await myAddresses(db, actor),
-      meetingLink: await readMeetingLink(db, actor),
-      scopes: stored ? await readGrantedScopes(db, stored.id) : null,
-      calendar: stored ? await defaultCalendar(db, stored.id) : null,
-    };
-  });
-  const stored = prepared.stored;
-  if (!isConnected(stored)) throw new CrmError("not_connected", INVITE_NOT_CONNECTED, 400);
-  const guests = cleanGuests(input.attendees, prepared.own);
-  if (input.includeMeetingLink === true && !prepared.meetingLink) {
+  const sender = await loadInviteSender(actor);
+  const guests = cleanGuests(input.attendees, sender.own);
+  if (input.includeMeetingLink === true && !sender.meetingLink) {
     throw invalid("Add your meeting link in Settings › General first.", "includeMeetingLink");
   }
-  const link = input.includeMeetingLink === false ? null : prepared.meetingLink;
-  const token = await writableToken(actor, stored, prepared.scopes, fetchImpl);
-
-  const calendarId =
-    prepared.calendar && prepared.calendar.provider_calendar_id !== DEFAULT_CALENDAR_PLACEHOLDER
-      ? prepared.calendar.provider_calendar_id
-      : null;
-  const draft = inviteDraft({
-    subject,
-    start: window.start,
-    end: window.end,
-    timeZone: window.timeZone,
-    guests,
-    notes,
-    link,
-    transactionId,
-  });
-  let created: Awaited<ReturnType<typeof createGraphEvent>>;
-  try {
-    created = await createGraphEvent(token.accessToken, draft, { calendarId, fetchImpl });
-  } catch (error) {
-    throw writeFailure(error);
-  }
-
-  const result: InviteResult = {
-    eventId: null,
-    providerEventId: typeof created.id === "string" ? created.id : "",
-    subject,
-    startsAt: window.start.toISOString(),
-    endsAt: window.end.toISOString(),
-    guests,
-    loggedOn: 0,
-    warning: null,
-  };
-  const providerEventId = created.id?.trim();
-  if (!providerEventId || providerEventId.length > 400) return { ...result, warning: SAVE_WARNING };
-  const parsed = toCalendarEvent(created);
-  const event = parsed
-    ? { ...parsed, startsAt: window.start.toISOString(), endsAt: window.end.toISOString() }
-    : fallbackEvent(providerEventId, created, {
+  const link = input.includeMeetingLink === false ? null : sender.meetingLink;
+  const token = await writableToken(actor, sender.stored, sender.scopes, fetchImpl);
+  return sendInvite(
+    actor,
+    { ...sender, token, calendarId: providerCalendarId(sender.calendar) },
+    {
       subject,
       start: window.start,
       end: window.end,
-      link,
-      organizer: { name: actor.fullName, email: stored.email },
+      timeZone: window.timeZone,
       guests,
-    });
-  const when = formatWhen(new Date(event.startsAt), new Date(event.endsAt), window.timeZone);
-  try {
-    const saved = await withActor(actor, async (db) => {
-      const calendarRow = prepared.calendar?.id ?? (await ensureDefaultCalendar(db, actor, stored.id));
-      const eventId = await saveCreatedEvent(db, actor, calendarRow, stored.id, event);
-      await linkEvents(db, actor, [eventId]);
-      const contacts = await matchContacts(
-        db,
-        actor,
-        guests.map((guest) => guest.email),
-        contactIds,
-      );
-      for (const contact of contacts) {
-        await createActivityInDb(
-          db,
-          actor,
-          {
-            type: "meeting",
-            title: clip(`Invited ${contact.name} to ${subject}`, 200),
-            body: [when, link ? `Join: ${link}` : null, notes ? `\n${notes}` : null].filter(Boolean).join("\n"),
-            contactId: contact.id,
-            companyId: contact.companyId,
-            metadata: {
-              source: "orbit",
-              kind: "invite",
-              eventId,
-              providerEventId,
-              startsAt: event.startsAt,
-            },
-          },
-          { operation: "send_invite", source: "microsoft" },
-        );
-      }
-      return { eventId, loggedOn: contacts.length };
-    });
-    return { ...result, eventId: saved.eventId, loggedOn: saved.loggedOn };
-  } catch (error) {
-    console.error("Invite sent but not saved", error);
-    return { ...result, warning: SAVE_WARNING };
-  }
+      notes,
+      link,
+      transactionId,
+      contactIds,
+      fetchImpl,
+    },
+  );
 }
 
 export async function cancelInvite(
