@@ -5,6 +5,12 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { getUserActor } from "@/lib/auth/user";
 import {
+  checkSlugAvailable,
+  saveBookingPage,
+  type BookingPageInput,
+  type BookingPageSettings,
+} from "@/lib/booking/pages";
+import {
   disableClickUpWebhook,
   enableClickUpWebhook,
   saveClickUpSettings,
@@ -17,7 +23,7 @@ import { saveOtherEmails, type MyEmails } from "@/lib/crm/profile";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import type { PipelineStage } from "@/lib/crm/types";
 import { archiveWebhook, createWebhook } from "@/lib/crm/webhooks";
-import { SETTINGS_ROOT } from "@/lib/settings-nav";
+import { SETTINGS_PATHS, SETTINGS_ROOT } from "@/lib/settings-nav";
 
 async function requireUser() {
   const user = await getUserActor();
@@ -88,6 +94,31 @@ export async function saveMeetingLinkAction(
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Could not save the meeting link." };
   }
+}
+
+export async function saveBookingPageAction(
+  input: BookingPageInput,
+): Promise<{ error?: string; field?: string; page?: BookingPageSettings }> {
+  const user = await requireUser();
+  try {
+    const page = await saveBookingPage(user, input && typeof input === "object" ? input : {});
+    revalidatePath(SETTINGS_PATHS.bookingPage);
+    return { page };
+  } catch (error) {
+    if (error instanceof CrmError) {
+      const field = typeof error.details?.field === "string" ? error.details.field : undefined;
+      return { error: error.message, field };
+    }
+    console.error("Booking page save failed", error);
+    return { error: "Could not save the booking page." };
+  }
+}
+
+export async function checkBookingSlugAction(
+  slug: string,
+): Promise<{ slug: string | null; available: boolean; error: string | null }> {
+  const user = await requireUser();
+  return checkSlugAvailable(user, typeof slug === "string" ? slug.slice(0, 100) : "");
 }
 
 export type ClickUpActionState = { error?: string; message?: string };

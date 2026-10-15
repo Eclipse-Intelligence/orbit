@@ -78,6 +78,70 @@
   --ease-power4-in-out: cubic-bezier(0.83, 0, 0.17, 1);
 
   --ease-smooth-in-out: cubic-bezier(0.7, 0, 0, 1);
+
+  --animate-aurora-a: aurora-a 32s ease-in-out infinite alternate;
+  --animate-aurora-b: aurora-b 41s ease-in-out infinite alternate;
+  --animate-aurora-c: aurora-c 53s ease-in-out infinite alternate;
+  --animate-panel-in: panel-in 0.6s var(--ease-power4-out) both;
+  --animate-rise-in: rise-in 0.45s var(--ease-power3-out) both;
+
+  @keyframes aurora-a {
+    0% {
+      transform: translate3d(-12%, -8%, 0) rotate(0deg) scale(1);
+    }
+    50% {
+      transform: translate3d(10%, 6%, 0) rotate(25deg) scale(1.2);
+    }
+    100% {
+      transform: translate3d(-4%, 14%, 0) rotate(-10deg) scale(1.05);
+    }
+  }
+
+  @keyframes aurora-b {
+    0% {
+      transform: translate3d(14%, 10%, 0) rotate(0deg) scale(1.1);
+    }
+    50% {
+      transform: translate3d(-8%, -6%, 0) rotate(-30deg) scale(0.95);
+    }
+    100% {
+      transform: translate3d(6%, -14%, 0) rotate(15deg) scale(1.2);
+    }
+  }
+
+  @keyframes aurora-c {
+    0% {
+      transform: translate3d(0, 12%, 0) scale(0.9);
+    }
+    50% {
+      transform: translate3d(-14%, -4%, 0) scale(1.15);
+    }
+    100% {
+      transform: translate3d(12%, 4%, 0) scale(1);
+    }
+  }
+
+  @keyframes panel-in {
+    from {
+      opacity: 0;
+      transform: translate3d(0, 16px, 0) scale(0.985);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  @keyframes rise-in {
+    from {
+      opacity: 0;
+      transform: translate3d(0, 6px, 0);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
 }
 
 :root {

@@ -44,6 +44,7 @@ Orbit has no sign-up. Only an account that already belongs to a workspace can si
 | General | `/settings/general` | Your account, My email addresses, and the meeting link for invites |
 | Email templates | `/settings/email-templates` | Reusable emails (below) |
 | Calendars | `/settings/calendars` | Calendar accounts and links, Show and Use for CRM |
+| Booking page | `/settings/booking-page` | Your public booking page at `/book/<link>` (below) |
 | Integrations | `/settings/integrations` | Microsoft 365, Teams calls and Granola status (managed from Inbox), and the ClickUp settings |
 | Pipeline | `/settings/pipeline` | Opportunity stages |
 | Tags | `/settings/tags` | Rename, merge, and delete tags |
@@ -81,6 +82,20 @@ Orbit sends meeting invitations through Outlook: the event is created in the def
 3. Choose New event on the Calendar page, click an empty slot in the day or week grid (it opens at that time, rounded down to 15 minutes), or use the calendar button next to Call in Teams on a contact (the contact needs an email address).
 
 The dialog takes a title (Eclipse × the contact's name when you start from a contact), a date and start time in London time, a duration of 15 to 90 minutes, guests (search contacts by name or email, or type any address and press Enter; your own addresses, including those in Settings › General, My email addresses, are never invited; up to 50 guests), notes, and Add meeting link. With the link on, the invite's location is the link and its body ends with "Join: <link>". After sending, the event shows on the Calendar page straight away, and each guest who is a contact gets an "Invited … to …" meeting activity. A meeting you organise that hasn't started yet has Cancel meeting in its details: Outlook sends the cancellation, with your optional message, to every guest, and each guest contact gets a "Cancelled …" activity.
+
+### Booking page
+
+`/book/<link>` is a public page where anyone can book a call with you, without signing in. It shows a looping background video (or a soft animated gradient), and a panel with your photo, name, title and intro, a month calendar with the days that have free times, the times for the chosen day in the visitor's own time zone (they can switch zones), and Name, Email and an optional Note. Booking creates the meeting in the default calendar of the mailbox connected in Inbox, exactly like an invite you send yourself: Outlook emails the invitation from your mailbox with your meeting link, the event appears on the Calendar page, the visitor becomes a contact (with a company from their email domain unless it is a free-mail domain; your own addresses and domains never do), and the contact gets a "Booked via your booking page" meeting activity. The page then turns into a confirmation with the time in their zone and in London.
+
+1. Connect Microsoft in Inbox with `Calendars.ReadWrite` (see Meeting invites) and add your Whereby link in Settings › General.
+2. Open Settings › Booking page. Pick the link (lowercase letters, numbers and hyphens, 3 to 40 characters; common words like `admin` or `settings` are reserved), set the title (default "Book a call with <first name>"), intro, meeting length (15, 20, 30, 45 or 60 minutes), buffer around meetings, minimum notice, how many days ahead people can book, and your weekly hours in London time. Turn the page on and save. Copy and Open use `SITE_URL`.
+3. Optionally upload a photo (JPEG, PNG or WebP up to 1 MB; it is cropped to a circle) and a background video.
+
+Free times come from every calendar Orbit syncs for you (Microsoft and calendar links), ignoring cancelled events and events shown as Free, with the buffer kept before and after each busy event. Just before booking, Orbit checks the stored calendar again and asks Outlook for the live calendar around that time, so a time taken in the meantime is refused with "That time was just taken — pick another". When the page is off or the link is unknown, visitors get a not-found page. If Microsoft isn't connected or can't create meetings, visitors see "Booking is temporarily unavailable" and Settings shows the reason. Visitors are limited to 10 time lookups a minute and 5 booking attempts an hour per IP address, and 3 bookings a day per email address.
+
+Background video: paste a direct `https://` link to an `.mp4` you host yourself (Vercel Blob, S3, Cloudflare R2 or similar; a short, muted, compressed loop of a few MB works best) and use Preview to check it plays. Stock sites such as Pixabay block playback on other websites, so their links can stop working. Orbit doesn't store videos: Vercel functions can't return large files, and serving video from Postgres would be slow and expensive. The optional still image is shown while the video loads, to visitors who prefer reduced motion, and instead of the gradient when there is no video. If the video fails to load, the still image or gradient stays.
+
+Domain: the page lives on Orbit's own domain, at `SITE_URL/book/<link>`. To give it a friendlier address, add another domain (for example `meet.example.com`) to the Vercel project; `/book/<link>` works on every domain the project serves, and setting `SITE_URL` to that domain makes Settings show it (`SITE_URL` is also used for webhooks, so only change it if Orbit should live there). The page is never indexed by search engines.
 
 ### More calendars and the Calendar page
 
