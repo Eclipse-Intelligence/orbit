@@ -8,6 +8,7 @@ import { EntityChip } from "@/components/beautifui/record-marks";
 import { ClickUpBadge } from "@/components/crm/clickup";
 import { relativeWhen } from "@/lib/companies";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
+import { reminderLabel } from "@/lib/crm/reminder-options";
 import { taskDueState } from "@/lib/crm/task-views";
 import type { Task } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
@@ -29,8 +30,9 @@ export default function ActionTask({
   const overdue =
     Boolean(task.dueAt) && !task.completedAt && new Date(task.dueAt ?? 0).getTime() < now;
   const due = dueBadge ? taskDueState(task.dueAt, now) : null;
+  const reminder = task.dueAt ? reminderLabel(task.remindMinutes) : null;
   const hasDetail = Boolean(
-    task.description || task.contactName || task.opportunityName || task.clickupError,
+    task.description || task.contactName || task.opportunityName || task.clickupError || reminder,
   );
 
   return (
@@ -129,6 +131,7 @@ export default function ActionTask({
               </p>
             )}
             {task.opportunityName && <p>{task.opportunityName}</p>}
+            {reminder && <p>Reminder {reminder.toLowerCase()}</p>}
             {task.clickupError && <p className="text-danger">ClickUp: {task.clickupError}</p>}
             {!hasDetail && <p>No extra detail.</p>}
             {task.priority !== "normal" && <p>Priority {task.priority}</p>}

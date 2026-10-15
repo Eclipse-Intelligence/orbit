@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
+import { DateTimePicker } from "@/components/_ui/date-picker";
 import { Input } from "@/components/_ui/input";
 import Tag from "@/components/_ui/tag";
 import { addCompanyTaskAction } from "@/app/(crm)/records";
@@ -10,6 +11,7 @@ import DetailSection from "@/components/companies/detail/detail-section";
 import CompanyContacts from "@/components/companies/detail/company-contacts";
 import { ConnectionMark } from "@/components/beautifui/record-marks";
 import { ClickUpBadge, ClickUpPickerField } from "@/components/crm/clickup";
+import ReminderSelect from "@/components/crm/reminder-select";
 import { formatMoney, formatWhen, relativeWhen } from "@/lib/companies";
 import type { ClickUpPicker } from "@/lib/crm/clickup";
 import type { CompanyContext } from "@/lib/crm/types";
@@ -25,6 +27,7 @@ export default function RelationshipPanel({
   const router = useRouter();
   const [taskTitle, setTaskTitle] = useState("");
   const [dueAt, setDueAt] = useState("");
+  const [reminder, setReminder] = useState("none");
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -40,6 +43,7 @@ export default function RelationshipPanel({
       taskTitle,
       dueAt,
       clickup && toClickUp ? clickupListId : null,
+      dueAt && reminder !== "none" ? Number(reminder) : null,
     );
     setPending(false);
     if (result.error) {
@@ -48,6 +52,7 @@ export default function RelationshipPanel({
     }
     setTaskTitle("");
     setDueAt("");
+    setReminder("none");
     setError(null);
     setWarning(result.warning ?? null);
     router.refresh();
@@ -97,14 +102,18 @@ export default function RelationshipPanel({
             }}
             placeholder="Follow up on the proposal"
           />
-          <Input
-            type="datetime-local"
+          <DateTimePicker
+            id={`task-${companyId}-due`}
             aria-label="Due date"
+            placeholder="Add a due date"
             value={dueAt}
-            onChange={(event) => setDueAt(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") event.preventDefault();
-            }}
+            onChange={setDueAt}
+          />
+          <ReminderSelect
+            id={`task-${companyId}-reminder`}
+            value={reminder}
+            onChange={setReminder}
+            disabled={!dueAt}
           />
           {clickup && (
             <ClickUpPickerField

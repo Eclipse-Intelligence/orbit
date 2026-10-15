@@ -288,6 +288,7 @@ export type Task = {
   title: string;
   description: string | null;
   dueAt: string | null;
+  remindMinutes: number | null;
   completedAt: string | null;
   priority: TaskPriority;
   ownerId: string | null;
@@ -313,6 +314,7 @@ export type TaskWrite = {
   title?: string;
   description?: string | null;
   dueAt?: string | null;
+  remindMinutes?: number | null;
   priority?: TaskPriority;
   ownerId?: string | null;
   companyId?: string | null;

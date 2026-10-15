@@ -10,12 +10,14 @@ import {
 } from "react";
 import Link from "next/link";
 import Button from "@/components/_ui/button";
+import { DateTimePicker } from "@/components/_ui/date-picker";
 import { DialogClose, DialogFooter, DialogHeader, DialogTitle } from "@/components/_ui/dialog";
 import Field from "@/components/_ui/field";
 import { Input } from "@/components/_ui/input";
 import { ClickUpPickerField } from "@/components/crm/clickup";
 import { recordSelectClass } from "@/components/crm/record-form";
 import RecordPicker, { type PickedRecord } from "@/components/crm/record-picker";
+import ReminderSelect from "@/components/crm/reminder-select";
 import { TagChip, TagOptions, TagPopover } from "@/components/crm/tags";
 import { createCompanyAction, type CompanyActionState } from "@/app/(crm)/actions";
 import type { QuickAddSetup } from "@/app/(crm)/quick-add";
@@ -202,7 +204,7 @@ function TagsField({ id, suggestions }: { id: string; suggestions: QuickAddSetup
   );
 }
 
-const TASK_FIELDS = ["title", "dueAt", "contactId", "companyId", "clickupListId"];
+const TASK_FIELDS = ["title", "dueAt", "remindMinutes", "contactId", "companyId", "clickupListId"];
 
 export function QuickTaskForm({ prefill, setup, onDone }: FormProps) {
   const [state, action, pending] = useActionState(saveTaskAction, {} as RecordActionState);
@@ -210,6 +212,8 @@ export function QuickTaskForm({ prefill, setup, onDone }: FormProps) {
   const [company, setCompany] = useState<PickedRecord | null>(prefill.company);
   const [toClickUp, setToClickUp] = useState(true);
   const [listId, setListId] = useState<string | null>(null);
+  const [dueAt, setDueAt] = useState("");
+  const [reminder, setReminder] = useState("none");
   const clickup = setup?.clickup ?? null;
 
   useSettled(
@@ -226,9 +230,26 @@ export function QuickTaskForm({ prefill, setup, onDone }: FormProps) {
       <Field label="Task" htmlFor="quick-task-title" required error={fieldError(state, TASK_FIELDS, "title")}>
         <Input id="quick-task-title" name="title" required placeholder="Send the follow-up" />
       </Field>
-      <Field label="Due" htmlFor="quick-task-due" error={fieldError(state, TASK_FIELDS, "dueAt")}>
-        <Input id="quick-task-due" name="dueAt" type="datetime-local" />
-      </Field>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field label="Due" htmlFor="quick-task-due" error={fieldError(state, TASK_FIELDS, "dueAt")}>
+          <DateTimePicker
+            id="quick-task-due"
+            name="dueAt"
+            placeholder="Add a due date"
+            value={dueAt}
+            onChange={setDueAt}
+          />
+        </Field>
+        <Field label="Reminder" htmlFor="quick-task-reminder" error={fieldError(state, TASK_FIELDS, "remindMinutes")}>
+          <ReminderSelect
+            id="quick-task-reminder"
+            name="remindMinutes"
+            value={reminder}
+            onChange={setReminder}
+            disabled={!dueAt}
+          />
+        </Field>
+      </div>
       <LinkField
         id="quick-task-contact"
         label="Contact"

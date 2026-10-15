@@ -189,6 +189,7 @@ export const taskWriteSchema = z
     title: z.string().optional(),
     description: nullableText,
     dueAt: nullableText,
+    remindMinutes: z.number().int().nullable().optional(),
     priority: z.enum(TASK_PRIORITIES).optional(),
     ownerId: z.uuid().nullable().optional(),
     companyId: z.uuid().nullable().optional(),

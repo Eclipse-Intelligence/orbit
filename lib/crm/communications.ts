@@ -83,7 +83,7 @@ export async function recordCommunication(
   }
   const emails = [...new Set((input.participantEmails ?? []).map((email) => canonicalEmail(email)).filter(Boolean))] as string[];
 
-  return withActor(actor, async (db) => {
+  const result = await withActor(actor, async (db) => {
     const contacts: Contact[] = [];
     for (const email of emails) {
       const found = await db.query<{ id: string }>(
@@ -166,4 +166,13 @@ export async function recordCommunication(
 
     return { activity, company, contacts, task, suggested };
   });
+  if (result.task && actor.type === "user") {
+    try {
+      const { sendTaskToDefaultList } = await import("@/lib/crm/clickup");
+      await sendTaskToDefaultList(actor, result.task.id);
+    } catch (error) {
+      console.error("Could not send the follow-up task to ClickUp", error);
+    }
+  }
+  return result;
 }
