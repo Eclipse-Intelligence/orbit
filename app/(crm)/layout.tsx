@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { after } from "next/server";
 import Sidebar from "@/components/_common/sidebar/sidebar";
 import CrmChrome from "@/components/crm/chrome";
+import { ShortcutsProvider } from "@/components/shortcuts/shortcuts-provider";
 import { getUserActor } from "@/lib/auth/user";
 import { syncCalendar } from "@/lib/crm/calendar";
 import { syncCalls } from "@/lib/crm/calls";
@@ -69,25 +70,27 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
   ]);
 
   return (
-    <main className="flex h-dvh max-w-full overflow-hidden">
-      <Sidebar
-        companyCount={companyCount}
-        openActionCount={openActionCount}
-        workspaceName={user.workspaceName}
-      />
-      <CrmChrome
-        viewer={{
-          id: user.userId,
-          name: user.fullName || user.email,
-          email: user.email,
-          role: user.role,
-        workspaceName: user.workspaceName,
-      }}
-      overdue={attention.overdue}
-      today={attention.today}
-    >
-        {children}
-      </CrmChrome>
-    </main>
+    <ShortcutsProvider>
+      <main className="flex h-dvh max-w-full overflow-hidden">
+        <Sidebar
+          companyCount={companyCount}
+          openActionCount={openActionCount}
+          workspaceName={user.workspaceName}
+        />
+        <CrmChrome
+          viewer={{
+            id: user.userId,
+            name: user.fullName || user.email,
+            email: user.email,
+            role: user.role,
+            workspaceName: user.workspaceName,
+          }}
+          overdue={attention.overdue}
+          today={attention.today}
+        >
+          {children}
+        </CrmChrome>
+      </main>
+    </ShortcutsProvider>
   );
 }

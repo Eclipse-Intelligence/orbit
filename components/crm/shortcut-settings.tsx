@@ -6,14 +6,14 @@ import { SettingsCard } from "@/components/crm/settings-ui";
 import { useShortcuts } from "@/components/shortcuts/shortcuts-provider";
 
 export default function ShortcutSettings() {
-  const { singleKeys, setSingleKeys, setHelpOpen, mac } = useShortcuts();
+  const { singleKeys, setSingleKeys, run, mac } = useShortcuts();
   return (
     <SettingsCard
       id="shortcuts"
       title="Keyboard shortcuts"
       description={`Press ${mac ? "⌘K" : "Ctrl+K"} for the command palette and ? for every shortcut. This setting is saved on this device.`}
       action={
-        <Button variant="secondary" size="sm" onClick={() => setHelpOpen(true)}>
+        <Button variant="secondary" size="sm" onClick={() => run("help")}>
           Show shortcuts
         </Button>
       }
