@@ -522,7 +522,7 @@ export default function BookingScreen({ page }: { page: PublicBookingPage }) {
                 )}
               </>
             )}
-            <p className="caption-style text-faint mt-auto pt-2 text-center">Scheduling by Orbit</p>
+            <p className="caption-style text-faint mt-auto pt-2 text-center">Scheduling by Orbit from Eclipse</p>
           </div>
         </section>
       </div>
