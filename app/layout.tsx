@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist } from "next/font/google";
 import { SITE_DESCRIPTION, SITE_NAME, SITE_URL, pageMetadata } from "@/lib/seo";
 import ScrollToTop from "@/components/_common/scroll-to-top";
+import StaleDeployReload from "@/components/_common/stale-deploy-reload";
 import { SIDEBAR_COLLAPSED_SCRIPT, SIDEBAR_WIDTH_SCRIPT } from "@/lib/sidebar";
 import "./globals.css";
 
@@ -41,6 +42,7 @@ export default function RootLayout({
       </head>
       <body className="relative z-0 font-sans antialiased">
         <ScrollToTop />
+        <StaleDeployReload />
         {children}
       </body>
     </html>
