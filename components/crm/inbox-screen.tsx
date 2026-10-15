@@ -2,6 +2,7 @@ import Button, { buttonVariants } from "@/components/_ui/button";
 import { EntityChip, Monogram } from "@/components/beautifui/record-marks";
 import PeopleMet from "@/components/crm/people-met";
 import SectionHeader from "@/components/crm/section-header";
+import KeyboardList from "@/components/shortcuts/keyboard-list";
 import UnfiledConversations from "@/components/crm/unfiled-conversations";
 import type { Viewer } from "@/components/crm/viewer";
 import {
@@ -76,7 +77,7 @@ export default function InboxScreen({
           live ? (
             <div className="flex items-center gap-2">
               <form action={syncInboxAction}>
-                <Button variant="secondary" size="sm" type="submit">
+                <Button variant="secondary" size="sm" type="submit" data-shortcut="sync" title="Sync (S)">
                   Sync
                 </Button>
               </form>
@@ -280,8 +281,10 @@ export default function InboxScreen({
           )}
         </div>
       </div>
-      <UnfiledConversations conversations={unfiled} />
-      <PeopleMet people={people} />
+      <KeyboardList className="contents">
+        <UnfiledConversations conversations={unfiled} />
+        <PeopleMet people={people} />
+      </KeyboardList>
       {messages.length === 0 ? (
         <p className="caption-style text-subtle px-4">No mail filed yet.</p>
       ) : (

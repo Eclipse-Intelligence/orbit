@@ -27,6 +27,8 @@ import { EntityChip, Monogram } from "@/components/beautifui/record-marks";
 import Pager from "@/components/crm/pager";
 import RecordTransfer from "@/components/crm/record-transfer";
 import SectionHeader from "@/components/crm/section-header";
+import KeyboardList from "@/components/shortcuts/keyboard-list";
+import ListSearch from "@/components/shortcuts/list-search";
 import { RecordList, RecordRow, RecordSelect } from "@/components/crm/record-form";
 import type { Viewer } from "@/components/crm/viewer";
 import { moveOpportunityStageAction, saveOpportunityAction, type RecordActionState } from "@/app/(crm)/records";
@@ -388,16 +390,30 @@ export default function OpportunitiesScreen({
         viewer={viewer}
         action={
           <div className="flex items-center gap-1">
-            <Button variant={view === "list" ? "secondary" : "ghost"} size="sm" href="/opportunities">
+            <Button
+              variant={view === "list" ? "secondary" : "ghost"}
+              size="sm"
+              href="/opportunities"
+              data-shortcut={view === "list" ? undefined : "toggle-view"}
+              title="List (V)"
+            >
               List
             </Button>
-            <Button variant={view === "board" ? "secondary" : "ghost"} size="sm" href="/opportunities?view=board">
+            <Button
+              variant={view === "board" ? "secondary" : "ghost"}
+              size="sm"
+              href="/opportunities?view=board"
+              data-shortcut={view === "board" ? undefined : "toggle-view"}
+              title="Board (V)"
+            >
               Board
             </Button>
             <RecordTransfer resource="opportunities" />
             <Button
               variant="primary"
               size="sm"
+              data-shortcut="add-record"
+              title="Add opportunity (C then P)"
               onClick={() => edit(null)}
             >
               Add opportunity
@@ -405,18 +421,9 @@ export default function OpportunitiesScreen({
           </div>
         }
       />
-      <form action="/opportunities" className="flex items-center gap-2 px-4 py-4">
-        <label className="sr-only" htmlFor="opportunity-search">
-          Search opportunities
-        </label>
-        <Input
-          id="opportunity-search"
-          name="q"
-          defaultValue={query}
-          placeholder="Search name or company"
-          className="w-[240px]"
-        />
-      </form>
+      <div className="flex items-center gap-2 px-4 py-4">
+        <ListSearch noun="opportunities" />
+      </div>
       <p className="caption-style text-subtle px-4 pb-2">
         {total} {total === 1 ? "opportunity" : "opportunities"}
       </p>
@@ -481,11 +488,23 @@ export default function OpportunitiesScreen({
                         type="button"
                         className="cursor-grab rounded-sm border-0 bg-transparent p-0 text-left font-normal text-inherit select-none focus-visible:ring-2 focus-visible:ring-ring/60"
                         aria-label={`Reorder ${stage.name}`}
-                        aria-keyshortcuts="ArrowLeft ArrowRight"
+                        aria-keyshortcuts="Shift+ArrowLeft Shift+ArrowRight"
+                        data-stage-button={stage.id}
                         onKeyDown={(event) => {
+                          if (event.key === "ArrowDown") {
+                            event.preventDefault();
+                            focusBoardCard(stage.id, 0);
+                            return;
+                          }
                           if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
                           event.preventDefault();
-                          moveStage(stage.id, event.key === "ArrowLeft" ? -1 : 1);
+                          const direction = event.key === "ArrowLeft" ? -1 : 1;
+                          if (event.shiftKey) {
+                            moveStage(stage.id, direction);
+                            window.requestAnimationFrame(() => focusStageButton(stage.id));
+                            return;
+                          }
+                          focusAdjacentStage(stage.id, direction);
                         }}
                       >
                         {stage.name}
@@ -498,14 +517,33 @@ export default function OpportunitiesScreen({
                       <div
                         key={opportunity.id}
                         data-opportunity=""
+                        data-opportunity-id={opportunity.id}
                         tabIndex={0}
                         aria-label={`${opportunity.name}, ${stage.name}`}
-                        aria-keyshortcuts="ArrowLeft ArrowRight"
+                        aria-keyshortcuts="Enter Shift+ArrowLeft Shift+ArrowRight"
                         onPointerDown={(event) => beginCardDrag(event, opportunity.id)}
                         onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            edit(opportunity);
+                            return;
+                          }
+                          if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+                            event.preventDefault();
+                            focusCardInColumn(event.currentTarget, event.key === "ArrowUp" ? -1 : 1);
+                            return;
+                          }
                           if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
                           event.preventDefault();
-                          moveCard(opportunity.id, event.key === "ArrowLeft" ? -1 : 1);
+                          const direction = event.key === "ArrowLeft" ? -1 : 1;
+                          if (event.shiftKey) {
+                            moveCard(opportunity.id, direction);
+                            window.requestAnimationFrame(() =>
+                              document.querySelector<HTMLElement>(`[data-opportunity-id="${opportunity.id}"]`)?.focus(),
+                            );
+                            return;
+                          }
+                          focusAdjacentColumnCard(event.currentTarget, direction);
                         }}
                         className={cn(
                           "border-border bg-card flex shrink-0 cursor-grab flex-col gap-2 rounded-lg border p-3 select-none focus-visible:ring-2 focus-visible:ring-ring/60 [-webkit-touch-callout:none]",
@@ -534,7 +572,8 @@ export default function OpportunitiesScreen({
           </div>
         </div>
       ) : (
-      <RecordList count={opportunities.length} empty="No opportunities yet.">
+      <KeyboardList className="flex min-h-0 flex-1 flex-col">
+      <RecordList count={opportunities.length} empty={query ? "No opportunities match the search." : "No opportunities yet."}>
         {opportunities.map((opportunity) => (
           <RecordRow
             key={opportunity.id}
@@ -555,6 +594,7 @@ export default function OpportunitiesScreen({
           />
         ))}
       </RecordList>
+      </KeyboardList>
       )}
       <Pager
         page={page}
@@ -697,7 +737,14 @@ function OpportunityEditor({
         <Button variant="subtle" size="sm" type="button" onClick={onClose}>
           Cancel
         </Button>
-        <Button variant="primary" size="sm" type="submit" disabled={pending || companyOptions.length === 0}>
+        <Button
+          variant="primary"
+          size="sm"
+          type="submit"
+          disabled={pending || companyOptions.length === 0}
+          data-shortcut="save"
+          title="Save (⌘S)"
+        >
           {pending ? "Saving…" : "Save"}
         </Button>
       </SheetFooter>
@@ -796,4 +843,58 @@ function StageInsert({
       </Button>
     </div>
   );
+}
+
+function boardColumns() {
+  return [...document.querySelectorAll<HTMLElement>("[data-stage-column]")];
+}
+
+function columnCards(column: Element | null | undefined) {
+  return column ? [...column.querySelectorAll<HTMLElement>("[data-opportunity]")] : [];
+}
+
+function focusBoardCard(stageId: string, index: number) {
+  const column = document.querySelector(`[data-stage-column][data-stage-id="${stageId}"]`);
+  const cards = columnCards(column);
+  cards[Math.min(index, cards.length - 1)]?.focus();
+}
+
+function focusStageButton(stageId: string) {
+  document.querySelector<HTMLElement>(`[data-stage-button="${stageId}"]`)?.focus();
+}
+
+function focusAdjacentStage(stageId: string, direction: -1 | 1) {
+  const columns = boardColumns();
+  const index = columns.findIndex((column) => column.dataset.stageId === stageId);
+  const next = columns[index + direction]?.dataset.stageId;
+  if (next) focusStageButton(next);
+}
+
+function focusCardInColumn(card: HTMLElement, direction: -1 | 1) {
+  const cards = columnCards(card.closest("[data-stage-column]"));
+  const index = cards.indexOf(card);
+  const next = cards[index + direction];
+  if (next) {
+    next.focus();
+    return;
+  }
+  if (direction < 0) {
+    const stageId = card.closest<HTMLElement>("[data-stage-column]")?.dataset.stageId;
+    if (stageId) focusStageButton(stageId);
+  }
+}
+
+function focusAdjacentColumnCard(card: HTMLElement, direction: -1 | 1) {
+  const columns = boardColumns();
+  const column = card.closest<HTMLElement>("[data-stage-column]");
+  const position = columnCards(column).indexOf(card);
+  for (let index = columns.indexOf(column as HTMLElement) + direction; index >= 0 && index < columns.length; index += direction) {
+    const cards = columnCards(columns[index]);
+    if (cards.length > 0) {
+      const next = cards[Math.min(position, cards.length - 1)];
+      next.focus();
+      next.scrollIntoView({ block: "nearest", inline: "nearest" });
+      return;
+    }
+  }
 }

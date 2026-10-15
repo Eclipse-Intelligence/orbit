@@ -7,6 +7,7 @@ import { Input } from "@/components/_ui/input";
 import Tag from "@/components/_ui/tag";
 import { addActivityAction, type RecordActionState } from "@/app/(crm)/records";
 import CallInsightPanel from "@/components/crm/call-insight";
+import { useShortcut } from "@/components/shortcuts/shortcuts-provider";
 import ContactEmail from "@/components/crm/contact-email";
 import {
   activityByline,
@@ -159,8 +160,27 @@ export function ActivityComposer({
   email: ReactNode;
 }) {
   const { kind, title, body, pending } = draft;
+  const root = useRef<HTMLDivElement>(null);
+
+  function compose(next: ActivityKind) {
+    draft.setKind(next);
+    window.requestAnimationFrame(() => {
+      root.current?.scrollIntoView({ block: "nearest" });
+      root.current?.querySelector<HTMLElement>("[data-compose-focus]")?.focus();
+    });
+  }
+
+  useShortcut("compose-note", () => compose("note"));
+  useShortcut("compose-call", () => compose("call"));
+  useShortcut("compose-email", () => compose("email"));
+  useShortcut("create-activity", () => compose("note"));
+
   return (
-    <div className="border-line-strong bg-card flex flex-col gap-3 rounded-xl border p-3">
+    <div
+      ref={root}
+      data-shortcut-scope=""
+      className="border-line-strong bg-card flex flex-col gap-3 rounded-xl border p-3"
+    >
       <div
         className="flex flex-wrap gap-1"
         role="group"
@@ -192,6 +212,7 @@ export function ActivityComposer({
           </label>
           <textarea
             id={`activity-note-${idPrefix}`}
+            data-compose-focus=""
             value={body}
             onChange={(event) => draft.setBody(event.target.value)}
             placeholder="Write a note"
@@ -204,6 +225,8 @@ export function ActivityComposer({
             type="button"
             className="self-start"
             disabled={pending || body.trim() === ""}
+            data-shortcut-submit=""
+            title="Add note (⌘ Enter)"
             onClick={() => draft.add("note")}
           >
             {pending ? "Saving…" : "Add note"}
@@ -217,6 +240,7 @@ export function ActivityComposer({
           </label>
           <Input
             id={`activity-call-${idPrefix}`}
+            data-compose-focus=""
             value={title}
             autoComplete="off"
             onChange={(event) => draft.setTitle(event.target.value)}
@@ -243,6 +267,8 @@ export function ActivityComposer({
             type="button"
             className="self-start"
             disabled={pending || (title.trim() === "" && body.trim() === "")}
+            data-shortcut-submit=""
+            title="Add call (⌘ Enter)"
             onClick={() => draft.add("call")}
           >
             {pending ? "Saving…" : "Add call"}
@@ -297,6 +323,7 @@ export function ActivityTimeline({
               variant={active === item.id ? "muted" : "ghost"}
               size="sm"
               type="button"
+              data-shortcut={item.id === "all" ? "timeline-filter" : undefined}
               className="px-2 sm:px-3"
               aria-pressed={active === item.id}
               onClick={() => setFilter(item.id)}

@@ -9,6 +9,7 @@ import type { Viewer } from "@/components/crm/viewer";
 import { displayInitials } from "@/lib/companies";
 import { RECORD_LISTS, type RecordListKey } from "@/lib/crm/hrefs";
 import { useCompaniesStore } from "@/stores/companies-store";
+import { useShortcuts } from "@/components/shortcuts/shortcuts-provider";
 import { ExpandSidebarButton } from "@/components/_common/sidebar/sidebar-toggle";
 import ChevronLeftIcon from "@/public/assets/images/_common/chevron-left.svg";
 import ChevronRightIcon from "@/public/assets/images/_common/chevron-right.svg";
@@ -27,7 +28,7 @@ export default function SectionHeader({
   list?: RecordListKey;
 }) {
   const setSidebarOpen = useCompaniesStore((state) => state.setSidebarOpen);
-  const setSearchOpen = useCompaniesStore((state) => state.setSearchOpen);
+  const { setPaletteOpen } = useShortcuts();
   const openProfile = useCompaniesStore((state) => state.openProfile);
 
   return (
@@ -60,9 +61,10 @@ export default function SectionHeader({
           <Button
             variant="secondary"
             size="icon"
-            aria-label="Search"
+            aria-label="Search and commands"
             aria-keyshortcuts="Meta+K Control+K"
-            onClick={() => setSearchOpen(true)}
+            title="Search and commands (⌘K)"
+            onClick={() => setPaletteOpen(true)}
           >
             <SearchIcon aria-hidden className="size-3.5" />
           </Button>
@@ -72,6 +74,7 @@ export default function SectionHeader({
             size="none"
             className="caption-style h-[30px] gap-1.5 py-[5px] pr-[7px] pl-[5px] font-normal"
             aria-label={`Open account for ${viewer.name}`}
+            data-shortcut="account"
             onClick={openProfile}
           >
             <span
@@ -97,6 +100,8 @@ function RecordBreadcrumb({ list, title }: { list: RecordListKey; title: string 
         <li className="shrink-0">
           <Link
             href={href}
+            data-shortcut="back"
+            title={`Back to ${label} (Esc)`}
             className="text-subtle hover:text-foreground flex h-[30px] items-center gap-1 rounded-full text-[14px] leading-5 transition-colors duration-150 max-sm:-ml-1 max-sm:pr-2.5 max-sm:pl-1.5 max-sm:hover:bg-white/6"
           >
             <ChevronLeftIcon aria-hidden className="size-3 sm:hidden" />

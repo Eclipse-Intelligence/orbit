@@ -97,6 +97,7 @@ function EventBlock({
       <PopoverTrigger asChild>
         <button
           type="button"
+          data-list-row=""
           aria-label={`${eventTitle(item)}, ${formatTimeRange(item)}${calendar ? `, ${calendar.name}` : ""}`}
           className={cn(
             "focus-visible:ring-ring/60 flex min-w-0 cursor-pointer flex-col overflow-hidden rounded-md border-l-[3px] px-1.5 text-left outline-none focus-visible:ring-2",

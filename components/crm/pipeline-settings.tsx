@@ -186,6 +186,8 @@ export default function PipelineSettings({
           type="button"
           onClick={saveStages}
           disabled={pending}
+          data-shortcut="save"
+          title="Save (⌘S)"
         >
           {pending ? "Saving…" : "Save pipeline"}
         </Button>

@@ -3,6 +3,7 @@ import Button from "@/components/_ui/button";
 import { ConnectionMark, Monogram } from "@/components/beautifui/record-marks";
 import SectionHeader from "@/components/crm/section-header";
 import { RecordList, RecordRow } from "@/components/crm/record-form";
+import KeyboardList from "@/components/shortcuts/keyboard-list";
 import { getUserActor } from "@/lib/auth/user";
 import { relativeWhen } from "@/lib/companies";
 import { companyHref } from "@/lib/crm/hrefs";
@@ -30,6 +31,7 @@ export default async function QuietPage() {
       <p className="caption-style text-subtle px-4 py-4">
         Companies with no interaction in the last 21 days.
       </p>
+      <KeyboardList sequence className="flex min-h-0 flex-1 flex-col">
       <RecordList count={rows.length} empty="Every company has been in touch recently.">
         {rows.map((row) => (
           <RecordRow
@@ -48,6 +50,7 @@ export default async function QuietPage() {
           />
         ))}
       </RecordList>
+      </KeyboardList>
     </section>
   );
 }

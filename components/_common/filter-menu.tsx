@@ -21,6 +21,7 @@ type FilterMenuProps = {
   onChange: (value: string) => void;
   align?: "start" | "end";
   className?: string;
+  shortcut?: string;
 };
 
 export default function FilterMenu({
@@ -30,6 +31,7 @@ export default function FilterMenu({
   onChange,
   align = "start",
   className,
+  shortcut,
 }: FilterMenuProps) {
   const current = options.find((option) => option.value === value);
 
@@ -39,6 +41,8 @@ export default function FilterMenu({
         <Button
           variant="secondary"
           size="none"
+          data-shortcut={shortcut}
+          title={shortcut === "filter" ? "Filter (F)" : undefined}
           className={cn(
             "group h-[30px] gap-0 overflow-hidden text-[12px] data-[state=open]:bg-muted",
             className,

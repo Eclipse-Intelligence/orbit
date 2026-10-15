@@ -10,14 +10,13 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
-  CommandSeparator,
   Kbd,
 } from "@/components/_ui/command";
+import { shortcutTarget, useShortcuts } from "@/components/shortcuts/shortcuts-provider";
 import { searchWorkspaceAction } from "@/app/(crm)/search";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import type { Company, Contact, Opportunity } from "@/lib/crm/types";
-import { useCompaniesStore } from "@/stores/companies-store";
-import PlusIcon from "@/public/assets/images/_common/plus.svg";
+import { SHORTCUTS, paletteMatches, shortcutKeys, type ShortcutDef, type ShortcutGroup } from "@/lib/shortcuts";
 
 type Results = {
   query: string;
@@ -27,41 +26,53 @@ type Results = {
   failed?: boolean;
 };
 
+const PAGE_GROUPS = new Set<ShortcutGroup>(["Lists", "Selection", "Tasks", "Opportunities", "Records", "Calendar", "Inbox"]);
+const GENERAL_IDS = new Set(["help", "settings", "notifications", "account"]);
+
+function Keys({ def, mac }: { def: ShortcutDef; mac: boolean }) {
+  const keys = shortcutKeys(def, mac);
+  if (keys.length === 0) return null;
+  return (
+    <span className="ml-auto flex shrink-0 items-center gap-1">
+      {keys.map((key, index) => (
+        <Kbd key={index} aria-hidden>
+          {key}
+        </Kbd>
+      ))}
+    </span>
+  );
+}
+
 export default function CommandMenu() {
   const router = useRouter();
-  const open = useCompaniesStore((state) => state.searchOpen);
-  const setOpen = useCompaniesStore((state) => state.setSearchOpen);
-  const setNewCompanyOpen = useCompaniesStore(
-    (state) => state.setNewCompanyOpen,
-  );
+  const { paletteOpen: open, setPaletteOpen: setOpen, paletteMode, listSearch, run, available, mac } = useShortcuts();
   const [query, setQuery] = useState("");
   const [remote, setRemote] = useState<Results | null>(null);
+  const [pageIds, setPageIds] = useState<string[]>([]);
+  const [labels, setLabels] = useState<Record<string, string>>({});
   const actionRan = useRef(false);
+  const listMode = paletteMode === "list" && listSearch !== null;
+
+  const [seen, setSeen] = useState({ open, listMode });
+  if (seen.open !== open || seen.listMode !== listMode) {
+    setSeen({ open, listMode });
+    if (open) setQuery(listMode ? (listSearch?.value ?? "") : "");
+  }
 
   useEffect(() => {
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key.toLowerCase() !== "k") return;
-      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey)
-        return;
-      const { searchOpen, setSearchOpen } = useCompaniesStore.getState();
-      const target = event.target;
-      if (
-        !searchOpen &&
-        target instanceof HTMLElement &&
-        (target.isContentEditable ||
-          target.tagName === "INPUT" ||
-          target.tagName === "TEXTAREA" ||
-          target.tagName === "SELECT")
-      ) {
-        return;
-      }
-      event.preventDefault();
-      setSearchOpen(!searchOpen);
-    }
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
+    if (!open) return;
+    const timer = window.setTimeout(() => {
+      setPageIds(
+        SHORTCUTS.filter(
+          (def) => def.palette && (PAGE_GROUPS.has(def.group) || GENERAL_IDS.has(def.id)) && available(def.id),
+        ).map((def) => def.id),
+      );
+      const add = shortcutTarget("add-record");
+      const text = add?.textContent?.trim();
+      setLabels(text && add?.tagName !== "INPUT" ? { "add-record": text } : {});
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [open, available]);
 
   const trimmed = query.trim();
   const searching = Boolean(open && trimmed && remote?.query !== trimmed);
@@ -77,13 +88,7 @@ export default function CommandMenu() {
         },
         () => {
           if (!cancelled)
-            setRemote({
-              query: trimmed,
-              companies: [],
-              contacts: [],
-              opportunities: [],
-              failed: true,
-            });
+            setRemote({ query: trimmed, companies: [], contacts: [], opportunities: [], failed: true });
         },
       );
     }, 200);
@@ -93,25 +98,37 @@ export default function CommandMenu() {
     };
   }, [trimmed, open]);
 
-  function run(action: () => void) {
+  function go(action: () => void) {
     actionRan.current = true;
     setOpen(false);
-    action();
+    window.setTimeout(action, 60);
   }
 
-  const empty = results
-    ? results.companies.length +
-        results.contacts.length +
-        results.opportunities.length ===
-      0
-    : true;
+  const commands = SHORTCUTS.filter((def) => def.palette);
+  const pageCommands = commands.filter(
+    (def) => pageIds.includes(def.id) && !GENERAL_IDS.has(def.id) && paletteMatches(def, query),
+  );
+  const generalCommands = commands.filter(
+    (def) => pageIds.includes(def.id) && GENERAL_IDS.has(def.id) && paletteMatches(def, query),
+  );
+  const createCommands = commands.filter((def) => def.group === "Create" && paletteMatches(def, query));
+  const goCommands = commands.filter((def) => def.group === "Go to" && paletteMatches(def, query));
+  const settingsCommands = trimmed ? commands.filter((def) => def.group === "Settings" && paletteMatches(def, query)) : [];
+
+  const recordCount = results ? results.companies.length + results.contacts.length + results.opportunities.length : 0;
+  const nothing =
+    trimmed &&
+    !searching &&
+    !listMode &&
+    recordCount === 0 &&
+    pageCommands.length + createCommands.length + goCommands.length + settingsCommands.length + generalCommands.length === 0;
 
   return (
     <CommandDialog
       open={open}
       onOpenChange={setOpen}
-      title="Search"
-      description="Search companies, people, and opportunities"
+      title="Command palette"
+      description="Search records and run actions"
       className="max-w-[640px]"
       onCloseAutoFocus={(event) => {
         if (actionRan.current) event.preventDefault();
@@ -120,30 +137,44 @@ export default function CommandMenu() {
         setRemote(null);
       }}
     >
-      <Command shouldFilter={false}>
+      <Command shouldFilter={false} loop>
         <CommandInput
           value={query}
           onValueChange={setQuery}
-          placeholder="Search companies, people, and opportunities"
+          placeholder={listMode ? `Search ${listSearch?.noun}…` : "Type a command or search…"}
           trailing={<Kbd>Esc</Kbd>}
         />
         <CommandList>
-          {searching && (
-            <p className="caption-style text-subtle px-4 py-6">Searching…</p>
+          {listMode && listSearch && (
+            <CommandGroup heading={`Search ${listSearch.noun}`}>
+              <CommandItem value="list-search" onSelect={() => go(() => router.push(listSearch.hrefFor(query)))}>
+                {trimmed ? (
+                  <span className="truncate">
+                    Show {listSearch.noun} matching “{trimmed}”
+                  </span>
+                ) : (
+                  <span>{listSearch.value ? "Clear the search" : `Show all ${listSearch.noun}`}</span>
+                )}
+                <span className="ml-auto flex shrink-0 items-center">
+                  <Kbd aria-hidden>Enter</Kbd>
+                </span>
+              </CommandItem>
+            </CommandGroup>
           )}
+          {pageCommands.length > 0 && (
+            <CommandGroup heading="This page">
+              {pageCommands.map((def) => (
+                <CommandItem key={def.id} value={def.id} onSelect={() => go(() => run(def.id))}>
+                  <span className="truncate">{labels[def.id] ?? def.label}</span>
+                  <Keys def={def} mac={mac} />
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          )}
+          {trimmed && searching && <p className="caption-style text-subtle px-4 py-3">Searching records…</p>}
           {!searching && results?.failed && (
-            <p role="alert" className="caption-style text-danger px-4 py-6">
+            <p role="alert" className="caption-style text-danger px-4 py-3">
               Search is unavailable right now. Try again in a moment.
-            </p>
-          )}
-          {!searching && trimmed && empty && !results?.failed && (
-            <p className="caption-style text-subtle px-4 py-6">
-              No records for “{trimmed}”
-            </p>
-          )}
-          {!trimmed && (
-            <p className="caption-style text-subtle px-4 py-6">
-              Type a name, email, or domain.
             </p>
           )}
           {results && results.companies.length > 0 && (
@@ -151,16 +182,12 @@ export default function CommandMenu() {
               {results.companies.map((company) => (
                 <CommandItem
                   key={company.id}
-                  value={company.id}
-                  onSelect={() =>
-                    run(() => router.push(companyHref(company.id)))
-                  }
+                  value={`company-${company.id}`}
+                  onSelect={() => go(() => router.push(companyHref(company.id)))}
                 >
                   <span className="flex min-w-0 flex-col">
                     <span className="truncate">{company.name}</span>
-                    <span className="caption-style text-subtle truncate">
-                      {company.domain ?? "No domain"}
-                    </span>
+                    <span className="caption-style text-subtle truncate">{company.domain ?? "No domain"}</span>
                   </span>
                 </CommandItem>
               ))}
@@ -171,17 +198,13 @@ export default function CommandMenu() {
               {results.contacts.map((contact) => (
                 <CommandItem
                   key={contact.id}
-                  value={contact.id}
-                  onSelect={() =>
-                    run(() => router.push(contactHref(contact.id)))
-                  }
+                  value={`contact-${contact.id}`}
+                  onSelect={() => go(() => router.push(contactHref(contact.id)))}
                 >
                   <span className="flex min-w-0 flex-col">
                     <span className="truncate">{contact.name}</span>
                     <span className="caption-style text-subtle truncate">
-                      {[contact.jobTitle, contact.companyName]
-                        .filter(Boolean)
-                        .join(" · ") || "No company"}
+                      {[contact.jobTitle, contact.companyName].filter(Boolean).join(" · ") || "No company"}
                     </span>
                   </span>
                 </CommandItem>
@@ -193,13 +216,9 @@ export default function CommandMenu() {
               {results.opportunities.map((opportunity) => (
                 <CommandItem
                   key={opportunity.id}
-                  value={opportunity.id}
+                  value={`opportunity-${opportunity.id}`}
                   onSelect={() =>
-                    run(() =>
-                      router.push(
-                        `/opportunities?q=${encodeURIComponent(opportunity.name)}`,
-                      ),
-                    )
+                    go(() => router.push(`/opportunities?q=${encodeURIComponent(opportunity.name)}`))
                   }
                 >
                   <span className="flex min-w-0 flex-col">
@@ -212,25 +231,46 @@ export default function CommandMenu() {
               ))}
             </CommandGroup>
           )}
-          {!searching && <CommandSeparator />}
-          {!searching && (
-            <CommandGroup heading="Actions">
-              <CommandItem
-                value="new-company"
-                onSelect={() =>
-                  run(() => {
-                    setNewCompanyOpen(true);
-                    router.push("/");
-                  })
-                }
-              >
-                <span className="bg-muted flex size-6 shrink-0 items-center justify-center rounded-md shadow-[0px_0px_0px_1px_#232323]">
-                  <PlusIcon aria-hidden className="text-soft size-3" />
-                </span>
-                New Company
-              </CommandItem>
+          {!listMode && createCommands.length > 0 && (
+            <CommandGroup heading="Create">
+              {createCommands.map((def) => (
+                <CommandItem key={def.id} value={def.id} onSelect={() => go(() => run(def.id))}>
+                  <span className="truncate">{def.label}</span>
+                  <Keys def={def} mac={mac} />
+                </CommandItem>
+              ))}
             </CommandGroup>
           )}
+          {!listMode && goCommands.length > 0 && (
+            <CommandGroup heading="Go to">
+              {goCommands.map((def) => (
+                <CommandItem key={def.id} value={def.id} onSelect={() => go(() => run(def.id))}>
+                  <span className="truncate">{def.label}</span>
+                  <Keys def={def} mac={mac} />
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          )}
+          {!listMode && settingsCommands.length > 0 && (
+            <CommandGroup heading="Settings">
+              {settingsCommands.map((def) => (
+                <CommandItem key={def.id} value={def.id} onSelect={() => go(() => run(def.id))}>
+                  <span className="truncate">{def.label}</span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          )}
+          {!listMode && generalCommands.length > 0 && (
+            <CommandGroup heading="General">
+              {generalCommands.map((def) => (
+                <CommandItem key={def.id} value={def.id} onSelect={() => go(() => run(def.id))}>
+                  <span className="truncate">{def.label}</span>
+                  <Keys def={def} mac={mac} />
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          )}
+          {nothing && <p className="caption-style text-subtle px-4 py-6">Nothing matches “{trimmed}”</p>}
         </CommandList>
         <CommandFooter>
           <span className="flex items-center gap-1.5">
@@ -239,8 +279,12 @@ export default function CommandMenu() {
             Navigate
           </span>
           <span className="flex items-center gap-1.5">
-            <Kbd>↵</Kbd>
-            Open
+            <Kbd>Enter</Kbd>
+            Run
+          </span>
+          <span className="ml-auto flex items-center gap-1.5">
+            <Kbd>Esc</Kbd>
+            Close
           </span>
         </CommandFooter>
       </Command>

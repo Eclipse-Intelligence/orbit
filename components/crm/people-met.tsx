@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { KEYBOARD_ROW_CLASS } from "@/lib/shortcuts";
+import { cn } from "@/lib/utils";
 import Button from "@/components/_ui/button";
 import { Monogram } from "@/components/beautifui/record-marks";
 import {
@@ -91,7 +93,7 @@ function PersonItem({
   }
 
   return (
-    <li className="border-border flex flex-col gap-2 rounded-xl border p-3">
+    <li data-list-row="" className={cn(KEYBOARD_ROW_CLASS, "border-border flex flex-col gap-2 rounded-xl border p-3")}>
       <div className="flex items-start gap-2.5">
         <Monogram name={label} />
         <span className="flex min-w-0 flex-1 flex-col">
@@ -113,10 +115,10 @@ function PersonItem({
         </p>
       )}
       <div className="flex flex-wrap items-center gap-2">
-        <Button variant="secondary" size="sm" disabled={pending !== null} onClick={create}>
+        <Button variant="secondary" size="sm" disabled={pending !== null} onClick={create} data-row-key="a" title="Create contact (A)">
           {pending === "create" ? "Creating…" : "Create contact"}
         </Button>
-        <Button variant="ghost" size="sm" disabled={pending !== null} onClick={hide}>
+        <Button variant="ghost" size="sm" disabled={pending !== null} onClick={hide} data-row-key="h" title="Hide (H)">
           {pending === "hide" ? "Hiding…" : "Hide"}
         </Button>
       </div>

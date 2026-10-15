@@ -1,10 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import FilterMenu from "@/components/_common/filter-menu";
-import { Input } from "@/components/_ui/input";
 import MobileFilters from "./mobile-filters";
 import { exportCompaniesAction } from "@/app/(crm)/actions";
 import {
@@ -19,6 +18,7 @@ import {
 import { SelectToggle } from "@/components/crm/bulk-bar";
 import { ANY_TAG, tagFilterOptions } from "@/components/crm/tags";
 import RecordTransfer from "@/components/crm/record-transfer";
+import ListSearch from "@/components/shortcuts/list-search";
 import type { BulkSelection } from "@/hooks/use-bulk-selection";
 import { downloadCsv } from "@/lib/csv";
 import type { CompanyListQuery, Member, TagCount } from "@/lib/crm/types";
@@ -41,15 +41,7 @@ export default function CompaniesToolbar({
 }: ToolbarProps) {
   const router = useRouter();
   const setNewCompanyOpen = useCompaniesStore((state) => state.setNewCompanyOpen);
-  const filterQuery = filters.query ?? "";
-  const [query, setQuery] = useState(filterQuery);
-  const [syncedQuery, setSyncedQuery] = useState(filterQuery);
-  const [pushedQuery, setPushedQuery] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
-  if (filterQuery !== syncedQuery) {
-    setSyncedQuery(filterQuery);
-    if (filterQuery !== pushedQuery) setQuery(filterQuery);
-  }
 
   const replaceParams = useCallback(
     (updates: Record<string, string | null>) => {
@@ -64,17 +56,6 @@ export default function CompaniesToolbar({
     },
     [router],
   );
-
-  useEffect(() => {
-    const handle = window.setTimeout(() => {
-      const current = filters.query ?? "";
-      const next = query.trim();
-      if (next === current) return;
-      setPushedQuery(next);
-      replaceParams({ q: next || null });
-    }, 250);
-    return () => window.clearTimeout(handle);
-  }, [query, filters.query, replaceParams]);
 
   async function exportCsv() {
     setExporting(true);
@@ -105,18 +86,10 @@ export default function CompaniesToolbar({
       />
 
       <div className="hidden min-w-0 flex-wrap items-center gap-2 sm:flex">
-        <label className="sr-only" htmlFor="company-search">
-          Search companies
-        </label>
-        <Input
-          id="company-search"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search name or domain"
-          className="w-[220px]"
-        />
+        <ListSearch noun="companies" />
         <FilterMenu
           label="Sort by"
+          shortcut="filter"
           value={sortValue(filters.sort, filters.order)}
           options={SORT_OPTIONS.map((option) => ({
             value: option.value,
@@ -165,11 +138,11 @@ export default function CompaniesToolbar({
       <div className="flex shrink-0 items-center gap-1">
         <SelectToggle selection={selection} />
         <RecordTransfer resource="companies" mode="import" />
-        <Button variant="secondary" size="sm" onClick={exportCsv} disabled={exporting}>
+        <Button variant="secondary" size="sm" onClick={exportCsv} disabled={exporting} data-shortcut="export">
           <ShareIcon aria-hidden className="size-3" />
           {exporting ? "Exporting…" : "Export"}
         </Button>
-        <Button variant="primary" size="sm" onClick={() => setNewCompanyOpen(true)}>
+        <Button variant="primary" size="sm" onClick={() => setNewCompanyOpen(true)} data-shortcut="add-record" title="New company (C then O)">
           <PlusIcon aria-hidden className="size-3" />
           New Company
         </Button>

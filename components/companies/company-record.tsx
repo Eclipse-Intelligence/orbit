@@ -17,6 +17,7 @@ import { useQuickAddRecord } from "@/components/crm/quick-add";
 import RecordLayout from "@/components/crm/record-layout";
 import { Detail, DetailList } from "@/components/crm/record-form";
 import SectionHeader from "@/components/crm/section-header";
+import RecordSequence from "@/components/shortcuts/record-sequence";
 import RecordTags from "@/components/crm/tags";
 import type { Viewer } from "@/components/crm/viewer";
 import { archiveCompanyAction } from "@/app/(crm)/actions";
@@ -85,6 +86,7 @@ export default function CompanyRecord({
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <RecordSequence />
       <SectionHeader
         title={company.name}
         viewer={viewer}
@@ -109,6 +111,7 @@ export default function CompanyRecord({
                   size="sm"
                   className="text-danger hover:text-danger"
                   disabled={archiving}
+                  autoFocus
                   onClick={archive}
                 >
                   {archiving ? "Archiving…" : "Archive company"}
@@ -119,6 +122,8 @@ export default function CompanyRecord({
                 variant="ghost"
                 size="sm"
                 disabled={editing}
+                data-shortcut="archive"
+                title="Archive (Delete)"
                 onClick={() => setConfirmArchive(true)}
               >
                 Archive
@@ -129,6 +134,8 @@ export default function CompanyRecord({
                 variant="primary"
                 size="sm"
                 disabled={archiving}
+                data-shortcut="edit"
+                title="Edit (E)"
                 onClick={() => {
                   setConfirmArchive(false);
                   setEditing(true);

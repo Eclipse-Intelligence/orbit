@@ -386,6 +386,8 @@ export default function EmailTemplatesSettings({
                 variant="primary"
                 size="sm"
                 disabled={pending !== null || !dirty || !draft.name.trim()}
+                data-shortcut="save"
+                title="Save (⌘S)"
                 onClick={save}
               >
                 {pending === "save"

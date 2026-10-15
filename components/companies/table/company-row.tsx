@@ -15,6 +15,7 @@ import {
 import { LIFECYCLE_LABELS, relativeWhen } from "@/lib/companies";
 import { companyHref } from "@/lib/crm/hrefs";
 import type { Company } from "@/lib/crm/types";
+import { KEYBOARD_ROW_CLASS } from "@/lib/shortcuts";
 import { cn } from "@/lib/utils";
 import {
   TABLE_CELL_CLASS,
@@ -74,8 +75,11 @@ export default function CompanyRow({
         router.push(href);
       }}
       data-active={selected}
+      data-list-row=""
+      data-row-href={href}
       className={cn(
         TABLE_ROW_CLASS,
+        KEYBOARD_ROW_CLASS,
         "group hover:bg-card/60 data-[active=true]:bg-card cursor-pointer",
       )}
     >

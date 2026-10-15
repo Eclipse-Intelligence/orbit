@@ -157,7 +157,7 @@ export default function ContactEditor({
           footerClassName,
         )}
       >
-        <Button variant="subtle" size="sm" type="button" onClick={onCancel}>
+        <Button variant="subtle" size="sm" type="button" onClick={onCancel} data-shortcut="cancel-edit">
           Cancel
         </Button>
         <Button
@@ -166,6 +166,8 @@ export default function ContactEditor({
           type="submit"
           form={formId}
           disabled={pending}
+          data-shortcut="save"
+          title="Save (⌘S)"
         >
           {pending ? "Saving…" : editing ? "Save" : "Create contact"}
         </Button>

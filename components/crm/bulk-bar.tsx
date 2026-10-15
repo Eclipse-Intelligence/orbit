@@ -47,6 +47,7 @@ export function RowCheckbox({
     <Checkbox
       checked={checked}
       aria-label={label}
+      data-row-key="x"
       onClick={(event: MouseEvent) => {
         event.preventDefault();
         event.stopPropagation();
@@ -77,6 +78,7 @@ export function SelectAllCheckbox({
       }
       onCheckedChange={selection.toggleAll}
       aria-label={label}
+      data-shortcut="select-all"
       disabled={selection.ids.length === 0}
       className={cn(
         "opacity-0 transition-opacity duration-150 focus-visible:opacity-100 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:none)]:pointer-events-none",
@@ -295,6 +297,8 @@ export default function BulkActions({
                       variant="secondary"
                       size="sm"
                       disabled={busy !== null}
+                      data-shortcut="bulk-undo"
+                      title="Undo (Z)"
                       onClick={() => notice.undo && undo(notice.undo)}
                     >
                       {busy === "undo" ? "Restoring…" : "Undo"}
@@ -340,7 +344,8 @@ export default function BulkActions({
                     size="sm"
                     onClick={openComposer}
                     disabled={busy !== null || !mailboxConnected}
-                    title={mailboxConnected ? undefined : "Connect Microsoft in Inbox to send email"}
+                    data-shortcut="bulk-email"
+                    title={mailboxConnected ? `${emailLabel} (E)` : "Connect Microsoft in Inbox to send email"}
                   >
                     {busy === "email" ? "Loading…" : emailLabel}
                   </Button>
@@ -350,7 +355,7 @@ export default function BulkActions({
                       onOpenChange={setTagMenu}
                       align="end"
                       trigger={
-                        <Button variant="secondary" size="sm" disabled={busy !== null}>
+                        <Button variant="secondary" size="sm" disabled={busy !== null} data-shortcut="bulk-tag" title="Tag (L)">
                           {busy === "tag" ? "Tagging…" : "Tag"}
                         </Button>
                       }
@@ -369,6 +374,7 @@ export default function BulkActions({
                     size="sm"
                     onClick={runExport}
                     disabled={busy !== null}
+                    data-shortcut="bulk-export"
                   >
                     {busy === "export" ? "Exporting…" : "Export selected"}
                   </Button>
@@ -377,6 +383,8 @@ export default function BulkActions({
                     size="sm"
                     onClick={() => setConfirming(true)}
                     disabled={busy !== null}
+                    data-shortcut="bulk-archive"
+                    title="Archive (Delete)"
                   >
                     {busy === "archive" ? "Archiving…" : "Archive"}
                   </Button>
@@ -398,7 +406,7 @@ export default function BulkActions({
             <Button variant="ghost" size="sm" onClick={() => setConfirming(false)}>
               Cancel
             </Button>
-            <Button variant="primary" size="sm" onClick={runArchive}>
+            <Button variant="primary" size="sm" onClick={runArchive} autoFocus>
               Archive
             </Button>
           </DialogFooter>

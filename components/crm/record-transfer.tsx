@@ -79,6 +79,7 @@ export default function RecordTransfer({
             size="sm"
             type="button"
             disabled={pending !== null}
+            data-shortcut="import"
             onClick={() => input.current?.click()}
           >
             {pending === "import" ? "Importing…" : "Import"}
@@ -86,7 +87,7 @@ export default function RecordTransfer({
         </>
       )}
       {mode === "both" && (
-        <Button variant="secondary" size="sm" type="button" onClick={exportCsv} disabled={pending !== null}>
+        <Button variant="secondary" size="sm" type="button" onClick={exportCsv} disabled={pending !== null} data-shortcut="export">
           <ShareIcon aria-hidden className="size-3" />
           {pending === "export" ? "Exporting…" : "Export"}
         </Button>

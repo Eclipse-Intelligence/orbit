@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Checkbox } from "@/components/_ui/checkbox";
 import {
@@ -20,6 +20,7 @@ import InviteDialog, {
   type InvitePrefill,
 } from "@/components/crm/invite-dialog";
 import SectionHeader from "@/components/crm/section-header";
+import KeyboardList from "@/components/shortcuts/keyboard-list";
 import type { Viewer } from "@/components/crm/viewer";
 import { setCalendarVisibleAction } from "@/app/(crm)/calendar/actions";
 import {
@@ -192,10 +193,11 @@ export default function CalendarScreen({
   const [panelOpen, setPanelOpen] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const startNew = useSearchParams().get("new") === "1";
   const [inviting, setInviting] = useState<{
     prefill: InvitePrefill;
     at: number;
-  } | null>(null);
+  } | null>(() => (startNew ? { prefill: {}, at: now } : null));
   const [notice, setNotice] = useState<string | null>(null);
   const clearNotice = useCallback(() => setNotice(null), []);
   const startInvite = (prefill: InvitePrefill = {}) =>
@@ -264,7 +266,13 @@ export default function CalendarScreen({
         title="Calendar"
         viewer={viewer}
         action={
-          <Button variant="primary" size="sm" onClick={() => startInvite()}>
+          <Button
+            variant="primary"
+            size="sm"
+            data-shortcut="new-event"
+            title="New event (C then E)"
+            onClick={() => startInvite()}
+          >
             <PlusIcon aria-hidden className="size-3" />
             New event
           </Button>
@@ -276,6 +284,7 @@ export default function CalendarScreen({
           size="icon"
           className="lg:hidden"
           aria-label="Choose calendars"
+          data-shortcut="calendars-panel"
           onClick={() => setDrawerOpen(true)}
         >
           <CalendarIcon aria-hidden className="size-3.5" />
@@ -287,11 +296,19 @@ export default function CalendarScreen({
           aria-label={panelOpen ? "Hide calendars" : "Show calendars"}
           aria-expanded={panelOpen}
           aria-controls="calendar-panel"
+          data-shortcut="calendars-panel"
+          title={`${panelOpen ? "Hide" : "Show"} calendars (\\)`}
           onClick={() => setPanelOpen((current) => !current)}
         >
           <CalendarIcon aria-hidden className="size-3.5" />
         </Button>
-        <Button variant="secondary" size="sm" href={calendarHref(today, mode)}>
+        <Button
+          variant="secondary"
+          size="sm"
+          href={calendarHref(today, mode)}
+          data-shortcut="today"
+          title="Today (T)"
+        >
           Today
         </Button>
         <span className="flex items-center gap-1">
@@ -303,6 +320,8 @@ export default function CalendarScreen({
               desktopMode === "week" ? "Previous week" : "Previous day"
             }
             href={calendarHref(shiftDateKey(date, -step), mode)}
+            data-shortcut="calendar-prev"
+            title={desktopMode === "week" ? "Previous week ([)" : "Previous day ([)"}
           >
             <ChevronLeftIcon aria-hidden className="size-3.5" />
           </Button>
@@ -312,6 +331,8 @@ export default function CalendarScreen({
             className="hidden lg:inline-flex"
             aria-label={desktopMode === "week" ? "Next week" : "Next day"}
             href={calendarHref(shiftDateKey(date, step), mode)}
+            data-shortcut="calendar-next"
+            title={desktopMode === "week" ? "Next week (])" : "Next day (])"}
           >
             <ChevronRightIcon aria-hidden className="size-3.5" />
           </Button>
@@ -321,6 +342,7 @@ export default function CalendarScreen({
             className="lg:hidden"
             aria-label="Previous day"
             href={calendarHref(shiftDateKey(date, -1), mode)}
+            data-shortcut="calendar-prev"
           >
             <ChevronLeftIcon aria-hidden className="size-3.5" />
           </Button>
@@ -330,6 +352,7 @@ export default function CalendarScreen({
             className="lg:hidden"
             aria-label="Next day"
             href={calendarHref(shiftDateKey(date, 1), mode)}
+            data-shortcut="calendar-next"
           >
             <ChevronRightIcon aria-hidden className="size-3.5" />
           </Button>
@@ -357,6 +380,8 @@ export default function CalendarScreen({
               data-active={desktopMode === option}
               aria-current={desktopMode === option ? "page" : undefined}
               href={calendarHref(date, option)}
+              data-shortcut={option === "day" ? "view-day" : "view-week"}
+              title={option === "day" ? "Day view (D)" : "Week view (W)"}
             >
               {option === "day" ? "Day" : "Week"}
             </Button>
@@ -369,7 +394,7 @@ export default function CalendarScreen({
         </p>
       )}
       <NoticeContext.Provider value={setNotice}>
-        <div className="flex min-h-0 flex-1">
+        <KeyboardList className="flex min-h-0 flex-1">
           {panelOpen && (
             <aside
               id="calendar-panel"
@@ -399,7 +424,7 @@ export default function CalendarScreen({
               onNew={() => startInvite(date === today ? {} : { date })}
             />
           </div>
-        </div>
+        </KeyboardList>
       </NoticeContext.Provider>
       <InviteDialog
         open={inviting !== null}

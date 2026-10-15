@@ -7,6 +7,7 @@ import Field from "@/components/_ui/field";
 import { Input } from "@/components/_ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/_ui/select";
 import { SettingsCard } from "@/components/crm/settings-ui";
+import Switch from "@/components/_ui/switch";
 import { checkBookingSlugAction, saveBookingPageAction } from "@/app/(crm)/settings/actions";
 import { reloadIfStaleDeploy } from "@/lib/stale-deploy";
 import type { BookingPageSettings as Settings, BookingSetup } from "@/lib/booking/pages";
@@ -75,40 +76,6 @@ function draftFrom(page: Settings): Draft {
   };
 }
 
-function Switch({
-  checked,
-  onChange,
-  label,
-  id,
-}: {
-  checked: boolean;
-  onChange: (value: boolean) => void;
-  label: string;
-  id?: string;
-}) {
-  return (
-    <button
-      id={id}
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      onClick={() => onChange(!checked)}
-      className={cn(
-        "focus-visible:ring-ring/60 relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200 ease-power3-out outline-none focus-visible:ring-2",
-        checked ? "bg-primary" : "bg-muted shadow-[inset_0px_0px_0px_1px_rgba(255,255,255,0.08)]",
-      )}
-    >
-      <span
-        aria-hidden
-        className={cn(
-          "size-4 rounded-full bg-white shadow-[0px_1px_2px_0px_rgba(0,0,0,0.4)] transition-transform duration-200 ease-power3-out",
-          checked ? "translate-x-[18px]" : "translate-x-0.5",
-        )}
-      />
-    </button>
-  );
-}
 
 function Notice({ tone, children }: { tone: "warning" | "danger"; children: ReactNode }) {
   return (
@@ -803,7 +770,14 @@ export default function BookingPageSettings({
         <p role="status" className="caption-style text-subtle">
           {message ?? (dirty ? "Unsaved changes" : "")}
         </p>
-        <Button variant="primary" size="md" type="submit" disabled={pending || (page.exists && !dirty)}>
+        <Button
+          variant="primary"
+          size="md"
+          type="submit"
+          disabled={pending || (page.exists && !dirty)}
+          data-shortcut="save"
+          title="Save (⌘S)"
+        >
           {pending ? "Saving…" : page.exists ? "Save changes" : "Create page"}
         </Button>
       </div>

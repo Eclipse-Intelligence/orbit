@@ -1,5 +1,6 @@
 "use client";
 
+import KeyboardList from "@/components/shortcuts/keyboard-list";
 import { ScrollArea } from "@/components/_ui/scroll-area";
 import {
   Table,
@@ -51,6 +52,7 @@ export default function CompaniesTable({
   return (
     <div className="border-border flex min-h-0 flex-1 flex-col border-t">
       <ScrollArea orientation="both" className="min-h-0 flex-1">
+        <KeyboardList sequence>
         <Table role="table" className={cn(TABLE_GRID_CLASS, "w-full pb-24 md:pb-8")}>
           <TableHeader role="rowgroup" className="contents">
             <TableRow role="row" className={cn(TABLE_ROW_CLASS, "group")}>
@@ -104,6 +106,7 @@ export default function CompaniesTable({
             )}
           </TableBody>
         </Table>
+        </KeyboardList>
       </ScrollArea>
       <BulkActions
         selection={selection}
