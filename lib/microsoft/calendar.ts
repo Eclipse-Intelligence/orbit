@@ -1,6 +1,7 @@
+import { resolveZone } from "@/lib/ical/parse";
 import { canonicalEmail } from "@/lib/crm/normalize";
 import { sanitizeMicrosoftError } from "@/lib/microsoft/oauth";
-import { isTimeZone, parseDateTime, zonedParts } from "@/lib/time";
+import { parseDateTime, zonedParts } from "@/lib/time";
 
 const PAGE_SIZE = 100;
 const PAGE_LIMIT = 10;
@@ -214,7 +215,7 @@ export function graphInstant(value: GraphDateTime | null | undefined) {
   const raw = value?.dateTime?.trim();
   if (!raw) return null;
   const zone = value?.timeZone?.trim() ?? "";
-  const timeZone = !zone || UTC_NAMES.has(zone.toLowerCase()) ? "UTC" : isTimeZone(zone) ? zone : "UTC";
+  const timeZone = !zone || UTC_NAMES.has(zone.toLowerCase()) ? "UTC" : (resolveZone(zone) ?? "UTC");
   const date = parseDateTime(raw, timeZone);
   return date ? date.toISOString() : null;
 }

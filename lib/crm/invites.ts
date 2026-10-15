@@ -509,9 +509,10 @@ export async function createInvite(
   };
   const providerEventId = created.id?.trim();
   if (!providerEventId || providerEventId.length > 400) return { ...result, warning: SAVE_WARNING };
-  const event =
-    toCalendarEvent(created) ??
-    fallbackEvent(providerEventId, created, {
+  const parsed = toCalendarEvent(created);
+  const event = parsed
+    ? { ...parsed, startsAt: window.start.toISOString(), endsAt: window.end.toISOString() }
+    : fallbackEvent(providerEventId, created, {
       subject,
       start: window.start,
       end: window.end,
