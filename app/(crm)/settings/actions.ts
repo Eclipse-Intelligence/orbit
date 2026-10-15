@@ -11,6 +11,7 @@ import {
   syncClickUpFor,
 } from "@/lib/crm/clickup";
 import { CrmError } from "@/lib/crm/errors";
+import { saveMeetingLink } from "@/lib/crm/invites";
 import { savePipelineStages, type StageDraft } from "@/lib/crm/pipeline";
 import { saveOtherEmails, type MyEmails } from "@/lib/crm/profile";
 import { TASKS_PATH } from "@/lib/crm/task-views";
@@ -70,6 +71,21 @@ export async function saveOtherEmailsAction(
     return { emails: saved };
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Could not save your email addresses." };
+  }
+}
+
+export async function saveMeetingLinkAction(
+  link: string,
+): Promise<{ error?: string; meetingLink?: string | null }> {
+  const user = await requireUser();
+  try {
+    const meetingLink = await saveMeetingLink(user, typeof link === "string" ? link : "");
+    revalidatePath("/settings");
+    revalidatePath("/calendar");
+    revalidatePath("/(crm)/contacts/[id]", "page");
+    return { meetingLink };
+  } catch (error) {
+    return { error: error instanceof CrmError ? error.message : "Could not save the meeting link." };
   }
 }
 

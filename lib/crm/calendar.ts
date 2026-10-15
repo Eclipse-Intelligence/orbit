@@ -13,6 +13,7 @@ import { withActor } from "@/lib/crm/context";
 import {
   claimIntegration,
   createContactFromAttendee,
+  ensureIntegration,
   errorText,
   finishIntegration,
   internalAddresses,
@@ -267,16 +268,17 @@ async function saveEvents(
   return saved;
 }
 
-async function removeEvents(db: Db, calendarId: string, keep: string[] | null, windowStart: Date) {
+async function removeEvents(db: Db, calendarId: string, keep: string[] | null, window: { start: Date; end: Date }) {
   const result = keep
     ? await db.query(
         `delete from crm.calendar_events
-         where calendar_id = $1 and provider_event_id <> all($2::text[])`,
-        [calendarId, keep],
+         where calendar_id = $1 and provider_event_id <> all($2::text[])
+           and not (created_by_orbit and starts_at >= $3)`,
+        [calendarId, keep, window.end.toISOString()],
       )
     : await db.query("delete from crm.calendar_events where calendar_id = $1 and ends_at <= $2", [
         calendarId,
-        windowStart.toISOString(),
+        window.start.toISOString(),
       ]);
   return result.rowCount ?? 0;
 }
@@ -369,7 +371,7 @@ async function saveCalendarEvents(
   source: SyncSource,
   calendar: SyncTarget,
   fetched: CalendarFetch,
-  window: { start: Date },
+  window: { start: Date; end: Date },
   now: number,
 ) {
   await db.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [`calendar:${calendar.id}`]);
@@ -378,7 +380,7 @@ async function saveCalendarEvents(
     db,
     calendar.id,
     fetched.complete ? fetched.events.map((event) => event.providerEventId) : null,
-    window.start,
+    window,
   );
   await db.query(
     `update crm.calendars
@@ -404,6 +406,38 @@ function sameIds(left: string[], right: string[]) {
   return right.every((id) => set.has(id));
 }
 
+export async function storeGrantedScopes(db: Db, actor: UserActor, connectionId: string, scope: string) {
+  const key = calendarKey(actor, connectionId);
+  await ensureIntegration(db, key);
+  await db.query(
+    `update crm.integration_state set granted_scopes = $3
+     where connection_id = $1 and source = $2`,
+    [connectionId, key.source, scope.replace(/\s+/g, " ").trim().slice(0, 2000)],
+  );
+}
+
+export async function readGrantedScopes(db: Db, connectionId: string) {
+  const result = await db.query<{ granted_scopes: string | null }>(
+    "select granted_scopes from crm.integration_state where connection_id = $1 and source = 'calendar'",
+    [connectionId],
+  );
+  return result.rows[0]?.granted_scopes ?? null;
+}
+
+export async function myAddresses(db: Db, actor: UserActor) {
+  const profile = await db.query<{ email: string | null; other_emails: string[] | null }>(
+    "select email, other_emails from crm.profiles where id = $1",
+    [actor.userId],
+  );
+  const row = profile.rows[0];
+  const emails = new Set<string>();
+  for (const value of [...(await ownAddresses(db, actor)), row?.email, ...(row?.other_emails ?? [])]) {
+    const email = value ? canonicalEmail(value) : null;
+    if (email) emails.add(email);
+  }
+  return emails;
+}
+
 export async function ownAddresses(db: Db, actor: UserActor) {
   const stored = await readStored(db, actor);
   const accounts = await db.query<{ email: string | null }>(
@@ -413,15 +447,17 @@ export async function ownAddresses(db: Db, actor: UserActor) {
   return [actor.email, stored?.email, ...accounts.rows.map((row) => row.email)];
 }
 
-async function linkEvents(db: Db, actor: UserActor) {
+export async function linkEvents(db: Db, actor: UserActor, only?: string[]) {
+  const filter = only ? "and e.id = any($3::uuid[])" : "";
+  const values = only ? [actor.userId, actor.workspaceId, only] : [actor.userId, actor.workspaceId];
   await db.query(
     `update crm.calendar_events e
      set contact_ids = '{}', company_ids = '{}'
      from crm.calendars c
      where c.id = e.calendar_id and not c.use_for_crm
-       and e.user_id = $1 and e.workspace_id = $2
+       and e.user_id = $1 and e.workspace_id = $2 ${filter}
        and (cardinality(e.contact_ids) > 0 or cardinality(e.company_ids) > 0)`,
-    [actor.userId, actor.workspaceId],
+    values,
   );
   const events = await db.query<{
     id: string;
@@ -433,8 +469,8 @@ async function linkEvents(db: Db, actor: UserActor) {
     `select e.id, e.organizer, e.attendees, e.contact_ids, e.company_ids
      from crm.calendar_events e
      join crm.calendars c on c.id = e.calendar_id and c.use_for_crm
-     where e.user_id = $1 and e.workspace_id = $2`,
-    [actor.userId, actor.workspaceId],
+     where e.user_id = $1 and e.workspace_id = $2 ${filter}`,
+    values,
   );
   if (events.rows.length === 0) return 0;
   const internal = await internalAddresses(db, actor.workspaceId, await ownAddresses(db, actor));
@@ -577,9 +613,14 @@ async function finishSource(
 }
 
 async function saveSourceToken(actor: UserActor, source: SyncSource, token: MicrosoftToken) {
-  await withActor(actor, (db) =>
-    source.kind === "account" ? storeAccountToken(db, source.id, token) : storeToken(db, source.id, token),
-  );
+  await withActor(actor, async (db) => {
+    if (source.kind === "account") {
+      await storeAccountToken(db, source.id, token);
+      return;
+    }
+    await storeToken(db, source.id, token);
+    if (token.scope) await storeGrantedScopes(db, actor, source.id, token.scope);
+  });
 }
 
 async function syncGraphSource(actor: UserActor, source: SyncSource, context: SyncContext): Promise<SourceOutcome> {
@@ -826,7 +867,7 @@ export async function syncCalendar(
   return result;
 }
 
-export async function resetCalendarSync(actor: UserActor) {
+export async function resetCalendarSync(actor: UserActor, scope?: string | null) {
   await withActor(actor, async (db) => {
     const stored = await readStored(db, actor);
     if (!stored) return;
@@ -836,6 +877,7 @@ export async function resetCalendarSync(actor: UserActor) {
        where connection_id = $1 and source = 'calendar'`,
       [stored.id],
     );
+    if (scope) await storeGrantedScopes(db, actor, stored.id, scope);
   });
 }
 

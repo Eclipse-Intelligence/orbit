@@ -3,6 +3,7 @@ import SettingsScreen from "@/components/crm/settings-screen";
 import { getUserActor } from "@/lib/auth/user";
 import { listCalendarGroups } from "@/lib/crm/calendars";
 import { getClickUpSettings } from "@/lib/crm/clickup";
+import { getMeetingLink } from "@/lib/crm/invites";
 import { listPipeline } from "@/lib/crm/opportunities";
 import { getMyEmails } from "@/lib/crm/profile";
 import { listTags } from "@/lib/crm/tags";
@@ -19,7 +20,7 @@ export default async function SettingsPage({
   const user = await getUserActor();
   if (!user) redirect("/login");
   const resolved = await searchParams;
-  const [pipeline, endpoints, deliveries, clickup, myEmails, tags, calendars] = await Promise.all([
+  const [pipeline, endpoints, deliveries, clickup, myEmails, tags, calendars, meetingLink] = await Promise.all([
     listPipeline(user),
     listWebhooks(user),
     listWebhookDeliveries(user, 20),
@@ -27,6 +28,7 @@ export default async function SettingsPage({
     getMyEmails(user),
     listTags(user),
     listCalendarGroups(user),
+    getMeetingLink(user),
   ]);
 
   return (
@@ -44,6 +46,7 @@ export default async function SettingsPage({
       deliveries={deliveries}
       clickup={clickup}
       myEmails={myEmails}
+      meetingLink={meetingLink}
       tags={tags}
       calendars={{
         groups: calendars,

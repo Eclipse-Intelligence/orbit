@@ -6,6 +6,7 @@ import Button from "@/components/_ui/button";
 import { Input } from "@/components/_ui/input";
 import CalendarsSettings from "@/components/crm/calendars-settings";
 import ClickUpSettings from "@/components/crm/clickup-settings";
+import MeetingLinkSettings from "@/components/crm/meeting-link-settings";
 import MyEmailsSettings from "@/components/crm/my-emails-settings";
 import SectionHeader from "@/components/crm/section-header";
 import TagsSettings from "@/components/crm/tags-settings";
@@ -41,6 +42,7 @@ export default function SettingsScreen({
   deliveries,
   clickup,
   myEmails,
+  meetingLink,
   tags,
   calendars,
 }: {
@@ -51,6 +53,7 @@ export default function SettingsScreen({
   deliveries: WebhookDelivery[];
   clickup: ClickUpSettingsView;
   myEmails: MyEmails;
+  meetingLink: string | null;
   tags: TagCount[];
   calendars: {
     groups: CalendarGroup[];
@@ -117,6 +120,8 @@ export default function SettingsScreen({
           </p>
         )}
         <MyEmailsSettings emails={myEmails} />
+
+        <MeetingLinkSettings meetingLink={meetingLink} />
 
         <CalendarsSettings {...calendars} />
 

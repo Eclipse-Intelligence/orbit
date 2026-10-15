@@ -9,6 +9,7 @@ import CalendarEventDetails, {
   type CalendarMeta,
 } from "@/components/crm/calendar-event-details";
 import { allDayKeys, DAY_MINUTES, daySpan, packColumns, wallMinutes } from "@/lib/calendar-view";
+import { snapTime } from "@/lib/invite-rules";
 import type { CalendarItem } from "@/lib/crm/calendars";
 import { cn } from "@/lib/utils";
 
@@ -52,17 +53,19 @@ function EventBlock({
   style,
   compact,
   allDay,
+  onOpenChange,
 }: {
   item: CalendarItem;
   calendar: CalendarMeta | null;
   style: CSSProperties;
   compact: boolean;
   allDay?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
   const color = calendar?.color ?? "#9aa1ab";
   const muted = item.showAs === "free" || item.showAs === "tentative";
   return (
-    <Popover>
+    <Popover onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>
         <button
           type="button"
@@ -97,15 +100,22 @@ export default function CalendarGrid({
   items,
   calendars,
   now,
+  onSlot,
 }: {
   days: string[];
   today: string;
   items: CalendarItem[];
   calendars: Map<string, CalendarMeta>;
   now: number;
+  onSlot?: (day: string, time: string) => void;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
   const scrolled = useRef(false);
+  const openPopovers = useRef(0);
+  const dismissing = useRef(false);
+  const trackPopover = (open: boolean) => {
+    openPopovers.current = Math.max(0, openPopovers.current + (open ? 1 : -1));
+  };
   const [current, setCurrent] = useState(now);
   const [hourHeight, setHourHeight] = useState(MIN_HOUR_HEIGHT);
   const perMinute = hourHeight / 60;
@@ -189,6 +199,7 @@ export default function CalendarGrid({
                     style={{}}
                     compact
                     allDay
+                    onOpenChange={trackPopover}
                   />
                 ))}
               </div>
@@ -218,7 +229,23 @@ export default function CalendarGrid({
               MIN_MINUTES,
             );
             return (
-              <div key={key} className="border-border relative border-l" data-day={key}>
+              <div
+                key={key}
+                className={cn("border-border relative border-l", onSlot && "cursor-copy")}
+                data-day={key}
+                onPointerDownCapture={() => {
+                  dismissing.current = openPopovers.current > 0;
+                }}
+                onClick={
+                  onSlot
+                    ? (event) => {
+                        if (dismissing.current || (event.target as HTMLElement).closest("button, a")) return;
+                        const box = event.currentTarget.getBoundingClientRect();
+                        onSlot(key, snapTime((event.clientY - box.top) / perMinute));
+                      }
+                    : undefined
+                }
+              >
                 {HOURS.map((hour) => (
                   <div key={hour} aria-hidden className="absolute inset-x-0" style={{ top: hour * hourHeight }}>
                     <div className={cn("border-border border-t", hour === 0 && "border-transparent")} />
@@ -235,6 +262,7 @@ export default function CalendarGrid({
                       item={entry.item}
                       calendar={calendars.get(entry.item.calendarId) ?? null}
                       compact={height < COMPACT_BELOW_PX}
+                      onOpenChange={trackPopover}
                       style={{
                         top: entry.top * perMinute + 1,
                         height,

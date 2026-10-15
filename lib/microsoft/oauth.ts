@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { appSecret } from "@/lib/auth/config";
 
-export const MICROSOFT_SCOPES = "offline_access Mail.Read Mail.Send User.Read Calendars.Read";
+export const MICROSOFT_SCOPES = "offline_access Mail.Read Mail.Send User.Read Calendars.ReadWrite";
 export const CALENDAR_ACCOUNT_SCOPES = "openid offline_access User.Read Calendars.Read";
 export const ORGANISATION_BLOCKED =
   "This Microsoft account's organisation doesn't allow Orbit yet — in Entra, set Orbit's Supported account types to include other organisations (and personal accounts if needed), or ask that organisation's admin to consent.";
@@ -146,16 +146,25 @@ export type MicrosoftToken = {
   tenantId?: string | null;
 };
 
-export function grantsCalendar(scope: string | null | undefined) {
+function grantedScopes(scope: string | null | undefined) {
   if (typeof scope !== "string" || !scope.trim()) return null;
   let decoded = scope;
   try {
     decoded = decodeURIComponent(scope);
   } catch {}
-  return decoded
-    .split(/\s+/)
-    .map((item) => item.split("/").pop()?.toLowerCase() ?? "")
-    .some((item) => item === "calendars.read" || item === "calendars.readwrite");
+  return decoded.split(/\s+/).map((item) => item.split("/").pop()?.toLowerCase() ?? "");
+}
+
+export function grantsCalendar(scope: string | null | undefined) {
+  const scopes = grantedScopes(scope);
+  if (!scopes) return null;
+  return scopes.some((item) => item === "calendars.read" || item === "calendars.readwrite");
+}
+
+export function grantsCalendarWrite(scope: string | null | undefined) {
+  const scopes = grantedScopes(scope);
+  if (!scopes) return null;
+  return scopes.includes("calendars.readwrite");
 }
 
 export function consentProblem(message: string | null | undefined) {

@@ -3,6 +3,7 @@ import CalendarScreen from "@/components/crm/calendar-screen";
 import { getUserActor } from "@/lib/auth/user";
 import { calendarRange, dateKey, parseDateKey, parseMode } from "@/lib/calendar-view";
 import { listCalendarGroups, listCalendarItems } from "@/lib/crm/calendars";
+import { getInviteSetup } from "@/lib/crm/invites";
 
 export const dynamic = "force-dynamic";
 
@@ -25,12 +26,17 @@ export default async function CalendarPage({
   const date = parseDateKey(typeof resolved.date === "string" ? resolved.date : null) ?? today;
   const mode = parseMode(typeof resolved.view === "string" ? resolved.view : null);
   const range = calendarRange(date, mode ?? "week");
-  const [groups, items] = await Promise.all([
+  const [groups, items, invite] = await Promise.all([
     listCalendarGroups(user),
-    listCalendarItems(user, {
-      start: new Date(range.start.getTime() - DAY_MS),
-      end: new Date(range.end.getTime() + DAY_MS),
-    }),
+    listCalendarItems(
+      user,
+      {
+        start: new Date(range.start.getTime() - DAY_MS),
+        end: new Date(range.end.getTime() + DAY_MS),
+      },
+      now,
+    ),
+    getInviteSetup(user),
   ]);
 
   return (
@@ -48,6 +54,7 @@ export default async function CalendarPage({
       groups={groups}
       items={items}
       now={now}
+      invite={invite}
     />
   );
 }

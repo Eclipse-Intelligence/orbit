@@ -8,6 +8,7 @@ import { syncCalendar } from "@/lib/crm/calendar";
 import { disconnectCalendarAccount } from "@/lib/crm/calendar-accounts";
 import { addCalendarFeed } from "@/lib/crm/calendar-feeds";
 import { createContactFromEvent, setCalendarForCrm, setCalendarVisible } from "@/lib/crm/calendars";
+import { cancelInvite, createInvite, type InviteInput } from "@/lib/crm/invites";
 import type { UserActor } from "@/lib/crm/types";
 import { revalidateRecordPages } from "@/lib/revalidate";
 
@@ -115,6 +116,43 @@ export async function createContactFromEventAction(
     const created = await createContactFromEvent(user, eventId, email);
     refreshRecords();
     return { ok: true, contactId: created.contactId, contactName: created.contactName };
+  } catch (error) {
+    return actionError(error);
+  }
+}
+
+export type InviteActionState = CalendarActionState & {
+  field?: string;
+  warning?: string | null;
+  guests?: { email: string; name: string | null }[];
+};
+
+function refreshInvites() {
+  refreshCalendar();
+  revalidatePath("/");
+  revalidatePath("/activities");
+  revalidateRecordPages();
+}
+
+export async function sendInviteAction(input: InviteInput): Promise<InviteActionState> {
+  const user = await getUserActor();
+  if (!user) return { error: "Sign in to send invites." };
+  try {
+    const sent = await createInvite(user, input && typeof input === "object" ? input : {});
+    refreshInvites();
+    return { ok: true, warning: sent.warning, guests: sent.guests };
+  } catch (error) {
+    return actionError(error);
+  }
+}
+
+export async function cancelInviteAction(eventId: string, comment: string): Promise<InviteActionState> {
+  const user = await getUserActor();
+  if (!user) return { error: "Sign in to cancel meetings." };
+  try {
+    const cancelled = await cancelInvite(user, typeof eventId === "string" ? eventId : "", comment);
+    refreshInvites();
+    return { ok: true, warning: cancelled.warning };
   } catch (error) {
     return actionError(error);
   }

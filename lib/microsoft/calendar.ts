@@ -1,6 +1,6 @@
 import { canonicalEmail } from "@/lib/crm/normalize";
 import { sanitizeMicrosoftError } from "@/lib/microsoft/oauth";
-import { isTimeZone, parseDateTime } from "@/lib/time";
+import { isTimeZone, parseDateTime, zonedParts } from "@/lib/time";
 
 const PAGE_SIZE = 100;
 const PAGE_LIMIT = 10;
@@ -345,4 +345,238 @@ export async function fetchCalendarView(
     if (body["@odata.nextLink"] && !next) complete = false;
   }
   return { events, complete, pages };
+}
+
+const WINDOWS_ZONES: Record<string, string> = {
+  "europe/london": "GMT Standard Time",
+  "europe/dublin": "GMT Standard Time",
+  "europe/lisbon": "GMT Standard Time",
+  "europe/paris": "Romance Standard Time",
+  "europe/madrid": "Romance Standard Time",
+  "europe/brussels": "Romance Standard Time",
+  "europe/berlin": "W. Europe Standard Time",
+  "europe/amsterdam": "W. Europe Standard Time",
+  "europe/rome": "W. Europe Standard Time",
+  "america/new_york": "Eastern Standard Time",
+  "america/chicago": "Central Standard Time",
+  "america/denver": "Mountain Standard Time",
+  "america/los_angeles": "Pacific Standard Time",
+  "utc": "UTC",
+  "etc/utc": "UTC",
+};
+const RETRY_STATUSES = new Set([502, 503, 504]);
+const WRITE_TIMEOUT_MS = 20_000;
+export const CALENDAR_WRITE_RECONNECT = "Reconnect Microsoft to send invites.";
+
+export class CalendarWriteScopeError extends Error {
+  constructor() {
+    super(CALENDAR_WRITE_RECONNECT);
+    this.name = "CalendarWriteScopeError";
+  }
+}
+
+export class CalendarWriteError extends Error {
+  readonly status: number;
+  readonly code: string;
+  constructor(message: string, status: number, code = "") {
+    super(message);
+    this.name = "CalendarWriteError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
+export function windowsTimeZone(timeZone: string) {
+  return WINDOWS_ZONES[timeZone.trim().toLowerCase()] ?? null;
+}
+
+export type InviteGuest = { email: string; name: string | null };
+
+export type GraphEventDraft = {
+  subject: string;
+  body?: { contentType: "HTML"; content: string };
+  start: { dateTime: string; timeZone: string };
+  end: { dateTime: string; timeZone: string };
+  location?: { displayName: string };
+  attendees: { emailAddress: { address: string; name?: string }; type: "required" }[];
+  isOnlineMeeting: false;
+  responseRequested: true;
+  allowNewTimeProposals: true;
+  transactionId: string;
+};
+
+function pad(value: number, size = 2) {
+  return String(value).padStart(size, "0");
+}
+
+function wallClock(instant: Date, timeZone: string) {
+  const value = zonedParts(instant, timeZone);
+  return `${pad(value.year, 4)}-${pad(value.month)}-${pad(value.day)}T${pad(value.hour)}:${pad(value.minute)}:${pad(value.second)}`;
+}
+
+function utcDateTime(instant: Date) {
+  return { dateTime: instant.toISOString().slice(0, 19), timeZone: "UTC" };
+}
+
+export function graphDateTime(instant: Date, timeZone: string) {
+  const windows = windowsTimeZone(timeZone);
+  if (!windows || windows === "UTC") return utcDateTime(instant);
+  const dateTime = wallClock(instant, timeZone);
+  const hour = 3_600_000;
+  const ambiguous = [instant.getTime() - hour, instant.getTime() + hour].some(
+    (at) => wallClock(new Date(at), timeZone) === dateTime,
+  );
+  if (ambiguous || parseDateTime(dateTime, timeZone)?.getTime() !== instant.getTime()) return null;
+  return { dateTime, timeZone: windows };
+}
+
+export function graphDateTimes(start: Date, end: Date, timeZone: string) {
+  const zonedStart = graphDateTime(start, timeZone);
+  const zonedEnd = graphDateTime(end, timeZone);
+  if (zonedStart && zonedEnd) return { start: zonedStart, end: zonedEnd };
+  return { start: utcDateTime(start), end: utcDateTime(end) };
+}
+
+export function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+export function inviteBodyHtml(notes: string | null, link: string | null) {
+  const parts: string[] = [];
+  if (notes) parts.push(`<p>${escapeHtml(notes).replace(/\r\n|\r|\n/g, "<br>")}</p>`);
+  if (link) {
+    const safe = escapeHtml(link);
+    parts.push(`<p>Join: <a href="${safe}">${safe}</a></p>`);
+  }
+  return parts.length > 0 ? `<div>${parts.join("")}</div>` : null;
+}
+
+export function inviteDraft(input: {
+  subject: string;
+  start: Date;
+  end: Date;
+  timeZone: string;
+  guests: InviteGuest[];
+  notes: string | null;
+  link: string | null;
+  transactionId: string;
+}): GraphEventDraft {
+  const content = inviteBodyHtml(input.notes, input.link);
+  return {
+    subject: input.subject,
+    ...(content ? { body: { contentType: "HTML" as const, content } } : {}),
+    ...graphDateTimes(input.start, input.end, input.timeZone),
+    ...(input.link ? { location: { displayName: input.link } } : {}),
+    attendees: input.guests.map((guest) => ({
+      emailAddress: { address: guest.email, ...(guest.name ? { name: guest.name } : {}) },
+      type: "required" as const,
+    })),
+    isOnlineMeeting: false,
+    responseRequested: true,
+    allowNewTimeProposals: true,
+    transactionId: input.transactionId,
+  };
+}
+
+export function eventsUrl(calendarId?: string | null) {
+  return calendarId
+    ? `https://graph.microsoft.com/v1.0/me/calendars/${encodeURIComponent(calendarId)}/events`
+    : "https://graph.microsoft.com/v1.0/me/events";
+}
+
+function retryAfter(response: Response) {
+  const raw = response.headers.get("retry-after");
+  const seconds = raw ? Number(raw) : NaN;
+  return Number.isFinite(seconds) && seconds > 0 ? Math.ceil(seconds) : null;
+}
+
+async function writeError(response: Response, action: "create" | "cancel") {
+  const body = (await response.json().catch(() => ({}))) as { error?: { message?: string; code?: string } };
+  const code = body.error?.code ?? "";
+  const message = body.error?.message ?? "";
+  if (response.status === 401 || code === "InvalidAuthenticationToken") {
+    return new CalendarWriteError("Microsoft rejected the mailbox connection. Connect it again.", 401, code);
+  }
+  if (response.status === 403 && (!code || SCOPE_ERRORS.has(code))) return new CalendarWriteScopeError();
+  if (response.status === 403) {
+    return new CalendarWriteError(
+      "Microsoft didn't let Orbit change this calendar. Check that the mailbox can create meetings in Outlook.",
+      403,
+      code,
+    );
+  }
+  if (response.status === 429 || code === "TooManyRequests" || code === "ApplicationThrottled") {
+    const wait = retryAfter(response);
+    return new CalendarWriteError(
+      `Microsoft is limiting requests right now. Try again in ${wait ? `${wait} seconds` : "a minute"}.`,
+      429,
+      code,
+    );
+  }
+  if (action === "cancel" && response.status === 400 && /organi[sz]er/i.test(message)) {
+    return new CalendarWriteError(
+      "Only the organiser can cancel this meeting. Decline it in Outlook instead.",
+      400,
+      code,
+    );
+  }
+  if (response.status === 404 || code === "ErrorItemNotFound") {
+    return new CalendarWriteError("Outlook no longer has this meeting.", 404, code);
+  }
+  const fallback = action === "create" ? "Microsoft could not create the meeting." : "Microsoft could not cancel the meeting.";
+  return new CalendarWriteError(sanitizeMicrosoftError(message || fallback), response.status, code);
+}
+
+async function graphWrite(
+  url: string,
+  accessToken: string,
+  payload: unknown,
+  fetchImpl: typeof fetch,
+  retry: boolean,
+) {
+  const init = () => ({
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      "content-type": "application/json",
+      prefer: 'outlook.timezone="UTC"',
+    },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(WRITE_TIMEOUT_MS),
+  });
+  if (!retry) return fetchImpl(url, init());
+  let response: Response;
+  try {
+    response = await fetchImpl(url, init());
+  } catch {
+    response = await fetchImpl(url, init());
+  }
+  if (RETRY_STATUSES.has(response.status)) response = await fetchImpl(url, init());
+  return response;
+}
+
+export async function createGraphEvent(
+  accessToken: string,
+  draft: GraphEventDraft,
+  options: { calendarId?: string | null; fetchImpl?: typeof fetch } = {},
+) {
+  const response = await graphWrite(eventsUrl(options.calendarId), accessToken, draft, options.fetchImpl ?? fetch, true);
+  if (!response.ok) throw await writeError(response, "create");
+  return (await response.json().catch(() => ({}))) as GraphEvent;
+}
+
+export async function cancelGraphEvent(
+  accessToken: string,
+  eventId: string,
+  comment: string | null,
+  fetchImpl: typeof fetch = fetch,
+) {
+  const url = `https://graph.microsoft.com/v1.0/me/events/${encodeURIComponent(eventId)}/cancel`;
+  const response = await graphWrite(url, accessToken, comment ? { comment } : {}, fetchImpl, false);
+  if (!response.ok) throw await writeError(response, "cancel");
 }
