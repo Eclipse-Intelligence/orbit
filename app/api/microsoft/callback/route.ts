@@ -116,7 +116,7 @@ export async function GET(request: Request) {
       expiresAt: token.expiresAt,
     });
     await removeAccountsForEmail(user, email);
-    await resetCalendarSync(user);
+    await resetCalendarSync(user, token.scope);
     await syncMailbox(user);
   } catch (error) {
     return finish(

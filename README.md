@@ -37,16 +37,26 @@ Orbit has no sign-up. Only an account that already belongs to a workspace can si
 
 ## Microsoft inbox
 
-Set `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, and the redirect URI registered on the Entra app. Delegated permissions are `Mail.Read`, `Mail.Send`, `User.Read`, `Calendars.Read`, and `offline_access`. Restart the server, open Inbox, and connect the mailbox. Received mail is attached to a contact by email address, or to a company by domain. Free-mail domains such as gmail.com are never matched by domain. Mail that matched nothing is attached on a later sync once its sender becomes a contact. From a contact, Send email delivers through that mailbox. A mailbox connected before Mail.Send was granted keeps syncing, but has to be disconnected and connected again before it can send. When `MICROSOFT_REDIRECT_URI` is set, Connect first sends you to that host, so be signed in there.
+Set `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, and the redirect URI registered on the Entra app. Delegated permissions are `Mail.Read`, `Mail.Send`, `User.Read`, `Calendars.ReadWrite`, and `offline_access`. Restart the server, open Inbox, and connect the mailbox. Received mail is attached to a contact by email address, or to a company by domain. Free-mail domains such as gmail.com are never matched by domain. Mail that matched nothing is attached on a later sync once its sender becomes a contact. From a contact, Send email delivers through that mailbox. A mailbox connected before Mail.Send was granted keeps syncing, but has to be disconnected and connected again before it can send. When `MICROSOFT_REDIRECT_URI` is set, Connect first sends you to that host, so be signed in there.
 
 ### Outlook calendar
 
 Orbit reads the connected user's Outlook calendars (30 days back to 60 days ahead) and shows meetings from the calendars marked Use for CRM (the default calendar unless you change it) on the matching contacts and companies.
 
-1. On the Entra app, add the Microsoft Graph delegated permission `Calendars.Read` (API permissions, Add a permission, Microsoft Graph, Delegated permissions). Grant admin consent if your tenant requires it.
-2. A mailbox connected before this permission was added keeps syncing mail, but Inbox shows "Reconnect Microsoft to include your calendar". Choose Reconnect Microsoft there and accept the new permission. There is no need to disconnect first.
+1. On the Entra app, add the Microsoft Graph delegated permission `Calendars.ReadWrite` (API permissions, Add a permission, Microsoft Graph, Delegated permissions). It includes reading, so `Calendars.Read` can stay or go. Grant admin consent if your tenant requires it.
+2. A mailbox connected before `Calendars.Read` was added keeps syncing mail, but Inbox shows "Reconnect Microsoft to include your calendar". A mailbox connected with only `Calendars.Read` keeps syncing mail and the calendar, but the invite dialog shows "Reconnect Microsoft to send invites". In both cases choose Reconnect Microsoft in Inbox and accept the new permission. There is no need to disconnect first.
 
 Contact and company pages then show a Meetings card with the next meeting, up to five upcoming and five recent ones (London time), an Open in Outlook link, and a Join link for online meetings. A past meeting that has Granola notes for the same contact within two hours links to those notes on the timeline instead. Inbox lists People you've met who aren't in Orbit: outside attendees from those meetings with no contact yet. Create contact adds them, with a company made from their email domain unless it is a free-mail domain, and Hide removes someone from the list for you. Calendars are private: other workspace members never see your meetings.
+
+### Meeting invites
+
+Orbit sends meeting invitations through Outlook: the event is created in the default calendar of the mailbox connected in Inbox, and Outlook emails the invitation to every guest from that mailbox, exactly as if you had sent it from Outlook. Replies and new-time proposals arrive in that mailbox.
+
+1. Add `Calendars.ReadWrite` and reconnect as described above.
+2. Open Settings, Meeting link, and paste your Whereby room (any `https://` link up to 500 characters works). Leave it empty if you don't want a link.
+3. Choose New event on the Calendar page, click an empty slot in the day or week grid (it opens at that time, rounded down to 15 minutes), or use the calendar button next to Call in Teams on a contact (the contact needs an email address).
+
+The dialog takes a title (Eclipse × the contact's name when you start from a contact), a date and start time in London time, a duration of 15 to 90 minutes, guests (search contacts by name or email, or type any address and press Enter; your own addresses, including those in Settings, My email addresses, are never invited; up to 50 guests), notes, and Add meeting link. With the link on, the invite's location is the link and its body ends with "Join: <link>". After sending, the event shows on the Calendar page straight away, and each guest who is a contact gets an "Invited … to …" meeting activity. A meeting you organise that hasn't started yet has Cancel meeting in its details: Outlook sends the cancellation, with your optional message, to every guest, and each guest contact gets a "Cancelled …" activity.
 
 ### More calendars and the Calendar page
 

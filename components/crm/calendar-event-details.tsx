@@ -1,13 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useContext, useState } from "react";
 import { useRouter } from "next/navigation";
 import Button, { buttonVariants } from "@/components/_ui/button";
-import { createContactFromEventAction } from "@/app/(crm)/calendar/actions";
+import { NoticeContext } from "@/components/crm/invite-dialog";
+import { cancelInviteAction, createContactFromEventAction } from "@/app/(crm)/calendar/actions";
 import { appTimeZone } from "@/lib/time";
 import { contactHref } from "@/lib/crm/hrefs";
 import type { CalendarProvider } from "@/lib/crm/calendar-accounts";
 import type { CalendarItem, EventPerson } from "@/lib/crm/calendars";
+import { INVITE_COMMENT_MAX } from "@/lib/invite-rules";
 
 const ATTENDEES_SHOWN = 25;
 
@@ -137,6 +139,76 @@ function PersonRow({
   );
 }
 
+function CancelMeeting({ item }: { item: CalendarItem }) {
+  const router = useRouter();
+  const notify = useContext(NoticeContext);
+  const [confirming, setConfirming] = useState(false);
+  const [comment, setComment] = useState("");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+  const fieldId = `cancel-comment-${item.id}`;
+
+  async function cancel() {
+    if (pending) return;
+    setPending(true);
+    setError(null);
+    const result = await cancelInviteAction(item.id, comment);
+    setPending(false);
+    if (result.error) {
+      setError(result.error);
+      return;
+    }
+    const message = result.warning ?? `Cancelled ${eventTitle(item)}. Outlook let your guests know.`;
+    setDone(message);
+    notify(message);
+    router.refresh();
+  }
+
+  if (done) {
+    return (
+      <p role="status" className="caption-style text-soft">
+        {done}
+      </p>
+    );
+  }
+  if (!confirming) {
+    return (
+      <Button variant="ghost" size="sm" className="text-danger self-start" onClick={() => setConfirming(true)}>
+        Cancel meeting
+      </Button>
+    );
+  }
+  return (
+    <div className="border-line-strong flex flex-col gap-2 rounded-lg border p-3">
+      <p className="text-[14px] leading-5">Cancel this meeting for everyone?</p>
+      <label className="caption-style text-subtle" htmlFor={fieldId}>
+        Message to guests (optional)
+      </label>
+      <textarea
+        id={fieldId}
+        value={comment}
+        maxLength={INVITE_COMMENT_MAX}
+        onChange={(event) => setComment(event.target.value)}
+        className="border-line-strong bg-secondary focus-visible:border-ring min-h-16 w-full rounded-lg border px-3 py-2 text-[14px] leading-5 outline-none"
+      />
+      {error && (
+        <p role="alert" className="caption-style text-danger">
+          {error}
+        </p>
+      )}
+      <div className="flex flex-wrap items-center gap-2">
+        <Button variant="secondary" size="sm" className="text-danger" disabled={pending} onClick={cancel}>
+          {pending ? "Cancelling…" : "Cancel meeting"}
+        </Button>
+        <Button variant="ghost" size="sm" disabled={pending} onClick={() => setConfirming(false)}>
+          Keep meeting
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export default function CalendarEventDetails({
   item,
   calendar,
@@ -204,6 +276,7 @@ export default function CalendarEventDetails({
           )}
         </div>
       )}
+      {item.canCancel && <CancelMeeting item={item} />}
       {item.organizer && (
         <div className="flex flex-col gap-2">
           <span className="caption-style text-subtle">Organiser</span>

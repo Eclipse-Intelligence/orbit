@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Checkbox } from "@/components/_ui/checkbox";
@@ -8,15 +8,18 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import CalendarAgenda from "@/components/crm/calendar-agenda";
 import type { CalendarMeta } from "@/components/crm/calendar-event-details";
 import CalendarGrid from "@/components/crm/calendar-grid";
+import InviteDialog, { InviteNotice, NoticeContext, type InvitePrefill } from "@/components/crm/invite-dialog";
 import SectionHeader from "@/components/crm/section-header";
 import type { Viewer } from "@/components/crm/viewer";
 import { setCalendarVisibleAction } from "@/app/(crm)/calendar/actions";
 import { rangeDays, shiftDateKey, stepDays, type CalendarMode } from "@/lib/calendar-view";
 import type { CalendarGroup, CalendarItem } from "@/lib/crm/calendars";
+import type { InviteSetup } from "@/lib/crm/invites";
 import { cn } from "@/lib/utils";
 import CalendarIcon from "@/public/assets/images/_common/calendar.svg";
 import ChevronLeftIcon from "@/public/assets/images/_common/chevron-left.svg";
 import ChevronRightIcon from "@/public/assets/images/_common/chevron-right.svg";
+import PlusIcon from "@/public/assets/images/_common/plus.svg";
 
 function calendarHref(date: string, mode: CalendarMode | null) {
   const params = new URLSearchParams({ date });
@@ -134,6 +137,7 @@ export default function CalendarScreen({
   groups,
   items,
   now,
+  invite,
 }: {
   viewer: Viewer;
   today: string;
@@ -142,6 +146,7 @@ export default function CalendarScreen({
   groups: CalendarGroup[];
   items: CalendarItem[];
   now: number;
+  invite: InviteSetup;
 }) {
   const router = useRouter();
   const [overrides, setOverrides] = useState<Record<string, boolean>>({});
@@ -153,6 +158,10 @@ export default function CalendarScreen({
   const [panelOpen, setPanelOpen] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [inviting, setInviting] = useState<{ prefill: InvitePrefill; at: number } | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const clearNotice = useCallback(() => setNotice(null), []);
+  const startInvite = (prefill: InvitePrefill = {}) => setInviting({ prefill, at: Date.now() });
   const desktopMode = mode ?? "week";
   const days = rangeDays(date, desktopMode);
 
@@ -195,7 +204,16 @@ export default function CalendarScreen({
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <SectionHeader title="Calendar" viewer={viewer} />
+      <SectionHeader
+        title="Calendar"
+        viewer={viewer}
+        action={
+          <Button variant="primary" size="sm" onClick={() => startInvite()}>
+            <PlusIcon aria-hidden className="size-3" />
+            New event
+          </Button>
+        }
+      />
       <div className="border-border flex shrink-0 flex-wrap items-center gap-2 border-b px-4 py-2.5">
         <Button
           variant="secondary"
@@ -287,23 +305,48 @@ export default function CalendarScreen({
           {error}
         </p>
       )}
-      <div className="flex min-h-0 flex-1">
-        {panelOpen && (
-          <aside
-            id="calendar-panel"
-            aria-label="Calendars"
-            className="border-border hidden w-60 shrink-0 overflow-y-auto border-r px-3 py-4 lg:block"
-          >
-            {list}
-          </aside>
-        )}
-        <div className="hidden min-h-0 min-w-0 flex-1 lg:flex">
-          <CalendarGrid days={days} today={today} items={shown} calendars={calendars} now={now} />
+      <NoticeContext.Provider value={setNotice}>
+        <div className="flex min-h-0 flex-1">
+          {panelOpen && (
+            <aside
+              id="calendar-panel"
+              aria-label="Calendars"
+              className="border-border hidden w-60 shrink-0 overflow-y-auto border-r px-3 py-4 lg:block"
+            >
+              {list}
+            </aside>
+          )}
+          <div className="hidden min-h-0 min-w-0 flex-1 lg:flex">
+            <CalendarGrid
+              days={days}
+              today={today}
+              items={shown}
+              calendars={calendars}
+              now={now}
+              onSlot={(day, time) => startInvite({ date: day, time })}
+            />
+          </div>
+          <div className="flex min-h-0 min-w-0 flex-1 lg:hidden">
+            <CalendarAgenda
+              date={date}
+              today={today}
+              items={shown}
+              calendars={calendars}
+              now={now}
+              onNew={() => startInvite(date === today ? {} : { date })}
+            />
+          </div>
         </div>
-        <div className="flex min-h-0 min-w-0 flex-1 lg:hidden">
-          <CalendarAgenda date={date} today={today} items={shown} calendars={calendars} now={now} />
-        </div>
-      </div>
+      </NoticeContext.Provider>
+      <InviteDialog
+        open={inviting !== null}
+        onOpenChange={(open) => !open && setInviting(null)}
+        setup={invite}
+        prefill={inviting?.prefill ?? {}}
+        now={inviting?.at ?? now}
+        onSent={setNotice}
+      />
+      <InviteNotice message={notice} onDone={clearNotice} />
       <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
         <SheetContent side="left" className="w-[min(320px,86vw)]">
           <SheetHeader className="px-4">

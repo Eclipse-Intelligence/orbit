@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Button from "@/components/_ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/_ui/sheet";
 import CalendarEventDetails, {
   eventTitle,
@@ -19,12 +20,14 @@ export default function CalendarAgenda({
   items,
   calendars,
   now,
+  onNew,
 }: {
   date: string;
   today: string;
   items: CalendarItem[];
   calendars: Map<string, CalendarMeta>;
   now: number;
+  onNew?: () => void;
 }) {
   const [open, setOpen] = useState<CalendarItem | null>(null);
   const allDay = items.filter((item) => item.isAllDay && allDayKeys(item.startsAt, item.endsAt).includes(date));
@@ -37,7 +40,14 @@ export default function CalendarAgenda({
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-4">
       {list.length === 0 ? (
-        <p className="caption-style text-subtle py-6 text-center">Nothing on this day.</p>
+        <div className="flex flex-col items-center gap-3 py-6">
+          <p className="caption-style text-subtle text-center">Nothing on this day.</p>
+          {onNew && date >= today && (
+            <Button variant="secondary" size="sm" onClick={onNew}>
+              New event
+            </Button>
+          )}
+        </div>
       ) : (
         <ol className="flex flex-col gap-2" aria-label="Events">
           {list.map((item) => {

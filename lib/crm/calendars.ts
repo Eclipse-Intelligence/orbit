@@ -1,6 +1,7 @@
 import { readAccounts, type CalendarProvider } from "@/lib/crm/calendar-accounts";
 import {
   createContactFromPerson,
+  myAddresses,
   ownAddresses,
   readPeople,
   readPerson,
@@ -70,6 +71,8 @@ export type CalendarItem = {
   organizer: EventPerson | null;
   attendees: EventPerson[];
   granolaHref: string | null;
+  createdByOrbit: boolean;
+  canCancel: boolean;
 };
 
 type CalendarRow = {
@@ -214,6 +217,8 @@ type ItemRow = {
   granola_id: string | null;
   granola_contact_id: string | null;
   granola_company_id: string | null;
+  connection_id: string | null;
+  created_by_orbit: boolean;
 };
 
 function readResponse(value: unknown, email: string) {
@@ -231,12 +236,14 @@ function readResponse(value: unknown, email: string) {
 export async function listCalendarItems(
   actor: UserActor,
   range: { start: Date; end: Date },
+  now = Date.now(),
 ): Promise<CalendarItem[]> {
   assertScope(actor.scopes, "crm:read");
   return withActor(actor, async (db) => {
     const result = await db.query<ItemRow>(
       `select e.id, e.calendar_id, e.subject, e.starts_at, e.ends_at, e.is_all_day, e.show_as,
               e.location, e.web_link, e.online_meeting_url, e.organizer, e.attendees,
+              e.connection_id, e.created_by_orbit,
               g.id as granola_id, g.contact_id as granola_contact_id, g.company_id as granola_company_id
        from crm.calendar_events e
        join crm.calendars c on c.id = e.calendar_id and c.is_visible
@@ -277,6 +284,15 @@ export async function listCalendarItems(
       }
     }
     const internal = await internalAddresses(db, actor.workspaceId, await ownAddresses(db, actor));
+    const stored = await readStored(db, actor);
+    const writable = stored?.status === "connected" && stored.refreshTokenCipher ? stored.id : null;
+    const own = writable ? await myAddresses(db, actor) : new Set<string>();
+    const cancellable = (row: ItemRow) => {
+      if (!writable || row.connection_id !== writable || new Date(row.starts_at).getTime() <= now) return false;
+      const organizer = readPerson(row.organizer);
+      if (!row.created_by_orbit && !(organizer && own.has(organizer.email))) return false;
+      return readPeople(row.attendees).some((person) => !own.has(person.email));
+    };
     const describe = (person: { name: string | null; email: string } | null, response: string | null) =>
       person
         ? {
@@ -311,6 +327,8 @@ export async function listCalendarItems(
           (person) => describe(person, readResponse(row.attendees, person.email))!,
         ),
         granolaHref,
+        createdByOrbit: row.created_by_orbit,
+        canCancel: cancellable(row),
       };
     });
   });

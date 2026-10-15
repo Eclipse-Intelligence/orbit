@@ -7,6 +7,7 @@ import { EntityChip, Monogram } from "@/components/beautifui/record-marks";
 import DetailSection from "@/components/companies/detail/detail-section";
 import ContactActivities from "@/components/crm/contact-activities";
 import ContactEditor from "@/components/crm/contact-editor";
+import InviteDialog, { InviteNotice } from "@/components/crm/invite-dialog";
 import MeetingsCard from "@/components/crm/meetings-card";
 import RecordLayout from "@/components/crm/record-layout";
 import { CallLink, Detail, DetailList } from "@/components/crm/record-form";
@@ -14,6 +15,7 @@ import SectionHeader from "@/components/crm/section-header";
 import RecordTags from "@/components/crm/tags";
 import type { Viewer } from "@/components/crm/viewer";
 import type { MeetingsSummary } from "@/lib/crm/calendar";
+import type { InviteSetup } from "@/lib/crm/invites";
 import { companyHref } from "@/lib/crm/hrefs";
 import type {
   Activity,
@@ -24,6 +26,7 @@ import type {
   TagCount,
 } from "@/lib/crm/types";
 import { teamsCallUrl } from "@/lib/phone";
+import CalendarIcon from "@/public/assets/images/_common/calendar.svg";
 import PhoneIcon from "@/public/assets/images/_common/phone.svg";
 
 export default function ContactRecord({
@@ -36,6 +39,7 @@ export default function ContactRecord({
   insights,
   meetings,
   tags,
+  invite,
 }: {
   viewer: Viewer;
   contact: Contact;
@@ -46,10 +50,14 @@ export default function ContactRecord({
   insights: Record<string, CallInsight>;
   meetings: MeetingsSummary | null;
   tags: TagCount[];
+  invite: InviteSetup;
 }) {
   const router = useRouter();
   const [editing, setEditing] = useState(false);
   const [fresh, setFresh] = useState<Contact | null>(null);
+  const [invitingAt, setInvitingAt] = useState<number | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const clearNotice = useCallback(() => setNotice(null), []);
   const shown =
     fresh && fresh.id === contact.id && fresh.updatedAt > contact.updatedAt
       ? fresh
@@ -74,6 +82,18 @@ export default function ContactRecord({
         list="contacts"
         action={
           <div className="flex items-center gap-1">
+            <span title={shown.email ? undefined : `Add an email address to invite ${shown.name} to a meeting`}>
+              <Button
+                variant="secondary"
+                size="icon"
+                aria-label="Invite to a meeting"
+                title={shown.email ? "Invite to a meeting" : undefined}
+                disabled={!shown.email}
+                onClick={() => setInvitingAt(Date.now())}
+              >
+                <CalendarIcon aria-hidden className="size-3.5" />
+              </Button>
+            </span>
             {callUrl && (
               <a
                 href={callUrl}
@@ -91,6 +111,26 @@ export default function ContactRecord({
           </div>
         }
       />
+      {shown.email && (
+        <InviteDialog
+          open={invitingAt !== null}
+          onOpenChange={(open) => !open && setInvitingAt(null)}
+          setup={invite}
+          prefill={{
+            guests: [
+              {
+                email: shown.email,
+                name: shown.name,
+                contactId: shown.id,
+                company: shown.companyName,
+              },
+            ],
+          }}
+          now={invitingAt ?? 0}
+          onSent={setNotice}
+        />
+      )}
+      <InviteNotice message={notice} onDone={clearNotice} />
       <RecordLayout
         details={
           <>
