@@ -155,3 +155,36 @@ export function packColumns(items: LayoutInput[], minimumHeight = 15) {
   close();
   return slots;
 }
+
+type MergeableEvent = {
+  calendarId: string;
+  subject: string | null;
+  startsAt: string;
+  endsAt: string;
+  icalUid: string | null;
+  alsoIn: string[];
+  canCancel: boolean;
+  granolaHref: string | null;
+};
+
+export function mergeDuplicateEvents<T extends MergeableEvent>(items: T[]): T[] {
+  const merged = new Map<string, T>();
+  for (const item of items) {
+    const key = item.icalUid
+      ? `uid:${item.icalUid}|${item.startsAt}`
+      : `subject:${(item.subject ?? "").trim().toLowerCase()}|${item.startsAt}|${item.endsAt}`;
+    const existing = merged.get(key);
+    if (!existing) {
+      merged.set(key, { ...item, alsoIn: [] });
+      continue;
+    }
+    const keep = item.canCancel && !existing.canCancel ? { ...item, alsoIn: [] as string[] } : existing;
+    const other = keep === existing ? item : existing;
+    keep.alsoIn = [...new Set([...keep.alsoIn, other.calendarId, ...other.alsoIn])].filter(
+      (id) => id !== keep.calendarId,
+    );
+    keep.granolaHref = keep.granolaHref ?? other.granolaHref;
+    merged.set(key, keep);
+  }
+  return [...merged.values()];
+}
