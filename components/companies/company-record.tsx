@@ -13,6 +13,7 @@ import DetailSection from "@/components/companies/detail/detail-section";
 import RelationshipPanel from "@/components/companies/detail/relationship-panel";
 import { useListHref } from "@/components/crm/list-memory";
 import MeetingsCard from "@/components/crm/meetings-card";
+import { useQuickAddRecord } from "@/components/crm/quick-add";
 import RecordLayout from "@/components/crm/record-layout";
 import { Detail, DetailList } from "@/components/crm/record-form";
 import SectionHeader from "@/components/crm/section-header";
@@ -60,6 +61,7 @@ export default function CompanyRecord({
     fresh && fresh.id === context.company.id && fresh.updatedAt > context.company.updatedAt
       ? fresh
       : context.company;
+  useQuickAddRecord({ type: "company", id: company.id, name: company.name });
 
   const saved = useCallback(
     (next: Company) => {

@@ -202,6 +202,8 @@ export function actionError(error: unknown) {
     return {
       error: error.message,
       field: typeof error.details?.field === "string" ? error.details.field : undefined,
+      existingId:
+        typeof error.details?.existingId === "string" ? error.details.existingId : undefined,
     };
   }
   return { error: "Something went wrong." };

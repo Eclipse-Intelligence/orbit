@@ -285,7 +285,7 @@ export default function InboxScreen({
       {messages.length === 0 ? (
         <p className="caption-style text-subtle px-4">No mail filed yet.</p>
       ) : (
-        <ul className="min-h-0 flex-1 overflow-auto">
+        <ul className="min-h-0 flex-1 overflow-auto pb-20">
           {messages.map((message) => {
             const attached = message.contactName || message.companyName;
             const attachedHref =

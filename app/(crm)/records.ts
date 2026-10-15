@@ -29,6 +29,7 @@ import { revalidateRecordPages } from "@/lib/revalidate";
 export type RecordActionState = {
   error?: string;
   field?: string;
+  existingId?: string;
   ok?: boolean;
   warning?: string;
 };
@@ -98,6 +99,9 @@ export async function saveContactAction(
     ownerId: optionalId(text(formData, "ownerId")),
     source: text(formData, "source") || null,
     notes: text(formData, "notes") || null,
+    tags: formData.has("tags")
+      ? formData.getAll("tags").filter((value): value is string => typeof value === "string")
+      : undefined,
   };
   try {
     const saved = id

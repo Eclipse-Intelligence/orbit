@@ -52,7 +52,7 @@ export default function CalendarAgenda({
   const openCalendar = open ? (calendars.get(open.calendarId) ?? null) : null;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-4">
+    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pt-4 pb-20">
       {list.length === 0 ? (
         <div className="flex flex-col items-center gap-3 py-6">
           <p className="caption-style text-subtle text-center">

@@ -44,8 +44,9 @@ export default function Pager({
 
   return (
     <div
+      data-quick-add-avoid="mobile"
       className={cn(
-        "caption-style border-border flex shrink-0 items-center justify-between gap-3 px-4 py-3",
+        "caption-style border-border flex shrink-0 items-center justify-between gap-3 py-3 pl-4 pr-4 md:pr-20",
         className,
       )}
     >

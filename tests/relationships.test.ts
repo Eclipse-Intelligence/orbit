@@ -107,7 +107,7 @@ describe("contacts, opportunities, and tasks", () => {
     assert.equal(created.body.opportunity.stageName, "New");
     assert.equal(created.body.opportunity.status, "open");
     assert.equal(created.body.opportunity.value, "1200.00");
-    assert.equal(created.body.opportunity.currency, "USD");
+    assert.equal(created.body.opportunity.currency, "GBP");
 
     const won = await updateOpportunity(owner, created.body.opportunity.id, { status: "won" });
     assert.equal(won.body.opportunity.status, "won");

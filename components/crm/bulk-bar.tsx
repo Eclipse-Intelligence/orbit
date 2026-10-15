@@ -274,6 +274,7 @@ export default function BulkActions({
         <>
           <div aria-hidden className="order-last h-24 shrink-0 md:hidden" />
           <div
+            data-quick-add-avoid=""
             className={cn(
               "border-line-strong bg-popover shadow-overlay caption-style fixed inset-x-2 bottom-[calc(env(safe-area-inset-bottom)+0.5rem)] z-40 flex flex-col gap-2 rounded-xl border px-3 py-2.5",
               "md:static md:inset-auto md:shrink-0 md:rounded-none md:border-x-0 md:border-b-0 md:bg-transparent md:px-4 md:py-2 md:shadow-none",

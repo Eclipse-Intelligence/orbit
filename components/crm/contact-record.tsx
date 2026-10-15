@@ -9,6 +9,7 @@ import ContactActivities from "@/components/crm/contact-activities";
 import ContactEditor from "@/components/crm/contact-editor";
 import InviteDialog, { InviteNotice } from "@/components/crm/invite-dialog";
 import MeetingsCard from "@/components/crm/meetings-card";
+import { useQuickAddRecord } from "@/components/crm/quick-add";
 import RecordLayout from "@/components/crm/record-layout";
 import { CallLink, Detail, DetailList } from "@/components/crm/record-form";
 import SectionHeader from "@/components/crm/section-header";
@@ -24,7 +25,10 @@ import type {
   Contact,
   Member,
   TagCount,
+  Task,
 } from "@/lib/crm/types";
+import { ClickUpBadge } from "@/components/crm/clickup";
+import { formatWhen } from "@/lib/companies";
 import { teamsCallUrl } from "@/lib/phone";
 import CalendarIcon from "@/public/assets/images/_common/calendar.svg";
 import PhoneIcon from "@/public/assets/images/_common/phone.svg";
@@ -38,6 +42,7 @@ export default function ContactRecord({
   activities,
   insights,
   meetings,
+  tasks,
   tags,
   invite,
 }: {
@@ -49,6 +54,7 @@ export default function ContactRecord({
   activities: Activity[];
   insights: Record<string, CallInsight>;
   meetings: MeetingsSummary | null;
+  tasks: Task[];
   tags: TagCount[];
   invite: InviteSetup;
 }) {
@@ -64,6 +70,15 @@ export default function ContactRecord({
       : contact;
   const callUrl = teamsCallUrl(shown.phone);
   const owner = members.find((member) => member.id === shown.ownerId);
+  useQuickAddRecord({
+    type: "contact",
+    id: shown.id,
+    name: shown.name,
+    company:
+      shown.companyId && shown.companyName
+        ? { id: shown.companyId, name: shown.companyName }
+        : null,
+  });
 
   const saved = useCallback(
     (next: Contact | undefined) => {
@@ -82,7 +97,13 @@ export default function ContactRecord({
         list="contacts"
         action={
           <div className="flex items-center gap-1">
-            <span title={shown.email ? undefined : `Add an email address to invite ${shown.name} to a meeting`}>
+            <span
+              title={
+                shown.email
+                  ? undefined
+                  : `Add an email address to invite ${shown.name} to a meeting`
+              }
+            >
               <Button
                 variant="secondary"
                 size="icon"
@@ -104,7 +125,11 @@ export default function ContactRecord({
               </a>
             )}
             {!editing && (
-              <Button variant="primary" size="sm" onClick={() => setEditing(true)}>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => setEditing(true)}
+              >
                 Edit
               </Button>
             )}
@@ -148,7 +173,11 @@ export default function ContactRecord({
                     {shown.companyName && (
                       <EntityChip
                         name={shown.companyName}
-                        href={shown.companyId ? companyHref(shown.companyId) : undefined}
+                        href={
+                          shown.companyId
+                            ? companyHref(shown.companyId)
+                            : undefined
+                        }
                       />
                     )}
                   </div>
@@ -183,7 +212,10 @@ export default function ContactRecord({
                   </Detail>
                   <Detail label="Email">
                     {shown.email ? (
-                      <a href={`mailto:${shown.email}`} className="hover:underline">
+                      <a
+                        href={`mailto:${shown.email}`}
+                        className="hover:underline"
+                      >
                         {shown.email}
                       </a>
                     ) : null}
@@ -200,7 +232,9 @@ export default function ContactRecord({
                       </a>
                     ) : null}
                   </Detail>
-                  <Detail label="Owner">{owner?.name ?? shown.ownerName}</Detail>
+                  <Detail label="Owner">
+                    {owner?.name ?? shown.ownerName}
+                  </Detail>
                   <Detail label="Source">{shown.source}</Detail>
                 </DetailList>
                 {shown.notes && (
@@ -213,6 +247,30 @@ export default function ContactRecord({
                 )}
               </DetailSection>
             )}
+            <DetailSection
+              title="Tasks"
+              className="shadow-[inset_0_1px_0_var(--line-strong)]"
+            >
+              {tasks.length === 0 ? (
+                <p className="caption-style text-subtle">No open tasks.</p>
+              ) : (
+                <ul className="flex flex-col gap-3">
+                  {tasks.map((task) => (
+                    <li key={task.id} className="flex flex-col gap-1">
+                      <span className="text-[14px] leading-5">
+                        {task.title}
+                      </span>
+                      <span className="caption-style text-subtle flex flex-wrap items-center gap-2">
+                        {task.dueAt
+                          ? `Due ${formatWhen(task.dueAt)}`
+                          : "No due date"}
+                        <ClickUpBadge task={task} />
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </DetailSection>
             <MeetingsCard
               meetings={meetings}
               className="shadow-[inset_0_1px_0_var(--line-strong)]"

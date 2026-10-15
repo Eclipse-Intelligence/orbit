@@ -51,7 +51,7 @@ export default function CompaniesTable({
   return (
     <div className="border-border flex min-h-0 flex-1 flex-col border-t">
       <ScrollArea orientation="both" className="min-h-0 flex-1">
-        <Table role="table" className={cn(TABLE_GRID_CLASS, "w-full")}>
+        <Table role="table" className={cn(TABLE_GRID_CLASS, "w-full pb-24 md:pb-8")}>
           <TableHeader role="rowgroup" className="contents">
             <TableRow role="row" className={cn(TABLE_ROW_CLASS, "group")}>
               {TABLE_COLUMNS.map((column) => (
