@@ -10,6 +10,7 @@ import {
 } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
+import { DatePicker } from "@/components/_ui/date-picker";
 import { Input } from "@/components/_ui/input";
 import { cn } from "@/lib/utils";
 import PlusIcon from "@/public/assets/images/_common/plus.svg";
@@ -688,15 +689,17 @@ function OpportunityEditor({
             <Input id="opp-currency" name="currency" defaultValue={editing?.currency ?? "GBP"} maxLength={3} />
           </label>
         </div>
-        <label className="flex flex-col gap-2" htmlFor="opp-close">
-          <span className="caption-style text-subtle">Expected close</span>
-          <Input
+        <div className="flex min-w-0 flex-col gap-2">
+          <label className="caption-style text-subtle" htmlFor="opp-close">
+            Expected close
+          </label>
+          <DatePicker
             id="opp-close"
             name="expectedCloseDate"
-            type="date"
+            placeholder="Pick a close date"
             defaultValue={editing?.expectedCloseDate ?? ""}
           />
-        </label>
+        </div>
         <label className="flex flex-col gap-2" htmlFor="opp-source">
           <span className="caption-style text-subtle">Source</span>
           <Input id="opp-source" name="source" defaultValue={editing?.source ?? ""} />

@@ -401,10 +401,11 @@ export async function syncMailbox(
       .map(graphToInbound)
       .filter((message) => message.providerMessageId);
     const watermark = syncWatermark(stored, since, fetched);
-    return await withActor(actor, async (db) => {
+    const followUpIds: string[] = [];
+    const counts = await withActor(actor, async (db) => {
       await lockMailbox(db, stored.id);
       await storeToken(db, stored.id, token);
-      const counts = await fileMessages(db, actor, stored, inbound);
+      const counts = await fileMessages(db, actor, stored, inbound, followUpIds);
       await db.query("savepoint attach_unmatched");
       try {
         counts.attached += await attachUnmatched(db, actor, stored);
@@ -423,6 +424,8 @@ export async function syncMailbox(
       );
       return counts;
     });
+    await sendFollowUpsToClickUp(actor, followUpIds);
+    return counts;
   } catch (error) {
     const message = sanitizeMicrosoftError(
       error instanceof Error ? error.message : "Could not sync the inbox.",
@@ -471,7 +474,8 @@ export async function fileInboundMessages(
   actor: UserActor,
   messages: InboundEmail[],
 ): Promise<SyncCounts> {
-  return withActor(actor, async (db) => {
+  const followUpIds: string[] = [];
+  const counts = await withActor(actor, async (db) => {
     const stored = await readStored(db, actor);
     if (!stored) {
       throw new CrmError(
@@ -481,8 +485,22 @@ export async function fileInboundMessages(
       );
     }
     await lockMailbox(db, stored.id);
-    return fileMessages(db, actor, stored, messages);
+    return fileMessages(db, actor, stored, messages, followUpIds);
   });
+  await sendFollowUpsToClickUp(actor, followUpIds);
+  return counts;
+}
+
+async function sendFollowUpsToClickUp(actor: UserActor, taskIds: string[]) {
+  if (taskIds.length === 0) return;
+  const { sendTaskToDefaultList } = await import("@/lib/crm/clickup");
+  for (const taskId of taskIds) {
+    try {
+      await sendTaskToDefaultList(actor, taskId);
+    } catch (error) {
+      console.error("Could not send the follow-up task to ClickUp", error);
+    }
+  }
 }
 
 async function lockMailbox(db: Db, connectionId: string) {
@@ -605,6 +623,7 @@ async function fileMessages(
   actor: UserActor,
   mailbox: StoredConnection,
   messages: InboundEmail[],
+  followUpIds: string[] = [],
 ): Promise<SyncCounts> {
   const counts: SyncCounts = {
     attached: 0,
@@ -649,7 +668,7 @@ async function fileMessages(
         (await openTasks(db, match.companyId)) === 0
       ) {
         const who = match.contactName || match.companyName || "them";
-        await createTaskInDb(
+        const followUp = await createTaskInDb(
           db,
           actor,
           {
@@ -662,6 +681,7 @@ async function fileMessages(
           },
           { operation: "suggest_follow_up", source: "microsoft" },
         );
+        if (followUp) followUpIds.push(followUp.id);
         counts.followUps += 1;
       }
     }

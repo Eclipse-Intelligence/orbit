@@ -22,6 +22,7 @@ import {
 } from "@/lib/crm/clickup";
 import { createCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
+import { fileInboundMessages, saveMailbox } from "@/lib/crm/inbox";
 import { syncTargets } from "@/lib/crm/scheduler";
 import { completeTask, getTask, updateTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
@@ -659,6 +660,40 @@ describe("clickup sync", () => {
     assert.equal(poll.imported, 0);
     const copies = await getAdminPool().query("select count(*)::int as total from crm.tasks where title = 'Flaky push'");
     assert.equal(copies.rows[0].total, 1);
+  });
+
+  it("sends follow-up tasks suggested after an email to the default list", async () => {
+    const company = (await createCompany(owner, { name: "Initech", domain: "initech-mail.test" })).body.company;
+    await createContact(owner, { companyId: company.id, firstName: "Peter", lastName: "Gibbons", email: "peter@initech-mail.test" });
+    await saveMailbox(owner, {
+      email: "mark@orbit.test",
+      refreshToken: "refresh-token",
+      accessToken: "access-token",
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    });
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = fetchImpl;
+    try {
+      const filed = await fileInboundMessages(owner, [
+        {
+          providerMessageId: "msg-initech",
+          subject: "TPS reports",
+          preview: "Did you get the memo?",
+          fromEmail: "peter@initech-mail.test",
+          receivedAt: new Date().toISOString(),
+        },
+      ]);
+      assert.equal(filed.followUps, 1);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    const pool = getAdminPool();
+    const row = await pool.query<{ clickup_task_id: string | null; clickup_list_id: string | null }>(
+      "select clickup_task_id, clickup_list_id from crm.tasks where company_id = $1 and title = 'Follow up with Peter Gibbons'",
+      [company.id],
+    );
+    assert.equal(row.rows[0]?.clickup_list_id, RELATIONSHIPS);
+    assert.ok(row.rows[0]?.clickup_task_id);
   });
 
   it("verifies webhook signatures before any work and ignores replays", async () => {

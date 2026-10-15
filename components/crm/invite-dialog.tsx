@@ -6,6 +6,7 @@ import Button from "@/components/_ui/button";
 import { Checkbox } from "@/components/_ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/_ui/dialog";
 import Field from "@/components/_ui/field";
+import { DatePicker } from "@/components/_ui/date-picker";
 import { Input } from "@/components/_ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/_ui/select";
 import { searchContactsToFileAction } from "@/app/(crm)/search";
@@ -299,14 +300,13 @@ function InviteForm({
         </Field>
         <div className="grid gap-3 sm:grid-cols-[1fr_7em_8em]">
           <Field label="Date" htmlFor={field("date")} required>
-            <Input
+            <DatePicker
               id={field("date")}
-              type="date"
               value={date}
               aria-invalid={errors.startLocal ? true : undefined}
               aria-describedby={errors.startLocal ? field("when-error") : undefined}
-              onChange={(event) => {
-                setDate(event.target.value);
+              onChange={(next) => {
+                setDate(next);
                 setError("startLocal", undefined);
               }}
             />

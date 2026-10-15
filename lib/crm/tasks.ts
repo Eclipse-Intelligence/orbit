@@ -29,6 +29,7 @@ import {
   type TaskView,
   type TaskWrite,
 } from "@/lib/crm/types";
+import { isReminderMinutes, REMINDER_LOOKAHEAD_MS } from "@/lib/crm/reminder-options";
 import { dayWindow, parseDateTime } from "@/lib/time";
 
 const TASK_SQL = `
@@ -38,6 +39,7 @@ const TASK_SQL = `
     t.title,
     t.description,
     t.due_at,
+    t.remind_minutes,
     t.completed_at,
     t.priority,
     t.owner_id,
@@ -74,6 +76,7 @@ type TaskRow = {
   title: string;
   description: string | null;
   due_at: Date | string | null;
+  remind_minutes: number | null;
   completed_at: Date | string | null;
   priority: TaskPriority;
   owner_id: string | null;
@@ -99,6 +102,7 @@ type PreparedTask = {
   title?: string;
   description?: string | null;
   dueAt?: string | null;
+  remindMinutes?: number | null;
   priority?: TaskPriority;
   ownerId?: string | null;
   companyId?: string | null;
@@ -114,6 +118,7 @@ function mapTask(row: TaskRow): Task {
     title: row.title,
     description: row.description,
     dueAt: iso(row.due_at),
+    remindMinutes: row.remind_minutes,
     completedAt: iso(row.completed_at),
     priority: row.priority,
     ownerId: row.owner_id,
@@ -157,6 +162,12 @@ function prepareTask(input: TaskWrite, mode: "create" | "patch"): PreparedTask {
   }
   if (input.description !== undefined) next.description = cleanText(input.description, 10000, "description");
   if (input.dueAt !== undefined) next.dueAt = timestamp(input.dueAt, "dueAt");
+  if (input.remindMinutes !== undefined) {
+    if (input.remindMinutes !== null && !isReminderMinutes(input.remindMinutes)) {
+      throw new CrmError("invalid_input", "Pick a reminder from the list.", 400, { field: "remindMinutes" });
+    }
+    next.remindMinutes = input.remindMinutes;
+  }
   if (input.priority !== undefined) {
     if (!(TASK_PRIORITIES as readonly string[]).includes(input.priority)) {
       throw new CrmError("invalid_input", "Priority is not recognised.", 400, { field: "priority" });
@@ -191,9 +202,9 @@ export async function createTaskInDb(
     const inserted = await db.query<{ id: string }>(
       `insert into crm.tasks (
         workspace_id, title, description, due_at, completed_at, priority, owner_id,
-        company_id, contact_id, opportunity_id, created_by_user_id, created_by_agent_id
+        company_id, contact_id, opportunity_id, created_by_user_id, created_by_agent_id, remind_minutes
       ) values (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
       ) returning id`,
       [
         actor.workspaceId,
@@ -208,6 +219,7 @@ export async function createTaskInDb(
         links.opportunityId,
         actorRef.userId,
         actorRef.agentId,
+        write.remindMinutes ?? null,
       ],
     );
     const saved = await readTask(db, inserted.rows[0].id);
@@ -248,6 +260,7 @@ async function applyTask(
     [write.title !== undefined, "title", "title", write.title ?? null],
     [write.description !== undefined, "description", "description", write.description ?? null],
     [write.dueAt !== undefined, "due_at", "dueAt", write.dueAt ?? null],
+    [write.remindMinutes !== undefined, "remind_minutes", "remindMinutes", write.remindMinutes ?? null],
     [write.priority !== undefined, "priority", "priority", write.priority ?? null],
     [write.ownerId !== undefined, "owner_id", "ownerId", write.ownerId ?? null],
     [write.companyId !== undefined || write.contactId !== undefined || write.opportunityId !== undefined, "company_id", "companyId", links.companyId],
@@ -478,4 +491,43 @@ export async function archiveTask(
       return { task };
     }),
   );
+}
+
+export type DueReminder = {
+  id: string;
+  title: string;
+  dueAt: string;
+  remindMinutes: number;
+  companyName: string | null;
+  contactName: string | null;
+};
+
+export async function listDueReminders(actor: Actor, now = new Date()): Promise<DueReminder[]> {
+  assertScope(actor.scopes, "crm:read");
+  return withActor(actor, async (db) => {
+    const result = await db.query<TaskRow>(
+      `${TASK_SQL}
+       where t.workspace_id = $1
+         and t.remind_minutes is not null
+         and t.due_at is not null
+         and t.completed_at is null
+         and t.archived_at is null
+         and t.due_at > $2::timestamptz
+         and t.due_at - make_interval(mins => t.remind_minutes) <= $3::timestamptz
+       order by t.due_at
+       limit 50`,
+      [actor.workspaceId, now.toISOString(), new Date(now.getTime() + REMINDER_LOOKAHEAD_MS).toISOString()],
+    );
+    return result.rows.map((row) => {
+      const task = mapTask(row);
+      return {
+        id: task.id,
+        title: task.title,
+        dueAt: task.dueAt ?? now.toISOString(),
+        remindMinutes: task.remindMinutes ?? 0,
+        companyName: task.companyName,
+        contactName: task.contactName,
+      };
+    });
+  });
 }

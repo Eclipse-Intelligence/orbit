@@ -3,11 +3,13 @@
 import { useActionState, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
+import { DateTimePicker } from "@/components/_ui/date-picker";
 import { Input } from "@/components/_ui/input";
 import RecordTransfer from "@/components/crm/record-transfer";
 import SectionHeader from "@/components/crm/section-header";
 import ActionTask from "@/components/beautifui/action-task";
 import { ClickUpPickerField } from "@/components/crm/clickup";
+import ReminderSelect from "@/components/crm/reminder-select";
 import { ConnectionMark, Monogram } from "@/components/beautifui/record-marks";
 import { RecordList, RecordRow, RecordSelect } from "@/components/crm/record-form";
 import type { Viewer } from "@/components/crm/viewer";
@@ -51,6 +53,16 @@ export default function ActionsScreen({
   const [message, setMessage] = useState<string | null>(null);
   const [toClickUp, setToClickUp] = useState(true);
   const [clickupListId, setClickupListId] = useState(clickup?.listId ?? "");
+  const [dueAt, setDueAt] = useState("");
+  const [reminder, setReminder] = useState("none");
+  const [settled, setSettled] = useState(state);
+  if (settled !== state) {
+    setSettled(state);
+    if (state.ok) {
+      setDueAt("");
+      setReminder("none");
+    }
+  }
   useEffect(() => {
     if (state.ok) router.refresh();
   }, [state, router]);
@@ -82,15 +94,29 @@ export default function ActionsScreen({
           </Button>
         ))}
       </div>
-      <form action={action} className="border-border grid gap-3 border-b px-4 py-4 sm:grid-cols-[1fr_180px_180px_auto] sm:items-end">
+      <form action={action} className="border-border grid gap-3 border-b px-4 py-4 sm:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_14em_12em_12em_auto] lg:items-end">
         <label className="flex flex-col gap-2" htmlFor="task-title">
           <span className="caption-style text-subtle">Task</span>
           <Input id="task-title" name="title" required placeholder="Send the follow-up" />
         </label>
-        <label className="flex flex-col gap-2" htmlFor="task-due">
-          <span className="caption-style text-subtle">Due</span>
-          <Input id="task-due" name="dueAt" type="datetime-local" />
-        </label>
+        <div className="flex min-w-0 flex-col gap-2">
+          <label className="caption-style text-subtle" htmlFor="task-due">
+            Due
+          </label>
+          <DateTimePicker id="task-due" name="dueAt" placeholder="Add a due date" value={dueAt} onChange={setDueAt} />
+        </div>
+        <div className="flex min-w-0 flex-col gap-2">
+          <label className="caption-style text-subtle" htmlFor="task-reminder">
+            Reminder
+          </label>
+          <ReminderSelect
+            id="task-reminder"
+            name="remindMinutes"
+            value={reminder}
+            onChange={setReminder}
+            disabled={!dueAt}
+          />
+        </div>
         <RecordSelect id="task-company" name="companyId" label="Company" defaultValue="none">
           <option value="none">No company</option>
           {companyChoices.map((company) => (
@@ -111,7 +137,7 @@ export default function ActionsScreen({
             onCheckedChange={setToClickUp}
             listId={clickupListId}
             onListChange={setClickupListId}
-            className="sm:col-span-4"
+            className="sm:col-span-2 lg:col-span-5"
           />
         )}
       </form>

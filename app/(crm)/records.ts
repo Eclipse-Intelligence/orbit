@@ -15,7 +15,8 @@ import { createTaskWithClickUp, pushClickUpTask } from "@/lib/crm/clickup";
 import { createContact, getContact, updateContact } from "@/lib/crm/contacts";
 import { createOpportunity, updateOpportunity } from "@/lib/crm/opportunities";
 import { TASKS_PATH } from "@/lib/crm/task-views";
-import { completeTask, updateTask } from "@/lib/crm/tasks";
+import { isReminderMinutes } from "@/lib/crm/reminder-options";
+import { completeTask, listDueReminders, updateTask, type DueReminder } from "@/lib/crm/tasks";
 import type {
   Activity,
   ActivityType,
@@ -45,6 +46,12 @@ async function requireUser() {
 function text(formData: FormData, key: string) {
   const value = formData.get(key);
   return typeof value === "string" ? value.trim() : "";
+}
+
+function reminderField(value: string) {
+  if (value === "" || value === "none") return null;
+  const minutes = Number(value);
+  return isReminderMinutes(minutes) ? minutes : Number.NaN;
 }
 
 function optionalId(value: string) {
@@ -212,6 +219,11 @@ export async function saveTaskAction(
     title: text(formData, "title"),
     description: text(formData, "description") || null,
     dueAt: due || null,
+    remindMinutes: formData.has("remindMinutes")
+      ? due
+        ? reminderField(text(formData, "remindMinutes"))
+        : null
+      : undefined,
     priority: (text(formData, "priority") || "normal") as TaskPriority,
     companyId: optionalId(text(formData, "companyId")),
     contactId: optionalId(text(formData, "contactId")),
@@ -282,6 +294,7 @@ export async function addCompanyTaskAction(
   title: string,
   dueAt: string,
   clickupListId: string | null = null,
+  remindMinutes: number | null = null,
 ): Promise<RecordActionState> {
   const user = await requireUser();
   try {
@@ -291,6 +304,7 @@ export async function addCompanyTaskAction(
         title,
         companyId,
         dueAt: dueAt.trim() || null,
+        remindMinutes: dueAt.trim() ? remindMinutes : null,
       },
       clickupListId,
       {
@@ -377,4 +391,10 @@ export async function createCompanyContactAction(
   } catch (error) {
     return actionError(error);
   }
+}
+
+export async function dueRemindersAction(): Promise<DueReminder[]> {
+  const user = await getUserActor();
+  if (!user) return [];
+  return listDueReminders(user);
 }
