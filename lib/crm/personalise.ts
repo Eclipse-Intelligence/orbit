@@ -7,6 +7,24 @@ export type Recipient = {
   company: string | null;
 };
 
+export function contactRecipient(contact: {
+  id: string;
+  firstName: string | null;
+  lastName: string | null;
+  name: string;
+  email: string | null;
+  companyName: string | null;
+}): Recipient {
+  return {
+    id: contact.id,
+    firstName: contact.firstName,
+    lastName: contact.lastName,
+    name: contact.name,
+    email: contact.email,
+    company: contact.companyName,
+  };
+}
+
 export const PERSONAL_TOKENS = [
   { token: "first_name", label: "First name, or the full name, or “there”" },
   { token: "last_name", label: "Last name" },

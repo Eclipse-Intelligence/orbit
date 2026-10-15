@@ -16,6 +16,7 @@ import {
 import { normalizeTags } from "@/lib/crm/normalize";
 import type { Actor, TagKind } from "@/lib/crm/types";
 import { revalidateRecordPages } from "@/lib/revalidate";
+import { SETTINGS_ROOT } from "@/lib/settings-nav";
 
 export type RecordTagsResult = { tags: string[] } | { error: string };
 export type TagChangeResult = TagChangeCount | { error: string };
@@ -29,7 +30,7 @@ async function requireUser() {
 function refresh() {
   revalidatePath("/");
   revalidatePath("/contacts");
-  revalidatePath("/settings");
+  revalidatePath(SETTINGS_ROOT, "layout");
   revalidateRecordPages();
 }
 

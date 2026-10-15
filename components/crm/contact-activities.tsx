@@ -24,6 +24,7 @@ import {
   type TimelineKind,
 } from "@/lib/crm/timeline";
 import { cn } from "@/lib/utils";
+import type { Recipient } from "@/lib/crm/personalise";
 import type { Activity, CallInsight } from "@/lib/crm/types";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
 import CallIcon from "@/public/assets/images/crm/activity/call.svg";
@@ -360,6 +361,7 @@ export function ActivityTimeline({
 export default function ContactActivities({
   contactId,
   email,
+  recipient,
   mailboxConnected,
   viewerId,
   activities,
@@ -368,6 +370,7 @@ export default function ContactActivities({
 }: {
   contactId: string;
   email: string | null;
+  recipient: Recipient;
   mailboxConnected: boolean;
   viewerId?: string | null;
   activities: Activity[];
@@ -393,6 +396,7 @@ export default function ContactActivities({
           <ContactEmail
             contactId={contactId}
             email={email}
+            recipient={recipient}
             mailboxConnected={mailboxConnected}
           />
         }

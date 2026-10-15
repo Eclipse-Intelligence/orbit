@@ -31,6 +31,7 @@ import {
 } from "@/lib/calendar-view";
 import type { CalendarGroup, CalendarItem } from "@/lib/crm/calendars";
 import type { InviteSetup } from "@/lib/crm/invites";
+import { SETTINGS_PATHS } from "@/lib/settings-nav";
 import { cn } from "@/lib/utils";
 import CalendarIcon from "@/public/assets/images/_common/calendar.svg";
 import ChevronLeftIcon from "@/public/assets/images/_common/chevron-left.svg";
@@ -94,7 +95,7 @@ function CalendarList({
           Inbox
         </Button>{" "}
         or add a calendar in{" "}
-        <Button variant="link" size="none" href="/settings#calendars">
+        <Button variant="link" size="none" href={SETTINGS_PATHS.calendars}>
           Settings
         </Button>
         .
@@ -154,7 +155,7 @@ function CalendarList({
         variant="link"
         size="none"
         className="caption-style text-subtle self-start px-1"
-        href="/settings#calendars"
+        href={SETTINGS_PATHS.calendars}
       >
         Manage calendars
       </Button>

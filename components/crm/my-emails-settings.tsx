@@ -4,6 +4,7 @@ import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Input } from "@/components/_ui/input";
+import { SettingsCard } from "@/components/crm/settings-ui";
 import { saveOtherEmailsAction } from "@/app/(crm)/settings/actions";
 import type { MyEmails } from "@/lib/crm/profile";
 
@@ -51,11 +52,11 @@ export default function MyEmailsSettings({ emails }: { emails: MyEmails }) {
   }
 
   return (
-    <div className="flex max-w-[640px] flex-col gap-3">
-      <h2>My email addresses</h2>
-      <p className="caption-style text-subtle">
-        Orbit treats these as you: they’re never filed as contacts or companies.
-      </p>
+    <SettingsCard
+      id="my-emails"
+      title="My email addresses"
+      description="Orbit treats these as you: they’re never filed as contacts or companies."
+    >
       <ul className="flex flex-col">
         <li className="border-border flex items-center justify-between gap-3 border-b py-2">
           <span className="min-w-0 truncate text-[14px] leading-5">{emails.loginEmail}</span>
@@ -108,6 +109,6 @@ export default function MyEmailsSettings({ emails }: { emails: MyEmails }) {
           {message}
         </p>
       </div>
-    </div>
+    </SettingsCard>
   );
 }

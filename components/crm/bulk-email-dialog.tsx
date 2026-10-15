@@ -11,14 +11,14 @@ import {
   DialogTitle,
 } from "@/components/_ui/dialog";
 import { Input } from "@/components/_ui/input";
+import { SaveTemplateForm, UseTemplateButton } from "@/components/crm/email-template-picker";
+import { TokenChips, insertToken } from "@/components/crm/email-tokens";
 import { sendContactEmailAction } from "@/app/(crm)/inbox/actions";
 import {
   BULK_EMAIL_GAP_MS,
   BULK_EMAIL_LIMIT,
-  PERSONAL_TOKENS,
   personalise,
   splitRecipients,
-  unknownTokens,
   type Recipient,
 } from "@/lib/crm/personalise";
 import { sendPaced } from "@/lib/crm/send-queue";
@@ -70,10 +70,11 @@ export default function BulkEmailDialog({
   const field = useRef<"subject" | "body">("body");
   const subjectRef = useRef<HTMLInputElement>(null);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
+  const [saving, setSaving] = useState(false);
+  const [savedName, setSavedName] = useState<string | null>(null);
 
   const tooMany = sendable.length > BULK_EMAIL_LIMIT;
   const first = sendable[0];
-  const unknown = unknownTokens(`${subject}\n${body}`);
   const canSend =
     mailboxConnected &&
     !tooMany &&
@@ -91,18 +92,8 @@ export default function BulkEmailDialog({
   }, [phase]);
 
   function insert(token: string) {
-    const text = `{{${token}}}`;
-    const target = field.current === "subject" ? subjectRef.current : bodyRef.current;
-    const value = field.current === "subject" ? subject : body;
-    const start = target?.selectionStart ?? value.length;
-    const end = target?.selectionEnd ?? value.length;
-    const next = value.slice(0, start) + text + value.slice(end);
-    if (field.current === "subject") setSubject(next);
-    else setBody(next);
-    requestAnimationFrame(() => {
-      target?.focus();
-      target?.setSelectionRange(start + text.length, start + text.length);
-    });
+    if (field.current === "subject") insertToken(subjectRef.current, subject, token, setSubject);
+    else insertToken(bodyRef.current, body, token, setBody);
   }
 
   function update(id: string, entry: Progress[string]) {
@@ -271,6 +262,44 @@ export default function BulkEmailDialog({
           {phase === "compose" && (
             <>
               <div className="flex flex-col gap-2">
+                <div className="flex flex-wrap items-center gap-1">
+                  <UseTemplateButton
+                    onPick={(template) => {
+                      setSubject(template.subject);
+                      setBody(template.body);
+                      setSaving(false);
+                      setSavedName(null);
+                    }}
+                  />
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    aria-expanded={saving}
+                    disabled={subject.trim() === "" && body.trim() === ""}
+                    onClick={() => {
+                      setSavedName(null);
+                      setSaving((value) => !value);
+                    }}
+                  >
+                    Save as template
+                  </Button>
+                  {savedName && (
+                    <span role="status" className="caption-style text-subtle">
+                      Saved “{savedName}”.
+                    </span>
+                  )}
+                </div>
+                {saving && (
+                  <SaveTemplateForm
+                    idPrefix="bulk"
+                    subject={subject}
+                    body={body}
+                    onDone={(template) => {
+                      setSaving(false);
+                      if (template) setSavedName(template.name);
+                    }}
+                  />
+                )}
                 <label className="sr-only" htmlFor="bulk-email-subject">
                   Subject
                 </label>
@@ -281,7 +310,9 @@ export default function BulkEmailDialog({
                   autoComplete="off"
                   maxLength={200}
                   placeholder="Subject"
-                  onFocus={() => (field.current = "subject")}
+                  onFocus={() => {
+          field.current = "subject";
+        }}
                   onChange={(event) => setSubject(event.target.value)}
                   onKeyDown={(event) => event.key === "Enter" && event.preventDefault()}
                 />
@@ -295,40 +326,14 @@ export default function BulkEmailDialog({
                   autoComplete="off"
                   maxLength={8000}
                   placeholder={"Hi {{first_name}},\n\nWrite the message"}
-                  onFocus={() => (field.current = "body")}
+                  onFocus={() => {
+          field.current = "body";
+        }}
                   onChange={(event) => setBody(event.target.value)}
                   className="border-line-strong bg-secondary focus-visible:border-ring min-h-32 w-full rounded-lg border px-3 py-2 text-[14px] leading-5 outline-none"
                 />
               </div>
-              <div className="flex flex-col gap-1.5">
-                <p className="caption-style text-subtle">
-                  Personalise with a token. Click one to insert it where you are typing.
-                </p>
-                <ul className="flex flex-wrap gap-1">
-                  {PERSONAL_TOKENS.map((item) => (
-                    <li key={item.token}>
-                      <Button
-                        variant="subtle"
-                        size="sm"
-                        title={item.label}
-                        onMouseDown={(event) => event.preventDefault()}
-                        onClick={() => insert(item.token)}
-                        className="font-mono"
-                      >
-                        {`{{${item.token}}}`}
-                      </Button>
-                    </li>
-                  ))}
-                </ul>
-                <p className="caption-style text-subtle">
-                  {"{{first_name}}"} falls back to the full name, then “there”.
-                </p>
-                {unknown.length > 0 && (
-                  <p className="caption-style text-warning">
-                    Not a token, sent as typed: {unknown.join(", ")}
-                  </p>
-                )}
-              </div>
+              <TokenChips onInsert={insert} text={`${subject}\n${body}`} />
               {first && (subject || body) && (
                 <section className="flex flex-col gap-1.5" aria-label="Preview">
                   <h3 className="caption-style text-subtle">

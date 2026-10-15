@@ -471,7 +471,7 @@ export async function createInvite(
   if (!isConnected(stored)) throw new CrmError("not_connected", INVITE_NOT_CONNECTED, 400);
   const guests = cleanGuests(input.attendees, prepared.own);
   if (input.includeMeetingLink === true && !prepared.meetingLink) {
-    throw invalid("Add your meeting link in Settings first.", "includeMeetingLink");
+    throw invalid("Add your meeting link in Settings › General first.", "includeMeetingLink");
   }
   const link = input.includeMeetingLink === false ? null : prepared.meetingLink;
   const token = await writableToken(actor, stored, prepared.scopes, fetchImpl);

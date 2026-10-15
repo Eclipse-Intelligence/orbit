@@ -4,6 +4,7 @@ import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Input } from "@/components/_ui/input";
+import { SettingsCard } from "@/components/crm/settings-ui";
 import { TagChip } from "@/components/crm/tags";
 import { deleteTagAction, renameTagAction } from "@/app/(crm)/tags";
 import { normalizeTag, TAG_MAX_LENGTH } from "@/lib/crm/normalize";
@@ -79,12 +80,11 @@ export default function TagsSettings({ tags }: { tags: TagCount[] }) {
   }
 
   return (
-    <div className="flex max-w-[640px] flex-col gap-3">
-      <h2>Tags</h2>
-      <p className="caption-style text-subtle">
-        Add tags from a contact or company, or select rows in a list. Renaming a tag to one that
-        already exists merges them.
-      </p>
+    <SettingsCard
+      id="tags"
+      title={tags.length === 0 ? "Tags" : `${tags.length} ${tags.length === 1 ? "tag" : "tags"}`}
+      description="Add tags from a contact or company, or select rows in a list. Renaming a tag to one that already exists merges them."
+    >
       {tags.length === 0 ? (
         <p className="caption-style text-subtle">No tags yet.</p>
       ) : (
@@ -92,7 +92,7 @@ export default function TagsSettings({ tags }: { tags: TagCount[] }) {
           {tags.map((tag) => (
             <li
               key={tag.name}
-              className="border-border flex min-h-12 flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b py-2"
+              className="border-border flex min-h-12 flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b py-2 first:pt-0 last:border-b-0 last:pb-0"
             >
               {renaming === tag.name ? (
                 <form className="flex min-w-0 flex-1 flex-col gap-1.5" onSubmit={rename}>
@@ -202,6 +202,6 @@ export default function TagsSettings({ tags }: { tags: TagCount[] }) {
       <p role="status" className="caption-style text-subtle empty:hidden">
         {message}
       </p>
-    </div>
+    </SettingsCard>
   );
 }
