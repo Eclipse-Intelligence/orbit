@@ -60,7 +60,7 @@ const LINK_FIELD_TYPES = ["short_text", "text", "url", "email"];
 
 export const CLICKUP_NOT_CONFIGURED =
   "Set CLICKUP_API_TOKEN to sync tasks with ClickUp.";
-const CLICKUP_NOT_SET_UP = "Choose a ClickUp workspace and lists in Settings first.";
+const CLICKUP_NOT_SET_UP = "Choose a ClickUp workspace and lists in Settings › Integrations first.";
 
 export type ClickUpSyncResult = {
   ran: boolean;

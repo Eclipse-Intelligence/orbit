@@ -142,10 +142,18 @@ Merging is three-way against `clickup_sync`. A field Orbit changed since the las
 
 Each sync claims the row with a five-minute gap (the cron and Sync now force it), lists tasks in the watched lists and in lists that hold linked tasks, updated since the last complete sync less five minutes (14 days the first time), 100 a page, closed tasks and subtasks included, then sends up to 20 pending or changed tasks, then re-reads up to five linked open tasks not checked for six hours, archiving any whose ClickUp task is gone. Running out of time keeps `last_synced_at` where it was. `private.clickup_webhook_targets()` returns the stored webhook secrets for the public route; it is a security-definer function executable only by `crm_app`.
 
+## Email templates
+
+| Table | What it holds |
+| --- | --- |
+| `crm.email_templates` | Reusable emails shared by the workspace: `name` (1 to 120 characters, unique per workspace on `lower(name)` among rows with no `archived_at`), `subject` (up to 300), `body` (plain text, up to 20,000, line breaks kept), `tags` (up to 20, normalised like contact tags, GIN-indexed), `created_by`, `created_at`, `updated_at` (set by `private.set_updated_at`), and `archived_at`. Workspace members can select, insert (only as themselves in `created_by`), update the content columns, and delete; agents and anonymous users have no access. |
+
+`lib/crm/email-templates.ts` validates and normalises writes, lists templates newest first with search over name, subject, and body and a tag filter, duplicates as "Copy of …" with a free name, archives or deletes, and counts tags. Personalisation reuses `lib/crm/personalise.ts`; `renderTemplate` fills the tokens for one recipient. The settings pages live under `app/(crm)/settings/` with a shared layout; `/settings` redirects to General in `proxy.ts`, and old `#section` links are sent to the matching page by `lib/settings-nav.ts`.
+
 ## Quiet relationships
 
 A company is quiet when its latest activity is older than 21 days, or it has never had one. Company context also reports a relationship status: `new`, `active`, `quiet`, or `needs_action`.
 
 ## What is left for you
 
-The hosted project is Orbit (`xuvofoydyewbloybrmas`) in `eu-west-1`. The app connects through the session pooler as `crm_app`, and webhook delivery uses `crm_admin`. Do not run `supabase/bootstrap/local-auth.sql` there. The Microsoft inbox starts once the Entra app credentials are in the environment. Automatic transcripts need `GRANOLA_API_KEY`, `CallTranscripts.Read.All`, `SITE_URL`, `CRON_SECRET`, and the Supabase `pg_cron` job in the README. ClickUp needs `CLICKUP_API_TOKEN`, the migration `20261018100000_clickup.sql`, and the lists chosen in Settings. Gmail is still separate. Apply `20261022100000_multi_calendar.sql` before deploying the Calendar page, and `20261023100000_calendar_feeds.sql` before deploying calendar links; extra calendar accounts from other tenants need Orbit's Entra app to allow other organisations (and personal accounts if wanted).
+The hosted project is Orbit (`xuvofoydyewbloybrmas`) in `eu-west-1`. The app connects through the session pooler as `crm_app`, and webhook delivery uses `crm_admin`. Do not run `supabase/bootstrap/local-auth.sql` there. The Microsoft inbox starts once the Entra app credentials are in the environment. Automatic transcripts need `GRANOLA_API_KEY`, `CallTranscripts.Read.All`, `SITE_URL`, `CRON_SECRET`, and the Supabase `pg_cron` job in the README. ClickUp needs `CLICKUP_API_TOKEN`, the migration `20261018100000_clickup.sql`, and the lists chosen in Settings. Gmail is still separate. Apply `20261022100000_multi_calendar.sql` before deploying the Calendar page, `20261023100000_calendar_feeds.sql` before deploying calendar links, and `20261025100000_email_templates.sql` before deploying email templates; extra calendar accounts from other tenants need Orbit's Entra app to allow other organisations (and personal accounts if wanted).

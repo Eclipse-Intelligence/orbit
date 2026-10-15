@@ -35,6 +35,30 @@ npm run dev
 
 Orbit has no sign-up. Only an account that already belongs to a workspace can sign in; `db:setup` creates the local one. Dates, typed due times, and the Today and Overdue cut-offs use London time. `NEXT_PUBLIC_TIMEZONE` overrides that at build time if it ever needs to.
 
+## Settings
+
+`/settings` opens Settings › General. Each section has its own page, listed down the left on wide screens and as a scrolling tab bar under the header on phones:
+
+| Page | Path | What it holds |
+| --- | --- | --- |
+| General | `/settings/general` | Your account, My email addresses, and the meeting link for invites |
+| Email templates | `/settings/email-templates` | Reusable emails (below) |
+| Calendars | `/settings/calendars` | Calendar accounts and links, Show and Use for CRM |
+| Integrations | `/settings/integrations` | Microsoft 365, Teams calls and Granola status (managed from Inbox), and the ClickUp settings |
+| Pipeline | `/settings/pipeline` | Opportunity stages |
+| Tags | `/settings/tags` | Rename, merge, and delete tags |
+| API and webhooks | `/settings/api` | REST and MCP addresses, how to issue agent tokens, webhooks and recent deliveries |
+
+Rarely used parts (token instructions, recent webhook deliveries, watched ClickUp lists, and similar) are collapsed until you open them. Old links keep working: `/settings#calendars`, `#pipeline`, `#tags`, `#webhooks`, `#clickup` and the rest open the matching page, and `#meeting-link` scrolls to it on General.
+
+## Email templates
+
+Settings › Email templates keeps emails you send often. A template has a name (up to 120 characters, unique in the workspace ignoring case), a subject (up to 300), a plain-text message (up to 20,000; line breaks are kept), and up to 20 tags, normalised like contact tags. Search matches the name, subject, and message; the tag chips filter the list. Selecting a template opens the editor with a live preview for one of your 20 most recently updated contacts, or for Alex Example at Example Ltd. Duplicate makes "Copy of …" (numbered when that name is taken), and Delete removes it after you confirm.
+
+Tokens are `{{first_name}}` (falls back to the full name, then "there"), `{{last_name}}`, `{{name}}`, and `{{company}}`. Click a token chip to insert it at the cursor; anything else in double braces is flagged and left as typed.
+
+In the email composer on a contact or company, and in the bulk email dialog, Use template lists your templates with search and tag filters. On a contact the subject and message are filled in already personalised for that person; in bulk email the tokens stay and each recipient gets their own version. Both composers accept tokens and personalise them when the email is sent or logged. Save as template stores the current subject and message under a name and tags; on a contact, a field you have not changed since using a template is saved with its tokens rather than the personalised text.
+
 ## Microsoft inbox
 
 Set `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, and the redirect URI registered on the Entra app. Delegated permissions are `Mail.Read`, `Mail.Send`, `User.Read`, `Calendars.ReadWrite`, and `offline_access`. Restart the server, open Inbox, and connect the mailbox. Received mail is attached to a contact by email address, or to a company by domain. Free-mail domains such as gmail.com are never matched by domain. Mail that matched nothing is attached on a later sync once its sender becomes a contact. From a contact, Send email delivers through that mailbox. A mailbox connected before Mail.Send was granted keeps syncing, but has to be disconnected and connected again before it can send. When `MICROSOFT_REDIRECT_URI` is set, Connect first sends you to that host, so be signed in there.
@@ -53,10 +77,10 @@ Contact and company pages then show a Meetings card with the next meeting, up to
 Orbit sends meeting invitations through Outlook: the event is created in the default calendar of the mailbox connected in Inbox, and Outlook emails the invitation to every guest from that mailbox, exactly as if you had sent it from Outlook. Replies and new-time proposals arrive in that mailbox.
 
 1. Add `Calendars.ReadWrite` and reconnect as described above.
-2. Open Settings, Meeting link, and paste your Whereby room (any `https://` link up to 500 characters works). Leave it empty if you don't want a link.
+2. Open Settings › General, Meeting link, and paste your Whereby room (any `https://` link up to 500 characters works). Leave it empty if you don't want a link.
 3. Choose New event on the Calendar page, click an empty slot in the day or week grid (it opens at that time, rounded down to 15 minutes), or use the calendar button next to Call in Teams on a contact (the contact needs an email address).
 
-The dialog takes a title (Eclipse × the contact's name when you start from a contact), a date and start time in London time, a duration of 15 to 90 minutes, guests (search contacts by name or email, or type any address and press Enter; your own addresses, including those in Settings, My email addresses, are never invited; up to 50 guests), notes, and Add meeting link. With the link on, the invite's location is the link and its body ends with "Join: <link>". After sending, the event shows on the Calendar page straight away, and each guest who is a contact gets an "Invited … to …" meeting activity. A meeting you organise that hasn't started yet has Cancel meeting in its details: Outlook sends the cancellation, with your optional message, to every guest, and each guest contact gets a "Cancelled …" activity.
+The dialog takes a title (Eclipse × the contact's name when you start from a contact), a date and start time in London time, a duration of 15 to 90 minutes, guests (search contacts by name or email, or type any address and press Enter; your own addresses, including those in Settings › General, My email addresses, are never invited; up to 50 guests), notes, and Add meeting link. With the link on, the invite's location is the link and its body ends with "Join: <link>". After sending, the event shows on the Calendar page straight away, and each guest who is a contact gets an "Invited … to …" meeting activity. A meeting you organise that hasn't started yet has Cancel meeting in its details: Outlook sends the cancellation, with your optional message, to every guest, and each guest contact gets a "Cancelled …" activity.
 
 ### More calendars and the Calendar page
 
@@ -134,7 +158,7 @@ Orbit keeps its tasks and ClickUp tasks in step, both ways.
 
 1. In ClickUp, open your avatar › Settings › Apps, and under API Token choose Generate (or Regenerate), then Copy. The token starts with `pk_`.
 2. In Vercel, add it as `CLICKUP_API_TOKEN` under Settings › Environment Variables and redeploy. Locally, put it in `.env.local` and restart.
-3. In Orbit, open Settings › ClickUp. Pick the default list for new tasks, tick the lists to watch, and choose Save ClickUp settings.
+3. In Orbit, open Settings › Integrations, ClickUp. Pick the default list for new tasks, tick the lists to watch, and choose Save ClickUp settings.
 4. On each list where you create tasks for contacts, add a text custom field named `Orbit` (or `CRM`). Put the contact's email, the company's domain, or the Orbit link to the record in it.
 5. Optional: with `SITE_URL` set to Orbit's https address, choose Enable instant ClickUp sync. Without it, Orbit checks ClickUp every 10 minutes and whenever a page loads (at most every 5 minutes).
 

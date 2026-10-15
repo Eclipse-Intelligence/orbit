@@ -17,6 +17,7 @@ import {
   readMicrosoftState,
   sanitizeMicrosoftError,
 } from "@/lib/microsoft/oauth";
+import { SETTINGS_PATHS } from "@/lib/settings-nav";
 
 export const dynamic = "force-dynamic";
 
@@ -30,13 +31,12 @@ export async function GET(request: Request) {
   const returned = url.searchParams.get("state");
   const responseState = cookieStore.get(STATE_COOKIE)?.value;
   const forCalendar = state?.purpose === "calendar_account";
-  const target = new URL(forCalendar ? "/settings" : "/inbox", origin);
+  const target = new URL(forCalendar ? SETTINGS_PATHS.calendars : "/inbox", origin);
 
   function finish(error?: string, connected?: string) {
     if (forCalendar) {
       if (error) target.searchParams.set("calendar_error", error);
       else target.searchParams.set("calendar_connected", connected ?? "1");
-      target.hash = "calendars";
     } else if (error) target.searchParams.set("error", error);
     else target.searchParams.set("connected", "1");
     const response = NextResponse.redirect(target);

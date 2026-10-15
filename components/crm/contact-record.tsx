@@ -7,6 +7,7 @@ import { EntityChip, Monogram } from "@/components/beautifui/record-marks";
 import DetailSection from "@/components/companies/detail/detail-section";
 import ContactActivities from "@/components/crm/contact-activities";
 import ContactEditor from "@/components/crm/contact-editor";
+import { contactRecipient } from "@/lib/crm/personalise";
 import InviteDialog, { InviteNotice } from "@/components/crm/invite-dialog";
 import MeetingsCard from "@/components/crm/meetings-card";
 import { useQuickAddRecord } from "@/components/crm/quick-add";
@@ -281,6 +282,7 @@ export default function ContactRecord({
           <ContactActivities
             contactId={shown.id}
             email={shown.email}
+            recipient={contactRecipient(shown)}
             mailboxConnected={mailboxConnected}
             viewerId={viewer.id}
             activities={activities}

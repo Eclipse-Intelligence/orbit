@@ -4,6 +4,7 @@ import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Input } from "@/components/_ui/input";
+import { SettingsCard } from "@/components/crm/settings-ui";
 import { saveMeetingLinkAction } from "@/app/(crm)/settings/actions";
 import { checkMeetingLink, MEETING_LINK_MAX } from "@/lib/invite-rules";
 
@@ -42,12 +43,11 @@ export default function MeetingLinkSettings({ meetingLink }: { meetingLink: stri
   }
 
   return (
-    <div id="meeting-link" className="flex max-w-[640px] scroll-mt-4 flex-col gap-3">
-      <h2>Meeting link</h2>
-      <p className="caption-style text-subtle">
-        Your Whereby room, or any other https link. Orbit adds it to the invites you send as the location and a Join
-        link.
-      </p>
+    <SettingsCard
+      id="meeting-link"
+      title="Meeting link"
+      description="Your Whereby room, or any other https link. Orbit adds it to the invites you send as the location and a Join link."
+    >
       <form className="flex flex-col gap-2" noValidate onSubmit={save}>
         <label className="sr-only" htmlFor="meeting-link-input">
           Meeting link
@@ -83,6 +83,6 @@ export default function MeetingLinkSettings({ meetingLink }: { meetingLink: stri
           {message}
         </p>
       </form>
-    </div>
+    </SettingsCard>
   );
 }

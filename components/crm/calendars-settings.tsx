@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Button, { buttonVariants } from "@/components/_ui/button";
 import { Checkbox } from "@/components/_ui/checkbox";
 import { Input } from "@/components/_ui/input";
+import { SettingsCard, SettingsDisclosure } from "@/components/crm/settings-ui";
 import {
   addCalendarFeedAction,
   disconnectCalendarAccountAction,
@@ -135,12 +136,11 @@ export default function CalendarsSettings({
   }
 
   return (
-    <div id="calendars" className="flex max-w-[640px] scroll-mt-4 flex-col gap-3">
-      <h2>Calendars</h2>
-      <p className="caption-style text-subtle">
-        Show any calendar on the Calendar page. Meetings cards and People you&apos;ve met only use calendars marked Use for
-        CRM.
-      </p>
+    <SettingsCard
+      id="calendars"
+      title="Your calendars"
+      description="Show any calendar on the Calendar page. Meetings cards and People you’ve met only use calendars marked Use for CRM."
+    >
       {connectedEmail && (
         <p role="status" className="caption-style text-soft">
           Connected {connectedEmail}. Its calendars appear here in a moment.
@@ -164,7 +164,7 @@ export default function CalendarsSettings({
         <section
           key={`${group.kind}-${group.id}`}
           aria-label={groupName(group)}
-          className="border-border flex flex-col gap-3 rounded-xl border p-3"
+          className="border-border flex flex-col gap-3 rounded-lg border p-3"
         >
           <div className="flex flex-wrap items-start justify-between gap-2">
             <span className="flex min-w-0 flex-col gap-1.5">
@@ -263,7 +263,7 @@ export default function CalendarsSettings({
         </p>
       )}
       {adding && (
-        <form onSubmit={addFeed} className="border-border flex flex-col gap-3 rounded-xl border p-3">
+        <form onSubmit={addFeed} className="border-border flex flex-col gap-3 rounded-lg border p-3">
           <label className="flex flex-col gap-2" htmlFor="calendar-feed-url">
             <span className="caption-style text-subtle">Secret iCal link</span>
             <Input
@@ -344,11 +344,16 @@ export default function CalendarsSettings({
         </p>
       </div>
       {configured && (
-        <p className="caption-style text-subtle">
-          Accounts from other organisations or personal Microsoft accounts need Orbit&apos;s app registration to allow
-          them (Entra › Supported account types).
-        </p>
+        <SettingsDisclosure
+          title="Connecting other Microsoft accounts"
+          summary="Accounts outside your organisation need the app registration to allow them."
+        >
+          <p className="caption-style text-subtle leading-[1.4]">
+            Accounts from other organisations or personal Microsoft accounts need Orbit&apos;s app registration to allow
+            them (Entra › Supported account types).
+          </p>
+        </SettingsDisclosure>
       )}
-    </div>
+    </SettingsCard>
   );
 }

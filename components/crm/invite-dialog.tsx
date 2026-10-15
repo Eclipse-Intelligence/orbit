@@ -24,6 +24,7 @@ import {
   TIME_OPTIONS,
 } from "@/lib/invite-rules";
 import { parseDateTime } from "@/lib/time";
+import { SETTINGS_PATHS } from "@/lib/settings-nav";
 import { cn } from "@/lib/utils";
 import XIcon from "@/public/assets/images/companies/detail/x.svg";
 
@@ -491,7 +492,7 @@ function InviteForm({
             ) : (
               <span id={field("link-detail")} className="caption-style text-subtle">
                 Add your meeting link in{" "}
-                <Button variant="link" size="none" href="/settings#meeting-link">
+                <Button variant="link" size="none" href={`${SETTINGS_PATHS.general}#meeting-link`}>
                   Settings
                 </Button>{" "}
                 first.

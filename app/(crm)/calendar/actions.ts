@@ -11,12 +11,13 @@ import { createContactFromEvent, setCalendarForCrm, setCalendarVisible } from "@
 import { cancelInvite, createInvite, type InviteInput } from "@/lib/crm/invites";
 import type { UserActor } from "@/lib/crm/types";
 import { revalidateRecordPages } from "@/lib/revalidate";
+import { SETTINGS_ROOT } from "@/lib/settings-nav";
 
 export type CalendarActionState = { error?: string; ok?: boolean; message?: string };
 
 function refreshCalendar() {
   revalidatePath("/calendar");
-  revalidatePath("/settings");
+  revalidatePath(SETTINGS_ROOT, "layout");
 }
 
 function refreshRecords() {

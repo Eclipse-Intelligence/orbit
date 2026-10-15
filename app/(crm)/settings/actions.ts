@@ -17,6 +17,7 @@ import { saveOtherEmails, type MyEmails } from "@/lib/crm/profile";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import type { PipelineStage } from "@/lib/crm/types";
 import { archiveWebhook, createWebhook } from "@/lib/crm/webhooks";
+import { SETTINGS_ROOT } from "@/lib/settings-nav";
 
 async function requireUser() {
   const user = await getUserActor();
@@ -28,7 +29,7 @@ export async function createWebhookAction(url: string, events: string[], descrip
   const user = await requireUser();
   try {
     const result = await createWebhook(user, { url, events, description });
-    revalidatePath("/settings");
+    revalidatePath(SETTINGS_ROOT, "layout");
     return { secret: result.secret, id: result.endpoint.id };
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Could not save the webhook." };
@@ -39,7 +40,7 @@ export async function archiveWebhookAction(id: string) {
   const user = await requireUser();
   try {
     await archiveWebhook(user, id);
-    revalidatePath("/settings");
+    revalidatePath(SETTINGS_ROOT, "layout");
     return {};
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Could not remove the webhook." };
@@ -52,7 +53,7 @@ export async function saveStagesAction(
   const user = await requireUser();
   try {
     const saved = await savePipelineStages(user, stages);
-    revalidatePath("/settings");
+    revalidatePath(SETTINGS_ROOT, "layout");
     revalidatePath("/opportunities");
     return { stages: saved };
   } catch (error) {
@@ -66,7 +67,7 @@ export async function saveOtherEmailsAction(
   const user = await requireUser();
   try {
     const saved = await saveOtherEmails(user, emails);
-    revalidatePath("/settings");
+    revalidatePath(SETTINGS_ROOT, "layout");
     revalidatePath("/inbox");
     return { emails: saved };
   } catch (error) {
@@ -80,7 +81,7 @@ export async function saveMeetingLinkAction(
   const user = await requireUser();
   try {
     const meetingLink = await saveMeetingLink(user, typeof link === "string" ? link : "");
-    revalidatePath("/settings");
+    revalidatePath(SETTINGS_ROOT, "layout");
     revalidatePath("/calendar");
     revalidatePath("/(crm)/contacts/[id]", "page");
     return { meetingLink };
@@ -102,7 +103,7 @@ function clickupFailure(error: unknown, fallback: string): ClickUpActionState {
 }
 
 function refreshClickUp() {
-  revalidatePath("/settings");
+  revalidatePath(SETTINGS_ROOT, "layout");
   revalidatePath(TASKS_PATH);
   revalidatePath("/");
 }

@@ -10,13 +10,14 @@ import {
   signMicrosoftState,
   type MicrosoftPurpose,
 } from "@/lib/microsoft/oauth";
+import { SETTINGS_PATHS } from "@/lib/settings-nav";
 
 export const dynamic = "force-dynamic";
 
 const STATE_COOKIE = "crm_ms_oauth";
 
 function connectReturnPath(purpose: MicrosoftPurpose) {
-  return purpose === "calendar_account" ? "/settings" : "/inbox";
+  return purpose === "calendar_account" ? SETTINGS_PATHS.calendars : "/inbox";
 }
 
 export async function GET(request: Request) {

@@ -17,6 +17,7 @@ import {
   useActivityDraft,
 } from "@/components/crm/contact-activities";
 import ContactEmail from "@/components/crm/contact-email";
+import { contactRecipient } from "@/lib/crm/personalise";
 import type { Activity, CallInsight, Contact } from "@/lib/crm/types";
 
 const NONE = "none";
@@ -134,6 +135,7 @@ export default function CompanyActivity({
             contactId={recipient?.id ?? null}
             companyId={companyId}
             email={recipient?.email ?? null}
+            recipient={recipient ? contactRecipient(recipient) : null}
             mailboxConnected={mailboxConnected}
             idPrefix={companyId}
             unavailable={
