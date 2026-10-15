@@ -5,10 +5,14 @@ const globalPools = globalThis as typeof globalThis & {
   __crmAdminPool?: Pool;
 };
 
+function transactionPooler(url: URL) {
+  return url.port === "6543" || url.searchParams.get("pgbouncer") === "true";
+}
+
 function connectionUrl(connectionString: string) {
   const url = new URL(connectionString);
   const options = url.searchParams.get("options") ?? "";
-  if (!options.includes("statement_timeout")) {
+  if (!transactionPooler(url) && !options.includes("statement_timeout")) {
     url.searchParams.set("options", `${options} -c statement_timeout=10000`.trim());
   }
   if (url.searchParams.get("sslmode") === "require" && !url.searchParams.has("uselibpqcompat")) {

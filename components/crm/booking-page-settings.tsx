@@ -8,6 +8,7 @@ import { Input } from "@/components/_ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/_ui/select";
 import { SettingsCard } from "@/components/crm/settings-ui";
 import { checkBookingSlugAction, saveBookingPageAction } from "@/app/(crm)/settings/actions";
+import { reloadIfStaleDeploy } from "@/lib/stale-deploy";
 import type { BookingPageSettings as Settings, BookingSetup } from "@/lib/booking/pages";
 import {
   BOOKING_BUFFER_MAX,
@@ -394,7 +395,13 @@ export default function BookingPageSettings({
       horizonDays: horizon,
       weeklyHours: draft.weeklyHours,
       videoUrl: draft.videoUrl,
-    }).catch(() => ({ error: "Could not save the booking page.", field: undefined, page: undefined }));
+    }).catch((error: unknown) => ({
+      error: reloadIfStaleDeploy(error)
+        ? "Orbit was just updated. Reloading…"
+        : "Could not save the booking page. Check your connection and try again.",
+      field: undefined,
+      page: undefined,
+    }));
     setPending(false);
     if (result.error || !result.page) {
       setErrors({ [result.field ?? "form"]: result.error ?? "Could not save the booking page." });

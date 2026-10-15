@@ -29,6 +29,7 @@ import { isTimeZone } from "@/lib/time";
 const MINUTE = 60_000;
 const DAY = 86_400_000;
 const LOCK_WAIT_MS = 25_000;
+const LOCK_HOLD_MS = 120_000;
 
 export const BOOKING_LIMITS = {
   slotsPerMinute: 10,
@@ -159,16 +160,24 @@ async function withBookingLock<T>(userId: string, run: () => Promise<T>) {
   let client: Awaited<ReturnType<typeof openClient>>;
   try {
     client = await openClient();
-    await client.query(`set statement_timeout = ${LOCK_WAIT_MS}`);
-    await client.query("select pg_advisory_lock(hashtextextended($1, 0))", [key]);
   } catch (error) {
     console.error("Booking lock failed", error);
     throw new CrmError("unavailable", BOOKING_UNAVAILABLE, 503);
   }
   try {
+    await client.query("begin");
+    await client.query(`set local statement_timeout = ${LOCK_WAIT_MS}`);
+    await client.query(`set local idle_in_transaction_session_timeout = ${LOCK_HOLD_MS}`);
+    await client.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [key]);
+  } catch (error) {
+    console.error("Booking lock failed", error);
+    await client.end().catch(() => undefined);
+    throw new CrmError("unavailable", BOOKING_UNAVAILABLE, 503);
+  }
+  try {
     return await run();
   } finally {
-    await client.query("select pg_advisory_unlock(hashtextextended($1, 0))", [key]).catch(() => undefined);
+    await client.query("rollback").catch(() => undefined);
     await client.end().catch(() => undefined);
   }
 }
