@@ -57,7 +57,7 @@ export function SettingsCard({
       id={id}
       aria-labelledby={headingId}
       className={cn(
-        "border-border bg-card scroll-mt-4 rounded-xl border",
+        "border-sidebar-border bg-sidebar-accent scroll-mt-4 rounded-xl border",
         className,
       )}
     >
