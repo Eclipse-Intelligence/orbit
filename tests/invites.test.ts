@@ -752,3 +752,18 @@ describe("cancelling invites", () => {
     assert.equal(calls.length, 0);
   });
 });
+
+describe("Graph time zones in responses", () => {
+  it("reads Windows zone names such as GMT Standard Time as London time", async () => {
+    const { graphInstant } = await import("@/lib/microsoft/calendar");
+    assert.equal(
+      graphInstant({ dateTime: "2026-10-16T13:15:00.0000000", timeZone: "GMT Standard Time" }),
+      "2026-10-16T12:15:00.000Z",
+    );
+    assert.equal(
+      graphInstant({ dateTime: "2026-12-16T13:15:00.0000000", timeZone: "GMT Standard Time" }),
+      "2026-12-16T13:15:00.000Z",
+    );
+    assert.equal(graphInstant({ dateTime: "2026-10-16T13:15:00.0000000", timeZone: "UTC" }), "2026-10-16T13:15:00.000Z");
+  });
+});
