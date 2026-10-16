@@ -1,9 +1,12 @@
 "use client";
 
 import { Kbd } from "@/components/_ui/command";
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/_ui/dialog";
+import { Dialog as DialogPrimitive } from "radix-ui";
+import Button from "@/components/_ui/button";
+import { DialogOverlay } from "@/components/_ui/dialog";
 import { useShortcuts } from "@/components/shortcuts/shortcuts-provider";
 import { SHORTCUTS, comboLabel, type ShortcutDef, type ShortcutGroup } from "@/lib/shortcuts";
+import XIcon from "@/public/assets/images/companies/detail/x.svg";
 
 const GROUPS: ShortcutGroup[] = [
   "General",
@@ -88,12 +91,22 @@ export function ShortcutsReference() {
 export default function ShortcutsHelp() {
   const { helpOpen, setHelpOpen } = useShortcuts();
   return (
-    <Dialog open={helpOpen} onOpenChange={setHelpOpen}>
-      <DialogContent className="flex max-h-[min(44em,calc(100dvh-4rem))] max-w-[760px] flex-col gap-0 p-0 pt-8">
-        <DialogTitle className="sr-only">Keyboard shortcuts</DialogTitle>
-        <DialogDescription className="sr-only">Every keyboard shortcut in Orbit</DialogDescription>
-        <ShortcutsReference />
-      </DialogContent>
-    </Dialog>
+    <DialogPrimitive.Root open={helpOpen} onOpenChange={setHelpOpen}>
+      <DialogPrimitive.Portal>
+        <DialogOverlay />
+        <DialogPrimitive.Content
+          className="border-line-strong bg-popover text-popover-foreground shadow-overlay data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 data-[state=open]:ease-power3-out data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=closed]:ease-power3-in fixed top-1/2 left-1/2 z-50 flex max-h-[min(44rem,calc(100dvh-2rem))] w-[calc(100%-2rem)] max-w-[760px] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border pt-10 outline-none duration-250 data-[state=closed]:duration-200"
+        >
+          <DialogPrimitive.Title className="sr-only">Keyboard shortcuts</DialogPrimitive.Title>
+          <DialogPrimitive.Description className="sr-only">Every keyboard shortcut in Orbit</DialogPrimitive.Description>
+          <ShortcutsReference />
+          <DialogPrimitive.Close asChild>
+            <Button variant="ghost" size="icon-sm" className="absolute top-3 right-3" aria-label="Close">
+              <XIcon aria-hidden className="size-4" />
+            </Button>
+          </DialogPrimitive.Close>
+        </DialogPrimitive.Content>
+      </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>
   );
 }
