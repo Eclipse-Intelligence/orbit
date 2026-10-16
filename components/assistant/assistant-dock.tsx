@@ -1,0 +1,625 @@
+"use client";
+
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
+import { useRouter } from "next/navigation";
+import Button from "@/components/_ui/button";
+import { Kbd } from "@/components/_ui/command";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popover";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/_ui/select";
+import Markdown from "@/components/assistant/markdown";
+import { useScreenState } from "@/components/crm/quick-add";
+import { useShortcut, useShortcuts } from "@/components/shortcuts/shortcuts-provider";
+import { deleteConversationAction, getConversationAction, listConversationsAction } from "@/app/(crm)/assistant";
+import type { AssistantAction, AssistantEvent, ConversationSummary, DisplayMessage } from "@/lib/assistant/chat";
+import {
+  ASSISTANT_MODELS,
+  DEFAULT_MODEL,
+  DEFAULT_REASONING,
+  REASONING_LABELS,
+  assistantModel,
+  settingsFor,
+  type ReasoningLevel,
+} from "@/lib/assistant/models";
+import { relativeWhen } from "@/lib/companies";
+import { cn } from "@/lib/utils";
+import ArrowUpIcon from "@/public/assets/images/assistant/arrow-up.svg";
+import GlobeIcon from "@/public/assets/images/assistant/globe.svg";
+import SparkleIcon from "@/public/assets/images/assistant/sparkle.svg";
+import StopIcon from "@/public/assets/images/assistant/stop.svg";
+import TrashIcon from "@/public/assets/images/assistant/trash.svg";
+import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
+import PlusIcon from "@/public/assets/images/_common/plus.svg";
+import ClockIcon from "@/public/assets/images/companies/detail/clock.svg";
+
+const SETTINGS_KEY = "orbit-assistant-settings";
+const CONVERSATION_KEY = "orbit-assistant-conversation";
+
+const SUGGESTIONS = [
+  "What tasks have I got outstanding?",
+  "How does my pipeline look for the next 30 days?",
+  "Which relationships have gone quiet?",
+  "What's in my calendar this week?",
+];
+
+type LiveTool = { id: string; label: string; status: "running" | "done" };
+
+function readSettings() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? "{}") as Record<string, unknown>;
+    const settings = settingsFor(parsed.model, parsed.reasoning);
+    return { ...settings, webSearch: parsed.webSearch === true };
+  } catch {
+    return { model: DEFAULT_MODEL, reasoning: DEFAULT_REASONING, webSearch: false };
+  }
+}
+
+async function streamAssistant(body: Record<string, unknown>, onEvent: (event: AssistantEvent) => void, signal: AbortSignal) {
+  const response = await fetch("/api/assistant", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!response.ok || !response.body) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error ?? "The assistant is unavailable right now.");
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+    let newline = buffer.indexOf("\n");
+    while (newline >= 0) {
+      const line = buffer.slice(0, newline).trim();
+      buffer = buffer.slice(newline + 1);
+      if (line) onEvent(JSON.parse(line) as AssistantEvent);
+      newline = buffer.indexOf("\n");
+    }
+    if (done) break;
+  }
+}
+
+function ActionCard({
+  action,
+  busy,
+  onDecide,
+}: {
+  action: AssistantAction;
+  busy: boolean;
+  onDecide: (approve: boolean) => void;
+}) {
+  const status: Record<AssistantAction["status"], string> = {
+    pending: "Waiting for you",
+    running: "Working…",
+    done: "Done",
+    failed: "Didn't work",
+    declined: "Cancelled",
+  };
+  return (
+    <div className="border-line-strong flex flex-col gap-2 rounded-xl border bg-white/[0.02] p-3">
+      <div className="flex items-start justify-between gap-3">
+        <span className="text-foreground min-w-0 text-[13.5px] leading-5 font-medium">{action.title}</span>
+        <span
+          className={cn(
+            "caption-style shrink-0",
+            action.status === "done" && "text-success",
+            action.status === "failed" && "text-danger",
+            action.status === "pending" && "text-warning",
+            (action.status === "declined" || action.status === "running") && "text-subtle",
+          )}
+        >
+          {status[action.status]}
+        </span>
+      </div>
+      {action.lines.length > 0 && (
+        <ul className="text-soft flex flex-col gap-0.5 text-[13px] leading-5">
+          {action.lines.map((line, index) => (
+            <li key={index} className="break-words whitespace-pre-wrap">
+              {line}
+            </li>
+          ))}
+        </ul>
+      )}
+      {action.status === "failed" && action.result && <p className="caption-style text-danger">{action.result}</p>}
+      {action.status === "pending" && (
+        <div className="flex items-center gap-2 pt-1">
+          <Button variant="primary" size="sm" disabled={busy} onClick={() => onDecide(true)}>
+            Confirm
+          </Button>
+          <Button variant="ghost" size="sm" disabled={busy} onClick={() => onDecide(false)}>
+            Cancel
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Message({
+  message,
+  busy,
+  onDecide,
+}: {
+  message: DisplayMessage;
+  busy: boolean;
+  onDecide: (actionId: string, approve: boolean) => void;
+}) {
+  if (message.role === "user") {
+    return (
+      <div className="flex justify-end">
+        <div className="bg-secondary text-foreground max-w-[85%] rounded-2xl rounded-br-md px-3.5 py-2 text-[14px] leading-6 whitespace-pre-wrap shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)]">
+          {message.content}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-2.5">
+      {message.tools.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {message.tools.map((tool) => (
+            <span key={tool.id} className="caption-style text-subtle bg-white/[0.04] rounded-full px-2 py-0.5">
+              {tool.label}
+            </span>
+          ))}
+        </div>
+      )}
+      {message.content && <Markdown text={message.content} />}
+      {message.sources.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {message.sources.map((source) => (
+            <a
+              key={source.url}
+              href={source.url}
+              target="_blank"
+              rel="noreferrer"
+              className="caption-style text-subtle hover:text-foreground border-line-strong max-w-[16rem] truncate rounded-full border px-2 py-0.5"
+            >
+              {source.title || new URL(source.url).hostname}
+            </a>
+          ))}
+        </div>
+      )}
+      {message.actions.map((action) => (
+        <ActionCard key={action.id} action={action} busy={busy} onDecide={(approve) => onDecide(action.id, approve)} />
+      ))}
+    </div>
+  );
+}
+
+export default function AssistantDock() {
+  const router = useRouter();
+  const { mac } = useShortcuts();
+  const { covered, lift } = useScreenState();
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [model, setModel] = useState(DEFAULT_MODEL);
+  const [reasoning, setReasoning] = useState<ReasoningLevel>(DEFAULT_REASONING);
+  const [webSearch, setWebSearch] = useState(false);
+  const [conversation, setConversation] = useState<ConversationSummary | null>(null);
+  const [messages, setMessages] = useState<DisplayMessage[]>([]);
+  const [live, setLive] = useState<LiveTool[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [history, setHistory] = useState<ConversationSummary[] | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const input = useRef<HTMLTextAreaElement>(null);
+  const scroller = useRef<HTMLDivElement>(null);
+  const abort = useRef<AbortController | null>(null);
+  const changed = useRef(false);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const saved = readSettings();
+      setModel(saved.model);
+      setReasoning(saved.reasoning);
+      setWebSearch(saved.webSearch);
+      const last = sessionStorage.getItem(CONVERSATION_KEY);
+      if (last) {
+        void getConversationAction(last).then((result) => {
+          if (!result) return;
+          setConversation(result.conversation);
+          setMessages(result.messages);
+        });
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify({ model, reasoning, webSearch }));
+    } catch {}
+  }, [model, reasoning, webSearch]);
+
+  useEffect(() => {
+    try {
+      if (conversation) sessionStorage.setItem(CONVERSATION_KEY, conversation.id);
+      else sessionStorage.removeItem(CONVERSATION_KEY);
+    } catch {}
+  }, [conversation]);
+
+  useEffect(() => {
+    const node = scroller.current;
+    if (node) node.scrollTop = node.scrollHeight;
+  }, [messages, live, busy, open]);
+
+  useEffect(() => {
+    const node = input.current;
+    if (!node) return;
+    node.style.height = "auto";
+    node.style.height = `${Math.min(node.scrollHeight, 200)}px`;
+  }, [draft, open]);
+
+  const expand = useCallback(() => {
+    setOpen(true);
+    window.requestAnimationFrame(() => input.current?.focus());
+  }, []);
+
+  useShortcut("assistant", () => expand());
+  useShortcut(
+    "back",
+    () => {
+      setOpen(false);
+      setHistoryOpen(false);
+    },
+    open,
+  );
+
+  const onEvent = useCallback((event: AssistantEvent) => {
+    if (event.type === "conversation") setConversation(event.conversation);
+    if (event.type === "user") setMessages((current) => [...current.filter((message) => !message.id.startsWith("local-")), event.message]);
+    if (event.type === "tool") {
+      setLive((current) => {
+        const others = current.filter((tool) => tool.id !== event.id);
+        return [...others, { id: event.id, label: event.label, status: event.status }];
+      });
+    }
+    if (event.type === "message") {
+      setLive([]);
+      setMessages((current) => {
+        const index = current.findIndex((message) => message.id === event.message.id);
+        if (index < 0) return [...current, event.message];
+        const next = current.slice();
+        next[index] = { ...event.message, tools: event.message.tools.length ? event.message.tools : next[index].tools };
+        return next;
+      });
+    }
+    if (event.type === "actions") {
+      setLive([]);
+      if (event.actions.some((action) => action.status === "done")) changed.current = true;
+      setMessages((current) => {
+        const index = current.findIndex((message) => message.id === event.messageId);
+        if (index < 0) {
+          return [
+            ...current,
+            { id: event.messageId, role: "assistant", content: "", tools: [], actions: event.actions, sources: [], createdAt: new Date().toISOString() },
+          ];
+        }
+        const next = current.slice();
+        next[index] = { ...next[index], actions: event.actions };
+        return next;
+      });
+    }
+    if (event.type === "error") setError(event.message);
+  }, []);
+
+  async function run(body: Record<string, unknown>) {
+    setBusy(true);
+    setError(null);
+    setLive([]);
+    const controller = new AbortController();
+    abort.current = controller;
+    try {
+      await streamAssistant(body, onEvent, controller.signal);
+    } catch (caught) {
+      if (!(caught instanceof Error && caught.name === "AbortError")) {
+        setError(caught instanceof Error ? caught.message : "The assistant is unavailable right now.");
+      }
+    } finally {
+      abort.current = null;
+      setBusy(false);
+      setLive([]);
+      if (changed.current) {
+        changed.current = false;
+        router.refresh();
+      }
+    }
+  }
+
+  function send(text: string) {
+    const message = text.trim();
+    if (!message || busy) return;
+    setDraft("");
+    setMessages((current) => [
+      ...current,
+      { id: `local-${Date.now()}`, role: "user", content: message, tools: [], actions: [], sources: [], createdAt: new Date().toISOString() },
+    ]);
+    void run({ conversationId: conversation?.id ?? null, message, model, reasoning, webSearch });
+  }
+
+  function decide(actionId: string, approve: boolean) {
+    if (!conversation || busy) return;
+    void run({ conversationId: conversation.id, actionId, approve });
+  }
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    send(draft);
+  }
+
+  function newChat() {
+    abort.current?.abort();
+    setConversation(null);
+    setMessages([]);
+    setLive([]);
+    setError(null);
+    setHistoryOpen(false);
+    window.requestAnimationFrame(() => input.current?.focus());
+  }
+
+  async function openHistory(next: boolean) {
+    setHistoryOpen(next);
+    if (next) setHistory(await listConversationsAction());
+  }
+
+  async function load(id: string) {
+    setHistoryOpen(false);
+    const result = await getConversationAction(id);
+    if (!result) {
+      setError("That chat couldn't be opened.");
+      return;
+    }
+    setConversation(result.conversation);
+    setMessages(result.messages);
+    const settings = settingsFor(result.conversation.model, result.conversation.reasoning);
+    setModel(settings.model);
+    setReasoning(settings.reasoning);
+    setWebSearch(result.conversation.webSearch);
+    setError(null);
+  }
+
+  async function remove(id: string) {
+    const result = await deleteConversationAction(id);
+    if (result.error) {
+      setError(result.error);
+      return;
+    }
+    setHistory((current) => current?.filter((item) => item.id !== id) ?? null);
+    if (conversation?.id === id) newChat();
+  }
+
+  const chosen = assistantModel(model) ?? ASSISTANT_MODELS[0];
+  const position = {
+    "--assistant-lift": `${lift}px`,
+  } as CSSProperties;
+  const placement =
+    "fixed z-40 bottom-[max(calc(env(safe-area-inset-bottom)+1rem),var(--assistant-lift))] left-3 right-[4.75rem] md:right-auto md:left-1/2 md:-translate-x-1/2 lg:left-[calc(var(--sidebar-width)+(100vw-var(--sidebar-width))/2)] sidebar-collapsed:lg:left-1/2";
+
+  if (!open) {
+    return (
+      <div style={position} className={cn(placement, "transition-[bottom] duration-200 ease-power3-out", covered && "invisible")}>
+        <button
+          type="button"
+          onClick={expand}
+          aria-keyshortcuts="o"
+          className="group border-line-strong bg-popover/95 text-subtle hover:text-foreground focus-visible:ring-ring/60 ease-power3-out shadow-overlay flex h-11 w-full cursor-text items-center gap-2.5 rounded-full border pr-2 pl-4 text-left text-[14px] backdrop-blur-md transition-[color,border-color] duration-150 outline-none hover:border-white/20 focus-visible:ring-2 md:w-[24rem]"
+        >
+          <SparkleIcon aria-hidden className="text-status size-4 shrink-0" />
+          <span className="min-w-0 flex-1 truncate">{messages.length > 0 ? conversation?.title ?? "Continue your chat" : "Ask Orbit anything"}</span>
+          <Kbd aria-hidden className="max-md:hidden">
+            O
+          </Kbd>
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      style={position}
+      className={cn(
+        "fixed z-40 inset-x-2 top-16 bottom-[max(calc(env(safe-area-inset-bottom)+0.5rem),var(--assistant-lift))] md:inset-x-auto md:top-auto md:bottom-[max(calc(env(safe-area-inset-bottom)+1rem),var(--assistant-lift))] md:left-1/2 md:w-[min(46rem,calc(100vw-2rem))] md:-translate-x-1/2 lg:left-[calc(var(--sidebar-width)+(100vw-var(--sidebar-width))/2)] lg:w-[min(46rem,calc(100vw-var(--sidebar-width)-3rem))] sidebar-collapsed:lg:left-1/2",
+        covered && "invisible",
+      )}
+    >
+      <section
+        aria-label="Orbit assistant"
+        className="border-line-strong bg-popover shadow-overlay animate-in fade-in-0 slide-in-from-bottom-3 zoom-in-[0.98] ease-power3-out flex h-full max-h-full flex-col overflow-hidden rounded-2xl border duration-200 md:h-auto md:max-h-[min(44rem,calc(100dvh-6rem))]"
+      >
+        <header className="border-line-strong flex h-11 shrink-0 items-center gap-2 border-b pr-1.5 pl-4">
+          <SparkleIcon aria-hidden className="text-status size-3.5 shrink-0" />
+          <span className="text-foreground min-w-0 flex-1 truncate text-[13.5px] font-medium">{conversation?.title ?? "New chat"}</span>
+          <Popover open={historyOpen} onOpenChange={(next) => void openHistory(next)}>
+            <PopoverTrigger asChild>
+              <Button variant="ghost" size="icon-sm" aria-label="Past chats" title="Past chats">
+                <ClockIcon aria-hidden className="size-3.5" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-[min(22rem,calc(100vw-2rem))] p-1.5">
+              {history === null ? (
+                <p className="caption-style text-subtle px-2.5 py-3">Loading…</p>
+              ) : history.length === 0 ? (
+                <p className="caption-style text-subtle px-2.5 py-3">No saved chats yet.</p>
+              ) : (
+                <ul className="flex max-h-80 flex-col overflow-y-auto">
+                  {history.map((item) => (
+                    <li key={item.id} className="group/item flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => void load(item.id)}
+                        className={cn(
+                          "flex min-w-0 flex-1 cursor-pointer flex-col items-start gap-0.5 rounded-lg px-2.5 py-2 text-left outline-none hover:bg-white/5 focus-visible:bg-white/5",
+                          item.id === conversation?.id && "bg-white/5",
+                        )}
+                      >
+                        <span className="text-foreground w-full truncate text-[13.5px] leading-5">{item.title}</span>
+                        <span className="caption-style text-subtle">{relativeWhen(item.updatedAt)}</span>
+                      </button>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={`Delete ${item.title}`}
+                        className="opacity-0 group-hover/item:opacity-100 focus-visible:opacity-100"
+                        onClick={() => void remove(item.id)}
+                      >
+                        <TrashIcon aria-hidden className="size-3.5" />
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </PopoverContent>
+          </Popover>
+          <Button variant="ghost" size="icon-sm" aria-label="New chat" title="New chat" onClick={newChat}>
+            <PlusIcon aria-hidden className="size-3.5" />
+          </Button>
+          <Button variant="ghost" size="icon-sm" aria-label="Minimise" title="Minimise (Esc)" onClick={() => setOpen(false)}>
+            <ChevronDownIcon aria-hidden className="size-3" />
+          </Button>
+        </header>
+
+        <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4 md:min-h-[12rem]">
+          {messages.length === 0 && !busy ? (
+            <div className="flex flex-col gap-3">
+              <p className="text-soft text-[14px] leading-6">
+                Ask about tasks, the pipeline, people, meetings or anything else in Orbit. I can also make changes for you once you confirm them.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {SUGGESTIONS.map((suggestion) => (
+                  <button
+                    key={suggestion}
+                    type="button"
+                    onClick={() => send(suggestion)}
+                    className="border-line-strong text-soft hover:text-foreground hover:border-white/20 cursor-pointer rounded-full border px-3 py-1.5 text-left text-[13px] leading-5 transition-colors duration-150"
+                  >
+                    {suggestion}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-5">
+              {messages.map((message) => (
+                <Message key={message.id} message={message} busy={busy} onDecide={decide} />
+              ))}
+              {busy && (
+                <div className="flex flex-col gap-1.5" aria-live="polite">
+                  {live.map((tool) => (
+                    <span key={tool.id} className="caption-style text-subtle flex items-center gap-2">
+                      <span
+                        aria-hidden
+                        className={cn("size-1.5 rounded-full", tool.status === "running" ? "bg-status animate-pulse" : "bg-faint")}
+                      />
+                      {tool.label}
+                      {tool.status === "done" ? " ✓" : "…"}
+                    </span>
+                  ))}
+                  {live.every((tool) => tool.status === "done") && (
+                    <span className="caption-style text-subtle flex items-center gap-2">
+                      <span aria-hidden className="bg-status size-1.5 animate-pulse rounded-full" />
+                      Thinking…
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+          {error && (
+            <p role="alert" className="caption-style text-danger pt-3">
+              {error}
+            </p>
+          )}
+        </div>
+
+        <form onSubmit={submit} className="border-line-strong shrink-0 border-t p-2.5">
+          <div className="bg-secondary focus-within:border-ring border-line-strong flex flex-col gap-2 rounded-xl border px-3 pt-2.5 pb-2 transition-[border-color] duration-150">
+            <label htmlFor="assistant-input" className="sr-only">
+              Message Orbit
+            </label>
+            <textarea
+              id="assistant-input"
+              ref={input}
+              rows={1}
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                  event.preventDefault();
+                  send(draft);
+                }
+              }}
+              placeholder={webSearch ? "Ask about Orbit or the web…" : "Ask about Orbit…"}
+              className="placeholder:text-subtle max-h-[200px] min-h-6 w-full resize-none bg-transparent text-[14px] leading-6 outline-none"
+            />
+            <div className="flex items-center gap-1.5">
+              <Select
+                value={model}
+                onValueChange={(next) => {
+                  setModel(next);
+                  setReasoning(settingsFor(next, reasoning).reasoning);
+                }}
+              >
+                <SelectTrigger aria-label="Model" className="h-7 w-auto gap-1.5 rounded-full border-transparent bg-transparent px-2.5 text-[12.5px] hover:bg-white/5">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent side="top" align="start">
+                  {ASSISTANT_MODELS.map((option) => (
+                    <SelectItem key={option.id} value={option.id}>
+                      {option.label}
+                      <span className="text-subtle"> · {option.maker}</span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={reasoning} onValueChange={(next) => setReasoning(next as ReasoningLevel)}>
+                <SelectTrigger aria-label="Reasoning" className="h-7 w-auto gap-1.5 rounded-full border-transparent bg-transparent px-2.5 text-[12.5px] hover:bg-white/5">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent side="top" align="start">
+                  {chosen.reasoning.map((level) => (
+                    <SelectItem key={level} value={level}>
+                      {REASONING_LABELS[level]} reasoning
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <button
+                type="button"
+                aria-pressed={webSearch}
+                onClick={() => setWebSearch((current) => !current)}
+                title={webSearch ? "Web search on" : "Web search off"}
+                className={cn(
+                  "focus-visible:ring-ring/60 ease-power3-out flex h-7 cursor-pointer items-center gap-1.5 rounded-full px-2.5 text-[12.5px] transition-colors duration-150 outline-none focus-visible:ring-2",
+                  webSearch ? "bg-status/15 text-status" : "text-subtle hover:text-foreground hover:bg-white/5",
+                )}
+              >
+                <GlobeIcon aria-hidden className="size-3.5" />
+                <span className="max-sm:sr-only">Web</span>
+              </button>
+              <span className="flex-1" />
+              {busy ? (
+                <Button variant="secondary" size="icon" type="button" aria-label="Stop" onClick={() => abort.current?.abort()}>
+                  <StopIcon aria-hidden className="size-3.5" />
+                </Button>
+              ) : (
+                <Button
+                  variant="primary"
+                  size="icon"
+                  type="submit"
+                  aria-label="Send"
+                  title={`Send (Enter). New line: ${mac ? "⇧" : "Shift"}+Enter`}
+                  disabled={!draft.trim()}
+                >
+                  <ArrowUpIcon aria-hidden className="size-3.5" />
+                </Button>
+              )}
+            </div>
+          </div>
+        </form>
+      </section>
+    </div>
+  );
+}

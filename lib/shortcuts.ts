@@ -63,6 +63,7 @@ const SETTINGS_SECTIONS: [string, string, string][] = [
 
 export const SHORTCUTS: ShortcutDef[] = [
   { id: "palette", label: "Command palette", group: "General", combos: [{ key: "/", mod: true }, { key: "k", mod: true }], whileTyping: true, inOverlay: true },
+  { id: "assistant", label: "Ask Orbit", group: "General", combos: [{ key: "o" }], palette: true, keywords: "ai assistant chat ask question" },
   { id: "search-list", label: "Search this list", group: "General", combos: [{ key: "/" }], target: "list-search" },
   { id: "help", label: "Keyboard shortcuts", group: "General", combos: [{ key: "?", shift: true }], palette: true, keywords: "help keys" },
   { id: "settings", label: "Settings", group: "General", combos: [{ key: ",", mod: true }], href: "/settings", whileTyping: true, palette: true },
