@@ -97,7 +97,7 @@ export async function complete(input: {
 }): Promise<Completion> {
   const apiKey = process.env.LLM_API_KEY?.trim();
   if (!apiKey) throw new AssistantError("Set LLM_API_KEY in Vercel to use the assistant.");
-  const tools = [...(input.tools ?? toolDefinitions()), ...(input.webSearch ? [{ type: "web_search" }] : [])];
+  const tools = input.tools ?? toolDefinitions();
   let response: Response;
   try {
     response = await (input.fetchImpl ?? fetch)(`${baseUrl()}/chat/completions`, {
@@ -110,6 +110,7 @@ export async function complete(input: {
         tool_choice: "auto",
         reasoning_effort: input.reasoning,
         max_tokens: MAX_TOKENS,
+        ...(input.webSearch ? { web_search_options: { search_context_size: "medium" } } : {}),
       }),
       signal: AbortSignal.timeout(input.timeoutMs),
     });
