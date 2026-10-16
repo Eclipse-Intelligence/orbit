@@ -107,7 +107,7 @@ export default function TaskReminders() {
   }
 
   return (
-    <div className="pointer-events-none fixed bottom-[calc(env(safe-area-inset-bottom)+1rem)] left-1/2 z-50 flex w-[min(24em,calc(100vw-2rem))] -translate-x-1/2 flex-col gap-2">
+    <div className="pointer-events-none fixed bottom-[calc(env(safe-area-inset-bottom)+4.5rem)] left-1/2 z-50 flex w-[min(24em,calc(100vw-2rem))] -translate-x-1/2 flex-col gap-2">
       {alerts.map((alert) => {
         const about = alert.reminder.contactName ?? alert.reminder.companyName;
         return (

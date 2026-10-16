@@ -27,7 +27,7 @@ type Results = {
 };
 
 const PAGE_GROUPS = new Set<ShortcutGroup>(["Lists", "Selection", "Tasks", "Opportunities", "Records", "Calendar", "Inbox"]);
-const GENERAL_IDS = new Set(["help", "settings", "notifications", "account"]);
+const GENERAL_IDS = new Set(["assistant", "help", "settings", "notifications", "account"]);
 
 function Keys({ def, mac }: { def: ShortcutDef; mac: boolean }) {
   const keys = shortcutKeys(def, mac);

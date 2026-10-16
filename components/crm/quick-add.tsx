@@ -103,7 +103,7 @@ function bottomLift() {
   return Math.round(lift);
 }
 
-function useScreenState() {
+export function useScreenState() {
   const [covered, setCovered] = useState(false);
   const [lift, setLift] = useState(0);
 

@@ -1,0 +1,54 @@
+import { complete, type ChatMessage } from "@/lib/assistant/gateway";
+import { ASSISTANT_MODELS } from "@/lib/assistant/models";
+import { cronAuthorization } from "@/lib/crm/scheduler";
+
+export const dynamic = "force-dynamic";
+export const maxDuration = 300;
+
+const PROBE_TOOL = {
+  type: "function",
+  function: {
+    name: "get_open_task_count",
+    description: "Returns how many open tasks the user has.",
+    parameters: { type: "object", properties: {} },
+  },
+};
+
+async function probe(model: string, webSearch: boolean) {
+  const started = Date.now();
+  const messages: ChatMessage[] = [
+    { role: "system", content: "Use tools to answer. Reply in one short sentence." },
+    { role: "user", content: "How many open tasks do I have? Use the tool." },
+  ];
+  try {
+    const first = await complete({ model, reasoning: "low", messages, webSearch, timeoutMs: 90_000, tools: [PROBE_TOOL] });
+    const call = first.toolCalls[0];
+    if (!call) return { model, webSearch, ok: false, toolCalled: false, reply: first.content.slice(0, 200), ms: Date.now() - started };
+    const second = await complete({
+      model,
+      reasoning: "low",
+      webSearch,
+      timeoutMs: 90_000,
+      tools: [PROBE_TOOL],
+      messages: [
+        ...messages,
+        { role: "assistant", content: first.content || null, tool_calls: [call] },
+        { role: "tool", tool_call_id: call.id, content: JSON.stringify({ openTasks: 7 }) },
+      ],
+    });
+    return { model, webSearch, ok: /7|seven/i.test(second.content), toolCalled: true, reply: second.content.slice(0, 200), ms: Date.now() - started };
+  } catch (error) {
+    return { model, webSearch, ok: false, error: error instanceof Error ? error.message : String(error), ms: Date.now() - started };
+  }
+}
+
+export async function GET(request: Request) {
+  const auth = cronAuthorization(request.headers.get("authorization"));
+  if (auth !== "ok") return Response.json({ error: "Not allowed." }, { status: auth === "unconfigured" ? 503 : 401 });
+  const url = new URL(request.url);
+  const only = url.searchParams.get("model");
+  const webSearch = url.searchParams.get("web") === "1";
+  const models = ASSISTANT_MODELS.filter((model) => !only || model.id === only).map((model) => model.id);
+  const results = await Promise.all(models.map((model) => probe(model, webSearch)));
+  return Response.json({ results });
+}

@@ -6,6 +6,7 @@ import Profile from "@/components/companies/profile/profile";
 import { AttentionProvider } from "@/components/crm/attention";
 import QuickAdd, { QuickAddProvider } from "@/components/crm/quick-add";
 import TaskReminders from "@/components/crm/task-reminders";
+import AssistantDock from "@/components/assistant/assistant-dock";
 import ShortcutsHelp from "@/components/shortcuts/shortcuts-help";
 import type { Viewer } from "@/components/crm/viewer";
 import type { Task } from "@/lib/crm/types";
@@ -31,6 +32,7 @@ export default function CrmChrome({
           <QuickAdd viewerId={viewer.id} />
           <TaskReminders />
           <ShortcutsHelp />
+          <AssistantDock />
         </div>
       </QuickAddProvider>
     </AttentionProvider>
