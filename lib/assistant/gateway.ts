@@ -1,13 +1,22 @@
+import { OAuthError } from "@/lib/ai-accounts/oauth";
+import { aiAccess, noteAiError } from "@/lib/ai-accounts/store";
+import { assistantModel } from "@/lib/assistant/models";
+import { completeChatGpt } from "@/lib/assistant/providers/chatgpt";
+import { completeClaude } from "@/lib/assistant/providers/claude";
+import { ProviderAuthError, ProviderError, type FunctionTool } from "@/lib/assistant/providers/shared";
 import { toolDefinitions } from "@/lib/assistant/tools";
+import type { UserActor } from "@/lib/crm/types";
 
 const DEFAULT_BASE_URL = "https://api.llmapi.ai/v1";
 const MAX_TOKENS = 16_000;
 
 export type ToolCall = { id: string; type: "function"; function: { name: string; arguments: string } };
 
+export type ProviderState = { model: string; content: unknown[] };
+
 export type ChatMessage =
   | { role: "system" | "user"; content: string }
-  | { role: "assistant"; content: string | null; tool_calls?: ToolCall[] }
+  | { role: "assistant"; content: string | null; tool_calls?: ToolCall[]; state?: ProviderState | null }
   | { role: "tool"; tool_call_id: string; content: string };
 
 export type Source = { url: string; title: string | null };
@@ -18,6 +27,7 @@ export type Completion = {
   sources: Source[];
   model: string;
   usage: Record<string, unknown> | null;
+  state?: ProviderState | null;
 };
 
 export class AssistantError extends Error {
@@ -114,7 +124,7 @@ async function detail(response: Response) {
   }
 }
 
-export async function complete(input: {
+type CompleteInput = {
   model: string;
   reasoning: string;
   messages: ChatMessage[];
@@ -122,7 +132,57 @@ export async function complete(input: {
   timeoutMs: number;
   tools?: unknown[];
   fetchImpl?: typeof fetch;
-}): Promise<Completion> {
+  actor?: UserActor;
+};
+
+function plain(messages: ChatMessage[]) {
+  return messages.map((message) =>
+    message.role === "assistant"
+      ? { role: message.role, content: message.content, ...(message.tool_calls ? { tool_calls: message.tool_calls } : {}) }
+      : message,
+  );
+}
+
+export async function complete(input: CompleteInput): Promise<Completion> {
+  const chosen = assistantModel(input.model);
+  if (!chosen || chosen.source === "orbit") return completeGateway({ ...input, model: chosen?.apiModel ?? input.model });
+  if (!input.actor) throw new AssistantError("Sign in again to use your connected accounts.");
+  const actor = input.actor;
+  const source = chosen.source;
+  const run = async (force: boolean) => {
+    const access = await aiAccess(actor, source, { force });
+    const provider = {
+      modelId: chosen.id,
+      apiModel: chosen.apiModel,
+      reasoning: input.reasoning,
+      messages: input.messages,
+      webSearch: input.webSearch,
+      timeoutMs: input.timeoutMs,
+      tools: (input.tools ?? toolDefinitions()) as FunctionTool[],
+      fetchImpl: input.fetchImpl,
+    };
+    return source === "claude"
+      ? completeClaude({ ...provider, token: access.token })
+      : completeChatGpt({ ...provider, token: access.token, accountId: access.accountId });
+  };
+  try {
+    try {
+      return await run(false);
+    } catch (error) {
+      if (!(error instanceof ProviderAuthError)) throw error;
+      return await run(true);
+    }
+  } catch (error) {
+    if (error instanceof ProviderAuthError) {
+      await noteAiError(actor, source, error.message);
+      throw new AssistantError(error.message);
+    }
+    if (error instanceof ProviderError || error instanceof OAuthError) throw new AssistantError(error.message);
+    throw error;
+  }
+}
+
+async function completeGateway(input: CompleteInput): Promise<Completion> {
   const apiKey = process.env.LLM_API_KEY?.trim();
   if (!apiKey) throw new AssistantError("Set LLM_API_KEY in Vercel to use the assistant.");
   const raw = input.tools ?? toolDefinitions();
@@ -134,7 +194,7 @@ export async function complete(input: {
       headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
       body: JSON.stringify({
         model: input.model,
-        messages: input.messages,
+        messages: plain(input.messages),
         tools,
         tool_choice: "auto",
         reasoning_effort: input.reasoning,

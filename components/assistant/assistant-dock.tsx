@@ -5,19 +5,22 @@ import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Kbd } from "@/components/_ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popover";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/_ui/select";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/_ui/select";
 import Markdown from "@/components/assistant/markdown";
 import { useScreenState } from "@/components/crm/quick-add";
 import { useShortcut, useShortcuts } from "@/components/shortcuts/shortcuts-provider";
-import { deleteConversationAction, getConversationAction, listConversationsAction } from "@/app/(crm)/assistant";
+import { connectedSourcesAction, deleteConversationAction, getConversationAction, listConversationsAction } from "@/app/(crm)/assistant";
 import type { ActionDecision, AssistantAction, AssistantEvent, ConversationSummary, DisplayMessage } from "@/lib/assistant/chat";
 import {
   ASSISTANT_MODELS,
   DEFAULT_MODEL,
+  MODEL_SOURCES,
   DEFAULT_REASONING,
   REASONING_LABELS,
   assistantModel,
+  availableModels,
   settingsFor,
+  type ModelSource,
   type ReasoningLevel,
 } from "@/lib/assistant/models";
 import { relativeWhen } from "@/lib/companies";
@@ -340,6 +343,20 @@ export default function AssistantDock() {
   const changed = useRef(false);
   const conversationId = useRef<string | null>(null);
   const pinned = useRef(true);
+  const [connected, setConnected] = useState<ModelSource[] | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    void connectedSourcesAction()
+      .then((sources) => {
+        if (live) setConnected(sources);
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [open]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -507,7 +524,7 @@ export default function AssistantDock() {
       ...current,
       { id: `local-${Date.now()}`, role: "user", content: message, tools: [], actions: [], sources: [], createdAt: new Date().toISOString() },
     ]);
-    void run({ conversationId: conversation?.id ?? null, message, model, reasoning, webSearch });
+    void run({ conversationId: conversation?.id ?? null, message, model: active.model, reasoning: active.reasoning, webSearch });
   }
 
   function decide(decisions: ActionDecision[]) {
@@ -562,7 +579,12 @@ export default function AssistantDock() {
     if (conversation?.id === id) newChat();
   }
 
-  const chosen = assistantModel(model) ?? ASSISTANT_MODELS[0];
+  const active = connected ? settingsFor(model, reasoning, connected) : { model, reasoning };
+  const chosen = assistantModel(active.model) ?? ASSISTANT_MODELS[0];
+  const offered = availableModels(connected ?? (chosen.source === "orbit" ? [] : [chosen.source]));
+  const groups = MODEL_SOURCES.map((source) => ({ ...source, models: offered.filter((option) => option.source === source.id) })).filter(
+    (group) => group.models.length > 0,
+  );
   const position = {
     "--assistant-lift": `${lift}px`,
   } as CSSProperties;
@@ -717,27 +739,42 @@ export default function AssistantDock() {
             />
             <div className="flex items-center gap-1.5">
               <Select
-                value={model}
+                value={active.model}
                 onValueChange={(next) => {
                   setModel(next);
                   setReasoning(settingsFor(next, reasoning).reasoning);
                 }}
               >
                 <SelectTrigger aria-label="Model" className="-ml-2.5 h-7 w-auto gap-1.5 rounded-full border-transparent bg-transparent px-2.5 text-[12.5px] whitespace-nowrap hover:bg-white/5">
-                  <SelectValue>{chosen.label}</SelectValue>
+                  <SelectValue>
+                    {chosen.label}
+                    {chosen.source !== "orbit" && <span className="text-subtle"> · {chosen.source === "claude" ? "Claude" : "ChatGPT"}</span>}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent side="top" align="start">
-                  {ASSISTANT_MODELS.map((option) => (
-                    <SelectItem key={option.id} value={option.id}>
-                      {option.label}
-                      <span className="text-subtle"> · {option.maker}</span>
-                    </SelectItem>
-                  ))}
+                  {groups.length === 1
+                    ? groups[0].models.map((option) => (
+                        <SelectItem key={option.id} value={option.id}>
+                          {option.label}
+                          <span className="text-subtle"> · {option.maker}</span>
+                        </SelectItem>
+                      ))
+                    : groups.map((group) => (
+                        <SelectGroup key={group.id}>
+                          <SelectLabel>{group.label}</SelectLabel>
+                          {group.models.map((option) => (
+                            <SelectItem key={option.id} value={option.id}>
+                              {option.label}
+                              {group.id === "orbit" && <span className="text-subtle"> · {option.maker}</span>}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      ))}
                 </SelectContent>
               </Select>
-              <Select value={reasoning} onValueChange={(next) => setReasoning(next as ReasoningLevel)}>
+              <Select value={active.reasoning} onValueChange={(next) => setReasoning(next as ReasoningLevel)}>
                 <SelectTrigger aria-label="Reasoning" className="h-7 w-auto gap-1.5 rounded-full border-transparent bg-transparent px-2.5 text-[12.5px] whitespace-nowrap hover:bg-white/5">
-                  <SelectValue>{REASONING_LABELS[reasoning]}</SelectValue>
+                  <SelectValue>{REASONING_LABELS[active.reasoning]}</SelectValue>
                 </SelectTrigger>
                 <SelectContent side="top" align="start">
                   {chosen.reasoning.map((level) => (
