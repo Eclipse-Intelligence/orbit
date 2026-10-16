@@ -1,66 +1,56 @@
-export const ECLIPSE_CONTEXT = `Eclipse is a B2B SaaS platform for B2B companies and content marketing agencies that turns company context, market data, competitor intelligence, keyword data, AI visibility data, and connected knowledge sources into content workflows. It is not just an article generator. It is closer to a content operating system: plan what to publish, generate and review content, create social distribution, track SEO and AI-search visibility, monitor competitors and Reddit opportunities, and feed all of that back into a client-specific AI workspace called Cortex/CASi.
+export const ECLIPSE_CONTEXT = `Eclipse is a content and intelligence platform for B2B brands, in-house marketing teams, SaaS companies and agencies. It takes a company's brand context, products, audiences, keywords, competitors, market signals and AI visibility data, and uses them to plan, write, review, publish and distribute content that is cited and grounded in evidence. Each client gets its own workspace, with Cortex and CASi as the research and writing layer.
 
-The core tenant object is a client. A client represents the company being managed: its website, brand voice, target regions, keywords, competitors, content profiles, publishing connections, Reddit presence, GEO tracking, billing limits, and knowledge base. Users can be admin, staff, agency, or client. Admin/staff/agency users can operate across clients; client users operate inside their own client workspace.
+The core tenant object is a client. A client is the company being managed: its website, brand voice, regions, keywords, competitors, content profiles, publishing connections, Reddit presence, GEO tracking, monitors, billing limits and knowledge base. The code has admin, staff, agency and client roles. Agency clients do not log in; the agency team works in the workspace, and agency staff are given access to specific client workspaces. Direct customers (brands and in-house teams that are not agency clients) get a client login to their own workspace.
 
 The main products are:
 
-1. Dashboard
-   A summary layer showing client activity: article counts, published/new/in-progress content, social posts, Reddit opportunities, GEO profiles, focus keywords, recent content, recent social posts, Cortex canvases, and items needing attention.
-2. Content
-   The article workspace. Eclipse stores generated articles with title, body, status, metadata, keywords, content profile, meta title, meta description, excerpt, summary, brand opinion, author bio, references, images, alt tags, EEAT analysis, keyword optimization, JSON-LD, revisions, comments, CMS publishing IDs, and read/unread state. Articles can be edited, reviewed, exported, published to connected CMSs, and used as sources for social posts.
-3. Planner
-   A planning table for future articles. Planner rows can contain topic, title, structure, discussion points, additional directions, scheduled date, owner, primary keyword, article type, content profile, status, Cortex source references, and CASi enrichment state. Planner supports generating or enriching article briefs and then turning approved/scheduled rows into generated content.
-4. Content Profiles
-   Content profiles define the repeatable strategic inputs for content generation: product/service, ICP, audience, industry, country, article type, target keyword set, angle, reader emotion, distribution goal, headline preferences, and other editorial constraints. They are the bridge between raw client brand setup and consistent generated articles.
-5. Product Hierarchy
-   Eclipse models product/service lines, ICPs, target industries, countries, article types, and profile sets. This lets a client or operator define structured go-to-market context instead of stuffing everything into one prompt.
-6. Social Media
-   Eclipse generates social posts from articles, scratch pads, canvases, news, or other source material. Social profiles define platform, post type, tone/settings such as emoji, hashtags, and images. Posts can be drafts, in progress, scheduled, or published. Supported/directly modeled platforms include LinkedIn, X/Twitter, Facebook, Bluesky, Instagram, TikTok, YouTube, Threads, and Buffer-style publishing flows.
-7. Social Profiles
-   A configuration area for reusable social generation profiles. These control how a post should be written for a given platform and post type.
-8. Keywords
-   SEO keyword tracking and management. Keywords belong to clients and include region, focus status, priority, usage count, Keyword.com identifiers, CPC, best/start/current rank, rank movement, search volume, difficulty, SERP features, search intent, landing page, sync status, author assignment, product/article-type/country associations, and soft deletion when historical relationships must be preserved.
-9. Keyword Scout / Keyword Analysis
-   Eclipse includes keyword discovery and analysis endpoints, plus assistant-thread style keyword analysis. Keyword data is intended to influence content planning, article generation, focus keyword quotas, and rank movement reporting.
-10. Analytics
-    Google Analytics and Google Search Console integrations provide performance data around content, pages, and search. The app includes Google property selection and analytics overview routes for client-scoped reporting.
-11. GEO Dashboard
-    GEO means AI visibility / generative engine optimization. It tracks whether and how a brand appears in AI platform answers. GEO profiles contain groups of queries. Queries can run across platforms such as ChatGPT, Gemini, Perplexity, Claude, SearchGPT, DeepSeek, Mistral, Llama, Kimi, Grok, and others. Eclipse stores raw responses, extracted brand mentions, sentiment, mention type, mention position, competitor co-occurrence, weekly metrics, trends, platform breakdowns, and strategic insights.
-12. GEO Profiles, Tracking, And Logs
-    GEO Profiles define query sets and tracking settings. Tracking runs queries and records visibility. Logs/history show raw run outputs and processing status. The dashboard then summarizes visibility score, strongest/weakest platforms, sentiment, competitor positioning, and trend over time.
-13. Competitor Intelligence
-    Eclipse tracks competitor companies for each client. Competitors may start as pending placeholders and then become active after enrichment. Competitor records include domain, name, logo, positioning, ideal customer, use cases, features, differentiators, gaps, pricing, longevity/funding, reviews, services, integrations, security/compliance, and missing data. Some competitor slots can be locked/unlocked through billing logic.
-14. Competitor Content Intelligence
-    Eclipse stores competitor blog posts, scraped content, article-level analysis, compiled blog intelligence, topics, keywords, strengths, weaknesses, gaps, posting frequency, and client opportunities. It also stores competitor signals such as funding, product launches, pricing changes, leadership, hiring, and press.
-15. Competitor Social / Review / Job Signals
-    Competitor intelligence also includes social mentions, review-site intelligence, and job postings. These are used to infer positioning, pain points, hiring direction, market movement, and content opportunities.
-16. Reddit
-    Eclipse monitors subreddits for opportunities, brand mentions, competitor mentions, SERP-linked Reddit threads, and intent signals. It stores monitored subreddits, scored opportunities, suggested angles, Reddit brand mentions, posts/comments created from Eclipse, comment trees, rate-limit style activity, and karma snapshots. The UI includes Growth, Analytics, My Activity, and an engagement workflow for drafting or sending useful replies.
-17. Cortex
-    Cortex is a visual AI research and ideation workspace. It uses canvases made of nodes and edges. Node types include text notes, sticky notes, URL cards, YouTube cards, latest news, social media cards, document cards, voice memos, library snippets, chat nodes, deep research nodes, podcast cards, Notion pages, Google Docs, Confluence pages, Granola notes, Monday items/docs, groups, generated content cards, image nodes, Reddit threads, and competitor cards. Cortex can ingest sources, process them, save knowledge snippets, run chat/deep research, and generate content from selected context.
-18. Cortex Library
-    The Library stores reusable knowledge snippets extracted from sources and canvas nodes. Snippets have source metadata, processed structured content, tags, checksums, usage counts, custom notes, and saved views. This is the durable knowledge layer that Cortex and CASi can reuse.
-19. CASi / Train CASi
-    CASi is the client-specific AI assistant/context layer. Train CASi lets users upload and organize documents, connect knowledge sources, and build the material CASi should use when assisting with content, planning, and research. There is also a CASi skills system with enabled skills, slash commands, prompt templates, provider handlers, versioning, and requirements.
-20. Integrations
-    Eclipse connects to CMSs, analytics tools, social platforms, and knowledge sources. The codebase includes integrations for Google Analytics, Google Search Console, Contentful, HubSpot, Webflow, WordPress, Wix, Google Docs, Slack, Reddit, Buffer, direct social platforms, Notion, Google Drive, Confluence, Granola, Monday.com, and Nango-managed OAuth flows. Publishing integrations store external IDs/status back on Eclipse content or social records.
-21. CMS Publishing
-    Articles can carry publishing state for Contentful, Webflow, WordPress, HubSpot, and Google Docs. Eclipse tracks external entry/item/post/file IDs, published timestamps, environments, slugs, statuses, and CMS removal sync.
-22. Billing, Credits, And Quotas
-    Eclipse has subscription/billing state on users and clients, plan fields, AI balance tracking, monthly allocation, credit transactions, competitor-slot billing, focus keyword quotas, subreddit quotas, trials, invoicing, and upgrade flows. AI-heavy actions can be gated by balance or plan limits.
-23. Agency And Client Management
-    Admin/staff/agency users can create and manage clients, assign agency ownership, onboard clients, edit brand/company details, manage users, view client settings, and operate across client contexts. Client users have a narrower workspace focused on their own content, insights, settings, and client details.
-24. Prospect
-    There is an admin-only prospecting area with campaigns, lists, prospects, and campaign detail pages. This appears separate from the core client-facing content/GEO/competitor workflow and is likely used for GTM or outbound operations.
-25. Workflow Pipelines And Scheduled Tasks
-    Admin-only/internal surfaces exist for workflows and scheduled tasks. Backend workers handle article brief runs, planner scheduled generation, competitor jobs, deep research, documentation sync, Reddit jobs, invoices, prospect work, support triage, CMS status sync, and idea-hub/Cortex processing.
-26. Support And Documentation
-    Eclipse includes support/admin routes and a documentation sync/retrieval system. The documentation services parse, embed, sync, retrieve, and transform citations, likely to support help/docs search or assistant context.
-27. Demo Mode
-    Demo access is a public route at /api/demo/:industry. It logs visitors into a persistent demo client/user, marks the session as demo, expires the session after 30 minutes, and redirects into /content. A demo guard blocks most write requests while allowing safe reads and a few status/logout endpoints. Current demo coverage exists structurally but needs fuller multi-industry seeded data, now tracked in CNT-530.
+1. **Dashboard**
+   Summary of client activity: articles by status, social posts, Reddit opportunities, GEO profiles, focus keywords, recent content, Cortex canvases and items needing attention.
+2. **Content**
+   The article workspace. Articles carry title, body, status, keywords, content profile, meta fields, excerpt, summary, brand opinion, author bio, references, images and alt tags, JSON-LD, revisions, comments and CMS publishing IDs. The editor includes Napkin visuals (generated from selected text, using the client's Napkin brand style) and CASi section rewrite. Standard articles get an E-E-A-T analysis, and Justifications show the full source trail and reasoning behind an article before approval. A Medium article type covers first-person thought leadership.
+3. **Planner**
+   Planning table for future articles: topic, title, structure, discussion points, directions, scheduled date, owner, primary keyword, article type, content profile, status, Cortex sources and CASi enrichment. Supports brief generation, approvals and scheduled generation.
+4. **Content Profiles**
+   Repeatable strategic inputs for generation: product or service, ICP, audience, industry, country, article type, keywords, angle and editorial constraints. Profiles cannot be edited after creation. Only their status and schedule can change; anything else means creating a new profile.
+5. **Product Hierarchy**
+   Products and services, ICPs, target industries, countries, article types and profile sets, so go-to-market context is structured rather than stuffed into one prompt.
+6. **Social Media and Social Profiles**
+   Social posts generated from articles, canvases, news and other sources, shaped by reusable social profiles (platform, post type, tone, emoji, hashtags, images). Posts can be drafted, scheduled or published through Buffer or direct connections to LinkedIn, X, Facebook, Instagram, Pinterest, Threads, TikTok and YouTube. Napkin visuals also work on social posts.
+7. **X.com**
+   Built so far: OAuth connect, the X page, voice settings, an allowance meter, a £50 allowance per connected account that falls back to AI balance when used up, and monitors. Not built yet: the Opportunities tab, the composer, Send on X, the browser extension, Mentions, History and alerts.
+8. **Keywords and Keyword Scout**
+   Keyword tracking per client with region, focus status, priority, rank history and movement, volume, difficulty, CPC, SERP features, intent, landing page and associations to products, article types and countries. Discovery and analysis feed planning, generation and focus keyword quotas.
+9. **Analytics**
+   Google Analytics and Google Search Console, with property selection and client-scoped reporting on pages, queries, impressions, clicks and traffic.
+10. **GEO (AI visibility)**
+    GEO profiles hold query sets and competitors. Live today: weekly prompt runs across ten AI assistants (including ChatGPT, Gemini, Perplexity and Claude), brand mentions, sentiment, mention position, competitor co-occurrence, trends and platform breakdowns, run logs, history export and a weekly email. Not live yet: page-level cited URLs (CNT-1529), gap-to-brief and impact tracking (CNT-1531), and Google AI Overviews (CNT-1526).
+11. **Competitor Intelligence**
+    Competitor records per client, enriched from pending placeholders: positioning, ideal customer, features, differentiators, gaps, pricing, funding, reviews, integrations and compliance. Also competitor content analysis, signals (funding, launches, pricing changes, hiring, press), review monitoring and job postings. Some competitor slots are gated by billing.
+12. **Monitors**
+    Monitors watch web, news, global media and trusted sources for chosen topics on a set frequency. Results can be filtered, tagged, prioritised and sent into Cortex as source material. Alerts and monthly caps draw on AI balance.
+13. **Reddit**
+    Five areas: Engagement (communities, opportunity queue, drafting replies and original posts), Inbox, Activity, Growth (karma, posting health, community fit) and Analytics (including website referral traffic). Reddit alerts can go to Slack.
+14. **Cortex, Library and Scratch Pad**
+    Cortex is a visual research canvas of nodes and edges: notes, URL and YouTube cards, news, documents, voice memos, library snippets, chat, deep research, podcasts, images, Reddit threads, competitor cards and imported pages from Notion, Google Drive, Confluence, Monday and Granola. It supports chat, deep research with traceable sources, image generation, and creating articles or social posts from selected context. The Library stores reusable knowledge snippets. The Scratch Pad captures rough notes with tags and a graph view for reuse in Cortex.
+15. **CASi and Train CASi**
+    CASi is the client-specific writing and context engine that learns from corrections. Train CASi holds uploaded documents and training folders. CASi skills add slash commands and prompt templates.
+16. **Integrations**
+    Publishing: WordPress, Webflow, Wix, Contentful, Ghost, HubSpot and Google Docs, with external IDs and status synced back. Data: Google Analytics and Search Console. Knowledge: Notion, Confluence, Google Drive, Monday and Granola. Social: Buffer and direct platform connections. Also Slack notifications and Napkin AI for visuals.
+17. **Eclipse MCP**
+    A live MCP connector (around 312 tools) for Claude Code, Cursor, Codex and Claude Desktop. It covers content, planner, canvas, image and Napkin flows, content profiles (create, status, schedule, delete), GEO, social, Reddit, monitors, competitors, billing reads and get_agent_guide. Paid actions quote a cost first and need confirmation.
+18. **Billing, Credits and AI Balance**
+    The standard plan includes 20 cited articles and £50 of AI credits per month. AI balance covers generation, GEO, research, images, CASi, Reddit and social, and can be topped up with packs. A durable AI usage and credit ledger is being built (CNT-856 to CNT-860), alongside honest fallbacks where pricing for an action is unknown.
+19. **Agency Accounts**
+    Agencies run the full feature set across isolated client workspaces from one login, with per-member logins and access assigned per client. Recent fixes revoke personal access tokens when a password changes and stop schedules owned by removed staff.
+20. **Affiliate Programme**
+    20% of the base subscription for the first 6 months, up to £954 per referred client, tracked by a 90-day first-touch eclipse_ref cookie.
+21. **Workflows, Scheduled Tasks and Docs Sync**
+    Internal admin surfaces for workflows and scheduled tasks. Workers handle brief runs, scheduled generation, competitor jobs, deep research, monitors, Reddit jobs, invoices, support triage, CMS status sync and documentation sync for help search.
+22. **AI Avatar Product Demo (in progress)**
+    An interactive product demo led by an AI assistant called Jen, driven by a product-map manifest of screens, hotspots and questions with an evaluation step.
 
-A typical Eclipse workflow looks like this: set up a client profile and brand context, define products/ICPs/content profiles, connect sources and publishing integrations, add keywords and competitors, monitor GEO and Reddit, use Cortex/CASi to research and assemble context, plan articles in Planner, generate and review content, publish to CMS, generate social distribution, then track performance and market changes back into future planning.
+A typical workflow: set up the client and brand context, define products, ICPs and content profiles, connect knowledge sources and publishing, add keywords, competitors and monitors, track GEO and Reddit, research in Cortex, plan in Planner, generate and review articles with E-E-A-T and justifications, publish to the CMS, distribute on social, then feed performance and market changes back into planning.
 
 ## Killer paragraph
 
-Eclipse is a B2B content operating system for teams and agencies that need content to shape buyer decisions, not just fill a calendar. It connects client context, research, buyer language, keywords, competitor intelligence, AI visibility, approvals, publishing and performance data into one workflow, so every asset is planned, created, reviewed and improved from evidence. The result is content that helps buyers understand the problem, trust the claims and choose with confidence before sales gets involved.`;
+Eclipse gives B2B brands, in-house teams and agencies one place to turn what they know about their market into content buyers can trust. It brings together brand context, research, competitor and market signals, keywords and AI visibility, so each piece is planned from evidence, written with citations, checked before approval and published where buyers look. Teams can see where they show up in search and AI answers, and improve from there.`;
