@@ -172,7 +172,7 @@ export default function Markdown({ text }: { text: string }) {
             </p>
           );
         }
-        if (block.kind === "rule") return <hr key={key} className="border-line-strong" />;
+        if (block.kind === "rule") return <hr key={key} className="border-white/[0.06]" />;
         if (block.kind === "code") {
           return (
             <pre key={key} className="bg-muted overflow-x-auto rounded-lg px-3 py-2 font-mono text-[12.5px] leading-5">
@@ -182,10 +182,10 @@ export default function Markdown({ text }: { text: string }) {
         }
         if (block.kind === "table") {
           return (
-            <div key={key} className="border-line-strong overflow-x-auto rounded-lg border">
+            <div key={key} className="overflow-x-auto rounded-xl bg-white/[0.03]">
               <table className="w-full border-collapse text-left text-[13px] leading-5">
                 <thead>
-                  <tr className="bg-white/[0.03]">
+                  <tr>
                     {block.head.map((cell, cellIndex) => (
                       <th key={cellIndex} className="text-subtle px-3 py-2 font-medium whitespace-nowrap">
                         {inline(cell, `${key}-h${cellIndex}`)}
@@ -195,7 +195,7 @@ export default function Markdown({ text }: { text: string }) {
                 </thead>
                 <tbody>
                   {block.rows.map((row, rowIndex) => (
-                    <tr key={rowIndex} className="border-line-strong border-t">
+                    <tr key={rowIndex} className="border-t border-white/[0.05]">
                       {row.map((cell, cellIndex) => (
                         <td key={cellIndex} className="px-3 py-2 align-top">
                           {inline(cell, `${key}-${rowIndex}-${cellIndex}`)}

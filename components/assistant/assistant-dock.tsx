@@ -24,7 +24,6 @@ import { relativeWhen } from "@/lib/companies";
 import { cn } from "@/lib/utils";
 import ArrowUpIcon from "@/public/assets/images/assistant/arrow-up.svg";
 import GlobeIcon from "@/public/assets/images/assistant/globe.svg";
-import SparkleIcon from "@/public/assets/images/assistant/sparkle.svg";
 import StopIcon from "@/public/assets/images/assistant/stop.svg";
 import TrashIcon from "@/public/assets/images/assistant/trash.svg";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
@@ -33,13 +32,6 @@ import ClockIcon from "@/public/assets/images/companies/detail/clock.svg";
 
 const SETTINGS_KEY = "orbit-assistant-settings";
 const CONVERSATION_KEY = "orbit-assistant-conversation";
-
-const SUGGESTIONS = [
-  "What tasks have I got outstanding?",
-  "How does my pipeline look for the next 30 days?",
-  "Which relationships have gone quiet?",
-  "What's in my calendar this week?",
-];
 
 type LiveTool = { id: string; label: string; status: "running" | "done" };
 
@@ -98,7 +90,7 @@ function ActionCard({
     declined: "Cancelled",
   };
   return (
-    <div className="border-line-strong flex flex-col gap-2 rounded-xl border bg-white/[0.02] p-3">
+    <div className="flex flex-col gap-2 rounded-2xl bg-white/[0.04] p-3.5">
       <div className="flex items-start justify-between gap-3">
         <span className="text-foreground min-w-0 text-[13.5px] leading-5 font-medium">{action.title}</span>
         <span
@@ -149,7 +141,7 @@ function Message({
   if (message.role === "user") {
     return (
       <div className="flex justify-end">
-        <div className="bg-secondary text-foreground max-w-[85%] rounded-2xl rounded-br-md px-3.5 py-2 text-[14px] leading-6 whitespace-pre-wrap shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)]">
+        <div className="text-foreground max-w-[85%] rounded-2xl rounded-br-md bg-white/[0.07] px-3.5 py-2 text-[14px] leading-6 whitespace-pre-wrap">
           {message.content}
         </div>
       </div>
@@ -175,7 +167,7 @@ function Message({
               href={source.url}
               target="_blank"
               rel="noreferrer"
-              className="caption-style text-subtle hover:text-foreground border-line-strong max-w-[16rem] truncate rounded-full border px-2 py-0.5"
+              className="caption-style text-subtle hover:text-foreground max-w-[16rem] truncate rounded-full bg-white/[0.04] px-2 py-0.5"
             >
               {source.title || new URL(source.url).hostname}
             </a>
@@ -405,9 +397,8 @@ export default function AssistantDock() {
           type="button"
           onClick={expand}
           aria-keyshortcuts="o"
-          className="group border-line-strong bg-popover/95 text-subtle hover:text-foreground focus-visible:ring-ring/60 ease-power3-out shadow-overlay flex h-11 w-full cursor-text items-center gap-2.5 rounded-full border pr-2 pl-4 text-left text-[14px] backdrop-blur-md transition-[color,border-color] duration-150 outline-none hover:border-white/20 focus-visible:ring-2 md:w-[24rem]"
+          className="group text-subtle hover:text-foreground focus-visible:ring-ring/60 ease-power3-out flex h-11 w-full cursor-text items-center gap-2.5 rounded-full bg-[#1f1f1f]/90 pr-2 pl-5 text-left text-[14px] shadow-[0_12px_40px_rgba(0,0,0,0.5)] backdrop-blur-xl transition-[color,background-color] duration-150 outline-none hover:bg-[#232323]/95 focus-visible:ring-2 md:w-[24rem]"
         >
-          <SparkleIcon aria-hidden className="text-status size-4 shrink-0" />
           <span className="min-w-0 flex-1 truncate">{messages.length > 0 ? conversation?.title ?? "Continue your chat" : "Ask Orbit anything"}</span>
           <Kbd aria-hidden className="max-md:hidden">
             O
@@ -427,11 +418,10 @@ export default function AssistantDock() {
     >
       <section
         aria-label="Orbit assistant"
-        className="border-line-strong bg-popover shadow-overlay animate-in fade-in-0 slide-in-from-bottom-3 zoom-in-[0.98] ease-power3-out flex h-full max-h-full flex-col overflow-hidden rounded-2xl border duration-200 md:h-auto md:max-h-[min(44rem,calc(100dvh-6rem))]"
+        className="animate-in fade-in-0 slide-in-from-bottom-3 zoom-in-[0.98] ease-power3-out flex h-full max-h-full flex-col overflow-hidden rounded-3xl bg-[#1c1c1c]/95 shadow-[0_24px_80px_rgba(0,0,0,0.6)] backdrop-blur-xl duration-200 md:h-auto md:max-h-[min(44rem,calc(100dvh-6rem))]"
       >
-        <header className="border-line-strong flex h-11 shrink-0 items-center gap-2 border-b pr-1.5 pl-4">
-          <SparkleIcon aria-hidden className="text-status size-3.5 shrink-0" />
-          <span className="text-foreground min-w-0 flex-1 truncate text-[13.5px] font-medium">{conversation?.title ?? "New chat"}</span>
+        <header className="flex h-11 shrink-0 items-center gap-1 pt-1 pr-2 pl-5">
+          <span className="text-subtle min-w-0 flex-1 truncate text-[13px]">{conversation?.title ?? "New chat"}</span>
           <Popover open={historyOpen} onOpenChange={(next) => void openHistory(next)}>
             <PopoverTrigger asChild>
               <Button variant="ghost" size="icon-sm" aria-label="Past chats" title="Past chats">
@@ -481,26 +471,14 @@ export default function AssistantDock() {
           </Button>
         </header>
 
-        <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4 md:min-h-[12rem]">
-          {messages.length === 0 && !busy ? (
-            <div className="flex flex-col gap-3">
-              <p className="text-soft text-[14px] leading-6">
-                Ask about tasks, the pipeline, people, meetings or anything else in Orbit. I can also make changes for you once you confirm them.
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {SUGGESTIONS.map((suggestion) => (
-                  <button
-                    key={suggestion}
-                    type="button"
-                    onClick={() => send(suggestion)}
-                    className="border-line-strong text-soft hover:text-foreground hover:border-white/20 cursor-pointer rounded-full border px-3 py-1.5 text-left text-[13px] leading-5 transition-colors duration-150"
-                  >
-                    {suggestion}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : (
+        <div
+          ref={scroller}
+          className={cn(
+            "min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 [mask-image:linear-gradient(to_bottom,transparent,black_1rem,black_calc(100%-1.5rem),transparent)]",
+            messages.length > 0 || busy ? "py-3 md:min-h-[12rem]" : "md:flex-none",
+          )}
+        >
+          {messages.length > 0 || busy ? (
             <div className="flex flex-col gap-5">
               {messages.map((message) => (
                 <Message key={message.id} message={message} busy={busy} onDecide={decide} />
@@ -511,7 +489,7 @@ export default function AssistantDock() {
                     <span key={tool.id} className="caption-style text-subtle flex items-center gap-2">
                       <span
                         aria-hidden
-                        className={cn("size-1.5 rounded-full", tool.status === "running" ? "bg-status animate-pulse" : "bg-faint")}
+                        className={cn("size-1.5 rounded-full", tool.status === "running" ? "bg-soft animate-pulse" : "bg-faint")}
                       />
                       {tool.label}
                       {tool.status === "done" ? " ✓" : "…"}
@@ -519,14 +497,14 @@ export default function AssistantDock() {
                   ))}
                   {live.every((tool) => tool.status === "done") && (
                     <span className="caption-style text-subtle flex items-center gap-2">
-                      <span aria-hidden className="bg-status size-1.5 animate-pulse rounded-full" />
+                      <span aria-hidden className="bg-soft size-1.5 animate-pulse rounded-full" />
                       Thinking…
                     </span>
                   )}
                 </div>
               )}
             </div>
-          )}
+          ) : null}
           {error && (
             <p role="alert" className="caption-style text-danger pt-3">
               {error}
@@ -534,8 +512,8 @@ export default function AssistantDock() {
           )}
         </div>
 
-        <form onSubmit={submit} className="border-line-strong shrink-0 border-t p-2.5">
-          <div className="bg-secondary focus-within:border-ring border-line-strong flex flex-col gap-2 rounded-xl border px-3 pt-2.5 pb-2 transition-[border-color] duration-150">
+        <form onSubmit={submit} className="shrink-0 px-5 pt-1 pb-3">
+          <div className="flex flex-col gap-2">
             <label htmlFor="assistant-input" className="sr-only">
               Message Orbit
             </label>
@@ -562,7 +540,7 @@ export default function AssistantDock() {
                   setReasoning(settingsFor(next, reasoning).reasoning);
                 }}
               >
-                <SelectTrigger aria-label="Model" className="h-7 w-auto gap-1.5 rounded-full border-transparent bg-transparent px-2.5 text-[12.5px] hover:bg-white/5">
+                <SelectTrigger aria-label="Model" className="-ml-2.5 h-7 w-auto gap-1.5 rounded-full border-transparent bg-transparent px-2.5 text-[12.5px] hover:bg-white/5">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent side="top" align="start">
@@ -593,7 +571,7 @@ export default function AssistantDock() {
                 title={webSearch ? "Web search on" : "Web search off"}
                 className={cn(
                   "focus-visible:ring-ring/60 ease-power3-out flex h-7 cursor-pointer items-center gap-1.5 rounded-full px-2.5 text-[12.5px] transition-colors duration-150 outline-none focus-visible:ring-2",
-                  webSearch ? "bg-status/15 text-status" : "text-subtle hover:text-foreground hover:bg-white/5",
+                  webSearch ? "bg-white/[0.08] text-foreground" : "text-subtle hover:text-foreground hover:bg-white/5",
                 )}
               >
                 <GlobeIcon aria-hidden className="size-3.5" />
