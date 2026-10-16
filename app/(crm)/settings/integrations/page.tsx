@@ -1,7 +1,9 @@
 import { redirect } from "next/navigation";
+import AiAccountsSettings from "@/components/crm/ai-accounts-settings";
 import ClickUpSettings from "@/components/crm/clickup-settings";
 import IntegrationsSettings from "@/components/crm/integrations-settings";
 import { SettingsPage } from "@/components/crm/settings-ui";
+import { listAiAccounts } from "@/lib/ai-accounts/store";
 import { getUserActor } from "@/lib/auth/user";
 import { getCallSync } from "@/lib/crm/calls";
 import { getClickUpSettings } from "@/lib/crm/clickup";
@@ -14,10 +16,11 @@ export const dynamic = "force-dynamic";
 export default async function IntegrationSettingsPage() {
   const user = await getUserActor();
   if (!user) redirect("/login");
-  const [mailbox, granola, clickup] = await Promise.all([
+  const [mailbox, granola, clickup, aiAccounts] = await Promise.all([
     getMailbox(user),
     getGranolaStatus(user),
     getClickUpSettings(user),
+    listAiAccounts(user),
   ]);
   const calls = mailbox ? await getCallSync(user) : null;
   const canAdmin = user.role === "owner" || user.role === "admin";
@@ -33,6 +36,7 @@ export default async function IntegrationSettingsPage() {
         granola={granola}
       />
       <ClickUpSettings view={clickup} canAdmin={canAdmin} />
+      <AiAccountsSettings accounts={aiAccounts} />
     </SettingsPage>
   );
 }

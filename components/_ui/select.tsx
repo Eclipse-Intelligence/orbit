@@ -88,4 +88,18 @@ function SelectItem({
   );
 }
 
-export { Select, SelectValue, SelectTrigger, SelectContent, SelectItem };
+function SelectGroup(props: ComponentProps<typeof SelectPrimitive.Group>) {
+  return <SelectPrimitive.Group data-slot="select-group" {...props} />;
+}
+
+function SelectLabel({ className, ...props }: ComponentProps<typeof SelectPrimitive.Label>) {
+  return (
+    <SelectPrimitive.Label
+      data-slot="select-label"
+      className={cn("caption-style px-2 pt-2.5 pb-1.5 text-subtle select-none", className)}
+      {...props}
+    />
+  );
+}
+
+export { Select, SelectValue, SelectTrigger, SelectContent, SelectItem, SelectGroup, SelectLabel };

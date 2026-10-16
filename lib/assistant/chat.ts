@@ -1,4 +1,4 @@
-import { AssistantError, complete, type ChatMessage, type Source, type ToolCall } from "@/lib/assistant/gateway";
+import { AssistantError, complete, type ChatMessage, type ProviderState, type Source, type ToolCall } from "@/lib/assistant/gateway";
 import { settingsFor, type ReasoningLevel } from "@/lib/assistant/models";
 import { systemPrompt } from "@/lib/assistant/prompt";
 import { TOOL_BY_NAME, describeAction, recordNames, runTool, toolJson } from "@/lib/assistant/tools";
@@ -63,6 +63,7 @@ type MessageRow = {
   tool_name: string | null;
   actions: AssistantAction[] | null;
   sources: Source[] | null;
+  provider_state: ProviderState | null;
   created_at: Date | string;
 };
 
@@ -109,7 +110,7 @@ function parseArgs(raw: string) {
   }
 }
 
-const MESSAGE_COLUMNS = "id, role, content, tool_calls, tool_call_id, tool_name, actions, sources, created_at";
+const MESSAGE_COLUMNS = "id, role, content, tool_calls, tool_call_id, tool_name, actions, sources, provider_state, created_at";
 const CONVERSATION_COLUMNS = "id, title, model, reasoning, web_search, updated_at";
 
 async function readConversation(db: Db, actor: UserActor, id: string) {
@@ -143,13 +144,14 @@ async function insertMessage(
     sources?: Source[] | null;
     model?: string | null;
     usage?: Record<string, unknown> | null;
+    state?: ProviderState | null;
   },
 ) {
   return withActor(actor, async (db) => {
     const result = await db.query<MessageRow>(
       `insert into crm.assistant_messages
-         (conversation_id, workspace_id, user_id, role, content, tool_calls, tool_call_id, tool_name, sources, model, usage)
-       values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9::jsonb, $10, $11::jsonb)
+         (conversation_id, workspace_id, user_id, role, content, tool_calls, tool_call_id, tool_name, sources, model, usage, provider_state)
+       values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9::jsonb, $10, $11::jsonb, $12::jsonb)
        returning ${MESSAGE_COLUMNS}`,
       [
         conversationId,
@@ -163,6 +165,7 @@ async function insertMessage(
         message.sources && message.sources.length > 0 ? JSON.stringify(message.sources) : null,
         message.model ?? null,
         message.usage ? JSON.stringify(message.usage) : null,
+        message.state ? JSON.stringify(message.state) : null,
       ],
     );
     await db.query("update crm.assistant_conversations set updated_at = now() where id = $1", [conversationId]);
@@ -240,7 +243,12 @@ function history(rows: MessageRow[]): ChatMessage[] {
     else if (row.role === "tool" && row.tool_call_id) messages.push({ role: "tool", tool_call_id: row.tool_call_id, content: row.content });
     else if (row.role === "assistant") {
       const calls = (row.tool_calls ?? []).filter((call) => answered.has(call.id));
-      messages.push(calls.length > 0 ? { role: "assistant", content: row.content || null, tool_calls: calls } : { role: "assistant", content: row.content || "" });
+      const state = row.provider_state ?? null;
+      messages.push(
+        calls.length > 0
+          ? { role: "assistant", content: row.content || null, tool_calls: calls, state }
+          : { role: "assistant", content: row.content || "", state },
+      );
     }
   }
   return messages;
@@ -296,6 +304,7 @@ async function runLoop(
       messages: [{ role: "system", content: systemPrompt(actor, { webSearch: conversation.web_search }) }, ...history(rows)],
       timeoutMs: Math.min(240_000, remaining - 5_000),
       fetchImpl,
+      actor,
     });
     const saved = await insertMessage(actor, conversation.id, {
       role: "assistant",
@@ -304,6 +313,7 @@ async function runLoop(
       sources: result.sources,
       model: result.model,
       usage: result.usage,
+      state: result.state ?? null,
     });
     if (result.toolCalls.length === 0) {
       emit({ type: "message", message: display(saved) });
