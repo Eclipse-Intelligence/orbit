@@ -135,9 +135,17 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
     handle: (match: RegExpExecArray) => boolean | void,
     kind: Span["kind"] = "when",
   ) => {
-    const match = pattern.exec(text);
+    const global = new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`);
+    let match: RegExpExecArray | null = null;
+    for (let next = global.exec(text); next; next = global.exec(text)) {
+      const candidate = next;
+      if (!spans.some((span) => candidate.index < span.end && candidate.index + candidate[0].length > span.start)) {
+        match = candidate;
+        break;
+      }
+      if (candidate[0].length === 0) global.lastIndex += 1;
+    }
     if (!match) return;
-    if (spans.some((span) => match.index < span.end && match.index + match[0].length > span.start)) return;
     if (handle(match) === false) return;
     spans.push({ start: match.index, end: match.index + match[0].length, kind });
   };
@@ -195,7 +203,7 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
     if (target < 0) return false;
     found.date = addDays(today, ((target - weekday(today) + 7) % 7) || 7);
   });
-  take(/\b(?:at\s+)?(\d{1,2})(?::|\.)(\d{2})\s*(am|pm)?\b/i, (match) => {
+  take(/\b(?:at\s+)?(\d{1,2})(?::|\.)(\d{2})(?:\s*(am|pm))?\b/i, (match) => {
     const parsed = toHour(Number(match[1]), Number(match[2]), match[3]);
     if (!parsed) return false;
     found.time = parsed;

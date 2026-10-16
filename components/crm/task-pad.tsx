@@ -105,11 +105,19 @@ export default function TaskPad({
   company: fixedCompany = null,
   className,
   placeholder = "Add a task, e.g. Call Jane Monday 3pm, remind me 1 hour before",
+  initialContact = null,
+  initialCompany = null,
+  autoFocus = false,
+  onAdded,
 }: {
   clickup: ClickUpPicker | null;
   company?: PadRecord | null;
   className?: string;
   placeholder?: string;
+  initialContact?: PadRecord | null;
+  initialCompany?: PadRecord | null;
+  autoFocus?: boolean;
+  onAdded?: (result: { warning?: string }) => void;
 }) {
   const router = useRouter();
   const id = useId();
@@ -123,8 +131,10 @@ export default function TaskPad({
   const [reading, setReading] = useState(false);
   const [due, setDue] = useState<Override<string | null>>(unset);
   const [reminder, setReminder] = useState<Override<number | null>>(unset);
-  const [company, setCompany] = useState<Override<PadRecord | null>>(unset);
-  const [contact, setContact] = useState<Override<PadRecord | null>>(unset);
+  const startCompany = (): Override<PadRecord | null> => (initialCompany ? { set: true, value: initialCompany } : unset());
+  const startContact = (): Override<PadRecord | null> => (initialContact ? { set: true, value: initialContact } : unset());
+  const [company, setCompany] = useState<Override<PadRecord | null>>(startCompany);
+  const [contact, setContact] = useState<Override<PadRecord | null>>(startContact);
   const [list, setList] = useState<Override<string | null>>(unset);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -253,8 +263,8 @@ export default function TaskPad({
     setAi(null);
     setDue(unset());
     setReminder(unset());
-    setCompany(unset());
-    setContact(unset());
+    setCompany(startCompany());
+    setContact(startContact());
     setList(unset());
   }
 
@@ -266,8 +276,8 @@ export default function TaskPad({
     setAi(null);
     setDue(unset());
     setReminder(unset());
-    setCompany(unset());
-    setContact(unset());
+    setCompany(startCompany());
+    setContact(startContact());
     setList(unset());
   }
 
@@ -289,9 +299,13 @@ export default function TaskPad({
       setError(result.error);
       return;
     }
-    setWarning(result.warning ?? null);
     reset();
     router.refresh();
+    if (onAdded) {
+      onAdded({ warning: result.warning });
+      return;
+    }
+    setWarning(result.warning ?? null);
     input.current?.focus();
   }
 
@@ -319,7 +333,7 @@ export default function TaskPad({
     }
   }
 
-  const showChips = text.trim() !== "";
+  const showChips = text.trim() !== "" || Boolean(initialContact || initialCompany);
   const names = [finalContact?.name, finalCompany?.name].filter((name): name is string => Boolean(name));
   const marks = mergeMarks([...parsed.marks, ...nameMarks(text, names)]);
   const pieces: { text: string; kind: PadMark["kind"] | null }[] = [];
@@ -341,7 +355,7 @@ export default function TaskPad({
           <div className="relative min-w-0 flex-1">
             <div
               aria-hidden
-              className="text-foreground pointer-events-none absolute inset-0 overflow-hidden py-1 text-[14px] leading-5 break-words whitespace-pre-wrap"
+              className="text-foreground pointer-events-none absolute inset-0 overflow-hidden py-1 text-[14px] leading-5 break-words whitespace-pre-wrap [@media(pointer:coarse)]:text-[16px]"
             >
               <div style={{ transform: `translateY(-${scrollTop}px)` }}>
                 {pieces.map((piece, index) =>
@@ -367,6 +381,7 @@ export default function TaskPad({
               id={`${id}-text`}
               ref={input}
               rows={1}
+              autoFocus={autoFocus}
               value={text}
               data-shortcut="add-record"
               placeholder={placeholder}

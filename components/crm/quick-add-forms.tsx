@@ -10,21 +10,18 @@ import {
 } from "react";
 import Link from "next/link";
 import Button from "@/components/_ui/button";
-import { DateTimePicker } from "@/components/_ui/date-picker";
 import { DialogClose, DialogFooter, DialogHeader, DialogTitle } from "@/components/_ui/dialog";
 import Field from "@/components/_ui/field";
 import { Input } from "@/components/_ui/input";
-import { ClickUpPickerField } from "@/components/crm/clickup";
 import { recordSelectClass } from "@/components/crm/record-form";
 import RecordPicker, { type PickedRecord } from "@/components/crm/record-picker";
-import ReminderSelect from "@/components/crm/reminder-select";
+import TaskPad from "@/components/crm/task-pad";
 import { TagChip, TagOptions, TagPopover } from "@/components/crm/tags";
 import { createCompanyAction, type CompanyActionState } from "@/app/(crm)/actions";
 import type { QuickAddSetup } from "@/app/(crm)/quick-add";
 import {
   saveContactAction,
   saveOpportunityAction,
-  saveTaskAction,
   type ContactActionState,
   type RecordActionState,
 } from "@/app/(crm)/records";
@@ -204,95 +201,22 @@ function TagsField({ id, suggestions }: { id: string; suggestions: QuickAddSetup
   );
 }
 
-const TASK_FIELDS = ["title", "dueAt", "remindMinutes", "contactId", "companyId", "clickupListId"];
-
 export function QuickTaskForm({ prefill, setup, onDone }: FormProps) {
-  const [state, action, pending] = useActionState(saveTaskAction, {} as RecordActionState);
-  const [contact, setContact] = useState<PickedRecord | null>(prefill.contact);
-  const [company, setCompany] = useState<PickedRecord | null>(prefill.company);
-  const [toClickUp, setToClickUp] = useState(true);
-  const [listId, setListId] = useState<string | null>(null);
-  const [dueAt, setDueAt] = useState("");
-  const [reminder, setReminder] = useState("none");
-  const clickup = setup?.clickup ?? null;
-
-  useSettled(
-    state,
-    (current) => Boolean(current.ok),
-    (current) =>
-      onDone({ message: current.warning ?? "Task added", href: TASKS_PATH, link: "Open" }),
-  );
-
   return (
-    <Shell kind="task" action={action} pending={pending}>
-      <FormError state={state} fields={TASK_FIELDS} />
-      <input type="hidden" name="priority" value="normal" />
-      <Field label="Task" htmlFor="quick-task-title" required error={fieldError(state, TASK_FIELDS, "title")}>
-        <Input id="quick-task-title" name="title" required placeholder="Send the follow-up" />
-      </Field>
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Due" htmlFor="quick-task-due" error={fieldError(state, TASK_FIELDS, "dueAt")}>
-          <DateTimePicker
-            id="quick-task-due"
-            name="dueAt"
-            placeholder="Add a due date"
-            value={dueAt}
-            onChange={setDueAt}
-          />
-        </Field>
-        <Field label="Reminder" htmlFor="quick-task-reminder" error={fieldError(state, TASK_FIELDS, "remindMinutes")}>
-          <ReminderSelect
-            id="quick-task-reminder"
-            name="remindMinutes"
-            value={reminder}
-            onChange={setReminder}
-            disabled={!dueAt}
-          />
-        </Field>
+    <div className="flex flex-col">
+      <DialogHeader className="py-4 pr-14">
+        <DialogTitle>{TITLES.task}</DialogTitle>
+      </DialogHeader>
+      <div className="px-6 pt-5 pb-6">
+        <TaskPad
+          clickup={setup?.clickup ?? null}
+          initialContact={prefill.contact}
+          initialCompany={prefill.company}
+          autoFocus
+          onAdded={(result) => onDone({ message: result.warning ?? "Task added", href: TASKS_PATH, link: "Open" })}
+        />
       </div>
-      <LinkField
-        id="quick-task-contact"
-        label="Contact"
-        kind="contact"
-        name="contactId"
-        empty="none"
-        value={contact}
-        onChange={(next) => {
-          setContact(next);
-          if (next?.company && !company) setCompany(next.company);
-        }}
-        placeholder="Link a contact"
-        error={fieldError(state, TASK_FIELDS, "contactId")}
-      />
-      <LinkField
-        id="quick-task-company"
-        label="Company"
-        kind="company"
-        name="companyId"
-        empty="none"
-        value={company}
-        onChange={setCompany}
-        placeholder="Link a company"
-        error={fieldError(state, TASK_FIELDS, "companyId")}
-      />
-      {clickup && (
-        <div className="flex flex-col gap-2">
-          <ClickUpPickerField
-            picker={clickup}
-            id="quick-task-clickup"
-            checked={toClickUp}
-            onCheckedChange={setToClickUp}
-            listId={listId ?? clickup.listId}
-            onListChange={setListId}
-          />
-          {fieldError(state, TASK_FIELDS, "clickupListId") && (
-            <p role="alert" className="caption-style text-danger">
-              {fieldError(state, TASK_FIELDS, "clickupListId")}
-            </p>
-          )}
-        </div>
-      )}
-    </Shell>
+    </div>
   );
 }
 
