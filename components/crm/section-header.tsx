@@ -62,8 +62,8 @@ export default function SectionHeader({
             variant="secondary"
             size="icon"
             aria-label="Search and commands"
-            aria-keyshortcuts="Meta+K Control+K"
-            title="Search and commands (⌘K)"
+            aria-keyshortcuts="Meta+/ Control+/"
+            title="Search and commands (⌘/)"
             onClick={() => setPaletteOpen(true)}
           >
             <SearchIcon aria-hidden className="size-3.5" />

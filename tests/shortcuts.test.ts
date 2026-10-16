@@ -28,12 +28,15 @@ describe("keyboard shortcuts", () => {
   });
 
   it("uses ⌘ on a Mac and Ctrl elsewhere", () => {
-    const palette = SHORTCUT_BY_ID.get("palette")!.combos![0];
-    assert.equal(comboMatches(palette, key({ key: "k", metaKey: true }), true), true);
-    assert.equal(comboMatches(palette, key({ key: "k", ctrlKey: true }), true), false);
-    assert.equal(comboMatches(palette, key({ key: "k", ctrlKey: true }), false), true);
-    assert.equal(comboMatches(palette, key({ key: "K", metaKey: true }), true), true);
-    assert.equal(comboMatches(palette, key({ key: "k" }), true), false);
+    const [slash, backup] = SHORTCUT_BY_ID.get("palette")!.combos!;
+    assert.equal(comboMatches(slash, key({ key: "/", metaKey: true }), true), true);
+    assert.equal(comboMatches(slash, key({ key: "/", ctrlKey: true }), true), false);
+    assert.equal(comboMatches(slash, key({ key: "/", ctrlKey: true }), false), true);
+    assert.equal(comboMatches(slash, key({ key: "/" }), true), false);
+    assert.equal(comboMatches(slash, key({ key: "?", metaKey: true, shiftKey: true }), true), false);
+    assert.equal(comboMatches(backup, key({ key: "K", metaKey: true }), true), true);
+    assert.ok(matchingShortcuts(key({ key: "/", metaKey: true }), true).some((shortcut) => shortcut.id === "palette"));
+    assert.ok(!matchingShortcuts(key({ key: "/", metaKey: true }), true).some((shortcut) => shortcut.id === "search-list"));
   });
 
   it("keeps shifted letters apart from plain ones", () => {
@@ -77,8 +80,8 @@ describe("keyboard shortcuts", () => {
   });
 
   it("labels keys for people", () => {
-    assert.deepEqual(shortcutKeys(SHORTCUT_BY_ID.get("palette")!, true), ["⌘", "K"]);
-    assert.deepEqual(shortcutKeys(SHORTCUT_BY_ID.get("palette")!, false), ["Ctrl", "K"]);
+    assert.deepEqual(shortcutKeys(SHORTCUT_BY_ID.get("palette")!, true), ["⌘", "/"]);
+    assert.deepEqual(shortcutKeys(SHORTCUT_BY_ID.get("palette")!, false), ["Ctrl", "/"]);
     assert.deepEqual(shortcutKeys(SHORTCUT_BY_ID.get("go-p")!, true), ["G", "P"]);
     assert.deepEqual(shortcutKeys(SHORTCUT_BY_ID.get("help")!, true), ["?"]);
     assert.equal(shortcutHint("go-p", true), "G then P");
