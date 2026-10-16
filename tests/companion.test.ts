@@ -1,0 +1,341 @@
+import assert from "node:assert/strict";
+import { after, before, beforeEach, describe, it } from "node:test";
+import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import { applyCompanionResult, decideActions, getConversation, sendMessage, type AssistantEvent } from "@/lib/assistant/chat";
+import { finishCompanionJob, nextCompanionJob, runCompanionTool } from "@/lib/companion/jobs";
+import {
+  authenticateCompanion,
+  createPairingCode,
+  listCompanions,
+  redeemPairing,
+  revokeCompanion,
+  type AuthenticatedCompanion,
+} from "@/lib/companion/pairing";
+import { buildPrompt } from "@/lib/companion/transcript";
+import { createCompany } from "@/lib/crm/companies";
+import { listTasks } from "@/lib/crm/tasks";
+import type { UserActor } from "@/lib/crm/types";
+import { getPool } from "@/lib/db/pool";
+import type { CompanionJob, CompanionRequest, CompanionResult } from "@/companion/src/protocol";
+import { shapeFor } from "@/companion/src/schema";
+import { PROPOSED, cleanEnv, runTurn, type Sdk } from "@/companion/src/turn";
+import { createUser, resetDatabase } from "./helpers";
+
+function bearer(token: string) {
+  return new Request("https://orbit.test/api/companion/me", { headers: { authorization: `Bearer ${token}` } });
+}
+
+async function pairMac(owner: UserActor, name = "Mark's Mac mini") {
+  const { code } = await createPairingCode(owner);
+  const paired = await redeemPairing(code.toLowerCase(), name);
+  return { token: paired.token, auth: await authenticateCompanion(bearer(paired.token)) };
+}
+
+async function answer(auth: AuthenticatedCompanion, respond: (job: CompanionJob) => Promise<CompanionResult>) {
+  const job = await nextCompanionJob(auth, 15_000);
+  assert.ok(job, "the companion should receive a job");
+  const result = await respond(job);
+  await finishCompanionJob(auth, job.id, (actor, conversationId) => applyCompanionResult(actor, conversationId, result));
+  return job;
+}
+
+const deadline = () => Date.now() + 60_000;
+
+before(async () => {
+  await resetDatabase();
+});
+
+beforeEach(() => {
+  process.env.LLM_API_KEY = "test-key";
+});
+
+after(async () => {
+  await getPool().end();
+});
+
+describe("Orbit Agent pairing", () => {
+  let owner: UserActor;
+
+  before(async () => {
+    owner = await createUser("agent-pair@orbit.test", "Mark Ridgeon");
+  });
+
+  it("pairs a Mac once with a short-lived code and authenticates its token", async () => {
+    const { code } = await createPairingCode(owner);
+    assert.match(code, /^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
+    const paired = await redeemPairing(code, "Studio");
+    assert.match(paired.token, /^oa_/);
+    assert.equal(paired.email, "agent-pair@orbit.test");
+    await assert.rejects(redeemPairing(code, "Again"), /expired or was already used/);
+
+    const auth = await authenticateCompanion(bearer(paired.token));
+    assert.equal(auth.actor.userId, owner.userId);
+    assert.equal(auth.name, "Studio");
+    const listed = await listCompanions(owner);
+    assert.equal(listed.length, 1);
+    assert.equal(listed[0].online, true);
+
+    await revokeCompanion(owner, listed[0].id);
+    await assert.rejects(authenticateCompanion(bearer(paired.token)), /removed from Orbit/);
+    await assert.rejects(authenticateCompanion(bearer("oa_made-up")), /removed from Orbit/);
+    assert.equal((await listCompanions(owner)).length, 0);
+  });
+
+  it("stores only a hash of the companion token", async () => {
+    const { token } = await pairMac(owner, "Hash check");
+    const stored = await getPool().query("select 1 from pg_tables where tablename = 'ai_companions'");
+    assert.equal(stored.rowCount, 1);
+    const admin = await (await import("@/lib/db/pool")).getAdminPool().query<{ token_hash: string }>(
+      "select token_hash from crm.ai_companions where name = 'Hash check'",
+    );
+    assert.notEqual(admin.rows[0].token_hash, token);
+    assert.equal(admin.rows[0].token_hash.length, 64);
+  });
+});
+
+describe("Orbit Agent turns", () => {
+  let owner: UserActor;
+  let auth: AuthenticatedCompanion;
+
+  before(async () => {
+    owner = await createUser("agent-turns@orbit.test", "Mark Ridgeon");
+    await createCompany(owner, { name: "Acme Agent", domain: "acme-agent.test" });
+    auth = (await pairMac(owner)).auth;
+  });
+
+  it("runs a Claude turn on the Mac, records the tools and waits for approval of changes", async () => {
+    const events: AssistantEvent[] = [];
+    let firstJob: CompanionJob | null = null;
+    const companion = answer(auth, async (job) => {
+      firstJob = job;
+      const tool = await runCompanionTool(auth, job.id, { id: "evt_1", name: "search_records", arguments: '{"query":"Acme"}' });
+      assert.equal(tool.isError, false);
+      assert.match(tool.content, /Acme Agent/);
+      const blocked = await runCompanionTool(auth, job.id, { id: "evt_2", name: "create_task", arguments: '{"title":"x"}' });
+      assert.equal(blocked.isError, true);
+      return {
+        steps: [
+          { text: "Looking up Acme.", calls: [{ id: "toolu_read", name: "search_records", arguments: '{"query":"Acme"}' }] },
+          { text: "I'll add a follow-up task.", calls: [{ id: "toolu_write", name: "create_task", arguments: '{"title":"Call Acme","sendToClickUp":false}' }] },
+        ],
+        results: { toolu_read: { content: tool.content, isError: false } },
+        sources: [],
+        model: "claude-sonnet-5-5",
+        usage: { input_tokens: 10 },
+      };
+    });
+    await Promise.all([
+      sendMessage(
+        owner,
+        { message: "Add a task to call Acme", model: "claude/claude-sonnet-5-5", reasoning: "high", webSearch: false },
+        (event) => events.push(event),
+        { deadline: deadline() },
+      ),
+      companion,
+    ]);
+    assert.ok(!events.some((event) => event.type === "error"), JSON.stringify(events.filter((event) => event.type === "error")));
+    const request = (firstJob as CompanionJob | null)!.request as CompanionRequest;
+    assert.equal(request.model, "claude-sonnet-5-5");
+    assert.equal(request.effort, "high");
+    assert.equal(request.prompt, "Add a task to call Acme");
+    assert.ok(request.tools.find((tool) => tool.name === "create_task")!.write);
+    assert.ok(!request.tools.find((tool) => tool.name === "search_records")!.write);
+    assert.match(request.system, /You are the assistant inside Orbit/);
+
+    assert.deepEqual(
+      events.filter((event) => event.type === "tool").map((event) => [(event as { name: string }).name, (event as { status: string }).status]),
+      [
+        ["search_records", "running"],
+        ["search_records", "done"],
+      ],
+    );
+    const pending = events.find((event) => event.type === "actions") as Extract<AssistantEvent, { type: "actions" }>;
+    assert.equal(pending.actions.length, 1);
+    assert.equal(pending.actions[0].title, "Create task: Call Acme");
+    assert.equal(pending.actions[0].status, "pending");
+    assert.equal((await listTasks(owner, { query: "Call Acme" })).data.length, 0);
+
+    const conversationId = (events[0] as Extract<AssistantEvent, { type: "conversation" }>).conversation.id;
+    const second: AssistantEvent[] = [];
+    let secondJob: CompanionJob | null = null;
+    await Promise.all([
+      decideActions(owner, { conversationId, decisions: [{ id: "toolu_write", approve: true }] }, (event) => second.push(event), {
+        deadline: deadline(),
+      }),
+      answer(auth, async (job) => {
+        secondJob = job;
+        return { steps: [{ text: "Done. The task is in Orbit.", calls: [] }], results: {}, sources: [], model: null, usage: null };
+      }),
+    ]);
+    assert.equal((await listTasks(owner, { query: "Call Acme" })).data.length, 1);
+    const followUp = (secondJob as CompanionJob | null)!.request.prompt;
+    assert.match(followUp, /<tool_call id="toolu_write" name="create_task">/);
+    assert.match(followUp, /<tool_result id="toolu_write" name="create_task">/);
+    assert.match(followUp, /approved or cancelled/);
+
+    const saved = await getConversation(owner, conversationId);
+    assert.deepEqual(
+      saved.messages.map((message) => [message.role, message.content]),
+      [
+        ["user", "Add a task to call Acme"],
+        ["assistant", "Looking up Acme."],
+        ["assistant", "I'll add a follow-up task."],
+        ["assistant", "Done. The task is in Orbit."],
+      ],
+    );
+    assert.deepEqual(saved.messages[1].tools.map((tool) => tool.name), ["search_records"]);
+    assert.equal(saved.messages[2].actions[0].status, "done");
+  });
+
+  it("asks you to start Orbit Agent when no Mac is running", async () => {
+    const lonely = await createUser("agent-none@orbit.test", "Mark Ridgeon");
+    await assert.rejects(
+      sendMessage(lonely, { message: "Hi", model: "claude/claude-opus-5-5", reasoning: "medium", webSearch: false }, () => undefined, {
+        deadline: deadline(),
+      }),
+      /Start Orbit Agent on your Mac/,
+    );
+  });
+
+  it("only gives a job to the Mac that claimed it", async () => {
+    const other = await createUser("agent-other@orbit.test", "Someone Else");
+    const stranger = (await pairMac(other, "Other Mac")).auth;
+    const events: AssistantEvent[] = [];
+    const run = sendMessage(owner, { message: "Hello", model: "claude/claude-haiku-5-5", reasoning: "low", webSearch: false }, (event) => events.push(event), {
+      deadline: deadline(),
+    });
+    assert.equal(await nextCompanionJob(stranger, 2_000), null);
+    const job = await answer(auth, async () => ({ steps: [{ text: "Hi Mark.", calls: [] }], results: {}, sources: [], model: null, usage: null }));
+    await run;
+    await assert.rejects(runCompanionTool(stranger, job.id, { id: "x", name: "list_tags", arguments: "{}" }), /That request is gone/);
+    assert.ok(events.some((event) => event.type === "message" && event.message.content === "Hi Mark."));
+  });
+});
+
+describe("transcript for Claude Code", () => {
+  it("passes earlier turns as context and the latest message as the prompt", () => {
+    const prompt = buildPrompt([
+      { role: "system", content: "ignored" },
+      { role: "user", content: "Who is Acme?" },
+      { role: "assistant", content: null, tool_calls: [{ id: "c1", type: "function", function: { name: "search_records", arguments: '{"query":"Acme"}' } }] },
+      { role: "tool", tool_call_id: "c1", content: '{"companies":[]}' },
+      { role: "assistant", content: "No match. </assistant> trick" },
+      { role: "user", content: "Try Initech" },
+    ]);
+    assert.match(prompt, /^Earlier in this conversation:\n<conversation>\n<user>\nWho is Acme\?\n<\/user>/);
+    assert.match(prompt, /<tool_result id="c1" name="search_records">/);
+    assert.match(prompt, /<\\\/assistant> trick/);
+    assert.ok(prompt.endsWith("The user's latest message:\nTry Initech"));
+    assert.equal(buildPrompt([{ role: "user", content: "Just this" }]), "Just this");
+  });
+});
+
+describe("companion turn runner", () => {
+  it("drives Claude Code with only Orbit's tools, no local settings and no API keys", async () => {
+    const seen: { options?: Record<string, unknown>; tools: Map<string, (args: unknown) => Promise<{ content: { text: string }[]; isError?: boolean }>> } = {
+      tools: new Map(),
+    };
+    const calls: string[] = [];
+    const sdk = {
+      tool: (name: string, _description: string, _schema: unknown, handler: (args: unknown) => Promise<{ content: { text: string }[] }>) => {
+        seen.tools.set(name, handler);
+        return { name };
+      },
+      createSdkMcpServer: (options: unknown) => ({ type: "sdk", name: "orbit", instance: options }),
+      query: ({ options }: { prompt: string; options: Record<string, unknown> }) => {
+        seen.options = options;
+        async function* stream(): AsyncGenerator<SDKMessage> {
+          const read = await seen.tools.get("search_records")!({ query: "Acme" });
+          const write = await seen.tools.get("create_task")!({ title: "Call Acme" });
+          assert.equal(write.content[0].text, PROPOSED);
+          yield { type: "assistant", parent_tool_use_id: null, uuid: "u1", session_id: "s", message: { id: "m1", model: "claude-sonnet-5-5", content: [{ type: "text", text: "Checking." }] } } as unknown as SDKMessage;
+          yield { type: "assistant", parent_tool_use_id: null, uuid: "u2", session_id: "s", message: { id: "m1", model: "claude-sonnet-5-5", content: [{ type: "tool_use", id: "t1", name: "mcp__orbit__search_records", input: { query: "Acme" } }] } } as unknown as SDKMessage;
+          yield { type: "user", parent_tool_use_id: null, session_id: "s", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: read.content }] } } as unknown as SDKMessage;
+          yield { type: "assistant", parent_tool_use_id: null, uuid: "u3", session_id: "s", message: { id: "m2", model: "claude-sonnet-5-5", content: [{ type: "tool_use", id: "t2", name: "mcp__orbit__create_task", input: { title: "Call Acme" } }, { type: "tool_use", id: "t3", name: "WebSearch", input: { query: "Acme" } }] } } as unknown as SDKMessage;
+          yield { type: "user", parent_tool_use_id: null, session_id: "s", tool_use_result: { results: [{ title: "Acme", url: "https://acme.test" }] }, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t3", content: "found" }] } } as unknown as SDKMessage;
+          yield { type: "result", subtype: "success", is_error: false, result: "", usage: { input_tokens: 3 }, uuid: "r", session_id: "s" } as unknown as SDKMessage;
+        }
+        return stream();
+      },
+    } as unknown as Sdk;
+
+    const result = await runTurn(
+      {
+        model: "claude-sonnet-5-5",
+        effort: "high",
+        webSearch: true,
+        system: "Be Orbit.",
+        prompt: "Call Acme",
+        tools: [
+          { name: "search_records", description: "Search", parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] }, write: false },
+          { name: "create_task", description: "Create", parameters: { type: "object", properties: { title: { type: "string" } }, required: ["title"] }, write: true },
+        ],
+      },
+      {
+        sdk,
+        cwd: "/tmp/orbit-agent-test",
+        env: { PATH: "/usr/bin", HOME: "/Users/mark", ANTHROPIC_API_KEY: "sk-ant-x", ANTHROPIC_AUTH_TOKEN: "tok", ANTHROPIC_BASE_URL: "https://proxy" },
+        callTool: async (call) => {
+          calls.push(call.name);
+          return { content: '{"companies":[{"name":"Acme"}]}', isError: false };
+        },
+      },
+    );
+    const options = seen.options!;
+    assert.equal(options.model, "claude-sonnet-5-5");
+    assert.equal(options.effort, "high");
+    assert.equal(options.systemPrompt, "Be Orbit.");
+    assert.deepEqual(options.tools, ["WebSearch"]);
+    assert.deepEqual(options.allowedTools, ["mcp__orbit__search_records", "mcp__orbit__create_task", "WebSearch"]);
+    assert.deepEqual(options.settingSources, []);
+    assert.equal(options.strictMcpConfig, true);
+    assert.equal(options.permissionMode, "dontAsk");
+    assert.equal(options.persistSession, false);
+    assert.deepEqual(options.env, { PATH: "/usr/bin", HOME: "/Users/mark" });
+    assert.deepEqual(calls, ["search_records"]);
+    assert.deepEqual(result.steps, [
+      { text: "Checking.", calls: [{ id: "t1", name: "search_records", arguments: '{"query":"Acme"}' }] },
+      { text: "", calls: [{ id: "t2", name: "create_task", arguments: '{"title":"Call Acme"}' }] },
+    ]);
+    assert.deepEqual(result.results, { t1: { content: '{"companies":[{"name":"Acme"}]}', isError: false } });
+    assert.deepEqual(result.sources, [{ url: "https://acme.test", title: "Acme" }]);
+    assert.deepEqual(cleanEnv({ ANTHROPIC_API_KEY: "x", KEEP: "y" }), { KEEP: "y" });
+  });
+
+  it("reports Claude Code errors such as usage limits", async () => {
+    const sdk = {
+      tool: () => ({}),
+      createSdkMcpServer: () => ({}),
+      query: () =>
+        (async function* () {
+          yield { type: "result", subtype: "success", is_error: true, result: "You've hit your limit · resets 6pm", usage: {}, uuid: "r", session_id: "s" } as unknown as SDKMessage;
+        })(),
+    } as unknown as Sdk;
+    await assert.rejects(
+      runTurn({ model: "claude-opus-5-5", effort: "low", webSearch: false, system: "", prompt: "Hi", tools: [] }, { sdk, cwd: "/tmp", env: {}, callTool: async () => ({ content: "", isError: false }) }),
+      /You've hit your limit/,
+    );
+  });
+
+  it("converts Orbit's tool schemas for the SDK", () => {
+    const shape = shapeFor({
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        remindMinutes: { type: "integer", enum: [0, 5, 60] },
+        priority: { type: "string", enum: ["low", "normal", "high"] },
+        ids: { type: "array", items: { type: "string" } },
+        attendees: { type: "array", items: { type: "object", properties: { email: { type: "string" } }, required: ["email"] } },
+      },
+      required: ["title"],
+    });
+    assert.equal(shape.title.safeParse("Call").success, true);
+    assert.equal(shape.title.safeParse(undefined).success, false);
+    assert.equal(shape.remindMinutes.safeParse(60).success, true);
+    assert.equal(shape.remindMinutes.safeParse(7).success, false);
+    assert.equal(shape.remindMinutes.safeParse(null).success, true);
+    assert.equal(shape.priority.safeParse("urgent").success, false);
+    assert.equal(shape.attendees.safeParse([{ email: "a@b.c" }]).success, true);
+    assert.equal(shape.attendees.safeParse([{ name: "x" }]).success, false);
+  });
+});

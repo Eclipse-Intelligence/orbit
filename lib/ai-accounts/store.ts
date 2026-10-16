@@ -3,11 +3,9 @@ import {
   OAuthError,
   OPENAI_DEVICE_PAGE,
   PROVIDER_NAMES,
-  finishPasteLogin,
   pollDeviceLogin,
   refreshTokens,
   startDeviceLogin,
-  startPasteLogin,
   type AiProvider,
   type Pending,
   type Tokens,
@@ -50,7 +48,7 @@ function isProvider(value: unknown): value is AiProvider {
 }
 
 function provider(value: unknown) {
-  if (!isProvider(value)) throw new OAuthError("Pick ChatGPT or Claude.");
+  if (!isProvider(value)) throw new OAuthError("Pick ChatGPT.");
   return value;
 }
 
@@ -150,21 +148,6 @@ export async function pollChatGptLogin(actor: UserActor, fetchImpl?: typeof fetc
   }
   await withActor(actor, (db) => saveTokens(db, actor, "chatgpt", result.tokens));
   return { status: "connected" as const, label: result.tokens.label };
-}
-
-export async function startClaudeLogin(actor: UserActor) {
-  const { pending, url } = startPasteLogin();
-  await savePending(actor, "claude", pending);
-  return { url };
-}
-
-export async function finishClaudeLogin(actor: UserActor, pasted: string, fetchImpl?: typeof fetch) {
-  const row = await withActor(actor, (db) => readRow(db, actor, "claude"));
-  const pending = readPending(row);
-  if (!pending || pending.kind !== "paste") throw new OAuthError("Start the Claude sign-in again.");
-  const tokens = await finishPasteLogin(pending, pasted, fetchImpl);
-  await withActor(actor, (db) => saveTokens(db, actor, "claude", tokens));
-  return { label: tokens.label };
 }
 
 export async function disconnectAiAccount(actor: UserActor, which: unknown) {

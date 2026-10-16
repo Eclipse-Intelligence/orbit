@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "npm run companion:pack && next build",
     "start": "next start",
     "lint": "eslint",
     "test": "DATABASE_URL=postgres://crm_app:crm_app_dev@127.0.0.1:5432/crm_test DATABASE_ADMIN_URL=postgres://postgres:postgres@127.0.0.1:5432/crm_test APP_SECRET=test-secret-value tsx --test --test-concurrency=1 tests/*.test.ts",
@@ -14,10 +14,10 @@
     "mcp": "tsx scripts/mcp-stdio.ts",
     "extract:avif": "bash scripts/extract_webm_frames.sh",
     "to:avif": "node scripts/to-avif.mjs",
-    "frame:rive": "node scripts/rive-frame.mjs"
+    "frame:rive": "node scripts/rive-frame.mjs",
+    "companion:pack": "node scripts/pack-companion.mjs"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.135.0",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "@rive-app/canvas": "^2.31.0",
     "@rive-app/react-canvas": "^4.31.0",
@@ -42,6 +42,7 @@
     "zustand": "^5.0.11"
   },
   "devDependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.301",
     "@svgr/webpack": "^8.1.0",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
