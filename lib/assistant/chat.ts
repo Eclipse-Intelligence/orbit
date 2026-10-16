@@ -1,7 +1,7 @@
 import { AssistantError, complete, type ChatMessage, type Source, type ToolCall } from "@/lib/assistant/gateway";
 import { settingsFor, type ReasoningLevel } from "@/lib/assistant/models";
 import { systemPrompt } from "@/lib/assistant/prompt";
-import { TOOL_BY_NAME, describeAction, runTool, toolJson } from "@/lib/assistant/tools";
+import { TOOL_BY_NAME, describeAction, recordNames, runTool, toolJson } from "@/lib/assistant/tools";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { iso, isUuid } from "@/lib/crm/mutate";
@@ -327,10 +327,14 @@ async function runLoop(
       }),
     );
     if (writes.length > 0) {
+      const names = await recordNames(
+        actor,
+        writes.map((call) => parseArgs(call.function.arguments)),
+      ).catch(() => new Map<string, string>());
       const actions: AssistantAction[] = writes.map((call) => ({
         id: call.id,
         name: call.function.name,
-        ...describeAction(call.function.name, parseArgs(call.function.arguments)),
+        ...describeAction(call.function.name, parseArgs(call.function.arguments), names),
         status: "pending",
       }));
       await saveActions(actor, saved.id, actions);
@@ -371,9 +375,11 @@ export async function sendMessage(
   emit({ type: "done" });
 }
 
-export async function decideAction(
+export type ActionDecision = { id: string; approve: boolean };
+
+export async function decideActions(
   actor: UserActor,
-  input: { conversationId: string; actionId: string; approve: boolean },
+  input: { conversationId: string; decisions: ActionDecision[] },
   emit: Emit,
   options: { deadline: number; fetchImpl?: typeof fetch },
 ) {
@@ -382,27 +388,31 @@ export async function decideAction(
     rows: await readMessages(db, input.conversationId),
   }));
   emit({ type: "conversation", conversation: summary(conversation) });
-  const owner = rows.find((row) => (row.actions ?? []).some((action) => action.id === input.actionId));
-  const action = owner?.actions?.find((entry) => entry.id === input.actionId);
-  if (!owner || !action) throw new AssistantError("That action is no longer available.");
-  if (action.status !== "pending") throw new AssistantError("That action has already been handled.");
-  const call = (owner.tool_calls ?? []).find((entry) => entry.id === input.actionId);
+  const decisions = new Map(input.decisions.map((decision) => [decision.id, decision.approve]));
+  const owner = rows.find((row) => (row.actions ?? []).some((action) => decisions.has(action.id)));
+  if (!owner || decisions.size === 0) throw new AssistantError("That action is no longer available.");
+  const chosen = (owner.actions ?? []).filter((action) => decisions.has(action.id));
+  if (chosen.length !== decisions.size) throw new AssistantError("Some of those actions are no longer available.");
+  if (chosen.some((action) => action.status !== "pending")) throw new AssistantError("That action has already been handled.");
   let actions = owner.actions ?? [];
-  const update = async (patch: Partial<AssistantAction>) => {
-    actions = actions.map((entry) => (entry.id === action.id ? { ...entry, ...patch } : entry));
+  const update = async (id: string, patch: Partial<AssistantAction>) => {
+    actions = actions.map((entry) => (entry.id === id ? { ...entry, ...patch } : entry));
     await saveActions(actor, owner.id, actions);
     emit({ type: "actions", messageId: owner.id, actions });
   };
-  if (!input.approve || !call) {
-    await insertMessage(actor, conversation.id, {
-      role: "tool",
-      content: toolJson({ declined: true, message: "The user declined this action." }),
-      toolCallId: action.id,
-      toolName: action.name,
-    });
-    await update({ status: "declined" });
-  } else {
-    await update({ status: "running" });
+  for (const action of chosen) {
+    const call = (owner.tool_calls ?? []).find((entry) => entry.id === action.id);
+    if (!decisions.get(action.id) || !call) {
+      await insertMessage(actor, conversation.id, {
+        role: "tool",
+        content: toolJson({ declined: true, message: "The user declined this action." }),
+        toolCallId: action.id,
+        toolName: action.name,
+      });
+      await update(action.id, { status: "declined" });
+      continue;
+    }
+    await update(action.id, { status: "running" });
     const output = (await runTool(actor, call.function.name, parseArgs(call.function.arguments))) as Record<string, unknown> | null;
     const failed = Boolean(output && typeof output === "object" && "error" in output);
     await insertMessage(actor, conversation.id, {
@@ -411,7 +421,7 @@ export async function decideAction(
       toolCallId: action.id,
       toolName: action.name,
     });
-    await update({ status: failed ? "failed" : "done", result: failed ? String((output as { error: unknown }).error) : null });
+    await update(action.id, { status: failed ? "failed" : "done", result: failed ? String((output as { error: unknown }).error) : null });
   }
   if (actions.some((entry) => entry.status === "pending")) {
     emit({ type: "done" });
@@ -419,4 +429,15 @@ export async function decideAction(
   }
   await runLoop(actor, conversation, emit, options.deadline, options.fetchImpl);
   emit({ type: "done" });
+}
+
+export function readDecisions(body: Record<string, unknown>): ActionDecision[] | null {
+  if (typeof body.actionId === "string") return [{ id: body.actionId, approve: body.approve === true }];
+  if (!Array.isArray(body.decisions)) return null;
+  const decisions = body.decisions.flatMap((entry) =>
+    entry && typeof entry === "object" && typeof (entry as ActionDecision).id === "string"
+      ? [{ id: (entry as ActionDecision).id, approve: (entry as ActionDecision).approve === true }]
+      : [],
+  );
+  return decisions.length > 0 && decisions.length <= 100 ? decisions : null;
 }

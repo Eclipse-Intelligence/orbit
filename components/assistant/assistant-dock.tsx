@@ -10,7 +10,7 @@ import Markdown from "@/components/assistant/markdown";
 import { useScreenState } from "@/components/crm/quick-add";
 import { useShortcut, useShortcuts } from "@/components/shortcuts/shortcuts-provider";
 import { deleteConversationAction, getConversationAction, listConversationsAction } from "@/app/(crm)/assistant";
-import type { AssistantAction, AssistantEvent, ConversationSummary, DisplayMessage } from "@/lib/assistant/chat";
+import type { ActionDecision, AssistantAction, AssistantEvent, ConversationSummary, DisplayMessage } from "@/lib/assistant/chat";
 import {
   ASSISTANT_MODELS,
   DEFAULT_MODEL,
@@ -75,38 +75,43 @@ async function streamAssistant(body: Record<string, unknown>, onEvent: (event: A
   }
 }
 
-function ActionCard({
-  action,
-  busy,
-  onDecide,
-}: {
-  action: AssistantAction;
-  busy: boolean;
-  onDecide: (approve: boolean) => void;
-}) {
-  const status: Record<AssistantAction["status"], string> = {
-    pending: "Waiting for you",
-    running: "Working…",
-    done: "Done",
-    failed: "Didn't work",
-    declined: "Cancelled",
-  };
+const ACTION_STATUS: Record<AssistantAction["status"], string> = {
+  pending: "Waiting for you",
+  running: "Working…",
+  done: "Done",
+  failed: "Didn't work",
+  declined: "Cancelled",
+};
+
+const GROUP_PREVIEW = 5;
+
+type Decide = (decisions: ActionDecision[]) => void;
+
+function statusTone(status: AssistantAction["status"]) {
+  return cn(
+    status === "done" && "text-success",
+    status === "failed" && "text-danger",
+    status === "pending" && "text-warning",
+    (status === "declined" || status === "running") && "text-subtle",
+  );
+}
+
+function groupStatus(actions: AssistantAction[]) {
+  if (actions.some((action) => action.status === "pending")) return { label: ACTION_STATUS.pending, tone: statusTone("pending") };
+  if (actions.some((action) => action.status === "running")) return { label: ACTION_STATUS.running, tone: statusTone("running") };
+  const count = (status: AssistantAction["status"]) => actions.filter((action) => action.status === status).length;
+  const parts = [
+    count("done") && `${count("done")} done`,
+    count("failed") && `${count("failed")} didn't work`,
+    count("declined") && `${count("declined")} cancelled`,
+  ].filter(Boolean);
+  const tone = count("failed") ? statusTone("failed") : count("done") ? statusTone("done") : statusTone("declined");
+  return { label: parts.join(", "), tone };
+}
+
+function ActionLines({ action }: { action: AssistantAction }) {
   return (
-    <div className="flex flex-col gap-2 rounded-2xl bg-white/[0.04] p-3.5">
-      <div className="flex items-start justify-between gap-3">
-        <span className="text-foreground min-w-0 text-[13.5px] leading-5 font-medium">{action.title}</span>
-        <span
-          className={cn(
-            "caption-style shrink-0",
-            action.status === "done" && "text-success",
-            action.status === "failed" && "text-danger",
-            action.status === "pending" && "text-warning",
-            (action.status === "declined" || action.status === "running") && "text-subtle",
-          )}
-        >
-          {status[action.status]}
-        </span>
-      </div>
+    <>
       {action.lines.length > 0 && (
         <ul className="text-soft flex flex-col gap-0.5 text-[13px] leading-5">
           {action.lines.map((line, index) => (
@@ -117,13 +122,108 @@ function ActionCard({
         </ul>
       )}
       {action.status === "failed" && action.result && <p className="caption-style text-danger">{action.result}</p>}
+    </>
+  );
+}
+
+function ActionCard({ action, busy, onDecide }: { action: AssistantAction; busy: boolean; onDecide: Decide }) {
+  return (
+    <div className="flex flex-col gap-2 rounded-2xl bg-white/[0.04] p-3.5">
+      <div className="flex items-start justify-between gap-3">
+        <span className="text-foreground min-w-0 text-[13.5px] leading-5 font-medium">{action.title}</span>
+        <span className={cn("caption-style shrink-0", statusTone(action.status))}>{ACTION_STATUS[action.status]}</span>
+      </div>
+      <ActionLines action={action} />
       {action.status === "pending" && (
         <div className="flex items-center gap-2 pt-1">
-          <Button variant="primary" size="sm" disabled={busy} onClick={() => onDecide(true)}>
+          <Button variant="primary" size="sm" disabled={busy} onClick={() => onDecide([{ id: action.id, approve: true }])}>
             Confirm
           </Button>
-          <Button variant="ghost" size="sm" disabled={busy} onClick={() => onDecide(false)}>
+          <Button variant="ghost" size="sm" disabled={busy} onClick={() => onDecide([{ id: action.id, approve: false }])}>
             Cancel
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ActionGroup({ actions, busy, onDecide }: { actions: AssistantAction[]; busy: boolean; onDecide: Decide }) {
+  const [skipped, setSkipped] = useState<Set<string>>(() => new Set());
+  const [expanded, setExpanded] = useState(false);
+  const pending = actions.filter((action) => action.status === "pending");
+  const chosen = pending.filter((action) => !skipped.has(action.id));
+  const status = groupStatus(actions);
+  const shown = expanded ? actions : actions.slice(0, GROUP_PREVIEW);
+
+  function toggle(id: string) {
+    setSkipped((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function decideAll(approve: boolean) {
+    onDecide(pending.map((action) => ({ id: action.id, approve: approve && !skipped.has(action.id) })));
+  }
+
+  return (
+    <div className="flex flex-col gap-3 rounded-2xl bg-white/[0.04] p-3.5">
+      <div className="flex items-start justify-between gap-3">
+        <span className="text-foreground text-[13.5px] leading-5 font-medium">{actions.length} changes</span>
+        <span className={cn("caption-style shrink-0", status.tone)}>{status.label}</span>
+      </div>
+      <ul className="flex flex-col gap-2.5">
+        {shown.map((action) => {
+          const waiting = action.status === "pending";
+          const included = waiting && !skipped.has(action.id);
+          return (
+            <li key={action.id} className="flex items-start gap-2.5">
+              {waiting ? (
+                <button
+                  type="button"
+                  role="checkbox"
+                  aria-checked={included}
+                  aria-label={included ? `Skip ${action.title}` : `Include ${action.title}`}
+                  disabled={busy}
+                  onClick={() => toggle(action.id)}
+                  className={cn(
+                    "mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-[5px] border transition-colors duration-150",
+                    included ? "border-primary bg-primary text-white" : "border-white/20 bg-transparent",
+                  )}
+                >
+                  {included && <CheckIcon className="size-3" aria-hidden />}
+                </button>
+              ) : null}
+              <div className={cn("flex min-w-0 flex-1 flex-col gap-0.5", waiting && !included && "opacity-50")}>
+                <div className="flex items-start justify-between gap-3">
+                  <span className="text-foreground min-w-0 text-[13px] leading-5">{action.title}</span>
+                  {!waiting && <span className={cn("caption-style shrink-0", statusTone(action.status))}>{ACTION_STATUS[action.status]}</span>}
+                </div>
+                <ActionLines action={action} />
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      {actions.length > GROUP_PREVIEW && (
+        <button
+          type="button"
+          onClick={() => setExpanded((current) => !current)}
+          className="caption-style text-subtle hover:text-foreground self-start transition-colors duration-150"
+        >
+          {expanded ? "Show fewer" : `Show all ${actions.length}`}
+        </button>
+      )}
+      {pending.length > 0 && (
+        <div className="flex items-center gap-2">
+          <Button variant="primary" size="sm" disabled={busy || chosen.length === 0} onClick={() => decideAll(true)}>
+            {chosen.length === pending.length ? "Confirm all" : `Confirm ${chosen.length}`}
+          </Button>
+          <Button variant="ghost" size="sm" disabled={busy} onClick={() => decideAll(false)}>
+            Cancel all
           </Button>
         </div>
       )}
@@ -174,7 +274,7 @@ function Message({
 }: {
   message: DisplayMessage;
   busy: boolean;
-  onDecide: (actionId: string, approve: boolean) => void;
+  onDecide: Decide;
 }) {
   if (message.role === "user") {
     return (
@@ -212,9 +312,8 @@ function Message({
           ))}
         </div>
       )}
-      {message.actions.map((action) => (
-        <ActionCard key={action.id} action={action} busy={busy} onDecide={(approve) => onDecide(action.id, approve)} />
-      ))}
+      {message.actions.length === 1 && <ActionCard action={message.actions[0]} busy={busy} onDecide={onDecide} />}
+      {message.actions.length > 1 && <ActionGroup actions={message.actions} busy={busy} onDecide={onDecide} />}
     </div>
   );
 }
@@ -240,6 +339,7 @@ export default function AssistantDock() {
   const abort = useRef<AbortController | null>(null);
   const changed = useRef(false);
   const conversationId = useRef<string | null>(null);
+  const pinned = useRef(true);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -275,8 +375,15 @@ export default function AssistantDock() {
 
   useEffect(() => {
     const node = scroller.current;
-    if (node) node.scrollTop = node.scrollHeight;
-  }, [messages, live, busy, open]);
+    if (node && pinned.current) node.scrollTop = node.scrollHeight;
+  }, [messages, live, busy, error]);
+
+  useEffect(() => {
+    const node = scroller.current;
+    if (!node || !open) return;
+    pinned.current = true;
+    node.scrollTop = node.scrollHeight;
+  }, [open]);
 
   useEffect(() => {
     const node = input.current;
@@ -394,6 +501,7 @@ export default function AssistantDock() {
   function send(text: string) {
     const message = text.trim();
     if (!message || busy) return;
+    pinned.current = true;
     setDraft("");
     setMessages((current) => [
       ...current,
@@ -402,9 +510,9 @@ export default function AssistantDock() {
     void run({ conversationId: conversation?.id ?? null, message, model, reasoning, webSearch });
   }
 
-  function decide(actionId: string, approve: boolean) {
-    if (!conversation || busy) return;
-    void run({ conversationId: conversation.id, actionId, approve });
+  function decide(decisions: ActionDecision[]) {
+    if (!conversation || busy || decisions.length === 0) return;
+    void run({ conversationId: conversation.id, decisions });
   }
 
   function submit(event: FormEvent) {
@@ -429,6 +537,7 @@ export default function AssistantDock() {
 
   async function load(id: string) {
     setHistoryOpen(false);
+    pinned.current = true;
     const result = await getConversationAction(id);
     if (!result) {
       setError("That chat couldn't be opened.");
@@ -543,6 +652,10 @@ export default function AssistantDock() {
 
         <div
           ref={scroller}
+          onScroll={(event) => {
+            const node = event.currentTarget;
+            pinned.current = node.scrollHeight - node.scrollTop - node.clientHeight < 80;
+          }}
           className={cn(
             "min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 [mask-image:linear-gradient(to_bottom,transparent,black_1rem,black_calc(100%-1.5rem),transparent)]",
             messages.length > 0 || busy ? "py-3 md:min-h-[12rem]" : "md:flex-none",

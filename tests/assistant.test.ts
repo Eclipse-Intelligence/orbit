@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, beforeEach, describe, it } from "node:test";
-import { decideAction, getConversation, listConversations, sendMessage, type AssistantEvent } from "@/lib/assistant/chat";
+import { decideActions, getConversation, listConversations, sendMessage, type AssistantEvent } from "@/lib/assistant/chat";
 import { settingsFor } from "@/lib/assistant/models";
 import { systemPrompt } from "@/lib/assistant/prompt";
 import { geminiTool } from "@/lib/assistant/gateway";
@@ -12,7 +12,7 @@ import { createOpportunity, listPipeline } from "@/lib/crm/opportunities";
 import { createTask, listTasks } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { getPool } from "@/lib/db/pool";
-import { createUser, resetDatabase } from "./helpers";
+import { createUser, queryAsUser, resetDatabase } from "./helpers";
 
 type Reply = { content?: string; tool_calls?: { id: string; name: string; args: Record<string, unknown> }[] };
 
@@ -218,7 +218,7 @@ describe("assistant conversations", () => {
 
     const conversationId = (first.events[0] as Extract<AssistantEvent, { type: "conversation" }>).conversation.id;
     const second = collect();
-    await decideAction(owner, { conversationId, actionId: "call_w", approve: true }, second.emit, { deadline: deadline(), fetchImpl: fake.fetchImpl });
+    await decideActions(owner, { conversationId, decisions: [{ id: "call_w", approve: true }] }, second.emit, { deadline: deadline(), fetchImpl: fake.fetchImpl });
     const statuses = second.events.filter((event) => event.type === "actions").map((event) => (event as Extract<AssistantEvent, { type: "actions" }>).actions[0].status);
     assert.deepEqual(statuses, ["running", "done"]);
     const created = await listTasks(owner, { query: "Globex proposal" });
@@ -226,7 +226,7 @@ describe("assistant conversations", () => {
     assert.equal(created.data[0].dueAt, "2026-10-22T08:00:00.000Z");
     assert.ok(second.events.some((event) => event.type === "message"));
     await assert.rejects(
-      decideAction(owner, { conversationId, actionId: "call_w", approve: true }, second.emit, { deadline: deadline(), fetchImpl: fake.fetchImpl }),
+      decideActions(owner, { conversationId, decisions: [{ id: "call_w", approve: true }] }, second.emit, { deadline: deadline(), fetchImpl: fake.fetchImpl }),
       /already been handled/,
     );
   });
@@ -245,7 +245,7 @@ describe("assistant conversations", () => {
     });
     const conversationId = (first.events[0] as Extract<AssistantEvent, { type: "conversation" }>).conversation.id;
     const declined = collect();
-    await decideAction(owner, { conversationId, actionId: "call_a", approve: false }, declined.emit, { deadline: deadline(), fetchImpl: fake.fetchImpl });
+    await decideActions(owner, { conversationId, decisions: [{ id: "call_a", approve: false }] }, declined.emit, { deadline: deadline(), fetchImpl: fake.fetchImpl });
     const lastRequest = fake.requests[1].messages as { role: string; tool_call_id?: string; content: string }[];
     assert.match(lastRequest.find((message) => message.tool_call_id === "call_a")!.content, /declined/);
 
@@ -264,6 +264,67 @@ describe("assistant conversations", () => {
     assert.equal(hooli?.status, "declined");
     const finalRequest = fake.requests.at(-1)!.messages as { role: string; tool_call_id?: string; content: string }[];
     assert.match(finalRequest.find((message) => message.tool_call_id === "call_b")!.content, /without confirming/);
+  });
+
+  it("names records on action cards and approves a batch in one go", async () => {
+    const alpha = (await createCompany(owner, { name: "Alpha Batch", domain: "alpha-batch.test" })).body.company.id;
+    const beta = (await createCompany(owner, { name: "Beta Batch", domain: "beta-batch.test" })).body.company.id;
+    const fake = gateway([
+      {
+        tool_calls: [
+          { id: "call_bulk", name: "update_companies", args: { companyIds: [alpha, beta], ownerId: owner.userId } },
+          { id: "call_one", name: "update_company", args: { companyId, lifecycle: "customer", ownerId: owner.userId } },
+          { id: "call_skip", name: "create_company", args: { name: "Skipped Ltd" } },
+        ],
+      },
+      { content: "All set." },
+    ]);
+    const first = collect();
+    await sendMessage(owner, { message: "Make me the owner of these", model: "claude-sonnet-5-5", reasoning: "medium", webSearch: false }, first.emit, {
+      deadline: deadline(),
+      fetchImpl: fake.fetchImpl,
+    });
+    const pending = (first.events.find((event) => event.type === "actions") as Extract<AssistantEvent, { type: "actions" }>).actions;
+    assert.deepEqual(
+      pending.map((action) => [action.title, action.lines]),
+      [
+        ["Update 2 companies", ["Owner: Mark Ridgeon", "Companies: Alpha Batch, Beta Batch"]],
+        ["Update company: Globex", ["Lifecycle: customer", "Owner: Mark Ridgeon"]],
+        ["Create company: Skipped Ltd", []],
+      ],
+    );
+
+    const conversationId = (first.events[0] as Extract<AssistantEvent, { type: "conversation" }>).conversation.id;
+    const requestsBefore = fake.requests.length;
+    const second = collect();
+    await decideActions(
+      owner,
+      {
+        conversationId,
+        decisions: [
+          { id: "call_bulk", approve: true },
+          { id: "call_one", approve: true },
+          { id: "call_skip", approve: false },
+        ],
+      },
+      second.emit,
+      { deadline: deadline(), fetchImpl: fake.fetchImpl },
+    );
+    const final = (second.events.filter((event) => event.type === "actions").at(-1) as Extract<AssistantEvent, { type: "actions" }>).actions;
+    assert.deepEqual(final.map((action) => action.status), ["done", "done", "declined"]);
+    assert.equal(fake.requests.length, requestsBefore + 1);
+    const owners = await queryAsUser<{ name: string; owner_id: string | null; lifecycle: string }>(
+      owner.userId,
+      "select name, owner_id, lifecycle from crm.companies where id = any($1::uuid[]) order by name",
+      [[alpha, beta, companyId]],
+    );
+    assert.equal(owners.length, 3);
+    assert.ok(owners.every((row) => row.owner_id === owner.userId));
+    assert.equal(owners.find((row) => row.name === "Globex")?.lifecycle, "customer");
+    const skipped = await queryAsUser(owner.userId, "select 1 from crm.companies where name = 'Skipped Ltd'");
+    assert.equal(skipped.length, 0);
+    const toolMessages = (fake.requests.at(-1)!.messages as { tool_call_id?: string; content: string }[]).filter((message) => message.tool_call_id);
+    assert.match(toolMessages.find((message) => message.tool_call_id === "call_bulk")!.content, /"updated":2/);
   });
 
   it("falls back to supported models and reasoning levels", () => {

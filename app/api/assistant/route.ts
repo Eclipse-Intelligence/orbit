@@ -1,4 +1,4 @@
-import { decideAction, sendMessage, type AssistantEvent } from "@/lib/assistant/chat";
+import { decideActions, readDecisions, sendMessage, type AssistantEvent } from "@/lib/assistant/chat";
 import { AssistantError, gatewayConfigured } from "@/lib/assistant/gateway";
 import { getUserActor } from "@/lib/auth/user";
 import { CrmError } from "@/lib/crm/errors";
@@ -44,13 +44,9 @@ export async function POST(request: Request) {
       const heartbeat = setInterval(() => emit({ type: "ping" }), HEARTBEAT_MS);
       const options = { deadline: started + BUDGET_MS };
       try {
-        if (typeof body.actionId === "string" && typeof body.conversationId === "string") {
-          await decideAction(
-            actor,
-            { conversationId: body.conversationId, actionId: body.actionId, approve: body.approve === true },
-            emit,
-            options,
-          );
+        const decisions = readDecisions(body);
+        if (decisions && typeof body.conversationId === "string") {
+          await decideActions(actor, { conversationId: body.conversationId, decisions }, emit, options);
         } else {
           await sendMessage(
             actor,

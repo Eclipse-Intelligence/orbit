@@ -1,4 +1,5 @@
 import { getBookingPage } from "@/lib/booking/pages";
+import { BULK_LIMIT, runBulk } from "@/lib/crm/bulk";
 import { listActivities } from "@/lib/crm/activities";
 import { getCalendarStatus, getMeetings, listPeopleMet } from "@/lib/crm/calendar";
 import { listCalendarItems } from "@/lib/crm/calendars";
@@ -32,6 +33,9 @@ import {
   type Task,
   type UserActor,
 } from "@/lib/crm/types";
+import { withActor } from "@/lib/crm/context";
+import { isUuid } from "@/lib/crm/mutate";
+import type { Scope } from "@/lib/crm/scopes";
 import { formatDateLabel, formatDateTimeLabel } from "@/lib/date-input";
 import { appTimeZone, parseDateTime, zonedParts } from "@/lib/time";
 
@@ -45,8 +49,10 @@ export type AssistantTool = {
   write?: boolean;
   label: string;
   run: (actor: UserActor, args: Args) => Promise<unknown>;
-  describe?: (args: Args) => { title: string; lines: string[] };
+  describe?: (args: Args, name: Names) => { title: string; lines: string[] };
 };
+
+type Names = (id: unknown) => string;
 
 const PROVENANCE = { source: "assistant" } as const;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -170,10 +176,22 @@ function shown(key: string, value: unknown) {
   return text;
 }
 
-function fieldLines(args: Args, labels: Record<string, string>) {
+const ID_FIELDS = new Set(["companyId", "contactId", "ownerId", "stageId", "primaryContactId", "taskId", "opportunityId"]);
+
+function fieldLines(args: Args, labels: Record<string, string>, name?: Names) {
   return Object.entries(labels)
     .filter(([key]) => args[key] !== undefined && args[key] !== null && args[key] !== "")
-    .map(([key, label]) => `${label}: ${shown(key, args[key])}`);
+    .map(([key, label]) => `${label}: ${name && ID_FIELDS.has(key) ? name(args[key]) : shown(key, args[key])}`);
+}
+
+function nameList(ids: string[], name: Names, noun: string) {
+  const shownNames = ids.slice(0, 6).map(name);
+  const rest = ids.length - shownNames.length;
+  return `${noun}: ${shownNames.join(", ")}${rest > 0 ? ` and ${rest} more` : ""}`;
+}
+
+function titled(verb: string, label: string | undefined) {
+  return label ? `${verb}: ${label}` : verb;
 }
 
 const idParam = (description: string) => ({ type: "string", description });
@@ -229,6 +247,21 @@ const OPPORTUNITY_FIELDS = {
   ownerId: { type: "string" },
   source: { type: "string" },
 };
+
+const BULK_COMPANY_KEYS = ["ownerId", "lifecycle", "industry", "sizeCategory", "source"];
+const BULK_CONTACT_KEYS = ["ownerId", "companyId", "jobTitle", "source"];
+
+function pickSchema(fields: Record<string, JsonSchema>, keys: string[]) {
+  return Object.fromEntries(keys.map((key) => [key, fields[key]]));
+}
+
+async function bulkUpdate(actor: UserActor, scope: Scope, ids: unknown, update: (id: string) => Promise<unknown>) {
+  const outcomes = await runBulk(actor, scope, ids, update);
+  const failed = outcomes.flatMap((outcome) => (outcome.ok ? [] : [{ id: outcome.id, error: outcome.error }]));
+  const updated = outcomes.length - failed.length;
+  if (updated === 0) return { error: failed[0]?.error ?? "Nothing was updated.", failed };
+  return { updated, failed };
+}
 
 function pick(args: Args, keys: string[]) {
   const out: Args = {};
@@ -657,10 +690,10 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       },
       required: ["title"],
     },
-    describe: (args) => ({
+    describe: (args, name) => ({
       title: `Create task: ${str(args.title)}`,
       lines: [
-        ...fieldLines(args, { dueAt: "Due", description: "Detail", priority: "Priority" }),
+        ...fieldLines(args, { companyId: "Company", contactId: "Person", dueAt: "Due", description: "Detail", priority: "Priority" }, name),
         ...fieldLines(args, { remindMinutes: "Reminder" }),
         `ClickUp: ${args.sendToClickUp === false ? "no" : "yes"}`,
       ],
@@ -694,8 +727,8 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       properties: { taskId: idParam("Task id."), ...TASK_FIELDS },
       required: ["taskId"],
     },
-    describe: (args) => ({
-      title: "Update task",
+    describe: (args, name) => ({
+      title: titled("Update task", name(args.taskId)),
       lines: fieldLines(args, { title: "Title", dueAt: "Due", remindMinutes: "Reminder", priority: "Priority", description: "Detail" }),
     }),
     run: async (actor, args) => {
@@ -722,7 +755,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     write: true,
     description: "Mark a task as done. ClickUp is updated too.",
     parameters: { type: "object", properties: { taskId: idParam("Task id.") }, required: ["taskId"] },
-    describe: (args) => ({ title: "Mark task done", lines: [`Task: ${str(args.taskTitle) || str(args.taskId)}`] }),
+    describe: (args, name) => ({ title: titled("Mark task done", name(args.taskId)), lines: [] }),
     run: async (actor, args) => {
       const done = await completeTask(actor, required(args.taskId, "A task id"), {
         provenance: { operation: "complete_task", ...PROVENANCE },
@@ -747,9 +780,9 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       },
       required: ["type", "body"],
     },
-    describe: (args) => ({
+    describe: (args, name) => ({
       title: `Log ${str(args.type) || "note"}`,
-      lines: fieldLines(args, { title: "Title", body: "Text" }),
+      lines: fieldLines(args, { companyId: "Company", contactId: "Person", title: "Title", body: "Text" }, name),
     }),
     run: async (actor, args) => {
       const type = oneOf(args.type, ["note", "call", "email"] as const) ?? "note";
@@ -774,9 +807,9 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       properties: { ...COMPANY_FIELDS, tags: { type: "array", items: { type: "string" } } },
       required: ["name"],
     },
-    describe: (args) => ({
+    describe: (args, name) => ({
       title: `Create company: ${str(args.name)}`,
-      lines: fieldLines(args, { domain: "Domain", website: "Website", industry: "Industry", lifecycle: "Lifecycle", description: "About", tags: "Tags" }),
+      lines: fieldLines(args, { domain: "Domain", website: "Website", industry: "Industry", lifecycle: "Lifecycle", ownerId: "Owner", description: "About", tags: "Tags" }, name),
     }),
     run: async (actor, args) => {
       const created = await createCompany(
@@ -793,9 +826,9 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     write: true,
     description: "Change a company's details. Only the fields you pass change.",
     parameters: { type: "object", properties: { companyId: idParam("Company id."), ...COMPANY_FIELDS }, required: ["companyId"] },
-    describe: (args) => ({
-      title: "Update company",
-      lines: fieldLines(args, { name: "Name", domain: "Domain", website: "Website", industry: "Industry", lifecycle: "Lifecycle", description: "About", ownerId: "Owner" }),
+    describe: (args, name) => ({
+      title: titled("Update company", name(args.companyId)),
+      lines: fieldLines(args, { name: "Name", domain: "Domain", website: "Website", industry: "Industry", lifecycle: "Lifecycle", ownerId: "Owner", description: "About" }, name),
     }),
     run: async (actor, args) => {
       const updated = await updateCompany(actor, required(args.companyId, "A company id"), pick(args, Object.keys(COMPANY_FIELDS)), {
@@ -803,6 +836,28 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       });
       return { company: withCompany(updated.body.company) };
     },
+  },
+  {
+    name: "update_companies",
+    label: "Updating companies",
+    write: true,
+    description: `Make the same change to many companies at once, for example a new owner or lifecycle. Up to ${BULK_LIMIT} companies per call. Use this instead of many update_company calls.`,
+    parameters: {
+      type: "object",
+      properties: { companyIds: { type: "array", items: { type: "string" } }, ...pickSchema(COMPANY_FIELDS, BULK_COMPANY_KEYS) },
+      required: ["companyIds"],
+    },
+    describe: (args, name) => {
+      const ids = strings(args.companyIds);
+      return {
+        title: `Update ${ids.length} ${ids.length === 1 ? "company" : "companies"}`,
+        lines: [...fieldLines(args, { ownerId: "Owner", lifecycle: "Lifecycle", industry: "Industry", sizeCategory: "Size", source: "Source" }, name), nameList(ids, name, "Companies")],
+      };
+    },
+    run: (actor, args) =>
+      bulkUpdate(actor, "companies:write", args.companyIds, (id) =>
+        updateCompany(actor, id, pick(args, BULK_COMPANY_KEYS), { provenance: { operation: "update_companies", ...PROVENANCE } }),
+      ),
   },
   {
     name: "create_contact",
@@ -813,9 +868,9 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       type: "object",
       properties: { ...CONTACT_FIELDS, tags: { type: "array", items: { type: "string" } } },
     },
-    describe: (args) => ({
+    describe: (args, name) => ({
       title: `Create contact: ${[str(args.firstName), str(args.lastName)].filter(Boolean).join(" ") || str(args.email)}`,
-      lines: fieldLines(args, { email: "Email", phone: "Phone", jobTitle: "Job title", companyId: "Company", tags: "Tags" }),
+      lines: fieldLines(args, { email: "Email", phone: "Phone", jobTitle: "Job title", companyId: "Company", ownerId: "Owner", tags: "Tags" }, name),
     }),
     run: async (actor, args) => {
       const created = await createContact(
@@ -832,9 +887,13 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     write: true,
     description: "Change a person's details. Only the fields you pass change.",
     parameters: { type: "object", properties: { contactId: idParam("Contact id."), ...CONTACT_FIELDS }, required: ["contactId"] },
-    describe: (args) => ({
-      title: "Update contact",
-      lines: fieldLines(args, { firstName: "First name", lastName: "Last name", email: "Email", phone: "Phone", jobTitle: "Job title", companyId: "Company", notes: "Notes" }),
+    describe: (args, name) => ({
+      title: titled("Update contact", name(args.contactId)),
+      lines: fieldLines(
+        args,
+        { firstName: "First name", lastName: "Last name", email: "Email", phone: "Phone", jobTitle: "Job title", companyId: "Company", ownerId: "Owner", notes: "Notes" },
+        name,
+      ),
     }),
     run: async (actor, args) => {
       const updated = await updateContact(actor, required(args.contactId, "A contact id"), pick(args, Object.keys(CONTACT_FIELDS)), {
@@ -842,6 +901,28 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       });
       return { contact: withContact(updated.body.contact) };
     },
+  },
+  {
+    name: "update_contacts",
+    label: "Updating people",
+    write: true,
+    description: `Make the same change to many people at once, for example a new owner or company. Up to ${BULK_LIMIT} people per call. Use this instead of many update_contact calls.`,
+    parameters: {
+      type: "object",
+      properties: { contactIds: { type: "array", items: { type: "string" } }, ...pickSchema(CONTACT_FIELDS, BULK_CONTACT_KEYS) },
+      required: ["contactIds"],
+    },
+    describe: (args, name) => {
+      const ids = strings(args.contactIds);
+      return {
+        title: `Update ${ids.length} ${ids.length === 1 ? "person" : "people"}`,
+        lines: [...fieldLines(args, { ownerId: "Owner", companyId: "Company", jobTitle: "Job title", source: "Source" }, name), nameList(ids, name, "People")],
+      };
+    },
+    run: (actor, args) =>
+      bulkUpdate(actor, "contacts:write", args.contactIds, (id) =>
+        updateContact(actor, id, pick(args, BULK_CONTACT_KEYS), { provenance: { operation: "update_contacts", ...PROVENANCE } }),
+      ),
   },
   {
     name: "create_opportunity",
@@ -853,9 +934,13 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       properties: { companyId: idParam("Company id."), ...OPPORTUNITY_FIELDS },
       required: ["companyId", "name"],
     },
-    describe: (args) => ({
+    describe: (args, name) => ({
       title: `Create opportunity: ${str(args.name)}`,
-      lines: fieldLines(args, { value: "Value", currency: "Currency", stageId: "Stage", expectedCloseDate: "Expected close", probability: "Probability" }),
+      lines: fieldLines(
+        args,
+        { companyId: "Company", value: "Value", currency: "Currency", stageId: "Stage", expectedCloseDate: "Expected close", probability: "Probability", ownerId: "Owner" },
+        name,
+      ),
     }),
     run: async (actor, args) => {
       const created = await createOpportunity(
@@ -876,9 +961,13 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       properties: { opportunityId: idParam("Opportunity id."), ...OPPORTUNITY_FIELDS },
       required: ["opportunityId"],
     },
-    describe: (args) => ({
-      title: "Update opportunity",
-      lines: fieldLines(args, { name: "Name", stageId: "Stage", status: "Status", value: "Value", expectedCloseDate: "Expected close", probability: "Probability" }),
+    describe: (args, name) => ({
+      title: titled("Update opportunity", name(args.opportunityId)),
+      lines: fieldLines(
+        args,
+        { name: "Name", stageId: "Stage", status: "Status", value: "Value", expectedCloseDate: "Expected close", probability: "Probability", ownerId: "Owner" },
+        name,
+      ),
     }),
     run: async (actor, args) => {
       const id = required(args.opportunityId, "An opportunity id");
@@ -904,9 +993,9 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       },
       required: ["kind", "ids"],
     },
-    describe: (args) => ({
+    describe: (args, name) => ({
       title: `Tag ${strings(args.ids).length} ${args.kind === "contact" ? "people" : "companies"}`,
-      lines: fieldLines(args, { add: "Add", remove: "Remove" }),
+      lines: [...fieldLines(args, { add: "Add", remove: "Remove" }), nameList(strings(args.ids), name, args.kind === "contact" ? "People" : "Companies")],
     }),
     run: async (actor, args) => {
       const kind = oneOf(args.kind, ["company", "contact"] as const) ?? "company";
@@ -926,9 +1015,9 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       properties: { contactId: idParam("Contact id."), subject: { type: "string" }, body: { type: "string" } },
       required: ["contactId", "subject", "body"],
     },
-    describe: (args) => ({
+    describe: (args, name) => ({
       title: `Send email: ${str(args.subject)}`,
-      lines: [`To: ${str(args.recipientName) || str(args.contactId)}`, str(args.body)],
+      lines: [`To: ${name(args.contactId)}`, str(args.body)],
     }),
     run: async (actor, args) => {
       const result = await sendContactEmail(actor, required(args.contactId, "A contact id"), {
@@ -994,10 +1083,47 @@ export function toolDefinitions() {
   }));
 }
 
-export function describeAction(name: string, args: Args) {
+function collectIds(value: unknown, into: Set<string>) {
+  if (typeof value === "string" && isUuid(value)) into.add(value);
+  else if (Array.isArray(value)) for (const item of value) collectIds(item, into);
+}
+
+export async function recordNames(actor: UserActor, args: Args[]) {
+  const ids = new Set<string>();
+  for (const entry of args) for (const value of Object.values(entry)) collectIds(value, ids);
+  const names = new Map<string, string>();
+  if (ids.size === 0) return names;
+  const list = [...ids];
+  await withActor(actor, async (db) => {
+    const result = await db.query<{ id: string; name: string | null }>(
+      `select id, name from crm.companies where id = any($1::uuid[])
+       union all
+       select id, nullif(trim(concat_ws(' ', first_name, last_name)), '') from crm.contacts where id = any($1::uuid[])
+       union all
+       select id, title from crm.tasks where id = any($1::uuid[])
+       union all
+       select id, name from crm.opportunities where id = any($1::uuid[])
+       union all
+       select id, name from crm.pipeline_stages where id = any($1::uuid[])
+       union all
+       select p.id, coalesce(nullif(p.full_name, ''), p.email) from crm.profiles p
+         join crm.workspace_members m on m.user_id = p.id and m.workspace_id = $2
+         where p.id = any($1::uuid[])`,
+      [list, actor.workspaceId],
+    );
+    for (const row of result.rows) if (row.name) names.set(row.id, row.name);
+  });
+  return names;
+}
+
+export function describeAction(name: string, args: Args, names: Map<string, string> = new Map()) {
   const tool = TOOL_BY_NAME.get(name);
   if (!tool?.describe) return { title: tool?.label ?? name, lines: [] };
-  const described = tool.describe(args);
+  const lookup: Names = (id) => {
+    const key = str(id);
+    return names.get(key) ?? (isUuid(key) ? "Unknown record" : key);
+  };
+  const described = tool.describe(args, lookup);
   return { title: described.title, lines: described.lines.filter(Boolean) };
 }
 
