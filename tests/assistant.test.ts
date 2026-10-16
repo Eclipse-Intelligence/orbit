@@ -123,7 +123,8 @@ describe("assistant tools", () => {
 
   it("writes the system prompt with Eclipse context and the house rules", () => {
     const prompt = systemPrompt(owner, { webSearch: false, now: new Date("2026-10-16T08:00:00Z") });
-    assert.match(prompt, /Eclipse is a B2B SaaS platform/);
+    assert.match(prompt, /Eclipse is a content and intelligence platform/);
+    assert.ok(!/Tags: #eclipse/.test(prompt));
     assert.match(prompt, /UK English/);
     assert.match(prompt, /Friday,? 16 October 2026/);
     assert.match(prompt, /list_tasks/);
