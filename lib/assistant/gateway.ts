@@ -27,6 +27,34 @@ export class AssistantError extends Error {
   }
 }
 
+function simplifySchema(schema: unknown): unknown {
+  if (Array.isArray(schema)) return schema.map(simplifySchema);
+  if (!schema || typeof schema !== "object") return schema;
+  const input = schema as Record<string, unknown>;
+  const output: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (key === "enum" && Array.isArray(value) && value.some((item) => typeof item !== "string")) {
+      const list = value.join(", ");
+      output.description = `${typeof input.description === "string" ? `${input.description} ` : ""}One of: ${list}.`;
+      continue;
+    }
+    if (key === "minimum" || key === "maximum" || key === "additionalProperties") continue;
+    if (key === "description" && "description" in output) continue;
+    output[key] = simplifySchema(value);
+  }
+  return output;
+}
+
+export function geminiTool(tool: unknown) {
+  const definition = tool as { type?: string; function?: { name: string; description?: string; parameters?: Record<string, unknown> } };
+  if (definition.type !== "function" || !definition.function) return tool;
+  const parameters = definition.function.parameters;
+  const properties = parameters?.properties as Record<string, unknown> | undefined;
+  const fn: Record<string, unknown> = { name: definition.function.name, description: definition.function.description };
+  if (parameters && properties && Object.keys(properties).length > 0) fn.parameters = simplifySchema(parameters);
+  return { type: "function", function: fn };
+}
+
 function baseUrl() {
   return (process.env.LLM_API_BASE_URL?.trim() || DEFAULT_BASE_URL).replace(/\/+$/, "");
 }
@@ -97,7 +125,8 @@ export async function complete(input: {
 }): Promise<Completion> {
   const apiKey = process.env.LLM_API_KEY?.trim();
   if (!apiKey) throw new AssistantError("Set LLM_API_KEY in Vercel to use the assistant.");
-  const tools = input.tools ?? toolDefinitions();
+  const raw = input.tools ?? toolDefinitions();
+  const tools = input.model.startsWith("gemini") ? raw.map(geminiTool) : raw;
   let response: Response;
   try {
     response = await (input.fetchImpl ?? fetch)(`${baseUrl()}/chat/completions`, {

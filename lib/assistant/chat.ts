@@ -49,6 +49,7 @@ export type AssistantEvent =
   | { type: "message"; message: DisplayMessage }
   | { type: "actions"; messageId: string; actions: AssistantAction[] }
   | { type: "done" }
+  | { type: "ping" }
   | { type: "error"; message: string };
 
 type Emit = (event: AssistantEvent) => void;

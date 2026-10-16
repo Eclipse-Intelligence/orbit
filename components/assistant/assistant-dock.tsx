@@ -239,6 +239,7 @@ export default function AssistantDock() {
   const scroller = useRef<HTMLDivElement>(null);
   const abort = useRef<AbortController | null>(null);
   const changed = useRef(false);
+  const conversationId = useRef<string | null>(null);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -265,6 +266,7 @@ export default function AssistantDock() {
   }, [model, reasoning, webSearch]);
 
   useEffect(() => {
+    conversationId.current = conversation?.id ?? null;
     try {
       if (conversation) sessionStorage.setItem(CONVERSATION_KEY, conversation.id);
       else sessionStorage.removeItem(CONVERSATION_KEY);
@@ -299,7 +301,10 @@ export default function AssistantDock() {
   );
 
   const onEvent = useCallback((event: AssistantEvent) => {
-    if (event.type === "conversation") setConversation(event.conversation);
+    if (event.type === "conversation") {
+      conversationId.current = event.conversation.id;
+      setConversation(event.conversation);
+    }
     if (event.type === "user") setMessages((current) => [...current.filter((message) => !message.id.startsWith("local-")), event.message]);
     if (event.type === "tool") {
       setLive((current) => {
@@ -346,7 +351,13 @@ export default function AssistantDock() {
       await streamAssistant(body, onEvent, controller.signal);
     } catch (caught) {
       if (!(caught instanceof Error && caught.name === "AbortError")) {
-        setError(caught instanceof Error ? caught.message : "The assistant is unavailable right now.");
+        const dropped = caught instanceof TypeError;
+        if (dropped && conversationId.current) {
+          setError("The connection dropped. Orbit is still working, so the answer will appear here when it's ready.");
+          void recover(conversationId.current);
+        } else {
+          setError(caught instanceof Error ? caught.message : "The assistant is unavailable right now.");
+        }
       }
     } finally {
       abort.current = null;
@@ -355,6 +366,27 @@ export default function AssistantDock() {
       if (changed.current) {
         changed.current = false;
         router.refresh();
+      }
+    }
+  }
+
+  async function recover(id: string) {
+    const known = messages.length;
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      await new Promise((resolve) => window.setTimeout(resolve, 6_000));
+      if (conversationId.current !== id) return;
+      const result = await getConversationAction(id).catch(() => null);
+      if (!result) continue;
+      const last = result.messages[result.messages.length - 1];
+      const settled =
+        last?.role === "assistant" &&
+        (last.content.trim() !== "" || last.actions.some((action) => action.status === "pending")) &&
+        result.messages.length > known;
+      if (settled) {
+        setMessages(result.messages);
+        setError(null);
+        router.refresh();
+        return;
       }
     }
   }
