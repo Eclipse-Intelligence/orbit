@@ -121,10 +121,33 @@ function readReply(content: BetaContentBlock[], stopReason: string | null) {
   return { text: text.join("").trim(), toolCalls, sources: [...sources.values()].slice(0, 30), kept };
 }
 
-function apiMessage(error: InstanceType<typeof Anthropic.APIError>) {
-  const body = error.error as { error?: { message?: unknown } } | undefined;
+export function claudeErrorDetail(error: InstanceType<typeof Anthropic.APIError>) {
+  const body = error.error as { error?: { message?: unknown; type?: unknown } } | undefined;
   const message = typeof body?.error?.message === "string" ? body.error.message : error.message;
-  return message.replace(/\s+/g, " ").trim().slice(0, 300);
+  const type = typeof body?.error?.type === "string" ? body.error.type : null;
+  const headers = error.headers;
+  const retry = headers?.get("retry-after") ?? null;
+  return {
+    status: error.status ?? null,
+    type,
+    message: message.replace(/\s+/g, " ").trim().slice(0, 300),
+    retryAfter: retry,
+    requestId: error.requestID ?? headers?.get("request-id") ?? null,
+    headers: headers
+      ? Object.fromEntries(
+          [...headers.entries()].filter(([key]) => /^(retry-after|anthropic-ratelimit-|x-should-retry|request-id|anthropic-organization-id)/.test(key)),
+        )
+      : {},
+  };
+}
+
+function describeError(error: InstanceType<typeof Anthropic.APIError>) {
+  const detail = claudeErrorDetail(error);
+  const parts = [`Claude returned ${detail.status}${detail.type ? ` (${detail.type})` : ""}: ${detail.message}`];
+  if (detail.retryAfter) parts.push(`Retry after ${detail.retryAfter}s.`);
+  if (detail.requestId) parts.push(`Request ${detail.requestId}.`);
+  console.error("Claude account request failed", detail);
+  return parts.join(" ");
 }
 
 export async function completeClaude(input: ProviderInput & { token: string }): Promise<Completion> {
@@ -147,13 +170,13 @@ export async function completeClaude(input: ProviderInput & { token: string }): 
     }
   } catch (error) {
     if (error instanceof Anthropic.AuthenticationError) {
-      throw new ProviderAuthError(`Claude returned ${error.status}: ${apiMessage(error)}`);
+      throw new ProviderAuthError(describeError(error));
     }
     if (error instanceof Anthropic.APIConnectionTimeoutError) {
       throw new ProviderError("Claude took too long to reply. Try again, or pick a lower reasoning level.");
     }
     if (error instanceof Anthropic.APIError && typeof error.status === "number") {
-      throw new ProviderError(`Claude returned ${error.status}: ${apiMessage(error)}`);
+      throw new ProviderError(describeError(error));
     }
     if (error instanceof Anthropic.APIError) throw new ProviderError("Couldn't reach Claude.");
     throw error;
