@@ -31,6 +31,15 @@ describe("task pad parser", () => {
     assert.equal(parse("Ping Sam tomorrow, remind me 45 minutes before").remindMinutes, 30);
   });
 
+  it("keeps the time when a reminder follows it", () => {
+    const result = parse("Speak to Toby Sutton OBE tomorrow at 12:15 and remind me 30 mins before");
+    assert.equal(result.due, "2026-10-17T12:15");
+    assert.equal(result.remindMinutes, 30);
+    assert.equal(result.title, "Speak to Toby Sutton OBE");
+    assert.equal(parse("at 12:15 remind me 30 mins").due, "2026-10-16T12:15");
+    assert.equal(parse("Lunch 1.30pm tomorrow").due, "2026-10-17T13:30");
+  });
+
   it("understands common ways of saying when", () => {
     const cases: [string, string | null][] = [
       ["Send proposal", null],
