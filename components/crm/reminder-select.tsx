@@ -10,8 +10,12 @@ export default function ReminderSelect({
   value,
   onChange,
   disabled,
+  className,
+  emptyLabel = "No reminder",
 }: {
   id: string;
+  className?: string;
+  emptyLabel?: string;
   name?: string;
   value: string;
   onChange: (value: string) => void;
@@ -27,11 +31,11 @@ export default function ReminderSelect({
           if (next !== "none") requestReminderPermission();
         }}
       >
-        <SelectTrigger id={id} aria-label="Reminder">
+        <SelectTrigger id={id} aria-label="Reminder" className={className}>
           <SelectValue />
         </SelectTrigger>
         <SelectContent className="max-h-64">
-          <SelectItem value="none">No reminder</SelectItem>
+          <SelectItem value="none">{emptyLabel}</SelectItem>
           {REMINDER_OPTIONS.map((option) => (
             <SelectItem key={option.minutes} value={String(option.minutes)}>
               {option.label}
