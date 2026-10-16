@@ -23,6 +23,8 @@ import {
 import { relativeWhen } from "@/lib/companies";
 import { cn } from "@/lib/utils";
 import ArrowUpIcon from "@/public/assets/images/assistant/arrow-up.svg";
+import CheckIcon from "@/public/assets/images/assistant/check.svg";
+import CopyIcon from "@/public/assets/images/assistant/copy.svg";
 import GlobeIcon from "@/public/assets/images/assistant/globe.svg";
 import StopIcon from "@/public/assets/images/assistant/stop.svg";
 import TrashIcon from "@/public/assets/images/assistant/trash.svg";
@@ -129,6 +131,42 @@ function ActionCard({
   );
 }
 
+function CopyableReply({ text }: { text: string }) {
+  const body = useRef<HTMLDivElement>(null);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 1600);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+
+  async function copy() {
+    const plain = body.current?.innerText.trim() || text;
+    try {
+      await navigator.clipboard.writeText(plain);
+      setCopied(true);
+    } catch {}
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div ref={body}>
+        <Markdown text={text} />
+      </div>
+      <button
+        type="button"
+        onClick={() => void copy()}
+        aria-label={copied ? "Copied" : "Copy reply"}
+        title={copied ? "Copied" : "Copy"}
+        className="text-faint hover:text-foreground focus-visible:ring-ring/60 ease-power3-out -ml-1.5 flex size-7 cursor-pointer items-center justify-center rounded-full transition-colors duration-150 outline-none hover:bg-white/5 focus-visible:ring-2"
+      >
+        {copied ? <CheckIcon aria-hidden className="text-soft size-3.5" /> : <CopyIcon aria-hidden className="size-3.5" />}
+      </button>
+    </div>
+  );
+}
+
 function Message({
   message,
   busy,
@@ -158,7 +196,7 @@ function Message({
           ))}
         </div>
       )}
-      {message.content && <Markdown text={message.content} />}
+      {message.content && <CopyableReply text={message.content} />}
       {message.sources.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
           {message.sources.map((source) => (
