@@ -2,7 +2,6 @@ import { OAuthError } from "@/lib/ai-accounts/oauth";
 import { aiAccess, noteAiError } from "@/lib/ai-accounts/store";
 import { assistantModel } from "@/lib/assistant/models";
 import { completeChatGpt } from "@/lib/assistant/providers/chatgpt";
-import { completeClaude } from "@/lib/assistant/providers/claude";
 import { ProviderAuthError, ProviderError, type FunctionTool } from "@/lib/assistant/providers/shared";
 import { toolDefinitions } from "@/lib/assistant/tools";
 import type { UserActor } from "@/lib/crm/types";
@@ -146,6 +145,7 @@ function plain(messages: ChatMessage[]) {
 export async function complete(input: CompleteInput): Promise<Completion> {
   const chosen = assistantModel(input.model);
   if (!chosen || chosen.source === "orbit") return completeGateway({ ...input, model: chosen?.apiModel ?? input.model });
+  if (chosen.source === "claude") throw new AssistantError("Claude account models run through Orbit Agent on your Mac.");
   if (!input.actor) throw new AssistantError("Sign in again to use your connected accounts.");
   const actor = input.actor;
   const source = chosen.source;
@@ -161,9 +161,7 @@ export async function complete(input: CompleteInput): Promise<Completion> {
       tools: (input.tools ?? toolDefinitions()) as FunctionTool[],
       fetchImpl: input.fetchImpl,
     };
-    return source === "claude"
-      ? completeClaude({ ...provider, token: access.token })
-      : completeChatGpt({ ...provider, token: access.token, accountId: access.accountId });
+    return completeChatGpt({ ...provider, token: access.token, accountId: access.accountId });
   };
   try {
     try {

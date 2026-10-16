@@ -5,12 +5,12 @@ import { redirect } from "next/navigation";
 import { OAuthError } from "@/lib/ai-accounts/oauth";
 import {
   disconnectAiAccount,
-  finishClaudeLogin,
   pollChatGptLogin,
   startChatGptLogin,
-  startClaudeLogin,
 } from "@/lib/ai-accounts/store";
 import { getUserActor } from "@/lib/auth/user";
+import { createPairingCode, listCompanions, revokeCompanion, type CompanionSummary } from "@/lib/companion/pairing";
+import { CrmError } from "@/lib/crm/errors";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
 
 async function requireUser() {
@@ -45,26 +45,6 @@ export async function pollChatGptAction() {
   }
 }
 
-export async function startClaudeAction() {
-  const user = await requireUser();
-  try {
-    return await startClaudeLogin(user);
-  } catch (error) {
-    return failed(error, "Claude sign-in couldn't start. Try again.");
-  }
-}
-
-export async function finishClaudeAction(code: string) {
-  const user = await requireUser();
-  try {
-    const result = await finishClaudeLogin(user, typeof code === "string" ? code : "");
-    revalidatePath(SETTINGS_PATHS.integrations);
-    return result;
-  } catch (error) {
-    return failed(error, "Claude sign-in failed. Try again.");
-  }
-}
-
 export async function disconnectAiAccountAction(provider: string): Promise<{ error?: string }> {
   const user = await requireUser();
   try {
@@ -73,5 +53,31 @@ export async function disconnectAiAccountAction(provider: string): Promise<{ err
     return {};
   } catch (error) {
     return failed(error, "Couldn't disconnect that account.");
+  }
+}
+
+export async function createPairingCodeAction(): Promise<{ code: string; expiresAt: string } | { error: string }> {
+  const user = await requireUser();
+  try {
+    return await createPairingCode(user);
+  } catch (error) {
+    console.error("Could not create a pairing code", error);
+    return { error: "Couldn't make a pairing code. Try again." };
+  }
+}
+
+export async function listCompanionsAction(): Promise<CompanionSummary[]> {
+  const user = await requireUser();
+  return listCompanions(user);
+}
+
+export async function revokeCompanionAction(id: string): Promise<{ error?: string }> {
+  const user = await requireUser();
+  try {
+    await revokeCompanion(user, id);
+    revalidatePath(SETTINGS_PATHS.integrations);
+    return {};
+  } catch (error) {
+    return { error: error instanceof CrmError ? error.message : "Couldn't remove that Mac." };
   }
 }

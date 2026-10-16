@@ -343,6 +343,7 @@ export default function AssistantDock() {
   const changed = useRef(false);
   const conversationId = useRef<string | null>(null);
   const pinned = useRef(true);
+  const waiting = useRef(false);
   const [connected, setConnected] = useState<ModelSource[] | null>(null);
 
   useEffect(() => {
@@ -463,6 +464,10 @@ export default function AssistantDock() {
       });
     }
     if (event.type === "error") setError(event.message);
+    if (event.type === "waiting") {
+      waiting.current = true;
+      setError(event.message);
+    }
   }, []);
 
   async function run(body: Record<string, unknown>) {
@@ -487,6 +492,10 @@ export default function AssistantDock() {
       abort.current = null;
       setBusy(false);
       setLive([]);
+      if (waiting.current && conversationId.current) {
+        waiting.current = false;
+        void recover(conversationId.current);
+      }
       if (changed.current) {
         changed.current = false;
         router.refresh();

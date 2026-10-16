@@ -1,7 +1,11 @@
 import { AssistantError, complete, type ChatMessage, type ProviderState, type Source, type ToolCall } from "@/lib/assistant/gateway";
-import { settingsFor, type ReasoningLevel } from "@/lib/assistant/models";
+import { assistantModel, settingsFor, type ReasoningLevel } from "@/lib/assistant/models";
 import { systemPrompt } from "@/lib/assistant/prompt";
-import { TOOL_BY_NAME, describeAction, recordNames, runTool, toolJson } from "@/lib/assistant/tools";
+import { ASSISTANT_TOOLS, TOOL_BY_NAME, describeAction, recordNames, runTool, toolJson } from "@/lib/assistant/tools";
+import type { CompanionResult, Effort } from "@/companion/src/protocol";
+import { cancelCompanionJob, enqueueCompanionJob, readCompanionJob } from "@/lib/companion/jobs";
+import { companionOnline } from "@/lib/companion/pairing";
+import { buildPrompt } from "@/lib/companion/transcript";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { iso, isUuid } from "@/lib/crm/mutate";
@@ -9,6 +13,8 @@ import type { UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
 
 const MAX_ROUNDS = 24;
+const COMPANION_POLL_MS = 1_000;
+const COMPANION_CLAIM_MS = 20_000;
 const TITLE_MAX = 80;
 const MESSAGE_MAX = 20_000;
 
@@ -50,6 +56,7 @@ export type AssistantEvent =
   | { type: "actions"; messageId: string; actions: AssistantAction[] }
   | { type: "done" }
   | { type: "ping" }
+  | { type: "waiting"; message: string }
   | { type: "error"; message: string };
 
 type Emit = (event: AssistantEvent) => void;
@@ -279,6 +286,112 @@ async function declinePending(actor: UserActor, conversationId: string, rows: Me
   }
 }
 
+function companionTools() {
+  return ASSISTANT_TOOLS.map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    parameters: tool.parameters,
+    write: Boolean(tool.write),
+  }));
+}
+
+function toToolCall(call: { id: string; name: string; arguments: string }): ToolCall {
+  return { id: call.id, type: "function", function: { name: call.name, arguments: call.arguments || "{}" } };
+}
+
+export async function applyCompanionResult(actor: UserActor, conversationId: string, result: CompanionResult) {
+  await withActor(actor, (db) => readConversation(db, actor, conversationId));
+  const entries: { content: string; reads: ToolCall[] }[] = [];
+  const writes: ToolCall[] = [];
+  for (const step of result.steps) {
+    const reads: ToolCall[] = [];
+    for (const call of step.calls) {
+      const tool = TOOL_BY_NAME.get(call.name);
+      if (!tool) continue;
+      (tool.write ? writes : reads).push(toToolCall(call));
+    }
+    if (step.text.trim() || reads.length > 0) entries.push({ content: step.text.trim(), reads });
+  }
+  if (entries.length === 0) entries.push({ content: writes.length > 0 ? "" : "I didn't get an answer back. Try again.", reads: [] });
+  const ids: string[] = [];
+  let last: MessageRow | null = null;
+  for (const [index, entry] of entries.entries()) {
+    const final = index === entries.length - 1;
+    const toolCalls = final ? [...entry.reads, ...writes] : entry.reads;
+    last = await insertMessage(actor, conversationId, {
+      role: "assistant",
+      content: entry.content,
+      toolCalls,
+      sources: final ? result.sources : null,
+      model: final ? result.model : null,
+      usage: final ? result.usage : null,
+    });
+    ids.push(last.id);
+    for (const call of entry.reads) {
+      const output = result.results[call.id];
+      await insertMessage(actor, conversationId, {
+        role: "tool",
+        content: output?.content ?? toolJson({ error: "No result came back for this tool." }),
+        toolCallId: call.id,
+        toolName: call.function.name,
+      });
+    }
+  }
+  if (writes.length > 0 && last) {
+    const names = await recordNames(
+      actor,
+      writes.map((call) => parseArgs(call.function.arguments)),
+    ).catch(() => new Map<string, string>());
+    const actions: AssistantAction[] = writes.map((call) => ({
+      id: call.id,
+      name: call.function.name,
+      ...describeAction(call.function.name, parseArgs(call.function.arguments), names),
+      status: "pending",
+    }));
+    await saveActions(actor, last.id, actions);
+  }
+  return ids;
+}
+
+async function runCompanionTurn(actor: UserActor, conversation: ConversationRow, apiModel: string, emit: Emit, deadline: number) {
+  if (!(await companionOnline(actor))) {
+    throw new AssistantError("Start Orbit Agent on your Mac to use your Claude account. Pair it in Settings › Integrations if you haven't yet.");
+  }
+  const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
+  const jobId = await enqueueCompanionJob(actor, conversation.id, {
+    model: apiModel,
+    effort: conversation.reasoning as Effort,
+    webSearch: conversation.web_search,
+    system: systemPrompt(actor, { webSearch: conversation.web_search }),
+    prompt: buildPrompt(history(rows)),
+    tools: companionTools(),
+  });
+  const started = Date.now();
+  let seen = 0;
+  while (Date.now() < deadline - 5_000) {
+    await new Promise((resolve) => setTimeout(resolve, COMPANION_POLL_MS));
+    const job = await readCompanionJob(actor, jobId);
+    for (const event of job.events.slice(seen)) emit(event);
+    seen = job.events.length;
+    if (job.status === "done") {
+      const ids = new Set(job.result?.messageIds ?? []);
+      const saved = await withActor(actor, (db) => readMessages(db, conversation.id));
+      for (const row of saved.filter((entry) => ids.has(entry.id))) {
+        emit({ type: "message", message: display(row) });
+        if ((row.actions ?? []).length > 0) emit({ type: "actions", messageId: row.id, actions: row.actions ?? [] });
+      }
+      return;
+    }
+    if (job.status === "failed") throw new AssistantError(job.error ?? "Orbit Agent couldn't answer.");
+    if (job.status === "cancelled") return;
+    if (job.status === "queued" && Date.now() - started > COMPANION_CLAIM_MS) {
+      await cancelCompanionJob(actor, jobId);
+      throw new AssistantError("Orbit Agent on your Mac isn't picking up. Check it's still running, then try again.");
+    }
+  }
+  emit({ type: "waiting", message: "Claude is still working on your Mac. The answer will appear here when it's ready." });
+}
+
 async function runLoop(
   actor: UserActor,
   conversation: ConversationRow,
@@ -286,6 +399,8 @@ async function runLoop(
   deadline: number,
   fetchImpl?: typeof fetch,
 ) {
+  const chosen = assistantModel(conversation.model);
+  if (chosen?.source === "claude") return runCompanionTurn(actor, conversation, chosen.apiModel, emit, deadline);
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
     const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
     const remaining = deadline - Date.now();
