@@ -162,7 +162,7 @@ describe("assistant conversations", () => {
     const first = fake.requests[0];
     assert.equal(first.model, "claude-sonnet-5-5");
     assert.equal(first.reasoning_effort, "high");
-    assert.ok(!(first.tools as { type: string }[]).some((tool) => tool.type === "web_search"));
+    assert.equal(first.web_search_options, undefined);
     const second = fake.requests[1].messages as { role: string; tool_call_id?: string; content: string }[];
     const toolMessage = second.find((message) => message.role === "tool")!;
     assert.equal(toolMessage.tool_call_id, "call_1");
@@ -187,7 +187,7 @@ describe("assistant conversations", () => {
       fetchImpl: fake.fetchImpl,
     });
     const tools = fake.requests[0].tools as { type: string; function?: { name: string } }[];
-    assert.ok(tools.some((tool) => tool.type === "web_search"));
+    assert.deepEqual(fake.requests[0].web_search_options, { search_context_size: "medium" });
     assert.ok(tools.some((tool) => tool.function?.name === "get_pipeline"));
     assert.equal(fake.requests[0].reasoning_effort, "high");
     assert.match(String((fake.requests[0].messages as { content: string }[])[0].content), /Web search is on/);
