@@ -1,14 +1,17 @@
 import { REMINDER_MINUTES } from "@/lib/crm/reminder-options";
 
+export type PadMark = { start: number; end: number; kind: "when" | "reminder" | "record" };
+
 export type PadParse = {
   title: string;
   due: string | null;
   remindMinutes: number | null;
   unsure: boolean;
+  marks: PadMark[];
 };
 
 type Day = { year: number; month: number; day: number };
-type Span = { start: number; end: number };
+type Span = { start: number; end: number; kind: "when" | "reminder" };
 
 const DEFAULT_HOUR = 9;
 const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
@@ -127,12 +130,16 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
     remind: number | null;
   } = { date: null, time: null, exact: null, remind: null };
 
-  const take = (pattern: RegExp, handle: (match: RegExpExecArray) => boolean | void) => {
+  const take = (
+    pattern: RegExp,
+    handle: (match: RegExpExecArray) => boolean | void,
+    kind: Span["kind"] = "when",
+  ) => {
     const match = pattern.exec(text);
     if (!match) return;
     if (spans.some((span) => match.index < span.end && match.index + match[0].length > span.start)) return;
     if (handle(match) === false) return;
-    spans.push({ start: match.index, end: match.index + match[0].length });
+    spans.push({ start: match.index, end: match.index + match[0].length, kind });
   };
 
   const setDate = (candidate: Day, explicitYear: boolean) => {
@@ -145,6 +152,7 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
     (match) => {
       found.remind = match[1] ? nearestReminder(amount(match[1]) * unitMinutes(match[2])) : 0;
     },
+    "reminder",
   );
   take(/\bin\s+(\d+|an?|one|two|three|four|five|six|ten|fifteen|thirty)\s*(mins?|minutes?|hrs?|hours?|days?|weeks?)\b/i, (match) => {
     const minutes = amount(match[1]) * unitMinutes(match[2]);
@@ -224,7 +232,16 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
   }
 
   const title = cleanTitle(text, spans);
-  return { title, due, remindMinutes: due ? found.remind : null, unsure: TEMPORAL.test(title) };
+  const marks = spans
+    .filter((span) => span.kind === "when" || due)
+    .map((span) => {
+      const lead = /^[\s,;]*(?:(?:and|on|by|due|for|at|this)\s+)?/i.exec(text.slice(span.start, span.end))?.[0].length ?? 0;
+      const tail = /\s*$/.exec(text.slice(span.start, span.end))?.[0].length ?? 0;
+      return { start: span.start + lead, end: span.end - tail, kind: span.kind } as PadMark;
+    })
+    .filter((mark) => mark.end > mark.start)
+    .sort((a, b) => a.start - b.start);
+  return { title, due, remindMinutes: due ? found.remind : null, unsure: TEMPORAL.test(title), marks };
 }
 
 export function stripMention(text: string, caret: number) {
@@ -235,4 +252,28 @@ export function stripMention(text: string, caret: number) {
   if (/\s{2,}|\n/.test(query) || query.length > 40) return null;
   if (at > 0 && !/\s/.test(before[at - 1])) return null;
   return { start: at, end: caret, query };
+}
+
+export function nameMarks(text: string, names: string[]): PadMark[] {
+  const marks: PadMark[] = [];
+  for (const name of names) {
+    const clean = name.trim();
+    if (clean.length < 2) continue;
+    const pattern = new RegExp(`(^|[^\\p{L}\\p{N}])(${clean.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})(?=$|[^\\p{L}\\p{N}])`, "giu");
+    for (const match of text.matchAll(pattern)) {
+      const start = (match.index ?? 0) + match[1].length;
+      marks.push({ start, end: start + match[2].length, kind: "record" });
+    }
+  }
+  return marks;
+}
+
+export function mergeMarks(marks: PadMark[]) {
+  const sorted = [...marks].sort((a, b) => a.start - b.start || b.end - a.end);
+  const result: PadMark[] = [];
+  for (const mark of sorted) {
+    if (result.length && mark.start < result[result.length - 1].end) continue;
+    result.push(mark);
+  }
+  return result;
 }

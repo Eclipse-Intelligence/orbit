@@ -5,7 +5,7 @@ import { createContact } from "@/lib/crm/contacts";
 import { detectPadRecords } from "@/lib/crm/task-pad";
 import type { UserActor } from "@/lib/crm/types";
 import { getPool } from "@/lib/db/pool";
-import { parseTaskText, stripMention } from "@/lib/task-pad";
+import { mergeMarks, nameMarks, parseTaskText, stripMention } from "@/lib/task-pad";
 import { createUser, resetDatabase } from "./helpers";
 
 const FRIDAY_10AM = new Date("2026-10-16T09:00:00Z");
@@ -16,18 +16,16 @@ function parse(text: string) {
 
 describe("task pad parser", () => {
   it("reads days, times and reminders and leaves a clean title", () => {
-    assert.deepEqual(parse("Take the dog for a walk Monday at 3pm"), {
-      title: "Take the dog for a walk",
-      due: "2026-10-19T15:00",
-      remindMinutes: null,
-      unsure: false,
-    });
-    assert.deepEqual(parse("Call Jane at Acme Monday 3pm, remind me 1 hour before"), {
-      title: "Call Jane at Acme",
-      due: "2026-10-19T15:00",
-      remindMinutes: 60,
-      unsure: false,
-    });
+    const walk = parse("Take the dog for a walk Monday at 3pm");
+    assert.deepEqual(
+      { title: walk.title, due: walk.due, remindMinutes: walk.remindMinutes, unsure: walk.unsure },
+      { title: "Take the dog for a walk", due: "2026-10-19T15:00", remindMinutes: null, unsure: false },
+    );
+    const call = parse("Call Jane at Acme Monday 3pm, remind me 1 hour before");
+    assert.deepEqual(
+      { title: call.title, due: call.due, remindMinutes: call.remindMinutes, unsure: call.unsure },
+      { title: "Call Jane at Acme", due: "2026-10-19T15:00", remindMinutes: 60, unsure: false },
+    );
     assert.equal(parse("Ship it Friday morning, remind 30 mins").remindMinutes, 30);
     assert.equal(parse("Check in with Bob in 3 days remind me a day before").remindMinutes, 1440);
     assert.equal(parse("Ping Sam tomorrow, remind me 45 minutes before").remindMinutes, 30);
@@ -57,9 +55,26 @@ describe("task pad parser", () => {
     for (const text of ["Send Monica the deck", "I sat down with Sunil", "Call Jane", "Fix the deck"]) {
       const result = parse(text);
       assert.equal(result.due, null, text);
+      assert.deepEqual(result.marks, [], text);
       assert.equal(result.unsure, false, text);
       assert.equal(result.title, text);
     }
+  });
+
+  it("marks where it read each part so the input can highlight it", () => {
+    const text = "Call Toby Sutton OBE at 3pm on Wednesday and remind me 15 mins";
+    const marks = mergeMarks([...parse(text).marks, ...nameMarks(text, ["Toby Sutton OBE"])]);
+    assert.deepEqual(
+      marks.map((mark) => [mark.kind, text.slice(mark.start, mark.end)]),
+      [
+        ["record", "Toby Sutton OBE"],
+        ["when", "3pm"],
+        ["when", "Wednesday"],
+        ["reminder", "remind me 15 mins"],
+      ],
+    );
+    assert.deepEqual(nameMarks("Visit Acme and acme again", ["Acme"]).length, 2);
+    assert.deepEqual(nameMarks("Visit Acmeworks", ["Acme"]), []);
   });
 
   it("flags leftovers it can't read so the AI can help", () => {

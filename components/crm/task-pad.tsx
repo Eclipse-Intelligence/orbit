@@ -12,7 +12,7 @@ import { searchContactsToFileAction } from "@/app/(crm)/search";
 import { addPadTaskAction, detectTaskRecordsAction, parseTaskWithAiAction } from "@/app/(crm)/task-pad";
 import type { ClickUpPicker } from "@/lib/crm/clickup";
 import type { PadAiParse, PadDetection, PadRecord } from "@/lib/crm/task-pad";
-import { parseTaskText, stripMention } from "@/lib/task-pad";
+import { mergeMarks, nameMarks, parseTaskText, stripMention, type PadMark } from "@/lib/task-pad";
 import { cn } from "@/lib/utils";
 import ArrowUpIcon from "@/public/assets/images/assistant/arrow-up.svg";
 
@@ -129,6 +129,7 @@ export default function TaskPad({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
+  const [scrollTop, setScrollTop] = useState(0);
 
   const parsed = useMemo(() => parseTaskText(text), [text]);
   const aiFits = ai !== null && ai.text === text && parsed.unsure;
@@ -227,7 +228,10 @@ export default function TaskPad({
 
   function pick(suggestion: Suggestion) {
     if (!mention) return;
-    const next = `${text.slice(0, mention.start)}${text.slice(mention.end)}`.replace(/\s{2,}/g, " ");
+    const after = text.slice(mention.end).replace(/^\s+/, "");
+    const inserted = `${suggestion.name} `;
+    const next = `${text.slice(0, mention.start)}${inserted}${after}`;
+    const caret = mention.start + inserted.length;
     setText(next);
     setMention(null);
     setSuggestions([]);
@@ -240,7 +244,7 @@ export default function TaskPad({
       const node = input.current;
       if (!node) return;
       node.focus();
-      node.setSelectionRange(mention.start, mention.start);
+      node.setSelectionRange(caret, caret);
     });
   }
 
@@ -316,6 +320,16 @@ export default function TaskPad({
   }
 
   const showChips = text.trim() !== "";
+  const names = [finalContact?.name, finalCompany?.name].filter((name): name is string => Boolean(name));
+  const marks = mergeMarks([...parsed.marks, ...nameMarks(text, names)]);
+  const pieces: { text: string; kind: PadMark["kind"] | null }[] = [];
+  let cursor = 0;
+  for (const mark of marks) {
+    if (mark.start > cursor) pieces.push({ text: text.slice(cursor, mark.start), kind: null });
+    pieces.push({ text: text.slice(mark.start, mark.end), kind: mark.kind });
+    cursor = mark.end;
+  }
+  pieces.push({ text: `${text.slice(cursor)}\u200b`, kind: null });
 
   return (
     <div className={cn("flex flex-col gap-2", className)}>
@@ -324,24 +338,51 @@ export default function TaskPad({
           <label htmlFor={`${id}-text`} className="sr-only">
             New task
           </label>
-          <textarea
-            id={`${id}-text`}
-            ref={input}
-            rows={1}
-            value={text}
-            data-shortcut="add-record"
-            placeholder={placeholder}
-            onChange={(event) => {
-              setText(event.target.value);
-              setError(null);
-              if (!event.target.value.trim()) clearChoices();
-              refreshMention(event.target.value, event.target.selectionStart ?? event.target.value.length);
-            }}
-            onSelect={(event) => refreshMention(event.currentTarget.value, event.currentTarget.selectionStart ?? 0)}
-            onKeyDown={onKeyDown}
-            onBlur={() => window.setTimeout(() => setMention(null), 150)}
-            className="placeholder:text-subtle max-h-40 min-h-7 min-w-0 flex-1 resize-none bg-transparent py-1 text-[14px] leading-5 outline-none"
-          />
+          <div className="relative min-w-0 flex-1">
+            <div
+              aria-hidden
+              className="text-foreground pointer-events-none absolute inset-0 overflow-hidden py-1 text-[14px] leading-5 break-words whitespace-pre-wrap"
+            >
+              <div style={{ transform: `translateY(-${scrollTop}px)` }}>
+                {pieces.map((piece, index) =>
+                  piece.kind ? (
+                    <mark
+                      key={index}
+                      className={cn(
+                        "rounded-[4px] text-inherit",
+                        piece.kind === "record"
+                          ? "bg-[var(--tag-purple-bg)] text-[var(--tag-purple-text)] shadow-[0_0_0_2px_var(--tag-purple-bg)]"
+                          : "bg-[var(--tag-blue-bg)] text-[var(--tag-blue-text)] shadow-[0_0_0_2px_var(--tag-blue-bg)]",
+                      )}
+                    >
+                      {piece.text}
+                    </mark>
+                  ) : (
+                    <span key={index}>{piece.text}</span>
+                  ),
+                )}
+              </div>
+            </div>
+            <textarea
+              id={`${id}-text`}
+              ref={input}
+              rows={1}
+              value={text}
+              data-shortcut="add-record"
+              placeholder={placeholder}
+              onChange={(event) => {
+                setText(event.target.value);
+                setError(null);
+                if (!event.target.value.trim()) clearChoices();
+                refreshMention(event.target.value, event.target.selectionStart ?? event.target.value.length);
+              }}
+              onSelect={(event) => refreshMention(event.currentTarget.value, event.currentTarget.selectionStart ?? 0)}
+              onKeyDown={onKeyDown}
+              onBlur={() => window.setTimeout(() => setMention(null), 150)}
+              onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
+              className="placeholder:text-subtle caret-foreground selection:bg-primary/40 relative m-0 block max-h-40 min-h-7 w-full resize-none border-0 bg-transparent px-0 py-1 text-[14px] leading-5 text-transparent outline-none"
+            />
+          </div>
           <Button
             variant="primary"
             size="icon"
