@@ -3,7 +3,8 @@ import { after, before, beforeEach, describe, it } from "node:test";
 import { decideAction, getConversation, listConversations, sendMessage, type AssistantEvent } from "@/lib/assistant/chat";
 import { settingsFor } from "@/lib/assistant/models";
 import { systemPrompt } from "@/lib/assistant/prompt";
-import { londonTime, runTool, toolJson } from "@/lib/assistant/tools";
+import { geminiTool } from "@/lib/assistant/gateway";
+import { londonTime, runTool, toolDefinitions, toolJson } from "@/lib/assistant/tools";
 import { parseBlocks } from "@/components/assistant/markdown";
 import { createCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
@@ -270,6 +271,21 @@ describe("assistant conversations", () => {
     assert.deepEqual(settingsFor("grok-4.7", "max"), { model: "grok-4.7", reasoning: "xhigh" });
     assert.deepEqual(settingsFor("gpt-6-astra", "nonsense"), { model: "gpt-6-astra", reasoning: "medium" });
     assert.deepEqual(settingsFor("gemini-4-argon", "high"), { model: "gemini-4-argon", reasoning: "high" });
+  });
+});
+
+describe("gemini tool definitions", () => {
+  it("drops numeric option lists, number limits and empty parameter blocks", () => {
+    const tools = toolDefinitions().map(geminiTool) as { function: { name: string; parameters?: Record<string, unknown> } }[];
+    const overview = tools.find((tool) => tool.function.name === "get_overview")!;
+    assert.equal(overview.function.parameters, undefined);
+    const create = tools.find((tool) => tool.function.name === "create_task")!;
+    const remind = (create.function.parameters!.properties as Record<string, Record<string, unknown>>).remindMinutes;
+    assert.equal(remind.enum, undefined);
+    assert.match(String(remind.description), /One of: 0, 5, 10/);
+    assert.ok(!JSON.stringify(tools).includes('"minimum"'));
+    const list = tools.find((tool) => tool.function.name === "list_tasks")!;
+    assert.ok(Array.isArray((list.function.parameters!.properties as Record<string, { enum?: unknown }>).view.enum));
   });
 });
 

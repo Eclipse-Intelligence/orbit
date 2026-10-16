@@ -8,6 +8,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 const BUDGET_MS = 285_000;
+const HEARTBEAT_MS = 10_000;
 
 async function allowed(userId: string) {
   const result = await query<{ allowed: boolean }>("select private.consume_rate_limit($1, $2, $3) as allowed", [
@@ -36,7 +37,11 @@ export async function POST(request: Request) {
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
-      const emit = (event: AssistantEvent) => controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+      let open = true;
+      const emit = (event: AssistantEvent) => {
+        if (open) controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+      };
+      const heartbeat = setInterval(() => emit({ type: "ping" }), HEARTBEAT_MS);
       const options = { deadline: started + BUDGET_MS };
       try {
         if (typeof body.actionId === "string" && typeof body.conversationId === "string") {
@@ -66,6 +71,8 @@ export async function POST(request: Request) {
         if (!(error instanceof AssistantError || error instanceof CrmError)) console.error("Assistant failed", error);
         emit({ type: "error", message });
       } finally {
+        clearInterval(heartbeat);
+        open = false;
         controller.close();
       }
     },
