@@ -1,5 +1,6 @@
 import { complete, type ChatMessage } from "@/lib/assistant/gateway";
 import { ASSISTANT_MODELS } from "@/lib/assistant/models";
+import { toolDefinitions } from "@/lib/assistant/tools";
 import { cronAuthorization } from "@/lib/crm/scheduler";
 
 export const dynamic = "force-dynamic";
@@ -14,22 +15,23 @@ const PROBE_TOOL = {
   },
 };
 
-async function probe(model: string, webSearch: boolean) {
+async function probe(model: string, webSearch: boolean, full: boolean, reasoning: string) {
   const started = Date.now();
   const messages: ChatMessage[] = [
     { role: "system", content: "Use tools to answer. Reply in one short sentence." },
     { role: "user", content: "How many open tasks do I have? Use the tool." },
   ];
   try {
-    const first = await complete({ model, reasoning: "low", messages, webSearch, timeoutMs: 90_000, tools: [PROBE_TOOL] });
+    const tools = full ? [...toolDefinitions(), PROBE_TOOL] : [PROBE_TOOL];
+    const first = await complete({ model, reasoning, messages, webSearch, timeoutMs: 90_000, tools });
     const call = first.toolCalls[0];
     if (!call) return { model, webSearch, ok: false, toolCalled: false, reply: first.content.slice(0, 200), ms: Date.now() - started };
     const second = await complete({
       model,
-      reasoning: "low",
+      reasoning,
       webSearch,
       timeoutMs: 90_000,
-      tools: [PROBE_TOOL],
+      tools,
       messages: [
         ...messages,
         { role: "assistant", content: first.content || null, tool_calls: [call] },
@@ -72,6 +74,8 @@ export async function GET(request: Request) {
   if (url.searchParams.get("search") === "1") {
     return Response.json({ results: await Promise.all(models.map((model) => searchProbe(model))) });
   }
-  const results = await Promise.all(models.map((model) => probe(model, webSearch)));
+  const full = url.searchParams.get("full") === "1";
+  const reasoning = url.searchParams.get("reasoning") ?? "low";
+  const results = await Promise.all(models.map((model) => probe(model, webSearch, full, reasoning)));
   return Response.json({ results });
 }
