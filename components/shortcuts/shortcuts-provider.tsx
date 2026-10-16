@@ -214,9 +214,13 @@ export function ShortcutsProvider({ children }: { children: ReactNode }) {
           return true;
         }
       }
-      const stack = handlers.current.get(def.id) ?? [];
-      for (let index = stack.length - 1; index >= 0; index -= 1) {
-        if (stack[index]() !== false) return true;
+      const stack = [...(handlers.current.get(def.id) ?? [])].reverse();
+      const ordered = [
+        ...stack.filter((handler) => !fallbacks.current.has(handler)),
+        ...stack.filter((handler) => fallbacks.current.has(handler)),
+      ];
+      for (const handler of ordered) {
+        if (handler() !== false) return true;
       }
       if (def.target) {
         const element = shortcutTarget(def.target);

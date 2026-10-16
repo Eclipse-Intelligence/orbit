@@ -11,7 +11,7 @@ export default function ShortcutSettings() {
     <SettingsCard
       id="shortcuts"
       title="Keyboard shortcuts"
-      description={`Press ${mac ? "⌘K" : "Ctrl+K"} for the command palette and ? for every shortcut. This setting is saved on this device.`}
+      description={`Press ${mac ? "⌘/" : "Ctrl+/"} for the command palette and ? for every shortcut. This setting is saved on this device.`}
       action={
         <Button variant="secondary" size="sm" onClick={() => run("help")}>
           Show shortcuts
