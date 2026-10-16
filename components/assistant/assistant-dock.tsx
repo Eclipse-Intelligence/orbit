@@ -578,8 +578,8 @@ export default function AssistantDock() {
                   setReasoning(settingsFor(next, reasoning).reasoning);
                 }}
               >
-                <SelectTrigger aria-label="Model" className="-ml-2.5 h-7 w-auto gap-1.5 rounded-full border-transparent bg-transparent px-2.5 text-[12.5px] hover:bg-white/5">
-                  <SelectValue />
+                <SelectTrigger aria-label="Model" className="-ml-2.5 h-7 w-auto gap-1.5 rounded-full border-transparent bg-transparent px-2.5 text-[12.5px] whitespace-nowrap hover:bg-white/5">
+                  <SelectValue>{chosen.label}</SelectValue>
                 </SelectTrigger>
                 <SelectContent side="top" align="start">
                   {ASSISTANT_MODELS.map((option) => (
@@ -591,8 +591,8 @@ export default function AssistantDock() {
                 </SelectContent>
               </Select>
               <Select value={reasoning} onValueChange={(next) => setReasoning(next as ReasoningLevel)}>
-                <SelectTrigger aria-label="Reasoning" className="h-7 w-auto gap-1.5 rounded-full border-transparent bg-transparent px-2.5 text-[12.5px] hover:bg-white/5">
-                  <SelectValue />
+                <SelectTrigger aria-label="Reasoning" className="h-7 w-auto gap-1.5 rounded-full border-transparent bg-transparent px-2.5 text-[12.5px] whitespace-nowrap hover:bg-white/5">
+                  <SelectValue>{REASONING_LABELS[reasoning]}</SelectValue>
                 </SelectTrigger>
                 <SelectContent side="top" align="start">
                   {chosen.reasoning.map((level) => (
