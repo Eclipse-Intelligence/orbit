@@ -42,6 +42,26 @@ async function probe(model: string, webSearch: boolean) {
   }
 }
 
+async function searchProbe(model: string) {
+  const started = Date.now();
+  try {
+    const result = await complete({
+      model,
+      reasoning: "low",
+      webSearch: true,
+      timeoutMs: 120_000,
+      tools: [PROBE_TOOL],
+      messages: [
+        { role: "system", content: "Search the web to answer. Reply in one sentence." },
+        { role: "user", content: "What does the company at geteclipse.co do? Search the web." },
+      ],
+    });
+    return { model, searched: result.sources.length > 0, sources: result.sources.slice(0, 3), reply: result.content.slice(0, 240), ms: Date.now() - started };
+  } catch (error) {
+    return { model, searched: false, error: error instanceof Error ? error.message : String(error), ms: Date.now() - started };
+  }
+}
+
 export async function GET(request: Request) {
   const auth = cronAuthorization(request.headers.get("authorization"));
   if (auth !== "ok") return Response.json({ error: "Not allowed." }, { status: auth === "unconfigured" ? 503 : 401 });
@@ -49,6 +69,9 @@ export async function GET(request: Request) {
   const only = url.searchParams.get("model");
   const webSearch = url.searchParams.get("web") === "1";
   const models = ASSISTANT_MODELS.filter((model) => !only || model.id === only).map((model) => model.id);
+  if (url.searchParams.get("search") === "1") {
+    return Response.json({ results: await Promise.all(models.map((model) => searchProbe(model))) });
+  }
   const results = await Promise.all(models.map((model) => probe(model, webSearch)));
   return Response.json({ results });
 }
