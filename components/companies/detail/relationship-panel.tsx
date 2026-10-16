@@ -1,17 +1,11 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
-import Button from "@/components/_ui/button";
-import { DateTimePicker } from "@/components/_ui/date-picker";
-import { Input } from "@/components/_ui/input";
 import Tag from "@/components/_ui/tag";
-import { addCompanyTaskAction } from "@/app/(crm)/records";
 import DetailSection from "@/components/companies/detail/detail-section";
 import CompanyContacts from "@/components/companies/detail/company-contacts";
 import { ConnectionMark } from "@/components/beautifui/record-marks";
-import { ClickUpBadge, ClickUpPickerField } from "@/components/crm/clickup";
-import ReminderSelect from "@/components/crm/reminder-select";
+import { ClickUpBadge } from "@/components/crm/clickup";
+import TaskPad from "@/components/crm/task-pad";
 import { formatMoney, formatWhen, relativeWhen } from "@/lib/companies";
 import type { ClickUpPicker } from "@/lib/crm/clickup";
 import type { CompanyContext } from "@/lib/crm/types";
@@ -24,39 +18,7 @@ export default function RelationshipPanel({
   clickup: ClickUpPicker | null;
 }) {
   const companyId = context.company.id;
-  const router = useRouter();
-  const [taskTitle, setTaskTitle] = useState("");
-  const [dueAt, setDueAt] = useState("");
-  const [reminder, setReminder] = useState("none");
-  const [error, setError] = useState<string | null>(null);
-  const [warning, setWarning] = useState<string | null>(null);
-  const [pending, setPending] = useState(false);
-  const [toClickUp, setToClickUp] = useState(true);
-  const [clickupListId, setClickupListId] = useState(clickup?.listId ?? "");
-
   const last = context.lastInteraction;
-
-  async function saveTask() {
-    setPending(true);
-    const result = await addCompanyTaskAction(
-      companyId,
-      taskTitle,
-      dueAt,
-      clickup && toClickUp ? clickupListId : null,
-      dueAt && reminder !== "none" ? Number(reminder) : null,
-    );
-    setPending(false);
-    if (result.error) {
-      setError(result.error);
-      return;
-    }
-    setTaskTitle("");
-    setDueAt("");
-    setReminder("none");
-    setError(null);
-    setWarning(result.warning ?? null);
-    router.refresh();
-  }
 
   return (
     <>
@@ -81,66 +43,11 @@ export default function RelationshipPanel({
             ? `${context.openTaskCount} open task${context.openTaskCount === 1 ? "" : "s"}`
             : "No open tasks."}
         </p>
-        {error && (
-          <p role="alert" className="caption-style text-danger">
-            {error}
-          </p>
-        )}
-        <div className="flex flex-col gap-2">
-          <label
-            className="caption-style text-subtle"
-            htmlFor={`task-${companyId}`}
-          >
-            Task
-          </label>
-          <Input
-            id={`task-${companyId}`}
-            value={taskTitle}
-            onChange={(event) => setTaskTitle(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") event.preventDefault();
-            }}
-            placeholder="Follow up on the proposal"
-          />
-          <DateTimePicker
-            id={`task-${companyId}-due`}
-            aria-label="Due date"
-            placeholder="Add a due date"
-            value={dueAt}
-            onChange={setDueAt}
-          />
-          <ReminderSelect
-            id={`task-${companyId}-reminder`}
-            value={reminder}
-            onChange={setReminder}
-            disabled={!dueAt}
-          />
-          {clickup && (
-            <ClickUpPickerField
-              picker={clickup}
-              id={`task-${companyId}-clickup`}
-              checked={toClickUp}
-              onCheckedChange={setToClickUp}
-              listId={clickupListId}
-              onListChange={setClickupListId}
-            />
-          )}
-          {warning && (
-            <p role="status" className="caption-style text-soft">
-              {warning}
-            </p>
-          )}
-          <Button
-            variant="secondary"
-            size="sm"
-            type="button"
-            className="self-start"
-            disabled={pending || taskTitle.trim() === ""}
-            onClick={saveTask}
-          >
-            {pending ? "Saving…" : "Add task"}
-          </Button>
-        </div>
+        <TaskPad
+          clickup={clickup}
+          company={{ id: companyId, name: context.company.name }}
+          placeholder="Add a task, e.g. Send the proposal Friday 10am"
+        />
       </DetailSection>
 
       <CompanyContacts companyId={companyId} contacts={context.contacts} />

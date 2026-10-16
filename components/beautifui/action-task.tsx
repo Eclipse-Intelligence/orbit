@@ -38,72 +38,105 @@ export default function ActionTask({
 
   return (
     <li data-list-row="" className={cn(KEYBOARD_ROW_CLASS, "border-border overflow-hidden border-b")}>
-      <div className="flex h-11 items-center gap-2.5 px-2.5">
+      <div className="flex items-start gap-2.5 px-2.5 py-2.5 sm:min-h-11 sm:items-center sm:py-1.5">
         <button
           type="button"
-          data-row-open=""
-          data-row-key="space"
-          aria-expanded={open}
-          onClick={() => setOpen((current) => !current)}
-          className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 text-left"
+          disabled={completed || !onComplete}
+          onClick={onComplete}
+          data-row-key="d"
+          aria-label={completed ? "Done" : `Mark “${task.title}” done`}
+          title={completed ? "Done" : "Mark done (D)"}
+          className={cn(
+            "group/done flex size-6 shrink-0 items-center justify-center rounded-full text-white transition-colors duration-150 disabled:cursor-default enabled:cursor-pointer",
+            completed
+              ? "bg-success"
+              : overdue
+                ? "bg-danger enabled:hover:bg-success"
+                : "bg-secondary text-subtle enabled:hover:bg-success enabled:hover:text-white",
+          )}
         >
-          <span
-            aria-hidden
-            className={cn(
-              "flex size-6 shrink-0 items-center justify-center rounded-full text-white",
-              completed ? "bg-success" : overdue ? "bg-danger" : "bg-secondary text-subtle",
-            )}
-          >
-            {completed ? (
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+          {completed ? (
+            <svg aria-hidden width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M5 12.5 10 17.5 19 7.5" />
+            </svg>
+          ) : (
+            <>
+              <svg
+                aria-hidden
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.4"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="hidden group-enabled/done:group-hover/done:block"
+              >
                 <path d="M5 12.5 10 17.5 19 7.5" />
               </svg>
-            ) : overdue ? (
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
-                <path d="M6 6 18 18M18 6 6 18" />
-              </svg>
-            ) : (
-              <span className="size-1.5 rounded-full bg-current" />
-            )}
-          </span>
-          <span className="min-w-0 flex-1 truncate text-[14px] leading-5">{task.title}</span>
-          {due ? (
-            <Tag
-              size="sm"
-              tone={due.kind === "overdue" ? "red" : due.kind === "today" ? "amber" : "neutral"}
-              className="text-[12px]"
-            >
-              {due.label}
-            </Tag>
-          ) : (
-            <span className="text-subtle shrink-0 text-[13px]">
-              {task.dueAt ? relativeWhen(task.dueAt, now) : "No due date"}
-            </span>
+              <span className="group-enabled/done:group-hover/done:hidden">
+                {overdue ? (
+                  <svg aria-hidden width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
+                    <path d="M6 6 18 18M18 6 6 18" />
+                  </svg>
+                ) : (
+                  <span className="block size-1.5 rounded-full bg-current" />
+                )}
+              </span>
+            </>
           )}
-          <svg
-            aria-hidden
-            width="15"
-            height="15"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2.2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className={cn("text-subtle shrink-0 transition-transform duration-300", open && "rotate-180")}
-          >
-            <path d="m6 9 6 6 6-6" />
-          </svg>
         </button>
-        <ClickUpBadge task={task} />
-        {task.companyName && (
-          <EntityChip
-            name={task.companyName}
-            href={task.companyId ? companyHref(task.companyId) : undefined}
-          />
-        )}
+        <div className="flex min-w-0 flex-1 flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-2.5">
+          <button
+            type="button"
+            data-row-open=""
+            data-row-key="space"
+            aria-expanded={open}
+            onClick={() => setOpen((current) => !current)}
+            className="flex min-w-0 flex-1 cursor-pointer items-start gap-2 text-left sm:items-center"
+          >
+            <span className="min-w-0 flex-1 text-[14px] leading-5 break-words sm:truncate">{task.title}</span>
+            <svg
+              aria-hidden
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className={cn("text-subtle mt-0.5 shrink-0 transition-transform duration-300 sm:mt-0", open && "rotate-180")}
+            >
+              <path d="m6 9 6 6 6-6" />
+            </svg>
+          </button>
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5 sm:shrink-0 sm:flex-nowrap">
+            {due ? (
+              <Tag
+                size="sm"
+                tone={due.kind === "overdue" ? "red" : due.kind === "today" ? "amber" : "neutral"}
+                className="text-[12px]"
+              >
+                {due.label}
+              </Tag>
+            ) : (
+              <span className="text-subtle shrink-0 text-[13px]">
+                {task.dueAt ? relativeWhen(task.dueAt, now) : "No due date"}
+              </span>
+            )}
+            <ClickUpBadge task={task} />
+            {task.companyName && (
+              <EntityChip
+                name={task.companyName}
+                href={task.companyId ? companyHref(task.companyId) : undefined}
+              />
+            )}
+          </div>
+        </div>
         {!completed && onComplete && (
-          <Button variant="secondary" size="sm" onClick={onComplete} data-row-key="d" title="Mark done (D)">
+          <Button variant="secondary" size="sm" onClick={onComplete} className="hidden sm:inline-flex" tabIndex={-1}>
             Done
           </Button>
         )}
