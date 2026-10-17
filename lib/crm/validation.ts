@@ -4,7 +4,10 @@ import { isUuid } from "@/lib/crm/mutate";
 import { normalizeTag } from "@/lib/crm/normalize";
 import {
   ACTIVITY_TYPES,
+  COMPANY_PRESENCE,
   COMPANY_SORTS,
+  CONTACT_PRESENCE,
+  CONTACT_SORTS,
   LIFECYCLES,
   OPPORTUNITY_STATUSES,
   TASK_PRIORITIES,
@@ -129,6 +132,10 @@ export function companyQueryFromSearchParams(
     query.sort = sort as CompanyListQuery["sort"];
   }
   if (order === "asc" || order === "desc") query.order = order;
+  const has = presenceList(params, "has", COMPANY_PRESENCE);
+  if (has) query.has = has;
+  const missing = presenceList(params, "missing", COMPANY_PRESENCE)?.filter((field) => !has?.includes(field));
+  if (missing?.length) query.missing = missing;
   if (owner) query.ownerId = owner;
   const tag = tagParam(params);
   if (tag) query.tag = tag;
@@ -297,8 +304,24 @@ function paging(params: URLSearchParams) {
   };
 }
 
+function presenceList<T extends string>(params: URLSearchParams, key: string, allowed: readonly T[]) {
+  const values = (params.get(key) ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter((value): value is T => (allowed as readonly string[]).includes(value));
+  return values.length > 0 ? [...new Set(values)] : undefined;
+}
+
 export function contactQueryFromSearchParams(params: URLSearchParams): ContactListQuery {
   const query: ContactListQuery = {};
+  const sort = params.get("sort");
+  if (sort && (CONTACT_SORTS as readonly string[]).includes(sort)) query.sort = sort as ContactListQuery["sort"];
+  const order = params.get("order");
+  if (order === "asc" || order === "desc") query.order = order;
+  const has = presenceList(params, "has", CONTACT_PRESENCE);
+  if (has) query.has = has;
+  const missing = presenceList(params, "missing", CONTACT_PRESENCE)?.filter((field) => !has?.includes(field));
+  if (missing?.length) query.missing = missing;
   const text = params.get("q")?.trim();
   if (text) query.query = text;
   const companyId = uuidParam(params, "company_id");

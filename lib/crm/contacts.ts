@@ -30,10 +30,12 @@ import {
   sameTags,
 } from "@/lib/crm/normalize";
 import { assertScope } from "@/lib/crm/scopes";
+import { DEFAULT_CONTACT_SORT, defaultContactOrder } from "@/lib/sorting";
 import type {
   Actor,
   Contact,
   ContactListQuery,
+  ContactPresence,
   ContactMatch,
   ContactWrite,
   Provenance,
@@ -490,6 +492,16 @@ async function createContactInDb(
   return insertContact(db, actor, write, provenance);
 }
 
+const CONTACT_NAME_SQL =
+  "lower(coalesce(nullif(trim(coalesce(c.first_name, '') || ' ' || coalesce(c.last_name, '')), ''), c.email, c.phone, ''))";
+
+const CONTACT_PRESENCE_SQL: Record<ContactPresence, string> = {
+  email: "c.email is not null",
+  phone: "c.phone is not null",
+  linkedin: "c.linkedin_url is not null",
+  company: "c.company_id is not null",
+};
+
 export async function listContacts(actor: Actor, query: ContactListQuery = {}) {
   assertScope(actor.scopes, "crm:read");
   const page = pageWindow(query.limit, query.offset);
@@ -523,6 +535,8 @@ export async function listContacts(actor: Actor, query: ContactListQuery = {}) {
         or coalesce(co.name, '') ilike ${ref} escape '\\'
       )`);
     }
+    for (const field of query.has ?? []) where.push(CONTACT_PRESENCE_SQL[field]);
+    for (const field of query.missing ?? []) where.push(`not (${CONTACT_PRESENCE_SQL[field]})`);
     const whereSql = where.join(" and ");
     const count = await db.query<{ total: number }>(
       `select count(*)::int as total
@@ -531,11 +545,19 @@ export async function listContacts(actor: Actor, query: ContactListQuery = {}) {
        where ${whereSql}`,
       values,
     );
+    const sort = query.sort ?? DEFAULT_CONTACT_SORT;
+    const direction = (query.order ?? defaultContactOrder(sort)) === "asc" ? "asc" : "desc";
+    const ordering =
+      sort === "company"
+        ? `lower(co.name) ${direction} nulls last, ${CONTACT_NAME_SQL} asc`
+        : sort === "name"
+          ? `${CONTACT_NAME_SQL} ${direction}`
+          : `c.${sort === "created" ? "created_at" : "updated_at"} ${direction}`;
     const listed = [...values, page.limit, page.offset];
     const rows = await db.query<ContactRow>(
       `${CONTACT_SQL}
        where ${whereSql}
-       order by c.updated_at desc, c.id asc
+       order by ${ordering}, c.id asc
        limit $${listed.length - 1} offset $${listed.length}`,
       listed,
     );

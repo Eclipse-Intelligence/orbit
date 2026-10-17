@@ -27,8 +27,18 @@ import {
 } from "@/app/(crm)/bulk";
 import { bulkAddTagAction, bulkRemoveTagAction } from "@/app/(crm)/tags";
 import type { BulkSelection } from "@/hooks/use-bulk-selection";
-import type { Company, TagCount } from "@/lib/crm/types";
+import { SortHeader, useListParams } from "@/components/crm/list-controls";
+import type { Company, CompanyListQuery, CompanySort, TagCount } from "@/lib/crm/types";
+import { DEFAULT_COMPANY_SORT, defaultCompanyOrder, nextSort } from "@/lib/sorting";
 import { cn } from "@/lib/utils";
+
+const SORTABLE: Record<string, CompanySort | undefined> = {
+  name: "name",
+  last: "interaction",
+  strength: "strength",
+  domain: "domain",
+  owner: "owner",
+};
 
 export default function CompaniesTable({
   companies,
@@ -39,6 +49,7 @@ export default function CompaniesTable({
   selection,
   mailboxConnected,
   tags,
+  filters,
 }: {
   companies: Company[];
   total: number;
@@ -48,7 +59,17 @@ export default function CompaniesTable({
   selection: BulkSelection;
   mailboxConnected: boolean;
   tags: TagCount[];
+  filters: CompanyListQuery;
 }) {
+  const replaceParams = useListParams();
+  const current = { sort: filters.sort ?? DEFAULT_COMPANY_SORT, order: filters.order ?? defaultCompanyOrder(filters.sort ?? DEFAULT_COMPANY_SORT) };
+  const sortBy = (column: CompanySort) =>
+    replaceParams(nextSort(column, current, { sort: DEFAULT_COMPANY_SORT, order: defaultCompanyOrder }));
+  const header = (key: string, label: string) => {
+    const column = SORTABLE[key];
+    if (!column) return label;
+    return <SortHeader label={label} direction={current.sort === column ? current.order : null} onSort={() => sortBy(column)} />;
+  };
   return (
     <div className="border-border flex min-h-0 flex-1 flex-col border-t">
       <ScrollArea orientation="both" className="min-h-0 flex-1">
@@ -70,10 +91,10 @@ export default function CompaniesTable({
                           label="Select all companies on this page"
                         />
                       </span>
-                      {column.label}
+                      {header(column.key, column.label)}
                     </span>
                   ) : (
-                    column.label
+                    header(column.key, column.label)
                   )}
                 </TableHead>
               ))}

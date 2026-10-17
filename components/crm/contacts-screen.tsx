@@ -21,6 +21,7 @@ import BulkActions, {
 } from "@/components/crm/bulk-bar";
 import ContactEditor from "@/components/crm/contact-editor";
 import FindDetailButton, { bulkFindSummary, findDetailsInBatches } from "@/components/crm/find-detail";
+import { PresenceFilter, SortHeader, useListParams, type PresenceField } from "@/components/crm/list-controls";
 import { RememberList } from "@/components/crm/list-memory";
 import Pager from "@/components/crm/pager";
 import RecordTransfer from "@/components/crm/record-transfer";
@@ -39,7 +40,8 @@ import { bulkAddTagAction, bulkRemoveTagAction } from "@/app/(crm)/tags";
 import { useBulkSelection } from "@/hooks/use-bulk-selection";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import type { Recipient } from "@/lib/crm/personalise";
-import type { Company, Contact, Member, TagCount } from "@/lib/crm/types";
+import type { Company, Contact, ContactPresence, ContactSort, Member, TagCount } from "@/lib/crm/types";
+import { DEFAULT_CONTACT_SORT, defaultContactOrder, nextSort, type SortOrder } from "@/lib/sorting";
 import type { ContactLookups } from "@/lib/enrichment/contacts";
 import type { ContactField } from "@/lib/enrichment/providers";
 import type { EnrichmentAvailability } from "@/lib/enrichment/settings";
@@ -48,6 +50,24 @@ import { cn } from "@/lib/utils";
 
 const GRID_CLASS =
   "md:grid md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,1fr)] md:gap-4";
+
+const PRESENCE_FIELDS: PresenceField<ContactPresence>[] = [
+  { key: "email", label: "Email", has: "Has email", missing: "No email" },
+  { key: "phone", label: "Phone", has: "Has phone", missing: "No phone" },
+  { key: "linkedin", label: "LinkedIn", has: "Has LinkedIn", missing: "No LinkedIn" },
+  { key: "company", label: "Company", has: "Has company", missing: "No company" },
+];
+
+const MOBILE_SORTS: { value: string; label: string; sort: ContactSort; order: SortOrder }[] = [
+  { value: "name:asc", label: "Name A–Z", sort: "name", order: "asc" },
+  { value: "name:desc", label: "Name Z–A", sort: "name", order: "desc" },
+  { value: "company:asc", label: "Company A–Z", sort: "company", order: "asc" },
+  { value: "company:desc", label: "Company Z–A", sort: "company", order: "desc" },
+  { value: "updated:desc", label: "Recently updated", sort: "updated", order: "desc" },
+  { value: "created:desc", label: "Newest", sort: "created", order: "desc" },
+];
+
+export type ContactListView = { sort: ContactSort; order: SortOrder; has: ContactPresence[]; missing: ContactPresence[] };
 
 function recipientOf(contact: Contact): Recipient {
   return {
@@ -72,6 +92,7 @@ export default function ContactsScreen({
   members,
   mailboxConnected,
   enrichment,
+  view,
 }: {
   viewer: Viewer;
   contacts: Contact[];
@@ -84,13 +105,19 @@ export default function ContactsScreen({
   members: Member[];
   mailboxConnected: boolean;
   enrichment: { available: EnrichmentAvailability; lookups: ContactLookups };
+  view: ContactListView;
 }) {
   const router = useRouter();
   const tagHref = useTagHref();
+  const replaceParams = useListParams();
   const selection = useBulkSelection(
     contacts.map((contact) => contact.id),
-    `${page}|${query}|${tag}`,
+    `${page}|${query}|${tag}|${view.sort}|${view.order}|${view.has.join()}|${view.missing.join()}`,
   );
+  const sortBy = (column: ContactSort) =>
+    replaceParams(nextSort(column, view, { sort: DEFAULT_CONTACT_SORT, order: defaultContactOrder }));
+  const direction = (column: ContactSort) => (view.sort === column ? view.order : null);
+  const filtering = view.has.length + view.missing.length > 0;
   const tagOptions = tagFilterOptions(tags, "contact", tag || undefined);
   const [creating, setCreating] = useState(false);
   const finders: BulkExtraAction[] = (["email", "linkedin"] as ContactField[])
@@ -153,6 +180,27 @@ export default function ContactsScreen({
               }
             />
           )}
+          <FilterMenu
+            label="Sort"
+            className="md:hidden"
+            value={`${view.sort}:${view.order}`}
+            options={MOBILE_SORTS.map(({ value, label }) => ({ value, label }))}
+            onChange={(value) => {
+              const chosen = MOBILE_SORTS.find((option) => option.value === value);
+              if (!chosen) return;
+              replaceParams({
+                sort: chosen.sort === DEFAULT_CONTACT_SORT ? null : chosen.sort,
+                order: chosen.order === defaultContactOrder(chosen.sort) ? null : chosen.order,
+              });
+            }}
+          />
+          <PresenceFilter
+            fields={PRESENCE_FIELDS}
+            shortcut={tagOptions.length > 1 ? undefined : "filter"}
+            has={view.has}
+            missing={view.missing}
+            onChange={(has, missing) => replaceParams({ has: has.join(",") || null, missing: missing.join(",") || null })}
+          />
         </div>
         <SelectToggle selection={selection} />
       </div>
@@ -165,7 +213,7 @@ export default function ContactsScreen({
         empty={
           page > 1
             ? "No contacts on this page."
-            : tag || query
+            : tag || query || filtering
               ? "No contacts match the current filters."
               : "No contacts yet. Add the person you need to speak with."
         }
@@ -183,9 +231,11 @@ export default function ContactsScreen({
                 label="Select all contacts on this page"
               />
             </span>
-            <span aria-hidden>Name</span>
+            <SortHeader label="Name" direction={direction("name")} onSort={() => sortBy("name")} />
           </span>
-          <span aria-hidden>Company</span>
+          <span>
+            <SortHeader label="Company" direction={direction("company")} onSort={() => sortBy("company")} />
+          </span>
           <span aria-hidden>Email</span>
           <span aria-hidden>Phone</span>
         </li>
