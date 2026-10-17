@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type KeyboardEvent } from "react";
 import Link from "next/link";
+import FindDetailButton from "@/components/crm/find-detail";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Input } from "@/components/_ui/input";
@@ -46,9 +47,11 @@ function draftFromQuery(query: string): Draft {
 export default function CompanyContacts({
   companyId,
   contacts,
+  findEmail = false,
 }: {
   companyId: string;
   contacts: Contact[];
+  findEmail?: boolean;
 }) {
   const router = useRouter();
   const [adding, setAdding] = useState(false);
@@ -113,11 +116,18 @@ export default function CompanyContacts({
                   >
                     {contact.name}
                   </Link>
-                  <span className="caption-style text-subtle">
-                    {[contact.jobTitle, contact.email]
-                      .filter(Boolean)
-                      .join(" · ") || "No email"}
-                  </span>
+                  {contact.email || !findEmail ? (
+                    <span className="caption-style text-subtle">
+                      {[contact.jobTitle, contact.email]
+                        .filter(Boolean)
+                        .join(" · ") || "No email"}
+                    </span>
+                  ) : (
+                    <span className="caption-style text-subtle flex min-w-0 items-center gap-1">
+                      {contact.jobTitle && <span className="truncate">{contact.jobTitle} ·</span>}
+                      <FindDetailButton contactId={contact.id} field="email" variant="text" className="-ml-1" />
+                    </span>
+                  )}
                   {contact.phone && (
                     <span className="caption-style text-subtle flex items-center gap-1">
                       {contact.phone}

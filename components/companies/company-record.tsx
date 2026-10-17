@@ -2,6 +2,7 @@
 
 import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
+import Asset from "@/components/_ui/asset";
 import Button from "@/components/_ui/button";
 import {
   lifecycleTagBase,
@@ -16,6 +17,7 @@ import MeetingsCard from "@/components/crm/meetings-card";
 import { useQuickAddRecord } from "@/components/crm/quick-add";
 import RecordLayout from "@/components/crm/record-layout";
 import { Detail, DetailList } from "@/components/crm/record-form";
+import CompanyEnrichButton from "@/components/companies/detail/company-enrich-button";
 import SectionHeader from "@/components/crm/section-header";
 import RecordSequence from "@/components/shortcuts/record-sequence";
 import RecordTags from "@/components/crm/tags";
@@ -25,6 +27,7 @@ import { formatDate, LIFECYCLE_LABELS } from "@/lib/companies";
 import type { MeetingsSummary } from "@/lib/crm/calendar";
 import type { ClickUpPicker } from "@/lib/crm/clickup";
 import type { Company, CompanyContext, Member, TagCount } from "@/lib/crm/types";
+import type { EnrichmentAvailability } from "@/lib/enrichment/settings";
 
 function externalUrl(value: string) {
   return /^https?:\/\//i.test(value) ? value : `https://${value}`;
@@ -42,6 +45,7 @@ export default function CompanyRecord({
   clickup,
   meetings,
   tags,
+  enrichment,
 }: {
   viewer: Viewer;
   context: CompanyContext;
@@ -50,6 +54,7 @@ export default function CompanyRecord({
   clickup: ClickUpPicker | null;
   meetings: MeetingsSummary | null;
   tags: TagCount[];
+  enrichment: EnrichmentAvailability;
 }) {
   const router = useRouter();
   const listHref = useListHref("companies");
@@ -151,10 +156,14 @@ export default function CompanyRecord({
         details={
           <>
             <div className="flex items-start gap-3 p-5 shadow-[inset_0_-1px_0_var(--line-strong)]">
-              <span className="bg-muted flex size-[50px] shrink-0 items-center justify-center rounded-[12.5px] shadow-[0px_6.25px_6.25px_0px_rgba(15,15,15,0.24),0px_0px_0px_1.563px_#232323]">
-                <span aria-hidden className="h2-style text-soft">
-                  {company.name.slice(0, 1).toUpperCase()}
-                </span>
+              <span className="bg-muted flex size-[50px] shrink-0 items-center justify-center overflow-hidden rounded-[12.5px] shadow-[0px_6.25px_6.25px_0px_rgba(15,15,15,0.24),0px_0px_0px_1.563px_#232323]">
+                {company.logoUrl ? (
+                  <Asset type="image" src={company.logoUrl} alt="" width={1} height={1} sizes="50px" fit="contain" className="size-full bg-white" />
+                ) : (
+                  <span aria-hidden className="h2-style text-soft">
+                    {company.name.slice(0, 1).toUpperCase()}
+                  </span>
+                )}
               </span>
               <div className="flex min-w-0 flex-1 flex-col gap-2 pt-1">
                 <h2 className="truncate leading-6">{company.name}</h2>
@@ -222,9 +231,21 @@ export default function CompanyRecord({
                   </Detail>
                   <Detail label="Industry">{company.industry}</Detail>
                   <Detail label="Size">{company.sizeCategory}</Detail>
+                  <Detail label="LinkedIn">
+                    {company.linkedinUrl ? (
+                      <a href={company.linkedinUrl} target="_blank" rel="noreferrer" className="block truncate hover:underline">
+                        {bareUrl(company.linkedinUrl)}
+                      </a>
+                    ) : null}
+                  </Detail>
+                  <Detail label="Phone">{company.phone}</Detail>
+                  <Detail label="Address">{company.address}</Detail>
                   <Detail label="Owner">{company.ownerName ?? "Unassigned"}</Detail>
                   <Detail label="Source">{company.source}</Detail>
                 </DetailList>
+                {enrichment.company && (company.domain || company.website) && !company.archivedAt && (
+                  <CompanyEnrichButton companyId={company.id} enrichedAt={company.enrichedAt} />
+                )}
                 {company.description && (
                   <div className="flex flex-col gap-2">
                     <span className="caption-style text-subtle">Description</span>
@@ -238,7 +259,7 @@ export default function CompanyRecord({
 
             <MeetingsCard meetings={meetings} />
 
-            <RelationshipPanel context={context} clickup={clickup} />
+            <RelationshipPanel context={context} clickup={clickup} findEmail={enrichment.email} />
           </>
         }
         activity={

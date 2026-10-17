@@ -1,3 +1,4 @@
+import { after } from "next/server";
 export type { MutationOptions, MutationOutcome } from "@/lib/crm/mutate";
 
 import type { Db } from "@/lib/db/pool";
@@ -47,6 +48,11 @@ const COMPANY_SQL = `
     c.description,
     c.industry,
     c.size_category,
+    c.linkedin_url,
+    c.phone,
+    c.address,
+    c.logo_url,
+    c.enriched_at,
     c.lifecycle,
     c.owner_id,
     p.full_name as owner_name,
@@ -85,6 +91,11 @@ type CompanyRow = {
   description: string | null;
   industry: string | null;
   size_category: string | null;
+  linkedin_url: string | null;
+  phone: string | null;
+  address: string | null;
+  logo_url: string | null;
+  enriched_at: Date | string | null;
   lifecycle: Lifecycle;
   owner_id: string | null;
   owner_name: string | null;
@@ -119,6 +130,11 @@ function mapCompany(row: CompanyRow): Company {
     description: row.description,
     industry: row.industry,
     sizeCategory: row.size_category,
+    linkedinUrl: row.linkedin_url,
+    phone: row.phone,
+    address: row.address,
+    logoUrl: row.logo_url,
+    enrichedAt: iso(row.enriched_at),
     lifecycle: row.lifecycle,
     ownerId: row.owner_id,
     ownerName: row.owner_name,
@@ -199,9 +215,9 @@ async function insertCompany(
       `insert into crm.companies (
         workspace_id, name, normalized_name, domain, website, description,
         industry, size_category, lifecycle, owner_id, source, source_reference,
-        tags, created_by_user_id, created_by_agent_id
+        tags, created_by_user_id, created_by_agent_id, linkedin_url, phone, address, logo_url
       ) values (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
       ) returning id`,
       [
         actor.workspaceId,
@@ -219,6 +235,10 @@ async function insertCompany(
         write.tags ?? [],
         actor.type === "user" ? actor.userId : null,
         actor.type === "agent" ? actor.agentId : null,
+        write.linkedinUrl ?? null,
+        write.phone ?? null,
+        write.address ?? null,
+        write.logoUrl ?? null,
       ],
     );
     const company = await readCompany(db, actor.workspaceId, inserted.rows[0].id);
@@ -266,6 +286,10 @@ function assignments(write: CompanyWrite & { normalizedName?: string }, current:
   if (write.sizeCategory !== undefined) {
     add("size_category", "sizeCategory", write.sizeCategory);
   }
+  if (write.linkedinUrl !== undefined) add("linkedin_url", "linkedinUrl", write.linkedinUrl);
+  if (write.phone !== undefined) add("phone", "phone", write.phone);
+  if (write.address !== undefined) add("address", "address", write.address);
+  if (write.logoUrl !== undefined) add("logo_url", "logoUrl", write.logoUrl);
   if (write.lifecycle !== undefined) add("lifecycle", "lifecycle", write.lifecycle);
   if (write.ownerId !== undefined) add("owner_id", "ownerId", write.ownerId);
   if (write.source !== undefined) add("source", "source", write.source);
@@ -525,6 +549,19 @@ export async function getCompany(actor: Actor, id: string) {
   });
 }
 
+function scheduleEnrichment(actor: Actor, companyId: string) {
+  const run = () => {
+    void import("@/lib/enrichment/companies")
+      .then((module) => module.autoEnrichCompany(actor, companyId))
+      .catch(() => undefined);
+  };
+  try {
+    after(run);
+  } catch {
+    run();
+  }
+}
+
 export async function createCompany(
   actor: Actor,
   input: CompanyWrite,
@@ -534,11 +571,13 @@ export async function createCompany(
   const write = normalizeCompanyWrite(input, "create");
   const provenance = options.provenance ?? { operation: "create_company" };
   const hash = requestHash("create_company", { write, provenance });
-  return withActor(actor, (db) =>
+  const outcome = await withActor(actor, (db) =>
     replayOrRun(db, actor, options.idempotencyKey, hash, 201, async () => ({
       company: await createInTransaction(db, actor, write, provenance),
     })),
   );
+  if (outcome.status === 201 && !outcome.replayed) scheduleEnrichment(actor, outcome.body.company.id);
+  return outcome;
 }
 
 export async function upsertCompany(
@@ -550,7 +589,7 @@ export async function upsertCompany(
   const write = normalizeCompanyWrite(input, "upsert");
   const provenance = options.provenance ?? { operation: "upsert_company" };
   const hash = requestHash("upsert_company", { write, provenance });
-  return withActor(actor, (db) =>
+  const outcome = await withActor(actor, (db) =>
     replayOrRun(db, actor, options.idempotencyKey, hash, 200, async () => {
       const result = await upsertInTransaction(db, actor, write, provenance);
       return {
@@ -560,6 +599,8 @@ export async function upsertCompany(
       };
     }),
   );
+  if (outcome.body.created && !outcome.replayed) scheduleEnrichment(actor, outcome.body.company.id);
+  return outcome;
 }
 
 export async function updateCompany(
@@ -586,9 +627,12 @@ export async function updateCompany(
         provenance,
         "company.updated",
       );
-      return { company: updated.company };
+      return { company: updated.company, gainedDomain: !current.domain && Boolean(updated.company.domain) };
     }),
-  );
+  ).then((outcome) => {
+    if (outcome.body.gainedDomain && !outcome.replayed) scheduleEnrichment(actor, outcome.body.company.id);
+    return { ...outcome, body: { company: outcome.body.company } };
+  });
 }
 
 export async function editCompanyTagsInDb(

@@ -11,6 +11,14 @@ const nextConfig: NextConfig = {
         protocol: "https",
         hostname: "api.builder.io",
       },
+      {
+        protocol: "https",
+        hostname: "**.context.dev",
+      },
+      {
+        protocol: "https",
+        hostname: "**.brand.dev",
+      },
     ],
   },
   turbopack: {

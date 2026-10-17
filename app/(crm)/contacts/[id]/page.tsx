@@ -13,6 +13,8 @@ import { CrmError } from "@/lib/crm/errors";
 import { getMailbox } from "@/lib/crm/inbox";
 import { getInviteSetup } from "@/lib/crm/invites";
 import { listTags } from "@/lib/crm/tags";
+import { contactLookups } from "@/lib/enrichment/contacts";
+import { enrichmentAvailability } from "@/lib/enrichment/settings";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -66,6 +68,8 @@ export default async function ContactPage({
     getInviteSetup(user),
     listTasks(user, { contactId: contact.id, view: "all", limit: 50 }),
   ]);
+  const available = enrichmentAvailability();
+  const lookups = available.email || available.linkedin ? await contactLookups(user, [contact.id]) : {};
   const activities = activitiesByContact[contact.id] ?? [];
   const insights = await getInsightsForActivities(
     user,
@@ -98,6 +102,7 @@ export default async function ContactPage({
       meetings={meetings}
       tags={tags}
       invite={invite}
+      enrichment={{ available, lookups: lookups[contact.id] ?? {} }}
     />
   );
 }

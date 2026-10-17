@@ -3,6 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { cache } from "react";
 import CompanyRecord from "@/components/companies/company-record";
 import { getUserActor } from "@/lib/auth/user";
+import { enrichmentAvailability } from "@/lib/enrichment/settings";
 import { getMeetings } from "@/lib/crm/calendar";
 import { getClickUpPicker } from "@/lib/crm/clickup";
 import { listMembers } from "@/lib/crm/companies";
@@ -67,6 +68,7 @@ export default async function CompanyPage({
       clickup={clickup}
       meetings={meetings}
       tags={tags}
+      enrichment={enrichmentAvailability()}
     />
   );
 }

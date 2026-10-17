@@ -26,6 +26,7 @@ const HASH_TARGETS: Record<string, string> = {
   clickup: SETTINGS_PATHS.integrations,
   teams: SETTINGS_PATHS.integrations,
   "ai-accounts": SETTINGS_PATHS.integrations,
+  enrichment: SETTINGS_PATHS.integrations,
   chatgpt: SETTINGS_PATHS.integrations,
   claude: SETTINGS_PATHS.integrations,
   pipeline: SETTINGS_PATHS.pipeline,

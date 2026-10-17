@@ -14,11 +14,13 @@ import {
 } from "@/components/_ui/dialog";
 import { EntityChip, Monogram } from "@/components/beautifui/record-marks";
 import BulkActions, {
+  type BulkExtraAction,
   RowCheckbox,
   SelectAllCheckbox,
   SelectToggle,
 } from "@/components/crm/bulk-bar";
 import ContactEditor from "@/components/crm/contact-editor";
+import FindDetailButton, { bulkFindSummary, findDetailsInBatches } from "@/components/crm/find-detail";
 import { RememberList } from "@/components/crm/list-memory";
 import Pager from "@/components/crm/pager";
 import RecordTransfer from "@/components/crm/record-transfer";
@@ -38,6 +40,9 @@ import { useBulkSelection } from "@/hooks/use-bulk-selection";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import type { Recipient } from "@/lib/crm/personalise";
 import type { Company, Contact, Member, TagCount } from "@/lib/crm/types";
+import type { ContactLookups } from "@/lib/enrichment/contacts";
+import type { ContactField } from "@/lib/enrichment/providers";
+import type { EnrichmentAvailability } from "@/lib/enrichment/settings";
 import { KEYBOARD_ROW_CLASS } from "@/lib/shortcuts";
 import { cn } from "@/lib/utils";
 
@@ -66,6 +71,7 @@ export default function ContactsScreen({
   companies,
   members,
   mailboxConnected,
+  enrichment,
 }: {
   viewer: Viewer;
   contacts: Contact[];
@@ -77,6 +83,7 @@ export default function ContactsScreen({
   companies: Company[];
   members: Member[];
   mailboxConnected: boolean;
+  enrichment: { available: EnrichmentAvailability; lookups: ContactLookups };
 }) {
   const router = useRouter();
   const tagHref = useTagHref();
@@ -86,6 +93,19 @@ export default function ContactsScreen({
   );
   const tagOptions = tagFilterOptions(tags, "contact", tag || undefined);
   const [creating, setCreating] = useState(false);
+  const finders: BulkExtraAction[] = (["email", "linkedin"] as ContactField[])
+    .filter((field) => enrichment.available[field])
+    .map((field) => ({
+      key: `find-${field}`,
+      label: field === "email" ? "Find emails" : "Find LinkedIn",
+      title: field === "email" ? "Find missing work emails" : "Find missing LinkedIn profiles",
+      run: async (ids, progress) => {
+        const results = await findDetailsInBatches(ids, field, (done, found) =>
+          progress(`Searching ${done}/${ids.length} · ${found} found`),
+        );
+        return bulkFindSummary(results, field);
+      },
+    }));
   const created = useCallback(
     (contact: Contact | undefined) => {
       if (!contact) {
@@ -174,6 +194,8 @@ export default function ContactsScreen({
             key={contact.id}
             contact={contact}
             selected={selection.isSelected(contact.id)}
+            findEmail={enrichment.available.email}
+            emailLookup={enrichment.lookups[contact.id]?.email}
             revealed={selection.revealed}
             selecting={selection.selecting}
             onToggle={(range) => selection.toggle(contact.id, range)}
@@ -195,6 +217,7 @@ export default function ContactsScreen({
             .map(recipientOf)
         }
         mailboxConnected={mailboxConnected}
+        extraActions={finders}
         tagging={{
           tags,
           selectedTags: (ids) => [
@@ -242,12 +265,16 @@ export default function ContactsScreen({
 function ContactRow({
   contact,
   selected,
+  findEmail,
+  emailLookup,
   revealed,
   selecting,
   onToggle,
 }: {
   contact: Contact;
   selected: boolean;
+  findEmail: boolean;
+  emailLookup?: ContactLookups[string]["email"];
   revealed: boolean;
   selecting: boolean;
   onToggle: (range: boolean) => void;
@@ -318,6 +345,8 @@ function ContactRow({
           >
             {contact.email}
           </a>
+        ) : findEmail ? (
+          <FindDetailButton contactId={contact.id} field="email" lookup={emailLookup} className="-ml-1" />
         ) : (
           <span className="caption-style text-subtle">—</span>
         )}

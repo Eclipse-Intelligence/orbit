@@ -7,6 +7,7 @@ import { EntityChip, Monogram } from "@/components/beautifui/record-marks";
 import DetailSection from "@/components/companies/detail/detail-section";
 import ContactActivities from "@/components/crm/contact-activities";
 import ContactEditor from "@/components/crm/contact-editor";
+import FindDetailButton from "@/components/crm/find-detail";
 import { contactRecipient } from "@/lib/crm/personalise";
 import InviteDialog, { InviteNotice } from "@/components/crm/invite-dialog";
 import MeetingsCard from "@/components/crm/meetings-card";
@@ -19,6 +20,8 @@ import RecordTags from "@/components/crm/tags";
 import type { Viewer } from "@/components/crm/viewer";
 import type { MeetingsSummary } from "@/lib/crm/calendar";
 import type { InviteSetup } from "@/lib/crm/invites";
+import type { ContactLookups } from "@/lib/enrichment/contacts";
+import type { EnrichmentAvailability } from "@/lib/enrichment/settings";
 import { companyHref } from "@/lib/crm/hrefs";
 import type {
   Activity,
@@ -47,6 +50,7 @@ export default function ContactRecord({
   tasks,
   tags,
   invite,
+  enrichment,
 }: {
   viewer: Viewer;
   contact: Contact;
@@ -59,6 +63,7 @@ export default function ContactRecord({
   tasks: Task[];
   tags: TagCount[];
   invite: InviteSetup;
+  enrichment: { available: EnrichmentAvailability; lookups: ContactLookups[string] };
 }) {
   const router = useRouter();
   const [editing, setEditing] = useState(false);
@@ -226,6 +231,8 @@ export default function ContactRecord({
                       >
                         {shown.email}
                       </a>
+                    ) : enrichment.available.email ? (
+                      <FindDetailButton contactId={shown.id} field="email" lookup={enrichment.lookups?.email} variant="text" className="-ml-1" />
                     ) : null}
                   </Detail>
                   <Detail label="LinkedIn">
@@ -238,6 +245,8 @@ export default function ContactRecord({
                       >
                         {shown.linkedinUrl.replace(/^https?:\/\/(www\.)?/, "")}
                       </a>
+                    ) : enrichment.available.linkedin ? (
+                      <FindDetailButton contactId={shown.id} field="linkedin" lookup={enrichment.lookups?.linkedin} variant="text" className="-ml-1" />
                     ) : null}
                   </Detail>
                   <Detail label="Owner">

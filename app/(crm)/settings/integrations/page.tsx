@@ -1,11 +1,13 @@
 import { redirect } from "next/navigation";
 import AiAccountsSettings from "@/components/crm/ai-accounts-settings";
 import ClickUpSettings from "@/components/crm/clickup-settings";
+import EnrichmentSettingsCard from "@/components/crm/enrichment-settings";
 import IntegrationsSettings from "@/components/crm/integrations-settings";
 import { SettingsPage } from "@/components/crm/settings-ui";
 import { listAiAccounts } from "@/lib/ai-accounts/store";
 import { getUserActor } from "@/lib/auth/user";
 import { listCompanions } from "@/lib/companion/pairing";
+import { getEnrichmentSettings, providerStatuses } from "@/lib/enrichment/settings";
 import { getCallSync } from "@/lib/crm/calls";
 import { getClickUpSettings } from "@/lib/crm/clickup";
 import { getGranolaStatus } from "@/lib/crm/granola";
@@ -24,6 +26,7 @@ export default async function IntegrationSettingsPage() {
     listAiAccounts(user),
     listCompanions(user),
   ]);
+  const enrichment = await getEnrichmentSettings(user);
   const calls = mailbox ? await getCallSync(user) : null;
   const canAdmin = user.role === "owner" || user.role === "admin";
   return (
@@ -39,6 +42,7 @@ export default async function IntegrationSettingsPage() {
       />
       <ClickUpSettings view={clickup} canAdmin={canAdmin} />
       <AiAccountsSettings accounts={aiAccounts} companions={companions} />
+      <EnrichmentSettingsCard settings={enrichment} providers={providerStatuses()} canAdmin={canAdmin} />
     </SettingsPage>
   );
 }
