@@ -136,6 +136,41 @@ export function canonicalLinkedin(value: string): string | null {
   return `https://www.linkedin.com/in/${slug}`;
 }
 
+export function canonicalCompanyLinkedin(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  let url: URL;
+  try {
+    url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`);
+  } catch {
+    return null;
+  }
+  const host = url.hostname.replace(/\.$/, "").replace(/^www\./, "").toLowerCase();
+  if (host !== "linkedin.com" && !host.endsWith(".linkedin.com")) return null;
+  const parts = url.pathname.split("/").filter(Boolean);
+  const kind = parts[0]?.toLowerCase();
+  if (parts.length < 2 || !["company", "school", "showcase"].includes(kind)) return null;
+  let slug: string;
+  try {
+    slug = decodeURIComponent(parts[1]).toLowerCase();
+  } catch {
+    return null;
+  }
+  if (!/^[a-z0-9_.-]{1,150}$/.test(slug)) return null;
+  return `https://www.linkedin.com/${kind}/${slug}`;
+}
+
+export function canonicalImageUrl(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 1000) return null;
+  try {
+    const url = new URL(trimmed);
+    return url.protocol === "https:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 export function normalizedLinkedin(url: string) {
   return url.replace(/^https:\/\/www\./, "");
 }
@@ -274,6 +309,34 @@ export function normalizeCompanyWrite(
   }
   if (input.sizeCategory !== undefined) {
     next.sizeCategory = cleanText(input.sizeCategory, 80, "sizeCategory");
+  }
+  if (input.linkedinUrl !== undefined) {
+    if (input.linkedinUrl === null || input.linkedinUrl.trim() === "") {
+      next.linkedinUrl = null;
+    } else {
+      const linkedin = canonicalCompanyLinkedin(input.linkedinUrl);
+      if (!linkedin) {
+        throw new CrmError("invalid_input", "Enter a LinkedIn company page like linkedin.com/company/acme.", 400, {
+          field: "linkedinUrl",
+        });
+      }
+      next.linkedinUrl = linkedin;
+    }
+  }
+  if (input.phone !== undefined) {
+    next.phone = cleanText(input.phone, 60, "phone");
+  }
+  if (input.address !== undefined) {
+    next.address = cleanText(input.address, 500, "address");
+  }
+  if (input.logoUrl !== undefined) {
+    if (input.logoUrl === null || input.logoUrl.trim() === "") {
+      next.logoUrl = null;
+    } else {
+      const logo = canonicalImageUrl(input.logoUrl);
+      if (!logo) throw new CrmError("invalid_input", "The logo must be an https image URL.", 400, { field: "logoUrl" });
+      next.logoUrl = logo;
+    }
   }
   if (input.source !== undefined) {
     next.source = cleanText(input.source, 120, "source");

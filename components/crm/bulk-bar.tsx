@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type MouseEvent } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Checkbox } from "@/components/_ui/checkbox";
@@ -124,6 +124,13 @@ export type BulkTagging = {
   remove: (ids: string[], tag: string) => Promise<BulkActionResult>;
 };
 
+export type BulkExtraAction = {
+  key: string;
+  label: string;
+  title?: string;
+  run: (ids: string[], progress: (text: string) => void) => Promise<{ message: string; tone: "status" | "error" }>;
+};
+
 export default function BulkActions({
   selection,
   noun,
@@ -135,6 +142,7 @@ export default function BulkActions({
   recipients,
   mailboxConnected,
   tagging,
+  extraActions = [],
 }: {
   selection: BulkSelection;
   noun: [string, string];
@@ -146,11 +154,14 @@ export default function BulkActions({
   recipients: (ids: string[]) => Recipient[] | Promise<Recipient[]>;
   mailboxConnected: boolean;
   tagging?: BulkTagging;
+  extraActions?: BulkExtraAction[];
 }) {
   const router = useRouter();
+  const [extraBusy, setExtraBusy] = useState<{ key: string; text: string } | null>(null);
+  const noticeCount = useRef(0);
   const [confirming, setConfirming] = useState(false);
   const [tagMenu, setTagMenu] = useState(false);
-  const [busy, setBusy] = useState<"archive" | "undo" | "export" | "email" | "tag" | null>(
+  const [busy, setBusy] = useState<"archive" | "undo" | "export" | "email" | "tag" | "extra" | null>(
     null,
   );
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -164,7 +175,8 @@ export default function BulkActions({
   }, [notice]);
 
   function show(message: string, tone: Notice["tone"], undo?: string[]) {
-    setNotice({ id: Date.now(), message, tone, undo });
+    noticeCount.current += 1;
+    setNotice({ id: noticeCount.current, message, tone, undo });
   }
 
   async function runArchive() {
@@ -240,6 +252,23 @@ export default function BulkActions({
       show("Tagging failed. Try again.", "error");
     } finally {
       setBusy(null);
+    }
+  }
+
+  async function runExtra(action: BulkExtraAction) {
+    const chosen = ids;
+    if (chosen.length === 0) return;
+    setBusy("extra");
+    setExtraBusy({ key: action.key, text: "Starting…" });
+    try {
+      const result = await action.run(chosen, (text) => setExtraBusy({ key: action.key, text }));
+      show(result.message, result.tone);
+      router.refresh();
+    } catch (error) {
+      show(error instanceof Error ? error.message : "That didn't work. Try again.", "error");
+    } finally {
+      setBusy(null);
+      setExtraBusy(null);
     }
   }
 
@@ -369,6 +398,18 @@ export default function BulkActions({
                       />
                     </TagPopover>
                   )}
+                  {extraActions.map((action) => (
+                    <Button
+                      key={action.key}
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => runExtra(action)}
+                      disabled={busy !== null}
+                      title={action.title}
+                    >
+                      {extraBusy?.key === action.key ? extraBusy.text : action.label}
+                    </Button>
+                  ))}
                   <Button
                     variant="secondary"
                     size="sm"

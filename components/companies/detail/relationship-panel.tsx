@@ -13,9 +13,11 @@ import type { CompanyContext } from "@/lib/crm/types";
 export default function RelationshipPanel({
   context,
   clickup,
+  findEmail = false,
 }: {
   context: CompanyContext;
   clickup: ClickUpPicker | null;
+  findEmail?: boolean;
 }) {
   const companyId = context.company.id;
   const last = context.lastInteraction;
@@ -50,7 +52,7 @@ export default function RelationshipPanel({
         />
       </DetailSection>
 
-      <CompanyContacts companyId={companyId} contacts={context.contacts} />
+      <CompanyContacts companyId={companyId} contacts={context.contacts} findEmail={findEmail} />
 
       <DetailSection title="Opportunities">
         {context.opportunities.length === 0 ? (

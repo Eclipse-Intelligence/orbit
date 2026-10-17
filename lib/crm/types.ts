@@ -40,6 +40,11 @@ export type Company = {
   description: string | null;
   industry: string | null;
   sizeCategory: string | null;
+  linkedinUrl: string | null;
+  phone: string | null;
+  address: string | null;
+  logoUrl: string | null;
+  enrichedAt: string | null;
   lifecycle: Lifecycle;
   ownerId: string | null;
   ownerName: string | null;
@@ -63,6 +68,10 @@ export type CompanyWrite = {
   description?: string | null;
   industry?: string | null;
   sizeCategory?: string | null;
+  linkedinUrl?: string | null;
+  phone?: string | null;
+  address?: string | null;
+  logoUrl?: string | null;
   lifecycle?: Lifecycle;
   ownerId?: string | null;
   source?: string | null;

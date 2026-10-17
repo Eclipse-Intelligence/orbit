@@ -8,6 +8,8 @@ import { contactHref } from "@/lib/crm/hrefs";
 import { getMailbox } from "@/lib/crm/inbox";
 import { listTags } from "@/lib/crm/tags";
 import { contactQueryFromSearchParams } from "@/lib/crm/validation";
+import { contactLookups } from "@/lib/enrichment/contacts";
+import { enrichmentAvailability } from "@/lib/enrichment/settings";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -37,6 +39,8 @@ export default async function ContactsPage({
     getMailbox(user),
     listTags(user),
   ]);
+  const available = enrichmentAvailability();
+  const lookups = available.email || available.linkedin ? await contactLookups(user, listed.data.map((contact) => contact.id)) : {};
 
   return (
     <ContactsScreen
@@ -56,6 +60,7 @@ export default async function ContactsPage({
       companies={companies.data}
       members={members}
       mailboxConnected={mailbox?.status === "connected"}
+      enrichment={{ available, lookups }}
     />
   );
 }
