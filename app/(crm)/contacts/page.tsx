@@ -9,6 +9,7 @@ import { getMailbox } from "@/lib/crm/inbox";
 import { listTags } from "@/lib/crm/tags";
 import { contactQueryFromSearchParams } from "@/lib/crm/validation";
 import { contactLookups } from "@/lib/enrichment/contacts";
+import { DEFAULT_CONTACT_SORT, defaultContactOrder } from "@/lib/sorting";
 import { enrichmentAvailability } from "@/lib/enrichment/settings";
 
 export const dynamic = "force-dynamic";
@@ -61,6 +62,12 @@ export default async function ContactsPage({
       members={members}
       mailboxConnected={mailbox?.status === "connected"}
       enrichment={{ available, lookups }}
+      view={{
+        sort: filters.sort ?? DEFAULT_CONTACT_SORT,
+        order: filters.order ?? defaultContactOrder(filters.sort ?? DEFAULT_CONTACT_SORT),
+        has: filters.has ?? [],
+        missing: filters.missing ?? [],
+      }}
     />
   );
 }

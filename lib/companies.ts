@@ -1,3 +1,4 @@
+import { DEFAULT_COMPANY_SORT, defaultCompanyOrder } from "@/lib/sorting";
 import { CrmError } from "@/lib/crm/errors";
 import {
   COMPANY_SORTS,
@@ -22,32 +23,35 @@ export const LIFECYCLE_LABELS: Record<Lifecycle, string> = {
 export const SIZE_OPTIONS = ["1-10", "11-50", "51-200", "201-1000", "1000+"];
 
 export const SORT_OPTIONS: { value: string; label: string; sort: CompanySort; order: "asc" | "desc" }[] = [
+  { value: "name:asc", label: "Name A–Z", sort: "name", order: "asc" },
+  { value: "name:desc", label: "Name Z–A", sort: "name", order: "desc" },
+  { value: "interaction:desc", label: "Last interaction", sort: "interaction", order: "desc" },
+  { value: "strength:asc", label: "Weakest connection", sort: "strength", order: "asc" },
   { value: "updated:desc", label: "Recently updated", sort: "updated", order: "desc" },
   { value: "created:desc", label: "Newest", sort: "created", order: "desc" },
-  { value: "name:asc", label: "Name", sort: "name", order: "asc" },
   { value: "domain:asc", label: "Domain", sort: "domain", order: "asc" },
+  { value: "owner:asc", label: "Owner", sort: "owner", order: "asc" },
 ];
 
-export function sortValue(sort: CompanySort = "updated", order: "asc" | "desc" = "desc") {
-  const match = SORT_OPTIONS.find((option) => option.sort === sort && option.order === order);
-  return match?.value ?? "updated:desc";
+export function sortValue(sort: CompanySort = DEFAULT_COMPANY_SORT, order?: "asc" | "desc") {
+  const wanted = order ?? defaultCompanyOrder(sort);
+  const match = SORT_OPTIONS.find((option) => option.sort === sort && option.order === wanted);
+  return match?.value ?? `${sort}:${wanted}`;
 }
 
 export function parseSortValue(value: string) {
   const match = SORT_OPTIONS.find((option) => option.value === value);
-  return { sort: match?.sort ?? "updated", order: match?.order ?? "desc" };
+  return { sort: match?.sort ?? DEFAULT_COMPANY_SORT, order: match?.order ?? "asc" };
 }
 
 export function activeFilterCount(filters: CompanyListQuery) {
-  const defaultSort =
-    (filters.sort ?? "updated") === "updated" && (filters.order ?? "desc") === "desc";
-  return [
-    Boolean(filters.query),
-    Boolean(filters.lifecycle),
-    Boolean(filters.ownerId),
-    Boolean(filters.tag),
-    !defaultSort,
-  ].filter(Boolean).length;
+  const sort = filters.sort ?? DEFAULT_COMPANY_SORT;
+  const defaultSort = sort === DEFAULT_COMPANY_SORT && (filters.order ?? defaultCompanyOrder(sort)) === defaultCompanyOrder(sort);
+  return (
+    [Boolean(filters.query), Boolean(filters.lifecycle), Boolean(filters.ownerId), Boolean(filters.tag), !defaultSort].filter(Boolean).length +
+    (filters.has?.length ?? 0) +
+    (filters.missing?.length ?? 0)
+  );
 }
 
 export function displayInitials(name: string) {

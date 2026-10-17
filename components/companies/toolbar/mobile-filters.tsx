@@ -32,6 +32,7 @@ import {
   sortValue,
 } from "@/lib/companies";
 import { ANY_TAG } from "@/components/crm/tags";
+import { DEFAULT_COMPANY_SORT, defaultCompanyOrder } from "@/lib/sorting";
 import type { FilterOption } from "@/components/_common/filter-menu";
 import type { CompanyListQuery, Member } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
@@ -70,6 +71,8 @@ export default function MobileFilters({
       tag: null,
       sort: null,
       order: null,
+      has: null,
+      missing: null,
     });
   }
 
@@ -125,8 +128,8 @@ export default function MobileFilters({
                 onValueChange={(value) => {
                   const next = SORT_OPTIONS.find((option) => option.value === value);
                   onChange({
-                    sort: !next || next.sort === "updated" ? null : next.sort,
-                    order: !next || next.order === "desc" ? null : next.order,
+                    sort: !next || next.sort === DEFAULT_COMPANY_SORT ? null : next.sort,
+                    order: !next || next.order === defaultCompanyOrder(next.sort) ? null : next.order,
                   });
                 }}
               >

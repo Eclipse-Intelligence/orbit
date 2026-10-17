@@ -23,11 +23,13 @@ import {
   sameTags,
 } from "@/lib/crm/normalize";
 import { assertScope } from "@/lib/crm/scopes";
+import { defaultCompanyOrder } from "@/lib/sorting";
 import type {
   Actor,
   BulkItemResult,
   Company,
   CompanyListQuery,
+  CompanyPresence,
   CompanySort,
   CompanyWrite,
   Lifecycle,
@@ -113,10 +115,21 @@ type CompanyRow = {
 };
 
 const SORT_COLUMNS: Record<CompanySort, string> = {
-  name: "c.name",
+  name: "lower(c.name)",
   domain: "c.domain",
   updated: "c.updated_at",
   created: "c.created_at",
+  interaction: "last_interaction_at",
+  strength: "last_interaction_at",
+  owner: "lower(coalesce(nullif(p.full_name, ''), p.email))",
+};
+
+const NULLS_LAST = new Set<CompanySort>(["domain", "interaction", "strength", "owner"]);
+
+const PRESENCE_SQL: Record<CompanyPresence, string> = {
+  domain: "c.domain is not null",
+  contacts: "exists (select 1 from crm.contacts ct where ct.company_id = c.id and ct.archived_at is null)",
+  interactions: "exists (select 1 from crm.activities a where a.company_id = c.id)",
 };
 
 function mapCompany(row: CompanyRow): Company {
@@ -444,11 +457,10 @@ export async function listCompanies(actor: Actor, query: CompanyListQuery = {}) 
   assertScope(actor.scopes, "crm:read");
   const limit = Math.min(100, Math.max(1, query.limit ?? 50));
   const offset = Math.min(10_000, Math.max(0, query.offset ?? 0));
-  const sort = query.sort ?? "updated";
-  const order =
-    query.order ?? (sort === "name" || sort === "domain" ? "asc" : "desc");
+  const sort = query.sort ?? "name";
+  const order = query.order ?? defaultCompanyOrder(sort);
   const direction = order === "asc" ? "asc" : "desc";
-  const nulls = sort === "domain" ? " nulls last" : "";
+  const nulls = sort === "strength" && direction === "asc" ? " nulls first" : NULLS_LAST.has(sort) ? " nulls last" : "";
 
   return withActor(actor, async (db) => {
     const values: unknown[] = [actor.workspaceId];
@@ -479,6 +491,8 @@ export async function listCompanies(actor: Actor, query: CompanyListQuery = {}) 
         or c.normalized_name ilike ${ref} escape '\\'
       )`);
     }
+    for (const field of query.has ?? []) where.push(PRESENCE_SQL[field]);
+    for (const field of query.missing ?? []) where.push(`not (${PRESENCE_SQL[field]})`);
     const whereSql = where.join(" and ");
     const count = await db.query<{ total: number }>(
       `select count(*)::int as total from crm.companies c where ${whereSql}`,
@@ -488,7 +502,7 @@ export async function listCompanies(actor: Actor, query: CompanyListQuery = {}) 
     const rows = await db.query<CompanyRow>(
       `${COMPANY_SQL}
        where ${whereSql}
-       order by ${SORT_COLUMNS[sort]} ${direction}${nulls}, c.id asc
+       order by ${SORT_COLUMNS[sort]} ${direction}${nulls}, lower(c.name) asc, c.id asc
        limit $${listed.length - 1} offset $${listed.length}`,
       listed,
     );

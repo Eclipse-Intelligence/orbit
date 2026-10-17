@@ -56,6 +56,7 @@ export default function Companies({
         page={page}
         now={now}
         filtered={activeFilterCount(filters) > 0}
+        filters={filters}
         selection={selection}
         mailboxConnected={mailboxConnected}
         tags={tags}

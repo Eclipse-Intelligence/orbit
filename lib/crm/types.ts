@@ -3,8 +3,17 @@ import type { Scope } from "@/lib/crm/scopes";
 export const LIFECYCLES = ["lead", "prospect", "customer", "churned"] as const;
 export type Lifecycle = (typeof LIFECYCLES)[number];
 
-export const COMPANY_SORTS = ["name", "domain", "updated", "created"] as const;
+export const COMPANY_SORTS = ["name", "domain", "updated", "created", "interaction", "strength", "owner"] as const;
 export type CompanySort = (typeof COMPANY_SORTS)[number];
+
+export const COMPANY_PRESENCE = ["domain", "contacts", "interactions"] as const;
+export type CompanyPresence = (typeof COMPANY_PRESENCE)[number];
+
+export const CONTACT_SORTS = ["name", "company", "updated", "created"] as const;
+export type ContactSort = (typeof CONTACT_SORTS)[number];
+
+export const CONTACT_PRESENCE = ["email", "phone", "linkedin", "company"] as const;
+export type ContactPresence = (typeof CONTACT_PRESENCE)[number];
 
 export type WorkspaceRole = "owner" | "admin" | "member";
 
@@ -93,6 +102,8 @@ export type CompanyListQuery = {
   includeArchived?: boolean;
   sort?: CompanySort;
   order?: "asc" | "desc";
+  has?: CompanyPresence[];
+  missing?: CompanyPresence[];
   limit?: number;
   offset?: number;
 };
@@ -187,6 +198,10 @@ export type ContactListQuery = {
   ownerId?: string | "unassigned";
   tag?: string;
   includeArchived?: boolean;
+  sort?: ContactSort;
+  order?: "asc" | "desc";
+  has?: ContactPresence[];
+  missing?: ContactPresence[];
   limit?: number;
   offset?: number;
 };

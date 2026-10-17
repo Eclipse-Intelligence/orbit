@@ -10,21 +10,25 @@ import {
   ALL_OWNERS,
   ANY_LIFECYCLE,
   LIFECYCLE_LABELS,
-  SORT_OPTIONS,
   UNASSIGNED_OWNER,
-  parseSortValue,
-  sortValue,
 } from "@/lib/companies";
 import { SelectToggle } from "@/components/crm/bulk-bar";
+import { PresenceFilter, type PresenceField } from "@/components/crm/list-controls";
 import { ANY_TAG, tagFilterOptions } from "@/components/crm/tags";
 import RecordTransfer from "@/components/crm/record-transfer";
 import ListSearch from "@/components/shortcuts/list-search";
 import type { BulkSelection } from "@/hooks/use-bulk-selection";
 import { downloadCsv } from "@/lib/csv";
-import type { CompanyListQuery, Member, TagCount } from "@/lib/crm/types";
+import type { CompanyListQuery, CompanyPresence, Member, TagCount } from "@/lib/crm/types";
 import { useCompaniesStore } from "@/stores/companies-store";
 import ShareIcon from "@/public/assets/images/companies/toolbar/share.svg";
 import PlusIcon from "@/public/assets/images/_common/plus.svg";
+
+const PRESENCE_FIELDS: PresenceField<CompanyPresence>[] = [
+  { key: "domain", label: "Domain", has: "Has domain", missing: "No domain" },
+  { key: "contacts", label: "People", has: "Has people", missing: "No people" },
+  { key: "interactions", label: "Interactions", has: "Contacted", missing: "Never contacted" },
+];
 
 type ToolbarProps = {
   filters: CompanyListQuery;
@@ -77,32 +81,18 @@ export default function CompaniesToolbar({
 
   return (
     <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 px-4 py-4">
-      <MobileFilters
-        className="sm:hidden"
-        filters={filters}
-        members={members}
-        tagOptions={tagOptions}
-        onChange={replaceParams}
-      />
+      <div className="flex items-center gap-2 sm:hidden">
+        <MobileFilters filters={filters} members={members} tagOptions={tagOptions} onChange={replaceParams} />
+        <PresenceFilter
+          fields={PRESENCE_FIELDS}
+          has={filters.has ?? []}
+          missing={filters.missing ?? []}
+          onChange={(has, missing) => replaceParams({ has: has.join(",") || null, missing: missing.join(",") || null })}
+        />
+      </div>
 
       <div className="hidden min-w-0 flex-wrap items-center gap-2 sm:flex">
         <ListSearch noun="companies" />
-        <FilterMenu
-          label="Sort by"
-          shortcut="filter"
-          value={sortValue(filters.sort, filters.order)}
-          options={SORT_OPTIONS.map((option) => ({
-            value: option.value,
-            label: option.label,
-          }))}
-          onChange={(value) => {
-            const next = parseSortValue(value);
-            replaceParams({
-              sort: next.sort === "updated" ? null : next.sort,
-              order: next.order === "desc" ? null : next.order,
-            });
-          }}
-        />
         <FilterMenu
           label="Owner"
           value={filters.ownerId ?? ALL_OWNERS}
@@ -133,6 +123,13 @@ export default function CompaniesToolbar({
             onChange={(value) => replaceParams({ tag: value === ANY_TAG ? null : value })}
           />
         )}
+        <PresenceFilter
+          fields={PRESENCE_FIELDS}
+          shortcut="filter"
+          has={filters.has ?? []}
+          missing={filters.missing ?? []}
+          onChange={(has, missing) => replaceParams({ has: has.join(",") || null, missing: missing.join(",") || null })}
+        />
       </div>
 
       <div className="flex shrink-0 items-center gap-1">
