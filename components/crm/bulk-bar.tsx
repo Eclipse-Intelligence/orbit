@@ -128,6 +128,7 @@ export type BulkExtraAction = {
   key: string;
   label: string;
   title?: string;
+  confirm?: (ids: string[]) => { title: string; description: string; action: string };
   run: (ids: string[], progress: (text: string) => void) => Promise<{ message: string; tone: "status" | "error" }>;
 };
 
@@ -159,6 +160,7 @@ export default function BulkActions({
   const router = useRouter();
   const [extraBusy, setExtraBusy] = useState<{ key: string; text: string } | null>(null);
   const noticeCount = useRef(0);
+  const [confirmExtra, setConfirmExtra] = useState<{ action: BulkExtraAction; ids: string[] } | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [tagMenu, setTagMenu] = useState(false);
   const [busy, setBusy] = useState<"archive" | "undo" | "export" | "email" | "tag" | "extra" | null>(
@@ -403,7 +405,7 @@ export default function BulkActions({
                       key={action.key}
                       variant="secondary"
                       size="sm"
-                      onClick={() => runExtra(action)}
+                      onClick={() => (action.confirm ? setConfirmExtra({ action, ids }) : runExtra(action))}
                       disabled={busy !== null}
                       title={action.title}
                     >
@@ -451,6 +453,35 @@ export default function BulkActions({
               Archive
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={confirmExtra !== null} onOpenChange={(open) => !open && setConfirmExtra(null)}>
+        <DialogContent className="max-w-[440px]">
+          {confirmExtra && (
+            <>
+              <DialogHeader>
+                <DialogTitle>{confirmExtra.action.confirm!(confirmExtra.ids).title}</DialogTitle>
+                <DialogDescription>{confirmExtra.action.confirm!(confirmExtra.ids).description}</DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <Button variant="ghost" size="sm" onClick={() => setConfirmExtra(null)}>
+                  Cancel
+                </Button>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  autoFocus
+                  onClick={() => {
+                    const chosen = confirmExtra.action;
+                    setConfirmExtra(null);
+                    void runExtra(chosen);
+                  }}
+                >
+                  {confirmExtra.action.confirm!(confirmExtra.ids).action}
+                </Button>
+              </DialogFooter>
+            </>
+          )}
         </DialogContent>
       </Dialog>
       {composing && (

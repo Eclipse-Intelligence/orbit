@@ -9,7 +9,13 @@ import SparkleIcon from "@/public/assets/images/assistant/sparkle.svg";
 
 export const BULK_FIND_CHUNK = 6;
 
-const NOUNS: Record<ContactField, string> = { email: "email", linkedin: "LinkedIn" };
+const NOUNS: Record<ContactField, string> = { email: "email", linkedin: "LinkedIn", phone: "phone" };
+
+const PLURALS: Record<ContactField, [string, string]> = {
+  email: ["email", "emails"],
+  linkedin: ["LinkedIn profile", "LinkedIn profiles"],
+  phone: ["phone number", "phone numbers"],
+};
 
 export async function findDetails(ids: string[], field: ContactField): Promise<ContactEnrichment[]> {
   const response = await fetch("/api/enrichment/contacts", {
@@ -36,7 +42,7 @@ export function bulkFindSummary(results: ContactEnrichment[], field: ContactFiel
   const skipped = results.filter((result) => result.status === "skipped").length;
   const failed = results.filter((result) => result.status === "failed");
   const searched = results.length - skipped;
-  const parts = [`Found ${found} of ${searched} ${field === "email" ? (searched === 1 ? "email" : "emails") : "LinkedIn profiles"}`];
+  const parts = [`Found ${found} of ${searched} ${PLURALS[field][searched === 1 ? 0 : 1]}`];
   if (skipped > 0) parts.push(`${skipped} skipped (already filled in or missing a name or company)`);
   if (failed.length > 0) parts.push(`${failed.length} couldn't be searched: ${failed[0].message}`);
   return { message: parts.join(". "), tone: failed.length > 0 && found === 0 ? ("error" as const) : ("status" as const) };
@@ -78,7 +84,7 @@ export default function FindDetailButton({
     try {
       const [result] = await findDetails([contactId], field);
       setOutcome({ status: result.status, title: attemptsTitle(result) });
-      if (result.email || result.linkedinUrl) router.refresh();
+      if (result.email || result.linkedinUrl || result.phone) router.refresh();
     } catch (error) {
       setOutcome({ status: "failed", title: error instanceof Error ? error.message : "That lookup failed." });
     } finally {

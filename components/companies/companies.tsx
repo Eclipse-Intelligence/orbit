@@ -22,6 +22,7 @@ type CompaniesProps = {
   tags: TagCount[];
   viewer: Viewer;
   mailboxConnected: boolean;
+  enrichment: { company: boolean; logoClientId: string | null };
 };
 
 export default function Companies({
@@ -34,6 +35,7 @@ export default function Companies({
   tags,
   viewer,
   mailboxConnected,
+  enrichment,
 }: CompaniesProps) {
   const selection = useBulkSelection(
     companies.map((company) => company.id),
@@ -60,6 +62,7 @@ export default function Companies({
         selection={selection}
         mailboxConnected={mailboxConnected}
         tags={tags}
+        enrichment={enrichment}
       />
       <NewCompanyDialog members={members} viewerId={viewer.id} />
     </section>

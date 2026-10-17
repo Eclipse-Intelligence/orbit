@@ -9,7 +9,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/_ui/table";
-import BulkActions, { SelectAllCheckbox } from "@/components/crm/bulk-bar";
+import BulkActions, { SelectAllCheckbox, type BulkExtraAction } from "@/components/crm/bulk-bar";
+import { companyEnrichSummary, enrichCompaniesInBatches } from "@/components/companies/company-enrich";
 import CompanyRow from "./company-row";
 import TableFooter from "./table-footer";
 import { PAGE_SIZE } from "@/components/crm/paging";
@@ -50,6 +51,7 @@ export default function CompaniesTable({
   mailboxConnected,
   tags,
   filters,
+  enrichment,
 }: {
   companies: Company[];
   total: number;
@@ -60,8 +62,18 @@ export default function CompaniesTable({
   mailboxConnected: boolean;
   tags: TagCount[];
   filters: CompanyListQuery;
+  enrichment: { company: boolean; logoClientId: string | null };
 }) {
   const replaceParams = useListParams();
+  const findDetails: BulkExtraAction = {
+    key: "find-details",
+    label: "Find details",
+    title: "Fill in logos, socials and details from context.dev",
+    run: async (ids, progress) => {
+      const results = await enrichCompaniesInBatches(ids, (done) => progress(`Looking up ${done}/${ids.length}`));
+      return companyEnrichSummary(results);
+    },
+  };
   const current = { sort: filters.sort ?? DEFAULT_COMPANY_SORT, order: filters.order ?? defaultCompanyOrder(filters.sort ?? DEFAULT_COMPANY_SORT) };
   const sortBy = (column: CompanySort) =>
     replaceParams(nextSort(column, current, { sort: DEFAULT_COMPANY_SORT, order: defaultCompanyOrder }));
@@ -111,6 +123,7 @@ export default function CompaniesTable({
                 revealed={selection.revealed}
                 selecting={selection.selecting}
                 onToggle={(range) => selection.toggle(company.id, range)}
+                logoClientId={enrichment.logoClientId}
               />
             ))}
             {companies.length === 0 && (
@@ -139,6 +152,7 @@ export default function CompaniesTable({
         emailLabel="Email people"
         recipients={companyRecipientsAction}
         mailboxConnected={mailboxConnected}
+        extraActions={enrichment.company ? [findDetails] : []}
         tagging={{
           tags,
           selectedTags: (ids) => [

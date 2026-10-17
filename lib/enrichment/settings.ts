@@ -14,7 +14,9 @@ export type EnrichmentSettings = {
 
 export type ProviderStatus = { id: ProviderId; name: string; envKey: string; configured: boolean; fields: ContactField[] };
 
-export type EnrichmentAvailability = { email: boolean; linkedin: boolean; company: boolean };
+export type EnrichmentAvailability = { email: boolean; linkedin: boolean; phone: boolean; company: boolean; logoClientId: string | null };
+
+export const PHONE_ORDER: ProviderId[] = ["enrow"];
 
 function cleanOrder(value: unknown, field: ContactField, fallback: ProviderId[]) {
   const supported = PROVIDERS.filter((provider) => provider.fields.includes(field)).map((provider) => provider.id);
@@ -37,7 +39,13 @@ export function providerStatuses(env: Record<string, string | undefined> = proce
 export function enrichmentAvailability(env: Record<string, string | undefined> = process.env): EnrichmentAvailability {
   const statuses = providerStatuses(env);
   const has = (field: ContactField) => statuses.some((status) => status.configured && status.fields.includes(field));
-  return { email: has("email"), linkedin: has("linkedin"), company: Boolean(providerKey("context", env)) };
+  return {
+    email: has("email"),
+    linkedin: has("linkedin"),
+    phone: has("phone"),
+    company: Boolean(providerKey("context", env)),
+    logoClientId: env.NEXT_PUBLIC_CONTEXT_LOGO_CLIENT_ID?.trim() || null,
+  };
 }
 
 export async function getEnrichmentSettings(actor: Actor): Promise<EnrichmentSettings> {

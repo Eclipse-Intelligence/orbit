@@ -41,7 +41,7 @@ export default async function ContactsPage({
     listTags(user),
   ]);
   const available = enrichmentAvailability();
-  const lookups = available.email || available.linkedin ? await contactLookups(user, listed.data.map((contact) => contact.id)) : {};
+  const lookups = available.email || available.linkedin || available.phone ? await contactLookups(user, listed.data.map((contact) => contact.id)) : {};
 
   return (
     <ContactsScreen

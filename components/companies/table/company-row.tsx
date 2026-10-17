@@ -5,11 +5,11 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { RowCheckbox } from "@/components/crm/bulk-bar";
 import { RowTags } from "@/components/crm/tags";
+import CompanyLogo from "@/components/companies/company-logo";
 import { TableCell, TableRow } from "@/components/_ui/table";
 import {
   ConnectionMark,
   lifecycleTagBase,
-  Monogram,
   RecordTag,
 } from "@/components/beautifui/record-marks";
 import { LIFECYCLE_LABELS, relativeWhen } from "@/lib/companies";
@@ -32,6 +32,7 @@ type CompanyRowProps = {
   revealed: boolean;
   selecting: boolean;
   onToggle: (range: boolean) => void;
+  logoClientId: string | null;
 };
 
 function cellClass(key: TableColumnKey) {
@@ -50,6 +51,7 @@ export default function CompanyRow({
   revealed,
   selecting,
   onToggle,
+  logoClientId,
 }: CompanyRowProps) {
   const router = useRouter();
   const href = companyHref(company.id);
@@ -102,7 +104,7 @@ export default function CompanyRow({
               className="absolute"
             />
           </span>
-          <Monogram name={company.name} />
+          <CompanyLogo company={company} clientId={logoClientId} />
           <Link
             href={href}
             onClick={(event) => {

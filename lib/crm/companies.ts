@@ -29,6 +29,7 @@ import type {
   BulkItemResult,
   Company,
   CompanyListQuery,
+  CompanyBrand,
   CompanyPresence,
   CompanySort,
   CompanyWrite,
@@ -55,6 +56,7 @@ const COMPANY_SQL = `
     c.address,
     c.logo_url,
     c.enriched_at,
+    c.brand,
     c.lifecycle,
     c.owner_id,
     p.full_name as owner_name,
@@ -98,6 +100,7 @@ type CompanyRow = {
   address: string | null;
   logo_url: string | null;
   enriched_at: Date | string | null;
+  brand: CompanyBrand | null;
   lifecycle: Lifecycle;
   owner_id: string | null;
   owner_name: string | null;
@@ -148,6 +151,7 @@ function mapCompany(row: CompanyRow): Company {
     address: row.address,
     logoUrl: row.logo_url,
     enrichedAt: iso(row.enriched_at),
+    brand: row.brand ?? null,
     lifecycle: row.lifecycle,
     ownerId: row.owner_id,
     ownerName: row.owner_name,
