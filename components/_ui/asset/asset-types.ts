@@ -24,6 +24,7 @@ export type AssetImageProps = AssetBaseProps & {
   blurDataURL?: string | null;
   priority?: boolean;
   loading?: "eager" | "lazy";
+  unoptimized?: boolean;
 };
 
 export type AssetVideoProps = AssetBaseProps & {

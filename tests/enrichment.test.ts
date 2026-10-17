@@ -105,7 +105,7 @@ describe("company enrichment", () => {
     assert.deepEqual(mapped, {
       website: "https://acme-pay.test",
       description: "Payments infrastructure.",
-      industry: "Financial Services",
+      industry: "Payments",
       sizeCategory: "51-200",
       linkedinUrl: "https://www.linkedin.com/company/acme-pay",
       phone: "+44 20 7946 0000",
@@ -306,8 +306,14 @@ describe("contact email and LinkedIn waterfall", () => {
       ],
     );
     await assert.rejects(enrichContacts(owner, Array.from({ length: 7 }, () => crypto.randomUUID()), "email"), /up to 6 people/);
-    assert.deepEqual(enrichmentAvailability(ENV), { email: true, linkedin: true, company: true });
-    assert.deepEqual(enrichmentAvailability({ ENROW_API_KEY: "x" }), { email: true, linkedin: false, company: false });
+    assert.deepEqual(enrichmentAvailability(ENV), { email: true, linkedin: true, phone: true, company: true, logoClientId: null });
+    assert.deepEqual(enrichmentAvailability({ ENROW_API_KEY: "x", NEXT_PUBLIC_CONTEXT_LOGO_CLIENT_ID: "brandLL_1" }), {
+      email: true,
+      linkedin: false,
+      phone: true,
+      company: false,
+      logoClientId: "brandLL_1",
+    });
   });
 
   it("spots LinkedIn profile URLs anywhere in a response", () => {

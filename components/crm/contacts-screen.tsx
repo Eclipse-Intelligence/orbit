@@ -120,12 +120,21 @@ export default function ContactsScreen({
   const filtering = view.has.length + view.missing.length > 0;
   const tagOptions = tagFilterOptions(tags, "contact", tag || undefined);
   const [creating, setCreating] = useState(false);
-  const finders: BulkExtraAction[] = (["email", "linkedin"] as ContactField[])
+  const finders: BulkExtraAction[] = (["email", "linkedin", "phone"] as ContactField[])
     .filter((field) => enrichment.available[field])
     .map((field) => ({
       key: `find-${field}`,
-      label: field === "email" ? "Find emails" : "Find LinkedIn",
-      title: field === "email" ? "Find missing work emails" : "Find missing LinkedIn profiles",
+      label: field === "email" ? "Find emails" : field === "linkedin" ? "Find LinkedIn" : "Find phones",
+      title: field === "email" ? "Find missing work emails" : field === "linkedin" ? "Find missing LinkedIn profiles" : "Find missing phone numbers",
+      ...(field === "phone"
+        ? {
+            confirm: (ids: string[]) => ({
+              title: `Find phone numbers for ${ids.length} ${ids.length === 1 ? "person" : "people"}?`,
+              description: `Enrow charges 40 credits for each number it finds, roughly $0.35 to $0.68 each, so up to ${ids.length * 40} credits. Nothing is charged when no number is found, and people who already have a phone are skipped.`,
+              action: "Find phones",
+            }),
+          }
+        : {}),
       run: async (ids, progress) => {
         const results = await findDetailsInBatches(ids, field, (done, found) =>
           progress(`Searching ${done}/${ids.length} · ${found} found`),
@@ -246,6 +255,8 @@ export default function ContactsScreen({
             selected={selection.isSelected(contact.id)}
             findEmail={enrichment.available.email}
             emailLookup={enrichment.lookups[contact.id]?.email}
+            findPhone={enrichment.available.phone}
+            phoneLookup={enrichment.lookups[contact.id]?.phone}
             revealed={selection.revealed}
             selecting={selection.selecting}
             onToggle={(range) => selection.toggle(contact.id, range)}
@@ -317,6 +328,8 @@ function ContactRow({
   selected,
   findEmail,
   emailLookup,
+  findPhone,
+  phoneLookup,
   revealed,
   selecting,
   onToggle,
@@ -325,6 +338,8 @@ function ContactRow({
   selected: boolean;
   findEmail: boolean;
   emailLookup?: ContactLookups[string]["email"];
+  findPhone: boolean;
+  phoneLookup?: ContactLookups[string]["phone"];
   revealed: boolean;
   selecting: boolean;
   onToggle: (range: boolean) => void;
@@ -411,6 +426,8 @@ function ContactRow({
               <CallLink phone={contact.phone} />
             </span>
           </>
+        ) : findPhone ? (
+          <FindDetailButton contactId={contact.id} field="phone" lookup={phoneLookup} className="-ml-1" />
         ) : (
           <span className="caption-style text-subtle">—</span>
         )}

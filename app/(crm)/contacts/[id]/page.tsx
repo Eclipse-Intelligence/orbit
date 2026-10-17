@@ -69,7 +69,7 @@ export default async function ContactPage({
     listTasks(user, { contactId: contact.id, view: "all", limit: 50 }),
   ]);
   const available = enrichmentAvailability();
-  const lookups = available.email || available.linkedin ? await contactLookups(user, [contact.id]) : {};
+  const lookups = available.email || available.linkedin || available.phone ? await contactLookups(user, [contact.id]) : {};
   const activities = activitiesByContact[contact.id] ?? [];
   const insights = await getInsightsForActivities(
     user,

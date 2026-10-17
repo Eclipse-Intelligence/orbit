@@ -221,6 +221,8 @@ export default function ContactRecord({
                         <span>{shown.phone}</span>
                         <CallLink phone={shown.phone} className="-my-1" />
                       </span>
+                    ) : enrichment.available.phone ? (
+                      <FindDetailButton contactId={shown.id} field="phone" lookup={enrichment.lookups?.phone} variant="text" className="-ml-1" />
                     ) : null}
                   </Detail>
                   <Detail label="Email">

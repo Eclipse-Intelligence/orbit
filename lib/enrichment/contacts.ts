@@ -17,7 +17,8 @@ import {
   type ProviderId,
   type Verdict,
 } from "@/lib/enrichment/providers";
-import { getEnrichmentSettings } from "@/lib/enrichment/settings";
+import { PHONE_ORDER, getEnrichmentSettings } from "@/lib/enrichment/settings";
+import { normalizePhone } from "@/lib/phone";
 
 const CONTACT_BUDGET_MS = 75_000;
 const CONTEXT_MIN_SCORE = 70;
@@ -35,9 +36,12 @@ export type ContactEnrichment = {
   message: string;
   email: string | null;
   linkedinUrl: string | null;
+  phone: string | null;
   provider: ProviderId | null;
   attempts: Attempt[];
 };
+
+const NOUNS: Record<ContactField, string> = { email: "email", linkedin: "LinkedIn profile", phone: "phone number" };
 
 export type LookupState = { status: "found" | "not_found" | "failed"; at: string; provider: string | null };
 
@@ -93,7 +97,7 @@ async function recordLookup(actor: UserActor, contactId: string, field: ContactF
 }
 
 function skipped(contactId: string, field: ContactField, message: string): ContactEnrichment {
-  return { contactId, field, status: "skipped", message, email: null, linkedinUrl: null, provider: null, attempts: [] };
+  return { contactId, field, status: "skipped", message, email: null, linkedinUrl: null, phone: null, provider: null, attempts: [] };
 }
 
 export async function enrichContact(actor: UserActor, contactId: string, field: ContactField, options: Options = {}): Promise<ContactEnrichment> {
@@ -103,6 +107,7 @@ export async function enrichContact(actor: UserActor, contactId: string, field: 
   const contact = await getContact(actor, contactId);
   if (field === "email" && contact.email) return skipped(contactId, field, `${contact.name} already has an email.`);
   if (field === "linkedin" && contact.linkedinUrl) return skipped(contactId, field, `${contact.name} already has a LinkedIn profile.`);
+  if (field === "phone" && contact.phone) return skipped(contactId, field, `${contact.name} already has a phone number.`);
   const { first, last } = splitName(contact);
   if (!first || !last) return skipped(contactId, field, `Add ${contact.name}'s first and last name first.`);
 
@@ -110,19 +115,22 @@ export async function enrichContact(actor: UserActor, contactId: string, field: 
   const ownEmail = workEmail(contact.email);
   const domain = company?.domain ?? (company?.website ? canonicalDomain(company.website) : null) ?? (ownEmail ? emailDomain(ownEmail) : null);
   const companyName = company?.name ?? contact.companyName ?? null;
-  if (!domain && !companyName) return skipped(contactId, field, `Link ${contact.name} to a company with a website first.`);
+  if (!domain && !companyName && !(field === "phone" && contact.linkedinUrl)) {
+    return skipped(contactId, field, `Link ${contact.name} to a company with a website first.`);
+  }
 
   const query: PersonQuery = { firstName: first, lastName: last, domain, companyName, linkedinUrl: contact.linkedinUrl };
   const settings = await getEnrichmentSettings(actor);
-  const order = (field === "email" ? settings.emailOrder : settings.linkedinOrder).filter((id) => {
+  const order = (field === "email" ? settings.emailOrder : field === "linkedin" ? settings.linkedinOrder : PHONE_ORDER).filter((id) => {
     const provider = PROVIDER_BY_ID.get(id);
     return provider?.fields.includes(field) && providerKey(id, env);
   });
-  if (order.length === 0) return skipped(contactId, field, `No ${field === "email" ? "email" : "LinkedIn"} finder is set up.`);
+  if (order.length === 0) return skipped(contactId, field, `No ${NOUNS[field]} finder is set up.`);
 
   const attempts: Attempt[] = [];
   let email: { value: string; provider: ProviderId } | null = null;
   let linkedin: { value: string; provider: ProviderId } | null = null;
+  let phone: { value: string; provider: ProviderId } | null = null;
 
   for (const id of order) {
     if (Date.now() > deadline - 5_000) break;
@@ -161,7 +169,10 @@ export async function enrichContact(actor: UserActor, contactId: string, field: 
       }
     }
 
-    const target = field === "email" ? email : linkedin;
+    const number = finding.phone ? normalizePhone(finding.phone) : null;
+    if (!phone && !contact.phone && number && field === "phone") phone = { value: number, provider: id };
+
+    const target = field === "email" ? email : field === "linkedin" ? linkedin : phone;
     if (target?.provider === id) {
       attempts.push({ provider: id, outcome: "found" });
       break;
@@ -172,12 +183,16 @@ export async function enrichContact(actor: UserActor, contactId: string, field: 
   const write: ContactWrite = {};
   if (email) write.email = email.value;
   if (linkedin) write.linkedinUrl = linkedin.value;
+  if (phone) write.phone = phone.value;
   const allFailed = attempts.length > 0 && attempts.every((attempt) => attempt.outcome === "failed");
 
   if (Object.keys(write).length > 0) {
     try {
       await updateContact(actor, contactId, write, {
-        provenance: { operation: "enrich_contact", source: (field === "email" ? email : linkedin)?.provider ?? email?.provider ?? linkedin?.provider ?? "enrichment" },
+        provenance: {
+          operation: "enrich_contact",
+          source: (field === "email" ? email : field === "linkedin" ? linkedin : phone)?.provider ?? email?.provider ?? linkedin?.provider ?? "enrichment",
+        },
       });
     } catch (error) {
       const message =
@@ -187,17 +202,17 @@ export async function enrichContact(actor: UserActor, contactId: string, field: 
             ? error.message
             : "Couldn't save what was found.";
       await recordLookup(actor, contactId, field, "failed", null, null, attempts);
-      return { contactId, field, status: "failed", message, email: null, linkedinUrl: null, provider: null, attempts };
+      return { contactId, field, status: "failed", message, email: null, linkedinUrl: null, phone: null, provider: null, attempts };
     }
   }
 
   if (email && field !== "email") await recordLookup(actor, contactId, "email", "found", email.provider, email.value, []);
   if (linkedin && field !== "linkedin") await recordLookup(actor, contactId, "linkedin", "found", linkedin.provider, linkedin.value, []);
-  const target = field === "email" ? email : linkedin;
+  const target = field === "email" ? email : field === "linkedin" ? linkedin : phone;
   const status = target ? "found" : allFailed ? "failed" : "not_found";
   await recordLookup(actor, contactId, field, status, target?.provider ?? null, target?.value ?? null, attempts);
 
-  const noun = field === "email" ? "email" : "LinkedIn profile";
+  const noun = NOUNS[field];
   const message = target
     ? `Found ${contact.name}'s ${noun} with ${PROVIDER_BY_ID.get(target.provider)!.name}.`
     : allFailed
@@ -210,6 +225,7 @@ export async function enrichContact(actor: UserActor, contactId: string, field: 
     message,
     email: email?.value ?? null,
     linkedinUrl: linkedin?.value ?? null,
+    phone: phone?.value ?? null,
     provider: target?.provider ?? null,
     attempts,
   };
@@ -245,7 +261,7 @@ export async function contactLookups(actor: UserActor, contactIds: string[]): Pr
     const result = await db.query<{ record_id: string; field: ContactField; status: LookupState["status"]; provider: string | null; created_at: Date | string }>(
       `select distinct on (record_id, field) record_id, field, status, provider, created_at
        from crm.enrichment_lookups
-       where workspace_id = $1 and record_type = 'contact' and record_id = any($2::uuid[]) and field in ('email', 'linkedin')
+       where workspace_id = $1 and record_type = 'contact' and record_id = any($2::uuid[]) and field in ('email', 'linkedin', 'phone')
        order by record_id, field, created_at desc`,
       [actor.workspaceId, ids],
     );

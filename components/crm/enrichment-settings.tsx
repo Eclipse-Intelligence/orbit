@@ -6,6 +6,7 @@ import Button from "@/components/_ui/button";
 import Switch from "@/components/_ui/switch";
 import { SettingsCard } from "@/components/crm/settings-ui";
 import { saveEnrichmentSettingsAction } from "@/app/(crm)/enrichment";
+import { enrichCompaniesRequest } from "@/components/companies/company-enrich";
 import type { ContactField, ProviderId } from "@/lib/enrichment/providers";
 import type { EnrichmentSettings, ProviderStatus } from "@/lib/enrichment/settings";
 import { cn } from "@/lib/utils";
@@ -78,14 +79,69 @@ function OrderList({
   );
 }
 
+function Backfill({ initial }: { initial: number }) {
+  const router = useRouter();
+  const [remaining, setRemaining] = useState(initial);
+  const [running, setRunning] = useState(false);
+  const [done, setDone] = useState(0);
+  const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);
+
+  async function run() {
+    setRunning(true);
+    setMessage(null);
+    let total = 0;
+    let updated = 0;
+    try {
+      for (let round = 0; round < 200; round += 1) {
+        const payload = await enrichCompaniesRequest({ backfill: true });
+        const results = payload.results ?? [];
+        total += results.length;
+        updated += results.filter((result) => result.status === "updated").length;
+        setDone(total);
+        setRemaining(payload.remaining ?? 0);
+        if (results.length === 0 || !payload.remaining) break;
+      }
+      setMessage({ text: `Checked ${total} ${total === 1 ? "company" : "companies"} and updated ${updated}.`, error: false });
+      router.refresh();
+    } catch (error) {
+      setMessage({ text: error instanceof Error ? error.message : "That stopped early. Try again.", error: true });
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <span className="flex min-w-0 flex-col gap-0.5">
+        <span className="text-foreground text-[13.5px] leading-5">Fill in existing companies</span>
+        <span className="caption-style text-subtle">
+          {running
+            ? `Looking up companies… ${done} done, ${remaining} to go`
+            : remaining > 0
+              ? `${remaining} ${remaining === 1 ? "company has" : "companies have"} a website but no details yet. About 10 context.dev credits each.`
+              : "Every company with a website has been checked."}
+        </span>
+        {message && <span className={cn("caption-style", message.error ? "text-danger" : "text-subtle")}>{message.text}</span>}
+      </span>
+      <Button variant="secondary" size="sm" disabled={running || remaining === 0} onClick={run}>
+        {running ? "Filling in…" : "Fill in now"}
+      </Button>
+    </div>
+  );
+}
+
 export default function EnrichmentSettingsCard({
   settings,
   providers,
   canAdmin,
+  unenriched,
+  logoLinkReady,
 }: {
   settings: EnrichmentSettings;
   providers: ProviderStatus[];
   canAdmin: boolean;
+  unenriched: number;
+  logoLinkReady: boolean;
 }) {
   const router = useRouter();
   const [current, setCurrent] = useState(settings);
@@ -120,7 +176,7 @@ export default function EnrichmentSettingsCard({
     <SettingsCard
       id="enrichment"
       title="Contact enrichment"
-      description="Finds missing work emails and LinkedIn profiles, trying each provider in order until one finds it. You only pay the provider that finds it. Company details come from context.dev."
+      description="Finds missing work emails, LinkedIn profiles and phone numbers, trying each provider in order until one finds it. You only pay the provider that finds it. Company details, logos and social profiles come from context.dev."
     >
       <div className="flex flex-col gap-5">
         <ul className="flex flex-col gap-2">
@@ -131,9 +187,11 @@ export default function EnrichmentSettingsCard({
                 <span className="caption-style text-subtle">
                   {provider.id === "context"
                     ? "Emails, LinkedIn and company details"
-                    : provider.fields.includes("linkedin")
-                      ? "Emails and LinkedIn"
-                      : "Emails"}
+                    : provider.fields.includes("phone")
+                      ? "Emails and phone numbers"
+                      : provider.fields.includes("linkedin")
+                        ? "Emails and LinkedIn"
+                        : "Emails"}
                 </span>
               </span>
               <Status on={provider.configured}>{provider.configured ? "Connected" : `Add ${provider.envKey} in Vercel`}</Status>
@@ -177,6 +235,17 @@ export default function EnrichmentSettingsCard({
             <Status on={current.autoCompanies}>{current.autoCompanies ? "On" : "Off"}</Status>
           )}
         </label>
+        {canAdmin && providers.some((provider) => provider.id === "context" && provider.configured) && <Backfill initial={unenriched} />}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <span className="flex min-w-0 flex-col gap-0.5">
+            <span className="text-foreground text-[13.5px] leading-5">Logos in lists</span>
+            <span className="caption-style text-subtle leading-[1.4]">
+              Shows every company&apos;s logo in the companies list using context.dev Logo Link, which has its own free allowance. Copy the Public
+              Client ID from context.dev › Logo Link, restrict it to orbit.geteclipse.co, and add it in Vercel as NEXT_PUBLIC_CONTEXT_LOGO_CLIENT_ID.
+            </span>
+          </span>
+          <Status on={logoLinkReady}>{logoLinkReady ? "On" : "Not set up"}</Status>
+        </div>
         {error && <p className="caption-style text-danger leading-[1.4]">{error}</p>}
       </div>
     </SettingsCard>

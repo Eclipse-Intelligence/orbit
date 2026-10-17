@@ -28,6 +28,7 @@ function AssetImage({
   blurDataURL,
   priority,
   loading,
+  unoptimized,
 }: AssetImageProps) {
   if (isSvgComponent(src)) {
     const Svg = src;
@@ -53,7 +54,7 @@ function AssetImage({
       blurDataURL={blurDataURL ?? undefined}
       priority={priority}
       loading={priority ? undefined : loading}
-      unoptimized={isRawSource(src)}
+      unoptimized={unoptimized || isRawSource(src)}
       className={assetMediaClass(fit, mediaClassName)}
     />
   );

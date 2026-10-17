@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import Asset from "@/components/_ui/asset";
 import Button from "@/components/_ui/button";
@@ -18,6 +18,8 @@ import { useQuickAddRecord } from "@/components/crm/quick-add";
 import RecordLayout from "@/components/crm/record-layout";
 import { Detail, DetailList } from "@/components/crm/record-form";
 import CompanyEnrichButton from "@/components/companies/detail/company-enrich-button";
+import CompanyLogo from "@/components/companies/company-logo";
+import { QuickLinks, SocialLinks, employeesLabel, sectorLabel } from "@/components/companies/detail/company-brand";
 import SectionHeader from "@/components/crm/section-header";
 import RecordSequence from "@/components/shortcuts/record-sequence";
 import RecordTags from "@/components/crm/tags";
@@ -28,6 +30,7 @@ import type { MeetingsSummary } from "@/lib/crm/calendar";
 import type { ClickUpPicker } from "@/lib/crm/clickup";
 import type { Company, CompanyContext, Member, TagCount } from "@/lib/crm/types";
 import type { EnrichmentAvailability } from "@/lib/enrichment/settings";
+import { cn } from "@/lib/utils";
 
 function externalUrl(value: string) {
   return /^https?:\/\//i.test(value) ? value : `https://${value}`;
@@ -68,6 +71,7 @@ export default function CompanyRecord({
       ? fresh
       : context.company;
   useQuickAddRecord({ type: "company", id: company.id, name: company.name });
+  const brandColor = company.brand?.colors[0] ?? null;
 
   const saved = useCallback(
     (next: Company) => {
@@ -155,18 +159,42 @@ export default function CompanyRecord({
       <RecordLayout
         details={
           <>
-            <div className="flex items-start gap-3 p-5 shadow-[inset_0_-1px_0_var(--line-strong)]">
+            <div
+              style={brandColor ? ({ "--brand": brandColor } as CSSProperties) : undefined}
+              className={cn(
+                "relative flex flex-col shadow-[inset_0_-1px_0_var(--line-strong)]",
+                brandColor && "bg-[linear-gradient(160deg,color-mix(in_srgb,var(--brand)_26%,transparent)_0%,transparent_55%)]",
+              )}
+            >
+              {company.brand?.backdropUrl && (
+                <Asset
+                  type="image"
+                  src={company.brand.backdropUrl}
+                  alt=""
+                  width={4}
+                  height={1}
+                  sizes="(min-width: 1024px) 480px, 100vw"
+                  unoptimized
+                  className="h-20 w-full opacity-70 [mask-image:linear-gradient(to_bottom,black,transparent)]"
+                />
+              )}
+              <div className="flex items-start gap-3 p-5">
               <span className="bg-muted flex size-[50px] shrink-0 items-center justify-center overflow-hidden rounded-[12.5px] shadow-[0px_6.25px_6.25px_0px_rgba(15,15,15,0.24),0px_0px_0px_1.563px_#232323]">
-                {company.logoUrl ? (
-                  <Asset type="image" src={company.logoUrl} alt="" width={1} height={1} sizes="50px" fit="contain" className="size-full bg-white" />
-                ) : (
-                  <span aria-hidden className="h2-style text-soft">
-                    {company.name.slice(0, 1).toUpperCase()}
-                  </span>
-                )}
+                <CompanyLogo
+                  company={company}
+                  clientId={enrichment.logoClientId}
+                  sizes="50px"
+                  className="size-full rounded-none outline-0"
+                  fallback={
+                    <span aria-hidden className="h2-style text-soft">
+                      {company.name.slice(0, 1).toUpperCase()}
+                    </span>
+                  }
+                />
               </span>
               <div className="flex min-w-0 flex-1 flex-col gap-2 pt-1">
                 <h2 className="truncate leading-6">{company.name}</h2>
+                {company.brand?.slogan && <p className="caption-style text-soft leading-[1.4]">{company.brand.slogan}</p>}
                 <span className="caption-style text-soft flex flex-wrap items-center gap-x-2 gap-y-1">
                   {company.domain && (
                     <a
@@ -184,12 +212,14 @@ export default function CompanyRecord({
                       : `Updated ${formatDate(company.updatedAt)}`}
                   </span>
                 </span>
+                <SocialLinks socials={company.brand?.socials ?? []} fallbackLinkedin={company.linkedinUrl} />
                 <RecordTags
                   kind="company"
                   id={company.id}
                   tags={company.tags}
                   suggestions={tags}
                 />
+              </div>
               </div>
             </div>
 
@@ -230,7 +260,11 @@ export default function CompanyRecord({
                     />
                   </Detail>
                   <Detail label="Industry">{company.industry}</Detail>
+                  {company.brand && company.brand.industries.length > 0 && (
+                    <Detail label="Sectors">{sectorLabel(company.brand.industries)}</Detail>
+                  )}
                   <Detail label="Size">{company.sizeCategory}</Detail>
+                  {company.brand?.employees && <Detail label="Employees">{employeesLabel(company.brand.employees)}</Detail>}
                   <Detail label="LinkedIn">
                     {company.linkedinUrl ? (
                       <a href={company.linkedinUrl} target="_blank" rel="noreferrer" className="block truncate hover:underline">
@@ -239,7 +273,22 @@ export default function CompanyRecord({
                     ) : null}
                   </Detail>
                   <Detail label="Phone">{company.phone}</Detail>
+                  {company.brand?.email && (
+                    <Detail label="Email">
+                      <a href={`mailto:${company.brand.email}`} className="block truncate hover:underline">
+                        {company.brand.email}
+                      </a>
+                    </Detail>
+                  )}
                   <Detail label="Address">{company.address}</Detail>
+                  {company.brand?.stock && (
+                    <Detail label="Stock">{[company.brand.stock.ticker, company.brand.stock.exchange].filter(Boolean).join(" · ")}</Detail>
+                  )}
+                  {company.brand && Object.keys(company.brand.links).length > 0 && (
+                    <Detail label="Links">
+                      <QuickLinks links={company.brand.links} />
+                    </Detail>
+                  )}
                   <Detail label="Owner">{company.ownerName ?? "Unassigned"}</Detail>
                   <Detail label="Source">{company.source}</Detail>
                 </DetailList>

@@ -39,6 +39,21 @@ export type AgentActor = {
 
 export type Actor = UserActor | AgentActor;
 
+export type BrandLink = "careers" | "pricing" | "blog" | "contact" | "terms" | "privacy";
+
+export type CompanyBrand = {
+  slogan: string | null;
+  socials: { type: string; url: string }[];
+  links: Partial<Record<BrandLink, string>>;
+  industries: { industry: string; subindustry: string | null }[];
+  employees: { range: string | null; exact: number | null } | null;
+  email: string | null;
+  stock: { ticker: string; exchange: string | null } | null;
+  colors: string[];
+  backdropUrl: string | null;
+  checkedAt: string;
+};
+
 export type Company = {
   id: string;
   workspaceId: string;
@@ -54,6 +69,7 @@ export type Company = {
   address: string | null;
   logoUrl: string | null;
   enrichedAt: string | null;
+  brand: CompanyBrand | null;
   lifecycle: Lifecycle;
   ownerId: string | null;
   ownerName: string | null;

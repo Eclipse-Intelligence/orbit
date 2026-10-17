@@ -7,6 +7,7 @@ import { companyHref } from "@/lib/crm/hrefs";
 import { getMailbox } from "@/lib/crm/inbox";
 import { listTags } from "@/lib/crm/tags";
 import { companyQueryFromSearchParams } from "@/lib/crm/validation";
+import { enrichmentAvailability } from "@/lib/enrichment/settings";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -42,6 +43,8 @@ export default async function CompaniesPage({
     listTags(user),
   ]);
 
+  const available = enrichmentAvailability();
+
   return (
     <Companies
       companies={listed.data}
@@ -52,6 +55,7 @@ export default async function CompaniesPage({
       members={members}
       tags={tags}
       mailboxConnected={mailbox?.status === "connected"}
+      enrichment={{ company: available.company, logoClientId: available.logoClientId }}
       viewer={{
         id: user.userId,
         name: user.fullName || user.email,

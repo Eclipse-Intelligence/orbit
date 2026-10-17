@@ -13,6 +13,8 @@ export function RecordSelect({
   name,
   label,
   defaultValue,
+  value,
+  onChange,
   required,
   children,
 }: {
@@ -20,6 +22,8 @@ export function RecordSelect({
   name: string;
   label: string;
   defaultValue?: string;
+  value?: string;
+  onChange?: (value: string) => void;
   required?: boolean;
   children: ReactNode;
 }) {
@@ -29,7 +33,9 @@ export function RecordSelect({
       <select
         id={id}
         name={name}
-        defaultValue={defaultValue}
+        defaultValue={value === undefined ? defaultValue : undefined}
+        value={value}
+        onChange={onChange ? (event) => onChange(event.target.value) : undefined}
         required={required}
         className={recordSelectClass}
       >

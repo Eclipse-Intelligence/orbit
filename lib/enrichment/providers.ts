@@ -1,6 +1,6 @@
 export type ProviderId = "context" | "hunter" | "enrow" | "icypeas";
 
-export type ContactField = "email" | "linkedin";
+export type ContactField = "email" | "linkedin" | "phone";
 
 export type PersonQuery = {
   firstName: string;
@@ -15,6 +15,7 @@ export type Finding = {
   emailVerified: boolean;
   emailScore: number | null;
   linkedinUrl: string | null;
+  phone: string | null;
   jobTitle: string | null;
   companyDomain: string | null;
   matchScore: number | null;
@@ -46,7 +47,7 @@ const POLL_MS = 2_500;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function empty(): Finding {
-  return { email: null, emailVerified: false, emailScore: null, linkedinUrl: null, jobTitle: null, companyDomain: null, matchScore: null };
+  return { email: null, emailVerified: false, emailScore: null, linkedinUrl: null, phone: null, jobTitle: null, companyDomain: null, matchScore: null };
 }
 
 function remaining(context: ProviderContext) {
@@ -221,9 +222,23 @@ const enrow: Provider = {
   id: "enrow",
   name: "Enrow",
   envKey: "ENROW_API_KEY",
-  fields: ["email"],
-  async find(query, _field, ctx) {
+  fields: ["email", "phone"],
+  async find(query, field, ctx) {
     const company = query.domain ? { company_domain: query.domain } : query.companyName ? { company_name: query.companyName } : null;
+    if (field === "phone") {
+      if (!query.linkedinUrl && !company) return null;
+      const started = await call("Enrow", ctx, "https://api.enrow.io/phone/single", {
+        headers: { "x-api-key": ctx.key },
+        body: query.linkedinUrl
+          ? { linkedin_url: query.linkedinUrl }
+          : { firstname: query.firstName, lastname: query.lastName, ...company },
+      });
+      const id = text(record(started.body).id);
+      if (!id) return null;
+      const result = await enrowPoll(ctx, "/phone/single", id);
+      if (!result || result.qualification !== "found") return null;
+      return { ...empty(), phone: text(result.number) };
+    }
     if (!company) return null;
     const started = await call("Enrow", ctx, "https://api.enrow.io/email/find/single", {
       headers: { "x-api-key": ctx.key },
