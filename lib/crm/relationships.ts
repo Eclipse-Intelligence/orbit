@@ -7,7 +7,7 @@ import { CrmError } from "@/lib/crm/errors";
 import { iso, isUuid } from "@/lib/crm/mutate";
 import { listOpportunities } from "@/lib/crm/opportunities";
 import { assertScope } from "@/lib/crm/scopes";
-import { listTasks } from "@/lib/crm/tasks";
+import { listTasks, mineFilter } from "@/lib/crm/tasks";
 import type {
   Actor,
   CompanyContext,
@@ -120,8 +120,8 @@ export async function findStaleRelationships(
 
 export async function listAttention(actor: Actor) {
   const [overdue, today] = await Promise.all([
-    getDueActions(actor, "overdue"),
-    getDueActions(actor, "today"),
+    getDueActions(actor, "overdue", { mine: true }),
+    getDueActions(actor, "today", { mine: true }),
   ]);
   return {
     overdue: overdue.tasks.slice(0, 8),
@@ -129,10 +129,17 @@ export async function listAttention(actor: Actor) {
   };
 }
 
-export async function countTaskViews(actor: Actor): Promise<Record<TaskView, number>> {
+export async function countTaskViews(actor: Actor, options: { mine?: boolean } = {}): Promise<Record<TaskView, number>> {
   assertScope(actor.scopes, "crm:read");
   const window = dayWindow();
   return withActor(actor, async (db) => {
+    const values: unknown[] = [
+      actor.workspaceId,
+      window.start.toISOString(),
+      window.end.toISOString(),
+      new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString(),
+    ];
+    const mine = options.mine ? mineFilter(actor, values) : null;
     const result = await db.query<Record<TaskView, number>>(
       `select
          count(*) filter (where t.completed_at is null)::int as "all",
@@ -156,13 +163,8 @@ export async function countTaskViews(actor: Actor): Promise<Record<TaskView, num
              )
          ) as none
        from crm.tasks t
-       where t.workspace_id = $1 and t.archived_at is null`,
-      [
-        actor.workspaceId,
-        window.start.toISOString(),
-        window.end.toISOString(),
-        new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString(),
-      ],
+       where t.workspace_id = $1 and t.archived_at is null${mine ? ` and ${mine}` : ""}`,
+      values,
     );
     const row = result.rows[0];
     return Object.fromEntries(TASK_VIEWS.map((view) => [view, row?.[view] ?? 0])) as Record<
@@ -172,7 +174,11 @@ export async function countTaskViews(actor: Actor): Promise<Record<TaskView, num
   });
 }
 
-export async function getDueActions(actor: Actor, view: TaskView = "today"): Promise<DueActions> {
+export async function getDueActions(
+  actor: Actor,
+  view: TaskView = "today",
+  options: { mine?: boolean } = {},
+): Promise<DueActions> {
   assertScope(actor.scopes, "crm:read");
   if (!(TASK_VIEWS as readonly string[]).includes(view)) {
     throw new CrmError("invalid_input", "That task view is not recognised.", 400, {
@@ -205,6 +211,6 @@ export async function getDueActions(actor: Actor, view: TaskView = "today"): Pro
       return { view, tasks: [], companies };
     });
   }
-  const tasks = await listTasks(actor, { view, limit: 100 });
+  const tasks = await listTasks(actor, { view, limit: 100, mine: options.mine });
   return { view, tasks: tasks.data, companies: [] };
 }

@@ -21,6 +21,7 @@ import LinkIcon from "@/public/assets/images/settings/link.svg";
 import PlugIcon from "@/public/assets/images/settings/plug.svg";
 import SlidersIcon from "@/public/assets/images/settings/sliders.svg";
 import TagIcon from "@/public/assets/images/settings/tag.svg";
+import UsersIcon from "@/public/assets/images/companies/sidebar/users.svg";
 
 type NavItem = {
   href: string;
@@ -30,6 +31,7 @@ type NavItem = {
 
 const NAV: NavItem[] = [
   { href: SETTINGS_PATHS.general, label: "General", icon: SlidersIcon },
+  { href: SETTINGS_PATHS.team, label: "Team", icon: UsersIcon },
   {
     href: SETTINGS_PATHS.emailTemplates,
     label: "Email templates",

@@ -702,13 +702,19 @@ describe("multi-calendar sync", () => {
     assert.ok(order.includes(firstViews[0].url));
   });
 
-  it("keeps calendars and accounts private to the owner", async () => {
+  it("keeps calendars, accounts and non-CRM events private to the owner", async () => {
     const teammate = await createUser("teammate@orbit-sync.test", "Teammate");
     await getAdminPool().query(
       "insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')",
       [owner.workspaceId, teammate.userId],
     );
-    for (const table of ["calendar_accounts", "calendars", "calendar_events"]) {
+    const linked = await queryAsUser<{ unlinked: number }>(
+      teammate.userId,
+      `select count(*) filter (where cardinality(contact_ids) = 0 and cardinality(company_ids) = 0)::int as unlinked
+       from crm.calendar_events`,
+    );
+    assert.equal(linked[0].unlinked, 0);
+    for (const table of ["calendar_accounts", "calendars"]) {
       const theirs = await queryAsUser<{ total: number }>(
         teammate.userId,
         `select count(*)::int as total from crm.${table}`,

@@ -66,7 +66,7 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
   }
   const [companyCount, openActionCount, attention, boards] = await Promise.all([
     countCompanies(user),
-    countOpenTasks(user),
+    countOpenTasks(user, { mine: true }),
     listAttention(user),
     listBoards(user),
   ]);
