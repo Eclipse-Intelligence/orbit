@@ -15,6 +15,13 @@ export function contactHref(id: string) {
   return `/contacts/${encodeURIComponent(id)}`;
 }
 
+export function opportunityHref(opportunity: { name: string; companyName?: string | null; pipelineId: string | null; pipelineKind: string | null }) {
+  if (opportunity.pipelineKind === "board" && opportunity.pipelineId) {
+    return `/boards/${encodeURIComponent(opportunity.pipelineId)}?view=list&q=${encodeURIComponent(opportunity.companyName ?? opportunity.name)}`;
+  }
+  return `/opportunities?q=${encodeURIComponent(opportunity.name)}`;
+}
+
 export function listQuery(search: string | null | undefined) {
   const params = new URLSearchParams(search ?? "");
   for (const key of RECORD_PARAMS) params.delete(key);

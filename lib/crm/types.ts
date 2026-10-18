@@ -232,6 +232,19 @@ export type PipelineStage = {
   isLost: boolean;
 };
 
+export type BoardKind = "sales" | "board";
+
+export type Board = {
+  id: string;
+  name: string;
+  kind: BoardKind;
+  addOnWon: boolean;
+  position: number;
+  stages: PipelineStage[];
+};
+
+export type BoardSummary = Omit<Board, "stages"> & { count: number };
+
 export type Opportunity = {
   id: string;
   workspaceId: string;
@@ -240,6 +253,8 @@ export type Opportunity = {
   primaryContactId: string | null;
   primaryContactName: string | null;
   pipelineId: string | null;
+  pipelineName: string | null;
+  pipelineKind: BoardKind | null;
   stageId: string | null;
   stageName: string | null;
   name: string;
@@ -260,6 +275,7 @@ export type Opportunity = {
 
 export type OpportunityWrite = {
   companyId?: string;
+  pipelineId?: string | null;
   primaryContactId?: string | null;
   stageId?: string | null;
   name?: string;
@@ -275,6 +291,7 @@ export type OpportunityWrite = {
 export type OpportunityListQuery = {
   query?: string;
   companyId?: string;
+  pipelineId?: string;
   status?: OpportunityStatus;
   includeArchived?: boolean;
   limit?: number;

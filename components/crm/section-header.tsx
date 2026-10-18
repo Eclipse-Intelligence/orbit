@@ -21,11 +21,13 @@ export default function SectionHeader({
   viewer,
   action,
   list,
+  heading,
 }: {
   title: string;
   viewer: Viewer;
   action?: ReactNode;
   list?: RecordListKey;
+  heading?: ReactNode;
 }) {
   const setSidebarOpen = useCompaniesStore((state) => state.setSidebarOpen);
   const { setPaletteOpen } = useShortcuts();
@@ -49,7 +51,7 @@ export default function SectionHeader({
             <RecordBreadcrumb list={list} title={title} />
           ) : (
             <div className="flex min-w-0 flex-col">
-              <h1 className="truncate">{title}</h1>
+              {heading ?? <h1 className="truncate">{title}</h1>}
               <span className="caption-style text-subtle hidden truncate sm:block">
                 {viewer.workspaceName}
               </span>

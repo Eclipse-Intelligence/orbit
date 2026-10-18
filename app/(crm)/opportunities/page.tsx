@@ -25,11 +25,12 @@ export default async function OpportunitiesPage({
   const page = pageFromParams(params);
   filters.limit = PAGE_SIZE;
   filters.offset = pageOffset(page);
-  const [listed, companies, contacts, pipeline] = await Promise.all([
+  const pipeline = await listPipeline(user);
+  filters.pipelineId = pipeline.id;
+  const [listed, companies, contacts] = await Promise.all([
     listOpportunities(user, filters),
     listCompanies(user, { limit: 100, sort: "name", order: "asc" }),
     listContacts(user, { limit: 100 }),
-    listPipeline(user),
   ]);
 
   return (

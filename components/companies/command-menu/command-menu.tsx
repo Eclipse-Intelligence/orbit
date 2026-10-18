@@ -14,7 +14,7 @@ import {
 } from "@/components/_ui/command";
 import { shortcutTarget, useShortcuts } from "@/components/shortcuts/shortcuts-provider";
 import { searchWorkspaceAction } from "@/app/(crm)/search";
-import { companyHref, contactHref } from "@/lib/crm/hrefs";
+import { companyHref, contactHref, opportunityHref } from "@/lib/crm/hrefs";
 import type { Company, Contact, Opportunity } from "@/lib/crm/types";
 import { SHORTCUTS, paletteMatches, shortcutKeys, type ShortcutDef, type ShortcutGroup } from "@/lib/shortcuts";
 
@@ -218,13 +218,15 @@ export default function CommandMenu() {
                   key={opportunity.id}
                   value={`opportunity-${opportunity.id}`}
                   onSelect={() =>
-                    go(() => router.push(`/opportunities?q=${encodeURIComponent(opportunity.name)}`))
+                    go(() => router.push(opportunityHref(opportunity)))
                   }
                 >
                   <span className="flex min-w-0 flex-col">
                     <span className="truncate">{opportunity.name}</span>
                     <span className="caption-style text-subtle truncate">
-                      {opportunity.companyName ?? "No company"}
+                      {opportunity.pipelineKind === "board"
+                        ? [opportunity.pipelineName, opportunity.stageName].filter(Boolean).join(" · ")
+                        : (opportunity.companyName ?? "No company")}
                     </span>
                   </span>
                 </CommandItem>

@@ -8,15 +8,17 @@ import {
 } from "@/components/_ui/sheet";
 import SidebarContent from "./sidebar-content";
 import SidebarResizer from "./sidebar-resizer";
+import type { BoardSummary } from "@/lib/crm/types";
 import { useCompaniesStore } from "@/stores/companies-store";
 
 type SidebarProps = {
+  boards: BoardSummary[];
   companyCount: number;
   openActionCount: number;
   workspaceName: string;
 };
 
-export default function Sidebar({ companyCount, openActionCount, workspaceName }: SidebarProps) {
+export default function Sidebar({ boards, companyCount, openActionCount, workspaceName }: SidebarProps) {
   const sidebarOpen = useCompaniesStore((state) => state.sidebarOpen);
   const setSidebarOpen = useCompaniesStore((state) => state.setSidebarOpen);
 
@@ -24,6 +26,7 @@ export default function Sidebar({ companyCount, openActionCount, workspaceName }
     <>
       <aside className="relative hidden w-(--sidebar-width) shrink-0 border-r border-sidebar-border bg-sidebar sidebar-collapsed:lg:hidden lg:flex lg:flex-col">
         <SidebarContent
+          boards={boards}
           companyCount={companyCount}
           openActionCount={openActionCount}
           workspaceName={workspaceName}
@@ -41,6 +44,7 @@ export default function Sidebar({ companyCount, openActionCount, workspaceName }
             Companies, contacts, opportunities, activities, and tasks.
           </SheetDescription>
           <SidebarContent
+            boards={boards}
             companyCount={companyCount}
             openActionCount={openActionCount}
             workspaceName={workspaceName}

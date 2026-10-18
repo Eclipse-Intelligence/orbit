@@ -85,6 +85,7 @@ function refresh() {
   revalidateRecordPages();
   revalidatePath("/contacts");
   revalidatePath("/opportunities");
+  revalidatePath("/boards", "layout");
   revalidatePath("/activities");
   revalidatePath(TASKS_PATH);
 }
@@ -135,6 +136,7 @@ export async function saveOpportunityAction(
   const probability = text(formData, "probability");
   const write = {
     companyId: text(formData, "companyId"),
+    ...(id ? {} : { pipelineId: optionalId(text(formData, "pipelineId")) }),
     name: text(formData, "name"),
     stageId: optionalId(text(formData, "stageId")) ?? undefined,
     primaryContactId: optionalId(text(formData, "primaryContactId")),

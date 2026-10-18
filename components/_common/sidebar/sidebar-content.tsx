@@ -1,14 +1,19 @@
 "use client";
 
+import { useState } from "react";
 import { usePathname } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { ScrollArea } from "@/components/_ui/scroll-area";
+import SidebarBoards from "./sidebar-boards";
 import SidebarNavItem from "./sidebar-nav-item";
 import SidebarSection from "./sidebar-section";
 import SidebarShortcuts from "./sidebar-shortcuts";
 import { CollapseSidebarButton } from "./sidebar-toggle";
 import { useCompaniesStore } from "@/stores/companies-store";
 import { TASKS_PATH } from "@/lib/crm/task-views";
+import type { BoardSummary } from "@/lib/crm/types";
+import { cn } from "@/lib/utils";
+import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
 import Logo from "@/public/assets/images/_common/logo.svg";
 import BuildingIcon from "@/public/assets/images/companies/sidebar/building.svg";
 import ClipboardIcon from "@/public/assets/images/companies/sidebar/clipboard.svg";
@@ -21,18 +26,21 @@ import AlertIcon from "@/public/assets/images/companies/sidebar/alert-triangle.s
 import MessageIcon from "@/public/assets/images/companies/sidebar/message-question.svg";
 
 type SidebarContentProps = {
+  boards: BoardSummary[];
   companyCount: number;
   openActionCount: number;
   workspaceName: string;
 };
 
 export default function SidebarContent({
+  boards,
   companyCount,
   openActionCount,
   workspaceName,
 }: SidebarContentProps) {
   const pathname = usePathname();
   const openProfile = useCompaniesStore((state) => state.openProfile);
+  const [boardsOpen, setBoardsOpen] = useState(true);
   const current = (href: string) =>
     href === "/"
       ? pathname === "/" || pathname.startsWith("/companies/")
@@ -86,7 +94,23 @@ export default function SidebarContent({
               icon={ClipboardIcon}
               label="Opportunities"
               active={current("/opportunities")}
+              accessory={
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={boardsOpen ? "Hide boards" : "Show boards"}
+                  aria-expanded={boardsOpen}
+                  onClick={() => setBoardsOpen((value) => !value)}
+                  className="size-5 rounded-md"
+                >
+                  <ChevronDownIcon
+                    aria-hidden
+                    className={cn("ease-power3-out size-3 transition-transform duration-150", !boardsOpen && "-rotate-90")}
+                  />
+                </Button>
+              }
             />
+            <SidebarBoards boards={boards} open={boardsOpen} current={current} />
             <SidebarNavItem
               href="/activities"
               icon={ListIcon}

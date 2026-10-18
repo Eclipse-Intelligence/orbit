@@ -7,6 +7,7 @@ import { getUserActor } from "@/lib/auth/user";
 import { syncCalendar } from "@/lib/crm/calendar";
 import { syncCalls } from "@/lib/crm/calls";
 import { syncClickUp } from "@/lib/crm/clickup";
+import { listBoards } from "@/lib/crm/boards";
 import { countCompanies } from "@/lib/crm/companies";
 import { syncGranola } from "@/lib/crm/granola";
 import { listAttention } from "@/lib/crm/relationships";
@@ -63,16 +64,18 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
       }
     });
   }
-  const [companyCount, openActionCount, attention] = await Promise.all([
+  const [companyCount, openActionCount, attention, boards] = await Promise.all([
     countCompanies(user),
     countOpenTasks(user),
     listAttention(user),
+    listBoards(user),
   ]);
 
   return (
     <ShortcutsProvider>
       <main className="flex h-dvh max-w-full overflow-hidden">
         <Sidebar
+          boards={boards}
           companyCount={companyCount}
           openActionCount={openActionCount}
           workspaceName={user.workspaceName}
