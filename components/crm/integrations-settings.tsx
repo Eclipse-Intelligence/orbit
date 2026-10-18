@@ -3,6 +3,7 @@ import { SettingsCard, SettingsDisclosure } from "@/components/crm/settings-ui";
 import { formatWhen } from "@/lib/companies";
 import type { CallSyncSummary } from "@/lib/crm/calls";
 import type { GranolaStatus } from "@/lib/crm/granola";
+import type { LinearStatus } from "@/lib/linear";
 import type { MailboxSummary } from "@/lib/crm/inbox";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
 import { cn } from "@/lib/utils";
@@ -43,11 +44,13 @@ export default function IntegrationsSettings({
   mailbox,
   calls,
   granola,
+  linear,
 }: {
   configured: boolean;
   mailbox: MailboxSummary | null;
   calls: CallSyncSummary | null;
   granola: GranolaStatus;
+  linear: LinearStatus;
 }) {
   const live = mailbox?.status === "connected";
   const mailboxError = mailbox?.lastError ?? null;
@@ -179,6 +182,26 @@ export default function IntegrationsSettings({
           <Status tone="off">
             Set GRANOLA_API_KEY in the server environment to import Granola
             meetings, then restart Orbit
+          </Status>
+        )}
+      </SettingsCard>
+
+      <SettingsCard
+        id="linear"
+        title="Linear"
+        description="The assistant can read Linear issues and, when you ask it to, create, comment on and update them. It never files issues on its own."
+      >
+        {linear.configured ? (
+          <div className="flex flex-col gap-1.5">
+            <Status tone={linear.error ? "error" : "on"}>
+              {linear.team ? `Connected · Issues go to ${linear.team.name} (${linear.team.key})` : "Couldn't connect"}
+            </Status>
+            {linear.error && <span className="caption-style text-danger leading-[1.4]">{linear.error}</span>}
+          </div>
+        ) : (
+          <Status tone="off">
+            Set LINEAR_API_KEY (a personal API key from Linear, Settings, Security and access) in the server environment, then
+            redeploy Orbit
           </Status>
         )}
       </SettingsCard>

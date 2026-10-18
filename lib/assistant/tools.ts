@@ -39,6 +39,17 @@ import { isUuid } from "@/lib/crm/mutate";
 import type { Scope } from "@/lib/crm/scopes";
 import { formatDateLabel, formatDateTimeLabel } from "@/lib/date-input";
 import { appTimeZone, parseDateTime, zonedParts } from "@/lib/time";
+import {
+  LINEAR_PRIORITIES,
+  LinearError,
+  commentOnLinearIssue,
+  createLinearIssue,
+  getLinearIssue,
+  linearTeamKey,
+  searchLinearIssues,
+  updateLinearIssue,
+} from "@/lib/linear";
+import { siteOrigin } from "@/lib/site-url";
 
 type Args = Record<string, unknown>;
 type JsonSchema = Record<string, unknown>;
@@ -1156,6 +1167,129 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       return { invite: result };
     },
   },
+  {
+    name: "linear_search_issues",
+    label: "Searching Linear",
+    description: `Search Linear issues in the ${linearTeamKey()} team by words in the title or description, or by identifier such as ${linearTeamKey()}-123. Open issues only unless includeDone is true. Use this to check for an existing issue before proposing a new one.`,
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string" },
+        includeDone: { type: "boolean", description: "Include completed and cancelled issues." },
+        limit: { type: "integer", minimum: 1, maximum: 50 },
+      },
+    },
+    run: async (_actor, args) => ({
+      issues: await searchLinearIssues({ query: optionalStr(args.query), includeDone: args.includeDone === true, limit: int(args.limit, 20, 1, 50) }),
+    }),
+  },
+  {
+    name: "linear_get_issue",
+    label: "Reading a Linear issue",
+    description: "Read one Linear issue in full, with its description and comments.",
+    parameters: {
+      type: "object",
+      properties: { issue: { type: "string", description: `Identifier like ${linearTeamKey()}-123, or the issue id.` } },
+      required: ["issue"],
+    },
+    run: async (_actor, args) => ({ issue: await getLinearIssue(required(args.issue, "An issue")) }),
+  },
+  {
+    name: "linear_create_issue",
+    label: "Creating a Linear issue",
+    write: true,
+    description: `Create an issue in Linear in the ${linearTeamKey()} team. Only when the user asks you to create or file Linear issues: never on your own initiative, and never as a side effect of another request. Write a clear title and a description with the context from the conversation, call notes or records, in markdown. Search first if a similar issue might exist. Several issues can be proposed together.`,
+    parameters: {
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        description: { type: "string", description: "Markdown." },
+        priority: { type: "string", enum: [...LINEAR_PRIORITIES] },
+        status: { type: "string", description: "Workflow status name, for example Todo or Backlog. Leave out for the team default." },
+        labels: { type: "array", items: { type: "string" }, description: "Existing label names." },
+        assignToMe: { type: "boolean", description: "Assign the issue to the user." },
+        companyId: { type: "string", description: "The Orbit company it's about, to link back to it." },
+      },
+      required: ["title"],
+    },
+    describe: (args, name) => ({
+      title: `Create Linear issue: ${str(args.title)}`,
+      lines: [
+        `Team: ${linearTeamKey()}`,
+        ...fieldLines(args, { priority: "Priority", status: "Status", companyId: "Company" }, name),
+        strings(args.labels).length ? `Labels: ${strings(args.labels).join(", ")}` : "",
+        args.assignToMe === true ? "Assigned to you" : "",
+        str(args.description) ? `Description: ${str(args.description).replace(/\s+/g, " ").slice(0, 280)}${str(args.description).length > 280 ? "…" : ""}` : "",
+      ],
+    }),
+    run: async (actor, args) => {
+      let description = str(args.description);
+      const companyId = optionalStr(args.companyId);
+      if (companyId && isUuid(companyId)) {
+        const context = await getCompanyContext(actor, companyId).catch(() => null);
+        const origin = siteOrigin();
+        if (context) {
+          const link = origin ? `[${context.company.name}](${origin}${companyHref(companyId)})` : context.company.name;
+          description = `${description}${description ? "\n\n" : ""}From Orbit: ${link}`;
+        }
+      }
+      const issue = await createLinearIssue({
+        title: required(args.title, "A title"),
+        description,
+        priority: optionalStr(args.priority),
+        status: optionalStr(args.status),
+        labels: strings(args.labels),
+        assignToMe: args.assignToMe === true,
+      });
+      return { issue };
+    },
+  },
+  {
+    name: "linear_comment",
+    label: "Commenting in Linear",
+    write: true,
+    description: "Add a comment to a Linear issue, only when the user asks.",
+    parameters: {
+      type: "object",
+      properties: {
+        issue: { type: "string", description: `Identifier like ${linearTeamKey()}-123.` },
+        body: { type: "string", description: "Markdown." },
+      },
+      required: ["issue", "body"],
+    },
+    describe: (args) => ({
+      title: `Comment on ${str(args.issue)}`,
+      lines: [str(args.body).replace(/\s+/g, " ").slice(0, 280)],
+    }),
+    run: async (_actor, args) => ({ comment: await commentOnLinearIssue(required(args.issue, "An issue"), required(args.body, "A comment")) }),
+  },
+  {
+    name: "linear_update_issue",
+    label: "Updating a Linear issue",
+    write: true,
+    description: "Change a Linear issue's title, status or priority, only when the user asks.",
+    parameters: {
+      type: "object",
+      properties: {
+        issue: { type: "string", description: `Identifier like ${linearTeamKey()}-123.` },
+        title: { type: "string" },
+        status: { type: "string", description: "Workflow status name, for example In Progress or Done." },
+        priority: { type: "string", enum: [...LINEAR_PRIORITIES] },
+      },
+      required: ["issue"],
+    },
+    describe: (args) => ({
+      title: `Update ${str(args.issue)}`,
+      lines: fieldLines(args, { title: "Title", status: "Status", priority: "Priority" }),
+    }),
+    run: async (_actor, args) => ({
+      issue: await updateLinearIssue(required(args.issue, "An issue"), {
+        title: optionalStr(args.title),
+        status: optionalStr(args.status),
+        priority: optionalStr(args.priority),
+      }),
+    }),
+  },
 ];
 
 export const TOOL_BY_NAME = new Map(ASSISTANT_TOOLS.map((tool) => [tool.name, tool]));
@@ -1220,6 +1354,7 @@ export async function runTool(actor: UserActor, name: string, args: Args) {
     return await tool.run(actor, args);
   } catch (error) {
     if (error instanceof CrmError) return { error: error.message, field: error.details?.field ?? null };
+    if (error instanceof LinearError) return { error: error.message };
     console.error(`Assistant tool ${name} failed`, error);
     return { error: "That did not work. Try again or check the details." };
   }
