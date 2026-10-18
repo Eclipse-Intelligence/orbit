@@ -6,6 +6,7 @@ import type { CompanionResult, Effort } from "@/companion/src/protocol";
 import { cancelCompanionJob, enqueueCompanionJob, readCompanionJob } from "@/lib/companion/jobs";
 import { companionOnline } from "@/lib/companion/pairing";
 import { buildPrompt } from "@/lib/companion/transcript";
+import { expandMentions, plainMentions } from "@/lib/mentions";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { iso, isUuid } from "@/lib/crm/mutate";
@@ -246,7 +247,7 @@ function history(rows: MessageRow[]): ChatMessage[] {
   const answered = new Set(rows.filter((row) => row.role === "tool").map((row) => row.tool_call_id));
   const messages: ChatMessage[] = [];
   for (const row of rows) {
-    if (row.role === "user") messages.push({ role: "user", content: row.content });
+    if (row.role === "user") messages.push({ role: "user", content: expandMentions(row.content) });
     else if (row.role === "tool" && row.tool_call_id) messages.push({ role: "tool", tool_call_id: row.tool_call_id, content: row.content });
     else if (row.role === "assistant") {
       const calls = (row.tool_calls ?? []).filter((call) => answered.has(call.id));
@@ -262,7 +263,7 @@ function history(rows: MessageRow[]): ChatMessage[] {
 }
 
 function titleFrom(message: string) {
-  const clean = message.replace(/\s+/g, " ").trim();
+  const clean = plainMentions(message).replace(/\s+/g, " ").trim();
   return clean.length > TITLE_MAX ? `${clean.slice(0, TITLE_MAX - 1).trimEnd()}…` : clean || "New chat";
 }
 
