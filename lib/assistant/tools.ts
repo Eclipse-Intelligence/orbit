@@ -1,4 +1,5 @@
 import { getBookingPage } from "@/lib/booking/pages";
+import { getBoard, listBoards } from "@/lib/crm/boards";
 import { BULK_LIMIT, runBulk } from "@/lib/crm/bulk";
 import { listActivities } from "@/lib/crm/activities";
 import { getCalendarStatus, getMeetings, listPeopleMet } from "@/lib/crm/calendar";
@@ -11,7 +12,7 @@ import { listUnfiledImports } from "@/lib/crm/conversations";
 import { listEmailTemplates } from "@/lib/crm/email-templates";
 import { CrmError } from "@/lib/crm/errors";
 import { getGranolaStatus } from "@/lib/crm/granola";
-import { companyHref, contactHref } from "@/lib/crm/hrefs";
+import { companyHref, contactHref, opportunityHref } from "@/lib/crm/hrefs";
 import { getMailbox, listInbox, sendContactEmail } from "@/lib/crm/inbox";
 import { createInvite, getMeetingLink } from "@/lib/crm/invites";
 import { createOpportunity, getOpportunity, listOpportunities, listPipeline, updateOpportunity } from "@/lib/crm/opportunities";
@@ -102,7 +103,7 @@ function withContact(contact: Contact) {
 function withOpportunity(opportunity: Opportunity) {
   return {
     ...opportunity,
-    href: `/opportunities?q=${encodeURIComponent(opportunity.name)}`,
+    href: opportunityHref(opportunity),
     companyHref: companyHref(opportunity.companyId),
   };
 }
@@ -471,7 +472,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       const pipeline = await listPipeline(actor);
       const all: Opportunity[] = [];
       for (let offset = 0; offset < 2000; offset += 100) {
-        const page = await listOpportunities(actor, { limit: 100, offset });
+        const page = await listOpportunities(actor, { limit: 100, offset, pipelineId: pipeline.id });
         all.push(...page.data);
         if (page.data.length < 100) break;
       }
@@ -509,9 +510,57 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     },
   },
   {
+    name: "list_boards",
+    label: "Looking at boards",
+    description:
+      "The custom boards (for example Onboarding) that sit under Opportunities. Each board has its own stages and holds companies, one card per company. Use get_board for the stages and cards.",
+    parameters: { type: "object", properties: {} },
+    run: async (actor) => ({ boards: (await listBoards(actor)).map((board) => ({ ...board, href: `/boards/${board.id}` })) }),
+  },
+  {
+    name: "get_board",
+    label: "Reviewing a board",
+    description: "One board: its stages in order, and the companies (cards) in each stage with their main contact and due date.",
+    parameters: {
+      type: "object",
+      properties: { boardId: idParam("Board id from list_boards.") },
+      required: ["boardId"],
+    },
+    run: async (actor, args) => {
+      const board = await getBoard(actor, required(args.boardId, "A board id"));
+      const cards: Opportunity[] = [];
+      for (let offset = 0; offset < 2000; offset += 100) {
+        const page = await listOpportunities(actor, { limit: 100, offset, pipelineId: board.id });
+        cards.push(...page.data);
+        if (page.data.length < 100) break;
+      }
+      return {
+        id: board.id,
+        name: board.name,
+        href: `/boards/${board.id}`,
+        addOnWon: board.addOnWon,
+        stages: board.stages.map((stage) => ({
+          id: stage.id,
+          name: stage.name,
+          cards: cards
+            .filter((card) => card.stageId === stage.id)
+            .map((card) => ({
+              cardId: card.id,
+              companyId: card.companyId,
+              companyName: card.companyName,
+              companyHref: companyHref(card.companyId),
+              primaryContactId: card.primaryContactId,
+              primaryContactName: card.primaryContactName,
+              due: card.expectedCloseDate,
+            })),
+        })),
+      };
+    },
+  },
+  {
     name: "list_opportunities",
     label: "Looking at opportunities",
-    description: "List opportunities with optional search, company and status filters.",
+    description: "List opportunities with optional search, company and status filters. Also returns board cards (pipelineKind board), with the board in pipelineName.",
     parameters: {
       type: "object",
       properties: {
@@ -952,10 +1001,45 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     },
   },
   {
+    name: "add_to_board",
+    label: "Adding to a board",
+    write: true,
+    description: "Put a company on a board, for example Onboarding. Goes into the first stage unless you give a stageId from get_board. A company can only be on a board once.",
+    parameters: {
+      type: "object",
+      properties: {
+        boardId: idParam("Board id from list_boards."),
+        companyId: idParam("Company id."),
+        stageId: { type: "string", description: "Stage id from get_board." },
+        primaryContactId: { type: "string" },
+        expectedCloseDate: { type: "string", description: "Due date, YYYY-MM-DD." },
+        ownerId: { type: "string" },
+      },
+      required: ["boardId", "companyId"],
+    },
+    describe: (args, name) => ({
+      title: titled("Add to board", name(args.companyId)),
+      lines: fieldLines(args, { boardId: "Board", stageId: "Stage", primaryContactId: "Contact", expectedCloseDate: "Due", ownerId: "Owner" }, name),
+    }),
+    run: async (actor, args) => {
+      const created = await createOpportunity(
+        actor,
+        {
+          ...pick(args, ["stageId", "primaryContactId", "expectedCloseDate", "ownerId"]),
+          pipelineId: required(args.boardId, "A board id"),
+          companyId: required(args.companyId, "A company id"),
+        },
+        { provenance: { operation: "add_to_board", ...PROVENANCE } },
+      );
+      return { card: withOpportunity(created.body.opportunity) };
+    },
+  },
+  {
     name: "update_opportunity",
     label: "Updating an opportunity",
     write: true,
-    description: "Move an opportunity to another stage, mark it won or lost, or change its value, close date or probability.",
+    description:
+      "Move an opportunity to another stage, mark it won or lost, or change its value, close date or probability. Also moves a board card to another stage on its board (stageId from get_board) or changes its due date (expectedCloseDate).",
     parameters: {
       type: "object",
       properties: { opportunityId: idParam("Opportunity id."), ...OPPORTUNITY_FIELDS },
@@ -1105,6 +1189,8 @@ export async function recordNames(actor: UserActor, args: Args[]) {
        select id, name from crm.opportunities where id = any($1::uuid[])
        union all
        select id, name from crm.pipeline_stages where id = any($1::uuid[])
+       union all
+       select id, name from crm.pipelines where id = any($1::uuid[]) and kind = 'board'
        union all
        select p.id, coalesce(nullif(p.full_name, ''), p.email) from crm.profiles p
          join crm.workspace_members m on m.user_id = p.id and m.workspace_id = $2

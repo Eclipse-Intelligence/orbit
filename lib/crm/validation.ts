@@ -340,6 +340,8 @@ export function opportunityQueryFromSearchParams(params: URLSearchParams): Oppor
   if (text) query.query = text;
   const companyId = uuidParam(params, "company_id");
   if (companyId) query.companyId = companyId;
+  const pipelineId = uuidParam(params, "pipeline_id");
+  if (pipelineId) query.pipelineId = pipelineId;
   const status = params.get("status");
   if (status && (OPPORTUNITY_STATUSES as readonly string[]).includes(status)) {
     query.status = status as OpportunityListQuery["status"];

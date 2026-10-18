@@ -2,7 +2,8 @@ import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { cleanText } from "@/lib/crm/normalize";
 import { assertScope } from "@/lib/crm/scopes";
-import type { Actor, PipelineStage } from "@/lib/crm/types";
+import { isUuid } from "@/lib/crm/mutate";
+import type { Actor, BoardKind, PipelineStage } from "@/lib/crm/types";
 
 export type StageDraft = {
   id?: string;
@@ -12,55 +13,42 @@ export type StageDraft = {
   isLost?: boolean;
 };
 
-export async function savePipelineStages(actor: Actor, drafts: StageDraft[]): Promise<PipelineStage[]> {
+export async function savePipelineStages(
+  actor: Actor,
+  drafts: StageDraft[],
+  pipelineId: string | null = null,
+): Promise<PipelineStage[]> {
   assertScope(actor.scopes, "opportunities:write");
-  if (drafts.length < 2 || drafts.length > 20) {
-    throw new CrmError("invalid_input", "A pipeline needs between 2 and 20 stages.", 400);
-  }
-  const stages = drafts.map((draft, index) => ({
-    id: draft.id,
-    name: cleanText(draft.name, 80, "name") ?? "",
-    probability: clampProbability(draft),
-    isWon: Boolean(draft.isWon),
-    isLost: Boolean(draft.isLost),
-    position: index,
-  }));
-  if (stages.some((stage) => !stage.name)) {
-    throw new CrmError("invalid_input", "Every stage needs a name.", 400, { field: "name" });
-  }
-  if (stages.filter((stage) => stage.isWon).length !== 1 || stages.filter((stage) => stage.isLost).length !== 1) {
-    throw new CrmError("invalid_input", "Mark one stage won and one stage lost.", 400);
-  }
-  if (stages.some((stage) => stage.isWon && stage.isLost)) {
-    throw new CrmError("invalid_input", "A stage cannot be both won and lost.", 400);
-  }
-  const names = new Set(stages.map((stage) => stage.name.toLowerCase()));
-  if (names.size !== stages.length) {
-    throw new CrmError("invalid_input", "Stage names must be unique.", 400, { field: "name" });
-  }
-
+  if (pipelineId !== null && !isUuid(pipelineId)) throw new CrmError("not_found", "Board not found.", 404);
   return withActor(actor, async (db) => {
-    const pipeline = await db.query<{ id: string }>(
-      `select id from crm.pipelines
-       where workspace_id = $1 and is_default and archived_at is null
+    const pipeline = await db.query<{ id: string; kind: BoardKind }>(
+      `select id, kind from crm.pipelines
+       where workspace_id = $1 and archived_at is null
+         and (case when $2::uuid is null then is_default else id = $2::uuid end)
        limit 1`,
-      [actor.workspaceId],
+      [actor.workspaceId, pipelineId],
     );
-    const pipelineId = pipeline.rows[0]?.id;
-    if (!pipelineId) throw new CrmError("invalid_input", "This workspace has no pipeline.", 400);
+    const found = pipeline.rows[0];
+    if (!found) {
+      if (pipelineId) throw new CrmError("not_found", "Board not found.", 404);
+      throw new CrmError("invalid_input", "This workspace has no pipeline.", 400);
+    }
+    const board = found.kind === "board";
+    const stages = cleanStages(drafts, board);
+    const id = found.id;
 
     const existing = await db.query<{ id: string }>(
       "select id from crm.pipeline_stages where pipeline_id = $1",
-      [pipelineId],
+      [id],
     );
     const existingIds = new Set(existing.rows.map((row) => row.id));
     for (const stage of stages) {
       if (stage.id && !existingIds.has(stage.id)) {
-        throw new CrmError("invalid_input", "That stage is not on this pipeline.", 400, { field: "id" });
+        throw new CrmError("invalid_input", board ? "That stage is not on this board." : "That stage is not on this pipeline.", 400, { field: "id" });
       }
     }
     const kept = new Set(stages.map((stage) => stage.id).filter(Boolean));
-    const removed = [...existingIds].filter((id) => !kept.has(id));
+    const removed = [...existingIds].filter((stageId) => !kept.has(stageId));
     if (removed.length > 0) {
       const used = await db.query(
         "select 1 from crm.opportunities where stage_id = any($1::uuid[]) and archived_at is null limit 1",
@@ -69,7 +57,7 @@ export async function savePipelineStages(actor: Actor, drafts: StageDraft[]): Pr
       if ((used.rowCount ?? 0) > 0) {
         throw new CrmError(
           "invalid_input",
-          "Move opportunities off a stage before removing it.",
+          board ? "Move cards off a stage before removing it." : "Move opportunities off a stage before removing it.",
           400,
         );
       }
@@ -79,7 +67,7 @@ export async function savePipelineStages(actor: Actor, drafts: StageDraft[]): Pr
       `update crm.pipeline_stages
        set position = position + 1000, name = id::text
        where pipeline_id = $1`,
-      [pipelineId],
+      [id],
     );
     const saved: PipelineStage[] = [];
     for (const stage of stages) {
@@ -92,7 +80,7 @@ export async function savePipelineStages(actor: Actor, drafts: StageDraft[]): Pr
         );
         saved.push({
           id: stage.id,
-          pipelineId,
+          pipelineId: id,
           name: stage.name,
           position: stage.position,
           probability: stage.probability,
@@ -108,7 +96,7 @@ export async function savePipelineStages(actor: Actor, drafts: StageDraft[]): Pr
         returning id`,
         [
           actor.workspaceId,
-          pipelineId,
+          id,
           stage.name,
           stage.position,
           stage.probability,
@@ -118,7 +106,7 @@ export async function savePipelineStages(actor: Actor, drafts: StageDraft[]): Pr
       );
       saved.push({
         id: inserted.rows[0].id,
-        pipelineId,
+        pipelineId: id,
         name: stage.name,
         position: stage.position,
         probability: stage.probability,
@@ -136,7 +124,7 @@ export async function savePipelineStages(actor: Actor, drafts: StageDraft[]): Pr
          set stage_id = case status when 'won' then $2::uuid when 'lost' then $3::uuid else $4::uuid end,
              pipeline_id = $5
          where stage_id = any($1::uuid[]) and archived_at is not null`,
-        [removed, won.id, lost.id, open.id, pipelineId],
+        [removed, won.id, lost.id, open.id, id],
       );
       await db.query("delete from crm.pipeline_stages where id = any($1::uuid[])", [removed]);
     }
@@ -149,10 +137,40 @@ export async function savePipelineStages(actor: Actor, drafts: StageDraft[]): Pr
          where pipeline_id = $1
        ) next
        where o.stage_id = next.id and o.status <> next.status`,
-      [pipelineId],
+      [id],
     );
     return saved;
   });
+}
+
+function cleanStages(drafts: StageDraft[], board: boolean) {
+  const noun = board ? "A board" : "A pipeline";
+  const least = board ? 1 : 2;
+  if (drafts.length < least || drafts.length > 20) {
+    throw new CrmError("invalid_input", `${noun} needs between ${least} and 20 stages.`, 400);
+  }
+  const stages = drafts.map((draft, index) => ({
+    id: draft.id,
+    name: cleanText(draft.name, 80, "name") ?? "",
+    probability: board ? 0 : clampProbability(draft),
+    isWon: board ? false : Boolean(draft.isWon),
+    isLost: board ? false : Boolean(draft.isLost),
+    position: index,
+  }));
+  if (stages.some((stage) => !stage.name)) {
+    throw new CrmError("invalid_input", "Every stage needs a name.", 400, { field: "name" });
+  }
+  if (!board && (stages.filter((stage) => stage.isWon).length !== 1 || stages.filter((stage) => stage.isLost).length !== 1)) {
+    throw new CrmError("invalid_input", "Mark one stage won and one stage lost.", 400);
+  }
+  if (stages.some((stage) => stage.isWon && stage.isLost)) {
+    throw new CrmError("invalid_input", "A stage cannot be both won and lost.", 400);
+  }
+  const names = new Set(stages.map((stage) => stage.name.toLowerCase()));
+  if (names.size !== stages.length) {
+    throw new CrmError("invalid_input", "Stage names must be unique.", 400, { field: "name" });
+  }
+  return stages;
 }
 
 function clampProbability(draft: StageDraft) {

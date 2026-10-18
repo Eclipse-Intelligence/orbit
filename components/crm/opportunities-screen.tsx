@@ -31,13 +31,17 @@ import KeyboardList from "@/components/shortcuts/keyboard-list";
 import ListSearch from "@/components/shortcuts/list-search";
 import { RecordList, RecordRow, RecordSelect } from "@/components/crm/record-form";
 import type { Viewer } from "@/components/crm/viewer";
+import BoardCardContext from "@/components/crm/board-card-context";
+import BoardSettings from "@/components/crm/board-settings";
+import { removeCardAction, updateBoardAction } from "@/app/(crm)/boards";
 import { moveOpportunityStageAction, saveOpportunityAction, type RecordActionState } from "@/app/(crm)/records";
 import { saveStagesAction } from "@/app/(crm)/settings/actions";
 import type { StageDraft } from "@/lib/crm/pipeline";
 import { formatMoney } from "@/lib/companies";
+import { formatDateLabel } from "@/lib/date-input";
 import { startPointerGesture, type GestureResult } from "@/lib/pointer-gesture";
 import { companyHref } from "@/lib/crm/hrefs";
-import type { Company, Contact, Opportunity, OpportunityStatus, PipelineStage } from "@/lib/crm/types";
+import type { Board, Company, Contact, Opportunity, OpportunityStatus, PipelineStage } from "@/lib/crm/types";
 
 export default function OpportunitiesScreen({
   viewer,
@@ -49,6 +53,7 @@ export default function OpportunitiesScreen({
   contacts,
   stages,
   view,
+  board,
 }: {
   viewer: Viewer;
   opportunities: Opportunity[];
@@ -59,8 +64,11 @@ export default function OpportunitiesScreen({
   contacts: Contact[];
   stages: PipelineStage[];
   view: "list" | "board";
+  board?: Board;
 }) {
   const router = useRouter();
+  const basePath = board ? `/boards/${board.id}` : "/opportunities";
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Opportunity | null>(null);
   const [session, setSession] = useState(0);
@@ -112,7 +120,7 @@ export default function OpportunitiesScreen({
     setSavingOrder(true);
     setBoardError(null);
     const run = saveChain.current.then(async () => {
-      const result = await saveStagesAction(drafts);
+      const result = await saveStagesAction(drafts, board?.id ?? null);
       if (generation !== saveGen.current) return { stale: true as const };
       setSavingOrder(false);
       if (result.error) {
@@ -386,14 +394,15 @@ export default function OpportunitiesScreen({
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
       <SectionHeader
-        title="Opportunities"
+        title={board?.name ?? "Opportunities"}
         viewer={viewer}
+        heading={board ? <BoardTitle key={board.name} board={board} /> : undefined}
         action={
           <div className="flex items-center gap-1">
             <Button
               variant={view === "list" ? "secondary" : "ghost"}
               size="sm"
-              href="/opportunities"
+              href={board ? `${basePath}?view=list` : basePath}
               data-shortcut={view === "list" ? undefined : "toggle-view"}
               title="List (V)"
             >
@@ -402,30 +411,36 @@ export default function OpportunitiesScreen({
             <Button
               variant={view === "board" ? "secondary" : "ghost"}
               size="sm"
-              href="/opportunities?view=board"
+              href={board ? basePath : `${basePath}?view=board`}
               data-shortcut={view === "board" ? undefined : "toggle-view"}
               title="Board (V)"
             >
               Board
             </Button>
-            <RecordTransfer resource="opportunities" />
+            {board ? (
+              <Button variant="ghost" size="sm" onClick={() => setSettingsOpen(true)}>
+                Settings
+              </Button>
+            ) : (
+              <RecordTransfer resource="opportunities" />
+            )}
             <Button
               variant="primary"
               size="sm"
               data-shortcut="add-record"
-              title="Add opportunity (C then P)"
+              title={board ? "Add a company (C then P)" : "Add opportunity (C then P)"}
               onClick={() => edit(null)}
             >
-              Add opportunity
+              {board ? "Add company" : "Add opportunity"}
             </Button>
           </div>
         }
       />
       <div className="flex items-center gap-2 px-4 py-4">
-        <ListSearch noun="opportunities" />
+        <ListSearch noun={board ? "companies" : "opportunities"} />
       </div>
       <p className="caption-style text-subtle px-4 pb-2">
-        {total} {total === 1 ? "opportunity" : "opportunities"}
+        {total} {board ? (total === 1 ? "company" : "companies") : total === 1 ? "opportunity" : "opportunities"}
       </p>
       {boardError && view === "board" && (
         <p role="alert" className="caption-style text-danger px-4 pb-2">
@@ -490,7 +505,14 @@ export default function OpportunitiesScreen({
                         aria-label={`Reorder ${stage.name}`}
                         aria-keyshortcuts="Shift+ArrowLeft Shift+ArrowRight"
                         data-stage-button={stage.id}
+                        title="Double-click to rename"
+                        onDoubleClick={() => setNamingId(stage.id)}
                         onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === "F2") {
+                            event.preventDefault();
+                            setNamingId(stage.id);
+                            return;
+                          }
                           if (event.key === "ArrowDown") {
                             event.preventDefault();
                             focusBoardCard(stage.id, 0);
@@ -550,9 +572,11 @@ export default function OpportunitiesScreen({
                           cardDragId === opportunity.id && "cursor-grabbing opacity-70",
                         )}
                       >
-                        <span className="text-[14px] leading-5">{opportunity.name}</span>
+                        <span className="text-[14px] leading-5">{board ? (opportunity.companyName ?? opportunity.name) : opportunity.name}</span>
                         <span className="caption-style text-subtle">
-                          {opportunity.companyName ?? "No company"} · {formatMoney(opportunity.value, opportunity.currency)}
+                          {board
+                            ? cardMeta(opportunity) || "No contact"
+                            : `${opportunity.companyName ?? "No company"} · ${formatMoney(opportunity.value, opportunity.currency)}`}
                         </span>
                       </div>
                     ))}
@@ -573,8 +597,28 @@ export default function OpportunitiesScreen({
         </div>
       ) : (
       <KeyboardList className="flex min-h-0 flex-1 flex-col">
-      <RecordList count={opportunities.length} empty={query ? "No opportunities match the search." : "No opportunities yet."}>
-        {opportunities.map((opportunity) => (
+      <RecordList
+        count={opportunities.length}
+        empty={
+          board
+            ? query
+              ? "No companies match the search."
+              : `Nothing on ${board.name} yet.`
+            : query
+              ? "No opportunities match the search."
+              : "No opportunities yet."
+        }
+      >
+        {opportunities.map((opportunity) =>
+          board ? (
+            <RecordRow
+              key={opportunity.id}
+              mark={<Monogram name={opportunity.companyName || opportunity.name} />}
+              title={opportunity.companyName ?? opportunity.name}
+              meta={[opportunity.stageName ?? "No stage", cardMeta(opportunity)].filter(Boolean).join(" · ")}
+              onClick={() => edit(opportunity)}
+            />
+          ) : (
           <RecordRow
             key={opportunity.id}
             mark={<Monogram name={opportunity.companyName || opportunity.name} />}
@@ -592,7 +636,8 @@ export default function OpportunitiesScreen({
               </span>
             }
           />
-        ))}
+          ),
+        )}
       </RecordList>
       </KeyboardList>
       )}
@@ -600,24 +645,61 @@ export default function OpportunitiesScreen({
         page={page}
         count={opportunities.length}
         total={total}
-        noun={["opportunity", "opportunities"]}
+        noun={board ? ["company", "companies"] : ["opportunity", "opportunities"]}
       />
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent side="right" className="sm:w-[480px] sm:max-w-[480px]">
           <SheetHeader>
-            <SheetTitle>{editing ? "Edit opportunity" : "New opportunity"}</SheetTitle>
-            <SheetDescription className="sr-only">Opportunity details</SheetDescription>
+            <SheetTitle>
+              {board
+                ? editing
+                  ? (editing.companyName ?? editing.name)
+                  : `Add to ${board.name}`
+                : editing
+                  ? "Edit opportunity"
+                  : "New opportunity"}
+            </SheetTitle>
+            <SheetDescription className="sr-only">{board ? "Card details" : "Opportunity details"}</SheetDescription>
           </SheetHeader>
-          <OpportunityEditor
-            key={`${editing?.id ?? "new"}-${session}`}
-            editing={editing}
-            companies={companies}
-            contacts={contacts}
-            stages={ordered}
-            onClose={close}
-          />
+          {board ? (
+            <BoardCardEditor
+              key={`${editing?.id ?? "new"}-${session}`}
+              board={board}
+              editing={editing}
+              companies={companies}
+              contacts={contacts}
+              stages={ordered}
+              onClose={close}
+            />
+          ) : (
+            <OpportunityEditor
+              key={`${editing?.id ?? "new"}-${session}`}
+              editing={editing}
+              companies={companies}
+              contacts={contacts}
+              stages={ordered}
+              onClose={close}
+            />
+          )}
         </SheetContent>
       </Sheet>
+      {board && (
+        <Sheet open={settingsOpen} onOpenChange={setSettingsOpen}>
+          <SheetContent side="right" className="sm:w-[480px] sm:max-w-[480px]">
+            <SheetHeader>
+              <SheetTitle>Board settings</SheetTitle>
+              <SheetDescription className="sr-only">Name, stages and automation for {board.name}</SheetDescription>
+            </SheetHeader>
+            {settingsOpen && (
+              <BoardSettings
+                board={{ ...board, stages: ordered }}
+                count={total}
+                onClose={() => setSettingsOpen(false)}
+              />
+            )}
+          </SheetContent>
+        </Sheet>
+      )}
     </section>
   );
 }
@@ -897,4 +979,197 @@ function focusAdjacentColumnCard(card: HTMLElement, direction: -1 | 1) {
       return;
     }
   }
+}
+
+function cardMeta(opportunity: Opportunity) {
+  return [
+    opportunity.primaryContactName,
+    opportunity.expectedCloseDate ? `Due ${formatDateLabel(opportunity.expectedCloseDate)}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function BoardTitle({ board }: { board: Board }) {
+  const router = useRouter();
+  const [naming, setNaming] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const cancelled = useRef(false);
+
+  async function save(value: string) {
+    setNaming(false);
+    const name = value.trim();
+    if (cancelled.current || !name || name === board.name) {
+      cancelled.current = false;
+      return;
+    }
+    const result = await updateBoardAction(board.id, { name });
+    if (result.error) {
+      setError(result.error);
+      return;
+    }
+    setError(null);
+    router.refresh();
+  }
+
+  return (
+    <div className="flex min-w-0 flex-col">
+      {naming ? (
+        <Input
+          autoFocus
+          aria-label="Board name"
+          defaultValue={board.name}
+          maxLength={120}
+          className="h-8 max-w-xs"
+          onKeyDown={(event) => {
+            if (event.key === "Enter") event.currentTarget.blur();
+            if (event.key === "Escape") {
+              cancelled.current = true;
+              event.currentTarget.blur();
+            }
+          }}
+          onBlur={(event) => save(event.currentTarget.value)}
+        />
+      ) : (
+        <h1 className="truncate">
+          <button
+            type="button"
+            title="Rename board"
+            onClick={() => setNaming(true)}
+            className="focus-visible:ring-ring/60 max-w-full cursor-text truncate rounded-sm border-0 bg-transparent p-0 text-left font-[inherit] text-inherit outline-none focus-visible:ring-2"
+          >
+            {board.name}
+          </button>
+        </h1>
+      )}
+      {error && (
+        <span role="alert" className="caption-style text-danger truncate">
+          {error}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function BoardCardEditor({
+  board,
+  editing,
+  companies,
+  contacts,
+  stages,
+  onClose,
+}: {
+  board: Board;
+  editing: Opportunity | null;
+  companies: Company[];
+  contacts: Contact[];
+  stages: PipelineStage[];
+  onClose: () => void;
+}) {
+  const router = useRouter();
+  const [state, action, pending] = useActionState(saveOpportunityAction, {} as RecordActionState);
+  const [removeError, setRemoveError] = useState<string | null>(null);
+  const [removing, setRemoving] = useState(false);
+  useEffect(() => {
+    if (state.ok) onClose();
+  }, [state, onClose]);
+
+  const companyOptions =
+    editing && !companies.some((company) => company.id === editing.companyId)
+      ? [{ id: editing.companyId, name: editing.companyName ?? "Current company" }, ...companies]
+      : companies;
+  const contactOptions =
+    editing?.primaryContactId && !contacts.some((contact) => contact.id === editing.primaryContactId)
+      ? [{ id: editing.primaryContactId, name: editing.primaryContactName ?? "Current contact" }, ...contacts]
+      : contacts;
+  const formId = `board-card-${editing?.id ?? "new"}`;
+  const error = removeError ?? (state.error && !state.ok ? state.error : null);
+
+  async function remove() {
+    if (!editing) return;
+    if (!window.confirm(`Take ${editing.companyName ?? editing.name} off ${board.name}?`)) return;
+    setRemoving(true);
+    const result = await removeCardAction(editing.id);
+    setRemoving(false);
+    if (result.error) {
+      setRemoveError(result.error);
+      return;
+    }
+    onClose();
+    router.refresh();
+  }
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex flex-col gap-6 overflow-auto p-5">
+        <form id={formId} action={action} className="flex flex-col gap-4">
+          <input type="hidden" name="id" value={editing?.id ?? ""} />
+          <input type="hidden" name="pipelineId" value={board.id} />
+          {editing && <input type="hidden" name="name" value={editing.name} />}
+          {error && (
+            <p role="alert" className="caption-style text-danger">
+              {error}
+            </p>
+          )}
+          <RecordSelect id="card-company" name="companyId" label="Company" required defaultValue={editing?.companyId ?? ""}>
+            <option value="" disabled>
+              Choose a company
+            </option>
+            {companyOptions.map((company) => (
+              <option key={company.id} value={company.id}>
+                {company.name}
+              </option>
+            ))}
+          </RecordSelect>
+          <RecordSelect id="card-stage" name="stageId" label="Stage" defaultValue={editing?.stageId ?? stages[0]?.id ?? ""}>
+            {stages.map((stage) => (
+              <option key={stage.id} value={stage.id}>
+                {stage.name}
+              </option>
+            ))}
+          </RecordSelect>
+          <RecordSelect id="card-contact" name="primaryContactId" label="Main contact" defaultValue={editing?.primaryContactId ?? "none"}>
+            <option value="none">No contact</option>
+            {contactOptions.map((contact) => (
+              <option key={contact.id} value={contact.id}>
+                {contact.name}
+              </option>
+            ))}
+          </RecordSelect>
+          <div className="flex min-w-0 flex-col gap-2">
+            <label className="caption-style text-subtle" htmlFor="card-due">
+              Due
+            </label>
+            <DatePicker id="card-due" name="expectedCloseDate" placeholder="Pick a due date" defaultValue={editing?.expectedCloseDate ?? ""} />
+          </div>
+        </form>
+        {editing && <BoardCardContext companyId={editing.companyId} companyName={editing.companyName ?? editing.name} />}
+      </div>
+      <SheetFooter>
+        {editing ? (
+          <Button variant="ghost" size="sm" className="text-danger" disabled={removing} onClick={remove}>
+            Remove from board
+          </Button>
+        ) : (
+          <span />
+        )}
+        <span className="flex items-center gap-2">
+          <Button variant="subtle" size="sm" type="button" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
+            type="submit"
+            form={formId}
+            disabled={pending || companyOptions.length === 0}
+            data-shortcut="save"
+            title="Save (⌘S)"
+          >
+            {pending ? "Saving…" : "Save"}
+          </Button>
+        </span>
+      </SheetFooter>
+    </div>
+  );
 }

@@ -55,12 +55,14 @@ export async function archiveWebhookAction(id: string) {
 
 export async function saveStagesAction(
   stages: StageDraft[],
+  pipelineId: string | null = null,
 ): Promise<{ error?: string; stages?: PipelineStage[] }> {
   const user = await requireUser();
   try {
-    const saved = await savePipelineStages(user, stages);
+    const saved = await savePipelineStages(user, stages, pipelineId);
     revalidatePath(SETTINGS_ROOT, "layout");
     revalidatePath("/opportunities");
+    revalidatePath("/boards", "layout");
     return { stages: saved };
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Could not save the pipeline." };

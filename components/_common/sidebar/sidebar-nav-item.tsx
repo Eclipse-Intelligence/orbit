@@ -1,6 +1,6 @@
 "use client";
 
-import type { ComponentType, SVGProps } from "react";
+import type { ComponentType, ReactNode, SVGProps } from "react";
 import Button from "@/components/_ui/button";
 import CountBadge from "@/components/_ui/count-badge";
 import { useCompaniesStore } from "@/stores/companies-store";
@@ -15,6 +15,7 @@ type SidebarNavItemProps = {
   disabled?: boolean;
   tone?: "default" | "quiet";
   iconClassName?: string;
+  accessory?: ReactNode;
 };
 
 export default function SidebarNavItem({
@@ -26,11 +27,12 @@ export default function SidebarNavItem({
   disabled = false,
   tone = "default",
   iconClassName,
+  accessory,
 }: SidebarNavItemProps) {
   const setSidebarOpen = useCompaniesStore((state) => state.setSidebarOpen);
 
   return (
-    <li className={cn(active && "mb-0.75")}>
+    <li className={cn("relative", active && "mb-0.75")}>
       <Button
         variant="nav"
         size="md"
@@ -56,7 +58,9 @@ export default function SidebarNavItem({
         <span className="min-w-0 flex-1 truncate text-left">{label}</span>
         {count !== undefined && <CountBadge>{count}</CountBadge>}
         {disabled && <span className="sr-only">Not available yet</span>}
+        {accessory && <span aria-hidden className="w-5 shrink-0" />}
       </Button>
+      {accessory && <span className="absolute inset-y-0 right-1 flex items-center">{accessory}</span>}
     </li>
   );
 }

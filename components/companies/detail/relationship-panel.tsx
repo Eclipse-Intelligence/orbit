@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import Tag from "@/components/_ui/tag";
 import DetailSection from "@/components/companies/detail/detail-section";
 import CompanyContacts from "@/components/companies/detail/company-contacts";
@@ -21,6 +22,8 @@ export default function RelationshipPanel({
 }) {
   const companyId = context.company.id;
   const last = context.lastInteraction;
+  const deals = context.opportunities.filter((opportunity) => opportunity.pipelineKind !== "board");
+  const cards = context.opportunities.filter((opportunity) => opportunity.pipelineKind === "board");
 
   return (
     <>
@@ -55,11 +58,11 @@ export default function RelationshipPanel({
       <CompanyContacts companyId={companyId} contacts={context.contacts} findEmail={findEmail} />
 
       <DetailSection title="Opportunities">
-        {context.opportunities.length === 0 ? (
+        {deals.length === 0 ? (
           <p className="caption-style text-subtle">No opportunities.</p>
         ) : (
           <ul className="flex flex-col gap-3">
-            {context.opportunities.map((opportunity) => (
+            {deals.map((opportunity) => (
               <li
                 key={opportunity.id}
                 className="flex items-start justify-between gap-3"
@@ -89,6 +92,21 @@ export default function RelationshipPanel({
           </ul>
         )}
       </DetailSection>
+
+      {cards.length > 0 && (
+        <DetailSection title="Boards">
+          <ul className="flex flex-col gap-3">
+            {cards.map((card) => (
+              <li key={card.id} className="flex items-start justify-between gap-3">
+                <Link href={`/boards/${card.pipelineId}`} className="min-w-0 hover:underline">
+                  <span className="block truncate text-[14px] leading-5">{card.pipelineName}</span>
+                </Link>
+                <Tag tone="blue">{card.stageName ?? "No stage"}</Tag>
+              </li>
+            ))}
+          </ul>
+        </DetailSection>
+      )}
 
       <DetailSection title="Tasks" className="shadow-none">
         {context.tasks.length === 0 ? (

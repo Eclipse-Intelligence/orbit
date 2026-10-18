@@ -22,6 +22,7 @@ import { cleanText, likePattern } from "@/lib/crm/normalize";
 import { assertScope } from "@/lib/crm/scopes";
 import type {
   Actor,
+  BoardKind,
   Opportunity,
   OpportunityListQuery,
   OpportunityStatus,
@@ -43,6 +44,8 @@ const OPPORTUNITY_SQL = `
       ct.phone
     ) as primary_contact_name,
     o.pipeline_id,
+    pl.name as pipeline_name,
+    pl.kind as pipeline_kind,
     o.stage_id,
     s.name as stage_name,
     o.name,
@@ -63,6 +66,7 @@ const OPPORTUNITY_SQL = `
   join crm.companies co on co.id = o.company_id
   left join crm.contacts ct on ct.id = o.primary_contact_id
   left join crm.pipeline_stages s on s.id = o.stage_id
+  left join crm.pipelines pl on pl.id = o.pipeline_id
   left join crm.profiles p on p.id = o.owner_id
 `;
 
@@ -74,6 +78,8 @@ type OpportunityRow = {
   primary_contact_id: string | null;
   primary_contact_name: string | null;
   pipeline_id: string | null;
+  pipeline_name: string | null;
+  pipeline_kind: BoardKind | null;
   stage_id: string | null;
   stage_name: string | null;
   name: string;
@@ -100,10 +106,12 @@ type StageRow = {
   probability: number;
   is_won: boolean;
   is_lost: boolean;
+  kind: BoardKind;
 };
 
 type PreparedOpportunity = {
   companyId?: string;
+  pipelineId?: string | null;
   primaryContactId?: string | null;
   stageId?: string | null;
   name?: string;
@@ -137,6 +145,8 @@ function mapOpportunity(row: OpportunityRow): Opportunity {
     primaryContactId: row.primary_contact_id,
     primaryContactName: row.primary_contact_name,
     pipelineId: row.pipeline_id,
+    pipelineName: row.pipeline_name,
+    pipelineKind: row.pipeline_kind,
     stageId: row.stage_id,
     stageName: row.stage_name,
     name: row.name,
@@ -182,13 +192,12 @@ function prepareOpportunity(
   } else if (mode === "create") {
     throw new CrmError("invalid_input", "Choose a company.", 400, { field: "companyId" });
   }
-  if (input.name !== undefined) {
+  if (input.name !== undefined && (mode === "patch" || input.name)) {
     const name = cleanText(input.name, 200, "name");
     if (!name) throw new CrmError("invalid_input", "Enter an opportunity name.", 400, { field: "name" });
     next.name = name;
-  } else if (mode === "create") {
-    throw new CrmError("invalid_input", "Enter an opportunity name.", 400, { field: "name" });
   }
+  if (input.pipelineId !== undefined) next.pipelineId = input.pipelineId || null;
   if (input.primaryContactId !== undefined) next.primaryContactId = input.primaryContactId || null;
   if (input.stageId !== undefined) {
     if (!input.stageId) {
@@ -233,19 +242,69 @@ async function readOpportunity(db: Db, id: string) {
   return result.rows[0] ?? null;
 }
 
-async function loadStages(db: Db, workspaceId: string) {
+async function loadStages(db: Db, workspaceId: string, pipelineId: string | null = null) {
+  if (pipelineId && !isUuid(pipelineId)) throw new CrmError("not_found", "Board not found.", 404);
   const result = await db.query<StageRow>(
-    `select s.id, s.pipeline_id, s.name, s.position, s.probability, s.is_won, s.is_lost
+    `select s.id, s.pipeline_id, s.name, s.position, s.probability, s.is_won, s.is_lost, p.kind
      from crm.pipeline_stages s
      join crm.pipelines p on p.id = s.pipeline_id
-     where s.workspace_id = $1 and p.is_default and p.archived_at is null
+     where s.workspace_id = $1 and p.archived_at is null
+       and (case when $2::uuid is null then p.is_default else p.id = $2::uuid end)
      order by s.position asc`,
-    [workspaceId],
+    [workspaceId, pipelineId],
   );
   if (result.rows.length === 0) {
+    if (pipelineId) throw new CrmError("not_found", "Board not found.", 404);
     throw new CrmError("invalid_input", "This workspace has no pipeline.", 400);
   }
   return result.rows;
+}
+
+async function stagePipeline(db: Db, workspaceId: string, stageId: string) {
+  if (!isUuid(stageId)) throw new CrmError("not_found", "Stage not found.", 404);
+  const result = await db.query<{ pipeline_id: string }>(
+    "select pipeline_id from crm.pipeline_stages where id = $1 and workspace_id = $2",
+    [stageId, workspaceId],
+  );
+  const row = result.rows[0];
+  if (!row) throw new CrmError("not_found", "Stage not found.", 404);
+  return row.pipeline_id;
+}
+
+async function afterWon(db: Db, actor: Actor, opportunity: Opportunity, provenance: Provenance | undefined) {
+  const company = await db.query<{ lifecycle: string }>(
+    "select lifecycle from crm.companies where id = $1 and workspace_id = $2",
+    [opportunity.companyId, actor.workspaceId],
+  );
+  const lifecycle = company.rows[0]?.lifecycle;
+  if (lifecycle && lifecycle !== "customer") {
+    await db.query("update crm.companies set lifecycle = 'customer' where id = $1", [opportunity.companyId]);
+    await recordAudit(db, actor, "company.updated", "company", opportunity.companyId, provenance, {
+      fields: ["lifecycle"],
+      before: { lifecycle },
+      after: { lifecycle: "customer" },
+    });
+  }
+  const boards = await db.query<{ id: string }>(
+    `select p.id
+     from crm.pipelines p
+     where p.workspace_id = $1 and p.kind = 'board' and p.add_on_won and p.archived_at is null
+       and exists (select 1 from crm.pipeline_stages s where s.pipeline_id = p.id)
+       and not exists (
+         select 1 from crm.opportunities o
+         where o.pipeline_id = p.id and o.company_id = $2 and o.archived_at is null
+       )
+     order by p.position asc, p.created_at asc`,
+    [actor.workspaceId, opportunity.companyId],
+  );
+  for (const board of boards.rows) {
+    await insertOpportunity(
+      db,
+      actor,
+      { companyId: opportunity.companyId, pipelineId: board.id, primaryContactId: opportunity.primaryContactId, ownerId: opportunity.ownerId },
+      { ...provenance, operation: "add_won_to_board" },
+    );
+  }
 }
 
 function statusFor(stage: StageRow): OpportunityStatus {
@@ -308,16 +367,28 @@ async function insertOpportunity(
   provenance: Provenance | undefined,
   fallbackName?: string,
 ) {
-  const name = write.name ?? cleanText(fallbackName, 200, "name");
-  if (!name) throw new CrmError("invalid_input", "Enter an opportunity name.", 400, { field: "name" });
   if (!write.companyId) {
     throw new CrmError("invalid_input", "Choose a company.", 400, { field: "companyId" });
   }
-  await requireCompany(db, actor.workspaceId, write.companyId);
+  const company = await requireCompany(db, actor.workspaceId, write.companyId);
   await assertOwner(db, actor.workspaceId, write.ownerId);
   await assertContactCompany(db, actor.workspaceId, write.primaryContactId, write.companyId);
-  const stages = await loadStages(db, actor.workspaceId);
+  const pipelineId = write.pipelineId ?? (write.stageId ? await stagePipeline(db, actor.workspaceId, write.stageId) : null);
+  const stages = await loadStages(db, actor.workspaceId, pipelineId);
   const stage = pickStage(stages, write.status, write.stageId);
+  const board = stage.kind === "board";
+  const name = write.name ?? cleanText(fallbackName, 200, "name") ?? (board ? company.name : null);
+  if (!name) throw new CrmError("invalid_input", "Enter an opportunity name.", 400, { field: "name" });
+  if (board) {
+    const existing = await db.query<{ name: string }>(
+      `select p.name from crm.opportunities o join crm.pipelines p on p.id = o.pipeline_id
+       where o.pipeline_id = $1 and o.company_id = $2 and o.archived_at is null limit 1`,
+      [stage.pipeline_id, write.companyId],
+    );
+    if (existing.rows[0]) {
+      throw new CrmError("conflict", `${company.name} is already on ${existing.rows[0].name}.`, 409, { field: "companyId" });
+    }
+  }
   const status = write.status ?? statusFor(stage);
   const actorRef = actorIds(actor);
   try {
@@ -359,6 +430,7 @@ async function insertOpportunity(
       provenance,
       { after: opportunity },
     );
+    if (opportunity.status === "won" && stage.kind === "sales") await afterWon(db, actor, opportunity, provenance);
     return opportunity;
   } catch (error) {
     constraintError(error, "duplicate_opportunity", "A matching opportunity already exists.");
@@ -383,12 +455,8 @@ async function applyOpportunity(
 
   let stage: StageRow | null = null;
   if (write.stageId || write.status === "won" || write.status === "lost" || (write.status === "open" && current.status !== "open")) {
-    const stages = await loadStages(db, actor.workspaceId);
-    const inPipeline = current.pipeline_id
-      ? stages.filter((item) => item.pipeline_id === current.pipeline_id)
-      : stages;
-    const pool = inPipeline.length > 0 ? inPipeline : stages;
-    stage = pickStage(pool, write.status, write.stageId);
+    const stages = await loadStages(db, actor.workspaceId, current.pipeline_id);
+    stage = pickStage(stages, write.status, write.stageId);
   }
   const nextStatus = stage ? (write.status ?? statusFor(stage)) : (write.status ?? current.status);
   const stageMoved = Boolean(stage && stage.id !== current.stage_id);
@@ -466,6 +534,9 @@ async function applyOpportunity(
       stageChanged ? { ...diff, fields: otherFields } : diff,
     );
   }
+  if (statusMoved && opportunity.status === "won" && opportunity.pipelineKind !== "board") {
+    await afterWon(db, actor, opportunity, provenance);
+  }
   return { opportunity, changed: true };
 }
 
@@ -484,13 +555,14 @@ export async function createOpportunityInDb(
   return insertOpportunity(db, actor, write, provenance, fallbackName);
 }
 
-export async function listPipeline(actor: Actor) {
+export async function listPipeline(actor: Actor, pipelineId: string | null = null) {
   assertScope(actor.scopes, "crm:read");
   return withActor(actor, async (db) => {
-    const stages = await loadStages(db, actor.workspaceId);
+    const stages = await loadStages(db, actor.workspaceId, pipelineId);
     return {
       id: stages[0].pipeline_id,
       name: "Default",
+      kind: stages[0].kind,
       stages: stages.map(mapStage),
     };
   });
@@ -506,6 +578,13 @@ export async function listOpportunities(actor: Actor, query: OpportunityListQuer
     if (query.companyId) {
       values.push(query.companyId);
       where.push(`o.company_id = $${values.length}`);
+    }
+    if (query.pipelineId) {
+      values.push(query.pipelineId);
+      const ref = `$${values.length}`;
+      where.push(`(o.pipeline_id = ${ref}::uuid or (o.pipeline_id is null and exists (
+        select 1 from crm.pipelines d where d.id = ${ref}::uuid and d.is_default
+      )))`);
     }
     if (query.status) {
       values.push(query.status);
