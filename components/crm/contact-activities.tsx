@@ -8,6 +8,7 @@ import Tag from "@/components/_ui/tag";
 import { addActivityAction, type RecordActionState } from "@/app/(crm)/records";
 import CallInsightPanel from "@/components/crm/call-insight";
 import { useShortcut } from "@/components/shortcuts/shortcuts-provider";
+import ActivityPad from "@/components/crm/activity-pad";
 import ContactEmail from "@/components/crm/contact-email";
 import {
   activityByline,
@@ -132,9 +133,14 @@ export function useActivityDraft(save: SaveActivity) {
     }
   }
 
+  function push(activity: Activity) {
+    setAdded((current) => [activity, ...current]);
+  }
+
   return {
     kind,
     setKind,
+    push,
     title,
     setTitle,
     body,
@@ -153,11 +159,13 @@ export function ActivityComposer({
   draft,
   about,
   email,
+  pad,
 }: {
   idPrefix: string;
   draft: ActivityDraft;
   about?: ReactNode;
   email: ReactNode;
+  pad?: ReactNode;
 }) {
   const { kind, title, body, pending } = draft;
   const root = useRef<HTMLDivElement>(null);
@@ -181,6 +189,28 @@ export function ActivityComposer({
       data-shortcut-scope=""
       className="border-line-strong bg-card flex flex-col gap-3 rounded-xl border p-3"
     >
+      {pad ? (
+        <div className="flex flex-wrap gap-1" role="group" aria-label="Activity type">
+          <Button
+            variant={kind !== "email" ? "primary" : "subtle"}
+            size="sm"
+            type="button"
+            aria-pressed={kind !== "email"}
+            onClick={() => compose("note")}
+          >
+            Log activity
+          </Button>
+          <Button
+            variant={kind === "email" ? "primary" : "subtle"}
+            size="sm"
+            type="button"
+            aria-pressed={kind === "email"}
+            onClick={() => compose("email")}
+          >
+            Send email
+          </Button>
+        </div>
+      ) : (
       <div
         className="flex flex-wrap gap-1"
         role="group"
@@ -199,13 +229,15 @@ export function ActivityComposer({
           </Button>
         ))}
       </div>
-      {about}
+      )}
+      {pad && kind !== "email" ? pad : null}
+      {(!pad || kind === "email") && about}
       {draft.error && (
         <p role="alert" className="caption-style text-danger">
           {draft.error}
         </p>
       )}
-      {kind === "note" && (
+      {!pad && kind === "note" && (
         <div className="flex flex-col gap-2">
           <label className="sr-only" htmlFor={`activity-note-${idPrefix}`}>
             Note
@@ -233,7 +265,7 @@ export function ActivityComposer({
           </Button>
         </div>
       )}
-      {kind === "call" && (
+      {!pad && kind === "call" && (
         <div className="flex flex-col gap-2">
           <label className="sr-only" htmlFor={`activity-call-${idPrefix}`}>
             Call summary
@@ -419,6 +451,7 @@ export default function ContactActivities({
       <ActivityComposer
         idPrefix={contactId}
         draft={draft}
+        pad={<ActivityPad fixedContact={{ id: contactId, name: recipient.name || "This contact" }} onAdded={draft.push} />}
         email={
           <ContactEmail
             contactId={contactId}
