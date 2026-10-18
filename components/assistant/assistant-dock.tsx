@@ -7,6 +7,7 @@ import { Kbd } from "@/components/_ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popover";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/_ui/select";
 import Markdown from "@/components/assistant/markdown";
+import MentionInput from "@/components/assistant/mention-input";
 import { useScreenState } from "@/components/crm/quick-add";
 import { useShortcut, useShortcuts } from "@/components/shortcuts/shortcuts-provider";
 import { connectedSourcesAction, deleteConversationAction, getConversationAction, listConversationsAction } from "@/app/(crm)/assistant";
@@ -24,6 +25,8 @@ import {
   type ReasoningLevel,
 } from "@/lib/assistant/models";
 import { relativeWhen } from "@/lib/companies";
+import { companyHref, contactHref } from "@/lib/crm/hrefs";
+import { encodeMentions, liveMentions, splitMentions, type Mention } from "@/lib/mentions";
 import { cn } from "@/lib/utils";
 import ArrowUpIcon from "@/public/assets/images/assistant/arrow-up.svg";
 import CheckIcon from "@/public/assets/images/assistant/check.svg";
@@ -283,7 +286,9 @@ function Message({
     return (
       <div className="flex justify-end">
         <div className="text-foreground max-w-[85%] rounded-2xl rounded-br-md bg-white/[0.07] px-3.5 py-2 text-[14px] leading-6 whitespace-pre-wrap">
-          {message.content}
+          {splitMentions(message.content).map((piece, index) =>
+            "mention" in piece ? <MentionChip key={index} mention={piece.mention} /> : <span key={index}>{piece.text}</span>,
+          )}
         </div>
       </div>
     );
@@ -321,12 +326,32 @@ function Message({
   );
 }
 
+function MentionChip({ mention }: { mention: Mention }) {
+  const href =
+    mention.kind === "contact"
+      ? contactHref(mention.id)
+      : mention.kind === "company"
+        ? companyHref(mention.id)
+        : mention.kind === "task"
+          ? "/tasks"
+          : "/opportunities";
+  return (
+    <a
+      href={href}
+      className="rounded-[4px] bg-[var(--tag-purple-bg)] text-[var(--tag-purple-text)] shadow-[0_0_0_2px_var(--tag-purple-bg)] hover:underline"
+    >
+      @{mention.name}
+    </a>
+  );
+}
+
 export default function AssistantDock() {
   const router = useRouter();
   const { mac } = useShortcuts();
   const { covered, lift } = useScreenState();
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState("");
+  const [mentions, setMentions] = useState<Mention[]>([]);
   const [model, setModel] = useState(DEFAULT_MODEL);
   const [reasoning, setReasoning] = useState<ReasoningLevel>(DEFAULT_REASONING);
   const [webSearch, setWebSearch] = useState(false);
@@ -525,10 +550,12 @@ export default function AssistantDock() {
   }
 
   function send(text: string) {
-    const message = text.trim();
-    if (!message || busy) return;
+    const typed = text.trim();
+    if (!typed || busy) return;
+    const message = encodeMentions(typed, liveMentions(typed, mentions));
     pinned.current = true;
     setDraft("");
+    setMentions([]);
     setMessages((current) => [
       ...current,
       { id: `local-${Date.now()}`, role: "user", content: message, tools: [], actions: [], sources: [], createdAt: new Date().toISOString() },
@@ -731,20 +758,17 @@ export default function AssistantDock() {
             <label htmlFor="assistant-input" className="sr-only">
               Message Orbit
             </label>
-            <textarea
+            <MentionInput
               id="assistant-input"
-              ref={input}
-              rows={1}
+              inputRef={input}
               value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-                  event.preventDefault();
-                  send(draft);
-                }
+              mentions={mentions}
+              onChange={(next, nextMentions) => {
+                setDraft(next);
+                setMentions(nextMentions);
               }}
-              placeholder={webSearch ? "Ask about Orbit or the web…" : "Ask about Orbit…"}
-              className="placeholder:text-subtle max-h-[200px] min-h-6 w-full resize-none bg-transparent text-[14px] leading-6 outline-none"
+              onSubmit={() => send(draft)}
+              placeholder={webSearch ? "Ask about Orbit or the web… Type @ to tag" : "Ask about Orbit… Type @ to tag"}
             />
             <div className="flex items-center gap-1.5">
               <Select
