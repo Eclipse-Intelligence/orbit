@@ -13,6 +13,7 @@ import { getCallSync } from "@/lib/crm/calls";
 import { getClickUpSettings } from "@/lib/crm/clickup";
 import { getGranolaStatus } from "@/lib/crm/granola";
 import { getMailbox } from "@/lib/crm/inbox";
+import { linearStatus } from "@/lib/linear";
 import { microsoftConfigured } from "@/lib/microsoft/oauth";
 
 export const dynamic = "force-dynamic";
@@ -20,12 +21,13 @@ export const dynamic = "force-dynamic";
 export default async function IntegrationSettingsPage() {
   const user = await getUserActor();
   if (!user) redirect("/login");
-  const [mailbox, granola, clickup, aiAccounts, companions] = await Promise.all([
+  const [mailbox, granola, clickup, aiAccounts, companions, linear] = await Promise.all([
     getMailbox(user),
     getGranolaStatus(user),
     getClickUpSettings(user),
     listAiAccounts(user),
     listCompanions(user),
+    linearStatus(),
   ]);
   const [enrichment, unenriched] = await Promise.all([getEnrichmentSettings(user), unenrichedCompanyCount(user)]);
   const calls = mailbox ? await getCallSync(user) : null;
@@ -40,6 +42,7 @@ export default async function IntegrationSettingsPage() {
         mailbox={mailbox}
         calls={calls}
         granola={granola}
+        linear={linear}
       />
       <ClickUpSettings view={clickup} canAdmin={canAdmin} />
       <AiAccountsSettings accounts={aiAccounts} companions={companions} />
