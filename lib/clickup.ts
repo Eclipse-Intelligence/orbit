@@ -49,6 +49,7 @@ export type ClickUpTask = {
   list: { id: string } | null;
   space?: { id: string } | null;
   custom_fields?: ClickUpCustomFieldValue[];
+  assignees?: { id: number; username?: string | null; email?: string | null }[];
 };
 
 export type ClickUpWebhook = {
@@ -196,6 +197,17 @@ export function clickupClient(options: ClickUpClientOptions) {
   async function getTeams() {
     const body = await json<{ teams: { id: string | number; name: string }[] }>("/team");
     return (body.teams ?? []).map((team) => ({ id: String(team.id), name: team.name }));
+  }
+
+  async function getTeamMembers(teamId: string): Promise<ClickUpUser[]> {
+    const body = await json<{
+      teams: { id: string | number; members?: { user?: { id: number; username?: string | null; email?: string | null } }[] }[];
+    }>("/team");
+    const team = (body.teams ?? []).find((item) => String(item.id) === teamId);
+    return (team?.members ?? [])
+      .map((member) => member.user)
+      .filter((user): user is { id: number; username?: string | null; email?: string | null } => Boolean(user?.id))
+      .map((user) => ({ id: user.id, username: user.username ?? null, email: user.email ?? null }));
   }
 
   async function getSpaces(teamId: string) {
@@ -361,6 +373,7 @@ export function clickupClient(options: ClickUpClientOptions) {
   return {
     getUser,
     getTeams,
+    getTeamMembers,
     getSpaces,
     getFolders,
     getFolderLists,

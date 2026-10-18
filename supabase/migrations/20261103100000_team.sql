@@ -28,6 +28,45 @@ create policy workspace_invites_select_member on crm.workspace_invites
 grant select on crm.workspace_invites to authenticated;
 revoke all on crm.workspace_invites from anon, crm_agent;
 
+create table if not exists crm.granola_keys (
+  id uuid primary key default gen_random_uuid(),
+  workspace_id uuid not null references crm.workspaces (id) on delete cascade,
+  user_id uuid not null references crm.profiles (id) on delete cascade,
+  key_cipher text not null,
+  key_hint text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint granola_keys_owner unique (workspace_id, user_id),
+  constraint granola_keys_hint_length check (key_hint is null or char_length(key_hint) <= 12)
+);
+
+alter table crm.granola_keys enable row level security;
+alter table crm.granola_keys force row level security;
+
+drop policy if exists granola_keys_owner on crm.granola_keys;
+create policy granola_keys_owner on crm.granola_keys
+  for all to authenticated
+  using (user_id = (select private.session_user_id()) and workspace_id in (select private.user_workspace_ids()))
+  with check (user_id = (select private.session_user_id()) and workspace_id in (select private.user_workspace_ids()));
+
+grant select, insert, update, delete on crm.granola_keys to authenticated;
+revoke all on crm.granola_keys from anon, crm_agent;
+
+create or replace function private.granola_key_members()
+returns table (workspace_id uuid, user_id uuid)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select k.workspace_id, k.user_id
+  from crm.granola_keys k
+  join crm.workspace_members m on m.workspace_id = k.workspace_id and m.user_id = k.user_id;
+$$;
+
+revoke all on function private.granola_key_members() from public;
+grant execute on function private.granola_key_members() to crm_app;
+
 create or replace function private.team_role(p_workspace uuid, p_user uuid)
 returns text
 language sql
@@ -229,6 +268,7 @@ begin
     set status = 'disconnected', refresh_token = null, access_token = null, access_token_expires_at = null
     where workspace_id = p_workspace and user_id = p_user;
   delete from crm.ai_accounts where workspace_id = p_workspace and user_id = p_user;
+  delete from crm.granola_keys where workspace_id = p_workspace and user_id = p_user;
   update crm.ai_companions set revoked_at = now()
     where workspace_id = p_workspace and user_id = p_user and revoked_at is null;
   delete from crm.workspace_members where workspace_id = p_workspace and user_id = p_user;

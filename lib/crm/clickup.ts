@@ -36,6 +36,7 @@ import {
   type ClickUpTask,
   type ClickUpTaskWrite,
   type ClickUpTeam,
+  type ClickUpUser,
 } from "@/lib/clickup";
 import { appTimeZone, zonedParts, zonedTimeToDate } from "@/lib/time";
 
@@ -152,6 +153,9 @@ type SyncRow = {
   updated_at: Date | string;
   contact_id: string | null;
   company_id: string | null;
+  owner_id: string | null;
+  owner_email: string | null;
+  owner_other_emails: string[] | null;
   contact_name: string | null;
   contact_email: string | null;
   company_name: string | null;
@@ -169,6 +173,7 @@ type Session = {
   deadline?: number;
   lists: Map<string, Promise<ClickUpListInfo>>;
   fields: Map<string, Promise<ClickUpField[]>>;
+  members?: Promise<ClickUpUser[]>;
 };
 
 type Schedule = (task: () => Promise<unknown>) => void;
@@ -181,7 +186,7 @@ export type ClickUpEvent = {
 
 const SYNC_COLUMNS = `
   t.id, t.title, t.description, t.due_at, t.completed_at, t.archived_at, t.updated_at,
-  t.contact_id, t.company_id,
+  t.contact_id, t.company_id, t.owner_id, op.email as owner_email, op.other_emails as owner_other_emails,
   coalesce(nullif(trim(concat_ws(' ', ct.first_name, ct.last_name)), ''), ct.email, ct.phone) as contact_name,
   ct.email as contact_email,
   co.name as company_name,
@@ -192,6 +197,7 @@ const SYNC_FROM = `
   from crm.tasks t
   left join crm.contacts ct on ct.id = t.contact_id
   left join crm.companies co on co.id = t.company_id
+  left join crm.profiles op on op.id = t.owner_id
 `;
 
 const DIRTY_SQL = `(
@@ -435,6 +441,39 @@ async function ownerId(s: Session) {
   return user.id;
 }
 
+function clickupMembers(s: Session) {
+  s.members ??= s.state.teamId ? s.api.getTeamMembers(s.state.teamId).catch(() => []) : Promise.resolve([]);
+  return s.members;
+}
+
+async function assigneesFor(s: Session, row: SyncRow) {
+  if (!row.owner_id || row.owner_id === s.state.userId) return [await ownerId(s)];
+  const emails = [row.owner_email, ...(row.owner_other_emails ?? [])]
+    .map((email) => (email ? canonicalEmail(email) : null))
+    .filter((email): email is string => Boolean(email));
+  const match = (await clickupMembers(s)).find((member) => member.email && emails.includes(canonicalEmail(member.email) ?? ""));
+  return match ? [match.id] : [];
+}
+
+async function ownerForAssignees(db: Db, workspaceId: string, task: ClickUpTask) {
+  const emails = (task.assignees ?? [])
+    .map((person) => (person.email ? canonicalEmail(person.email) : null))
+    .filter((email): email is string => Boolean(email));
+  if (emails.length === 0) return undefined;
+  const result = await db.query<{ id: string }>(
+    `select p.id
+     from crm.workspace_members m
+     join crm.profiles p on p.id = m.user_id
+     where m.workspace_id = $1
+       and (lower(p.email) = any($2::text[])
+         or exists (select 1 from unnest(coalesce(p.other_emails, '{}')) other where lower(other) = any($2::text[])))
+     order by array_position($2::text[], lower(p.email)) nulls last
+     limit 1`,
+    [workspaceId, emails],
+  );
+  return result.rows[0]?.id;
+}
+
 async function archiveDeleted(s: Session, row: SyncRow) {
   if (row.archived_at) return "unchanged" as const;
   await archiveTask(s.actor, row.id, {
@@ -470,7 +509,7 @@ async function createRemote(s: Session, taskId: string) {
     const body: ClickUpTaskWrite = {
       name: local.title,
       description: clickupDescription(s.origin, row),
-      assignees: [await ownerId(s)],
+      assignees: await assigneesFor(s, row),
       ...(local.dueAt ? toClickUpDue(local.dueAt) : {}),
     };
     if (local.done) {
@@ -720,6 +759,7 @@ async function pullRemote(s: Session, task: ClickUpTask, watched: Set<string>): 
     if (creating.rows[0]) return "ignored";
     const link = await findClickUpLink(db, s.actor.workspaceId, task);
     if (!link) return "ignored";
+    const owner = await ownerForAssignees(db, s.actor.workspaceId, task);
     const created = await createTaskInDb(
       db,
       s.actor,
@@ -727,6 +767,7 @@ async function pullRemote(s: Session, task: ClickUpTask, watched: Set<string>): 
         title: remote.title,
         dueAt: remote.dueAt,
         completed: remote.done,
+        ...(owner ? { ownerId: owner } : {}),
         contactId: link.contactId,
         companyId: link.contactId ? undefined : link.companyId,
       },

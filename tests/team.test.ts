@@ -4,7 +4,10 @@ import { runTool } from "@/lib/assistant/tools";
 import { getMeetings } from "@/lib/crm/calendar";
 import { createCompany, getCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
-import { saveMailbox } from "@/lib/crm/inbox";
+import { listActivities } from "@/lib/crm/activities";
+import { getGranolaStatus, personalGranolaKey, removeGranolaKey, saveGranolaKey, syncGranolaFor } from "@/lib/crm/granola";
+import { fileInboundMessages, saveMailbox } from "@/lib/crm/inbox";
+import { syncTargets } from "@/lib/crm/scheduler";
 import { getCompanyContext } from "@/lib/crm/relationships";
 import { countOpenTasks, createTask, listDueReminders, listTasks, updateTask } from "@/lib/crm/tasks";
 import { scopesForRole } from "@/lib/crm/scopes";
@@ -175,14 +178,63 @@ describe("team", () => {
     );
   });
 
-  it("removes a member, hands their records to the remover, and disconnects them", async () => {
-    await getAdminPool().query("update crm.companies set owner_id = $1 where id = $2", [member.userId, companyId]);
+  it("logs an email once when two people receive it", async () => {
     await saveMailbox(member, {
       email: "sam@team.test",
       refreshToken: "sam-refresh",
       accessToken: "sam-access",
       expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
     });
+    const email = (providerMessageId: string) => ({
+      providerMessageId,
+      internetMessageId: "<pricing-123@acme-team.test>",
+      subject: "Pricing question",
+      preview: "Could you both look at the pricing?",
+      fromEmail: "jane@acme-team.test",
+      toEmails: ["mark@team.test", "sam@team.test"],
+      receivedAt: new Date().toISOString(),
+    });
+    await fileInboundMessages(owner, [email("mark-copy")]);
+    await fileInboundMessages(member, [email("sam-copy")]);
+    const logged = await listActivities(owner, { contactId, type: "email" });
+    assert.equal(logged.data.filter((activity) => activity.title === "Pricing question").length, 1);
+    const linked = await getAdminPool().query<{ total: number }>(
+      "select count(distinct activity_id)::int as total from crm.email_messages where internet_message_id = '<pricing-123@acme-team.test>'",
+    );
+    assert.equal(linked.rows[0].total, 1);
+  });
+
+  it("lets each person connect their own Granola, kept private to them", async () => {
+    const seen: string[] = [];
+    const granola = (status = 200): typeof fetch => async (_input, init) => {
+      seen.push(new Headers(init?.headers).get("authorization") ?? "");
+      if (status !== 200) return Response.json({ message: "Invalid API key" }, { status });
+      return Response.json({ notes: [], hasMore: false, cursor: null });
+    };
+    await assert.rejects(saveGranolaKey(member, "grn_bad_key_123456", { fetchImpl: granola(401) }), /Granola didn't accept that key/);
+    await saveGranolaKey(member, "grn_sam_key_123456", { fetchImpl: granola() });
+    assert.equal(await personalGranolaKey(member), "grn_sam_key_123456");
+    assert.deepEqual((await getGranolaStatus(member)).personal, { connected: true, hint: "3456" });
+    assert.deepEqual((await getGranolaStatus(owner)).personal, { connected: false, hint: null });
+    const peek = await queryAsUser<{ total: number }>(owner.userId, "select count(*)::int as total from crm.granola_keys");
+    assert.equal(peek[0].total, 0);
+
+    seen.length = 0;
+    const run = await syncGranolaFor(member, { fetchImpl: granola() });
+    assert.equal(run.error, undefined);
+    assert.ok(seen.every((header) => header === "Bearer grn_sam_key_123456") && seen.length > 0);
+
+    const { targets } = await syncTargets();
+    const samTarget = targets.find((target) => target.actor.userId === member.userId);
+    assert.equal(samTarget?.personalGranola, true);
+
+    await removeGranolaKey(member);
+    assert.equal(await personalGranolaKey(member), null);
+    await saveGranolaKey(member, "grn_sam_key_123456", { fetchImpl: granola() });
+  });
+
+  it("removes a member, hands their records to the remover, and disconnects them", async () => {
+    await getAdminPool().query("update crm.companies set owner_id = $1 where id = $2", [member.userId, companyId]);
     await removeMember(owner, member.userId);
     assert.equal((await getCompany(owner, companyId)).ownerId, owner.userId);
     const tasks = await getAdminPool().query<{ total: number }>(
@@ -195,6 +247,8 @@ describe("team", () => {
       [member.userId],
     );
     assert.deepEqual(mailbox.rows[0], { status: "disconnected", refresh_token: null });
+    const keys = await getAdminPool().query<{ total: number }>("select count(*)::int as total from crm.granola_keys where user_id = $1", [member.userId]);
+    assert.equal(keys.rows[0].total, 0);
     assert.deepEqual(
       (await getTeam(owner)).members.map((person) => person.role),
       ["owner", "admin"],
