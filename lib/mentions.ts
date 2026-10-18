@@ -34,6 +34,10 @@ export function plainMentions(text: string) {
   return text.replace(TOKEN, (_whole, name: string) => `@${name}`);
 }
 
+export function namedMentions(text: string) {
+  return text.replace(TOKEN, (_whole, name: string) => name);
+}
+
 export function expandMentions(text: string) {
   return text.replace(TOKEN, (_whole, name: string, kind: MentionKind, id: string) => `${name} [${LABELS[kind]} id ${id}]`);
 }

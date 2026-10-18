@@ -10,29 +10,43 @@ const KIND_LABELS: Record<MentionKind, string> = { contact: "Person", company: "
 
 type Open = { start: number; end: number; query: string };
 
-function highlightPieces(text: string, mentions: Mention[]) {
-  const ranges: { start: number; end: number }[] = [];
+export type InputMark = { start: number; end: number; className: string };
+
+const MENTION_CLASS = "bg-[var(--tag-purple-bg)] text-[var(--tag-purple-text)] shadow-[0_0_0_2px_var(--tag-purple-bg)]";
+
+function highlightPieces(text: string, mentions: Mention[], extra: InputMark[]) {
+  const ranges: { start: number; end: number; className: string }[] = extra.map((mark) => ({ ...mark }));
   for (const mention of mentions) {
     const label = `@${mention.name}`;
     let from = 0;
     for (;;) {
       const index = text.indexOf(label, from);
       if (index < 0) break;
-      ranges.push({ start: index, end: index + label.length });
+      ranges.push({ start: index, end: index + label.length, className: MENTION_CLASS });
       from = index + label.length;
     }
   }
   ranges.sort((left, right) => left.start - right.start || right.end - left.end);
-  const pieces: { text: string; mark: boolean }[] = [];
+  const pieces: { text: string; className: string | null }[] = [];
   let cursor = 0;
   for (const range of ranges) {
     if (range.start < cursor) continue;
-    if (range.start > cursor) pieces.push({ text: text.slice(cursor, range.start), mark: false });
-    pieces.push({ text: text.slice(range.start, range.end), mark: true });
+    if (range.start > cursor) pieces.push({ text: text.slice(cursor, range.start), className: null });
+    pieces.push({ text: text.slice(range.start, range.end), className: range.className });
     cursor = range.end;
   }
-  pieces.push({ text: `${text.slice(cursor)}​`, mark: false });
+  pieces.push({ text: `${text.slice(cursor)}\u200b`, className: null });
   return pieces;
+}
+
+function tightenPunctuation(text: string, mentions: Mention[]) {
+  let output = text;
+  for (const mention of mentions) {
+    const label = `@${mention.name}`;
+    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    output = output.replace(new RegExp(`${escaped} ([,.;:!?])`, "g"), `${label}$1`);
+  }
+  return output;
 }
 
 export default function MentionInput({
@@ -43,6 +57,14 @@ export default function MentionInput({
   placeholder,
   onChange,
   onSubmit,
+  marks = [],
+  kinds,
+  listPlacement = "above",
+  ariaLabel,
+  onFocus,
+  composeFocus,
+  shortcut,
+  autoFocus,
 }: {
   id: string;
   inputRef: RefObject<HTMLTextAreaElement | null>;
@@ -51,6 +73,14 @@ export default function MentionInput({
   placeholder: string;
   onChange: (value: string, mentions: Mention[]) => void;
   onSubmit: () => void;
+  marks?: InputMark[];
+  kinds?: MentionKind[];
+  listPlacement?: "above" | "below";
+  ariaLabel?: string;
+  onFocus?: () => void;
+  composeFocus?: boolean;
+  shortcut?: string;
+  autoFocus?: boolean;
 }) {
   const [open, setOpen] = useState<Open | null>(null);
   const [found, setFound] = useState<{ query: string; options: MentionOption[] }>({ query: "", options: [] });
@@ -65,7 +95,7 @@ export default function MentionInput({
       void searchMentionsAction(open.query)
         .then((options) => {
           if (!live) return;
-          setFound({ query: open.query, options });
+          setFound({ query: open.query, options: kinds ? options.filter((option) => kinds.includes(option.kind)) : options });
           setHighlight(0);
         })
         .catch(() => undefined);
@@ -74,7 +104,7 @@ export default function MentionInput({
       live = false;
       window.clearTimeout(timer);
     };
-  }, [open]);
+  }, [open, kinds]);
 
   function refresh(text: string, caret: number, known: Mention[] = mentions) {
     const found = stripMention(text, caret);
@@ -127,7 +157,7 @@ export default function MentionInput({
   }
 
   const options = open && found.query === open.query ? found.options : [];
-  const pieces = highlightPieces(value, mentions);
+  const pieces = highlightPieces(value, mentions, marks);
   const listId = `${id}-mentions`;
   const showList = open !== null && options.length > 0;
 
@@ -139,11 +169,8 @@ export default function MentionInput({
       >
         <div style={{ transform: `translateY(-${scrollTop}px)` }}>
           {pieces.map((piece, index) =>
-            piece.mark ? (
-              <mark
-                key={index}
-                className="rounded-[4px] bg-[var(--tag-purple-bg)] text-[var(--tag-purple-text)] shadow-[0_0_0_2px_var(--tag-purple-bg)]"
-              >
+            piece.className ? (
+              <mark key={index} className={cn("rounded-[4px]", piece.className)}>
                 {piece.text}
               </mark>
             ) : (
@@ -161,8 +188,13 @@ export default function MentionInput({
         aria-expanded={showList}
         aria-controls={showList ? listId : undefined}
         aria-autocomplete="list"
+        aria-label={ariaLabel}
+        data-compose-focus={composeFocus ? "" : undefined}
+        data-shortcut={shortcut}
+        autoFocus={autoFocus}
+        onFocus={onFocus}
         onChange={(event) => {
-          const next = event.target.value;
+          const next = tightenPunctuation(event.target.value, mentions);
           const kept = liveMentions(next, mentions);
           onChange(next, kept);
           refresh(next, event.target.selectionStart ?? next.length, kept);
@@ -178,8 +210,11 @@ export default function MentionInput({
         <ul
           id={listId}
           role="listbox"
-          aria-label="Tag a person, company, task or opportunity"
-          className="bg-popover border-line-strong shadow-overlay absolute bottom-full left-0 z-30 mb-2 max-h-72 w-[min(22rem,100%)] overflow-y-auto rounded-xl border p-1"
+          aria-label={kinds ? "Tag a person or company" : "Tag a person, company, task or opportunity"}
+          className={cn(
+            "bg-popover border-line-strong shadow-overlay absolute left-0 z-30 max-h-72 w-[min(22rem,100%)] overflow-y-auto rounded-xl border p-1",
+            listPlacement === "above" ? "bottom-full mb-2" : "top-full mt-2",
+          )}
         >
           {options.map((option, index) => (
             <li key={`${option.kind}-${option.id}`} role="option" aria-selected={index === highlight}>

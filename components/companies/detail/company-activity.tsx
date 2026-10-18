@@ -16,6 +16,7 @@ import {
   ActivityTimeline,
   useActivityDraft,
 } from "@/components/crm/contact-activities";
+import ActivityPad from "@/components/crm/activity-pad";
 import ContactEmail from "@/components/crm/contact-email";
 import { contactRecipient } from "@/lib/crm/personalise";
 import type { Activity, CallInsight, Contact } from "@/lib/crm/types";
@@ -25,6 +26,7 @@ const ALL = "all";
 
 export default function CompanyActivity({
   companyId,
+  companyName,
   contacts,
   timeline,
   insights,
@@ -32,6 +34,7 @@ export default function CompanyActivity({
   viewerId,
 }: {
   companyId: string;
+  companyName: string;
   contacts: Contact[];
   timeline: Activity[];
   insights: Record<string, CallInsight>;
@@ -91,6 +94,7 @@ export default function CompanyActivity({
       <ActivityComposer
         idPrefix={companyId}
         draft={draft}
+        pad={<ActivityPad fixedCompany={{ id: companyId, name: companyName }} onAdded={draft.push} />}
         about={
           <div className="flex flex-col gap-2">
             <label className="caption-style text-subtle" htmlFor={aboutId}>

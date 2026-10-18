@@ -1,21 +1,18 @@
 "use client";
 
-import { useActionState, useEffect } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
-import Button from "@/components/_ui/button";
-import { Input } from "@/components/_ui/input";
+import { useSearchParams } from "next/navigation";
 import { EntityChip, Monogram } from "@/components/beautifui/record-marks";
 import Pager from "@/components/crm/pager";
 import RecordTransfer from "@/components/crm/record-transfer";
 import SectionHeader from "@/components/crm/section-header";
 import KeyboardList from "@/components/shortcuts/keyboard-list";
 import ListSearch from "@/components/shortcuts/list-search";
-import { RecordList, RecordRow, RecordSelect } from "@/components/crm/record-form";
+import ActivityPad from "@/components/crm/activity-pad";
+import { RecordList, RecordRow } from "@/components/crm/record-form";
 import type { Viewer } from "@/components/crm/viewer";
-import { saveActivityAction, type RecordActionState } from "@/app/(crm)/records";
 import { formatWhen } from "@/lib/companies";
 import { companyHref } from "@/lib/crm/hrefs";
-import { ACTIVITY_TYPES, type Activity, type Company, type Contact } from "@/lib/crm/types";
+import type { Activity } from "@/lib/crm/types";
 
 const LABELS: Record<string, string> = {
   email: "Email",
@@ -34,83 +31,21 @@ export default function ActivitiesScreen({
   total,
   page,
   query,
-  companies,
-  contacts,
 }: {
   viewer: Viewer;
   activities: Activity[];
   total: number;
   page: number;
   query: string;
-  companies: Company[];
-  contacts: Contact[];
 }) {
-  const router = useRouter();
   const adding = useSearchParams().get("add") === "1";
-  const [state, action, pending] = useActionState(saveActivityAction, {} as RecordActionState);
-  useEffect(() => {
-    if (state.ok) router.refresh();
-  }, [state, router]);
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
       <SectionHeader title="Activities" viewer={viewer} action={<RecordTransfer resource="activities" />} />
-      <form action={action} className="border-border flex flex-col gap-3 border-b px-4 py-4">
-        <div className="grid gap-3 sm:grid-cols-2">
-          <RecordSelect id="activity-type" name="type" label="Type" defaultValue="note">
-            {ACTIVITY_TYPES.map((type) => (
-              <option key={type} value={type}>
-                {LABELS[type]}
-              </option>
-            ))}
-          </RecordSelect>
-          <label className="flex flex-col gap-2" htmlFor="activity-title">
-            <span className="caption-style text-subtle">Title</span>
-            <Input
-              id="activity-title"
-              name="title"
-              placeholder="Intro call"
-              autoFocus={adding}
-              data-shortcut="add-record"
-            />
-          </label>
-        </div>
-        <label className="flex flex-col gap-2" htmlFor="activity-body">
-          <span className="caption-style text-subtle">What happened</span>
-          <textarea
-            id="activity-body"
-            name="body"
-            placeholder="What was discussed"
-            className="border-line-strong bg-secondary min-h-20 w-full rounded-lg border px-3 py-2 text-[14px] leading-5 outline-none"
-          />
-        </label>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <RecordSelect id="activity-company" name="companyId" label="Company" defaultValue="none">
-            <option value="none">No company</option>
-            {companies.map((company) => (
-              <option key={company.id} value={company.id}>
-                {company.name}
-              </option>
-            ))}
-          </RecordSelect>
-          <RecordSelect id="activity-contact" name="contactId" label="Contact" defaultValue="none">
-            <option value="none">No contact</option>
-            {contacts.map((contact) => (
-              <option key={contact.id} value={contact.id}>
-                {contact.name}
-              </option>
-            ))}
-          </RecordSelect>
-        </div>
-        {state.error && (
-          <p role="alert" className="caption-style text-danger">
-            {state.error}
-          </p>
-        )}
-        <Button variant="primary" size="sm" type="submit" className="self-start" disabled={pending}>
-          {pending ? "Saving…" : "Add activity"}
-        </Button>
-      </form>
+      <div className="border-border border-b px-4 py-4">
+        <ActivityPad suggestions shortcut="add-record" autoFocus={adding} />
+      </div>
       <div className="flex items-center gap-2 px-4 py-4">
         <ListSearch noun="activities" />
       </div>

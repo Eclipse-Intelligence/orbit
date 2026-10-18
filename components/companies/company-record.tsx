@@ -314,6 +314,7 @@ export default function CompanyRecord({
         activity={
           <CompanyActivity
             companyId={company.id}
+            companyName={company.name}
             contacts={context.contacts}
             timeline={context.timeline}
             insights={context.insights}
