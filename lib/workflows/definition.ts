@@ -385,3 +385,36 @@ export function newStepId(type: StepType, existing: string[]) {
   }
   return `${base}_${Date.now()}`;
 }
+
+export function definitionFromInput(value: unknown): { definition: WorkflowDefinition } | { error: string } {
+  if (!value || typeof value !== "object") return { error: "Send a definition with a trigger and steps." };
+  const input = value as { nodes?: unknown; steps?: unknown; triggerPosition?: unknown; edges?: unknown };
+  if (Array.isArray(input.nodes)) {
+    const nodes = input.nodes as Record<string, unknown>[];
+    const placed = {
+      ...input,
+      version: 2,
+      triggerPosition: input.triggerPosition ?? { x: 0, y: 0 },
+      edges: Array.isArray(input.edges) ? input.edges : [],
+      nodes: nodes.map((node) => ({ config: {}, ...node, position: node.position ?? { x: 0, y: 0 } })),
+    };
+    const parsed = definitionSchema.safeParse(placed);
+    if (!parsed.success) return { error: describeIssue(parsed.error) };
+    const laidOut = nodes.some((node) => !node.position) ? autoLayout(parsed.data) : parsed.data;
+    const problem = graphProblem(laidOut);
+    return problem ? { error: problem } : { definition: laidOut };
+  }
+  if (Array.isArray(input.steps)) {
+    const parsed = legacySchema.safeParse(value);
+    if (!parsed.success) return { error: describeIssue(parsed.error) };
+    const converted = fromLegacy(parsed.data);
+    const problem = graphProblem(converted);
+    return problem ? { error: problem } : { definition: converted };
+  }
+  return { error: "Send either steps (a list, with then and else on If and body on For each item) or nodes and edges." };
+}
+
+function describeIssue(error: z.ZodError) {
+  const issue = error.issues[0];
+  return issue ? `The definition isn't valid at ${issue.path.join(".") || "the top"}: ${issue.message}` : "The definition isn't valid.";
+}
