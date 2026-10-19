@@ -12,8 +12,9 @@ import {
 } from "@/components/_ui/dialog";
 import { Input } from "@/components/_ui/input";
 import { SaveTemplateForm, UseTemplateButton } from "@/components/crm/email-template-picker";
+import { AttachButton, AttachmentList, useEmailAttachments } from "@/components/crm/email-attachments";
 import { TokenChips, insertToken } from "@/components/crm/email-tokens";
-import { sendContactEmailAction } from "@/app/(crm)/inbox/actions";
+import { discardAttachmentsAction, sendContactEmailAction } from "@/app/(crm)/inbox/actions";
 import {
   BULK_EMAIL_GAP_MS,
   BULK_EMAIL_LIMIT,
@@ -72,11 +73,13 @@ export default function BulkEmailDialog({
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   const [saving, setSaving] = useState(false);
   const [savedName, setSavedName] = useState<string | null>(null);
+  const files = useEmailAttachments();
 
   const tooMany = sendable.length > BULK_EMAIL_LIMIT;
   const first = sendable[0];
   const canSend =
     mailboxConnected &&
+    !files.uploading &&
     !tooMany &&
     sendable.length > 0 &&
     subject.trim() !== "" &&
@@ -119,6 +122,7 @@ export default function BulkEmailDialog({
     setHalted(null);
     setPhase("sending");
     setProgress(Object.fromEntries(sendable.map((recipient) => [recipient.id, { status: "queued" }])));
+    const attachments = files.ids;
     const result = await sendPaced(
       sendable,
       async (recipient) => {
@@ -126,6 +130,8 @@ export default function BulkEmailDialog({
           recipient.id,
           personalise(subject, recipient),
           personalise(body, recipient),
+          attachments,
+          true,
         );
         if ("error" in sent && sent.error) return { error: sent.error };
         return { warning: "warning" in sent ? sent.warning : null };
@@ -141,6 +147,10 @@ export default function BulkEmailDialog({
         },
       },
     );
+    if (attachments.length) {
+      void discardAttachmentsAction(attachments);
+      files.clear();
+    }
     setHalted(result.halted);
     setProgress((current) => {
       const next = { ...current };
@@ -160,6 +170,7 @@ export default function BulkEmailDialog({
 
   function close() {
     if (phase === "sending") return;
+    if (files.ids.length) void discardAttachmentsAction(files.ids);
     onClose(sentCount);
   }
 
@@ -334,6 +345,10 @@ export default function BulkEmailDialog({
                 />
               </div>
               <TokenChips onInsert={insert} text={`${subject}\n${body}`} />
+              <div className="flex flex-col items-start gap-2">
+                <AttachButton id="bulk-email-files" onFiles={(picked) => void files.add(picked)} />
+                <AttachmentList items={files.items} onRemove={files.remove} />
+              </div>
               {first && (subject || body) && (
                 <section className="flex flex-col gap-1.5" aria-label="Preview">
                   <h3 className="caption-style text-subtle">

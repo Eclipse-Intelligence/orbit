@@ -252,6 +252,12 @@ export async function handleCronRequest(
   }
   const report = await run();
   try {
+    const { sweepEmailAttachments } = await import("@/lib/crm/email-attachments");
+    await sweepEmailAttachments();
+  } catch (error) {
+    console.error("Attachment sweep failed", error);
+  }
+  try {
     const { backfillCallHealth } = await import("@/lib/crm/call-health");
     await backfillCallHealth({ budgetMs: 12_000 });
   } catch (error) {

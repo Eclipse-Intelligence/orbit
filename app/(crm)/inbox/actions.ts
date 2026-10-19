@@ -5,6 +5,7 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { after } from "next/server";
 import { getUserActor } from "@/lib/auth/user";
+import { discardAttachments, prepareAttachment, type PreparedAttachment } from "@/lib/crm/email-attachments";
 import {
   createContactFromMeeting,
   hideAttendee,
@@ -214,16 +215,34 @@ export async function ignoreConversationAction(
   return { ok: true };
 }
 
+export async function prepareAttachmentAction(file: { name: string; size: number; contentType: string }): Promise<{ attachment?: PreparedAttachment; error?: string }> {
+  const user = await getUserActor();
+  if (!user) return { error: "Sign in to attach files." };
+  try {
+    return { attachment: await prepareAttachment(user, file) };
+  } catch (error) {
+    return actionError(error);
+  }
+}
+
+export async function discardAttachmentsAction(ids: string[]) {
+  const user = await getUserActor();
+  if (!user) return;
+  await discardAttachments(user, ids).catch(() => undefined);
+}
+
 export async function sendContactEmailAction(
   contactId: string,
   subject: string,
   body: string,
+  attachments: string[] = [],
+  keepAttachments = false,
 ) {
   const user = await getUserActor();
   if (!user) return { error: "Sign in to send mail." };
   let warning: string | null;
   try {
-    ({ warning } = await sendContactEmail(user, contactId, { subject, body }));
+    ({ warning } = await sendContactEmail(user, contactId, { subject, body, attachments, keepAttachments }));
   } catch (error) {
     return actionError(error);
   }
