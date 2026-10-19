@@ -3,9 +3,10 @@ import Link from "next/link";
 import {
   CONNECTION_STRENGTH,
   connectionStrength,
+  HEALTH_LABELS,
   type ConnectionStrength,
 } from "@/lib/companies";
-import type { Lifecycle } from "@/lib/crm/types";
+import type { AccountHealth, Lifecycle } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
 
 const TAG_PALETTE = [
@@ -75,6 +76,16 @@ export function RecordTag({
       {label}
     </span>
   );
+}
+
+const HEALTH_BASE: Record<AccountHealth, string> = {
+  healthy: "var(--success)",
+  watch: "var(--warning)",
+  at_risk: "var(--danger)",
+};
+
+export function HealthMark({ health }: { health: AccountHealth }) {
+  return <RecordTag label={HEALTH_LABELS[health]} base={HEALTH_BASE[health]} />;
 }
 
 export function lifecycleTagBase(lifecycle: Lifecycle) {

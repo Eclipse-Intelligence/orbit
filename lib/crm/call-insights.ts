@@ -7,8 +7,10 @@ import { iso, isUuid, recordAudit } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
 import { createTaskInDb } from "@/lib/crm/tasks";
 import {
+  ACCOUNT_HEALTH,
   CALL_INSIGHT_SOURCES,
   CALL_INSIGHT_STALE_MS,
+  type AccountHealth,
   type Actor,
   type CallActionItem,
   type CallActionOwner,
@@ -40,6 +42,8 @@ const INSIGHT_COLUMNS = `
   i.model,
   i.status,
   i.error,
+  i.sentiment,
+  i.sentiment_reason,
   char_length(i.transcript)::int as transcript_length,
   i.created_at,
   i.updated_at
@@ -58,6 +62,8 @@ type InsightRow = {
   model: string | null;
   status: CallInsightStatus;
   error: string | null;
+  sentiment: AccountHealth | null;
+  sentiment_reason: string | null;
   transcript_length: number;
   created_at: Date | string;
   updated_at: Date | string;
@@ -112,6 +118,8 @@ function mapInsight(row: InsightRow): CallInsight {
     model: row.model,
     status: row.status,
     error: row.error,
+    sentiment: row.sentiment,
+    sentimentReason: row.sentiment_reason,
     transcriptLength: row.transcript_length,
     createdAt: iso(row.created_at) ?? new Date(0).toISOString(),
     updatedAt: iso(row.updated_at) ?? new Date(0).toISOString(),
@@ -251,10 +259,17 @@ function shortDay(date: Date) {
   }).format(date);
 }
 
+const HEALTH_RULES = `- health: how the relationship with the other party stands after this call, judged from their side (their mood, commitment and intent), not from how polite the call was.
+  - "healthy": engaged and positive, things are on track or moving forward.
+  - "watch": mixed signals: concerns, hesitation, slipping timelines, unanswered objections, a new decision maker, or lukewarm engagement.
+  - "at_risk": clear frustration or dissatisfaction, talk of cancelling, not renewing, pausing, cutting back or looking at competitors, or a serious unresolved complaint.
+  - null only when the call holds no signal at all about the relationship (for example an internal call or a few words of small talk).
+- healthReason: one plain sentence, at most 200 characters, naming the specific thing said that decided the health. null when health is null.`;
+
 const SYSTEM_PROMPT = `You summarise sales and relationship calls and meetings for a personal CRM called Orbit.
 
 Read the call transcript and reply with a single JSON object and nothing else: no prose, no Markdown, no code fences. Use exactly this shape:
-{"summary": string, "keyPoints": string[], "actionItems": [{"title": string, "owner": "me" | "them" | null, "dueDate": "YYYY-MM-DD" | null}]}
+{"summary": string, "keyPoints": string[], "actionItems": [{"title": string, "owner": "me" | "them" | null, "dueDate": "YYYY-MM-DD" | null}], "health": "healthy" | "watch" | "at_risk" | null, "healthReason": string | null}
 
 Rules:
 - Write in British English. Be concise and factual. Use only what the transcript says; never invent names, figures, dates or commitments. If something is unclear, leave it out.
@@ -264,6 +279,7 @@ Rules:
   - title: a short imperative next step of at most 120 characters, written so it makes sense on its own as a to-do in the Orbit user's list. For something the other party committed to, name them, for example "Sarah to send the signed order form".
   - owner: "me" when the Orbit user committed to it, "them" when the other party did, null when it is genuinely unclear.
   - dueDate: only when a date or relative day was actually stated for that item ("Friday", "tomorrow", "next week", "by the 14th"). Resolve it against the call date given below in London time and write it as YYYY-MM-DD. "Next week" with no day means the Monday of the following week. Use null when no timing was stated; never guess one.
+${HEALTH_RULES}
 - The transcript may be machine generated, with errors and speaker labels such as "Name: text". Lines may be unlabelled.`;
 
 const llmSchema = z.object({
@@ -278,6 +294,8 @@ const llmSchema = z.object({
       }).nullable().catch(null),
     )
     .catch([]),
+  health: z.enum(ACCOUNT_HEALTH).nullable().optional().catch(null),
+  healthReason: z.string().nullable().optional().catch(null),
 });
 
 type LlmSummary = z.infer<typeof llmSchema>;
@@ -329,7 +347,13 @@ function cleanSummary(data: LlmSummary, occurredAt: string) {
     });
     if (actionItems.length === 10) break;
   }
-  return { summary: data.summary.trim().slice(0, 4000), keyPoints, actionItems };
+  return { summary: data.summary.trim().slice(0, 4000), keyPoints, actionItems, ...cleanHealth(data) };
+}
+
+function cleanHealth(data: { health?: AccountHealth | null; healthReason?: string | null }) {
+  const sentiment = data.health ?? null;
+  const reason = sentiment ? data.healthReason?.replace(/\s+/g, " ").trim().slice(0, 500) || null : null;
+  return { sentiment, sentimentReason: reason };
 }
 
 async function readCall(db: Db, actor: Actor, activityId: string) {
@@ -388,6 +412,8 @@ async function finishInsight(
     actionItems?: CallActionItem[];
     model?: string | null;
     error?: string | null;
+    sentiment?: AccountHealth | null;
+    sentimentReason?: string | null;
   },
 ) {
   const result = await db.query<InsightRow>(
@@ -397,7 +423,10 @@ async function finishInsight(
          key_points = case when $2 = 'ready' then $4::jsonb else i.key_points end,
          action_items = case when $2 = 'ready' then $5::jsonb else i.action_items end,
          model = coalesce($6, i.model),
-         error = $7
+         error = $7,
+         sentiment = case when $2 = 'ready' then $8 else i.sentiment end,
+         sentiment_reason = case when $2 = 'ready' then $9 else i.sentiment_reason end,
+         sentiment_checked_at = case when $2 = 'ready' then now() else i.sentiment_checked_at end
      where i.id = $1
      returning ${INSIGHT_COLUMNS}`,
     [
@@ -408,11 +437,103 @@ async function finishInsight(
       JSON.stringify(values.actionItems ?? []),
       values.model ?? null,
       values.error ?? null,
+      values.sentiment ?? null,
+      values.sentimentReason ?? null,
     ],
   );
   const row = result.rows[0];
   if (!row) throw new CrmError("not_found", "Call summary not found.", 404);
   return mapInsight(row);
+}
+
+async function applyCallHealth(db: Db, actor: Actor, call: CallRow, insight: CallInsight, source: string) {
+  if (!insight.sentiment || !actor.scopes.includes("companies:write")) return;
+  const companyId = call.company_id ?? call.contact_company_id;
+  if (!companyId) return;
+  const occurredAt = iso(call.occurred_at) ?? new Date().toISOString();
+  const result = await db.query<{ health: AccountHealth | null; health_reason: string | null; health_at: Date | string | null }>(
+    `select health, health_reason, health_at from crm.companies
+     where id = $1 and workspace_id = $2 and archived_at is null
+     for update`,
+    [companyId, actor.workspaceId],
+  );
+  const current = result.rows[0];
+  if (!current) return;
+  const setAt = iso(current.health_at);
+  if (setAt && new Date(setAt).getTime() > new Date(occurredAt).getTime()) return;
+  await db.query(
+    `update crm.companies
+     set health = $2, health_reason = $3, health_at = $4, health_activity_id = $5
+     where id = $1`,
+    [companyId, insight.sentiment, insight.sentimentReason, occurredAt, insight.activityId],
+  );
+  const fields = [
+    current.health !== insight.sentiment ? "health" : null,
+    current.health_reason !== insight.sentimentReason ? "healthReason" : null,
+  ].filter((field): field is string => field !== null);
+  if (!fields.length) return;
+  await recordAudit(db, actor, "company.updated", "company", companyId, { operation: "call_health", source }, {
+    fields,
+    before: { health: current.health, healthReason: current.health_reason },
+    after: { health: insight.sentiment, healthReason: insight.sentimentReason },
+    activityId: insight.activityId,
+  });
+}
+
+const SENTIMENT_PROMPT = `You judge how a client relationship stands after a call, for a personal CRM called Orbit.
+
+Read the call and reply with a single JSON object and nothing else: {"health": "healthy" | "watch" | "at_risk" | null, "healthReason": string | null}
+
+Rules:
+- Write in British English. Use only what the call says.
+${HEALTH_RULES}`;
+
+const sentimentSchema = z.object({
+  health: z.enum(ACCOUNT_HEALTH).nullable().optional().catch(null),
+  healthReason: z.string().nullable().optional().catch(null),
+});
+
+export async function judgeCallSentiment(
+  actor: Actor,
+  activityId: string,
+  options: { fetchImpl?: typeof fetch; deadline?: number } = {},
+): Promise<CallInsight> {
+  assertScope(actor.scopes, "activities:write");
+  if (!isUuid(activityId)) throw new CrmError("not_found", "Call not found.", 404);
+  const prepared = await withActor(actor, async (db) => {
+    const call = await readCall(db, actor, activityId);
+    const insight = await lockInsightWithTranscript(db, activityId, actor.workspaceId);
+    if (!call || !insight || insight.status !== "ready") throw new CrmError("not_found", "Call summary not found.", 404);
+    return { call, insight };
+  });
+  const { call, insight } = prepared;
+  const user = [
+    buildPrompt(call, insight.transcript.slice(0, TRANSCRIPT_MAX_LENGTH), actorName(actor)),
+    "",
+    "Summary already written:",
+    insight.summary ?? "",
+  ].join("\n");
+  const result = await completeJson({
+    system: SENTIMENT_PROMPT,
+    user,
+    schema: sentimentSchema,
+    maxTokens: 400,
+    fetchImpl: options.fetchImpl,
+    deadline: options.deadline,
+  });
+  const judged = cleanHealth(result.data);
+  return withActor(actor, async (db) => {
+    const updated = await db.query<InsightRow>(
+      `update crm.call_insights i
+       set sentiment = $2, sentiment_reason = $3, sentiment_checked_at = now()
+       where i.id = $1
+       returning ${INSIGHT_COLUMNS}`,
+      [insight.id, judged.sentiment, judged.sentimentReason],
+    );
+    const saved = mapInsight(updated.rows[0]);
+    await applyCallHealth(db, actor, call, saved, insight.source);
+    return saved;
+  });
 }
 
 function actorName(actor: Actor) {
@@ -522,6 +643,7 @@ export async function summariseCall(
   const finished = await withActor(actor, async (db) => {
     const saved = await finishInsight(db, prepared.insight.id, outcome);
     if (saved.status === "ready") {
+      await applyCallHealth(db, actor, prepared.call, saved, source);
       await recordAudit(db, actor, "call_summary.ready", "call_insight", saved.id, { operation: "summarise_call", source: source }, {
         activityId: saved.activityId,
         companyId: saved.companyId,

@@ -3,6 +3,7 @@ import { CrmError } from "@/lib/crm/errors";
 import {
   COMPANY_SORTS,
   LIFECYCLES,
+  type AccountHealth,
   type CompanyListQuery,
   type CompanySort,
   type Lifecycle,
@@ -19,6 +20,28 @@ export const LIFECYCLE_LABELS: Record<Lifecycle, string> = {
   customer: "Customer",
   churned: "Churned",
 };
+
+export const ANY_HEALTH = "any";
+
+export const HEALTH_LABELS: Record<AccountHealth, string> = {
+  healthy: "Healthy",
+  watch: "Watch",
+  at_risk: "At risk",
+};
+
+export const HEALTH_TONE: Record<AccountHealth, "green" | "amber" | "red"> = {
+  healthy: "green",
+  watch: "amber",
+  at_risk: "red",
+};
+
+export const HEALTH_OPTIONS = [
+  { value: ANY_HEALTH, label: "Any health" },
+  { value: "at_risk", label: "At risk" },
+  { value: "watch", label: "Watch" },
+  { value: "healthy", label: "Healthy" },
+  { value: "none", label: "Not set" },
+];
 
 export const SIZE_OPTIONS = ["1-10", "11-50", "51-200", "201-1000", "1000+"];
 
@@ -48,7 +71,7 @@ export function activeFilterCount(filters: CompanyListQuery) {
   const sort = filters.sort ?? DEFAULT_COMPANY_SORT;
   const defaultSort = sort === DEFAULT_COMPANY_SORT && (filters.order ?? defaultCompanyOrder(sort)) === defaultCompanyOrder(sort);
   return (
-    [Boolean(filters.query), Boolean(filters.lifecycle), Boolean(filters.ownerId), Boolean(filters.tag), !defaultSort].filter(Boolean).length +
+    [Boolean(filters.query), Boolean(filters.lifecycle), Boolean(filters.health), Boolean(filters.ownerId), Boolean(filters.tag), !defaultSort].filter(Boolean).length +
     (filters.has?.length ?? 0) +
     (filters.missing?.length ?? 0)
   );

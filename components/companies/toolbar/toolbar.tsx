@@ -8,7 +8,9 @@ import MobileFilters from "./mobile-filters";
 import { exportCompaniesAction } from "@/app/(crm)/actions";
 import {
   ALL_OWNERS,
+  ANY_HEALTH,
   ANY_LIFECYCLE,
+  HEALTH_OPTIONS,
   LIFECYCLE_LABELS,
   UNASSIGNED_OWNER,
 } from "@/lib/companies";
@@ -112,6 +114,12 @@ export default function CompaniesToolbar({
           onChange={(value) =>
             replaceParams({ lifecycle: value === ANY_LIFECYCLE ? null : value })
           }
+        />
+        <FilterMenu
+          label="Health"
+          value={filters.health ?? ANY_HEALTH}
+          options={HEALTH_OPTIONS}
+          onChange={(value) => replaceParams({ health: value === ANY_HEALTH ? null : value })}
         />
         {tagOptions.length > 1 && (
           <FilterMenu

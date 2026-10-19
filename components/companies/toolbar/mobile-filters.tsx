@@ -24,7 +24,9 @@ import {
 } from "@/components/_ui/sheet";
 import {
   ALL_OWNERS,
+  ANY_HEALTH,
   ANY_LIFECYCLE,
+  HEALTH_OPTIONS,
   LIFECYCLE_LABELS,
   SORT_OPTIONS,
   UNASSIGNED_OWNER,
@@ -68,6 +70,7 @@ export default function MobileFilters({
       q: null,
       owner: null,
       lifecycle: null,
+      health: null,
       tag: null,
       sort: null,
       order: null,
@@ -183,6 +186,24 @@ export default function MobileFilters({
                   {Object.entries(LIFECYCLE_LABELS).map(([value, label]) => (
                     <SelectItem key={value} value={value}>
                       {label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+
+            <Field label="Health" htmlFor="mobile-health">
+              <Select
+                value={filters.health ?? ANY_HEALTH}
+                onValueChange={(value) => onChange({ health: value === ANY_HEALTH ? null : value })}
+              >
+                <SelectTrigger id="mobile-health">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {HEALTH_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
                     </SelectItem>
                   ))}
                 </SelectContent>

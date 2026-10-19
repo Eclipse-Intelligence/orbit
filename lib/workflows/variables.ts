@@ -93,6 +93,8 @@ const COMPANY: VariableOption[] = [
   { path: "company.name", label: "Name", group: "Company" },
   { path: "company.domain", label: "Domain", group: "Company" },
   { path: "company.lifecycle", label: "Lifecycle", group: "Company" },
+  { path: "company.health", label: "Health", group: "Company" },
+  { path: "company.healthReason", label: "Health reason", group: "Company" },
   { path: "company.industry", label: "Industry", group: "Company" },
   { path: "company.ownerName", label: "Owner", group: "Company" },
   { path: "company.url", label: "Link in Orbit", group: "Company" },
@@ -126,6 +128,8 @@ export function variableOptions(definition: WorkflowDefinition | null, nodeId?: 
   if (type === "call_summary_ready") {
     options.push(
       { path: "call.summary", label: "Summary", group: "Call" },
+      { path: "call.sentiment", label: "Sentiment", group: "Call" },
+      { path: "call.sentimentReason", label: "Sentiment reason", group: "Call" },
       { path: "call.keyPoints", label: "Key points", group: "Call" },
       { path: "call.actionItems", label: "Action items", group: "Call" },
       { path: "call.transcript", label: "Transcript", group: "Call" },

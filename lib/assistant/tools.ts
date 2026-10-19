@@ -41,6 +41,7 @@ import { completeTask, listTasks, updateTask } from "@/lib/crm/tasks";
 import { logActivity } from "@/lib/crm/activities";
 import {
   ACTIVITY_TYPES,
+  ACCOUNT_HEALTH,
   LIFECYCLES,
   OPPORTUNITY_STATUSES,
   TASK_VIEWS,
@@ -301,10 +302,10 @@ function pick(args: Args, keys: string[]) {
   return out;
 }
 
-const WORKFLOW_GUIDE = `A definition is {trigger, steps}. trigger.type is one of: ${TRIGGER_TYPES.join(", ")}. call_summary_ready, task_completed: no other fields. record_created and manual: object (company or contact). field_changed: object, field (company: lifecycle, ownerId, industry, sizeCategory, source, description; contact: ownerId, jobTitle, companyId, source, notes), optional to. stage_changed: optional pipelineId (board id; omit for Opportunities) and stageId. added_to_board: boardId. activity_logged: optional activityType (call, email, meeting, note). schedule: frequency (daily or weekly), weekday (0 Sunday to 6 Saturday), time (HH:mm London). Any trigger except manual and schedule can take mine: true to only fire for the user's own changes.
+const WORKFLOW_GUIDE = `A definition is {trigger, steps}. trigger.type is one of: ${TRIGGER_TYPES.join(", ")}. call_summary_ready, task_completed: no other fields. record_created and manual: object (company or contact). field_changed: object, field (company: lifecycle, health (healthy, watch or at_risk; set from every summarised call), ownerId, industry, sizeCategory, source, description; contact: ownerId, jobTitle, companyId, source, notes), optional to. stage_changed: optional pipelineId (board id; omit for Opportunities) and stageId. added_to_board: boardId. activity_logged: optional activityType (call, email, meeting, note). schedule: frequency (daily or weekly), weekday (0 Sunday to 6 Saturday), time (HH:mm London). Any trigger except manual and schedule can take mine: true to only fire for the user's own changes.
 steps is a list run in order. Each step is {id, type, label, config}; ids are lowercase like ai_1, if_1, notify_1 and unique. type is one of: ${STEP_TYPES.join(", ")}. An if step has then and else lists; a loop step has a body list run once per item; a path that ends simply stops (inside a loop it moves to the next item).
 config by type: ai {prompt, model (claude-haiku-5-5, claude-sonnet-5-5 or claude-opus-5-5), outputs: [{key, type: text|number|boolean|list|choice, description, choices}]}. if and filter {match: all|any, conditions: [{left: "{{path}}", op: is|is_not|contains|not_contains|is_empty|is_not_empty|greater_than|less_than, right}]}; filter stops the path when false. loop {items: "{{steps.ai_1.requests}}", limit}. delay {amount, unit: minutes|hours|days}. approval {title, details} pauses for the user to approve. create_task {title, notes, dueInDays, assignee: owner|record_owner|<member id>, link: company|contact|none, clickup: boolean}. add_note {title, body}. update_record {object, field, value}. board {boardId, stageId} adds the company to a board or moves its card. notify {to: owner|record_owner|<member id>, title, body}. send_email {subject, body} to the run's contact. linear_issue {title, description, priority: urgent|high|medium|low}.
-Text fields take {{company.name}}, {{company.url}}, {{contact.name}}, {{contact.firstName}}, {{contact.email}}, {{call.summary}}, {{call.keyPoints}}, {{call.transcript}}, {{activity.title}}, {{deal.name}}, {{deal.stage}}, {{change.to}}, {{task.title}}, {{owner.name}}, {{today}}, {{steps.<id>.<output key>}} and {{loop.item}}. Keep workflows small: only the nodes the job needs.`;
+Text fields take {{company.name}}, {{company.url}}, {{company.health}}, {{company.healthReason}}, {{call.sentiment}}, {{contact.name}}, {{contact.firstName}}, {{contact.email}}, {{call.summary}}, {{call.keyPoints}}, {{call.transcript}}, {{activity.title}}, {{deal.name}}, {{deal.stage}}, {{change.to}}, {{task.title}}, {{owner.name}}, {{today}}, {{steps.<id>.<output key>}} and {{loop.item}}. Keep workflows small: only the nodes the job needs.`;
 
 function stageLines(args: Args, name: Names) {
   const stages = Array.isArray(args.stages) ? (args.stages as Args[]) : [];
@@ -396,6 +397,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       properties: {
         query: { type: "string" },
         lifecycle: { type: "string", enum: [...LIFECYCLES] },
+        health: { type: "string", enum: [...ACCOUNT_HEALTH, "none"], description: "Account health from calls; none means not set yet." },
         tag: { type: "string" },
         ownerId: { type: "string", description: "Member id, or 'unassigned'." },
         sort: { type: "string", enum: ["name", "domain", "updated", "created"] },
@@ -408,6 +410,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       const result = await listCompanies(actor, {
         query: optionalStr(args.query),
         lifecycle: oneOf(args.lifecycle, LIFECYCLES),
+        health: oneOf(args.health, [...ACCOUNT_HEALTH, "none"] as const),
         tag: optionalStr(args.tag),
         ownerId: optionalStr(args.ownerId),
         sort: oneOf(args.sort, ["name", "domain", "updated", "created"] as const),
@@ -1012,14 +1015,25 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     name: "update_company",
     label: "Updating a company",
     write: true,
-    description: "Change a company's details. Only the fields you pass change.",
-    parameters: { type: "object", properties: { companyId: idParam("Company id."), ...COMPANY_FIELDS }, required: ["companyId"] },
+    description:
+      "Change a company's details. Only the fields you pass change. health is normally set from each summarised call; set it by hand only when the user asks, with a one-sentence healthReason.",
+    parameters: {
+      type: "object",
+      properties: {
+        companyId: idParam("Company id."),
+        ...COMPANY_FIELDS,
+        health: { type: "string", enum: [...ACCOUNT_HEALTH, "none"], description: "healthy, watch or at_risk; none clears it." },
+        healthReason: { type: "string" },
+      },
+      required: ["companyId"],
+    },
     describe: (args, name) => ({
       title: titled("Update company", name(args.companyId)),
-      lines: fieldLines(args, { name: "Name", domain: "Domain", website: "Website", industry: "Industry", lifecycle: "Lifecycle", ownerId: "Owner", description: "About" }, name),
+      lines: fieldLines(args, { name: "Name", domain: "Domain", website: "Website", industry: "Industry", lifecycle: "Lifecycle", health: "Health", healthReason: "Why", ownerId: "Owner", description: "About" }, name),
     }),
     run: async (actor, args) => {
-      const updated = await updateCompany(actor, required(args.companyId, "A company id"), pick(args, Object.keys(COMPANY_FIELDS)), {
+      const health = args.health === "none" ? { health: null } : pick(args, ["health", "healthReason"]);
+      const updated = await updateCompany(actor, required(args.companyId, "A company id"), { ...pick(args, Object.keys(COMPANY_FIELDS)), ...health }, {
         provenance: { operation: "update_company", ...PROVENANCE },
       });
       return { company: withCompany(updated.body.company) };

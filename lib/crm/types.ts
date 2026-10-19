@@ -2,6 +2,8 @@ import type { Scope } from "@/lib/crm/scopes";
 
 export const LIFECYCLES = ["lead", "prospect", "customer", "churned"] as const;
 export type Lifecycle = (typeof LIFECYCLES)[number];
+export const ACCOUNT_HEALTH = ["healthy", "watch", "at_risk"] as const;
+export type AccountHealth = (typeof ACCOUNT_HEALTH)[number];
 
 export const COMPANY_SORTS = ["name", "domain", "updated", "created", "interaction", "strength", "owner"] as const;
 export type CompanySort = (typeof COMPANY_SORTS)[number];
@@ -84,6 +86,10 @@ export type Company = {
   lastInteractionAt: string | null;
   openTaskCount: number;
   tags: string[];
+  health: AccountHealth | null;
+  healthReason: string | null;
+  healthAt: string | null;
+  healthActivityId: string | null;
 };
 
 export type CompanyWrite = {
@@ -102,6 +108,8 @@ export type CompanyWrite = {
   source?: string | null;
   sourceReference?: string | null;
   tags?: string[] | null;
+  health?: AccountHealth | null;
+  healthReason?: string | null;
 };
 
 export type Provenance = {
@@ -115,6 +123,7 @@ export type Provenance = {
 export type CompanyListQuery = {
   query?: string;
   lifecycle?: Lifecycle;
+  health?: AccountHealth | "none";
   ownerId?: string | "unassigned";
   tag?: string;
   includeArchived?: boolean;
@@ -252,6 +261,7 @@ export type Opportunity = {
   workspaceId: string;
   companyId: string;
   companyName: string | null;
+  companyHealth: AccountHealth | null;
   primaryContactId: string | null;
   primaryContactName: string | null;
   pipelineId: string | null;
@@ -446,6 +456,8 @@ export type CallInsight = {
   model: string | null;
   status: CallInsightStatus;
   error: string | null;
+  sentiment: AccountHealth | null;
+  sentimentReason: string | null;
   transcriptLength: number;
   createdAt: string;
   updatedAt: string;

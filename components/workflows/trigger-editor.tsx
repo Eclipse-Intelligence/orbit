@@ -105,6 +105,13 @@ export default function TriggerEditor({
                     <option value="customer">Customer</option>
                     <option value="churned">Churned</option>
                   </select>
+                ) : trigger.field === "health" ? (
+                  <select id="trigger-to" value={trigger.to ?? ""} onChange={(event) => onChange({ ...trigger, to: event.target.value || null })} className={recordSelectClass}>
+                    <option value="">Anything</option>
+                    <option value="healthy">Healthy</option>
+                    <option value="watch">Watch</option>
+                    <option value="at_risk">At risk</option>
+                  </select>
                 ) : (
                   <Input id="trigger-to" value={trigger.to ?? ""} placeholder="Anything" onChange={(event) => onChange({ ...trigger, to: event.target.value || null })} />
                 )}

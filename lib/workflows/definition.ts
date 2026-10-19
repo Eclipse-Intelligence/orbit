@@ -57,6 +57,7 @@ export const AI_MODELS = [
 export const FIELD_OPTIONS: Record<RecordObject, { key: string; label: string }[]> = {
   company: [
     { key: "lifecycle", label: "Lifecycle" },
+    { key: "health", label: "Health" },
     { key: "ownerId", label: "Owner" },
     { key: "industry", label: "Industry" },
     { key: "sizeCategory", label: "Size" },

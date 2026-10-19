@@ -3,6 +3,7 @@ export const TABLE_COLUMNS = [
   { key: "categories", label: "Categories", className: "justify-start" },
   { key: "last", label: "Last interaction", className: "justify-start" },
   { key: "strength", label: "Connection strength", className: "justify-start" },
+  { key: "health", label: "Health", className: "justify-start" },
   { key: "domain", label: "Domain", className: "justify-start" },
   { key: "owner", label: "Owner", className: "justify-start" },
 ] as const;
@@ -10,7 +11,7 @@ export const TABLE_COLUMNS = [
 export type TableColumnKey = (typeof TABLE_COLUMNS)[number]["key"];
 
 export const TABLE_GRID_CLASS =
-  "grid min-w-max grid-cols-[repeat(6,max-content)] justify-between";
+  "grid min-w-max grid-cols-[repeat(7,max-content)] justify-between";
 
 export const TABLE_ROW_CLASS = "col-span-full grid grid-cols-subgrid";
 

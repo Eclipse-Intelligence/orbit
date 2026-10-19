@@ -157,6 +157,12 @@ Orbit can turn a call or meeting transcript into a short summary, key points, an
 
 On a call in a contact's or company's activity, choose Add transcript, paste the transcript (plain text or the Teams `.vtt` text), and choose Summarise. Teams `.vtt` files are reduced to `Speaker: line` text first. Each suggested task has Add as task, which creates a task on the call's contact and company due at 09:00 London time on the stated day, and Dismiss. The transcript stays on the call under Transcript. A summary that fails keeps the transcript and shows the error with Try again.
 
+### Account health
+
+Every summary also judges how the relationship stands after the call, from the other side: Healthy (engaged, on track), Watch (concerns, hesitation, slipping timelines) or At risk (frustration, talk of cancelling, not renewing or competitors), with a one-sentence reason. The call shows it under Sentiment, and the company takes it as its Health, unless the company already has a health from a later call or one set by hand after the call. Health is a separate signal from Connection strength, which only measures how recently you were in touch (14 days or less is Very strong, up to 45 days Weak, older Very weak).
+
+Health shows on the company page (with the reason and where it came from, and a menu to set it by hand), as a column and a filter on Companies (At risk, Watch, Healthy, Not set), and on board and opportunity cards. Each change is recorded as a company update, so workflows can react with When a field changes, Health, changes to At risk; the starter template Follow up when a client turns at risk notifies the account owner and adds a check-in task for the next day. Calls summarised before health existed are judged once each by the scheduled sync, one per run. The assistant can filter companies by health and set it when asked.
+
 What is sent to the gateway: the transcript, the call or meeting date, your name, the contact's name, job title and company, and the activity's title. Nothing else from the CRM is sent. Meetings get the same panel as calls, and pasting a transcript still works for anything Orbit did not import itself.
 
 ## Automatic transcripts
@@ -464,7 +470,7 @@ When an opportunity is marked won, its company becomes a Customer, and every boa
 
 ## Workflows
 
-Workflows automate work around your records. Each person builds their own on the Workflows page, and runs use that person's permissions. Share as a template (under More on a workflow) lets everyone in the workspace copy it. Orbit's starter templates are Flag at-risk clients after a call and Product requests to Linear.
+Workflows automate work around your records. Each person builds their own on the Workflows page, and runs use that person's permissions. Share as a template (under More on a workflow) lets everyone in the workspace copy it. Orbit's starter templates are Follow up when a client turns at risk and Product requests to Linear.
 
 A workflow is built on a canvas, like n8n. It always starts with a When node (the trigger). The list on the left holds every other node: click one to add it below the selected node (already connected), or drag it onto the canvas. Connect nodes by dragging from the dot under a node to the next one. If has a Yes and a No output, and For each item has Each item and Done. Click a node to edit just that node in the panel on the right; Backspace or Delete removes the selected node or connection. Nodes can be dragged anywhere, and the canvas pans and zooms. On a phone, Add node opens the list and a node's settings open in a sheet.
 
