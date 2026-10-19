@@ -1,7 +1,7 @@
 "use client";
-
 import { useEffect, useState, type FormEvent } from "react";
 import Button from "@/components/_ui/button";
+import TemplateIcon from "@/public/assets/images/_common/template.svg";
 import {
   Command,
   CommandEmpty,
@@ -99,9 +99,11 @@ export function TemplateTagFilter({
 export function UseTemplateButton({
   onPick,
   disabled,
+  compact,
 }: {
   onPick: (template: EmailTemplate) => void;
   disabled?: boolean;
+  compact?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [templates, setTemplates] = useState<EmailTemplate[] | null>(null);
@@ -143,8 +145,10 @@ export function UseTemplateButton({
           aria-haspopup="dialog"
           data-shortcut="use-template"
           title="Use a template (⌘⇧T)"
+          aria-label={compact ? "Use a template" : undefined}
+          className={compact ? "size-8 p-0" : undefined}
         >
-          Use template
+          {compact ? <TemplateIcon aria-hidden className="size-3.5" /> : "Use template"}
         </Button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-[min(360px,calc(100vw-2rem))]">

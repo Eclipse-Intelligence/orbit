@@ -85,7 +85,17 @@ export function useEmailAttachments() {
   };
 }
 
-export function AttachButton({ onFiles, disabled, id }: { onFiles: (files: File[]) => void; disabled?: boolean; id: string }) {
+export function AttachButton({
+  onFiles,
+  disabled,
+  id,
+  compact,
+}: {
+  onFiles: (files: File[]) => void;
+  disabled?: boolean;
+  id: string;
+  compact?: boolean;
+}) {
   const input = useRef<HTMLInputElement>(null);
   return (
     <>
@@ -103,9 +113,18 @@ export function AttachButton({ onFiles, disabled, id }: { onFiles: (files: File[
           if (files.length) onFiles(files);
         }}
       />
-      <Button variant="ghost" size="sm" type="button" disabled={disabled} onClick={() => input.current?.click()}>
+      <Button
+        variant="ghost"
+        size="sm"
+        type="button"
+        disabled={disabled}
+        aria-label={compact ? "Attach files" : undefined}
+        title="Attach files"
+        className={compact ? "size-8 p-0" : undefined}
+        onClick={() => input.current?.click()}
+      >
         <PaperclipIcon aria-hidden className="size-3.5" />
-        Attach
+        {!compact && "Attach"}
       </Button>
     </>
   );

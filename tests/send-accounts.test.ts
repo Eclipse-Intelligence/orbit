@@ -5,7 +5,7 @@ import { listActivities } from "@/lib/crm/activities";
 import { connectCalendarAccount } from "@/lib/crm/calendar-accounts";
 import { listCalendarGroups } from "@/lib/crm/calendars";
 import { createContact } from "@/lib/crm/contacts";
-import { listSenders, saveMailbox, sendContactEmail } from "@/lib/crm/inbox";
+import { listSenders, saveMailbox, saveSignature, sendContactEmail } from "@/lib/crm/inbox";
 import type { UserActor } from "@/lib/crm/types";
 import { getPool } from "@/lib/db/pool";
 import { microsoftAuthorizationUrl, SEND_ACCOUNT_SCOPES, signMicrosoftState } from "@/lib/microsoft/oauth";
@@ -133,5 +133,36 @@ describe("sending from other accounts", () => {
     assert.match(refused.error, /You can't send from mark@zeusvoice\.com yet\. You can send from: mark@geteclipse\.co, mark@markridgeon\.com/);
     const listed = (await runTool(owner, "list_email_senders", {})) as { senders: { email: string }[] };
     assert.equal(listed.senders.length, 2);
+  });
+
+  it("adds each address's own signature below the message unless left off", async () => {
+    assert.equal(await saveSignature(owner, "Mark@GetEclipse.co", "Mark Ridgeon  \r\nFounder, Eclipse\n"), "Mark Ridgeon\nFounder, Eclipse");
+    await saveSignature(owner, "mark@markridgeon.com", "Mark Ridgeon\nIndependent consultant");
+    await assert.rejects(saveSignature(owner, "someone@else.test", "Hi"), /address you send from/);
+
+    const senders = await listSenders(owner);
+    assert.deepEqual(
+      senders.map((sender) => [sender.email, sender.signature]),
+      [
+        ["mark@geteclipse.co", "Mark Ridgeon\nFounder, Eclipse"],
+        ["mark@markridgeon.com", "Mark Ridgeon\nIndependent consultant"],
+      ],
+    );
+    const out = graph();
+    const consultancy = senders.find((sender) => !sender.primary)!;
+    await sendContactEmail(owner, contactId, { subject: "Signed", body: "Hello Jane" }, out.fetchImpl);
+    await sendContactEmail(owner, contactId, { subject: "Consulting", body: "Hello Jane", from: consultancy.id }, out.fetchImpl);
+    await sendContactEmail(owner, contactId, { subject: "Plain", body: "Hello Jane", signature: false }, out.fetchImpl);
+    const bodies = out.sent.map((item) => (item.body.message as { body: { content: string } }).body.content);
+    assert.deepEqual(bodies, [
+      "Hello Jane\n\nMark Ridgeon\nFounder, Eclipse",
+      "Hello Jane\n\nMark Ridgeon\nIndependent consultant",
+      "Hello Jane",
+    ]);
+    const logged = (await listActivities(owner, { contactId, type: "email" })).data.find((item) => item.title === "Signed")!;
+    assert.equal(logged.body, "Hello Jane");
+
+    assert.equal(await saveSignature(owner, "mark@geteclipse.co", "   "), null);
+    assert.equal((await listSenders(owner))[0].signature, null);
   });
 });

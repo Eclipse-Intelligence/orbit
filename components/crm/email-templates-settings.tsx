@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import {
@@ -78,9 +78,11 @@ function sameDraft(left: Draft, right: Draft) {
 export default function EmailTemplatesSettings({
   templates,
   recipients,
+  extra,
 }: {
   templates: EmailTemplate[];
   recipients: Recipient[];
+  extra?: ReactNode;
 }) {
   const router = useRouter();
   const [list, setList] = useState(templates);
@@ -221,8 +223,8 @@ export default function EmailTemplatesSettings({
   return (
     <SettingsPage
       wide
-      title="Email templates"
-      description="Reusable emails for one contact or a bulk send. Tokens are filled in for each person."
+      title="Email templates and signatures"
+      description="Reusable emails for one contact or a bulk send, and the signature for each address you send from. Tokens are filled in for each person."
       action={
         <Button
           variant="primary"
@@ -567,6 +569,7 @@ export default function EmailTemplatesSettings({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {extra}
     </SettingsPage>
   );
 }

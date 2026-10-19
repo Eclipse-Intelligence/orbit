@@ -227,11 +227,55 @@ export async function saveMailbox(
   });
 }
 
-export type Sender = { id: string; email: string; label: string; primary: boolean };
+export type Sender = { id: string; email: string; label: string; primary: boolean; signature: string | null };
+
+export const SIGNATURE_MAX_LENGTH = 2000;
+
+async function signatureFor(db: Db, actor: UserActor, email: string) {
+  const result = await db.query<{ body: string }>(
+    "select body from crm.email_signatures where workspace_id = $1 and user_id = $2 and sender_email = $3",
+    [actor.workspaceId, actor.userId, email.toLowerCase()],
+  );
+  return result.rows[0]?.body ?? null;
+}
+
+export async function saveSignature(actor: UserActor, senderEmail: string, body: string) {
+  const email = canonicalEmail(senderEmail);
+  const senders = await listSenders(actor);
+  if (!email || !senders.some((sender) => sender.email.toLowerCase() === email)) {
+    throw new CrmError("not_found", "You can only add a signature to an address you send from.", 404, { field: "email" });
+  }
+  const text = body.replace(/\r\n/g, "\n").replace(/[ \t]+$/gm, "").trim();
+  if (text.length > SIGNATURE_MAX_LENGTH) {
+    throw new CrmError("invalid_input", `Keep the signature under ${SIGNATURE_MAX_LENGTH} characters.`, 400, { field: "signature" });
+  }
+  await withActor(actor, async (db) => {
+    if (!text) {
+      await db.query("delete from crm.email_signatures where workspace_id = $1 and user_id = $2 and sender_email = $3", [
+        actor.workspaceId,
+        actor.userId,
+        email,
+      ]);
+      return;
+    }
+    await db.query(
+      `insert into crm.email_signatures (workspace_id, user_id, sender_email, body)
+       values ($1, $2, $3, $4)
+       on conflict (workspace_id, user_id, sender_email) do update set body = excluded.body, updated_at = now()`,
+      [actor.workspaceId, actor.userId, email, text],
+    );
+  });
+  return text || null;
+}
 
 export const PRIMARY_SENDER = "primary";
 
-type ResolvedSender = { email: string; tokens: StoredTokens; save: (db: Db, token: MicrosoftToken) => Promise<void> };
+type ResolvedSender = {
+  email: string;
+  signature: string | null;
+  tokens: StoredTokens;
+  save: (db: Db, token: MicrosoftToken) => Promise<void>;
+};
 
 export async function listSenders(actor: UserActor): Promise<Sender[]> {
   return withActor(actor, async (db) => {
@@ -242,11 +286,16 @@ export async function listSenders(actor: UserActor): Promise<Sender[]> {
        order by created_at, email`,
       [actor.userId, actor.workspaceId],
     );
+    const signatures = await db.query<{ sender_email: string; body: string }>(
+      "select sender_email, body from crm.email_signatures where workspace_id = $1 and user_id = $2",
+      [actor.workspaceId, actor.userId],
+    );
+    const signature = (email: string) => signatures.rows.find((row) => row.sender_email === email.toLowerCase())?.body ?? null;
     return [
       ...(primary && primary.status === "connected" && primary.refreshTokenCipher
-        ? [{ id: PRIMARY_SENDER, email: primary.email, label: primary.email, primary: true }]
+        ? [{ id: PRIMARY_SENDER, email: primary.email, label: primary.email, primary: true, signature: signature(primary.email) }]
         : []),
-      ...accounts.rows.map((row) => ({ id: row.id, email: row.email, label: row.email, primary: false })),
+      ...accounts.rows.map((row) => ({ id: row.id, email: row.email, label: row.email, primary: false, signature: signature(row.email) })),
     ];
   });
 }
@@ -257,7 +306,12 @@ async function resolveSender(db: Db, actor: UserActor, from: string | null | und
     if (!mailbox || mailbox.status !== "connected" || !mailbox.refreshTokenCipher) {
       throw new CrmError("invalid_input", "Connect Microsoft in Inbox before sending.", 400);
     }
-    return { email: mailbox.email, tokens: mailbox, save: (inner, token) => storeToken(inner, mailbox.id, token) };
+    return {
+      email: mailbox.email,
+      signature: await signatureFor(db, actor, mailbox.email),
+      tokens: mailbox,
+      save: (inner, token) => storeToken(inner, mailbox.id, token),
+    };
   }
   const found = isUuid(from)
     ? await db.query<{
@@ -285,6 +339,7 @@ async function resolveSender(db: Db, actor: UserActor, from: string | null | und
   }
   return {
     email: account.email,
+    signature: await signatureFor(db, actor, account.email),
     tokens: {
       refreshTokenCipher: account.refresh_token,
       accessTokenCipher: account.access_token,
@@ -304,7 +359,14 @@ async function resolveSender(db: Db, actor: UserActor, from: string | null | und
 export async function sendContactEmail(
   actor: UserActor,
   contactId: string,
-  input: { subject: string; body: string; attachments?: string[]; keepAttachments?: boolean; from?: string | null },
+  input: {
+    subject: string;
+    body: string;
+    attachments?: string[];
+    keepAttachments?: boolean;
+    from?: string | null;
+    signature?: boolean;
+  },
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ warning: string | null }> {
   const subject = input.subject.replace(/\s+/g, " ").trim();
@@ -379,7 +441,13 @@ export async function sendContactEmail(
     token = await currentToken(sender.tokens, fetchImpl);
     await sendGraphMail(
       token.accessToken,
-      { to, toName: contact.name, subject, body, attachments: attached.files },
+      {
+        to,
+        toName: contact.name,
+        subject,
+        body: input.signature !== false && sender.signature ? `${body}\n\n${sender.signature}` : body,
+        attachments: attached.files,
+      },
       fetchImpl,
     );
   } catch (error) {

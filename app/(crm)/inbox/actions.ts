@@ -23,6 +23,7 @@ import { enableGranolaWebhook, syncGranolaFor } from "@/lib/crm/granola";
 import {
   disconnectMailbox,
   listSenders,
+  saveSignature,
   sendContactEmail,
   type Sender,
   syncMailbox,
@@ -227,6 +228,16 @@ export async function prepareAttachmentAction(file: { name: string; size: number
   }
 }
 
+export async function saveSignatureAction(senderEmail: string, body: string): Promise<{ signature?: string | null; error?: string }> {
+  const user = await getUserActor();
+  if (!user) return { error: "Sign in to change your signature." };
+  try {
+    return { signature: await saveSignature(user, senderEmail, body) };
+  } catch (error) {
+    return actionError(error);
+  }
+}
+
 export async function listSendersAction(): Promise<Sender[]> {
   const user = await getUserActor();
   if (!user) return [];
@@ -241,17 +252,20 @@ export async function discardAttachmentsAction(ids: string[]) {
 
 export async function sendContactEmailAction(
   contactId: string,
-  subject: string,
-  body: string,
-  attachments: string[] = [],
-  keepAttachments = false,
-  from: string | null = null,
+  email: {
+    subject: string;
+    body: string;
+    attachments?: string[];
+    keepAttachments?: boolean;
+    from?: string | null;
+    signature?: boolean;
+  },
 ) {
   const user = await getUserActor();
   if (!user) return { error: "Sign in to send mail." };
   let warning: string | null;
   try {
-    ({ warning } = await sendContactEmail(user, contactId, { subject, body, attachments, keepAttachments, from }));
+    ({ warning } = await sendContactEmail(user, contactId, email));
   } catch (error) {
     return actionError(error);
   }
