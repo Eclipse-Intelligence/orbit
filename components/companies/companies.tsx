@@ -3,7 +3,6 @@
 import CompaniesHeader from "./header/header";
 import CompaniesToolbar from "./toolbar/toolbar";
 import CompaniesTable from "./table/companies-table";
-import NewCompanyDialog from "./new-company/new-company-dialog";
 import { RememberList } from "@/components/crm/list-memory";
 import { useBulkSelection } from "@/hooks/use-bulk-selection";
 import { activeFilterCount } from "@/lib/companies";
@@ -64,7 +63,6 @@ export default function Companies({
         tags={tags}
         enrichment={enrichment}
       />
-      <NewCompanyDialog members={members} viewerId={viewer.id} />
     </section>
   );
 }

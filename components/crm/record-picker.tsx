@@ -19,11 +19,11 @@ import XIcon from "@/public/assets/images/companies/detail/x.svg";
 
 export type PickedRecord = QuickAddRef & { company?: QuickAddRef | null };
 
-type Option = PickedRecord & { detail: string };
+export type RecordOption = PickedRecord & { detail: string };
 
-type Results = { query: string; options: Option[]; failed?: boolean };
+type Results = { query: string; options: RecordOption[]; failed?: boolean };
 
-async function search(kind: "contact" | "company", query: string, companyId: string | null | undefined): Promise<Option[]> {
+export async function searchRecords(kind: "contact" | "company", query: string, companyId: string | null | undefined): Promise<RecordOption[]> {
   if (kind === "company") {
     const companies = await searchCompaniesAction(query);
     return companies.map((company) => ({
@@ -101,7 +101,7 @@ export default function RecordPicker({
     if (!open) return;
     let cancelled = false;
     const handle = window.setTimeout(() => {
-      search(kind, trimmed, companyId).then(
+      searchRecords(kind, trimmed, companyId).then(
         (options) => {
           if (!cancelled) setResults({ query: trimmed, options });
         },

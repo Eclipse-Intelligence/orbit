@@ -12,6 +12,7 @@ import {
 } from "@/lib/crm/activities";
 import { actionError } from "@/lib/companies";
 import { createTaskWithClickUp, pushClickUpTask } from "@/lib/crm/clickup";
+import { createCompany } from "@/lib/crm/companies";
 import { createContact, getContact, updateContact } from "@/lib/crm/contacts";
 import { createOpportunity, updateOpportunity } from "@/lib/crm/opportunities";
 import { TASKS_PATH } from "@/lib/crm/task-views";
@@ -21,6 +22,7 @@ import type {
   Activity,
   ActivityType,
   Contact,
+  Opportunity,
   OpportunityStatus,
   TaskPriority,
 } from "@/lib/crm/types";
@@ -161,6 +163,84 @@ export async function saveOpportunityAction(
     }
     refresh();
     return { ok: true };
+  } catch (error) {
+    return actionError(error);
+  }
+}
+
+export type InlineRecord = { id: string; name: string; company?: { id: string; name: string } | null };
+
+function splitName(value: string) {
+  const parts = value.trim().replace(/\s+/g, " ").split(" ");
+  return { firstName: parts[0] || null, lastName: parts.slice(1).join(" ") || null };
+}
+
+export async function addCompanyInlineAction(input: { name: string; domain?: string }): Promise<{ company?: InlineRecord; error?: string }> {
+  const user = await requireUser();
+  try {
+    const created = await createCompany(
+      user,
+      { name: input.name.trim(), domain: input.domain?.trim() || null, ownerId: user.userId },
+      { provenance: { operation: "create_company", source: "web" } },
+    );
+    refresh();
+    revalidatePath("/companies");
+    return { company: { id: created.body.company.id, name: created.body.company.name } };
+  } catch (error) {
+    return actionError(error);
+  }
+}
+
+export async function addContactInlineAction(input: {
+  name: string;
+  email?: string;
+  companyId?: string | null;
+}): Promise<{ contact?: InlineRecord; error?: string }> {
+  const user = await requireUser();
+  try {
+    const created = await createContact(
+      user,
+      { ...splitName(input.name), email: input.email?.trim() || null, companyId: input.companyId || null, ownerId: user.userId },
+      { provenance: { operation: "create_contact", source: "web" } },
+    );
+    refresh();
+    const contact = created.body.contact;
+    return {
+      contact: {
+        id: contact.id,
+        name: contact.name,
+        company: contact.companyId && contact.companyName ? { id: contact.companyId, name: contact.companyName } : null,
+      },
+    };
+  } catch (error) {
+    return actionError(error);
+  }
+}
+
+export async function addOpportunityInlineAction(input: {
+  companyId: string;
+  pipelineId: string | null;
+  stageId: string | null;
+  primaryContactId: string | null;
+  name?: string;
+  value?: string;
+}): Promise<{ opportunity?: Opportunity; error?: string }> {
+  const user = await requireUser();
+  try {
+    const created = await createOpportunity(
+      user,
+      {
+        companyId: input.companyId,
+        pipelineId: input.pipelineId,
+        stageId: input.stageId ?? undefined,
+        primaryContactId: input.primaryContactId,
+        ...(input.name?.trim() ? { name: input.name.trim() } : {}),
+        ...(input.value?.trim() ? { value: input.value.trim() } : {}),
+      },
+      { provenance: { operation: "create_opportunity", source: "web" } },
+    );
+    refresh();
+    return { opportunity: created.body.opportunity };
   } catch (error) {
     return actionError(error);
   }

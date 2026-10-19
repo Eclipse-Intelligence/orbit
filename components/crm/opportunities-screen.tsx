@@ -33,6 +33,7 @@ import { RecordList, RecordRow, RecordSelect } from "@/components/crm/record-for
 import type { Viewer } from "@/components/crm/viewer";
 import BoardCardContext from "@/components/crm/board-card-context";
 import CompanyContactFields from "@/components/crm/company-contact-fields";
+import OpportunityComposer from "@/components/crm/opportunity-composer";
 import type { PickedRecord } from "@/components/crm/record-picker";
 import BoardSettings from "@/components/crm/board-settings";
 import { removeCardAction, updateBoardAction } from "@/app/(crm)/boards";
@@ -73,6 +74,8 @@ export default function OpportunitiesScreen({
   const close = useCallback(() => setOpen(false), []);
   const [boardError, setBoardError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [composerStage, setComposerStage] = useState<string | null>(null);
+  const closeComposer = useCallback(() => setComposerStage(null), []);
   const [hovered, setHovered] = useState<number | null>(null);
   const [namingId, setNamingId] = useState<string | null>(null);
   const [ordered, setOrdered] = useState(stages);
@@ -383,7 +386,18 @@ export default function OpportunitiesScreen({
       orderedRef.current.map((item) => stageDraft({ ...item, name: item.id === stage.id ? name : item.name })),
     );
   }
-  function edit(opportunity: Opportunity | null) {
+  function startAdding() {
+    if (view === "board") {
+      const first = ordered.find((stage) => !stage.isWon && !stage.isLost) ?? ordered[0];
+      if (first) setComposerStage(first.id);
+      return;
+    }
+    const input = document.getElementById("list-add-company");
+    input?.scrollIntoView({ block: "center" });
+    input?.focus();
+  }
+
+  function edit(opportunity: Opportunity) {
     setEditing(opportunity);
     setSession((current) => current + 1);
     setOpen(true);
@@ -427,7 +441,7 @@ export default function OpportunitiesScreen({
               size="sm"
               data-shortcut="add-record"
               title={board ? "Add a company (C then P)" : "Add opportunity (C then P)"}
-              onClick={() => edit(null)}
+              onClick={startAdding}
             >
               {board ? "Add company" : "Add opportunity"}
             </Button>
@@ -474,7 +488,7 @@ export default function OpportunitiesScreen({
                   onPointerDown={(event) => {
                     const target = event.target;
                     if (!(target instanceof Element)) return;
-                    if (target.closest("input, textarea, a, label, [data-opportunity]")) return;
+                    if (target.closest("input, textarea, a, label, [data-opportunity], [data-composer]")) return;
                     beginDrag(event, stage.id);
                   }}
                   className={cn(
@@ -532,7 +546,13 @@ export default function OpportunitiesScreen({
                     </h2>
                   )}
                   <p className="caption-style text-subtle">{cards.length}</p>
-                  <div className="-mx-1 flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto overscroll-y-contain px-1 pb-1">
+                  <div
+                    data-stage-cards=""
+                    className="-mx-1 flex min-h-0 flex-1 cursor-default flex-col gap-2 overflow-y-auto overscroll-y-contain px-1 pb-1"
+                    onClick={(event) => {
+                      if (event.target === event.currentTarget && !stage.isWon && !stage.isLost) setComposerStage(stage.id);
+                    }}
+                  >
                     {cards.map((opportunity) => (
                       <div
                         key={opportunity.id}
@@ -578,6 +598,34 @@ export default function OpportunitiesScreen({
                         </span>
                       </div>
                     ))}
+                    {composerStage === stage.id ? (
+                      <div data-composer="">
+                        <OpportunityComposer
+                          key={stage.id}
+                          id={`compose-${stage.id}`}
+                          board={board ?? null}
+                          stages={ordered}
+                          stageId={stage.id}
+                          layout="card"
+                          autoFocus
+                          onClose={closeComposer}
+                        />
+                      </div>
+                    ) : (
+                      !stage.isWon &&
+                      !stage.isLost && (
+                        <button
+                          type="button"
+                          data-composer=""
+                          onClick={() => setComposerStage(stage.id)}
+                          className="text-subtle hover:text-foreground focus-visible:ring-ring/60 flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-lg px-2 text-left text-[13px] leading-5 outline-none hover:bg-white/5 focus-visible:ring-2"
+                        >
+                          <PlusIcon aria-hidden className="size-3" />
+                          {board ? "Add company" : "Add opportunity"}
+                          <span className="sr-only"> to {stage.name}</span>
+                        </button>
+                      )
+                    )}
                   </div>
                 </section>
               </div>
@@ -597,6 +645,7 @@ export default function OpportunitiesScreen({
       <KeyboardList className="flex min-h-0 flex-1 flex-col">
       <RecordList
         count={opportunities.length}
+        footer={<OpportunityComposer id="list-add" board={board ?? null} stages={ordered} layout="row" />}
         empty={
           board
             ? query
@@ -649,13 +698,7 @@ export default function OpportunitiesScreen({
         <SheetContent side="right" className="sm:w-[480px] sm:max-w-[480px]">
           <SheetHeader>
             <SheetTitle>
-              {board
-                ? editing
-                  ? (editing.companyName ?? editing.name)
-                  : `Add to ${board.name}`
-                : editing
-                  ? "Edit opportunity"
-                  : "New opportunity"}
+              {board ? (editing?.companyName ?? editing?.name) : "Edit opportunity"}
             </SheetTitle>
             <SheetDescription className="sr-only">{board ? "Card details" : "Opportunity details"}</SheetDescription>
           </SheetHeader>

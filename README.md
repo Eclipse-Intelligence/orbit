@@ -292,7 +292,7 @@ A company's stored logo comes from context.dev, and Orbit only accepts https URL
 
 ### Company from an email
 
-When you add or edit a contact that has no company, leaving the Email field checks its domain. A free-mail domain suggests nothing. If a company in Orbit has that domain (or its parent, for a three-part host such as `uk.acme.com`, but not for `acme.co.uk`), Orbit offers "Works at Acme? Link to Acme". Otherwise Orbit asks context.dev about the address and may offer a card with the company's logo, name and Add company. A company added this way has the source `context.dev` and is filled in straight away.
+When you edit a contact that has no company, leaving the Email field checks its domain. A free-mail domain suggests nothing. If a company in Orbit has that domain (or its parent, for a three-part host such as `uk.acme.com`, but not for `acme.co.uk`), Orbit offers "Works at Acme? Link to Acme". Otherwise Orbit asks context.dev about the address and may offer a card with the company's logo, name and Add company. A company added this way has the source `context.dev` and is filled in straight away.
 
 ## Sorting and filtering lists
 
@@ -455,6 +455,8 @@ Every `/api/companion` route allows 600 requests a minute per Mac and answers wi
 ## Boards
 
 Boards sit under Opportunities in the side menu and track clients through stages of your choosing, for example Onboarding. New board (at the bottom of the tree) creates one with To start, In progress and Done. Click the board title to rename it, double-click a stage to rename it, use the + between columns to add a stage, and drag columns to reorder them. Settings on the board edits the name and stages, deletes the board (its cards are archived), and has Add companies when a deal is won.
+
+Adding happens in place, with no pop-up. On a board, Add company at the foot of a stage (or a click on a stage's empty space) opens a card there: type to find a company, or add a new one, then pick a contact at it or add a new person, and press Enter. The card stays open for the next one, and Esc closes it. The list view has the same row under the list, with a stage picker; Opportunities works the same way and also takes a name (the company's, if left blank) and a value. Contacts and Companies have an add row at the end of the list (name, then email and company, or name and website), and the Add button in the header jumps to it.
 
 A card is a company, at most once per board, with a main contact and a due date. The main contact (and an opportunity's primary contact) must work at that company: the contact search only lists the chosen company's people, picking a contact first fills in their company, and changing the company clears a contact who doesn't work there. Cards drag between stages like opportunities, and there is a list view too. Opening a card shows the activity pad, the company's recent activity and open tasks, and Remove from board. The company page lists the boards it is on.
 

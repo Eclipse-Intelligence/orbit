@@ -11,6 +11,7 @@ import {
 } from "@/components/_ui/table";
 import BulkActions, { SelectAllCheckbox, type BulkExtraAction } from "@/components/crm/bulk-bar";
 import { companyEnrichSummary, enrichCompaniesInBatches } from "@/components/companies/company-enrich";
+import { CompanyAdder } from "@/components/crm/inline-adders";
 import CompanyRow from "./company-row";
 import TableFooter from "./table-footer";
 import { PAGE_SIZE } from "@/components/crm/paging";
@@ -138,6 +139,11 @@ export default function CompaniesTable({
                 </td>
               </TableRow>
             )}
+            <TableRow role="row" className={TABLE_ROW_CLASS}>
+              <td role="cell" className="col-span-full">
+                <CompanyAdder className="sticky left-0 w-fit max-w-[100vw]" />
+              </td>
+            </TableRow>
           </TableBody>
         </Table>
         </KeyboardList>

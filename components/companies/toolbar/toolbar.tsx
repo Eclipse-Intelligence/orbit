@@ -20,7 +20,6 @@ import ListSearch from "@/components/shortcuts/list-search";
 import type { BulkSelection } from "@/hooks/use-bulk-selection";
 import { downloadCsv } from "@/lib/csv";
 import type { CompanyListQuery, CompanyPresence, Member, TagCount } from "@/lib/crm/types";
-import { useCompaniesStore } from "@/stores/companies-store";
 import ShareIcon from "@/public/assets/images/companies/toolbar/share.svg";
 import PlusIcon from "@/public/assets/images/_common/plus.svg";
 
@@ -44,7 +43,6 @@ export default function CompaniesToolbar({
   selection,
 }: ToolbarProps) {
   const router = useRouter();
-  const setNewCompanyOpen = useCompaniesStore((state) => state.setNewCompanyOpen);
   const [exporting, setExporting] = useState(false);
 
   const replaceParams = useCallback(
@@ -139,9 +137,19 @@ export default function CompaniesToolbar({
           <ShareIcon aria-hidden className="size-3" />
           {exporting ? "Exporting…" : "Export"}
         </Button>
-        <Button variant="primary" size="sm" onClick={() => setNewCompanyOpen(true)} data-shortcut="add-record" title="New company (C then O)">
+        <Button
+          variant="primary"
+          size="sm"
+          onClick={() => {
+            const input = document.getElementById("inline-add-company");
+            input?.scrollIntoView({ block: "center" });
+            input?.focus();
+          }}
+          data-shortcut="add-record"
+          title="Add company (C then O)"
+        >
           <PlusIcon aria-hidden className="size-3" />
-          New Company
+          Add company
         </Button>
       </div>
     </div>
