@@ -296,6 +296,10 @@ A company context.dev doesn't know is marked as checked, so it isn't tried again
 
 A company's stored logo comes from context.dev, and Orbit only accepts https URLs on `context.dev` or `brand.dev` hosts. A company with no stored logo but with a domain can still show one through context.dev Logo Link: copy the Public Client ID from context.dev › Logo Link, restrict it to Orbit's domain, and add it in Vercel as `NEXT_PUBLIC_CONTEXT_LOGO_CLIENT_ID`. Settings shows "Logos in lists" as On or Not set up. Without a logo, Orbit shows the company's initial. Orbit never downloads or stores logo images: it keeps only the URL, and the browser loads the image straight from context.dev, unoptimised.
 
+### Lifecycle
+
+Every company has one lifecycle. Lead, Prospect, Customer and Churned are built in, and new companies start as Lead. Click the lifecycle on a company (or use Edit) to pick another one or type a new name, such as Consultant or Personal, which then appears for every company, in the Lifecycle filter on Companies, and in workflow triggers and steps. Names ignore case, so "consultant" joins an existing "Consultant". Settings › Tags and lifecycles renames or deletes your own lifecycles (deleting one moves its companies to Lead); the built-in ones stay, and a won deal still makes a company a Customer.
+
 ### Company from an email
 
 When you edit a contact that has no company, leaving the Email field checks its domain. A free-mail domain suggests nothing. If a company in Orbit has that domain (or its parent, for a three-part host such as `uk.acme.com`, but not for `acme.co.uk`), Orbit offers "Works at Acme? Link to Acme". Otherwise Orbit asks context.dev about the address and may offer a card with the company's logo, name and Add company. A company added this way has the source `context.dev` and is filled in straight away.

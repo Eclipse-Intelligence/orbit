@@ -13,7 +13,8 @@ import {
   listCompanies,
   updateCompany,
 } from "@/lib/crm/companies";
-import type { AccountHealth, Company, CompanyListQuery, CompanyWrite, Lifecycle } from "@/lib/crm/types";
+import type { AccountHealth, Company, CompanyListQuery, CompanyWrite, LifecycleCount } from "@/lib/crm/types";
+import { deleteLifecycle, listLifecycles, renameLifecycle } from "@/lib/crm/lifecycles";
 import { revalidateRecordPages } from "@/lib/revalidate";
 
 export type CompanyActionState = {
@@ -50,7 +51,7 @@ function writeFromForm(formData: FormData): CompanyWrite {
     sizeCategory: text(formData, "sizeCategory") || null,
     description: text(formData, "description") || null,
     source: text(formData, "source") || null,
-    lifecycle: (lifecycle || "lead") as Lifecycle,
+    lifecycle: lifecycle || "lead",
     ownerId: ownerId && ownerId !== "unassigned" ? ownerId : null,
     tags: tagsFromForm(formData),
   };
@@ -86,6 +87,48 @@ export async function updateCompanyAction(
     revalidatePath("/");
     revalidateRecordPages();
     return { company: result.body.company };
+  } catch (error) {
+    return actionError(error);
+  }
+}
+
+export async function setCompanyLifecycleAction(id: string, lifecycle: string): Promise<{ error?: string }> {
+  const user = await requireUser();
+  try {
+    await updateCompany(user, id, { lifecycle }, { provenance: { operation: "set_lifecycle", source: "web" } });
+    revalidatePath("/");
+    revalidateRecordPages();
+    return {};
+  } catch (error) {
+    return actionError(error);
+  }
+}
+
+export async function listLifecyclesAction(): Promise<LifecycleCount[]> {
+  const user = await getUserActor();
+  if (!user) return [];
+  return listLifecycles(user);
+}
+
+export async function renameLifecycleAction(from: string, to: string): Promise<{ companies?: number; error?: string }> {
+  const user = await requireUser();
+  try {
+    const result = await renameLifecycle(user, from, to);
+    revalidatePath("/");
+    revalidateRecordPages();
+    return result;
+  } catch (error) {
+    return actionError(error);
+  }
+}
+
+export async function deleteLifecycleAction(name: string): Promise<{ companies?: number; error?: string }> {
+  const user = await requireUser();
+  try {
+    const result = await deleteLifecycle(user, name);
+    revalidatePath("/");
+    revalidateRecordPages();
+    return result;
   } catch (error) {
     return actionError(error);
   }

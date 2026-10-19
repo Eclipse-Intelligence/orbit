@@ -1,5 +1,6 @@
 import { CrmError } from "@/lib/crm/errors";
-import { ACCOUNT_HEALTH, LIFECYCLES, type CompanyWrite, type Lifecycle } from "@/lib/crm/types";
+import { cleanLifecycle } from "@/lib/companies";
+import { ACCOUNT_HEALTH, type CompanyWrite } from "@/lib/crm/types";
 
 const NAME_SUFFIXES = new Set([
   "inc",
@@ -345,12 +346,11 @@ export function normalizeCompanyWrite(
     next.sourceReference = cleanText(input.sourceReference, 500, "sourceReference");
   }
   if (input.lifecycle !== undefined) {
-    if (!(LIFECYCLES as readonly string[]).includes(input.lifecycle)) {
-      throw new CrmError("invalid_input", "Lifecycle is not recognised.", 400, {
-        field: "lifecycle",
-      });
+    const lifecycle = typeof input.lifecycle === "string" ? cleanLifecycle(input.lifecycle) : null;
+    if (!lifecycle) {
+      throw new CrmError("invalid_input", "Give the lifecycle a name.", 400, { field: "lifecycle" });
     }
-    next.lifecycle = input.lifecycle as Lifecycle;
+    next.lifecycle = lifecycle;
   }
   if (input.health !== undefined) {
     if (input.health !== null && !(ACCOUNT_HEALTH as readonly string[]).includes(input.health)) {

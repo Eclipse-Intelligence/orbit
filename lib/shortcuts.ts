@@ -57,7 +57,7 @@ const SETTINGS_SECTIONS: [string, string, string][] = [
   ["Booking page", "/settings/booking-page", "booking scheduling"],
   ["Integrations", "/settings/integrations", "clickup granola microsoft"],
   ["Pipeline", "/settings/pipeline", "stages"],
-  ["Tags", "/settings/tags", "labels"],
+  ["Tags", "/settings/tags", "labels lifecycles"],
   ["API and webhooks", "/settings/api", "tokens webhooks"],
 ];
 

@@ -1,7 +1,9 @@
 import type { Scope } from "@/lib/crm/scopes";
 
 export const LIFECYCLES = ["lead", "prospect", "customer", "churned"] as const;
-export type Lifecycle = (typeof LIFECYCLES)[number];
+export type BuiltInLifecycle = (typeof LIFECYCLES)[number];
+export type Lifecycle = string;
+export type LifecycleCount = { value: string; label: string; companies: number; builtIn: boolean };
 export const ACCOUNT_HEALTH = ["healthy", "watch", "at_risk"] as const;
 export type AccountHealth = (typeof ACCOUNT_HEALTH)[number];
 

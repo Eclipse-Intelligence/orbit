@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
+import { cleanLifecycle } from "@/lib/companies";
 import { normalizeTag } from "@/lib/crm/normalize";
 import {
   ACTIVITY_TYPES,
@@ -9,7 +10,6 @@ import {
   CONTACT_PRESENCE,
   CONTACT_SORTS,
   ACCOUNT_HEALTH,
-  LIFECYCLES,
   OPPORTUNITY_STATUSES,
   TASK_PRIORITIES,
   TASK_VIEWS,
@@ -34,7 +34,7 @@ export const companyWriteSchema = z
     description: nullableText,
     industry: nullableText,
     sizeCategory: nullableText,
-    lifecycle: z.enum(LIFECYCLES).optional(),
+    lifecycle: z.string().max(200).optional(),
     health: z.enum(ACCOUNT_HEALTH).nullable().optional(),
     healthReason: nullableText,
     ownerId: z.uuid().nullable().optional(),
@@ -128,9 +128,8 @@ export function companyQueryFromSearchParams(
 
   const text = params.get("q")?.trim();
   if (text) query.query = text;
-  if (lifecycle && (LIFECYCLES as readonly string[]).includes(lifecycle)) {
-    query.lifecycle = lifecycle as CompanyListQuery["lifecycle"];
-  }
+  const chosenLifecycle = lifecycle ? cleanLifecycle(lifecycle) : null;
+  if (chosenLifecycle) query.lifecycle = chosenLifecycle;
   const health = params.get("health");
   if (health === "none" || (health && (ACCOUNT_HEALTH as readonly string[]).includes(health))) {
     query.health = health as CompanyListQuery["health"];

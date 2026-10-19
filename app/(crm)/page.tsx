@@ -5,6 +5,7 @@ import { getUserActor } from "@/lib/auth/user";
 import { listCompanies, listMembers } from "@/lib/crm/companies";
 import { companyHref } from "@/lib/crm/hrefs";
 import { getMailbox } from "@/lib/crm/inbox";
+import { listLifecycles } from "@/lib/crm/lifecycles";
 import { listTags } from "@/lib/crm/tags";
 import { companyQueryFromSearchParams } from "@/lib/crm/validation";
 import { enrichmentAvailability } from "@/lib/enrichment/settings";
@@ -36,11 +37,12 @@ export default async function CompaniesPage({
   filters.limit = PAGE_SIZE;
   filters.offset = pageOffset(page);
 
-  const [listed, members, mailbox, tags] = await Promise.all([
+  const [listed, members, mailbox, tags, lifecycles] = await Promise.all([
     listCompanies(user, filters),
     listMembers(user),
     getMailbox(user),
     listTags(user),
+    listLifecycles(user),
   ]);
 
   const available = enrichmentAvailability();
@@ -54,6 +56,7 @@ export default async function CompaniesPage({
       filters={filters}
       members={members}
       tags={tags}
+      lifecycles={lifecycles}
       mailboxConnected={mailbox?.status === "connected"}
       enrichment={{ company: available.company, logoClientId: available.logoClientId }}
       viewer={{

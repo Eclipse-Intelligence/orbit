@@ -13,7 +13,7 @@ import {
   lifecycleTagBase,
   RecordTag,
 } from "@/components/beautifui/record-marks";
-import { LIFECYCLE_LABELS, relativeWhen } from "@/lib/companies";
+import { lifecycleLabel, relativeWhen } from "@/lib/companies";
 import { companyHref } from "@/lib/crm/hrefs";
 import type { Company } from "@/lib/crm/types";
 import { KEYBOARD_ROW_CLASS } from "@/lib/shortcuts";
@@ -57,7 +57,7 @@ export default function CompanyRow({
   const router = useRouter();
   const href = companyHref(company.id);
   const tags = [
-    { label: LIFECYCLE_LABELS[company.lifecycle], base: lifecycleTagBase(company.lifecycle) },
+    { label: lifecycleLabel(company.lifecycle), base: lifecycleTagBase(company.lifecycle) },
     ...(company.industry ? [{ label: company.industry, base: undefined }] : []),
     ...(company.sizeCategory ? [{ label: company.sizeCategory, base: undefined }] : []),
   ];

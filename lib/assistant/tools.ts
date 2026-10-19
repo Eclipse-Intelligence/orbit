@@ -1,4 +1,5 @@
 import { getBookingPage } from "@/lib/booking/pages";
+import { listLifecycles } from "@/lib/crm/lifecycles";
 import { archiveBoard, createBoard, getBoard, listBoards, updateBoard } from "@/lib/crm/boards";
 import { savePipelineStages } from "@/lib/crm/pipeline";
 import { definitionFromInput, STEP_TYPES, TRIGGER_TYPES } from "@/lib/workflows/definition";
@@ -42,7 +43,6 @@ import { logActivity } from "@/lib/crm/activities";
 import {
   ACTIVITY_TYPES,
   ACCOUNT_HEALTH,
-  LIFECYCLES,
   OPPORTUNITY_STATUSES,
   TASK_VIEWS,
   type Activity,
@@ -240,6 +240,11 @@ const TASK_FIELDS = {
   priority: { type: "string", enum: ["low", "normal", "high"] },
 };
 
+const LIFECYCLE_PARAM = {
+  type: "string",
+  description: "Built in: lead, prospect, customer, churned. Any other name, such as Consultant or Personal, works too; reuse the workspace's existing ones from list_lifecycles where they fit.",
+};
+
 const COMPANY_FIELDS = {
   name: { type: "string" },
   domain: { type: "string", description: "Website domain such as acme.com." },
@@ -247,7 +252,7 @@ const COMPANY_FIELDS = {
   description: { type: "string" },
   industry: { type: "string" },
   sizeCategory: { type: "string" },
-  lifecycle: { type: "string", enum: [...LIFECYCLES] },
+  lifecycle: LIFECYCLE_PARAM,
   ownerId: { type: "string", description: "Team member id from list_team_members." },
   source: { type: "string" },
 };
@@ -396,7 +401,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       type: "object",
       properties: {
         query: { type: "string" },
-        lifecycle: { type: "string", enum: [...LIFECYCLES] },
+        lifecycle: LIFECYCLE_PARAM,
         health: { type: "string", enum: [...ACCOUNT_HEALTH, "none"], description: "Account health from calls; none means not set yet." },
         tag: { type: "string" },
         ownerId: { type: "string", description: "Member id, or 'unassigned'." },
@@ -409,7 +414,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     run: async (actor, args) => {
       const result = await listCompanies(actor, {
         query: optionalStr(args.query),
-        lifecycle: oneOf(args.lifecycle, LIFECYCLES),
+        lifecycle: optionalStr(args.lifecycle),
         health: oneOf(args.health, [...ACCOUNT_HEALTH, "none"] as const),
         tag: optionalStr(args.tag),
         ownerId: optionalStr(args.ownerId),
@@ -626,6 +631,13 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         })),
       };
     },
+  },
+  {
+    name: "list_lifecycles",
+    label: "Checking lifecycles",
+    description: "The lifecycles companies can have (built in and the workspace's own, such as Consultant) with how many companies each has.",
+    parameters: { type: "object", properties: {} },
+    run: async (actor) => ({ lifecycles: await listLifecycles(actor) }),
   },
   {
     name: "list_workflows",

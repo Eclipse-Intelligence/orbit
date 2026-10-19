@@ -1,4 +1,4 @@
-import { companiesCsvRows } from "@/lib/companies";
+import { cleanLifecycle, companiesCsvRows } from "@/lib/companies";
 import { listCompanies, bulkUpsertCompanies } from "@/lib/crm/companies";
 import { upsertContact } from "@/lib/crm/contacts";
 import { listActivities } from "@/lib/crm/activities";
@@ -222,11 +222,7 @@ async function findCompanyId(actor: Actor, domain: string | null, name: string) 
 }
 
 function lifecycleOf(value: string): CompanyWrite["lifecycle"] {
-  const normalized = value.toLowerCase();
-  if (normalized === "lead" || normalized === "prospect" || normalized === "customer" || normalized === "churned") {
-    return normalized;
-  }
-  return undefined;
+  return cleanLifecycle(value) ?? undefined;
 }
 
 function countBulk(

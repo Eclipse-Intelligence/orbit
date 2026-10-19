@@ -1,3 +1,4 @@
+import { listLifecycles } from "@/lib/crm/lifecycles";
 import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import { cache } from "react";
@@ -41,13 +42,14 @@ export default async function WorkflowPage({
   if (!user) redirect("/login");
   if (!workflow) notFound();
   const query = await searchParams;
-  const [runs, boards, pipeline, members, companies, contacts] = await Promise.all([
+  const [runs, boards, pipeline, members, companies, contacts, lifecycles] = await Promise.all([
     workflow.mine ? listRuns(user, workflow.id) : Promise.resolve([]),
     listBoards(user),
     listPipeline(user),
     listMembers(user),
     listCompanies(user, { limit: 100, sort: "name", order: "asc" }),
     listContacts(user, { limit: 100 }),
+    listLifecycles(user),
   ]);
   const fullBoards = await Promise.all(boards.map((board) => getBoard(user, board.id)));
   return (
@@ -65,6 +67,7 @@ export default async function WorkflowPage({
         boards: fullBoards.map((board) => ({ id: board.id, name: board.name, stages: board.stages.map((stage) => ({ id: stage.id, name: stage.name })) })),
         salesStages: pipeline.stages.map((stage) => ({ id: stage.id, name: stage.name })),
         members: members.filter((member) => member.id !== user.userId).map((member) => ({ id: member.id, name: member.name })),
+        lifecycles: lifecycles.map((item) => ({ value: item.value, label: item.label })),
       }}
       records={{
         companies: companies.data.map((company) => ({ id: company.id, name: company.name })),

@@ -29,7 +29,7 @@ That reads `CRM_AGENT_TOKEN` from the environment or `.env.local` and speaks MCP
 
 ## Tools
 
-`search_companies`: `query`, `lifecycle`, `owner_id`, `tag`, `limit`.
+`search_companies`: `query`, `lifecycle` (built in or custom), `owner_id`, `tag`, `limit`.
 
 `get_company`: `id`.
 

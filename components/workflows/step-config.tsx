@@ -19,7 +19,13 @@ export type BuilderOptions = {
   boards: { id: string; name: string; stages: { id: string; name: string }[] }[];
   salesStages: { id: string; name: string }[];
   members: { id: string; name: string }[];
+  lifecycles: { value: string; label: string }[];
 };
+
+export function matchLifecycleOption(options: BuilderOptions["lifecycles"], value: string) {
+  const lower = value.trim().toLowerCase();
+  return options.find((option) => option.value.toLowerCase() === lower || option.label.toLowerCase() === lower)?.value ?? "";
+}
 
 type Output = { key: string; type: string; description?: string; choices?: string[] };
 
@@ -344,11 +350,17 @@ export default function StepConfig({
             </Select>
           </div>
           {(str(c.field) || fields[0].key) === "lifecycle" ? (
-            <Select id={`${step.id}-value`} label="New value" value={str(c.value) || "customer"} onChange={(value) => update({ ...c, value })}>
-              <option value="lead">Lead</option>
-              <option value="prospect">Prospect</option>
-              <option value="customer">Customer</option>
-              <option value="churned">Churned</option>
+            <Select
+              id={`${step.id}-value`}
+              label="New value"
+              value={matchLifecycleOption(options.lifecycles, str(c.value) || "customer")}
+              onChange={(value) => update({ ...c, value })}
+            >
+              {options.lifecycles.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
             </Select>
           ) : (str(c.field) || fields[0].key) === "health" ? (
             <Select id={`${step.id}-value`} label="New value" value={str(c.value) || "at_risk"} onChange={(value) => update({ ...c, value })}>
