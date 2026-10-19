@@ -24,6 +24,7 @@ import {
 } from "@/lib/crm/normalize";
 import { assertScope } from "@/lib/crm/scopes";
 import { defaultCompanyOrder } from "@/lib/sorting";
+import { LIFECYCLES } from "@/lib/crm/types";
 import type {
   Actor,
   BulkItemResult,
@@ -228,12 +229,24 @@ async function findMatch(
   return { company: mapCompany(row), matchedOn } as const;
 }
 
+async function matchLifecycle(db: Db, workspaceId: string, value: string | undefined) {
+  if (!value || (LIFECYCLES as readonly string[]).includes(value)) return value;
+  const found = await db.query<{ lifecycle: string }>(
+    `select lifecycle from crm.companies
+     where workspace_id = $1 and lower(lifecycle) = lower($2) and archived_at is null
+     limit 1`,
+    [workspaceId, value],
+  );
+  return found.rows[0]?.lifecycle ?? value;
+}
+
 async function insertCompany(
   db: Db,
   actor: Actor,
-  write: CompanyWrite & { normalizedName?: string },
+  input: CompanyWrite & { normalizedName?: string },
   provenance?: Provenance,
 ) {
+  const write = { ...input, lifecycle: await matchLifecycle(db, actor.workspaceId, input.lifecycle) };
   await assertOwner(db, actor.workspaceId, write.ownerId);
   if (!write.name || !write.normalizedName) {
     throw new CrmError("invalid_input", "Enter a company name.", 400, {
@@ -369,10 +382,13 @@ async function writeChanges(
   db: Db,
   actor: Actor,
   current: Company,
-  write: CompanyWrite & { normalizedName?: string },
+  input: CompanyWrite & { normalizedName?: string },
   provenance: Provenance | undefined,
   eventType: string,
+  exactLifecycle = false,
 ) {
+  const write =
+    input.lifecycle === undefined || exactLifecycle ? input : { ...input, lifecycle: await matchLifecycle(db, actor.workspaceId, input.lifecycle) };
   const change = assignments(write, current);
   if (change.sets.length === 0) return { company: current, changed: false };
 
@@ -499,7 +515,7 @@ export async function listCompanies(actor: Actor, query: CompanyListQuery = {}) 
     }
     if (query.lifecycle) {
       values.push(query.lifecycle);
-      where.push(`c.lifecycle = $${values.length}`);
+      where.push(`lower(c.lifecycle) = lower($${values.length})`);
     }
     if (query.ownerId === "unassigned") where.push("c.owner_id is null");
     else if (query.ownerId) {
@@ -678,6 +694,12 @@ export async function updateCompany(
     if (outcome.body.gainedDomain && !outcome.replayed) scheduleEnrichment(actor, outcome.body.company.id);
     return { ...outcome, body: { company: outcome.body.company } };
   });
+}
+
+export async function setCompanyLifecycleInDb(db: Db, actor: Actor, id: string, lifecycle: string, provenance: Provenance, exact = false) {
+  const current = await readCompany(db, actor.workspaceId, id);
+  if (!current) throw new CrmError("not_found", "Company not found.", 404);
+  return writeChanges(db, actor, current, normalizeCompanyWrite({ lifecycle }, "patch"), provenance, "company.updated", exact);
 }
 
 export async function editCompanyTagsInDb(

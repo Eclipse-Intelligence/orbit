@@ -25,9 +25,10 @@ import SectionHeader from "@/components/crm/section-header";
 import RecordSequence from "@/components/shortcuts/record-sequence";
 import RecordTags from "@/components/crm/tags";
 import type { Viewer } from "@/components/crm/viewer";
-import { archiveCompanyAction } from "@/app/(crm)/actions";
-import { formatDate, LIFECYCLE_LABELS } from "@/lib/companies";
+import { archiveCompanyAction, setCompanyLifecycleAction } from "@/app/(crm)/actions";
+import { formatDate, lifecycleLabel } from "@/lib/companies";
 import CompanyHealth from "@/components/companies/detail/company-health";
+import LifecyclePicker from "@/components/companies/lifecycle-picker";
 import type { MeetingsSummary } from "@/lib/crm/calendar";
 import type { ClickUpPicker } from "@/lib/crm/clickup";
 import type { Company, CompanyContext, Member, TagCount } from "@/lib/crm/types";
@@ -70,6 +71,7 @@ export default function CompanyRecord({
   const [confirmArchive, setConfirmArchive] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const [archiveError, setArchiveError] = useState<string | null>(null);
+  const [lifecycleError, setLifecycleError] = useState<string | null>(null);
   const company =
     fresh && fresh.id === context.company.id && fresh.updatedAt > context.company.updatedAt
       ? fresh
@@ -85,6 +87,13 @@ export default function CompanyRecord({
     },
     [router],
   );
+
+  async function changeLifecycle(value: string) {
+    setLifecycleError(null);
+    const result = await setCompanyLifecycleAction(company.id, value);
+    if (result.error) setLifecycleError(result.error);
+    else router.refresh();
+  }
 
   async function archive() {
     setArchiving(true);
@@ -261,10 +270,25 @@ export default function CompanyRecord({
                     ) : null}
                   </Detail>
                   <Detail label="Lifecycle">
-                    <RecordTag
-                      label={LIFECYCLE_LABELS[company.lifecycle]}
-                      base={lifecycleTagBase(company.lifecycle)}
+                    <LifecyclePicker
+                      value={company.lifecycle}
+                      disabled={Boolean(company.archivedAt)}
+                      onChange={(value) => void changeLifecycle(value)}
+                      trigger={
+                        <button
+                          type="button"
+                          aria-label={`Lifecycle: ${lifecycleLabel(company.lifecycle)}. Change`}
+                          className="focus-visible:ring-ring/60 cursor-pointer rounded-lg outline-none focus-visible:ring-2 disabled:cursor-default"
+                        >
+                          <RecordTag label={lifecycleLabel(company.lifecycle)} base={lifecycleTagBase(company.lifecycle)} />
+                        </button>
+                      }
                     />
+                    {lifecycleError && (
+                      <p role="alert" className="caption-style text-danger mt-1">
+                        {lifecycleError}
+                      </p>
+                    )}
                   </Detail>
                   <Detail label="Industry">{company.industry}</Detail>
                   {company.brand && company.brand.industries.length > 0 && (

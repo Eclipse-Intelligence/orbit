@@ -6,7 +6,7 @@ import {
   listCompanies,
   upsertCompany,
 } from "@/lib/crm/companies";
-import { LIFECYCLES, type Actor, type CompanyWrite } from "@/lib/crm/types";
+import type { Actor, CompanyWrite } from "@/lib/crm/types";
 import { registerOperationTools } from "@/server/mcp/operations";
 import { registerRelationshipTools } from "@/server/mcp/relationships";
 
@@ -17,7 +17,7 @@ const writeShape = {
   description: z.string().nullable().optional(),
   industry: z.string().nullable().optional(),
   sizeCategory: z.string().nullable().optional(),
-  lifecycle: z.enum(LIFECYCLES).optional(),
+  lifecycle: z.string().max(40).optional().describe("lead, prospect, customer, churned, or any custom lifecycle name"),
   ownerId: z.uuid().nullable().optional(),
   source: z.string().nullable().optional(),
   sourceReference: z.string().nullable().optional(),
@@ -89,7 +89,7 @@ export function createCrmMcpServer(actor: Actor) {
         "Search companies in the authenticated workspace by name, domain, or industry, optionally limited to one tag.",
       inputSchema: {
         query: z.string().optional(),
-        lifecycle: z.enum(LIFECYCLES).optional(),
+        lifecycle: z.string().max(40).optional().describe("lead, prospect, customer, churned, or any custom lifecycle name"),
         owner_id: z.uuid().optional(),
         tag: z.string().optional(),
         limit: z.number().int().min(1).max(100).optional(),

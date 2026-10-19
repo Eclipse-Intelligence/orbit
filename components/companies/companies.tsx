@@ -7,7 +7,7 @@ import { RememberList } from "@/components/crm/list-memory";
 import { useBulkSelection } from "@/hooks/use-bulk-selection";
 import { activeFilterCount } from "@/lib/companies";
 import type { Viewer } from "@/components/crm/viewer";
-import type { Company, CompanyListQuery, Member, TagCount } from "@/lib/crm/types";
+import type { Company, CompanyListQuery, LifecycleCount, Member, TagCount } from "@/lib/crm/types";
 
 export type { Viewer };
 
@@ -19,6 +19,7 @@ type CompaniesProps = {
   filters: CompanyListQuery;
   members: Member[];
   tags: TagCount[];
+  lifecycles: LifecycleCount[];
   viewer: Viewer;
   mailboxConnected: boolean;
   enrichment: { company: boolean; logoClientId: string | null };
@@ -32,6 +33,7 @@ export default function Companies({
   filters,
   members,
   tags,
+  lifecycles,
   viewer,
   mailboxConnected,
   enrichment,
@@ -49,6 +51,7 @@ export default function Companies({
         filters={filters}
         members={members}
         tags={tags}
+        lifecycles={lifecycles}
         selection={selection}
       />
       <CompaniesTable

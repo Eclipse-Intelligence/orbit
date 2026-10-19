@@ -11,7 +11,6 @@ import {
   ANY_HEALTH,
   ANY_LIFECYCLE,
   HEALTH_OPTIONS,
-  LIFECYCLE_LABELS,
   UNASSIGNED_OWNER,
 } from "@/lib/companies";
 import { SelectToggle } from "@/components/crm/bulk-bar";
@@ -21,7 +20,7 @@ import RecordTransfer from "@/components/crm/record-transfer";
 import ListSearch from "@/components/shortcuts/list-search";
 import type { BulkSelection } from "@/hooks/use-bulk-selection";
 import { downloadCsv } from "@/lib/csv";
-import type { CompanyListQuery, CompanyPresence, Member, TagCount } from "@/lib/crm/types";
+import type { CompanyListQuery, CompanyPresence, LifecycleCount, Member, TagCount } from "@/lib/crm/types";
 import ShareIcon from "@/public/assets/images/companies/toolbar/share.svg";
 import PlusIcon from "@/public/assets/images/_common/plus.svg";
 
@@ -35,6 +34,7 @@ type ToolbarProps = {
   filters: CompanyListQuery;
   members?: Member[];
   tags?: TagCount[];
+  lifecycles?: LifecycleCount[];
   selection: BulkSelection;
 };
 
@@ -42,6 +42,7 @@ export default function CompaniesToolbar({
   filters,
   members = [],
   tags = [],
+  lifecycles = [],
   selection,
 }: ToolbarProps) {
   const router = useRouter();
@@ -73,6 +74,10 @@ export default function CompaniesToolbar({
   }
 
   const tagOptions = tagFilterOptions(tags, "company", filters.tag);
+  const lifecycleOptions = [
+    { value: ANY_LIFECYCLE, label: "Any lifecycle" },
+    ...lifecycles.filter((item) => item.builtIn || item.companies > 0).map((item) => ({ value: item.value, label: item.label })),
+  ];
   const ownerOptions = [
     { value: ALL_OWNERS, label: "All owners" },
     { value: UNASSIGNED_OWNER, label: "Unassigned" },
@@ -82,7 +87,7 @@ export default function CompaniesToolbar({
   return (
     <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 px-4 py-4">
       <div className="flex items-center gap-2 sm:hidden">
-        <MobileFilters filters={filters} members={members} tagOptions={tagOptions} onChange={replaceParams} />
+        <MobileFilters filters={filters} members={members} tagOptions={tagOptions} lifecycleOptions={lifecycleOptions} onChange={replaceParams} />
         <PresenceFilter
           fields={PRESENCE_FIELDS}
           has={filters.has ?? []}
@@ -104,13 +109,7 @@ export default function CompaniesToolbar({
         <FilterMenu
           label="Lifecycle"
           value={filters.lifecycle ?? ANY_LIFECYCLE}
-          options={[
-            { value: ANY_LIFECYCLE, label: "Any lifecycle" },
-            ...Object.entries(LIFECYCLE_LABELS).map(([value, label]) => ({
-              value,
-              label,
-            })),
-          ]}
+          options={lifecycleOptions}
           onChange={(value) =>
             replaceParams({ lifecycle: value === ANY_LIFECYCLE ? null : value })
           }

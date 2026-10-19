@@ -26,7 +26,7 @@ Optional `Idempotency-Key` header (printable ASCII, up to 200 characters). Reuse
 
 `GET /api/v1/companies`
 
-Query: `q`, `lifecycle` (`lead`, `prospect`, `customer`, `churned`), `health` (`healthy`, `watch`, `at_risk`, or `none` for not set), `owner` (a user id or `unassigned`), `tag` (one tag; matching ignores case and extra spaces), `sort` (`name`, `domain`, `owner`, `interaction`, `strength`, `updated`, `created`; default `name`), `order` (`asc` or `desc`; each sort has its own default), `has` and `missing` (comma-separated `domain`, `contacts`, `interactions`), `limit` (1–100, default 50), `offset` (max 10000), `include_archived=true`.
+Query: `q`, `lifecycle` (`lead`, `prospect`, `customer`, `churned`, or a custom name; matching ignores case), `health` (`healthy`, `watch`, `at_risk`, or `none` for not set), `owner` (a user id or `unassigned`), `tag` (one tag; matching ignores case and extra spaces), `sort` (`name`, `domain`, `owner`, `interaction`, `strength`, `updated`, `created`; default `name`), `order` (`asc` or `desc`; each sort has its own default), `has` and `missing` (comma-separated `domain`, `contacts`, `interactions`), `limit` (1–100, default 50), `offset` (max 10000), `include_archived=true`.
 
 Response:
 
@@ -57,6 +57,8 @@ Response:
 `name`, `domain`, `website`, `description`, `industry`, `sizeCategory`, `lifecycle`, `ownerId`, `source`, `sourceReference`, `tags`, and on updates `health` (`healthy`, `watch`, `at_risk` or null) with an optional `healthReason`.
 
 Responses also carry `health`, `healthReason`, `healthAt` and `healthActivityId` (the call it came from; null when set by hand). Health is normally set from call summaries.
+
+`lifecycle` is `lead`, `prospect`, `customer` or `churned` (their labels such as `Customer` are accepted too), or any other name up to 40 characters, such as `Consultant`; a name that matches an existing one apart from case takes the existing spelling. New companies default to `lead`.
 
 `ownerId` must be a member of the workspace. Domain and website are canonicalised (`https://www.acme.com/about` becomes domain `acme.com`).
 

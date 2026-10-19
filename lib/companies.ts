@@ -4,6 +4,7 @@ import {
   COMPANY_SORTS,
   LIFECYCLES,
   type AccountHealth,
+  type BuiltInLifecycle,
   type CompanyListQuery,
   type CompanySort,
   type Lifecycle,
@@ -14,7 +15,7 @@ export const ANY_LIFECYCLE = "any";
 export const ALL_OWNERS = "all";
 export const UNASSIGNED_OWNER = "unassigned";
 
-export const LIFECYCLE_LABELS: Record<Lifecycle, string> = {
+export const LIFECYCLE_LABELS: Record<BuiltInLifecycle, string> = {
   lead: "Lead",
   prospect: "Prospect",
   customer: "Customer",
@@ -213,7 +214,7 @@ export function companiesCsvRows(
       company.website ?? "",
       company.industry ?? "",
       company.sizeCategory ?? "",
-      company.lifecycle,
+      lifecycleLabel(company.lifecycle),
       company.ownerName ?? "",
       company.source ?? "",
       company.description ?? "",
@@ -236,8 +237,21 @@ export function actionError(error: unknown) {
   return { error: "Something went wrong." };
 }
 
-export function isLifecycle(value: string): value is Lifecycle {
-  return (LIFECYCLES as readonly string[]).includes(value);
+export const LIFECYCLE_MAX_LENGTH = 40;
+
+export function lifecycleLabel(value: Lifecycle) {
+  return LIFECYCLE_LABELS[value as BuiltInLifecycle] ?? value;
+}
+
+export function builtInLifecycle(value: string): BuiltInLifecycle | null {
+  const lower = value.trim().toLowerCase();
+  return LIFECYCLES.find((key) => key === lower || LIFECYCLE_LABELS[key].toLowerCase() === lower) ?? null;
+}
+
+export function cleanLifecycle(value: string) {
+  const text = value.replace(/\s+/g, " ").trim().slice(0, LIFECYCLE_MAX_LENGTH);
+  if (!text) return null;
+  return builtInLifecycle(text) ?? text;
 }
 
 export function isCompanySort(value: string): value is CompanySort {

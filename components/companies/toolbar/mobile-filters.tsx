@@ -27,7 +27,6 @@ import {
   ANY_HEALTH,
   ANY_LIFECYCLE,
   HEALTH_OPTIONS,
-  LIFECYCLE_LABELS,
   SORT_OPTIONS,
   UNASSIGNED_OWNER,
   activeFilterCount,
@@ -46,6 +45,7 @@ type MobileFiltersProps = {
   filters: CompanyListQuery;
   members: Member[];
   tagOptions: FilterOption[];
+  lifecycleOptions: FilterOption[];
   onChange: (updates: Record<string, string | null>) => void;
 };
 
@@ -54,6 +54,7 @@ export default function MobileFilters({
   filters,
   members,
   tagOptions,
+  lifecycleOptions,
   onChange,
 }: MobileFiltersProps) {
   const [open, setOpen] = useState(false);
@@ -182,10 +183,9 @@ export default function MobileFilters({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value={ANY_LIFECYCLE}>Any lifecycle</SelectItem>
-                  {Object.entries(LIFECYCLE_LABELS).map(([value, label]) => (
-                    <SelectItem key={value} value={value}>
-                      {label}
+                  {lifecycleOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
                     </SelectItem>
                   ))}
                 </SelectContent>

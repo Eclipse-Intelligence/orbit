@@ -10,8 +10,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/_ui/select";
-import { LIFECYCLE_LABELS, SIZE_OPTIONS } from "@/lib/companies";
-import { LIFECYCLES, type Lifecycle, type Member } from "@/lib/crm/types";
+import { LifecycleMark } from "@/components/beautifui/record-marks";
+import LifecyclePicker from "@/components/companies/lifecycle-picker";
+import { SIZE_OPTIONS } from "@/lib/companies";
+import type { Lifecycle, Member } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
 
 export type CompanyFormValues = {
@@ -153,21 +155,19 @@ export default function CompanyFields({
 
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="Lifecycle" htmlFor={`${idPrefix}-lifecycle`}>
-          <Select
+          <LifecyclePicker
             value={values.lifecycle}
-            onValueChange={(value) => update("lifecycle", value as Lifecycle)}
-          >
-            <SelectTrigger id={`${idPrefix}-lifecycle`}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {LIFECYCLES.map((lifecycle) => (
-                <SelectItem key={lifecycle} value={lifecycle}>
-                  {LIFECYCLE_LABELS[lifecycle]}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+            onChange={(value) => update("lifecycle", value)}
+            trigger={
+              <button
+                id={`${idPrefix}-lifecycle`}
+                type="button"
+                className="border-line-strong bg-secondary focus-visible:border-ring flex h-9 w-full cursor-pointer items-center rounded-lg border px-2 outline-none"
+              >
+                <LifecycleMark lifecycle={values.lifecycle} />
+              </button>
+            }
+          />
         </Field>
         <Field label="Owner" htmlFor={`${idPrefix}-owner`} error={errors?.ownerId}>
           <Select value={values.ownerId} onValueChange={(value) => update("ownerId", value)}>

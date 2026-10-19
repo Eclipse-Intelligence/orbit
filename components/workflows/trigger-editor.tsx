@@ -3,7 +3,7 @@
 import { Checkbox } from "@/components/_ui/checkbox";
 import { Input } from "@/components/_ui/input";
 import { recordSelectClass } from "@/components/crm/record-form";
-import type { BuilderOptions } from "@/components/workflows/step-config";
+import { matchLifecycleOption, type BuilderOptions } from "@/components/workflows/step-config";
 import { FIELD_OPTIONS, TRIGGER_LABELS, TRIGGER_TYPES, type Trigger, type TriggerType } from "@/lib/workflows/definition";
 import { cn } from "@/lib/utils";
 
@@ -98,12 +98,18 @@ export default function TriggerEditor({
               </Labelled>
               <Labelled id="trigger-to" label="Changes to (optional)">
                 {trigger.field === "lifecycle" ? (
-                  <select id="trigger-to" value={trigger.to ?? ""} onChange={(event) => onChange({ ...trigger, to: event.target.value || null })} className={recordSelectClass}>
+                  <select
+                    id="trigger-to"
+                    value={trigger.to ? matchLifecycleOption(options.lifecycles, trigger.to) : ""}
+                    onChange={(event) => onChange({ ...trigger, to: event.target.value || null })}
+                    className={recordSelectClass}
+                  >
                     <option value="">Anything</option>
-                    <option value="lead">Lead</option>
-                    <option value="prospect">Prospect</option>
-                    <option value="customer">Customer</option>
-                    <option value="churned">Churned</option>
+                    {options.lifecycles.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
                   </select>
                 ) : trigger.field === "health" ? (
                   <select id="trigger-to" value={trigger.to ?? ""} onChange={(event) => onChange({ ...trigger, to: event.target.value || null })} className={recordSelectClass}>

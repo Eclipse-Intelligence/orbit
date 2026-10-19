@@ -4,9 +4,10 @@ import {
   CONNECTION_STRENGTH,
   connectionStrength,
   HEALTH_LABELS,
+  lifecycleLabel,
   type ConnectionStrength,
 } from "@/lib/companies";
-import type { AccountHealth, Lifecycle } from "@/lib/crm/types";
+import type { AccountHealth, BuiltInLifecycle, Lifecycle } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
 
 const TAG_PALETTE = [
@@ -22,7 +23,7 @@ const TAG_PALETTE = [
   "oklch(0.67 0.19 3)",
 ];
 
-const LIFECYCLE_BASE: Record<Lifecycle, string> = {
+const LIFECYCLE_BASE: Record<BuiltInLifecycle, string> = {
   lead: TAG_PALETTE[0],
   prospect: TAG_PALETTE[5],
   customer: TAG_PALETTE[8],
@@ -89,7 +90,11 @@ export function HealthMark({ health }: { health: AccountHealth }) {
 }
 
 export function lifecycleTagBase(lifecycle: Lifecycle) {
-  return LIFECYCLE_BASE[lifecycle];
+  return LIFECYCLE_BASE[lifecycle as BuiltInLifecycle] ?? tagBase(lifecycle);
+}
+
+export function LifecycleMark({ lifecycle }: { lifecycle: Lifecycle }) {
+  return <RecordTag label={lifecycleLabel(lifecycle)} base={lifecycleTagBase(lifecycle)} />;
 }
 
 export function ConnectionMark({
