@@ -9,6 +9,7 @@ export type ShortcutGroup =
   | "Records"
   | "Calendar"
   | "Inbox"
+  | "Mail"
   | "Settings";
 
 export type Combo = {
@@ -39,6 +40,7 @@ export const SEQUENCE_PREFIXES = ["g", "c"] as const;
 export const SEQUENCE_TIMEOUT_MS = 1200;
 
 const NAV: [string, string, string, string?][] = [
+  ["m", "Mail", "/mail", "email inbox sent drafts archive"],
   ["o", "Companies", "/", "home organisations"],
   ["c", "Contacts", "/contacts", "people"],
   ["p", "Opportunities", "/opportunities", "deals pipeline"],
@@ -159,6 +161,13 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: "calendar-panel", label: "Show or hide calendars", group: "Calendar", combos: [{ key: "\\" }], target: "calendars-panel", palette: true },
   { id: "event-join", label: "Join the meeting", group: "Calendar", combos: [{ key: "j" }], target: "join", inOverlay: true },
   { id: "event-cancel", label: "Cancel the meeting", group: "Calendar", combos: [{ key: "Backspace" }, { key: "Delete" }], target: "cancel-meeting", inOverlay: true },
+
+  { id: "mail-archive", label: "Archive", group: "Mail", combos: [{ key: "e" }] },
+  { id: "mail-trash", label: "Move to Trash", group: "Mail", combos: [{ key: "#" }, { key: "#", shift: true }, { key: "#", alt: true }, { key: "Backspace" }, { key: "Delete" }] },
+  { id: "mail-read", label: "Mark read or unread", group: "Mail", combos: [{ key: "u" }] },
+  { id: "mail-flag", label: "Flag or unflag", group: "Mail", combos: [{ key: "s" }] },
+  { id: "mail-undo", label: "Undo the last move", group: "Mail", combos: [{ key: "z" }] },
+  { id: "mail-refresh", label: "Check for new mail", group: "Mail", combos: [{ key: "r", shift: true }], palette: true, keywords: "sync refresh email" },
 
   { id: "inbox-sync", label: "Sync the inbox", group: "Inbox", combos: [{ key: "s" }], target: "sync", palette: true },
   { id: "inbox-file", label: "File the conversation to…", group: "Inbox", combos: [{ key: "f" }], rowKey: "f" },

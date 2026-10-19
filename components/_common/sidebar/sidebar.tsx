@@ -16,10 +16,11 @@ type SidebarProps = {
   approvals: number;
   companyCount: number;
   openActionCount: number;
+  mailUnread: number;
   workspaceName: string;
 };
 
-export default function Sidebar({ boards, approvals, companyCount, openActionCount, workspaceName }: SidebarProps) {
+export default function Sidebar({ boards, approvals, companyCount, openActionCount, mailUnread, workspaceName }: SidebarProps) {
   const sidebarOpen = useCompaniesStore((state) => state.sidebarOpen);
   const setSidebarOpen = useCompaniesStore((state) => state.setSidebarOpen);
 
@@ -31,6 +32,7 @@ export default function Sidebar({ boards, approvals, companyCount, openActionCou
           approvals={approvals}
           companyCount={companyCount}
           openActionCount={openActionCount}
+          mailUnread={mailUnread}
           workspaceName={workspaceName}
         />
         <SidebarResizer />
@@ -50,6 +52,7 @@ export default function Sidebar({ boards, approvals, companyCount, openActionCou
             approvals={approvals}
             companyCount={companyCount}
             openActionCount={openActionCount}
+          mailUnread={mailUnread}
             workspaceName={workspaceName}
           />
         </SheetContent>

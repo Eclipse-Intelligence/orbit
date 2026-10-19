@@ -1,5 +1,6 @@
 import { withActor } from "@/lib/crm/context";
 import { currentToken, readStored, storeToken, type StoredTokens } from "@/lib/crm/inbox";
+import { CrmError } from "@/lib/crm/errors";
 import type { UserActor } from "@/lib/crm/types";
 import { encryptSecret } from "@/lib/crypto/secret";
 import type { Db } from "@/lib/db/pool";
@@ -132,6 +133,14 @@ async function saveToken(db: Db, source: Source, token: MicrosoftToken) {
     "update crm.calendar_accounts set refresh_token = $2, access_token = $3, access_token_expires_at = $4 where id = $1",
     [source.account_id, encryptSecret(token.refreshToken), encryptSecret(token.accessToken), token.expiresAt],
   );
+}
+
+export async function mailSourceToken(actor: UserActor, sourceId: string, fetchImpl: typeof fetch = fetch) {
+  const source = (await loadSources(actor)).find((item) => item.id === sourceId);
+  if (!source) throw new CrmError("not_found", "That mail account is no longer connected. Connect it again in Inbox.", 404);
+  const token = await currentToken(source.tokens, fetchImpl);
+  if (token.expiresAt !== source.tokens.accessTokenExpiresAt) await withActor(actor, (db) => saveToken(db, source, token));
+  return token.accessToken;
 }
 
 async function claim(actor: UserActor, sourceId: string) {

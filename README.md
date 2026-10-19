@@ -89,6 +89,12 @@ Orbit keeps its own copy of every connected mailbox: the Inbox account and each 
 
 The history fills in through `/api/cron/mail` (up to four minutes a run), plus a short catch-up for new mail on every page load and in the scheduled sync. Run `/api/cron/mail` every couple of minutes until the history is in. The backfill stops when the database reaches `MAIL_STORAGE_LIMIT_MB` (400 by default); new mail keeps coming in until `MAIL_HARD_STOP_MB` (472 by default), where all mail sync stops and Inbox says so. Together they keep a Free Supabase project under its 500 MB read-only limit. On a Pro project, raise it, for example to 50000.
 
+### Mail
+
+Mail (`G` then `M`, at the top of the side menu with your unread count) is where you read and work through that copy. Every connected account is in one inbox, with All accounts or a single account at the top, and a coloured dot on each conversation shows which account it came to. Inbox, Sent, Drafts, Archive, Trash and Folders (your own folders) sit above the list; search looks through every folder. Mail is grouped into conversations, newest first, and opens in the reading pane straight away because Orbit loads the next few conversations before you get to them. Designed emails show on a white sheet; ordinary emails take Orbit's colours. Scripts never run and links open in a new tab.
+
+Keys: `J` and `K` (or the arrows) move through the list, `E` archives (in Archive it moves back to Inbox), `#` or Delete moves to Trash, `U` marks read or unread, `S` flags, `Z` undoes the last archive or delete, `/` searches, `Shift R` checks for new mail and Esc goes back to the list on a phone. A conversation you stay on is marked read. Every change shows at once and goes to Outlook in the background; if Outlook refuses, Orbit puts it back and says why. New mail is checked every minute while Mail is open and when you come back to the tab. Compose opens the email pad. Replying from Orbit comes next; until then, Open in Outlook opens the email in Outlook on the web.
+
 ### Email from anywhere
 
 The plus button in the bottom-right corner (or `Q`) has Send email, and `C` then `M` opens it from any page. It is the same pad as on a contact: search for the person in To (on a contact's page they are filled in), pick the From address, write, and Send or Log only. Either way the email is logged on that contact's timeline, and a notice links to their record.

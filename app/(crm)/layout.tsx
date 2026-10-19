@@ -16,6 +16,7 @@ import { listAttention } from "@/lib/crm/relationships";
 import { countOpenTasks } from "@/lib/crm/tasks";
 import { syncTeamsTranscripts } from "@/lib/crm/teams-transcripts";
 import { syncMail } from "@/lib/mail/sync";
+import { mailUnreadCount } from "@/lib/mail/threads";
 import { clickupToken } from "@/lib/clickup";
 import { microsoftConfigured } from "@/lib/microsoft/oauth";
 
@@ -81,13 +82,14 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
       }
     });
   }
-  const [companyCount, openActionCount, attention, boards, notifications, approvals] = await Promise.all([
+  const [companyCount, openActionCount, attention, boards, notifications, approvals, mailUnread] = await Promise.all([
     countCompanies(user),
     countOpenTasks(user, { mine: true }),
     listAttention(user),
     listBoards(user),
     listNotifications(user, 10),
     countApprovals(user),
+    mailUnreadCount(user).catch(() => 0),
   ]);
 
   return (
@@ -98,6 +100,7 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
           approvals={approvals}
           companyCount={companyCount}
           openActionCount={openActionCount}
+          mailUnread={mailUnread}
           workspaceName={user.workspaceName}
         />
         <CrmChrome

@@ -20,6 +20,7 @@ import ClipboardIcon from "@/public/assets/images/companies/sidebar/clipboard.sv
 import ListIcon from "@/public/assets/images/companies/sidebar/list.svg";
 import BookClosedIcon from "@/public/assets/images/companies/sidebar/book-closed.svg";
 import MailIcon from "@/public/assets/images/companies/sidebar/mail.svg";
+import InboxIcon from "@/public/assets/images/mail/inbox.svg";
 import CalendarIcon from "@/public/assets/images/companies/sidebar/calendar.svg";
 import TargetIcon from "@/public/assets/images/companies/sidebar/target-05.svg";
 import AlertIcon from "@/public/assets/images/companies/sidebar/alert-triangle.svg";
@@ -31,6 +32,7 @@ type SidebarContentProps = {
   approvals: number;
   companyCount: number;
   openActionCount: number;
+  mailUnread: number;
   workspaceName: string;
 };
 
@@ -39,10 +41,13 @@ export default function SidebarContent({
   approvals,
   companyCount,
   openActionCount,
+  mailUnread,
   workspaceName,
 }: SidebarContentProps) {
   const pathname = usePathname();
   const openProfile = useCompaniesStore((state) => state.openProfile);
+  const liveMailUnread = useCompaniesStore((state) => state.mailUnread);
+  const unreadMail = liveMailUnread ?? mailUnread;
   const [boardsOpen, setBoardsOpen] = useState(true);
   const current = (href: string) =>
     href === "/"
@@ -67,6 +72,13 @@ export default function SidebarContent({
       <ScrollArea className="min-h-0 flex-1">
         <nav aria-label="Primary">
           <SidebarSection className="border-sidebar-border border-b">
+            <SidebarNavItem
+              href="/mail"
+              icon={InboxIcon}
+              label="Mail"
+              count={unreadMail > 0 ? unreadMail : undefined}
+              active={current("/mail")}
+            />
             <SidebarNavItem
               href="/"
               icon={BuildingIcon}
