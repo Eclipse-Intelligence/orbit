@@ -11,7 +11,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popover";
 import { Monogram } from "@/components/beautifui/record-marks";
 import { searchCompaniesAction } from "@/app/(crm)/actions";
-import { searchContactsToFileAction } from "@/app/(crm)/search";
+import { searchCompanyContactsAction, searchContactsToFileAction } from "@/app/(crm)/search";
 import type { QuickAddRef } from "@/lib/crm/quick-add";
 import { cn } from "@/lib/utils";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
@@ -23,7 +23,7 @@ type Option = PickedRecord & { detail: string };
 
 type Results = { query: string; options: Option[]; failed?: boolean };
 
-async function search(kind: "contact" | "company", query: string): Promise<Option[]> {
+async function search(kind: "contact" | "company", query: string, companyId: string | null | undefined): Promise<Option[]> {
   if (kind === "company") {
     const companies = await searchCompaniesAction(query);
     return companies.map((company) => ({
@@ -32,18 +32,20 @@ async function search(kind: "contact" | "company", query: string): Promise<Optio
       detail: company.domain ?? "",
     }));
   }
-  const { contacts } = await searchContactsToFileAction(query);
-  return contacts.map((contact) => ({
-    id: contact.id,
-    name: contact.name,
-    detail: [contact.email, contact.companyName ? `at ${contact.companyName}` : null]
-      .filter(Boolean)
-      .join(" · "),
-    company:
-      contact.companyId && contact.companyName
-        ? { id: contact.companyId, name: contact.companyName }
-        : null,
-  }));
+  const { contacts } = companyId ? await searchCompanyContactsAction(companyId, query) : await searchContactsToFileAction(query);
+  return contacts
+    .filter((contact) => companyId === undefined || contact.companyId)
+    .map((contact) => ({
+      id: contact.id,
+      name: contact.name,
+      detail: [contact.email, contact.companyName && !companyId ? `at ${contact.companyName}` : null]
+        .filter(Boolean)
+        .join(" · "),
+      company:
+        contact.companyId && contact.companyName
+          ? { id: contact.companyId, name: contact.companyName }
+          : null,
+    }));
 }
 
 export function RecordChip({
@@ -78,6 +80,7 @@ export default function RecordPicker({
   onChange,
   placeholder,
   invalid,
+  companyId,
 }: {
   id: string;
   kind: "contact" | "company";
@@ -85,6 +88,7 @@ export default function RecordPicker({
   onChange: (value: PickedRecord | null) => void;
   placeholder: string;
   invalid?: boolean;
+  companyId?: string | null;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -97,7 +101,7 @@ export default function RecordPicker({
     if (!open) return;
     let cancelled = false;
     const handle = window.setTimeout(() => {
-      search(kind, trimmed).then(
+      search(kind, trimmed, companyId).then(
         (options) => {
           if (!cancelled) setResults({ query: trimmed, options });
         },
@@ -110,7 +114,7 @@ export default function RecordPicker({
       cancelled = true;
       window.clearTimeout(handle);
     };
-  }, [kind, open, trimmed]);
+  }, [companyId, kind, open, trimmed]);
 
   if (value) {
     return (
@@ -162,8 +166,10 @@ export default function RecordPicker({
                 {current.failed
                   ? "Search is unavailable right now."
                   : trimmed
-                    ? `No ${noun} match “${trimmed}”.`
-                    : `No ${noun} yet.`}
+                    ? `No ${noun} match “${trimmed}”${companyId ? " at this company" : ""}.`
+                    : companyId
+                      ? "No contacts at this company yet."
+                      : `No ${noun} yet.`}
               </CommandEmpty>
             )}
             {!current && (

@@ -456,7 +456,7 @@ Every `/api/companion` route allows 600 requests a minute per Mac and answers wi
 
 Boards sit under Opportunities in the side menu and track clients through stages of your choosing, for example Onboarding. New board (at the bottom of the tree) creates one with To start, In progress and Done. Click the board title to rename it, double-click a stage to rename it, use the + between columns to add a stage, and drag columns to reorder them. Settings on the board edits the name and stages, deletes the board (its cards are archived), and has Add companies when a deal is won.
 
-A card is a company, at most once per board, with a main contact and a due date. Cards drag between stages like opportunities, and there is a list view too. Opening a card shows the activity pad, the company's recent activity and open tasks, and Remove from board. The company page lists the boards it is on.
+A card is a company, at most once per board, with a main contact and a due date. The main contact (and an opportunity's primary contact) must work at that company: the contact search only lists the chosen company's people, picking a contact first fills in their company, and changing the company clears a contact who doesn't work there. Cards drag between stages like opportunities, and there is a list view too. Opening a card shows the activity pad, the company's recent activity and open tasks, and Remove from board. The company page lists the boards it is on.
 
 When an opportunity is marked won, its company becomes a Customer, and every board with Add companies when a deal is won gets a card for it in its first stage. The assistant can create, rename and delete boards, change their stages and auto-add setting, add companies, and move or remove cards.
 

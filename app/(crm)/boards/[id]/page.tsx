@@ -5,8 +5,6 @@ import OpportunitiesScreen from "@/components/crm/opportunities-screen";
 import { PAGE_SIZE, pageFromParams, pageOffset } from "@/components/crm/paging";
 import { getUserActor } from "@/lib/auth/user";
 import { getBoard } from "@/lib/crm/boards";
-import { listCompanies } from "@/lib/crm/companies";
-import { listContacts } from "@/lib/crm/contacts";
 import { CrmError } from "@/lib/crm/errors";
 import { listOpportunities } from "@/lib/crm/opportunities";
 import { opportunityQueryFromSearchParams } from "@/lib/crm/validation";
@@ -50,11 +48,7 @@ export default async function BoardPage({
   filters.pipelineId = board.id;
   filters.limit = PAGE_SIZE;
   filters.offset = pageOffset(page);
-  const [listed, companies, contacts] = await Promise.all([
-    listOpportunities(user, filters),
-    listCompanies(user, { limit: 100, sort: "name", order: "asc" }),
-    listContacts(user, { limit: 100 }),
-  ]);
+  const listed = await listOpportunities(user, filters);
 
   return (
     <OpportunitiesScreen
@@ -69,8 +63,6 @@ export default async function BoardPage({
       total={listed.total}
       page={page}
       query={filters.query ?? ""}
-      companies={companies.data}
-      contacts={contacts.data}
       stages={board.stages}
       view={query.get("view") === "list" ? "list" : "board"}
       board={board}

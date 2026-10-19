@@ -135,6 +135,7 @@ function LinkField({
   placeholder,
   required,
   error,
+  companyId,
 }: {
   id: string;
   label: string;
@@ -146,6 +147,7 @@ function LinkField({
   placeholder: string;
   required?: boolean;
   error?: string;
+  companyId?: string | null;
 }) {
   return (
     <Field label={label} htmlFor={id} required={required} error={error}>
@@ -157,6 +159,7 @@ function LinkField({
         onChange={onChange}
         placeholder={placeholder}
         invalid={Boolean(error)}
+        companyId={companyId}
       />
     </Field>
   );
@@ -333,7 +336,9 @@ const OPPORTUNITY_FIELDS = ["name", "companyId", "stageId", "value", "currency",
 export function QuickOpportunityForm({ prefill, setup, onDone }: FormProps) {
   const [state, action, pending] = useActionState(saveOpportunityAction, {} as RecordActionState);
   const [company, setCompany] = useState<PickedRecord | null>(prefill.company);
-  const [contact, setContact] = useState<PickedRecord | null>(prefill.contact);
+  const [contact, setContact] = useState<PickedRecord | null>(
+    prefill.contact && prefill.company ? { ...prefill.contact, company: prefill.company } : null,
+  );
   const [stageId, setStageId] = useState<string | null>(null);
   const name = useRef("");
   const error = (field: string) => fieldError(state, OPPORTUNITY_FIELDS, field);
@@ -373,7 +378,10 @@ export function QuickOpportunityForm({ prefill, setup, onDone }: FormProps) {
         empty=""
         required
         value={company}
-        onChange={setCompany}
+        onChange={(next) => {
+          setCompany(next);
+          if (contact && contact.company?.id !== next?.id) setContact(null);
+        }}
         placeholder="Choose a company"
         error={error("companyId")}
       />
@@ -419,8 +427,9 @@ export function QuickOpportunityForm({ prefill, setup, onDone }: FormProps) {
           setContact(next);
           if (next?.company && !company) setCompany(next.company);
         }}
-        placeholder="Choose a contact"
+        placeholder={company ? `Choose someone at ${company.name}` : "Choose a contact"}
         error={error("primaryContactId")}
+        companyId={company?.id ?? null}
       />
     </Shell>
   );

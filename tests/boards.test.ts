@@ -137,6 +137,25 @@ describe("boards", () => {
     assert.equal(pipeline.totals.count, 3);
   });
 
+  it("only takes a main contact who works at the card's company", async () => {
+    const board = await createBoard(owner, { name: "Contacts check" });
+    const loner = (await createContact(owner, { firstName: "Lee", lastName: "Solo" })).body.contact.id;
+    await assert.rejects(
+      createOpportunity(owner, { companyId: globex, pipelineId: board.id, primaryContactId: jane }),
+      /Jane Doe doesn't work at Globex Boards/,
+    );
+    await assert.rejects(
+      createOpportunity(owner, { companyId: globex, pipelineId: board.id, primaryContactId: loner }),
+      /Lee Solo doesn't work at Globex Boards/,
+    );
+    const card = (await createOpportunity(owner, { companyId: acme, pipelineId: board.id, primaryContactId: jane })).body.opportunity;
+    assert.equal(card.primaryContactId, jane);
+    await assert.rejects(updateOpportunity(owner, card.id, { companyId: globex }), /doesn't work at Globex Boards/);
+    const cleared = await updateOpportunity(owner, card.id, { companyId: globex, primaryContactId: null });
+    assert.equal(cleared.body.opportunity.primaryContactId, null);
+    await archiveBoard(owner, board.id);
+  });
+
   it("takes a deleted board and its cards out of view", async () => {
     const welcome = (await listBoards(owner)).find((board) => board.name === "Welcome pack");
     assert.ok(welcome);

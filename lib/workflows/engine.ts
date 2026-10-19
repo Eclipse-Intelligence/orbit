@@ -133,6 +133,7 @@ function contactVars(contact: Contact) {
     phone: contact.phone,
     jobTitle: contact.jobTitle,
     ownerId: contact.ownerId,
+    companyId: contact.companyId,
     url: link(contactHref(contact.id)),
   };
 }
@@ -464,13 +465,14 @@ async function runStepAction(ctx: Ctx, step: Step): Promise<StepResult> {
         }
         return { kind: "next", output: { cardId: existing.id, stage: existing.stageName, moved: false } };
       }
+      const contact = ctx.vars.contact as { id?: string; companyId?: string | null } | undefined;
       const created = await createOpportunity(
         ctx.actor,
         {
           companyId,
           pipelineId: boardId,
           ...(stageId ? { stageId } : {}),
-          primaryContactId: (ctx.vars.contact as { id?: string } | undefined)?.id ?? null,
+          primaryContactId: contact?.id && contact.companyId === companyId ? contact.id : null,
         },
         { provenance: provenance(ctx, step) },
       );
