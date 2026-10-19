@@ -1,6 +1,9 @@
 import { createHmac, randomUUID } from "node:crypto";
+import { after } from "next/server";
 import { appSecret } from "@/lib/auth/config";
 import { CrmError } from "@/lib/crm/errors";
+import { contactHref } from "@/lib/crm/hrefs";
+import { sendOwnMail } from "@/lib/crm/inbox";
 import { openInviteSender, sendInvite } from "@/lib/crm/invites";
 import { canonicalEmail } from "@/lib/crm/normalize";
 import type { UserActor } from "@/lib/crm/types";
@@ -24,7 +27,9 @@ import {
   parseMonth,
   type BusyInterval,
 } from "@/lib/booking/slots";
+import { siteOrigin } from "@/lib/site-url";
 import { isTimeZone } from "@/lib/time";
+import { notify } from "@/lib/workflows/engine";
 
 const MINUTE = 60_000;
 const DAY = 86_400_000;
@@ -245,10 +250,17 @@ export async function bookSlot(slug: string, input: BookingInput, context: Booki
   const owner = await loadBookingOwner(slug);
   if (!owner) throw missing();
   const fetchImpl = context.fetchImpl ?? fetch;
+  const booked: { contactId: string | null; when: string | null; link: string | null; mailbox: string | null } = {
+    contactId: null,
+    when: null,
+    link: null,
+    mailbox: null,
+  };
   const result = await withBookingLock(page.userId, async () => {
     const busy = await loadBusy(page.userId, busyWindow.from, busyWindow.to);
     if (!isOpenSlot(page.rules, start, now, busy)) throw new CrmError("conflict", SLOT_TAKEN, 409, { field: "start" });
     const sender = await openOwnerSender(owner, fetchImpl);
+    booked.mailbox = sender.stored.email;
     if (sender.own.has(email)) {
       throw invalid("That's the organiser's address. Use your own email.", "email");
     }
@@ -269,24 +281,29 @@ export async function bookSlot(slug: string, input: BookingInput, context: Booki
         createContacts: true,
         fetchImpl,
         provenance: { operation: "booking_page", source: "booking" },
-        activity: (contact, details) => ({
-          title: "Booked via your booking page",
-          body: [
-            details.when,
-            details.link ? `Join: ${details.link}` : null,
-            note ? `\nNote from ${name}:\n${note}` : null,
-          ]
-            .filter(Boolean)
-            .join("\n"),
-          metadata: {
-            source: "booking",
-            kind: "booking",
-            eventId: details.eventId,
-            providerEventId: details.providerEventId,
-            startsAt: details.startsAt,
-            page: bookingPath(page.slug),
-          },
-        }),
+        activity: (contact, details) => {
+          booked.contactId = contact.id;
+          booked.when = details.when;
+          booked.link = details.link ?? null;
+          return {
+            title: "Booked via your booking page",
+            body: [
+              details.when,
+              details.link ? `Join: ${details.link}` : null,
+              note ? `\nNote from ${name}:\n${note}` : null,
+            ]
+              .filter(Boolean)
+              .join("\n"),
+            metadata: {
+              source: "booking",
+              kind: "booking",
+              eventId: details.eventId,
+              providerEventId: details.providerEventId,
+              startsAt: details.startsAt,
+              page: bookingPath(page.slug),
+            },
+          };
+        },
       });
     } catch (error) {
       throw await failed(owner, error);
@@ -294,6 +311,20 @@ export async function bookSlot(slug: string, input: BookingInput, context: Booki
   });
   if (result.warning) console.error("Booking saved with a warning", result.warning);
   await recordBookingError(owner, null).catch(() => undefined);
+  await whenDone(() =>
+    alertOwner(owner, {
+      name,
+      email,
+      note,
+      title: page.title,
+      subject: result.subject,
+      when: booked.when ?? new Date(result.startsAt).toUTCString(),
+      link: booked.link,
+      contactId: booked.contactId,
+      mailbox: booked.mailbox,
+      fetchImpl,
+    }),
+  );
   return {
     subject: result.subject,
     title: page.title,
@@ -307,6 +338,69 @@ export async function bookSlot(slug: string, input: BookingInput, context: Booki
     pageTimeZone: page.timeZone,
     meetingKind: page.meetingKind,
   };
+}
+
+async function whenDone(run: () => Promise<void>) {
+  try {
+    after(run);
+  } catch {
+    await run();
+  }
+}
+
+export async function alertOwner(
+  owner: UserActor,
+  booking: {
+    name: string;
+    email: string;
+    note: string | null;
+    title: string;
+    subject: string;
+    when: string;
+    link: string | null;
+    contactId: string | null;
+    mailbox: string | null;
+    fetchImpl?: typeof fetch;
+  },
+) {
+  const path = booking.contactId ? contactHref(booking.contactId) : "/calendar";
+  const origin = siteOrigin();
+  try {
+    await notify(owner, owner.userId, {
+      title: `${booking.name} booked ${booking.title}`,
+      body: [booking.when, booking.note ? `Note: ${booking.note}` : null].filter(Boolean).join("\n"),
+      href: path,
+      source: "booking",
+    });
+  } catch (error) {
+    console.error("Booking notification failed", error);
+  }
+  if (!booking.mailbox) return;
+  try {
+    await sendOwnMail(
+      owner,
+      {
+        to: booking.mailbox,
+        toName: owner.fullName,
+        subject: `New booking: ${booking.name}, ${booking.when}`,
+        body: [
+          `${booking.name} (${booking.email}) booked ${booking.title} through your booking page.`,
+          "",
+          booking.when,
+          booking.link ? `Join: ${booking.link}` : null,
+          booking.note ? `\nNote from ${booking.name}:\n${booking.note}` : null,
+          "",
+          `It's in your calendar as "${booking.subject}"${booking.contactId ? ` and on ${booking.name}'s record in Orbit` : ""}.`,
+          origin ? `${origin}${path}` : null,
+        ]
+          .filter((line) => line !== null)
+          .join("\n"),
+      },
+      booking.fetchImpl,
+    );
+  } catch (error) {
+    console.error("Booking email failed", error);
+  }
 }
 
 async function failed(owner: UserActor, error: unknown) {

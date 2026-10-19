@@ -136,12 +136,17 @@ function graph(
         201,
       );
     }
+    if (init?.method === "POST" && parsed.pathname === "/v1.0/me/sendMail") return new Response(null, { status: 202 });
     return json({ error: { code: "NotFound", message: "Unexpected call" } }, 404);
   }) as typeof fetch;
 }
 
 function posts(calls: Call[]) {
-  return calls.filter((call) => call.method === "POST" && new URL(call.url).hostname === "graph.microsoft.com");
+  return calls.filter((call) => call.method === "POST" && new URL(call.url).hostname === "graph.microsoft.com" && call.url.endsWith("/events"));
+}
+
+function alerts(calls: Call[]) {
+  return calls.filter((call) => call.method === "POST" && call.url === "https://graph.microsoft.com/v1.0/me/sendMail");
 }
 
 async function connect(actor: UserActor) {
@@ -572,6 +577,7 @@ describe("booking a call", () => {
   }
 
   it("creates the Outlook meeting, the contact, the activity and the saved event", async () => {
+    process.env.SITE_URL = "https://orbit.test";
     const calls: Call[] = [];
     const booking = await bookSlot("mark", input(), { ip: freshIp(), now: NOW, fetchImpl: graph(calls) });
     assert.deepEqual(booking, {
@@ -637,6 +643,24 @@ describe("booking a call", () => {
     assert.match(activity.rows[0].body, /Keen to talk <pricing> & terms/);
     assert.equal(activity.rows[0].metadata.source, "booking");
     assert.equal(activity.rows[0].metadata.eventId, event.rows[0].id);
+
+    const [alert] = alerts(calls);
+    assert.equal(alerts(calls).length, 1);
+    const message = (alert.body as { message: { subject: string; body: { content: string }; toRecipients: { emailAddress: { address: string } }[] } }).message;
+    assert.equal(message.toRecipients[0].emailAddress.address, MAILBOX);
+    assert.match(message.subject, /^New booking: Jane Doe, Mon, 19 Oct 2026, 14:00/);
+    assert.match(message.body.content, /Jane Doe \(jane@acme-booking\.test\) booked .+ through your booking page\./);
+    assert.match(message.body.content, /Join: https:\/\/whereby\.com\/mark/);
+    assert.match(message.body.content, /Note from Jane Doe:\nKeen to talk <pricing> & terms/);
+    assert.match(message.body.content, new RegExp(`https://orbit\\.test/contacts/${contact.rows[0].id}`));
+    const bell = await admin.query<{ title: string; href: string; source: string }>(
+      "select title, href, source from crm.notifications where user_id = $1 and source = 'booking'",
+      [owner.userId],
+    );
+    assert.equal(bell.rows.length, 1);
+    assert.match(bell.rows[0].title, /^Jane Doe booked /);
+    assert.equal(bell.rows[0].href, `/contacts/${contact.rows[0].id}`);
+    delete process.env.SITE_URL;
 
     const after = await listSlots("mark", { month: "2026-10" }, { ip: freshIp(), now: NOW });
     assert.ok(!after.days["2026-10-19"].includes(MONDAY_2PM));
