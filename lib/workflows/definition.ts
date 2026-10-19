@@ -105,33 +105,182 @@ const triggerSchema = z.discriminatedUnion("type", [
 ]);
 export type Trigger = z.infer<typeof triggerSchema>;
 
-export type Step = {
+type LegacyStep = {
   id: string;
   type: StepType;
   label?: string;
   config: Record<string, unknown>;
-  then?: Step[];
-  else?: Step[];
-  body?: Step[];
+  then?: LegacyStep[];
+  else?: LegacyStep[];
+  body?: LegacyStep[];
 };
 
-const stepSchema: z.ZodType<Step> = z.lazy(() =>
+const STEP_ID = /^[a-z][a-z0-9_]{0,39}$/;
+
+const legacyStepSchema: z.ZodType<LegacyStep> = z.lazy(() =>
   z.object({
-    id: z.string().regex(/^[a-z][a-z0-9_]{0,39}$/),
+    id: z.string().regex(STEP_ID),
     type: z.enum(STEP_TYPES),
     label: z.string().max(120).optional(),
     config: z.record(z.string(), z.unknown()),
-    then: z.array(stepSchema).max(50).optional(),
-    else: z.array(stepSchema).max(50).optional(),
-    body: z.array(stepSchema).max(50).optional(),
+    then: z.array(legacyStepSchema).max(50).optional(),
+    else: z.array(legacyStepSchema).max(50).optional(),
+    body: z.array(legacyStepSchema).max(50).optional(),
   }),
 );
 
-export const definitionSchema = z.object({
-  trigger: triggerSchema,
-  steps: z.array(stepSchema).max(50),
+const legacySchema = z.object({ trigger: triggerSchema, steps: z.array(legacyStepSchema).max(50) });
+
+const position = z.object({ x: z.number().finite(), y: z.number().finite() });
+
+const nodeSchema = z.object({
+  id: z.string().regex(STEP_ID),
+  type: z.enum(STEP_TYPES),
+  label: z.string().max(120).optional(),
+  config: z.record(z.string(), z.unknown()),
+  position,
 });
+
+const edgeSchema = z.object({
+  source: z.string().max(40),
+  handle: z.string().max(10),
+  target: z.string().regex(STEP_ID),
+});
+
+export const definitionSchema = z.object({
+  version: z.literal(2),
+  trigger: triggerSchema,
+  triggerPosition: position,
+  nodes: z.array(nodeSchema).max(60),
+  edges: z.array(edgeSchema).max(200),
+});
+
+export type WorkflowNode = z.infer<typeof nodeSchema>;
+export type WorkflowEdge = z.infer<typeof edgeSchema>;
 export type WorkflowDefinition = z.infer<typeof definitionSchema>;
+export type Step = WorkflowNode;
+
+export const TRIGGER_NODE = "trigger";
+
+export function outputHandles(type: StepType | typeof TRIGGER_NODE): string[] {
+  if (type === "if") return ["true", "false"];
+  if (type === "loop") return ["each", "done"];
+  return ["out"];
+}
+
+export const HANDLE_LABELS: Record<string, string> = { true: "Yes", false: "No", each: "Each item", done: "Done" };
+
+export function graphProblem(definition: WorkflowDefinition): string | null {
+  const ids = new Set(definition.nodes.map((node) => node.id));
+  if (ids.size !== definition.nodes.length) return "Two nodes share the same id.";
+  if (ids.has(TRIGGER_NODE)) return "A node can't be called trigger.";
+  const types = new Map<string, StepType | typeof TRIGGER_NODE>(definition.nodes.map((node) => [node.id, node.type]));
+  types.set(TRIGGER_NODE, TRIGGER_NODE);
+  const used = new Set<string>();
+  for (const edge of definition.edges) {
+    const type = types.get(edge.source);
+    if (!type) return "A connection starts from a node that doesn't exist.";
+    if (!ids.has(edge.target)) return "A connection goes to a node that doesn't exist.";
+    if (edge.source === edge.target) return "A node can't connect to itself.";
+    if (!outputHandles(type).includes(edge.handle)) return "A connection uses an output the node doesn't have.";
+    const key = `${edge.source}:${edge.handle}`;
+    if (used.has(key)) return "An output can only connect to one node.";
+    used.add(key);
+  }
+  const next = new Map<string, string[]>();
+  for (const edge of definition.edges) next.set(edge.source, [...(next.get(edge.source) ?? []), edge.target]);
+  const state = new Map<string, number>();
+  const visit = (id: string): boolean => {
+    if (state.get(id) === 1) return true;
+    if (state.get(id) === 2) return false;
+    state.set(id, 1);
+    for (const target of next.get(id) ?? []) if (visit(target)) return true;
+    state.set(id, 2);
+    return false;
+  };
+  for (const id of [TRIGGER_NODE, ...ids]) if (visit(id)) return "Connections can't loop back. Use For each item to repeat steps.";
+  return null;
+}
+
+export function nextNode(definition: WorkflowDefinition, source: string, handle: string) {
+  return definition.edges.find((edge) => edge.source === source && edge.handle === handle)?.target ?? null;
+}
+
+export function ancestors(definition: WorkflowDefinition, nodeId: string) {
+  const found = new Set<string>();
+  const queue = [nodeId];
+  while (queue.length) {
+    const current = queue.shift()!;
+    for (const edge of definition.edges) {
+      if (edge.target === current && edge.source !== TRIGGER_NODE && !found.has(edge.source)) {
+        found.add(edge.source);
+        queue.push(edge.source);
+      }
+    }
+  }
+  return found;
+}
+
+const COLUMN = 280;
+const ROW = 140;
+
+export function autoLayout(definition: WorkflowDefinition): WorkflowDefinition {
+  const depth = new Map<string, number>([[TRIGGER_NODE, 0]]);
+  const order: string[] = [];
+  const walk = (id: string, level: number) => {
+    if ((depth.get(id) ?? -1) >= level && id !== TRIGGER_NODE) return;
+    depth.set(id, level);
+    if (!order.includes(id)) order.push(id);
+    const type = id === TRIGGER_NODE ? TRIGGER_NODE : definition.nodes.find((node) => node.id === id)?.type;
+    if (!type) return;
+    for (const handle of outputHandles(type)) {
+      const target = nextNode(definition, id, handle);
+      if (target) walk(target, level + 1);
+    }
+  };
+  walk(TRIGGER_NODE, 0);
+  for (const node of definition.nodes) if (!depth.has(node.id)) {
+    depth.set(node.id, 1);
+    order.push(node.id);
+  }
+  const rows = new Map<number, number>();
+  const place = new Map<string, { x: number; y: number }>();
+  for (const id of order) {
+    const level = depth.get(id) ?? 0;
+    const row = rows.get(level) ?? 0;
+    rows.set(level, row + 1);
+    place.set(id, { x: row * COLUMN, y: level * ROW });
+  }
+  return {
+    ...definition,
+    triggerPosition: place.get(TRIGGER_NODE) ?? { x: 0, y: 0 },
+    nodes: definition.nodes.map((node) => ({ ...node, position: place.get(node.id) ?? node.position })),
+  };
+}
+
+function fromLegacy(legacy: z.infer<typeof legacySchema>): WorkflowDefinition {
+  const nodes: WorkflowNode[] = [];
+  const edges: WorkflowEdge[] = [];
+  type Exit = { source: string; handle: string };
+  const chain = (steps: LegacyStep[], entries: Exit[]): Exit[] => {
+    let open = entries;
+    for (const step of steps) {
+      nodes.push({ id: step.id, type: step.type, ...(step.label ? { label: step.label } : {}), config: step.config, position: { x: 0, y: 0 } });
+      for (const entry of open) edges.push({ ...entry, target: step.id });
+      if (step.type === "if") {
+        open = [...chain(step.then ?? [], [{ source: step.id, handle: "true" }]), ...chain(step.else ?? [], [{ source: step.id, handle: "false" }])];
+      } else if (step.type === "loop") {
+        chain(step.body ?? [], [{ source: step.id, handle: "each" }]);
+        open = [{ source: step.id, handle: "done" }];
+      } else {
+        open = [{ source: step.id, handle: "out" }];
+      }
+    }
+    return open;
+  };
+  chain(legacy.steps, [{ source: TRIGGER_NODE, handle: "out" }]);
+  return autoLayout({ version: 2, trigger: legacy.trigger, triggerPosition: { x: 0, y: 0 }, nodes, edges });
+}
 
 export const TRIGGER_LABELS: Record<TriggerType, string> = {
   call_summary_ready: "A call summary is ready",
@@ -147,7 +296,7 @@ export const TRIGGER_LABELS: Record<TriggerType, string> = {
 
 export const STEP_LABELS: Record<StepType, string> = {
   ai: "Ask AI",
-  if: "If / else",
+  if: "If",
   filter: "Continue only if",
   loop: "For each item",
   delay: "Wait",
@@ -163,8 +312,8 @@ export const STEP_LABELS: Record<StepType, string> = {
 
 export const STEP_HINTS: Record<StepType, string> = {
   ai: "Prompt an LLM and get back named fields you can use in later steps.",
-  if: "Run different steps depending on a condition.",
-  filter: "Stop the run unless a condition is true.",
+  if: "Go one way or another depending on a condition.",
+  filter: "Stop here unless a condition is true.",
   loop: "Repeat steps for each item in a list, such as each risk the AI found.",
   delay: "Pause for minutes, hours or days.",
   approval: "Pause until you approve or reject in Orbit.",
@@ -177,13 +326,11 @@ export const STEP_HINTS: Record<StepType, string> = {
   linear_issue: "Create an issue in Linear.",
 };
 
-export function parseDefinition(value: unknown): WorkflowDefinition {
-  return definitionSchema.parse(value);
-}
-
 export function safeDefinition(value: unknown): WorkflowDefinition | null {
   const parsed = definitionSchema.safeParse(value);
-  return parsed.success ? parsed.data : null;
+  if (parsed.success) return parsed.data;
+  const legacy = legacySchema.safeParse(value);
+  return legacy.success ? fromLegacy(legacy.data) : null;
 }
 
 export function eventTriggerTypes(eventType: string, entityType: string, changes: Record<string, unknown>): TriggerType[] {
@@ -231,14 +378,10 @@ function zonedTime(year: number, month: number, day: number, hour: number, minut
 }
 
 export function newStepId(type: StepType, existing: string[]) {
-  const base = type === "ai" ? "ai" : type;
+  const base = type;
   for (let index = 1; index < 500; index += 1) {
     const id = `${base}_${index}`;
     if (!existing.includes(id)) return id;
   }
   return `${base}_${Date.now()}`;
-}
-
-export function allSteps(steps: Step[]): Step[] {
-  return steps.flatMap((step) => [step, ...allSteps(step.then ?? []), ...allSteps(step.else ?? []), ...allSteps(step.body ?? [])]);
 }

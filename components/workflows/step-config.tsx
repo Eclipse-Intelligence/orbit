@@ -94,21 +94,34 @@ function Conditions({ step, update, variables }: { step: Step; update: (config: 
       )}
       {conditions.map((condition, index) => (
         <div key={index} className="border-border flex flex-col gap-2 rounded-lg border p-3">
-          <TemplateField
+          <Select
             id={`${step.id}-left-${index}`}
-            label="Value"
+            label="When"
             value={condition.left}
-            options={variables}
-            placeholder="{{steps.ai_1.health}}"
             onChange={(value) => set(conditions.map((item, at) => (at === index ? { ...item, left: value } : item)))}
-          />
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+          >
+            <option value="">Choose a field…</option>
+            {condition.left && !variables.some((option) => `{{${option.path}}}` === condition.left) && (
+              <option value={condition.left}>{condition.left}</option>
+            )}
+            {[...new Set(variables.map((option) => option.group))].map((group) => (
+              <optgroup key={group} label={group}>
+                {variables
+                  .filter((option) => option.group === group)
+                  .map((option) => (
+                    <option key={option.path} value={`{{${option.path}}}`}>
+                      {option.label}
+                    </option>
+                  ))}
+              </optgroup>
+            ))}
+          </Select>
+          <div className="flex flex-col gap-2">
             <Select
               id={`${step.id}-op-${index}`}
               label="Check"
               value={condition.op}
               onChange={(value) => set(conditions.map((item, at) => (at === index ? { ...item, op: value as Condition["op"] } : item)))}
-              className="sm:w-48"
             >
               {CONDITION_OPS.map((op) => (
                 <option key={op} value={op}>
@@ -128,9 +141,11 @@ function Conditions({ step, update, variables }: { step: Step; update: (config: 
                 />
               </div>
             )}
-            <Button variant="ghost" size="sm" className="h-9" onClick={() => set(conditions.filter((_, at) => at !== index))}>
-              Remove
-            </Button>
+            {conditions.length > 1 && (
+              <Button variant="ghost" size="sm" className="self-start" onClick={() => set(conditions.filter((_, at) => at !== index))}>
+                Remove
+              </Button>
+            )}
           </div>
         </div>
       ))}
@@ -146,10 +161,10 @@ function Outputs({ step, update }: { step: Step; update: (config: Record<string,
   const set = (next: Output[]) => update({ ...step.config, outputs: next });
   return (
     <fieldset className="flex flex-col gap-2">
-      <legend className="caption-style text-subtle pb-1.5">Answers to get back (each becomes a field for later steps)</legend>
+      <legend className="caption-style text-subtle pb-1.5">Answers (later nodes can use these)</legend>
       {outputs.map((output, index) => (
         <div key={index} className="border-border flex flex-col gap-2 rounded-lg border p-3">
-          <div className="flex flex-col gap-2 sm:flex-row">
+          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
             <Input
               aria-label="Field name"
               placeholder="field_name"
@@ -157,13 +172,12 @@ function Outputs({ step, update }: { step: Step; update: (config: Record<string,
               onChange={(event) =>
                 set(outputs.map((item, at) => (at === index ? { ...item, key: event.target.value.replace(/[^a-zA-Z0-9_]/g, "").slice(0, 40) } : item)))
               }
-              className="sm:w-44"
             />
             <select
               aria-label="Type"
               value={output.type}
               onChange={(event) => set(outputs.map((item, at) => (at === index ? { ...item, type: event.target.value } : item)))}
-              className={cn(recordSelectClass, "sm:w-36")}
+              className={cn(recordSelectClass, "w-32")}
             >
               {AI_OUTPUT_TYPES.map((type) => (
                 <option key={type} value={type}>
@@ -176,12 +190,14 @@ function Outputs({ step, update }: { step: Step; update: (config: Record<string,
               placeholder="What it should contain"
               value={output.description ?? ""}
               onChange={(event) => set(outputs.map((item, at) => (at === index ? { ...item, description: event.target.value } : item)))}
-              className="flex-1"
+              className="col-span-2"
             />
-            <Button variant="ghost" size="sm" className="h-9" onClick={() => set(outputs.filter((_, at) => at !== index))}>
+          </div>
+          {outputs.length > 1 && (
+            <Button variant="ghost" size="sm" className="self-start" onClick={() => set(outputs.filter((_, at) => at !== index))}>
               Remove
             </Button>
-          </div>
+          )}
           {output.type === "choice" && (
             <Input
               aria-label="Choices, separated by commas"
