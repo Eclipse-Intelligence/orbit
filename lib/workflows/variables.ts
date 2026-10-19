@@ -1,5 +1,5 @@
-import type { ConditionOp, Step, Trigger } from "@/lib/workflows/definition";
-import { allSteps } from "@/lib/workflows/definition";
+import type { ConditionOp, WorkflowDefinition } from "@/lib/workflows/definition";
+import { ancestors } from "@/lib/workflows/definition";
 
 export type Vars = Record<string, unknown>;
 
@@ -112,9 +112,9 @@ const BASE: VariableOption[] = [
   { path: "today", label: "Today's date", group: "Run" },
 ];
 
-export function variableOptions(trigger: Trigger | null, steps: Step[], before?: string): VariableOption[] {
+export function variableOptions(definition: WorkflowDefinition | null, nodeId?: string): VariableOption[] {
   const options = [...BASE];
-  const type = trigger?.type;
+  const type = definition?.trigger.type;
   if (type && type !== "schedule") options.push(...COMPANY, ...CONTACT);
   if (type === "call_summary_ready" || type === "activity_logged") {
     options.push(
@@ -150,9 +150,8 @@ export function variableOptions(trigger: Trigger | null, steps: Step[], before?:
   if (type === "task_completed") {
     options.push({ path: "task.title", label: "Title", group: "Task" }, { path: "task.completedAt", label: "Completed", group: "Task" });
   }
-  const flat = allSteps(steps);
-  const stop = before ? flat.findIndex((step) => step.id === before) : flat.length;
-  for (const step of flat.slice(0, stop < 0 ? flat.length : stop)) {
+  const upstream = definition && nodeId ? ancestors(definition, nodeId) : null;
+  for (const step of (definition?.nodes ?? []).filter((node) => !upstream || upstream.has(node.id))) {
     const group = step.label || step.id;
     if (step.type === "ai") {
       const outputs = Array.isArray(step.config.outputs) ? (step.config.outputs as { key?: string }[]) : [];

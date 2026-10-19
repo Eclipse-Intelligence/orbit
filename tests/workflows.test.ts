@@ -8,7 +8,7 @@ import { scopesForRole } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { resetLinearCache } from "@/lib/linear";
-import { nextScheduleRun, type WorkflowDefinition } from "@/lib/workflows/definition";
+import { nextScheduleRun, safeDefinition, type WorkflowDefinition } from "@/lib/workflows/definition";
 import { runWorkflowTick } from "@/lib/workflows/engine";
 import {
   createWorkflow,
@@ -87,8 +87,8 @@ function fakes(replies: Record<string, unknown>[]) {
   return { fetchImpl, ai, linear };
 }
 
-const AT_RISK = { sentiment: "Negative", health: "at risk", risks: ["Finance may push back on renewal"], productRequests: ["Add SSO", "CSV export"] };
-const HEALTHY = { sentiment: "Positive", health: "Healthy", risks: [], productRequests: [] };
+const AT_RISK = { health: "at risk", reason: "Finance may push back on renewal", requests: ["Add SSO", "CSV export"] };
+const HEALTHY = { health: "Healthy", reason: "All good", requests: [] };
 
 describe("workflow variables", () => {
   it("renders fields, lists and conditions", () => {
@@ -142,27 +142,25 @@ describe("workflows", () => {
     return (await createActivity(owner, { type: "call", title, contactId, companyId, occurredAt: new Date().toISOString() })).body.activity.id;
   }
 
-  it("runs the after-call template: reviews the call, alerts on risk and waits for approval before Linear", async () => {
-    const workflow = await createWorkflow(owner, { template: "after-client-call" });
-    assert.equal(workflow.name, "After a client call");
-    await setWorkflowStatus(owner, workflow.id, "active");
+  it("runs the starter templates: flags an at-risk client and waits for approval before Linear", async () => {
+    const risk = await createWorkflow(owner, { template: "at-risk-after-call" });
+    const requests = await createWorkflow(owner, { template: "requests-to-linear" });
+    assert.equal(risk.name, "Flag at-risk clients after a call");
+    assert.equal(risk.definition.nodes.length, 3);
+    await setWorkflowStatus(owner, risk.id, "active");
+    await setWorkflowStatus(owner, requests.id, "active");
 
     const llm = fakes([AT_RISK]);
     await summariseCall(owner, await call("Rollout check-in"), VTT, { source: "manual", fetchImpl: llm.fetchImpl, autoAccept: false });
     const tick = await runWorkflowTick({ fetchImpl: llm.fetchImpl, budgetMs: 30_000 });
-    assert.equal(tick.dispatched, 1);
-    assert.equal(tick.processed, 1);
-    assert.equal(llm.ai.length, 1);
-    assert.equal(llm.ai[0].model, "claude-sonnet-5-5");
-    assert.match(llm.ai[0].user, /Company: Acme Flows/);
-    assert.match(llm.ai[0].user, /SSO and a CSV export/);
-    assert.match(llm.ai[0].system, /"productRequests" \(array of strings\)/);
+    assert.equal(tick.dispatched, 2);
+    assert.equal(tick.processed, 2);
+    assert.equal(llm.ai.length, 2);
+    assert.match(llm.ai[0].user, /Acme Flows/);
+    assert.match(llm.ai[0].user, /needs SSO and CSV export/);
 
-    const notes = await listActivities(owner, { companyId, type: "note" });
-    assert.equal(notes.data[0].title, "Call review: At risk");
-    assert.match(notes.data[0].body ?? "", /- Finance may push back on renewal/);
     const alerts = await listNotifications(owner);
-    assert.ok(alerts.some((item) => item.title === "Acme Flows looks at risk after a call"));
+    assert.ok(alerts.some((item) => item.title === "Acme Flows looks at risk" && item.body === "Finance may push back on renewal"));
     const approvals = await listApprovals(owner);
     assert.equal(approvals.length, 1);
     assert.equal(approvals[0].title, "Create Linear issues for Acme Flows?");
@@ -180,16 +178,18 @@ describe("workflows", () => {
     assert.equal(run.companyName, "Acme Flows");
     assert.deepEqual(
       steps.filter((step) => step.status === "succeeded").map((step) => step.stepId),
-      ["ai_1", "add_note_1", "if_1", "notify_1", "if_2", "approval_1", "loop_1", "linear_issue_1", "linear_issue_1"],
+      ["ai_1", "if_1", "approval_1", "loop_1", "linear_issue_1", "linear_issue_1"],
     );
     assert.deepEqual(await listApprovals(owner), []);
   });
 
   it("takes the quiet path for a healthy call, and stops when an approval is rejected", async () => {
     const healthy = fakes([HEALTHY]);
+    const before = (await listNotifications(owner)).length;
     await summariseCall(owner, await call("Happy check-in"), VTT, { source: "manual", fetchImpl: healthy.fetchImpl, autoAccept: false });
     await runWorkflowTick({ fetchImpl: healthy.fetchImpl, budgetMs: 30_000 });
     assert.deepEqual(await listApprovals(owner), []);
+    assert.equal((await listNotifications(owner)).length, before);
     assert.equal(healthy.linear.length, 0);
 
     const risky = fakes([AT_RISK]);
@@ -202,27 +202,71 @@ describe("workflows", () => {
   });
 
   it("test runs a workflow against a record without changing anything", async () => {
-    const workflow = (await listWorkflows(owner)).mine[0];
-    const before = (await listActivities(owner, { companyId, type: "note" })).total;
+    const workflow = (await listWorkflows(owner)).mine.find((item) => item.name === "Flag at-risk clients after a call")!;
+    const before = (await listNotifications(owner)).length;
     const llm = fakes([AT_RISK]);
     const result = await startRun(owner, workflow.id, { test: true, record: { type: "company", id: companyId }, fetchImpl: llm.fetchImpl });
     assert.equal(result.status, "succeeded");
-    assert.equal((await listActivities(owner, { companyId, type: "note" })).total, before);
-    assert.equal(llm.linear.length, 0);
+    assert.equal((await listNotifications(owner)).length, before);
     const { steps } = await getRunSteps(owner, result.runId);
-    const note = steps.find((step) => step.stepId === "add_note_1");
-    assert.deepEqual((note?.output as { testRun: boolean }).testRun, true);
-    assert.match(JSON.stringify(note?.output), /Call review: At risk/);
+    const alert = steps.find((step) => step.stepId === "notify_1");
+    assert.deepEqual((alert?.output as { testRun: boolean }).testRun, true);
+    assert.match(JSON.stringify(alert?.output), /Acme Flows looks at risk/);
     const runs = await listRuns(owner, workflow.id);
     assert.ok(runs.some((item) => item.test));
   });
 
-  it("waits on a delay, keeps workflows personal, and shares them as templates", async () => {
-    const definition: WorkflowDefinition = {
+  it("reads older step lists as a graph, and refuses broken graphs", async () => {
+    const legacy = safeDefinition({
       trigger: { type: "manual", object: "company" },
       steps: [
-        { id: "delay_1", type: "delay", config: { amount: 1, unit: "hours" } },
-        { id: "add_note_1", type: "add_note", config: { title: "Checked in", body: "Follow-up check for {{company.name}}" } },
+        { id: "if_1", type: "if", config: {}, then: [{ id: "notify_1", type: "notify", config: {} }], else: [] },
+        { id: "add_note_1", type: "add_note", config: {} },
+      ],
+    });
+    assert.ok(legacy);
+    assert.deepEqual(
+      legacy.edges.map((edge) => `${edge.source}:${edge.handle}>${edge.target}`).sort(),
+      ["if_1:false>add_note_1", "if_1:true>notify_1", "notify_1:out>add_note_1", "trigger:out>if_1"],
+    );
+    assert.ok(legacy.nodes.every((node) => node.position.y > 0));
+
+    const workflow = await createWorkflow(owner, { name: "Broken" });
+    const nodes = [
+      { id: "notify_1", type: "notify" as const, config: {}, position: { x: 300, y: 0 } },
+      { id: "notify_2", type: "notify" as const, config: {}, position: { x: 600, y: 0 } },
+    ];
+    const base = { version: 2 as const, trigger: { type: "manual" as const, object: "company" as const }, triggerPosition: { x: 0, y: 0 }, nodes };
+    await assert.rejects(
+      saveWorkflow(owner, workflow.id, {
+        definition: { ...base, edges: [{ source: "notify_1", handle: "out", target: "notify_2" }, { source: "notify_2", handle: "out", target: "notify_1" }] },
+      }),
+      /can't loop back/,
+    );
+    await assert.rejects(
+      saveWorkflow(owner, workflow.id, {
+        definition: { ...base, edges: [{ source: "trigger", handle: "out", target: "notify_1" }, { source: "trigger", handle: "out", target: "notify_2" }] },
+      }),
+      /only connect to one node/,
+    );
+    await assert.rejects(
+      saveWorkflow(owner, workflow.id, { definition: { ...base, edges: [{ source: "notify_1", handle: "true", target: "notify_2" }] } }),
+      /output the node doesn't have/,
+    );
+  });
+
+  it("waits on a delay, keeps workflows personal, and shares them as templates", async () => {
+    const definition: WorkflowDefinition = {
+      version: 2,
+      trigger: { type: "manual", object: "company" },
+      triggerPosition: { x: 0, y: 0 },
+      nodes: [
+        { id: "delay_1", type: "delay", config: { amount: 1, unit: "hours" }, position: { x: 300, y: 0 } },
+        { id: "add_note_1", type: "add_note", config: { title: "Checked in", body: "Follow-up check for {{company.name}}" }, position: { x: 600, y: 0 } },
+      ],
+      edges: [
+        { source: "trigger", handle: "out", target: "delay_1" },
+        { source: "delay_1", handle: "out", target: "add_note_1" },
       ],
     };
     const workflow = await createWorkflow(member, { name: "Hour later note" });
@@ -239,7 +283,8 @@ describe("workflows", () => {
     assert.equal(notes.data[0].title, "Checked in");
 
     await assert.rejects(saveWorkflow(member, (await listWorkflows(owner)).mine[0].id, { name: "Mine now" }), /not found|Only the person/);
-    await assert.rejects(getRunSteps(member, (await listRuns(owner, (await listWorkflows(owner)).mine[0].id))[0].id), /Run not found/);
+    const ownerFlow = (await listWorkflows(owner)).mine.find((item) => item.name === "Flag at-risk clients after a call")!;
+    await assert.rejects(getRunSteps(member, (await listRuns(owner, ownerFlow.id))[0].id), /Run not found/);
     assert.deepEqual((await listWorkflows(owner)).templates, []);
 
     await setWorkflowTemplate(member, workflow.id, true);
@@ -252,7 +297,7 @@ describe("workflows", () => {
     assert.equal(copy.mine, true);
     assert.equal(copy.status, "draft");
     assert.deepEqual(
-      copy.definition.steps.map((step) => step.id),
+      copy.definition.nodes.map((node) => node.id),
       ["delay_1", "add_note_1"],
     );
   });
@@ -261,8 +306,11 @@ describe("workflows", () => {
     const workflow = await createWorkflow(owner, { name: "Email the contact" });
     await saveWorkflow(owner, workflow.id, {
       definition: {
+        version: 2,
         trigger: { type: "manual", object: "company" },
-        steps: [{ id: "send_email_1", type: "send_email", config: { subject: "Hi", body: "Hello {{contact.firstName}}" } }],
+        triggerPosition: { x: 0, y: 0 },
+        nodes: [{ id: "send_email_1", type: "send_email", config: { subject: "Hi", body: "Hello {{contact.firstName}}" }, position: { x: 300, y: 0 } }],
+        edges: [{ source: "trigger", handle: "out", target: "send_email_1" }],
       },
     });
     await setWorkflowStatus(owner, workflow.id, "active");
@@ -271,6 +319,6 @@ describe("workflows", () => {
     const { run } = await getRunSteps(owner, started.runId);
     assert.match(run.error ?? "", /send_email_1: This run has no contact to work on/);
     assert.ok((await listNotifications(owner)).some((item) => item.title === "Email the contact failed"));
-    await assert.rejects(setWorkflowStatus(owner, (await createWorkflow(owner, {})).id, "active"), /Add at least one step/);
+    await assert.rejects(setWorkflowStatus(owner, (await createWorkflow(owner, {})).id, "active"), /Connect the trigger to a node/);
   });
 });

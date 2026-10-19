@@ -462,9 +462,9 @@ When an opportunity is marked won, its company becomes a Customer, and every boa
 
 ## Workflows
 
-Workflows automate work around your records. Each person builds their own on the Workflows page, and runs use that person's permissions. Share as a template on a workflow lets everyone in the workspace copy it; Orbit's own starter templates are listed too.
+Workflows automate work around your records. Each person builds their own on the Workflows page, and runs use that person's permissions. Share as a template (under More on a workflow) lets everyone in the workspace copy it. Orbit's starter templates are Flag at-risk clients after a call and Product requests to Linear.
 
-A workflow has one trigger and a list of steps.
+A workflow is built on a canvas, like n8n. It always starts with a When node (the trigger). The list on the left holds every other node: click one to add it below the selected node (already connected), or drag it onto the canvas. Connect nodes by dragging from the dot under a node to the next one. If has a Yes and a No output, and For each item has Each item and Done. Click a node to edit just that node in the panel on the right; Backspace or Delete removes the selected node or connection. Nodes can be dragged anywhere, and the canvas pans and zooms. On a phone, Add node opens the list and a node's settings open in a sheet.
 
 | Trigger | Fires when |
 | --- | --- |
@@ -480,11 +480,11 @@ A workflow has one trigger and a list of steps.
 
 "Only when it's mine" limits a trigger to your own calls, changes and tasks.
 
-| Step | What it does |
+| Node | What it does |
 | --- | --- |
 | Ask AI | Sends a prompt to the LLM API with the model you choose and returns the named answers you define (text, number, yes or no, list, or one of a set of choices). Each answer becomes a field for later steps. |
-| If / else, Continue only if | Branch or stop on conditions (is, is not, contains, is empty, more than, less than). |
-| For each item | Runs the steps inside it once per item of a list, such as each risk the AI found. |
+| If, Continue only if | Branch on a condition, or stop this path unless it is true (is, is not, contains, is empty, more than, less than). |
+| For each item | Runs the nodes connected to Each item once per item of a list, then carries on from Done. |
 | Wait | Pauses for minutes, hours or days. |
 | Wait for approval | Optional. Pauses until you approve or reject it on the Workflows page; rejecting stops the run. |
 | Create task, Add note, Update record | Act on the run's company or contact. Tasks can go to ClickUp too. |
@@ -493,9 +493,9 @@ A workflow has one trigger and a list of steps.
 | Send email | Emails the run's contact from your Outlook and logs it. |
 | Create Linear issue | Creates an issue in the Linear team. |
 
-Every text field has Insert field, which adds a value such as `{{company.name}}`, `{{call.summary}}`, `{{steps.ai_1.risks}}` or `{{loop.item}}`. Lists are written one item per line.
+Every text field has Insert field, which adds a value such as `{{company.name}}`, `{{call.summary}}`, `{{steps.ai_1.health}}` or `{{loop.item}}`, from the trigger and the nodes above it. Lists are written one item per line. A path simply ends at a node with nothing connected below it.
 
-Test run runs a workflow against a record you choose: AI and logic run for real, and actions only show what they would have done. The Runs panel shows each run with the result of every step. Failed runs notify you with the reason. A workflow's own changes never trigger it again, and runs set off by other workflows stop three levels deep.
+Test run runs a workflow against a record you choose: AI and logic run for real, and actions only show what they would have done. The Runs tab lists runs; selecting one marks each node on the canvas as Done, Failed or Waiting and shows every node's result. Failed runs notify you with the reason. A workflow's own changes never trigger it again, and runs set off by other workflows stop three levels deep.
 
 Event triggers run straight away. Waits, approvals and schedules continue when someone uses Orbit and on every `/api/cron/sync` call (every 10 minutes in production), so they can be up to ten minutes late. `/api/cron/workflows` runs only workflows if you want them more often.
 

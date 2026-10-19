@@ -20,7 +20,9 @@ import { completeJson, LlmError } from "@/lib/llm";
 import { siteOrigin } from "@/lib/site-url";
 import { appTimeZone } from "@/lib/time";
 import {
+  nextNode,
   nextScheduleRun,
+  TRIGGER_NODE,
   safeDefinition,
   type Step,
   type Trigger,
@@ -28,15 +30,14 @@ import {
 } from "@/lib/workflows/definition";
 import { conditionsPass, display, render, resolve, type Vars } from "@/lib/workflows/variables";
 
-type Cursor = (number | string)[];
-
-type LoopState = { items: unknown[]; index: number };
+type LoopFrame = { id: string; items: unknown[]; index: number };
 
 export type RunState = {
   started?: boolean;
-  cursor?: Cursor;
+  at?: string | null;
+  cursor?: unknown;
   vars?: Vars;
-  loops?: Record<string, LoopState>;
+  frames?: LoopFrame[];
   waitingStep?: string | null;
   decisions?: Record<string, { approved: boolean; note: string | null; by: string | null }>;
   approval?: { stepId: string; title: string; details: string } | null;
@@ -66,7 +67,7 @@ export type RunEvent = {
 
 type StepResult =
   | { kind: "next"; output?: unknown }
-  | { kind: "branch"; branch: "then" | "else"; output?: unknown }
+  | { kind: "branch"; branch: "true" | "false"; output?: unknown }
   | { kind: "loop"; items: unknown[]; output?: unknown }
   | { kind: "wait"; until: Date; output?: unknown }
   | { kind: "approval"; title: string; details: string }
@@ -243,44 +244,27 @@ export async function buildContext(actor: UserActor, trigger: Trigger, event: Ru
   return { vars, matches };
 }
 
-function listAt(steps: Step[], cursor: Cursor): Step[] {
-  let list = steps;
-  for (let index = 0; index < cursor.length - 1; index += 2) {
-    const step = list[cursor[index] as number];
-    const key = cursor[index + 1] as "then" | "else" | "body";
-    list = step?.[key] ?? [];
+function loopVars(frame: LoopFrame | undefined) {
+  return frame ? { item: frame.items[frame.index], index: frame.index + 1, total: frame.items.length } : undefined;
+}
+
+function follow(definition: WorkflowDefinition, source: string, handle: string, state: RunState, vars: Vars): string | null {
+  const target = nextNode(definition, source, handle);
+  if (target) return target;
+  const frames = state.frames ?? [];
+  const frame = frames[frames.length - 1];
+  if (!frame) return null;
+  if (frame.index + 1 < frame.items.length) {
+    frame.index += 1;
+    vars.loop = loopVars(frame);
+    return nextNode(definition, frame.id, "each");
   }
-  return list;
-}
-
-function stepAt(steps: Step[], cursor: Cursor) {
-  return listAt(steps, cursor)[cursor[cursor.length - 1] as number];
-}
-
-function loopKey(cursor: Cursor) {
-  return cursor.join(".");
-}
-
-function advance(steps: Step[], cursor: Cursor, state: RunState, vars: Vars): Cursor | null {
-  let current: Cursor = [...cursor.slice(0, -1), (cursor[cursor.length - 1] as number) + 1];
-  for (;;) {
-    const list = listAt(steps, current);
-    if ((current[current.length - 1] as number) < list.length) return current;
-    if (current.length === 1) return null;
-    const key = current[current.length - 2];
-    const parent = current.slice(0, -2);
-    if (key === "body") {
-      const loop = state.loops?.[loopKey(parent)];
-      if (loop && loop.index + 1 < loop.items.length) {
-        loop.index += 1;
-        vars.loop = { item: loop.items[loop.index], index: loop.index + 1, total: loop.items.length };
-        return [...parent, "body", 0];
-      }
-      if (state.loops) delete state.loops[loopKey(parent)];
-      delete vars.loop;
-    }
-    current = [...parent.slice(0, -1), (parent[parent.length - 1] as number) + 1];
-  }
+  frames.pop();
+  state.frames = frames;
+  const outer = loopVars(frames[frames.length - 1]);
+  if (outer) vars.loop = outer;
+  else delete vars.loop;
+  return follow(definition, frame.id, "done", state, vars);
 }
 
 function provenance(ctx: Ctx, step: Step): Provenance {
@@ -385,7 +369,7 @@ async function runStepAction(ctx: Ctx, step: Step): Promise<StepResult> {
     case "ai":
       return aiStep(ctx, step);
     case "if":
-      return { kind: "branch", branch: conditionsPass(config, ctx.vars) ? "then" : "else" };
+      return { kind: "branch", branch: conditionsPass(config, ctx.vars) ? "true" : "false" };
     case "filter":
       return conditionsPass(config, ctx.vars) ? { kind: "next", output: { passed: true } } : { kind: "stop", output: { passed: false } };
     case "loop": {
@@ -620,6 +604,10 @@ export async function executeRun(runId: string, ownerId: string, workspaceId: st
     return "failed" as const;
   }
   const state: RunState = run.state ?? {};
+  if (state.started && state.at === undefined) {
+    await saveRun(actor, run.id, { status: "cancelled", error: "This workflow was rebuilt since the run started. Run it again.", finished_at: new Date().toISOString() });
+    return "cancelled" as const;
+  }
   if (!state.started) {
     const built = await buildContext(actor, definition.trigger, run.event);
     if (!built.matches && !run.test) {
@@ -628,8 +616,7 @@ export async function executeRun(runId: string, ownerId: string, workspaceId: st
     }
     state.started = true;
     state.vars = built.vars;
-    state.cursor = [0];
-    state.loops = {};
+    state.frames = [];
     const company = built.vars.company as { id?: string } | undefined;
     const contact = built.vars.contact as { id?: string } | undefined;
     await saveRun(actor, run.id, { state, company_id: company?.id ?? null, contact_id: contact?.id ?? null });
@@ -639,17 +626,21 @@ export async function executeRun(runId: string, ownerId: string, workspaceId: st
   }
   const vars = state.vars ?? {};
   const ctx: Ctx = { actor, run, vars, fetchImpl: options.fetchImpl, deadline: options.deadline };
-  let cursor: Cursor | null = state.cursor ?? [0];
-  if (definition.steps.length === 0) cursor = null;
+  const nodes = new Map(definition.nodes.map((node) => [node.id, node]));
+  let at: string | null = state.at !== undefined ? state.at : follow(definition, TRIGGER_NODE, "out", state, vars);
+  const finish = async (status: "succeeded" | "cancelled", error: string | null = null) => {
+    await saveRun(actor, run.id, { state: { ...state, at: null, vars }, status, error, finished_at: new Date().toISOString() });
+    return status;
+  };
 
-  for (let count = 0; cursor && count < MAX_STEPS_PER_RUN; count += 1) {
+  for (let count = 0; at && count < MAX_STEPS_PER_RUN; count += 1) {
     if (Date.now() > options.deadline - STEP_RESERVE_MS) {
-      await saveRun(actor, run.id, { state: { ...state, cursor, vars }, status: "queued" });
+      await saveRun(actor, run.id, { state: { ...state, at, vars }, status: "queued" });
       return "paused" as const;
     }
-    const step = stepAt(definition.steps, cursor);
+    const step = nodes.get(at);
     if (!step) {
-      cursor = advance(definition.steps, cursor, state, vars);
+      at = follow(definition, at, "missing", state, vars);
       continue;
     }
     const started = new Date();
@@ -660,15 +651,14 @@ export async function executeRun(runId: string, ownerId: string, workspaceId: st
         state.approval = null;
         if (!decision?.approved) {
           await logStep(ctx, step, "failed", null, decision ?? null, "Rejected.", started);
-          await saveRun(actor, run.id, { state: { ...state, vars }, status: "cancelled", error: "Rejected at an approval step.", finished_at: new Date().toISOString() });
-          return "cancelled" as const;
+          return finish("cancelled", "Rejected at an approval step.");
         }
         (vars.steps as Record<string, unknown>)[step.id] = { approved: true, note: decision.note };
         await logStep(ctx, step, "succeeded", null, { approved: true, note: decision.note }, null, started);
       } else {
         await logStep(ctx, step, "succeeded", null, { waited: true }, null, started);
       }
-      cursor = advance(definition.steps, cursor, state, vars);
+      at = follow(definition, step.id, "out", state, vars);
       continue;
     }
     const input = renderedInput(step, vars);
@@ -679,7 +669,7 @@ export async function executeRun(runId: string, ownerId: string, workspaceId: st
       const message = errorText(error);
       await logStep(ctx, step, "failed", input, null, message, started);
       await saveRun(actor, run.id, {
-        state: { ...state, cursor, vars },
+        state: { ...state, at, vars },
         status: "failed",
         error: `${step.label || step.id}: ${message}`.slice(0, 2000),
         finished_at: new Date().toISOString(),
@@ -697,14 +687,14 @@ export async function executeRun(runId: string, ownerId: string, workspaceId: st
     if (result.kind === "wait") {
       state.waitingStep = step.id;
       await logStep(ctx, step, "waiting", input, { until: result.until.toISOString() }, null, started);
-      await saveRun(actor, run.id, { state: { ...state, cursor, vars }, status: "waiting", waiting_for: "delay", resume_at: result.until.toISOString() });
+      await saveRun(actor, run.id, { state: { ...state, at, vars }, status: "waiting", waiting_for: "delay", resume_at: result.until.toISOString() });
       return "waiting" as const;
     }
     if (result.kind === "approval") {
       state.waitingStep = step.id;
       state.approval = { stepId: step.id, title: result.title, details: result.details };
       await logStep(ctx, step, "waiting", input, { title: result.title }, null, started);
-      await saveRun(actor, run.id, { state: { ...state, cursor, vars }, status: "waiting", waiting_for: "approval" });
+      await saveRun(actor, run.id, { state: { ...state, at, vars }, status: "waiting", waiting_for: "approval" });
       await notify(actor, actor.userId, {
         title: `Approval needed: ${result.title}`.slice(0, 200),
         body: result.details.slice(0, 4000) || null,
@@ -716,29 +706,27 @@ export async function executeRun(runId: string, ownerId: string, workspaceId: st
     (vars.steps as Record<string, unknown>)[step.id] = result.output ?? null;
     await logStep(ctx, step, "succeeded", input, result.output ?? null, null, started);
     if (result.kind === "stop") {
-      cursor = null;
-      break;
+      at = follow(definition, step.id, "stopped", state, vars);
+      continue;
     }
     if (result.kind === "branch") {
-      const branch = step[result.branch] ?? [];
-      cursor = branch.length > 0 ? [...cursor, result.branch, 0] : advance(definition.steps, cursor, state, vars);
+      at = follow(definition, step.id, result.branch, state, vars);
       continue;
     }
     if (result.kind === "loop") {
-      const body = step.body ?? [];
-      if (result.items.length === 0 || body.length === 0) {
-        cursor = advance(definition.steps, cursor, state, vars);
+      if (result.items.length === 0 || !nextNode(definition, step.id, "each")) {
+        at = follow(definition, step.id, "done", state, vars);
         continue;
       }
-      state.loops = { ...(state.loops ?? {}), [loopKey(cursor)]: { items: result.items, index: 0 } };
-      vars.loop = { item: result.items[0], index: 1, total: result.items.length };
-      cursor = [...cursor, "body", 0];
+      const frame = { id: step.id, items: result.items, index: 0 };
+      state.frames = [...(state.frames ?? []), frame];
+      vars.loop = loopVars(frame);
+      at = nextNode(definition, step.id, "each");
       continue;
     }
-    cursor = advance(definition.steps, cursor, state, vars);
+    at = follow(definition, step.id, "out", state, vars);
   }
-  await saveRun(actor, run.id, { state: { ...state, cursor: null, vars }, status: "succeeded", error: null, finished_at: new Date().toISOString() });
-  return "succeeded" as const;
+  return finish("succeeded");
 }
 
 async function startSchedules() {

@@ -5,7 +5,9 @@ import { cleanText } from "@/lib/crm/normalize";
 import type { UserActor } from "@/lib/crm/types";
 import { appTimeZone } from "@/lib/time";
 import {
-  allSteps,
+  graphProblem,
+  nextNode,
+  TRIGGER_NODE,
   definitionSchema,
   nextScheduleRun,
   safeDefinition,
@@ -109,7 +111,7 @@ const WORKFLOW_SQL = `
   left join crm.profiles p on p.id = w.owner_id
 `;
 
-const EMPTY: WorkflowDefinition = { trigger: { type: "manual", object: "company" }, steps: [] };
+const EMPTY: WorkflowDefinition = { version: 2, trigger: { type: "manual", object: "company" }, triggerPosition: { x: 0, y: 0 }, nodes: [], edges: [] };
 
 function iso(value: Date | string | null) {
   return value ? new Date(value).toISOString() : null;
@@ -146,8 +148,8 @@ function validate(definition: unknown) {
     const issue = parsed.error.issues[0];
     throw new CrmError("invalid_input", `This workflow isn't valid yet${issue ? ` (${issue.path.join(".") || "steps"})` : ""}.`, 400);
   }
-  const ids = allSteps(parsed.data.steps).map((step) => step.id);
-  if (new Set(ids).size !== ids.length) throw new CrmError("invalid_input", "Two steps share the same id.", 400);
+  const problem = graphProblem(parsed.data);
+  if (problem) throw new CrmError("invalid_input", problem, 400);
   return parsed.data;
 }
 
@@ -254,7 +256,7 @@ export async function setWorkflowStatus(actor: UserActor, id: string, status: Wo
   const current = await requireOwn(actor, id);
   if (status === "active") {
     validate(current.definition);
-    if (current.definition.steps.length === 0) throw new CrmError("invalid_input", "Add at least one step before turning it on.", 400);
+    if (!nextNode(current.definition, TRIGGER_NODE, "out")) throw new CrmError("invalid_input", "Connect the trigger to a node before turning it on.", 400);
   }
   await withActor(actor, (db) =>
     db.query("update crm.workflows set status = $2, next_run_at = $3 where id = $1", [id, status, nextRunFor(current.definition, status)]),

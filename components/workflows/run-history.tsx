@@ -62,19 +62,34 @@ function StepLog({ step }: { step: RunStepLog }) {
   );
 }
 
-export default function RunHistory({ runs, selected, onSelect }: { runs: RunSummary[]; selected: string | null; onSelect: (id: string | null) => void }) {
+export default function RunHistory({
+  runs,
+  selected,
+  onSelect,
+  onSteps,
+}: {
+  runs: RunSummary[];
+  selected: string | null;
+  onSelect: (id: string | null) => void;
+  onSteps?: (steps: RunStepLog[] | null) => void;
+}) {
   const [details, setDetails] = useState<{ runId: string; steps: RunStepLog[]; error?: string } | null>(null);
 
   useEffect(() => {
-    if (!selected) return;
+    if (!selected) {
+      onSteps?.(null);
+      return;
+    }
     let live = true;
     void runDetailsAction(selected).then((result) => {
-      if (live) setDetails({ runId: selected, steps: result.steps ?? [], error: result.error });
+      if (!live) return;
+      setDetails({ runId: selected, steps: result.steps ?? [], error: result.error });
+      onSteps?.(result.steps ?? null);
     });
     return () => {
       live = false;
     };
-  }, [selected, runs]);
+  }, [selected, runs, onSteps]);
 
   if (runs.length === 0) return <p className="caption-style text-subtle">No runs yet. Use Test run to try it on a record.</p>;
 

@@ -1,20 +1,28 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { ReactFlowProvider } from "@xyflow/react";
 import Button from "@/components/_ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/_ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popover";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/_ui/sheet";
 import Switch from "@/components/_ui/switch";
-import Tag from "@/components/_ui/tag";
 import { recordSelectClass } from "@/components/crm/record-form";
 import SectionHeader from "@/components/crm/section-header";
 import type { Viewer } from "@/components/crm/viewer";
+import Inspector from "@/components/workflows/canvas/inspector";
+import Palette from "@/components/workflows/canvas/palette";
+import WorkflowCanvas, { type RunStatus } from "@/components/workflows/canvas/workflow-canvas";
 import RunHistory from "@/components/workflows/run-history";
 import type { BuilderOptions } from "@/components/workflows/step-config";
-import StepList from "@/components/workflows/step-list";
-import { textareaClass } from "@/components/workflows/template-field";
-import TriggerEditor from "@/components/workflows/trigger-editor";
 import {
   archiveWorkflowAction,
   createWorkflowAction,
@@ -23,11 +31,50 @@ import {
   setWorkflowStatusAction,
   setWorkflowTemplateAction,
 } from "@/app/(crm)/workflows/actions";
-import type { WorkflowDefinition } from "@/lib/workflows/definition";
-import type { RunSummary, Workflow } from "@/lib/workflows/store";
+import {
+  newStepId,
+  nextNode,
+  outputHandles,
+  TRIGGER_NODE,
+  type StepType,
+  type WorkflowDefinition,
+} from "@/lib/workflows/definition";
+import type { RunStepLog, RunSummary, Workflow } from "@/lib/workflows/store";
 import { cn } from "@/lib/utils";
+import PlusIcon from "@/public/assets/images/_common/plus.svg";
 
 type Records = { companies: { id: string; name: string }[]; contacts: { id: string; name: string }[] };
+
+const DEFAULTS: Record<StepType, Record<string, unknown>> = {
+  ai: { model: "claude-haiku-5-5", prompt: "", outputs: [{ key: "answer", type: "text", description: "" }] },
+  if: { match: "all", conditions: [{ left: "", op: "is", right: "" }] },
+  filter: { match: "all", conditions: [{ left: "", op: "is", right: "" }] },
+  loop: { items: "", limit: 25 },
+  delay: { amount: 1, unit: "days" },
+  approval: { title: "", details: "" },
+  create_task: { title: "", notes: "", dueInDays: "2", assignee: "owner", link: "company", clickup: false },
+  add_note: { title: "", body: "" },
+  update_record: { object: "company", field: "lifecycle", value: "customer" },
+  board: { boardId: "", stageId: "" },
+  notify: { to: "owner", title: "", body: "" },
+  send_email: { subject: "", body: "" },
+  linear_issue: { title: "", description: "", priority: "medium" },
+};
+
+function narrow() {
+  return typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches;
+}
+
+function statusesFrom(steps: RunStepLog[] | null): Record<string, RunStatus> | null {
+  if (!steps) return null;
+  const map: Record<string, RunStatus> = {};
+  for (const step of steps) {
+    const status = step.status as RunStatus;
+    if (map[step.stepId] === "failed") continue;
+    map[step.stepId] = status;
+  }
+  return map;
+}
 
 export default function WorkflowEditor({
   viewer,
@@ -47,34 +94,82 @@ export default function WorkflowEditor({
   const router = useRouter();
   const editable = workflow.mine;
   const [name, setName] = useState(workflow.name);
-  const [description, setDescription] = useState(workflow.description ?? "");
   const [definition, setDefinition] = useState<WorkflowDefinition>(workflow.definition);
+  const [selected, setSelected] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
-  const [selectedRun, setSelectedRun] = useState<string | null>(initialRun ?? runs[0]?.id ?? null);
+  const [panel, setPanel] = useState<"node" | "runs">(initialRun ? "runs" : "node");
+  const [selectedRun, setSelectedRun] = useState<string | null>(initialRun);
+  const [runSteps, setRunSteps] = useState<RunStepLog[] | null>(null);
   const [testOpen, setTestOpen] = useState(false);
   const [testKind, setTestKind] = useState<"company" | "contact">("company");
   const [testId, setTestId] = useState("");
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [sheetOpen, setSheetOpen] = useState(false);
 
-  function change(next: WorkflowDefinition) {
+  const change = useCallback((next: WorkflowDefinition) => {
     setDefinition(next);
     setDirty(true);
-    setMessage(null);
+    setError(null);
+  }, []);
+
+  const select = useCallback((id: string | null) => {
+    setSelected(id);
+    if (id) {
+      setPanel("node");
+      if (narrow()) setSheetOpen(true);
+    }
+  }, []);
+
+  const showSteps = useCallback((steps: RunStepLog[] | null) => setRunSteps(steps), []);
+
+  function freeHandle(source: string) {
+    const type = source === TRIGGER_NODE ? TRIGGER_NODE : definition.nodes.find((node) => node.id === source)?.type;
+    if (!type) return null;
+    return outputHandles(type).find((handle) => !nextNode(definition, source, handle)) ?? null;
+  }
+
+  function positionOf(id: string) {
+    return id === TRIGGER_NODE ? definition.triggerPosition : (definition.nodes.find((node) => node.id === id)?.position ?? { x: 0, y: 0 });
+  }
+
+  function clear(position: { x: number; y: number }) {
+    let next = position;
+    while (definition.nodes.some((node) => Math.abs(node.position.x - next.x) < 220 && Math.abs(node.position.y - next.y) < 100)) {
+      next = { x: next.x + 280, y: next.y };
+    }
+    return next;
+  }
+
+  function addNode(type: StepType, dropped?: { x: number; y: number }) {
+    if (!editable) return;
+    const id = newStepId(type, definition.nodes.map((node) => node.id));
+    const candidates = [selected, TRIGGER_NODE, ...[...definition.nodes].reverse().map((node) => node.id)].filter(Boolean) as string[];
+    const from = dropped ? null : (candidates.find((candidate) => freeHandle(candidate)) ?? null);
+    const handle = from ? freeHandle(from) : null;
+    const origin = from ? positionOf(from) : null;
+    const index = from && handle ? outputHandles(from === TRIGGER_NODE ? TRIGGER_NODE : definition.nodes.find((node) => node.id === from)!.type).indexOf(handle) : 0;
+    const position = clear(dropped ?? (origin ? { x: origin.x + index * 280, y: origin.y + 140 } : { x: 0, y: 140 }));
+    change({
+      ...definition,
+      nodes: [...definition.nodes, { id, type, config: structuredClone(DEFAULTS[type]), position }],
+      edges: from && handle ? [...definition.edges, { source: from, handle, target: id }] : definition.edges,
+    });
+    setPaletteOpen(false);
+    select(id);
   }
 
   async function save() {
     setBusy("save");
     setError(null);
-    const result = await saveWorkflowAction(workflow.id, { name, description: description || null, definition });
+    const result = await saveWorkflowAction(workflow.id, { name, definition });
     setBusy(null);
     if (result.error) {
       setError(result.error);
       return false;
     }
     setDirty(false);
-    setMessage("Saved.");
     router.refresh();
     return true;
   }
@@ -113,7 +208,11 @@ export default function WorkflowEditor({
       setError(result.error);
       return;
     }
-    if (result.runId) setSelectedRun(result.runId);
+    if (result.runId) {
+      setSelectedRun(result.runId);
+      setPanel("runs");
+      if (narrow()) setSheetOpen(true);
+    }
     router.refresh();
   }
 
@@ -139,6 +238,35 @@ export default function WorkflowEditor({
 
   const recordChoices = testKind === "company" ? records.companies : records.contacts;
   const active = workflow.status === "active";
+  const statuses = panel === "runs" && selectedRun ? statusesFrom(runSteps) : null;
+
+  const sidePanel = (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div role="tablist" aria-label="Panel" className="border-border flex shrink-0 gap-1 border-b p-2">
+        {(["node", "runs"] as const).map((tab) => (
+          <Button
+            key={tab}
+            role="tab"
+            aria-selected={panel === tab}
+            variant={panel === tab ? "secondary" : "ghost"}
+            size="sm"
+            onClick={() => setPanel(tab)}
+          >
+            {tab === "node" ? "Node" : `Runs${runs.length ? ` (${runs.length})` : ""}`}
+          </Button>
+        ))}
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto">
+        {panel === "node" ? (
+          <Inspector definition={definition} selected={selected} onChange={change} options={options} readOnly={!editable} />
+        ) : (
+          <div className="p-3">
+            <RunHistory runs={runs} selected={selectedRun} onSelect={setSelectedRun} onSteps={showSteps} />
+          </div>
+        )}
+      </div>
+    </div>
+  );
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -159,7 +287,7 @@ export default function WorkflowEditor({
                   setName(event.target.value);
                   setDirty(true);
                 }}
-                className="focus-visible:ring-ring/60 min-w-0 rounded-sm bg-transparent text-[18px] leading-6 font-medium outline-none focus-visible:ring-2"
+                className="focus-visible:ring-ring/60 w-[min(36ch,60vw)] min-w-0 rounded-sm bg-transparent text-[16px] leading-6 font-medium outline-none focus-visible:ring-2"
               />
             ) : (
               <h1 className="truncate">{workflow.name}</h1>
@@ -169,6 +297,10 @@ export default function WorkflowEditor({
         action={
           editable ? (
             <div className="flex flex-wrap items-center gap-2">
+              <Button variant="secondary" size="sm" className="lg:hidden" onClick={() => setPaletteOpen(true)}>
+                <PlusIcon aria-hidden className="size-3" />
+                Add node
+              </Button>
               <label className="caption-style text-subtle flex items-center gap-2">
                 <Switch checked={active} onChange={(on) => void toggle(on)} label={active ? "Turn off" : "Turn on"} />
                 {active ? "On" : "Off"}
@@ -186,7 +318,15 @@ export default function WorkflowEditor({
                     </p>
                     {definition.trigger.type !== "schedule" && (
                       <>
-                        <select aria-label="Record type" value={testKind} onChange={(event) => { setTestKind(event.target.value as "company" | "contact"); setTestId(""); }} className={recordSelectClass}>
+                        <select
+                          aria-label="Record type"
+                          value={testKind}
+                          onChange={(event) => {
+                            setTestKind(event.target.value as "company" | "contact");
+                            setTestId("");
+                          }}
+                          className={recordSelectClass}
+                        >
                           <option value="company">A company</option>
                           <option value="contact">A contact</option>
                         </select>
@@ -209,6 +349,30 @@ export default function WorkflowEditor({
               <Button variant="primary" size="sm" disabled={!dirty || busy !== null} data-shortcut="save" title="Save (⌘S)" onClick={() => void save()}>
                 {busy === "save" ? "Saving…" : dirty ? "Save" : "Saved"}
               </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="sm" aria-label="More">
+                    More
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-60">
+                  <DropdownMenuItem onSelect={() => void share(!workflow.isTemplate)}>
+                    {workflow.isTemplate ? "Stop sharing as a template" : "Share as a template"}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onSelect={() => {
+                      setPanel("runs");
+                      if (narrow()) setSheetOpen(true);
+                    }}
+                  >
+                    Show runs
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem className="text-danger" onSelect={() => void remove()}>
+                    Delete workflow
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           ) : (
             <Button variant="primary" size="sm" disabled={busy !== null} onClick={() => void copy()}>
@@ -217,79 +381,62 @@ export default function WorkflowEditor({
           )
         }
       />
-      <div className="min-h-0 flex-1 overflow-auto">
-        <div className="mx-auto grid w-full max-w-[80em] gap-6 px-4 py-6 pb-24 lg:grid-cols-[minmax(0,1fr)_minmax(280px,360px)]">
-          <div className={cn("flex min-w-0 flex-col gap-5", !editable && "pointer-events-none opacity-80")} aria-disabled={!editable || undefined}>
-            {!editable && (
-              <p className="caption-style text-subtle pointer-events-auto">
-                Shared by {workflow.ownerName ?? "a teammate"}. Use template to make your own copy you can edit and turn on.
-              </p>
-            )}
-            {error && (
-              <p role="alert" className="caption-style text-danger">
-                {error}
-              </p>
-            )}
-            {message && !error && (
-              <p role="status" className="caption-style text-subtle">
-                {message}
-              </p>
-            )}
-            <textarea
-              aria-label="Description"
-              rows={2}
-              value={description}
-              placeholder="What this workflow is for (optional)"
-              onChange={(event) => {
-                setDescription(event.target.value);
-                setDirty(true);
-              }}
-              className={cn(textareaClass, "resize-y")}
-            />
-            <section aria-labelledby="trigger-heading" className="border-line-strong bg-card flex flex-col gap-3 rounded-xl border p-4">
-              <h2 id="trigger-heading" className="text-[14px] leading-5 font-medium">
-                Trigger
-              </h2>
-              <TriggerEditor trigger={definition.trigger} options={options} onChange={(trigger) => change({ ...definition, trigger })} />
-            </section>
-            <section aria-labelledby="steps-heading" className="flex flex-col gap-3">
-              <h2 id="steps-heading" className="text-[14px] leading-5 font-medium">
-                Steps
-              </h2>
-              <StepList
-                steps={definition.steps}
-                root={definition.steps}
-                trigger={definition.trigger}
-                options={options}
-                onChange={(steps) => change({ ...definition, steps })}
-              />
-            </section>
-            {editable && (
-              <section className="border-border flex flex-col gap-3 border-t pt-5">
-                <label className="flex items-start justify-between gap-4">
-                  <span className="flex flex-col gap-1">
-                    <span className="text-[14px] leading-5">Share as a template</span>
-                    <span className="caption-style text-subtle">Everyone in the workspace can copy it. Your runs and approvals stay private.</span>
-                  </span>
-                  <Switch checked={workflow.isTemplate} onChange={(on) => void share(on)} label="Share as a template" />
-                </label>
-                <Button variant="ghost" size="sm" className="text-danger self-start" disabled={busy !== null} onClick={() => void remove()}>
-                  Delete workflow
-                </Button>
-              </section>
-            )}
-          </div>
-          <aside aria-labelledby="runs-heading" className="flex min-w-0 flex-col gap-3">
-            <div className="flex items-center justify-between gap-2">
-              <h2 id="runs-heading" className="text-[14px] leading-5 font-medium">
-                Runs
-              </h2>
-              {workflow.isTemplate && <Tag tone="blue">Shared</Tag>}
-            </div>
-            <RunHistory runs={runs} selected={selectedRun} onSelect={setSelectedRun} />
+      {error && (
+        <p role="alert" className="caption-style text-danger border-border border-b px-4 py-2">
+          {error}
+        </p>
+      )}
+      <div className="flex min-h-0 flex-1">
+        {editable && (
+          <aside aria-label="Add nodes" className="border-border hidden w-56 shrink-0 overflow-auto border-r p-3 lg:block">
+            <Palette onAdd={(type) => addNode(type)} />
           </aside>
+        )}
+        <div className="relative min-h-0 min-w-0 flex-1">
+          <ReactFlowProvider>
+            <WorkflowCanvas
+              definition={definition}
+              onChange={change}
+              selected={selected}
+              onSelect={select}
+              onDropNode={(type, position) => addNode(type, position)}
+              statuses={statuses}
+              readOnly={!editable}
+            />
+          </ReactFlowProvider>
+          {statuses && (
+            <div className="bg-card border-line-strong caption-style absolute top-3 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full border px-3 py-1.5">
+              Showing a run
+              <button type="button" className="text-foreground underline underline-offset-2" onClick={() => setSelectedRun(null)}>
+                Clear
+              </button>
+            </div>
+          )}
         </div>
+        <aside aria-label="Details" className={cn("border-border hidden w-[360px] shrink-0 flex-col border-l md:flex")}>
+          {sidePanel}
+        </aside>
       </div>
+      <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
+        <SheetContent side="right" className="flex flex-col md:hidden">
+          <SheetHeader>
+            <SheetTitle>{panel === "runs" ? "Runs" : "Node"}</SheetTitle>
+            <SheetDescription className="sr-only">Settings for the selected node, or recent runs</SheetDescription>
+          </SheetHeader>
+          {sidePanel}
+        </SheetContent>
+      </Sheet>
+      <Sheet open={paletteOpen} onOpenChange={setPaletteOpen}>
+        <SheetContent side="left" className="lg:hidden">
+          <SheetHeader>
+            <SheetTitle>Add a node</SheetTitle>
+            <SheetDescription className="sr-only">Choose a node to add after the selected one</SheetDescription>
+          </SheetHeader>
+          <div className="overflow-auto p-3">
+            <Palette onAdd={(type) => addNode(type)} />
+          </div>
+        </SheetContent>
+      </Sheet>
     </section>
   );
 }
