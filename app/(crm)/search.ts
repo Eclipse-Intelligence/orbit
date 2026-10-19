@@ -73,3 +73,11 @@ export async function searchContactsToFileAction(query: string) {
   if (!user) return { contacts: [] };
   return { contacts: await findContactsToLink(user, null, query, 8) };
 }
+
+export async function searchCompanyContactsAction(companyId: string, query: string) {
+  const user = await getUserActor();
+  if (!user) return { contacts: [] };
+  const text = query.trim().slice(0, 200);
+  const listed = await listContacts(user, { companyId, ...(text ? { query: text } : { sort: "name", order: "asc" }), limit: 20 });
+  return { contacts: listed.data };
+}

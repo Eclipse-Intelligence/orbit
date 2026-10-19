@@ -32,6 +32,8 @@ import ListSearch from "@/components/shortcuts/list-search";
 import { RecordList, RecordRow, RecordSelect } from "@/components/crm/record-form";
 import type { Viewer } from "@/components/crm/viewer";
 import BoardCardContext from "@/components/crm/board-card-context";
+import CompanyContactFields from "@/components/crm/company-contact-fields";
+import type { PickedRecord } from "@/components/crm/record-picker";
 import BoardSettings from "@/components/crm/board-settings";
 import { removeCardAction, updateBoardAction } from "@/app/(crm)/boards";
 import { moveOpportunityStageAction, saveOpportunityAction, type RecordActionState } from "@/app/(crm)/records";
@@ -41,7 +43,7 @@ import { formatMoney } from "@/lib/companies";
 import { formatDateLabel } from "@/lib/date-input";
 import { startPointerGesture, type GestureResult } from "@/lib/pointer-gesture";
 import { companyHref } from "@/lib/crm/hrefs";
-import type { Board, Company, Contact, Opportunity, OpportunityStatus, PipelineStage } from "@/lib/crm/types";
+import type { Board, Opportunity, OpportunityStatus, PipelineStage } from "@/lib/crm/types";
 
 export default function OpportunitiesScreen({
   viewer,
@@ -49,8 +51,6 @@ export default function OpportunitiesScreen({
   total,
   page,
   query,
-  companies,
-  contacts,
   stages,
   view,
   board,
@@ -60,8 +60,6 @@ export default function OpportunitiesScreen({
   total: number;
   page: number;
   query: string;
-  companies: Company[];
-  contacts: Contact[];
   stages: PipelineStage[];
   view: "list" | "board";
   board?: Board;
@@ -666,8 +664,6 @@ export default function OpportunitiesScreen({
               key={`${editing?.id ?? "new"}-${session}`}
               board={board}
               editing={editing}
-              companies={companies}
-              contacts={contacts}
               stages={ordered}
               onClose={close}
             />
@@ -675,8 +671,6 @@ export default function OpportunitiesScreen({
             <OpportunityEditor
               key={`${editing?.id ?? "new"}-${session}`}
               editing={editing}
-              companies={companies}
-              contacts={contacts}
               stages={ordered}
               onClose={close}
             />
@@ -704,35 +698,29 @@ export default function OpportunitiesScreen({
   );
 }
 
+function pickedCompany(editing: Opportunity | null): PickedRecord | null {
+  return editing?.companyId ? { id: editing.companyId, name: editing.companyName ?? editing.name } : null;
+}
+
+function pickedContact(editing: Opportunity | null): PickedRecord | null {
+  if (!editing?.primaryContactId) return null;
+  return { id: editing.primaryContactId, name: editing.primaryContactName ?? "Current contact", company: pickedCompany(editing) };
+}
+
 function OpportunityEditor({
   editing,
-  companies,
-  contacts,
   stages,
   onClose,
 }: {
   editing: Opportunity | null;
-  companies: Company[];
-  contacts: Contact[];
   stages: PipelineStage[];
   onClose: () => void;
 }) {
   const [state, action, pending] = useActionState(saveOpportunityAction, {} as RecordActionState);
+  const [hasCompany, setHasCompany] = useState(Boolean(editing?.companyId));
   useEffect(() => {
     if (state.ok) onClose();
   }, [state, onClose]);
-
-  const companyOptions =
-    editing && !companies.some((company) => company.id === editing.companyId)
-      ? [{ id: editing.companyId, name: editing.companyName ?? "Current company" }, ...companies]
-      : companies;
-  const contactOptions =
-    editing?.primaryContactId && !contacts.some((contact) => contact.id === editing.primaryContactId)
-      ? [
-          { id: editing.primaryContactId, name: editing.primaryContactName ?? "Current contact" },
-          ...contacts,
-        ]
-      : contacts;
 
   return (
     <form action={action} className="flex min-h-0 flex-1 flex-col">
@@ -747,48 +735,27 @@ function OpportunityEditor({
           <span className="caption-style text-subtle">Name</span>
           <Input id="opp-name" name="name" required defaultValue={editing?.name ?? ""} />
         </label>
-        <RecordSelect
-          id="opp-company"
-          name="companyId"
-          label="Company"
-          required
-          defaultValue={editing?.companyId ?? ""}
+        <CompanyContactFields
+          idPrefix="opp"
+          initialCompany={pickedCompany(editing)}
+          initialContact={pickedContact(editing)}
+          contactLabel="Primary contact"
+          onCompanyChange={(company) => setHasCompany(Boolean(company))}
         >
-          <option value="" disabled>
-            Choose a company
-          </option>
-          {companyOptions.map((company) => (
-            <option key={company.id} value={company.id}>
-              {company.name}
-            </option>
-          ))}
-        </RecordSelect>
-        <RecordSelect
-          id="opp-stage"
-          name="stageId"
-          label="Stage"
-          defaultValue={editing?.stageId ?? stages[0]?.id ?? "none"}
-        >
-          <option value="none">Default stage</option>
-          {stages.map((stage) => (
-            <option key={stage.id} value={stage.id}>
-              {stage.name}
-            </option>
-          ))}
-        </RecordSelect>
-        <RecordSelect
-          id="opp-contact"
-          name="primaryContactId"
-          label="Primary contact"
-          defaultValue={editing?.primaryContactId ?? "none"}
-        >
-          <option value="none">No contact</option>
-          {contactOptions.map((contact) => (
-            <option key={contact.id} value={contact.id}>
-              {contact.name}
-            </option>
-          ))}
-        </RecordSelect>
+          <RecordSelect
+            id="opp-stage"
+            name="stageId"
+            label="Stage"
+            defaultValue={editing?.stageId ?? stages[0]?.id ?? "none"}
+          >
+            <option value="none">Default stage</option>
+            {stages.map((stage) => (
+              <option key={stage.id} value={stage.id}>
+                {stage.name}
+              </option>
+            ))}
+          </RecordSelect>
+        </CompanyContactFields>
         <div className="grid gap-4 sm:grid-cols-2">
           <label className="flex flex-col gap-2" htmlFor="opp-value">
             <span className="caption-style text-subtle">Value</span>
@@ -823,7 +790,7 @@ function OpportunityEditor({
           variant="primary"
           size="sm"
           type="submit"
-          disabled={pending || companyOptions.length === 0}
+          disabled={pending || !hasCompany}
           data-shortcut="save"
           title="Save (⌘S)"
         >
@@ -1054,15 +1021,11 @@ function BoardTitle({ board }: { board: Board }) {
 function BoardCardEditor({
   board,
   editing,
-  companies,
-  contacts,
   stages,
   onClose,
 }: {
   board: Board;
   editing: Opportunity | null;
-  companies: Company[];
-  contacts: Contact[];
   stages: PipelineStage[];
   onClose: () => void;
 }) {
@@ -1074,14 +1037,7 @@ function BoardCardEditor({
     if (state.ok) onClose();
   }, [state, onClose]);
 
-  const companyOptions =
-    editing && !companies.some((company) => company.id === editing.companyId)
-      ? [{ id: editing.companyId, name: editing.companyName ?? "Current company" }, ...companies]
-      : companies;
-  const contactOptions =
-    editing?.primaryContactId && !contacts.some((contact) => contact.id === editing.primaryContactId)
-      ? [{ id: editing.primaryContactId, name: editing.primaryContactName ?? "Current contact" }, ...contacts]
-      : contacts;
+  const [hasCompany, setHasCompany] = useState(Boolean(editing?.companyId));
   const formId = `board-card-${editing?.id ?? "new"}`;
   const error = removeError ?? (state.error && !state.ok ? state.error : null);
 
@@ -1111,31 +1067,21 @@ function BoardCardEditor({
               {error}
             </p>
           )}
-          <RecordSelect id="card-company" name="companyId" label="Company" required defaultValue={editing?.companyId ?? ""}>
-            <option value="" disabled>
-              Choose a company
-            </option>
-            {companyOptions.map((company) => (
-              <option key={company.id} value={company.id}>
-                {company.name}
-              </option>
-            ))}
-          </RecordSelect>
-          <RecordSelect id="card-stage" name="stageId" label="Stage" defaultValue={editing?.stageId ?? stages[0]?.id ?? ""}>
-            {stages.map((stage) => (
-              <option key={stage.id} value={stage.id}>
-                {stage.name}
-              </option>
-            ))}
-          </RecordSelect>
-          <RecordSelect id="card-contact" name="primaryContactId" label="Main contact" defaultValue={editing?.primaryContactId ?? "none"}>
-            <option value="none">No contact</option>
-            {contactOptions.map((contact) => (
-              <option key={contact.id} value={contact.id}>
-                {contact.name}
-              </option>
-            ))}
-          </RecordSelect>
+          <CompanyContactFields
+            idPrefix="card"
+            initialCompany={pickedCompany(editing)}
+            initialContact={pickedContact(editing)}
+            contactLabel="Main contact"
+            onCompanyChange={(company) => setHasCompany(Boolean(company))}
+          >
+            <RecordSelect id="card-stage" name="stageId" label="Stage" defaultValue={editing?.stageId ?? stages[0]?.id ?? ""}>
+              {stages.map((stage) => (
+                <option key={stage.id} value={stage.id}>
+                  {stage.name}
+                </option>
+              ))}
+            </RecordSelect>
+          </CompanyContactFields>
           <div className="flex min-w-0 flex-col gap-2">
             <label className="caption-style text-subtle" htmlFor="card-due">
               Due
@@ -1162,7 +1108,7 @@ function BoardCardEditor({
             size="sm"
             type="submit"
             form={formId}
-            disabled={pending || companyOptions.length === 0}
+            disabled={pending || !hasCompany}
             data-shortcut="save"
             title="Save (⌘S)"
           >

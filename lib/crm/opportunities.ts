@@ -297,11 +297,18 @@ async function afterWon(db: Db, actor: Actor, opportunity: Opportunity, provenan
      order by p.position asc, p.created_at asc`,
     [actor.workspaceId, opportunity.companyId],
   );
+  const contact = opportunity.primaryContactId
+    ? await db.query("select 1 from crm.contacts where id = $1 and company_id = $2 and archived_at is null", [
+        opportunity.primaryContactId,
+        opportunity.companyId,
+      ])
+    : null;
+  const primaryContactId = contact?.rowCount ? opportunity.primaryContactId : null;
   for (const board of boards.rows) {
     await insertOpportunity(
       db,
       actor,
-      { companyId: opportunity.companyId, pipelineId: board.id, primaryContactId: opportunity.primaryContactId, ownerId: opportunity.ownerId },
+      { companyId: opportunity.companyId, pipelineId: board.id, primaryContactId, ownerId: opportunity.ownerId },
       { ...provenance, operation: "add_won_to_board" },
     );
   }
@@ -320,16 +327,19 @@ async function assertContactCompany(
   companyId: string,
 ) {
   if (!contactId) return;
-  const result = await db.query<{ company_id: string | null }>(
-    "select company_id from crm.contacts where id = $1 and workspace_id = $2",
-    [contactId, workspaceId],
+  const result = await db.query<{ company_id: string | null; name: string | null; company_name: string | null }>(
+    `select ct.company_id, nullif(trim(concat_ws(' ', ct.first_name, ct.last_name)), '') as name,
+       (select co.name from crm.companies co where co.id = $3) as company_name
+     from crm.contacts ct
+     where ct.id = $1 and ct.workspace_id = $2 and ct.archived_at is null`,
+    [contactId, workspaceId, companyId],
   );
   const row = result.rows[0];
   if (!row) throw new CrmError("not_found", "Contact not found.", 404);
-  if (row.company_id && row.company_id !== companyId) {
+  if (row.company_id !== companyId) {
     throw new CrmError(
       "invalid_input",
-      "That contact belongs to a different company.",
+      `${row.name ?? "That contact"} doesn't work at ${row.company_name ?? "this company"}. Choose one of its contacts.`,
       400,
       { field: "primaryContactId" },
     );
