@@ -31,7 +31,7 @@ import { listEmailTemplates } from "@/lib/crm/email-templates";
 import { CrmError } from "@/lib/crm/errors";
 import { getGranolaStatus } from "@/lib/crm/granola";
 import { companyHref, contactHref, opportunityHref } from "@/lib/crm/hrefs";
-import { getMailbox, listInbox, sendContactEmail } from "@/lib/crm/inbox";
+import { getMailbox, listInbox, listSenders, sendContactEmail } from "@/lib/crm/inbox";
 import { createInvite, getMeetingLink } from "@/lib/crm/invites";
 import { archiveOpportunity, createOpportunity, getOpportunity, listOpportunities, listPipeline, updateOpportunity } from "@/lib/crm/opportunities";
 import { getMyEmails } from "@/lib/crm/profile";
@@ -631,6 +631,13 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         })),
       };
     },
+  },
+  {
+    name: "list_email_senders",
+    label: "Checking email accounts",
+    description: "The email addresses the user can send from: the main Inbox mailbox (primary) and any other Microsoft accounts with sending allowed.",
+    parameters: { type: "object", properties: {} },
+    run: async (actor) => ({ senders: (await listSenders(actor)).map((item) => ({ email: item.email, primary: item.primary })) }),
   },
   {
     name: "list_lifecycles",
@@ -1545,22 +1552,35 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     name: "send_email",
     label: "Sending an email",
     write: true,
-    description: "Send an email to a person from your connected Outlook mailbox. It is logged on their timeline.",
+    description:
+      "Send an email to a person from one of the user's connected Microsoft accounts (the Inbox mailbox unless from names another address the user can send from; list_email_senders shows them). It is logged on their timeline.",
     parameters: {
       type: "object",
-      properties: { contactId: idParam("Contact id."), subject: { type: "string" }, body: { type: "string" } },
+      properties: {
+        contactId: idParam("Contact id."),
+        subject: { type: "string" },
+        body: { type: "string" },
+        from: { type: "string", description: "Email address to send from. Leave out for the main Inbox mailbox." },
+      },
       required: ["contactId", "subject", "body"],
     },
     describe: (args, name) => ({
       title: `Send email: ${str(args.subject)}`,
-      lines: [`To: ${name(args.contactId)}`, str(args.body)],
+      lines: [`To: ${name(args.contactId)}`, str(args.from) ? `From: ${str(args.from)}` : "", str(args.body)],
     }),
     run: async (actor, args) => {
+      const wanted = optionalStr(args.from)?.toLowerCase();
+      const senders = wanted ? await listSenders(actor) : [];
+      const sender = wanted ? senders.find((item) => item.email.toLowerCase() === wanted) : null;
+      if (wanted && !sender) {
+        return { error: `You can't send from ${args.from} yet. You can send from: ${senders.map((item) => item.email).join(", ") || "no connected accounts"}.` };
+      }
       const result = await sendContactEmail(actor, required(args.contactId, "A contact id"), {
         subject: required(args.subject, "A subject"),
         body: required(args.body, "A message"),
+        from: sender?.id ?? null,
       });
-      return { sent: true, warning: result.warning };
+      return { sent: true, from: sender?.email ?? null, warning: result.warning };
     },
   },
   {

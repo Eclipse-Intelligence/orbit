@@ -31,8 +31,13 @@ function needsReconnect(group: CalendarGroup) {
 }
 
 function sourceLine(group: CalendarGroup) {
-  if (group.kind === "primary") return "Main account · from Inbox";
-  return group.provider === "ics" ? "Calendar link · read-only" : "Calendar only";
+  if (group.kind === "primary") return "Main account · from Inbox · sends email";
+  if (group.provider === "ics") return "Calendar link · read-only";
+  return group.canSend ? "Calendar · sends email" : "Calendar only";
+}
+
+function allowSendingHref(group: CalendarGroup) {
+  return `/api/microsoft/connect?purpose=send_account&hint=${encodeURIComponent(group.email ?? "")}`;
 }
 
 function groupName(group: CalendarGroup) {
@@ -180,6 +185,15 @@ export default function CalendarsSettings({
               {configured && needsReconnect(group) && (
                 <a href={reconnectHref(group)} className={buttonVariants({ variant: "secondary", size: "sm" })}>
                   Reconnect
+                </a>
+              )}
+              {configured && group.kind === "account" && group.provider === "microsoft" && group.connected && !group.canSend && (
+                <a
+                  href={allowSendingHref(group)}
+                  className={buttonVariants({ variant: "secondary", size: "sm" })}
+                  title={`Let Orbit send email from ${group.email ?? "this account"}`}
+                >
+                  Allow sending
                 </a>
               )}
               {group.kind === "account" && (

@@ -44,6 +44,7 @@ export type CalendarGroup = {
   displayName: string | null;
   connected: boolean;
   scopeMissing: boolean;
+  canSend: boolean;
   lastSyncedAt: string | null;
   lastError: string | null;
   calendars: CalendarEntry[];
@@ -144,6 +145,7 @@ export async function listCalendarGroups(actor: UserActor): Promise<CalendarGrou
         displayName: null,
         connected: stored.status === "connected" && Boolean(stored.refreshTokenCipher),
         scopeMissing: Boolean(state.rows[0]?.scope_missing),
+        canSend: true,
         lastSyncedAt: iso(state.rows[0]?.last_synced_at ?? null),
         lastError: state.rows[0]?.last_error ?? null,
         calendars: calendars.rows.filter((row) => row.connection_id === stored.id).map(mapCalendar),
@@ -161,6 +163,7 @@ export async function listCalendarGroups(actor: UserActor): Promise<CalendarGrou
           account.status === "connected" &&
           (account.provider === "ics" ? Boolean(account.feed) : Boolean(account.refreshTokenCipher)),
         scopeMissing: account.scopeMissing,
+        canSend: account.provider === "microsoft" && account.canSend,
         lastSyncedAt: account.lastSyncedAt,
         lastError: account.lastError,
         calendars: calendars.rows.filter((row) => row.account_id === account.id).map(mapCalendar),

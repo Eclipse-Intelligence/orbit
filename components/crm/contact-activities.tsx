@@ -500,6 +500,8 @@ function emailParty(activity: Activity) {
     (item): item is string => typeof item === "string" && item.trim() !== "",
   );
   if (list.length === 0) return null;
+  const sender = activity.metadata.direction === "outbound" && typeof activity.metadata.from === "string" ? activity.metadata.from : null;
+  if (sender) return `From ${sender} to ${list.join(", ")}`;
   return `${activity.metadata.direction === "outbound" ? "To" : "From"} ${list.join(", ")}`;
 }
 

@@ -13,6 +13,7 @@ import {
 import { Input } from "@/components/_ui/input";
 import { SaveTemplateForm, UseTemplateButton } from "@/components/crm/email-template-picker";
 import { AttachButton, AttachmentList, useEmailAttachments } from "@/components/crm/email-attachments";
+import { SenderSelect, useSenders } from "@/components/crm/email-sender";
 import { TokenChips, insertToken } from "@/components/crm/email-tokens";
 import { discardAttachmentsAction, sendContactEmailAction } from "@/app/(crm)/inbox/actions";
 import {
@@ -74,11 +75,12 @@ export default function BulkEmailDialog({
   const [saving, setSaving] = useState(false);
   const [savedName, setSavedName] = useState<string | null>(null);
   const files = useEmailAttachments();
+  const sender = useSenders(true);
 
   const tooMany = sendable.length > BULK_EMAIL_LIMIT;
   const first = sendable[0];
   const canSend =
-    mailboxConnected &&
+    (mailboxConnected || sender.senders.length > 0) &&
     !files.uploading &&
     !tooMany &&
     sendable.length > 0 &&
@@ -123,6 +125,7 @@ export default function BulkEmailDialog({
     setPhase("sending");
     setProgress(Object.fromEntries(sendable.map((recipient) => [recipient.id, { status: "queued" }])));
     const attachments = files.ids;
+    const from = sender.from;
     const result = await sendPaced(
       sendable,
       async (recipient) => {
@@ -132,6 +135,7 @@ export default function BulkEmailDialog({
           personalise(body, recipient),
           attachments,
           true,
+          from,
         );
         if ("error" in sent && sent.error) return { error: sent.error };
         return { warning: "warning" in sent ? sent.warning : null };
@@ -191,12 +195,11 @@ export default function BulkEmailDialog({
             Email {plural(sendable.length, "person", "people")}
           </DialogTitle>
           <DialogDescription>
-            Each person gets their own email from your Microsoft mailbox, sent one at a
-            time about two seconds apart.
+            Each person gets their own email from {sender.chosen?.email ?? "your Microsoft mailbox"}, sent one at a time about two seconds apart.
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-4 px-6 py-5">
-          {!mailboxConnected && (
+          {!mailboxConnected && sender.senders.length === 0 && (
             <p role="alert" className="caption-style text-danger">
               Connect Microsoft in Inbox before sending.
             </p>
@@ -272,6 +275,7 @@ export default function BulkEmailDialog({
           </section>
           {phase === "compose" && (
             <>
+              <SenderSelect id="bulk-email-from" senders={sender.senders} value={sender.from} onChange={sender.setFrom} />
               <div className="flex flex-col gap-2">
                 <div className="flex flex-wrap items-center gap-1">
                   <UseTemplateButton
