@@ -1,5 +1,22 @@
 import { getBookingPage } from "@/lib/booking/pages";
-import { getBoard, listBoards } from "@/lib/crm/boards";
+import { archiveBoard, createBoard, getBoard, listBoards, updateBoard } from "@/lib/crm/boards";
+import { savePipelineStages } from "@/lib/crm/pipeline";
+import { definitionFromInput, STEP_TYPES, TRIGGER_TYPES } from "@/lib/workflows/definition";
+import {
+  archiveWorkflow,
+  createWorkflow,
+  decideApproval,
+  getRunSteps,
+  getWorkflow,
+  listApprovals,
+  listRuns,
+  listWorkflows,
+  saveWorkflow,
+  setWorkflowStatus,
+  setWorkflowTemplate,
+  startRun,
+} from "@/lib/workflows/store";
+import { STARTER_TEMPLATES } from "@/lib/workflows/templates";
 import { BULK_LIMIT, runBulk } from "@/lib/crm/bulk";
 import { listActivities } from "@/lib/crm/activities";
 import { getCalendarStatus, getMeetings, listPeopleMet } from "@/lib/crm/calendar";
@@ -15,7 +32,7 @@ import { getGranolaStatus } from "@/lib/crm/granola";
 import { companyHref, contactHref, opportunityHref } from "@/lib/crm/hrefs";
 import { getMailbox, listInbox, sendContactEmail } from "@/lib/crm/inbox";
 import { createInvite, getMeetingLink } from "@/lib/crm/invites";
-import { createOpportunity, getOpportunity, listOpportunities, listPipeline, updateOpportunity } from "@/lib/crm/opportunities";
+import { archiveOpportunity, createOpportunity, getOpportunity, listOpportunities, listPipeline, updateOpportunity } from "@/lib/crm/opportunities";
 import { getMyEmails } from "@/lib/crm/profile";
 import { REMINDER_OPTIONS } from "@/lib/crm/reminder-options";
 import { findStaleRelationships, getCompanyContext, listAttention } from "@/lib/crm/relationships";
@@ -188,7 +205,7 @@ function shown(key: string, value: unknown) {
   return text;
 }
 
-const ID_FIELDS = new Set(["companyId", "contactId", "ownerId", "stageId", "primaryContactId", "taskId", "opportunityId"]);
+const ID_FIELDS = new Set(["companyId", "contactId", "ownerId", "stageId", "primaryContactId", "taskId", "opportunityId", "boardId", "cardId", "workflowId"]);
 
 function fieldLines(args: Args, labels: Record<string, string>, name?: Names) {
   return Object.entries(labels)
@@ -282,6 +299,43 @@ function pick(args: Args, keys: string[]) {
     out[key] = typeof args[key] === "string" ? (args[key] as string).trim() || null : args[key];
   }
   return out;
+}
+
+const WORKFLOW_GUIDE = `A definition is {trigger, steps}. trigger.type is one of: ${TRIGGER_TYPES.join(", ")}. call_summary_ready, task_completed: no other fields. record_created and manual: object (company or contact). field_changed: object, field (company: lifecycle, ownerId, industry, sizeCategory, source, description; contact: ownerId, jobTitle, companyId, source, notes), optional to. stage_changed: optional pipelineId (board id; omit for Opportunities) and stageId. added_to_board: boardId. activity_logged: optional activityType (call, email, meeting, note). schedule: frequency (daily or weekly), weekday (0 Sunday to 6 Saturday), time (HH:mm London). Any trigger except manual and schedule can take mine: true to only fire for the user's own changes.
+steps is a list run in order. Each step is {id, type, label, config}; ids are lowercase like ai_1, if_1, notify_1 and unique. type is one of: ${STEP_TYPES.join(", ")}. An if step has then and else lists; a loop step has a body list run once per item; a path that ends simply stops (inside a loop it moves to the next item).
+config by type: ai {prompt, model (claude-haiku-5-5, claude-sonnet-5-5 or claude-opus-5-5), outputs: [{key, type: text|number|boolean|list|choice, description, choices}]}. if and filter {match: all|any, conditions: [{left: "{{path}}", op: is|is_not|contains|not_contains|is_empty|is_not_empty|greater_than|less_than, right}]}; filter stops the path when false. loop {items: "{{steps.ai_1.requests}}", limit}. delay {amount, unit: minutes|hours|days}. approval {title, details} pauses for the user to approve. create_task {title, notes, dueInDays, assignee: owner|record_owner|<member id>, link: company|contact|none, clickup: boolean}. add_note {title, body}. update_record {object, field, value}. board {boardId, stageId} adds the company to a board or moves its card. notify {to: owner|record_owner|<member id>, title, body}. send_email {subject, body} to the run's contact. linear_issue {title, description, priority: urgent|high|medium|low}.
+Text fields take {{company.name}}, {{company.url}}, {{contact.name}}, {{contact.firstName}}, {{contact.email}}, {{call.summary}}, {{call.keyPoints}}, {{call.transcript}}, {{activity.title}}, {{deal.name}}, {{deal.stage}}, {{change.to}}, {{task.title}}, {{owner.name}}, {{today}}, {{steps.<id>.<output key>}} and {{loop.item}}. Keep workflows small: only the nodes the job needs.`;
+
+function stageLines(args: Args, name: Names) {
+  const stages = Array.isArray(args.stages) ? (args.stages as Args[]) : [];
+  return stages.map((stage, index) => {
+    const label = str(stage.name) || "Unnamed";
+    const before = stage.id ? name(stage.id) : null;
+    const flags = [stage.isWon ? "won" : null, stage.isLost ? "lost" : null].filter(Boolean).join(", ");
+    const change = !stage.id ? " (new)" : before && before !== label && before !== "Unknown record" ? ` (was ${before})` : "";
+    return `${index + 1}. ${label}${change}${flags ? ` · ${flags}` : ""}`;
+  });
+}
+
+async function workflowDefinition(value: unknown) {
+  const result = definitionFromInput(value);
+  if ("error" in result) throw new CrmError("invalid_input", result.error, 400);
+  return result.definition;
+}
+
+function workflowSummary(workflow: Awaited<ReturnType<typeof getWorkflow>>) {
+  return {
+    id: workflow.id,
+    name: workflow.name,
+    description: workflow.description,
+    status: workflow.status,
+    shared: workflow.isTemplate,
+    mine: workflow.mine,
+    href: `/workflows/${workflow.id}`,
+    trigger: workflow.definition.trigger,
+    nodes: workflow.definition.nodes.map((node) => ({ id: node.id, type: node.type, label: node.label ?? null, config: node.config })),
+    edges: workflow.definition.edges,
+  };
 }
 
 export const ASSISTANT_TOOLS: AssistantTool[] = [
@@ -568,6 +622,78 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
             })),
         })),
       };
+    },
+  },
+  {
+    name: "list_workflows",
+    label: "Looking at workflows",
+    description: "The user's workflows (with on or off status), workflows teammates shared as templates, and Orbit's starter templates (by key).",
+    parameters: { type: "object", properties: {} },
+    run: async (actor) => {
+      const listed = await listWorkflows(actor);
+      const summary = (item: (typeof listed.mine)[number]) => ({
+        id: item.id,
+        name: item.name,
+        status: item.status,
+        trigger: item.triggerType,
+        shared: item.isTemplate,
+        lastRunAt: item.lastRunAt,
+        lastRunStatus: item.lastRunStatus,
+        href: `/workflows/${item.id}`,
+      });
+      return {
+        mine: listed.mine.map(summary),
+        sharedTemplates: listed.templates.filter((item) => !item.mine).map((item) => ({ ...summary(item), sharedBy: item.ownerName })),
+        starterTemplates: STARTER_TEMPLATES.map((item) => ({ key: item.key, name: item.name, description: item.description })),
+      };
+    },
+  },
+  {
+    name: "get_workflow",
+    label: "Reading a workflow",
+    description: "One workflow in full: trigger, nodes with their settings, connections, and its last 10 runs.",
+    parameters: { type: "object", properties: { workflowId: idParam("Workflow id from list_workflows.") }, required: ["workflowId"] },
+    run: async (actor, args) => {
+      const workflow = await getWorkflow(actor, required(args.workflowId, "A workflow id"));
+      const runs = workflow.mine ? await listRuns(actor, workflow.id, 10) : [];
+      return { workflow: workflowSummary(workflow), runs };
+    },
+  },
+  {
+    name: "get_workflow_run",
+    label: "Reading a workflow run",
+    description: "What happened in one workflow run: each node's status, inputs, results and errors.",
+    parameters: { type: "object", properties: { runId: idParam("Run id from get_workflow.") }, required: ["runId"] },
+    run: async (actor, args) => getRunSteps(actor, required(args.runId, "A run id")),
+  },
+  {
+    name: "list_workflow_approvals",
+    label: "Checking approvals",
+    description: "Workflow runs waiting for the user to approve or reject a step.",
+    parameters: { type: "object", properties: {} },
+    run: async (actor) => ({ approvals: await listApprovals(actor) }),
+  },
+  {
+    name: "test_workflow",
+    label: "Testing a workflow",
+    description:
+      "Test run one of the user's workflows against a company or contact. AI and logic run for real; actions only report what they would do, so nothing changes. Returns the run id; read it with get_workflow_run.",
+    parameters: {
+      type: "object",
+      properties: {
+        workflowId: idParam("Workflow id."),
+        recordType: { type: "string", enum: ["company", "contact"] },
+        recordId: { type: "string", description: "Company or contact id. Not needed for schedule triggers." },
+      },
+      required: ["workflowId"],
+    },
+    run: async (actor, args) => {
+      const recordId = optionalStr(args.recordId);
+      const result = await startRun(actor, required(args.workflowId, "A workflow id"), {
+        test: true,
+        record: recordId ? { type: args.recordType === "contact" ? "contact" : "company", id: recordId } : null,
+      });
+      return { ...result, ...(await getRunSteps(actor, result.runId)) };
     },
   },
   {
@@ -1048,6 +1174,293 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     },
   },
   {
+    name: "create_board",
+    label: "Creating a board",
+    write: true,
+    description: "Create a board under Opportunities, for example Onboarding, with its stages in order. Optionally turn on adding companies automatically when a deal is won.",
+    parameters: {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        stages: { type: "array", items: { type: "string" }, description: "Stage names in order. Defaults to To start, In progress, Done." },
+        addOnWon: { type: "boolean", description: "Add a company to the first stage when one of its deals is won." },
+      },
+      required: ["name"],
+    },
+    describe: (args) => ({
+      title: `Create board: ${str(args.name)}`,
+      lines: [
+        strings(args.stages).length ? `Stages: ${strings(args.stages).join(", ")}` : "",
+        args.addOnWon === true ? "Adds companies when a deal is won" : "",
+      ],
+    }),
+    run: async (actor, args) => {
+      const board = await createBoard(actor, { name: required(args.name, "A name") });
+      const stages = strings(args.stages);
+      if (stages.length) await savePipelineStages(actor, stages.map((stage) => ({ name: stage })), board.id);
+      if (args.addOnWon === true) await updateBoard(actor, board.id, { addOnWon: true });
+      return { board: await getBoard(actor, board.id), href: `/boards/${board.id}` };
+    },
+  },
+  {
+    name: "update_board",
+    label: "Updating a board",
+    write: true,
+    description: "Rename a board, or turn adding companies when a deal is won on or off.",
+    parameters: {
+      type: "object",
+      properties: { boardId: idParam("Board id."), name: { type: "string" }, addOnWon: { type: "boolean" } },
+      required: ["boardId"],
+    },
+    describe: (args, name) => ({
+      title: titled("Update board", name(args.boardId)),
+      lines: [
+        str(args.name) ? `Name: ${str(args.name)}` : "",
+        typeof args.addOnWon === "boolean" ? `Add companies when a deal is won: ${args.addOnWon ? "on" : "off"}` : "",
+      ],
+    }),
+    run: async (actor, args) => {
+      const id = required(args.boardId, "A board id");
+      await updateBoard(actor, id, { ...(str(args.name) ? { name: str(args.name) } : {}), ...(typeof args.addOnWon === "boolean" ? { addOnWon: args.addOnWon } : {}) });
+      return { board: await getBoard(actor, id) };
+    },
+  },
+  {
+    name: "set_board_stages",
+    label: "Changing stages",
+    write: true,
+    description:
+      "Set a board's stages, in order. This is the full list: keep existing stages by passing their id (rename by changing the name, reorder by moving them), add new ones without an id, and leave out stages to delete them (a stage must have no cards to be deleted; move them first). Without boardId it changes the Opportunities pipeline, which needs exactly one isWon and one isLost stage.",
+    parameters: {
+      type: "object",
+      properties: {
+        boardId: { type: "string", description: "Board id. Leave out for the Opportunities pipeline." },
+        stages: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string", description: "Existing stage id from get_board or get_pipeline." },
+              name: { type: "string" },
+              probability: { type: "integer", minimum: 0, maximum: 100, description: "Opportunities only." },
+              isWon: { type: "boolean", description: "Opportunities only." },
+              isLost: { type: "boolean", description: "Opportunities only." },
+            },
+            required: ["name"],
+          },
+        },
+      },
+      required: ["stages"],
+    },
+    describe: (args, name) => ({
+      title: optionalStr(args.boardId) ? titled("Change stages", name(args.boardId)) : "Change Opportunities stages",
+      lines: stageLines(args, name),
+    }),
+    run: async (actor, args) => {
+      const boardId = optionalStr(args.boardId) ?? null;
+      const current = boardId ? [] : (await listPipeline(actor)).stages;
+      const stages = (Array.isArray(args.stages) ? (args.stages as Args[]) : []).map((stage) => {
+        const before = current.find((item) => item.id === stage.id);
+        const probability = typeof stage.probability === "number" ? stage.probability : before?.probability;
+        return {
+          ...(optionalStr(stage.id) ? { id: str(stage.id) } : {}),
+          name: str(stage.name),
+          ...(probability !== undefined ? { probability } : {}),
+          isWon: stage.isWon === true,
+          isLost: stage.isLost === true,
+        };
+      });
+      const saved = await savePipelineStages(actor, stages, boardId);
+      return { stages: saved.map((stage) => ({ id: stage.id, name: stage.name, position: stage.position, isWon: stage.isWon, isLost: stage.isLost })) };
+    },
+  },
+  {
+    name: "delete_board",
+    label: "Deleting a board",
+    write: true,
+    description: "Delete a board. Its cards are archived; the companies themselves stay.",
+    parameters: { type: "object", properties: { boardId: idParam("Board id.") }, required: ["boardId"] },
+    describe: (args, name) => ({ title: titled("Delete board", name(args.boardId)), lines: ["Its cards are archived"] }),
+    run: async (actor, args) => archiveBoard(actor, required(args.boardId, "A board id")),
+  },
+  {
+    name: "move_card",
+    label: "Moving a card",
+    write: true,
+    description: "Move a company's card to another stage on its board, and optionally change its due date, main contact or owner. cardId comes from get_board.",
+    parameters: {
+      type: "object",
+      properties: {
+        cardId: idParam("Card id from get_board."),
+        stageId: { type: "string", description: "Stage id on the same board." },
+        expectedCloseDate: { type: "string", description: "Due date, YYYY-MM-DD, or empty to clear." },
+        primaryContactId: { type: "string" },
+        ownerId: { type: "string" },
+      },
+      required: ["cardId"],
+    },
+    describe: (args, name) => ({
+      title: titled("Move card", name(args.cardId)),
+      lines: fieldLines(args, { stageId: "Stage", expectedCloseDate: "Due", primaryContactId: "Contact", ownerId: "Owner" }, name),
+    }),
+    run: async (actor, args) => {
+      const id = required(args.cardId, "A card id");
+      const updated = await updateOpportunity(actor, id, pick(args, ["stageId", "expectedCloseDate", "primaryContactId", "ownerId"]), {
+        provenance: { operation: "move_card", ...PROVENANCE },
+      });
+      return { card: withOpportunity(updated.body.opportunity) };
+    },
+  },
+  {
+    name: "remove_from_board",
+    label: "Removing from a board",
+    write: true,
+    description: "Take a company's card off a board.",
+    parameters: { type: "object", properties: { cardId: idParam("Card id from get_board.") }, required: ["cardId"] },
+    describe: (args, name) => ({ title: titled("Remove from board", name(args.cardId)), lines: [] }),
+    run: async (actor, args) => {
+      const removed = await archiveOpportunity(actor, required(args.cardId, "A card id"), { provenance: { operation: "remove_from_board", ...PROVENANCE } });
+      return { card: withOpportunity(removed.body.opportunity) };
+    },
+  },
+  {
+    name: "create_workflow",
+    label: "Creating a workflow",
+    write: true,
+    description: `Create a workflow for the user, either from a template (a starter template key or a shared workflow id from list_workflows) or from a definition. It starts off; turn it on with set_workflow_status once it looks right. ${WORKFLOW_GUIDE}`,
+    parameters: {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        description: { type: "string" },
+        template: { type: "string", description: "Starter template key or shared workflow id." },
+        definition: { type: "object", description: "{trigger, steps}. See the description." },
+      },
+    },
+    describe: (args) => {
+      const steps = args.definition && typeof args.definition === "object" ? ((args.definition as Args).steps as Args[] | undefined) : undefined;
+      return {
+        title: `Create workflow${str(args.name) ? `: ${str(args.name)}` : ""}`,
+        lines: [
+          str(args.template) ? `From template: ${str(args.template)}` : "",
+          steps ? `Steps: ${steps.map((step) => str(step.label) || str(step.type)).join(", ")}` : "",
+        ],
+      };
+    },
+    run: async (actor, args) => {
+      const definition = args.definition ? await workflowDefinition(args.definition) : null;
+      const created = await createWorkflow(actor, { name: optionalStr(args.name), template: optionalStr(args.template) ?? null });
+      const saved =
+        definition || optionalStr(args.description) || (optionalStr(args.name) && args.template)
+          ? await saveWorkflow(actor, created.id, {
+              ...(definition ? { definition } : {}),
+              ...(optionalStr(args.description) ? { description: str(args.description) } : {}),
+              ...(optionalStr(args.name) ? { name: str(args.name) } : {}),
+            })
+          : created;
+      return { workflow: workflowSummary(saved) };
+    },
+  },
+  {
+    name: "update_workflow",
+    label: "Updating a workflow",
+    write: true,
+    description: "Rename a workflow, change its description, or replace its definition (send the whole definition, same format as create_workflow).",
+    parameters: {
+      type: "object",
+      properties: {
+        workflowId: idParam("Workflow id."),
+        name: { type: "string" },
+        description: { type: "string" },
+        definition: { type: "object", description: "{trigger, steps}, or {trigger, nodes, edges} as returned by get_workflow." },
+      },
+      required: ["workflowId"],
+    },
+    describe: (args, name) => ({
+      title: titled("Update workflow", name(args.workflowId)),
+      lines: [str(args.name) ? `Name: ${str(args.name)}` : "", args.definition ? "Replaces the steps" : ""],
+    }),
+    run: async (actor, args) => {
+      const definition = args.definition ? await workflowDefinition(args.definition) : undefined;
+      const saved = await saveWorkflow(actor, required(args.workflowId, "A workflow id"), {
+        ...(definition ? { definition } : {}),
+        ...(args.name !== undefined ? { name: str(args.name) } : {}),
+        ...(args.description !== undefined ? { description: str(args.description) || null } : {}),
+      });
+      return { workflow: workflowSummary(saved) };
+    },
+  },
+  {
+    name: "set_workflow_status",
+    label: "Turning a workflow on or off",
+    write: true,
+    description: "Turn one of the user's workflows on or off.",
+    parameters: { type: "object", properties: { workflowId: idParam("Workflow id."), on: { type: "boolean" } }, required: ["workflowId", "on"] },
+    describe: (args, name) => ({ title: `${args.on ? "Turn on" : "Turn off"}: ${name(args.workflowId)}`, lines: [] }),
+    run: async (actor, args) => ({
+      workflow: workflowSummary(await setWorkflowStatus(actor, required(args.workflowId, "A workflow id"), args.on === true ? "active" : "paused")),
+    }),
+  },
+  {
+    name: "share_workflow",
+    label: "Sharing a workflow",
+    write: true,
+    description: "Share one of the user's workflows as a template the whole workspace can copy, or stop sharing it.",
+    parameters: { type: "object", properties: { workflowId: idParam("Workflow id."), shared: { type: "boolean" } }, required: ["workflowId", "shared"] },
+    describe: (args, name) => ({ title: `${args.shared ? "Share as a template" : "Stop sharing"}: ${name(args.workflowId)}`, lines: [] }),
+    run: async (actor, args) => ({
+      workflow: workflowSummary(await setWorkflowTemplate(actor, required(args.workflowId, "A workflow id"), args.shared === true)),
+    }),
+  },
+  {
+    name: "delete_workflow",
+    label: "Deleting a workflow",
+    write: true,
+    description: "Delete one of the user's workflows. It stops running straight away.",
+    parameters: { type: "object", properties: { workflowId: idParam("Workflow id.") }, required: ["workflowId"] },
+    describe: (args, name) => ({ title: titled("Delete workflow", name(args.workflowId)), lines: [] }),
+    run: async (actor, args) => {
+      await archiveWorkflow(actor, required(args.workflowId, "A workflow id"));
+      return { deleted: true };
+    },
+  },
+  {
+    name: "run_workflow",
+    label: "Running a workflow",
+    write: true,
+    description: "Run one of the user's Run from a record workflows on a company or contact, for real.",
+    parameters: {
+      type: "object",
+      properties: {
+        workflowId: idParam("Workflow id."),
+        recordType: { type: "string", enum: ["company", "contact"] },
+        recordId: idParam("Company or contact id."),
+      },
+      required: ["workflowId", "recordType", "recordId"],
+    },
+    describe: (args, name) => ({ title: titled("Run workflow", name(args.workflowId)), lines: [`On: ${name(args.recordId)}`] }),
+    run: async (actor, args) =>
+      startRun(actor, required(args.workflowId, "A workflow id"), {
+        test: false,
+        record: { type: args.recordType === "contact" ? "contact" : "company", id: required(args.recordId, "A record id") },
+      }),
+  },
+  {
+    name: "decide_workflow_approval",
+    label: "Answering an approval",
+    write: true,
+    description: "Approve or reject a workflow step that is waiting for the user (run id from list_workflow_approvals).",
+    parameters: {
+      type: "object",
+      properties: { runId: idParam("Run id."), approve: { type: "boolean" }, note: { type: "string" } },
+      required: ["runId", "approve"],
+    },
+    describe: (args) => ({ title: args.approve ? "Approve workflow step" : "Reject workflow step", lines: str(args.note) ? [`Note: ${str(args.note)}`] : [] }),
+    run: async (actor, args) => ({
+      status: await decideApproval(actor, required(args.runId, "A run id"), { approved: args.approve === true, note: optionalStr(args.note) ?? null }),
+    }),
+  },
+  {
     name: "update_opportunity",
     label: "Updating an opportunity",
     write: true,
@@ -1306,6 +1719,7 @@ export function toolDefinitions() {
 function collectIds(value: unknown, into: Set<string>) {
   if (typeof value === "string" && isUuid(value)) into.add(value);
   else if (Array.isArray(value)) for (const item of value) collectIds(item, into);
+  else if (value && typeof value === "object") for (const item of Object.values(value)) collectIds(item, into);
 }
 
 export async function recordNames(actor: UserActor, args: Args[]) {
@@ -1327,6 +1741,8 @@ export async function recordNames(actor: UserActor, args: Args[]) {
        select id, name from crm.pipeline_stages where id = any($1::uuid[])
        union all
        select id, name from crm.pipelines where id = any($1::uuid[]) and kind = 'board'
+       union all
+       select id, name from crm.workflows where id = any($1::uuid[])
        union all
        select p.id, coalesce(nullif(p.full_name, ''), p.email) from crm.profiles p
          join crm.workspace_members m on m.user_id = p.id and m.workspace_id = $2
