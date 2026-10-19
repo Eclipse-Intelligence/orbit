@@ -138,7 +138,7 @@ after(async () => {
 
 describe("graph calendar view", () => {
   it("asks for the default scopes including the calendar", () => {
-    assert.equal(MICROSOFT_SCOPES, "offline_access Mail.Read Mail.Send User.Read Calendars.ReadWrite");
+    assert.equal(MICROSOFT_SCOPES, "offline_access Mail.ReadWrite Mail.Send User.Read Calendars.ReadWrite");
     assert.equal(grantsCalendar("openid https://graph.microsoft.com/Calendars.Read Mail.Read"), true);
     assert.equal(grantsCalendar("https%3A%2F%2Fgraph.microsoft.com%2Fcalendars.readwrite"), true);
     assert.equal(grantsCalendar("Mail.Read Mail.Send User.Read"), false);

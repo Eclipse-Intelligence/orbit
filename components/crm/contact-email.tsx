@@ -8,6 +8,7 @@ import {
   SaveTemplateForm,
   UseTemplateButton,
 } from "@/components/crm/email-template-picker";
+import { AttachButton, AttachmentList, useEmailAttachments } from "@/components/crm/email-attachments";
 import { TokenChips, insertToken } from "@/components/crm/email-tokens";
 import { sendContactEmailAction } from "@/app/(crm)/inbox/actions";
 import { addActivityAction } from "@/app/(crm)/records";
@@ -37,6 +38,7 @@ export default function ContactEmail({
   unavailable?: string;
 }) {
   const router = useRouter();
+  const files = useEmailAttachments();
   const sending = useRef(false);
   const [subject, setSubject] = useState("");
   const [message, setMessage] = useState("");
@@ -112,6 +114,7 @@ export default function ContactEmail({
         contactId,
         personalise(subject, target),
         personalise(message, target),
+        files.ids,
       );
       if ("error" in result && result.error) {
         setError(result.error);
@@ -119,6 +122,7 @@ export default function ContactEmail({
         return;
       }
       reset();
+      files.clear();
       setSent(true);
       setWarning("warning" in result ? (result.warning ?? null) : null);
       router.refresh();
@@ -280,6 +284,7 @@ export default function ContactEmail({
       {contactId && (
         <TokenChips onInsert={insert} text={`${subject}\n${message}`} />
       )}
+      <AttachmentList items={files.items} onRemove={files.remove} disabled={pending !== null} />
       <div className="flex flex-wrap gap-2">
         <Button
           variant="primary"
@@ -287,6 +292,7 @@ export default function ContactEmail({
           type="button"
           disabled={
             pending !== null ||
+            files.uploading ||
             !contactId ||
             !email ||
             !mailboxConnected ||
@@ -297,7 +303,7 @@ export default function ContactEmail({
           title="Send (⌘ Enter)"
           onClick={send}
         >
-          {pending === "send" ? "Sending…" : "Send email"}
+          {pending === "send" ? "Sending…" : files.uploading ? "Uploading…" : "Send email"}
         </Button>
         <Button
           variant="secondary"
@@ -313,6 +319,9 @@ export default function ContactEmail({
         >
           {pending === "log" ? "Saving…" : "Log email"}
         </Button>
+        {contactId && email && mailboxConnected && (
+          <AttachButton id={`email-files-${idPrefix}`} onFiles={(picked) => void files.add(picked)} disabled={pending !== null} />
+        )}
       </div>
     </div>
   );

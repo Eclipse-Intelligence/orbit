@@ -10,6 +10,7 @@ import CallInsightPanel from "@/components/crm/call-insight";
 import { useShortcut } from "@/components/shortcuts/shortcuts-provider";
 import ActivityPad from "@/components/crm/activity-pad";
 import ContactEmail from "@/components/crm/contact-email";
+import PaperclipIcon from "@/public/assets/images/_common/paperclip.svg";
 import {
   activityByline,
   activityDetails,
@@ -502,6 +503,14 @@ function emailParty(activity: Activity) {
   return `${activity.metadata.direction === "outbound" ? "To" : "From"} ${list.join(", ")}`;
 }
 
+function emailAttachments(activity: Activity) {
+  const value = activity.metadata.attachments;
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => (item && typeof item === "object" && typeof (item as { name?: unknown }).name === "string" ? (item as { name: string }).name : null))
+    .filter((name): name is string => Boolean(name));
+}
+
 function ActivityRow({
   panelId,
   activity,
@@ -539,6 +548,7 @@ function ActivityRow({
   const details = activityDetails(activity);
   const granola = granolaUrl(activity);
   const party = activity.type === "email" ? emailParty(activity) : null;
+  const attached = activity.type === "email" ? emailAttachments(activity) : [];
   const insightful = activity.type === "call" || activity.type === "meeting";
   const emptyPanel =
     !details.body && !details.attendees && !granola && !party && !insightful;
@@ -606,6 +616,12 @@ function ActivityRow({
         className="flex flex-col gap-3 pr-2 pb-3 pl-12"
       >
         {party && <span className="caption-style text-subtle">{party}</span>}
+        {attached.length > 0 && (
+          <span className="caption-style text-subtle flex flex-wrap items-center gap-1.5">
+            <PaperclipIcon aria-hidden className="size-3" />
+            {attached.join(", ")}
+          </span>
+        )}
         {details.attendees && (
           <div className="flex flex-col gap-1">
             <span className="caption-style text-subtle">Attendees</span>

@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { appSecret } from "@/lib/auth/config";
 
-export const MICROSOFT_SCOPES = "offline_access Mail.Read Mail.Send User.Read Calendars.ReadWrite";
+export const MICROSOFT_SCOPES = "offline_access Mail.ReadWrite Mail.Send User.Read Calendars.ReadWrite";
 export const CALENDAR_ACCOUNT_SCOPES = "openid offline_access User.Read Calendars.Read";
 export const ORGANISATION_BLOCKED =
   "This Microsoft account's organisation doesn't allow Orbit yet — in Entra, set Orbit's Supported account types to include other organisations (and personal accounts if needed), or ask that organisation's admin to consent.";
@@ -397,6 +397,29 @@ function inboxUrl(since: Date, order: boolean) {
   return url.toString();
 }
 
+export type MailAttachment = { name: string; contentType: string; bytes: Uint8Array };
+
+export const INLINE_ATTACHMENT_LIMIT = 3 * 1024 * 1024;
+const UPLOAD_CHUNK = 320 * 1024 * 10;
+export const LARGE_ATTACHMENT_RECONNECT =
+  "Attachments over 3 MB need permission to create drafts. Reconnect Microsoft in Inbox, then send again.";
+
+function recipients(message: { to: string; toName?: string | null }) {
+  return [{ emailAddress: { address: message.to, ...(message.toName ? { name: message.toName } : {}) } }];
+}
+
+function base64(bytes: Uint8Array) {
+  return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("base64");
+}
+
+async function sendFailure(response: Response) {
+  const detail = await graphError(response);
+  if (response.status === 403) {
+    return new Error("Microsoft has not allowed sending yet. Add Mail.Send, then disconnect and connect the mailbox again.");
+  }
+  return new Error(sanitizeMicrosoftError(detail));
+}
+
 export async function sendGraphMail(
   accessToken: string,
   message: {
@@ -404,43 +427,107 @@ export async function sendGraphMail(
     toName?: string | null;
     subject: string;
     body: string;
+    attachments?: MailAttachment[];
   },
   fetchImpl: typeof fetch = fetch,
 ) {
-  const response = await fetchImpl(
-    "https://graph.microsoft.com/v1.0/me/sendMail",
-    {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${accessToken}`,
-        "content-type": "application/json",
+  const attachments = message.attachments ?? [];
+  const total = attachments.reduce((sum, item) => sum + item.bytes.byteLength, 0);
+  if (total > INLINE_ATTACHMENT_LIMIT) return sendLargeGraphMail(accessToken, message, attachments, fetchImpl);
+  const response = await fetchImpl("https://graph.microsoft.com/v1.0/me/sendMail", {
+    method: "POST",
+    headers: { authorization: `Bearer ${accessToken}`, "content-type": "application/json" },
+    body: JSON.stringify({
+      message: {
+        subject: message.subject,
+        body: { contentType: "Text", content: message.body },
+        toRecipients: recipients(message),
+        ...(attachments.length
+          ? {
+              attachments: attachments.map((item) => ({
+                "@odata.type": "#microsoft.graph.fileAttachment",
+                name: item.name,
+                contentType: item.contentType,
+                contentBytes: base64(item.bytes),
+              })),
+            }
+          : {}),
       },
-      body: JSON.stringify({
-        message: {
-          subject: message.subject,
-          body: { contentType: "Text", content: message.body },
-          toRecipients: [
-            {
-              emailAddress: {
-                address: message.to,
-                ...(message.toName ? { name: message.toName } : {}),
-              },
-            },
-          ],
-        },
-        saveToSentItems: true,
-      }),
-      signal: AbortSignal.timeout(15000),
-    },
-  );
+      saveToSentItems: true,
+    }),
+    signal: AbortSignal.timeout(attachments.length ? 60_000 : 15_000),
+  });
   if (response.ok) return;
-  const detail = await graphError(response);
-  if (response.status === 403) {
-    throw new Error(
-      "Microsoft has not allowed sending yet. Add Mail.Send, then disconnect and connect the mailbox again.",
-    );
+  throw await sendFailure(response);
+}
+
+async function sendLargeGraphMail(
+  accessToken: string,
+  message: { to: string; toName?: string | null; subject: string; body: string },
+  attachments: MailAttachment[],
+  fetchImpl: typeof fetch,
+) {
+  const auth = { authorization: `Bearer ${accessToken}` };
+  const created = await fetchImpl("https://graph.microsoft.com/v1.0/me/messages", {
+    method: "POST",
+    headers: { ...auth, "content-type": "application/json" },
+    body: JSON.stringify({
+      subject: message.subject,
+      body: { contentType: "Text", content: message.body },
+      toRecipients: recipients(message),
+    }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (created.status === 403) throw new Error(LARGE_ATTACHMENT_RECONNECT);
+  if (!created.ok) throw await sendFailure(created);
+  const draft = (await created.json()) as { id: string };
+  const draftUrl = `https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(draft.id)}`;
+  try {
+    for (const item of attachments) {
+      if (item.bytes.byteLength <= INLINE_ATTACHMENT_LIMIT) {
+        const added = await fetchImpl(`${draftUrl}/attachments`, {
+          method: "POST",
+          headers: { ...auth, "content-type": "application/json" },
+          body: JSON.stringify({
+            "@odata.type": "#microsoft.graph.fileAttachment",
+            name: item.name,
+            contentType: item.contentType,
+            contentBytes: base64(item.bytes),
+          }),
+          signal: AbortSignal.timeout(60_000),
+        });
+        if (!added.ok) throw await sendFailure(added);
+        continue;
+      }
+      const session = await fetchImpl(`${draftUrl}/attachments/createUploadSession`, {
+        method: "POST",
+        headers: { ...auth, "content-type": "application/json" },
+        body: JSON.stringify({ AttachmentItem: { attachmentType: "file", name: item.name, size: item.bytes.byteLength } }),
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!session.ok) throw await sendFailure(session);
+      const { uploadUrl } = (await session.json()) as { uploadUrl: string };
+      for (let start = 0; start < item.bytes.byteLength; start += UPLOAD_CHUNK) {
+        const chunk = item.bytes.slice(start, Math.min(start + UPLOAD_CHUNK, item.bytes.byteLength));
+        const put = await fetchImpl(uploadUrl, {
+          method: "PUT",
+          headers: {
+            "content-type": "application/octet-stream",
+            "content-length": String(chunk.byteLength),
+            "content-range": `bytes ${start}-${start + chunk.byteLength - 1}/${item.bytes.byteLength}`,
+          },
+          body: chunk,
+          signal: AbortSignal.timeout(60_000),
+        });
+        if (!put.ok) throw new Error(`Microsoft stopped the upload of ${item.name}.`);
+      }
+    }
+    const sent = await fetchImpl(`${draftUrl}/send`, { method: "POST", headers: auth, signal: AbortSignal.timeout(30_000) });
+    if (!sent.ok) throw await sendFailure(sent);
+  } catch (error) {
+    await fetchImpl(draftUrl, { method: "DELETE", headers: auth, signal: AbortSignal.timeout(10_000) }).catch(() => undefined);
+    throw error;
   }
-  throw new Error(sanitizeMicrosoftError(detail));
 }
 
 async function graphGet(

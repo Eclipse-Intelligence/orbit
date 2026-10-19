@@ -2,6 +2,7 @@ import type { Db } from "@/lib/db/pool";
 import { decryptSecret, encryptSecret } from "@/lib/crypto/secret";
 import { withActor } from "@/lib/crm/context";
 import { createActivityInDb } from "@/lib/crm/activities";
+import { discardAttachments, loadAttachments } from "@/lib/crm/email-attachments";
 import {
   FREE_MAIL_DOMAINS,
   isFreeMailDomain,
@@ -228,7 +229,7 @@ export async function saveMailbox(
 export async function sendContactEmail(
   actor: UserActor,
   contactId: string,
-  input: { subject: string; body: string },
+  input: { subject: string; body: string; attachments?: string[]; keepAttachments?: boolean },
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ warning: string | null }> {
   const subject = input.subject.replace(/\s+/g, " ").trim();
@@ -309,12 +310,13 @@ export async function sendContactEmail(
     );
   }
 
+  const attached = await loadAttachments(actor, input.attachments ?? [], fetchImpl);
   let token: MicrosoftToken;
   try {
     token = await currentToken(mailbox, fetchImpl);
     await sendGraphMail(
       token.accessToken,
-      { to, toName: contact.name, subject, body },
+      { to, toName: contact.name, subject, body, attachments: attached.files },
       fetchImpl,
     );
   } catch (error) {
@@ -332,6 +334,7 @@ export async function sendContactEmail(
       await storeToken(db, mailbox.id, token);
     });
   } catch {}
+  if (attached.summary.length && !input.keepAttachments) await discardAttachments(actor, input.attachments ?? [], fetchImpl);
   try {
     await withActor(actor, async (db) => {
       await createActivityInDb(
@@ -343,7 +346,12 @@ export async function sendContactEmail(
           body,
           companyId: contact.company_id,
           contactId: contact.id,
-          metadata: { source: "microsoft", direction: "outbound", to },
+          metadata: {
+            source: "microsoft",
+            direction: "outbound",
+            to,
+            ...(attached.summary.length ? { attachments: attached.summary } : {}),
+          },
         },
         { operation: "send_email", source: "microsoft" },
       );
