@@ -10,6 +10,8 @@ import { syncClickUp } from "@/lib/crm/clickup";
 import { listBoards } from "@/lib/crm/boards";
 import { countCompanies } from "@/lib/crm/companies";
 import { syncGranolaOnVisit } from "@/lib/crm/granola";
+import { runWorkflowTick } from "@/lib/workflows/engine";
+import { countApprovals, listNotifications } from "@/lib/workflows/store";
 import { listAttention } from "@/lib/crm/relationships";
 import { countOpenTasks } from "@/lib/crm/tasks";
 import { syncTeamsTranscripts } from "@/lib/crm/teams-transcripts";
@@ -45,6 +47,13 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
   }
   after(async () => {
     try {
+      await runWorkflowTick({ budgetMs: 20_000 });
+    } catch (error) {
+      console.error("Workflow tick failed", error);
+    }
+  });
+  after(async () => {
+    try {
       const result = await syncGranolaOnVisit(user);
       if (result?.ran && result.error) console.error("Granola sync failed", result.error);
     } catch (error) {
@@ -61,11 +70,13 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
       }
     });
   }
-  const [companyCount, openActionCount, attention, boards] = await Promise.all([
+  const [companyCount, openActionCount, attention, boards, notifications, approvals] = await Promise.all([
     countCompanies(user),
     countOpenTasks(user, { mine: true }),
     listAttention(user),
     listBoards(user),
+    listNotifications(user, 10),
+    countApprovals(user),
   ]);
 
   return (
@@ -73,6 +84,7 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
       <main className="flex h-dvh max-w-full overflow-hidden">
         <Sidebar
           boards={boards}
+          approvals={approvals}
           companyCount={companyCount}
           openActionCount={openActionCount}
           workspaceName={user.workspaceName}
@@ -87,6 +99,7 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
           }}
           overdue={attention.overdue}
           today={attention.today}
+          notifications={notifications}
         >
           {children}
         </CrmChrome>

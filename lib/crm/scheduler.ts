@@ -250,5 +250,12 @@ export async function handleCronRequest(
   if (auth === "unauthorized") {
     return Response.json({ error: "Unauthorized." }, { status: 401 });
   }
-  return Response.json(await run());
+  const report = await run();
+  try {
+    const { runWorkflowTick } = await import("@/lib/workflows/engine");
+    await runWorkflowTick({ budgetMs: 8_000 });
+  } catch (error) {
+    console.error("Workflow tick failed", error);
+  }
+  return Response.json(report);
 }

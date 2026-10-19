@@ -11,6 +11,7 @@ import { CrmError } from "@/lib/crm/errors";
 import { getMailbox } from "@/lib/crm/inbox";
 import { getCompanyContext } from "@/lib/crm/relationships";
 import { listTags } from "@/lib/crm/tags";
+import { manualWorkflows } from "@/lib/workflows/store";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -45,12 +46,13 @@ export default async function CompanyPage({
   if (!user) redirect("/login");
   if (!context) notFound();
 
-  const [members, mailbox, clickup, meetings, tags] = await Promise.all([
+  const [members, mailbox, clickup, meetings, tags, workflows] = await Promise.all([
     listMembers(user),
     getMailbox(user),
     getClickUpPicker(user),
     getMeetings(user, { companyId: context.company.id }),
     listTags(user),
+    manualWorkflows(user, "company"),
   ]);
 
   return (
@@ -67,6 +69,7 @@ export default async function CompanyPage({
       mailboxConnected={mailbox?.status === "connected"}
       clickup={clickup}
       meetings={meetings}
+      workflows={workflows}
       tags={tags}
       enrichment={enrichmentAvailability()}
     />

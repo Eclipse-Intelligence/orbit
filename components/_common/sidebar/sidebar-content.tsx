@@ -23,10 +23,12 @@ import MailIcon from "@/public/assets/images/companies/sidebar/mail.svg";
 import CalendarIcon from "@/public/assets/images/companies/sidebar/calendar.svg";
 import TargetIcon from "@/public/assets/images/companies/sidebar/target-05.svg";
 import AlertIcon from "@/public/assets/images/companies/sidebar/alert-triangle.svg";
+import ZapIcon from "@/public/assets/images/companies/sidebar/zap.svg";
 import MessageIcon from "@/public/assets/images/companies/sidebar/message-question.svg";
 
 type SidebarContentProps = {
   boards: BoardSummary[];
+  approvals: number;
   companyCount: number;
   openActionCount: number;
   workspaceName: string;
@@ -34,6 +36,7 @@ type SidebarContentProps = {
 
 export default function SidebarContent({
   boards,
+  approvals,
   companyCount,
   openActionCount,
   workspaceName,
@@ -123,6 +126,13 @@ export default function SidebarContent({
               label="Tasks"
               count={openActionCount}
               active={current(TASKS_PATH)}
+            />
+            <SidebarNavItem
+              href="/workflows"
+              icon={ZapIcon}
+              label="Workflows"
+              count={approvals > 0 ? approvals : undefined}
+              active={current("/workflows")}
             />
             <SidebarNavItem
               href="/quiet"

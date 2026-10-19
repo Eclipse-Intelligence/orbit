@@ -20,6 +20,7 @@ import { Detail, DetailList } from "@/components/crm/record-form";
 import CompanyEnrichButton from "@/components/companies/detail/company-enrich-button";
 import CompanyLogo from "@/components/companies/company-logo";
 import { QuickLinks, SocialLinks, employeesLabel, sectorLabel } from "@/components/companies/detail/company-brand";
+import RunWorkflowButton from "@/components/workflows/run-workflow-button";
 import SectionHeader from "@/components/crm/section-header";
 import RecordSequence from "@/components/shortcuts/record-sequence";
 import RecordTags from "@/components/crm/tags";
@@ -49,6 +50,7 @@ export default function CompanyRecord({
   meetings,
   tags,
   enrichment,
+  workflows = [],
 }: {
   viewer: Viewer;
   context: CompanyContext;
@@ -58,6 +60,7 @@ export default function CompanyRecord({
   meetings: MeetingsSummary | null;
   tags: TagCount[];
   enrichment: EnrichmentAvailability;
+  workflows?: { id: string; name: string }[];
 }) {
   const router = useRouter();
   const listHref = useListHref("companies");
@@ -102,6 +105,7 @@ export default function CompanyRecord({
         list="companies"
         action={
           <div className="flex items-center gap-1">
+            {!company.archivedAt && <RunWorkflowButton object="company" recordId={company.id} workflows={workflows} />}
             {company.archivedAt ? null : confirmArchive ? (
               <>
                 <Button

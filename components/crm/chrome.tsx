@@ -10,20 +10,23 @@ import AssistantDock from "@/components/assistant/assistant-dock";
 import ShortcutsHelp from "@/components/shortcuts/shortcuts-help";
 import type { Viewer } from "@/components/crm/viewer";
 import type { Task } from "@/lib/crm/types";
+import type { Notification } from "@/lib/workflows/store";
 
 export default function CrmChrome({
   viewer,
   overdue,
   today,
+  notifications,
   children,
 }: {
   viewer: Viewer;
   overdue: Task[];
   today: Task[];
+  notifications?: Notification[];
   children: ReactNode;
 }) {
   return (
-    <AttentionProvider overdue={overdue} today={today}>
+    <AttentionProvider overdue={overdue} today={today} notifications={notifications}>
       <QuickAddProvider>
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           {children}

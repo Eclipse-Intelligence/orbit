@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { Db } from "@/lib/db/pool";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
-import { iso, isUuid } from "@/lib/crm/mutate";
+import { iso, isUuid, recordAudit } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
 import { createTaskInDb } from "@/lib/crm/tasks";
 import {
@@ -519,7 +519,17 @@ export async function summariseCall(
   } catch (error) {
     outcome = { status: "failed", error: failureMessage(error) };
   }
-  const finished = await withActor(actor, (db) => finishInsight(db, prepared.insight.id, outcome));
+  const finished = await withActor(actor, async (db) => {
+    const saved = await finishInsight(db, prepared.insight.id, outcome);
+    if (saved.status === "ready") {
+      await recordAudit(db, actor, "call_summary.ready", "call_insight", saved.id, { operation: "summarise_call", source: source }, {
+        activityId: saved.activityId,
+        companyId: saved.companyId,
+        contactId: saved.contactId,
+      });
+    }
+    return saved;
+  });
   return options.autoAccept === false ? finished : acceptAllActionItems(actor, finished);
 }
 

@@ -108,6 +108,8 @@ export type Provenance = {
   operation: string;
   source?: string | null;
   sourceUrl?: string | null;
+  workflowId?: string;
+  depth?: number;
 };
 
 export type CompanyListQuery = {
