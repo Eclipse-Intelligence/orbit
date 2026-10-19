@@ -119,7 +119,7 @@ describe("sending from other accounts", () => {
     const zeus = (await listCalendarGroups(owner)).find((group) => group.email === "mark@zeusvoice.com")!;
     await assert.rejects(
       sendContactEmail(owner, contactId, { subject: "Nope", body: "Hi", from: zeus.id }, out.fetchImpl),
-      /Allow sending for mark@zeusvoice\.com/,
+      /Add mail for mark@zeusvoice\.com/,
     );
     const other = await createUser("someone@orbit.test", "Someone");
     await assert.rejects(

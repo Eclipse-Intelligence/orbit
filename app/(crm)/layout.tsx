@@ -15,6 +15,7 @@ import { countApprovals, listNotifications } from "@/lib/workflows/store";
 import { listAttention } from "@/lib/crm/relationships";
 import { countOpenTasks } from "@/lib/crm/tasks";
 import { syncTeamsTranscripts } from "@/lib/crm/teams-transcripts";
+import { syncMail } from "@/lib/mail/sync";
 import { clickupToken } from "@/lib/clickup";
 import { microsoftConfigured } from "@/lib/microsoft/oauth";
 
@@ -42,6 +43,16 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
         if (result.ran && result.error) console.error("Teams transcript sync failed", result.error);
       } catch (error) {
         console.error("Teams transcript sync failed", error);
+      }
+    });
+  }
+  if (microsoftConfigured()) {
+    after(async () => {
+      try {
+        const result = await syncMail(user, { budgetMs: 10_000, backfill: false });
+        if (result.errors.length) console.error("Mail sync failed", result.errors.join("; "));
+      } catch (error) {
+        console.error("Mail sync failed", error);
       }
     });
   }

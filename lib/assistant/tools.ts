@@ -1,5 +1,6 @@
 import { getBookingPage } from "@/lib/booking/pages";
 import { listLifecycles } from "@/lib/crm/lifecycles";
+import { getMailThread, mailSyncStatus, searchMail } from "@/lib/mail/store";
 import { archiveBoard, createBoard, getBoard, listBoards, updateBoard } from "@/lib/crm/boards";
 import { savePipelineStages } from "@/lib/crm/pipeline";
 import { definitionFromInput, STEP_TYPES, TRIGGER_TYPES } from "@/lib/workflows/definition";
@@ -814,6 +815,48 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       ]);
       return { mailbox, recentMail: messages, unfiledConversations: unfiled, peopleMet: people };
     },
+  },
+  {
+    name: "search_email",
+    label: "Searching email",
+    description:
+      "Search every email in the user's connected mailboxes (all accounts, all folders, full history as far as it has synced). Matches words in the subject, sender and body; filter by sender, account or folder. Returns newest or best matches with ids for get_email_thread.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Words to find, for example pricing renewal. Quotes match a phrase, a leading minus excludes a word." },
+        from: { type: "string", description: "Part of the sender's name or address." },
+        account: { type: "string", description: "One of the user's own addresses, to search only that mailbox." },
+        folder: { type: "string", enum: ["inbox", "sent", "drafts", "archive", "trash", "other"] },
+        limit: { type: "integer", minimum: 1, maximum: 50 },
+      },
+    },
+    run: async (actor, args) => ({
+      emails: await searchMail(actor, {
+        query: optionalStr(args.query),
+        from: optionalStr(args.from),
+        account: optionalStr(args.account),
+        folder: oneOf(args.folder, ["inbox", "sent", "drafts", "archive", "trash", "other"] as const),
+        limit: int(args.limit, 20, 1, 50),
+      }),
+    }),
+  },
+  {
+    name: "get_email_thread",
+    label: "Reading an email thread",
+    description: "The whole conversation an email belongs to, oldest first, with each message's sender, recipients, time and text.",
+    parameters: { type: "object", properties: { emailId: idParam("Email id from search_email.") }, required: ["emailId"] },
+    run: async (actor, args) => {
+      const thread = await getMailThread(actor, required(args.emailId, "An email id"));
+      return { messages: thread.map((message) => ({ ...message, bodyText: message.bodyText?.slice(0, 20_000) ?? null })) };
+    },
+  },
+  {
+    name: "get_mail_sync_status",
+    label: "Checking mail sync",
+    description: "How far each connected mailbox has synced into Orbit: messages stored against the total, per folder, and any errors.",
+    parameters: { type: "object", properties: {} },
+    run: async (actor) => ({ accounts: await mailSyncStatus(actor) }),
   },
   {
     name: "list_quiet_relationships",

@@ -335,7 +335,7 @@ async function resolveSender(db: Db, actor: UserActor, from: string | null | und
     throw new CrmError("invalid_input", `Reconnect ${account.email} in Settings › Calendars before sending from it.`, 400, { field: "from" });
   }
   if (!account.can_send) {
-    throw new CrmError("invalid_input", `Allow sending for ${account.email} in Settings › Calendars first.`, 400, { field: "from" });
+    throw new CrmError("invalid_input", `Add mail for ${account.email} in Settings › Calendars first.`, 400, { field: "from" });
   }
   return {
     email: account.email,
