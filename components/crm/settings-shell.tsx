@@ -41,7 +41,7 @@ const NAV: NavItem[] = [
   { href: SETTINGS_PATHS.bookingPage, label: "Booking page", icon: LinkIcon },
   { href: SETTINGS_PATHS.integrations, label: "Integrations", icon: PlugIcon },
   { href: SETTINGS_PATHS.pipeline, label: "Pipeline", icon: BarChartIcon },
-  { href: SETTINGS_PATHS.tags, label: "Tags", icon: TagIcon },
+  { href: SETTINGS_PATHS.tags, label: "Tags and lifecycles", icon: TagIcon },
   { href: SETTINGS_PATHS.api, label: "API and webhooks", icon: CodeIcon },
 ];
 

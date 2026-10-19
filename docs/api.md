@@ -26,7 +26,7 @@ Optional `Idempotency-Key` header (printable ASCII, up to 200 characters). Reuse
 
 `GET /api/v1/companies`
 
-Query: `q`, `lifecycle` (`lead`, `prospect`, `customer`, `churned`, or a custom name; matching ignores case), `health` (`healthy`, `watch`, `at_risk`, or `none` for not set), `owner` (a user id or `unassigned`), `tag` (one tag; matching ignores case and extra spaces), `sort` (`name`, `domain`, `owner`, `interaction`, `strength`, `updated`, `created`; default `name`), `order` (`asc` or `desc`; each sort has its own default), `has` and `missing` (comma-separated `domain`, `contacts`, `interactions`), `limit` (1–100, default 50), `offset` (max 10000), `include_archived=true`.
+Query: `q`, `lifecycle` (`lead`, `prospect`, `customer`, `churned`, or a custom name; matching ignores case), `health` (`healthy`, `watch`, `at_risk`, or `none` for not set), `owner` (a user id or `unassigned`), `tag` (one tag; matching ignores case and extra spaces), `sort` (`name`, `domain`, `owner`, `interaction`, `strength`, `updated`, `created`; default `name`), `order` (`asc` or `desc`; each sort has its own default), `has` and `missing` (comma-separated `domain`, `contacts`, `interactions`), `limit` (1 to 100, default 50), `offset` (max 10000), `include_archived=true`.
 
 Response:
 
@@ -50,7 +50,7 @@ Response:
 
 `matchedOn` is `domain`, `name`, or `null` when a new row was inserted. Provide a name or a domain.
 
-`POST /api/v1/companies/bulk` accepts `{ "companies": [ ... ], "provenance": { "source": "", "sourceUrl": "" } }` with 1–50 companies. Each item is validated on its own. The response is `{ "results": [ { "index": 0, "status": "created", "company": {}, "matchedOn": null } ] }`. `status` is `created`, `updated`, `matched`, or `error`. `matched` means an existing company was found and no fields changed. An error item includes `{ "code", "message" }` and does not roll back the items that succeeded.
+`POST /api/v1/companies/bulk` accepts `{ "companies": [ ... ], "provenance": { "source": "", "sourceUrl": "" } }` with 1 to 50 companies. Each item is validated on its own. The response is `{ "results": [ { "index": 0, "status": "created", "company": {}, "matchedOn": null } ] }`. `status` is `created`, `updated`, `matched`, or `error`. `matched` means an existing company was found and no fields changed. An error item includes `{ "code", "message" }` and does not roll back the items that succeeded.
 
 ## Company fields
 
@@ -80,7 +80,7 @@ Companies and contacts carry `tags`, an array of strings, in every response. Sen
 { "error": { "code": "forbidden", "message": "Missing scope companies:write.", "details": {} } }
 ```
 
-Codes include `unauthorized` (401), `forbidden` (403), `not_found` (404), `invalid_input` (400), `duplicate_company` (409), `duplicate_contact` (409), `idempotency_conflict` (409), `rate_limited` (429), and `internal_error` (500).
+Codes include `unauthorized` (401), `forbidden` (403), `not_found` (404), `invalid_input` (400), `duplicate_company` (409), `duplicate_contact` (409), `conflict` (409, for example a company already on a board), `idempotency_conflict` (409), `rate_limited` (429), and `internal_error` (500).
 
 ## Contacts
 
@@ -98,7 +98,7 @@ Contact fields: `companyId`, `firstName`, `lastName`, `email`, `phone`, `jobTitl
 
 `GET /api/v1/opportunities` with `q`, `company_id`, `pipeline_id` (a board id, or the default pipeline's id), `status` (`open`, `won`, `lost`). Without `pipeline_id` it returns opportunities and board cards together; each row has `pipelineId`, `pipelineName` and `pipelineKind` (`sales` or `board`).
 
-`POST /api/v1/opportunities` requires `companyId` and, on the default pipeline, `name`. `pipelineId` adds a card to a board instead: the name defaults to the company's, a company can be on a board once (409 otherwise), and board stages have no won or lost. Omitting `stageId` uses the first stage of the pipeline. Marking a sales opportunity won also makes the company a customer and adds it to boards set to Add companies when a deal is won. A won or lost stage sets `status`. Setting `status` to `won` or `lost` moves the opportunity to that stage. Value is a non-negative amount with up to two decimal places. Currency is a three-letter code and defaults to `GBP`.
+`POST /api/v1/opportunities` requires `companyId` and, on the default pipeline, `name`. `pipelineId` adds a card to a board instead: the name defaults to the company's, a company can be on a board once (409 `conflict` otherwise), and board stages have no won or lost. `primaryContactId` must be a contact who works at `companyId`; a create, or a `PATCH` that changes the company or contact, fails with 400 `invalid_input` (`field: primaryContactId`) otherwise. Omitting `stageId` uses the first stage of the pipeline. Marking a sales opportunity won also makes the company a customer and adds it to boards set to Add companies when a deal is won. A won or lost stage sets `status`. Setting `status` to `won` or `lost` moves the opportunity to that stage. Value is a non-negative amount with up to two decimal places. Currency is a three-letter code and defaults to `GBP`.
 
 `GET /api/v1/pipeline` returns the default pipeline and its stages.
 
@@ -128,7 +128,7 @@ Agent tokens see every task in the workspace; people in the app only see tasks t
 
 ## Context
 
-`GET /api/v1/companies/:id/context` returns the company, its contacts, opportunities, recent activities, open tasks, `lastInteraction`, `openTaskCount`, `relationshipStatus` (`new`, `active`, `quiet`, or `needs_action`), and `timeline`: the company's activities plus those of its current contacts, newest first. `insights` maps the id of each call in the timeline that has a summary to its summary, key points, suggested actions, and status (the transcript is not included).
+`GET /api/v1/companies/:id/context` returns the company, its contacts, opportunities, recent activities, open tasks, `lastInteraction`, `openTaskCount`, `relationshipStatus` (`new`, `active`, `quiet`, or `needs_action`), and `timeline`: the company's activities plus those of its current contacts, newest first. `insights` maps the id of each call in the timeline that has a summary to its summary, key points, suggested actions, status, and `sentiment` (`healthy`, `watch`, `at_risk` or null) with `sentimentReason` (the transcript is not included). The company carries `health`, `healthReason`, `healthAt` and `healthActivityId`.
 
 `GET /api/v1/relationships/stale` lists companies with no interaction in the last 21 days. `days` and `limit` are optional.
 
@@ -144,7 +144,7 @@ Agent tokens see every task in the workspace; people in the app only see tasks t
 
 ## Bulk leads
 
-`POST /api/v1/leads/bulk` accepts `{ "leads": [ ... ], "provenance": {} }` with 1–50 leads. Each lead uses the single-lead rules and is saved on its own. The response is `{ "results": [ { "index": 0, "status": "created", "lead": {} } ] }`. `status` is `created` or `error`.
+`POST /api/v1/leads/bulk` accepts `{ "leads": [ ... ], "provenance": {} }` with 1 to 50 leads. Each lead uses the single-lead rules and is saved on its own. The response is `{ "results": [ { "index": 0, "status": "created", "lead": {} } ] }`. `status` is `created` or `error`.
 
 ## Pipeline
 
