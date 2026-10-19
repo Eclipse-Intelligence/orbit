@@ -52,12 +52,12 @@ const NAV: [string, string, string, string?][] = [
 
 const SETTINGS_SECTIONS: [string, string, string][] = [
   ["General", "/settings/general", "email addresses meeting link account"],
-  ["Email templates", "/settings/email-templates", "templates signatures"],
-  ["Calendars", "/settings/calendars", "outlook ics gmail"],
+  ["Templates and signatures", "/settings/email-templates", "email templates signatures"],
+  ["Calendars", "/settings/calendars", "outlook ics gmail accounts allow sending"],
   ["Booking page", "/settings/booking-page", "booking scheduling"],
   ["Integrations", "/settings/integrations", "clickup granola microsoft"],
   ["Pipeline", "/settings/pipeline", "stages"],
-  ["Tags", "/settings/tags", "labels lifecycles"],
+  ["Tags and lifecycles", "/settings/tags", "labels lifecycles"],
   ["API and webhooks", "/settings/api", "tokens webhooks"],
 ];
 

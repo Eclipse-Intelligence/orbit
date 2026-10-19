@@ -48,7 +48,7 @@ Settings › Team lists everyone in the workspace. The owner and admins invite p
 What is shared and what is private:
 
 - Shared with every member: companies, contacts, deals, boards, tags, email templates, and everything logged to a record (emails, calls, meetings, notes, call summaries, filed transcripts), plus meetings from calendars marked Use for CRM that include a contact or company.
-- Private to each person: their inbox, calendars and calendar page, OAuth tokens and API keys, assistant conversations, workflow runs and approvals, notifications.
+- Private to each person: their inbox, calendars and calendar page, OAuth tokens and API keys, email signatures and unsent attachments, assistant conversations, workflow runs and approvals, notifications.
 - Tasks belong to their owner and creator. A member sees only tasks assigned to them or that they created, everywhere in Orbit (lists, record pages, search, the assistant). The owner and admins see everyone's, with a Mine or Everyone switch on Tasks once the workspace has more than one person. New tasks are owned by whoever creates them. Reminders, the side menu count and the notifications bell only cover your own tasks. A member can hand back a task they created, but not one someone else gave them.
 
 Removing someone moves their companies, contacts, deals and tasks to whoever removed them, disconnects their Microsoft and calendar accounts, AI account, Orbit Agent and Granola key, and keeps everything they logged.
@@ -61,19 +61,19 @@ Removing someone moves their companies, contacts, deals and tasks to whoever rem
 | --- | --- | --- |
 | General | `/settings/general` | Your account, My email addresses, and the meeting link for invites |
 | Team | `/settings/team` | Who is in the workspace, their roles, invites (below) |
-| Email templates | `/settings/email-templates` | Reusable emails (below) |
-| Calendars | `/settings/calendars` | Calendar accounts and links, Show and Use for CRM |
+| Templates and signatures | `/settings/email-templates` | Reusable emails (below) and a signature per sending address |
+| Calendars | `/settings/calendars` | Calendar accounts and links, Show and Use for CRM, Allow sending for extra Microsoft accounts |
 | Booking page | `/settings/booking-page` | Your public booking page at `/book/<link>` (below) |
 | Integrations | `/settings/integrations` | Microsoft 365 and Teams calls (managed from Inbox), your Granola key, Linear, ClickUp, AI accounts and Orbit Agent, enrichment providers |
 | Pipeline | `/settings/pipeline` | Opportunity stages (each board has its own stages, set on the board) |
-| Tags | `/settings/tags` | Rename, merge, and delete tags |
+| Tags and lifecycles | `/settings/tags` | Rename, merge, and delete tags and custom lifecycles |
 | API and webhooks | `/settings/api` | REST and MCP addresses, how to issue agent tokens, webhooks and recent deliveries |
 
 Rarely used parts (token instructions, recent webhook deliveries, watched ClickUp lists, and similar) are collapsed until you open them. Old links keep working: `/settings#calendars`, `#pipeline`, `#tags`, `#webhooks`, `#clickup` and the rest open the matching page, and `#meeting-link` scrolls to it on General.
 
 ## Email templates
 
-Settings › Email templates keeps emails you send often. A template has a name (up to 120 characters, unique in the workspace ignoring case), a subject (up to 300), a plain-text message (up to 20,000; line breaks are kept), and up to 20 tags, normalised like contact tags. Search matches the name, subject, and message; the tag chips filter the list. Selecting a template opens the editor with a live preview for one of your 20 most recently updated contacts, or for Alex Example at Example Ltd. Duplicate makes "Copy of …" (numbered when that name is taken), and Delete removes it after you confirm.
+Settings › Templates and signatures keeps emails you send often. A template has a name (up to 120 characters, unique in the workspace ignoring case), a subject (up to 300), a plain-text message (up to 20,000; line breaks are kept), and up to 20 tags, normalised like contact tags. Search matches the name, subject, and message; the tag chips filter the list. Selecting a template opens the editor with a live preview for one of your 20 most recently updated contacts, or for Alex Example at Example Ltd. Duplicate makes "Copy of …" (numbered when that name is taken), and Delete removes it after you confirm.
 
 Tokens are `{{first_name}}` (falls back to the full name, then "there"), `{{last_name}}`, `{{name}}`, and `{{company}}`. Click a token chip to insert it at the cursor; anything else in double braces is flagged and left as typed.
 
@@ -215,7 +215,7 @@ Instant sync registers one ClickUp webhook for task created, updated, deleted, s
 
 ### Scheduling
 
-`GET` or `POST /api/cron/sync` with `Authorization: Bearer <CRON_SECRET>` runs, for each workspace with a connected mailbox, extra calendar account or calendar link, Granola, or ClickUp: mail sync, Teams call sync, calendar sync (every connected account and calendar link; links sync even without the Microsoft app), Teams transcript sync and subscription upkeep, Granola sync, ClickUp sync (watched lists since the last sync less five minutes, then pending and failed pushes), and pending summaries. Each step runs on its own, so one failing does not stop the rest, and the run stops starting new steps after about 50 seconds. Mail sync only starts with at least 15 seconds left, and model calls, Graph, Granola and ClickUp requests are cut short so the run fits. It returns a JSON report of counts and errors per mailbox owner, then runs due workflows for up to 8 seconds. CRM pages also sync and run workflows in the background after they load. `GET` or `POST /api/cron/workflows` with the same header runs only workflows, for up to 50 seconds, if you want a tighter schedule for them.
+`GET` or `POST /api/cron/sync` with `Authorization: Bearer <CRON_SECRET>` runs, for each workspace with a connected mailbox, extra calendar account or calendar link, Granola, or ClickUp: mail sync, Teams call sync, calendar sync (every connected account and calendar link; links sync even without the Microsoft app), Teams transcript sync and subscription upkeep, Granola sync, ClickUp sync (watched lists since the last sync less five minutes, then pending and failed pushes), and pending summaries. Each step runs on its own, so one failing does not stop the rest, and the run stops starting new steps after about 50 seconds. Mail sync only starts with at least 15 seconds left, and model calls, Graph, Granola and ClickUp requests are cut short so the run fits. It then removes unsent email attachments older than a day, judges the health of one call summarised before health existed (up to 12 seconds), returns a JSON report of counts and errors per mailbox owner, and runs due workflows for up to 8 seconds. CRM pages also sync and run workflows in the background after they load. `GET` or `POST /api/cron/workflows` with the same header runs only workflows, for up to 50 seconds, if you want a tighter schedule for them.
 
 `vercel.json` has a daily Vercel cron as a backstop (Hobby plans allow one run a day; Vercel sends `CRON_SECRET` as the bearer token). For every 10 minutes, schedule it from Supabase with `pg_cron` and `pg_net`. Run this in the SQL editor, replacing `<SITE_URL>` with Orbit's address and `<CRON_SECRET>` with the value set on Vercel (production already has this job, named `orbit-sync`):
 
@@ -313,7 +313,7 @@ The Contacts list (`/contacts`) and the Companies list (`/`) keep their sort and
 | `sort` | `name` (default), `company`, `updated`, `created` | `name` (default), `domain`, `owner`, `interaction`, `strength`, `updated`, `created` |
 | `order` | `asc` or `desc` | `asc` or `desc` |
 | `has`, `missing` | Comma-separated: `email`, `phone`, `linkedin`, `company` | Comma-separated: `domain`, `contacts`, `interactions` |
-| Other | `q`, `tag`, `owner`, `company_id`, `page`, `include_archived=true` | `q`, `tag`, `owner`, `lifecycle`, `page`, `include_archived=true` |
+| Other | `q`, `tag`, `owner`, `company_id`, `page`, `include_archived=true` | `q`, `tag`, `owner`, `lifecycle`, `health` (`healthy`, `watch`, `at_risk`, `none`), `page`, `include_archived=true` |
 
 Name, company, domain and owner sort A to Z; updated, created, interaction and strength sort newest first. Records without a company, domain, owner or interaction go last, except `strength` in ascending order (Weakest connection), which puts never-contacted companies first. Ties are sorted by name. Click a column header to sort and again to reverse; on phones a Sort menu replaces the headers. Filter (F) sets each field to Any, Has or No. `GET /api/v1/contacts` and `GET /api/v1/companies` accept the same parameters (use `limit` and `offset` instead of `page`).
 
@@ -377,13 +377,13 @@ Replies are markdown, with links to the records they mention. Copy copies a repl
 
 | Read (run straight away) | Actions (need your approval) |
 | --- | --- |
-| `get_overview`, `search_records`, `list_companies`, `get_company`, `list_contacts`, `get_contact`, `list_tasks`, `get_pipeline`, `list_boards`, `get_board`, `list_workflows`, `get_workflow`, `get_workflow_run`, `list_workflow_approvals`, `test_workflow`, `list_opportunities`, `list_activities`, `get_call_transcript`, `list_calendar_events`, `get_inbox`, `list_quiet_relationships`, `list_tags`, `list_team_members`, `list_email_templates`, `get_settings`, `linear_search_issues`, `linear_get_issue` | `create_task`, `update_task`, `complete_task`, `log_activity`, `create_company`, `update_company`, `update_companies`, `create_contact`, `update_contact`, `update_contacts`, `create_opportunity`, `add_to_board`, `create_board`, `update_board`, `set_board_stages`, `delete_board`, `move_card`, `remove_from_board`, `create_workflow`, `update_workflow`, `set_workflow_status`, `share_workflow`, `delete_workflow`, `run_workflow`, `decide_workflow_approval`, `update_opportunity`, `tag_records`, `send_email`, `create_meeting_invite`, `linear_create_issue`, `linear_comment`, `linear_update_issue` |
+| `get_overview`, `search_records`, `list_companies`, `get_company`, `list_contacts`, `get_contact`, `list_tasks`, `get_pipeline`, `list_boards`, `get_board`, `list_workflows`, `get_workflow`, `get_workflow_run`, `list_workflow_approvals`, `test_workflow`, `list_opportunities`, `list_activities`, `get_call_transcript`, `list_calendar_events`, `get_inbox`, `list_quiet_relationships`, `list_tags`, `list_lifecycles`, `list_team_members`, `list_email_templates`, `list_email_senders`, `get_settings`, `linear_search_issues`, `linear_get_issue` | `create_task`, `update_task`, `complete_task`, `log_activity`, `create_company`, `update_company`, `update_companies`, `create_contact`, `update_contact`, `update_contacts`, `create_opportunity`, `add_to_board`, `create_board`, `update_board`, `set_board_stages`, `delete_board`, `move_card`, `remove_from_board`, `create_workflow`, `update_workflow`, `set_workflow_status`, `share_workflow`, `delete_workflow`, `run_workflow`, `decide_workflow_approval`, `update_opportunity`, `tag_records`, `send_email`, `create_meeting_invite`, `linear_create_issue`, `linear_comment`, `linear_update_issue` |
 
-`update_companies` and `update_contacts` make the same change to up to 100 records in one call. `send_email` sends from the Outlook mailbox connected in Inbox. `create_meeting_invite` goes through the same path as Meeting invites. `create_task` goes to the default ClickUp list unless told not to. `set_board_stages` takes a board's full stage list in order (existing stages by id, new ones without, left-out ones removed once they have no cards); without a board id it changes the Opportunities stages and keeps their probabilities unless given new ones. `create_workflow` and `update_workflow` take a template key or shared workflow id, or a definition as nested `steps` (`then`/`else` on If, `body` on For each item) or as `nodes` and `edges`; it is laid out on the canvas and checked like a saved one. `test_workflow` is a read because test runs only report what actions would do. Writes are recorded with source `assistant`.
+`update_companies` and `update_contacts` make the same change to up to 100 records in one call. `send_email` sends from the Inbox mailbox, or from another address the user can send from when given `from`, with that address's signature. `create_meeting_invite` goes through the same path as Meeting invites. `create_task` goes to the default ClickUp list unless told not to. `set_board_stages` takes a board's full stage list in order (existing stages by id, new ones without, left-out ones removed once they have no cards); without a board id it changes the Opportunities stages and keeps their probabilities unless given new ones. `create_workflow` and `update_workflow` take a template key or shared workflow id, or a definition as nested `steps` (`then`/`else` on If, `body` on For each item) or as `nodes` and `edges`; it is laid out on the canvas and checked like a saved one. `test_workflow` is a read because test runs only report what actions would do. Writes are recorded with source `assistant`.
 
 ### Approving changes
 
-Proposed changes appear as cards under the reply, each with a title and the fields it will set. Record ids are shown as names (companies, people, tasks, opportunities, stages, boards and team members).
+Proposed changes appear as cards under the reply, each with a title and the fields it will set. Record ids are shown as names (companies, people, tasks, opportunities, stages, boards, workflows and team members).
 
 - **One change:** a card with Confirm and Cancel.
 - **Several changes:** one "N changes" card. Every change starts ticked; untick any you want to skip. Confirm all (or Confirm N) runs the ticked ones and cancels the rest. Cancel all cancels everything. The card shows the first five changes, and Show all lists the rest.
@@ -521,15 +521,15 @@ The bell shows workflow updates (approvals waiting, failed runs, Notify someone 
 
 ## Environment variables
 
-Every variable Orbit reads. `.env.example` lists them with comments.
+Every variable Orbit reads. `.env.example` lists them with comments (aliases such as `SUPABASE_SECRET_KEY` and `NEXT_PUBLIC_SITE_URL` are noted here).
 
 | Variable | Needed for | Notes |
 | --- | --- | --- |
 | `DATABASE_URL`, `DATABASE_ADMIN_URL` | Everything | `crm_app` and `crm_admin` (or `postgres` locally). |
 | `APP_SECRET` | Everything | At least 16 characters. Signs local sessions and encrypts stored tokens, keys and calendar links. |
 | `DEV_USER_EMAIL`, `DEV_USER_PASSWORD`, `CRM_AGENT_TOKEN` | Local development | Written by `db:setup`. |
-| `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Hosted sign-in | Unset means local password sessions. |
-| `SUPABASE_SERVICE_ROLE_KEY` (or `SUPABASE_SECRET_KEY`) | Invites | Server only. Creates confirmed logins for invitees. |
+| `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Hosted sign-in, email attachments (Storage) | Unset means local password sessions and no attachments. |
+| `SUPABASE_SERVICE_ROLE_KEY` (or `SUPABASE_SECRET_KEY`) | Invites, email attachments | Server only. Creates confirmed logins for invitees, and signs uploads to and reads from the private `email-attachments` Storage bucket. |
 | `SITE_URL` (or `NEXT_PUBLIC_SITE_URL`) | Links in emails, ClickUp, Linear and invites; webhooks and Teams subscriptions | The https origin, with or without `https://`. |
 | `CRON_SECRET` | `/api/cron/sync`, `/api/cron/workflows`, `/api/assistant/probe` | Bearer secret. |
 | `NEXT_PUBLIC_TIMEZONE` | Optional | Default `Europe/London`. |

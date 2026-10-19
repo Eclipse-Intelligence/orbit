@@ -13,7 +13,6 @@ import { findStaleRelationships, getCompanyContext, getDueActions } from "@/lib/
 import { completeTask, createTask } from "@/lib/crm/tasks";
 import {
   ACTIVITY_TYPES,
-  LIFECYCLES,
   OPPORTUNITY_STATUSES,
   TASK_PRIORITIES,
   TASK_VIEWS,
@@ -149,7 +148,7 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
         domain: z.string().nullable().optional(),
         website: z.string().nullable().optional(),
         industry: z.string().nullable().optional(),
-        lifecycle: z.enum(LIFECYCLES).optional(),
+        lifecycle: z.string().max(40).optional().describe("lead, prospect, customer, churned, or any custom lifecycle name"),
         contactFirstName: z.string().nullable().optional(),
         contactLastName: z.string().nullable().optional(),
         contactEmail: z.string().nullable().optional(),

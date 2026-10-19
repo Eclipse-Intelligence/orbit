@@ -11,7 +11,7 @@ How Orbit is built. Follow these when changing or adding code. `README.md` cover
 | `app/login`, `app/join`, `app/book`, `app/auth` | Public pages: sign in, invite acceptance, booking pages, the Supabase email callback. |
 | `lib/crm/` | Domain logic. Every function takes an `Actor` and talks to Postgres through `withActor`. |
 | `lib/workflows/`, `lib/assistant/`, `lib/enrichment/`, `lib/companion/`, `lib/ai-accounts/` | Feature engines. |
-| `lib/*.ts` | Clients for outside services (`llm.ts`, `linear.ts`, `clickup.ts`, `granola.ts`, `microsoft/`) and small shared helpers. |
+| `lib/*.ts` | Clients for outside services (`llm.ts`, `linear.ts`, `clickup.ts`, `granola.ts`, `storage.ts`, `microsoft/`) and small shared helpers. |
 | `components/_ui/` | Primitives (`Button`, `Input`, `Sheet`, `Popover`, `DropdownMenu`, `Switch`, `Tag`, `Asset`). |
 | `components/<area>/` | Feature components, grouped by area (`crm`, `companies`, `workflows`, `assistant`, `auth`). |
 | `public/assets/images/<area>/` | SVG icons and images. |
@@ -23,7 +23,7 @@ How Orbit is built. Follow these when changing or adding code. `README.md` cover
 
 - Read and write through `lib/crm/*` (or a feature engine), never with ad hoc SQL in a page or action.
 - `withActor(actor, db => ...)` runs as `authenticated` (or `crm_agent`) with the user's id in the JWT claims, so row-level security decides what each person can see. Never bypass it for user-facing reads.
-- Shared records (companies, contacts, deals, boards, activity) are visible to every workspace member. Private by design: inboxes, calendars, OAuth tokens, assistant conversations, workflow runs, notifications, Granola keys, and tasks (owner or creator only; owners and admins see all).
+- Shared records (companies, contacts, deals, boards, activity) are visible to every workspace member. Private by design: inboxes, calendars, OAuth tokens, email signatures and unsent attachments, assistant conversations, workflow runs, notifications, Granola keys, and tasks (owner or creator only; owners and admins see all).
 - Work that must cross users (background sync, invites, workflow dispatch) goes through `private.*` security-definer functions granted only to `crm_app` and called with `query()`. Inside `withActor`, do not call `private.*` functions in a query: `authenticated` has no usage on that schema, only policies can use them.
 - Every mutation calls `recordAudit` with a `Provenance`. Audit events feed outbound webhooks and workflow triggers.
 - Throw `CrmError(code, message, status)` with a message a person can act on. Server actions return `{ error }` instead of throwing.

@@ -33,7 +33,7 @@ That reads `CRM_AGENT_TOKEN` from the environment or `.env.local` and speaks MCP
 
 `get_company`: `id`.
 
-`upsert_company`: any company field, including `tags`. Omitted fields stay as they are; `tags` replaces the whole list. `provenanceSource` and `provenanceUrl` are written to the audit event.
+`upsert_company`: any company field except health (set from call summaries, or by REST `PATCH` and the app), including `tags` and any lifecycle name. Omitted fields stay as they are; `tags` replaces the whole list. `provenanceSource` and `provenanceUrl` are written to the audit event.
 
 `search_contacts`, `get_contact`, `upsert_contact`: people. `search_contacts` takes `tag`; `upsert_contact` takes `tags`, which replaces the whole list. Matching is email, then LinkedIn, then the same name at the same company.
 
