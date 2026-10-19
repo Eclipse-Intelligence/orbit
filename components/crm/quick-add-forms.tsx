@@ -15,10 +15,12 @@ import Field from "@/components/_ui/field";
 import { Input } from "@/components/_ui/input";
 import { recordSelectClass } from "@/components/crm/record-form";
 import RecordPicker, { type PickedRecord } from "@/components/crm/record-picker";
+import ContactEmail from "@/components/crm/contact-email";
+import RecordCombobox from "@/components/crm/record-combobox";
 import TaskPad from "@/components/crm/task-pad";
 import { TagChip, TagOptions, TagPopover } from "@/components/crm/tags";
 import { createCompanyAction, type CompanyActionState } from "@/app/(crm)/actions";
-import type { QuickAddSetup } from "@/app/(crm)/quick-add";
+import { emailRecipientAction, type QuickAddSetup } from "@/app/(crm)/quick-add";
 import {
   saveContactAction,
   saveOpportunityAction,
@@ -26,6 +28,7 @@ import {
   type RecordActionState,
 } from "@/app/(crm)/records";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
+import type { Recipient } from "@/lib/crm/personalise";
 import type { QuickAddKind, QuickAddPrefill } from "@/lib/crm/quick-add";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import PlusIcon from "@/public/assets/images/_common/plus.svg";
@@ -44,6 +47,7 @@ const TITLES: Record<QuickAddKind, string> = {
   contact: "Add contact",
   company: "Add company",
   opportunity: "Add opportunity",
+  email: "Send email",
 };
 
 function useSettled<T extends object>(state: T, done: (state: T) => boolean, run: (state: T) => void) {
@@ -432,5 +436,91 @@ export function QuickOpportunityForm({ prefill, setup, onDone }: FormProps) {
         companyId={company?.id ?? null}
       />
     </Shell>
+  );
+}
+
+export function QuickEmailForm({ prefill, onDone }: FormProps) {
+  const [picked, setPicked] = useState<PickedRecord | null>(prefill.contact);
+  const [recipient, setRecipient] = useState<Recipient | null>(null);
+  const [loading, setLoading] = useState(Boolean(prefill.contact));
+  const [loadedFor, setLoadedFor] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!picked || loadedFor === picked.id) return;
+    let cancelled = false;
+    emailRecipientAction(picked.id).then(
+      (found) => {
+        if (cancelled) return;
+        setRecipient(found);
+        setLoadedFor(picked.id);
+        setLoading(false);
+      },
+      () => {
+        if (!cancelled) setLoading(false);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [picked, loadedFor]);
+
+  function choose(next: PickedRecord | null) {
+    setPicked(next);
+    setRecipient(null);
+    setLoadedFor(null);
+    setLoading(Boolean(next));
+  }
+
+  const ready = picked && recipient && recipient.id === picked.id ? recipient : null;
+
+  return (
+    <div className="flex flex-col">
+      <DialogHeader className="py-4 pr-14">
+        <DialogTitle>{TITLES.email}</DialogTitle>
+      </DialogHeader>
+      <div className="px-6 pt-2 pb-5">
+        <ContactEmail
+          key={ready?.id ?? "none"}
+          contactId={ready?.id ?? null}
+          email={ready?.email ?? null}
+          recipient={ready}
+          mailboxConnected={false}
+          idPrefix="quick"
+          focusSubject={Boolean(ready)}
+          unavailable={loading ? "Loading…" : picked && !ready ? "Couldn't load that contact." : "Choose who to email."}
+          to={
+            <RecordCombobox
+              id="email-to-quick"
+              kind="contact"
+              label="To"
+              placeholder="Search people"
+              value={picked}
+              onChange={choose}
+              autoFocus={!picked}
+              className="min-w-0 flex-1 py-1"
+            />
+          }
+          onDone={(result) => {
+            const name = ready?.name || ready?.email || "this contact";
+            onDone({
+              message: result.sent
+                ? result.warning ?? `Email sent to ${name}${result.from ? ` from ${result.from}` : ""}`
+                : `Email logged on ${name}`,
+              href: ready ? contactHref(ready.id) : undefined,
+              link: "Open",
+            });
+          }}
+        />
+        {ready && !ready.email && (
+          <p className="caption-style text-subtle pt-2">
+            {ready.name} has no email address.{" "}
+            <Link href={contactHref(ready.id)} className="text-foreground underline underline-offset-2">
+              Add one on their record
+            </Link>
+            .
+          </p>
+        )}
+      </div>
+    </div>
   );
 }

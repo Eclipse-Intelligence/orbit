@@ -97,6 +97,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: "create-contact", label: "Create contact", group: "Create", sequence: ["c", "c"], palette: true, keywords: "new add person" },
   { id: "create-company", label: "Create company", group: "Create", sequence: ["c", "o"], palette: true, keywords: "new add organisation" },
   { id: "create-opportunity", label: "Create opportunity", group: "Create", sequence: ["c", "p"], palette: true, keywords: "new add deal" },
+  { id: "create-email", label: "Send an email", group: "Create", sequence: ["c", "m"], palette: true, keywords: "new mail write compose message" },
   { id: "create-event", label: "Create meeting invite", group: "Create", sequence: ["c", "e"], palette: true, keywords: "new event invite calendar" },
   { id: "create-activity", label: "Create activity", group: "Create", sequence: ["c", "a"], palette: true, keywords: "new note log" },
 

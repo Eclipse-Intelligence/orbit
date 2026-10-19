@@ -57,6 +57,9 @@ export default function ContactEmail({
   mailboxConnected,
   idPrefix = contactId ?? "none",
   unavailable,
+  to,
+  onDone,
+  focusSubject,
 }: {
   contactId: string | null;
   companyId?: string;
@@ -65,6 +68,9 @@ export default function ContactEmail({
   mailboxConnected: boolean;
   idPrefix?: string;
   unavailable?: string;
+  to?: ReactNode;
+  onDone?: (result: { sent: boolean; from: string | null; warning: string | null }) => void;
+  focusSubject?: boolean;
 }) {
   const router = useRouter();
   const files = useEmailAttachments();
@@ -162,6 +168,7 @@ export default function ContactEmail({
       reset();
       files.clear();
       const warning = "warning" in result ? (result.warning ?? null) : null;
+      onDone?.({ sent: true, from: chosen?.email ?? null, warning });
       setNotice(warning ? { text: warning, tone: "warn" } : { text: `Sent from ${chosen?.email ?? "your mailbox"}.`, tone: "ok" });
       router.refresh();
     } finally {
@@ -183,6 +190,7 @@ export default function ContactEmail({
         return;
       }
       reset();
+      onDone?.({ sent: false, from: null, warning: null });
       setNotice({ text: "Email recorded on this contact.", tone: "ok" });
       router.refresh();
     } finally {
@@ -203,15 +211,17 @@ export default function ContactEmail({
     setWithSignature(true);
   }
 
-  if (!contactId) return <p className="caption-style text-subtle px-1 py-2">{unavailable}</p>;
+  if (!contactId && !to) return <p className="caption-style text-subtle px-1 py-2">{unavailable}</p>;
 
   return (
     <div className="flex flex-col">
-      <Line label="To">
-        <span className="min-w-0 truncate text-[14px] leading-5">
-          {target.name || email || "This contact"}
-          {email && target.name && <span className="text-subtle"> &lt;{email}&gt;</span>}
-        </span>
+      <Line label="To" htmlFor={to ? `email-to-${idPrefix}` : undefined}>
+        {to ?? (
+          <span className="min-w-0 truncate text-[14px] leading-5">
+            {target.name || email || "This contact"}
+            {email && target.name && <span className="text-subtle"> &lt;{email}&gt;</span>}
+          </span>
+        )}
       </Line>
       {email && sender.senders.length > 0 && (
         <Line label="From" htmlFor={`email-from-${idPrefix}`}>
@@ -248,6 +258,7 @@ export default function ContactEmail({
         id={`email-subject-${idPrefix}`}
         ref={subjectRef}
         data-compose-focus=""
+        autoFocus={focusSubject}
         value={subject}
         autoComplete="off"
         maxLength={200}
@@ -365,7 +376,11 @@ export default function ContactEmail({
         >
           {error ??
             notice?.text ??
-            (!email ? "Save an email address on this contact to send. You can still log an email." : "Connect Microsoft in Inbox to send. You can still log the email.")}
+            (!contactId
+              ? (unavailable ?? "Choose who to email.")
+              : !email
+                ? "Save an email address on this contact to send. You can still log an email."
+                : "Connect Microsoft in Inbox to send. You can still log the email.")}
         </p>
       )}
 
@@ -400,7 +415,7 @@ export default function ContactEmail({
           </Button>
         </span>
         <span className="flex items-center gap-1">
-          <Button variant="ghost" size="sm" type="button" disabled={pending !== null || empty} onClick={logEmail}>
+          <Button variant="ghost" size="sm" type="button" disabled={pending !== null || empty || !contactId} onClick={logEmail}>
             {pending === "log" ? "Saving…" : "Log only"}
           </Button>
           <Button

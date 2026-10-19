@@ -1,10 +1,11 @@
-export type QuickAddKind = "task" | "contact" | "company" | "opportunity";
+export type QuickAddKind = "task" | "contact" | "company" | "opportunity" | "email";
 
 export const QUICK_ADD_ITEMS: { kind: QuickAddKind; label: string; key: string }[] = [
   { kind: "task", label: "Add task", key: "t" },
   { kind: "contact", label: "Add contact", key: "c" },
   { kind: "company", label: "Add company", key: "o" },
   { kind: "opportunity", label: "Add opportunity", key: "p" },
+  { kind: "email", label: "Send email", key: "m" },
 ];
 
 export const QUICK_ADD_KEY = "q";
@@ -44,7 +45,7 @@ export function quickAddPrefill(
     if (kind === "company") return EMPTY;
     return { contact: null, company: { id: record.id, name: record.name } };
   }
-  if (kind === "task" || kind === "opportunity") {
+  if (kind === "task" || kind === "opportunity" || kind === "email") {
     return { contact: { id: record.id, name: record.name }, company: record.company };
   }
   return EMPTY;
