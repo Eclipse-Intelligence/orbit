@@ -13,7 +13,7 @@ import { microsoftConfigured, microsoftRedirectUri } from "@/lib/microsoft/oauth
 
 export const dynamic = "force-dynamic";
 
-export default async function InboxPage({
+export default async function CapturePage({
   searchParams,
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;

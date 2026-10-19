@@ -77,7 +77,7 @@ export async function saveOtherEmailsAction(
   try {
     const saved = await saveOtherEmails(user, emails);
     revalidatePath(SETTINGS_ROOT, "layout");
-    revalidatePath("/inbox");
+    revalidatePath("/capture");
     return { emails: saved };
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Could not save your email addresses." };

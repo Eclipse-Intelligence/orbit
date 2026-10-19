@@ -66,13 +66,13 @@ export default function IntegrationsSettings({
           <Button
             variant={live ? "secondary" : "primary"}
             size="sm"
-            href="/inbox"
+            href="/capture"
           >
             {live
-              ? "Manage in Inbox"
+              ? "Manage in Capture"
               : configured
-                ? "Connect in Inbox"
-                : "Set up in Inbox"}
+                ? "Connect in Capture"
+                : "Set up in Capture"}
           </Button>
         }
       >
@@ -140,7 +140,7 @@ export default function IntegrationsSettings({
           </div>
         ) : (
           <Status tone="off">
-            Connect Microsoft in Inbox to log Teams calls
+            Connect Microsoft in Capture to log Teams calls
           </Status>
         )}
         <SettingsDisclosure
@@ -151,7 +151,7 @@ export default function IntegrationsSettings({
             To log Teams calls and their transcripts, add the
             CallRecords.Read.All and CallTranscripts.Read.All application
             permissions to Orbit&apos;s Microsoft Entra app, with admin consent.
-            Sync calls and transcripts from Inbox.
+            Sync calls and transcripts from Capture.
           </p>
         </SettingsDisclosure>
       </SettingsCard>
@@ -162,8 +162,8 @@ export default function IntegrationsSettings({
         description="Granola meeting notes and transcripts are filed onto the people who were in the meeting."
         action={
           granola.configured ? (
-            <Button variant="secondary" size="sm" href="/inbox">
-              Sync in Inbox
+            <Button variant="secondary" size="sm" href="/capture">
+              Sync in Capture
             </Button>
           ) : undefined
         }

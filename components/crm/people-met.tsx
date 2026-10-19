@@ -9,7 +9,7 @@ import { Monogram } from "@/components/beautifui/record-marks";
 import {
   createContactFromMeetingAction,
   hideAttendeeAction,
-} from "@/app/(crm)/inbox/actions";
+} from "@/app/(crm)/capture/actions";
 import { formatMeetingWhen } from "@/lib/companies";
 import type { MeetingRef, MetPerson } from "@/lib/crm/calendar";
 import { contactHref } from "@/lib/crm/hrefs";

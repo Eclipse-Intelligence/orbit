@@ -304,7 +304,7 @@ async function resolveSender(db: Db, actor: UserActor, from: string | null | und
   if (!from || from === PRIMARY_SENDER) {
     const mailbox = await readStored(db, actor);
     if (!mailbox || mailbox.status !== "connected" || !mailbox.refreshTokenCipher) {
-      throw new CrmError("invalid_input", "Connect Microsoft in Inbox before sending.", 400);
+      throw new CrmError("invalid_input", "Connect Microsoft in Capture before sending.", 400);
     }
     return {
       email: mailbox.email,
@@ -1094,7 +1094,7 @@ export async function sendOwnMail(
 ) {
   const mailbox = await withActor(actor, (db) => readStored(db, actor));
   if (!mailbox || mailbox.status !== "connected" || !mailbox.refreshTokenCipher) {
-    throw new CrmError("invalid_input", "Connect Microsoft in Inbox to send this by email.", 400);
+    throw new CrmError("invalid_input", "Connect Microsoft in Capture to send this by email.", 400);
   }
   let token: MicrosoftToken;
   try {

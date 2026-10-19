@@ -8,7 +8,7 @@ export type ShortcutGroup =
   | "Opportunities"
   | "Records"
   | "Calendar"
-  | "Inbox"
+  | "Capture"
   | "Mail"
   | "Settings";
 
@@ -45,7 +45,7 @@ const NAV: [string, string, string, string?][] = [
   ["c", "Contacts", "/contacts", "people"],
   ["p", "Opportunities", "/opportunities", "deals pipeline"],
   ["t", "Tasks", "/tasks", "to do"],
-  ["i", "Inbox", "/inbox", "mail email"],
+  ["i", "Capture", "/capture", "inbox filing mailbox connect calls"],
   ["l", "Calendar", "/calendar", "meetings events"],
   ["a", "Activities", "/activities", "timeline notes"],
   ["q", "Quiet", "/quiet", "stale relationships"],
@@ -54,7 +54,7 @@ const NAV: [string, string, string, string?][] = [
 
 const SETTINGS_SECTIONS: [string, string, string][] = [
   ["General", "/settings/general", "email addresses meeting link account"],
-  ["Templates and signatures", "/settings/email-templates", "email templates signatures"],
+  ["Templates and signatures", "/settings/email-templates", "email templates signatures read statuses tracking"],
   ["Calendars", "/settings/calendars", "outlook ics gmail accounts allow sending"],
   ["Booking page", "/settings/booking-page", "booking scheduling"],
   ["Integrations", "/settings/integrations", "clickup granola microsoft"],
@@ -162,6 +162,9 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: "event-join", label: "Join the meeting", group: "Calendar", combos: [{ key: "j" }], target: "join", inOverlay: true },
   { id: "event-cancel", label: "Cancel the meeting", group: "Calendar", combos: [{ key: "Backspace" }, { key: "Delete" }], target: "cancel-meeting", inOverlay: true },
 
+  { id: "mail-reply", label: "Reply", group: "Mail", combos: [{ key: "r" }] },
+  { id: "mail-reply-all", label: "Reply all", group: "Mail", combos: [{ key: "a" }] },
+  { id: "mail-forward", label: "Forward", group: "Mail", combos: [{ key: "f" }] },
   { id: "mail-archive", label: "Archive", group: "Mail", combos: [{ key: "e" }] },
   { id: "mail-trash", label: "Move to Trash", group: "Mail", combos: [{ key: "#" }, { key: "#", shift: true }, { key: "#", alt: true }, { key: "Backspace" }, { key: "Delete" }] },
   { id: "mail-read", label: "Mark read or unread", group: "Mail", combos: [{ key: "u" }] },
@@ -169,11 +172,11 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: "mail-undo", label: "Undo the last move", group: "Mail", combos: [{ key: "z" }] },
   { id: "mail-refresh", label: "Check for new mail", group: "Mail", combos: [{ key: "r", shift: true }], palette: true, keywords: "sync refresh email" },
 
-  { id: "inbox-sync", label: "Sync the inbox", group: "Inbox", combos: [{ key: "s" }], target: "sync", palette: true },
-  { id: "inbox-file", label: "File the conversation to…", group: "Inbox", combos: [{ key: "f" }], rowKey: "f" },
-  { id: "inbox-add", label: "Add as a contact", group: "Inbox", combos: [{ key: "a" }], rowKey: "a" },
-  { id: "inbox-ignore", label: "Ignore the conversation", group: "Inbox", combos: [{ key: "i" }], rowKey: "i" },
-  { id: "inbox-hide", label: "Hide the person", group: "Inbox", combos: [{ key: "h" }], rowKey: "h" },
+  { id: "inbox-sync", label: "Sync Capture", group: "Capture", combos: [{ key: "s" }], target: "sync", palette: true },
+  { id: "inbox-file", label: "File the conversation to…", group: "Capture", combos: [{ key: "f" }], rowKey: "f" },
+  { id: "inbox-add", label: "Add as a contact", group: "Capture", combos: [{ key: "a" }], rowKey: "a" },
+  { id: "inbox-ignore", label: "Ignore the conversation", group: "Capture", combos: [{ key: "i" }], rowKey: "i" },
+  { id: "inbox-hide", label: "Hide the person", group: "Capture", combos: [{ key: "h" }], rowKey: "h" },
 ];
 
 export const SHORTCUT_BY_ID = new Map(SHORTCUTS.map((shortcut) => [shortcut.id, shortcut]));

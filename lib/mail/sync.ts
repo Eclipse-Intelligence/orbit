@@ -5,6 +5,7 @@ import type { UserActor } from "@/lib/crm/types";
 import { encryptSecret } from "@/lib/crypto/secret";
 import type { Db } from "@/lib/db/pool";
 import { fetchMicrosoftDelta, GraphMailError, initialDeltaUrl, listMicrosoftFolders } from "@/lib/mail/microsoft";
+import { trackingIdIn } from "@/lib/mail/html";
 import { MailSyncReset, type MailRole, type ProviderMessage } from "@/lib/mail/types";
 import type { MicrosoftToken } from "@/lib/microsoft/oauth";
 
@@ -137,7 +138,7 @@ async function saveToken(db: Db, source: Source, token: MicrosoftToken) {
 
 export async function mailSourceToken(actor: UserActor, sourceId: string, fetchImpl: typeof fetch = fetch) {
   const source = (await loadSources(actor)).find((item) => item.id === sourceId);
-  if (!source) throw new CrmError("not_found", "That mail account is no longer connected. Connect it again in Inbox.", 404);
+  if (!source) throw new CrmError("not_found", "That mail account is no longer connected. Connect it again in Capture.", 404);
   const token = await currentToken(source.tokens, fetchImpl);
   if (token.expiresAt !== source.tokens.accessTokenExpiresAt) await withActor(actor, (db) => saveToken(db, source, token));
   return token.accessToken;
@@ -196,7 +197,8 @@ async function refreshFolders(actor: UserActor, source: Source, token: string, f
   });
 }
 
-function messageRows(messages: ProviderMessage[]) {
+function messageRows(messages: ProviderMessage[], ownEmail: string) {
+  const own = ownEmail.toLowerCase();
   return messages
     .filter((message) => !message.partial)
     .map((message) => ({
@@ -222,29 +224,30 @@ function messageRows(messages: ProviderMessage[]) {
       has_attachments: message.hasAttachments,
       categories: message.categories,
       web_link: message.webLink,
+      tracking_id: message.from?.address === own ? trackingIdIn(message.bodyHtml) : null,
     }));
 }
 
 async function storePage(db: Db, actor: UserActor, source: Source, folder: FolderRow, messages: ProviderMessage[], removed: string[]) {
-  const rows = messageRows(messages);
+  const rows = messageRows(messages, source.email);
   if (rows.length > 0) {
     await db.query(
       `insert into crm.mail_messages (
          workspace_id, user_id, source_id, folder_id, provider_message_id, internet_message_id, thread_key, subject, snippet,
          body_html, body_text, body_truncated, from_email, from_name, to_recipients, cc_recipients, bcc_recipients,
-         sent_at, received_at, is_read, is_draft, is_flagged, importance, has_attachments, categories, web_link
+         sent_at, received_at, is_read, is_draft, is_flagged, importance, has_attachments, categories, web_link, tracking_id
        )
        select $1, $2, $3, $4, x.provider_message_id, x.internet_message_id, x.thread_key, x.subject, x.snippet,
          x.body_html, x.body_text, coalesce(x.body_truncated, false), x.from_email, x.from_name,
          coalesce(x.to_recipients, '[]'), coalesce(x.cc_recipients, '[]'), coalesce(x.bcc_recipients, '[]'),
          x.sent_at, x.received_at, coalesce(x.is_read, false), coalesce(x.is_draft, false), coalesce(x.is_flagged, false),
-         x.importance, coalesce(x.has_attachments, false), coalesce(x.categories, '{}'), x.web_link
+         x.importance, coalesce(x.has_attachments, false), coalesce(x.categories, '{}'), x.web_link, x.tracking_id
        from jsonb_to_recordset($5::jsonb) as x(
          provider_message_id text, internet_message_id text, thread_key text, subject text, snippet text,
          body_html text, body_text text, body_truncated boolean, from_email text, from_name text,
          to_recipients jsonb, cc_recipients jsonb, bcc_recipients jsonb, sent_at timestamptz, received_at timestamptz,
          is_read boolean, is_draft boolean, is_flagged boolean, importance text, has_attachments boolean,
-         categories text[], web_link text
+         categories text[], web_link text, tracking_id uuid
        )
        on conflict (source_id, provider_message_id) do update set
          folder_id = excluded.folder_id,
@@ -268,7 +271,8 @@ async function storePage(db: Db, actor: UserActor, source: Source, folder: Folde
          importance = excluded.importance,
          has_attachments = excluded.has_attachments,
          categories = excluded.categories,
-         web_link = excluded.web_link`,
+         web_link = excluded.web_link,
+         tracking_id = excluded.tracking_id`,
       [actor.workspaceId, actor.userId, source.id, folder.id, JSON.stringify(rows)],
     );
   }

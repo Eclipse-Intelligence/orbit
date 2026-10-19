@@ -27,7 +27,6 @@ import { Kbd } from "@/components/_ui/command";
 import {
   QuickCompanyForm,
   QuickContactForm,
-  QuickEmailForm,
   QuickOpportunityForm,
   QuickTaskForm,
   type QuickAddNotice,
@@ -41,6 +40,7 @@ import {
   type QuickAddKind,
   type QuickAddRecord,
 } from "@/lib/crm/quick-add";
+import { useComposer } from "@/components/mail/compose-dock";
 import { cn } from "@/lib/utils";
 import PlusIcon from "@/public/assets/images/_common/plus.svg";
 import BookClosedIcon from "@/public/assets/images/companies/sidebar/book-closed.svg";
@@ -168,8 +168,16 @@ export default function QuickAdd({ viewerId }: { viewerId: string }) {
     quickAddSetupAction().then(setSetup, () => undefined);
   }, []);
 
+  const { openComposer } = useComposer();
+
   const start = useCallback(
     (next: QuickAddKind) => {
+      if (next === "email") {
+        setMenuOpen(false);
+        const contact = quickAddPrefill(pathname, record, "email").contact;
+        openComposer({ contactId: contact?.id ?? null });
+        return;
+      }
       choosing.current = true;
       setMenuOpen(false);
       setNotice(null);
@@ -178,7 +186,7 @@ export default function QuickAdd({ viewerId }: { viewerId: string }) {
       setDialogOpen(true);
       loadSetup();
     },
-    [loadSetup],
+    [loadSetup, openComposer, pathname, record],
   );
 
   useShortcut("quick-add", () => setMenuOpen((open) => !open));
@@ -289,12 +297,11 @@ export default function QuickAdd({ viewerId }: { viewerId: string }) {
         </DropdownMenu>
       </div>
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className={kind === "email" ? "max-w-[640px]" : "max-w-[440px]"} aria-describedby={undefined}>
+        <DialogContent className="max-w-[440px]" aria-describedby={undefined}>
           {kind === "task" && <QuickTaskForm key={opening} {...formProps} />}
           {kind === "contact" && <QuickContactForm key={opening} {...formProps} />}
           {kind === "company" && <QuickCompanyForm key={opening} {...formProps} />}
           {kind === "opportunity" && <QuickOpportunityForm key={opening} {...formProps} />}
-          {kind === "email" && <QuickEmailForm key={opening} {...formProps} />}
         </DialogContent>
       </Dialog>
     </>

@@ -2,6 +2,7 @@ import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
+import { threadDrafts } from "@/lib/mail/compose";
 import { cleanEmailHtml, richEmail } from "@/lib/mail/html";
 import type { MailAddress, MailRole } from "@/lib/mail/types";
 import type { MailNav, MailView, ThreadCursor, ThreadDetail, ThreadSummary } from "@/lib/mail/view";
@@ -41,6 +42,7 @@ type ThreadRow = {
   attachments: boolean;
   is_draft: boolean;
   at: Date | string | null;
+  reads: { count: number; last: string | null } | null;
 };
 
 export async function listThreads(
@@ -78,7 +80,8 @@ export async function listThreads(
     const result = await db.query<ThreadRow>(
       `with scoped as (
          select m.id, m.source_id, ${THREAD_KEY} as tk, m.subject, m.snippet, m.from_email, m.from_name, m.to_recipients,
-           m.is_read, m.is_flagged, m.has_attachments, m.is_draft, coalesce(m.received_at, m.sent_at, m.created_at) as at
+           m.is_read, m.is_flagged, m.has_attachments, m.is_draft, coalesce(m.received_at, m.sent_at, m.created_at) as at,
+           m.tracking_id
          from crm.mail_messages m
          join crm.mail_folders f on f.id = m.folder_id
          where ${where.join(" and ")}
@@ -94,7 +97,10 @@ export async function listThreads(
          window w as (partition by s.source_id, s.tk)
        )
        select r.source_id, r.tk, src.email as account, r.id, r.subject, r.snippet, r.from_email, r.from_name, r.to_recipients,
-         r.n::int as n, r.unread, r.flagged, r.attachments, r.is_draft, r.at
+         r.n::int as n, r.unread, r.flagged, r.attachments, r.is_draft, r.at,
+         case when r.tracking_id is not null then (
+           select json_build_object('count', count(*)::int, 'last', max(o.opened_at)) from crm.mail_opens o where o.tracking_id = r.tracking_id
+         ) end as reads
        from ranked r
        join crm.mail_sources src on src.id = r.source_id
        where r.rn = 1 ${cursor.length ? `and ${cursor.join(" and ")}` : ""}
@@ -118,6 +124,7 @@ export async function listThreads(
       hasAttachments: row.attachments,
       draft: row.is_draft,
       latestAt: iso(row.at),
+      reads: row.reads ? { count: row.reads.count, last: iso(row.reads.last) } : null,
     }));
     const last = threads[threads.length - 1];
     return {
@@ -149,10 +156,16 @@ export async function getThread(actor: UserActor, key: string): Promise<ThreadDe
       body_html: string | null;
       body_text: string | null;
       web_link: string | null;
+      provider_message_id: string;
+      opens: { at: string; agent: string | null }[] | null;
     }>(
       `select m.id, f.role, f.name as folder, src.email as account, m.subject, m.from_email, m.from_name, m.to_recipients, m.cc_recipients,
          coalesce(m.received_at, m.sent_at, m.created_at) as at, m.is_read, m.is_draft, m.is_flagged, m.has_attachments, m.snippet,
-         m.body_html, m.body_text, m.web_link
+         m.body_html, m.body_text, m.web_link, m.provider_message_id,
+         case when m.tracking_id is not null then (
+           select coalesce(json_agg(json_build_object('at', o.opened_at, 'agent', o.agent) order by o.opened_at desc), '[]'::json)
+           from crm.mail_opens o where o.tracking_id = m.tracking_id
+         ) end as opens
        from crm.mail_messages m
        join crm.mail_folders f on f.id = m.folder_id
        join crm.mail_sources src on src.id = m.source_id
@@ -162,12 +175,15 @@ export async function getThread(actor: UserActor, key: string): Promise<ThreadDe
       [actor.userId, sourceId, tk],
     );
     if (result.rows.length === 0) throw new CrmError("not_found", "Conversation not found.", 404);
-    const latest = result.rows[result.rows.length - 1];
+    const { drafts, providerIds } = await threadDrafts(db, actor, sourceId, tk);
+    const rows = result.rows.filter((row) => !providerIds.includes(row.provider_message_id));
+    const latest = rows[rows.length - 1] ?? result.rows[result.rows.length - 1];
     return {
       key,
       account: latest.account,
       subject: latest.subject,
-      messages: result.rows.map((row) => {
+      drafts,
+      messages: rows.map((row) => {
         const html = row.body_html ? cleanEmailHtml(row.body_html) : null;
         return {
           id: row.id,
@@ -186,6 +202,7 @@ export async function getThread(actor: UserActor, key: string): Promise<ThreadDe
           rich: html ? richEmail(html) : false,
           text: row.body_text,
           webLink: row.web_link,
+          opens: row.opens ? row.opens.map((open) => ({ at: iso(open.at)!, agent: open.agent })) : null,
         };
       }),
     };

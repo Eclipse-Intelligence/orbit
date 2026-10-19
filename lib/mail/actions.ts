@@ -69,7 +69,7 @@ async function eachLimited<T>(items: T[], run: (item: T) => Promise<void>) {
 
 function failureMessage(error: unknown) {
   if (error instanceof GraphMailError) {
-    if (error.status === 401 || error.status === 403) return "Microsoft didn't allow that change. Connect the account again in Inbox.";
+    if (error.status === 401 || error.status === 403) return "Microsoft didn't allow that change. Connect the account again in Capture.";
     if (error.status === 404) return "Outlook no longer has that email. It will disappear after the next sync.";
     return error.message;
   }

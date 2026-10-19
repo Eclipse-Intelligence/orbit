@@ -414,7 +414,7 @@ export type MailAttachment = { name: string; contentType: string; bytes: Uint8Ar
 export const INLINE_ATTACHMENT_LIMIT = 3 * 1024 * 1024;
 const UPLOAD_CHUNK = 320 * 1024 * 10;
 export const LARGE_ATTACHMENT_RECONNECT =
-  "Attachments over 3 MB need permission to create drafts. Reconnect Microsoft in Inbox, then send again.";
+  "Attachments over 3 MB need permission to create drafts. Reconnect Microsoft in Capture, then send again.";
 
 function recipients(message: { to: string; toName?: string | null }) {
   return [{ emailAddress: { address: message.to, ...(message.toName ? { name: message.toName } : {}) } }];
@@ -473,6 +473,54 @@ export async function sendGraphMail(
   throw await sendFailure(response);
 }
 
+export async function attachToDraft(
+  accessToken: string,
+  draftUrl: string,
+  attachments: MailAttachment[],
+  fetchImpl: typeof fetch = fetch,
+) {
+  const auth = { authorization: `Bearer ${accessToken}` };
+  for (const item of attachments) {
+    if (item.bytes.byteLength <= INLINE_ATTACHMENT_LIMIT) {
+      const added = await fetchImpl(`${draftUrl}/attachments`, {
+        method: "POST",
+        headers: { ...auth, "content-type": "application/json" },
+        body: JSON.stringify({
+          "@odata.type": "#microsoft.graph.fileAttachment",
+          name: item.name,
+          contentType: item.contentType,
+          contentBytes: base64(item.bytes),
+        }),
+        signal: AbortSignal.timeout(60_000),
+      });
+      if (!added.ok) throw await sendFailure(added);
+      continue;
+    }
+    const session = await fetchImpl(`${draftUrl}/attachments/createUploadSession`, {
+      method: "POST",
+      headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({ AttachmentItem: { attachmentType: "file", name: item.name, size: item.bytes.byteLength } }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!session.ok) throw await sendFailure(session);
+    const { uploadUrl } = (await session.json()) as { uploadUrl: string };
+    for (let start = 0; start < item.bytes.byteLength; start += UPLOAD_CHUNK) {
+      const chunk = item.bytes.slice(start, Math.min(start + UPLOAD_CHUNK, item.bytes.byteLength));
+      const put = await fetchImpl(uploadUrl, {
+        method: "PUT",
+        headers: {
+          "content-type": "application/octet-stream",
+          "content-length": String(chunk.byteLength),
+          "content-range": `bytes ${start}-${start + chunk.byteLength - 1}/${item.bytes.byteLength}`,
+        },
+        body: chunk,
+        signal: AbortSignal.timeout(60_000),
+      });
+      if (!put.ok) throw new Error(`Microsoft stopped the upload of ${item.name}.`);
+    }
+  }
+}
+
 async function sendLargeGraphMail(
   accessToken: string,
   message: { to: string; toName?: string | null; subject: string; body: string },
@@ -495,45 +543,7 @@ async function sendLargeGraphMail(
   const draft = (await created.json()) as { id: string };
   const draftUrl = `https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(draft.id)}`;
   try {
-    for (const item of attachments) {
-      if (item.bytes.byteLength <= INLINE_ATTACHMENT_LIMIT) {
-        const added = await fetchImpl(`${draftUrl}/attachments`, {
-          method: "POST",
-          headers: { ...auth, "content-type": "application/json" },
-          body: JSON.stringify({
-            "@odata.type": "#microsoft.graph.fileAttachment",
-            name: item.name,
-            contentType: item.contentType,
-            contentBytes: base64(item.bytes),
-          }),
-          signal: AbortSignal.timeout(60_000),
-        });
-        if (!added.ok) throw await sendFailure(added);
-        continue;
-      }
-      const session = await fetchImpl(`${draftUrl}/attachments/createUploadSession`, {
-        method: "POST",
-        headers: { ...auth, "content-type": "application/json" },
-        body: JSON.stringify({ AttachmentItem: { attachmentType: "file", name: item.name, size: item.bytes.byteLength } }),
-        signal: AbortSignal.timeout(15_000),
-      });
-      if (!session.ok) throw await sendFailure(session);
-      const { uploadUrl } = (await session.json()) as { uploadUrl: string };
-      for (let start = 0; start < item.bytes.byteLength; start += UPLOAD_CHUNK) {
-        const chunk = item.bytes.slice(start, Math.min(start + UPLOAD_CHUNK, item.bytes.byteLength));
-        const put = await fetchImpl(uploadUrl, {
-          method: "PUT",
-          headers: {
-            "content-type": "application/octet-stream",
-            "content-length": String(chunk.byteLength),
-            "content-range": `bytes ${start}-${start + chunk.byteLength - 1}/${item.bytes.byteLength}`,
-          },
-          body: chunk,
-          signal: AbortSignal.timeout(60_000),
-        });
-        if (!put.ok) throw new Error(`Microsoft stopped the upload of ${item.name}.`);
-      }
-    }
+    await attachToDraft(accessToken, draftUrl, attachments, fetchImpl);
     const sent = await fetchImpl(`${draftUrl}/send`, { method: "POST", headers: auth, signal: AbortSignal.timeout(30_000) });
     if (!sent.ok) throw await sendFailure(sent);
   } catch (error) {

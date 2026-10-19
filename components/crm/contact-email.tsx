@@ -8,7 +8,7 @@ import { AttachButton, AttachmentList, useEmailAttachments } from "@/components/
 import { useSenders } from "@/components/crm/email-sender";
 import { SaveTemplateForm, UseTemplateButton } from "@/components/crm/email-template-picker";
 import { TokenChips, insertToken } from "@/components/crm/email-tokens";
-import { saveSignatureAction, sendContactEmailAction } from "@/app/(crm)/inbox/actions";
+import { saveSignatureAction, sendContactEmailAction } from "@/app/(crm)/capture/actions";
 import { addActivityAction } from "@/app/(crm)/records";
 import { renderTemplate, unpersonalised, type EmailTemplate, type UsedTemplate } from "@/lib/crm/email-template-rules";
 import { personalise, type Recipient } from "@/lib/crm/personalise";
@@ -380,7 +380,7 @@ export default function ContactEmail({
               ? (unavailable ?? "Choose who to email.")
               : !email
                 ? "Save an email address on this contact to send. You can still log an email."
-                : "Connect Microsoft in Inbox to send. You can still log the email.")}
+                : "Connect Microsoft in Capture to send. You can still log the email.")}
         </p>
       )}
 

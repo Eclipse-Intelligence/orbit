@@ -19,6 +19,7 @@ export type ThreadSummary = {
   hasAttachments: boolean;
   draft: boolean;
   latestAt: string | null;
+  reads: { count: number; last: string | null } | null;
 };
 
 export type ThreadMessage = {
@@ -38,9 +39,65 @@ export type ThreadMessage = {
   rich: boolean;
   text: string | null;
   webLink: string | null;
+  opens: { at: string; agent: string | null }[] | null;
 };
 
-export type ThreadDetail = { key: string; account: string; subject: string | null; messages: ThreadMessage[] };
+export type ThreadDetail = {
+  key: string;
+  account: string;
+  subject: string | null;
+  messages: ThreadMessage[];
+  drafts: MailDraft[];
+};
+
+export type ComposeAccount = { id: string; email: string; signature: string | null };
+
+export type DraftMode = "new" | "reply" | "reply_all" | "forward";
+
+export type MailDraft = {
+  id: string;
+  sourceId: string;
+  mode: DraftMode;
+  messageId: string | null;
+  to: MailAddress[];
+  cc: MailAddress[];
+  bcc: MailAddress[];
+  subject: string;
+  body: string;
+  savedAt: string;
+};
+
+function mine(address: MailAddress | null | undefined, own: Set<string>) {
+  return Boolean(address && own.has(address.address.toLowerCase()));
+}
+
+function unique(list: MailAddress[]) {
+  const seen = new Set<string>();
+  return list.filter((item) => {
+    const key = item.address.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+export function replyDefaults(
+  mode: DraftMode,
+  message: { from: MailAddress | null; to: MailAddress[]; cc: MailAddress[] },
+  subject: string | null,
+  ownAddresses: string[],
+) {
+  const own = new Set(ownAddresses.map((item) => item.toLowerCase()));
+  const base = (subject ?? "").trim();
+  if (mode === "forward" || mode === "new") {
+    return { to: [] as MailAddress[], cc: [] as MailAddress[], subject: /^(fw|fwd):/i.test(base) ? base : `FW: ${base}` };
+  }
+  const fromMe = mine(message.from, own);
+  const others = (list: MailAddress[]) => list.filter((item) => !mine(item, own));
+  const to = fromMe ? unique(message.to) : unique([message.from!, ...(mode === "reply_all" ? others(message.to) : [])]);
+  const cc = mode === "reply_all" ? unique(others(message.cc)).filter((item) => !to.some((entry) => entry.address === item.address)) : [];
+  return { to, cc, subject: /^re:/i.test(base) ? base : `RE: ${base}` };
+}
 
 export type MailNav = {
   accounts: { id: string; email: string; unread: number }[];

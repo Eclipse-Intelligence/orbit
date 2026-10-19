@@ -636,7 +636,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
   {
     name: "list_email_senders",
     label: "Checking email accounts",
-    description: "The email addresses the user can send from: the main Inbox mailbox (primary) and any other Microsoft accounts with sending allowed.",
+    description: "The email addresses the user can send from: the main mailbox connected in Capture (primary) and any other Microsoft accounts with sending allowed.",
     parameters: { type: "object", properties: {} },
     run: async (actor) => ({ senders: (await listSenders(actor)).map((item) => ({ email: item.email, primary: item.primary })) }),
   },
@@ -1596,14 +1596,14 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     label: "Sending an email",
     write: true,
     description:
-      "Send an email to a person from one of the user's connected Microsoft accounts (the Inbox mailbox unless from names another address the user can send from; list_email_senders shows them). It is logged on their timeline.",
+      "Send an email to a person from one of the user's connected Microsoft accounts (the main mailbox unless from names another address the user can send from; list_email_senders shows them). It is logged on their timeline.",
     parameters: {
       type: "object",
       properties: {
         contactId: idParam("Contact id."),
         subject: { type: "string" },
         body: { type: "string" },
-        from: { type: "string", description: "Email address to send from. Leave out for the main Inbox mailbox." },
+        from: { type: "string", description: "Email address to send from. Leave out for the main mailbox." },
       },
       required: ["contactId", "subject", "body"],
     },

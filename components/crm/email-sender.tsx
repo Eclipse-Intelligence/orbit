@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { recordSelectClass } from "@/components/crm/record-form";
-import { listSendersAction } from "@/app/(crm)/inbox/actions";
+import { listSendersAction } from "@/app/(crm)/capture/actions";
 import type { Sender } from "@/lib/crm/inbox";
 import { cn } from "@/lib/utils";
 

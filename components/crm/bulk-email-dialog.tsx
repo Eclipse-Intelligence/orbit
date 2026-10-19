@@ -15,7 +15,7 @@ import { SaveTemplateForm, UseTemplateButton } from "@/components/crm/email-temp
 import { AttachButton, AttachmentList, useEmailAttachments } from "@/components/crm/email-attachments";
 import { SenderSelect, useSenders } from "@/components/crm/email-sender";
 import { TokenChips, insertToken } from "@/components/crm/email-tokens";
-import { discardAttachmentsAction, sendContactEmailAction } from "@/app/(crm)/inbox/actions";
+import { discardAttachmentsAction, sendContactEmailAction } from "@/app/(crm)/capture/actions";
 import {
   BULK_EMAIL_GAP_MS,
   BULK_EMAIL_LIMIT,
@@ -200,7 +200,7 @@ export default function BulkEmailDialog({
         <div className="flex flex-col gap-4 px-6 py-5">
           {!mailboxConnected && sender.senders.length === 0 && (
             <p role="alert" className="caption-style text-danger">
-              Connect Microsoft in Inbox before sending.
+              Connect Microsoft in Capture before sending.
             </p>
           )}
           {tooMany && (

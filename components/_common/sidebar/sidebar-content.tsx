@@ -93,10 +93,10 @@ export default function SidebarContent({
               active={current("/contacts")}
             />
             <SidebarNavItem
-              href="/inbox"
+              href="/capture"
               icon={MailIcon}
-              label="Inbox"
-              active={current("/inbox")}
+              label="Capture"
+              active={current("/capture")}
             />
             <SidebarNavItem
               href="/calendar"

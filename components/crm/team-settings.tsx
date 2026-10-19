@@ -179,7 +179,7 @@ export default function TeamSettings({
             </div>
             <label className="caption-style text-subtle flex items-center gap-2">
               <Checkbox checked={send && mailboxConnected} disabled={!mailboxConnected} onCheckedChange={(value) => setSend(value === true)} />
-              {mailboxConnected ? "Email the invite from my Outlook" : "Connect Microsoft in Inbox to email invites from Outlook. Until then, copy the link."}
+              {mailboxConnected ? "Email the invite from my Outlook" : "Connect Microsoft in Capture to email invites from Outlook. Until then, copy the link."}
             </label>
           </form>
           {sent && (
@@ -229,7 +229,7 @@ export default function TeamSettings({
           <SettingsDisclosure title="What each role can do" summary="Members, admins and the owner.">
             <ul className="caption-style text-subtle flex list-disc flex-col gap-1.5 pl-4 leading-[1.4]">
               <li>
-                Members use everything: companies, contacts, deals, boards, tasks, activity, Inbox, Calendar and the assistant. They
+                Members use everything: companies, contacts, deals, boards, tasks, activity, Mail, Capture, Calendar and the assistant. They
                 connect their own Microsoft account, calendars, Granola and AI account.
               </li>
               <li>Members can&apos;t change workspace settings like ClickUp, enrichment and webhooks, or manage people.</li>

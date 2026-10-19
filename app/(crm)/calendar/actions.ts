@@ -22,7 +22,7 @@ function refreshCalendar() {
 
 function refreshRecords() {
   refreshCalendar();
-  revalidatePath("/inbox");
+  revalidatePath("/capture");
   revalidatePath("/");
   revalidatePath("/contacts");
   revalidateRecordPages();
