@@ -1,7 +1,9 @@
 import Button, { buttonVariants } from "@/components/_ui/button";
 import { EntityChip, Monogram } from "@/components/beautifui/record-marks";
 import PeopleMet from "@/components/crm/people-met";
+import MailMirrorStatus from "@/components/crm/mail-mirror-status";
 import SectionHeader from "@/components/crm/section-header";
+import type { MailSourceStatus } from "@/lib/mail/store";
 import KeyboardList from "@/components/shortcuts/keyboard-list";
 import UnfiledConversations from "@/components/crm/unfiled-conversations";
 import type { Viewer } from "@/components/crm/viewer";
@@ -47,6 +49,7 @@ export default function InboxScreen({
   transcripts,
   calendar,
   people,
+  mirror,
   notice,
   info,
   connected,
@@ -62,6 +65,7 @@ export default function InboxScreen({
   transcripts: TeamsTranscriptStatus | null;
   calendar: CalendarStatus | null;
   people: MetPerson[];
+  mirror: MailSourceStatus[];
   notice: string | null;
   info: string | null;
   connected: boolean;
@@ -119,12 +123,13 @@ export default function InboxScreen({
             {mailbox.lastError}
           </p>
         )}
+        <MailMirrorStatus sources={mirror} />
         {!configured && (
           <div className="border-border bg-card flex max-w-[640px] flex-col gap-2 rounded-xl border p-4">
             <h2>Microsoft app</h2>
             <p className="caption-style text-subtle">
-              Register an app in Microsoft Entra with delegated Mail.Read,
-              Mail.Send, User.Read, Calendars.Read, and offline_access. To log Teams calls and
+              Register an app in Microsoft Entra with delegated Mail.ReadWrite,
+              Mail.Send, User.Read, Calendars.ReadWrite, and offline_access. To log Teams calls and
               their transcripts, also add the CallRecords.Read.All and
               CallTranscripts.Read.All application permissions with admin
               consent. Put the client id and secret in the server environment,
