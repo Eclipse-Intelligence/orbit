@@ -34,7 +34,7 @@ const NAV: NavItem[] = [
   { href: SETTINGS_PATHS.team, label: "Team", icon: UsersIcon },
   {
     href: SETTINGS_PATHS.emailTemplates,
-    label: "Email templates",
+    label: "Templates and signatures",
     icon: FileTextIcon,
   },
   { href: SETTINGS_PATHS.calendars, label: "Calendars", icon: CalendarIcon },

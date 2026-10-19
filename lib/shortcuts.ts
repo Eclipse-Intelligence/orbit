@@ -52,7 +52,7 @@ const NAV: [string, string, string, string?][] = [
 
 const SETTINGS_SECTIONS: [string, string, string][] = [
   ["General", "/settings/general", "email addresses meeting link account"],
-  ["Email templates", "/settings/email-templates", "templates"],
+  ["Email templates", "/settings/email-templates", "templates signatures"],
   ["Calendars", "/settings/calendars", "outlook ics gmail"],
   ["Booking page", "/settings/booking-page", "booking scheduling"],
   ["Integrations", "/settings/integrations", "clickup granola microsoft"],

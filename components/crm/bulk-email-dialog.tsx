@@ -129,14 +129,13 @@ export default function BulkEmailDialog({
     const result = await sendPaced(
       sendable,
       async (recipient) => {
-        const sent = await sendContactEmailAction(
-          recipient.id,
-          personalise(subject, recipient),
-          personalise(body, recipient),
+        const sent = await sendContactEmailAction(recipient.id, {
+          subject: personalise(subject, recipient),
+          body: personalise(body, recipient),
           attachments,
-          true,
+          keepAttachments: true,
           from,
-        );
+        });
         if ("error" in sent && sent.error) return { error: sent.error };
         return { warning: "warning" in sent ? sent.warning : null };
       },
@@ -367,6 +366,9 @@ export default function BulkEmailDialog({
                     >
                       {personalise(body, first)}
                     </p>
+                    {sender.chosen?.signature && (
+                      <p className="text-subtle border-l-2 border-white/10 pl-3 text-[13px] leading-5 whitespace-pre-wrap">{sender.chosen.signature}</p>
+                    )}
                   </div>
                 </section>
               )}
