@@ -350,6 +350,12 @@ export default function StepConfig({
               <option value="customer">Customer</option>
               <option value="churned">Churned</option>
             </Select>
+          ) : (str(c.field) || fields[0].key) === "health" ? (
+            <Select id={`${step.id}-value`} label="New value" value={str(c.value) || "at_risk"} onChange={(value) => update({ ...c, value })}>
+              <option value="healthy">Healthy</option>
+              <option value="watch">Watch</option>
+              <option value="at_risk">At risk</option>
+            </Select>
           ) : (str(c.field) || fields[0].key) === "ownerId" ? (
             <Select id={`${step.id}-value`} label="New owner" value={str(c.value) || "owner"} onChange={(value) => update({ ...c, value })}>
               <option value="owner">Me</option>

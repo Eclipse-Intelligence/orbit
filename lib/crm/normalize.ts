@@ -1,5 +1,5 @@
 import { CrmError } from "@/lib/crm/errors";
-import { LIFECYCLES, type CompanyWrite, type Lifecycle } from "@/lib/crm/types";
+import { ACCOUNT_HEALTH, LIFECYCLES, type CompanyWrite, type Lifecycle } from "@/lib/crm/types";
 
 const NAME_SUFFIXES = new Set([
   "inc",
@@ -351,6 +351,15 @@ export function normalizeCompanyWrite(
       });
     }
     next.lifecycle = input.lifecycle as Lifecycle;
+  }
+  if (input.health !== undefined) {
+    if (input.health !== null && !(ACCOUNT_HEALTH as readonly string[]).includes(input.health)) {
+      throw new CrmError("invalid_input", "Health is healthy, watch or at_risk.", 400, { field: "health" });
+    }
+    next.health = input.health;
+  }
+  if (input.healthReason !== undefined) {
+    next.healthReason = cleanText(input.healthReason, 500, "healthReason");
   }
   if (input.ownerId !== undefined) {
     if (input.ownerId === null || input.ownerId === "") next.ownerId = null;

@@ -27,6 +27,7 @@ import type {
   OpportunityListQuery,
   OpportunityStatus,
   OpportunityWrite,
+  AccountHealth,
   PipelineStage,
   Provenance,
 } from "@/lib/crm/types";
@@ -37,6 +38,7 @@ const OPPORTUNITY_SQL = `
     o.workspace_id,
     o.company_id,
     co.name as company_name,
+    co.health as company_health,
     o.primary_contact_id,
     coalesce(
       nullif(trim(concat_ws(' ', ct.first_name, ct.last_name)), ''),
@@ -75,6 +77,7 @@ type OpportunityRow = {
   workspace_id: string;
   company_id: string;
   company_name: string | null;
+  company_health: AccountHealth | null;
   primary_contact_id: string | null;
   primary_contact_name: string | null;
   pipeline_id: string | null;
@@ -142,6 +145,7 @@ function mapOpportunity(row: OpportunityRow): Opportunity {
     workspaceId: row.workspace_id,
     companyId: row.company_id,
     companyName: row.company_name,
+    companyHealth: row.company_health,
     primaryContactId: row.primary_contact_id,
     primaryContactName: row.primary_contact_name,
     pipelineId: row.pipeline_id,

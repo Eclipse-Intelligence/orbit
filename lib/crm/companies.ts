@@ -29,6 +29,7 @@ import type {
   BulkItemResult,
   Company,
   CompanyListQuery,
+  AccountHealth,
   CompanyBrand,
   CompanyPresence,
   CompanySort,
@@ -58,6 +59,10 @@ const COMPANY_SQL = `
     c.enriched_at,
     c.brand,
     c.lifecycle,
+    c.health,
+    c.health_reason,
+    c.health_at,
+    c.health_activity_id,
     c.owner_id,
     p.full_name as owner_name,
     p.email as owner_email,
@@ -102,6 +107,10 @@ type CompanyRow = {
   enriched_at: Date | string | null;
   brand: CompanyBrand | null;
   lifecycle: Lifecycle;
+  health: AccountHealth | null;
+  health_reason: string | null;
+  health_at: Date | string | null;
+  health_activity_id: string | null;
   owner_id: string | null;
   owner_name: string | null;
   owner_email: string | null;
@@ -166,6 +175,10 @@ function mapCompany(row: CompanyRow): Company {
     lastInteractionAt: iso(row.last_interaction_at),
     openTaskCount: row.open_task_count ?? 0,
     tags: row.tags ?? [],
+    health: row.health,
+    healthReason: row.health_reason,
+    healthAt: iso(row.health_at),
+    healthActivityId: row.health_activity_id,
   };
 }
 
@@ -308,6 +321,15 @@ function assignments(write: CompanyWrite & { normalizedName?: string }, current:
   if (write.address !== undefined) add("address", "address", write.address);
   if (write.logoUrl !== undefined) add("logo_url", "logoUrl", write.logoUrl);
   if (write.lifecycle !== undefined) add("lifecycle", "lifecycle", write.lifecycle);
+  if (write.health !== undefined && write.health !== current.health) {
+    add("health", "health", write.health);
+    values.push(write.health ? (write.healthReason ?? null) : null);
+    sets.push(`health_reason = $${values.length}`);
+    sets.push(write.health ? "health_at = now()" : "health_at = null");
+    sets.push("health_activity_id = null");
+  } else if (write.healthReason !== undefined && current.health) {
+    add("health_reason", "healthReason", write.healthReason);
+  }
   if (write.ownerId !== undefined) add("owner_id", "ownerId", write.ownerId);
   if (write.source !== undefined) add("source", "source", write.source);
   if (write.sourceReference !== undefined) {
@@ -470,6 +492,11 @@ export async function listCompanies(actor: Actor, query: CompanyListQuery = {}) 
     const values: unknown[] = [actor.workspaceId];
     const where = ["c.workspace_id = $1"];
     if (!query.includeArchived) where.push("c.archived_at is null");
+    if (query.health === "none") where.push("c.health is null");
+    else if (query.health) {
+      values.push(query.health);
+      where.push(`c.health = $${values.length}`);
+    }
     if (query.lifecycle) {
       values.push(query.lifecycle);
       where.push(`c.lifecycle = $${values.length}`);

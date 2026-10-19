@@ -13,7 +13,7 @@ import {
   listCompanies,
   updateCompany,
 } from "@/lib/crm/companies";
-import type { Company, CompanyListQuery, CompanyWrite, Lifecycle } from "@/lib/crm/types";
+import type { AccountHealth, Company, CompanyListQuery, CompanyWrite, Lifecycle } from "@/lib/crm/types";
 import { revalidateRecordPages } from "@/lib/revalidate";
 
 export type CompanyActionState = {
@@ -86,6 +86,20 @@ export async function updateCompanyAction(
     revalidatePath("/");
     revalidateRecordPages();
     return { company: result.body.company };
+  } catch (error) {
+    return actionError(error);
+  }
+}
+
+export async function setCompanyHealthAction(id: string, health: AccountHealth | null): Promise<{ error?: string }> {
+  const user = await requireUser();
+  try {
+    await updateCompany(user, id, { health, healthReason: null }, { provenance: { operation: "set_health", source: "web" } });
+    revalidatePath("/");
+    revalidateRecordPages();
+    revalidatePath("/opportunities");
+    revalidatePath("/boards", "layout");
+    return {};
   } catch (error) {
     return actionError(error);
   }

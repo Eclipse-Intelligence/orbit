@@ -19,42 +19,35 @@ function graph(trigger: WorkflowDefinition["trigger"], nodes: Omit<WorkflowNode,
 
 export const STARTER_TEMPLATES: StarterTemplate[] = [
   {
-    key: "at-risk-after-call",
-    name: "Flag at-risk clients after a call",
-    description: "When a call summary is ready, AI judges the client's health and tells the account owner if they look at risk.",
+    key: "at-risk-follow-up",
+    name: "Follow up when a client turns at risk",
+    description: "When a call leaves a client at risk, tell the account owner why and give them a task to check in tomorrow.",
     definition: graph(
-      { type: "call_summary_ready" },
+      { type: "field_changed", object: "company", field: "health", to: "at_risk" },
       [
-        {
-          id: "ai_1",
-          type: "ai",
-          label: "Judge health",
-          config: {
-            model: "claude-haiku-5-5",
-            prompt: "How is our relationship with {{company.name}} after this call?\n\n{{call.summary}}",
-            outputs: [
-              { key: "health", type: "choice", choices: ["Healthy", "Watch", "At risk"], description: "Account health after this call." },
-              { key: "reason", type: "text", description: "One sentence on why." },
-            ],
-          },
-        },
-        {
-          id: "if_1",
-          type: "if",
-          label: "At risk?",
-          config: { match: "all", conditions: [{ left: "{{steps.ai_1.health}}", op: "is", right: "At risk" }] },
-        },
         {
           id: "notify_1",
           type: "notify",
           label: "Tell the owner",
-          config: { to: "record_owner", title: "{{company.name}} looks at risk", body: "{{steps.ai_1.reason}}" },
+          config: { to: "record_owner", title: "{{company.name}} looks at risk", body: "{{company.healthReason}}" },
+        },
+        {
+          id: "create_task_1",
+          type: "create_task",
+          label: "Check in",
+          config: {
+            title: "Check in with {{company.name}}",
+            notes: "Health turned At risk: {{company.healthReason}}",
+            dueInDays: 1,
+            assignee: "record_owner",
+            link: "company",
+            clickup: false,
+          },
         },
       ],
       [
-        { source: "trigger", handle: "out", target: "ai_1" },
-        { source: "ai_1", handle: "out", target: "if_1" },
-        { source: "if_1", handle: "true", target: "notify_1" },
+        { source: "trigger", handle: "out", target: "notify_1" },
+        { source: "notify_1", handle: "out", target: "create_task_1" },
       ],
     ),
   },

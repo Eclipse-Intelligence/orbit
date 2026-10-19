@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
+import { HealthMark } from "@/components/beautifui/record-marks";
 import {
   acceptCallActionAction,
   callTranscriptAction,
@@ -197,6 +198,15 @@ export default function CallInsightPanel({
         <div className="flex flex-col gap-1">
           <span className="caption-style text-subtle">Summary</span>
           <p className="text-[14px] leading-5 whitespace-pre-wrap">{insight.summary}</p>
+        </div>
+      )}
+      {insight.status === "ready" && insight.sentiment && (
+        <div className="flex flex-col gap-1">
+          <span className="caption-style text-subtle">Sentiment</span>
+          <span className="flex flex-wrap items-center gap-2 text-[14px] leading-5">
+            <HealthMark health={insight.sentiment} />
+            {insight.sentimentReason}
+          </span>
         </div>
       )}
       {insight.status === "ready" && insight.keyPoints.length > 0 && (

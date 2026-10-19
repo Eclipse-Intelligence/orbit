@@ -4,6 +4,7 @@ import { createActivity, listActivities } from "@/lib/crm/activities";
 import { summariseCall } from "@/lib/crm/call-insights";
 import { createCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
+import { listTasks } from "@/lib/crm/tasks";
 import { scopesForRole } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
@@ -39,9 +40,13 @@ const SUMMARY = {
   summary: "Jane is frustrated with the rollout and needs SSO and CSV export before renewal.",
   keyPoints: ["Rollout is behind", "Renewal at risk"],
   actionItems: [],
+  health: "at_risk",
+  healthReason: "Finance may push back on renewal",
 };
 
-function fakes(replies: Record<string, unknown>[]) {
+const HAPPY_SUMMARY = { ...SUMMARY, health: "healthy", healthReason: "Jane is pleased with the rollout" };
+
+function fakes(replies: Record<string, unknown>[], summary: Record<string, unknown> = SUMMARY) {
   const ai: { system: string; user: string; model: string }[] = [];
   const linear: { title: string }[] = [];
   const fetchImpl: typeof fetch = async (input, init) => {
@@ -80,7 +85,7 @@ function fakes(replies: Record<string, unknown>[]) {
     const messages = body.messages as { role: string; content: string }[];
     const system = messages[0].content;
     const user = messages[1].content;
-    const reply = system.includes("automated workflow") ? replies[Math.min(ai.length, replies.length - 1)] : SUMMARY;
+    const reply = system.includes("automated workflow") ? replies[Math.min(ai.length, replies.length - 1)] : summary;
     if (system.includes("automated workflow")) ai.push({ system, user, model: body.model });
     return Response.json({ model: body.model, choices: [{ message: { role: "assistant", content: JSON.stringify(reply) }, finish_reason: "stop" }] });
   };
@@ -142,25 +147,26 @@ describe("workflows", () => {
     return (await createActivity(owner, { type: "call", title, contactId, companyId, occurredAt: new Date().toISOString() })).body.activity.id;
   }
 
-  it("runs the starter templates: flags an at-risk client and waits for approval before Linear", async () => {
-    const risk = await createWorkflow(owner, { template: "at-risk-after-call" });
+  it("runs the starter templates: follows up when a call leaves a client at risk, and waits for approval before Linear", async () => {
+    const risk = await createWorkflow(owner, { template: "at-risk-follow-up" });
     const requests = await createWorkflow(owner, { template: "requests-to-linear" });
-    assert.equal(risk.name, "Flag at-risk clients after a call");
-    assert.equal(risk.definition.nodes.length, 3);
+    assert.equal(risk.name, "Follow up when a client turns at risk");
+    assert.equal(risk.definition.nodes.length, 2);
     await setWorkflowStatus(owner, risk.id, "active");
     await setWorkflowStatus(owner, requests.id, "active");
 
     const llm = fakes([AT_RISK]);
     await summariseCall(owner, await call("Rollout check-in"), VTT, { source: "manual", fetchImpl: llm.fetchImpl, autoAccept: false });
     const tick = await runWorkflowTick({ fetchImpl: llm.fetchImpl, budgetMs: 30_000 });
-    assert.equal(tick.dispatched, 2);
     assert.equal(tick.processed, 2);
-    assert.equal(llm.ai.length, 2);
+    assert.equal(llm.ai.length, 1);
     assert.match(llm.ai[0].user, /Acme Flows/);
     assert.match(llm.ai[0].user, /needs SSO and CSV export/);
 
     const alerts = await listNotifications(owner);
     assert.ok(alerts.some((item) => item.title === "Acme Flows looks at risk" && item.body === "Finance may push back on renewal"));
+    const followUp = (await listTasks(owner, { view: "all", companyId })).data.find((task) => task.title === "Check in with Acme Flows");
+    assert.equal(followUp?.description, "Health turned At risk: Finance may push back on renewal");
     const approvals = await listApprovals(owner);
     assert.equal(approvals.length, 1);
     assert.equal(approvals[0].title, "Create Linear issues for Acme Flows?");
@@ -184,7 +190,7 @@ describe("workflows", () => {
   });
 
   it("takes the quiet path for a healthy call, and stops when an approval is rejected", async () => {
-    const healthy = fakes([HEALTHY]);
+    const healthy = fakes([HEALTHY], HAPPY_SUMMARY);
     const before = (await listNotifications(owner)).length;
     await summariseCall(owner, await call("Happy check-in"), VTT, { source: "manual", fetchImpl: healthy.fetchImpl, autoAccept: false });
     await runWorkflowTick({ fetchImpl: healthy.fetchImpl, budgetMs: 30_000 });
@@ -202,7 +208,7 @@ describe("workflows", () => {
   });
 
   it("test runs a workflow against a record without changing anything", async () => {
-    const workflow = (await listWorkflows(owner)).mine.find((item) => item.name === "Flag at-risk clients after a call")!;
+    const workflow = (await listWorkflows(owner)).mine.find((item) => item.name === "Follow up when a client turns at risk")!;
     const before = (await listNotifications(owner)).length;
     const llm = fakes([AT_RISK]);
     const result = await startRun(owner, workflow.id, { test: true, record: { type: "company", id: companyId }, fetchImpl: llm.fetchImpl });
@@ -283,7 +289,7 @@ describe("workflows", () => {
     assert.equal(notes.data[0].title, "Checked in");
 
     await assert.rejects(saveWorkflow(member, (await listWorkflows(owner)).mine[0].id, { name: "Mine now" }), /not found|Only the person/);
-    const ownerFlow = (await listWorkflows(owner)).mine.find((item) => item.name === "Flag at-risk clients after a call")!;
+    const ownerFlow = (await listWorkflows(owner)).mine.find((item) => item.name === "Follow up when a client turns at risk")!;
     await assert.rejects(getRunSteps(member, (await listRuns(owner, ownerFlow.id))[0].id), /Run not found/);
     assert.deepEqual((await listWorkflows(owner)).templates, []);
 

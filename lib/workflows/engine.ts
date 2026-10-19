@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { HEALTH_LABELS } from "@/lib/companies";
 import { membershipsFor } from "@/lib/auth/user";
 import { createActivity, getActivity } from "@/lib/crm/activities";
 import { getInsightTranscript, getInsightsForActivities } from "@/lib/crm/call-insights";
@@ -115,6 +116,8 @@ function companyVars(company: Company) {
     domain: company.domain,
     website: company.website,
     lifecycle: company.lifecycle,
+    health: company.health ? HEALTH_LABELS[company.health] : null,
+    healthReason: company.healthReason,
     industry: company.industry,
     ownerId: company.ownerId,
     ownerName: company.ownerName,
@@ -175,6 +178,8 @@ export async function buildContext(actor: UserActor, trigger: Trigger, event: Ru
     vars.activity = { id: activity.id, type: activity.type, title: activity.title, body: activity.body, occurredAt: activity.occurredAt };
     vars.call = {
       summary: insight?.summary ?? null,
+      sentiment: insight?.sentiment ? HEALTH_LABELS[insight.sentiment] : null,
+      sentimentReason: insight?.sentimentReason ?? null,
       keyPoints: insight?.keyPoints ?? [],
       actionItems: (insight?.actionItems ?? []).map((item) => item.title),
       transcript: transcript ? transcript.slice(0, TRANSCRIPT_LIMIT) : null,

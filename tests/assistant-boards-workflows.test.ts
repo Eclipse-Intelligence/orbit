@@ -114,15 +114,15 @@ describe("assistant board and workflow tools", () => {
     const listed = (await runTool(owner, "list_workflows", {})) as { starterTemplates: { key: string }[] };
     assert.deepEqual(
       listed.starterTemplates.map((item) => item.key),
-      ["at-risk-after-call", "requests-to-linear"],
+      ["at-risk-follow-up", "requests-to-linear"],
     );
 
-    const fromTemplate = (await runTool(owner, "create_workflow", { template: "at-risk-after-call", name: "Health check" })) as WorkflowResult;
+    const fromTemplate = (await runTool(owner, "create_workflow", { template: "requests-to-linear", name: "Health check" })) as WorkflowResult;
     assert.equal(fromTemplate.workflow.name, "Health check");
     assert.equal(fromTemplate.workflow.trigger.type, "call_summary_ready");
     assert.deepEqual(
       fromTemplate.workflow.nodes.map((node) => node.type),
-      ["ai", "if", "notify"],
+      ["ai", "if", "approval", "loop", "linear_issue"],
     );
 
     const definition = {

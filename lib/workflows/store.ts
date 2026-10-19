@@ -322,6 +322,15 @@ async function testEvent(actor: UserActor, definition: WorkflowDefinition, recor
       if (!found.rows[0]) throw new CrmError("invalid_input", "There's no matching deal or card for this company to test with.", 400);
       return { type: "opportunity.stage_changed", entityType: "opportunity", entityId: found.rows[0].id, at };
     }
+    if (trigger.type === "field_changed") {
+      return {
+        type: `${record.type}.updated`,
+        entityType: record.type,
+        entityId: record.id,
+        data: { fields: [trigger.field], before: {}, after: { [trigger.field]: trigger.to ?? null } },
+        at,
+      };
+    }
     return { type: "manual", entityType: record.type, entityId: record.id, at };
   });
 }

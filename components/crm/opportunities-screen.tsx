@@ -23,7 +23,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/_ui/sheet";
-import { EntityChip, Monogram } from "@/components/beautifui/record-marks";
+import { EntityChip, HealthMark, Monogram } from "@/components/beautifui/record-marks";
 import Pager from "@/components/crm/pager";
 import RecordTransfer from "@/components/crm/record-transfer";
 import SectionHeader from "@/components/crm/section-header";
@@ -590,7 +590,10 @@ export default function OpportunitiesScreen({
                           cardDragId === opportunity.id && "cursor-grabbing opacity-70",
                         )}
                       >
-                        <span className="text-[14px] leading-5">{board ? (opportunity.companyName ?? opportunity.name) : opportunity.name}</span>
+                        <span className="flex items-start justify-between gap-2">
+                          <span className="min-w-0 text-[14px] leading-5">{board ? (opportunity.companyName ?? opportunity.name) : opportunity.name}</span>
+                          {opportunity.companyHealth && <HealthMark health={opportunity.companyHealth} />}
+                        </span>
                         <span className="caption-style text-subtle">
                           {board
                             ? cardMeta(opportunity) || "No contact"
@@ -664,6 +667,7 @@ export default function OpportunitiesScreen({
               title={opportunity.companyName ?? opportunity.name}
               meta={[opportunity.stageName ?? "No stage", cardMeta(opportunity)].filter(Boolean).join(" · ")}
               onClick={() => edit(opportunity)}
+              action={opportunity.companyHealth ? <HealthMark health={opportunity.companyHealth} /> : undefined}
             />
           ) : (
           <RecordRow

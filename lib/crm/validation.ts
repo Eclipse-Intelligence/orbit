@@ -8,6 +8,7 @@ import {
   COMPANY_SORTS,
   CONTACT_PRESENCE,
   CONTACT_SORTS,
+  ACCOUNT_HEALTH,
   LIFECYCLES,
   OPPORTUNITY_STATUSES,
   TASK_PRIORITIES,
@@ -34,6 +35,8 @@ export const companyWriteSchema = z
     industry: nullableText,
     sizeCategory: nullableText,
     lifecycle: z.enum(LIFECYCLES).optional(),
+    health: z.enum(ACCOUNT_HEALTH).nullable().optional(),
+    healthReason: nullableText,
     ownerId: z.uuid().nullable().optional(),
     source: nullableText,
     sourceReference: nullableText,
@@ -127,6 +130,10 @@ export function companyQueryFromSearchParams(
   if (text) query.query = text;
   if (lifecycle && (LIFECYCLES as readonly string[]).includes(lifecycle)) {
     query.lifecycle = lifecycle as CompanyListQuery["lifecycle"];
+  }
+  const health = params.get("health");
+  if (health === "none" || (health && (ACCOUNT_HEALTH as readonly string[]).includes(health))) {
+    query.health = health as CompanyListQuery["health"];
   }
   if (sort && (COMPANY_SORTS as readonly string[]).includes(sort)) {
     query.sort = sort as CompanyListQuery["sort"];

@@ -27,6 +27,7 @@ import RecordTags from "@/components/crm/tags";
 import type { Viewer } from "@/components/crm/viewer";
 import { archiveCompanyAction } from "@/app/(crm)/actions";
 import { formatDate, LIFECYCLE_LABELS } from "@/lib/companies";
+import CompanyHealth from "@/components/companies/detail/company-health";
 import type { MeetingsSummary } from "@/lib/crm/calendar";
 import type { ClickUpPicker } from "@/lib/crm/clickup";
 import type { Company, CompanyContext, Member, TagCount } from "@/lib/crm/types";
@@ -232,6 +233,8 @@ export default function CompanyRecord({
                 {archiveError}
               </p>
             )}
+
+            <CompanyHealth company={company} />
 
             {editing ? (
               <CompanyEditor

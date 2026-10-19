@@ -252,6 +252,12 @@ export async function handleCronRequest(
   }
   const report = await run();
   try {
+    const { backfillCallHealth } = await import("@/lib/crm/call-health");
+    await backfillCallHealth({ budgetMs: 12_000 });
+  } catch (error) {
+    console.error("Call health backfill failed", error);
+  }
+  try {
     const { runWorkflowTick } = await import("@/lib/workflows/engine");
     await runWorkflowTick({ budgetMs: 8_000 });
   } catch (error) {

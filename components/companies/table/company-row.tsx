@@ -9,6 +9,7 @@ import CompanyLogo from "@/components/companies/company-logo";
 import { TableCell, TableRow } from "@/components/_ui/table";
 import {
   ConnectionMark,
+  HealthMark,
   lifecycleTagBase,
   RecordTag,
 } from "@/components/beautifui/record-marks";
@@ -131,6 +132,9 @@ export default function CompanyRow({
       </TableCell>
       <TableCell role="cell" className={cellClass("strength")}>
         <ConnectionMark at={company.lastInteractionAt} now={now} />
+      </TableCell>
+      <TableCell role="cell" className={cellClass("health")} title={company.healthReason ?? undefined}>
+        {company.health ? <HealthMark health={company.health} /> : <span className="text-subtle text-[13px]">Not set</span>}
       </TableCell>
       <TableCell role="cell" className={cellClass("domain")} onClick={stop}>
         {company.domain ? (
