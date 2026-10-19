@@ -25,6 +25,7 @@ export type LlmJsonRequest<T> = {
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
   deadline?: number;
+  model?: string;
 };
 
 export type LlmJsonResult<T> = {
@@ -154,7 +155,7 @@ async function attempt<T>(
 export async function completeJson<T>(request: LlmJsonRequest<T>): Promise<LlmJsonResult<T>> {
   const apiKey = process.env.LLM_API_KEY?.trim();
   if (!apiKey) throw new LlmError("Set LLM_API_KEY to summarise calls.");
-  const model = llmModel();
+  const model = request.model?.trim() || llmModel();
   let last: unknown;
   for (let index = 0; index < MAX_ATTEMPTS; index += 1) {
     const limit = request.timeoutMs ?? TIMEOUT_MS;

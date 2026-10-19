@@ -15,6 +15,7 @@ import { useQuickAddRecord } from "@/components/crm/quick-add";
 import RecordLayout from "@/components/crm/record-layout";
 import { CallLink, Detail, DetailList } from "@/components/crm/record-form";
 import SectionHeader from "@/components/crm/section-header";
+import RunWorkflowButton from "@/components/workflows/run-workflow-button";
 import RecordSequence from "@/components/shortcuts/record-sequence";
 import RecordTags from "@/components/crm/tags";
 import type { Viewer } from "@/components/crm/viewer";
@@ -51,6 +52,7 @@ export default function ContactRecord({
   tags,
   invite,
   enrichment,
+  workflows = [],
 }: {
   viewer: Viewer;
   contact: Contact;
@@ -64,6 +66,7 @@ export default function ContactRecord({
   tags: TagCount[];
   invite: InviteSetup;
   enrichment: { available: EnrichmentAvailability; lookups: ContactLookups[string] };
+  workflows?: { id: string; name: string }[];
 }) {
   const router = useRouter();
   const [editing, setEditing] = useState(false);
@@ -105,6 +108,7 @@ export default function ContactRecord({
         list="contacts"
         action={
           <div className="flex items-center gap-1">
+            <RunWorkflowButton object="contact" recordId={shown.id} workflows={workflows} />
             <span
               title={
                 shown.email

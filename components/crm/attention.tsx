@@ -2,6 +2,7 @@
 
 import { createContext, useContext, type ReactNode } from "react";
 import type { Task } from "@/lib/crm/types";
+import type { Notification } from "@/lib/workflows/store";
 
 export type AttentionItem = {
   id: string;
@@ -13,14 +14,17 @@ export type AttentionItem = {
 };
 
 const AttentionContext = createContext<AttentionItem[]>([]);
+const NotificationsContext = createContext<Notification[]>([]);
 
 export function AttentionProvider({
   overdue,
   today,
+  notifications = [],
   children,
 }: {
   overdue: Task[];
   today: Task[];
+  notifications?: Notification[];
   children: ReactNode;
 }) {
   const items: AttentionItem[] = [
@@ -34,11 +38,19 @@ export function AttentionProvider({
       )
       .map((task) => toItem(task, false)),
   ].slice(0, 8);
-  return <AttentionContext.Provider value={items}>{children}</AttentionContext.Provider>;
+  return (
+    <AttentionContext.Provider value={items}>
+      <NotificationsContext.Provider value={notifications}>{children}</NotificationsContext.Provider>
+    </AttentionContext.Provider>
+  );
 }
 
 export function useAttention() {
   return useContext(AttentionContext);
+}
+
+export function useNotifications() {
+  return useContext(NotificationsContext);
 }
 
 function toItem(task: Task, overdue: boolean): AttentionItem {

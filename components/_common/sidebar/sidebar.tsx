@@ -13,12 +13,13 @@ import { useCompaniesStore } from "@/stores/companies-store";
 
 type SidebarProps = {
   boards: BoardSummary[];
+  approvals: number;
   companyCount: number;
   openActionCount: number;
   workspaceName: string;
 };
 
-export default function Sidebar({ boards, companyCount, openActionCount, workspaceName }: SidebarProps) {
+export default function Sidebar({ boards, approvals, companyCount, openActionCount, workspaceName }: SidebarProps) {
   const sidebarOpen = useCompaniesStore((state) => state.sidebarOpen);
   const setSidebarOpen = useCompaniesStore((state) => state.setSidebarOpen);
 
@@ -27,6 +28,7 @@ export default function Sidebar({ boards, companyCount, openActionCount, workspa
       <aside className="relative hidden w-(--sidebar-width) shrink-0 border-r border-sidebar-border bg-sidebar sidebar-collapsed:lg:hidden lg:flex lg:flex-col">
         <SidebarContent
           boards={boards}
+          approvals={approvals}
           companyCount={companyCount}
           openActionCount={openActionCount}
           workspaceName={workspaceName}
@@ -45,6 +47,7 @@ export default function Sidebar({ boards, companyCount, openActionCount, workspa
           </SheetDescription>
           <SidebarContent
             boards={boards}
+            approvals={approvals}
             companyCount={companyCount}
             openActionCount={openActionCount}
             workspaceName={workspaceName}

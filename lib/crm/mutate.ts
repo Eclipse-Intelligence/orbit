@@ -4,6 +4,7 @@ import { actorKey } from "@/lib/crm/context";
 import { CrmError, isPgError } from "@/lib/crm/errors";
 import { stableStringify } from "@/lib/crm/normalize";
 import { enqueueWebhookDeliveries } from "@/lib/crm/webhooks";
+import { enqueueWorkflowEvent } from "@/lib/workflows/events";
 import type { Actor, Provenance } from "@/lib/crm/types";
 
 export type MutationOutcome<T> = {
@@ -94,6 +95,7 @@ export async function recordAudit(
   );
   const eventId = inserted.rows[0]?.id;
   if (!eventId) return;
+  await enqueueWorkflowEvent(db, actor, eventType, entityType, entityId, provenance, changes);
   await enqueueWebhookDeliveries(db, actor.workspaceId, eventId, eventType, {
     id: eventId,
     type: eventType,
