@@ -4,6 +4,7 @@ import { formatWhen } from "@/lib/companies";
 import type { CallSyncSummary } from "@/lib/crm/calls";
 import type { GranolaStatus } from "@/lib/crm/granola";
 import type { LinearStatus } from "@/lib/linear";
+import GranolaKey from "@/components/crm/granola-key";
 import type { MailboxSummary } from "@/lib/crm/inbox";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
 import { cn } from "@/lib/utils";
@@ -167,7 +168,7 @@ export default function IntegrationsSettings({
           ) : undefined
         }
       >
-        {granola.configured ? (
+        {granola.configured && (
           <div className="flex flex-col gap-1.5">
             <Status tone={granola.lastError ? "error" : "on"}>
               {`${syncedLine(granola.lastSyncedAt)}${granola.webhookEnabled ? " · Instant sync on" : " · Checked every 10 minutes"}`}
@@ -178,12 +179,8 @@ export default function IntegrationsSettings({
               </span>
             )}
           </div>
-        ) : (
-          <Status tone="off">
-            Set GRANOLA_API_KEY in the server environment to import Granola
-            meetings, then restart Orbit
-          </Status>
         )}
+        <GranolaKey connected={granola.personal.connected} hint={granola.personal.hint} />
       </SettingsCard>
 
       <SettingsCard

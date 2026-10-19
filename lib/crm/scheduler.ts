@@ -13,6 +13,7 @@ import { syncMailbox } from "@/lib/crm/inbox";
 import { ensureTranscriptSubscription, syncTeamsTranscripts } from "@/lib/crm/teams-transcripts";
 import type { UserActor } from "@/lib/crm/types";
 import { granolaApiKey, granolaClient } from "@/lib/granola";
+import { query } from "@/lib/db/pool";
 import { microsoftConfigured } from "@/lib/microsoft/oauth";
 
 export const CRON_BUDGET_MS = 50_000;
@@ -23,6 +24,7 @@ export type CronAuth = "ok" | "unauthorized" | "unconfigured";
 export type SyncTarget = BackgroundTarget & {
   granola: UserActor | null;
   clickup?: UserActor | null;
+  personalGranola?: boolean;
 };
 
 export type StepContext = { deadline: number; fetchImpl?: typeof fetch };
@@ -100,10 +102,10 @@ export const DEFAULT_STEPS: SyncStep[] = [
   },
   {
     name: "granola",
-    applies: (target) => Boolean(target.granola),
+    applies: (target) => Boolean(target.granola) || Boolean(target.personalGranola),
     run: (target, context) =>
       syncGranola({
-        actor: target.granola ?? target.actor,
+        actor: target.personalGranola ? target.actor : (target.granola ?? target.actor),
         fetchImpl: context.fetchImpl,
         deadline: context.deadline,
       }),
@@ -120,7 +122,7 @@ export const DEFAULT_STEPS: SyncStep[] = [
   },
   {
     name: "summaries",
-    applies: (target) => target.mailbox || Boolean(target.granola),
+    applies: (target) => target.mailbox || Boolean(target.granola) || Boolean(target.personalGranola),
     run: async (target, context) => ({
       summarised: await summarisePendingImports(target.actor, {
         fetchImpl: context.fetchImpl,
@@ -146,6 +148,11 @@ export async function syncTargets(options: { fetchImpl?: typeof fetch } = {}) {
       granolaError = errorText(error, "Could not reach Granola.");
     }
   }
+  const keyedRows = (
+    await query<{ workspace_id: string; user_id: string }>("select * from private.granola_key_members()").catch(() => ({ rows: [] }))
+  ).rows;
+  const memberKey = (actor: UserActor) => `${actor.workspaceId}:${actor.userId}`;
+  const keyed = new Set(keyedRows.map((row) => `${row.workspace_id}:${row.user_id}`));
   let assigned = false;
   const clickupDone = new Set<string>();
   const list: SyncTarget[] = [];
@@ -161,10 +168,16 @@ export async function syncTargets(options: { fetchImpl?: typeof fetch } = {}) {
         console.error("ClickUp target lookup failed", error);
       }
     }
-    const entry = { ...target, granola: mine ? granola : null, clickup };
-    if (entry.mailbox || entry.calendarAccounts || entry.calendarFeeds || entry.granola || entry.clickup) {
+    const entry: SyncTarget = { ...target, granola: mine ? granola : null, clickup, personalGranola: keyed.has(memberKey(target.actor)) };
+    if (entry.mailbox || entry.calendarAccounts || entry.calendarFeeds || entry.granola || entry.clickup || entry.personalGranola) {
       list.push(entry);
     }
+  }
+  for (const row of keyedRows) {
+    if (list.some((entry) => entry.actor.workspaceId === row.workspace_id && entry.actor.userId === row.user_id)) continue;
+    const members = targets.find((target) => target.actor.workspaceId === row.workspace_id)?.members ?? [];
+    const actor = members.find((member) => member.userId === row.user_id);
+    if (actor) list.push({ actor, mailbox: false, members, granola: null, clickup: null, personalGranola: true });
   }
   return { targets: list, granolaError };
 }

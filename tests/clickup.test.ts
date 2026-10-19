@@ -132,7 +132,20 @@ function clickup(fake: Fake) {
       );
     }
     if (path === "/user") return Response.json({ user: { id: 101, username: "Mark Ridgeon", email: "mark@orbit.test" } });
-    if (path === "/team") return Response.json({ teams: [{ id: TEAM, name: "Mark's Workspace" }] });
+    if (path === "/team") {
+      return Response.json({
+        teams: [
+          {
+            id: TEAM,
+            name: "Mark's Workspace",
+            members: [
+              { user: { id: 101, username: "Mark Ridgeon", email: "mark@orbit.test" } },
+              { user: { id: 202, username: "Sam Colleague", email: "Sam@Orbit.test" } },
+            ],
+          },
+        ],
+      });
+    }
     let match = /^\/team\/(\d+)\/space$/.exec(path);
     if (match) return Response.json({ spaces: SPACES });
     match = /^\/space\/(\d+)\/folder$/.exec(path);
@@ -768,6 +781,36 @@ describe("clickup sync", () => {
 
     delete process.env.CLICKUP_API_TOKEN;
     assert.equal((await send(signClickUpWebhook(secret, body))).status, 404);
+  });
+
+  it("assigns tasks to the matching ClickUp person, and imports ClickUp assignments to the right owner", async () => {
+    const db = getAdminPool();
+    const add = async (email: string, name: string) => {
+      const id = (await db.query<{ id: string }>("select private.create_local_user($1, 'password-123', $2) as id", [email, name])).rows[0].id;
+      await db.query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [owner.workspaceId, id]);
+      return id;
+    };
+    const sam = await add("sam@orbit.test", "Sam Colleague");
+    const ola = await add("ola@orbit.test", "Ola Outside");
+    const post = () => fake.requests.filter((item) => item.method === "POST" && item.path === `/list/${RELATIONSHIPS}/task`).at(-1)?.body as Record<string, unknown>;
+
+    await createTaskWithClickUp(owner, { title: "Sam's follow-up", contactId: janeId, ownerId: sam }, RELATIONSHIPS, { fetchImpl });
+    assert.deepEqual(post().assignees, [202]);
+    await createTaskWithClickUp(owner, { title: "Ola's follow-up", contactId: janeId, ownerId: ola }, RELATIONSHIPS, { fetchImpl });
+    assert.deepEqual(post().assignees, []);
+    await createTaskWithClickUp(owner, { title: "Mark's follow-up", contactId: janeId }, RELATIONSHIPS, { fetchImpl });
+    assert.deepEqual(post().assignees, [101]);
+
+    remoteTask(fake, { id: "forsam", listId: RELATIONSHIPS, name: "Sam calls Jane", orbit: "jane@acme.com", assignees: [{ id: 202, email: "sam@orbit.test" }] });
+    remoteTask(fake, { id: "nobody", listId: RELATIONSHIPS, name: "Unassigned in ClickUp", orbit: "jane@acme.com" });
+    await syncClickUp({ actor: owner, force: true, fetchImpl });
+    const owners = await db.query<{ clickup_task_id: string; owner_id: string | null }>(
+      "select clickup_task_id, owner_id from crm.tasks where clickup_task_id in ('forsam', 'nobody')",
+    );
+    const byId = Object.fromEntries(owners.rows.map((row) => [row.clickup_task_id, row.owner_id]));
+    assert.equal(byId.forsam, sam);
+    assert.equal(byId.nobody, owner.userId);
+    await db.query("delete from crm.workspace_members where user_id = any($1::uuid[])", [[sam, ola]]);
   });
 
   it("adds a clickup step for the workspace in scheduled sync", async () => {

@@ -951,12 +951,14 @@ export async function getMeetings(
          from (
            select distinct on (coalesce(e.ical_uid, e.id::text)) e.*
            from crm.calendar_events e
-           join crm.calendars c on c.id = e.calendar_id and c.use_for_crm
-           where e.user_id = $1 and e.workspace_id = $2
+           left join crm.calendars c on c.id = e.calendar_id
+           where e.workspace_id = $2
+             and (e.user_id <> $1 or c.use_for_crm)
              and e.${column} @> array[$3]::uuid[]
              and not e.is_cancelled
              and ${upcoming ? "e.ends_at > $4" : "e.ends_at <= $4"}
-           order by coalesce(e.ical_uid, e.id::text), (e.connection_id is not null) desc, c.is_default desc, e.id
+           order by coalesce(e.ical_uid, e.id::text), (e.user_id = $1) desc, (e.connection_id is not null) desc,
+             c.is_default desc nulls last, e.id
          ) m
          left join lateral (
            select a.id from crm.activities a

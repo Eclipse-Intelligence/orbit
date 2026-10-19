@@ -35,6 +35,8 @@ export default function ActionsScreen({
   companies,
   clickup,
   now,
+  who = "mine",
+  shared = false,
 }: {
   viewer: Viewer;
   view: TaskView;
@@ -43,7 +45,14 @@ export default function ActionsScreen({
   companies: Company[];
   clickup: ClickUpPicker | null;
   now: number;
+  who?: "mine" | "everyone";
+  shared?: boolean;
 }) {
+  const href = (target: TaskView, person = who) => {
+    const base = tasksHref(target);
+    if (!shared || person === "mine") return base;
+    return `${base}${base.includes("?") ? "&" : "?"}who=everyone`;
+  };
   const router = useRouter();
   const [message, setMessage] = useState<string | null>(null);
 
@@ -59,14 +68,37 @@ export default function ActionsScreen({
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <SectionHeader title="Tasks" viewer={viewer} action={<RecordTransfer resource="tasks" />} />
+      <SectionHeader
+        title="Tasks"
+        viewer={viewer}
+        action={
+          <span className="flex items-center gap-1">
+            {shared && (
+              <>
+                <Button variant={who === "mine" ? "secondary" : "ghost"} size="sm" href={href(view, "mine")} aria-current={who === "mine" ? "page" : undefined}>
+                  Mine
+                </Button>
+                <Button
+                  variant={who === "everyone" ? "secondary" : "ghost"}
+                  size="sm"
+                  href={href(view, "everyone")}
+                  aria-current={who === "everyone" ? "page" : undefined}
+                >
+                  Everyone
+                </Button>
+              </>
+            )}
+            <RecordTransfer resource="tasks" />
+          </span>
+        }
+      />
       <div className="flex flex-wrap gap-2 px-4 pt-4">
         {VIEWS.map((item, index) => (
           <Button
             key={item.id}
             variant={item.id === view ? "secondary" : "ghost"}
             size="sm"
-            href={tasksHref(item.id)}
+            href={href(item.id)}
             aria-current={item.id === view ? "page" : undefined}
             data-shortcut={`tab-${index + 1}`}
             title={`${item.label} (${index + 1})`}

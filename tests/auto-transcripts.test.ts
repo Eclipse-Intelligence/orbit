@@ -1019,7 +1019,7 @@ describe("teams transcripts", () => {
     assert.equal(garbage.status, 400);
   });
 
-  it("keeps Teams transcripts private to the mailbox owner and state per mailbox", async () => {
+  it("keeps unfiled Teams transcripts private to the mailbox owner, shares filed ones, and keeps state per mailbox", async () => {
     const colleagueUser = await createUser("colleague@orbit.test", "Cole League");
     await getAdminPool().query(
       "insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')",
@@ -1091,9 +1091,16 @@ describe("teams transcripts", () => {
         )
       ).rows[0];
     const ownerBefore = await ownerState();
+    const filedByOwner = (
+      await getAdminPool().query<{ total: number }>(
+        "select count(*)::int as total from crm.conversation_imports where user_id = $1 and source = 'teams' and status = 'filed'",
+        [owner.userId],
+      )
+    ).rows[0].total;
+    assert.ok(filedByOwner > 0);
     const colleagueRun = await syncTeamsTranscripts(colleague, { fetchImpl, force: true });
     assert.equal(colleagueRun.error, undefined);
-    assert.equal(colleagueRun.imported, state.transcripts.length);
+    assert.equal(colleagueRun.imported, state.transcripts.length - filedByOwner);
     const states = await getAdminPool().query<{ user_id: string; connection_id: string }>(
       "select user_id, connection_id from crm.integration_state where workspace_id = $1 and source = 'teams_transcripts'",
       [owner.workspaceId],
@@ -1109,7 +1116,7 @@ describe("teams transcripts", () => {
       "select 1 from crm.conversation_imports where user_id = $1 and source = 'teams'",
       [colleagueUser.userId],
     );
-    assert.equal(colleagueRows.rowCount, state.transcripts.length);
+    assert.equal(colleagueRows.rowCount, state.transcripts.length - filedByOwner);
     assert.ok((ownerRows.rowCount ?? 0) >= state.transcripts.length);
   });
 });

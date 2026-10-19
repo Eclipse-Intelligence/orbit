@@ -388,17 +388,26 @@ describe("calendar sync", () => {
     });
   });
 
-  it("keeps events private to the owner", async () => {
+  it("keeps events private to the owner, apart from CRM meetings", async () => {
     const teammate = await createUser("teammate@orbit-calendar.test", "Teammate");
     await getAdminPool().query(
       "insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')",
       [owner.workspaceId, teammate.userId],
     );
-    const theirs = await queryAsUser<{ total: number }>(
+    const theirs = await queryAsUser<{ total: number; unlinked: number }>(
       teammate.userId,
-      "select count(*)::int as total from crm.calendar_events",
+      `select count(*)::int as total,
+         count(*) filter (where cardinality(contact_ids) = 0 and cardinality(company_ids) = 0)::int as unlinked
+       from crm.calendar_events`,
     );
-    assert.equal(theirs[0].total, 0);
+    const shared = await getAdminPool().query<{ total: number }>(
+      `select count(*)::int as total from crm.calendar_events e
+       join crm.calendars c on c.id = e.calendar_id
+       where e.workspace_id = $1 and c.use_for_crm and (cardinality(e.contact_ids) > 0 or cardinality(e.company_ids) > 0)`,
+      [owner.workspaceId],
+    );
+    assert.equal(theirs[0].unlinked, 0);
+    assert.equal(theirs[0].total, shared.rows[0].total);
     const mine = await queryAsUser<{ total: number }>(
       owner.userId,
       "select count(*)::int as total from crm.calendar_events",

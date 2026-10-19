@@ -17,6 +17,7 @@ import {
   syncClickUpFor,
 } from "@/lib/crm/clickup";
 import { CrmError } from "@/lib/crm/errors";
+import { removeGranolaKey, saveGranolaKey } from "@/lib/crm/granola";
 import { saveMeetingLink } from "@/lib/crm/invites";
 import { savePipelineStages, type StageDraft } from "@/lib/crm/pipeline";
 import { saveOtherEmails, type MyEmails } from "@/lib/crm/profile";
@@ -192,5 +193,27 @@ export async function disableClickUpWebhookAction(): Promise<ClickUpActionState>
     return { message: result.message };
   } catch (error) {
     return clickupFailure(error, "Could not turn off instant ClickUp sync.");
+  }
+}
+
+export async function saveGranolaKeyAction(key: string): Promise<{ error?: string }> {
+  const user = await requireUser();
+  try {
+    await saveGranolaKey(user, key);
+    revalidatePath(SETTINGS_PATHS.integrations);
+    return {};
+  } catch (error) {
+    return { error: error instanceof CrmError ? error.message : "Couldn't save the Granola key." };
+  }
+}
+
+export async function removeGranolaKeyAction(): Promise<{ error?: string }> {
+  const user = await requireUser();
+  try {
+    await removeGranolaKey(user);
+    revalidatePath(SETTINGS_PATHS.integrations);
+    return {};
+  } catch (error) {
+    return { error: error instanceof CrmError ? error.message : "Couldn't remove the Granola key." };
   }
 }

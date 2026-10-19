@@ -75,7 +75,11 @@ export type GranolaSyncResult = {
   error?: string;
 };
 
-export type GranolaStatus = IntegrationStatus & { configured: boolean };
+export type GranolaStatus = IntegrationStatus & {
+  configured: boolean;
+  personal: { connected: boolean; hint: string | null };
+  sharedKey: boolean;
+};
 
 type GranolaOptions = {
   fetchImpl?: typeof fetch;
@@ -130,7 +134,7 @@ export async function resolveGranolaActor(
   if (list.length === 0) return null;
   const workspaces = new Set(list.map((target) => target.actor.workspaceId));
   let ownerEmail = ownerEmails.get(apiKey) ?? null;
-  if (!ownerEmail && workspaces.size > 1) {
+  if (!ownerEmail && (workspaces.size > 1 || list.some((target) => target.members.length > 1))) {
     const page = await api.listNotes({ pageSize: 1 });
     ownerEmail = canonicalEmail(page.notes[0]?.owner?.email ?? "");
     if (ownerEmail) ownerEmails.set(apiKey, ownerEmail);
@@ -153,9 +157,74 @@ async function workspaceActor(actor: UserActor, api: GranolaClient, apiKey: stri
   return actor;
 }
 
+async function readPersonalKey(actor: UserActor) {
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ key_cipher: string; key_hint: string | null }>(
+      "select key_cipher, key_hint from crm.granola_keys where workspace_id = $1 and user_id = $2",
+      [actor.workspaceId, actor.userId],
+    );
+    return result.rows[0] ?? null;
+  });
+}
+
+export async function personalGranolaKey(actor: UserActor) {
+  const row = await readPersonalKey(actor);
+  if (!row) return null;
+  try {
+    return decryptSecret(row.key_cipher);
+  } catch {
+    return null;
+  }
+}
+
+export async function saveGranolaKey(actor: UserActor, key: string, options: GranolaOptions = {}) {
+  const trimmed = key.trim();
+  if (trimmed.length < 10 || trimmed.length > 500 || /\s/.test(trimmed)) {
+    throw new CrmError("invalid_input", "Paste the whole Granola API key.", 400, { field: "key" });
+  }
+  try {
+    await client(trimmed, options).listNotes({ pageSize: 1 });
+  } catch (error) {
+    const reason = errorText(error, "");
+    const rejected = /reject|401|403|unauthori[sz]ed|invalid/i.test(reason);
+    throw new CrmError(
+      "invalid_input",
+      rejected ? "Granola didn't accept that key. Check you copied all of it." : `Couldn't reach Granola to check the key. ${reason}`.trim(),
+      400,
+      { field: "key" },
+    );
+  }
+  await withActor(actor, (db) =>
+    db.query(
+      `insert into crm.granola_keys (workspace_id, user_id, key_cipher, key_hint)
+       values ($1, $2, $3, $4)
+       on conflict (workspace_id, user_id)
+       do update set key_cipher = excluded.key_cipher, key_hint = excluded.key_hint, updated_at = now()`,
+      [actor.workspaceId, actor.userId, encryptSecret(trimmed), trimmed.slice(-4)],
+    ),
+  );
+}
+
+export async function removeGranolaKey(actor: UserActor) {
+  await withActor(actor, (db) =>
+    db.query("delete from crm.granola_keys where workspace_id = $1 and user_id = $2", [actor.workspaceId, actor.userId]),
+  );
+}
+
 export async function getGranolaStatus(actor: UserActor): Promise<GranolaStatus> {
-  const status = await getIntegrationStatus(actor, granolaKey(actor));
-  return { ...status, configured: Boolean(granolaApiKey()) };
+  const [status, personal] = await Promise.all([getIntegrationStatus(actor, granolaKey(actor)), readPersonalKey(actor)]);
+  return {
+    ...status,
+    configured: Boolean(granolaApiKey()) || Boolean(personal),
+    personal: { connected: Boolean(personal), hint: personal?.key_hint ?? null },
+    sharedKey: Boolean(granolaApiKey()),
+  };
+}
+
+export async function syncGranolaOnVisit(actor: UserActor) {
+  if (await readPersonalKey(actor)) return syncGranola({ actor });
+  if (granolaApiKey()) return syncGranola();
+  return null;
 }
 
 export async function fileGranolaNote(actor: UserActor, note: GranolaNote): Promise<ImportOutcome> {
@@ -286,7 +355,8 @@ export async function syncGranola(
     summarised: 0,
     complete: false,
   };
-  const apiKey = granolaApiKey();
+  const personal = options.actor ? await personalGranolaKey(options.actor).catch(() => null) : null;
+  const apiKey = personal ?? granolaApiKey();
   if (!apiKey) return { ...idle, error: GRANOLA_NOT_CONFIGURED };
   const api = client(apiKey, options);
   let actor = options.actor ?? null;
@@ -383,6 +453,7 @@ export async function syncGranola(
 }
 
 export async function syncGranolaFor(actor: UserActor, options: GranolaOptions = {}) {
+  if (await readPersonalKey(actor)) return syncGranola({ ...options, actor, force: true });
   const apiKey = granolaApiKey();
   if (!apiKey) throw new CrmError("invalid_input", GRANOLA_NOT_CONFIGURED, 400);
   await workspaceActor(actor, client(apiKey, options), apiKey);

@@ -1,6 +1,6 @@
 import type { Db } from "@/lib/db/pool";
 import { withActor } from "@/lib/crm/context";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, isPgError } from "@/lib/crm/errors";
 import { resolveLinks } from "@/lib/crm/links";
 import {
   actorIds,
@@ -195,6 +195,7 @@ export async function createTaskInDb(
 ) {
   const write = prepareTask(input, "create");
   if (!write.title) throw new CrmError("invalid_input", "Enter a task.", 400, { field: "title" });
+  if (write.ownerId === undefined && actor.type === "user") write.ownerId = actor.userId;
   await assertOwner(db, actor.workspaceId, write.ownerId);
   const links = await resolveLinks(db, actor.workspaceId, write);
   const actorRef = actorIds(actor);
@@ -277,6 +278,14 @@ async function applyTask(
       change.values,
     );
   } catch (error) {
+    if (isPgError(error) && error.code === "42501") {
+      throw new CrmError(
+        "forbidden",
+        "You can't hand this task to someone else because you didn't create it. Ask the owner or an admin to reassign it.",
+        403,
+        { field: "ownerId" },
+      );
+    }
     constraintError(error, "duplicate_task", "That task already exists.");
   }
   const saved = await readTask(db, current.id);
@@ -316,14 +325,22 @@ export async function updateTaskInDb(
   return applyTask(db, actor, current, prepareTask(input, "patch"), provenance);
 }
 
-export async function countOpenTasks(actor: Actor) {
+export function mineFilter(actor: Actor, values: unknown[], alias = "t") {
+  if (actor.type !== "user") return null;
+  values.push(actor.userId);
+  return `(${alias}.owner_id = $${values.length} or ${alias}.owner_id is null)`;
+}
+
+export async function countOpenTasks(actor: Actor, options: { mine?: boolean } = {}) {
   assertScope(actor.scopes, "crm:read");
   return withActor(actor, async (db) => {
+    const values: unknown[] = [actor.workspaceId];
+    const mine = options.mine ? mineFilter(actor, values) : null;
     const result = await db.query<{ total: number }>(
       `select count(*)::int as total
-       from crm.tasks
-       where workspace_id = $1 and archived_at is null and completed_at is null`,
-      [actor.workspaceId],
+       from crm.tasks t
+       where t.workspace_id = $1 and t.archived_at is null and t.completed_at is null${mine ? ` and ${mine}` : ""}`,
+      values,
     );
     return result.rows[0]?.total ?? 0;
   });
@@ -344,6 +361,10 @@ export async function listTasks(actor: Actor, query: TaskListQuery = {}) {
     if (query.contactId) {
       values.push(query.contactId);
       where.push(`t.contact_id = $${values.length}`);
+    }
+    if (query.mine) {
+      const mine = mineFilter(actor, values);
+      if (mine) where.push(mine);
     }
     if (query.ownerId === "unassigned") where.push("t.owner_id is null");
     else if (query.ownerId) {
@@ -505,9 +526,11 @@ export type DueReminder = {
 export async function listDueReminders(actor: Actor, now = new Date()): Promise<DueReminder[]> {
   assertScope(actor.scopes, "crm:read");
   return withActor(actor, async (db) => {
+    const values: unknown[] = [actor.workspaceId, now.toISOString(), new Date(now.getTime() + REMINDER_LOOKAHEAD_MS).toISOString()];
+    const mine = mineFilter(actor, values);
     const result = await db.query<TaskRow>(
       `${TASK_SQL}
-       where t.workspace_id = $1
+       where t.workspace_id = $1${mine ? ` and ${mine}` : ""}
          and t.remind_minutes is not null
          and t.due_at is not null
          and t.completed_at is null
@@ -516,7 +539,7 @@ export async function listDueReminders(actor: Actor, now = new Date()): Promise<
          and t.due_at - make_interval(mins => t.remind_minutes) <= $3::timestamptz
        order by t.due_at
        limit 50`,
-      [actor.workspaceId, now.toISOString(), new Date(now.getTime() + REMINDER_LOOKAHEAD_MS).toISOString()],
+      values,
     );
     return result.rows.map((row) => {
       const task = mapTask(row);

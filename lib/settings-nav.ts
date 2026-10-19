@@ -2,6 +2,7 @@ export const SETTINGS_ROOT = "/settings";
 
 export const SETTINGS_PATHS = {
   general: "/settings/general",
+  team: "/settings/team",
   emailTemplates: "/settings/email-templates",
   calendars: "/settings/calendars",
   bookingPage: "/settings/booking-page",
@@ -14,6 +15,9 @@ export const SETTINGS_PATHS = {
 export type SettingsPage = keyof typeof SETTINGS_PATHS;
 
 const HASH_TARGETS: Record<string, string> = {
+  team: SETTINGS_PATHS.team,
+  members: SETTINGS_PATHS.team,
+  invites: SETTINGS_PATHS.team,
   "email-templates": SETTINGS_PATHS.emailTemplates,
   templates: SETTINGS_PATHS.emailTemplates,
   calendars: SETTINGS_PATHS.calendars,

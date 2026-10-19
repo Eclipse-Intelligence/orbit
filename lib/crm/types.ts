@@ -383,6 +383,7 @@ export type TaskWrite = {
 export type TaskListQuery = {
   query?: string;
   view?: TaskView;
+  mine?: boolean;
   companyId?: string;
   contactId?: string;
   ownerId?: string | "unassigned";

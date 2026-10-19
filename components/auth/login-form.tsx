@@ -8,7 +8,7 @@ import { signInAction, type AuthState } from "@/app/login/actions";
 
 const INITIAL: AuthState = {};
 
-export default function LoginForm({ hintEmail }: { hintEmail?: string }) {
+export default function LoginForm({ hintEmail, notice }: { hintEmail?: string; notice?: string }) {
   const [state, action, pending] = useActionState(signInAction, INITIAL);
 
   return (
@@ -18,6 +18,11 @@ export default function LoginForm({ hintEmail }: { hintEmail?: string }) {
         <p className="text-muted-foreground">
           Use your workspace account to open the company list.
         </p>
+        {notice && (
+          <p role="status" className="caption-style text-success">
+            {notice}
+          </p>
+        )}
       </div>
       <div className="flex flex-col gap-4">
         <Field label="Email" htmlFor="login-email" required error={state.error}>

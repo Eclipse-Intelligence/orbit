@@ -514,7 +514,7 @@ async function fileActivity(
   actor: UserActor,
   message: Pick<
     InboundEmail,
-    "providerMessageId" | "subject" | "preview" | "fromEmail" | "receivedAt"
+    "providerMessageId" | "subject" | "preview" | "fromEmail" | "receivedAt" | "internetMessageId"
   >,
   match: PartyMatch,
 ) {
@@ -531,6 +531,7 @@ async function fileActivity(
       metadata: {
         source: "microsoft",
         providerMessageId: message.providerMessageId,
+        ...(message.internetMessageId ? { internetMessageId: message.internetMessageId } : {}),
         from: canonicalEmail(message.fromEmail ?? "") ?? null,
       },
     },
@@ -654,11 +655,22 @@ async function fileMessages(
     });
     const match = await matchParties(db, actor.workspaceId, parties);
     let activityId: string | null = null;
-    if (match.contactId || match.companyId) {
+    const internetMessageId = clip(message.internetMessageId, 400);
+    const logged = internetMessageId
+      ? await db.query<{ id: string }>(
+          `select id from crm.activities
+           where workspace_id = $1 and type = 'email' and metadata->>'internetMessageId' = $2
+           limit 1`,
+          [actor.workspaceId, internetMessageId],
+        )
+      : null;
+    if (logged?.rows[0]) {
+      activityId = logged.rows[0].id;
+    } else if (match.contactId || match.companyId) {
       activityId = await fileActivity(
         db,
         actor,
-        { ...message, providerMessageId },
+        { ...message, providerMessageId, internetMessageId },
         match,
       );
       if (
@@ -933,4 +945,29 @@ function summary(stored: StoredConnection): MailboxSummary {
 function iso(value: Date | string | null) {
   if (!value) return null;
   return new Date(value).toISOString();
+}
+
+export async function sendOwnMail(
+  actor: UserActor,
+  message: { to: string; toName?: string | null; subject: string; body: string },
+  fetchImpl: typeof fetch = fetch,
+) {
+  const mailbox = await withActor(actor, (db) => readStored(db, actor));
+  if (!mailbox || mailbox.status !== "connected" || !mailbox.refreshTokenCipher) {
+    throw new CrmError("invalid_input", "Connect Microsoft in Inbox to send this by email.", 400);
+  }
+  let token: MicrosoftToken;
+  try {
+    token = await currentToken(mailbox, fetchImpl);
+    await sendGraphMail(token.accessToken, message, fetchImpl);
+  } catch (error) {
+    throw new CrmError(
+      "upstream_error",
+      sanitizeMicrosoftError(error instanceof Error ? error.message : "Could not send the email."),
+      502,
+    );
+  }
+  try {
+    await withActor(actor, (db) => storeToken(db, mailbox.id, token));
+  } catch {}
 }

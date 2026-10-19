@@ -448,6 +448,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     parameters: {
       type: "object",
       properties: {
+        mine: { type: "boolean", description: "Only the user's own tasks: assigned to them or unassigned. Use for \"my tasks\"." },
         view: { type: "string", enum: TASK_VIEWS.filter((view) => view !== "none") },
         query: { type: "string" },
         companyId: { type: "string" },
@@ -458,6 +459,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     },
     run: async (actor, args) => {
       const result = await listTasks(actor, {
+        mine: args.mine === true,
         view: oneOf(args.view, TASK_VIEWS) ?? "all",
         query: optionalStr(args.query),
         companyId: optionalStr(args.companyId),
