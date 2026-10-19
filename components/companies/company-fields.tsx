@@ -38,20 +38,6 @@ type CompanyFieldsProps = {
 const textareaClass =
   "flex min-h-24 w-full rounded-lg border border-line-strong bg-secondary px-3 py-2 text-[14px] leading-5 text-foreground outline-none transition-[border-color] duration-150 ease-power3-out placeholder:text-subtle focus-visible:border-ring aria-invalid:border-danger";
 
-export function emptyCompanyForm(ownerId = "unassigned"): CompanyFormValues {
-  return {
-    name: "",
-    domain: "",
-    website: "",
-    industry: "",
-    sizeCategory: "",
-    lifecycle: "lead",
-    ownerId,
-    source: "",
-    description: "",
-  };
-}
-
 export default function CompanyFields({
   idPrefix,
   values,

@@ -1,17 +1,9 @@
 "use client";
 
-import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import FilterMenu from "@/components/_common/filter-menu";
 import Button from "@/components/_ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/_ui/dialog";
 import { EntityChip, Monogram } from "@/components/beautifui/record-marks";
 import BulkActions, {
   type BulkExtraAction,
@@ -19,7 +11,7 @@ import BulkActions, {
   SelectAllCheckbox,
   SelectToggle,
 } from "@/components/crm/bulk-bar";
-import ContactEditor from "@/components/crm/contact-editor";
+import { ContactAdder } from "@/components/crm/inline-adders";
 import FindDetailButton, { bulkFindSummary, findDetailsInBatches } from "@/components/crm/find-detail";
 import { PresenceFilter, SortHeader, useListParams, type PresenceField } from "@/components/crm/list-controls";
 import { RememberList } from "@/components/crm/list-memory";
@@ -40,7 +32,7 @@ import { bulkAddTagAction, bulkRemoveTagAction } from "@/app/(crm)/tags";
 import { useBulkSelection } from "@/hooks/use-bulk-selection";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import type { Recipient } from "@/lib/crm/personalise";
-import type { Company, Contact, ContactPresence, ContactSort, Member, TagCount } from "@/lib/crm/types";
+import type { Contact, ContactPresence, ContactSort, TagCount } from "@/lib/crm/types";
 import { DEFAULT_CONTACT_SORT, defaultContactOrder, nextSort, type SortOrder } from "@/lib/sorting";
 import type { ContactLookups } from "@/lib/enrichment/contacts";
 import type { ContactField } from "@/lib/enrichment/providers";
@@ -88,8 +80,6 @@ export default function ContactsScreen({
   query,
   tag,
   tags,
-  companies,
-  members,
   mailboxConnected,
   enrichment,
   view,
@@ -101,8 +91,6 @@ export default function ContactsScreen({
   query: string;
   tag: string;
   tags: TagCount[];
-  companies: Company[];
-  members: Member[];
   mailboxConnected: boolean;
   enrichment: { available: EnrichmentAvailability; lookups: ContactLookups };
   view: ContactListView;
@@ -119,7 +107,6 @@ export default function ContactsScreen({
   const direction = (column: ContactSort) => (view.sort === column ? view.order : null);
   const filtering = view.has.length + view.missing.length > 0;
   const tagOptions = tagFilterOptions(tags, "contact", tag || undefined);
-  const [creating, setCreating] = useState(false);
   const finders: BulkExtraAction[] = (["email", "linkedin", "phone"] as ContactField[])
     .filter((field) => enrichment.available[field])
     .map((field) => ({
@@ -142,17 +129,6 @@ export default function ContactsScreen({
         return bulkFindSummary(results, field);
       },
     }));
-  const created = useCallback(
-    (contact: Contact | undefined) => {
-      if (!contact) {
-        setCreating(false);
-        router.refresh();
-        return;
-      }
-      router.push(contactHref(contact.id));
-    },
-    [router],
-  );
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -168,7 +144,11 @@ export default function ContactsScreen({
               size="sm"
               data-shortcut="add-record"
               title="Add contact (C then C)"
-              onClick={() => setCreating(true)}
+              onClick={() => {
+                const input = document.getElementById("inline-add-contact");
+                input?.scrollIntoView({ block: "center" });
+                input?.focus();
+              }}
             >
               Add contact
             </Button>
@@ -219,6 +199,7 @@ export default function ContactsScreen({
       <KeyboardList sequence className="flex min-h-0 flex-1 flex-col">
       <RecordList
         count={contacts.length}
+        footer={<ContactAdder />}
         empty={
           page > 1
             ? "No contacts on this page."
@@ -298,27 +279,6 @@ export default function ContactsScreen({
         total={total}
         noun={["person", "people"]}
       />
-      <Dialog open={creating} onOpenChange={setCreating}>
-        <DialogContent className="max-w-[560px]">
-          <DialogHeader>
-            <DialogTitle>New contact</DialogTitle>
-            <DialogDescription>
-              Add a person. Their record opens once they are saved.
-            </DialogDescription>
-          </DialogHeader>
-          {creating && (
-            <ContactEditor
-              editing={null}
-              companies={companies}
-              members={members}
-              onSaved={created}
-              onCancel={() => setCreating(false)}
-              formClassName="px-6"
-              footerClassName="px-6"
-            />
-          )}
-        </DialogContent>
-      </Dialog>
     </section>
   );
 }

@@ -278,6 +278,8 @@ A board is a row in `crm.pipelines` with `kind = 'board'` (the default pipeline 
 
 When an opportunity on a sales pipeline becomes won (on create or update), `afterWon` sets the company's lifecycle to `customer` with an audit event and adds a card to the first stage of every active board with `add_on_won` that doesn't already hold the company.
 
+Adding is inline. `components/crm/record-combobox.tsx` is a search box with a listbox in a popover anchored to the input; it searches through `searchRecords` in `record-picker.tsx` (contacts scoped to a company with `searchCompanyContactsAction`, or to people with any company when the company is still empty) and offers "Add … as a new company" or "Add … at <company>", which call `addCompanyInlineAction` and `addContactInlineAction`. Enter before results arrive waits for them and picks the exact match, else the first. `opportunity-composer.tsx` uses two of them as a card in a stage (focused without scrolling the page) or as a row under the list, and saves with `addOpportunityInlineAction`; `inline-adders.tsx` holds the Contacts and Companies rows. Opening an existing card or opportunity still uses the sheet.
+
 ## Workflows
 
 `crm.workflows` belongs to its owner (`owner_id`) and stores `definition` (`{version: 2, trigger, triggerPosition, nodes, edges}`, validated by `lib/workflows/definition.ts`: every edge leaves a real output of its source (`out`, or `true`/`false` for If, `each`/`done` for For each item), each output connects to at most one node, and the graph has no cycles), `trigger_type` for matching, `status` (`draft`, `active`, `paused`), `is_template`, and `next_run_at` for schedules. Members read their own workflows and shared templates; owners and admins read all.

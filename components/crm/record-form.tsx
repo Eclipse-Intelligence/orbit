@@ -49,15 +49,22 @@ export function RecordList({
   empty,
   children,
   count,
+  footer,
 }: {
   empty: string;
   children: ReactNode;
   count: number;
+  footer?: ReactNode;
 }) {
-  if (count === 0) {
+  if (count === 0 && !footer) {
     return <p className="caption-style text-subtle px-4 py-8">{empty}</p>;
   }
-  return <ul className="min-h-0 flex-1 overflow-auto pb-20">{children}</ul>;
+  return (
+    <ul className="min-h-0 flex-1 overflow-auto pb-20">
+      {count === 0 ? <li className="caption-style text-subtle px-4 py-8">{empty}</li> : children}
+      {footer && <li>{footer}</li>}
+    </ul>
+  );
 }
 
 export function RecordRow({
