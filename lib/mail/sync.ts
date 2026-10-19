@@ -46,10 +46,22 @@ export function mailStorageLimitBytes() {
   return megabytes * 1024 * 1024;
 }
 
-async function storageFull(db: Db) {
-  const result = await db.query<{ size: string }>("select pg_database_size(current_database())::text as size");
-  return Number(result.rows[0]?.size ?? 0) >= mailStorageLimitBytes();
+export function mailHardStopBytes() {
+  const raw = Number(process.env.MAIL_HARD_STOP_MB);
+  return Number.isFinite(raw) && raw > 0 ? raw * 1024 * 1024 : mailStorageLimitBytes() * 1.18;
 }
+
+async function databaseBytes(db: Db) {
+  const result = await db.query<{ size: string }>("select pg_database_size(current_database())::text as size");
+  return Number(result.rows[0]?.size ?? 0);
+}
+
+async function storageFull(db: Db) {
+  return (await databaseBytes(db)) >= mailStorageLimitBytes();
+}
+
+export const MAIL_HARD_STOP =
+  "Mail sync is paused because the database is nearly full. Upgrade Supabase to Pro and raise MAIL_STORAGE_LIMIT_MB to keep syncing.";
 
 async function loadSources(actor: UserActor): Promise<Source[]> {
   return withActor(actor, async (db) => {
@@ -338,6 +350,14 @@ export async function syncMail(
   const deadline = options.deadline ?? Date.now() + (options.budgetMs ?? 20_000);
   const report: MailSyncReport = { sources: 0, stored: 0, removed: 0, backfilling: 0, paused: false, errors: [] };
   const sources = await loadSources(actor);
+  const hardStop = await withActor(actor, async (db) => (await databaseBytes(db)) >= mailHardStopBytes());
+  if (hardStop) {
+    report.paused = true;
+    await withActor(actor, (db) =>
+      db.query("update crm.mail_sources set last_error = $3 where user_id = $1 and workspace_id = $2", [actor.userId, actor.workspaceId, MAIL_HARD_STOP]),
+    );
+    return report;
+  }
   for (const [index, source] of sources.entries()) {
     if (Date.now() >= deadline) break;
     if (!(await claim(actor, source.id))) continue;

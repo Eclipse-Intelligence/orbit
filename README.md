@@ -87,7 +87,7 @@ Set `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, and the redirect URI regis
 
 Orbit keeps its own copy of every connected mailbox: the Inbox account and each extra Microsoft account with Add mail (Settings › Calendars). It reads every folder except Junk and Outbox, including Sent, Drafts, Archive, Deleted Items and your own folders, with the full message, and fills in the whole history, newest first. Microsoft's change tracking then keeps each folder up to date: new mail, read and flag changes, moves and deletions. Inbox shows how far each account has got. The mail is private to you, and the assistant can search all of it (`search_email`) and read whole threads (`get_email_thread`).
 
-The history fills in through `/api/cron/mail` (up to four minutes a run), plus a short catch-up for new mail on every page load and in the scheduled sync. Run `/api/cron/mail` every couple of minutes until the history is in. The backfill stops when the database reaches `MAIL_STORAGE_LIMIT_MB` (400 by default, which keeps a Free Supabase project under its 500 MB read-only limit); new mail keeps coming in. On a Pro project, raise it, for example to 50000.
+The history fills in through `/api/cron/mail` (up to four minutes a run), plus a short catch-up for new mail on every page load and in the scheduled sync. Run `/api/cron/mail` every couple of minutes until the history is in. The backfill stops when the database reaches `MAIL_STORAGE_LIMIT_MB` (400 by default); new mail keeps coming in until `MAIL_HARD_STOP_MB` (472 by default), where all mail sync stops and Inbox says so. Together they keep a Free Supabase project under its 500 MB read-only limit. On a Pro project, raise it, for example to 50000.
 
 ### Email from anywhere
 
@@ -543,6 +543,7 @@ Every variable Orbit reads. `.env.example` lists them with comments (aliases suc
 | `SITE_URL` (or `NEXT_PUBLIC_SITE_URL`) | Links in emails, ClickUp, Linear and invites; webhooks and Teams subscriptions | The https origin, with or without `https://`. |
 | `CRON_SECRET` | `/api/cron/sync`, `/api/cron/workflows`, `/api/cron/mail`, `/api/assistant/probe` | Bearer secret. |
 | `MAIL_STORAGE_LIMIT_MB` | Mail mirror | Optional. The database size at which the mail backfill pauses (default 400). Raise it on a Pro Supabase project. |
+| `MAIL_HARD_STOP_MB` | Mail mirror | Optional. The database size at which all mail sync stops, new mail included (default 18% above `MAIL_STORAGE_LIMIT_MB`, so 472 on the defaults). |
 | `NEXT_PUBLIC_TIMEZONE` | Optional | Default `Europe/London`. |
 | `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, `MICROSOFT_TENANT`, `MICROSOFT_REDIRECT_URI` | Inbox, calendar, invites, Teams | See Microsoft inbox. |
 | `LLM_API_KEY`, `LLM_API_BASE_URL`, `LLM_MODEL` | Assistant, call summaries, activity pad tidy, workflow AI steps | Default gateway `https://api.llmapi.ai/v1`, default model `claude-haiku-5-5` (the assistant and workflow steps pick their own). |

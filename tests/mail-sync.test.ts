@@ -6,7 +6,7 @@ import type { UserActor } from "@/lib/crm/types";
 import { encryptSecret } from "@/lib/crypto/secret";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { getMailThread, mailSyncStatus, searchMail } from "@/lib/mail/store";
-import { syncMail } from "@/lib/mail/sync";
+import { MAIL_HARD_STOP, syncMail } from "@/lib/mail/sync";
 import { htmlToText } from "@/lib/mail/text";
 import { createUser, resetDatabase } from "./helpers";
 
@@ -87,6 +87,7 @@ describe("mail mirror", () => {
 
   afterEach(() => {
     delete process.env.MAIL_STORAGE_LIMIT_MB;
+    delete process.env.MAIL_HARD_STOP_MB;
   });
 
   after(async () => {
@@ -170,6 +171,7 @@ describe("mail mirror", () => {
     const admin = getAdminPool();
     await admin.query("update crm.mail_folders set sync_state = 'pending', sync_link = null where role = 'sent'");
     process.env.MAIL_STORAGE_LIMIT_MB = "1";
+    process.env.MAIL_HARD_STOP_MB = "100000";
     const capped = mailbox({
       "start:f-sent": {
         value: [message("s-2", { subject: "Proposal", receivedDateTime: "2026-09-01T09:00:00Z" })],
@@ -192,6 +194,13 @@ describe("mail mirror", () => {
       ],
     );
     assert.match(folders.rows[1].last_error ?? "", /MAIL_STORAGE_LIMIT_MB/);
+
+    process.env.MAIL_HARD_STOP_MB = "1";
+    const stopped = mailbox({});
+    const halted = await syncMail(owner, { budgetMs: 30_000, fetchImpl: stopped.fetchImpl });
+    assert.equal(halted.paused, true);
+    assert.deepEqual(stopped.calls, []);
+    assert.equal((await mailSyncStatus(owner))[0].lastError, MAIL_HARD_STOP);
 
     const stranger = await createUser("stranger@orbit.test", "Someone Else");
     assert.deepEqual(await searchMail(stranger, { query: "renewal" }), []);
