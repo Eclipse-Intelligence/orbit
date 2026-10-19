@@ -18,6 +18,7 @@ const GROUPS: ShortcutGroup[] = [
   "Tasks",
   "Opportunities",
   "Calendar",
+  "Mail",
   "Inbox",
 ];
 

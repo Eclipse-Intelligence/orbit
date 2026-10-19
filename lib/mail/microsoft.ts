@@ -89,12 +89,21 @@ function graphUrl(url: string) {
   return parsed.toString();
 }
 
-async function graphJson<T>(url: string, token: string, fetchImpl: typeof fetch, prefer?: string): Promise<T> {
+async function graphJson<T>(
+  url: string,
+  token: string,
+  fetchImpl: typeof fetch,
+  prefer?: string,
+  write?: { method: "PATCH" | "POST"; body: unknown },
+): Promise<T> {
   const response = await fetchImpl(graphUrl(url), {
+    method: write?.method ?? "GET",
     headers: {
       authorization: `Bearer ${token}`,
       prefer: [prefer, 'IdType="ImmutableId"'].filter(Boolean).join(", "),
+      ...(write ? { "content-type": "application/json" } : {}),
     },
+    body: write ? JSON.stringify(write.body) : undefined,
     signal: AbortSignal.timeout(30_000),
   });
   if (response.ok) return (await response.json()) as T;
@@ -104,7 +113,12 @@ async function graphJson<T>(url: string, token: string, fetchImpl: typeof fetch,
   if (response.status === 401 || code === "InvalidAuthenticationToken") {
     throw new GraphMailError("Microsoft rejected the mailbox connection. Connect it again.", 401);
   }
-  if (response.status === 403) throw new GraphMailError("Microsoft hasn't allowed Orbit to read this mailbox. Connect it again.", 403);
+  if (response.status === 403) {
+    throw new GraphMailError(
+      write ? "Microsoft hasn't allowed Orbit to change this mailbox. Connect it again." : "Microsoft hasn't allowed Orbit to read this mailbox. Connect it again.",
+      403,
+    );
+  }
   throw new GraphMailError((body.error?.message || `Microsoft answered ${response.status}.`).slice(0, 240), response.status);
 }
 
@@ -221,4 +235,24 @@ export async function fetchMicrosoftDelta(url: string, token: string, fetchImpl:
     nextLink: page["@odata.nextLink"] ? graphUrl(page["@odata.nextLink"]) : null,
     deltaLink: page["@odata.deltaLink"] ? graphUrl(page["@odata.deltaLink"]) : null,
   };
+}
+
+export type MicrosoftMessageChange = { isRead?: boolean; flagged?: boolean };
+
+export async function updateMicrosoftMessage(token: string, messageId: string, change: MicrosoftMessageChange, fetchImpl: typeof fetch = fetch) {
+  const body: Record<string, unknown> = {};
+  if (change.isRead !== undefined) body.isRead = change.isRead;
+  if (change.flagged !== undefined) body.flag = { flagStatus: change.flagged ? "flagged" : "notFlagged" };
+  await graphJson<unknown>(`${GRAPH}/me/messages/${encodeURIComponent(messageId)}?$select=id`, token, fetchImpl, undefined, { method: "PATCH", body });
+}
+
+export async function moveMicrosoftMessage(token: string, messageId: string, destination: string, fetchImpl: typeof fetch = fetch) {
+  const moved = await graphJson<{ id?: string; parentFolderId?: string }>(
+    `${GRAPH}/me/messages/${encodeURIComponent(messageId)}/move`,
+    token,
+    fetchImpl,
+    undefined,
+    { method: "POST", body: { destinationId: destination } },
+  );
+  return { id: moved.id ?? messageId, folderId: moved.parentFolderId ?? null };
 }
