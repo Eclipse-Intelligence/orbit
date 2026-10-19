@@ -139,6 +139,8 @@ describe("company from a work email", () => {
       company: { id: known.id, name: "Known Ltd" },
     });
     assert.deepEqual(await suggestCompanyForEmail(owner, "sam@gmail.com", { env: ENV }), { kind: "none" });
+    await createCompany(owner, { name: "Registry", domain: "co.uk" });
+    assert.equal((await suggestCompanyForEmail(owner, "sam@acme.co.uk", { env: {} })).kind, "none");
     const net = fake(() => ({ body: { brand: { ...BRAND, domain: "newco.test", title: "NewCo" } } }));
     const suggestion = await suggestCompanyForEmail(owner, "Ana@NewCo.test", { env: ENV, fetchImpl: net.fetchImpl });
     assert.deepEqual(net.calls[0].body, { type: "by_email", email: "ana@newco.test", tags: ["orbit"] });

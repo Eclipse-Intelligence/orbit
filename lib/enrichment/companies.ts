@@ -315,6 +315,14 @@ export type CompanySuggestion =
   | { kind: "new"; name: string; domain: string; logoUrl: string | null; description: string | null }
   | { kind: "none" };
 
+const SECOND_LEVEL = /^(co|com|org|net|ac|gov|ltd|plc|me|sch|nhs|police|edu)\.[a-z]{2}$/;
+
+function parentDomain(domain: string) {
+  const labels = domain.split(".");
+  if (labels.length !== 3 || SECOND_LEVEL.test(labels.slice(1).join("."))) return domain;
+  return labels.slice(1).join(".");
+}
+
 export async function suggestCompanyForEmail(actor: UserActor, email: unknown, options: Options = {}): Promise<CompanySuggestion> {
   const address = typeof email === "string" ? email.trim().toLowerCase() : "";
   const domain = /^[^\s@]+@([^\s@]+\.[^\s@]+)$/.exec(address)?.[1] ?? null;
@@ -324,7 +332,7 @@ export async function suggestCompanyForEmail(actor: UserActor, email: unknown, o
       `select id, name from crm.companies
        where workspace_id = $1 and archived_at is null and (domain = $2 or domain = $3)
        order by created_at limit 1`,
-      [actor.workspaceId, domain, domain.replace(/^[^.]+\.(?=[^.]+\.[^.]+$)/, "")],
+      [actor.workspaceId, domain, parentDomain(domain)],
     );
     return result.rows[0] ?? null;
   });

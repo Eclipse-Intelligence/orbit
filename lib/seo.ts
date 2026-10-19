@@ -5,7 +5,7 @@ export const SITE_NAME = "Orbit";
 export const SITE_URL = siteOrigin() ?? "https://example.com";
 export const SITE_DESCRIPTION =
   "A focused CRM for companies, relationships, and tasks.";
-export const DEFAULT_OG_IMAGE = "/opengraph-image.jpg";
+export const DEFAULT_OG_IMAGE = "/logo.png";
 
 export function absoluteUrl(path: string) {
   return new URL(path, SITE_URL).toString();
@@ -65,7 +65,7 @@ export function pageMetadata({
       images: [{ url: absoluteUrl(image) }],
     },
     twitter: {
-      card: "summary_large_image",
+      card: "summary",
       title,
       description,
       images: [absoluteUrl(image)],

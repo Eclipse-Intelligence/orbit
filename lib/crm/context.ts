@@ -44,9 +44,7 @@ export async function withActor<T>(
   } catch (error) {
     try {
       await client.query("rollback");
-    } catch {
-      // The connection is discarded by release after a failed transaction.
-    }
+    } catch {}
     throw error;
   } finally {
     client.release();
