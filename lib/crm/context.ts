@@ -1,6 +1,7 @@
 import { after } from "next/server";
 import type { Db } from "@/lib/db/pool";
 import { getPool } from "@/lib/db/pool";
+import { takeWebhooksQueued } from "@/lib/crm/webhook-queue";
 import { deliverDueWebhooks } from "@/lib/crm/webhooks";
 import type { Actor } from "@/lib/crm/types";
 
@@ -21,27 +22,21 @@ export async function withActor<T>(
 ): Promise<T> {
   const client = await getPool().connect();
   try {
-    await client.query("begin");
-    if (actor.type === "user") {
-      await client.query("select set_config('request.jwt.claims', $1, true)", [
-        JSON.stringify({ sub: actor.userId, role: "authenticated" }),
-      ]);
-      await client.query("set local role authenticated");
-    } else {
-      await client.query("select set_config('app.workspace_id', $1, true)", [
-        actor.workspaceId,
-      ]);
-      await client.query("select set_config('app.agent_id', $1, true)", [
-        actor.agentId,
-      ]);
-      await client.query("select set_config('app.actor_type', 'agent', true)");
-      await client.query("set local role crm_agent");
-    }
+    await client.query(
+      actor.type === "user"
+        ? `begin; select set_config('request.jwt.claims', ${client.escapeLiteral(
+            JSON.stringify({ sub: actor.userId, role: "authenticated" }),
+          )}, true); set local role authenticated`
+        : `begin; select set_config('app.workspace_id', ${client.escapeLiteral(actor.workspaceId)}, true), set_config('app.agent_id', ${client.escapeLiteral(
+            actor.agentId,
+          )}, true), set_config('app.actor_type', 'agent', true); set local role crm_agent`,
+    );
     const result = await fn(client);
     await client.query("commit");
-    scheduleWebhooks();
+    if (takeWebhooksQueued(client)) scheduleWebhooks();
     return result;
   } catch (error) {
+    takeWebhooksQueued(client);
     try {
       await client.query("rollback");
     } catch {}

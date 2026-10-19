@@ -3,6 +3,7 @@ import type { Db } from "@/lib/db/pool";
 import { getAdminPool } from "@/lib/db/pool";
 import { CrmError } from "@/lib/crm/errors";
 import { assertScope } from "@/lib/crm/scopes";
+import { markWebhooksQueued } from "@/lib/crm/webhook-queue";
 import type { Actor } from "@/lib/crm/types";
 
 function iso(value: Date | string | null) {
@@ -81,7 +82,7 @@ export async function enqueueWebhookDeliveries(
   eventType: string,
   payload: Record<string, unknown>,
 ) {
-  await db.query(
+  const inserted = await db.query(
     `insert into crm.webhook_deliveries (
       workspace_id, endpoint_id, event_id, event_type, payload
     )
@@ -93,6 +94,7 @@ export async function enqueueWebhookDeliveries(
       and ($3 = any(endpoint.events) or '*' = any(endpoint.events))`,
     [workspaceId, eventId, eventType, JSON.stringify(payload)],
   );
+  if ((inserted.rowCount ?? 0) > 0) markWebhooksQueued(db);
 }
 
 export async function createWebhook(
