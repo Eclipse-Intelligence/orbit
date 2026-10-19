@@ -252,6 +252,12 @@ export async function handleCronRequest(
   }
   const report = await run();
   try {
+    const { deliverDueWebhooks } = await import("@/lib/crm/webhooks");
+    await deliverDueWebhooks();
+  } catch (error) {
+    console.error("Webhook retry failed", error);
+  }
+  try {
     const { sweepEmailAttachments } = await import("@/lib/crm/email-attachments");
     await sweepEmailAttachments();
   } catch (error) {

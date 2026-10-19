@@ -35,7 +35,7 @@ export async function proxy(request: NextRequest) {
           getAll() {
             return request.cookies.getAll();
           },
-          setAll(cookiesToSet) {
+          setAll(cookiesToSet, headers) {
             for (const { name, value } of cookiesToSet) {
               request.cookies.set(name, value);
             }
@@ -43,12 +43,15 @@ export async function proxy(request: NextRequest) {
             for (const { name, value, options } of cookiesToSet) {
               response.cookies.set(name, value, options);
             }
+            for (const [key, value] of Object.entries(headers ?? {})) {
+              response.headers.set(key, value);
+            }
           },
         },
       },
     );
-    const { data } = await supabase.auth.getUser();
-    if (!data.user) {
+    const { data } = await supabase.auth.getClaims();
+    if (!data?.claims.sub) {
       const url = request.nextUrl.clone();
       url.pathname = "/login";
       return NextResponse.redirect(url);

@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { cookies } from "next/headers";
 import { query } from "@/lib/db/pool";
 import {
@@ -22,8 +23,8 @@ type MembershipRow = {
 async function currentUserId() {
   if (supabaseConfigured()) {
     const supabase = await createSupabaseServer();
-    const { data } = await supabase.auth.getUser();
-    return data.user?.id ?? null;
+    const { data } = await supabase.auth.getClaims();
+    return typeof data?.claims.sub === "string" ? data.claims.sub : null;
   }
   const cookieStore = await cookies();
   return readSession(cookieStore.get(SESSION_COOKIE)?.value);
@@ -45,7 +46,7 @@ export async function verifyLocalPassword(email: string, password: string) {
   return result.rows[0]?.user_id ?? null;
 }
 
-export async function getUserActor(): Promise<UserActor | null> {
+export const getUserActor = cache(async (): Promise<UserActor | null> => {
   const userId = await currentUserId();
   if (!userId) return null;
 
@@ -67,4 +68,4 @@ export async function getUserActor(): Promise<UserActor | null> {
     role: membership.role,
     scopes: scopesForRole(membership.role),
   };
-}
+});

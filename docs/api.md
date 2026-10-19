@@ -156,4 +156,4 @@ Agent tokens see every task in the workspace; people in the app only see tasks t
 
 `GET /api/v1/webhooks` lists endpoints without the secret. `DELETE /api/v1/webhooks/:id` archives one. `GET /api/v1/webhooks/deliveries` lists recent attempts.
 
-A delivery is `POST` JSON with headers `X-CRM-Event`, `X-CRM-Event-Id`, `X-CRM-Timestamp`, and `X-CRM-Signature: v1=<hex>`. The signature is HMAC SHA-256 of `{timestamp}.{body}` using the endpoint secret. A non-2xx response is retried for about three hours.
+A delivery is `POST` JSON with headers `X-CRM-Event`, `X-CRM-Event-Id`, `X-CRM-Timestamp`, and `X-CRM-Signature: v1=<hex>`. The signature is HMAC SHA-256 of `{timestamp}.{body}` using the endpoint secret. Deliveries go out right after the change that queued them. A non-2xx response is retried for about three hours; retries run on the next delivery or the scheduled sync (every 10 minutes), whichever comes first.
