@@ -253,7 +253,7 @@ export default function BulkEmailDialog({
                     {recipient.name}
                   </span>
                   <span className="caption-style text-subtle shrink-0">
-                    Skipped — {reason}
+                    Skipped: {reason}
                   </span>
                 </li>
               ))}

@@ -26,7 +26,7 @@ Optional `Idempotency-Key` header (printable ASCII, up to 200 characters). Reuse
 
 `GET /api/v1/companies`
 
-Query: `q`, `lifecycle` (`lead`, `prospect`, `customer`, `churned`), `owner` (a user id or `unassigned`), `tag` (one tag; matching ignores case and extra spaces), `sort` (`name`, `domain`, `updated`, `created`), `order` (`asc` or `desc`), `limit` (1–100, default 50), `offset` (max 10000), `include_archived=true`.
+Query: `q`, `lifecycle` (`lead`, `prospect`, `customer`, `churned`), `owner` (a user id or `unassigned`), `tag` (one tag; matching ignores case and extra spaces), `sort` (`name`, `domain`, `owner`, `interaction`, `strength`, `updated`, `created`; default `name`), `order` (`asc` or `desc`; each sort has its own default), `has` and `missing` (comma-separated `domain`, `contacts`, `interactions`), `limit` (1–100, default 50), `offset` (max 10000), `include_archived=true`.
 
 Response:
 
@@ -80,7 +80,7 @@ Codes include `unauthorized` (401), `forbidden` (403), `not_found` (404), `inval
 
 ## Contacts
 
-`GET /api/v1/contacts` with `q`, `company_id`, `owner`, `tag`, `limit`, `offset`, `include_archived=true`.
+`GET /api/v1/contacts` with `q`, `company_id`, `owner`, `tag`, `sort` (`name`, `company`, `updated`, `created`; default `name`), `order` (`asc` or `desc`), `has` and `missing` (comma-separated `email`, `phone`, `linkedin`, `company`), `limit`, `offset`, `include_archived=true`.
 
 Contact fields: `companyId`, `firstName`, `lastName`, `email`, `phone`, `jobTitle`, `linkedinUrl`, `ownerId`, `source`, `sourceReference`, `notes`, `tags`. Tags follow the rules in [Tags](#tags).
 
@@ -92,9 +92,9 @@ Contact fields: `companyId`, `firstName`, `lastName`, `email`, `phone`, `jobTitl
 
 ## Opportunities
 
-`GET /api/v1/opportunities` with `q`, `company_id`, `status` (`open`, `won`, `lost`).
+`GET /api/v1/opportunities` with `q`, `company_id`, `pipeline_id` (a board id, or the default pipeline's id), `status` (`open`, `won`, `lost`). Without `pipeline_id` it returns opportunities and board cards together; each row has `pipelineId`, `pipelineName` and `pipelineKind` (`sales` or `board`).
 
-`POST /api/v1/opportunities` requires `companyId` and `name`. Omitting `stageId` uses the first stage of the default pipeline. A won or lost stage sets `status`. Setting `status` to `won` or `lost` moves the opportunity to that stage. Value is a non-negative amount with up to two decimal places. Currency is a three-letter code and defaults to `GBP`.
+`POST /api/v1/opportunities` requires `companyId` and, on the default pipeline, `name`. `pipelineId` adds a card to a board instead: the name defaults to the company's, a company can be on a board once (409 otherwise), and board stages have no won or lost. Omitting `stageId` uses the first stage of the pipeline. Marking a sales opportunity won also makes the company a customer and adds it to boards set to Add companies when a deal is won. A won or lost stage sets `status`. Setting `status` to `won` or `lost` moves the opportunity to that stage. Value is a non-negative amount with up to two decimal places. Currency is a three-letter code and defaults to `GBP`.
 
 `GET /api/v1/pipeline` returns the default pipeline and its stages.
 
@@ -114,7 +114,7 @@ Every activity includes `actorUserId`, `actorAgentId`, and `actorName`: the full
 
 `GET /api/v1/actions?view=` returns the same tasks, up to 100, and defaults to `today` when `view` is missing or not recognised. `view=all` returns every open task in the order above. `view=none` returns companies that have no open task.
 
-`POST /api/v1/tasks` creates one. A `dueAt` without a `Z` or offset is read as London time, and `today` and `overdue` are cut at midnight London time. `PATCH /api/v1/tasks/:id` updates it. `completed: true` sets `completed_at` without moving an existing completion time. `completed: false` reopens it.
+Agent tokens see every task in the workspace; people in the app only see tasks they own or created unless they are an owner or admin. `POST /api/v1/tasks` creates one (unowned unless `ownerId` is given). A `dueAt` without a `Z` or offset is read as London time, and `today` and `overdue` are cut at midnight London time. `PATCH /api/v1/tasks/:id` updates it. `completed: true` sets `completed_at` without moving an existing completion time. `completed: false` reopens it.
 
 `POST /api/v1/tasks/:id/complete` marks it complete. `DELETE /api/v1/tasks/:id` archives it. Each task also carries `clickupTaskId`, `clickupListId`, `clickupUrl`, and `clickupError` (null when it is not linked to ClickUp). Changes made through the API reach ClickUp on the next sync.
 

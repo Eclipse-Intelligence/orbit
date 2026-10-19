@@ -165,6 +165,7 @@ export const contactWriteSchema = z
 export const opportunityWriteSchema = z
   .object({
     companyId: z.uuid().optional(),
+    pipelineId: z.uuid().nullable().optional(),
     primaryContactId: z.uuid().nullable().optional(),
     stageId: z.uuid().nullable().optional(),
     name: z.string().optional(),

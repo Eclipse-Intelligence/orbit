@@ -37,7 +37,7 @@ export const BOOKING_LIMITS = {
   bookingsPerEmailPerDay: 3,
 };
 
-export const SLOT_TAKEN = "That time was just taken — pick another.";
+export const SLOT_TAKEN = "That time was just taken. Pick another.";
 export const BOOKING_UNAVAILABLE = "Booking is temporarily unavailable. Please try again later.";
 export const PAGE_MISSING = "This booking page isn't available.";
 
