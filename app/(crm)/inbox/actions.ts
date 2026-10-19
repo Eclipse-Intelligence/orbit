@@ -22,7 +22,9 @@ import {
 import { enableGranolaWebhook, syncGranolaFor } from "@/lib/crm/granola";
 import {
   disconnectMailbox,
+  listSenders,
   sendContactEmail,
+  type Sender,
   syncMailbox,
 } from "@/lib/crm/inbox";
 import { ensureTranscriptSubscription, syncTeamsTranscripts } from "@/lib/crm/teams-transcripts";
@@ -225,6 +227,12 @@ export async function prepareAttachmentAction(file: { name: string; size: number
   }
 }
 
+export async function listSendersAction(): Promise<Sender[]> {
+  const user = await getUserActor();
+  if (!user) return [];
+  return listSenders(user);
+}
+
 export async function discardAttachmentsAction(ids: string[]) {
   const user = await getUserActor();
   if (!user) return;
@@ -237,12 +245,13 @@ export async function sendContactEmailAction(
   body: string,
   attachments: string[] = [],
   keepAttachments = false,
+  from: string | null = null,
 ) {
   const user = await getUserActor();
   if (!user) return { error: "Sign in to send mail." };
   let warning: string | null;
   try {
-    ({ warning } = await sendContactEmail(user, contactId, { subject, body, attachments, keepAttachments }));
+    ({ warning } = await sendContactEmail(user, contactId, { subject, body, attachments, keepAttachments, from }));
   } catch (error) {
     return actionError(error);
   }

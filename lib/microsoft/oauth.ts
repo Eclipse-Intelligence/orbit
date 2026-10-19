@@ -3,11 +3,16 @@ import { appSecret } from "@/lib/auth/config";
 
 export const MICROSOFT_SCOPES = "offline_access Mail.ReadWrite Mail.Send User.Read Calendars.ReadWrite";
 export const CALENDAR_ACCOUNT_SCOPES = "openid offline_access User.Read Calendars.Read";
+export const SEND_ACCOUNT_SCOPES = "openid offline_access User.Read Calendars.Read Mail.Send Mail.ReadWrite";
 export const ORGANISATION_BLOCKED =
   "This Microsoft account's organisation doesn't allow Orbit yet — in Entra, set Orbit's Supported account types to include other organisations (and personal accounts if needed), or ask that organisation's admin to consent.";
 export const SIGN_IN_CANCELLED = "Microsoft sign-in was cancelled. Try again when you're ready.";
 
-export type MicrosoftPurpose = "mailbox" | "calendar_account";
+export type MicrosoftPurpose = "mailbox" | "calendar_account" | "send_account";
+
+export function microsoftPurpose(value: unknown): MicrosoftPurpose {
+  return value === "calendar_account" || value === "send_account" ? value : "mailbox";
+}
 
 const STATE_MAX_AGE_MS = 10 * 60 * 1000;
 
@@ -97,8 +102,7 @@ export function readMicrosoftState(
     if (!parsed.userId || !parsed.workspaceId || typeof parsed.exp !== "number")
       return null;
     if (parsed.exp < now) return null;
-    const purpose: MicrosoftPurpose =
-      parsed.purpose === "calendar_account" ? "calendar_account" : "mailbox";
+    const purpose = microsoftPurpose(parsed.purpose);
     return { userId: parsed.userId, workspaceId: parsed.workspaceId, purpose };
   } catch {
     return null;
@@ -106,7 +110,9 @@ export function readMicrosoftState(
 }
 
 export function scopesFor(purpose: MicrosoftPurpose) {
-  return purpose === "calendar_account" ? CALENDAR_ACCOUNT_SCOPES : MICROSOFT_SCOPES;
+  if (purpose === "calendar_account") return CALENDAR_ACCOUNT_SCOPES;
+  if (purpose === "send_account") return SEND_ACCOUNT_SCOPES;
+  return MICROSOFT_SCOPES;
 }
 
 export function microsoftAuthorizationUrl(
@@ -159,6 +165,12 @@ export function grantsCalendar(scope: string | null | undefined) {
   const scopes = grantedScopes(scope);
   if (!scopes) return null;
   return scopes.some((item) => item === "calendars.read" || item === "calendars.readwrite");
+}
+
+export function grantsMailSend(scope: string | null | undefined) {
+  const scopes = grantedScopes(scope);
+  if (!scopes) return null;
+  return scopes.includes("mail.send");
 }
 
 export function grantsCalendarWrite(scope: string | null | undefined) {

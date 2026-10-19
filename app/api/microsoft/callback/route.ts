@@ -30,7 +30,7 @@ export async function GET(request: Request) {
   const state = readMicrosoftState(cookieStore.get(STATE_COOKIE)?.value);
   const returned = url.searchParams.get("state");
   const responseState = cookieStore.get(STATE_COOKIE)?.value;
-  const forCalendar = state?.purpose === "calendar_account";
+  const forCalendar = state?.purpose === "calendar_account" || state?.purpose === "send_account";
   const target = new URL(forCalendar ? SETTINGS_PATHS.calendars : "/inbox", origin);
 
   function finish(error?: string, connected?: string) {
@@ -73,7 +73,7 @@ export async function GET(request: Request) {
     if (!code) return finish("Microsoft did not return a connection code.");
     let account: Awaited<ReturnType<typeof connectCalendarAccount>>;
     try {
-      account = await connectCalendarAccount(user, { origin, code });
+      account = await connectCalendarAccount(user, { origin, code, purpose: state.purpose === "send_account" ? "send_account" : "calendar_account" });
     } catch (error) {
       return finish(
         error instanceof CrmError

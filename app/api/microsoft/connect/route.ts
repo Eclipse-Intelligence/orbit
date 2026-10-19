@@ -5,6 +5,7 @@ import { canonicalEmail } from "@/lib/crm/normalize";
 import {
   microsoftAuthorizationUrl,
   microsoftConfigured,
+  microsoftPurpose,
   microsoftRedirectOrigin,
   originFrom,
   signMicrosoftState,
@@ -17,7 +18,7 @@ export const dynamic = "force-dynamic";
 const STATE_COOKIE = "crm_ms_oauth";
 
 function connectReturnPath(purpose: MicrosoftPurpose) {
-  return purpose === "calendar_account" ? SETTINGS_PATHS.calendars : "/inbox";
+  return purpose === "mailbox" ? "/inbox" : SETTINGS_PATHS.calendars;
 }
 
 export async function GET(request: Request) {
@@ -30,8 +31,7 @@ export async function GET(request: Request) {
     moved.searchParams.set("hop", "1");
     return NextResponse.redirect(moved);
   }
-  const purpose: MicrosoftPurpose =
-    url.searchParams.get("purpose") === "calendar_account" ? "calendar_account" : "mailbox";
+  const purpose: MicrosoftPurpose = microsoftPurpose(url.searchParams.get("purpose"));
   const user = await getUserActor();
   const back = new URL(connectReturnPath(purpose), origin);
   if (!user) {
@@ -39,7 +39,7 @@ export async function GET(request: Request) {
   }
   if (!microsoftConfigured()) {
     back.searchParams.set(
-      purpose === "calendar_account" ? "calendar_error" : "error",
+      purpose === "mailbox" ? "error" : "calendar_error",
       "Add the Microsoft app credentials before connecting.",
     );
     return NextResponse.redirect(back);

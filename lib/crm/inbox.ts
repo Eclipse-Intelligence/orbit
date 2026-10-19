@@ -9,6 +9,7 @@ import {
   isRecent,
 } from "@/lib/crm/communications";
 import { CrmError } from "@/lib/crm/errors";
+import { isUuid } from "@/lib/crm/mutate";
 import { canonicalDomain, canonicalEmail } from "@/lib/crm/normalize";
 import { hasScope } from "@/lib/crm/scopes";
 import { createTaskInDb } from "@/lib/crm/tasks";
@@ -226,10 +227,84 @@ export async function saveMailbox(
   });
 }
 
+export type Sender = { id: string; email: string; label: string; primary: boolean };
+
+export const PRIMARY_SENDER = "primary";
+
+type ResolvedSender = { email: string; tokens: StoredTokens; save: (db: Db, token: MicrosoftToken) => Promise<void> };
+
+export async function listSenders(actor: UserActor): Promise<Sender[]> {
+  return withActor(actor, async (db) => {
+    const primary = await readStored(db, actor);
+    const accounts = await db.query<{ id: string; email: string; display_name: string | null }>(
+      `select id, email, display_name from crm.calendar_accounts
+       where user_id = $1 and workspace_id = $2 and provider = 'microsoft' and status = 'connected' and can_send and email is not null
+       order by created_at, email`,
+      [actor.userId, actor.workspaceId],
+    );
+    return [
+      ...(primary && primary.status === "connected" && primary.refreshTokenCipher
+        ? [{ id: PRIMARY_SENDER, email: primary.email, label: primary.email, primary: true }]
+        : []),
+      ...accounts.rows.map((row) => ({ id: row.id, email: row.email, label: row.email, primary: false })),
+    ];
+  });
+}
+
+async function resolveSender(db: Db, actor: UserActor, from: string | null | undefined): Promise<ResolvedSender> {
+  if (!from || from === PRIMARY_SENDER) {
+    const mailbox = await readStored(db, actor);
+    if (!mailbox || mailbox.status !== "connected" || !mailbox.refreshTokenCipher) {
+      throw new CrmError("invalid_input", "Connect Microsoft in Inbox before sending.", 400);
+    }
+    return { email: mailbox.email, tokens: mailbox, save: (inner, token) => storeToken(inner, mailbox.id, token) };
+  }
+  const found = isUuid(from)
+    ? await db.query<{
+        id: string;
+        email: string;
+        can_send: boolean;
+        status: string;
+        refresh_token: string | null;
+        access_token: string | null;
+        access_token_expires_at: Date | string | null;
+      }>(
+        `select id, email, can_send, status, refresh_token, access_token, access_token_expires_at
+         from crm.calendar_accounts
+         where id = $1 and user_id = $2 and workspace_id = $3 and provider = 'microsoft'`,
+        [from, actor.userId, actor.workspaceId],
+      )
+    : { rows: [] };
+  const account = found.rows[0];
+  if (!account) throw new CrmError("not_found", "That email account isn't connected.", 404, { field: "from" });
+  if (account.status !== "connected" || !account.refresh_token) {
+    throw new CrmError("invalid_input", `Reconnect ${account.email} in Settings › Calendars before sending from it.`, 400, { field: "from" });
+  }
+  if (!account.can_send) {
+    throw new CrmError("invalid_input", `Allow sending for ${account.email} in Settings › Calendars first.`, 400, { field: "from" });
+  }
+  return {
+    email: account.email,
+    tokens: {
+      refreshTokenCipher: account.refresh_token,
+      accessTokenCipher: account.access_token,
+      accessTokenExpiresAt: account.access_token_expires_at ? new Date(account.access_token_expires_at).toISOString() : null,
+    },
+    save: async (inner, token) => {
+      await inner.query(
+        `update crm.calendar_accounts
+         set refresh_token = $2, access_token = $3, access_token_expires_at = $4
+         where id = $1`,
+        [account.id, encryptSecret(token.refreshToken), encryptSecret(token.accessToken), token.expiresAt],
+      );
+    },
+  };
+}
+
 export async function sendContactEmail(
   actor: UserActor,
   contactId: string,
-  input: { subject: string; body: string; attachments?: string[]; keepAttachments?: boolean },
+  input: { subject: string; body: string; attachments?: string[]; keepAttachments?: boolean; from?: string | null },
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ warning: string | null }> {
   const subject = input.subject.replace(/\s+/g, " ").trim();
@@ -281,7 +356,7 @@ export async function sendContactEmail(
     );
     return {
       contact: found.rows[0] ?? null,
-      mailbox: await readStored(db, actor),
+      sender: found.rows[0] ? await resolveSender(db, actor, input.from) : null,
     };
   });
   const contact = prepared.contact;
@@ -297,23 +372,11 @@ export async function sendContactEmail(
       },
     );
   }
-  const mailbox = prepared.mailbox;
-  if (
-    !mailbox ||
-    mailbox.status !== "connected" ||
-    !mailbox.refreshTokenCipher
-  ) {
-    throw new CrmError(
-      "invalid_input",
-      "Connect Microsoft in Inbox before sending.",
-      400,
-    );
-  }
-
+  const sender = prepared.sender!;
   const attached = await loadAttachments(actor, input.attachments ?? [], fetchImpl);
   let token: MicrosoftToken;
   try {
-    token = await currentToken(mailbox, fetchImpl);
+    token = await currentToken(sender.tokens, fetchImpl);
     await sendGraphMail(
       token.accessToken,
       { to, toName: contact.name, subject, body, attachments: attached.files },
@@ -331,7 +394,7 @@ export async function sendContactEmail(
 
   try {
     await withActor(actor, async (db) => {
-      await storeToken(db, mailbox.id, token);
+      await sender.save(db, token);
     });
   } catch {}
   if (attached.summary.length && !input.keepAttachments) await discardAttachments(actor, input.attachments ?? [], fetchImpl);
@@ -350,6 +413,7 @@ export async function sendContactEmail(
             source: "microsoft",
             direction: "outbound",
             to,
+            from: sender.email,
             ...(attached.summary.length ? { attachments: attached.summary } : {}),
           },
         },

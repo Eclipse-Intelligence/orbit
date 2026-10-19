@@ -9,6 +9,7 @@ import {
   UseTemplateButton,
 } from "@/components/crm/email-template-picker";
 import { AttachButton, AttachmentList, useEmailAttachments } from "@/components/crm/email-attachments";
+import { SenderSelect, useSenders } from "@/components/crm/email-sender";
 import { TokenChips, insertToken } from "@/components/crm/email-tokens";
 import { sendContactEmailAction } from "@/app/(crm)/inbox/actions";
 import { addActivityAction } from "@/app/(crm)/records";
@@ -39,6 +40,9 @@ export default function ContactEmail({
 }) {
   const router = useRouter();
   const files = useEmailAttachments();
+  const sender = useSenders(Boolean(contactId && email));
+  const canSendMail = mailboxConnected || sender.senders.length > 0;
+  const [sentFrom, setSentFrom] = useState<string | null>(null);
   const sending = useRef(false);
   const [subject, setSubject] = useState("");
   const [message, setMessage] = useState("");
@@ -115,6 +119,8 @@ export default function ContactEmail({
         personalise(subject, target),
         personalise(message, target),
         files.ids,
+        false,
+        sender.from,
       );
       if ("error" in result && result.error) {
         setError(result.error);
@@ -123,6 +129,7 @@ export default function ContactEmail({
       }
       reset();
       files.clear();
+      setSentFrom(sender.chosen?.email ?? null);
       setSent(true);
       setWarning("warning" in result ? (result.warning ?? null) : null);
       router.refresh();
@@ -181,7 +188,7 @@ export default function ContactEmail({
           Save an email address on this contact before sending.
         </p>
       )}
-      {email && !mailboxConnected && (
+      {email && !canSendMail && (
         <p className="caption-style text-subtle">
           Connect Microsoft in Inbox before sending to {email}. You can still
           log the email here.
@@ -199,7 +206,7 @@ export default function ContactEmail({
       )}
       {sent && !error && !warning && (
         <p className="caption-style text-subtle" role="status">
-          Sent from your Microsoft mailbox.
+          {sentFrom ? `Sent from ${sentFrom}.` : "Sent from your Microsoft mailbox."}
         </p>
       )}
       {logged && !error && (
@@ -243,6 +250,15 @@ export default function ContactEmail({
             setSaving(false);
             if (template) setSavedName(template.name);
           }}
+        />
+      )}
+      {contactId && email && (
+        <SenderSelect
+          id={`email-from-${idPrefix}`}
+          senders={sender.senders}
+          value={sender.from}
+          onChange={sender.setFrom}
+          disabled={pending !== null}
         />
       )}
       <label className="sr-only" htmlFor={`email-subject-${idPrefix}`}>
@@ -295,7 +311,7 @@ export default function ContactEmail({
             files.uploading ||
             !contactId ||
             !email ||
-            !mailboxConnected ||
+            !canSendMail ||
             subject.trim() === "" ||
             message.trim() === ""
           }
@@ -319,7 +335,7 @@ export default function ContactEmail({
         >
           {pending === "log" ? "Saving…" : "Log email"}
         </Button>
-        {contactId && email && mailboxConnected && (
+        {contactId && email && canSendMail && (
           <AttachButton id={`email-files-${idPrefix}`} onFiles={(picked) => void files.add(picked)} disabled={pending !== null} />
         )}
       </div>
