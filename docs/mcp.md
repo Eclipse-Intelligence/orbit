@@ -19,6 +19,32 @@ A client configuration:
 }
 ```
 
+## Personal tokens and mail
+
+Settings › API and webhooks › Your mail in Claude creates a personal token (`orbit_…`, shown once, stored as a SHA-256 hash in `crm.personal_tokens`, owner-only, revocable, up to 10 a person). Send it to `POST /api/mcp` like an agent token. It signs in as that person through `private.authenticate_personal_token`, so every tool runs under their row-level security, with the scopes of their role and a limit of 120 requests a minute per token. A personal token also gets the mail tools below; workspace agent tokens never do, because mail is private to each person. stdio (`npm run mcp`) stays agent-only.
+
+To add it to Claude Code:
+
+```bash
+claude mcp add --transport http orbit https://orbit.geteclipse.co/api/mcp --header "Authorization: Bearer orbit_..."
+```
+
+Mail tools. None of them sends email.
+
+`mail_accounts`: the person's mailboxes and sending addresses, with ids for `mail_save_draft`.
+
+`mail_search`: `query` (every folder) or `view` (`inbox`, `important`, `other`, `news`, `calendar`, `snoozed`, `sent`, `drafts`, `archive`, `trash`), `account_id`, `limit` (up to 50). Returns thread keys, senders, snippets and whether Orbit has a reply ready.
+
+`mail_get_thread`: `key`. Every message as plain text without quoted history, with message ids, plus saved drafts, Orbit's prepared reply and any follow-up reminder.
+
+`mail_read_attachments`: `message_id`. The attachment list and the text Orbit can read from them.
+
+`mail_ask`: `question`, optional `account_id`. Ask AI over the person's email and attachments, with sources.
+
+`mail_save_draft`: `mode` (`new`, `reply`, `reply_all`, `forward`), `message_id` for replies and forwards, `draft_id` to update, `from`, `to`, `cc`, `bcc`, `subject`, `body` (plain text; Orbit adds the signature and read tracking). Saves an Outlook draft that shows in Orbit for the person to review and send. Returns `sent: false`.
+
+`mail_discard_draft`: `draft_id`.
+
 ## stdio
 
 ```bash
