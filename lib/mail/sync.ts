@@ -4,7 +4,14 @@ import { CrmError } from "@/lib/crm/errors";
 import type { UserActor } from "@/lib/crm/types";
 import { encryptSecret } from "@/lib/crypto/secret";
 import type { Db } from "@/lib/db/pool";
-import { fetchMicrosoftDelta, GraphMailError, initialDeltaUrl, listMicrosoftFolders } from "@/lib/mail/microsoft";
+import {
+  classificationUrl,
+  fetchMicrosoftClassifications,
+  fetchMicrosoftDelta,
+  GraphMailError,
+  initialDeltaUrl,
+  listMicrosoftFolders,
+} from "@/lib/mail/microsoft";
 import { trackingIdIn } from "@/lib/mail/html";
 import { MailSyncReset, type MailRole, type ProviderMessage } from "@/lib/mail/types";
 import type { MicrosoftToken } from "@/lib/microsoft/oauth";
@@ -30,6 +37,7 @@ type FolderRow = {
   role: MailRole;
   sync_state: "pending" | "backfill" | "live" | "skipped";
   sync_link: string | null;
+  classified_at: Date | string | null;
 };
 
 type Source = SourceRow & { tokens: StoredTokens };
@@ -257,6 +265,7 @@ function messageRows(messages: ProviderMessage[], ownEmail: string) {
       categories: message.categories,
       web_link: message.webLink,
       tracking_id: message.from?.address === own ? trackingIdIn(message.bodyHtml) : null,
+      focused: message.focused,
     }));
 }
 
@@ -267,19 +276,19 @@ async function storePage(db: Db, actor: UserActor, source: Source, folder: Folde
       `insert into crm.mail_messages (
          workspace_id, user_id, source_id, folder_id, provider_message_id, internet_message_id, thread_key, subject, snippet,
          body_html, body_text, body_truncated, from_email, from_name, to_recipients, cc_recipients, bcc_recipients,
-         sent_at, received_at, is_read, is_draft, is_flagged, importance, has_attachments, categories, web_link, tracking_id
+         sent_at, received_at, is_read, is_draft, is_flagged, importance, has_attachments, categories, web_link, tracking_id, focused
        )
        select $1, $2, $3, $4, x.provider_message_id, x.internet_message_id, x.thread_key, x.subject, x.snippet,
          x.body_html, x.body_text, coalesce(x.body_truncated, false), x.from_email, x.from_name,
          coalesce(x.to_recipients, '[]'), coalesce(x.cc_recipients, '[]'), coalesce(x.bcc_recipients, '[]'),
          x.sent_at, x.received_at, coalesce(x.is_read, false), coalesce(x.is_draft, false), coalesce(x.is_flagged, false),
-         x.importance, coalesce(x.has_attachments, false), coalesce(x.categories, '{}'), x.web_link, x.tracking_id
+         x.importance, coalesce(x.has_attachments, false), coalesce(x.categories, '{}'), x.web_link, x.tracking_id, x.focused
        from jsonb_to_recordset($5::jsonb) as x(
          provider_message_id text, internet_message_id text, thread_key text, subject text, snippet text,
          body_html text, body_text text, body_truncated boolean, from_email text, from_name text,
          to_recipients jsonb, cc_recipients jsonb, bcc_recipients jsonb, sent_at timestamptz, received_at timestamptz,
          is_read boolean, is_draft boolean, is_flagged boolean, importance text, has_attachments boolean,
-         categories text[], web_link text, tracking_id uuid
+         categories text[], web_link text, tracking_id uuid, focused boolean
        )
        on conflict (source_id, provider_message_id) do update set
          folder_id = excluded.folder_id,
@@ -304,14 +313,15 @@ async function storePage(db: Db, actor: UserActor, source: Source, folder: Folde
          has_attachments = excluded.has_attachments,
          categories = excluded.categories,
          web_link = excluded.web_link,
-         tracking_id = excluded.tracking_id`,
+         tracking_id = excluded.tracking_id,
+         focused = coalesce(excluded.focused, crm.mail_messages.focused)`,
       [actor.workspaceId, actor.userId, source.id, folder.id, JSON.stringify(rows)],
     );
   }
   for (const message of messages.filter((item) => item.partial)) {
     await db.query(
-      "update crm.mail_messages set is_read = $3, is_flagged = $4 where source_id = $1 and provider_message_id = $2",
-      [source.id, message.providerId, message.isRead, message.isFlagged],
+      "update crm.mail_messages set is_read = $3, is_flagged = $4, focused = coalesce($5, focused) where source_id = $1 and provider_message_id = $2",
+      [source.id, message.providerId, message.isRead, message.isFlagged, message.focused],
     );
   }
   if (removed.length > 0) {
@@ -387,6 +397,25 @@ async function syncFolder(
   report.backfilling += 1;
 }
 
+async function classifyFolder(actor: UserActor, source: Source, folder: FolderRow, token: string, deadline: number, fetchImpl: typeof fetch) {
+  let url: string | null = classificationUrl(folder.provider_folder_id);
+  while (url && Date.now() < deadline) {
+    const page = await fetchMicrosoftClassifications(url, token, fetchImpl);
+    if (page.items.length) {
+      await withActor(actor, (db) =>
+        db.query(
+          `update crm.mail_messages m set focused = x.focused
+           from jsonb_to_recordset($2::jsonb) as x(id text, focused boolean)
+           where m.source_id = $1 and m.provider_message_id = x.id`,
+          [source.id, JSON.stringify(page.items)],
+        ),
+      );
+    }
+    url = page.next;
+  }
+  if (!url) await withActor(actor, (db) => db.query("update crm.mail_folders set classified_at = now() where id = $1", [folder.id]));
+}
+
 export async function syncMail(
   actor: UserActor,
   options: { deadline?: number; budgetMs?: number; fetchImpl?: typeof fetch; backfill?: boolean },
@@ -417,7 +446,7 @@ export async function syncMail(
       if (stale) await refreshFolders(actor, source, token.accessToken, fetchImpl);
       const folders = await withActor(actor, async (db) => {
         const result = await db.query<FolderRow>(
-          "select id, provider_folder_id, role, sync_state, sync_link from crm.mail_folders where source_id = $1",
+          "select id, provider_folder_id, role, sync_state, sync_link, classified_at from crm.mail_folders where source_id = $1",
           [source.id],
         );
         return result.rows;
@@ -426,6 +455,10 @@ export async function syncMail(
       for (const folder of live) {
         if (Date.now() >= sourceDeadline) break;
         await syncFolder(actor, source, folder, token.accessToken, { deadline: sourceDeadline, fetchImpl, guard: false }, report);
+      }
+      for (const folder of live.filter((item) => item.role === "inbox" && !item.classified_at)) {
+        if (Date.now() >= sourceDeadline) break;
+        await classifyFolder(actor, source, folder, token.accessToken, sourceDeadline, fetchImpl);
       }
       if (options.backfill !== false) {
         for (const folder of backfill) {

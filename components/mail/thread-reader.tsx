@@ -12,7 +12,19 @@ import EmailFrame from "@/components/mail/email-frame";
 import { useShortcut, useShortcutHint } from "@/components/shortcuts/shortcuts-provider";
 import { mailFullWhen, personName, recipientList } from "@/lib/mail/format";
 import type { MailAddress } from "@/lib/mail/types";
-import { replyDefaults, type ComposeAccount, type DraftMode, type ThreadDetail, type ThreadMessage, type ThreadSummary } from "@/lib/mail/view";
+import {
+  MAIL_SPLITS,
+  replyDefaults,
+  SPLIT_LABELS,
+  type ComposeAccount,
+  type DraftMode,
+  type MailSplit,
+  type ThreadDetail,
+  type ThreadMessage,
+  type ThreadSummary,
+} from "@/lib/mail/view";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/_ui/dropdown-menu";
+import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
 import { cn } from "@/lib/utils";
 import ChevronLeftIcon from "@/public/assets/images/_common/chevron-left.svg";
 import PaperclipIcon from "@/public/assets/images/_common/paperclip.svg";
@@ -236,7 +248,9 @@ export default function ThreadReader({
   onBack,
   onSent,
   onNext,
+  onSplit,
 }: {
+  onSplit: (sender: string, split: MailSplit) => void;
   summary: ThreadSummary | null;
   detail: ThreadDetail | null;
   error: string | null;
@@ -326,6 +340,10 @@ export default function ThreadReader({
   const unread = summary ? summary.unread : Boolean(detail?.messages.some((message) => !message.isRead));
   const flagged = summary ? summary.flagged : Boolean(detail?.messages.some((message) => message.isFlagged));
   const restorable = view === "archive" || view === "trash" || view === "snoozed";
+  const ownSet = new Set(own.map((item) => item.toLowerCase()));
+  const sender =
+    detail?.messages.filter((message) => message.from && !ownSet.has(message.from.address.toLowerCase())).at(-1)?.from?.address ??
+    (summary?.from && !ownSet.has(summary.from.address.toLowerCase()) ? summary.from.address : null);
   const latestLink = detail?.messages.findLast((message) => message.webLink)?.webLink ?? null;
 
   return (
@@ -360,6 +378,31 @@ export default function ThreadReader({
           <FlagIcon aria-hidden className="size-3.5" />
         </ToolButton>
         <span className="ml-auto flex min-w-0 items-center gap-2">
+          {summary?.split && sender && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="sm" aria-label={`Split: ${SPLIT_LABELS[summary.split]}. Change where this sender goes`} title="Change where this sender's email goes">
+                  {SPLIT_LABELS[summary.split]}
+                  <ChevronDownIcon aria-hidden className="size-3" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-[17rem]">
+                <DropdownMenuLabel>Always put email from {sender} in</DropdownMenuLabel>
+                {MAIL_SPLITS.map((split) => (
+                  <DropdownMenuItem key={split} onSelect={() => onSplit(sender, split)}>
+                    <span className="flex-1">{SPLIT_LABELS[split]}</span>
+                    {split === summary.split && <span className="text-subtle">Now</span>}
+                  </DropdownMenuItem>
+                ))}
+                <DropdownMenuLabel>Everyone at @{sender.split("@")[1]}</DropdownMenuLabel>
+                {MAIL_SPLITS.map((split) => (
+                  <DropdownMenuItem key={`domain-${split}`} onSelect={() => onSplit(`@${sender.split("@")[1]}`, split)}>
+                    {SPLIT_LABELS[split]}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
           <span aria-hidden className="size-1.5 shrink-0 rounded-full" style={{ background: tagBase(account) }} />
           <span className="caption-style text-subtle truncate">{account}</span>
           {latestLink && (

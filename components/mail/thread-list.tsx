@@ -33,7 +33,13 @@ function Row({
   onOpen,
   onHover,
   swipe,
+  selecting,
+  selected,
+  onToggle,
 }: {
+  selecting: boolean;
+  selected: boolean;
+  onToggle: () => void;
   thread: ThreadSummary;
   active: boolean;
   outgoing: boolean;
@@ -128,9 +134,12 @@ function Row({
       )}
       <button
         type="button"
-        onClick={() => {
-          if (!swiped.current) onOpen();
+        onClick={(event) => {
+          if (swiped.current) return;
+          if (selecting || event.metaKey || event.ctrlKey || event.shiftKey) onToggle();
+          else onOpen();
         }}
+        aria-pressed={selecting ? selected : undefined}
         onPointerDown={down}
         onPointerMove={move}
         onPointerUp={up}
@@ -142,15 +151,37 @@ function Row({
         className={cn(
           "ease-power3-out group relative flex w-full cursor-pointer touch-pan-y flex-col gap-0.5 rounded-xl px-3 py-2.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
           dragging ? "transition-none" : "transition-[background-color,transform] duration-200",
-          offset !== 0 ? "bg-background" : active ? "bg-white/[0.07]" : "hover:bg-white/[0.035]",
+          offset !== 0
+            ? "bg-background"
+            : active
+              ? "bg-white/[0.07]"
+              : selected
+                ? "bg-[color-mix(in_srgb,var(--primary)_12%,transparent)]"
+                : "hover:bg-white/[0.035]",
         )}
         style={offset ? { transform: `translateX(${offset}px)` } : undefined}
       >
         <span className="flex min-w-0 items-center gap-2">
-          <span
-            aria-hidden
-            className={cn("size-1.5 shrink-0 rounded-full", thread.unread ? "bg-primary shadow-[0_0_0_3px_rgba(65,36,251,0.18)]" : "bg-transparent")}
-          />
+          {selecting ? (
+            <span
+              aria-hidden
+              className={cn(
+                "-ml-1 flex size-3.5 shrink-0 items-center justify-center rounded-full",
+                selected ? "bg-primary" : "shadow-[inset_0_0_0_1.5px_var(--line-strong)]",
+              )}
+            >
+              {selected && (
+                <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M5 12.5 10 17.5 19 7.5" />
+                </svg>
+              )}
+            </span>
+          ) : (
+            <span
+              aria-hidden
+              className={cn("size-1.5 shrink-0 rounded-full", thread.unread ? "bg-primary shadow-[0_0_0_3px_rgba(65,36,251,0.18)]" : "bg-transparent")}
+            />
+          )}
           <span className={cn("min-w-0 truncate text-[14px]", thread.unread ? "text-foreground font-medium" : "text-soft")}>
             {thread.draft && <span className="text-danger mr-1">Draft</span>}
             {people}
@@ -215,7 +246,11 @@ export default function ThreadList({
   onHover,
   onMore,
   swipe,
+  selected,
+  onToggle,
 }: {
+  selected: Set<string>;
+  onToggle: (key: string) => void;
   threads: ThreadSummary[];
   cursor: string | null;
   outgoing: boolean;
@@ -288,6 +323,9 @@ export default function ThreadList({
             onOpen={() => onOpen(thread.key)}
             onHover={() => onHover(thread.key)}
             swipe={swipe}
+            selecting={selected.size > 0}
+            selected={selected.has(thread.key)}
+            onToggle={() => onToggle(thread.key)}
           />
         ))}
       </ul>

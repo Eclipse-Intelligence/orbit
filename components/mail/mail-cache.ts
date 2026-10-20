@@ -130,3 +130,11 @@ export function writeWithAi(input: { mode: string; messageId: string | null; to:
     body: JSON.stringify(input),
   });
 }
+
+export function postSenderSplit(sender: string, split: string | null) {
+  return getJson<{ sender: string; split: string | null }>("/api/mail/sender-split", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ sender, split }),
+  });
+}
