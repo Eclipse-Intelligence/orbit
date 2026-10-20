@@ -36,7 +36,7 @@ export type InviteGuestDraft = {
   company: string | null;
 };
 
-export type InvitePrefill = { date?: string; time?: string; guests?: InviteGuestDraft[] };
+export type InvitePrefill = { date?: string; time?: string; guests?: InviteGuestDraft[]; title?: string; durationMinutes?: number; notes?: string };
 
 type ErrorKey = "title" | "startLocal" | "durationMinutes" | "attendees" | "notes" | "form";
 type Errors = Partial<Record<ErrorKey, string>>;
@@ -95,17 +95,17 @@ function InviteForm({
   const router = useRouter();
   const ids = useId();
   const [slot] = useState(() => defaultInviteSlot(now));
-  const [titleDraft, setTitleDraft] = useState<string | null>(null);
+  const [titleDraft, setTitleDraft] = useState<string | null>(prefill.title ?? null);
   const [date, setDate] = useState(prefill.date ?? slot.date);
   const [time, setTime] = useState(
     prefill.time ?? (prefill.date && prefill.date !== slot.date ? "09:00" : slot.time),
   );
-  const [duration, setDuration] = useState(String(INVITE_DEFAULT_DURATION));
+  const [duration, setDuration] = useState(String(prefill.durationMinutes ?? INVITE_DEFAULT_DURATION));
   const [guests, setGuests] = useState<InviteGuestDraft[]>(prefill.guests ?? []);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<{ query: string; contacts: Contact[]; failed?: boolean } | null>(null);
   const [active, setActive] = useState(0);
-  const [notes, setNotes] = useState("");
+  const [notes, setNotes] = useState(prefill.notes ?? "");
   const [includeLink, setIncludeLink] = useState(Boolean(setup.meetingLink));
   const [errors, setErrors] = useState<Errors>({});
   const [pending, setPending] = useState(false);

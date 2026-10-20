@@ -4,7 +4,7 @@ import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
 import { threadDrafts } from "@/lib/mail/compose";
-import { preparedFor } from "@/lib/mail/prepare";
+import { freshPrepared, preparedFor } from "@/lib/mail/prepare";
 import { cleanEmailHtml, richEmail } from "@/lib/mail/html";
 import type { MailAddress, MailRole } from "@/lib/mail/types";
 import { splitCase, splitJoin } from "@/lib/mail/split";
@@ -186,6 +186,14 @@ export async function listThreads(
 }
 
 export async function getThread(actor: UserActor, key: string): Promise<ThreadDetail> {
+  const detail = await readThread(actor, key);
+  if (detail.prepared?.times) {
+    detail.prepared = (await freshPrepared(actor, detail.prepared.id).catch(() => null)) ?? detail.prepared;
+  }
+  return detail;
+}
+
+async function readThread(actor: UserActor, key: string): Promise<ThreadDetail> {
   const { sourceId, key: tk } = parseThreadKey(key);
   return withActor(actor, async (db) => {
     const result = await db.query<{

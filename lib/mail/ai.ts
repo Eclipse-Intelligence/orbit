@@ -17,7 +17,7 @@ const MESSAGE_CHARS = 3_000;
 const THREAD_CHARS = 16_000;
 const SHORT_THREAD = 280;
 
-type ThreadText = { id: string; from: MailAddress | null; to: MailAddress[]; at: string | null; text: string };
+type ThreadText = { id: string; from: MailAddress | null; to: MailAddress[]; cc: MailAddress[]; at: string | null; text: string };
 
 export type MailSummaryText = { summary: string; todo: string | null };
 
@@ -52,13 +52,14 @@ export async function threadText(db: Db, actor: UserActor, sourceId: string, key
     from_email: string | null;
     from_name: string | null;
     to_recipients: MailAddress[];
+    cc_recipients: MailAddress[];
     at: Date | string | null;
     body_text: string | null;
     snippet: string | null;
     is_draft: boolean;
     subject: string | null;
   }>(
-    `select m.id, m.from_email, m.from_name, m.to_recipients, coalesce(m.received_at, m.sent_at, m.created_at) as at,
+    `select m.id, m.from_email, m.from_name, m.to_recipients, m.cc_recipients, coalesce(m.received_at, m.sent_at, m.created_at) as at,
        m.body_text, m.snippet, m.is_draft, m.subject
      from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
      where m.user_id = $1 and m.source_id = $2 and ${THREAD_KEY} = $3 and f.role not in ('junk', 'outbox')
@@ -72,6 +73,7 @@ export async function threadText(db: Db, actor: UserActor, sourceId: string, key
       id: row.id,
       from: row.from_email ? { name: row.from_name, address: row.from_email } : null,
       to: row.to_recipients ?? [],
+      cc: row.cc_recipients ?? [],
       at: row.at ? new Date(row.at).toISOString() : null,
       text: stripQuoted(row.body_text ?? row.snippet ?? "").slice(0, MESSAGE_CHARS),
     }));
