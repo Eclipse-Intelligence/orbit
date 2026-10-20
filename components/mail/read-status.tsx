@@ -2,15 +2,14 @@
 
 import { useRef, useState } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popover";
-import { firstName, mailFullWhen } from "@/lib/mail/format";
+import { mailFullWhen, personName } from "@/lib/mail/format";
 import type { MailAddress } from "@/lib/mail/types";
 import { cn } from "@/lib/utils";
 import EyeIcon from "@/public/assets/images/mail/eye.svg";
 
 export function readLabel(opens: { at: string }[], recipients: MailAddress[]) {
-  if (opens.length === 0) return "Not read yet";
-  const who = recipients.length === 1 ? `Read by ${firstName(recipients[0])}` : "Read";
-  return opens.length > 1 ? `${who} · ${opens.length} times` : who;
+  if (opens.length === 0) return "Unread";
+  return recipients.length === 1 ? `Read by ${personName(recipients[0])}` : "Read";
 }
 
 export default function ReadStatus({
@@ -41,15 +40,20 @@ export default function ReadStatus({
           onMouseEnter={show}
           onMouseLeave={hide}
           className={cn(
-            "ease-power3-out inline-flex h-6 cursor-pointer items-center gap-1.5 rounded-full px-2 text-[12px] transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
-            read ? "text-status bg-[color-mix(in_srgb,var(--status)_10%,transparent)] hover:bg-[color-mix(in_srgb,var(--status)_16%,transparent)]" : "text-subtle hover:bg-white/[0.04]",
+            "ease-power3-out inline-flex cursor-pointer items-center gap-1.5 rounded-sm text-[13px] transition-colors duration-150 outline-none hover:underline hover:underline-offset-4 focus-visible:ring-2 focus-visible:ring-ring/60",
+            read ? "text-status" : "text-subtle",
           )}
         >
-          <EyeIcon aria-hidden className="size-3" />
+          <EyeIcon aria-hidden className="size-3.5" />
           {readLabel(opens, recipients)}
         </button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-[18rem] p-1" onMouseEnter={show} onMouseLeave={hide}>
+      <PopoverContent align="end" className="w-[18rem] p-1" onMouseEnter={show} onMouseLeave={hide}>
+        {read ? (
+          <p className="caption-style text-subtle px-2.5 pt-1.5 pb-1">
+            Opened {opens.length === 1 ? "once" : `${opens.length} times`}
+          </p>
+        ) : null}
         {read ? (
           <ol aria-label="Times this email was opened" className="flex max-h-64 flex-col overflow-y-auto">
             {opens.map((item, index) => (

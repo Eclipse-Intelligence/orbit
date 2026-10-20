@@ -355,3 +355,34 @@ export async function ensureMicrosoftFolder(token: string, name: string, fetchIm
   });
   return created.id;
 }
+
+export const MAIL_SUBSCRIPTION_MINUTES = 4_200;
+
+export async function createMailSubscription(
+  token: string,
+  input: { notificationUrl: string; clientState: string },
+  fetchImpl: typeof fetch = fetch,
+) {
+  const expirationDateTime = new Date(Date.now() + MAIL_SUBSCRIPTION_MINUTES * 60_000).toISOString();
+  const created = await graphJson<{ id: string; expirationDateTime?: string }>(`${GRAPH}/subscriptions`, token, fetchImpl, undefined, {
+    method: "POST",
+    body: {
+      changeType: "created",
+      notificationUrl: input.notificationUrl,
+      resource: "me/mailFolders('inbox')/messages",
+      expirationDateTime,
+      clientState: input.clientState,
+      latestSupportedTlsVersion: "v1_2",
+    },
+  });
+  return { id: created.id, expiresAt: created.expirationDateTime ?? expirationDateTime };
+}
+
+export async function renewMailSubscription(token: string, id: string, fetchImpl: typeof fetch = fetch) {
+  const expirationDateTime = new Date(Date.now() + MAIL_SUBSCRIPTION_MINUTES * 60_000).toISOString();
+  const renewed = await graphJson<{ expirationDateTime?: string }>(`${GRAPH}/subscriptions/${encodeURIComponent(id)}`, token, fetchImpl, undefined, {
+    method: "PATCH",
+    body: { expirationDateTime },
+  });
+  return renewed.expirationDateTime ?? expirationDateTime;
+}

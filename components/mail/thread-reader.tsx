@@ -121,11 +121,6 @@ function Message({
           )}
         </span>
       </button>
-      {message.opens && (
-        <div className="-mt-1 px-4 pb-2 sm:pl-14">
-          <ReadStatus opens={message.opens} recipients={[...message.to, ...message.cc]} />
-        </div>
-      )}
       {expanded && (
         <div className="flex flex-col gap-3 px-4 pb-4 sm:pl-14">
           <MessageBody message={message} title={`Email from ${sender}`} swipe={swipe} />
@@ -341,6 +336,7 @@ export default function ThreadReader({
   const flagged = summary ? summary.flagged : Boolean(detail?.messages.some((message) => message.isFlagged));
   const restorable = view === "archive" || view === "trash" || view === "snoozed";
   const ownSet = new Set(own.map((item) => item.toLowerCase()));
+  const tracked = detail?.messages.filter((message) => message.opens !== null).at(-1) ?? null;
   const sender =
     detail?.messages.filter((message) => message.from && !ownSet.has(message.from.address.toLowerCase())).at(-1)?.from?.address ??
     (summary?.from && !ownSet.has(summary.from.address.toLowerCase()) ? summary.from.address : null);
@@ -458,6 +454,11 @@ export default function ThreadReader({
               ) : (
                 target && (
                   <div className="flex flex-wrap items-center gap-2 px-4">
+                    {tracked && (
+                      <span className="order-last ml-auto">
+                        <ReadStatus opens={tracked.opens!} recipients={[...tracked.to, ...tracked.cc]} />
+                      </span>
+                    )}
                     {REPLIES.map((reply) => (
                       <Button key={reply.mode} variant="secondary" onClick={() => startReply(reply.mode)} title={`${reply.label} (${hints[reply.mode]})`}>
                         <reply.icon aria-hidden className="size-3.5" />

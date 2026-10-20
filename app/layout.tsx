@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist } from "next/font/google";
 import { SITE_DESCRIPTION, SITE_NAME, SITE_URL, pageMetadata } from "@/lib/seo";
 import ScrollToTop from "@/components/_common/scroll-to-top";
@@ -19,6 +19,11 @@ export const metadata: Metadata = {
     path: "/",
   }),
   robots: { index: false, follow: false },
+  appleWebApp: { capable: true, title: "Orbit", statusBarStyle: "black" },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#161616",
 };
 
 export default function RootLayout({
