@@ -26,17 +26,27 @@ self.addEventListener("push", (event) => {
   event.waitUntil(Promise.all(work).catch(() => undefined));
 });
 
+let pending = null;
+
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const target = new URL((event.notification.data && event.notification.data.url) || "/mail", self.location.origin).href;
+  pending = { url: target, at: Date.now() };
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
-      for (const client of clients) {
-        if (new URL(client.url).origin === self.location.origin && "focus" in client) {
-          return client.focus().then((focused) => (focused && "navigate" in focused ? focused.navigate(target) : undefined));
-        }
+      const client = clients.find((item) => new URL(item.url).origin === self.location.origin);
+      if (client) {
+        client.postMessage({ type: "orbit-open", url: target });
+        return "focus" in client ? client.focus() : undefined;
       }
       return self.clients.openWindow(target);
     }),
   );
+});
+
+self.addEventListener("message", (event) => {
+  if (!event.data || event.data.type !== "orbit-pending" || !event.ports[0]) return;
+  const fresh = pending && Date.now() - pending.at < 60000 ? pending.url : null;
+  pending = null;
+  event.ports[0].postMessage(fresh);
 });
