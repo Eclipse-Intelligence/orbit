@@ -38,3 +38,19 @@ export function laterOptions(nowMs: number, timeZone = appTimeZone()): LaterOpti
   options.push({ id: "next-week", label: "Next week", at: wallAt(nowMs, timeZone, (8 - weekday) % 7 || 7, 8) });
   return options.map((option) => ({ id: option.id, label: option.label, detail: laterDetail(option.at, nowMs, timeZone), at: option.at.toISOString() }));
 }
+
+export function workingDaysLater(fromMs: number, days: number, timeZone = appTimeZone()) {
+  const start = zonedParts(new Date(fromMs), timeZone);
+  let day = new Date(Date.UTC(start.year, start.month - 1, start.day));
+  let left = days;
+  while (left > 0) {
+    day = new Date(day.getTime() + DAY_MS);
+    const weekday = day.getUTCDay();
+    if (weekday !== 0 && weekday !== 6) left -= 1;
+  }
+  const working = start.hour >= 8 && start.hour < 18;
+  return zonedTimeToDate(
+    { year: day.getUTCFullYear(), month: day.getUTCMonth() + 1, day: day.getUTCDate(), hour: working ? start.hour : 9, minute: working ? start.minute : 0, second: 0 },
+    timeZone,
+  );
+}

@@ -1,6 +1,7 @@
 import { after } from "next/server";
 import { memberActor } from "@/lib/crm/conversations";
 import { query } from "@/lib/db/pool";
+import { prepareMail } from "@/lib/mail/prepare";
 import { syncMail } from "@/lib/mail/sync";
 
 export const dynamic = "force-dynamic";
@@ -18,7 +19,10 @@ async function syncOwner(subscriptionId: string, clientState: string) {
   const actor = memberActor(owner);
   for (let attempt = 0; attempt < RETRIES; attempt += 1) {
     const report = await syncMail(actor, { budgetMs: 15_000, backfill: false });
-    if (report.sources > 0) return;
+    if (report.sources > 0) {
+      if (report.stored > 0) await prepareMail(actor, { deadline: Date.now() + 30_000 }).catch((error) => console.error("Preparing mail failed", error));
+      return;
+    }
     await new Promise((resolve) => setTimeout(resolve, RETRY_MS));
   }
 }

@@ -20,6 +20,7 @@ import {
   type ComposeAccount,
   type DraftMode,
   type MailSplit,
+  type PreparedReply,
   type ThreadDetail,
   type ThreadMessage,
   type ThreadSummary,
@@ -187,6 +188,29 @@ function SummaryLine({ threadKey, latestId, messages }: { threadKey: string; lat
   );
 }
 
+function PreparedCard({ prepared, onUse, onDismiss }: { prepared: PreparedReply; onUse: () => void; onDismiss: () => void }) {
+  return (
+    <section
+      aria-label={prepared.kind === "nudge" ? "Follow-up ready" : "Reply ready"}
+      className="animate-rise-in mx-4 flex flex-col gap-2 rounded-2xl bg-white/[0.025] px-4 py-3"
+    >
+      <span className="text-subtle flex items-center gap-1.5 text-[12px]">
+        <SparkleIcon aria-hidden className="text-primary-foreground size-3.5" />
+        {prepared.kind === "nudge" ? "Nobody has replied. Orbit has a follow-up ready." : "Orbit has a reply ready"}
+      </span>
+      <p className="text-soft line-clamp-5 text-[14px] leading-6 whitespace-pre-line">{prepared.body}</p>
+      <span className="mt-1 flex flex-wrap gap-2">
+        <Button variant="primary" onClick={onUse}>
+          Edit and send
+        </Button>
+        <Button variant="ghost" onClick={onDismiss}>
+          Dismiss
+        </Button>
+      </span>
+    </section>
+  );
+}
+
 function Thread({
   detail,
   own,
@@ -284,6 +308,8 @@ export default function ThreadReader({
   const [echo, setEcho] = useState<Echo | null>(null);
   const [removedDrafts, setRemovedDrafts] = useState<Set<string>>(() => new Set());
   const [draftError, setDraftError] = useState<string | null>(null);
+  const [hiddenPrepared, setHiddenPrepared] = useState<Set<string>>(() => new Set());
+  const [cancelledFollowUp, setCancelledFollowUp] = useState<string | null>(null);
   const replyHint = useShortcutHint("mail-reply");
   const replyAllHint = useShortcutHint("mail-reply-all");
   const forwardHint = useShortcutHint("mail-forward");
@@ -307,7 +333,31 @@ export default function ThreadReader({
         }
       : null);
 
-  function startReply(mode: Exclude<DraftMode, "new">) {
+  const prepared = detail?.prepared && target && detail.prepared.messageId === target.id && !hiddenPrepared.has(detail.prepared.id) ? detail.prepared : null;
+  const followUp = detail?.followUp && detail.followUp.id !== cancelledFollowUp ? detail.followUp : null;
+
+  function preparedAction(id: string, action: "use" | "dismiss" | "cancel_reminder") {
+    void fetch("/api/mail/prepared", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id, action }),
+    }).catch(() => undefined);
+  }
+
+  function takePrepared(item: PreparedReply) {
+    if (!target) return;
+    const everyone = target.to.length + target.cc.length > 1;
+    startReply(everyone ? "reply_all" : "reply", item.body);
+    setHiddenPrepared((existing) => new Set(existing).add(item.id));
+    preparedAction(item.id, "use");
+  }
+
+  function dismissPrepared(item: PreparedReply) {
+    setHiddenPrepared((existing) => new Set(existing).add(item.id));
+    preparedAction(item.id, "dismiss");
+  }
+
+  function startReply(mode: Exclude<DraftMode, "new">, body?: string) {
     if (!detail || !target) return false;
     if (active) {
       document.querySelector<HTMLTextAreaElement>("[data-reader-composer] textarea")?.focus();
@@ -323,7 +373,9 @@ export default function ThreadReader({
       to: defaults.to,
       cc: defaults.cc,
       subject: defaults.subject,
-      draft: null,
+      draft: body
+        ? { id: "", sourceId, mode, messageId: target.id, to: defaults.to, cc: defaults.cc, bcc: [], subject: defaults.subject, body, savedAt: "", sendAt: null, sendError: null }
+        : null,
       fromId: identity?.id ?? null,
     });
   }
@@ -524,6 +576,8 @@ export default function ThreadReader({
                 </div>
               ) : (
                 target && (
+                  <>
+                  {prepared && <PreparedCard prepared={prepared} onUse={() => takePrepared(prepared)} onDismiss={() => dismissPrepared(prepared)} />}
                   <div className="flex flex-wrap items-center gap-2 px-4">
                     {tracked && (
                       <span className="order-last ml-auto">
@@ -537,6 +591,24 @@ export default function ThreadReader({
                       </Button>
                     ))}
                   </div>
+                  {followUp && (
+                    <div role="status" className="caption-style text-subtle flex flex-wrap items-center gap-x-2 px-4">
+                      <span>
+                        {followUp.automatic ? "Orbit will remind you" : "You'll be reminded"} on {mailFullWhen(followUp.at)} if nobody replies.
+                      </span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setCancelledFollowUp(followUp.id);
+                          preparedAction(followUp.id, "cancel_reminder");
+                        }}
+                      >
+                        Don&apos;t remind me
+                      </Button>
+                    </div>
+                  )}
+                  </>
                 )
               )}
             </>

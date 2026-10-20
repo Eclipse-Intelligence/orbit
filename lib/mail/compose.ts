@@ -18,6 +18,7 @@ import {
   updateMicrosoftDraft,
   type DraftMode,
 } from "@/lib/mail/microsoft";
+import { notePreparedSent } from "@/lib/mail/prepare";
 import { mailSourceToken } from "@/lib/mail/sync";
 import { readStatusesOn } from "@/lib/mail/tracking";
 import type { MailAddress } from "@/lib/mail/types";
@@ -422,6 +423,7 @@ export async function sendMailDraft(
       ]);
     }
     await db.query("delete from crm.mail_drafts where id = $1", [row.id]);
+    if (input.messageId) await notePreparedSent(db, actor, input.messageId, input.body);
     const threadKey = row.thread_key ?? (row.reply_to ? `m:${row.reply_to}` : null);
     if (input.remindHours && threadKey) {
       await db.query(

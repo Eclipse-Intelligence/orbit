@@ -3,6 +3,8 @@ import { contactRecipient } from "@/lib/crm/personalise";
 import EmailTemplatesSettings from "@/components/crm/email-templates-settings";
 import SignaturesSettings from "@/components/crm/signatures-settings";
 import ReadStatusSettings from "@/components/mail/read-status-settings";
+import MailHelpSettings from "@/components/mail/mail-help-settings";
+import { mailHelpSettings } from "@/lib/mail/prepare";
 import { listSenders } from "@/lib/crm/inbox";
 import { getUserActor } from "@/lib/auth/user";
 import { listContacts } from "@/lib/crm/contacts";
@@ -17,13 +19,14 @@ export const dynamic = "force-dynamic";
 export default async function EmailTemplateSettingsPage() {
   const user = await getUserActor();
   if (!user) redirect("/login");
-  const [templates, contacts, senders, readStatuses, identities, accounts] = await Promise.all([
+  const [templates, contacts, senders, readStatuses, identities, accounts, help] = await Promise.all([
     listEmailTemplates(user),
     listContacts(user, { limit: 20 }),
     listSenders(user),
     readStatusesOn(user),
     listIdentities(user).catch(() => []),
     composeAccounts(user).catch(() => []),
+    mailHelpSettings(user).catch(() => ({ prepareReplies: true, autoRemindDays: 3 })),
   ]);
   const sources = accounts.filter((account) => !account.identityId).map((account) => ({ id: account.id, email: account.email }));
   const allSenders = [
@@ -44,6 +47,7 @@ export default async function EmailTemplateSettingsPage() {
             suggestedSource={null}
           />
           <SignaturesSettings senders={allSenders} />
+          <MailHelpSettings initial={help} />
           <ReadStatusSettings initial={readStatuses} />
         </>
       }

@@ -1,6 +1,7 @@
 import { backgroundTargets } from "@/lib/crm/conversations";
 import { cronAuthorization } from "@/lib/crm/scheduler";
 import { processDueMail } from "@/lib/mail/due";
+import { prepareMail } from "@/lib/mail/prepare";
 import { syncMail, type MailSyncReport } from "@/lib/mail/sync";
 import { microsoftConfigured } from "@/lib/microsoft/oauth";
 
@@ -24,6 +25,9 @@ async function handle(request: Request) {
     try {
       const report = await syncMail(target.actor, { deadline: Date.now() + share });
       await processDueMail(target.actor).catch((error) => console.error("Due mail failed", error));
+      await prepareMail(target.actor, { deadline: Math.min(deadline - 5_000, Date.now() + Math.max(share, 30_000)) }).catch((error) =>
+        console.error("Preparing mail failed", error),
+      );
       users.push({ userId: target.actor.userId, report });
     } catch (error) {
       users.push({ userId: target.actor.userId, report: { error: error instanceof Error ? error.message : "Mail sync failed." } });

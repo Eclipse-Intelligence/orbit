@@ -4,6 +4,7 @@ import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
 import { threadDrafts } from "@/lib/mail/compose";
+import { preparedFor } from "@/lib/mail/prepare";
 import { cleanEmailHtml, richEmail } from "@/lib/mail/html";
 import type { MailAddress, MailRole } from "@/lib/mail/types";
 import { splitCase, splitJoin } from "@/lib/mail/split";
@@ -50,6 +51,7 @@ type ThreadRow = {
   snoozed_until: Date | string | null;
   split: MailSplit | null;
   reads: { count: number; last: string | null } | null;
+  prepared: boolean;
 };
 
 export async function listThreads(
@@ -141,7 +143,11 @@ export async function listThreads(
          l.n::int as n, l.unread, l.flagged, l.attachments, l.is_draft, l.at, l.sort_at, l.reminder_kind, l.surfaced_at, l.snoozed_until, l.split,
          case when l.tracking_id is not null then (
            select json_build_object('count', count(*)::int, 'last', max(o.opened_at)) from crm.mail_opens o where o.tracking_id = l.tracking_id
-         ) end as reads
+         ) end as reads,
+         exists (
+           select 1 from crm.mail_prepared p
+           where p.message_id = l.id and p.kind in ('reply', 'nudge') and p.state in ('ready', 'used')
+         ) as prepared
        from listed l
        join crm.mail_sources src on src.id = l.source_id
        ${cursor.length ? `where ${cursor.join(" and ")}` : ""}
@@ -169,6 +175,7 @@ export async function listThreads(
       reminder: row.reminder_kind && row.surfaced_at ? { kind: row.reminder_kind, at: iso(row.surfaced_at)! } : null,
       snoozedUntil: iso(row.snoozed_until),
       split: row.split,
+      prepared: row.prepared,
     }));
     const lastRow = rows[rows.length - 1];
     return {
@@ -222,11 +229,22 @@ export async function getThread(actor: UserActor, key: string): Promise<ThreadDe
     const { drafts, providerIds } = await threadDrafts(db, actor, sourceId, tk);
     const rows = result.rows.filter((row) => !providerIds.includes(row.provider_message_id));
     const latest = rows[rows.length - 1] ?? result.rows[result.rows.length - 1];
+    const target = rows.filter((row) => !(row.is_draft && row.role === "drafts")).at(-1);
+    const prepared = target ? await preparedFor(db, actor, target.id) : null;
+    const reminder = await db.query<{ id: string; due_at: Date | string; automatic: boolean }>(
+      `select id, due_at, automatic from crm.mail_reminders
+       where user_id = $1 and source_id = $2 and thread_key = $3 and kind = 'follow_up' and state = 'waiting'
+       order by due_at limit 1`,
+      [actor.userId, sourceId, tk],
+    );
+    const followUp = reminder.rows[0];
     return {
       key,
       account: latest.account,
       subject: latest.subject,
       drafts,
+      prepared,
+      followUp: followUp ? { id: followUp.id, at: iso(followUp.due_at)!, automatic: followUp.automatic } : null,
       messages: rows.map((row) => {
         const html = row.body_html ? cleanEmailHtml(row.body_html) : null;
         return {
