@@ -4,18 +4,19 @@ import { hostname } from "node:os";
 import { createInterface } from "node:readline/promises";
 import { ApiError, createApi, type Api } from "./api";
 import { clearConfig, loadConfig, prepareWorkspace, saveConfig } from "./config";
+import { installLaunchAgent, LOG_FILE, uninstallLaunchAgent } from "./launch";
 import type { CompanionJob } from "./protocol";
 import { cleanEnv, runTurn, type Sdk } from "./turn";
 
-const VERSION = "1.0.0";
+const VERSION = "1.1.0";
 const DEFAULT_URL = "https://orbit.geteclipse.co";
 const ACCOUNT_TIMEOUT_MS = 45_000;
 const sdk: Sdk = { query, createSdkMcpServer, tool };
 
-type Args = { pair?: string; url?: string; name?: string; logout: boolean; help: boolean; version: boolean };
+type Args = { pair?: string; url?: string; name?: string; logout: boolean; help: boolean; version: boolean; install: boolean; uninstall: boolean };
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { logout: false, help: false, version: false };
+  const args: Args = { logout: false, help: false, version: false, install: false, uninstall: false };
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
     const next = () => argv[++index];
@@ -25,6 +26,8 @@ function parseArgs(argv: string[]): Args {
     else if (value.startsWith("--url=")) args.url = value.slice(6);
     else if (value === "--name") args.name = next();
     else if (value === "--logout") args.logout = true;
+    else if (value === "--install") args.install = true;
+    else if (value === "--uninstall") args.uninstall = true;
     else if (value === "--help" || value === "-h") args.help = true;
     else if (value === "--version" || value === "-v") args.version = true;
   }
@@ -134,7 +137,9 @@ async function main() {
         "",
         "  orbit-agent --pair CODE   pair this Mac using the code from Orbit › Settings › Integrations",
         "  orbit-agent               start answering (after pairing)",
-        "  orbit-agent --logout      forget this Mac's pairing",
+        "  orbit-agent --install     keep it running: start at login and restart if it stops (Mac)",
+        "  orbit-agent --uninstall   stop starting at login",
+        "  orbit-agent --logout      forget this Mac's pairing (and stop starting at login)",
         "",
         "  --url URL    Orbit address (default https://orbit.geteclipse.co)",
         "  --name NAME  how this Mac appears in Orbit",
@@ -144,8 +149,14 @@ async function main() {
     return;
   }
   if (args.logout) {
+    await uninstallLaunchAgent();
     await clearConfig();
     log("Forgot this Mac's pairing.");
+    return;
+  }
+  if (args.uninstall) {
+    const removed = await uninstallLaunchAgent();
+    log(removed ? "Orbit Agent won't start at login any more." : "Orbit Agent wasn't set to start at login.");
     return;
   }
 
@@ -153,6 +164,7 @@ async function main() {
   const url = (args.url ?? saved.url ?? DEFAULT_URL).replace(/\/+$/, "");
   let token = args.pair ? null : (saved.token ?? null);
   if (!token) {
+    if (!args.pair && !process.stdin.isTTY) stop("This Mac isn't paired. Run orbit-agent --pair CODE in Terminal with a code from Orbit › Settings › Integrations.");
     const code = args.pair ?? (await ask("Pairing code from Orbit › Settings › Integrations: "));
     if (!code) stop("A pairing code is needed.");
     try {
@@ -160,6 +172,16 @@ async function main() {
     } catch (error) {
       stop(error instanceof Error ? error.message : String(error));
     }
+  }
+
+  if (args.install) {
+    try {
+      await installLaunchAgent(url);
+    } catch (error) {
+      stop(error instanceof Error ? error.message : String(error));
+    }
+    log(`Orbit Agent now runs in the background, starts when you log in, and restarts if it stops. You can close this window. Its log is ${LOG_FILE}.`);
+    return;
   }
 
   const cwd = await prepareWorkspace();
@@ -191,7 +213,11 @@ async function main() {
   log(
     `Connected to Orbit as ${me.email} on "${me.name}". Claude: ${account.email ?? "signed in"}${account.subscriptionType ? ` (${account.subscriptionType})` : ""}.`,
   );
-  log("Waiting for questions. Leave this running; press Ctrl+C to stop.");
+  log(
+    process.stdin.isTTY
+      ? "Waiting for questions. Leave this running; press Ctrl+C to stop. To keep it running without this window, run it again with --install."
+      : "Waiting for questions.",
+  );
   process.on("SIGINT", () => {
     log("Stopped.");
     process.exit(0);

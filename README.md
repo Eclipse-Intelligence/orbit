@@ -483,13 +483,13 @@ Claude account models run through Orbit Agent, a small command-line program on y
 2. In Settings › Integrations, AI accounts, choose Pair a Mac. Orbit shows a command with a one-time code that works for 10 minutes:
 
    ```bash
-   npx -y --package=https://orbit.geteclipse.co/downloads/orbit-agent.tgz orbit-agent --pair ABCD-EFGH
+   npx -y --package=https://orbit.geteclipse.co/downloads/orbit-agent.tgz orbit-agent --pair ABCD-EFGH --install
    ```
 
    On any other Orbit address the command uses that address for the package and adds `--url <address>`.
-3. Run it in Terminal and leave it running. The Settings page updates when the Mac connects. On its first run, npx downloads the package and its dependencies (the Claude Agent SDK and zod).
+3. Run it in Terminal. The Settings page updates when the Mac connects. On its first run, npx downloads the package and its dependencies (the Claude Agent SDK and zod).
 
-To start it again later, run the same command without `--pair`. The pairing is saved in `~/.config/orbit-agent/config.json`, which only your user can read.
+The command ends with `--install`, which sets Orbit Agent up as a background service on the Mac (a LaunchAgent in `~/Library/LaunchAgents/co.geteclipse.orbit-agent.plist`): it starts when you log in and restarts if it stops, so Terminal can be closed. It fetches the latest Orbit Agent each time it starts and logs to `~/Library/Logs/orbit-agent.log`. `orbit-agent --uninstall` stops that, and `--logout` also forgets the pairing. Without `--install` it runs only while the Terminal window is open. If it isn't running, the assistant says when the Mac was last seen and gives the command to start it. The pairing is saved in `~/.config/orbit-agent/config.json`, which only your user can read.
 
 | Option | What it does |
 | --- | --- |

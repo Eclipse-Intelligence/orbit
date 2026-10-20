@@ -5,6 +5,7 @@ import { applyCompanionResult, decideActions, getConversation, sendMessage, type
 import { finishCompanionJob, nextCompanionJob, runCompanionTool } from "@/lib/companion/jobs";
 import {
   authenticateCompanion,
+  companionOfflineMessage,
   createPairingCode,
   listCompanions,
   redeemPairing,
@@ -18,6 +19,7 @@ import type { UserActor } from "@/lib/crm/types";
 import { getPool } from "@/lib/db/pool";
 import type { CompanionJob, CompanionRequest, CompanionResult } from "@/companion/src/protocol";
 import { shapeFor } from "@/companion/src/schema";
+import { launchPath, launchPlist } from "@/companion/src/launch";
 import { PROPOSED, cleanEnv, runTurn, type Sdk } from "@/companion/src/turn";
 import { createUser, resetDatabase } from "./helpers";
 
@@ -193,9 +195,16 @@ describe("Orbit Agent turns", () => {
       sendMessage(lonely, { message: "Hi", model: "claude/claude-opus-5-5", reasoning: "medium", webSearch: false }, () => undefined, {
         deadline: deadline(),
       }),
-      /Start Orbit Agent on your Mac/,
+      /pair your Mac in Settings › Integrations/,
     );
   });
+
+  it("explains how to start Orbit Agent and when it was last seen", async () => {
+    const message = await companionOfflineMessage(owner, Date.now() + 21 * 3_600_000);
+    assert.match(message, /isn't running on your Mac\. .+ was last seen 21 hours ago\./);
+    assert.ok(message.endsWith("orbit-agent --install"));
+  });
+
 
   it("only gives a job to the Mac that claimed it", async () => {
     const other = await createUser("agent-other@orbit.test", "Someone Else");
@@ -337,5 +346,15 @@ describe("companion turn runner", () => {
     assert.equal(shape.priority.safeParse("urgent").success, false);
     assert.equal(shape.attendees.safeParse([{ email: "a@b.c" }]).success, true);
     assert.equal(shape.attendees.safeParse([{ name: "x" }]).success, false);
+  });
+
+  it("writes a Mac launch file that starts at login and restarts", () => {
+    const plist = launchPlist({ npx: "/opt/homebrew/bin/npx", url: "https://orbit.geteclipse.co", path: "/opt/homebrew/bin:/usr/bin", log: "/Users/m/Library/Logs/orbit-agent.log" });
+    assert.ok(plist.includes("<string>co.geteclipse.orbit-agent</string>"));
+    assert.ok(plist.includes("<string>--package=https://orbit.geteclipse.co/downloads/orbit-agent.tgz</string>"));
+    assert.ok(plist.includes("<key>RunAtLoad</key>\n  <true/>"));
+    assert.ok(plist.includes("<key>KeepAlive</key>\n  <true/>"));
+    assert.ok(!plist.includes("--pair"));
+    assert.ok(launchPath("/opt/homebrew/bin/npx").split(":").includes("/opt/homebrew/bin"));
   });
 });

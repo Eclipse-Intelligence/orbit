@@ -4,7 +4,7 @@ import { systemPrompt } from "@/lib/assistant/prompt";
 import { ASSISTANT_TOOLS, TOOL_BY_NAME, describeAction, recordNames, runTool, toolJson } from "@/lib/assistant/tools";
 import type { CompanionResult, Effort } from "@/companion/src/protocol";
 import { cancelCompanionJob, enqueueCompanionJob, readCompanionJob } from "@/lib/companion/jobs";
-import { companionOnline } from "@/lib/companion/pairing";
+import { companionOfflineMessage, companionOnline } from "@/lib/companion/pairing";
 import { buildPrompt } from "@/lib/companion/transcript";
 import { expandMentions, plainMentions } from "@/lib/mentions";
 import { withActor } from "@/lib/crm/context";
@@ -355,9 +355,7 @@ export async function applyCompanionResult(actor: UserActor, conversationId: str
 }
 
 async function runCompanionTurn(actor: UserActor, conversation: ConversationRow, apiModel: string, emit: Emit, deadline: number) {
-  if (!(await companionOnline(actor))) {
-    throw new AssistantError("Start Orbit Agent on your Mac to use your Claude account. Pair it in Settings › Integrations if you haven't yet.");
-  }
+  if (!(await companionOnline(actor))) throw new AssistantError(await companionOfflineMessage(actor));
   const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
   const jobId = await enqueueCompanionJob(actor, conversation.id, {
     model: apiModel,

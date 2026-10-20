@@ -126,3 +126,25 @@ export async function authenticateCompanion(request: Request): Promise<Authentic
   if (!actor) throw new CrmError("unauthorized", "This Mac was removed from Orbit. Pair it again.", 401);
   return { companionId: row.companion_id, name: row.name, actor };
 }
+
+export const AGENT_START_COMMAND = "npx -y --package=https://orbit.geteclipse.co/downloads/orbit-agent.tgz orbit-agent --install";
+
+function sinceText(iso: string, now: number) {
+  const minutes = Math.max(1, Math.round((now - new Date(iso).getTime()) / 60_000));
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  return `${Math.round(hours / 24)} days ago`;
+}
+
+export async function companionOfflineMessage(actor: UserActor, now = Date.now()) {
+  const companions = await listCompanions(actor);
+  if (companions.length === 0) {
+    return "To use your Claude account, pair your Mac in Settings › Integrations. It takes one command in Terminal.";
+  }
+  const latest = companions
+    .filter((companion) => companion.lastSeenAt)
+    .sort((a, b) => new Date(b.lastSeenAt!).getTime() - new Date(a.lastSeenAt!).getTime())[0];
+  const seen = latest ? ` ${latest.name} was last seen ${sinceText(latest.lastSeenAt!, now)}.` : "";
+  return `Orbit Agent isn't running on your Mac.${seen} Run this once in Terminal and it will keep running, starting by itself at login: ${AGENT_START_COMMAND}`;
+}
