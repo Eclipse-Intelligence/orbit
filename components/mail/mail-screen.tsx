@@ -32,8 +32,9 @@ import {
 } from "@/components/mail/mail-cache";
 import ThreadList from "@/components/mail/thread-list";
 import ThreadReader, { type ReaderAction } from "@/components/mail/thread-reader";
-import { useShortcut, useShortcuts } from "@/components/shortcuts/shortcuts-provider";
-import type { MailNav, ThreadDetail, ThreadSummary } from "@/lib/mail/view";
+import { useComposer } from "@/components/mail/compose-dock";
+import { useShortcut } from "@/components/shortcuts/shortcuts-provider";
+import type { ComposeAccount, MailNav, ThreadDetail, ThreadSummary } from "@/lib/mail/view";
 import { cn } from "@/lib/utils";
 import { useCompaniesStore } from "@/stores/companies-store";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
@@ -57,6 +58,20 @@ const MIN_POLL_GAP_MS = 20_000;
 const READ_DWELL_MS = 700;
 
 type Toast = { message: string; tone: "status" | "alert"; undo?: () => void };
+
+function MailOverscroll() {
+  useEffect(() => {
+    const root = document.documentElement;
+    const previous = root.style.overscrollBehaviorX;
+    root.style.overscrollBehaviorX = "none";
+    document.body.style.overscrollBehaviorX = "none";
+    return () => {
+      root.style.overscrollBehaviorX = previous;
+      document.body.style.overscrollBehaviorX = "";
+    };
+  }, []);
+  return null;
+}
 
 function mailUrl(query: ListQuery, thread: string | null) {
   const params = new URLSearchParams();
@@ -109,15 +124,17 @@ export default function MailScreen({
   initialPage,
   initialThread,
   initialNow,
+  accounts,
 }: {
   viewer: Viewer;
+  accounts: ComposeAccount[];
   initialNav: MailNav;
   initialQuery: ListQuery;
   initialPage: ThreadPage;
   initialThread: ThreadDetail | null;
   initialNow: number;
 }) {
-  const { run } = useShortcuts();
+  const { openComposer, sent: sentCount } = useComposer();
   const setMailUnread = useCompaniesStore((state) => state.setMailUnread);
   const [nav, setNav] = useState(initialNav);
   const [query, setQuery] = useState(initialQuery);
@@ -350,6 +367,17 @@ export default function MailScreen({
       });
   }
 
+  function sent(key: string) {
+    setToast({ message: "Sent.", tone: "status" });
+    window.setTimeout(() => {
+      forgetThread(key);
+      refreshRef.current(true);
+      window.setTimeout(() => {
+        if (latest.current.cursor === key) fetchDetail(key, true);
+      }, 9000);
+    }, 2500);
+  }
+
   const actRef = useRef(act);
   useEffect(() => {
     actRef.current = act;
@@ -365,6 +393,12 @@ export default function MailScreen({
     const timer = window.setTimeout(() => actRef.current(key, "read", true), READ_DWELL_MS);
     return () => window.clearTimeout(timer);
   }, [cursor, current?.unread]);
+
+  useEffect(() => {
+    if (sentCount === 0) return;
+    const timer = window.setTimeout(() => refreshRef.current(true), 2500);
+    return () => window.clearTimeout(timer);
+  }, [sentCount]);
 
   useEffect(() => {
     let last = 0;
@@ -461,8 +495,8 @@ export default function MailScreen({
         <SectionHeader title="Mail" viewer={viewer} />
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
           <h2>Bring your mail into Orbit</h2>
-          <p className="text-subtle max-w-[28em]">Connect Microsoft in Inbox. Orbit copies every folder and keeps it in step with Outlook.</p>
-          <Button variant="primary" href="/inbox">
+          <p className="text-subtle max-w-[28em]">Connect Microsoft in Capture. Orbit copies every folder and keeps it in step with Outlook.</p>
+          <Button variant="primary" href="/capture">
             Connect Microsoft
           </Button>
         </div>
@@ -471,13 +505,14 @@ export default function MailScreen({
   }
 
   return (
-    <section className="flex min-h-0 min-w-0 flex-1 flex-col">
+    <section className="flex min-h-0 min-w-0 flex-1 touch-pan-y flex-col overscroll-x-none">
+      <MailOverscroll />
       <SectionHeader
         title="Mail"
         viewer={viewer}
         action={
           <>
-            <Button variant="primary" onClick={() => run("create-email")} title="Write an email (C then M)">
+            <Button variant="primary" onClick={() => openComposer()} title="Write an email (C then M)">
               Compose
             </Button>
             {nav.accounts.length > 1 && (
@@ -630,7 +665,7 @@ export default function MailScreen({
               </p>
             )}
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className="min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-x-none">
             {listError && threads.length === 0 ? (
               <div className="flex flex-col items-center gap-3 px-6 py-16 text-center">
                 <p role="alert" className="text-danger">
@@ -654,6 +689,19 @@ export default function MailScreen({
                 onOpen={(key) => select(key, true)}
                 onHover={(key) => prefetchThreads([key])}
                 onMore={more}
+                swipe={
+                  !query.query && query.view === "drafts"
+                    ? null
+                    : {
+                        leftLabel: primaryMove() === "inbox" ? "Inbox" : "Archive",
+                        restore: primaryMove() === "inbox",
+                        onLeft: (key) => act(key, primaryMove()),
+                        onRight: (key) => {
+                          const thread = threads.find((item) => item.key === key);
+                          if (thread) act(key, thread.unread ? "read" : "unread");
+                        },
+                      }
+                }
               />
             )}
           </div>
@@ -666,8 +714,11 @@ export default function MailScreen({
             error={cursor ? (detailErrors[cursor] ?? null) : null}
             own={own}
             view={viewParam}
+            accounts={accounts}
             onAction={(action) => cursor && act(cursor, action)}
             onBack={() => setOpen(false)}
+            onNext={() => step(1)}
+            onSent={() => cursor && sent(cursor)}
           />
         </div>
       </div>

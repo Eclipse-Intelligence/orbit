@@ -72,7 +72,7 @@ export default function ApiSettings({
           Orbit matches the person by email and the company by domain, then
           suggests a follow-up task when the company has no open task. To file
           Outlook mail automatically and send from a contact, connect Microsoft
-          in Inbox.
+          in Capture.
         </p>
       </SettingsDisclosure>
     </SettingsCard>

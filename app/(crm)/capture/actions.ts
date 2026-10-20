@@ -39,7 +39,7 @@ async function requireUser() {
 }
 
 function refreshRecords() {
-  revalidatePath("/inbox");
+  revalidatePath("/capture");
   revalidatePath("/");
   revalidateRecordPages();
   revalidatePath("/activities");
@@ -47,31 +47,31 @@ function refreshRecords() {
 }
 
 function inboxWith(key: "error" | "info", message: string): never {
-  redirect(`/inbox?${key}=${encodeURIComponent(message)}`);
+  redirect(`/capture?${key}=${encodeURIComponent(message)}`);
 }
 
 export async function syncInboxAction() {
   const user = await requireUser();
   const result = await syncMailbox(user);
-  revalidatePath("/inbox");
+  revalidatePath("/capture");
   revalidatePath("/");
   revalidateRecordPages();
   if (result.error)
-    redirect(`/inbox?error=${encodeURIComponent(result.error)}`);
-  redirect("/inbox");
+    redirect(`/capture?error=${encodeURIComponent(result.error)}`);
+  redirect("/capture");
 }
 
 export async function syncCallsAction() {
   const user = await requireUser();
   const result = await syncCalls(user, { force: true });
-  revalidatePath("/inbox");
+  revalidatePath("/capture");
   revalidatePath("/");
   revalidateRecordPages();
   revalidatePath("/activities");
   revalidatePath("/contacts");
   if (result.error)
-    redirect(`/inbox?error=${encodeURIComponent(result.error)}`);
-  redirect("/inbox");
+    redirect(`/capture?error=${encodeURIComponent(result.error)}`);
+  redirect("/capture");
 }
 
 export async function syncCalendarAction() {
@@ -79,7 +79,7 @@ export async function syncCalendarAction() {
   const result = await syncCalendar(user, { force: true });
   refreshRecords();
   if (result.error) inboxWith("error", result.error);
-  redirect("/inbox");
+  redirect("/capture");
 }
 
 export async function syncGranolaAction() {
@@ -92,7 +92,7 @@ export async function syncGranolaAction() {
   }
   refreshRecords();
   if (error) inboxWith("error", error);
-  redirect("/inbox");
+  redirect("/capture");
 }
 
 export async function enableGranolaWebhookAction() {
@@ -106,7 +106,7 @@ export async function enableGranolaWebhookAction() {
   } catch (failure) {
     inboxWith("error", actionError(failure).error);
   }
-  revalidatePath("/inbox");
+  revalidatePath("/capture");
   inboxWith("info", message);
 }
 
@@ -117,7 +117,7 @@ export async function syncTranscriptsAction() {
   refreshRecords();
   const error = result.error ?? subscription.error;
   if (error) inboxWith("error", error);
-  redirect("/inbox");
+  redirect("/capture");
 }
 
 export type ConversationActionState = { error?: string; ok?: boolean };
@@ -200,7 +200,7 @@ export async function hideAttendeeAction(email: string): Promise<ConversationAct
   } catch (error) {
     return actionError(error);
   }
-  revalidatePath("/inbox");
+  revalidatePath("/capture");
   return { ok: true };
 }
 
@@ -214,7 +214,7 @@ export async function ignoreConversationAction(
   } catch (error) {
     return actionError(error);
   }
-  revalidatePath("/inbox");
+  revalidatePath("/capture");
   return { ok: true };
 }
 
@@ -272,7 +272,7 @@ export async function sendContactEmailAction(
   revalidatePath("/contacts");
   revalidatePath("/");
   revalidateRecordPages();
-  revalidatePath("/inbox");
+  revalidatePath("/capture");
   revalidatePath("/activities");
   return { ok: true as const, warning };
 }
@@ -280,6 +280,6 @@ export async function sendContactEmailAction(
 export async function disconnectInboxAction() {
   const user = await requireUser();
   await disconnectMailbox(user);
-  revalidatePath("/inbox");
-  redirect("/inbox");
+  revalidatePath("/capture");
+  redirect("/capture");
 }

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Button from "@/components/_ui/button";
 import { SettingsCard } from "@/components/crm/settings-ui";
-import { saveSignatureAction } from "@/app/(crm)/inbox/actions";
+import { saveSignatureAction } from "@/app/(crm)/capture/actions";
 import type { Sender } from "@/lib/crm/inbox";
 
 function SignatureEditor({ sender }: { sender: Sender }) {
@@ -64,7 +64,7 @@ export default function SignaturesSettings({ senders }: { senders: Sender[] }) {
       description="Added below every email you send from that address, from a contact, in bulk or by the assistant. You can remove it from a single email while writing it."
     >
       {senders.length === 0 ? (
-        <p className="caption-style text-subtle">Connect Microsoft in Inbox to add a signature.</p>
+        <p className="caption-style text-subtle">Connect Microsoft in Capture to add a signature.</p>
       ) : (
         <div className="flex flex-col gap-4">
           {senders.map((sender) => (

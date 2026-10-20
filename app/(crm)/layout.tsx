@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { headers } from "next/headers";
 import { after } from "next/server";
 import Sidebar from "@/components/_common/sidebar/sidebar";
 import CrmChrome from "@/components/crm/chrome";
@@ -17,6 +18,7 @@ import { countOpenTasks } from "@/lib/crm/tasks";
 import { syncTeamsTranscripts } from "@/lib/crm/teams-transcripts";
 import { syncMail } from "@/lib/mail/sync";
 import { mailUnreadCount } from "@/lib/mail/threads";
+import { noteViewerAddress } from "@/lib/mail/tracking";
 import { clickupToken } from "@/lib/clickup";
 import { microsoftConfigured } from "@/lib/microsoft/oauth";
 
@@ -57,6 +59,14 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
       }
     });
   }
+  const viewerAddress = (await headers()).get("x-forwarded-for");
+  after(async () => {
+    try {
+      await noteViewerAddress(user, viewerAddress);
+    } catch (error) {
+      console.error("Viewer address failed", error);
+    }
+  });
   after(async () => {
     try {
       await runWorkflowTick({ budgetMs: 20_000 });

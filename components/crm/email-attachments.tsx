@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 import Button from "@/components/_ui/button";
-import { discardAttachmentsAction, prepareAttachmentAction } from "@/app/(crm)/inbox/actions";
+import { discardAttachmentsAction, prepareAttachmentAction } from "@/app/(crm)/capture/actions";
 import { cn } from "@/lib/utils";
 import PaperclipIcon from "@/public/assets/images/_common/paperclip.svg";
 import XIcon from "@/public/assets/images/companies/detail/x.svg";

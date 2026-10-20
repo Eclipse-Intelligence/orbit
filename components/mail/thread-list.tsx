@@ -1,12 +1,20 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { tagBase } from "@/components/beautifui/record-marks";
 import { mailListWhen, personName, recipientList } from "@/lib/mail/format";
 import type { ThreadSummary } from "@/lib/mail/view";
 import { cn } from "@/lib/utils";
+import ArchiveIcon from "@/public/assets/images/mail/archive.svg";
+import EyeIcon from "@/public/assets/images/mail/eye.svg";
 import FlagIcon from "@/public/assets/images/mail/flag.svg";
+import InboxIcon from "@/public/assets/images/mail/inbox.svg";
+import MailOpenIcon from "@/public/assets/images/mail/mail-open.svg";
 import PaperclipIcon from "@/public/assets/images/_common/paperclip.svg";
+
+export type SwipeActions = { leftLabel: string; restore: boolean; onLeft: (key: string) => void; onRight: (key: string) => void };
+
+type Drag = { pointer: number; x: number; y: number; axis: "x" | "y" | null };
 
 function Row({
   thread,
@@ -17,6 +25,7 @@ function Row({
   now,
   onOpen,
   onHover,
+  swipe,
 }: {
   thread: ThreadSummary;
   active: boolean;
@@ -26,21 +35,109 @@ function Row({
   now: number;
   onOpen: () => void;
   onHover: () => void;
+  swipe: SwipeActions | null;
 }) {
+  const [offset, setOffset] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const drag = useRef<Drag | null>(null);
+  const swiped = useRef(false);
+  const row = useRef<HTMLLIElement>(null);
+
+  function down(event: PointerEvent<HTMLButtonElement>) {
+    if (!swipe || event.pointerType !== "touch") return;
+    drag.current = { pointer: event.pointerId, x: event.clientX, y: event.clientY, axis: null };
+  }
+
+  function move(event: PointerEvent<HTMLButtonElement>) {
+    const state = drag.current;
+    if (!state || state.pointer !== event.pointerId) return;
+    const dx = event.clientX - state.x;
+    const dy = event.clientY - state.y;
+    if (!state.axis) {
+      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+      state.axis = Math.abs(dx) > Math.abs(dy) ? "x" : "y";
+      if (state.axis === "x") {
+        event.currentTarget.setPointerCapture(event.pointerId);
+        setDragging(true);
+      }
+    }
+    if (state.axis === "x") setOffset(dx);
+  }
+
+  function up(event: PointerEvent<HTMLButtonElement>) {
+    const state = drag.current;
+    drag.current = null;
+    if (!state || state.pointer !== event.pointerId || state.axis !== "x" || !swipe) {
+      setDragging(false);
+      return;
+    }
+    swiped.current = true;
+    window.setTimeout(() => (swiped.current = false), 50);
+    setDragging(false);
+    const width = row.current?.offsetWidth ?? 360;
+    const threshold = Math.min(110, width * 0.28);
+    const dx = event.clientX - state.x;
+    if (dx < -threshold) {
+      setOffset(-width);
+      window.setTimeout(() => swipe.onLeft(thread.key), 160);
+      return;
+    }
+    setOffset(0);
+    if (dx > threshold) swipe.onRight(thread.key);
+  }
+
+  function cancel() {
+    drag.current = null;
+    setDragging(false);
+    setOffset(0);
+  }
+
+  const reveal = Math.min(1, Math.abs(offset) / 110);
+  const LeftIcon = swipe?.restore ? InboxIcon : ArchiveIcon;
   const people = outgoing || thread.draft ? `To ${recipientList(thread.to, own) || "no one yet"}` : personName(thread.from);
   return (
-    <li>
+    <li ref={row} className="relative overflow-hidden rounded-xl">
+      {offset !== 0 && swipe && (
+        <span
+          aria-hidden
+          className={cn(
+            "absolute inset-0 flex items-center rounded-xl px-5 text-[13px] font-medium",
+            offset < 0 ? "text-success justify-end bg-[color-mix(in_srgb,var(--success)_16%,transparent)]" : "text-primary-foreground justify-start bg-[color-mix(in_srgb,var(--primary)_30%,transparent)]",
+          )}
+          style={{ opacity: 0.4 + reveal * 0.6 }}
+        >
+          {offset < 0 ? (
+            <span className="flex items-center gap-2">
+              {swipe.leftLabel}
+              <LeftIcon className="size-4" />
+            </span>
+          ) : (
+            <span className="flex items-center gap-2">
+              <MailOpenIcon className="size-4" />
+              {thread.unread ? "Mark read" : "Mark unread"}
+            </span>
+          )}
+        </span>
+      )}
       <button
         type="button"
-        onClick={onOpen}
+        onClick={() => {
+          if (!swiped.current) onOpen();
+        }}
+        onPointerDown={down}
+        onPointerMove={move}
+        onPointerUp={up}
+        onPointerCancel={cancel}
         onMouseEnter={onHover}
         onFocus={onHover}
         data-mail-row={thread.key}
         aria-current={active ? "true" : undefined}
         className={cn(
-          "ease-power3-out group relative flex w-full cursor-pointer flex-col gap-0.5 rounded-xl px-3 py-2.5 text-left transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
-          active ? "bg-white/[0.07]" : "hover:bg-white/[0.035]",
+          "ease-power3-out group relative flex w-full cursor-pointer touch-pan-y flex-col gap-0.5 rounded-xl px-3 py-2.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+          dragging ? "transition-none" : "transition-[background-color,transform] duration-200",
+          offset !== 0 ? "bg-background" : active ? "bg-white/[0.07]" : "hover:bg-white/[0.035]",
         )}
+        style={offset ? { transform: `translateX(${offset}px)` } : undefined}
       >
         <span className="flex min-w-0 items-center gap-2">
           <span
@@ -55,6 +152,9 @@ function Row({
           <span className="ml-auto flex shrink-0 items-center gap-1.5">
             {thread.hasAttachments && <PaperclipIcon aria-label="Has attachments" className="text-subtle size-3" />}
             {thread.flagged && <FlagIcon aria-label="Flagged" className="text-warning size-3" />}
+            {thread.reads && thread.reads.count > 0 && (
+              <EyeIcon aria-label={thread.reads.count === 1 ? "Read once" : `Read ${thread.reads.count} times`} className="text-status size-3" />
+            )}
             {showAccount && (
               <span
                 aria-hidden
@@ -95,6 +195,7 @@ export default function ThreadList({
   onOpen,
   onHover,
   onMore,
+  swipe,
 }: {
   threads: ThreadSummary[];
   cursor: string | null;
@@ -108,6 +209,7 @@ export default function ThreadList({
   onOpen: (key: string) => void;
   onHover: (key: string) => void;
   onMore: () => void;
+  swipe: SwipeActions | null;
 }) {
   const sentinel = useRef<HTMLDivElement>(null);
   const loadMore = useRef(onMore);
@@ -166,6 +268,7 @@ export default function ThreadList({
             now={now}
             onOpen={() => onOpen(thread.key)}
             onHover={() => onHover(thread.key)}
+            swipe={swipe}
           />
         ))}
       </ul>

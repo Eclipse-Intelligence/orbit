@@ -31,7 +31,7 @@ function needsReconnect(group: CalendarGroup) {
 }
 
 function sourceLine(group: CalendarGroup) {
-  if (group.kind === "primary") return "Main account · from Inbox · calendar and mail";
+  if (group.kind === "primary") return "Main account · from Capture · calendar and mail";
   if (group.provider === "ics") return "Calendar link · read-only";
   return group.canSend ? "Calendar and mail" : "Calendar only";
 }
@@ -159,8 +159,8 @@ export default function CalendarsSettings({
       {!primary && configured && (
         <p className="caption-style text-subtle">
           Your main calendar comes from the Microsoft account connected in{" "}
-          <Button variant="link" size="none" href="/inbox">
-            Inbox
+          <Button variant="link" size="none" href="/capture">
+            Capture
           </Button>
           .
         </p>

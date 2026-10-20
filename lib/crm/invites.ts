@@ -45,7 +45,7 @@ import {
 } from "@/lib/microsoft/oauth";
 import { appTimeZone, dateTimeInputValue, parseDateTime } from "@/lib/time";
 
-export const INVITE_NOT_CONNECTED = "Connect Microsoft in Inbox to send invites.";
+export const INVITE_NOT_CONNECTED = "Connect Microsoft in Capture to send invites.";
 export const INVITE_RECONNECT = CALENDAR_WRITE_RECONNECT;
 const LOCAL_START = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
 const MIN_DURATION = 5;
@@ -743,7 +743,7 @@ export async function cancelInvite(
   if (row.connection_id !== stored.id) {
     throw new CrmError(
       "invalid_input",
-      "Orbit can only cancel meetings in the calendar of the mailbox connected in Inbox.",
+      "Orbit can only cancel meetings in the calendar of the mailbox connected in Capture.",
       400,
     );
   }

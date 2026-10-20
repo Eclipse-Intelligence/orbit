@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import MailScreen from "@/components/mail/mail-screen";
 import { getUserActor } from "@/lib/auth/user";
+import { composeAccounts } from "@/lib/mail/compose";
 import { getThread, listThreads, mailNav } from "@/lib/mail/threads";
 import { readMailView, mailViewParam } from "@/lib/mail/view";
 
@@ -27,9 +28,10 @@ export default async function MailPage({
   const nav = await mailNav(user);
   const account = nav.accounts.some((item) => item.id === text(resolved.account)) ? text(resolved.account) : null;
   const threadKey = text(resolved.thread);
-  const [page, thread] = await Promise.all([
+  const [page, thread, accounts] = await Promise.all([
     listThreads(user, { view, sourceId: account, query }),
     threadKey ? getThread(user, threadKey).catch(() => null) : Promise.resolve(null),
+    composeAccounts(user).catch(() => []),
   ]);
 
   return (
@@ -46,6 +48,7 @@ export default async function MailPage({
       initialPage={page}
       initialThread={thread}
       initialNow={requestTime()}
+      accounts={accounts}
     />
   );
 }

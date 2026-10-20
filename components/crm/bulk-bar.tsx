@@ -366,8 +366,8 @@ export default function BulkActions({
                 </span>
                 <span className="flex flex-wrap items-center gap-1">
                   {!mailboxConnected && (
-                    <Button variant="link" size="none" href="/inbox" className="text-subtle mr-1">
-                      Connect Microsoft in Inbox to email
+                    <Button variant="link" size="none" href="/capture" className="text-subtle mr-1">
+                      Connect Microsoft in Capture to email
                     </Button>
                   )}
                   <Button
@@ -376,7 +376,7 @@ export default function BulkActions({
                     onClick={openComposer}
                     disabled={busy !== null || !mailboxConnected}
                     data-shortcut="bulk-email"
-                    title={mailboxConnected ? `${emailLabel} (E)` : "Connect Microsoft in Inbox to send email"}
+                    title={mailboxConnected ? `${emailLabel} (E)` : "Connect Microsoft in Capture to send email"}
                   >
                     {busy === "email" ? "Loading…" : emailLabel}
                   </Button>

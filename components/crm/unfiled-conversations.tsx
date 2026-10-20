@@ -12,7 +12,7 @@ import {
   createContactAndFileAction,
   fileConversationAction,
   ignoreConversationAction,
-} from "@/app/(crm)/inbox/actions";
+} from "@/app/(crm)/capture/actions";
 import { searchContactsToFileAction } from "@/app/(crm)/search";
 import { formatWhen } from "@/lib/companies";
 import type { ConversationImport, NewPerson, UnfiledImport } from "@/lib/crm/conversations";

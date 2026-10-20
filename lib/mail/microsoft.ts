@@ -94,7 +94,7 @@ async function graphJson<T>(
   token: string,
   fetchImpl: typeof fetch,
   prefer?: string,
-  write?: { method: "PATCH" | "POST"; body: unknown },
+  write?: { method: "PATCH" | "POST" | "DELETE"; body?: unknown },
 ): Promise<T> {
   const response = await fetchImpl(graphUrl(url), {
     method: write?.method ?? "GET",
@@ -103,10 +103,13 @@ async function graphJson<T>(
       prefer: [prefer, 'IdType="ImmutableId"'].filter(Boolean).join(", "),
       ...(write ? { "content-type": "application/json" } : {}),
     },
-    body: write ? JSON.stringify(write.body) : undefined,
+    body: write && write.body !== undefined ? JSON.stringify(write.body) : undefined,
     signal: AbortSignal.timeout(30_000),
   });
-  if (response.ok) return (await response.json()) as T;
+  if (response.ok) {
+    const text = await response.text();
+    return (text ? JSON.parse(text) : {}) as T;
+  }
   const body = (await response.json().catch(() => ({}))) as { error?: { code?: string; message?: string } };
   const code = body.error?.code ?? "";
   if (response.status === 410 || /syncstate/i.test(code)) throw new MailSyncReset(body.error?.message ?? "The sync state expired.");
@@ -255,4 +258,62 @@ export async function moveMicrosoftMessage(token: string, messageId: string, des
     { method: "POST", body: { destinationId: destination } },
   );
   return { id: moved.id ?? messageId, folderId: moved.parentFolderId ?? null };
+}
+
+export type DraftMode = "new" | "reply" | "reply_all" | "forward";
+
+const DRAFT_ACTIONS: Record<Exclude<DraftMode, "new">, string> = { reply: "createReply", reply_all: "createReplyAll", forward: "createForward" };
+
+function recipientsFor(list: MailAddress[]) {
+  return list.map((item) => ({ emailAddress: { address: item.address, ...(item.name ? { name: item.name } : {}) } }));
+}
+
+export async function createMicrosoftDraft(token: string, messageId: string | null, mode: DraftMode, fetchImpl: typeof fetch = fetch) {
+  const draft =
+    mode === "new" || !messageId
+      ? await graphJson<GraphMessage>(`${GRAPH}/me/messages`, token, fetchImpl, undefined, { method: "POST", body: { subject: "" } })
+      : await graphJson<GraphMessage>(
+          `${GRAPH}/me/messages/${encodeURIComponent(messageId)}/${DRAFT_ACTIONS[mode]}`,
+          token,
+          fetchImpl,
+          'outlook.body-content-type="html"',
+          { method: "POST", body: {} },
+        );
+  return {
+    id: draft.id,
+    subject: mode === "new" ? null : (draft.subject ?? null),
+    html: mode !== "new" && draft.body?.contentType?.toLowerCase() === "html" ? (draft.body.content ?? "") : null,
+    threadKey: draft.conversationId?.slice(0, 400) ?? null,
+  };
+}
+
+export async function updateMicrosoftDraft(
+  token: string,
+  draftId: string,
+  draft: { subject: string; html: string; to: MailAddress[]; cc: MailAddress[]; bcc: MailAddress[] },
+  fetchImpl: typeof fetch = fetch,
+) {
+  await graphJson<unknown>(`${GRAPH}/me/messages/${encodeURIComponent(draftId)}`, token, fetchImpl, undefined, {
+    method: "PATCH",
+    body: {
+      subject: draft.subject,
+      body: { contentType: "HTML", content: draft.html },
+      toRecipients: recipientsFor(draft.to),
+      ccRecipients: recipientsFor(draft.cc),
+      bccRecipients: recipientsFor(draft.bcc),
+    },
+  });
+}
+
+export async function sendMicrosoftDraft(token: string, draftId: string, fetchImpl: typeof fetch = fetch) {
+  await graphJson<unknown>(`${GRAPH}/me/messages/${encodeURIComponent(draftId)}/send`, token, fetchImpl, undefined, { method: "POST" });
+}
+
+export async function deleteMicrosoftDraft(token: string, draftId: string, fetchImpl: typeof fetch = fetch) {
+  try {
+    await graphJson<unknown>(`${GRAPH}/me/messages/${encodeURIComponent(draftId)}`, token, fetchImpl, undefined, { method: "DELETE" });
+  } catch (error) {
+    if (error instanceof GraphMailError && error.status === 404) return;
+    throw error;
+  }
 }

@@ -7,6 +7,7 @@ import { AttentionProvider } from "@/components/crm/attention";
 import QuickAdd, { QuickAddProvider } from "@/components/crm/quick-add";
 import TaskReminders from "@/components/crm/task-reminders";
 import AssistantDock from "@/components/assistant/assistant-dock";
+import { ComposerProvider } from "@/components/mail/compose-dock";
 import ShortcutsHelp from "@/components/shortcuts/shortcuts-help";
 import type { Viewer } from "@/components/crm/viewer";
 import type { Task } from "@/lib/crm/types";
@@ -28,6 +29,7 @@ export default function CrmChrome({
   return (
     <AttentionProvider overdue={overdue} today={today} notifications={notifications}>
       <QuickAddProvider>
+        <ComposerProvider>
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           {children}
           <Profile viewer={viewer} />
@@ -37,6 +39,7 @@ export default function CrmChrome({
           <ShortcutsHelp />
           <AssistantDock />
         </div>
+        </ComposerProvider>
       </QuickAddProvider>
     </AttentionProvider>
   );

@@ -15,7 +15,7 @@ import {
   syncGranolaAction,
   syncInboxAction,
   syncTranscriptsAction,
-} from "@/app/(crm)/inbox/actions";
+} from "@/app/(crm)/capture/actions";
 import { formatWhen } from "@/lib/companies";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import type { CalendarStatus, MetPerson } from "@/lib/crm/calendar";
@@ -75,7 +75,7 @@ export default function InboxScreen({
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
       <SectionHeader
-        title="Inbox"
+        title="Capture"
         viewer={viewer}
         action={
           live ? (

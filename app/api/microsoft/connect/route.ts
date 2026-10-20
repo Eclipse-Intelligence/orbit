@@ -18,7 +18,7 @@ export const dynamic = "force-dynamic";
 const STATE_COOKIE = "crm_ms_oauth";
 
 function connectReturnPath(purpose: MicrosoftPurpose) {
-  return purpose === "mailbox" ? "/inbox" : SETTINGS_PATHS.calendars;
+  return purpose === "mailbox" ? "/capture" : SETTINGS_PATHS.calendars;
 }
 
 export async function GET(request: Request) {

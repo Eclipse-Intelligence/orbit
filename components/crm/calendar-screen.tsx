@@ -92,8 +92,8 @@ function CalendarList({
     return (
       <p className="caption-style text-subtle px-1">
         Connect Microsoft in{" "}
-        <Button variant="link" size="none" href="/inbox">
-          Inbox
+        <Button variant="link" size="none" href="/capture">
+          Capture
         </Button>{" "}
         or add a calendar in{" "}
         <Button variant="link" size="none" href={SETTINGS_PATHS.calendars}>
