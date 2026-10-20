@@ -30,7 +30,7 @@ export type ThreadSummary = {
   prepared: boolean;
 };
 
-export type PreparedReply = { id: string; kind: "reply" | "nudge"; messageId: string; body: string };
+export type PreparedReply = { id: string; kind: "reply" | "nudge"; messageId: string; body: string; times: string[] | null };
 
 export type FollowUpReminder = { id: string; at: string; automatic: boolean };
 

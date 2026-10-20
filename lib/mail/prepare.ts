@@ -8,6 +8,7 @@ import { completeJson } from "@/lib/llm";
 import { clean, formatThread, recipientContext, threadText, today, voiceSamples } from "@/lib/mail/ai";
 import { stripQuoted } from "@/lib/mail/format";
 import { workingDaysLater } from "@/lib/mail/later";
+import { offerTimes, refreshTimes, TIMES_MARK } from "@/lib/mail/scheduling";
 import { splitCase, splitJoin } from "@/lib/mail/split";
 import type { MailAddress } from "@/lib/mail/types";
 
@@ -20,13 +21,13 @@ const BODY_MAX = 20_000;
 
 export type PreparedKind = "reply" | "nudge";
 
-export type PreparedDraft = { id: string; kind: PreparedKind; messageId: string; body: string };
+export type PreparedDraft = { id: string; kind: PreparedKind; messageId: string; body: string; times: string[] | null };
 
 export type MailHelpSettings = { prepareReplies: boolean; autoRemindDays: number | null };
 
 export type PrepareReport = { prepared: number; skipped: number; reminders: number; checked: number };
 
-const REPLY_SCHEMA = z.object({ needsReply: z.boolean(), body: z.string().nullable() });
+const REPLY_SCHEMA = z.object({ needsReply: z.boolean(), meeting: z.boolean().optional(), body: z.string().nullable() });
 const NUDGE_SCHEMA = z.object({ body: z.string() });
 const CHECK_SCHEMA = z.object({ expectReply: z.array(z.number()) });
 
@@ -121,7 +122,7 @@ async function draftContext(db: Db, actor: UserActor, sourceId: string, key: str
   );
   const addresses = [
     ...new Set(
-      text.messages.flatMap((message) => [message.from, ...message.to]).flatMap((item) => (item ? [item.address.toLowerCase()] : [])),
+      text.messages.flatMap((message) => [message.from, ...message.to, ...message.cc]).flatMap((item) => (item ? [item.address.toLowerCase()] : [])),
     ),
   ]
     .filter((address) => !own.has(address))
@@ -189,12 +190,13 @@ async function prepareReply(actor: UserActor, candidate: ReplyCandidate, deadlin
   const first = name.split(/\s+/)[0];
   const result = await completeJson({
     system:
-      `You prepare email replies for ${name}, who reviews and sends them from their CRM. Reply with JSON only: {"needsReply": boolean, "body": string or null}. ` +
+      `You prepare email replies for ${name}, who reviews and sends them from their CRM. Reply with JSON only: {"needsReply": boolean, "meeting": boolean, "body": string or null}. ` +
       `needsReply is true only if the latest email is from a real person and is waiting on ${name}: a question, a request, a proposal or something that would be rude to leave unanswered. ` +
       "It is false for newsletters, receipts, notifications, automated mail, a simple thank you or sign-off, and emails where someone else is clearly expected to answer. " +
       `When needsReply is true, body is the reply: a greeting, the content and a sign-off with "${first}". No subject and no signature block. ` +
       "Write in UK English, plain and direct. Match the tone, length and greeting style of the examples, and the changes the user made to earlier drafts. " +
       "Use only facts from the conversation and the CRM and call notes. Never invent prices, dates, availability, attachments or promises: write [square brackets] for anything the user must fill in. " +
+      `meeting is true when the latest email asks to find a time to meet or talk and no time is fixed yet. Then put ${TIMES_MARK} on its own line where the times go (Orbit fills in free times from the calendar and the booking link) and never suggest times yourself. ` +
       `When needsReply is false, body is null. ${UNTRUSTED} No em dashes. Today is ${today()}.`,
     user: contextBlocks(first, context).join("\n\n"),
     schema: REPLY_SCHEMA,
@@ -203,13 +205,31 @@ async function prepareReply(actor: UserActor, candidate: ReplyCandidate, deadlin
     deadline,
     fetchImpl,
   });
-  const body = result.data.needsReply && result.data.body ? clean(result.data.body).replace(/\r\n/g, "\n").slice(0, BODY_MAX) : "";
+  const written = result.data.needsReply && result.data.body ? clean(result.data.body).replace(/\r\n/g, "\n").slice(0, BODY_MAX) : "";
+  const template = written.includes(TIMES_MARK) ? written : null;
+  const offered = template
+    ? await offerTimes(actor, template).catch((error) => {
+        console.error("Finding free times failed", error instanceof Error ? error.message : error);
+        return { body: template.replace(TIMES_MARK, "[suggest some times]"), slots: [] as number[] };
+      })
+    : null;
+  const body = offered ? offered.body.slice(0, BODY_MAX) : written;
   await withActor(actor, (db) =>
     db.query(
-      `insert into crm.mail_prepared (workspace_id, user_id, source_id, thread_key, message_id, kind, state, body)
-       values ($1, $2, $3, $4, $5, 'reply', $6, $7)
+      `insert into crm.mail_prepared (workspace_id, user_id, source_id, thread_key, message_id, kind, state, body, template, slots)
+       values ($1, $2, $3, $4, $5, 'reply', $6, $7, $8, $9::timestamptz[])
        on conflict (message_id, kind) do nothing`,
-      [actor.workspaceId, actor.userId, candidate.source_id, candidate.tk, candidate.id, body ? "ready" : "skipped", body || null],
+      [
+        actor.workspaceId,
+        actor.userId,
+        candidate.source_id,
+        candidate.tk,
+        candidate.id,
+        body ? "ready" : "skipped",
+        body || null,
+        offered ? template : null,
+        offered ? offered.slots.map((slot) => new Date(slot).toISOString()) : null,
+      ],
     ),
   );
   return body ? ("prepared" as const) : ("skipped" as const);
@@ -385,19 +405,57 @@ export async function prepareMail(
   return report;
 }
 
+type PreparedRow = { id: string; kind: PreparedKind; message_id: string; body: string; template: string | null; slots: (Date | string)[] | null };
+
+function toPrepared(row: PreparedRow): PreparedDraft {
+  return {
+    id: row.id,
+    kind: row.kind,
+    messageId: row.message_id,
+    body: row.body,
+    times: row.template && row.slots ? row.slots.map((slot) => new Date(slot).toISOString()) : null,
+  };
+}
+
 export async function preparedFor(db: Db, actor: UserActor, messageId: string): Promise<PreparedDraft | null> {
-  const result = await db.query<{ id: string; kind: PreparedKind; message_id: string; body: string }>(
-    `select id, kind, message_id, body from crm.mail_prepared
+  const result = await db.query<PreparedRow>(
+    `select id, kind, message_id, body, template, slots from crm.mail_prepared
      where user_id = $1 and message_id = $2 and kind in ('reply', 'nudge') and state in ('ready', 'used') and body is not null
      order by kind = 'nudge' desc, created_at desc limit 1`,
     [actor.userId, messageId],
   );
   const row = result.rows[0];
-  return row ? { id: row.id, kind: row.kind, messageId: row.message_id, body: row.body } : null;
+  return row ? toPrepared(row) : null;
+}
+
+export async function freshPrepared(actor: UserActor, id: string, now = Date.now()): Promise<PreparedDraft | null> {
+  const row = await withActor(actor, async (db) => {
+    const result = await db.query<PreparedRow>(
+      "select id, kind, message_id, body, template, slots from crm.mail_prepared where id = $1 and user_id = $2 and body is not null",
+      [id, actor.userId],
+    );
+    return result.rows[0] ?? null;
+  });
+  if (!row) return null;
+  if (!row.template || !row.slots) return toPrepared(row);
+  const offered = row.slots.map((slot) => new Date(slot).getTime());
+  const refreshed = await refreshTimes(actor, row.template, offered, now);
+  if (!refreshed) return toPrepared(row);
+  const updated = await withActor(actor, async (db) => {
+    const result = await db.query<PreparedRow>(
+      `update crm.mail_prepared set body = $3, slots = $4::timestamptz[], updated_at = now()
+       where id = $1 and user_id = $2
+       returning id, kind, message_id, body, template, slots`,
+      [id, actor.userId, refreshed.body.slice(0, BODY_MAX), refreshed.slots.map((slot) => new Date(slot).toISOString())],
+    );
+    return result.rows[0];
+  });
+  return updated ? toPrepared(updated) : toPrepared(row);
 }
 
 export async function updatePrepared(actor: UserActor, id: string, action: "use" | "dismiss") {
   if (!isUuid(id)) throw new CrmError("not_found", "That draft has gone.", 404);
+  const fresh = action === "use" ? await freshPrepared(actor, id).catch(() => null) : null;
   await withActor(actor, (db) =>
     db.query(
       `update crm.mail_prepared set state = $3, updated_at = now()
@@ -405,6 +463,7 @@ export async function updatePrepared(actor: UserActor, id: string, action: "use"
       [id, actor.userId, action === "use" ? "used" : "dismissed"],
     ),
   );
+  return fresh;
 }
 
 export async function notePreparedSent(db: Db, actor: UserActor, messageId: string, body: string) {

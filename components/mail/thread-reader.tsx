@@ -8,6 +8,8 @@ import { loadSummary, type ThreadSummaryText } from "@/components/mail/mail-cach
 import { watchSwipe, type SwipeHandlers } from "@/components/mail/swipe";
 import MailComposer, { type ComposerStart } from "@/components/mail/mail-composer";
 import Button from "@/components/_ui/button";
+import InviteDialog, { InviteNotice, type InvitePrefill } from "@/components/crm/invite-dialog";
+import type { InviteSetup } from "@/lib/crm/invites";
 import { Monogram, tagBase } from "@/components/beautifui/record-marks";
 import EmailFrame from "@/components/mail/email-frame";
 import { useShortcut, useShortcutHint } from "@/components/shortcuts/shortcuts-provider";
@@ -30,6 +32,7 @@ import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
 import { cn } from "@/lib/utils";
 import ChevronLeftIcon from "@/public/assets/images/_common/chevron-left.svg";
 import ArchiveIcon from "@/public/assets/images/mail/archive.svg";
+import CalendarIcon from "@/public/assets/images/_common/calendar.svg";
 import ClockIcon from "@/public/assets/images/mail/clock.svg";
 import SparkleIcon from "@/public/assets/images/mail/sparkle.svg";
 import FlagIcon from "@/public/assets/images/mail/flag.svg";
@@ -198,7 +201,10 @@ function PreparedCard({ prepared, onUse, onDismiss }: { prepared: PreparedReply;
         <SparkleIcon aria-hidden className="text-primary-foreground size-3.5" />
         {prepared.kind === "nudge" ? "Nobody has replied. Orbit has a follow-up ready." : "Orbit has a reply ready"}
       </span>
-      <p className="text-soft line-clamp-5 text-[14px] leading-6 whitespace-pre-line">{prepared.body}</p>
+      <p className={cn("text-soft text-[14px] leading-6 whitespace-pre-line", prepared.times ? "line-clamp-[14]" : "line-clamp-5")}>{prepared.body}</p>
+      {prepared.times && (
+        <span className="caption-style text-subtle">The times are free in your calendar. Orbit checks them again when you open the reply.</span>
+      )}
       <span className="mt-1 flex flex-wrap gap-2">
         <Button variant="primary" onClick={onUse}>
           Edit and send
@@ -310,6 +316,10 @@ export default function ThreadReader({
   const [draftError, setDraftError] = useState<string | null>(null);
   const [hiddenPrepared, setHiddenPrepared] = useState<Set<string>>(() => new Set());
   const [cancelledFollowUp, setCancelledFollowUp] = useState<string | null>(null);
+  const [invite, setInvite] = useState<{ prefill: InvitePrefill; setup: InviteSetup; at: number } | null>(null);
+  const [inviteBusy, setInviteBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const clearNotice = useCallback(() => setNotice(null), []);
   const replyHint = useShortcutHint("mail-reply");
   const replyAllHint = useShortcutHint("mail-reply-all");
   const forwardHint = useShortcutHint("mail-forward");
@@ -336,25 +346,67 @@ export default function ThreadReader({
   const prepared = detail?.prepared && target && detail.prepared.messageId === target.id && !hiddenPrepared.has(detail.prepared.id) ? detail.prepared : null;
   const followUp = detail?.followUp && detail.followUp.id !== cancelledFollowUp ? detail.followUp : null;
 
-  function preparedAction(id: string, action: "use" | "dismiss" | "cancel_reminder") {
-    void fetch("/api/mail/prepared", {
+  async function preparedAction(id: string, action: "use" | "dismiss" | "cancel_reminder") {
+    const response = await fetch("/api/mail/prepared", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ id, action }),
-    }).catch(() => undefined);
+    }).catch(() => null);
+    const body = (await response?.json().catch(() => null)) as { prepared?: PreparedReply | null } | null;
+    return body?.prepared ?? null;
   }
 
-  function takePrepared(item: PreparedReply) {
+  async function takePrepared(item: PreparedReply) {
     if (!target) return;
     const everyone = target.to.length + target.cc.length > 1;
-    startReply(everyone ? "reply_all" : "reply", item.body);
+    const fresh = item.times ? await preparedAction(item.id, "use") : null;
+    startReply(everyone ? "reply_all" : "reply", fresh?.body ?? item.body);
     setHiddenPrepared((existing) => new Set(existing).add(item.id));
-    preparedAction(item.id, "use");
+    if (!item.times) void preparedAction(item.id, "use");
+  }
+
+  async function makeInvite() {
+    if (!detail || inviteBusy) return;
+    setInviteBusy(true);
+    try {
+      const response = await fetch("/api/mail/ai/event", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ key: detail.key }),
+      });
+      const body = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        title?: string;
+        date?: string | null;
+        time?: string | null;
+        durationMinutes?: number;
+        notes?: string;
+        guests?: InvitePrefill["guests"];
+        setup?: InviteSetup;
+      };
+      if (!response.ok || !body.setup) throw new Error(body.error ?? "Orbit couldn't read the meeting from this email. Try again.");
+      setInvite({
+        prefill: {
+          title: body.title,
+          date: body.date ?? undefined,
+          time: body.time ?? undefined,
+          durationMinutes: body.durationMinutes,
+          notes: body.notes,
+          guests: body.guests ?? [],
+        },
+        setup: body.setup,
+        at: Date.now(),
+      });
+    } catch (problem) {
+      setNotice(problem instanceof Error ? problem.message : "Orbit couldn't read the meeting from this email. Try again.");
+    } finally {
+      setInviteBusy(false);
+    }
   }
 
   function dismissPrepared(item: PreparedReply) {
     setHiddenPrepared((existing) => new Set(existing).add(item.id));
-    preparedAction(item.id, "dismiss");
+    void preparedAction(item.id, "dismiss");
   }
 
   function startReply(mode: Exclude<DraftMode, "new">, body?: string) {
@@ -489,6 +541,11 @@ export default function ThreadReader({
         <ToolButton label={flagged ? "Remove flag" : "Flag"} hint={flagHint} active={flagged} onClick={() => onAction(flagged ? "unflag" : "flag")}>
           <FlagIcon aria-hidden className="size-3.5" />
         </ToolButton>
+        {detail && (
+          <ToolButton label={inviteBusy ? "Reading the meeting from this email" : "Send an invite from this email"} onClick={() => void makeInvite()}>
+            <CalendarIcon aria-hidden className={cn("size-3.5", inviteBusy && "animate-pulse")} />
+          </ToolButton>
+        )}
         <span className="ml-auto flex min-w-0 items-center gap-2">
           {summary?.split && sender && (
             <DropdownMenu>
@@ -577,7 +634,7 @@ export default function ThreadReader({
               ) : (
                 target && (
                   <>
-                  {prepared && <PreparedCard prepared={prepared} onUse={() => takePrepared(prepared)} onDismiss={() => dismissPrepared(prepared)} />}
+                  {prepared && <PreparedCard prepared={prepared} onUse={() => void takePrepared(prepared)} onDismiss={() => dismissPrepared(prepared)} />}
                   <div className="flex flex-wrap items-center gap-2 px-4">
                     {tracked && (
                       <span className="order-last ml-auto">
@@ -601,7 +658,7 @@ export default function ThreadReader({
                         size="sm"
                         onClick={() => {
                           setCancelledFollowUp(followUp.id);
-                          preparedAction(followUp.id, "cancel_reminder");
+                          void preparedAction(followUp.id, "cancel_reminder");
                         }}
                       >
                         Don&apos;t remind me
@@ -624,6 +681,19 @@ export default function ThreadReader({
           )}
         </div>
       </div>
+      {invite && (
+        <InviteDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setInvite(null);
+          }}
+          setup={invite.setup}
+          prefill={invite.prefill}
+          now={invite.at}
+          onSent={setNotice}
+        />
+      )}
+      <InviteNotice message={notice} onDone={clearNotice} />
     </div>
   );
 }

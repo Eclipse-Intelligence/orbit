@@ -137,6 +137,10 @@ Orbit reads new email in Important and, when a real person is waiting on you, ge
 
 When you send an email that asks something, Orbit sets a No reply reminder for you (3 working days by default; weekends don't count, and it lands in working hours). The conversation shows when Orbit will remind you, with Don't remind me. If nobody replies, the conversation comes back to the top of the inbox with a follow-up already written. Both live in Settings › Templates and signatures › Prepared replies and reminders, where you can turn prepared replies off or change or stop the reminders. They run after mail syncs (straight away when Outlook reports new mail, and every five minutes), look back 48 hours, and stop at 60 prepared emails a day.
 
+When someone asks to meet, the prepared reply offers three free times on different days from your calendars (inside your booking page hours, or 9:00 to 17:30 on weekdays, at least four hours ahead, for your booking page's meeting length), and your booking link when the page is on. The times are checked against your calendar again when you open the conversation and when you press Edit and send, and replaced if any has filled up.
+
+The calendar button above an email reads the conversation and opens Send invite with the title, the time they agreed or proposed, the length, a note and the people in the conversation already filled in. Check it and press Send invites.
+
 ### Replies and read statuses
 
 `R` replies, `A` replies to all and `F` forwards, or use the buttons under the conversation. Reply goes to the sender (or, on your own email, to the people you sent it to); reply all adds everyone else on the latest email except you. Type names or addresses in To, Cc and Bcc: Orbit suggests contacts and people who have emailed you. The reply is sent from the account the conversation is in, with that address's signature (Remove signature drops it for this email), attachments, and `⌘ Enter` to send. Outlook's own quoted history goes below your message, so the thread reads as it would in Outlook.

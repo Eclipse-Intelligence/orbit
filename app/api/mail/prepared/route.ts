@@ -7,8 +7,10 @@ export async function POST(request: Request) {
   const body = (await request.json().catch(() => ({}))) as { id?: unknown; action?: unknown };
   const id = typeof body.id === "string" ? body.id : "";
   return mailResponse(async (actor) => {
-    if (body.action === "cancel_reminder") await cancelFollowUp(actor, id);
-    else await updatePrepared(actor, id, body.action === "use" ? "use" : "dismiss");
-    return { ok: true };
+    if (body.action === "cancel_reminder") {
+      await cancelFollowUp(actor, id);
+      return { ok: true, prepared: null };
+    }
+    return { ok: true, prepared: await updatePrepared(actor, id, body.action === "use" ? "use" : "dismiss") };
   });
 }
