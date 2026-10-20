@@ -37,6 +37,7 @@ import AskPanel, { type AskState } from "@/components/mail/ask-panel";
 import ScheduledList from "@/components/mail/scheduled-list";
 import { setBadge } from "@/components/push/push-client";
 import PushPrompt from "@/components/push/push-prompt";
+import { OPEN_THREAD_EVENT } from "@/components/push/push-registrar";
 import ThreadList from "@/components/mail/thread-list";
 import ThreadReader, { type ReaderAction } from "@/components/mail/thread-reader";
 import { useComposer } from "@/components/mail/compose-dock";
@@ -568,6 +569,20 @@ export default function MailScreen({
     const timer = window.setTimeout(() => actRef.current(key, "read", true), READ_DWELL_MS);
     return () => window.clearTimeout(timer);
   }, [cursor, current?.unread]);
+
+  useEffect(() => {
+    const onOpen = (event: Event) => {
+      const thread = (event as CustomEvent<{ thread?: string }>).detail?.thread;
+      if (thread) selectRef.current(thread, true);
+    };
+    window.addEventListener(OPEN_THREAD_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_THREAD_EVENT, onOpen);
+  }, []);
+
+  const selectRef = useRef(select);
+  useEffect(() => {
+    selectRef.current = select;
+  });
 
   useEffect(() => {
     if (sentCount === 0) return;
