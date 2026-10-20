@@ -4,8 +4,12 @@ import { CrmError } from "@/lib/crm/errors";
 import type { UserActor } from "@/lib/crm/types";
 import { encryptSecret } from "@/lib/crypto/secret";
 import type { Db } from "@/lib/db/pool";
+import { randomBytes } from "node:crypto";
+import { mailOrigin } from "@/lib/mail/origin";
 import {
   classificationUrl,
+  createMailSubscription,
+  renewMailSubscription,
   fetchMicrosoftClassifications,
   fetchMicrosoftDelta,
   GraphMailError,
@@ -13,6 +17,8 @@ import {
   listMicrosoftFolders,
 } from "@/lib/mail/microsoft";
 import { trackingIdIn } from "@/lib/mail/html";
+import { notifyNewMail } from "@/lib/mail/notify";
+import type { PushSender } from "@/lib/push";
 import { MailSyncReset, type MailRole, type ProviderMessage } from "@/lib/mail/types";
 import type { MicrosoftToken } from "@/lib/microsoft/oauth";
 
@@ -29,6 +35,8 @@ type SourceRow = {
   account_id: string | null;
   folders_synced_at: Date | string | null;
   snooze_folder_id: string | null;
+  graph_subscription_id: string | null;
+  graph_subscription_expires_at: Date | string | null;
 };
 
 type FolderRow = {
@@ -49,6 +57,7 @@ export type MailSyncReport = {
   backfilling: number;
   paused: boolean;
   errors: string[];
+  arrived: string[];
 };
 
 export function mailStorageLimitBytes() {
@@ -107,7 +116,7 @@ async function loadSources(actor: UserActor): Promise<Source[]> {
       );
     }
     const rows = await db.query<SourceRow>(
-      `select id, email, connection_id, account_id, folders_synced_at, snooze_folder_id
+      `select id, email, connection_id, account_id, folders_synced_at, snooze_folder_id, graph_subscription_id, graph_subscription_expires_at
        from crm.mail_sources where user_id = $1 and workspace_id = $2
        order by connection_id is null, created_at`,
       [actor.userId, actor.workspaceId],
@@ -148,7 +157,7 @@ async function saveToken(db: Db, source: Source, token: MicrosoftToken) {
 async function loadSource(actor: UserActor, sourceId: string): Promise<Source | null> {
   return withActor(actor, async (db) => {
     const found = await db.query<SourceRow>(
-      `select id, email, connection_id, account_id, folders_synced_at, snooze_folder_id
+      `select id, email, connection_id, account_id, folders_synced_at, snooze_folder_id, graph_subscription_id, graph_subscription_expires_at
        from crm.mail_sources where id = $1 and user_id = $2 and workspace_id = $3`,
       [sourceId, actor.userId, actor.workspaceId],
     );
@@ -271,8 +280,9 @@ function messageRows(messages: ProviderMessage[], ownEmail: string) {
 
 async function storePage(db: Db, actor: UserActor, source: Source, folder: FolderRow, messages: ProviderMessage[], removed: string[]) {
   const rows = messageRows(messages, source.email);
+  const inserted: string[] = [];
   if (rows.length > 0) {
-    await db.query(
+    const result = await db.query<{ id: string; inserted: boolean }>(
       `insert into crm.mail_messages (
          workspace_id, user_id, source_id, folder_id, provider_message_id, internet_message_id, thread_key, subject, snippet,
          body_html, body_text, body_truncated, from_email, from_name, to_recipients, cc_recipients, bcc_recipients,
@@ -314,9 +324,11 @@ async function storePage(db: Db, actor: UserActor, source: Source, folder: Folde
          categories = excluded.categories,
          web_link = excluded.web_link,
          tracking_id = excluded.tracking_id,
-         focused = coalesce(excluded.focused, crm.mail_messages.focused)`,
+         focused = coalesce(excluded.focused, crm.mail_messages.focused)
+       returning id, (xmax = 0) as inserted`,
       [actor.workspaceId, actor.userId, source.id, folder.id, JSON.stringify(rows)],
     );
+    for (const row of result.rows) if (row.inserted) inserted.push(row.id);
   }
   for (const message of messages.filter((item) => item.partial)) {
     await db.query(
@@ -327,7 +339,7 @@ async function storePage(db: Db, actor: UserActor, source: Source, folder: Folde
   if (removed.length > 0) {
     await db.query("delete from crm.mail_messages where folder_id = $1 and provider_message_id = any($2::text[])", [folder.id, removed]);
   }
-  return rows.length;
+  return { stored: rows.length, inserted };
 }
 
 function folderOrder(folders: FolderRow[]) {
@@ -363,7 +375,9 @@ async function syncFolder(
       throw error;
     }
     const full = await withActor(actor, async (db) => {
-      report.stored += await storePage(db, actor, source, folder, page.messages, page.removed);
+      const stored = await storePage(db, actor, source, folder, page.messages, page.removed);
+      report.stored += stored.stored;
+      if (folder.role === "inbox" && folder.sync_state === "live" && !backfilling) report.arrived.push(...stored.inserted);
       report.removed += page.removed.length;
       const next = page.deltaLink ?? page.nextLink;
       const state = page.deltaLink ? "live" : backfilling ? "backfill" : "live";
@@ -397,6 +411,32 @@ async function syncFolder(
   report.backfilling += 1;
 }
 
+const RENEW_BEFORE_MS = 24 * 60 * 60 * 1000;
+
+async function keepSubscription(actor: UserActor, source: Source, token: string, fetchImpl: typeof fetch) {
+  const origin = mailOrigin();
+  if (!origin) return;
+  const expires = source.graph_subscription_expires_at ? new Date(source.graph_subscription_expires_at).getTime() : 0;
+  if (source.graph_subscription_id && expires - Date.now() > RENEW_BEFORE_MS) return;
+  if (source.graph_subscription_id) {
+    try {
+      const expiresAt = await renewMailSubscription(token, source.graph_subscription_id, fetchImpl);
+      await withActor(actor, (db) => db.query("update crm.mail_sources set graph_subscription_expires_at = $2 where id = $1", [source.id, expiresAt]));
+      return;
+    } catch (error) {
+      if (!(error instanceof GraphMailError && error.status === 404)) throw error;
+    }
+  }
+  const clientState = randomBytes(24).toString("hex");
+  const created = await createMailSubscription(token, { notificationUrl: `${origin}/api/microsoft/mail-webhook`, clientState }, fetchImpl);
+  await withActor(actor, (db) =>
+    db.query(
+      "update crm.mail_sources set graph_subscription_id = $2, graph_subscription_expires_at = $3, graph_client_state = $4 where id = $1",
+      [source.id, created.id, created.expiresAt, clientState],
+    ),
+  );
+}
+
 async function classifyFolder(actor: UserActor, source: Source, folder: FolderRow, token: string, deadline: number, fetchImpl: typeof fetch) {
   let url: string | null = classificationUrl(folder.provider_folder_id);
   while (url && Date.now() < deadline) {
@@ -418,11 +458,11 @@ async function classifyFolder(actor: UserActor, source: Source, folder: FolderRo
 
 export async function syncMail(
   actor: UserActor,
-  options: { deadline?: number; budgetMs?: number; fetchImpl?: typeof fetch; backfill?: boolean },
+  options: { deadline?: number; budgetMs?: number; fetchImpl?: typeof fetch; backfill?: boolean; push?: PushSender },
 ): Promise<MailSyncReport> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const deadline = options.deadline ?? Date.now() + (options.budgetMs ?? 20_000);
-  const report: MailSyncReport = { sources: 0, stored: 0, removed: 0, backfilling: 0, paused: false, errors: [] };
+  const report: MailSyncReport = { sources: 0, stored: 0, removed: 0, backfilling: 0, paused: false, errors: [], arrived: [] };
   const sources = await loadSources(actor);
   const hardStop = await withActor(actor, async (db) => (await databaseBytes(db)) >= mailHardStopBytes());
   if (hardStop) {
@@ -442,6 +482,9 @@ export async function syncMail(
     try {
       const token = await currentToken(source.tokens, fetchImpl);
       await withActor(actor, (db) => saveToken(db, source, token));
+      await keepSubscription(actor, source, token.accessToken, fetchImpl).catch((error) =>
+        console.error("Mail subscription failed", error instanceof Error ? error.message : error),
+      );
       const stale = !source.folders_synced_at || Date.now() - new Date(source.folders_synced_at).getTime() > FOLDER_REFRESH_MS;
       if (stale) await refreshFolders(actor, source, token.accessToken, fetchImpl);
       const folders = await withActor(actor, async (db) => {
@@ -477,6 +520,9 @@ export async function syncMail(
         ),
       );
     }
+  }
+  if (report.arrived.length) {
+    await notifyNewMail(actor, report.arrived, { send: options.push }).catch((error) => console.error("Mail notification failed", error));
   }
   return report;
 }

@@ -63,5 +63,5 @@ export async function signInAction(
     return { ...kept, ...actionError(error) };
   }
 
-  redirect("/");
+  redirect("/mail");
 }

@@ -16,7 +16,7 @@ export default async function LoginPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const user = await getUserActor();
-  if (user) redirect("/");
+  if (user) redirect("/mail");
   const { confirmed } = await searchParams;
 
   return (

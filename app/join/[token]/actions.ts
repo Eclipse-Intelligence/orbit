@@ -42,5 +42,5 @@ export async function joinAction(_state: JoinState, formData: FormData): Promise
     return { ...kept, error: error instanceof CrmError ? error.message : "Couldn't set up your login. Try again." };
   }
   if (needsConfirmation) return { ...kept, confirmEmail: invite.email };
-  redirect("/");
+  redirect("/mail");
 }

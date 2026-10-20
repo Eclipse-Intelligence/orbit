@@ -35,6 +35,8 @@ import {
 } from "@/components/mail/mail-cache";
 import AskPanel, { type AskState } from "@/components/mail/ask-panel";
 import ScheduledList from "@/components/mail/scheduled-list";
+import { setBadge } from "@/components/push/push-client";
+import PushPrompt from "@/components/push/push-prompt";
 import ThreadList from "@/components/mail/thread-list";
 import ThreadReader, { type ReaderAction } from "@/components/mail/thread-reader";
 import { useComposer } from "@/components/mail/compose-dock";
@@ -190,6 +192,7 @@ export default function MailScreen({
   const importantUnread = nav.splits.filter((row) => row.split === "important").reduce((sum, row) => sum + row.unread, 0);
   useEffect(() => {
     setMailUnread(importantUnread);
+    setBadge(importantUnread);
   }, [importantUnread, setMailUnread]);
 
   useEffect(() => {
@@ -814,6 +817,7 @@ export default function MailScreen({
       <div className="flex min-h-0 flex-1">
         <div className={cn("min-h-0 w-full flex-col lg:flex lg:w-[25rem] lg:shrink-0 xl:w-[29rem]", open ? "hidden" : "flex")}>
           <div className="flex shrink-0 flex-col gap-2 px-3 pt-3 pb-2">
+            <PushPrompt />
             <form role="search" onSubmit={submitSearch} className="relative">
               <label htmlFor="mail-search" className="sr-only">
                 Search mail

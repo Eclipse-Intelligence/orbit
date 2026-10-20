@@ -8,6 +8,7 @@ import QuickAdd, { QuickAddProvider } from "@/components/crm/quick-add";
 import TaskReminders from "@/components/crm/task-reminders";
 import AssistantDock from "@/components/assistant/assistant-dock";
 import { ComposerProvider } from "@/components/mail/compose-dock";
+import PushRegistrar from "@/components/push/push-registrar";
 import ShortcutsHelp from "@/components/shortcuts/shortcuts-help";
 import type { Viewer } from "@/components/crm/viewer";
 import type { Task } from "@/lib/crm/types";
@@ -38,6 +39,7 @@ export default function CrmChrome({
           <TaskReminders />
           <ShortcutsHelp />
           <AssistantDock />
+          <PushRegistrar />
         </div>
         </ComposerProvider>
       </QuickAddProvider>

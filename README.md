@@ -97,6 +97,12 @@ Keys: `J` and `K` (or the arrows) move through the list, `E` archives (in Archiv
 
 Capture (`G` then `I`, formerly Inbox) is where the Microsoft connection lives, along with everything Orbit has captured and is waiting for you: mail to file to contacts, people you've met, calls and transcripts. `/inbox` redirects there.
 
+### Orbit as an app, and notifications
+
+Orbit installs as an app. On iPhone, open it in Safari, tap Share, then Add to Home Screen; on a Mac, use Safari's File › Add to Dock or Chrome's install button. It opens full screen on Mail, and signing in anywhere lands on Mail too.
+
+Notifications for new mail work on iPhone (iOS 16.4 or later, opened from the Home Screen icon) and on desktop browsers, even when Orbit is closed. Turn them on from the prompt at the top of Mail or in Settings › General › Notifications (Turn on for this device, then Send a test), and choose Important only (the default: people you know, conversations you're in and calendar replies), All new mail, or Off. Outlook tells Orbit about new inbox mail straight away, so a notification usually arrives within seconds; tapping it opens the conversation. Several at once are grouped. The app icon shows the Important unread count. A sent email's read status sits on the right of the reply buttons: Unread, or Read by and the person's name, with every open on hover.
+
 ### Split inbox and triage
 
 Mail opens on Important. The inbox is split into Important, Other, News and Calendar (a split shows when it has mail), with unread counts, and `Tab` and `Shift Tab` move between them; More holds All inbox, Snoozed, Scheduled, Sent, Drafts, Archive, Trash and your folders. The side menu's Mail count is Important only.

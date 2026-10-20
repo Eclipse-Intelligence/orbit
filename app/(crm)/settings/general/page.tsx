@@ -3,6 +3,8 @@ import AccountSettings from "@/components/crm/account-settings";
 import MeetingLinkSettings from "@/components/crm/meeting-link-settings";
 import MyEmailsSettings from "@/components/crm/my-emails-settings";
 import ShortcutSettings from "@/components/crm/shortcut-settings";
+import NotificationSettings from "@/components/push/notification-settings";
+import { notificationSettings } from "@/lib/mail/notify";
 import SettingsHashRedirect from "@/components/crm/settings-hash-redirect";
 import { SettingsPage } from "@/components/crm/settings-ui";
 import { getUserActor } from "@/lib/auth/user";
@@ -14,14 +16,15 @@ export const dynamic = "force-dynamic";
 export default async function GeneralSettingsPage() {
   const user = await getUserActor();
   if (!user) redirect("/login");
-  const [myEmails, meetingLink] = await Promise.all([
+  const [myEmails, meetingLink, notifications] = await Promise.all([
     getMyEmails(user),
     getMeetingLink(user),
+    notificationSettings(user),
   ]);
   return (
     <SettingsPage
       title="General"
-      description="Your account, the addresses Orbit treats as you, your meeting link and keyboard shortcuts."
+      description="Your account, the addresses Orbit treats as you, notifications, your meeting link and keyboard shortcuts."
     >
       <SettingsHashRedirect />
       <AccountSettings
@@ -31,6 +34,7 @@ export default async function GeneralSettingsPage() {
         workspaceName={user.workspaceName}
       />
       <MyEmailsSettings emails={myEmails} />
+      <NotificationSettings initialMail={notifications.mail} devices={notifications.devices} />
       <MeetingLinkSettings meetingLink={meetingLink} />
       <ShortcutSettings />
     </SettingsPage>
