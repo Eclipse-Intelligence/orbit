@@ -3,16 +3,51 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import Button from "@/components/_ui/button";
 import { AttachButton, AttachmentList, useEmailAttachments } from "@/components/crm/email-attachments";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/_ui/dropdown-menu";
+import { useComposer } from "@/components/mail/compose-dock";
 import RecipientField from "@/components/mail/recipient-field";
+import { laterDetail, laterOptions } from "@/lib/mail/later";
 import { useShortcutHint } from "@/components/shortcuts/shortcuts-provider";
 import type { MailAddress } from "@/lib/mail/types";
 import type { ComposeAccount, DraftMode, MailDraft } from "@/lib/mail/view";
 import { cn } from "@/lib/utils";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
+import BellIcon from "@/public/assets/images/mail/bell.svg";
+import ClockIcon from "@/public/assets/images/mail/clock.svg";
 import TrashIcon from "@/public/assets/images/mail/trash.svg";
 
 const SAVE_DELAY_MS = 1500;
 export const MODE_LABEL: Record<DraftMode, string> = { new: "New email", reply: "Reply", reply_all: "Reply all", forward: "Forward" };
+
+export type SendPayload = {
+  id: string | null;
+  mode: DraftMode;
+  messageId: string | null;
+  sourceId: string;
+  to: MailAddress[];
+  cc: MailAddress[];
+  bcc: MailAddress[];
+  subject: string;
+  body: string;
+  signature: boolean;
+  remindHours: number | null;
+  attachments: string[];
+};
+
+const REMINDERS: { hours: number | null; label: string }[] = [
+  { hours: null, label: "No reminder" },
+  { hours: 24, label: "1 day" },
+  { hours: 48, label: "2 days" },
+  { hours: 72, label: "3 days" },
+  { hours: 168, label: "1 week" },
+];
 
 export type ComposerStart = {
   mode: DraftMode;
@@ -45,6 +80,8 @@ export default function MailComposer({
   onSent,
   onClose,
   onSubject,
+  onDelivered,
+  onUndone,
 }: {
   start: ComposerStart;
   accounts: ComposeAccount[];
@@ -52,7 +89,11 @@ export default function MailComposer({
   onSent: (body: string, to: MailAddress[]) => void;
   onClose: () => void;
   onSubject?: (subject: string) => void;
+  onDelivered?: () => void;
+  onUndone?: () => void;
 }) {
+  const { queueSend, scheduleSend, pickLater } = useComposer();
+  const [remindHours, setRemindHours] = useState<number | null>(null);
   const id = useId();
   const sendHint = useShortcutHint("submit");
   const draft = start.draft;
@@ -64,11 +105,11 @@ export default function MailComposer({
   const [subject, setSubject] = useState(draft?.subject || start.subject);
   const [body, setBody] = useState(draft?.body ?? "");
   const [withSignature, setWithSignature] = useState(true);
-  const [save, setSave] = useState<SaveState>(draft ? { kind: "saved" } : { kind: "idle" });
-  const [sending, setSending] = useState(false);
+  const [save, setSave] = useState<SaveState>(draft?.savedAt ? { kind: "saved" } : { kind: "idle" });
+  const [scheduledFor, setScheduledFor] = useState(draft?.sendAt ?? null);
   const [error, setError] = useState<string | null>(null);
   const attachments = useEmailAttachments();
-  const draftId = useRef<string | null>(draft?.id ?? null);
+  const draftId = useRef<string | null>(draft?.id || null);
   const chain = useRef<Promise<unknown>>(Promise.resolve());
   const dirty = useRef(false);
   const textarea = useRef<HTMLTextAreaElement>(null);
@@ -87,7 +128,7 @@ export default function MailComposer({
 
   useEffect(() => {
     const element = textarea.current;
-    if (!element) return;
+    if (!element || card) return;
     element.style.height = "auto";
     element.style.height = `${Math.min(element.scrollHeight, card ? 420 : 560)}px`;
   }, [body, card]);
@@ -146,40 +187,60 @@ export default function MailComposer({
     };
   }
 
-  async function send(event?: FormEvent) {
-    event?.preventDefault();
-    if (sending) return;
+  function ready() {
     if (attachments.uploading) {
       setError("Wait for the attachments to finish uploading.");
-      return;
+      return false;
     }
     if (to.length + cc.length + bcc.length === 0) {
       setError("Add at least one person to send to.");
-      return;
+      return false;
     }
     if (start.mode === "new" && !subject.trim()) {
       setError("Add a subject.");
-      return;
+      return false;
     }
-    setSending(true);
-    setError(null);
-    await chain.current.catch(() => null);
+    if (!body.trim() && start.mode !== "forward") {
+      setError("Write a message first.");
+      return false;
+    }
+    return true;
+  }
+
+  function handOver(): Promise<SendPayload> {
+    const snapshot = { ...payload.current, remindHours, attachments: attachments.ids };
     dirty.current = false;
-    try {
-      const result = await postJson<{ warning: string | null }>("/api/mail/drafts/send", {
-        ...payload.current,
-        id: draftId.current,
-        attachments: attachments.ids,
-      });
-      attachments.clear();
-      draftId.current = null;
-      onSent(body, [...to, ...cc]);
-      if (result.warning) setError(result.warning);
-    } catch (problem) {
-      dirty.current = true;
-      setSending(false);
-      setError(problem instanceof Error ? problem.message : "The email didn't send. Try again.");
-    }
+    const pending = chain.current.catch(() => null);
+    return pending.then(() => ({ ...snapshot, id: draftId.current }));
+  }
+
+  function send(event?: FormEvent) {
+    event?.preventDefault();
+    if (!ready()) return;
+    queueSend(handOver(), { onDelivered, onUndone });
+    onSent(body, [...to, ...cc]);
+  }
+
+  function sendLater() {
+    if (!ready()) return;
+    const now = Date.now();
+    pickLater({
+      title: "Send later",
+      description: "Orbit keeps the draft in Outlook and sends it at this time.",
+      options: laterOptions(now),
+      now,
+      onPick: (at, detail) => {
+        scheduleSend(handOver(), at, detail);
+        onClose();
+      },
+    });
+  }
+
+  async function unschedule() {
+    const current = draftId.current;
+    if (!current) return;
+    setScheduledFor(null);
+    await fetch(`/api/mail/drafts/schedule?id=${encodeURIComponent(current)}`, { method: "DELETE" }).catch(() => null);
   }
 
   async function discard() {
@@ -285,7 +346,10 @@ export default function MailComposer({
         onChange={(event) => change(setBody)(event.target.value)}
         placeholder={start.mode === "forward" ? "Add a note" : start.mode === "new" ? "Write your email" : "Write your reply"}
         rows={card ? 8 : 4}
-        className="text-foreground placeholder:text-subtle mt-2 min-h-24 w-full resize-none bg-transparent text-[14px] leading-6 outline-none"
+        className={cn(
+          "text-foreground placeholder:text-subtle mt-2 min-h-24 w-full resize-none bg-transparent text-[14px] leading-6 outline-none",
+          card && "flex-1",
+        )}
       />
       {account?.signature && (
         <div className="flex items-start gap-3 pb-1">
@@ -301,23 +365,63 @@ export default function MailComposer({
           </button>
         </div>
       )}
-      <AttachmentList items={attachments.items} onRemove={attachments.remove} disabled={sending} />
+      <AttachmentList items={attachments.items} onRemove={attachments.remove} />
+      {scheduledFor && (
+        <p className="caption-style text-soft flex items-center gap-2">
+          <ClockIcon aria-hidden className="text-primary size-3.5" />
+          Scheduled for {laterDetail(scheduledFor, Date.parse(draft?.savedAt || scheduledFor))}. Changes here go out with it.
+          <button
+            type="button"
+            onClick={() => void unschedule()}
+            className="text-foreground cursor-pointer underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+          >
+            Unschedule
+          </button>
+        </p>
+      )}
       {error && (
         <p role="alert" className="caption-style text-danger">
           {error}
         </p>
       )}
       <div className="flex items-center gap-1 pt-2">
-        <Button variant="primary" type="submit" disabled={sending} data-shortcut-submit title={`Send (${sendHint})`}>
-          {sending ? "Sending…" : "Send"}
+        <Button variant="primary" type="submit" data-shortcut-submit title={`Send (${sendHint})`}>
+          {scheduledFor ? "Send now" : "Send"}
         </Button>
-        <AttachButton id={`${id}-attach`} onFiles={(files) => void attachments.add(files)} disabled={sending} />
+        <Button variant="ghost" size="icon" aria-label="Send later" title="Send later" onClick={sendLater}>
+          <ClockIcon aria-hidden className="size-3.5" />
+        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size={remindHours ? "sm" : "icon"}
+              aria-label={remindHours ? `Remind me if no reply in ${REMINDERS.find((item) => item.hours === remindHours)?.label}` : "Remind me if no reply"}
+              title="Remind me if no reply"
+              className={cn(remindHours && "text-primary-foreground bg-[color-mix(in_srgb,var(--primary)_28%,transparent)] hover:text-white")}
+            >
+              <BellIcon aria-hidden className="size-3.5" />
+              {remindHours ? REMINDERS.find((item) => item.hours === remindHours)?.label : null}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            <DropdownMenuLabel>Remind me if no reply in</DropdownMenuLabel>
+            <DropdownMenuRadioGroup value={String(remindHours ?? "")} onValueChange={(value) => setRemindHours(value ? Number(value) : null)}>
+              {REMINDERS.map((item) => (
+                <DropdownMenuRadioItem key={item.label} value={String(item.hours ?? "")}>
+                  {item.label}
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <AttachButton id={`${id}-attach`} onFiles={(files) => void attachments.add(files)} compact />
         {card && (
           <span role="status" className={cn("caption-style ml-2 min-w-0 truncate", save.kind === "error" ? "text-danger" : "text-subtle")}>
             {status}
           </span>
         )}
-        <Button variant="ghost" size="icon" aria-label="Discard draft" title="Discard draft" onClick={() => void discard()} className="ml-auto" disabled={sending}>
+        <Button variant="ghost" size="icon" aria-label="Discard draft" title="Discard draft" onClick={() => void discard()} className="ml-auto">
           <TrashIcon aria-hidden className="size-3.5" />
         </Button>
       </div>

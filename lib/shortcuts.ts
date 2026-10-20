@@ -166,6 +166,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: "mail-reply-all", label: "Reply all", group: "Mail", combos: [{ key: "a" }] },
   { id: "mail-forward", label: "Forward", group: "Mail", combos: [{ key: "f" }] },
   { id: "mail-archive", label: "Archive", group: "Mail", combos: [{ key: "e" }] },
+  { id: "mail-snooze", label: "Remind me (snooze)", group: "Mail", combos: [{ key: "h" }] },
   { id: "mail-trash", label: "Move to Trash", group: "Mail", combos: [{ key: "#" }, { key: "#", shift: true }, { key: "#", alt: true }, { key: "Backspace" }, { key: "Delete" }] },
   { id: "mail-read", label: "Mark read or unread", group: "Mail", combos: [{ key: "u" }] },
   { id: "mail-flag", label: "Flag or unflag", group: "Mail", combos: [{ key: "s" }] },

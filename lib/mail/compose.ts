@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createActivityInDb } from "@/lib/crm/activities";
 import { withActor } from "@/lib/crm/context";
 import { discardAttachments, loadAttachments } from "@/lib/crm/email-attachments";
@@ -37,7 +38,11 @@ export type DraftInput = {
   subject: string;
   body: string;
   signature: boolean;
+  remindHours: number | null;
 };
+
+const SCHEDULE_MIN_MS = 30_000;
+const SCHEDULE_MAX_MS = 366 * 24 * 60 * 60 * 1000;
 
 type DraftRow = {
   id: string;
@@ -54,6 +59,9 @@ type DraftRow = {
   body: string;
   tracking_id: string | null;
   updated_at: Date | string;
+  send_at: Date | string | null;
+  send_error: string | null;
+  content_hash: string | null;
 };
 
 type Target = { id: string | null; source_id: string; provider_message_id: string | null; thread_key: string | null; email: string };
@@ -99,6 +107,10 @@ export function readDraftInput(value: unknown): DraftInput {
     subject,
     body,
     signature: input.signature !== false,
+    remindHours:
+      typeof input.remindHours === "number" && Number.isInteger(input.remindHours) && input.remindHours >= 1 && input.remindHours <= 2160
+        ? input.remindHours
+        : null,
   };
 }
 
@@ -114,11 +126,13 @@ function toDraft(row: DraftRow): MailDraft {
     subject: row.subject ?? "",
     body: row.body,
     savedAt: new Date(row.updated_at).toISOString(),
+    sendAt: row.send_at ? new Date(row.send_at).toISOString() : null,
+    sendError: row.send_error,
   };
 }
 
 const DRAFT_COLUMNS = `id, source_id, provider_draft_id, mode, reply_to, thread_key, quote_html, to_recipients, cc_recipients,
-  bcc_recipients, subject, body, tracking_id, updated_at`;
+  bcc_recipients, subject, body, tracking_id, updated_at, send_at, send_error, content_hash`;
 
 async function loadTarget(db: Db, actor: UserActor, messageId: string) {
   const result = await db.query<Target>(
@@ -205,28 +219,46 @@ async function createDraft(
   });
 }
 
-async function writeDraft(actor: UserActor, input: DraftInput, options: { origin: string | null; fetchImpl: typeof fetch }) {
-  const found = input.id
-    ? await withActor(actor, async (db) => {
-        const result = await db.query<DraftRow>(`select ${DRAFT_COLUMNS} from crm.mail_drafts where id = $1 and user_id = $2`, [input.id, actor.userId]);
-        return result.rows[0] ?? null;
-      })
-    : null;
-  const moved = Boolean(found && input.mode === "new" && input.sourceId && found.source_id !== input.sourceId);
-  if (found && moved) await discardMailDraft(actor, found.id, options.fetchImpl);
-  const { target, existing, signature } = await withActor(actor, async (db) => {
-    const row = moved ? null : found;
+function contentHash(input: DraftInput, signature: string | null, subject: string) {
+  return createHash("sha256")
+    .update(JSON.stringify([subject, input.body, signature, ...[input.to, input.cc, input.bcc].map((list) => list.map((item) => [item.address, item.name ?? null]))]))
+    .digest("hex")
+    .slice(0, 32);
+}
+
+async function readDraftContext(actor: UserActor, input: DraftInput, row: DraftRow | null) {
+  return withActor(actor, async (db) => {
     const target =
       row?.reply_to || (!row && input.messageId)
         ? await loadTarget(db, actor, (row?.reply_to ?? input.messageId)!)
         : await loadSourceTarget(db, actor, (row?.source_id ?? input.sourceId)!);
-    return { target, existing: row, signature: input.signature ? await signatureFor(db, actor, target.email) : null };
+    return { target, signature: input.signature ? await signatureFor(db, actor, target.email) : null };
   });
+}
+
+async function writeDraft(actor: UserActor, input: DraftInput, options: { origin: string | null; fetchImpl: typeof fetch }) {
+  const first = await withActor(actor, async (db) => {
+    const found = input.id
+      ? (await db.query<DraftRow>(`select ${DRAFT_COLUMNS} from crm.mail_drafts where id = $1 and user_id = $2`, [input.id, actor.userId])).rows[0] ?? null
+      : null;
+    const moved = Boolean(found && input.mode === "new" && input.sourceId && found.source_id !== input.sourceId);
+    if (moved) return { found, moved, target: null, signature: null };
+    const target =
+      found?.reply_to || (!found && input.messageId)
+        ? await loadTarget(db, actor, (found?.reply_to ?? input.messageId)!)
+        : await loadSourceTarget(db, actor, (found?.source_id ?? input.sourceId)!);
+    return { found, moved, target, signature: input.signature ? await signatureFor(db, actor, target.email) : null };
+  });
+  if (first.found && first.moved) await discardMailDraft(actor, first.found.id, options.fetchImpl);
+  const existing = first.moved ? null : first.found;
+  const { target, signature } = first.target ? { target: first.target, signature: first.signature } : await readDraftContext(actor, input, null);
   const token = await mailSourceToken(actor, target.source_id, options.fetchImpl);
   let row = existing ?? (await createDraft(actor, input, target, token, options.origin, options.fetchImpl));
   const html = () =>
     composeEmailHtml({ body: input.body, signature, pixel: pixelUrl(options.origin, row.tracking_id), quote: row.quote_html });
   const subject = input.subject || row.subject || "";
+  const hash = contentHash(input, signature, subject);
+  if (existing && existing.content_hash === hash) return { row: existing, target, token };
   try {
     await updateMicrosoftDraft(token, row.provider_draft_id, { subject, html: html(), to: input.to, cc: input.cc, bcc: input.bcc }, options.fetchImpl);
   } catch (error) {
@@ -239,9 +271,10 @@ async function writeDraft(actor: UserActor, input: DraftInput, options: { origin
   }
   const saved = await withActor(actor, async (db) => {
     const result = await db.query<DraftRow>(
-      `update crm.mail_drafts set to_recipients = $2, cc_recipients = $3, bcc_recipients = $4, subject = $5, body = $6, updated_at = now()
+      `update crm.mail_drafts set to_recipients = $2, cc_recipients = $3, bcc_recipients = $4, subject = $5, body = $6,
+         signature = $7, content_hash = $8, updated_at = now()
        where id = $1 returning ${DRAFT_COLUMNS}`,
-      [row.id, JSON.stringify(input.to), JSON.stringify(input.cc), JSON.stringify(input.bcc), subject, input.body],
+      [row.id, JSON.stringify(input.to), JSON.stringify(input.cc), JSON.stringify(input.bcc), subject, input.body, input.signature, hash],
     );
     return result.rows[0];
   });
@@ -292,25 +325,43 @@ async function logReply(actor: UserActor, input: DraftInput, subject: string, fr
   });
 }
 
-export async function sendMailDraft(
-  actor: UserActor,
-  input: DraftInput & { attachments?: string[] },
-  options: { origin: string | null; fetchImpl?: typeof fetch },
-): Promise<{ warning: string | null }> {
+function checkSendable(input: DraftInput) {
   if (input.to.length + input.cc.length + input.bcc.length === 0) {
     throw new CrmError("invalid_input", "Add at least one person to send to.", 400, { field: "To" });
   }
   if (!input.body.trim() && input.mode !== "forward") throw new CrmError("invalid_input", "Write a message first.", 400, { field: "body" });
   if (input.mode === "new" && !input.subject) throw new CrmError("invalid_input", "Add a subject.", 400, { field: "subject" });
+}
+
+export function readAttachmentIds(value: unknown) {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && isUuid(item)).slice(0, 10) : [];
+}
+
+export async function sendMailDraft(
+  actor: UserActor,
+  input: DraftInput & { attachments?: string[] },
+  options: { origin: string | null; fetchImpl?: typeof fetch },
+): Promise<{ warning: string | null }> {
+  checkSendable(input);
   const fetchImpl = options.fetchImpl ?? fetch;
-  const attached = await loadAttachments(actor, input.attachments ?? [], fetchImpl);
-  const { row, target, token } = await writeDraft(actor, input, { origin: options.origin, fetchImpl });
-  const draftUrl = `https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(row.provider_draft_id)}`;
-  try {
+  const [attached, written] = await Promise.all([
+    loadAttachments(actor, input.attachments ?? [], fetchImpl),
+    writeDraft(actor, input, { origin: options.origin, fetchImpl }),
+  ]);
+  let { row } = written;
+  const { target, token } = written;
+  const deliver = async (draft: DraftRow) => {
+    const draftUrl = `https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(draft.provider_draft_id)}`;
     if (attached.files.length) await attachToDraft(token, draftUrl, attached.files, fetchImpl);
-    await sendMicrosoftDraft(token, row.provider_draft_id, fetchImpl);
+    await sendMicrosoftDraft(token, draft.provider_draft_id, fetchImpl);
+  };
+  try {
+    await deliver(row);
   } catch (error) {
-    graphProblem(error);
+    if (!(error instanceof GraphMailError && error.status === 404)) graphProblem(error);
+    await withActor(actor, (db) => db.query("delete from crm.mail_drafts where id = $1", [row.id]));
+    row = (await writeDraft(actor, { ...input, id: null }, { origin: options.origin, fetchImpl })).row;
+    await deliver(row).catch(graphProblem);
   }
   await withActor(actor, async (db) => {
     if (row.tracking_id) {
@@ -321,14 +372,107 @@ export async function sendMailDraft(
       ]);
     }
     await db.query("delete from crm.mail_drafts where id = $1", [row.id]);
+    const threadKey = row.thread_key ?? (row.reply_to ? `m:${row.reply_to}` : null);
+    if (input.remindHours && threadKey) {
+      await db.query(
+        `insert into crm.mail_reminders (workspace_id, user_id, source_id, thread_key, kind, due_at, subject)
+         values ($1, $2, $3, $4, 'follow_up', now() + make_interval(hours => $5), $6)`,
+        [actor.workspaceId, actor.userId, row.source_id, threadKey, input.remindHours, row.subject],
+      );
+    }
   });
-  if (attached.summary.length) await discardAttachments(actor, input.attachments ?? [], fetchImpl).catch(() => undefined);
-  try {
-    await logReply(actor, input, row.subject ?? "", target.email, attached.summary);
-  } catch {
-    return { warning: "Sent, but Orbit couldn't add it to the contact's timeline." };
+  const [, logged] = await Promise.all([
+    attached.summary.length ? discardAttachments(actor, input.attachments ?? [], fetchImpl).catch(() => undefined) : Promise.resolve(),
+    logReply(actor, input, row.subject ?? "", target.email, attached.summary).then(
+      () => true,
+      () => false,
+    ),
+  ]);
+  return { warning: logged ? null : "Sent, but Orbit couldn't add it to the contact's timeline." };
+}
+
+export async function scheduleMailDraft(
+  actor: UserActor,
+  input: DraftInput & { attachments?: string[]; sendAt: string },
+  options: { origin: string | null; fetchImpl?: typeof fetch },
+): Promise<MailDraft> {
+  checkSendable(input);
+  const at = new Date(input.sendAt);
+  if (Number.isNaN(at.getTime()) || at.getTime() < Date.now() + SCHEDULE_MIN_MS || at.getTime() > Date.now() + SCHEDULE_MAX_MS) {
+    throw new CrmError("invalid_input", "Choose a time at least a minute from now and within a year.", 400, { field: "sendAt" });
   }
-  return { warning: null };
+  const { row } = await writeDraft(actor, input, { origin: options.origin, fetchImpl: options.fetchImpl ?? fetch });
+  return withActor(actor, async (db) => {
+    const result = await db.query<DraftRow>(
+      `update crm.mail_drafts set send_at = $2, attachments = $3::uuid[], remind_hours = $4, signature = $5, send_error = null
+       where id = $1 returning ${DRAFT_COLUMNS}`,
+      [row.id, at.toISOString(), input.attachments ?? [], input.remindHours, input.signature],
+    );
+    return toDraft(result.rows[0]);
+  });
+}
+
+export async function unscheduleMailDraft(actor: UserActor, id: string): Promise<MailDraft | null> {
+  if (!isUuid(id)) return null;
+  return withActor(actor, async (db) => {
+    const result = await db.query<DraftRow>(
+      `update crm.mail_drafts set send_at = null, send_error = null where id = $1 and user_id = $2 returning ${DRAFT_COLUMNS}`,
+      [id, actor.userId],
+    );
+    return result.rows[0] ? toDraft(result.rows[0]) : null;
+  });
+}
+
+export async function listScheduledDrafts(actor: UserActor): Promise<MailDraft[]> {
+  return withActor(actor, async (db) => {
+    const result = await db.query<DraftRow>(
+      `select ${DRAFT_COLUMNS} from crm.mail_drafts
+       where user_id = $1 and workspace_id = $2 and (send_at is not null or send_error is not null)
+       order by send_at nulls first, updated_at desc
+       limit 200`,
+      [actor.userId, actor.workspaceId],
+    );
+    return result.rows.map(toDraft);
+  });
+}
+
+type DueDraft = DraftRow & { attachments: string[]; remind_hours: number | null; signature: boolean };
+
+export async function claimDueDrafts(actor: UserActor, limit = 5): Promise<DueDraft[]> {
+  return withActor(actor, async (db) => {
+    const result = await db.query<DueDraft>(
+      `update crm.mail_drafts set send_at = null
+       where id in (
+         select id from crm.mail_drafts
+         where user_id = $1 and workspace_id = $2 and send_at <= now()
+         order by send_at limit $3 for update skip locked
+       )
+       returning ${DRAFT_COLUMNS}, attachments, remind_hours, signature`,
+      [actor.userId, actor.workspaceId, limit],
+    );
+    return result.rows;
+  });
+}
+
+export function dueDraftInput(row: DueDraft): DraftInput & { attachments: string[] } {
+  return {
+    id: row.id,
+    mode: row.mode,
+    messageId: row.reply_to,
+    sourceId: row.source_id,
+    to: row.to_recipients ?? [],
+    cc: row.cc_recipients ?? [],
+    bcc: row.bcc_recipients ?? [],
+    subject: row.subject ?? "",
+    body: row.body,
+    signature: row.signature,
+    remindHours: row.remind_hours,
+    attachments: row.attachments ?? [],
+  };
+}
+
+export async function failDueDraft(actor: UserActor, id: string, message: string) {
+  await withActor(actor, (db) => db.query("update crm.mail_drafts set send_error = $2 where id = $1", [id, message.slice(0, 500)]));
 }
 
 export async function discardMailDraft(actor: UserActor, id: string, fetchImpl: typeof fetch = fetch) {

@@ -12,7 +12,7 @@ import type { MicrosoftToken } from "@/lib/microsoft/oauth";
 const FOLDER_REFRESH_MS = 6 * 60 * 60 * 1000;
 const LOCK_SECONDS = 300;
 const SKIPPED_ROLES: MailRole[] = ["junk", "outbox"];
-const ROLE_ORDER: MailRole[] = ["inbox", "sent", "drafts", "archive", "other", "trash"];
+const ROLE_ORDER: MailRole[] = ["inbox", "sent", "drafts", "snoozed", "archive", "other", "trash"];
 const DEFAULT_STORAGE_LIMIT_MB = 400;
 
 type SourceRow = {
@@ -21,6 +21,7 @@ type SourceRow = {
   connection_id: string | null;
   account_id: string | null;
   folders_synced_at: Date | string | null;
+  snooze_folder_id: string | null;
 };
 
 type FolderRow = {
@@ -98,7 +99,7 @@ async function loadSources(actor: UserActor): Promise<Source[]> {
       );
     }
     const rows = await db.query<SourceRow>(
-      `select id, email, connection_id, account_id, folders_synced_at
+      `select id, email, connection_id, account_id, folders_synced_at, snooze_folder_id
        from crm.mail_sources where user_id = $1 and workspace_id = $2
        order by connection_id is null, created_at`,
       [actor.userId, actor.workspaceId],
@@ -136,8 +137,39 @@ async function saveToken(db: Db, source: Source, token: MicrosoftToken) {
   );
 }
 
+async function loadSource(actor: UserActor, sourceId: string): Promise<Source | null> {
+  return withActor(actor, async (db) => {
+    const found = await db.query<SourceRow>(
+      `select id, email, connection_id, account_id, folders_synced_at, snooze_folder_id
+       from crm.mail_sources where id = $1 and user_id = $2 and workspace_id = $3`,
+      [sourceId, actor.userId, actor.workspaceId],
+    );
+    const row = found.rows[0];
+    if (!row) return null;
+    if (row.connection_id) {
+      const mailbox = await readStored(db, actor);
+      return mailbox && mailbox.id === row.connection_id && mailbox.status === "connected" && mailbox.refreshTokenCipher ? { ...row, tokens: mailbox } : null;
+    }
+    const account = await db.query<{ refresh_token: string | null; access_token: string | null; access_token_expires_at: Date | string | null }>(
+      `select refresh_token, access_token, access_token_expires_at from crm.calendar_accounts
+       where id = $1 and user_id = $2 and provider = 'microsoft' and status = 'connected' and can_send and refresh_token is not null`,
+      [row.account_id, actor.userId],
+    );
+    const tokens = account.rows[0];
+    if (!tokens) return null;
+    return {
+      ...row,
+      tokens: {
+        refreshTokenCipher: tokens.refresh_token,
+        accessTokenCipher: tokens.access_token,
+        accessTokenExpiresAt: tokens.access_token_expires_at ? new Date(tokens.access_token_expires_at).toISOString() : null,
+      },
+    };
+  });
+}
+
 export async function mailSourceToken(actor: UserActor, sourceId: string, fetchImpl: typeof fetch = fetch) {
-  const source = (await loadSources(actor)).find((item) => item.id === sourceId);
+  const source = await loadSource(actor, sourceId);
   if (!source) throw new CrmError("not_found", "That mail account is no longer connected. Connect it again in Capture.", 404);
   const token = await currentToken(source.tokens, fetchImpl);
   if (token.expiresAt !== source.tokens.accessTokenExpiresAt) await withActor(actor, (db) => saveToken(db, source, token));
@@ -185,7 +217,7 @@ async function refreshFolders(actor: UserActor, source: Source, token: string, f
           folder.providerId,
           folder.parentProviderId,
           folder.name,
-          folder.role,
+          folder.providerId === source.snooze_folder_id ? "snoozed" : folder.role,
           folder.total,
           folder.unread,
           SKIPPED_ROLES.includes(folder.role) ? "skipped" : "pending",

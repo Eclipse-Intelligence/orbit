@@ -1,8 +1,8 @@
 import { originFrom } from "@/lib/microsoft/oauth";
 import { siteOrigin } from "@/lib/site-url";
 
-export function mailOrigin(request: Request) {
-  const origin = siteOrigin() ?? originFrom(request);
+function publicOrigin(origin: string | null) {
+  if (!origin) return null;
   try {
     const url = new URL(origin);
     if (url.protocol !== "https:" || ["localhost", "127.0.0.1"].includes(url.hostname)) return null;
@@ -10,4 +10,8 @@ export function mailOrigin(request: Request) {
   } catch {
     return null;
   }
+}
+
+export function mailOrigin(request?: Request) {
+  return publicOrigin(siteOrigin() ?? (request ? originFrom(request) : null));
 }

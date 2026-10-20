@@ -1,4 +1,4 @@
-export type MailRole = "inbox" | "sent" | "drafts" | "archive" | "trash" | "junk" | "outbox" | "other";
+export type MailRole = "inbox" | "sent" | "drafts" | "archive" | "trash" | "junk" | "outbox" | "snoozed" | "other";
 
 export type MailAddress = { name: string | null; address: string };
 

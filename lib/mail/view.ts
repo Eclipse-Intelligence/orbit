@@ -1,6 +1,6 @@
 import type { MailAddress, MailRole } from "@/lib/mail/types";
 
-export const MAIL_ROLES = ["inbox", "sent", "drafts", "archive", "trash"] as const;
+export const MAIL_ROLES = ["inbox", "snoozed", "sent", "drafts", "archive", "trash"] as const;
 export type MailViewRole = (typeof MAIL_ROLES)[number];
 export type MailView = { role: MailViewRole } | { folderId: string };
 
@@ -20,6 +20,8 @@ export type ThreadSummary = {
   draft: boolean;
   latestAt: string | null;
   reads: { count: number; last: string | null } | null;
+  reminder: { kind: "snooze" | "follow_up"; at: string } | null;
+  snoozedUntil: string | null;
 };
 
 export type ThreadMessage = {
@@ -65,6 +67,8 @@ export type MailDraft = {
   subject: string;
   body: string;
   savedAt: string;
+  sendAt: string | null;
+  sendError: string | null;
 };
 
 function mine(address: MailAddress | null | undefined, own: Set<string>) {
@@ -103,6 +107,8 @@ export type MailNav = {
   accounts: { id: string; email: string; unread: number }[];
   folders: { id: string; sourceId: string; name: string; role: MailRole; unread: number }[];
   unread: number;
+  snoozed: number;
+  scheduled: number;
 };
 
 export type ThreadCursor = { at: string; key: string };

@@ -16,6 +16,7 @@ import { cn } from "@/lib/utils";
 import ChevronLeftIcon from "@/public/assets/images/_common/chevron-left.svg";
 import PaperclipIcon from "@/public/assets/images/_common/paperclip.svg";
 import ArchiveIcon from "@/public/assets/images/mail/archive.svg";
+import ClockIcon from "@/public/assets/images/mail/clock.svg";
 import FlagIcon from "@/public/assets/images/mail/flag.svg";
 import InboxIcon from "@/public/assets/images/mail/inbox.svg";
 import MailOpenIcon from "@/public/assets/images/mail/mail-open.svg";
@@ -24,7 +25,7 @@ import ReplyAllIcon from "@/public/assets/images/mail/reply-all.svg";
 import ReplyIcon from "@/public/assets/images/mail/reply.svg";
 import TrashIcon from "@/public/assets/images/mail/trash.svg";
 
-export type ReaderAction = "archive" | "trash" | "inbox" | "read" | "unread" | "flag" | "unflag";
+export type ReaderAction = "archive" | "trash" | "inbox" | "read" | "unread" | "flag" | "unflag" | "snooze";
 
 function ToolButton({
   label,
@@ -266,6 +267,7 @@ export default function ThreadReader({
   const trashHint = useShortcutHint("mail-trash");
   const readHint = useShortcutHint("mail-read");
   const flagHint = useShortcutHint("mail-flag");
+  const snoozeHint = useShortcutHint("mail-snooze");
 
   if (!summary && !detail) {
     return (
@@ -280,7 +282,7 @@ export default function ThreadReader({
   const account = detail?.account ?? summary?.account ?? "";
   const unread = summary ? summary.unread : Boolean(detail?.messages.some((message) => !message.isRead));
   const flagged = summary ? summary.flagged : Boolean(detail?.messages.some((message) => message.isFlagged));
-  const restorable = view === "archive" || view === "trash";
+  const restorable = view === "archive" || view === "trash" || view === "snoozed";
   const latestLink = detail?.messages.findLast((message) => message.webLink)?.webLink ?? null;
 
   return (
@@ -296,6 +298,11 @@ export default function ThreadReader({
         ) : (
           <ToolButton label="Archive" hint={archiveHint} onClick={() => onAction("archive")}>
             <ArchiveIcon aria-hidden className="size-3.5" />
+          </ToolButton>
+        )}
+        {view !== "snoozed" && (
+          <ToolButton label="Remind me" hint={snoozeHint} onClick={() => onAction("snooze")}>
+            <ClockIcon aria-hidden className="size-3.5" />
           </ToolButton>
         )}
         {view !== "trash" && (
@@ -349,8 +356,9 @@ export default function ThreadReader({
                   onSent={(body, to) => {
                     setEcho({ body, to, count: detail.messages.length });
                     closeComposer();
-                    onSent();
                   }}
+                  onDelivered={onSent}
+                  onUndone={() => setEcho(null)}
                 />
                 </div>
               ) : !target && newDraft ? (
