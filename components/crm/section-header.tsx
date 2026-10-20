@@ -50,12 +50,7 @@ export default function SectionHeader({
           {list ? (
             <RecordBreadcrumb list={list} title={title} />
           ) : (
-            <div className="flex min-w-0 flex-col">
-              {heading ?? <h1 className="truncate">{title}</h1>}
-              <span className="caption-style text-subtle hidden truncate sm:block">
-                {viewer.workspaceName}
-              </span>
-            </div>
+            <div className="flex min-w-0 flex-col">{heading ?? <h1 className="truncate">{title}</h1>}</div>
           )}
         </div>
         <div className="flex flex-wrap items-center justify-start gap-2 sm:justify-end">
