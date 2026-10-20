@@ -42,6 +42,7 @@ export type SendPayload = {
   remindHours: number | null;
   attachments: string[];
   replaces?: string | null;
+  identityId?: string | null;
 };
 
 const REMINDERS: { hours: number | null; label: string }[] = [
@@ -61,6 +62,7 @@ export type ComposerStart = {
   subject: string;
   draft: MailDraft | null;
   replaces?: string | null;
+  fromId?: string | null;
 };
 
 type SaveState = { kind: "idle" | "saving" | "saved" | "error"; message?: string };
@@ -108,7 +110,13 @@ export default function MailComposer({
   const id = useId();
   const sendHint = useShortcutHint("submit");
   const draft = start.draft;
-  const [sourceId, setSourceId] = useState(draft?.sourceId ?? start.sourceId);
+  const [fromId, setFromId] = useState(
+    draft?.identityId ? `smtp:${draft.identityId}` : (start.fromId ?? draft?.sourceId ?? start.sourceId),
+  );
+  const fromAccount = accounts.find((item) => item.id === fromId) ?? null;
+  const sourceId = fromAccount?.sourceId ?? fromAccount?.id ?? draft?.sourceId ?? start.sourceId;
+  const identityId = fromAccount?.identityId ?? null;
+  const fromChoices = start.mode === "new" ? accounts : accounts.filter((item) => (item.sourceId ?? item.id) === (draft?.sourceId ?? start.sourceId));
   const [to, setTo] = useState<MailAddress[]>(draft?.to ?? start.to);
   const [cc, setCc] = useState<MailAddress[]>(draft?.cc ?? start.cc);
   const [bcc, setBcc] = useState<MailAddress[]>(draft?.bcc ?? []);
@@ -124,13 +132,37 @@ export default function MailComposer({
   const chain = useRef<Promise<unknown>>(Promise.resolve());
   const dirty = useRef(false);
   const textarea = useRef<HTMLTextAreaElement>(null);
-  const payload = useRef({ mode: start.mode, messageId: start.messageId, sourceId, to, cc, bcc, subject, body, signature: withSignature, replaces: start.replaces ?? null });
-  const account = accounts.find((item) => item.id === sourceId) ?? null;
+  const payload = useRef({
+    mode: start.mode,
+    messageId: start.messageId,
+    sourceId,
+    identityId,
+    to,
+    cc,
+    bcc,
+    subject,
+    body,
+    signature: withSignature,
+    replaces: start.replaces ?? null,
+  });
+  const account = fromAccount;
   const showSubject = start.mode === "new" || start.mode === "forward";
   const card = variant === "card";
 
   useEffect(() => {
-    payload.current = { mode: start.mode, messageId: start.messageId, sourceId, to, cc, bcc, subject, body, signature: withSignature, replaces: start.replaces ?? null };
+    payload.current = {
+      mode: start.mode,
+      messageId: start.messageId,
+      sourceId,
+      identityId,
+      to,
+      cc,
+      bcc,
+      subject,
+      body,
+      signature: withSignature,
+      replaces: start.replaces ?? null,
+    };
   });
 
   useEffect(() => {
@@ -179,7 +211,7 @@ export default function MailComposer({
     if (!dirty.current) return;
     const timer = window.setTimeout(() => void saveRef.current(), SAVE_DELAY_MS);
     return () => window.clearTimeout(timer);
-  }, [sourceId, to, cc, bcc, subject, body, withSignature]);
+  }, [fromId, to, cc, bcc, subject, body, withSignature]);
 
   useEffect(
     () => () => {
@@ -314,7 +346,7 @@ export default function MailComposer({
           </span>
         </div>
       )}
-      {card && accounts.length > 1 && (
+      {fromChoices.length > 1 && (
         <div className="flex items-center gap-2">
           <label htmlFor={`${id}-from`} className="text-subtle w-8 shrink-0 text-[13px]">
             From
@@ -322,11 +354,11 @@ export default function MailComposer({
           <span className="relative flex min-w-0 items-center">
             <select
               id={`${id}-from`}
-              value={sourceId}
-              onChange={(event) => change(setSourceId)(event.target.value)}
+              value={fromId}
+              onChange={(event) => change(setFromId)(event.target.value)}
               className="text-foreground h-7 min-w-0 cursor-pointer appearance-none truncate rounded-full bg-transparent pr-6 pl-0 text-[14px] outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
             >
-              {accounts.map((item) => (
+              {fromChoices.map((item) => (
                 <option key={item.id} value={item.id} className="bg-popover">
                   {item.email}
                 </option>

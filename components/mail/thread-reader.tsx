@@ -112,7 +112,7 @@ function Message({
             {expanded && message.from && message.from.address !== sender && (
               <span className="text-subtle hidden min-w-0 truncate text-[12px] sm:inline">{message.from.address}</span>
             )}
-            {message.isDraft && <span className="text-danger shrink-0 text-[12px]">Draft</span>}
+            {message.isDraft && message.folderRole === "drafts" && <span className="text-danger shrink-0 text-[12px]">Draft</span>}
             <span className="text-subtle ml-auto shrink-0 text-[12px] tabular-nums">{mailFullWhen(message.at)}</span>
           </span>
           {expanded ? (
@@ -125,7 +125,7 @@ function Message({
           )}
         </span>
       </button>
-      {message.isDraft && (
+      {message.isDraft && message.folderRole === "drafts" && (
         <div className="-mt-1 flex flex-wrap items-center gap-2 px-4 pb-3 sm:pl-14">
           <span className="caption-style text-subtle mr-1">Draft made outside Orbit.</span>
           <Button variant="secondary" size="sm" onClick={() => onEditDraft(message)}>
@@ -288,7 +288,7 @@ export default function ThreadReader({
   const replyAllHint = useShortcutHint("mail-reply-all");
   const forwardHint = useShortcutHint("mail-forward");
   const hints: Record<Exclude<DraftMode, "new">, string> = { reply: replyHint, reply_all: replyAllHint, forward: forwardHint };
-  const target = detail?.messages.filter((message) => !message.isDraft).at(-1) ?? null;
+  const target = detail?.messages.filter((message) => !(message.isDraft && message.folderRole === "drafts")).at(-1) ?? null;
   const { openComposer } = useComposer();
   const sourceId = detail?.key.split("|")[0] ?? "";
   const newDraft = detail?.drafts.find((draft) => draft.mode === "new") ?? null;
@@ -314,7 +314,18 @@ export default function ThreadReader({
       return;
     }
     const defaults = replyDefaults(mode, target, detail.subject, own);
-    setComposer({ mode, messageId: target.id, sourceId, to: defaults.to, cc: defaults.cc, subject: defaults.subject, draft: null });
+    const addressedTo = new Set([...target.to, ...target.cc].map((item) => item.address.toLowerCase()));
+    const identity = accounts.find((account) => account.identityId && account.sourceId === sourceId && addressedTo.has(account.email.toLowerCase()));
+    setComposer({
+      mode,
+      messageId: target.id,
+      sourceId,
+      to: defaults.to,
+      cc: defaults.cc,
+      subject: defaults.subject,
+      draft: null,
+      fromId: identity?.id ?? null,
+    });
   }
 
   function editOutsideDraft(message: ThreadMessage) {

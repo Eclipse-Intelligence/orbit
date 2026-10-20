@@ -206,7 +206,7 @@ export default function MailScreen({
   const current = threads.find((thread) => thread.key === cursor) ?? null;
   const detail = cursor ? (details[cursor] ?? null) : null;
   const viewParam = query.query ? "search" : query.view;
-  const own = nav.accounts.map((account) => account.email).concat(viewer.email);
+  const own = nav.accounts.map((account) => account.email).concat(viewer.email, ...accounts.map((account) => account.email));
   const folders = nav.folders.filter((folder) => folder.role === "other" && (!query.account || folder.sourceId === query.account));
   const activeFolder = query.view.startsWith("folder:") ? nav.folders.find((folder) => `folder:${folder.id}` === query.view) : null;
   const moreLabel = query.query ? null : (MORE_VIEWS.find((view) => view.id === query.view)?.label ?? activeFolder?.name ?? null);

@@ -66,6 +66,7 @@ function payloadDraft(payload: SendPayload): MailDraft {
     savedAt: "",
     sendAt: null,
     sendError: null,
+    identityId: payload.identityId ?? null,
   };
 }
 

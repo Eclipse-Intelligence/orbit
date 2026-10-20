@@ -104,7 +104,7 @@ export async function listThreads(
     const result = await db.query<ThreadRow>(
       `with scoped as (
          select m.id, m.source_id, ${THREAD_KEY} as tk, m.subject, m.snippet, m.from_email, m.from_name, m.to_recipients,
-           m.is_read, m.is_flagged, m.has_attachments, m.is_draft, coalesce(m.received_at, m.sent_at, m.created_at) as at,
+           m.is_read, m.is_flagged, m.has_attachments, (m.is_draft and f.role = 'drafts') as is_draft, coalesce(m.received_at, m.sent_at, m.created_at) as at,
            m.tracking_id, m.focused
          from crm.mail_messages m
          join crm.mail_folders f on f.id = m.folder_id
