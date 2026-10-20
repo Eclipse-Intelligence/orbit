@@ -416,3 +416,24 @@ export async function fetchMicrosoftAttachment(token: string, messageId: string,
   }
   return response;
 }
+
+export async function exportMicrosoftMime(token: string, messageId: string, fetchImpl: typeof fetch = fetch) {
+  const response = await fetchImpl(graphUrl(`${GRAPH}/me/messages/${encodeURIComponent(messageId)}/$value`), {
+    headers: { authorization: `Bearer ${token}`, prefer: 'IdType="ImmutableId"' },
+    signal: AbortSignal.timeout(60_000),
+  });
+  if (!response.ok) throw new GraphMailError(response.status === 404 ? "The draft is no longer in Outlook." : `Microsoft answered ${response.status}.`, response.status);
+  return response.text();
+}
+
+export async function saveMicrosoftSentCopy(token: string, mime: string, fetchImpl: typeof fetch = fetch) {
+  const response = await fetchImpl(graphUrl(`${GRAPH}/me/mailFolders/sentitems/messages`), {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "text/plain", prefer: 'IdType="ImmutableId"' },
+    body: Buffer.from(mime, "utf8").toString("base64"),
+    signal: AbortSignal.timeout(60_000),
+  });
+  if (!response.ok) throw new GraphMailError(`Microsoft answered ${response.status}.`, response.status);
+  const created = (await response.json().catch(() => ({}))) as { id?: string };
+  return created.id ?? null;
+}

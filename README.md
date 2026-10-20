@@ -127,6 +127,10 @@ In any reply or compose card, `⌘ J` (or the sparkle next to Send) asks AI to w
 
 Type a question in the Mail search box (anything ending in a question mark, or starting with words like what, when or who) and press Enter, or press `⌘ Enter` or Ask: Orbit searches your mail for the answer and replies in a sentence or two, with the emails it used listed underneath to open. Plain words still search as before. All three need `LLM_API_KEY` and are limited per person to keep costs in check.
 
+### Sending from other addresses
+
+Settings › Templates and signatures › Send from other addresses adds an address that isn't a Microsoft account, such as Neo, so Orbit can send as it. Choose Neo (or Other and give the SMTP server, and optionally an IMAP server), enter the address, the name people see and its password, and pick the connected mailbox its mail already arrives in (for example by forwarding). Orbit checks the login before saving and keeps the password encrypted. The address then appears in From, has its own signature, and a reply to an email that was sent to it uses it automatically. Orbit writes the email as an Outlook draft in that mailbox as usual, then sends it through the address's own mail server, keeps a copy in the mailbox's Sent Items and in the provider's Sent folder, and logs it on the contact. Read statuses, Undo send, Send later and AI writing all work with it.
+
 ### Replies and read statuses
 
 `R` replies, `A` replies to all and `F` forwards, or use the buttons under the conversation. Reply goes to the sender (or, on your own email, to the people you sent it to); reply all adds everyone else on the latest email except you. Type names or addresses in To, Cc and Bcc: Orbit suggests contacts and people who have emailed you. The reply is sent from the account the conversation is in, with that address's signature (Remove signature drops it for this email), attachments, and `⌘ Enter` to send. Outlook's own quoted history goes below your message, so the thread reads as it would in Outlook.

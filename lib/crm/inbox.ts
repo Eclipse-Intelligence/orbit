@@ -242,7 +242,14 @@ async function signatureFor(db: Db, actor: UserActor, email: string) {
 export async function saveSignature(actor: UserActor, senderEmail: string, body: string) {
   const email = canonicalEmail(senderEmail);
   const senders = await listSenders(actor);
-  if (!email || !senders.some((sender) => sender.email.toLowerCase() === email)) {
+  const identities = await withActor(actor, async (db) => {
+    const result = await db.query<{ email: string }>("select email from crm.send_identities where user_id = $1 and workspace_id = $2", [
+      actor.userId,
+      actor.workspaceId,
+    ]);
+    return result.rows.map((row) => row.email.toLowerCase());
+  });
+  if (!email || !(senders.some((sender) => sender.email.toLowerCase() === email) || identities.includes(email))) {
     throw new CrmError("not_found", "You can only add a signature to an address you send from.", 404, { field: "email" });
   }
   const text = body.replace(/\r\n/g, "\n").replace(/[ \t]+$/gm, "").trim();

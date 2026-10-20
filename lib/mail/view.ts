@@ -57,7 +57,7 @@ export type ThreadDetail = {
   drafts: MailDraft[];
 };
 
-export type ComposeAccount = { id: string; email: string; signature: string | null };
+export type ComposeAccount = { id: string; email: string; signature: string | null; sourceId?: string; identityId?: string };
 
 export type DraftMode = "new" | "reply" | "reply_all" | "forward";
 
@@ -74,6 +74,7 @@ export type MailDraft = {
   savedAt: string;
   sendAt: string | null;
   sendError: string | null;
+  identityId?: string | null;
 };
 
 function mine(address: MailAddress | null | undefined, own: Set<string>) {
