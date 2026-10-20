@@ -29,13 +29,13 @@ const REPEATABLE = new Set(["j", "k", "J", "K", "ArrowDown", "ArrowUp", "ArrowLe
 
 type Handler = () => boolean | void;
 
-export type ListSearchConfig = {
+type ListSearchConfig = {
   noun: string;
   value: string;
   hrefFor: (query: string) => string;
 };
 
-export type PaletteMode = "global" | "list";
+type PaletteMode = "global" | "list";
 
 type ShortcutsContextValue = {
   mac: boolean;
@@ -81,7 +81,7 @@ export function useShortcutHint(id: string) {
   return context?.hint(id) ?? "";
 }
 
-export function overlayOpen() {
+function overlayOpen() {
   if (document.querySelector("[data-radix-popper-content-wrapper]")) return true;
   return [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')].some(
     (node) => node.getAttribute("data-state") === "open",
@@ -100,7 +100,7 @@ export function shortcutTarget(name: string) {
   );
 }
 
-export function activate(element: HTMLElement) {
+function activate(element: HTMLElement) {
   const popup = element.getAttribute("aria-haspopup");
   if (popup === "menu" || popup === "listbox" || element.getAttribute("role") === "combobox") {
     element.focus();

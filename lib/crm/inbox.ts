@@ -54,7 +54,7 @@ export type InboxMessage = {
   companyName: string | null;
 };
 
-export type InboundEmail = {
+type InboundEmail = {
   providerMessageId: string;
   conversationId?: string | null;
   internetMessageId?: string | null;
@@ -68,7 +68,7 @@ export type InboundEmail = {
   isDraft?: boolean;
 };
 
-export type SyncCounts = {
+type SyncCounts = {
   attached: number;
   unattached: number;
   skipped: number;
@@ -82,7 +82,7 @@ export type StoredConnection = MailboxSummary & {
   accessTokenExpiresAt: string | null;
 };
 
-export type PartyMatch = {
+type PartyMatch = {
   contactId: string | null;
   contactName: string | null;
   companyId: string | null;
@@ -229,7 +229,7 @@ export async function saveMailbox(
 
 export type Sender = { id: string; email: string; label: string; primary: boolean; signature: string | null };
 
-export const SIGNATURE_MAX_LENGTH = 2000;
+const SIGNATURE_MAX_LENGTH = 2000;
 
 async function signatureFor(db: Db, actor: UserActor, email: string) {
   const result = await db.query<{ body: string }>(
@@ -275,7 +275,7 @@ export async function saveSignature(actor: UserActor, senderEmail: string, body:
   return text || null;
 }
 
-export const PRIMARY_SENDER = "primary";
+const PRIMARY_SENDER = "primary";
 
 type ResolvedSender = {
   email: string;
@@ -966,7 +966,7 @@ function clip(value: string | null | undefined, max: number) {
   return trimmed.slice(0, max);
 }
 
-export function graphToInbound(message: GraphInboxMessage): InboundEmail {
+function graphToInbound(message: GraphInboxMessage): InboundEmail {
   return {
     providerMessageId: message.id?.trim() ?? "",
     conversationId: message.conversationId ?? null,

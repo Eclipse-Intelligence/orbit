@@ -23,9 +23,9 @@ export type Finding = {
 
 export type Verdict = "valid" | "invalid" | "unknown";
 
-export type ProviderContext = { key: string; fetchImpl: typeof fetch; deadline: number; pollMs?: number };
+type ProviderContext = { key: string; fetchImpl: typeof fetch; deadline: number; pollMs?: number };
 
-export type Provider = {
+type Provider = {
   id: ProviderId;
   name: string;
   envKey: string;

@@ -3,7 +3,7 @@ export type ReasoningLevel = (typeof REASONING_LEVELS)[number];
 
 export type ModelSource = "orbit" | "chatgpt" | "claude";
 
-export type AssistantModel = {
+type AssistantModel = {
   id: string;
   apiModel: string;
   label: string;

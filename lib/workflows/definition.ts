@@ -30,8 +30,8 @@ export const STEP_TYPES = [
 ] as const;
 export type StepType = (typeof STEP_TYPES)[number];
 
-export const RECORD_OBJECTS = ["company", "contact"] as const;
-export type RecordObject = (typeof RECORD_OBJECTS)[number];
+const RECORD_OBJECTS = ["company", "contact"] as const;
+type RecordObject = (typeof RECORD_OBJECTS)[number];
 
 export const CONDITION_OPS = [
   "is",
@@ -46,7 +46,6 @@ export const CONDITION_OPS = [
 export type ConditionOp = (typeof CONDITION_OPS)[number];
 
 export const AI_OUTPUT_TYPES = ["text", "number", "boolean", "list", "choice"] as const;
-export type AiOutputType = (typeof AI_OUTPUT_TYPES)[number];
 
 export const AI_MODELS = [
   { id: "claude-haiku-5-5", label: "Claude Haiku 5.5 (fast)" },

@@ -638,7 +638,7 @@ describe("booking a call", () => {
     assert.equal(activity.rows[0].type, "meeting");
     assert.equal(activity.rows[0].title, "Booked via your booking page");
     assert.equal(activity.rows[0].actor_user_id, owner.userId);
-    assert.match(activity.rows[0].body, /Mon, 19 Oct 2026, 14:00–14:30 London time/);
+    assert.match(activity.rows[0].body, /Mon, 19 Oct 2026, 14:00 to 14:30 London time/);
     assert.match(activity.rows[0].body, /Join: https:\/\/whereby\.com\/mark/);
     assert.match(activity.rows[0].body, /Keen to talk <pricing> & terms/);
     assert.equal(activity.rows[0].metadata.source, "booking");

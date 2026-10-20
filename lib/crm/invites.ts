@@ -72,7 +72,7 @@ export type InviteInput = {
   transactionId?: unknown;
 };
 
-export type InviteResult = {
+type InviteResult = {
   eventId: string | null;
   providerEventId: string;
   subject: string;
@@ -83,7 +83,7 @@ export type InviteResult = {
   warning: string | null;
 };
 
-export type CancelResult = { warning: string | null; loggedOn: number };
+type CancelResult = { warning: string | null; loggedOn: number };
 
 type InviteOptions = { fetchImpl?: typeof fetch; now?: number };
 
@@ -260,8 +260,8 @@ function formatWhen(start: Date, end: Date, timeZone: string) {
     new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone }).format(date);
   const range =
     day(start) === day(end)
-      ? `${day(start)}, ${time(start)}–${time(end)}`
-      : `${day(start)} ${time(start)} – ${day(end)} ${time(end)}`;
+      ? `${day(start)}, ${time(start)} to ${time(end)}`
+      : `${day(start)} ${time(start)} to ${day(end)} ${time(end)}`;
   return `${range} ${zoneLabel(timeZone)} time`;
 }
 
@@ -440,7 +440,7 @@ async function saveCreatedEvent(
   return result.rows[0].id;
 }
 
-export type InviteSender = {
+type InviteSender = {
   stored: StoredConnection;
   own: Set<string>;
   meetingLink: string | null;
@@ -448,9 +448,9 @@ export type InviteSender = {
   calendar: { id: string; provider_calendar_id: string } | null;
 };
 
-export type OpenInviteSender = InviteSender & { token: MicrosoftToken; calendarId: string | null };
+type OpenInviteSender = InviteSender & { token: MicrosoftToken; calendarId: string | null };
 
-export type InviteActivity = (
+type InviteActivity = (
   contact: { id: string; name: string; companyId: string | null },
   details: {
     eventId: string;
@@ -463,7 +463,7 @@ export type InviteActivity = (
   },
 ) => { title: string; body: string; metadata: Record<string, unknown> };
 
-export type InviteSend = {
+type InviteSend = {
   subject: string;
   start: Date;
   end: Date;

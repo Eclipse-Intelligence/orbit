@@ -17,18 +17,18 @@ export type SlotRules = {
 
 export type BusyInterval = { start: number; end: number };
 
-export type SlotQuery = {
+type SlotQuery = {
   from: number;
   to: number;
   now: number;
   busy: BusyInterval[];
 };
 
-export function slotStep(durationMinutes: number) {
+function slotStep(durationMinutes: number) {
   return durationMinutes <= 30 ? durationMinutes : 30;
 }
 
-export function bookingBounds(rules: SlotRules, now: number) {
+function bookingBounds(rules: SlotRules, now: number) {
   return {
     earliest: now + rules.minNoticeMinutes * MINUTE,
     latest: startOfDay(new Date(now), rules.timeZone, rules.horizonDays + 1).getTime(),
@@ -111,7 +111,7 @@ export function parseMonth(value: string | null | undefined) {
   return match ? `${match[1]}-${match[2]}` : null;
 }
 
-export function monthOf(instant: number, timeZone: string) {
+function monthOf(instant: number, timeZone: string) {
   return dateKey(instant, timeZone).slice(0, 7);
 }
 

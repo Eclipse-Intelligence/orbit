@@ -60,13 +60,13 @@ export type MailSyncReport = {
   arrived: string[];
 };
 
-export function mailStorageLimitBytes() {
+function mailStorageLimitBytes() {
   const raw = Number(process.env.MAIL_STORAGE_LIMIT_MB);
   const megabytes = Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_STORAGE_LIMIT_MB;
   return megabytes * 1024 * 1024;
 }
 
-export function mailHardStopBytes() {
+function mailHardStopBytes() {
   const raw = Number(process.env.MAIL_HARD_STOP_MB);
   return Number.isFinite(raw) && raw > 0 ? raw * 1024 * 1024 : mailStorageLimitBytes() * 1.18;
 }

@@ -132,7 +132,7 @@ export function parseIcs(text: string): IcsComponent[] {
   return roots;
 }
 
-export function unescapeText(value: string) {
+function unescapeText(value: string) {
   return value.replace(/\\([\\;,nN])/g, (_, char: string) => (char === "n" || char === "N" ? "\n" : char));
 }
 

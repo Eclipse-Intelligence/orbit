@@ -145,7 +145,7 @@ export function Detail({ label, children }: { label: string; children: ReactNode
   return (
     <>
       <dt className="caption-style text-subtle leading-5">{label}</dt>
-      <dd className="min-w-0 break-words">{children || <span className="text-subtle">—</span>}</dd>
+      <dd className="min-w-0 break-words">{children || <span className="text-subtle"><span aria-hidden>·</span><span className="sr-only">None</span></span>}</dd>
     </>
   );
 }

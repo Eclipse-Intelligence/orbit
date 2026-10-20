@@ -2,9 +2,9 @@ import { londonParts, parseTaskText } from "@/lib/task-pad";
 
 export type PadActivityType = "call" | "email" | "meeting" | "note";
 
-export type ActivityMark = { start: number; end: number; kind: "type" | "when" | "followup" };
+type ActivityMark = { start: number; end: number; kind: "type" | "when" | "followup" };
 
-export type ActivityParse = {
+type ActivityParse = {
   type: PadActivityType;
   typeFound: boolean;
   when: string | null;

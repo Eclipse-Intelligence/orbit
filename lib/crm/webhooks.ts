@@ -35,8 +35,6 @@ export const WEBHOOK_EVENTS = [
   "task.archived",
 ] as const;
 
-export type WebhookEvent = (typeof WEBHOOK_EVENTS)[number];
-
 const BACKOFF_SECONDS = [60, 300, 1800, 7200];
 
 export type WebhookEndpoint = {
@@ -62,7 +60,7 @@ export type WebhookDelivery = {
   createdAt: string;
 };
 
-export function assertWebhookUrl(value: string) {
+function assertWebhookUrl(value: string) {
   let url: URL;
   try {
     url = new URL(value);

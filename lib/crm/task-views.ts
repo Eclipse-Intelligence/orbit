@@ -2,12 +2,12 @@ import { TASK_VIEWS, type TaskView } from "@/lib/crm/types";
 import { appTimeZone, dayWindow } from "@/lib/time";
 
 export const TASKS_PATH = "/tasks";
-export const LEGACY_TASKS_PATH = "/actions";
+const LEGACY_TASKS_PATH = "/actions";
 export const DEFAULT_TASK_VIEW: TaskView = "all";
 
 const VIEW_SLUGS: Partial<Record<TaskView, string>> = { none: "without-tasks" };
 
-export function taskViewSlug(view: TaskView) {
+function taskViewSlug(view: TaskView) {
   return VIEW_SLUGS[view] ?? view;
 }
 
@@ -31,7 +31,7 @@ export function legacyTasksHref(pathname: string, search: URLSearchParams) {
   return query ? `${TASKS_PATH}?${query}` : TASKS_PATH;
 }
 
-export type TaskDueState = {
+type TaskDueState = {
   kind: "overdue" | "today" | "later" | "none";
   label: string;
 };

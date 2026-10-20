@@ -21,19 +21,9 @@ import {
 import { assertScope } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
 
-export {
-  matchesTemplate,
-  renderTemplate,
-  SAMPLE_RECIPIENT,
-  TEMPLATE_BODY_MAX,
-  TEMPLATE_NAME_MAX,
-  TEMPLATE_SUBJECT_MAX,
-  type EmailTemplate,
-  type EmailTemplateWrite,
-  type TemplateTagCount,
-} from "@/lib/crm/email-template-rules";
+export { renderTemplate, SAMPLE_RECIPIENT, type EmailTemplate, type EmailTemplateWrite } from "@/lib/crm/email-template-rules";
 
-export type EmailTemplateQuery = { search?: string; tag?: string | null };
+type EmailTemplateQuery = { search?: string; tag?: string | null };
 
 type TemplateRow = {
   id: string;
@@ -129,7 +119,7 @@ function cleanTags(value: unknown) {
   }
 }
 
-export function cleanTemplateWrite(input: unknown, mode: "create" | "patch") {
+function cleanTemplateWrite(input: unknown, mode: "create" | "patch") {
   if (!input || typeof input !== "object")
     invalid("Send the template details.", "name");
   const source = input as Record<string, unknown>;

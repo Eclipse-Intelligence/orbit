@@ -462,7 +462,7 @@ describe("sending invites", () => {
     assert.equal(toJane.title, "Invited Jane Doe to Eclipse × Jane Doe");
     assert.equal(
       toJane.body,
-      "Tue, 20 Oct 2026, 14:00–14:30 London time\nJoin: https://whereby.com/eclipse\n\nBring numbers",
+      "Tue, 20 Oct 2026, 14:00 to 14:30 London time\nJoin: https://whereby.com/eclipse\n\nBring numbers",
     );
     assert.equal(toJane.metadata.eventId, result.eventId);
     assert.equal(toJane.metadata.startsAt, "2026-10-20T13:00:00.000Z");
@@ -649,7 +649,7 @@ describe("cancelling invites", () => {
     assert.deepEqual(logged.rows, [
       {
         title: "Cancelled Eclipse × Jane Doe",
-        body: "Tue, 20 Oct 2026, 14:00–14:30 London time\n\nMessage to guests: Something came up.",
+        body: "Tue, 20 Oct 2026, 14:00 to 14:30 London time\n\nMessage to guests: Something came up.",
         contact_id: jane,
       },
     ]);

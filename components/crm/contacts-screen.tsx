@@ -51,15 +51,15 @@ const PRESENCE_FIELDS: PresenceField<ContactPresence>[] = [
 ];
 
 const MOBILE_SORTS: { value: string; label: string; sort: ContactSort; order: SortOrder }[] = [
-  { value: "name:asc", label: "Name A–Z", sort: "name", order: "asc" },
-  { value: "name:desc", label: "Name Z–A", sort: "name", order: "desc" },
-  { value: "company:asc", label: "Company A–Z", sort: "company", order: "asc" },
-  { value: "company:desc", label: "Company Z–A", sort: "company", order: "desc" },
+  { value: "name:asc", label: "Name A to Z", sort: "name", order: "asc" },
+  { value: "name:desc", label: "Name Z to A", sort: "name", order: "desc" },
+  { value: "company:asc", label: "Company A to Z", sort: "company", order: "asc" },
+  { value: "company:desc", label: "Company Z to A", sort: "company", order: "desc" },
   { value: "updated:desc", label: "Recently updated", sort: "updated", order: "desc" },
   { value: "created:desc", label: "Newest", sort: "created", order: "desc" },
 ];
 
-export type ContactListView = { sort: ContactSort; order: SortOrder; has: ContactPresence[]; missing: ContactPresence[] };
+type ContactListView = { sort: ContactSort; order: SortOrder; has: ContactPresence[]; missing: ContactPresence[] };
 
 function recipientOf(contact: Contact): Recipient {
   return {
@@ -360,7 +360,7 @@ function ContactRow({
         </span>
       </span>
       <span className="hidden min-w-0 md:block">
-        {company ?? <span className="caption-style text-subtle">—</span>}
+        {company ?? <span className="caption-style text-subtle"><span aria-hidden>·</span><span className="sr-only">None</span></span>}
       </span>
       <span className="hidden min-w-0 md:block">
         {contact.email ? (
@@ -373,7 +373,7 @@ function ContactRow({
         ) : findEmail ? (
           <FindDetailButton contactId={contact.id} field="email" lookup={emailLookup} className="-ml-1" />
         ) : (
-          <span className="caption-style text-subtle">—</span>
+          <span className="caption-style text-subtle"><span aria-hidden>·</span><span className="sr-only">None</span></span>
         )}
       </span>
       <span className="hidden min-w-0 items-center gap-1 md:flex">
@@ -389,7 +389,7 @@ function ContactRow({
         ) : findPhone ? (
           <FindDetailButton contactId={contact.id} field="phone" lookup={phoneLookup} className="-ml-1" />
         ) : (
-          <span className="caption-style text-subtle">—</span>
+          <span className="caption-style text-subtle"><span aria-hidden>·</span><span className="sr-only">None</span></span>
         )}
       </span>
       <span className="flex shrink-0 items-center gap-1 md:hidden">

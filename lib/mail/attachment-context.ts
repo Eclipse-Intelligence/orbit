@@ -21,7 +21,7 @@ type MessageRow = {
 
 type TextRow = { message_id: string; name: string; text: string };
 
-export type AttachmentReport = { read: number; skipped: number };
+type AttachmentReport = { read: number; skipped: number };
 
 async function bytesOf(response: Response, limit: number) {
   const reader = response.body!.getReader();
@@ -96,7 +96,7 @@ async function readMessage(actor: UserActor, message: MessageRow, deadline: numb
   return true;
 }
 
-export async function readAttachments(
+async function readAttachments(
   actor: UserActor,
   messageIds: string[],
   options: { deadline: number; fetchImpl?: typeof fetch },

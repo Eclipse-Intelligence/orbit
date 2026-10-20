@@ -6,7 +6,7 @@ import { cleanText } from "@/lib/crm/normalize";
 import { assertScope } from "@/lib/crm/scopes";
 import type { Actor, Board, BoardKind, BoardSummary, PipelineStage } from "@/lib/crm/types";
 
-export const BOARD_STARTER_STAGES = ["To start", "In progress", "Done"];
+const BOARD_STARTER_STAGES = ["To start", "In progress", "Done"];
 
 type BoardRow = {
   id: string;

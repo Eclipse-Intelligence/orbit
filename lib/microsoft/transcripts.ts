@@ -1,7 +1,7 @@
 import { sanitizeMicrosoftError } from "@/lib/microsoft/oauth";
 import { withMicrosoftDetail } from "@/lib/microsoft/calls";
 
-export const TRANSCRIPT_PERMISSION_MESSAGE =
+const TRANSCRIPT_PERMISSION_MESSAGE =
   "Grant Orbit the CallTranscripts.Read.All application permission with admin consent in Microsoft Entra.";
 export const TRANSCRIPTS_DISABLED_MESSAGE =
   "Your Microsoft 365 admin has turned off API access to Teams transcripts.";
@@ -22,15 +22,15 @@ export type CallTranscript = {
   meetingOrganizer?: { user?: { id?: string | null; displayName?: string | null } | null } | null;
 };
 
-export type TranscriptRef = { userId: string; callId: string; transcriptId: string };
+type TranscriptRef = { userId: string; callId: string; transcriptId: string };
 
-export type GraphSubscription = {
+type GraphSubscription = {
   id: string;
   expirationDateTime: string;
   resource?: string;
 };
 
-export class GraphError extends Error {
+class GraphError extends Error {
   readonly status: number;
 
   constructor(message: string, status: number) {
@@ -53,11 +53,11 @@ function quoted(value: string) {
   return value.replace(/'/g, "''");
 }
 
-export function transcriptsUrl(userId: string, from: Date, to: Date) {
+function transcriptsUrl(userId: string, from: Date, to: Date) {
   return `${GRAPH}/users/${encodeURIComponent(userId)}/adhocCalls/getAllTranscripts(userId='${quoted(userId)}',startDateTime=${graphTime(from)},endDateTime=${graphTime(to)})`;
 }
 
-export function transcriptResource(userId: string) {
+function transcriptResource(userId: string) {
   return `users/${userId}/adhocCalls/getAllTranscripts`;
 }
 
@@ -158,7 +158,7 @@ export async function fetchTranscript(
   return (await response.json()) as CallTranscript;
 }
 
-export function transcriptContentUrl(userId: string, transcript: CallTranscript) {
+function transcriptContentUrl(userId: string, transcript: CallTranscript) {
   const given = transcript.transcriptContentUrl?.trim();
   const base =
     given && given.startsWith(`${GRAPH}/`)

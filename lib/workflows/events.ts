@@ -33,7 +33,7 @@ export async function enqueueWorkflowEvent(
   kickWorkflows();
 }
 
-export function kickWorkflows() {
+function kickWorkflows() {
   try {
     after(async () => {
       try {

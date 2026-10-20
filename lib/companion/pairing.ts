@@ -10,7 +10,7 @@ import { query } from "@/lib/db/pool";
 
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const CODE_TTL_MS = 10 * 60 * 1000;
-export const ONLINE_WINDOW_MS = 75 * 1000;
+const ONLINE_WINDOW_MS = 75 * 1000;
 
 export type CompanionSummary = {
   id: string;
@@ -127,7 +127,7 @@ export async function authenticateCompanion(request: Request): Promise<Authentic
   return { companionId: row.companion_id, name: row.name, actor };
 }
 
-export const AGENT_START_COMMAND = "npx -y --package=https://orbit.geteclipse.co/downloads/orbit-agent.tgz orbit-agent --install";
+const AGENT_START_COMMAND = "npx -y --package=https://orbit.geteclipse.co/downloads/orbit-agent.tgz orbit-agent --install";
 
 function sinceText(iso: string, now: number) {
   const minutes = Math.max(1, Math.round((now - new Date(iso).getTime()) / 60_000));

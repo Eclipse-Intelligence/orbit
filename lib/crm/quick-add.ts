@@ -8,7 +8,7 @@ export const QUICK_ADD_ITEMS: { kind: QuickAddKind; label: string; key: string }
   { kind: "email", label: "Send email", key: "m" },
 ];
 
-export const QUICK_ADD_KEY = "q";
+const QUICK_ADD_KEY = "q";
 
 export type QuickAddRef = { id: string; name: string };
 
@@ -67,7 +67,7 @@ export function isTypingTarget(target: unknown) {
   );
 }
 
-export type ShortcutEvent = {
+type ShortcutEvent = {
   key: string;
   metaKey: boolean;
   ctrlKey: boolean;

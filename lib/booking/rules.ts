@@ -6,17 +6,16 @@ export const BOOKING_TITLE_MAX = 120;
 export const BOOKING_INTRO_MAX = 500;
 export const BOOKING_NAME_MAX = 120;
 export const BOOKING_NOTE_MAX = 1000;
-export const BOOKING_EMAIL_MAX = 200;
 export const BOOKING_VIDEO_URL_MAX = 1000;
 export const BOOKING_IMAGE_MAX_BYTES = 1024 * 1024;
 export const BOOKING_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
-export const BOOKING_SLUG_MIN = 3;
+const BOOKING_SLUG_MIN = 3;
 export const BOOKING_SLUG_MAX = 40;
 export const BOOKING_TIME_ZONE = "Europe/London";
-export const BOOKING_PATH = "/book";
+const BOOKING_PATH = "/book";
 
 export type BookingImageKind = "avatar" | "poster";
-export type BookingImageType = (typeof BOOKING_IMAGE_TYPES)[number];
+type BookingImageType = (typeof BOOKING_IMAGE_TYPES)[number];
 
 export const WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
 export type Weekday = (typeof WEEKDAYS)[number];
@@ -102,7 +101,7 @@ const SLUG_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const CLOCK = /^([01]\d|2[0-3]):[0-5]\d$/;
 const END_CLOCK = /^(([01]\d|2[0-3]):[0-5]\d|24:00)$/;
 
-export type Check<T> = { ok: true; value: T } | { ok: false; error: string };
+type Check<T> = { ok: true; value: T } | { ok: false; error: string };
 
 export function checkSlug(raw: string): Check<string> {
   const slug = raw.trim().toLowerCase();

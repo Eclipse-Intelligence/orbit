@@ -22,7 +22,7 @@ export type PstnCallRow = {
   calleeNumber?: string | null;
 };
 
-export type PstnCallFetch = {
+type PstnCallFetch = {
   rows: PstnCallRow[];
   complete: boolean;
 };
@@ -124,7 +124,7 @@ function graphTime(value: Date) {
   return value.toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
-export function pstnCallsUrl(from: Date, to: Date) {
+function pstnCallsUrl(from: Date, to: Date) {
   return `https://graph.microsoft.com/v1.0/communications/callRecords/getPstnCalls(fromDateTime=${graphTime(from)},toDateTime=${graphTime(to)})`;
 }
 

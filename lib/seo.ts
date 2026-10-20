@@ -5,13 +5,13 @@ export const SITE_NAME = "Orbit";
 export const SITE_URL = siteOrigin() ?? "https://example.com";
 export const SITE_DESCRIPTION =
   "A focused CRM for companies, relationships, and tasks.";
-export const DEFAULT_OG_IMAGE = "/logo.png";
+const DEFAULT_OG_IMAGE = "/logo.png";
 
 export function absoluteUrl(path: string) {
   return new URL(path, SITE_URL).toString();
 }
 
-export type SiteRoute = {
+type SiteRoute = {
   path: string;
   title: string;
   description: string;

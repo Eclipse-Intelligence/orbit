@@ -4,8 +4,8 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { homedir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 
-export const LABEL = "co.geteclipse.orbit-agent";
-export const PLIST = join(homedir(), "Library", "LaunchAgents", `${LABEL}.plist`);
+const LABEL = "co.geteclipse.orbit-agent";
+const PLIST = join(homedir(), "Library", "LaunchAgents", `${LABEL}.plist`);
 export const LOG_FILE = join(homedir(), "Library", "Logs", "orbit-agent.log");
 
 function escapeXml(value: string) {

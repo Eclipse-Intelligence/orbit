@@ -118,7 +118,7 @@ Every activity includes `actorUserId`, `actorAgentId`, and `actorName`: the full
 
 `GET /api/v1/actions?view=` returns the same tasks, up to 100, and defaults to `today` when `view` is missing or not recognised. `view=all` returns every open task in the order above. `view=none` returns companies that have no open task.
 
-Agent tokens see every task in the workspace; people in the app only see tasks they own or created unless they are an owner or admin. `POST /api/v1/tasks` creates one (unowned unless `ownerId` is given). A `dueAt` without a `Z` or offset is read as London time, and `today` and `overdue` are cut at midnight London time. `PATCH /api/v1/tasks/:id` updates it. `completed: true` sets `completed_at` without moving an existing completion time. `completed: false` reopens it.
+Agent tokens see every task in the workspace; people in the app only see tasks they own or created unless they are an owner or admin. `POST /api/v1/tasks` creates one (unowned unless `ownerId` is given). A `dueAt` without a `Z` or offset is read as London time, and `today` and `overdue` are cut at midnight London time. `GET /api/v1/tasks/:id` returns `{ "task": { ... } }`, and `PATCH /api/v1/tasks/:id` updates it. `completed: true` sets `completed_at` without moving an existing completion time. `completed: false` reopens it.
 
 `POST /api/v1/tasks/:id/complete` marks it complete. `DELETE /api/v1/tasks/:id` archives it. Each task also carries `clickupTaskId`, `clickupListId`, `clickupUrl`, and `clickupError` (null when it is not linked to ClickUp). Changes made through the API reach ClickUp on the next sync.
 

@@ -12,8 +12,6 @@ export const SETTINGS_PATHS = {
   api: "/settings/api",
 } as const;
 
-export type SettingsPage = keyof typeof SETTINGS_PATHS;
-
 const HASH_TARGETS: Record<string, string> = {
   team: SETTINGS_PATHS.team,
   members: SETTINGS_PATHS.team,

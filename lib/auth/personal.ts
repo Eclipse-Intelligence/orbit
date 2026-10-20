@@ -7,7 +7,7 @@ import { hashToken } from "@/lib/crm/tokens";
 import type { UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
 
-export const PERSONAL_PREFIX = "orbit_";
+const PERSONAL_PREFIX = "orbit_";
 const TOKENS_MAX = 10;
 
 export type PersonalToken = { id: string; name: string; prefix: string; createdAt: string; lastUsedAt: string | null };

@@ -5,7 +5,7 @@ const MAX_ATTEMPTS = 4;
 const MAX_BACKOFF_MS = 15_000;
 const TIMEOUT_MS = 20_000;
 const HIERARCHY_TTL_MS = 5 * 60 * 1000;
-export const TEAM_TASKS_PAGE_SIZE = 100;
+const TEAM_TASKS_PAGE_SIZE = 100;
 
 export const CLICKUP_EVENTS = [
   "taskCreated",
@@ -52,7 +52,7 @@ export type ClickUpTask = {
   assignees?: { id: number; username?: string | null; email?: string | null }[];
 };
 
-export type ClickUpWebhook = {
+type ClickUpWebhook = {
   id: string;
   endpoint: string;
   secret?: string;
@@ -91,7 +91,7 @@ export class ClickUpError extends Error {
   }
 }
 
-export type ClickUpClientOptions = {
+type ClickUpClientOptions = {
   token: string;
   fetchImpl?: typeof fetch;
   sleep?: (ms: number) => Promise<void>;
@@ -108,7 +108,7 @@ function defaultSleep(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
-export function rateLimitDelay(response: Response, attempt: number, now: number) {
+function rateLimitDelay(response: Response, attempt: number, now: number) {
   const reset = Number(response.headers.get("x-ratelimit-reset") ?? Number.NaN);
   if (Number.isFinite(reset) && reset > 0) {
     const resetMs = reset > 1e12 ? reset : reset * 1000;

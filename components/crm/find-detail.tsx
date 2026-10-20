@@ -7,7 +7,7 @@ import type { ContactField } from "@/lib/enrichment/providers";
 import { cn } from "@/lib/utils";
 import SparkleIcon from "@/public/assets/images/assistant/sparkle.svg";
 
-export const BULK_FIND_CHUNK = 6;
+const BULK_FIND_CHUNK = 6;
 
 const NOUNS: Record<ContactField, string> = { email: "email", linkedin: "LinkedIn", phone: "phone" };
 
@@ -17,7 +17,7 @@ const PLURALS: Record<ContactField, [string, string]> = {
   phone: ["phone number", "phone numbers"],
 };
 
-export async function findDetails(ids: string[], field: ContactField): Promise<ContactEnrichment[]> {
+async function findDetails(ids: string[], field: ContactField): Promise<ContactEnrichment[]> {
   const response = await fetch("/api/enrichment/contacts", {
     method: "POST",
     headers: { "content-type": "application/json" },

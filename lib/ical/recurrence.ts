@@ -6,10 +6,10 @@ const WEEKDAYS = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"];
 const UNSUPPORTED = new Set(["BYWEEKNO", "BYYEARDAY", "BYHOUR", "BYMINUTE", "BYSECOND"]);
 const MAX_PERIODS = 200_000;
 
-export type Frequency = "DAILY" | "WEEKLY" | "MONTHLY" | "YEARLY";
-export type ByDay = { weekday: number; ordinal: number };
+type Frequency = "DAILY" | "WEEKLY" | "MONTHLY" | "YEARLY";
+type ByDay = { weekday: number; ordinal: number };
 
-export type Rule = {
+type Rule = {
   freq: Frequency;
   interval: number;
   count: number | null;
@@ -80,11 +80,11 @@ export function parseRule(value: string, start: IcsTime): Rule | null {
   };
 }
 
-export function dayNumber(year: number, month: number, day: number) {
+function dayNumber(year: number, month: number, day: number) {
   return Math.round(Date.UTC(year, month - 1, day) / DAY_MS);
 }
 
-export function fromDayNumber(value: number) {
+function fromDayNumber(value: number) {
   const date = new Date(value * DAY_MS);
   return { year: date.getUTCFullYear(), month: date.getUTCMonth() + 1, day: date.getUTCDate() };
 }
@@ -176,7 +176,7 @@ function dailyMatch(day: number, rule: Rule) {
   return true;
 }
 
-export function* ruleDays(rule: Rule, start: Wall, lastDay: number): Generator<number> {
+function* ruleDays(rule: Rule, start: Wall, lastDay: number): Generator<number> {
   const startDay = dayNumber(start.year, start.month, start.day);
   for (let period = 0; period < MAX_PERIODS; period += 1) {
     let days: number[];
@@ -220,7 +220,7 @@ export function instantOf(time: IcsTime) {
   return zonedTimeToDate(time.wall, time.zone).getTime();
 }
 
-export function untilInstant(until: IcsTime, start: IcsTime) {
+function untilInstant(until: IcsTime, start: IcsTime) {
   if (!until.allDay || start.allDay) return instantOf(until);
   const next = fromDayNumber(dayNumber(until.wall.year, until.wall.month, until.wall.day) + 1);
   return zonedTimeToDate({ ...next, hour: 0, minute: 0, second: 0 }, start.zone).getTime() - 1;

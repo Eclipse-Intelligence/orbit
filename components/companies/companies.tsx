@@ -9,7 +9,6 @@ import { activeFilterCount } from "@/lib/companies";
 import type { Viewer } from "@/components/crm/viewer";
 import type { Company, CompanyListQuery, LifecycleCount, Member, TagCount } from "@/lib/crm/types";
 
-export type { Viewer };
 
 type CompaniesProps = {
   companies: Company[];

@@ -39,7 +39,7 @@ const BODY_MAX = 20_000;
 const SUBJECT_MAX = 300;
 const RECIPIENT_MAX = 100;
 
-export type DraftInput = {
+type DraftInput = {
   id?: string | null;
   mode: DraftMode;
   messageId: string | null;

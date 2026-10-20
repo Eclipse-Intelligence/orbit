@@ -193,7 +193,7 @@ function validDay(value: string) {
   return value;
 }
 
-export function callDay(occurredAt: string, timeZone = appTimeZone()) {
+function callDay(occurredAt: string, timeZone = appTimeZone()) {
   const parts = zonedParts(new Date(occurredAt), timeZone);
   return utcDay(parts.year, parts.month, parts.day);
 }
@@ -738,7 +738,7 @@ export async function acceptActionItem(
   return result;
 }
 
-export async function acceptAllActionItems(
+async function acceptAllActionItems(
   actor: Actor,
   insight: CallInsight,
 ): Promise<CallInsight> {

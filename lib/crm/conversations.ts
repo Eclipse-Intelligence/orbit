@@ -62,7 +62,7 @@ export type IntegrationStatus = {
   subscriptionExpiresAt: string | null;
 };
 
-export type IntegrationRow = {
+type IntegrationRow = {
   last_synced_at: Date | string | null;
   last_attempt_at: Date | string | null;
   last_error: string | null;
@@ -135,7 +135,7 @@ const IMPORT_COLUMNS = `
 `;
 
 const SUMMARY_ATTEMPTS = 3;
-export const SUMMARY_RESERVE_MS = 25_000;
+const SUMMARY_RESERVE_MS = 25_000;
 
 export function configuredSiteOrigin() {
   return siteOrigin();
@@ -247,7 +247,7 @@ export async function backgroundTargets(): Promise<BackgroundTarget[]> {
   return targets;
 }
 
-export function participantLine(people: Participant[]) {
+function participantLine(people: Participant[]) {
   return people
     .map((person) =>
       person.name && person.email
@@ -280,7 +280,7 @@ export type IntegrationKey = {
   userId?: string | null;
 };
 
-export const ITEM_ATTEMPTS = 3;
+const ITEM_ATTEMPTS = 3;
 
 function conflictTarget(key: IntegrationKey) {
   return key.connectionId
@@ -548,21 +548,7 @@ export async function listUnfiledImports(actor: UserActor, limit = 50): Promise<
   });
 }
 
-export async function getImport(actor: UserActor, importId: string) {
-  assertScope(actor.scopes, "crm:read");
-  if (!isUuid(importId)) throw new CrmError("not_found", "Conversation not found.", 404);
-  return withActor(actor, async (db) => {
-    const result = await db.query<ImportRow>(
-      `select ${IMPORT_COLUMNS} from crm.conversation_imports i where i.id = $1 and i.workspace_id = $2`,
-      [importId, actor.workspaceId],
-    );
-    const row = result.rows[0];
-    if (!row) throw new CrmError("not_found", "Conversation not found.", 404);
-    return mapImport(row);
-  });
-}
-
-export function meetingBody(people: Participant[], externalUrl: string | null) {
+function meetingBody(people: Participant[], externalUrl: string | null) {
   const lines = [];
   const attendees = participantLine(people);
   if (attendees) lines.push(`Attendees: ${attendees}`);
@@ -712,7 +698,7 @@ function splitName(name: string | null) {
 
 const ATTENDEE_PROVENANCE: Provenance = { operation: "create_from_attendee", source: "meeting" };
 
-export type AttendeePerson = { name?: string | null; email: string };
+type AttendeePerson = { name?: string | null; email: string };
 
 export async function createContactFromAttendeeInDb(
   db: Db,
@@ -869,7 +855,7 @@ export async function ignoreImport(actor: UserActor, importId: string) {
   });
 }
 
-export function summaryTranscript(raw: string) {
+function summaryTranscript(raw: string) {
   const text = transcriptToText(raw);
   if (text.length <= TRANSCRIPT_MAX_LENGTH) return text;
   const cut = text.slice(0, TRANSCRIPT_MAX_LENGTH);

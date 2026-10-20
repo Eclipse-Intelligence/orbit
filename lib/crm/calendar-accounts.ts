@@ -29,7 +29,7 @@ export type StoredFeed = {
   fetchedAt: string | null;
 };
 
-export type StoredAccount = StoredTokens & {
+type StoredAccount = StoredTokens & {
   id: string;
   provider: CalendarProvider;
   email: string | null;

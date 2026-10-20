@@ -25,7 +25,7 @@ const CONTEXT_MIN_SCORE = 70;
 const BULK_MAX = 6;
 const BULK_CONCURRENCY = 3;
 
-export type AttemptOutcome = "found" | "not_found" | "rejected" | "failed";
+type AttemptOutcome = "found" | "not_found" | "rejected" | "failed";
 
 export type Attempt = { provider: ProviderId; outcome: AttemptOutcome; detail?: string };
 

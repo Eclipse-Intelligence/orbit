@@ -3,13 +3,13 @@ export type MentionKind = (typeof MENTION_KINDS)[number];
 
 export type Mention = { kind: MentionKind; id: string; name: string };
 
-export type MentionPiece = { text: string } | { mention: Mention };
+type MentionPiece = { text: string } | { mention: Mention };
 
 const TOKEN = /@\[([^\]\n]{1,200})\]\((contact|company|task|opportunity):([0-9a-f-]{36})\)/g;
 
 const LABELS: Record<MentionKind, string> = { contact: "person", company: "company", task: "task", opportunity: "opportunity" };
 
-export function mentionToken(mention: Mention) {
+function mentionToken(mention: Mention) {
   return `@[${mention.name.replace(/[[\]\n]/g, " ").trim()}](${mention.kind}:${mention.id})`;
 }
 

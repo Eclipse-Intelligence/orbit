@@ -109,7 +109,7 @@ function Confirmation({ booking }: { booking: BookingConfirmation }) {
             <p className="caption-style text-subtle leading-4">{zoneLabel(booking.timeZone, new Date(booking.startsAt))}</p>
             {!sameZone && (
               <p className="caption-style text-subtle leading-4">
-                {timeOf(booking.startsAt, booking.pageTimeZone)} – {timeOf(booking.endsAt, booking.pageTimeZone)}{" "}
+                {timeOf(booking.startsAt, booking.pageTimeZone)} to {timeOf(booking.endsAt, booking.pageTimeZone)}{" "}
                 {zoneLabel(booking.pageTimeZone, new Date(booking.startsAt))} for {booking.ownerName.split(" ")[0]}
               </p>
             )}

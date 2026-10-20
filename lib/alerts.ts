@@ -3,7 +3,7 @@ import type { UserActor } from "@/lib/crm/types";
 import { pushToUser, type PushSender } from "@/lib/push";
 import { notify } from "@/lib/workflows/engine";
 
-export type Alert = {
+type Alert = {
   key?: string;
   title: string;
   body: string;

@@ -78,29 +78,6 @@ export async function createAgent(workspaceId: string, scopes: Scope[], name = "
   return { actor, token: issued.token };
 }
 
-export async function asUser<T>(userId: string, run: () => Promise<T>) {
-  const client = await getPool().connect();
-  try {
-    await client.query("begin");
-    await client.query("select set_config('request.jwt.claims', $1, true)", [
-      JSON.stringify({ sub: userId, role: "authenticated" }),
-    ]);
-    await client.query("set local role authenticated");
-    const result = await run();
-    await client.query("rollback");
-    return result;
-  } catch (error) {
-    try {
-      await client.query("rollback");
-    } catch {
-      // Ignore a rollback failure after the connection is already aborted.
-    }
-    throw error;
-  } finally {
-    client.release();
-  }
-}
-
 export async function queryAsUser<T extends Record<string, unknown>>(
   userId: string,
   text: string,

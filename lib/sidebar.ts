@@ -3,7 +3,7 @@ export const SIDEBAR_MAX_WIDTH = 400;
 export const SIDEBAR_DEFAULT_WIDTH = 254;
 export const SIDEBAR_WIDTH_VAR = "--sidebar-width";
 export const SIDEBAR_WIDTH_STORAGE_KEY = "sidebar-width";
-export const SIDEBAR_COLLAPSED_STORAGE_KEY = "sidebar-collapsed";
+const SIDEBAR_COLLAPSED_STORAGE_KEY = "sidebar-collapsed";
 
 export function clampSidebarWidth(width: number) {
   return Math.round(

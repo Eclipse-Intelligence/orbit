@@ -29,7 +29,7 @@ const CALL_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
 const CALL_MAX_WINDOW_MS = 89 * 24 * 60 * 60 * 1000;
 const REMATCH_LIMIT = 500;
 
-export type CallDirection = "inbound" | "outbound";
+type CallDirection = "inbound" | "outbound";
 
 export type CallSyncSummary = {
   lastSyncedAt: string | null;
@@ -39,7 +39,7 @@ export type CallSyncSummary = {
   unmatched: number;
 };
 
-export type CallSyncResult = {
+type CallSyncResult = {
   ran: boolean;
   logged: number;
   unmatched: number;
@@ -68,7 +68,7 @@ type Claim = {
   lastSyncedAt: string | null;
 };
 
-export function callDirection(callType: string | null | undefined) {
+function callDirection(callType: string | null | undefined) {
   const type = callType?.trim().toLowerCase();
   if (type === "user_out") return "outbound" as const;
   if (type === "user_in") return "inbound" as const;
@@ -91,7 +91,7 @@ export function callBody(
   return `${direction === "outbound" ? "Outgoing" : "Incoming"} call · ${formatCallDuration(durationSeconds)}`;
 }
 
-export function rowForUser(
+function rowForUser(
   row: PstnCallRow,
   user: { email: string; objectId: string | null },
 ) {
@@ -108,7 +108,7 @@ export function rowForUser(
   return false;
 }
 
-export function toCallRow(row: PstnCallRow): CallRow | null {
+function toCallRow(row: PstnCallRow): CallRow | null {
   const providerCallId = row.id?.trim().slice(0, 400);
   const direction = callDirection(row.callType);
   if (!providerCallId || !direction) return null;

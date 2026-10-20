@@ -82,7 +82,7 @@ type Ctx = {
   deadline: number;
 };
 
-export type TickOptions = { budgetMs?: number; fetchImpl?: typeof fetch; limit?: number };
+type TickOptions = { budgetMs?: number; fetchImpl?: typeof fetch; limit?: number };
 
 const DEFAULT_BUDGET_MS = 45_000;
 const STEP_RESERVE_MS = 8_000;
@@ -154,7 +154,7 @@ function londonToday() {
   return new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric", timeZone: appTimeZone() }).format(new Date());
 }
 
-export async function buildContext(actor: UserActor, trigger: Trigger, event: RunEvent): Promise<{ vars: Vars; matches: boolean }> {
+async function buildContext(actor: UserActor, trigger: Trigger, event: RunEvent): Promise<{ vars: Vars; matches: boolean }> {
   const data = event.data ?? {};
   const vars: Vars = {
     trigger: { type: event.type, at: event.at ?? new Date().toISOString() },

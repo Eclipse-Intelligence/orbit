@@ -8,7 +8,7 @@ export type Condition = { left: string; op: ConditionOp; right?: string };
 const TOKEN = /\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g;
 const SINGLE = /^\s*\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}\s*$/;
 
-export function lookup(vars: Vars, path: string): unknown {
+function lookup(vars: Vars, path: string): unknown {
   let current: unknown = vars;
   for (const part of path.split(".")) {
     if (current === null || current === undefined) return undefined;

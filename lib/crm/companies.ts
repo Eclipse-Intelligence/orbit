@@ -1,5 +1,4 @@
 import { after } from "next/server";
-export type { MutationOptions, MutationOutcome } from "@/lib/crm/mutate";
 
 import type { Db } from "@/lib/db/pool";
 import { withActor } from "@/lib/crm/context";

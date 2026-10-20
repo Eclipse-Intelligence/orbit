@@ -31,7 +31,7 @@ const RESPONSES: Record<string, string> = {
   "NEEDS-ACTION": "notResponded",
 };
 
-export type FeedCalendar = {
+type FeedCalendar = {
   name: string | null;
   color: string | null;
   events: CalendarEvent[];
@@ -70,7 +70,7 @@ export function meetingLink(...texts: (string | null | undefined)[]) {
   return null;
 }
 
-export function feedColor(value: string | null | undefined) {
+function feedColor(value: string | null | undefined) {
   const match = /^#?([0-9a-f]{6})(?:[0-9a-f]{2})?$/i.exec(value?.trim() ?? "");
   return match ? `#${match[1].toLowerCase()}` : null;
 }

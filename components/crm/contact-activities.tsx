@@ -41,7 +41,7 @@ const KINDS = [
   { id: "email", label: "Email" },
 ] as const;
 
-export type ActivityKind = (typeof KINDS)[number]["id"];
+type ActivityKind = (typeof KINDS)[number]["id"];
 
 type SaveActivity = (
   kind: "note" | "call",
@@ -153,7 +153,7 @@ export function useActivityDraft(save: SaveActivity) {
   };
 }
 
-export type ActivityDraft = ReturnType<typeof useActivityDraft>;
+type ActivityDraft = ReturnType<typeof useActivityDraft>;
 
 export function ActivityComposer({
   idPrefix,

@@ -16,7 +16,7 @@ const UTC_NAMES = new Set(["utc", "etc/utc", "gmt", "coordinated universal time"
 const CALENDAR_PAGE_LIMIT = 5;
 const SHOW_AS = new Set(["free", "tentative", "busy", "oof", "workingelsewhere", "unknown"]);
 
-export const CALENDAR_PALETTE = [
+const CALENDAR_PALETTE = [
   "#4f9be8",
   "#5fb760",
   "#f0913a",
@@ -78,7 +78,7 @@ export type GraphEvent = {
   showAs?: string | null;
 };
 
-export type GraphCalendar = {
+type GraphCalendar = {
   id?: string | null;
   name?: string | null;
   color?: string | null;
@@ -128,7 +128,7 @@ export class CalendarScopeError extends Error {
   }
 }
 
-export function explicitCalendarColor(calendar: Pick<GraphCalendar, "hexColor" | "color">) {
+function explicitCalendarColor(calendar: Pick<GraphCalendar, "hexColor" | "color">) {
   const hex = calendar.hexColor?.trim().toLowerCase() ?? "";
   const short = /^#([0-9a-f])([0-9a-f])([0-9a-f])$/.exec(hex);
   if (short) return `#${short[1]}${short[1]}${short[2]}${short[2]}${short[3]}${short[3]}`;
@@ -158,7 +158,7 @@ export function toCalendarInfo(calendar: GraphCalendar, fallbackIndex = 0): Cale
   };
 }
 
-export function calendarsUrl() {
+function calendarsUrl() {
   const url = new URL("https://graph.microsoft.com/v1.0/me/calendars");
   url.searchParams.set("$top", "100");
   url.searchParams.set("$select", CALENDAR_FIELDS);
@@ -387,13 +387,13 @@ export class CalendarWriteError extends Error {
   }
 }
 
-export function windowsTimeZone(timeZone: string) {
+function windowsTimeZone(timeZone: string) {
   return WINDOWS_ZONES[timeZone.trim().toLowerCase()] ?? null;
 }
 
 export type InviteGuest = { email: string; name: string | null };
 
-export type GraphEventDraft = {
+type GraphEventDraft = {
   subject: string;
   body?: { contentType: "HTML"; content: string };
   start: { dateTime: string; timeZone: string };
@@ -419,7 +419,7 @@ function utcDateTime(instant: Date) {
   return { dateTime: instant.toISOString().slice(0, 19), timeZone: "UTC" };
 }
 
-export function graphDateTime(instant: Date, timeZone: string) {
+function graphDateTime(instant: Date, timeZone: string) {
   const windows = windowsTimeZone(timeZone);
   if (!windows || windows === "UTC") return utcDateTime(instant);
   const dateTime = wallClock(instant, timeZone);
@@ -438,7 +438,7 @@ export function graphDateTimes(start: Date, end: Date, timeZone: string) {
   return { start: utcDateTime(start), end: utcDateTime(end) };
 }
 
-export function escapeHtml(value: string) {
+function escapeHtml(value: string) {
   return value
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -484,7 +484,7 @@ export function inviteDraft(input: {
   };
 }
 
-export function eventsUrl(calendarId?: string | null) {
+function eventsUrl(calendarId?: string | null) {
   return calendarId
     ? `https://graph.microsoft.com/v1.0/me/calendars/${encodeURIComponent(calendarId)}/events`
     : "https://graph.microsoft.com/v1.0/me/events";

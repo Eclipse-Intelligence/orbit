@@ -136,12 +136,8 @@ function pageZone(value: string | null | undefined) {
   return isTimeZone(value) ? value : BOOKING_TIME_ZONE;
 }
 
-export function bookingImagePath(slug: string, kind: BookingImageKind, version: string) {
+function bookingImagePath(slug: string, kind: BookingImageKind, version: string) {
   return `/api/book/${encodeURIComponent(slug)}/image/${kind}?v=${encodeURIComponent(version)}`;
-}
-
-export function ownImagePath(kind: BookingImageKind, version: string) {
-  return `/api/booking-page/image?kind=${kind}&v=${encodeURIComponent(version)}`;
 }
 
 function defaults(actor: UserActor): BookingPageSettings {
@@ -224,7 +220,7 @@ function cleanInteger(value: unknown, field: string, check: (value: number) => b
   return number;
 }
 
-export function cleanBookingPage(input: BookingPageInput) {
+function cleanBookingPage(input: BookingPageInput) {
   const slug = checkSlug(typeof input.slug === "string" ? input.slug : "");
   if (!slug.ok) throw invalid(slug.error, "slug");
   if (input.enabled !== undefined && typeof input.enabled !== "boolean") {

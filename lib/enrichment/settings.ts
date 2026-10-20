@@ -3,8 +3,8 @@ import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import type { Actor, UserActor } from "@/lib/crm/types";
 
-export const DEFAULT_EMAIL_ORDER: ProviderId[] = ["context", "hunter", "enrow", "icypeas"];
-export const DEFAULT_LINKEDIN_ORDER: ProviderId[] = ["context", "icypeas", "hunter"];
+const DEFAULT_EMAIL_ORDER: ProviderId[] = ["context", "hunter", "enrow", "icypeas"];
+const DEFAULT_LINKEDIN_ORDER: ProviderId[] = ["context", "icypeas", "hunter"];
 
 export type EnrichmentSettings = {
   emailOrder: ProviderId[];

@@ -6,7 +6,7 @@ function base64ToBytes(value: string) {
   return Uint8Array.from(raw, (char) => char.charCodeAt(0));
 }
 
-export function isStandalone() {
+function isStandalone() {
   return window.matchMedia("(display-mode: standalone)").matches || (navigator as Navigator & { standalone?: boolean }).standalone === true;
 }
 
@@ -14,7 +14,7 @@ export function isAppleMobile() {
   return /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 }
 
-export function pushSupported() {
+function pushSupported() {
   return "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
 }
 
@@ -75,7 +75,7 @@ export function setBadge(count: number) {
   void (count > 0 ? target.setAppBadge(count) : target.clearAppBadge?.())?.catch(() => undefined);
 }
 
-export type PushTestResult = { sent: number; host: string | null; failures: { status: number | null; reason: string }[] };
+type PushTestResult = { sent: number; host: string | null; failures: { status: number | null; reason: string }[] };
 
 export async function sendPushTest(): Promise<PushTestResult> {
   const registration = await navigator.serviceWorker.getRegistration("/");

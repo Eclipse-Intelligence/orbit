@@ -26,7 +26,7 @@ import {
 const nullableText = z.string().nullable().optional();
 const tagList = z.array(z.string().max(200)).max(100).nullable().optional();
 
-export const companyWriteSchema = z
+const companyWriteSchema = z
   .object({
     name: z.string().optional(),
     domain: nullableText,
@@ -44,7 +44,7 @@ export const companyWriteSchema = z
   })
   .strict();
 
-export const provenanceSchema = z
+const provenanceSchema = z
   .object({
     source: nullableText,
     sourceUrl: nullableText,
@@ -151,7 +151,7 @@ export function companyQueryFromSearchParams(
   return query;
 }
 
-export const contactWriteSchema = z
+const contactWriteSchema = z
   .object({
     companyId: z.uuid().nullable().optional(),
     firstName: nullableText,
@@ -168,7 +168,7 @@ export const contactWriteSchema = z
   })
   .strict();
 
-export const opportunityWriteSchema = z
+const opportunityWriteSchema = z
   .object({
     companyId: z.uuid().optional(),
     pipelineId: z.uuid().nullable().optional(),
@@ -185,7 +185,7 @@ export const opportunityWriteSchema = z
   })
   .strict();
 
-export const activityWriteSchema = z
+const activityWriteSchema = z
   .object({
     type: z.enum(ACTIVITY_TYPES).optional(),
     title: nullableText,
@@ -198,7 +198,7 @@ export const activityWriteSchema = z
   })
   .strict();
 
-export const taskWriteSchema = z
+const taskWriteSchema = z
   .object({
     title: z.string().optional(),
     description: nullableText,

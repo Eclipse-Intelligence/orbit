@@ -1,21 +1,13 @@
 import { DEFAULT_COMPANY_SORT, defaultCompanyOrder } from "@/lib/sorting";
 import { CrmError } from "@/lib/crm/errors";
-import {
-  COMPANY_SORTS,
-  LIFECYCLES,
-  type AccountHealth,
-  type BuiltInLifecycle,
-  type CompanyListQuery,
-  type CompanySort,
-  type Lifecycle,
-} from "@/lib/crm/types";
+import { LIFECYCLES, type AccountHealth, type BuiltInLifecycle, type CompanyListQuery, type CompanySort, type Lifecycle } from "@/lib/crm/types";
 import { appTimeZone } from "@/lib/time";
 
 export const ANY_LIFECYCLE = "any";
 export const ALL_OWNERS = "all";
 export const UNASSIGNED_OWNER = "unassigned";
 
-export const LIFECYCLE_LABELS: Record<BuiltInLifecycle, string> = {
+const LIFECYCLE_LABELS: Record<BuiltInLifecycle, string> = {
   lead: "Lead",
   prospect: "Prospect",
   customer: "Customer",
@@ -30,12 +22,6 @@ export const HEALTH_LABELS: Record<AccountHealth, string> = {
   at_risk: "At risk",
 };
 
-export const HEALTH_TONE: Record<AccountHealth, "green" | "amber" | "red"> = {
-  healthy: "green",
-  watch: "amber",
-  at_risk: "red",
-};
-
 export const HEALTH_OPTIONS = [
   { value: ANY_HEALTH, label: "Any health" },
   { value: "at_risk", label: "At risk" },
@@ -47,8 +33,8 @@ export const HEALTH_OPTIONS = [
 export const SIZE_OPTIONS = ["1-10", "11-50", "51-200", "201-1000", "1000+"];
 
 export const SORT_OPTIONS: { value: string; label: string; sort: CompanySort; order: "asc" | "desc" }[] = [
-  { value: "name:asc", label: "Name A–Z", sort: "name", order: "asc" },
-  { value: "name:desc", label: "Name Z–A", sort: "name", order: "desc" },
+  { value: "name:asc", label: "Name A to Z", sort: "name", order: "asc" },
+  { value: "name:desc", label: "Name Z to A", sort: "name", order: "desc" },
   { value: "interaction:desc", label: "Last interaction", sort: "interaction", order: "desc" },
   { value: "strength:asc", label: "Weakest connection", sort: "strength", order: "asc" },
   { value: "updated:desc", label: "Recently updated", sort: "updated", order: "desc" },
@@ -61,11 +47,6 @@ export function sortValue(sort: CompanySort = DEFAULT_COMPANY_SORT, order?: "asc
   const wanted = order ?? defaultCompanyOrder(sort);
   const match = SORT_OPTIONS.find((option) => option.sort === sort && option.order === wanted);
   return match?.value ?? `${sort}:${wanted}`;
-}
-
-export function parseSortValue(value: string) {
-  const match = SORT_OPTIONS.find((option) => option.value === value);
-  return { sort: match?.sort ?? DEFAULT_COMPANY_SORT, order: match?.order ?? "asc" };
 }
 
 export function activeFilterCount(filters: CompanyListQuery) {
@@ -252,8 +233,4 @@ export function cleanLifecycle(value: string) {
   const text = value.replace(/\s+/g, " ").trim().slice(0, LIFECYCLE_MAX_LENGTH);
   if (!text) return null;
   return builtInLifecycle(text) ?? text;
-}
-
-export function isCompanySort(value: string): value is CompanySort {
-  return (COMPANY_SORTS as readonly string[]).includes(value);
 }

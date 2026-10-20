@@ -20,11 +20,11 @@ const SHORT_THREAD = 280;
 
 type ThreadText = { id: string; from: MailAddress | null; to: MailAddress[]; cc: MailAddress[]; at: string | null; text: string };
 
-export type MailSummaryText = { summary: string; todo: string | null };
+type MailSummaryText = { summary: string; todo: string | null };
 
-export type AskSource = { key: string; subject: string | null; from: string; at: string | null };
+type AskSource = { key: string; subject: string | null; from: string; at: string | null };
 
-export type AskAnswer = { answer: string; sources: AskSource[] };
+type AskAnswer = { answer: string; sources: AskSource[] };
 
 const SUMMARY_SCHEMA = z.object({ summary: z.string(), todo: z.string().nullable() });
 const DRAFT_SCHEMA = z.object({ body: z.string() });

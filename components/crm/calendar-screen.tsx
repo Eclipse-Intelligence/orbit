@@ -76,7 +76,7 @@ function weekLabel(days: string[]) {
     year: "numeric",
     timeZone: "UTC",
   }).format(last);
-  return `${start} – ${end}`;
+  return `${start} to ${end}`;
 }
 
 function CalendarList({

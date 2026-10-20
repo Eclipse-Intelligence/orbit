@@ -2,7 +2,7 @@ import { REMINDER_MINUTES } from "@/lib/crm/reminder-options";
 
 export type PadMark = { start: number; end: number; kind: "when" | "reminder" | "record" };
 
-export type PadParse = {
+type PadParse = {
   title: string;
   due: string | null;
   remindMinutes: number | null;
