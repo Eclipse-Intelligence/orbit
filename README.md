@@ -105,6 +105,14 @@ Send is instant: the email closes, "Sent" shows with Undo (or `Z`) for ten secon
 
 The clock next to Send is Send later: the email stays a draft in Outlook and goes out at the chosen time, listed under Scheduled, where opening it lets you edit it, Unschedule it or Send now. The bell next to Send is Remind me if no reply (1, 2 or 3 days, or a week): if nobody but you has written in the conversation by then, it comes back to the top of the inbox tagged No reply, with a notification. Scheduled sends, snoozes and reminders run from `/api/cron/mail-due` (add a one-minute pg_cron job for it), the five-minute mail cron, and Mail's own minute check while it is open.
 
+### AI in Mail
+
+Each conversation opens with a short summary of what it is about and where it stands, and, when something is waiting on you, a Next line saying what to do. Summaries are made the first time you open a conversation and kept until new mail arrives; a single short email gets none.
+
+In any reply or compose card, `⌘ J` (or the sparkle next to Send) asks AI to write the email. Type a few words (for example "yes, Thursday works") or nothing at all, and it writes the message in your voice from the conversation, what Orbit knows about the people (job, company, lifecycle, health, recent activity) and how your recent sent emails read. With a draft already written, it polishes it. Missing details come back in [square brackets] rather than being made up, and Undo puts your text back. The signature is still added on sending.
+
+Type a question in the Mail search box (anything ending in a question mark, or starting with words like what, when or who) and press Enter, or press `⌘ Enter` or Ask: Orbit searches your mail for the answer and replies in a sentence or two, with the emails it used listed underneath to open. Plain words still search as before. All three need `LLM_API_KEY` and are limited per person to keep costs in check.
+
 ### Replies and read statuses
 
 `R` replies, `A` replies to all and `F` forwards, or use the buttons under the conversation. Reply goes to the sender (or, on your own email, to the people you sent it to); reply all adds everyone else on the latest email except you. Type names or addresses in To, Cc and Bcc: Orbit suggests contacts and people who have emailed you. The reply is sent from the account the conversation is in, with that address's signature (Remove signature drops it for this email), attachments, and `⌘ Enter` to send. Outlook's own quoted history goes below your message, so the thread reads as it would in Outlook.

@@ -6,6 +6,10 @@ export type ListQuery = { view: string; account: string | null; query: string };
 const lists = new Map<string, ThreadPage>();
 const details = new Map<string, ThreadDetail>();
 const pending = new Map<string, Promise<ThreadDetail>>();
+const summaries = new Map<string, Promise<ThreadSummaryText>>();
+
+export type ThreadSummaryText = { summary: string | null; todo: string | null };
+export type AskResult = { answer: string; sources: { key: string; subject: string | null; from: string; at: string | null }[] };
 
 export function listKey(query: ListQuery) {
   return `${query.query ? "search" : query.view}|${query.account ?? ""}|${query.query}`;
@@ -97,4 +101,32 @@ export function fetchScheduled() {
 
 export function syncNow() {
   return getJson<{ stored: number; removed: number }>("/api/mail/sync", { method: "POST" });
+}
+
+export function loadSummary(key: string, latestId: string) {
+  const cacheKey = `${key}|${latestId}`;
+  const hit = summaries.get(cacheKey);
+  if (hit) return hit;
+  const request = getJson<ThreadSummaryText>(`/api/mail/summary?key=${encodeURIComponent(key)}`).catch((error) => {
+    summaries.delete(cacheKey);
+    throw error;
+  });
+  summaries.set(cacheKey, request);
+  return request;
+}
+
+export function askAi(question: string, account: string | null) {
+  return getJson<AskResult>("/api/mail/ai/ask", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ question, account }),
+  });
+}
+
+export function writeWithAi(input: { mode: string; messageId: string | null; to: unknown[]; subject: string; instruction: string; current: string }) {
+  return getJson<{ body: string }>("/api/mail/ai/draft", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
 }
