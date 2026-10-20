@@ -6,6 +6,7 @@ import type { UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
 import { completeJson } from "@/lib/llm";
 import { clean, formatThread, recipientContext, threadText, today, voiceSamples } from "@/lib/mail/ai";
+import { attachmentNotes } from "@/lib/mail/attachment-context";
 import { stripQuoted } from "@/lib/mail/format";
 import { workingDaysLater } from "@/lib/mail/later";
 import { offerTimes, refreshTimes, TIMES_MARK } from "@/lib/mail/scheduling";
@@ -136,11 +137,14 @@ async function draftContext(db: Db, actor: UserActor, sourceId: string, key: str
   return { text, people, voice, edits, calls };
 }
 
-function contextBlocks(name: string, context: Awaited<ReturnType<typeof draftContext>>) {
+const ATTACHMENT_BUDGET = 12_000;
+
+function contextBlocks(name: string, context: Awaited<ReturnType<typeof draftContext>>, attachments: string[]) {
   return [
     context.people.length ? `What the CRM knows about the people:\n${context.people.join("\n")}` : "",
     context.calls.length ? `Notes from recent calls with them:\n${context.calls.join("\n")}` : "",
     `The conversation so far:\n${formatThread(context.text.messages, context.text.subject)}`,
+    attachments.length ? `Text read from the attachments in the conversation:\n\n${attachments.join("\n\n---\n\n")}` : "",
     context.voice.length ? `Examples of how ${name} writes:\n${context.voice.map((sample) => `"""\n${sample}\n"""`).join("\n")}` : "",
     context.edits.length
       ? `Replies Orbit drafted before, and what ${name} actually sent. Learn from the changes:\n${context.edits
@@ -186,6 +190,11 @@ async function prepareReply(actor: UserActor, candidate: ReplyCandidate, deadlin
   const context = await withActor(actor, (db) => draftContext(db, actor, candidate.source_id, candidate.tk));
   const latest = context.text.messages.at(-1);
   if (!latest || latest.id !== candidate.id) return "stale" as const;
+  const attachments = await attachmentNotes(
+    actor,
+    context.text.messages.slice(-4).map((message) => message.id),
+    { budget: ATTACHMENT_BUDGET, deadline: Math.min(deadline - 20_000, Date.now() + 25_000), fetchImpl },
+  );
   const name = actor.fullName || actor.email;
   const first = name.split(/\s+/)[0];
   const result = await completeJson({
@@ -195,10 +204,10 @@ async function prepareReply(actor: UserActor, candidate: ReplyCandidate, deadlin
       "It is false for newsletters, receipts, notifications, automated mail, a simple thank you or sign-off, and emails where someone else is clearly expected to answer. " +
       `When needsReply is true, body is the reply: a greeting, the content and a sign-off with "${first}". No subject and no signature block. ` +
       "Write in UK English, plain and direct. Match the tone, length and greeting style of the examples, and the changes the user made to earlier drafts. " +
-      "Use only facts from the conversation and the CRM and call notes. Never invent prices, dates, availability, attachments or promises: write [square brackets] for anything the user must fill in. " +
+      "Use only facts from the conversation, its attachments and the CRM and call notes, and refer to an attachment by its name when it matters. Never invent prices, dates, availability, attachments or promises: write [square brackets] for anything the user must fill in. " +
       `meeting is true when the latest email asks to find a time to meet or talk and no time is fixed yet. Then put ${TIMES_MARK} on its own line where the times go (Orbit fills in free times from the calendar and the booking link) and never suggest times yourself. ` +
       `When needsReply is false, body is null. ${UNTRUSTED} No em dashes. Today is ${today()}.`,
-    user: contextBlocks(first, context).join("\n\n"),
+    user: contextBlocks(first, context, attachments).join("\n\n"),
     schema: REPLY_SCHEMA,
     maxTokens: 1_200,
     timeoutMs: 20_000,
@@ -256,7 +265,7 @@ export async function prepareNudge(
       `body is two or three sentences at most: a greeting, a light nudge that refers to what was asked, and a sign-off with "${first}". No subject and no signature block. ` +
       "Don't apologise for following up and don't add new facts. Write in UK English and match the tone of the examples. " +
       `${UNTRUSTED} No em dashes. Today is ${today()}.`,
-    user: contextBlocks(first, context).join("\n\n"),
+    user: contextBlocks(first, context, []).join("\n\n"),
     schema: NUDGE_SCHEMA,
     maxTokens: 500,
     timeoutMs: 15_000,

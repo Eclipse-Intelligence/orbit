@@ -141,6 +141,8 @@ When someone asks to meet, the prepared reply offers three free times on differe
 
 The calendar button above an email reads the conversation and opens Send invite with the title, the time they agreed or proposed, the length, a note and the people in the conversation already filled in. Check it and press Send invites.
 
+Orbit also reads the attachments in a conversation: PDFs, Word, Excel and PowerPoint files, and text, CSV and HTML files, up to 15 MB and four per email. Prepared replies, Write with AI and the summary above a conversation use what they say (a reply to "see the attached terms" can refer to the terms), and Ask AI can answer from any attachment Orbit has read, naming the file. Images, scanned PDFs without a text layer and other formats are skipped. What Orbit reads is kept privately for you so each file is only downloaded once.
+
 ### Replies and read statuses
 
 `R` replies, `A` replies to all and `F` forwards, or use the buttons under the conversation. Reply goes to the sender (or, on your own email, to the people you sent it to); reply all adds everyone else on the latest email except you. Type names or addresses in To, Cc and Bcc: Orbit suggests contacts and people who have emailed you. The reply is sent from the account the conversation is in, with that address's signature (Remove signature drops it for this email), attachments, and `⌘ Enter` to send. Outlook's own quoted history goes below your message, so the thread reads as it would in Outlook.
