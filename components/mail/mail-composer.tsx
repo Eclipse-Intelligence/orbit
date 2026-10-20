@@ -12,6 +12,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/_ui/dropdown-menu";
 import { useComposer } from "@/components/mail/compose-dock";
+import { writeWithAi } from "@/components/mail/mail-cache";
 import RecipientField from "@/components/mail/recipient-field";
 import { laterDetail, laterOptions } from "@/lib/mail/later";
 import { useShortcutHint } from "@/components/shortcuts/shortcuts-provider";
@@ -20,6 +21,7 @@ import type { ComposeAccount, DraftMode, MailDraft } from "@/lib/mail/view";
 import { cn } from "@/lib/utils";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
 import BellIcon from "@/public/assets/images/mail/bell.svg";
+import SparkleIcon from "@/public/assets/images/mail/sparkle.svg";
 import ClockIcon from "@/public/assets/images/mail/clock.svg";
 import TrashIcon from "@/public/assets/images/mail/trash.svg";
 
@@ -94,6 +96,13 @@ export default function MailComposer({
 }) {
   const { queueSend, scheduleSend, pickLater } = useComposer();
   const [remindHours, setRemindHours] = useState<number | null>(null);
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiText, setAiText] = useState("");
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiUndo, setAiUndo] = useState<string | null>(null);
+  const aiInput = useRef<HTMLInputElement>(null);
+  const aiHint = useShortcutHint("mail-ai-write");
   const id = useId();
   const sendHint = useShortcutHint("submit");
   const draft = start.draft;
@@ -252,11 +261,41 @@ export default function MailComposer({
     if (current) await fetch(`/api/mail/drafts?id=${encodeURIComponent(current)}`, { method: "DELETE" }).catch(() => null);
   }
 
+  async function writeAi() {
+    if (aiBusy) return;
+    setAiBusy(true);
+    setAiError(null);
+    try {
+      const result = await writeWithAi({ mode: start.mode, messageId: start.messageId, to: [...to, ...cc], subject, instruction: aiText, current: body });
+      setAiUndo(body);
+      change(setBody)(result.body);
+      setAiOpen(false);
+      setAiText("");
+      window.setTimeout(() => textarea.current?.focus(), 0);
+    } catch (problem) {
+      setAiError(problem instanceof Error ? problem.message : "The AI didn't answer. Try again.");
+    } finally {
+      setAiBusy(false);
+    }
+  }
+
+  function openAi() {
+    setAiOpen(true);
+    setAiError(null);
+    window.setTimeout(() => aiInput.current?.focus(), 0);
+  }
+
   const status = save.kind === "saving" ? "Saving to Outlook…" : save.kind === "saved" ? "Saved in Outlook" : save.kind === "error" ? save.message : "";
 
   return (
     <form
       onSubmit={send}
+      onKeyDown={(event) => {
+        if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "j") {
+          event.preventDefault();
+          openAi();
+        }
+      }}
       aria-label={MODE_LABEL[start.mode]}
       className={cn(
         "flex min-h-0 flex-col gap-1",
@@ -334,6 +373,61 @@ export default function MailComposer({
             )}
           />
         </div>
+      )}
+      {aiOpen && (
+        <div className="animate-rise-in mt-2 flex flex-col gap-1.5 rounded-xl bg-[color-mix(in_srgb,var(--primary)_10%,transparent)] px-3 py-2">
+          <div className="flex items-center gap-2">
+            <SparkleIcon aria-hidden className={cn("text-primary-foreground size-3.5 shrink-0", aiBusy && "animate-pulse")} />
+            <label htmlFor={`${id}-ai`} className="sr-only">
+              What should the email say?
+            </label>
+            <input
+              ref={aiInput}
+              id={`${id}-ai`}
+              value={aiText}
+              disabled={aiBusy}
+              onChange={(event) => setAiText(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void writeAi();
+                }
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setAiOpen(false);
+                  textarea.current?.focus();
+                }
+              }}
+              placeholder={body.trim() ? "How should it change? Or press Enter to polish it" : "What should it say? Or press Enter for a sensible reply"}
+              className="text-foreground placeholder:text-subtle h-7 min-w-0 flex-1 bg-transparent text-[14px] outline-none disabled:opacity-60"
+            />
+            <Button variant="ghost" size="sm" onClick={() => void writeAi()} disabled={aiBusy}>
+              {aiBusy ? "Writing…" : "Write"}
+            </Button>
+          </div>
+          {aiError && (
+            <p role="alert" className="caption-style text-danger">
+              {aiError}
+            </p>
+          )}
+        </div>
+      )}
+      {aiUndo !== null && !aiOpen && (
+        <p className="caption-style text-subtle flex items-center gap-2 pt-2">
+          <SparkleIcon aria-hidden className="size-3" />
+          Written with AI. Check it before you send.
+          <button
+            type="button"
+            onClick={() => {
+              change(setBody)(aiUndo);
+              setAiUndo(null);
+            }}
+            className="text-foreground cursor-pointer underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+          >
+            Undo
+          </button>
+        </p>
       )}
       <label htmlFor={`${id}-body`} className="sr-only">
         Message
@@ -416,6 +510,9 @@ export default function MailComposer({
           </DropdownMenuContent>
         </DropdownMenu>
         <AttachButton id={`${id}-attach`} onFiles={(files) => void attachments.add(files)} compact />
+        <Button variant="ghost" size="icon" aria-label="Write with AI" title={`Write with AI (${aiHint})`} onClick={openAi}>
+          <SparkleIcon aria-hidden className="size-3.5" />
+        </Button>
         {card && (
           <span role="status" className={cn("caption-style ml-2 min-w-0 truncate", save.kind === "error" ? "text-danger" : "text-subtle")}>
             {status}

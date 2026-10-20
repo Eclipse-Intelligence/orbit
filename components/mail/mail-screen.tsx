@@ -20,6 +20,7 @@ import {
   fetchList,
   fetchNav,
   fetchScheduled,
+  askAi,
   forgetOtherLists,
   forgetThread,
   loadThread,
@@ -31,6 +32,7 @@ import {
   type ListQuery,
   type ThreadPage,
 } from "@/components/mail/mail-cache";
+import AskPanel, { type AskState } from "@/components/mail/ask-panel";
 import ScheduledList from "@/components/mail/scheduled-list";
 import ThreadList from "@/components/mail/thread-list";
 import ThreadReader, { type ReaderAction } from "@/components/mail/thread-reader";
@@ -42,6 +44,7 @@ import { cn } from "@/lib/utils";
 import { useCompaniesStore } from "@/stores/companies-store";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
 import SearchIcon from "@/public/assets/images/_common/search.svg";
+import SparkleIcon from "@/public/assets/images/mail/sparkle.svg";
 import FolderIcon from "@/public/assets/images/mail/folder.svg";
 import RefreshIcon from "@/public/assets/images/mail/refresh.svg";
 
@@ -61,6 +64,7 @@ const MORE_VIEWS = [
 const MOVES = new Set<ReaderAction>(["archive", "trash", "inbox", "snooze"]);
 const DONE_LABEL: Record<string, string> = { archive: "Archived.", trash: "Moved to Trash.", inbox: "Moved to Inbox.", snooze: "Snoozed." };
 const POLL_MS = 60_000;
+const QUESTION = /\?\s*$|^(who|what|when|where|why|how|which|did|does|do|is|are|was|were|has|have|had|can|could|should|would|will|find|show|list|summari[sz]e|tell)\s+\S+\s+\S+/i;
 const FIRST_POLL_MS = 12_000;
 const MIN_POLL_GAP_MS = 20_000;
 const READ_DWELL_MS = 700;
@@ -143,6 +147,8 @@ export default function MailScreen({
 }) {
   const { openComposer, sent: sentCount, pickLater, showToast, undoLatest } = useComposer();
   const [scheduled, setScheduled] = useState<MailDraft[] | null>(null);
+  const [ask, setAsk] = useState<AskState | null>(null);
+  const askToken = useRef(0);
   const setMailUnread = useCompaniesStore((state) => state.setMailUnread);
   const [nav, setNav] = useState(initialNav);
   const [query, setQuery] = useState(initialQuery);
@@ -235,6 +241,8 @@ export default function MailScreen({
 
   function show(next: ListQuery) {
     const token = ++request.current;
+    askToken.current += 1;
+    setAsk(null);
     setQuery(next);
     setCursor(null);
     setOpen(false);
@@ -519,9 +527,28 @@ export default function MailScreen({
     searchInput.current?.select();
   });
 
+  function runAsk(question: string) {
+    const token = ++askToken.current;
+    setAsk({ question, result: null, error: null });
+    setCursor(null);
+    searchInput.current?.blur();
+    askAi(question, query.account)
+      .then((result) => {
+        if (token === askToken.current) setAsk({ question, result, error: null });
+      })
+      .catch((error: Error) => {
+        if (token === askToken.current) setAsk({ question, result: null, error: error.message });
+      });
+  }
+
   function submitSearch(event: FormEvent) {
     event.preventDefault();
     const text = search.trim();
+    if (text && QUESTION.test(text)) {
+      runAsk(text);
+      return;
+    }
+    setAsk(null);
     if (text === query.query) return;
     show({ ...query, query: text, view: text ? query.view : query.view });
     searchInput.current?.blur();
@@ -529,6 +556,8 @@ export default function MailScreen({
 
   function clearSearch() {
     setSearch("");
+    askToken.current += 1;
+    setAsk(null);
     if (query.query) show({ ...query, query: "" });
   }
 
@@ -632,12 +661,28 @@ export default function MailScreen({
                     event.preventDefault();
                     clearSearch();
                   }
+                  if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && search.trim()) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    runAsk(search.trim());
+                  }
                 }}
-                placeholder="Search all mail"
+                placeholder="Search, or ask a question"
                 autoComplete="off"
-                className="placeholder:text-subtle text-foreground ease-power3-out h-9 w-full rounded-xl bg-white/[0.04] pr-10 pl-9 text-[14px] transition-colors duration-150 outline-none focus:bg-white/[0.06] focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-search-cancel-button]:hidden"
+                className="placeholder:text-subtle text-foreground ease-power3-out h-9 w-full rounded-xl bg-white/[0.04] pr-24 pl-9 text-[14px] transition-colors duration-150 outline-none focus:bg-white/[0.06] focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-search-cancel-button]:hidden"
               />
               {search ? (
+                <>
+                <button
+                  type="button"
+                  onClick={() => runAsk(search.trim())}
+                  aria-label="Ask AI about your email"
+                  title="Ask AI (⌘ Enter)"
+                  className="text-primary-foreground absolute top-1/2 right-9 flex h-6 -translate-y-1/2 cursor-pointer items-center gap-1 rounded-full bg-[color-mix(in_srgb,var(--primary)_22%,transparent)] px-2 text-[12px] outline-none hover:bg-[color-mix(in_srgb,var(--primary)_32%,transparent)] focus-visible:ring-2 focus-visible:ring-ring/60"
+                >
+                  <SparkleIcon aria-hidden className="size-3" />
+                  Ask
+                </button>
                 <button
                   type="button"
                   onClick={clearSearch}
@@ -648,6 +693,7 @@ export default function MailScreen({
                     <path d="M6 6 18 18M18 6 6 18" />
                   </svg>
                 </button>
+                </>
               ) : (
                 <Kbd aria-hidden className="absolute top-1/2 right-2 -translate-y-1/2">
                   /
@@ -678,7 +724,7 @@ export default function MailScreen({
                     onClick={() => show({ ...query, view: view.id, query: "" })}
                     aria-current={active ? "page" : undefined}
                     className={cn(
-                      "ease-power3-out flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-full px-3 text-[13px] transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+                      "ease-power3-out flex h-8 shrink-0 cursor-pointer items-center gap-1 rounded-full px-2.5 text-[13px] transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
                       active ? "text-foreground bg-white/[0.07]" : "text-subtle hover:text-foreground hover:bg-white/[0.035]",
                     )}
                   >
@@ -693,7 +739,7 @@ export default function MailScreen({
                       type="button"
                       aria-current={moreLabel ? "page" : undefined}
                       className={cn(
-                        "ease-power3-out flex h-8 max-w-[12em] shrink-0 cursor-pointer items-center gap-1.5 rounded-full px-2.5 text-[13px] transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+                        "ease-power3-out flex h-8 max-w-[12em] shrink-0 cursor-pointer items-center gap-1 rounded-full px-2.5 text-[13px] transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
                         moreLabel ? "text-foreground bg-white/[0.07]" : "text-subtle hover:text-foreground hover:bg-white/[0.035]",
                       )}
                     >
@@ -734,7 +780,9 @@ export default function MailScreen({
             )}
           </div>
           <div className="min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-x-none">
-            {query.view === "scheduled" && !query.query ? (
+            {ask ? (
+              <AskPanel ask={ask} now={now} onOpen={(key) => select(key, true)} />
+            ) : query.view === "scheduled" && !query.query ? (
               <ScheduledList drafts={scheduled} now={now} onOpen={(draft) => openComposer({ draft })} />
             ) : listError && threads.length === 0 ? (
               <div className="flex flex-col items-center gap-3 px-6 py-16 text-center">

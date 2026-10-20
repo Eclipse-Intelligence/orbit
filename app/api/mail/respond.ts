@@ -1,6 +1,16 @@
 import { getUserActor } from "@/lib/auth/user";
 import { CrmError } from "@/lib/crm/errors";
 import type { UserActor } from "@/lib/crm/types";
+import { query } from "@/lib/db/pool";
+
+export async function aiAllowed(userId: string, kind: string, limit: number) {
+  const result = await query<{ allowed: boolean }>("select private.consume_rate_limit($1, $2, $3) as allowed", [`mail-ai:${kind}:${userId}`, limit, 600]);
+  return Boolean(result.rows[0]?.allowed);
+}
+
+export function aiConfigured() {
+  return Boolean(process.env.LLM_API_KEY?.trim());
+}
 
 export async function mailResponse<T>(run: (actor: UserActor) => Promise<T>) {
   const actor = await getUserActor();

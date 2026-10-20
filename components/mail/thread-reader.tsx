@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import ReadStatus from "@/components/mail/read-status";
 import { useComposer } from "@/components/mail/compose-dock";
+import { loadSummary, type ThreadSummaryText } from "@/components/mail/mail-cache";
 import { watchSwipe, type SwipeHandlers } from "@/components/mail/swipe";
 import MailComposer, { type ComposerStart } from "@/components/mail/mail-composer";
 import Button, { buttonVariants } from "@/components/_ui/button";
@@ -17,6 +18,7 @@ import ChevronLeftIcon from "@/public/assets/images/_common/chevron-left.svg";
 import PaperclipIcon from "@/public/assets/images/_common/paperclip.svg";
 import ArchiveIcon from "@/public/assets/images/mail/archive.svg";
 import ClockIcon from "@/public/assets/images/mail/clock.svg";
+import SparkleIcon from "@/public/assets/images/mail/sparkle.svg";
 import FlagIcon from "@/public/assets/images/mail/flag.svg";
 import InboxIcon from "@/public/assets/images/mail/inbox.svg";
 import MailOpenIcon from "@/public/assets/images/mail/mail-open.svg";
@@ -129,6 +131,47 @@ function Message({
         </div>
       )}
     </article>
+  );
+}
+
+function SummaryLine({ threadKey, latestId, messages }: { threadKey: string; latestId: string; messages: number }) {
+  const id = `${threadKey}|${latestId}`;
+  const [state, setState] = useState<{ id: string; data: ThreadSummaryText | null; failed: boolean } | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    loadSummary(threadKey, latestId)
+      .then((data) => live && setState({ id, data, failed: false }))
+      .catch(() => live && setState({ id, data: null, failed: true }));
+    return () => {
+      live = false;
+    };
+  }, [id, threadKey, latestId]);
+
+  const current = state?.id === id ? state : null;
+  if (!current) {
+    if (messages < 2) return null;
+    return (
+      <div aria-label="Summarising" className="mx-4 flex items-center gap-2.5 rounded-xl bg-white/[0.025] px-3 py-3">
+        <SparkleIcon aria-hidden className="text-primary-foreground size-3.5 shrink-0 animate-pulse" />
+        <span className="h-2.5 w-2/3 animate-pulse rounded-full bg-white/[0.06]" />
+      </div>
+    );
+  }
+  if (current.failed || !current.data?.summary) return null;
+  return (
+    <div className="animate-rise-in mx-4 flex items-start gap-2.5 rounded-xl bg-white/[0.025] px-3 py-2.5">
+      <SparkleIcon aria-hidden className="text-primary-foreground mt-0.5 size-3.5 shrink-0" />
+      <div className="flex min-w-0 flex-col gap-1 text-[13px] leading-5">
+        <p className="text-soft">{current.data.summary}</p>
+        {current.data.todo && (
+          <p className="text-foreground">
+            <span className="text-subtle">Next: </span>
+            {current.data.todo}
+          </p>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -329,6 +372,7 @@ export default function ThreadReader({
       <div className="min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-x-none">
         <div className="mx-auto flex w-full max-w-[52em] flex-col gap-4 px-3 pt-3 pb-32 sm:px-6">
           <h2 className="px-4 text-pretty">{subject?.trim() || "(no subject)"}</h2>
+          {detail && target && <SummaryLine threadKey={detail.key} latestId={target.id} messages={detail.messages.length} />}
           {detail ? (
             <>
               <Thread key={detail.key + detail.messages.length} detail={detail} own={own} swipe={swipe} />
