@@ -77,15 +77,34 @@ export async function removePushSubscription(actor: UserActor, endpoint: string)
   await withActor(actor, (db) => db.query("delete from crm.push_subscriptions where user_id = $1 and endpoint = $2", [actor.userId, endpoint]));
 }
 
-export async function pushToUser(actor: UserActor, message: PushMessage, options: { send?: PushSender } = {}) {
+export type PushFailure = { status: number | null; reason: string };
+
+function failureReason(error: unknown): PushFailure {
+  const status = (error as { statusCode?: number }).statusCode ?? null;
+  const body = String((error as { body?: unknown }).body ?? "").slice(0, 300);
+  let reason = body;
+  try {
+    const parsed = JSON.parse(body) as { reason?: unknown };
+    if (typeof parsed.reason === "string") reason = parsed.reason;
+  } catch {}
+  if (!reason) reason = error instanceof Error ? error.message.slice(0, 200) : "Unknown error";
+  return { status, reason };
+}
+
+export async function pushToUser(
+  actor: UserActor,
+  message: PushMessage,
+  options: { send?: PushSender; endpoint?: string } = {},
+): Promise<{ sent: number; removed: number; failures: PushFailure[] }> {
   const subscriptions = await withActor(actor, async (db) => {
     const result = await db.query<{ id: string; endpoint: string; p256dh: string; auth: string }>(
-      "select id, endpoint, p256dh, auth from crm.push_subscriptions where user_id = $1 and workspace_id = $2",
-      [actor.userId, actor.workspaceId],
+      `select id, endpoint, p256dh, auth from crm.push_subscriptions
+       where user_id = $1 and workspace_id = $2 and ($3::text is null or endpoint = $3)`,
+      [actor.userId, actor.workspaceId, options.endpoint ?? null],
     );
     return result.rows;
   });
-  if (subscriptions.length === 0) return { sent: 0, removed: 0 };
+  if (subscriptions.length === 0) return { sent: 0, removed: 0, failures: [] };
   const keys = await pushKeys();
   const send: PushSender = options.send ?? ((subscription, payload, sendOptions) => webpush.sendNotification(subscription, payload, sendOptions));
   const payload = JSON.stringify({
@@ -97,6 +116,7 @@ export async function pushToUser(actor: UserActor, message: PushMessage, options
   });
   let sent = 0;
   const gone: string[] = [];
+  const failures: PushFailure[] = [];
   await Promise.all(
     subscriptions.map(async (subscription) => {
       try {
@@ -108,14 +128,15 @@ export async function pushToUser(actor: UserActor, message: PushMessage, options
         });
         sent += 1;
       } catch (error) {
-        const status = (error as { statusCode?: number }).statusCode;
-        if (status === 404 || status === 410) gone.push(subscription.id);
-        else console.error("push failed", status ?? error);
+        const failure = failureReason(error);
+        failures.push(failure);
+        if (failure.status === 404 || failure.status === 410) gone.push(subscription.id);
+        else console.error("push failed", new URL(subscription.endpoint).host, failure.status, failure.reason);
       }
     }),
   );
   if (gone.length) {
     await withActor(actor, (db) => db.query("delete from crm.push_subscriptions where id = any($1::uuid[])", [gone]));
   }
-  return { sent, removed: gone.length };
+  return { sent, removed: gone.length, failures };
 }
