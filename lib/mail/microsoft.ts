@@ -386,3 +386,33 @@ export async function renewMailSubscription(token: string, id: string, fetchImpl
   });
   return renewed.expirationDateTime ?? expirationDateTime;
 }
+
+export type MicrosoftAttachment = { id: string; name: string; contentType: string | null; size: number; inline: boolean };
+
+export async function listMicrosoftAttachments(token: string, messageId: string, fetchImpl: typeof fetch = fetch): Promise<MicrosoftAttachment[]> {
+  const page = await graphJson<{ value?: { id: string; name?: string; contentType?: string | null; size?: number; isInline?: boolean; "@odata.type"?: string }[] }>(
+    `${GRAPH}/me/messages/${encodeURIComponent(messageId)}/attachments?$select=id,name,contentType,size,isInline`,
+    token,
+    fetchImpl,
+  );
+  return (page.value ?? [])
+    .filter((item) => item["@odata.type"] !== "#microsoft.graph.itemAttachment" || item.name)
+    .map((item) => ({
+      id: item.id,
+      name: (item.name?.trim() || "Attachment").slice(0, 300),
+      contentType: item.contentType ?? null,
+      size: item.size ?? 0,
+      inline: Boolean(item.isInline),
+    }));
+}
+
+export async function fetchMicrosoftAttachment(token: string, messageId: string, attachmentId: string, fetchImpl: typeof fetch = fetch) {
+  const response = await fetchImpl(
+    graphUrl(`${GRAPH}/me/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}/$value`),
+    { headers: { authorization: `Bearer ${token}`, prefer: 'IdType="ImmutableId"' }, signal: AbortSignal.timeout(60_000) },
+  );
+  if (!response.ok || !response.body) {
+    throw new GraphMailError(response.status === 404 ? "That attachment is no longer in Outlook." : `Microsoft answered ${response.status}.`, response.status);
+  }
+  return response;
+}

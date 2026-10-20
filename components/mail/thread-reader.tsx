@@ -1,12 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import MessageAttachments from "@/components/mail/message-attachments";
 import ReadStatus from "@/components/mail/read-status";
 import { useComposer } from "@/components/mail/compose-dock";
 import { loadSummary, type ThreadSummaryText } from "@/components/mail/mail-cache";
 import { watchSwipe, type SwipeHandlers } from "@/components/mail/swipe";
 import MailComposer, { type ComposerStart } from "@/components/mail/mail-composer";
-import Button, { buttonVariants } from "@/components/_ui/button";
+import Button from "@/components/_ui/button";
 import { Monogram, tagBase } from "@/components/beautifui/record-marks";
 import EmailFrame from "@/components/mail/email-frame";
 import { useShortcut, useShortcutHint } from "@/components/shortcuts/shortcuts-provider";
@@ -27,7 +28,6 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
 import { cn } from "@/lib/utils";
 import ChevronLeftIcon from "@/public/assets/images/_common/chevron-left.svg";
-import PaperclipIcon from "@/public/assets/images/_common/paperclip.svg";
 import ArchiveIcon from "@/public/assets/images/mail/archive.svg";
 import ClockIcon from "@/public/assets/images/mail/clock.svg";
 import SparkleIcon from "@/public/assets/images/mail/sparkle.svg";
@@ -139,17 +139,7 @@ function Message({
       {expanded && (
         <div className="flex flex-col gap-3 px-4 pb-4 sm:pl-14">
           <MessageBody message={message} title={`Email from ${sender}`} swipe={swipe} />
-          {message.hasAttachments && (
-            <p className="caption-style text-subtle flex items-center gap-1.5">
-              <PaperclipIcon aria-hidden className="size-3" />
-              Has attachments.
-              {message.webLink && (
-                <a href={message.webLink} target="_blank" rel="noreferrer" className="text-soft hover:text-foreground underline underline-offset-2">
-                  Open in Outlook
-                </a>
-              )}
-            </p>
-          )}
+          {message.hasAttachments && <MessageAttachments messageId={message.id} />}
         </div>
       )}
     </article>
@@ -404,7 +394,6 @@ export default function ThreadReader({
   const sender =
     detail?.messages.filter((message) => message.from && !ownSet.has(message.from.address.toLowerCase())).at(-1)?.from?.address ??
     (summary?.from && !ownSet.has(summary.from.address.toLowerCase()) ? summary.from.address : null);
-  const latestLink = detail?.messages.findLast((message) => message.webLink)?.webLink ?? null;
 
   return (
     <div ref={surface} className="flex min-h-0 flex-1 touch-pan-y flex-col">
@@ -465,11 +454,6 @@ export default function ThreadReader({
           )}
           <span aria-hidden className="size-1.5 shrink-0 rounded-full" style={{ background: tagBase(account) }} />
           <span className="caption-style text-subtle truncate">{account}</span>
-          {latestLink && (
-            <a href={latestLink} target="_blank" rel="noreferrer" className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "hidden sm:inline-flex")}>
-              Open in Outlook
-            </a>
-          )}
         </span>
       </div>
       <div className="min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-x-none">
