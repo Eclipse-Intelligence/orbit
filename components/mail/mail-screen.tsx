@@ -572,8 +572,11 @@ export default function MailScreen({
 
   useEffect(() => {
     const onOpen = (event: Event) => {
-      const thread = (event as CustomEvent<{ thread?: string }>).detail?.thread;
-      if (thread) selectRef.current(thread, true);
+      const detail = (event as CustomEvent<{ thread?: string; view?: string | null }>).detail;
+      if (!detail?.thread) return;
+      const current = latest.current.query;
+      if (detail.view && (detail.view !== current.view || current.query)) showRef.current({ view: detail.view, account: current.account, query: "" });
+      selectRef.current(detail.thread, true);
     };
     window.addEventListener(OPEN_THREAD_EVENT, onOpen);
     return () => window.removeEventListener(OPEN_THREAD_EVENT, onOpen);
@@ -582,6 +585,11 @@ export default function MailScreen({
   const selectRef = useRef(select);
   useEffect(() => {
     selectRef.current = select;
+  });
+
+  const showRef = useRef(show);
+  useEffect(() => {
+    showRef.current = show;
   });
 
   useEffect(() => {

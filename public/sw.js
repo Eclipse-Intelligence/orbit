@@ -28,6 +28,17 @@ self.addEventListener("push", (event) => {
 
 let pending = null;
 
+const PENDING_CACHE = "orbit-pending";
+const PENDING_KEY = "/__orbit-pending";
+
+function rememberPending(value) {
+  pending = value;
+  return caches
+    .open(PENDING_CACHE)
+    .then((cache) => cache.put(PENDING_KEY, new Response(JSON.stringify(value), { headers: { "content-type": "application/json" } })))
+    .catch(() => undefined);
+}
+
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const target = new URL((event.notification.data && event.notification.data.url) || "/mail", self.location.origin).href;
@@ -35,9 +46,8 @@ self.addEventListener("notificationclick", (event) => {
     event.waitUntil(self.clients.openWindow(target));
     return;
   }
-  pending = { url: target, at: Date.now() };
   event.waitUntil(
-    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
+    rememberPending({ url: target, at: Date.now() }).then(() => self.clients.matchAll({ type: "window", includeUncontrolled: true })).then((clients) => {
       const client = clients.find((item) => new URL(item.url).origin === self.location.origin);
       if (client) {
         client.postMessage({ type: "orbit-open", url: target });
@@ -52,5 +62,6 @@ self.addEventListener("message", (event) => {
   if (!event.data || event.data.type !== "orbit-pending" || !event.ports[0]) return;
   const fresh = pending && Date.now() - pending.at < 60000 ? pending.url : null;
   pending = null;
+  caches.delete(PENDING_CACHE).catch(() => undefined);
   event.ports[0].postMessage(fresh);
 });
