@@ -34,7 +34,12 @@ export default async function GeneralSettingsPage() {
         workspaceName={user.workspaceName}
       />
       <MyEmailsSettings emails={myEmails} />
-      <NotificationSettings initialMail={notifications.mail} devices={notifications.devices} />
+      <NotificationSettings
+        initialMail={notifications.mail}
+        initialCalendarMinutes={notifications.calendarMinutes}
+        initialReads={notifications.reads}
+        devices={notifications.devices}
+      />
       <MeetingLinkSettings meetingLink={meetingLink} />
       <ShortcutSettings />
     </SettingsPage>

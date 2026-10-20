@@ -31,6 +31,10 @@ let pending = null;
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const target = new URL((event.notification.data && event.notification.data.url) || "/mail", self.location.origin).href;
+  if (new URL(target).origin !== self.location.origin) {
+    event.waitUntil(self.clients.openWindow(target));
+    return;
+  }
   pending = { url: target, at: Date.now() };
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
