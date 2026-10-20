@@ -195,7 +195,7 @@ function CopyLine({ text }: { text: string }) {
 function agentCommand(origin: string, code?: string) {
   const base = `npx -y --package=${origin}/downloads/orbit-agent.tgz orbit-agent`;
   const pair = code ? ` --pair ${code}` : "";
-  return `${base}${pair}${origin === PRODUCTION_URL || !code ? "" : ` --url ${origin}`}`;
+  return `${base}${pair}${origin === PRODUCTION_URL ? "" : ` --url ${origin}`} --install`;
 }
 
 function AgentRow({ companions }: { companions: CompanionSummary[] }) {
@@ -286,7 +286,7 @@ function AgentRow({ companions }: { companions: CompanionSummary[] }) {
             <CopyLine text={agentCommand(pairing.origin, pairing.code)} />
           </li>
           <li className="caption-style text-subtle leading-[1.4]">
-            3. Leave it running. This page updates when your Mac connects. The code works for 10 minutes.
+            3. That&apos;s it: Orbit Agent now runs in the background, starts when you log in and restarts if it stops, so you can close Terminal. This page updates when your Mac connects. The code works for 10 minutes.
           </li>
         </ol>
       )}
@@ -309,7 +309,9 @@ function AgentRow({ companions }: { companions: CompanionSummary[] }) {
       )}
       {companions.length > 0 && !online && !pairing && (
         <div className="flex flex-col gap-2">
-          <span className="caption-style text-subtle leading-[1.4]">To start it again, run this in Terminal on your Mac:</span>
+          <span className="caption-style text-subtle leading-[1.4]">
+            To start it and keep it running (it will then start by itself whenever you log in), run this once in Terminal on your Mac:
+          </span>
           <CopyLine text={agentCommand(origin)} />
         </div>
       )}
