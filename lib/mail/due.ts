@@ -9,6 +9,7 @@ import { threadKey } from "@/lib/mail/threads";
 import { sendAlert } from "@/lib/alerts";
 import { mailNotifyLevel } from "@/lib/mail/notify";
 import type { PushSender } from "@/lib/push";
+import { prepareNudge } from "@/lib/mail/prepare";
 
 export type DueReport = { sent: number; failed: number; returned: number; followUps: number };
 
@@ -76,6 +77,10 @@ async function checkFollowUp(actor: UserActor, reminder: ReminderRow, options: {
     await withActor(actor, (db) => db.query("update crm.mail_reminders set state = 'done' where id = $1", [reminder.id]));
     return false;
   }
+  const nudge = await prepareNudge(actor, reminder.source_id, reminder.thread_key, { deadline: Date.now() + 15_000 }).catch((error) => {
+    console.error("Preparing a follow-up failed", error instanceof Error ? error.message : error);
+    return null;
+  });
   const title = `No reply yet: ${reminder.subject?.trim() || "(no subject)"}`;
   const href = mailHref(reminder.source_id, reminder.thread_key);
   const quiet = (await mailNotifyLevel(actor)) === "none";
@@ -84,7 +89,7 @@ async function checkFollowUp(actor: UserActor, reminder: ReminderRow, options: {
     {
       key: `follow-up:${reminder.id}`,
       title,
-      body: "Nobody has replied. It's back at the top of your inbox.",
+      body: nudge ? "Nobody has replied. Orbit has a follow-up ready for you to send." : "Nobody has replied. It's back at the top of your inbox.",
       url: href,
       tag: `${reminder.source_id}|${reminder.thread_key}`,
       bell: { title, body: "Orbit has put the conversation back at the top of your inbox.", href },

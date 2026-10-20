@@ -27,7 +27,12 @@ export type ThreadSummary = {
   reminder: { kind: "snooze" | "follow_up"; at: string } | null;
   snoozedUntil: string | null;
   split: MailSplit | null;
+  prepared: boolean;
 };
+
+export type PreparedReply = { id: string; kind: "reply" | "nudge"; messageId: string; body: string };
+
+export type FollowUpReminder = { id: string; at: string; automatic: boolean };
 
 export type ThreadMessage = {
   id: string;
@@ -55,6 +60,8 @@ export type ThreadDetail = {
   subject: string | null;
   messages: ThreadMessage[];
   drafts: MailDraft[];
+  prepared: PreparedReply | null;
+  followUp: FollowUpReminder | null;
 };
 
 export type ComposeAccount = { id: string; email: string; signature: string | null; sourceId?: string; identityId?: string };

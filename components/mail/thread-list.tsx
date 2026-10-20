@@ -11,6 +11,7 @@ import EyeIcon from "@/public/assets/images/mail/eye.svg";
 import FlagIcon from "@/public/assets/images/mail/flag.svg";
 import InboxIcon from "@/public/assets/images/mail/inbox.svg";
 import ClockIcon from "@/public/assets/images/mail/clock.svg";
+import SparkleIcon from "@/public/assets/images/mail/sparkle.svg";
 import PaperclipIcon from "@/public/assets/images/_common/paperclip.svg";
 
 export type SwipeActions = {
@@ -188,6 +189,7 @@ function Row({
           </span>
           {thread.count > 1 && <span className="text-subtle shrink-0 text-[12px] tabular-nums">{thread.count}</span>}
           <span className="ml-auto flex shrink-0 items-center gap-1.5">
+            {thread.prepared && <SparkleIcon aria-label="Reply ready" className="text-primary-foreground size-3" />}
             {thread.hasAttachments && <PaperclipIcon aria-label="Has attachments" className="text-subtle size-3" />}
             {thread.flagged && <FlagIcon aria-label="Flagged" className="text-warning size-3" />}
             {thread.reads && thread.reads.count > 0 && (
