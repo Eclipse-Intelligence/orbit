@@ -123,6 +123,10 @@ describe("notifications", () => {
     const burst = pusher();
     await syncMail(owner, { budgetMs: 30_000, fetchImpl: outlook(state).fetchImpl, push: burst.send });
     assert.deepEqual(burst.sent.map((item) => item.payload.title), ["4 new emails"]);
+    state.inbox = [message("n-news", "news@brand.test")];
+    const news = pusher();
+    await syncMail(owner, { budgetMs: 30_000, fetchImpl: outlook(state).fetchImpl, push: news.send });
+    assert.match(String(news.sent[0].payload.url), /^\/mail\?view=inbox:news&thread=/);
     await setMailNotifications(owner, { mail: "none" });
     state.inbox = [message("n5", "jane@acme.test")];
     const off = pusher();

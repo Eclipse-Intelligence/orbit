@@ -81,7 +81,7 @@ export async function notifyNewMail(actor: UserActor, messageIds: string[], opti
       {
         title: item.from_name || item.from_email || "New email",
         body: [item.subject?.trim() || "(no subject)", item.snippet?.trim()].filter(Boolean).join("\n").slice(0, 300),
-        url: `/mail?view=inbox:${item.split === "calendar" ? "calendar" : "important"}&thread=${encodeURIComponent(key)}`,
+        url: `/mail?view=inbox:${item.split}&thread=${encodeURIComponent(key)}`,
         tag: key,
         badge,
       },
