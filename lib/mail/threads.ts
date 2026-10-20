@@ -42,6 +42,10 @@ type ThreadRow = {
   attachments: boolean;
   is_draft: boolean;
   at: Date | string | null;
+  sort_at: Date | string | null;
+  reminder_kind: "snooze" | "follow_up" | null;
+  surfaced_at: Date | string | null;
+  snoozed_until: Date | string | null;
   reads: { count: number; last: string | null } | null;
 };
 
@@ -63,8 +67,17 @@ export async function listThreads(
       values.push(input.view.folderId);
       where.push(`m.folder_id = $${values.length}`);
     } else {
-      values.push(input.view && "role" in input.view ? input.view.role : "inbox");
-      where.push(`f.role = $${values.length}`);
+      const role = input.view && "role" in input.view ? input.view.role : "inbox";
+      values.push(role);
+      where.push(
+        role === "inbox"
+          ? `(f.role = $${values.length} or (f.role not in ('trash', 'junk', 'outbox', 'drafts') and exists (
+              select 1 from crm.mail_reminders rm
+              where rm.user_id = m.user_id and rm.source_id = m.source_id and rm.thread_key = ${THREAD_KEY}
+                and rm.state = 'due' and rm.kind = 'follow_up'
+            )))`
+          : `f.role = $${values.length}`,
+      );
     }
     if (input.sourceId) {
       if (!isUuid(input.sourceId)) return { threads: [], next: null };
@@ -74,7 +87,7 @@ export async function listThreads(
     const cursor: string[] = [];
     if (input.before) {
       values.push(input.before.at, input.before.key);
-      cursor.push(`(r.at, r.source_id::text || '|' || r.tk) < ($${values.length - 1}::timestamptz, $${values.length})`);
+      cursor.push(`(l.sort_at, l.source_id::text || '|' || l.tk) < ($${values.length - 1}::timestamptz, $${values.length})`);
     }
     values.push(limit + 1);
     const result = await db.query<ThreadRow>(
@@ -95,16 +108,31 @@ export async function listThreads(
            bool_or(s.has_attachments) over w as attachments
          from scoped s
          window w as (partition by s.source_id, s.tk)
+       ),
+       listed as (
+         select r.*, rem.kind as reminder_kind, rem.surfaced_at, snz.until as snoozed_until,
+           greatest(r.at, coalesce(rem.surfaced_at, r.at)) as sort_at
+         from ranked r
+         left join lateral (
+           select rm.kind, rm.surfaced_at from crm.mail_reminders rm
+           where rm.user_id = $1 and rm.source_id = r.source_id and rm.thread_key = r.tk and rm.state = 'due'
+           order by rm.surfaced_at desc limit 1
+         ) rem on true
+         left join lateral (
+           select min(rm.due_at) as until from crm.mail_reminders rm
+           where rm.user_id = $1 and rm.source_id = r.source_id and rm.thread_key = r.tk and rm.state = 'waiting' and rm.kind = 'snooze'
+         ) snz on true
+         where r.rn = 1
        )
-       select r.source_id, r.tk, src.email as account, r.id, r.subject, r.snippet, r.from_email, r.from_name, r.to_recipients,
-         r.n::int as n, r.unread, r.flagged, r.attachments, r.is_draft, r.at,
-         case when r.tracking_id is not null then (
-           select json_build_object('count', count(*)::int, 'last', max(o.opened_at)) from crm.mail_opens o where o.tracking_id = r.tracking_id
+       select l.source_id, l.tk, src.email as account, l.id, l.subject, l.snippet, l.from_email, l.from_name, l.to_recipients,
+         l.n::int as n, l.unread, l.flagged, l.attachments, l.is_draft, l.at, l.sort_at, l.reminder_kind, l.surfaced_at, l.snoozed_until,
+         case when l.tracking_id is not null then (
+           select json_build_object('count', count(*)::int, 'last', max(o.opened_at)) from crm.mail_opens o where o.tracking_id = l.tracking_id
          ) end as reads
-       from ranked r
-       join crm.mail_sources src on src.id = r.source_id
-       where r.rn = 1 ${cursor.length ? `and ${cursor.join(" and ")}` : ""}
-       order by r.at desc, r.source_id::text || '|' || r.tk desc
+       from listed l
+       join crm.mail_sources src on src.id = l.source_id
+       ${cursor.length ? `where ${cursor.join(" and ")}` : ""}
+       order by l.sort_at desc, l.source_id::text || '|' || l.tk desc
        limit $${values.length}`,
       values,
     );
@@ -125,11 +153,13 @@ export async function listThreads(
       draft: row.is_draft,
       latestAt: iso(row.at),
       reads: row.reads ? { count: row.reads.count, last: iso(row.reads.last) } : null,
+      reminder: row.reminder_kind && row.surfaced_at ? { kind: row.reminder_kind, at: iso(row.surfaced_at)! } : null,
+      snoozedUntil: iso(row.snoozed_until),
     }));
-    const last = threads[threads.length - 1];
+    const lastRow = rows[rows.length - 1];
     return {
       threads,
-      next: result.rows.length > limit && last?.latestAt ? { at: last.latestAt, key: last.key } : null,
+      next: result.rows.length > limit && lastRow?.sort_at ? { at: iso(lastRow.sort_at)!, key: threadKey(lastRow.source_id, lastRow.tk) } : null,
     };
   });
 }
@@ -223,12 +253,20 @@ export async function mailNav(actor: UserActor): Promise<MailNav> {
        order by f.name`,
       [actor.userId],
     );
+    const counts = await db.query<{ snoozed: number; scheduled: number }>(
+      `select
+         (select count(distinct (source_id, thread_key))::int from crm.mail_reminders where user_id = $1 and kind = 'snooze' and state = 'waiting') as snoozed,
+         (select count(*)::int from crm.mail_drafts where user_id = $1 and (send_at is not null or send_error is not null)) as scheduled`,
+      [actor.userId],
+    );
     const inboxUnread = (sourceId: string | null) =>
       folders.rows.filter((folder) => folder.role === "inbox" && (!sourceId || folder.source_id === sourceId)).reduce((sum, folder) => sum + folder.unread, 0);
     return {
       accounts: accounts.rows.map((row) => ({ id: row.id, email: row.email, unread: inboxUnread(row.id) })),
       folders: folders.rows.map((row) => ({ id: row.id, sourceId: row.source_id, name: row.name, role: row.role, unread: row.unread })),
       unread: inboxUnread(null),
+      snoozed: counts.rows[0]?.snoozed ?? 0,
+      scheduled: counts.rows[0]?.scheduled ?? 0,
     };
   });
 }

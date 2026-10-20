@@ -28,8 +28,9 @@ export default async function MailPage({
   const nav = await mailNav(user);
   const account = nav.accounts.some((item) => item.id === text(resolved.account)) ? text(resolved.account) : null;
   const threadKey = text(resolved.thread);
+  const scheduledView = text(resolved.view) === "scheduled" && !query;
   const [page, thread, accounts] = await Promise.all([
-    listThreads(user, { view, sourceId: account, query }),
+    scheduledView ? Promise.resolve({ threads: [], next: null }) : listThreads(user, { view, sourceId: account, query }),
     threadKey ? getThread(user, threadKey).catch(() => null) : Promise.resolve(null),
     composeAccounts(user).catch(() => []),
   ]);
@@ -44,7 +45,7 @@ export default async function MailPage({
         workspaceName: user.workspaceName,
       }}
       initialNav={nav}
-      initialQuery={{ view: mailViewParam(view), account, query }}
+      initialQuery={{ view: scheduledView ? "scheduled" : mailViewParam(view), account, query }}
       initialPage={page}
       initialThread={thread}
       initialNow={requestTime()}

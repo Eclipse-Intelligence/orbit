@@ -203,7 +203,7 @@ describe("mail replies and read statuses", () => {
     const first = await saveMailDraft(owner, input, { origin: ORIGIN, fetchImpl: outlook(state).fetchImpl });
     const oldDraft = `draft-${draftCount}`;
     const gone = outlook({ ...state, missing: new Set([oldDraft]) });
-    const again = await saveMailDraft(owner, { ...input, id: first.id }, { origin: ORIGIN, fetchImpl: gone.fetchImpl });
+    const again = await saveMailDraft(owner, { ...input, id: first.id, body: "FYI, see below" }, { origin: ORIGIN, fetchImpl: gone.fetchImpl });
     assert.notEqual(again.id, first.id);
     assert.deepEqual(gone.calls.map((call) => `${call.method} ${call.url.replace(GRAPH, "").split("?")[0]}`), [
       `PATCH /me/messages/${oldDraft}`,
@@ -278,8 +278,19 @@ describe("mail replies and read statuses", () => {
     );
     const send = outlook(state);
     await sendMailDraft(owner, { ...input, id: draft.id }, { origin: ORIGIN, fetchImpl: send.fetchImpl });
-    assert.deepEqual(send.calls.map((call) => call.method), ["PATCH", "POST"]);
-    assert.ok(send.calls[1].url.endsWith("/send"));
+    assert.deepEqual(send.calls.map((call) => call.method), ["POST"]);
+    assert.ok(send.calls[0].url.endsWith("/send"));
+
+    const kept = await saveMailDraft(owner, { ...input, subject: "Second" }, { origin: ORIGIN, fetchImpl: outlook(state).fetchImpl });
+    const goneDraft = `draft-${draftCount}`;
+    const resend = outlook({ ...state, missing: new Set([goneDraft]) });
+    await sendMailDraft(owner, { ...input, id: kept.id, subject: "Second" }, { origin: ORIGIN, fetchImpl: resend.fetchImpl });
+    assert.deepEqual(resend.calls.map((call) => `${call.method} ${call.url.replace(GRAPH, "").split("?")[0]}`), [
+      `POST /me/messages/${goneDraft}/send`,
+      "POST /me/messages",
+      `PATCH /me/messages/draft-${draftCount}`,
+      `POST /me/messages/draft-${draftCount}/send`,
+    ]);
   });
 
   it("leaves read images out when read statuses are off", async () => {

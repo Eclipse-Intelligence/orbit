@@ -91,11 +91,19 @@ The history fills in through `/api/cron/mail` (up to four minutes a run), plus a
 
 ### Mail
 
-Mail (`G` then `M`, at the top of the side menu with your unread count) is where you read and work through that copy. Every connected account is in one inbox, with All accounts or a single account at the top, and a coloured dot on each conversation shows which account it came to. Inbox, Sent, Drafts, Archive, Trash and Folders (your own folders) sit above the list; search looks through every folder. Mail is grouped into conversations, newest first, and opens in the reading pane straight away because Orbit loads the next few conversations before you get to them. Designed emails show on a white sheet; ordinary emails take Orbit's colours. Scripts never run and links open in a new tab.
+Mail (`G` then `M`, at the top of the side menu with your unread count) is where you read and work through that copy. Every connected account is in one inbox, with All accounts or a single account at the top, and a coloured dot on each conversation shows which account it came to. Inbox, Snoozed and Scheduled (when they have anything), Sent, Drafts, and More (Archive, Trash and your own folders) sit above the list; search looks through every folder. Mail is grouped into conversations, newest first, and opens in the reading pane straight away because Orbit loads the next few conversations before you get to them. Designed emails show on a white sheet; ordinary emails take Orbit's colours. Scripts never run and links open in a new tab.
 
-Keys: `J` and `K` (or the arrows) move through the list, `E` archives (in Archive it moves back to Inbox), `#` or Delete moves to Trash, `U` marks read or unread, `S` flags, `Z` undoes the last archive or delete, `/` searches, `Shift R` checks for new mail and Esc goes back to the list on a phone. A conversation you stay on is marked read. Every change shows at once and goes to Outlook in the background; if Outlook refuses, Orbit puts it back and says why. New mail is checked every minute while Mail is open and when you come back to the tab. On a phone, swipe a conversation left to archive it (in Archive, back to Inbox) and right to mark it read or unread; in an open email, swipe right to go back to the list and left for the next email. Compose opens a new email card (see Email from anywhere).
+Keys: `J` and `K` (or the arrows) move through the list, `E` archives (in Archive it moves back to Inbox), `#` or Delete moves to Trash, `U` marks read or unread, `S` flags, `H` snoozes, `Z` undoes the last archive, delete, snooze or send, `/` searches, `Shift R` checks for new mail and Esc goes back to the list on a phone. A conversation you stay on is marked read. Every change shows at once and goes to Outlook in the background; if Outlook refuses, Orbit puts it back and says why. New mail is checked every minute while Mail is open and when you come back to the tab. On a phone, swipe a conversation left to archive it (in Archive or Snoozed, back to Inbox) and right to snooze it; in an open email, swipe right to go back to the list and left for the next email. Compose opens a new email card (see Email from anywhere).
 
 Capture (`G` then `I`, formerly Inbox) is where the Microsoft connection lives, along with everything Orbit has captured and is waiting for you: mail to file to contacts, people you've met, calls and transcripts. `/inbox` redirects there.
+
+### Remind me, Send later and Undo send
+
+Send is instant: the email closes, "Sent" shows with Undo (or `Z`) for ten seconds, and Outlook gets it after that. If Outlook refuses, an alert offers the draft back. Leaving the page during those ten seconds sends it straight away.
+
+`H` (Remind me), the clock in the reading pane, or swiping a conversation right on a phone, asks when you want it back: later today, this evening, tomorrow, this weekend, next week or a date and time. Orbit moves the conversation to a Snoozed folder in that Outlook mailbox (made on first use), and at that time moves it back to the inbox, unread, at the top with a Reminder tag. Snoozed lists what is waiting and when it comes back; `E` there returns a conversation now.
+
+The clock next to Send is Send later: the email stays a draft in Outlook and goes out at the chosen time, listed under Scheduled, where opening it lets you edit it, Unschedule it or Send now. The bell next to Send is Remind me if no reply (1, 2 or 3 days, or a week): if nobody but you has written in the conversation by then, it comes back to the top of the inbox tagged No reply, with a notification. Scheduled sends, snoozes and reminders run from `/api/cron/mail-due` (add a one-minute pg_cron job for it), the five-minute mail cron, and Mail's own minute check while it is open.
 
 ### Replies and read statuses
 
@@ -557,7 +565,7 @@ Every variable Orbit reads. `.env.example` lists them with comments (aliases suc
 | `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Hosted sign-in, email attachments (Storage) | Unset means local password sessions and no attachments. |
 | `SUPABASE_SERVICE_ROLE_KEY` (or `SUPABASE_SECRET_KEY`) | Invites, email attachments | Server only. Creates confirmed logins for invitees, and signs uploads to and reads from the private `email-attachments` Storage bucket. |
 | `SITE_URL` (or `NEXT_PUBLIC_SITE_URL`) | Links in emails, ClickUp, Linear and invites; webhooks and Teams subscriptions | The https origin, with or without `https://`. |
-| `CRON_SECRET` | `/api/cron/sync`, `/api/cron/workflows`, `/api/cron/mail`, `/api/assistant/probe` | Bearer secret. |
+| `CRON_SECRET` | `/api/cron/sync`, `/api/cron/workflows`, `/api/cron/mail`, `/api/cron/mail-due`, `/api/assistant/probe` | Bearer secret. |
 | `MAIL_STORAGE_LIMIT_MB` | Mail mirror | Optional. The database size at which the mail backfill pauses (default 400). Raise it on a Pro Supabase project. |
 | `MAIL_HARD_STOP_MB` | Mail mirror | Optional. The database size at which all mail sync stops, new mail included (default 18% above `MAIL_STORAGE_LIMIT_MB`, so 472 on the defaults). |
 | `NEXT_PUBLIC_TIMEZONE` | Optional | Default `Europe/London`. |

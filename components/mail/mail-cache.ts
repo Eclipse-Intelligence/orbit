@@ -1,4 +1,4 @@
-import type { MailNav, ThreadCursor, ThreadDetail, ThreadSummary } from "@/lib/mail/view";
+import type { MailDraft, MailNav, ThreadCursor, ThreadDetail, ThreadSummary } from "@/lib/mail/view";
 
 export type ThreadPage = { threads: ThreadSummary[]; next: ThreadCursor | null };
 export type ListQuery = { view: string; account: string | null; query: string };
@@ -83,12 +83,16 @@ export function fetchNav() {
   return getJson<MailNav>("/api/mail/nav");
 }
 
-export function postAction(thread: string, action: string, view: string) {
+export function postAction(thread: string, action: string, view: string, until?: string) {
   return getJson<{ changed: number }>("/api/mail/actions", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ thread, action, view }),
+    body: JSON.stringify({ thread, action, view, until }),
   });
+}
+
+export function fetchScheduled() {
+  return getJson<{ drafts: MailDraft[] }>("/api/mail/scheduled").then((body) => body.drafts);
 }
 
 export function syncNow() {

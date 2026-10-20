@@ -317,3 +317,17 @@ export async function deleteMicrosoftDraft(token: string, draftId: string, fetch
     throw error;
   }
 }
+
+export const SNOOZE_FOLDER = "Snoozed";
+
+export async function ensureMicrosoftFolder(token: string, name: string, fetchImpl: typeof fetch = fetch) {
+  const filter = encodeURIComponent(`displayName eq '${name.replace(/'/g, "''")}'`);
+  const found = await graphJson<{ value?: GraphFolder[] }>(`${GRAPH}/me/mailFolders?$filter=${filter}&$select=id,displayName`, token, fetchImpl);
+  const existing = found.value?.find((folder) => folder.displayName === name);
+  if (existing) return existing.id;
+  const created = await graphJson<GraphFolder>(`${GRAPH}/me/mailFolders`, token, fetchImpl, undefined, {
+    method: "POST",
+    body: { displayName: name },
+  });
+  return created.id;
+}

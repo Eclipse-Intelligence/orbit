@@ -19,6 +19,7 @@ import {
   cachedThread,
   fetchList,
   fetchNav,
+  fetchScheduled,
   forgetOtherLists,
   forgetThread,
   loadThread,
@@ -30,11 +31,13 @@ import {
   type ListQuery,
   type ThreadPage,
 } from "@/components/mail/mail-cache";
+import ScheduledList from "@/components/mail/scheduled-list";
 import ThreadList from "@/components/mail/thread-list";
 import ThreadReader, { type ReaderAction } from "@/components/mail/thread-reader";
 import { useComposer } from "@/components/mail/compose-dock";
 import { useShortcut } from "@/components/shortcuts/shortcuts-provider";
-import type { ComposeAccount, MailNav, ThreadDetail, ThreadSummary } from "@/lib/mail/view";
+import { laterOptions } from "@/lib/mail/later";
+import type { ComposeAccount, MailDraft, MailNav, ThreadDetail, ThreadSummary } from "@/lib/mail/view";
 import { cn } from "@/lib/utils";
 import { useCompaniesStore } from "@/stores/companies-store";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
@@ -44,20 +47,24 @@ import RefreshIcon from "@/public/assets/images/mail/refresh.svg";
 
 const VIEWS = [
   { id: "inbox", label: "Inbox" },
+  { id: "snoozed", label: "Snoozed" },
+  { id: "scheduled", label: "Scheduled" },
   { id: "sent", label: "Sent" },
   { id: "drafts", label: "Drafts" },
+] as const;
+
+const MORE_VIEWS = [
   { id: "archive", label: "Archive" },
   { id: "trash", label: "Trash" },
 ] as const;
 
-const MOVES = new Set<ReaderAction>(["archive", "trash", "inbox"]);
-const DONE_LABEL: Record<string, string> = { archive: "Archived.", trash: "Moved to Trash.", inbox: "Moved to Inbox." };
+const MOVES = new Set<ReaderAction>(["archive", "trash", "inbox", "snooze"]);
+const DONE_LABEL: Record<string, string> = { archive: "Archived.", trash: "Moved to Trash.", inbox: "Moved to Inbox.", snooze: "Snoozed." };
 const POLL_MS = 60_000;
 const FIRST_POLL_MS = 12_000;
 const MIN_POLL_GAP_MS = 20_000;
 const READ_DWELL_MS = 700;
 
-type Toast = { message: string; tone: "status" | "alert"; undo?: () => void };
 
 function MailOverscroll() {
   useEffect(() => {
@@ -134,7 +141,8 @@ export default function MailScreen({
   initialThread: ThreadDetail | null;
   initialNow: number;
 }) {
-  const { openComposer, sent: sentCount } = useComposer();
+  const { openComposer, sent: sentCount, pickLater, showToast, undoLatest } = useComposer();
+  const [scheduled, setScheduled] = useState<MailDraft[] | null>(null);
   const setMailUnread = useCompaniesStore((state) => state.setMailUnread);
   const [nav, setNav] = useState(initialNav);
   const [query, setQuery] = useState(initialQuery);
@@ -146,7 +154,6 @@ export default function MailScreen({
   const [details, setDetails] = useState<Record<string, ThreadDetail>>(initialThread ? { [initialThread.key]: initialThread } : {});
   const [detailErrors, setDetailErrors] = useState<Record<string, string>>({});
   const [search, setSearch] = useState(initialQuery.query);
-  const [toast, setToast] = useState<Toast | null>(null);
   const [now, setNow] = useState(initialNow);
   const [syncing, setSyncing] = useState(false);
   const request = useRef(0);
@@ -173,11 +180,6 @@ export default function MailScreen({
     prefetchThreads(initialPage.threads.slice(0, 4).map((thread) => thread.key));
   }, [initialPage, initialThread]);
 
-  useEffect(() => {
-    if (!toast) return;
-    const timer = window.setTimeout(() => setToast(null), toast.undo ? 6000 : 4000);
-    return () => window.clearTimeout(timer);
-  }, [toast]);
 
   const threads = page?.threads ?? [];
   const current = threads.find((thread) => thread.key === cursor) ?? null;
@@ -186,6 +188,7 @@ export default function MailScreen({
   const own = nav.accounts.map((account) => account.email).concat(viewer.email);
   const folders = nav.folders.filter((folder) => folder.role === "other" && (!query.account || folder.sourceId === query.account));
   const activeFolder = query.view.startsWith("folder:") ? nav.folders.find((folder) => `folder:${folder.id}` === query.view) : null;
+  const moreLabel = query.query ? null : (MORE_VIEWS.find((view) => view.id === query.view)?.label ?? activeFolder?.name ?? null);
   const accountLabel = nav.accounts.find((account) => account.id === query.account)?.email ?? "All accounts";
 
   function writeUrl(next: ListQuery, thread: string | null) {
@@ -224,12 +227,25 @@ export default function MailScreen({
     prefetchThreads([list[index + 1], list[index + 2], list[index - 1]].filter(Boolean).map((thread) => thread!.key));
   }
 
+  function loadScheduled() {
+    fetchScheduled()
+      .then(setScheduled)
+      .catch((error: Error) => showToast({ message: error.message, tone: "alert" }));
+  }
+
   function show(next: ListQuery) {
     const token = ++request.current;
     setQuery(next);
     setCursor(null);
     setOpen(false);
     setListError(null);
+    if (next.view === "scheduled" && !next.query) {
+      setPage({ threads: [], next: null });
+      setLoading(false);
+      writeUrl(next, null);
+      loadScheduled();
+      return;
+    }
     setPage(cachedList(next));
     setLoading(true);
     writeUrl(next, null);
@@ -294,7 +310,7 @@ export default function MailScreen({
           next: older.next,
         }));
       })
-      .catch((error: Error) => setToast({ message: error.message, tone: "alert" }))
+      .catch((error: Error) => showToast({ message: error.message, tone: "alert" }))
       .finally(() => {
         loadingMore.current = false;
         if (token === request.current) setLoading(false);
@@ -306,7 +322,18 @@ export default function MailScreen({
     if (thread.unread && from === "inbox") setNav((existing) => shiftUnread(existing, thread.sourceId, 1));
   }
 
-  function act(key: string, action: ReaderAction, quiet = false) {
+  function snooze(key: string) {
+    const now = Date.now();
+    pickLater({
+      title: "Remind me",
+      description: "Orbit moves the conversation out of your inbox and brings it back to the top at this time.",
+      options: laterOptions(now),
+      now,
+      onPick: (at, detail) => act(key, "snooze", false, at, detail),
+    });
+  }
+
+  function act(key: string, action: ReaderAction, quiet = false, until?: string, detail?: string) {
     const { page: currentPage, query: target } = latest.current;
     const thread = currentPage?.threads.find((item) => item.key === key);
     if (!thread) return;
@@ -324,24 +351,34 @@ export default function MailScreen({
         setOpen(false);
       }
       forgetOtherLists(target);
-      postAction(key, action, from)
-        .then(() => {
-          const undo =
-            from === "inbox" && action !== "inbox"
-              ? () => {
+      const undoable = (from === "inbox" && action !== "inbox") || action === "snooze";
+      const undoFrom = action === "snooze" ? "snoozed" : action === "archive" ? "archive" : "trash";
+      showToast({
+        message: action === "snooze" && detail ? `Back in your inbox ${detail}.` : DONE_LABEL[action],
+        action: undoable
+          ? {
+              label: "Undo",
+              run: () => {
+                void pendingMove.then(() => {
                   restore(thread, from);
-                  setToast(null);
-                  postAction(key, "inbox", action === "archive" ? "archive" : "trash")
-                    .then(() => forgetOtherLists(latest.current.query))
-                    .catch((error: Error) => setToast({ message: error.message, tone: "alert" }));
-                }
-              : undefined;
-          setToast({ message: DONE_LABEL[action], tone: "status", undo });
+                  postAction(key, "inbox", undoFrom)
+                    .then(() => {
+                      forgetOtherLists(latest.current.query);
+                      fetchNav().then(setNav).catch(() => null);
+                    })
+                    .catch((error: Error) => showToast({ message: error.message, tone: "alert" }));
+                });
+              },
+            }
+          : undefined,
+      });
+      const pendingMove = postAction(key, action, from, until)
+        .then(() => {
           fetchNav().then(setNav).catch(() => null);
         })
         .catch((error: Error) => {
           restore(thread, from);
-          setToast({ message: error.message, tone: "alert" });
+          showToast({ message: error.message, tone: "alert" });
         })
         .finally(() => removing.current.delete(key));
       return;
@@ -363,12 +400,11 @@ export default function MailScreen({
         forgetThread(key);
         fetchDetail(key, true);
         if (change && from === "inbox") setNav((existing) => shiftUnread(existing, thread.sourceId, -change));
-        setToast({ message: error.message, tone: "alert" });
+        showToast({ message: error.message, tone: "alert" });
       });
   }
 
   function sent(key: string) {
-    setToast({ message: "Sent.", tone: "status" });
     window.setTimeout(() => {
       forgetThread(key);
       refreshRef.current(true);
@@ -396,9 +432,21 @@ export default function MailScreen({
 
   useEffect(() => {
     if (sentCount === 0) return;
-    const timer = window.setTimeout(() => refreshRef.current(true), 2500);
+    const timer = window.setTimeout(() => {
+      refreshRef.current(true);
+      if (latest.current.query.view === "scheduled") loadScheduledRef.current();
+    }, 1500);
     return () => window.clearTimeout(timer);
   }, [sentCount]);
+
+  const loadScheduledRef = useRef(loadScheduled);
+  useEffect(() => {
+    loadScheduledRef.current = loadScheduled;
+  });
+
+  useEffect(() => {
+    if (initialQuery.view === "scheduled") loadScheduledRef.current();
+  }, [initialQuery.view]);
 
   useEffect(() => {
     let last = 0;
@@ -426,7 +474,7 @@ export default function MailScreen({
   }
 
   function primaryMove() {
-    if (query.view === "archive" && !query.query) return "inbox" as const;
+    if ((query.view === "archive" || query.view === "snoozed") && !query.query) return "inbox" as const;
     return "archive" as const;
   }
 
@@ -459,8 +507,11 @@ export default function MailScreen({
     act(current.key, current.flagged ? "unflag" : "flag");
   });
   useShortcut("mail-undo", () => {
-    if (!toast?.undo) return false;
-    toast.undo();
+    if (!undoLatest()) return false;
+  });
+  useShortcut("mail-snooze", () => {
+    if (!cursor || query.view === "snoozed") return false;
+    snooze(cursor);
   });
   useShortcut("mail-refresh", () => refresh(true));
   useShortcut("search-list", () => {
@@ -487,7 +538,7 @@ export default function MailScreen({
       ? "Inbox zero. Nothing is waiting for you."
       : activeFolder
         ? `${activeFolder.name} is empty.`
-        : `Nothing in ${VIEWS.find((view) => view.id === query.view)?.label ?? "this folder"}.`;
+        : `Nothing in ${[...VIEWS, ...MORE_VIEWS].find((view) => view.id === query.view)?.label ?? "this folder"}.`;
 
   if (nav.accounts.length === 0) {
     return (
@@ -604,9 +655,22 @@ export default function MailScreen({
               )}
             </form>
             <nav aria-label="Mail folders" className="-mx-1 flex items-center gap-0.5 overflow-x-auto px-1 [scrollbar-width:none]">
-              {VIEWS.map((view) => {
+              {VIEWS.filter(
+                (view) =>
+                  (view.id !== "snoozed" || nav.snoozed > 0 || query.view === "snoozed") &&
+                  (view.id !== "scheduled" || nav.scheduled > 0 || query.view === "scheduled"),
+              ).map((view) => {
                 const active = !query.query && query.view === view.id;
-                const count = view.id === "inbox" ? (query.account ? nav.accounts.find((account) => account.id === query.account)?.unread : nav.unread) : 0;
+                const count =
+                  view.id === "inbox"
+                    ? query.account
+                      ? nav.accounts.find((account) => account.id === query.account)?.unread
+                      : nav.unread
+                    : view.id === "snoozed"
+                      ? nav.snoozed
+                      : view.id === "scheduled"
+                        ? nav.scheduled
+                        : 0;
                 return (
                   <button
                     key={view.id}
@@ -623,24 +687,29 @@ export default function MailScreen({
                   </button>
                 );
               })}
-              {folders.length > 0 && (
-                <DropdownMenu>
+              <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <button
                       type="button"
-                      aria-current={activeFolder ? "page" : undefined}
+                      aria-current={moreLabel ? "page" : undefined}
                       className={cn(
                         "ease-power3-out flex h-8 max-w-[12em] shrink-0 cursor-pointer items-center gap-1.5 rounded-full px-2.5 text-[13px] transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
-                        activeFolder && !query.query ? "text-foreground bg-white/[0.07]" : "text-subtle hover:text-foreground hover:bg-white/[0.035]",
+                        moreLabel ? "text-foreground bg-white/[0.07]" : "text-subtle hover:text-foreground hover:bg-white/[0.035]",
                       )}
                     >
                       <FolderIcon aria-hidden className="size-3.5 shrink-0" />
-                      <span className="truncate">{activeFolder && !query.query ? activeFolder.name : "Folders"}</span>
+                      <span className="truncate">{moreLabel ?? "More"}</span>
                       <ChevronDownIcon aria-hidden className="size-3 shrink-0" />
                     </button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="start" className="min-w-[14rem]">
                     <DropdownMenuRadioGroup value={query.query ? "" : query.view} onValueChange={(value) => show({ ...query, view: value, query: "" })}>
+                      {MORE_VIEWS.map((view) => (
+                        <DropdownMenuRadioItem key={view.id} value={view.id}>
+                          {view.label}
+                        </DropdownMenuRadioItem>
+                      ))}
+                      {folders.length > 0 && <DropdownMenuLabel>Your folders</DropdownMenuLabel>}
                       {folders.map((folder) => (
                         <DropdownMenuRadioItem key={folder.id} value={`folder:${folder.id}`}>
                           <span className="min-w-0 flex-1 truncate">{folder.name}</span>
@@ -657,7 +726,6 @@ export default function MailScreen({
                     </DropdownMenuRadioGroup>
                   </DropdownMenuContent>
                 </DropdownMenu>
-              )}
             </nav>
             {query.query && (
               <p role="status" className="caption-style text-subtle px-1">
@@ -666,7 +734,9 @@ export default function MailScreen({
             )}
           </div>
           <div className="min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-x-none">
-            {listError && threads.length === 0 ? (
+            {query.view === "scheduled" && !query.query ? (
+              <ScheduledList drafts={scheduled} now={now} onOpen={(draft) => openComposer({ draft })} />
+            ) : listError && threads.length === 0 ? (
               <div className="flex flex-col items-center gap-3 px-6 py-16 text-center">
                 <p role="alert" className="text-danger">
                   {listError}
@@ -696,9 +766,9 @@ export default function MailScreen({
                         leftLabel: primaryMove() === "inbox" ? "Inbox" : "Archive",
                         restore: primaryMove() === "inbox",
                         onLeft: (key) => act(key, primaryMove()),
+                        rightLabel: query.view === "snoozed" && !query.query ? null : "Remind me",
                         onRight: (key) => {
-                          const thread = threads.find((item) => item.key === key);
-                          if (thread) act(key, thread.unread ? "read" : "unread");
+                          if (query.view !== "snoozed" || query.query) snooze(key);
                         },
                       }
                 }
@@ -715,30 +785,17 @@ export default function MailScreen({
             own={own}
             view={viewParam}
             accounts={accounts}
-            onAction={(action) => cursor && act(cursor, action)}
+            onAction={(action) => {
+              if (!cursor) return;
+              if (action === "snooze") snooze(cursor);
+              else act(cursor, action);
+            }}
             onBack={() => setOpen(false)}
             onNext={() => step(1)}
             onSent={() => cursor && sent(cursor)}
           />
         </div>
       </div>
-      {toast && (
-        <div className="pointer-events-none fixed inset-x-0 bottom-5 z-40 flex justify-center px-4">
-          <div
-            role={toast.tone}
-            className="bg-popover border-line-strong shadow-overlay animate-rise-in pointer-events-auto flex items-center gap-3 rounded-full border py-1.5 pr-1.5 pl-4 text-[13px]"
-          >
-            <span className={toast.tone === "alert" ? "text-danger" : "text-foreground"}>{toast.message}</span>
-            {toast.undo ? (
-              <Button variant="ghost" size="sm" onClick={toast.undo} title="Undo (Z)">
-                Undo
-              </Button>
-            ) : (
-              <span aria-hidden className="w-2" />
-            )}
-          </div>
-        </div>
-      )}
     </section>
   );
 }

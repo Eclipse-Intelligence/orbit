@@ -16,6 +16,7 @@ import { countApprovals, listNotifications } from "@/lib/workflows/store";
 import { listAttention } from "@/lib/crm/relationships";
 import { countOpenTasks } from "@/lib/crm/tasks";
 import { syncTeamsTranscripts } from "@/lib/crm/teams-transcripts";
+import { processDueMail } from "@/lib/mail/due";
 import { syncMail } from "@/lib/mail/sync";
 import { mailUnreadCount } from "@/lib/mail/threads";
 import { noteViewerAddress } from "@/lib/mail/tracking";
@@ -54,6 +55,7 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
       try {
         const result = await syncMail(user, { budgetMs: 10_000, backfill: false });
         if (result.errors.length) console.error("Mail sync failed", result.errors.join("; "));
+        await processDueMail(user);
       } catch (error) {
         console.error("Mail sync failed", error);
       }

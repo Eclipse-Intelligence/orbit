@@ -3,16 +3,23 @@
 import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { tagBase } from "@/components/beautifui/record-marks";
 import { mailListWhen, personName, recipientList } from "@/lib/mail/format";
+import { laterDetail } from "@/lib/mail/later";
 import type { ThreadSummary } from "@/lib/mail/view";
 import { cn } from "@/lib/utils";
 import ArchiveIcon from "@/public/assets/images/mail/archive.svg";
 import EyeIcon from "@/public/assets/images/mail/eye.svg";
 import FlagIcon from "@/public/assets/images/mail/flag.svg";
 import InboxIcon from "@/public/assets/images/mail/inbox.svg";
-import MailOpenIcon from "@/public/assets/images/mail/mail-open.svg";
+import ClockIcon from "@/public/assets/images/mail/clock.svg";
 import PaperclipIcon from "@/public/assets/images/_common/paperclip.svg";
 
-export type SwipeActions = { leftLabel: string; restore: boolean; onLeft: (key: string) => void; onRight: (key: string) => void };
+export type SwipeActions = {
+  leftLabel: string;
+  restore: boolean;
+  rightLabel: string | null;
+  onLeft: (key: string) => void;
+  onRight: (key: string) => void;
+};
 
 type Drag = { pointer: number; x: number; y: number; axis: "x" | "y" | null };
 
@@ -61,7 +68,7 @@ function Row({
         setDragging(true);
       }
     }
-    if (state.axis === "x") setOffset(dx);
+    if (state.axis === "x") setOffset(dx > 0 && !swipe?.rightLabel ? Math.min(dx, 24) : dx);
   }
 
   function up(event: PointerEvent<HTMLButtonElement>) {
@@ -83,7 +90,7 @@ function Row({
       return;
     }
     setOffset(0);
-    if (dx > threshold) swipe.onRight(thread.key);
+    if (dx > threshold && swipe.rightLabel) swipe.onRight(thread.key);
   }
 
   function cancel() {
@@ -113,8 +120,8 @@ function Row({
             </span>
           ) : (
             <span className="flex items-center gap-2">
-              <MailOpenIcon className="size-4" />
-              {thread.unread ? "Mark read" : "Mark unread"}
+              <ClockIcon className="size-4" />
+              {swipe.rightLabel}
             </span>
           )}
         </span>
@@ -163,12 +170,24 @@ function Row({
                 style={{ background: tagBase(thread.account) }}
               />
             )}
-            <span className={cn("text-[12px] tabular-nums", thread.unread ? "text-foreground" : "text-subtle")}>
-              {mailListWhen(thread.latestAt, now)}
-            </span>
+            {thread.snoozedUntil ? (
+              <span className="text-primary-foreground flex items-center gap-1 text-[12px] tabular-nums" title="Comes back to your inbox">
+                <ClockIcon aria-hidden className="size-3" />
+                {laterDetail(thread.snoozedUntil, now)}
+              </span>
+            ) : (
+              <span className={cn("text-[12px] tabular-nums", thread.unread ? "text-foreground" : "text-subtle")}>
+                {mailListWhen(thread.latestAt, now)}
+              </span>
+            )}
           </span>
         </span>
         <span className="flex min-w-0 items-baseline gap-1.5 pl-3.5 text-[13px]">
+          {thread.reminder && (
+            <span className="text-primary-foreground shrink-0 rounded-full bg-[color-mix(in_srgb,var(--primary)_30%,transparent)] px-1.5 text-[11px] leading-[18px] font-medium">
+              {thread.reminder.kind === "follow_up" ? "No reply" : "Reminder"}
+            </span>
+          )}
           <span className={cn("max-w-[70%] shrink-0 truncate", thread.unread ? "text-foreground" : "text-soft")}>
             {thread.subject?.trim() || "(no subject)"}
           </span>
