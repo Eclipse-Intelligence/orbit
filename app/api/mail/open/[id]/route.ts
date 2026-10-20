@@ -1,3 +1,5 @@
+import { after } from "next/server";
+import { alertFirstRead } from "@/lib/mail/read-alert";
 import { recordOpen } from "@/lib/mail/tracking";
 
 export const dynamic = "force-dynamic";
@@ -6,8 +8,18 @@ const PIXEL = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBR
 
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  const trackingId = id.replace(/\.gif$/i, "");
   try {
-    await recordOpen(id.replace(/\.gif$/i, ""), request.headers.get("x-forwarded-for") ?? request.headers.get("x-real-ip"), request.headers.get("user-agent"));
+    const recorded = await recordOpen(trackingId, request.headers.get("x-forwarded-for") ?? request.headers.get("x-real-ip"), request.headers.get("user-agent"));
+    if (recorded) {
+      after(async () => {
+        try {
+          await alertFirstRead(trackingId);
+        } catch (error) {
+          console.error("read alert failed", error);
+        }
+      });
+    }
   } catch (error) {
     console.error("mail open failed", error);
   }

@@ -6,7 +6,9 @@ import { applyMailAction } from "@/lib/mail/actions";
 import { claimDueDrafts, dueDraftInput, failDueDraft, sendMailDraft } from "@/lib/mail/compose";
 import { mailOrigin } from "@/lib/mail/origin";
 import { threadKey } from "@/lib/mail/threads";
-import { notify } from "@/lib/workflows/engine";
+import { sendAlert } from "@/lib/alerts";
+import { mailNotifyLevel } from "@/lib/mail/notify";
+import type { PushSender } from "@/lib/push";
 
 export type DueReport = { sent: number; failed: number; returned: number; followUps: number };
 
@@ -52,7 +54,7 @@ async function returnSnooze(actor: UserActor, reminder: ReminderRow, fetchImpl: 
   );
 }
 
-async function checkFollowUp(actor: UserActor, reminder: ReminderRow) {
+async function checkFollowUp(actor: UserActor, reminder: ReminderRow, options: { send?: PushSender }) {
   const replied = await withActor(actor, async (db) => {
     const result = await db.query<{ replied: boolean }>(
       `select exists (
@@ -74,16 +76,28 @@ async function checkFollowUp(actor: UserActor, reminder: ReminderRow) {
     await withActor(actor, (db) => db.query("update crm.mail_reminders set state = 'done' where id = $1", [reminder.id]));
     return false;
   }
-  await notify(actor, actor.userId, {
-    title: `No reply yet: ${reminder.subject?.trim() || "(no subject)"}`,
-    body: "Orbit has put the conversation back at the top of your inbox.",
-    href: mailHref(reminder.source_id, reminder.thread_key),
-    source: "mail",
-  });
+  const title = `No reply yet: ${reminder.subject?.trim() || "(no subject)"}`;
+  const href = mailHref(reminder.source_id, reminder.thread_key);
+  const quiet = (await mailNotifyLevel(actor)) === "none";
+  await sendAlert(
+    actor,
+    {
+      key: `follow-up:${reminder.id}`,
+      title,
+      body: "Nobody has replied. It's back at the top of your inbox.",
+      url: href,
+      tag: `${reminder.source_id}|${reminder.thread_key}`,
+      bell: { title, body: "Orbit has put the conversation back at the top of your inbox.", href },
+    },
+    { send: quiet ? async () => undefined : options.send },
+  );
   return true;
 }
 
-export async function processDueMail(actor: UserActor, options: { fetchImpl?: typeof fetch; origin?: string | null } = {}): Promise<DueReport> {
+export async function processDueMail(
+  actor: UserActor,
+  options: { fetchImpl?: typeof fetch; origin?: string | null; send?: PushSender } = {},
+): Promise<DueReport> {
   const report: DueReport = { sent: 0, failed: 0, returned: 0, followUps: 0 };
   if (!(await anythingDue(actor))) return report;
   const fetchImpl = options.fetchImpl ?? fetch;
@@ -96,12 +110,12 @@ export async function processDueMail(actor: UserActor, options: { fetchImpl?: ty
       report.failed += 1;
       const message = error instanceof Error ? error.message : "The scheduled email didn't send.";
       await failDueDraft(actor, draft.id, message);
-      await notify(actor, actor.userId, {
-        title: `Scheduled email didn't send: ${draft.subject?.trim() || "(no subject)"}`,
-        body: message,
-        href: "/mail?view=scheduled",
-        source: "mail",
-      }).catch(() => undefined);
+      const title = `Scheduled email didn't send: ${draft.subject?.trim() || "(no subject)"}`;
+      await sendAlert(
+        actor,
+        { key: `send-failed:${draft.id}:${Date.now()}`, title, body: message, url: "/mail?view=scheduled", bell: { title, body: message, href: "/mail?view=scheduled" } },
+        { send: options.send },
+      ).catch(() => undefined);
     }
   }
   for (const reminder of await claimReminders(actor, 20)) {
@@ -109,7 +123,20 @@ export async function processDueMail(actor: UserActor, options: { fetchImpl?: ty
       if (reminder.kind === "snooze") {
         await returnSnooze(actor, reminder, fetchImpl);
         report.returned += 1;
-      } else if (await checkFollowUp(actor, reminder)) {
+        if ((await mailNotifyLevel(actor)) !== "none") {
+          await sendAlert(
+            actor,
+            {
+              key: `snooze:${reminder.id}`,
+              title: "Back in your inbox",
+              body: reminder.subject?.trim() || "(no subject)",
+              url: mailHref(reminder.source_id, reminder.thread_key),
+              tag: `${reminder.source_id}|${reminder.thread_key}`,
+            },
+            { send: options.send },
+          ).catch(() => undefined);
+        }
+      } else if (await checkFollowUp(actor, reminder, options)) {
         report.followUps += 1;
       }
     } catch (error) {
