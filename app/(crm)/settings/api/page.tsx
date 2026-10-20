@@ -1,6 +1,8 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import ApiSettings from "@/components/crm/api-settings";
+import PersonalTokenSettings from "@/components/crm/personal-token-settings";
+import { listPersonalTokens } from "@/lib/auth/personal";
 import { SettingsPage } from "@/components/crm/settings-ui";
 import WebhooksSettings from "@/components/crm/webhooks-settings";
 import { getUserActor } from "@/lib/auth/user";
@@ -12,10 +14,11 @@ export const dynamic = "force-dynamic";
 export default async function ApiSettingsPage() {
   const user = await getUserActor();
   if (!user) redirect("/login");
-  const [endpoints, deliveries, headerStore] = await Promise.all([
+  const [endpoints, deliveries, headerStore, tokens] = await Promise.all([
     listWebhooks(user),
     listWebhookDeliveries(user, 20),
     headers(),
+    listPersonalTokens(user).catch(() => []),
   ]);
   const host =
     headerStore.get("x-forwarded-host") ??
@@ -28,6 +31,7 @@ export default async function ApiSettingsPage() {
       title="API and webhooks"
       description="Connect agents and scripts to Orbit, and send CRM events to your own services."
     >
+      <PersonalTokenSettings origin={origin} initial={tokens} />
       <ApiSettings origin={origin} scopes={[...SCOPES]} />
       <WebhooksSettings
         endpoints={endpoints}
