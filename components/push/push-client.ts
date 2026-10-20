@@ -74,3 +74,21 @@ export function setBadge(count: number) {
   if (!target.setAppBadge) return;
   void (count > 0 ? target.setAppBadge(count) : target.clearAppBadge?.())?.catch(() => undefined);
 }
+
+export type PushTestResult = { sent: number; host: string | null; failures: { status: number | null; reason: string }[] };
+
+export async function sendPushTest(): Promise<PushTestResult> {
+  const registration = await navigator.serviceWorker.getRegistration("/");
+  const subscription = await registration?.pushManager.getSubscription();
+  if (!subscription) throw new Error("This device isn't set up yet. Press Turn on for this device.");
+  const response = await fetch("/api/push/test", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(subscription.toJSON()),
+  });
+  const body = (await response.json().catch(() => ({}))) as Partial<PushTestResult> & { error?: string };
+  if (!response.ok) throw new Error(body.error ?? "The test didn't send. Try again.");
+  const failures = body.failures ?? [];
+  if (failures.some((item) => item.status === 404 || item.status === 410)) await subscription.unsubscribe().catch(() => false);
+  return { sent: body.sent ?? 0, host: body.host ?? null, failures };
+}

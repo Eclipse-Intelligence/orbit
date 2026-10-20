@@ -131,6 +131,21 @@ describe("notifications", () => {
     await setMailNotifications(owner, { mail: "important" });
   });
 
+  it("tests one device and says why the push service refused it", async () => {
+    await savePushSubscription(owner, { endpoint: "https://web.push.apple.com/mac", keys: { p256dh: "BKey", auth: "auth" } }, "Mac");
+    const one = pusher();
+    const sent = await pushToUser(owner, { title: "Orbit", body: "Test", url: "/mail" }, { send: one.send, endpoint: "https://web.push.apple.com/mac" });
+    assert.equal(sent.sent, 1);
+    assert.deepEqual(one.sent.map((item) => item.endpoint), ["https://web.push.apple.com/mac"]);
+    const refused: PushSender = async () => {
+      throw Object.assign(new Error("Received unexpected response code"), { statusCode: 403, body: '{"reason":"BadJwtToken"}' });
+    };
+    const result = await pushToUser(owner, { title: "Orbit", body: "Test", url: "/mail" }, { send: refused, endpoint: "https://web.push.apple.com/mac" });
+    assert.equal(result.sent, 0);
+    assert.deepEqual(result.failures, [{ status: 403, reason: "BadJwtToken" }]);
+    await getAdminPool().query("delete from crm.push_subscriptions where endpoint = 'https://web.push.apple.com/mac'");
+  });
+
   it("forgets a device the push service says is gone", async () => {
     const gone = pusher(410);
     await pushToUser(owner, { title: "x", body: "y", url: "/mail" }, { send: gone.send });

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Button from "@/components/_ui/button";
 import Switch from "@/components/_ui/switch";
 import { SettingsCard } from "@/components/crm/settings-ui";
-import { disablePush, enablePush, pushState, type PushState } from "@/components/push/push-client";
+import { disablePush, enablePush, isAppleMobile, pushState, sendPushTest, type PushState } from "@/components/push/push-client";
 import type { NotifyMail } from "@/lib/mail/notify";
 
 const LEVELS: { id: NotifyMail; label: string; detail: string }[] = [
@@ -56,13 +56,13 @@ export default function NotificationSettings({
     };
   }, []);
 
-  async function run(work: () => Promise<void>, done: string) {
+  async function run(work: () => Promise<string | void>, done: string) {
     setBusy(true);
     setMessage(null);
     try {
-      await work();
+      const text = await work();
       setState(await pushState());
-      setMessage({ text: done, tone: "status" });
+      setMessage({ text: text || done, tone: "status" });
     } catch (error) {
       setMessage({ text: error instanceof Error ? error.message : "That didn't work. Try again.", tone: "alert" });
     } finally {
@@ -121,10 +121,24 @@ export default function NotificationSettings({
                   disabled={busy}
                   onClick={() =>
                     void run(async () => {
-                      const response = await fetch("/api/push/test", { method: "POST" });
-                      const body = (await response.json()) as { sent?: number };
-                      if (!response.ok || !body.sent) throw new Error("No device took the test. Turn notifications off and on again.");
-                    }, "Test sent. It should arrive in a few seconds.")
+                      const result = await sendPushTest();
+                      const failure = result.failures[0];
+                      if (failure?.status === 404 || failure?.status === 410) {
+                        throw new Error("This device's notification setup had expired, so Orbit removed it. Press Turn on for this device, then try again.");
+                      }
+                      if (!result.sent) {
+                        const code = failure ? [failure.status, failure.reason].filter(Boolean).join(" ") : "";
+                        throw new Error(
+                          failure
+                            ? `The push service refused the test${code ? ` (${code})` : ""}. Turn notifications off and on again on this device.`
+                            : "Orbit couldn't find this device. Turn notifications off and on again.",
+                        );
+                      }
+                      const service = result.host?.includes("apple") ? "Apple" : "The push service";
+                      return isAppleMobile()
+                        ? "Test sent to this device. It should arrive in a few seconds."
+                        : `${service} accepted the test for this device, so it should appear in a few seconds. If it doesn't on a Mac, open System Settings › Notifications, choose Orbit (or your browser), turn on Allow notifications with Banners or Alerts, and check Focus or Do Not Disturb is off.`;
+                    }, "Test sent.")
                   }
                 >
                   Send a test
