@@ -5,7 +5,7 @@ import { createContact } from "@/lib/crm/contacts";
 import { saveMailbox } from "@/lib/crm/inbox";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
-import { discardMailDraft, readDraftInput, saveMailDraft, sendMailDraft } from "@/lib/mail/compose";
+import { deleteDraftMessage, discardMailDraft, readDraftInput, saveMailDraft, sendMailDraft } from "@/lib/mail/compose";
 import { composeEmailHtml, trackingIdIn } from "@/lib/mail/html";
 import { syncMail } from "@/lib/mail/sync";
 import { getThread, listThreads } from "@/lib/mail/threads";
@@ -291,6 +291,28 @@ describe("mail replies and read statuses", () => {
       `PATCH /me/messages/draft-${draftCount}`,
       `POST /me/messages/draft-${draftCount}/send`,
     ]);
+  });
+
+  it("replaces a draft made outside Orbit and can delete one", async () => {
+    state.drafts = [
+      message("outside-1", { isDraft: true, subject: "Re: Renewal pricing", from: { emailAddress: { address: "mark@eclipse.test" } }, body: { contentType: "text", content: "Hi Jane \u2014 sure." } }),
+      message("outside-2", { isDraft: true, conversationId: "conv-other", subject: "Other", from: { emailAddress: { address: "mark@eclipse.test" } } }),
+    ];
+    await syncMail(owner, { budgetMs: 30_000, fetchImpl: outlook(state).fetchImpl });
+    const admin = getAdminPool();
+    const ids = Object.fromEntries(
+      (await admin.query<{ id: string; provider_message_id: string }>("select id, provider_message_id from crm.mail_messages where is_draft")).rows.map((row) => [row.provider_message_id, row.id]),
+    );
+    const { fetchImpl, calls } = outlook(state);
+    await saveMailDraft(owner, readDraftInput({ mode: "reply", messageId: jane, to: ["jane@acme.test"], body: "Hi Jane, sure.", replaces: ids["outside-1"] }), { origin: ORIGIN, fetchImpl });
+    assert.ok(calls.some((call) => call.method === "DELETE" && call.url.endsWith("/me/messages/outside-1")));
+    assert.equal((await admin.query("select 1 from crm.mail_messages where id = $1", [ids["outside-1"]])).rows.length, 0);
+
+    const removal = outlook(state);
+    await deleteDraftMessage(owner, ids["outside-2"], removal.fetchImpl);
+    assert.deepEqual(removal.calls.map((call) => `${call.method} ${call.url.replace(GRAPH, "")}`), ["DELETE /me/messages/outside-2"]);
+    await assert.rejects(() => deleteDraftMessage(owner, jane, outlook(state).fetchImpl), /already gone/);
+    state.drafts = [];
   });
 
   it("leaves read images out when read statuses are off", async () => {

@@ -5,7 +5,8 @@ import { isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
 import { completeJson } from "@/lib/llm";
-import { mailFullWhen, personName } from "@/lib/mail/format";
+export { stripQuoted } from "@/lib/mail/format";
+import { mailFullWhen, personName, stripQuoted } from "@/lib/mail/format";
 import { parseThreadKey, threadKey } from "@/lib/mail/threads";
 import type { MailAddress } from "@/lib/mail/types";
 import type { DraftMode } from "@/lib/mail/view";
@@ -34,10 +35,6 @@ const PLAN_SCHEMA = z.object({
 });
 const ANSWER_SCHEMA = z.object({ answer: z.string(), sources: z.array(z.number()) });
 
-export function stripQuoted(text: string) {
-  const cut = text.search(/^(On .{3,200}wrote:|From: .+|-{3,}\s*Original Message\s*-{3,}|_{20,})\s*$/m);
-  return (cut > 0 ? text.slice(0, cut) : text).replace(/\n{3,}/g, "\n\n").trim();
-}
 
 function clean(text: string) {
   return text.replace(/\s*[\u2013\u2014]\s*/g, ", ").replace(/ ,/g, ",").trim();

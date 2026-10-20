@@ -41,6 +41,7 @@ export type SendPayload = {
   signature: boolean;
   remindHours: number | null;
   attachments: string[];
+  replaces?: string | null;
 };
 
 const REMINDERS: { hours: number | null; label: string }[] = [
@@ -59,6 +60,7 @@ export type ComposerStart = {
   cc: MailAddress[];
   subject: string;
   draft: MailDraft | null;
+  replaces?: string | null;
 };
 
 type SaveState = { kind: "idle" | "saving" | "saved" | "error"; message?: string };
@@ -122,13 +124,13 @@ export default function MailComposer({
   const chain = useRef<Promise<unknown>>(Promise.resolve());
   const dirty = useRef(false);
   const textarea = useRef<HTMLTextAreaElement>(null);
-  const payload = useRef({ mode: start.mode, messageId: start.messageId, sourceId, to, cc, bcc, subject, body, signature: withSignature });
+  const payload = useRef({ mode: start.mode, messageId: start.messageId, sourceId, to, cc, bcc, subject, body, signature: withSignature, replaces: start.replaces ?? null });
   const account = accounts.find((item) => item.id === sourceId) ?? null;
   const showSubject = start.mode === "new" || start.mode === "forward";
   const card = variant === "card";
 
   useEffect(() => {
-    payload.current = { mode: start.mode, messageId: start.messageId, sourceId, to, cc, bcc, subject, body, signature: withSignature };
+    payload.current = { mode: start.mode, messageId: start.messageId, sourceId, to, cc, bcc, subject, body, signature: withSignature, replaces: start.replaces ?? null };
   });
 
   useEffect(() => {

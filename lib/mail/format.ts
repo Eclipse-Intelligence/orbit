@@ -42,3 +42,8 @@ export function recipientList(addresses: MailAddress[], own: string[]) {
   const mine = new Set(own.map((item) => item.toLowerCase()));
   return addresses.map((address) => (mine.has(address.address.toLowerCase()) ? "me" : personName(address))).join(", ");
 }
+
+export function stripQuoted(text: string) {
+  const cut = text.search(/^(On .{3,200}wrote:|From: .+|-{3,}\s*Original Message\s*-{3,}|_{20,})\s*$/m);
+  return (cut > 0 ? text.slice(0, cut) : text).replace(/\n{3,}/g, "\n\n").trim();
+}
