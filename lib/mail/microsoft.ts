@@ -26,6 +26,7 @@ const MESSAGE_FIELDS = [
   "hasAttachments",
   "categories",
   "webLink",
+  "inferenceClassification",
 ].join(",");
 
 const WELL_KNOWN: [string, MailRole][] = [
@@ -70,6 +71,7 @@ type GraphMessage = {
   hasAttachments?: boolean;
   categories?: string[] | null;
   webLink?: string | null;
+  inferenceClassification?: string | null;
 };
 
 export class GraphMailError extends Error {
@@ -135,6 +137,27 @@ function addresses(values: GraphRecipient[] | null | undefined) {
   return (values ?? []).map(address).filter((item): item is MailAddress => item !== null).slice(0, 200);
 }
 
+function focusedFrom(value: string | null | undefined) {
+  if (value === "focused") return true;
+  if (value === "other") return false;
+  return null;
+}
+
+export async function fetchMicrosoftClassifications(url: string, token: string, fetchImpl: typeof fetch = fetch) {
+  const page = await graphJson<{ value?: { id: string; inferenceClassification?: string | null }[]; "@odata.nextLink"?: string }>(url, token, fetchImpl);
+  return {
+    items: (page.value ?? []).flatMap((item) => {
+      const focused = focusedFrom(item.inferenceClassification);
+      return item.id && focused !== null ? [{ id: item.id, focused }] : [];
+    }),
+    next: page["@odata.nextLink"] ? graphUrl(page["@odata.nextLink"]) : null,
+  };
+}
+
+export function classificationUrl(folderId: string) {
+  return `${GRAPH}/me/mailFolders/${encodeURIComponent(folderId)}/messages?$select=id,inferenceClassification&$top=500`;
+}
+
 export function normaliseMessage(message: GraphMessage): ProviderMessage {
   const html = message.body?.contentType?.toLowerCase() === "html" ? (message.body.content ?? "") : null;
   const plain = html === null ? (message.body?.content ?? "") : null;
@@ -162,6 +185,7 @@ export function normaliseMessage(message: GraphMessage): ProviderMessage {
     hasAttachments: Boolean(message.hasAttachments),
     categories: (message.categories ?? []).slice(0, 50),
     webLink: message.webLink?.slice(0, 2000) ?? null,
+    focused: focusedFrom(message.inferenceClassification),
   };
 }
 

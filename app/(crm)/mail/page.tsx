@@ -23,7 +23,7 @@ export default async function MailPage({
   const user = await getUserActor();
   if (!user) redirect("/login");
   const resolved = await searchParams;
-  const view = readMailView(text(resolved.view));
+  const view = readMailView(text(resolved.view) || "inbox:important");
   const query = text(resolved.q).trim().slice(0, 300);
   const nav = await mailNav(user);
   const account = nav.accounts.some((item) => item.id === text(resolved.account)) ? text(resolved.account) : null;

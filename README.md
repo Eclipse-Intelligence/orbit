@@ -91,11 +91,19 @@ The history fills in through `/api/cron/mail` (up to four minutes a run), plus a
 
 ### Mail
 
-Mail (`G` then `M`, at the top of the side menu with your unread count) is where you read and work through that copy. Every connected account is in one inbox, with All accounts or a single account at the top, and a coloured dot on each conversation shows which account it came to. Inbox, Snoozed and Scheduled (when they have anything), Sent, Drafts, and More (Archive, Trash and your own folders) sit above the list; search looks through every folder. Mail is grouped into conversations, newest first, and opens in the reading pane straight away because Orbit loads the next few conversations before you get to them. Designed emails show on a white sheet; ordinary emails take Orbit's colours. Scripts never run and links open in a new tab.
+Mail (`G` then `M`, at the top of the side menu with your Important unread count) is where you read and work through that copy. Every connected account is in one inbox, with All accounts or a single account at the top, and a coloured dot on each conversation shows which account it came to. Inbox, Snoozed and Scheduled (when they have anything), Sent, Drafts, and More (Archive, Trash and your own folders) sit above the list; search looks through every folder. Mail is grouped into conversations, newest first, and opens in the reading pane straight away because Orbit loads the next few conversations before you get to them. Designed emails show on a white sheet; ordinary emails take Orbit's colours. Scripts never run and links open in a new tab.
 
 Keys: `J` and `K` (or the arrows) move through the list, `E` archives (in Archive it moves back to Inbox), `#` or Delete moves to Trash, `U` marks read or unread, `S` flags, `H` snoozes, `Z` undoes the last archive, delete, snooze or send, `/` searches, `Shift R` checks for new mail and Esc goes back to the list on a phone. A conversation you stay on is marked read. Every change shows at once and goes to Outlook in the background; if Outlook refuses, Orbit puts it back and says why. New mail is checked every minute while Mail is open and when you come back to the tab. On a phone, swipe a conversation left to archive it (in Archive or Snoozed, back to Inbox) and right to snooze it; in an open email, swipe right to go back to the list and left for the next email. Compose opens a new email card (see Email from anywhere).
 
 Capture (`G` then `I`, formerly Inbox) is where the Microsoft connection lives, along with everything Orbit has captured and is waiting for you: mail to file to contacts, people you've met, calls and transcripts. `/inbox` redirects there.
+
+### Split inbox and triage
+
+Mail opens on Important. The inbox is split into Important, Other, News and Calendar (a split shows when it has mail), with unread counts, and `Tab` and `Shift Tab` move between them; More holds All inbox, Snoozed, Scheduled, Sent, Drafts, Archive, Trash and your folders. The side menu's Mail count is Important only.
+
+Where an email goes, in order: your own choice for that sender or domain; Calendar for meeting replies and invitations; Important for anyone who is a contact in Orbit and for any conversation you have written in; News for automated senders such as no-reply, newsletters, notifications and receipts; Other for what Outlook's Focused Inbox puts in Other; and Important for everything else. In the reading pane, the split button (for example Other) moves a sender, or everyone at their domain, to another split from now on.
+
+`X` selects the highlighted conversation (or ⌘-click a row), `⌘ A` selects every loaded one, and Esc clears the selection. With a selection, `E`, `#`, `U`, `S` and `H` (and the bar above the list) archive, delete, mark read or unread, flag or snooze them all at once, with Undo.
 
 ### Remind me, Send later and Undo send
 

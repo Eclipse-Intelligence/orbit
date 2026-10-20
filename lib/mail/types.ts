@@ -34,6 +34,7 @@ export type ProviderMessage = {
   hasAttachments: boolean;
   categories: string[];
   webLink: string | null;
+  focused: boolean | null;
 };
 
 export type DeltaPage = {

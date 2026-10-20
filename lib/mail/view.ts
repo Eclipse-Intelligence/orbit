@@ -2,7 +2,11 @@ import type { MailAddress, MailRole } from "@/lib/mail/types";
 
 export const MAIL_ROLES = ["inbox", "snoozed", "sent", "drafts", "archive", "trash"] as const;
 export type MailViewRole = (typeof MAIL_ROLES)[number];
-export type MailView = { role: MailViewRole } | { folderId: string };
+export const MAIL_SPLITS = ["important", "other", "news", "calendar"] as const;
+export type MailSplit = (typeof MAIL_SPLITS)[number];
+export const SPLIT_LABELS: Record<MailSplit, string> = { important: "Important", other: "Other", news: "News", calendar: "Calendar" };
+
+export type MailView = { role: MailViewRole; split?: MailSplit | null } | { folderId: string };
 
 export type ThreadSummary = {
   key: string;
@@ -22,6 +26,7 @@ export type ThreadSummary = {
   reads: { count: number; last: string | null } | null;
   reminder: { kind: "snooze" | "follow_up"; at: string } | null;
   snoozedUntil: string | null;
+  split: MailSplit | null;
 };
 
 export type ThreadMessage = {
@@ -109,18 +114,24 @@ export type MailNav = {
   unread: number;
   snoozed: number;
   scheduled: number;
+  splits: { sourceId: string; split: MailSplit; total: number; unread: number }[];
 };
 
 export type ThreadCursor = { at: string; key: string };
 
 export function readMailView(value: string | null | undefined): MailView {
   if (value?.startsWith("folder:")) return { folderId: value.slice(7) };
+  if (value?.startsWith("inbox:")) {
+    const split = MAIL_SPLITS.find((item) => item === value.slice(6));
+    return { role: "inbox", split: split ?? null };
+  }
   const role = MAIL_ROLES.find((item) => item === value);
   return { role: role ?? "inbox" };
 }
 
 export function mailViewParam(view: MailView) {
-  return "folderId" in view ? `folder:${view.folderId}` : view.role;
+  if ("folderId" in view) return `folder:${view.folderId}`;
+  return view.role === "inbox" && view.split ? `inbox:${view.split}` : view.role;
 }
 
 export function readThreadCursor(value: string | null | undefined): ThreadCursor | null {

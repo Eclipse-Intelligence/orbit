@@ -1,11 +1,13 @@
 import { withActor } from "@/lib/crm/context";
+import type { Db } from "@/lib/db/pool";
 import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
 import { threadDrafts } from "@/lib/mail/compose";
 import { cleanEmailHtml, richEmail } from "@/lib/mail/html";
 import type { MailAddress, MailRole } from "@/lib/mail/types";
-import type { MailNav, MailView, ThreadCursor, ThreadDetail, ThreadSummary } from "@/lib/mail/view";
+import { splitCase, splitJoin } from "@/lib/mail/split";
+import type { MailNav, MailSplit, MailView, ThreadCursor, ThreadDetail, ThreadSummary } from "@/lib/mail/view";
 
 const THREAD_KEY = "coalesce(m.thread_key, 'm:' || m.id::text)";
 
@@ -46,6 +48,7 @@ type ThreadRow = {
   reminder_kind: "snooze" | "follow_up" | null;
   surfaced_at: Date | string | null;
   snoozed_until: Date | string | null;
+  split: MailSplit | null;
   reads: { count: number; last: string | null } | null;
 };
 
@@ -55,8 +58,10 @@ export async function listThreads(
 ): Promise<{ threads: ThreadSummary[]; next: ThreadCursor | null }> {
   const limit = Math.min(Math.max(Math.trunc(input.limit ?? 50), 1), 100);
   return withActor(actor, async (db) => {
-    const values: unknown[] = [actor.userId];
-    const where = ["m.user_id = $1"];
+    const values: unknown[] = [actor.userId, actor.workspaceId];
+    const where = ["m.user_id = $1", "m.workspace_id = $2"];
+    let split: MailSplit | null = null;
+    let splitting = false;
     const text = input.query?.trim().slice(0, 300);
     if (text) {
       values.push(text);
@@ -68,6 +73,8 @@ export async function listThreads(
       where.push(`m.folder_id = $${values.length}`);
     } else {
       const role = input.view && "role" in input.view ? input.view.role : "inbox";
+      split = role === "inbox" && input.view && "role" in input.view ? (input.view.split ?? null) : null;
+      splitting = role === "inbox";
       values.push(role);
       where.push(
         role === "inbox"
@@ -85,6 +92,10 @@ export async function listThreads(
       where.push(`m.source_id = $${values.length}`);
     }
     const cursor: string[] = [];
+    if (split) {
+      values.push(split);
+      cursor.push(`l.split = $${values.length}`);
+    }
     if (input.before) {
       values.push(input.before.at, input.before.key);
       cursor.push(`(l.sort_at, l.source_id::text || '|' || l.tk) < ($${values.length - 1}::timestamptz, $${values.length})`);
@@ -94,7 +105,7 @@ export async function listThreads(
       `with scoped as (
          select m.id, m.source_id, ${THREAD_KEY} as tk, m.subject, m.snippet, m.from_email, m.from_name, m.to_recipients,
            m.is_read, m.is_flagged, m.has_attachments, m.is_draft, coalesce(m.received_at, m.sent_at, m.created_at) as at,
-           m.tracking_id
+           m.tracking_id, m.focused
          from crm.mail_messages m
          join crm.mail_folders f on f.id = m.folder_id
          where ${where.join(" and ")}
@@ -111,8 +122,10 @@ export async function listThreads(
        ),
        listed as (
          select r.*, rem.kind as reminder_kind, rem.surfaced_at, snz.until as snoozed_until,
-           greatest(r.at, coalesce(rem.surfaced_at, r.at)) as sort_at
+           greatest(r.at, coalesce(rem.surfaced_at, r.at)) as sort_at,
+           ${splitting ? splitCase("r", "$2") : "null"} as split
          from ranked r
+         ${splitting ? splitJoin("r", "$1") : ""}
          left join lateral (
            select rm.kind, rm.surfaced_at from crm.mail_reminders rm
            where rm.user_id = $1 and rm.source_id = r.source_id and rm.thread_key = r.tk and rm.state = 'due'
@@ -125,7 +138,7 @@ export async function listThreads(
          where r.rn = 1
        )
        select l.source_id, l.tk, src.email as account, l.id, l.subject, l.snippet, l.from_email, l.from_name, l.to_recipients,
-         l.n::int as n, l.unread, l.flagged, l.attachments, l.is_draft, l.at, l.sort_at, l.reminder_kind, l.surfaced_at, l.snoozed_until,
+         l.n::int as n, l.unread, l.flagged, l.attachments, l.is_draft, l.at, l.sort_at, l.reminder_kind, l.surfaced_at, l.snoozed_until, l.split,
          case when l.tracking_id is not null then (
            select json_build_object('count', count(*)::int, 'last', max(o.opened_at)) from crm.mail_opens o where o.tracking_id = l.tracking_id
          ) end as reads
@@ -155,6 +168,7 @@ export async function listThreads(
       reads: row.reads ? { count: row.reads.count, last: iso(row.reads.last) } : null,
       reminder: row.reminder_kind && row.surfaced_at ? { kind: row.reminder_kind, at: iso(row.surfaced_at)! } : null,
       snoozedUntil: iso(row.snoozed_until),
+      split: row.split,
     }));
     const lastRow = rows[rows.length - 1];
     return {
@@ -239,6 +253,32 @@ export async function getThread(actor: UserActor, key: string): Promise<ThreadDe
   });
 }
 
+async function splitCounts(db: Db, actor: UserActor) {
+  const result = await db.query<{ source_id: string; split: MailSplit; total: number; unread: number }>(
+    `with scoped as (
+       select m.id, m.source_id, ${THREAD_KEY} as tk, m.subject, m.from_email, m.focused, m.is_read,
+         coalesce(m.received_at, m.sent_at, m.created_at) as at
+       from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
+       where m.user_id = $1 and f.role = 'inbox'
+     ),
+     ranked as (
+       select s.*, row_number() over (partition by s.source_id, s.tk order by s.at desc, s.id desc) as rn,
+         bool_or(not s.is_read) over (partition by s.source_id, s.tk) as unread
+       from scoped s
+     ),
+     listed as (
+       select r.source_id, r.unread, ${splitCase("r", "$2")} as split
+       from ranked r
+       ${splitJoin("r", "$1")}
+       where r.rn = 1
+     )
+     select source_id, split, count(*)::int as total, count(*) filter (where unread)::int as unread
+     from listed group by source_id, split`,
+    [actor.userId, actor.workspaceId],
+  );
+  return result.rows.map((row) => ({ sourceId: row.source_id, split: row.split, total: row.total, unread: row.unread }));
+}
+
 export async function mailNav(actor: UserActor): Promise<MailNav> {
   return withActor(actor, async (db) => {
     const accounts = await db.query<{ id: string; email: string }>(
@@ -267,18 +307,13 @@ export async function mailNav(actor: UserActor): Promise<MailNav> {
       unread: inboxUnread(null),
       snoozed: counts.rows[0]?.snoozed ?? 0,
       scheduled: counts.rows[0]?.scheduled ?? 0,
+      splits: await splitCounts(db, actor),
     };
   });
 }
 
 export async function mailUnreadCount(actor: UserActor) {
-  return withActor(actor, async (db) => {
-    const result = await db.query<{ unread: number }>(
-      `select count(distinct (m.source_id, ${THREAD_KEY}))::int as unread
-       from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
-       where m.user_id = $1 and f.role = 'inbox' and not m.is_read`,
-      [actor.userId],
-    );
-    return result.rows[0]?.unread ?? 0;
-  });
+  return withActor(actor, async (db) =>
+    (await splitCounts(db, actor)).filter((row) => row.split === "important").reduce((sum, row) => sum + row.unread, 0),
+  );
 }

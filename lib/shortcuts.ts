@@ -165,6 +165,8 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: "mail-reply", label: "Reply", group: "Mail", combos: [{ key: "r" }] },
   { id: "mail-reply-all", label: "Reply all", group: "Mail", combos: [{ key: "a" }] },
   { id: "mail-forward", label: "Forward", group: "Mail", combos: [{ key: "f" }] },
+  { id: "mail-next-split", label: "Next split (Important, Other, News, Calendar)", group: "Mail", combos: [{ key: "Tab" }] },
+  { id: "mail-prev-split", label: "Previous split", group: "Mail", combos: [{ key: "Tab", shift: true }] },
   { id: "mail-archive", label: "Archive", group: "Mail", combos: [{ key: "e" }] },
   { id: "mail-ai-write", label: "Write with AI (in an email)", group: "Mail", combos: [{ key: "j", mod: true }], whileTyping: true, inOverlay: true },
   { id: "mail-snooze", label: "Remind me (snooze)", group: "Mail", combos: [{ key: "h" }] },
@@ -238,6 +240,7 @@ const KEY_LABELS: Record<string, string> = {
   ArrowLeft: "←",
   ArrowRight: "→",
   " ": "Space",
+  Tab: "Tab",
 };
 
 export function comboLabel(combo: Combo, mac: boolean) {
