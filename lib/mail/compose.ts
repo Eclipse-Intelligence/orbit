@@ -39,6 +39,7 @@ export type DraftInput = {
   body: string;
   signature: boolean;
   remindHours: number | null;
+  replaces?: string | null;
 };
 
 const SCHEDULE_MIN_MS = 30_000;
@@ -107,6 +108,7 @@ export function readDraftInput(value: unknown): DraftInput {
     subject,
     body,
     signature: input.signature !== false,
+    replaces: typeof input.replaces === "string" && isUuid(input.replaces) ? input.replaces : null,
     remindHours:
       typeof input.remindHours === "number" && Number.isInteger(input.remindHours) && input.remindHours >= 1 && input.remindHours <= 2160
         ? input.remindHours
@@ -190,6 +192,7 @@ async function createDraft(
   const created = await createMicrosoftDraft(token, target.provider_message_id, target.provider_message_id ? input.mode : "new", fetchImpl).catch(
     graphProblem,
   );
+  if (input.replaces) await deleteDraftMessage(actor, input.replaces, fetchImpl).catch(() => undefined);
   const tracked = origin ? await readStatusesOn(actor) : false;
   return withActor(actor, async (db) => {
     const tracking = tracked
@@ -516,4 +519,21 @@ export async function composeAccounts(actor: UserActor): Promise<ComposeAccount[
     );
     return result.rows;
   });
+}
+
+export async function deleteDraftMessage(actor: UserActor, messageId: string, fetchImpl: typeof fetch = fetch) {
+  if (!isUuid(messageId)) throw new CrmError("not_found", "Draft not found.", 404);
+  const row = await withActor(actor, async (db) => {
+    const result = await db.query<{ id: string; source_id: string; provider_message_id: string }>(
+      `select m.id, m.source_id, m.provider_message_id from crm.mail_messages m
+       join crm.mail_folders f on f.id = m.folder_id
+       where m.id = $1 and m.user_id = $2 and m.is_draft and f.role = 'drafts'`,
+      [messageId, actor.userId],
+    );
+    return result.rows[0] ?? null;
+  });
+  if (!row) throw new CrmError("not_found", "That draft has already gone.", 404);
+  const token = await mailSourceToken(actor, row.source_id, fetchImpl);
+  await deleteMicrosoftDraft(token, row.provider_message_id, fetchImpl).catch(graphProblem);
+  await withActor(actor, (db) => db.query("delete from crm.mail_messages where id = $1", [row.id]));
 }

@@ -10,7 +10,7 @@ import Button, { buttonVariants } from "@/components/_ui/button";
 import { Monogram, tagBase } from "@/components/beautifui/record-marks";
 import EmailFrame from "@/components/mail/email-frame";
 import { useShortcut, useShortcutHint } from "@/components/shortcuts/shortcuts-provider";
-import { mailFullWhen, personName, recipientList } from "@/lib/mail/format";
+import { mailFullWhen, personName, recipientList, stripQuoted } from "@/lib/mail/format";
 import type { MailAddress } from "@/lib/mail/types";
 import {
   MAIL_SPLITS,
@@ -81,7 +81,11 @@ function Message({
   expanded,
   onToggle,
   swipe,
+  onEditDraft,
+  onDeleteDraft,
 }: {
+  onEditDraft: (message: ThreadMessage) => void;
+  onDeleteDraft: (message: ThreadMessage) => void;
   message: ThreadMessage;
   own: string[];
   expanded: boolean;
@@ -121,6 +125,17 @@ function Message({
           )}
         </span>
       </button>
+      {message.isDraft && (
+        <div className="-mt-1 flex flex-wrap items-center gap-2 px-4 pb-3 sm:pl-14">
+          <span className="caption-style text-subtle mr-1">Draft made outside Orbit.</span>
+          <Button variant="secondary" size="sm" onClick={() => onEditDraft(message)}>
+            Edit in Orbit
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => onDeleteDraft(message)}>
+            Delete draft
+          </Button>
+        </div>
+      )}
       {expanded && (
         <div className="flex flex-col gap-3 px-4 pb-4 sm:pl-14">
           <MessageBody message={message} title={`Email from ${sender}`} swipe={swipe} />
@@ -182,7 +197,19 @@ function SummaryLine({ threadKey, latestId, messages }: { threadKey: string; lat
   );
 }
 
-function Thread({ detail, own, swipe }: { detail: ThreadDetail; own: string[]; swipe: () => SwipeHandlers }) {
+function Thread({
+  detail,
+  own,
+  swipe,
+  onEditDraft,
+  onDeleteDraft,
+}: {
+  detail: ThreadDetail;
+  own: string[];
+  swipe: () => SwipeHandlers;
+  onEditDraft: (message: ThreadMessage) => void;
+  onDeleteDraft: (message: ThreadMessage) => void;
+}) {
   const last = detail.messages.length - 1;
   const [open, setOpen] = useState<Set<string>>(
     () => new Set(detail.messages.filter((message, index) => index === last || !message.isRead).map((message) => message.id)),
@@ -199,6 +226,8 @@ function Thread({ detail, own, swipe }: { detail: ThreadDetail; own: string[]; s
             message={message}
             own={own}
             swipe={swipe}
+            onEditDraft={onEditDraft}
+            onDeleteDraft={onDeleteDraft}
             expanded={open.has(message.id)}
             onToggle={() =>
               setOpen((current) => {
@@ -263,6 +292,8 @@ export default function ThreadReader({
   const [composer, setComposer] = useState<ComposerStart | null>(null);
   const [dismissed, setDismissed] = useState(false);
   const [echo, setEcho] = useState<Echo | null>(null);
+  const [removedDrafts, setRemovedDrafts] = useState<Set<string>>(() => new Set());
+  const [draftError, setDraftError] = useState<string | null>(null);
   const replyHint = useShortcutHint("mail-reply");
   const replyAllHint = useShortcutHint("mail-reply-all");
   const forwardHint = useShortcutHint("mail-forward");
@@ -294,6 +325,39 @@ export default function ThreadReader({
     }
     const defaults = replyDefaults(mode, target, detail.subject, own);
     setComposer({ mode, messageId: target.id, sourceId, to: defaults.to, cc: defaults.cc, subject: defaults.subject, draft: null });
+  }
+
+  function editOutsideDraft(message: ThreadMessage) {
+    if (!detail || !target) return;
+    const mode: DraftMode = message.to.length + message.cc.length > 1 ? "reply_all" : "reply";
+    const subject = detail.subject ?? "";
+    const body = stripQuoted(message.text ?? message.snippet ?? "").replace(/\s*[\u2013\u2014]\s*/g, ", ");
+    setRemovedDrafts((existing) => new Set(existing).add(message.id));
+    setComposer({
+      mode,
+      messageId: target.id,
+      sourceId,
+      to: message.to,
+      cc: message.cc,
+      subject,
+      replaces: message.id,
+      draft: { id: "", sourceId, mode, messageId: target.id, to: message.to, cc: message.cc, bcc: [], subject, body, savedAt: "", sendAt: null, sendError: null },
+    });
+  }
+
+  async function deleteOutsideDraft(message: ThreadMessage) {
+    setDraftError(null);
+    setRemovedDrafts((existing) => new Set(existing).add(message.id));
+    const response = await fetch(`/api/mail/draft-message?id=${encodeURIComponent(message.id)}`, { method: "DELETE" }).catch(() => null);
+    if (!response?.ok) {
+      const body = (await response?.json().catch(() => ({}))) as { error?: string } | undefined;
+      setRemovedDrafts((existing) => {
+        const next = new Set(existing);
+        next.delete(message.id);
+        return next;
+      });
+      setDraftError(body?.error ?? "Outlook didn't delete the draft. Try again.");
+    }
   }
 
   function closeComposer() {
@@ -414,7 +478,19 @@ export default function ThreadReader({
           {detail && target && <SummaryLine threadKey={detail.key} latestId={target.id} messages={detail.messages.length} />}
           {detail ? (
             <>
-              <Thread key={detail.key + detail.messages.length} detail={detail} own={own} swipe={swipe} />
+              <Thread
+                key={detail.key + detail.messages.length}
+                detail={{ ...detail, messages: detail.messages.filter((message) => !removedDrafts.has(message.id)) }}
+                own={own}
+                swipe={swipe}
+                onEditDraft={editOutsideDraft}
+                onDeleteDraft={(message) => void deleteOutsideDraft(message)}
+              />
+              {draftError && (
+                <p role="alert" className="text-danger px-4 text-[13px]">
+                  {draftError}
+                </p>
+              )}
               {echo && echo.count === detail.messages.length && (
                 <article aria-label="Sent just now" className="flex items-start gap-3 rounded-2xl bg-white/[0.025] px-4 py-3">
                   <Monogram name="Me" className="mt-0.5 size-7 rounded-full text-[11px]" />
