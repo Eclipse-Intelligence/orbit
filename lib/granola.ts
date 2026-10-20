@@ -50,7 +50,7 @@ export type GranolaNote = GranolaNoteSummary & {
   transcript: GranolaTranscriptItem[] | null;
 };
 
-export type GranolaWebhookEndpoint = {
+type GranolaWebhookEndpoint = {
   id: string;
   url: string;
   events: string[];
@@ -69,7 +69,7 @@ export class GranolaError extends Error {
   }
 }
 
-export type GranolaClientOptions = {
+type GranolaClientOptions = {
   apiKey: string;
   fetchImpl?: typeof fetch;
   sleep?: (ms: number) => Promise<void>;

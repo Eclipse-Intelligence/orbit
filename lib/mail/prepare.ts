@@ -20,13 +20,13 @@ const CHECKS_PER_RUN = 12;
 const STEP_MS = 20_000;
 const BODY_MAX = 20_000;
 
-export type PreparedKind = "reply" | "nudge";
+type PreparedKind = "reply" | "nudge";
 
-export type PreparedDraft = { id: string; kind: PreparedKind; messageId: string; body: string; times: string[] | null };
+type PreparedDraft = { id: string; kind: PreparedKind; messageId: string; body: string; times: string[] | null };
 
 export type MailHelpSettings = { prepareReplies: boolean; autoRemindDays: number | null };
 
-export type PrepareReport = { prepared: number; skipped: number; reminders: number; checked: number };
+type PrepareReport = { prepared: number; skipped: number; reminders: number; checked: number };
 
 const REPLY_SCHEMA = z.object({ needsReply: z.boolean(), meeting: z.boolean().optional(), body: z.string().nullable() });
 const NUDGE_SCHEMA = z.object({ body: z.string() });

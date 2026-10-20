@@ -57,7 +57,7 @@ export function weekStartKey(key: string) {
   return shiftDateKey(key, -weekday(key));
 }
 
-export function dayStart(key: string, timeZone = appTimeZone()) {
+function dayStart(key: string, timeZone = appTimeZone()) {
   const parts = keyParts(key);
   if (!parts) throw new Error(`Invalid date ${key}`);
   return zonedTimeToDate({ ...parts, hour: 0, minute: 0, second: 0 }, timeZone);
@@ -87,7 +87,7 @@ export function wallMinutes(instant: Date | string | number, timeZone = appTimeZ
   return parts.hour * 60 + parts.minute;
 }
 
-export function allDayKey(instant: Date | string | number, timeZone = appTimeZone()) {
+function allDayKey(instant: Date | string | number, timeZone = appTimeZone()) {
   const date = new Date(instant);
   if (date.getUTCHours() === 0 && date.getUTCMinutes() === 0) return utcKey(date);
   return dateKey(date, timeZone);
@@ -121,8 +121,8 @@ export function daySpan(
   return { top, bottom: Math.max(bottom, top) };
 }
 
-export type LayoutInput = { id: string; top: number; bottom: number };
-export type LayoutSlot = { column: number; columns: number };
+type LayoutInput = { id: string; top: number; bottom: number };
+type LayoutSlot = { column: number; columns: number };
 
 export function packColumns(items: LayoutInput[], minimumHeight = 15) {
   const sorted = [...items].sort(

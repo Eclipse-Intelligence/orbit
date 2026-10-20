@@ -6,7 +6,7 @@ The starting point was a Next.js 16 company table. The screens were useful. The 
 
 - Sidebar, table, command menu, sheets, dialogs, filters, buttons, tags, and the dark visual system.
 - CSV download, including formula-injection escaping in `lib/csv.ts`.
-- Zustand, limited to ephemeral UI: which row is open, which dialog is open, and the current page of companies.
+- Zustand, limited to ephemeral UI: whether the profile panel and the sidebar are open, and the Mail unread count (`stores/companies-store.ts`).
 
 ## Removed from the product
 
@@ -19,7 +19,7 @@ The starting point was a Next.js 16 company table. The screens were useful. The 
 
 ## Now recorded
 
-Contacts, opportunities, activities, and tasks are real records. Notifications list due and overdue follow-ups. Quiet lists companies with no recent interaction. CSV import and export cover the core records. Webhooks deliver the audit events. The Microsoft inbox files received mail, and a contact can send through the connected mailbox, once the Entra app credentials are set. Gmail and calendar sync still need an OAuth app you provide.
+Contacts, opportunities, activities, and tasks are real records. The notifications bell lists workflow updates (approvals, failed runs, Notify someone steps) and other alerts, such as bookings, above due and overdue tasks. Quiet lists companies with no recent interaction. CSV import and export cover the core records. Webhooks deliver the audit events. The Microsoft mailbox connected in Capture files received mail and is mirrored in Mail, and Outlook calendars sync through the same Entra app once its credentials are set. Other calendars are added by iCal link with no OAuth app. Gmail is not connected.
 
 ## Security notes from the prototype
 

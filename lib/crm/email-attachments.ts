@@ -6,10 +6,10 @@ import { query } from "@/lib/db/pool";
 import type { MailAttachment } from "@/lib/microsoft/oauth";
 import { ATTACHMENT_MAX_BYTES, readObject, removeObjects, signedUploadUrl, storageConfigured, StorageError } from "@/lib/storage";
 
-export const ATTACHMENT_MAX_COUNT = 10;
+const ATTACHMENT_MAX_COUNT = 10;
 
 export type PreparedAttachment = { id: string; name: string; size: number; uploadUrl: string };
-export type AttachmentSummary = { name: string; size: number };
+type AttachmentSummary = { name: string; size: number };
 
 function cleanName(value: unknown) {
   const name = typeof value === "string" ? value.replace(/[\\/\u0000-\u001f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 200) : "";
@@ -22,7 +22,7 @@ function cleanType(value: unknown) {
   return /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/.test(type) && type.length <= 200 ? type : "application/octet-stream";
 }
 
-export function megabytes(bytes: number) {
+function megabytes(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
 }
 

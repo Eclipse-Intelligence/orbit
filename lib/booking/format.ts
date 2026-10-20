@@ -23,10 +23,6 @@ export function dayTitle(key: string) {
   return formatter("day", { weekday: "long", day: "numeric", month: "long", timeZone: "UTC" }).format(noon(key));
 }
 
-export function shortDay(key: string) {
-  return formatter("short-day", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" }).format(noon(key));
-}
-
 export function timeOf(iso: string, timeZone: string) {
   return formatter(`time:${timeZone}`, { hour: "numeric", minute: "2-digit", timeZone }).format(new Date(iso));
 }
@@ -39,10 +35,10 @@ export function fullWhen(startIso: string, endIso: string, timeZone: string) {
     year: "numeric",
     timeZone,
   }).format(new Date(startIso));
-  return `${day}, ${timeOf(startIso, timeZone)} – ${timeOf(endIso, timeZone)}`;
+  return `${day}, ${timeOf(startIso, timeZone)} to ${timeOf(endIso, timeZone)}`;
 }
 
-export function zoneOffset(timeZone: string, at = new Date()) {
+function zoneOffset(timeZone: string, at = new Date()) {
   try {
     const part = new Intl.DateTimeFormat("en-GB", { timeZone, timeZoneName: "shortOffset" })
       .formatToParts(at)
@@ -53,7 +49,7 @@ export function zoneOffset(timeZone: string, at = new Date()) {
   }
 }
 
-export function zoneName(timeZone: string) {
+function zoneName(timeZone: string) {
   const city = timeZone.split("/").pop() ?? timeZone;
   return city.replace(/_/g, " ");
 }

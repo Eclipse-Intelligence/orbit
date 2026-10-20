@@ -158,7 +158,7 @@ export function classificationUrl(folderId: string) {
   return `${GRAPH}/me/mailFolders/${encodeURIComponent(folderId)}/messages?$select=id,inferenceClassification&$top=500`;
 }
 
-export function normaliseMessage(message: GraphMessage): ProviderMessage {
+function normaliseMessage(message: GraphMessage): ProviderMessage {
   const html = message.body?.contentType?.toLowerCase() === "html" ? (message.body.content ?? "") : null;
   const plain = html === null ? (message.body?.content ?? "") : null;
   const truncated = html !== null && html.length > BODY_HTML_MAX;
@@ -264,7 +264,7 @@ export async function fetchMicrosoftDelta(url: string, token: string, fetchImpl:
   };
 }
 
-export type MicrosoftMessageChange = { isRead?: boolean; flagged?: boolean };
+type MicrosoftMessageChange = { isRead?: boolean; flagged?: boolean };
 
 export async function updateMicrosoftMessage(token: string, messageId: string, change: MicrosoftMessageChange, fetchImpl: typeof fetch = fetch) {
   const body: Record<string, unknown> = {};
@@ -356,7 +356,7 @@ export async function ensureMicrosoftFolder(token: string, name: string, fetchIm
   return created.id;
 }
 
-export const MAIL_SUBSCRIPTION_MINUTES = 4_200;
+const MAIL_SUBSCRIPTION_MINUTES = 4_200;
 
 export async function createMailSubscription(
   token: string,
@@ -387,7 +387,7 @@ export async function renewMailSubscription(token: string, id: string, fetchImpl
   return renewed.expirationDateTime ?? expirationDateTime;
 }
 
-export type MicrosoftAttachment = { id: string; name: string; contentType: string | null; size: number; inline: boolean };
+type MicrosoftAttachment = { id: string; name: string; contentType: string | null; size: number; inline: boolean };
 
 export async function listMicrosoftAttachments(token: string, messageId: string, fetchImpl: typeof fetch = fetch): Promise<MicrosoftAttachment[]> {
   const page = await graphJson<{ value?: { id: string; name?: string; contentType?: string | null; size?: number; isInline?: boolean; "@odata.type"?: string }[] }>(

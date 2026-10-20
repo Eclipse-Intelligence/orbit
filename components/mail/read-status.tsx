@@ -7,7 +7,7 @@ import type { MailAddress } from "@/lib/mail/types";
 import { cn } from "@/lib/utils";
 import EyeIcon from "@/public/assets/images/mail/eye.svg";
 
-export function readLabel(opens: { at: string }[], recipients: MailAddress[]) {
+function readLabel(opens: { at: string }[], recipients: MailAddress[]) {
   if (opens.length === 0) return "Unread";
   return recipients.length === 1 ? `Read by ${personName(recipients[0])}` : "Read";
 }

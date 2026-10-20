@@ -46,15 +46,15 @@ import {
 const SYNC_GAP_MS = 5 * 60 * 1000;
 const OVERLAP_MS = 6 * 60 * 60 * 1000;
 const LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
-export const UNFILED_AFTER_MS = 48 * 60 * 60 * 1000;
+const UNFILED_AFTER_MS = 48 * 60 * 60 * 1000;
 const SUBSCRIPTION_MS = 2 * 24 * 60 * 60 * 1000;
 const RENEW_BEFORE_MS = 24 * 60 * 60 * 1000;
 const STEP_RESERVE_MS = 5_000;
 const HANDLER_BUDGET_MS = 50_000;
-export const MAX_NOTIFICATIONS = 50;
+const MAX_NOTIFICATIONS = 50;
 const NOT_CONNECTED = "Connect Microsoft to import Teams transcripts.";
 
-export type TranscriptSyncResult = {
+type TranscriptSyncResult = {
   ran: boolean;
   imported: number;
   filed: number;
@@ -65,7 +65,7 @@ export type TranscriptSyncResult = {
   error?: string;
 };
 
-export type SubscriptionResult = {
+type SubscriptionResult = {
   status: "skipped" | "active" | "renewed" | "created" | "failed";
   expiresAt?: string | null;
   error?: string;
@@ -76,7 +76,7 @@ export type TeamsTranscriptStatus = IntegrationStatus & {
   pending: number;
 };
 
-export type GraphNotification = {
+type GraphNotification = {
   subscriptionId?: string;
   clientState?: string;
   changeType?: string;
@@ -84,11 +84,11 @@ export type GraphNotification = {
   lifecycleEvent?: string;
 };
 
-export type VerifiedNotification = { actor: UserActor; item: GraphNotification };
+type VerifiedNotification = { actor: UserActor; item: GraphNotification };
 
-export type SubscriptionOwner = { actor: UserActor; clientState: string | null };
+type SubscriptionOwner = { actor: UserActor; clientState: string | null };
 
-export type OwnerLookup = (subscriptionIds: string[]) => Promise<Map<string, SubscriptionOwner>>;
+type OwnerLookup = (subscriptionIds: string[]) => Promise<Map<string, SubscriptionOwner>>;
 
 type Identity = { tenantId: string; objectId: string; connectionId: string };
 
@@ -107,7 +107,7 @@ type SubscriptionRow = {
   full_name: string | null;
 };
 
-export function subscriptionOrigin() {
+function subscriptionOrigin() {
   const origin = configuredSiteOrigin();
   return origin && origin.startsWith("https://") ? origin : null;
 }
@@ -172,7 +172,7 @@ async function settleTranscripts(actor: UserActor, now: number) {
   });
 }
 
-export async function importTeamsTranscript(
+async function importTeamsTranscript(
   actor: UserActor,
   token: string,
   identity: Identity,
@@ -464,7 +464,7 @@ export async function ensureTranscriptSubscription(
   }
 }
 
-export async function lookupSubscriptions(subscriptionIds: string[]) {
+async function lookupSubscriptions(subscriptionIds: string[]) {
   const owners = new Map<string, SubscriptionOwner>();
   if (subscriptionIds.length === 0) return owners;
   const result = await query<SubscriptionRow>(
@@ -477,7 +477,7 @@ export async function lookupSubscriptions(subscriptionIds: string[]) {
   return owners;
 }
 
-export function validationResponse(request: Request) {
+function validationResponse(request: Request) {
   const token = new URL(request.url).searchParams.get("validationToken");
   if (token === null) return null;
   return new Response(token.slice(0, 1000), {
@@ -486,7 +486,7 @@ export function validationResponse(request: Request) {
   });
 }
 
-export async function verifyNotifications(
+async function verifyNotifications(
   items: GraphNotification[],
   lookup: OwnerLookup = lookupSubscriptions,
 ): Promise<VerifiedNotification[]> {
@@ -521,7 +521,7 @@ export async function verifyNotifications(
   return verified;
 }
 
-export async function receiveGraphNotifications(request: Request, lookup?: OwnerLookup) {
+async function receiveGraphNotifications(request: Request, lookup?: OwnerLookup) {
   let items: unknown[];
   try {
     const body = (await request.json()) as { value?: unknown };
@@ -537,7 +537,7 @@ export async function receiveGraphNotifications(request: Request, lookup?: Owner
   return { status: 202, accepted };
 }
 
-export async function processTranscriptNotification(
+async function processTranscriptNotification(
   actor: UserActor,
   item: GraphNotification,
   options: Options = {},
@@ -574,7 +574,7 @@ export async function processTranscriptNotification(
   }
 }
 
-export async function processLifecycleEvent(
+async function processLifecycleEvent(
   actor: UserActor,
   item: GraphNotification,
   options: Options = {},

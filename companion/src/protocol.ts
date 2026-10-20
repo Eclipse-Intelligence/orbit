@@ -35,5 +35,3 @@ export type CompanionResult = {
 };
 
 export type PairResponse = { token: string; companionId: string; email: string | null; workspace: string | null };
-
-export const COMPANION_PROTOCOL = 1;

@@ -1,4 +1,4 @@
-export const DEFAULT_TIME_ZONE = "Europe/London";
+const DEFAULT_TIME_ZONE = "Europe/London";
 
 const DAY_MS = 86_400_000;
 const LOCAL_DATE_TIME = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?)?$/;

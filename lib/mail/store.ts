@@ -4,7 +4,7 @@ import { isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
 import type { MailAddress, MailRole } from "@/lib/mail/types";
 
-export type MailSummary = {
+type MailSummary = {
   id: string;
   account: string;
   folder: string;
@@ -20,7 +20,7 @@ export type MailSummary = {
   hasAttachments: boolean;
 };
 
-export type MailMessage = MailSummary & {
+type MailMessage = MailSummary & {
   cc: MailAddress[];
   sentAt: string | null;
   bodyText: string | null;

@@ -2,11 +2,11 @@ import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-export const CONFIG_DIR = join(homedir(), ".config", "orbit-agent");
+const CONFIG_DIR = join(homedir(), ".config", "orbit-agent");
 const CONFIG_FILE = join(CONFIG_DIR, "config.json");
-export const WORKSPACE_DIR = join(CONFIG_DIR, "workspace");
+const WORKSPACE_DIR = join(CONFIG_DIR, "workspace");
 
-export type Config = { url: string; token: string; email: string | null };
+type Config = { url: string; token: string; email: string | null };
 
 export async function loadConfig(): Promise<Partial<Config>> {
   try {

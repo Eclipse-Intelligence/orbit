@@ -136,7 +136,7 @@ export async function startDeviceLogin(fetchImpl: typeof fetch = fetch): Promise
   };
 }
 
-export type DevicePoll = { status: "pending" } | { status: "complete"; tokens: Tokens } | { status: "failed"; error: string };
+type DevicePoll = { status: "pending" } | { status: "complete"; tokens: Tokens } | { status: "failed"; error: string };
 
 export async function pollDeviceLogin(pending: DevicePending, fetchImpl: typeof fetch = fetch): Promise<DevicePoll> {
   if (Date.now() >= pending.deadlineAt) return { status: "failed", error: "The code expired. Start again." };

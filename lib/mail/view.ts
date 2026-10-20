@@ -1,6 +1,6 @@
 import type { MailAddress, MailRole } from "@/lib/mail/types";
 
-export const MAIL_ROLES = ["inbox", "snoozed", "sent", "drafts", "archive", "trash"] as const;
+const MAIL_ROLES = ["inbox", "snoozed", "sent", "drafts", "archive", "trash"] as const;
 export type MailViewRole = (typeof MAIL_ROLES)[number];
 export const MAIL_SPLITS = ["important", "other", "news", "calendar"] as const;
 export type MailSplit = (typeof MAIL_SPLITS)[number];

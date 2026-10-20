@@ -13,7 +13,7 @@ const REDIRECTS = new Set([301, 302, 303, 307, 308]);
 export type Address = { address: string; family: number };
 export type Lookup = (hostname: string) => Promise<Address[]>;
 
-export type FeedResult =
+type FeedResult =
   | { status: "not_modified" }
   | { status: "ok"; text: string; etag: string | null; lastModified: string | null };
 
@@ -104,7 +104,7 @@ function bareHost(hostname: string) {
   return hostname.replace(/^\[|\]$/g, "").toLowerCase();
 }
 
-export const systemLookup: Lookup = (hostname) =>
+const systemLookup: Lookup = (hostname) =>
   new Promise((resolve, reject) => {
     dnsLookup(hostname, { all: true, verbatim: true }, (error, addresses) => {
       if (error) reject(error);

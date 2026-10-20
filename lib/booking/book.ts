@@ -36,7 +36,7 @@ const DAY = 86_400_000;
 const LOCK_WAIT_MS = 25_000;
 const LOCK_HOLD_MS = 120_000;
 
-export const BOOKING_LIMITS = {
+const BOOKING_LIMITS = {
   slotsPerMinute: 10,
   attemptsPerHour: 5,
   bookingsPerEmailPerDay: 3,
@@ -44,9 +44,9 @@ export const BOOKING_LIMITS = {
 
 export const SLOT_TAKEN = "That time was just taken. Pick another.";
 export const BOOKING_UNAVAILABLE = "Booking is temporarily unavailable. Please try again later.";
-export const PAGE_MISSING = "This booking page isn't available.";
+const PAGE_MISSING = "This booking page isn't available.";
 
-export type BookingContext = { ip: string; now?: number; fetchImpl?: typeof fetch };
+type BookingContext = { ip: string; now?: number; fetchImpl?: typeof fetch };
 
 export type BookingInput = {
   start?: unknown;
@@ -348,7 +348,7 @@ async function whenDone(run: () => Promise<void>) {
   }
 }
 
-export async function alertOwner(
+async function alertOwner(
   owner: UserActor,
   booking: {
     name: string;

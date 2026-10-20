@@ -5,7 +5,7 @@ export const MICROSOFT_SCOPES = "offline_access Mail.ReadWrite Mail.Send User.Re
 export const CALENDAR_ACCOUNT_SCOPES = "openid offline_access User.Read Calendars.Read";
 export const SEND_ACCOUNT_SCOPES = "openid offline_access User.Read Calendars.Read Mail.Send Mail.ReadWrite";
 export const ORGANISATION_BLOCKED =
-  "This Microsoft account's organisation doesn't allow Orbit yet — in Entra, set Orbit's Supported account types to include other organisations (and personal accounts if needed), or ask that organisation's admin to consent.";
+  "This Microsoft account's organisation doesn't allow Orbit yet. In Entra, set Orbit's Supported account types to include other organisations (and personal accounts if needed), or ask that organisation's admin to consent.";
 export const SIGN_IN_CANCELLED = "Microsoft sign-in was cancelled. Try again when you're ready.";
 
 export type MicrosoftPurpose = "mailbox" | "calendar_account" | "send_account";
@@ -31,7 +31,7 @@ function microsoftCredentials() {
   return { id, secret };
 }
 
-export function microsoftTenant() {
+function microsoftTenant() {
   return process.env.MICROSOFT_TENANT?.trim() || "common";
 }
 
@@ -109,7 +109,7 @@ export function readMicrosoftState(
   }
 }
 
-export function scopesFor(purpose: MicrosoftPurpose) {
+function scopesFor(purpose: MicrosoftPurpose) {
   if (purpose === "calendar_account") return CALENDAR_ACCOUNT_SCOPES;
   if (purpose === "send_account") return SEND_ACCOUNT_SCOPES;
   return MICROSOFT_SCOPES;
@@ -192,7 +192,7 @@ export function consentProblem(message: string | null | undefined) {
   return null;
 }
 
-export function idTokenTenant(idToken: string | null | undefined) {
+function idTokenTenant(idToken: string | null | undefined) {
   const payload = idToken?.split(".")[1];
   if (!payload) return null;
   try {
@@ -411,7 +411,7 @@ function inboxUrl(since: Date, order: boolean) {
 
 export type MailAttachment = { name: string; contentType: string; bytes: Uint8Array };
 
-export const INLINE_ATTACHMENT_LIMIT = 3 * 1024 * 1024;
+const INLINE_ATTACHMENT_LIMIT = 3 * 1024 * 1024;
 const UPLOAD_CHUNK = 320 * 1024 * 10;
 export const LARGE_ATTACHMENT_RECONNECT =
   "Attachments over 3 MB need permission to create drafts. Reconnect Microsoft in Capture, then send again.";

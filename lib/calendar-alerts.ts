@@ -20,7 +20,7 @@ function time(value: Date | string) {
   return new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: appTimeZone() }).format(new Date(value));
 }
 
-export function eventAlertKey(event: { ical_uid: string | null; provider_event_id: string | null; starts_at: Date | string }) {
+function eventAlertKey(event: { ical_uid: string | null; provider_event_id: string | null; starts_at: Date | string }) {
   return `cal:${event.ical_uid ?? event.provider_event_id ?? "event"}:${new Date(event.starts_at).toISOString().slice(0, 16)}`;
 }
 

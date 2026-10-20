@@ -48,8 +48,8 @@ import {
 } from "@/lib/microsoft/oauth";
 
 const DAY_MS = 86_400_000;
-export const CALENDAR_BACK_MS = 30 * DAY_MS;
-export const CALENDAR_AHEAD_MS = 60 * DAY_MS;
+const CALENDAR_BACK_MS = 30 * DAY_MS;
+const CALENDAR_AHEAD_MS = 60 * DAY_MS;
 const SYNC_GAP_MS = 5 * 60 * 1000;
 const SYNC_BUDGET_MS = 45_000;
 const CALENDAR_RESERVE_MS = 5_000;
@@ -59,13 +59,12 @@ const SAVE_BATCH = 200;
 const MEETINGS_SHOWN = 5;
 const PEOPLE_SHOWN = 25;
 export const DEFAULT_CALENDAR_PLACEHOLDER = "__default__";
-export const CALENDAR_RECONNECT = "Reconnect Microsoft to include your calendar.";
-export const CALENDAR_NO_ACCESS = "Microsoft didn't let Orbit read this calendar.";
+const CALENDAR_NO_ACCESS = "Microsoft didn't let Orbit read this calendar.";
 const NOT_CONNECTED = "Connect Microsoft or add a calendar link to sync your calendar.";
 const FEED_FAILED = "Couldn't sync this calendar link. Orbit will try again later.";
 const REJECTED = /rejected the mailbox connection|could not read the saved Microsoft connection/i;
 
-export type CalendarSyncResult = {
+type CalendarSyncResult = {
   ran: boolean;
   saved: number;
   removed: number;
@@ -164,7 +163,7 @@ function iso(value: Date | string | null) {
   return new Date(value).toISOString();
 }
 
-export function calendarWindow(now = Date.now()) {
+function calendarWindow(now = Date.now()) {
   return { start: new Date(now - CALENDAR_BACK_MS), end: new Date(now + CALENDAR_AHEAD_MS) };
 }
 

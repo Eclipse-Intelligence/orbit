@@ -9,11 +9,11 @@ import type { UserActor } from "@/lib/crm/types";
 const POLL_MS = 1_500;
 const QUEUE_EXPIRY = "2 minutes";
 
-export type ToolEvent = { type: "tool"; id: string; name: string; label: string; status: "running" | "done" };
+type ToolEvent = { type: "tool"; id: string; name: string; label: string; status: "running" | "done" };
 
-export type JobStatus = "queued" | "running" | "done" | "failed" | "cancelled";
+type JobStatus = "queued" | "running" | "done" | "failed" | "cancelled";
 
-export type JobState = {
+type JobState = {
   status: JobStatus;
   events: ToolEvent[];
   result: { messageIds: string[] } | null;

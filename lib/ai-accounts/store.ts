@@ -26,7 +26,7 @@ export type AiAccountSummary = {
   connectedAt: string | null;
 };
 
-export type AiAccess = { provider: AiProvider; token: string; accountId: string | null };
+type AiAccess = { provider: AiProvider; token: string; accountId: string | null };
 
 type Row = {
   provider: AiProvider;

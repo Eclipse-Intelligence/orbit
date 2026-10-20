@@ -50,7 +50,7 @@ export async function ingestLead(
   );
 }
 
-export async function ingestLeadInDb(
+async function ingestLeadInDb(
   db: Db,
   actor: Actor,
   input: LeadInput,

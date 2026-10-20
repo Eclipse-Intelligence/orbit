@@ -19,14 +19,14 @@ const EVENT_SCHEMA = z.object({
   notes: z.string().nullable(),
 });
 
-export type EventGuest = {
+type EventGuest = {
   email: string;
   name: string | null;
   contactId: string | null;
   company: string | null;
 };
 
-export type EventDraft = {
+type EventDraft = {
   title: string;
   date: string | null;
   time: string | null;

@@ -11,7 +11,7 @@ import { mailNotifyLevel } from "@/lib/mail/notify";
 import type { PushSender } from "@/lib/push";
 import { prepareNudge } from "@/lib/mail/prepare";
 
-export type DueReport = { sent: number; failed: number; returned: number; followUps: number };
+type DueReport = { sent: number; failed: number; returned: number; followUps: number };
 
 type ReminderRow = { id: string; source_id: string; thread_key: string; subject: string | null; kind: "snooze" | "follow_up" };
 

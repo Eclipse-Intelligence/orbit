@@ -13,7 +13,7 @@ import type { UserActor } from "@/lib/crm/types";
 import { revalidateRecordPages } from "@/lib/revalidate";
 import { SETTINGS_ROOT } from "@/lib/settings-nav";
 
-export type CalendarActionState = { error?: string; ok?: boolean; message?: string };
+type CalendarActionState = { error?: string; ok?: boolean; message?: string };
 
 function refreshCalendar() {
   revalidatePath("/calendar");
@@ -122,7 +122,7 @@ export async function createContactFromEventAction(
   }
 }
 
-export type InviteActionState = CalendarActionState & {
+type InviteActionState = CalendarActionState & {
   field?: string;
   warning?: string | null;
   guests?: { email: string; name: string | null }[];

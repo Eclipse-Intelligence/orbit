@@ -9,7 +9,7 @@ import type { UserActor } from "@/lib/crm/types";
 import { decryptSecret, encryptSecret } from "@/lib/crypto/secret";
 import type { MailAddress } from "@/lib/mail/types";
 
-export const NEO = { smtpHost: "smtp0001.neo.space", smtpPort: 465, imapHost: "imap0001.neo.space", imapPort: 993 };
+const NEO = { smtpHost: "smtp0001.neo.space", smtpPort: 465, imapHost: "imap0001.neo.space", imapPort: 993 };
 
 export type SendIdentity = {
   id: string;

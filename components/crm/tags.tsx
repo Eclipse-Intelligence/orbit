@@ -35,7 +35,7 @@ const TONES = [
 
 export const ANY_TAG = "any";
 
-export function tagTone(name: string) {
+function tagTone(name: string) {
   let hash = 0;
   for (const char of name) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
   return TONES[hash % TONES.length];

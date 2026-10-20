@@ -41,7 +41,7 @@ function foldText(value: string) {
     .normalize("NFC");
 }
 
-export function isSharedHost(host: string) {
+function isSharedHost(host: string) {
   return SHARED_HOSTS.some((shared) => host === shared || host.endsWith(`.${shared}`));
 }
 
@@ -83,7 +83,7 @@ export function canonicalDomain(value: string): string | null {
   return host;
 }
 
-export function canonicalWebsite(value: string): string | null {
+function canonicalWebsite(value: string): string | null {
   const domain = canonicalDomain(value);
   if (!domain) return null;
   const trimmed = value.trim();

@@ -18,7 +18,7 @@ import RepeatIcon from "@/public/assets/images/workflows/repeat.svg";
 
 type Icon = ComponentType<SVGProps<SVGSVGElement>>;
 
-export type NodeGroup = "trigger" | "ai" | "logic" | "action";
+type NodeGroup = "trigger" | "ai" | "logic" | "action";
 
 export const GROUP_STYLE: Record<NodeGroup, string> = {
   trigger: "bg-[var(--tag-amber-bg)] text-[var(--tag-amber-text)]",

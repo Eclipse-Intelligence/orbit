@@ -3,7 +3,7 @@ import { CrmError } from "@/lib/crm/errors";
 import { canonicalEmail } from "@/lib/crm/normalize";
 import type { UserActor } from "@/lib/crm/types";
 
-export const OTHER_EMAILS_LIMIT = 20;
+const OTHER_EMAILS_LIMIT = 20;
 
 export type MyEmails = { loginEmail: string; otherEmails: string[] };
 

@@ -14,7 +14,7 @@ function enumOf(values: unknown[]): z.ZodType {
   return z.union(literals as unknown as [z.ZodType, z.ZodType, ...z.ZodType[]]);
 }
 
-export function zodFor(input: unknown): z.ZodType {
+function zodFor(input: unknown): z.ZodType {
   const schema = asSchema(input);
   let out: z.ZodType;
   if (Array.isArray(schema.enum)) {

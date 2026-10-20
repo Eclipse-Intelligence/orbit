@@ -17,7 +17,7 @@ export class LlmError extends Error {
   }
 }
 
-export type LlmJsonRequest<T> = {
+type LlmJsonRequest<T> = {
   system: string;
   user: string;
   schema: z.ZodType<T>;
@@ -28,12 +28,12 @@ export type LlmJsonRequest<T> = {
   model?: string;
 };
 
-export type LlmJsonResult<T> = {
+type LlmJsonResult<T> = {
   data: T;
   model: string;
 };
 
-export function llmModel() {
+function llmModel() {
   return process.env.LLM_MODEL?.trim() || DEFAULT_MODEL;
 }
 

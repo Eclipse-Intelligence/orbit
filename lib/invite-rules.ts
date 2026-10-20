@@ -2,7 +2,7 @@ import { dateKey, shiftDateKey, weekday } from "@/lib/calendar-view";
 import { canonicalEmail } from "@/lib/crm/normalize";
 import { appTimeZone, zonedParts } from "@/lib/time";
 
-export const INVITE_TITLE_PREFIX = "Eclipse";
+const INVITE_TITLE_PREFIX = "Eclipse";
 export const INVITE_DURATIONS = [15, 30, 45, 60, 90] as const;
 export const INVITE_DEFAULT_DURATION = 30;
 export const INVITE_GUESTS_MAX = 50;
@@ -10,11 +10,11 @@ export const INVITE_TITLE_MAX = 200;
 export const INVITE_NOTES_MAX = 4000;
 export const INVITE_COMMENT_MAX = 1000;
 export const MEETING_LINK_MAX = 500;
-export const SLOT_MINUTES = 15;
+const SLOT_MINUTES = 15;
 const WORK_START = 9 * 60;
 const LAST_START = 17 * 60 + 30;
 
-export type MeetingLinkCheck = { ok: true; link: string | null } | { ok: false; error: string };
+type MeetingLinkCheck = { ok: true; link: string | null } | { ok: false; error: string };
 
 export function checkMeetingLink(value: string): MeetingLinkCheck {
   const trimmed = value.trim();
@@ -50,7 +50,7 @@ function pad(value: number) {
   return String(value).padStart(2, "0");
 }
 
-export function timeLabel(minutes: number) {
+function timeLabel(minutes: number) {
   return `${pad(Math.floor(minutes / 60))}:${pad(minutes % 60)}`;
 }
 

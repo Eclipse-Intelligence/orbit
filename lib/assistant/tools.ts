@@ -73,7 +73,7 @@ import { siteOrigin } from "@/lib/site-url";
 type Args = Record<string, unknown>;
 type JsonSchema = Record<string, unknown>;
 
-export type AssistantTool = {
+type AssistantTool = {
   name: string;
   description: string;
   parameters: JsonSchema;

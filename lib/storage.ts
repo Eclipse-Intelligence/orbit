@@ -1,4 +1,4 @@
-export const ATTACHMENT_BUCKET = "email-attachments";
+const ATTACHMENT_BUCKET = "email-attachments";
 export const ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024;
 
 export class StorageError extends Error {}

@@ -11,7 +11,7 @@ const summaries = new Map<string, Promise<ThreadSummaryText>>();
 export type ThreadSummaryText = { summary: string | null; todo: string | null };
 export type AskResult = { answer: string; sources: { key: string; subject: string | null; from: string; at: string | null }[] };
 
-export function listKey(query: ListQuery) {
+function listKey(query: ListQuery) {
   return `${query.query ? "search" : query.view}|${query.account ?? ""}|${query.query}`;
 }
 

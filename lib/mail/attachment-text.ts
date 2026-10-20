@@ -1,6 +1,6 @@
 import { strFromU8, unzipSync } from "fflate";
 
-export const TEXT_MAX = 30_000;
+const TEXT_MAX = 30_000;
 
 const OFFICE_TYPES: Record<string, "docx" | "xlsx" | "pptx"> = {
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
@@ -10,7 +10,7 @@ const OFFICE_TYPES: Record<string, "docx" | "xlsx" | "pptx"> = {
 
 const PLAIN = /\.(txt|csv|tsv|md|markdown|json|ics|vcf|log|xml|html?)$/i;
 
-export type AttachmentKind = "pdf" | "docx" | "xlsx" | "pptx" | "text" | "html";
+type AttachmentKind = "pdf" | "docx" | "xlsx" | "pptx" | "text" | "html";
 
 export function attachmentKind(name: string, contentType: string | null): AttachmentKind | null {
   const type = (contentType ?? "").toLowerCase().split(";")[0].trim();

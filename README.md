@@ -31,6 +31,16 @@ npm run dev
 
 `npm run db:reset` drops the `crm` and `private` schemas and the local auth users, then sets up again. It refuses to run when it detects hosted Supabase Auth.
 
+### Test database
+
+`npm test` uses its own database, `crm_test` on `127.0.0.1:5432`, with the connection strings set in the `test` script in `package.json` (not `.env.local`): it connects as `postgres` with password `postgres` to rebuild the schema, and as `crm_app` with password `crm_app_dev` for the tests. Create it once as `postgres`:
+
+```sql
+create database crm_test;
+```
+
+The test files that need the database then drop the `crm`, `private` and `public` schemas, apply `supabase/bootstrap/local-auth.sql` and every migration in order, and set the `crm_app` password to `crm_app_dev` (roles are shared by every database on the server, so this is also the password for `crm`). The migrations create the `pgcrypto` and `pg_trgm` extensions, so the server must have them available. Never point the tests at a database you want to keep.
+
 ## Accounts and time
 
 Orbit has no open sign-up. Only an account that belongs to a workspace can sign in: `db:setup` creates the local one, and everyone else joins through an invite (see Team and permissions). Dates, typed due times, and the Today and Overdue cut-offs use London time. `NEXT_PUBLIC_TIMEZONE` overrides that at build time if it ever needs to.
@@ -49,7 +59,7 @@ What is shared and what is private:
 
 - Shared with every member: companies, contacts, deals, boards, tags, email templates, and everything logged to a record (emails, calls, meetings, notes, call summaries, filed transcripts), plus meetings from calendars marked Use for CRM that include a contact or company.
 - Private to each person: their inbox, calendars and calendar page, OAuth tokens and API keys, email signatures and unsent attachments, assistant conversations, workflow runs and approvals, notifications.
-- Tasks belong to their owner and creator. A member sees only tasks assigned to them or that they created, everywhere in Orbit (lists, record pages, search, the assistant). The owner and admins see everyone's, with a Mine or Everyone switch on Tasks once the workspace has more than one person. New tasks are owned by whoever creates them. Reminders, the side menu count and the notifications bell only cover your own tasks. A member can hand back a task they created, but not one someone else gave them.
+- Tasks belong to their owner and creator. A member sees only tasks assigned to them or that they created, everywhere in Orbit (lists, record pages, search, the assistant). The owner and admins see everyone's, with a Mine or Everyone switch on Tasks once the workspace has more than one person. New tasks are owned by whoever creates them. Reminders, the side menu count and the notifications bell only cover your own tasks and unowned ones. A member can hand back a task they created, but not one someone else gave them.
 
 Removing someone moves their companies, contacts, deals and tasks to whoever removed them, disconnects their Microsoft and calendar accounts, AI account, Orbit Agent and Granola key, and keeps everything they logged.
 
@@ -67,7 +77,7 @@ Removing someone moves their companies, contacts, deals and tasks to whoever rem
 | Integrations | `/settings/integrations` | Microsoft 365 and Teams calls (managed from Capture), your Granola key, Linear, ClickUp, AI accounts and Orbit Agent, enrichment providers |
 | Pipeline | `/settings/pipeline` | Opportunity stages (each board has its own stages, set on the board) |
 | Tags and lifecycles | `/settings/tags` | Rename, merge, and delete tags and custom lifecycles |
-| API and webhooks | `/settings/api` | REST and MCP addresses, how to issue agent tokens, webhooks and recent deliveries |
+| API and webhooks | `/settings/api` | Your mail in Claude (personal MCP tokens), REST and MCP addresses, how to issue agent tokens, webhooks and recent deliveries |
 
 Rarely used parts (token instructions, recent webhook deliveries, watched ClickUp lists, and similar) are collapsed until you open them. Old links keep working: `/settings#calendars`, `#pipeline`, `#tags`, `#webhooks`, `#clickup` and the rest open the matching page, and `#meeting-link` scrolls to it on General.
 
@@ -85,9 +95,9 @@ Set `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, and the redirect URI regis
 
 ### Mail mirror
 
-Orbit keeps its own copy of every connected mailbox: the Capture account and each extra Microsoft account with Add mail (Settings › Calendars). It reads every folder except Junk and Outbox, including Sent, Drafts, Archive, Deleted Items and your own folders, with the full message, and fills in the whole history, newest first. Microsoft's change tracking then keeps each folder up to date: new mail, read and flag changes, moves and deletions. Capture shows how far each account has got. The mail is private to you, and the assistant can search all of it (`search_email`) and read whole threads (`get_email_thread`).
+Orbit keeps its own copy of every connected mailbox: the Capture account and each extra Microsoft account with Add mail (Settings › Calendars). It reads every folder except Junk and Outbox, including Sent, Drafts, Archive, Deleted Items and your own folders, with the full message, and fills in the whole history, newest first. Microsoft's change tracking then keeps each folder up to date: new mail, read and flag changes, moves and deletions. Capture shows how far each account has got. The mail is private to you, and the assistant can search all of it (`search_email`), read whole threads (`get_email_thread`) and check how far each mailbox has synced (`get_mail_sync_status`).
 
-The history fills in through `/api/cron/mail` (up to four minutes a run), plus a short catch-up for new mail on every page load and in the scheduled sync. Run `/api/cron/mail` every couple of minutes until the history is in. The backfill stops when the database reaches `MAIL_STORAGE_LIMIT_MB` (400 by default); new mail keeps coming in until `MAIL_HARD_STOP_MB` (472 by default), where all mail sync stops and Capture says so. Together they keep a Free Supabase project under its 500 MB read-only limit. On a Pro project, raise it, for example to 50000.
+The history fills in through `/api/cron/mail` (up to four minutes a run, every five minutes in production; see Scheduling), plus a short catch-up for new mail on every page load and in the scheduled sync. The backfill stops when the database reaches `MAIL_STORAGE_LIMIT_MB` (400 by default); new mail keeps coming in until `MAIL_HARD_STOP_MB` (472 by default), where all mail sync stops and Capture says so. Together they keep a Free Supabase project under its 500 MB read-only limit. On a Pro project, raise it, for example to 50000.
 
 ### Mail
 
@@ -117,7 +127,7 @@ Send is instant: the email closes, "Sent" shows with Undo (or `Z`) for ten secon
 
 `H` (Remind me), the clock in the reading pane, or swiping a conversation right on a phone, asks when you want it back: later today, this evening, tomorrow, this weekend, next week or a date and time. Orbit moves the conversation to a Snoozed folder in that Outlook mailbox (made on first use), and at that time moves it back to the inbox, unread, at the top with a Reminder tag. Snoozed lists what is waiting and when it comes back; `E` there returns a conversation now.
 
-The clock next to Send is Send later: the email stays a draft in Outlook and goes out at the chosen time, listed under Scheduled, where opening it lets you edit it, Unschedule it or Send now. The bell next to Send is Remind me if no reply (1, 2 or 3 days, or a week): if nobody but you has written in the conversation by then, it comes back to the top of the inbox tagged No reply, with a notification. Scheduled sends, snoozes and reminders run from `/api/cron/mail-due` (add a one-minute pg_cron job for it), the five-minute mail cron, and Mail's own minute check while it is open.
+The clock next to Send is Send later: the email stays a draft in Outlook and goes out at the chosen time, listed under Scheduled, where opening it lets you edit it, Unschedule it or Send now. The bell next to Send is Remind me if no reply (1, 2 or 3 days, or a week): if nobody but you has written in the conversation by then, it comes back to the top of the inbox tagged No reply, with a notification. Scheduled sends, snoozes and reminders run from the one-minute `/api/cron/mail-due` job, the five-minute `/api/cron/mail` job (see Scheduling), and Mail's own minute check while it is open.
 
 ### AI in Mail
 
@@ -135,7 +145,7 @@ Settings › Templates and signatures › Send from other addresses adds an addr
 
 Orbit reads new email in Important and, when a real person is waiting on you, gets a reply ready before you open it. The conversation shows a sparkle in the list and Orbit has a reply ready under the latest email: Edit and send opens it in the reply box, Dismiss hides it. Replies are written in your voice from your recent sent mail, use what the CRM and recent call notes say about the people, and leave [square brackets] for anything you must fill in. When you edit a prepared reply before sending, Orbit keeps the difference and learns from it for the next ones. Nothing is ever sent without you pressing Send, and the instructions in an email are never followed.
 
-When you send an email that asks something, Orbit sets a No reply reminder for you (3 working days by default; weekends don't count, and it lands in working hours). The conversation shows when Orbit will remind you, with Don't remind me. If nobody replies, the conversation comes back to the top of the inbox with a follow-up already written. Both live in Settings › Templates and signatures › Prepared replies and reminders, where you can turn prepared replies off or change or stop the reminders. They run after mail syncs (straight away when Outlook reports new mail, and every five minutes), look back 48 hours, and stop at 60 prepared emails a day.
+When you send an email that asks something, Orbit sets a No reply reminder for you (3 working days by default; weekends don't count, and it lands in working hours). The conversation shows when Orbit will remind you, with Don't remind me. If nobody replies, the conversation comes back to the top of the inbox with a follow-up already written. Both live in Settings › Templates and signatures › Prepared replies and reminders, where you can turn prepared replies off or change or stop the reminders. They run after mail syncs (straight away when Outlook reports new mail, and after each user's sync in the five-minute `/api/cron/mail` job), look back 48 hours, and stop at 60 prepared emails a day.
 
 When someone asks to meet, the prepared reply offers three free times on different days from your calendars (inside your booking page hours, or 9:00 to 17:30 on weekdays, at least four hours ahead, for your booking page's meeting length), and your booking link when the page is on. The times are checked against your calendar again when you open the conversation and when you press Edit and send, and replaced if any has filled up.
 
@@ -194,7 +204,7 @@ Domain: the page lives on Orbit's own domain, at `SITE_URL/book/<link>`. To give
 
 The Calendar page shows a day or week (London time) across every connected calendar, with a checkbox per calendar to show or hide it. On a phone it shows the selected day as a list. Click an event for its time, calendar, location, organiser and attendees (each linked to their contact, or with Create contact), Join, Open in Outlook (Open event for a calendar link's event that has its own URL), and Granola notes when a Granola meeting overlaps it.
 
-Your main calendars come from the Microsoft account connected in Capture; nothing needs reconnecting. To add calendars from other Microsoft accounts (another work tenant, or a personal Outlook.com account), open Settings, Calendars, and choose Connect another Microsoft account. That account only grants `User.Read` and `Calendars.Read` (plus `openid` and `offline_access`), never mail, until you choose Add mail on it: Microsoft then asks for `Mail.Send` and `Mail.ReadWrite` too, and the account appears in a From menu on Send email (contacts and companies) and bulk email. The main mailbox stays the default sender; the timeline records which address each email came from, and the assistant can send from any allowed address (`list_email_senders`, `send_email` with `from`). Replies to those accounts aren't read, since only the main mailbox syncs mail. It reuses the same redirect URI, so there is nothing new to register. Settings lists every account with its calendars: Show controls the Calendar page, and Use for CRM decides which calendars feed the Meetings cards and People you've met (only the main account's default calendar is on at first). Disconnect removes an extra account with its calendars and events.
+Your main calendars come from the Microsoft account connected in Capture; nothing needs reconnecting. To add calendars from other Microsoft accounts (another work tenant, or a personal Outlook.com account), open Settings, Calendars, and choose Connect another Microsoft account. That account only grants `User.Read` and `Calendars.Read` (plus `openid` and `offline_access`), never mail, until you choose Add mail on it: Microsoft then asks for `Mail.Send` and `Mail.ReadWrite` too, and the account appears in a From menu on Send email (contacts and companies) and bulk email. The main mailbox stays the default sender; the timeline records which address each email came from, and the assistant can send from any allowed address (`list_email_senders`, `send_email` with `from`). Once Add mail is on, Orbit also mirrors that account's mail (see Mail mirror), so replies to it show in Mail. It reuses the same redirect URI, so there is nothing new to register. Settings lists every account with its calendars: Show controls the Calendar page, and Use for CRM decides which calendars feed the Meetings cards and People you've met (only the main account's default calendar is on at first). Disconnect removes an extra account with its calendars and events.
 
 Accounts outside the Entra app's own tenant only work when the app allows them:
 
@@ -249,7 +259,7 @@ Environment:
 | ---------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `GRANOLA_API_KEY`      | Granola personal API key (`grn_…`, Business plan). Leave empty to turn Granola off.                                     |
 | `GRANOLA_API_BASE_URL` | Optional. Overrides the Granola API base URL (default `https://public-api.granola.ai`).                                  |
-| `CRON_SECRET`          | Shared secret for `/api/cron/sync`. The scheduler sends `Authorization: Bearer <CRON_SECRET>`. Without it the route returns 503. |
+| `CRON_SECRET`          | Shared secret for `/api/cron/sync` (and the other cron routes, see Environment variables). The scheduler sends `Authorization: Bearer <CRON_SECRET>`. Without it the route returns 503. |
 | `SITE_URL` | Production origin, for example `https://orbit.geteclipse.co`. Teams subscriptions are only created when it is set and uses https, and the Granola webhook is registered on it. |
 
 ### Granola
@@ -285,11 +295,11 @@ From Orbit to ClickUp: the add-task forms on a company page and on Tasks have Ad
 
 From ClickUp to Orbit: a new task in a watched list becomes an Orbit task, owned by the workspace member whose email matches its first ClickUp assignee (otherwise the token's owner), when Orbit can tell who it is for, checked in this order: the Orbit or CRM field holds an Orbit record link, a contact's email, or a company's domain; the description holds an Orbit record link; the description holds a contact's email (your own and other members' addresses are skipped). Tasks Orbit cannot place are left alone. Linked tasks keep their title, due date, and done state in step; when the same field changed on both sides, the later edit wins. Deleting the task in ClickUp archives the Orbit task.
 
-Instant sync registers one ClickUp webhook for task created, updated, deleted, status, due date, and moved events. It covers a single list or space when everything you chose lives there, otherwise the whole workspace, and Orbit ignores tasks outside your lists. The route checks `X-Signature` (HMAC SHA-256 of the body with the webhook's secret, stored encrypted) before doing anything else, ignores deliveries it has already seen and events more than a day old, and answers straight away; the task is fetched afterwards. Changing the lists in Settings moves the webhook to match.
+Instant sync registers one ClickUp webhook, pointing at `/api/clickup/webhook`, for task created, updated, deleted, status, due date, and moved events. It covers a single list or space when everything you chose lives there, otherwise the whole workspace, and Orbit ignores tasks outside your lists. The route checks `X-Signature` (HMAC SHA-256 of the body with the webhook's secret, stored encrypted) before doing anything else, ignores deliveries it has already seen and events more than a day old, and answers straight away; the task is fetched afterwards. Changing the lists in Settings moves the webhook to match.
 
 ### Scheduling
 
-`GET` or `POST /api/cron/sync` with `Authorization: Bearer <CRON_SECRET>` runs, for each workspace with a connected mailbox, extra calendar account or calendar link, Granola, or ClickUp: mail sync, Teams call sync, calendar sync (every connected account and calendar link; links sync even without the Microsoft app), Teams transcript sync and subscription upkeep, Granola sync, ClickUp sync (watched lists since the last sync less five minutes, then pending and failed pushes), and pending summaries. Each step runs on its own, so one failing does not stop the rest, and the run stops starting new steps after about 50 seconds. Mail sync only starts with at least 15 seconds left, and model calls, Graph, Granola and ClickUp requests are cut short so the run fits. It then removes unsent email attachments older than a day, judges the health of one call summarised before health existed (up to 12 seconds), returns a JSON report of counts and errors per mailbox owner, and runs due workflows for up to 8 seconds. CRM pages also sync and run workflows in the background after they load. `GET` or `POST /api/cron/workflows` with the same header runs only workflows, for up to 50 seconds, if you want a tighter schedule for them.
+`GET` or `POST /api/cron/sync` with `Authorization: Bearer <CRON_SECRET>` runs, for each workspace with a connected mailbox, extra calendar account or calendar link, Granola, or ClickUp: mail sync (filing for Capture), a 15-second new-mail catch-up of the Mail mirror, Teams call sync, calendar sync (every connected account and calendar link; links sync even without the Microsoft app), Teams transcript sync and subscription upkeep, Granola sync, ClickUp sync (watched lists since the last sync less five minutes, then pending and failed pushes), and pending summaries. Each step runs on its own, so one failing does not stop the rest, and the run stops starting new steps after about 50 seconds. Mail sync only starts with at least 15 seconds left, and model calls, Graph, Granola and ClickUp requests are cut short so the run fits. It then retries due webhook deliveries, removes unsent email attachments older than a day, judges the health of one call summarised before health existed (up to 12 seconds), runs due workflows for up to 8 seconds, and returns a JSON report of counts and errors per mailbox owner. CRM pages also sync and run workflows in the background after they load. `GET` or `POST /api/cron/workflows` with the same header runs only workflows, for up to 50 seconds, if you want a tighter schedule for them.
 
 `vercel.json` has a daily Vercel cron as a backstop (Hobby plans allow one run a day; Vercel sends `CRON_SECRET` as the bearer token). For every 10 minutes, schedule it from Supabase with `pg_cron` and `pg_net`. Run this in the SQL editor, replacing `<SITE_URL>` with Orbit's address and `<CRON_SECRET>` with the value set on Vercel (production already has this job, named `orbit-sync`):
 
@@ -315,6 +325,13 @@ select cron.schedule(
 ```
 
 Check runs with `select * from cron.job_run_details order by start_time desc limit 10;` and responses with `select * from net._http_response order by created desc limit 10;`. Stop it with `select cron.unschedule('orbit-sync');`. Running `cron.schedule` again with the same name replaces the job, which is how to rotate the secret.
+
+Mail needs two more jobs, made the same way with their own name, schedule and path (production has both):
+
+| Job | Schedule | Path | What it does |
+| --- | --- | --- | --- |
+| `orbit-mail` | `*/5 * * * *` (every five minutes) | `/api/cron/mail` | Syncs every connected mailbox into the Mail mirror (backfill included, up to four minutes a run), then for each user sends due mail and prepares replies and reminders (`prepareMail`). |
+| `orbit-mail-due` | `* * * * *` (every minute) | `/api/cron/mail-due` | Sends scheduled emails, brings snoozed conversations back, raises No reply reminders and sends meeting reminders. |
 
 ## Contact enrichment
 
@@ -391,6 +408,12 @@ The Contacts list (`/contacts`) and the Companies list (`/`) keep their sort and
 
 Name, company, domain and owner sort A to Z; updated, created, interaction and strength sort newest first. Records without a company, domain, owner or interaction go last, except `strength` in ascending order (Weakest connection), which puts never-contacted companies first. Ties are sorted by name. Click a column header to sort and again to reverse; on phones a Sort menu replaces the headers. Filter (F) sets each field to Any, Has or No. `GET /api/v1/contacts` and `GET /api/v1/companies` accept the same parameters (use `limit` and `offset` instead of `page`).
 
+## Tasks
+
+The Tasks page (`/tasks`, `G` then `T`; `/actions` redirects there) opens on All: every open task, overdue first and undated last. The task pad at the top turns a line such as "Call Jane Monday 3pm, remind me 1 hour before" into a task: the due date and reminder are highlighted as you type, `@` links a person or company, and companies and contacts named in the text are offered as links. When the wording about time is unclear and `LLM_API_KEY` is set, the model reads the title, due time and reminder instead. The same pad is on a company page and in Quick add (`Q`).
+
+A task with a due time can have a reminder: at the due time, 5, 10, 15 or 30 minutes, 1 or 2 hours, 24 hours, 2 days or a week before. While Orbit is open, it checks every minute and shows an alert with Open tasks and Dismiss, plus a browser notification once you choose Turn on browser alerts. Reminders cover tasks you own and unowned ones.
+
 ## Activity pad
 
 The activity pad logs a call, email, meeting or note from a line of text, such as "Called @Jane, wants pricing by Friday". Type `@` to tag a person or company; every activity needs one, except where the pad is already tied to a record. Press Enter to save. It is at the top of the Activities page (C then A opens it), in a contact's and a company's activity (tied to that record), and on a board card's panel (tied to the card's company).
@@ -422,6 +445,14 @@ On the Contacts and Companies lists, a checkbox appears when you point at a row.
 
 Each record is handled on its own; when some fail, the notice says how many and gives the first reason. One action handles up to 100 records.
 
+## Quiet
+
+The Quiet page (`/quiet`, `G` then `Q`) lists up to 100 companies with no interaction in the last 21 days, or none at all, with when you were last in touch and how many open tasks each has.
+
+## Keyboard shortcuts and the command palette
+
+`⌘ K` (or `⌘ /`) opens the command palette: search companies, people and opportunities, go to a page or a Settings section, create a record, or run a command for the current page. `?` lists every shortcut. `G` then a letter goes to a page (`M` Mail, `O` Companies, `C` Contacts, `P` Opportunities, `T` Tasks, `I` Capture, `L` Calendar, `A` Activities, `Q` Quiet, `S` Settings), and `C` then a letter creates something (`T` task, `C` contact, `O` company, `P` opportunity, `M` email, `E` meeting invite, `A` activity).
+
 ## Assistant
 
 Every CRM page has an "Ask Orbit anything" bar at the bottom. Click it or press `O` to open the assistant; `Esc` minimises it. It answers from Orbit's data using tools, and proposes changes for you to approve. It works as you, with your role's permissions and the same row-level security as the app.
@@ -451,7 +482,7 @@ Replies are markdown, with links to the records they mention. Copy copies a repl
 
 | Read (run straight away) | Actions (need your approval) |
 | --- | --- |
-| `get_overview`, `search_records`, `list_companies`, `get_company`, `list_contacts`, `get_contact`, `list_tasks`, `get_pipeline`, `list_boards`, `get_board`, `list_workflows`, `get_workflow`, `get_workflow_run`, `list_workflow_approvals`, `test_workflow`, `list_opportunities`, `list_activities`, `get_call_transcript`, `list_calendar_events`, `get_inbox`, `list_quiet_relationships`, `list_tags`, `list_lifecycles`, `list_team_members`, `list_email_templates`, `list_email_senders`, `get_settings`, `linear_search_issues`, `linear_get_issue` | `create_task`, `update_task`, `complete_task`, `log_activity`, `create_company`, `update_company`, `update_companies`, `create_contact`, `update_contact`, `update_contacts`, `create_opportunity`, `add_to_board`, `create_board`, `update_board`, `set_board_stages`, `delete_board`, `move_card`, `remove_from_board`, `create_workflow`, `update_workflow`, `set_workflow_status`, `share_workflow`, `delete_workflow`, `run_workflow`, `decide_workflow_approval`, `update_opportunity`, `tag_records`, `send_email`, `create_meeting_invite`, `linear_create_issue`, `linear_comment`, `linear_update_issue` |
+| `get_overview`, `search_records`, `list_companies`, `get_company`, `list_contacts`, `get_contact`, `list_tasks`, `get_pipeline`, `list_boards`, `get_board`, `list_workflows`, `get_workflow`, `get_workflow_run`, `list_workflow_approvals`, `test_workflow`, `list_opportunities`, `list_activities`, `get_call_transcript`, `list_calendar_events`, `get_inbox`, `search_email`, `get_email_thread`, `get_mail_sync_status`, `list_quiet_relationships`, `list_tags`, `list_lifecycles`, `list_team_members`, `list_email_templates`, `list_email_senders`, `get_settings`, `linear_search_issues`, `linear_get_issue` | `create_task`, `update_task`, `complete_task`, `log_activity`, `create_company`, `update_company`, `update_companies`, `create_contact`, `update_contact`, `update_contacts`, `create_opportunity`, `add_to_board`, `create_board`, `update_board`, `set_board_stages`, `delete_board`, `move_card`, `remove_from_board`, `create_workflow`, `update_workflow`, `set_workflow_status`, `share_workflow`, `delete_workflow`, `run_workflow`, `decide_workflow_approval`, `update_opportunity`, `tag_records`, `send_email`, `create_meeting_invite`, `linear_create_issue`, `linear_comment`, `linear_update_issue` |
 
 `update_companies` and `update_contacts` make the same change to up to 100 records in one call. `send_email` sends from the main mailbox, or from another address the user can send from when given `from`, with that address's signature. `create_meeting_invite` goes through the same path as Meeting invites. `create_task` goes to the default ClickUp list unless told not to. `set_board_stages` takes a board's full stage list in order (existing stages by id, new ones without, left-out ones removed once they have no cards); without a board id it changes the Opportunities stages and keeps their probabilities unless given new ones. `create_workflow` and `update_workflow` take a template key or shared workflow id, or a definition as nested `steps` (`then`/`else` on If, `body` on For each item) or as `nodes` and `edges`; it is laid out on the canvas and checked like a saved one. `test_workflow` is a read because test runs only report what actions would do. Writes are recorded with source `assistant`.
 
@@ -514,6 +545,8 @@ The command ends with `--install`, which sets Orbit Agent up as a background ser
 | `--pair CODE` | Pair this Mac with a code from Settings. Without a saved pairing and without `--pair`, it asks for the code. |
 | `--url URL` | Orbit address. Default `https://orbit.geteclipse.co`. |
 | `--name NAME` | How the Mac appears in Orbit. Default: the computer's host name. |
+| `--install` | Set Orbit Agent up as a background service (LaunchAgent) and start it. |
+| `--uninstall` | Stop the background service and remove it. |
 | `--logout` | Forget this Mac's pairing. |
 | `--help`, `--version` | Show help or the version. |
 
@@ -593,6 +626,10 @@ Set `LINEAR_API_KEY` to a Linear personal API key (Linear, Settings, Security an
 
 The bell shows workflow updates (approvals waiting, failed runs, Notify someone steps) above your due tasks. Opening it marks the updates read. The Workflows item in the side menu shows how many approvals are waiting for you.
 
+## Search engines
+
+`robots.txt` disallows every path and the sitemap is empty, so search engines don't index Orbit. `/llms.txt` is public and lists Orbit's name, description and the Companies page.
+
 ## Environment variables
 
 Every variable Orbit reads. `.env.example` lists them with comments (aliases such as `SUPABASE_SECRET_KEY` and `NEXT_PUBLIC_SITE_URL` are noted here).
@@ -610,7 +647,7 @@ Every variable Orbit reads. `.env.example` lists them with comments (aliases suc
 | `MAIL_HARD_STOP_MB` | Mail mirror | Optional. The database size at which all mail sync stops, new mail included (default 18% above `MAIL_STORAGE_LIMIT_MB`, so 472 on the defaults). |
 | `NEXT_PUBLIC_TIMEZONE` | Optional | Default `Europe/London`. |
 | `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, `MICROSOFT_TENANT`, `MICROSOFT_REDIRECT_URI` | Mail, Capture, calendar, invites, Teams | See Microsoft inbox. |
-| `LLM_API_KEY`, `LLM_API_BASE_URL`, `LLM_MODEL` | Assistant, call summaries, activity pad tidy, workflow AI steps | Default gateway `https://api.llmapi.ai/v1`, default model `claude-haiku-5-5` (the assistant and workflow steps pick their own). |
+| `LLM_API_KEY`, `LLM_API_BASE_URL`, `LLM_MODEL` | Assistant, call summaries, Mail AI (summaries, prepared replies, Write with AI, Ask, invites from a thread), activity and task pads, workflow AI steps | Default gateway `https://api.llmapi.ai/v1`, default model `claude-haiku-5-5` (the assistant and workflow steps pick their own). |
 | `GRANOLA_API_KEY`, `GRANOLA_API_BASE_URL` | Granola for the key's owner | Others connect their own key in Settings. |
 | `CLICKUP_API_TOKEN`, `CLICKUP_API_BASE_URL` | ClickUp | |
 | `LINEAR_API_KEY`, `LINEAR_TEAM_KEY`, `LINEAR_API_URL` | Linear | Team key default `CNT`. |
@@ -639,6 +676,7 @@ API: `docs/api.md`. MCP: `docs/mcp.md`. Schema and tenancy: `docs/architecture.m
 | ---------------------- | ---------------------------------------------------------- |
 | `npm run dev`          | Next.js dev server                                         |
 | `npm run build`        | Production build                                           |
+| `npm start`            | Serve the production build                                 |
 | `npm run lint`         | ESLint                                                     |
 | `npm test`             | Domain, API, and MCP tests against the `crm_test` database |
 | `npm run db:setup`     | Apply schema and seed a local user                         |

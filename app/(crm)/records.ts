@@ -1,31 +1,20 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { headers } from "next/headers";
+
 import { redirect } from "next/navigation";
 import { after } from "next/server";
 import { getUserActor } from "@/lib/auth/user";
-import {
-  createActivity,
-  logActivity,
-  type LoggedActivityType,
-} from "@/lib/crm/activities";
+import { logActivity, type LoggedActivityType } from "@/lib/crm/activities";
 import { actionError } from "@/lib/companies";
-import { createTaskWithClickUp, pushClickUpTask } from "@/lib/crm/clickup";
+import { pushClickUpTask } from "@/lib/crm/clickup";
 import { createCompany } from "@/lib/crm/companies";
 import { createContact, getContact, updateContact } from "@/lib/crm/contacts";
 import { createOpportunity, updateOpportunity } from "@/lib/crm/opportunities";
 import { TASKS_PATH } from "@/lib/crm/task-views";
-import { isReminderMinutes } from "@/lib/crm/reminder-options";
-import { completeTask, listDueReminders, updateTask, type DueReminder } from "@/lib/crm/tasks";
-import type {
-  Activity,
-  ActivityType,
-  Contact,
-  Opportunity,
-  OpportunityStatus,
-  TaskPriority,
-} from "@/lib/crm/types";
+
+import { completeTask, listDueReminders, type DueReminder } from "@/lib/crm/tasks";
+import type { Activity, Contact, Opportunity, OpportunityStatus } from "@/lib/crm/types";
 import { clickupToken } from "@/lib/clickup";
 import { revalidateRecordPages } from "@/lib/revalidate";
 
@@ -50,21 +39,8 @@ function text(formData: FormData, key: string) {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function reminderField(value: string) {
-  if (value === "" || value === "none") return null;
-  const minutes = Number(value);
-  return isReminderMinutes(minutes) ? minutes : Number.NaN;
-}
-
 function optionalId(value: string) {
   return value && value !== "none" && value !== "unassigned" ? value : null;
-}
-
-async function requestOrigin() {
-  const headerStore = await headers();
-  const host = headerStore.get("x-forwarded-host") ?? headerStore.get("host");
-  if (!host) return null;
-  return `${headerStore.get("x-forwarded-proto") ?? "http"}://${host}`;
 }
 
 function pushLater(user: Parameters<typeof pushClickUpTask>[0], id: string) {
@@ -76,10 +52,6 @@ function pushLater(user: Parameters<typeof pushClickUpTask>[0], id: string) {
       console.error("ClickUp push failed", error);
     }
   });
-}
-
-function clickupWarning(error: string | null) {
-  return error ? `Saved in Orbit, but ClickUp said: ${error} Orbit will try again.` : undefined;
 }
 
 function refresh() {
@@ -168,7 +140,7 @@ export async function saveOpportunityAction(
   }
 }
 
-export type InlineRecord = { id: string; name: string; company?: { id: string; name: string } | null };
+type InlineRecord = { id: string; name: string; company?: { id: string; name: string } | null };
 
 function splitName(value: string) {
   const parts = value.trim().replace(/\s+/g, " ").split(" ");
@@ -265,73 +237,6 @@ export async function moveOpportunityStageAction(
   }
 }
 
-export async function saveActivityAction(
-  _state: RecordActionState,
-  formData: FormData,
-): Promise<RecordActionState> {
-  const user = await requireUser();
-  try {
-    await createActivity(
-      user,
-      {
-        type: (text(formData, "type") || "note") as ActivityType,
-        title: text(formData, "title") || null,
-        body: text(formData, "body") || null,
-        occurredAt: text(formData, "occurredAt") || null,
-        companyId: optionalId(text(formData, "companyId")),
-        contactId: optionalId(text(formData, "contactId")),
-      },
-      { provenance: { operation: "create_activity", source: "web" } },
-    );
-    refresh();
-    return { ok: true };
-  } catch (error) {
-    return actionError(error);
-  }
-}
-
-export async function saveTaskAction(
-  _state: RecordActionState,
-  formData: FormData,
-): Promise<RecordActionState> {
-  const user = await requireUser();
-  const id = text(formData, "id");
-  const due = text(formData, "dueAt");
-  const write = {
-    title: text(formData, "title"),
-    description: text(formData, "description") || null,
-    dueAt: due || null,
-    remindMinutes: formData.has("remindMinutes")
-      ? due
-        ? reminderField(text(formData, "remindMinutes"))
-        : null
-      : undefined,
-    priority: (text(formData, "priority") || "normal") as TaskPriority,
-    companyId: optionalId(text(formData, "companyId")),
-    contactId: optionalId(text(formData, "contactId")),
-  };
-  try {
-    if (id) {
-      await updateTask(user, id, write, {
-        provenance: { operation: "update_task", source: "web" },
-      });
-      pushLater(user, id);
-      refresh();
-      return { ok: true };
-    }
-    const listId =
-      formData.get("clickup") === "on" ? optionalId(text(formData, "clickupListId")) : null;
-    const created = await createTaskWithClickUp(user, write, listId, {
-      origin: await requestOrigin(),
-      provenance: { operation: "create_task", source: "web" },
-    });
-    refresh();
-    return { ok: true, warning: clickupWarning(created.clickupError) };
-  } catch (error) {
-    return actionError(error);
-  }
-}
-
 export async function completeTaskAction(
   id: string,
 ): Promise<RecordActionState> {
@@ -366,36 +271,6 @@ export async function addActivityAction(
     });
     refresh();
     return { ok: true, activity };
-  } catch (error) {
-    return actionError(error);
-  }
-}
-
-export async function addCompanyTaskAction(
-  companyId: string,
-  title: string,
-  dueAt: string,
-  clickupListId: string | null = null,
-  remindMinutes: number | null = null,
-): Promise<RecordActionState> {
-  const user = await requireUser();
-  try {
-    const created = await createTaskWithClickUp(
-      user,
-      {
-        title,
-        companyId,
-        dueAt: dueAt.trim() || null,
-        remindMinutes: dueAt.trim() ? remindMinutes : null,
-      },
-      clickupListId,
-      {
-        origin: await requestOrigin(),
-        provenance: { operation: "create_task", source: "web" },
-      },
-    );
-    refresh();
-    return { ok: true, warning: clickupWarning(created.clickupError) };
   } catch (error) {
     return actionError(error);
   }

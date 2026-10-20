@@ -14,7 +14,7 @@ import ClockIcon from "@/public/assets/images/mail/clock.svg";
 import SparkleIcon from "@/public/assets/images/mail/sparkle.svg";
 import PaperclipIcon from "@/public/assets/images/_common/paperclip.svg";
 
-export type SwipeActions = {
+type SwipeActions = {
   leftLabel: string;
   restore: boolean;
   rightLabel: string | null;

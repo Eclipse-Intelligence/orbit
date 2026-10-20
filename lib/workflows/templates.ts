@@ -1,6 +1,6 @@
 import { autoLayout, type WorkflowDefinition, type WorkflowEdge, type WorkflowNode } from "@/lib/workflows/definition";
 
-export type StarterTemplate = {
+type StarterTemplate = {
   key: string;
   name: string;
   description: string;

@@ -6,7 +6,7 @@ import { assertScope } from "@/lib/crm/scopes";
 import type { UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
 
-export type InviteRole = "member" | "admin";
+type InviteRole = "member" | "admin";
 
 export type TeamMember = {
   id: string;
@@ -27,7 +27,7 @@ export type TeamInvite = {
 
 export type Team = { members: TeamMember[]; invites: TeamInvite[] };
 
-export type InvitePreview = {
+type InvitePreview = {
   inviteId: string;
   workspaceId: string;
   workspaceName: string;
@@ -37,7 +37,7 @@ export type InvitePreview = {
   status: "pending" | "accepted" | "revoked" | "expired";
 };
 
-export function inviteTokenHash(token: string) {
+function inviteTokenHash(token: string) {
   return createHash("sha256").update(token).digest("hex");
 }
 
@@ -54,7 +54,7 @@ function iso(value: Date | string) {
   return new Date(value).toISOString();
 }
 
-export function canManageTeam(actor: UserActor) {
+function canManageTeam(actor: UserActor) {
   return actor.role === "owner" || actor.role === "admin";
 }
 

@@ -51,7 +51,7 @@ function durationLabel(minutes: number) {
   return Number.isInteger(hours) ? `${hours} hour${hours === 1 ? "" : "s"}` : `${hours} hours`;
 }
 
-export function sentMessage(guests: { email: string; name: string | null }[]) {
+function sentMessage(guests: { email: string; name: string | null }[]) {
   const names = guests.map((guest) => guest.name ?? guest.email);
   if (names.length === 0) return "Invite sent";
   if (names.length === 1) return `Invite sent to ${names[0]}`;

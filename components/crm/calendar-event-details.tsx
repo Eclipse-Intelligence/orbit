@@ -50,7 +50,7 @@ export function formatTimeRange(
   item: Pick<CalendarItem, "startsAt" | "endsAt" | "isAllDay">,
 ) {
   if (item.isAllDay) return "All day";
-  return `${formatTime(item.startsAt)} – ${formatTime(item.endsAt)}`;
+  return `${formatTime(item.startsAt)} to ${formatTime(item.endsAt)}`;
 }
 
 function formatDay(iso: string, allDay: boolean) {
@@ -62,17 +62,17 @@ function formatDay(iso: string, allDay: boolean) {
   }).format(new Date(iso));
 }
 
-export function whenLine(item: CalendarItem) {
+function whenLine(item: CalendarItem) {
   if (item.isAllDay) {
     const last = new Date(new Date(item.endsAt).getTime() - 1).toISOString();
     const first = formatDay(item.startsAt, true);
     const end = formatDay(last, true);
-    return first === end ? `${first} · All day` : `${first} – ${end} · All day`;
+    return first === end ? `${first} · All day` : `${first} to ${end} · All day`;
   }
   const first = formatDay(item.startsAt, false);
   const end = formatDay(item.endsAt, false);
   if (first === end) return `${first}, ${formatTimeRange(item)}`;
-  return `${first} ${formatTime(item.startsAt)} – ${end} ${formatTime(item.endsAt)}`;
+  return `${first} ${formatTime(item.startsAt)} to ${end} ${formatTime(item.endsAt)}`;
 }
 
 export function eventTitle(item: Pick<CalendarItem, "subject">) {

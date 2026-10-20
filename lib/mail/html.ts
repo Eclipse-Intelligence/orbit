@@ -9,7 +9,7 @@ const TRACKING_ID = /\/api\/mail\/open\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-
 
 export const TRACKING_PATH = "/api/mail/open/";
 
-export function stripTrackers(html: string) {
+function stripTrackers(html: string) {
   return html.replace(TRACKERS, "");
 }
 
@@ -39,7 +39,7 @@ function linkify(escaped: string) {
   return escaped.replace(/\bhttps?:\/\/[^\s<]+[^\s<.,;:!?)\]'"]/g, (url) => `<a href="${url}">${url}</a>`);
 }
 
-export function textToHtml(text: string) {
+function textToHtml(text: string) {
   return text
     .replace(/\r\n/g, "\n")
     .trim()

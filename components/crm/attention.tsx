@@ -4,7 +4,7 @@ import { createContext, useContext, type ReactNode } from "react";
 import type { Task } from "@/lib/crm/types";
 import type { Notification } from "@/lib/workflows/store";
 
-export type AttentionItem = {
+type AttentionItem = {
   id: string;
   title: string;
   companyName: string | null;

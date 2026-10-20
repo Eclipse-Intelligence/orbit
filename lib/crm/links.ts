@@ -1,7 +1,7 @@
 import type { Db } from "@/lib/db/pool";
 import { CrmError } from "@/lib/crm/errors";
 
-export type LinkRefs = {
+type LinkRefs = {
   companyId: string | null;
   contactId: string | null;
   opportunityId: string | null;

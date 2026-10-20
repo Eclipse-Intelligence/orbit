@@ -40,7 +40,7 @@ export default function Pager({
       ? `${count} ${count === 1 ? noun[0] : noun[1]}`
       : count === 0
         ? `No ${noun[1]} on this page · ${total} total`
-        : `Showing ${start + 1}–${start + count} of ${total} ${noun[1]}`;
+        : `Showing ${start + 1} to ${start + count} of ${total} ${noun[1]}`;
 
   return (
     <div

@@ -16,13 +16,13 @@ const EDGE = 16;
 const UNDO_MS = 10_000;
 const TOAST_MS = 5_000;
 
-export type Toast = { message: string; tone?: "status" | "alert"; action?: { label: string; run: () => void }; duration?: number };
+type Toast = { message: string; tone?: "status" | "alert"; action?: { label: string; run: () => void }; duration?: number };
 
 type ShownToast = Toast & { id: number };
 
 type Outgoing = { payload: Promise<SendPayload>; timer: number; onDelivered?: () => void; onUndone?: () => void };
 
-export type SendMeta = { onDelivered?: () => void; onUndone?: () => void };
+type SendMeta = { onDelivered?: () => void; onUndone?: () => void };
 
 type Card = {
   key: number;

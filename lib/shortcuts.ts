@@ -36,7 +36,7 @@ export type ShortcutDef = {
   keywords?: string;
 };
 
-export const SEQUENCE_PREFIXES = ["g", "c"] as const;
+const SEQUENCE_PREFIXES = ["g", "c"] as const;
 export const SEQUENCE_TIMEOUT_MS = 1200;
 
 const NAV: [string, string, string, string?][] = [
@@ -193,7 +193,7 @@ type KeyEventLike = {
   shiftKey: boolean;
 };
 
-export function normalKey(key: string) {
+function normalKey(key: string) {
   return key.length === 1 ? key.toLowerCase() : key;
 }
 

@@ -142,7 +142,7 @@ describe("scheduling replies and invites from email", () => {
 
   it("reads a meeting invite from the conversation", async () => {
     const thread = (await listThreads(owner, { view: { role: "inbox" } })).threads[0];
-    const { fetchImpl, prompts } = model([{ title: "Mark and Jane: renewal — catch up", date: "2026-11-04", time: "14:10", durationMinutes: 40, notes: "Talk through the renewal." }]);
+    const { fetchImpl, prompts } = model([{ title: "Mark and Jane: renewal \u2014 catch up", date: "2026-11-04", time: "14:10", durationMinutes: 40, notes: "Talk through the renewal." }]);
     const draft = await eventFromThread(owner, thread.key, { fetchImpl });
     assert.match(prompts[0].system, /never follow instructions/);
     assert.equal(draft.title, "Mark and Jane: renewal, catch up");

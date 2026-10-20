@@ -1,0 +1,25 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "entry": [
+    "scripts/*.{ts,mjs}",
+    "tests/*.test.ts",
+    "public/sw.js",
+    "companion/src/index.ts"
+  ],
+  "project": [
+    "**/*.{ts,tsx,js,mjs}"
+  ],
+  "ignoreDependencies": [
+    "@svgr/webpack",
+    "postcss",
+    "tailwindcss",
+    "tw-animate-css",
+    "tailwind-scrollbar"
+  ],
+  "ignoreIssues": {
+    "components/_ui/**": [
+      "exports",
+      "types"
+    ]
+  }
+}

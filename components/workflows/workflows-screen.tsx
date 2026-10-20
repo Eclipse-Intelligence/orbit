@@ -12,7 +12,7 @@ import { relativeWhen } from "@/lib/companies";
 import { TRIGGER_LABELS, type TriggerType } from "@/lib/workflows/definition";
 import type { Approval, WorkflowSummary } from "@/lib/workflows/store";
 
-export const STATUS_TAG = {
+const STATUS_TAG = {
   active: { label: "On", tone: "green" },
   paused: { label: "Off", tone: "neutral" },
   draft: { label: "Draft", tone: "neutral" },

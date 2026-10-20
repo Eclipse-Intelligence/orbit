@@ -18,8 +18,8 @@ import type { Actor, TagKind } from "@/lib/crm/types";
 import { revalidateRecordPages } from "@/lib/revalidate";
 import { SETTINGS_ROOT } from "@/lib/settings-nav";
 
-export type RecordTagsResult = { tags: string[] } | { error: string };
-export type TagChangeResult = TagChangeCount | { error: string };
+type RecordTagsResult = { tags: string[] } | { error: string };
+type TagChangeResult = TagChangeCount | { error: string };
 
 async function requireUser() {
   const user = await getUserActor();

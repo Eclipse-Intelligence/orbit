@@ -147,7 +147,7 @@ export default function CompanyRow({
             {company.domain}
           </a>
         ) : (
-          <span className="text-faint">—</span>
+          <span className="text-faint"><span aria-hidden>·</span><span className="sr-only">None</span></span>
         )}
       </TableCell>
       <TableCell role="cell" className={cn(cellClass("owner"), "text-subtle text-[13px]")}>

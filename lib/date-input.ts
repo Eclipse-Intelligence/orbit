@@ -1,4 +1,4 @@
-export type CalendarDay = { value: string; day: number; inMonth: boolean };
+type CalendarDay = { value: string; day: number; inMonth: boolean };
 
 const DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 const DATE_TIME_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/;

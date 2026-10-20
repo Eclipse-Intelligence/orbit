@@ -1,4 +1,4 @@
-export const LONG_PRESS_MS = 350;
+const LONG_PRESS_MS = 350;
 const MOUSE_SLOP = 4;
 const TOUCH_SLOP = 8;
 

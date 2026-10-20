@@ -13,7 +13,7 @@ const LOOK_AHEAD_DAYS = 14;
 const MIN_NOTICE_MINUTES = 240;
 const OFFERED = 3;
 
-export async function ownBusy(actor: UserActor, from: number, to: number): Promise<BusyInterval[]> {
+async function ownBusy(actor: UserActor, from: number, to: number): Promise<BusyInterval[]> {
   return withActor(actor, async (db) => {
     const result = await db.query<{ starts_at: Date; ends_at: Date }>(
       `select e.starts_at, e.ends_at from crm.calendar_events e
@@ -27,9 +27,9 @@ export async function ownBusy(actor: UserActor, from: number, to: number): Promi
   });
 }
 
-export type SchedulingSetup = { rules: SlotRules; link: string | null };
+type SchedulingSetup = { rules: SlotRules; link: string | null };
 
-export async function schedulingSetup(actor: UserActor): Promise<SchedulingSetup> {
+async function schedulingSetup(actor: UserActor): Promise<SchedulingSetup> {
   const page = await getBookingPage(actor);
   const origin = mailOrigin();
   return {
@@ -83,7 +83,7 @@ function zoneName(timeZone: string) {
   return timeZone === "Europe/London" ? "UK time" : `${timeZone.split("/").pop()?.replace(/_/g, " ")} time`;
 }
 
-export function timesText(slots: number[], rules: SlotRules, link: string | null) {
+function timesText(slots: number[], rules: SlotRules, link: string | null) {
   const when = new Intl.DateTimeFormat("en-GB", {
     weekday: "long",
     day: "numeric",

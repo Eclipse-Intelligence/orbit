@@ -654,7 +654,7 @@ export default function BookingPageSettings({
                         />
                       </div>
                       <span aria-hidden className="text-subtle">
-                        –
+                        to
                       </span>
                       <div className="w-28">
                         <ChoiceSelect

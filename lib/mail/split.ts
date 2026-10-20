@@ -40,7 +40,7 @@ export function splitCase(alias: string, workspaceParam: string) {
   end`;
 }
 
-export function senderKey(value: string) {
+function senderKey(value: string) {
   const text = value.trim().toLowerCase();
   if (text.startsWith("@")) {
     const domain = text.slice(1);

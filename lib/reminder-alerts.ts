@@ -1,7 +1,7 @@
 const FIRED_KEY = "orbit-task-reminders";
 const KEEP_MS = 8 * 24 * 60 * 60 * 1000;
 
-export function notificationsSupported() {
+function notificationsSupported() {
   return typeof window !== "undefined" && "Notification" in window;
 }
 

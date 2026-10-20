@@ -131,7 +131,7 @@ describe("assistant tools", () => {
     assert.match(prompt, /list_tasks/);
     assert.match(prompt, /create_task/);
     assert.match(prompt, /Web search is off/);
-    assert.ok(!/[—–]/.test(prompt.replace(/No em dashes or en dashes/, "")));
+    assert.ok(!/[\u2014\u2013]/.test(prompt.replace(/No em dashes or en dashes/, "")));
   });
 });
 

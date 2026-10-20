@@ -13,7 +13,7 @@ import { shapeFor } from "./schema";
 
 export type Sdk = Pick<typeof AgentSdk, "query" | "createSdkMcpServer" | "tool">;
 
-export type TurnDeps = {
+type TurnDeps = {
   sdk: Sdk;
   callTool: (call: CompanionCall) => Promise<CompanionToolResult>;
   cwd: string;
@@ -22,7 +22,7 @@ export type TurnDeps = {
   onTool?: (name: string) => void;
 };
 
-export const SERVER = "orbit";
+const SERVER = "orbit";
 const PREFIX = `mcp__${SERVER}__`;
 const MAX_TURNS = 40;
 
@@ -46,7 +46,7 @@ export function cleanEnv(env: Record<string, string | undefined>) {
   return copy;
 }
 
-export function turnOptions(request: CompanionRequest, server: Options["mcpServers"], deps: Pick<TurnDeps, "cwd" | "env">, abort: AbortController): Options {
+function turnOptions(request: CompanionRequest, server: Options["mcpServers"], deps: Pick<TurnDeps, "cwd" | "env">, abort: AbortController): Options {
   const web = request.webSearch ? ["WebSearch"] : [];
   return {
     model: request.model,

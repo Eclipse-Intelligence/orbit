@@ -56,14 +56,14 @@ const MAX_LIST_PAGES = 50;
 const STEP_RESERVE_MS = 5_000;
 const WEBHOOK_BUDGET_MS = 50_000;
 
-export const GRANOLA_NOT_CONFIGURED = "Set GRANOLA_API_KEY to import Granola meetings.";
+const GRANOLA_NOT_CONFIGURED = "Set GRANOLA_API_KEY to import Granola meetings.";
 export const GRANOLA_WEBHOOK_UNAVAILABLE =
   "Granola webhooks aren't available for this workspace; Orbit will check every 10 minutes instead.";
 const GRANOLA_NO_WORKSPACE =
   "Orbit could not work out which workspace the Granola notes belong to.";
 const GRANOLA_OTHER_WORKSPACE = "Granola notes are imported into another workspace.";
 
-export type GranolaSyncResult = {
+type GranolaSyncResult = {
   ran: boolean;
   fetched: number;
   filed: number;
@@ -107,7 +107,7 @@ function granolaKey(actor: UserActor): IntegrationKey {
   return { workspaceId: actor.workspaceId, source: "granola", userId: actor.userId };
 }
 
-export function granolaParticipants(note: GranolaNote): Participant[] {
+function granolaParticipants(note: GranolaNote): Participant[] {
   const owner = canonicalEmail(note.owner?.email ?? "");
   const people = new Map<string, Participant>();
   const add = (name: string | null | undefined, email: string | null | undefined) => {
@@ -227,7 +227,7 @@ export async function syncGranolaOnVisit(actor: UserActor) {
   return null;
 }
 
-export async function fileGranolaNote(actor: UserActor, note: GranolaNote): Promise<ImportOutcome> {
+async function fileGranolaNote(actor: UserActor, note: GranolaNote): Promise<ImportOutcome> {
   const participants = granolaParticipants(note);
   const transcript = granolaTranscriptText(note.transcript, note.owner?.name ?? actor.fullName);
   const title = clip(note.title, 500) ?? clip(note.calendar_event?.event_title, 500);
@@ -316,7 +316,7 @@ export async function fileGranolaNote(actor: UserActor, note: GranolaNote): Prom
   });
 }
 
-export async function importGranolaNote(
+async function importGranolaNote(
   actor: UserActor,
   api: GranolaClient,
   noteId: string,
@@ -541,7 +541,7 @@ async function claimReceipt(actor: UserActor, messageId: string) {
   });
 }
 
-export async function receiveGranolaWebhook(
+async function receiveGranolaWebhook(
   headers: Headers,
   body: string,
   options: { now?: number } = {},

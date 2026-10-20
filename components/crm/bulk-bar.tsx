@@ -117,7 +117,7 @@ function failureText(results: { ok: boolean; error?: string }[], verb: string) {
   return ` · ${failed.length} could not be ${verb}${first ? `: ${first}` : "."}`;
 }
 
-export type BulkTagging = {
+type BulkTagging = {
   tags: TagCount[];
   selectedTags: (ids: string[]) => string[];
   add: (ids: string[], tag: string) => Promise<BulkActionResult>;

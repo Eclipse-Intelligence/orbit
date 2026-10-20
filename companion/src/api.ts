@@ -10,7 +10,7 @@ export class ApiError extends Error {
   }
 }
 
-export type Me = { companionId: string; name: string; email: string; workspace: string };
+type Me = { companionId: string; name: string; email: string; workspace: string };
 
 export function createApi(baseUrl: string, token: string | null, fetchImpl: typeof fetch = fetch) {
   async function call<T>(path: string, init: { method?: string; body?: unknown; timeoutMs?: number } = {}): Promise<T> {

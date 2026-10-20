@@ -3,10 +3,12 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   allowedDevOrigins: ["127.0.0.1", "localhost"],
   async redirects() {
-    return [{ source: "/inbox", destination: "/capture", permanent: true }];
+    return [
+      { source: "/inbox", destination: "/capture", permanent: true },
+      { source: "/companies", destination: "/", permanent: false },
+    ];
   },
   images: {
-    // unoptimized: true,
     formats: ["image/avif", "image/webp"],
     qualities: [75, 90],
     remotePatterns: [

@@ -13,7 +13,7 @@ import { Input } from "@/components/_ui/input";
 import type { VariableOption } from "@/lib/workflows/variables";
 import { cn } from "@/lib/utils";
 
-export const textareaClass =
+const textareaClass =
   "flex w-full rounded-lg border border-line-strong bg-secondary px-3 py-2 text-[14px] leading-5 text-foreground outline-none transition-[border-color] duration-150 ease-power3-out placeholder:text-subtle focus-visible:border-ring";
 
 export default function TemplateField({

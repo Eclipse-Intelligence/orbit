@@ -17,10 +17,10 @@ import { granolaApiKey, granolaClient } from "@/lib/granola";
 import { query } from "@/lib/db/pool";
 import { microsoftConfigured } from "@/lib/microsoft/oauth";
 
-export const CRON_BUDGET_MS = 50_000;
+const CRON_BUDGET_MS = 50_000;
 const STEP_MIN_MS = 3_000;
 
-export type CronAuth = "ok" | "unauthorized" | "unconfigured";
+type CronAuth = "ok" | "unauthorized" | "unconfigured";
 
 export type SyncTarget = BackgroundTarget & {
   granola: UserActor | null;
@@ -28,18 +28,18 @@ export type SyncTarget = BackgroundTarget & {
   personalGranola?: boolean;
 };
 
-export type StepContext = { deadline: number; fetchImpl?: typeof fetch };
+type StepContext = { deadline: number; fetchImpl?: typeof fetch };
 
-export type SyncStep = {
+type SyncStep = {
   name: string;
   minMs?: number;
   applies: (target: SyncTarget) => boolean;
   run: (target: SyncTarget, context: StepContext) => Promise<object>;
 };
 
-export type StepReport = { ok: boolean; skipped?: string; error?: string } & Record<string, unknown>;
+type StepReport = { ok: boolean; skipped?: string; error?: string } & Record<string, unknown>;
 
-export type CronReport = {
+type CronReport = {
   startedAt: string;
   durationMs: number;
   errors: number;

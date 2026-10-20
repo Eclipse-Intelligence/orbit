@@ -15,7 +15,7 @@ const ENTITIES: Record<string, string> = {
 };
 
 export const BODY_HTML_MAX = 1_500_000;
-export const BODY_TEXT_MAX = 200_000;
+const BODY_TEXT_MAX = 200_000;
 
 function decode(text: string) {
   return text.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (match, entity: string) => {

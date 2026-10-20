@@ -52,18 +52,18 @@ const CREATE_CLAIM_MS = 2 * 60 * 1000;
 const STEP_RESERVE_MS = 3_000;
 const INLINE_BUDGET_MS = 10_000;
 const WEBHOOK_BUDGET_MS = 50_000;
-export const ECHO_WINDOW_MS = 15_000;
+const ECHO_WINDOW_MS = 15_000;
 const RECEIPT_TTL_SECONDS = 24 * 60 * 60;
 const MAX_WEBHOOK_BYTES = 256 * 1024;
 const MAX_HISTORY_ITEMS = 50;
 const LINK_FIELD_NAMES = ["orbit", "crm"];
 const LINK_FIELD_TYPES = ["short_text", "text", "url", "email"];
 
-export const CLICKUP_NOT_CONFIGURED =
+const CLICKUP_NOT_CONFIGURED =
   "Set CLICKUP_API_TOKEN to sync tasks with ClickUp.";
 const CLICKUP_NOT_SET_UP = "Choose a ClickUp workspace and lists in Settings › Integrations first.";
 
-export type ClickUpSyncResult = {
+type ClickUpSyncResult = {
   ran: boolean;
   fetched: number;
   imported: number;
@@ -93,7 +93,7 @@ export type ClickUpSettingsView = {
   lastError: string | null;
 };
 
-export type ClickUpOptions = {
+type ClickUpOptions = {
   fetchImpl?: typeof fetch;
   sleep?: (ms: number) => Promise<void>;
   deadline?: number;
@@ -178,7 +178,7 @@ type Session = {
 
 type Schedule = (task: () => Promise<unknown>) => void;
 
-export type ClickUpEvent = {
+type ClickUpEvent = {
   event: string;
   taskId: string;
   newestAt: number | null;
@@ -297,11 +297,11 @@ function cached<T>(map: Map<string, Promise<T>>, key: string, load: () => Promis
   return value;
 }
 
-export function isDoneStatus(type: string | null | undefined) {
+function isDoneStatus(type: string | null | undefined) {
   return type === "done" || type === "closed";
 }
 
-export function statusFor(list: ClickUpListInfo, done: boolean) {
+function statusFor(list: ClickUpListInfo, done: boolean) {
   const ordered = [...list.statuses].sort((a, b) => a.orderindex - b.orderindex);
   if (done) return ordered.find((status) => isDoneStatus(status.type))?.status ?? null;
   return (
@@ -374,7 +374,7 @@ function recordLink(origin: string | null, row: Pick<SyncRow, "contact_id" | "co
   return null;
 }
 
-export function clickupDescription(origin: string | null, row: SyncRow) {
+function clickupDescription(origin: string | null, row: SyncRow) {
   const lines: string[] = [];
   if (row.description?.trim()) lines.push(row.description.trim(), "");
   if (row.contact_id && row.contact_name) lines.push(`Contact: ${row.contact_name}`);
@@ -1253,7 +1253,7 @@ async function claimReceipt(actor: UserActor, messageId: string) {
   });
 }
 
-export async function receiveClickUpWebhook(
+async function receiveClickUpWebhook(
   headers: Headers,
   body: string,
   options: { now?: number } = {},

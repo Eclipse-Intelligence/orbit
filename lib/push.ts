@@ -6,7 +6,7 @@ import { decryptSecret, encryptSecret } from "@/lib/crypto/secret";
 import { query } from "@/lib/db/pool";
 import { siteOrigin } from "@/lib/site-url";
 
-export type PushMessage = { title: string; body: string; url: string; tag?: string; badge?: number | null };
+type PushMessage = { title: string; body: string; url: string; tag?: string; badge?: number | null };
 
 export type PushSender = (
   subscription: { endpoint: string; keys: { p256dh: string; auth: string } },
@@ -77,7 +77,7 @@ export async function removePushSubscription(actor: UserActor, endpoint: string)
   await withActor(actor, (db) => db.query("delete from crm.push_subscriptions where user_id = $1 and endpoint = $2", [actor.userId, endpoint]));
 }
 
-export type PushFailure = { status: number | null; reason: string };
+type PushFailure = { status: number | null; reason: string };
 
 function failureReason(error: unknown): PushFailure {
   const status = (error as { statusCode?: number }).statusCode ?? null;

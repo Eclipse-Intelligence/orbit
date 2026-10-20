@@ -109,7 +109,7 @@ describe("prepared replies and automatic reminders", () => {
   });
 
   it("prepares a reply for a person waiting on you, and only once", async () => {
-    const { fetchImpl, prompts } = model([{ needsReply: true, body: "Hi Jane — I'll send the terms by Thursday.\n\nMark" }]);
+    const { fetchImpl, prompts } = model([{ needsReply: true, body: "Hi Jane \u2014 I'll send the terms by Thursday.\n\nMark" }]);
     const report = await prepareMail(owner, { deadline: soon(), fetchImpl });
     assert.equal(report.prepared, 1);
     assert.equal(prompts.length, 1);

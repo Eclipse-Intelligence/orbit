@@ -3,15 +3,15 @@ const TIMEOUT_MS = 15_000;
 const TEAM_TTL_MS = 5 * 60 * 1000;
 
 export const LINEAR_PRIORITIES = ["urgent", "high", "medium", "low"] as const;
-export type LinearPriority = (typeof LINEAR_PRIORITIES)[number];
+type LinearPriority = (typeof LINEAR_PRIORITIES)[number];
 
 const PRIORITY_VALUE: Record<LinearPriority, number> = { urgent: 1, high: 2, medium: 3, low: 4 };
 
-export type LinearOptions = { fetchImpl?: typeof fetch; url?: string; apiKey?: string | null; teamKey?: string };
+type LinearOptions = { fetchImpl?: typeof fetch; url?: string; apiKey?: string | null; teamKey?: string };
 
-export type LinearState = { id: string; name: string; type: string };
+type LinearState = { id: string; name: string; type: string };
 
-export type LinearTeam = {
+type LinearTeam = {
   id: string;
   key: string;
   name: string;
@@ -19,7 +19,7 @@ export type LinearTeam = {
   labels: { id: string; name: string }[];
 };
 
-export type LinearIssue = {
+type LinearIssue = {
   id: string;
   identifier: string;
   title: string;
@@ -34,7 +34,7 @@ export type LinearIssue = {
   updatedAt: string;
 };
 
-export type LinearIssueDetail = LinearIssue & {
+type LinearIssueDetail = LinearIssue & {
   description: string | null;
   comments: { author: string | null; body: string; createdAt: string }[];
 };
@@ -65,7 +65,7 @@ const ISSUE_FIELDS = `
 
 let teamCache: { key: string; at: number; team: LinearTeam } | null = null;
 
-export function linearApiKey() {
+function linearApiKey() {
   return process.env.LINEAR_API_KEY?.trim() || null;
 }
 
@@ -122,7 +122,7 @@ function mapIssue(node: IssueNode): LinearIssue {
   };
 }
 
-export async function getLinearTeam(options: LinearOptions = {}): Promise<LinearTeam> {
+async function getLinearTeam(options: LinearOptions = {}): Promise<LinearTeam> {
   const key = options.teamKey ?? linearTeamKey();
   if (teamCache && teamCache.key === key && Date.now() - teamCache.at < TEAM_TTL_MS && !options.fetchImpl) return teamCache.team;
   const data = await linearRequest<{

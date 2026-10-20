@@ -7,12 +7,6 @@ export function personName(address: MailAddress | null | undefined) {
   return address.name?.trim() || address.address;
 }
 
-export function firstName(address: MailAddress | null | undefined) {
-  const name = personName(address);
-  if (name.includes("@")) return name.split("@")[0];
-  return name.split(/\s+/)[0] ?? name;
-}
-
 export function mailListWhen(iso: string | null, now: number) {
   if (!iso) return "";
   const at = new Date(iso);

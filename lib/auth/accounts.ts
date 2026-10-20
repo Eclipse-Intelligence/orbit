@@ -7,7 +7,7 @@ import { verifyLocalPassword } from "@/lib/auth/user";
 import { CrmError, isPgError } from "@/lib/crm/errors";
 import { query } from "@/lib/db/pool";
 
-export type JoinedAccount = { userId: string; signedIn: boolean; needsConfirmation: boolean };
+type JoinedAccount = { userId: string; signedIn: boolean; needsConfirmation: boolean };
 
 const EXISTING = "You already have an Orbit login with this email. Enter that password to join.";
 

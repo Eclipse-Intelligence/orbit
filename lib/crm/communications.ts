@@ -51,7 +51,7 @@ export function isRecent(at: string | null | undefined) {
   return age <= RECENT_MS && age >= -5 * 60 * 1000;
 }
 
-export type CommunicationInput = {
+type CommunicationInput = {
   kind: "email" | "meeting";
   title?: string | null;
   body?: string | null;
@@ -61,7 +61,7 @@ export type CommunicationInput = {
   contactId?: string | null;
 };
 
-export type CommunicationResult = {
+type CommunicationResult = {
   activity: Activity;
   company: Company | null;
   contacts: Contact[];

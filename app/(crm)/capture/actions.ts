@@ -120,7 +120,7 @@ export async function syncTranscriptsAction() {
   redirect("/capture");
 }
 
-export type ConversationActionState = { error?: string; ok?: boolean };
+type ConversationActionState = { error?: string; ok?: boolean };
 
 export async function fileConversationAction(
   importId: string,
@@ -144,7 +144,7 @@ export async function fileConversationAction(
   return { ok: true };
 }
 
-export type CreateAndFileState = {
+type CreateAndFileState = {
   error?: string;
   ok?: boolean;
   contactId?: string;

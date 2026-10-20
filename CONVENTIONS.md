@@ -7,15 +7,18 @@ How Orbit is built. Follow these when changing or adding code. `README.md` cover
 | Path | What lives there |
 | --- | --- |
 | `app/(crm)/` | Signed-in pages (server components) and their server actions (`"use server"` files such as `records.ts`, `boards.ts`, `workflows/actions.ts`). |
-| `app/api/` | Route handlers: the agent REST API (`v1`), webhooks, OAuth callbacks, cron and the Orbit Agent endpoints. |
+| `app/api/` | Route handlers: the agent REST API (`v1`), the MCP endpoint (`mcp`), Mail, push, booking, webhooks, OAuth callbacks, cron and the Orbit Agent endpoints. |
 | `app/login`, `app/join`, `app/book`, `app/auth` | Public pages: sign in, invite acceptance, booking pages, the Supabase email callback. |
 | `lib/crm/` | Domain logic. Every function takes an `Actor` and talks to Postgres through `withActor`. |
-| `lib/workflows/`, `lib/assistant/`, `lib/enrichment/`, `lib/companion/`, `lib/ai-accounts/` | Feature engines. |
+| `lib/mail/`, `lib/workflows/`, `lib/assistant/`, `lib/enrichment/`, `lib/booking/`, `lib/ical/`, `lib/companion/`, `lib/ai-accounts/` | Feature engines. |
 | `lib/*.ts` | Clients for outside services (`llm.ts`, `linear.ts`, `clickup.ts`, `granola.ts`, `storage.ts`, `microsoft/`) and small shared helpers. |
 | `components/_ui/` | Primitives (`Button`, `Input`, `Sheet`, `Popover`, `DropdownMenu`, `Switch`, `Tag`, `Asset`). |
-| `components/<area>/` | Feature components, grouped by area (`crm`, `companies`, `workflows`, `assistant`, `auth`). |
+| `components/<area>/` | Feature components, grouped by area (`crm`, `companies`, `mail`, `workflows`, `assistant`, `booking`, `push`, `shortcuts`, `auth`). |
+| `hooks/`, `stores/` | Shared React hooks, and the Zustand store for ephemeral UI state. |
+| `server/mcp/` | The MCP server and its tools (`server.ts`, mail tools in `mail.ts`), served at `/api/mcp` and over stdio. |
 | `public/assets/images/<area>/` | SVG icons and images. |
 | `supabase/migrations/` | Schema, row-level security and security-definer functions. |
+| `scripts/` | `db:setup`, `agent:create`, the stdio MCP server and the Orbit Agent packer. |
 | `tests/` | `node:test` suites that run against a real local Postgres. |
 | `companion/` | The Orbit Agent CLI that runs on a user's Mac. |
 
@@ -23,9 +26,9 @@ How Orbit is built. Follow these when changing or adding code. `README.md` cover
 
 - Read and write through `lib/crm/*` (or a feature engine), never with ad hoc SQL in a page or action.
 - `withActor(actor, db => ...)` runs as `authenticated` (or `crm_agent`) with the user's id in the JWT claims, so row-level security decides what each person can see. Never bypass it for user-facing reads.
-- Shared records (companies, contacts, deals, boards, activity) are visible to every workspace member. Private by design: inboxes, calendars, OAuth tokens, email signatures and unsent attachments, assistant conversations, workflow runs, notifications, Granola keys, and tasks (owner or creator only; owners and admins see all).
+- Shared records (companies, contacts, deals, boards, activity) are visible to every workspace member. Private by design: inboxes and the Mail mirror (messages, drafts, reminders, summaries, prepared replies, read statuses), sending addresses, calendars, booking pages, OAuth tokens, AI accounts, Orbit Agent pairings, personal tokens, email signatures and unsent attachments, assistant conversations, workflow runs, notifications, push subscriptions, Granola keys, and tasks (owner or creator only; owners and admins see all).
 - Work that must cross users (background sync, invites, workflow dispatch) goes through `private.*` security-definer functions granted only to `crm_app` and called with `query()`. Inside `withActor`, do not call `private.*` functions in a query: `authenticated` has no usage on that schema, only policies can use them.
-- Every mutation calls `recordAudit` with a `Provenance`. Audit events feed outbound webhooks and workflow triggers.
+- Every mutation of shared CRM data calls `recordAudit` with a `Provenance`. Audit events feed outbound webhooks and workflow triggers. Changes to a person's own mailbox (Mail actions, drafts, reminders) are not audit events.
 - Throw `CrmError(code, message, status)` with a message a person can act on. Server actions return `{ error }` instead of throwing.
 
 ## Migrations
@@ -54,17 +57,17 @@ How Orbit is built. Follow these when changing or adding code. `README.md` cover
 
 ## AI
 
-- Model calls go through `lib/llm.ts` (`completeJson`) and the LLM API gateway (`LLM_API_KEY`). Pass a zod schema, a deadline when running in the background, and a `model` only when a step needs a specific one.
+- Model calls go through `lib/llm.ts` (`completeJson`) and the LLM API gateway (`LLM_API_KEY`). Pass a zod schema, a deadline when running in the background, and a `model` only when a step needs a specific one. The assistant's turns are the exception: they go through `lib/assistant/gateway.ts`.
 - The assistant's tools live in `lib/assistant/tools.ts`. A tool that changes anything sets `write: true` so it goes through an approval card, and has a `describe` for that card.
 
 ## Background work
 
 - Use `after()` from `next/server` to keep work out of the response. Guard it with try/catch because it throws outside a request.
-- Long jobs carry a deadline and stop starting new steps when time runs short. `/api/cron/sync` (every 10 minutes from Supabase `pg_cron`) and page loads drive syncs and workflow runs.
+- Long jobs carry a deadline and stop starting new steps when time runs short. Supabase `pg_cron` calls `/api/cron/sync` every 10 minutes, `/api/cron/mail` every 5 and `/api/cron/mail-due` every minute; with page loads, they drive syncs, mail and workflow runs. `/api/cron/workflows` runs only workflows.
 
 ## Testing and checks
 
-- Before every commit: `npx tsc --noEmit`, `npx eslint .`, `npm test` (needs local Postgres, see `README.md`).
+- Before every commit: `npx tsc --noEmit`, `npx eslint .`, `npm test` (needs the local `crm_test` database, see Test database in `README.md`).
 - Add tests in `tests/*.test.ts` for new behaviour in `lib/`. Fake outside APIs by passing `fetchImpl`, never by calling real services.
 - For UI changes, run the production build locally and check the page in a browser at desktop and mobile sizes.
 

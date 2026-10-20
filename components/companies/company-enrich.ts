@@ -1,6 +1,6 @@
 import type { CompanyEnrichment } from "@/lib/enrichment/companies";
 
-export const COMPANY_CHUNK = 5;
+const COMPANY_CHUNK = 5;
 
 type Result = CompanyEnrichment & { companyId: string };
 
