@@ -3,7 +3,7 @@ import { CrmError } from "@/lib/crm/errors";
 import { summariseThread } from "@/lib/mail/ai";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 30;
+export const maxDuration = 60;
 
 export async function GET(request: Request) {
   const key = new URL(request.url).searchParams.get("key") ?? "";
