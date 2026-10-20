@@ -31,9 +31,6 @@ export default function CompaniesHeader({ viewer }: { viewer: Viewer }) {
           <ExpandSidebarButton />
           <div className="flex min-w-0 flex-col">
             <h1 className="truncate">Companies</h1>
-            <span className="caption-style text-subtle hidden truncate sm:block">
-              {viewer.workspaceName}
-            </span>
           </div>
         </div>
 
