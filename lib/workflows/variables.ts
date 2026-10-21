@@ -124,6 +124,16 @@ export function variableOptions(definition: WorkflowDefinition | null, nodeId?: 
   const type = definition?.trigger.type;
   const findsRecords = Boolean(definition?.nodes.some((node) => node.type === "find_records" || node.type === "upsert_record"));
   if (type && (type !== "schedule" || findsRecords)) options.push(...COMPANY, ...CONTACT);
+  if (type === "proposal_event") {
+    options.push(
+      { path: "proposal.title", label: "Title", group: "Proposal" },
+      { path: "proposal.status", label: "Status", group: "Proposal" },
+      { path: "proposal.total", label: "Value", group: "Proposal" },
+      { path: "proposal.signedBy", label: "Signed by", group: "Proposal" },
+      { path: "proposal.declineReason", label: "Decline reason", group: "Proposal" },
+      { path: "proposal.url", label: "Link in Orbit", group: "Proposal" },
+    );
+  }
   if (type === "email_received") {
     options.push(
       { path: "email.subject", label: "Subject", group: "Email" },

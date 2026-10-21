@@ -14,6 +14,7 @@ import { isUuid } from "@/lib/crm/mutate";
 import { createOpportunity, getOpportunity, listOpportunities, updateOpportunity } from "@/lib/crm/opportunities";
 import { scopesForRole } from "@/lib/crm/scopes";
 import { getTask } from "@/lib/crm/tasks";
+import { getDocument } from "@/lib/proposals/documents";
 import type { Company, CompanyWrite, Contact, ContactWrite, Provenance, UserActor } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
 import { createLinearIssue, LinearError } from "@/lib/linear";
@@ -258,6 +259,27 @@ async function buildContext(actor: UserActor, trigger: Trigger, event: RunEvent)
     vars.email = { ...email, kind, failedRecipient: failed };
     contactId = await contactIdByEmail(actor, kind === "bounce" ? failed : email.from);
     if (!contactId && (kind === "bounce" || trigger.fromContactsOnly !== false)) matches = false;
+  } else if (trigger.type === "proposal_event") {
+    if (event.type !== `document.${trigger.event}`) return { vars, matches: false };
+    const document = event.entityId ? await maybe(() => getDocument(actor, event.entityId!)) : null;
+    if (!document) return { vars, matches: false };
+    if (trigger.kind && document.kind !== trigger.kind) matches = false;
+    const client = document.signatures.find((signature) => signature.role === "client");
+    vars.proposal = {
+      id: document.id,
+      title: document.title,
+      kind: document.kind,
+      status: document.status,
+      total: document.totalLabel,
+      currency: document.currency,
+      validUntil: document.validUntil,
+      declineReason: document.declineReason,
+      signedBy: client?.name ?? null,
+      url: link(document.href),
+      clientUrl: document.link,
+    };
+    companyId = document.companyId;
+    contactId = document.contactId;
   } else if (trigger.type === "task_completed") {
     const task = event.entityId ? await maybe(() => getTask(actor, event.entityId!)) : null;
     if (!task) return { vars, matches: false };

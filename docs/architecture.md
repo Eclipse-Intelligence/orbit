@@ -353,6 +353,27 @@ When an opportunity on a sales pipeline becomes won (on create or update), `afte
 
 Adding is inline. `components/crm/record-combobox.tsx` is a search box with a listbox in a popover anchored to the input; it searches through `searchRecords` in `record-picker.tsx` (contacts scoped to a company with `searchCompanyContactsAction`, or to people with any company when the company is still empty) and offers "Add … as a new company" or "Add … at <company>", which call `addCompanyInlineAction` and `addContactInlineAction`. Enter before results arrive waits for them and picks the exact match, else the first. `opportunity-composer.tsx` uses two of them as a card in a stage (focused without scrolling the page) or as a row under the list, and saves with `addOpportunityInlineAction`; `inline-adders.tsx` holds the Contacts and Companies rows. Opening an existing card or opportunity still uses the sheet.
 
+## Proposals
+
+| Table | What it holds |
+| --- | --- |
+| `crm.products` | Name, description, `price_gbp`, `price_usd` (at least one), `billing` (`one_off`, `monthly`, `yearly`), `archived_at`. |
+| `crm.document_templates` | `kind` (`proposal`, `nda`), name, `status` (`draft`, `active`, `archived`), `blocks` and `settings` (accent colour, valid days) as JSON, checked by the zod schemas in `lib/proposals/model.ts`. |
+| `crm.documents` | One proposal or NDA: template, title, `status` (`draft`, `sent`, `viewed`, `client_signed`, `completed`, `declined`, `withdrawn`), company, contact, optional opportunity, owner, currency, `items` and `blocks` copied from the template and products, `valid_until`, `current_version_id`, view counts and the time of each step. |
+| `crm.document_versions` | What was sent: `content` (the filled-in blocks, items, totals, both parties and the consent text) and `content_hash`, a SHA-256 of its stable JSON. |
+| `crm.document_links` | The client's link for a version: `token_hash` (SHA-256), `token_cipher` (encrypted with `APP_SECRET` so Orbit can show the link again), `revoked_at`. |
+| `crm.document_signatures` | One `client` and one `sender` signature per version: name, title, company, typed signature, consent text, method (`email_link` or `orbit_login`), IP address, browser and time. |
+| `crm.document_events` | Created, sent, viewed, client signed, countersigned, completed, declined, changed and withdrawn, with who, IP address, browser and data. `occurred_at` defaults to `clock_timestamp()` so events in one transaction keep their order. |
+| `crm.document_files` | The `issued` PDF (rendered on send) and the `executed` PDF (rendered on completion), with their SHA-256. |
+
+All of them are shared workspace records with `_member` and `_agent` policies like the rest of the CRM. Drafts can be deleted; sent documents can't. Versions, links, signatures, events and files are insert-only (links may only set `revoked_at`), so what was signed can't be changed after the fact.
+
+`lib/proposals/catalogue.ts` holds products and templates, and `lib/proposals/documents.ts` the rest. `createDocument` checks that the template is active and the contact works at the company, prices the items in the chosen currency, and links the company's only open sales deal. `sendDocument` refuses missing fields and square-bracket placeholders, snapshots the content into a version, renders the PDF (`lib/proposals/pdf.ts`, pdf-lib with the standard fonts and a signing certificate page), creates a 24-byte link, sets the status and emails it through `sendContactEmail`. `reviseDocument` revokes the link and returns to draft. `countersignDocument` needs `client_signed` and the owner, a workspace owner or an admin, then stores the executed PDF and emails the client.
+
+The client page (`app/p/[token]`) and its routes (`/api/p/[token]/sign`, `/decline`, `/pdf`) are public in `proxy.ts`. `private.document_link_owner` (granted only to `crm_app`) turns the hashed token into the document, version and owner; `lib/proposals/public.ts` then acts as the owner through `withActor`, like booking pages. It counts views (not for signed-in members), records `document.viewed` the first time, and alerts the owner in the bell and by push, deduplicated per hour. `clientSign` needs `agree: true`, signs the current version only, and records `document.signed`; signing is limited to 20 attempts per IP address in 10 minutes.
+
+Audit events `document.created`, `.sent`, `.viewed`, `.signed`, `.completed`, `.declined`, `.withdrawn` and `.changed` feed webhooks and the `proposal_event` workflow trigger, whose context adds `proposal` (title, kind, status, total, currency, valid until, decline reason, who signed, Orbit and client links) with the company and contact. `proposalsForDeals` gives Opportunities the latest proposal per deal, by deal or else by the company's unlinked proposal.
+
 ## Workflows
 
 `crm.workflows` belongs to its owner (`owner_id`) and stores `definition` (`{version: 2, trigger, triggerPosition, nodes, edges}`, validated by `lib/workflows/definition.ts`: every edge leaves a real output of its source (`out`, or `true`/`false` for If, `each`/`done` for For each item), each output connects to at most one node, and the graph has no cycles), `trigger_type` for matching, `status` (`draft`, `active`, `paused`), `is_template`, and `next_run_at` for schedules. Members read their own workflows and shared templates; owners and admins read all.

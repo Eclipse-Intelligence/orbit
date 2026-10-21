@@ -12,6 +12,7 @@ import { getMailbox } from "@/lib/crm/inbox";
 import { getCompanyContext } from "@/lib/crm/relationships";
 import { listTags } from "@/lib/crm/tags";
 import { manualWorkflows } from "@/lib/workflows/store";
+import { listDocuments } from "@/lib/proposals/documents";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -46,13 +47,14 @@ export default async function CompanyPage({
   if (!user) redirect("/login");
   if (!context) notFound();
 
-  const [members, mailbox, clickup, meetings, tags, workflows] = await Promise.all([
+  const [members, mailbox, clickup, meetings, tags, workflows, proposals] = await Promise.all([
     listMembers(user),
     getMailbox(user),
     getClickUpPicker(user),
     getMeetings(user, { companyId: context.company.id }),
     listTags(user),
     manualWorkflows(user, "company"),
+    listDocuments(user, { companyId: context.company.id, limit: 20 }),
   ]);
 
   return (
@@ -70,6 +72,7 @@ export default async function CompanyPage({
       clickup={clickup}
       meetings={meetings}
       workflows={workflows}
+      proposals={proposals}
       tags={tags}
       enrichment={enrichmentAvailability()}
     />

@@ -4,6 +4,7 @@ import { PAGE_SIZE, pageFromParams, pageOffset } from "@/components/crm/paging";
 import { getUserActor } from "@/lib/auth/user";
 import { listOpportunities, listPipeline } from "@/lib/crm/opportunities";
 import { opportunityQueryFromSearchParams } from "@/lib/crm/validation";
+import { proposalsForDeals } from "@/lib/proposals/documents";
 
 export const dynamic = "force-dynamic";
 
@@ -26,6 +27,7 @@ export default async function OpportunitiesPage({
   const pipeline = await listPipeline(user);
   filters.pipelineId = pipeline.id;
   const listed = await listOpportunities(user, filters);
+  const proposals = await proposalsForDeals(user, listed.data.map((item) => ({ id: item.id, companyId: item.companyId })));
 
   return (
     <OpportunitiesScreen
@@ -37,6 +39,7 @@ export default async function OpportunitiesPage({
         workspaceName: user.workspaceName,
       }}
       opportunities={listed.data}
+      proposals={proposals}
       total={listed.total}
       page={page}
       query={filters.query ?? ""}

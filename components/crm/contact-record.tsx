@@ -11,6 +11,8 @@ import FindDetailButton from "@/components/crm/find-detail";
 import { contactRecipient } from "@/lib/crm/personalise";
 import InviteDialog, { InviteNotice } from "@/components/crm/invite-dialog";
 import MeetingsCard from "@/components/crm/meetings-card";
+import ProposalsCard from "@/components/proposals/proposals-card";
+import type { DocumentSummary } from "@/lib/proposals/documents";
 import { useQuickAddRecord } from "@/components/crm/quick-add";
 import RecordLayout from "@/components/crm/record-layout";
 import { CallLink, Detail, DetailList } from "@/components/crm/record-form";
@@ -53,6 +55,7 @@ export default function ContactRecord({
   invite,
   enrichment,
   workflows = [],
+  proposals = [],
 }: {
   viewer: Viewer;
   contact: Contact;
@@ -67,6 +70,7 @@ export default function ContactRecord({
   invite: InviteSetup;
   enrichment: { available: EnrichmentAvailability; lookups: ContactLookups[string] };
   workflows?: { id: string; name: string }[];
+  proposals?: DocumentSummary[];
 }) {
   const router = useRouter();
   const [editing, setEditing] = useState(false);
@@ -297,6 +301,11 @@ export default function ContactRecord({
             <MeetingsCard
               meetings={meetings}
               className="shadow-[inset_0_1px_0_var(--line-strong)]"
+            />
+            <ProposalsCard
+              documents={proposals}
+              company={shown.companyId ? { id: shown.companyId, name: shown.companyName ?? "Company" } : null}
+              contactId={shown.id}
             />
           </>
         }
