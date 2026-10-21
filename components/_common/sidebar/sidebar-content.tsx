@@ -17,6 +17,7 @@ import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
 import Logo from "@/public/assets/images/_common/logo.svg";
 import BuildingIcon from "@/public/assets/images/companies/sidebar/building.svg";
 import ClipboardIcon from "@/public/assets/images/companies/sidebar/clipboard.svg";
+import FileSignatureIcon from "@/public/assets/images/companies/sidebar/file-signature.svg";
 import ListIcon from "@/public/assets/images/companies/sidebar/list.svg";
 import BookClosedIcon from "@/public/assets/images/companies/sidebar/book-closed.svg";
 import MailIcon from "@/public/assets/images/companies/sidebar/mail.svg";
@@ -126,6 +127,12 @@ export default function SidebarContent({
               }
             />
             <SidebarBoards boards={boards} open={boardsOpen} current={current} />
+            <SidebarNavItem
+              href="/proposals"
+              icon={FileSignatureIcon}
+              label="Proposals"
+              active={current("/proposals")}
+            />
             <SidebarNavItem
               href="/activities"
               icon={ListIcon}

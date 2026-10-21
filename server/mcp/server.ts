@@ -8,6 +8,7 @@ import {
 } from "@/lib/crm/companies";
 import type { Actor, CompanyWrite } from "@/lib/crm/types";
 import { registerMailTools } from "@/server/mcp/mail";
+import { registerProposalTools } from "@/server/mcp/proposals";
 import { registerOperationTools } from "@/server/mcp/operations";
 import { registerRelationshipTools } from "@/server/mcp/relationships";
 
@@ -158,5 +159,6 @@ export function createCrmMcpServer(actor: Actor) {
   registerRelationshipTools(server, actor);
   registerOperationTools(server, actor);
   if (actor.type === "user") registerMailTools(server, actor);
+  registerProposalTools(server, actor);
   return server;
 }

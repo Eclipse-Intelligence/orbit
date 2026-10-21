@@ -1,5 +1,5 @@
 import type { ComponentType, SVGProps } from "react";
-import { AI_MODELS, EMAIL_KIND_LABELS, STEP_LABELS, TRIGGER_LABELS, type StepType, type Trigger, type WorkflowNode } from "@/lib/workflows/definition";
+import { AI_MODELS, EMAIL_KIND_LABELS, PROPOSAL_EVENT_LABELS, STEP_LABELS, TRIGGER_LABELS, type StepType, type Trigger, type WorkflowNode } from "@/lib/workflows/definition";
 import type { Condition } from "@/lib/workflows/variables";
 import SparkleIcon from "@/public/assets/images/assistant/sparkle.svg";
 import CheckIcon from "@/public/assets/images/booking/check.svg";
@@ -91,6 +91,7 @@ export function triggerSummary(trigger: Trigger) {
     return trigger.frequency === "daily" ? `Every day at ${trigger.time}` : `${days[trigger.weekday ?? 1]}s at ${trigger.time}`;
   }
   if (trigger.type === "email_received") return EMAIL_KIND_LABELS[trigger.kind];
+  if (trigger.type === "proposal_event") return `${trigger.kind === "nda" ? "An NDA" : trigger.kind === "proposal" ? "A proposal" : "A proposal or NDA"} ${PROPOSAL_EVENT_LABELS[trigger.event].toLowerCase()}`;
   if (trigger.type === "manual" || trigger.type === "record_created") return trigger.object === "company" ? "Companies" : "Contacts";
   return TRIGGER_LABELS[trigger.type];
 }

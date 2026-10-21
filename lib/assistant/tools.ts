@@ -2,6 +2,8 @@ import { getBookingPage } from "@/lib/booking/pages";
 import { listLifecycles } from "@/lib/crm/lifecycles";
 import { getMailThread, mailSyncStatus, searchMail } from "@/lib/mail/store";
 import { saveDraftForAgent } from "@/lib/mail/compose";
+import { createProduct, listProducts, listTemplates, updateProduct } from "@/lib/proposals/catalogue";
+import { createDocument, getDocument, listDocuments, sendDocument, updateDocument } from "@/lib/proposals/documents";
 import { mailOrigin } from "@/lib/mail/origin";
 import { archiveBoard, createBoard, getBoard, listBoards, updateBoard } from "@/lib/crm/boards";
 import { savePipelineStages } from "@/lib/crm/pipeline";
@@ -310,7 +312,7 @@ function pick(args: Args, keys: string[]) {
   return out;
 }
 
-const WORKFLOW_GUIDE = `A definition is {trigger, steps}. trigger.type is one of: ${TRIGGER_TYPES.join(", ")}. call_summary_ready, task_completed: no other fields. record_created and manual: object (company or contact). field_changed: object, field (company: lifecycle, health (healthy, watch or at_risk; set from every summarised call), ownerId, industry, sizeCategory, source, description; contact: ownerId, jobTitle, companyId, source, notes), optional to. stage_changed: optional pipelineId (board id; omit for Opportunities) and stageId. added_to_board: boardId. activity_logged: optional activityType (call, email, meeting, note). schedule: frequency (daily, weekly or monthly), weekday (0 Sunday to 6 Saturday, for weekly), dayOfMonth (1 to 28, for monthly), time (HH:mm London). email_received: kind (any: any new email from a contact; reply: a reply to an email the user sent; bounce: an undeliverable notice, where the contact is the person whose address bounced; auto_reply: out of office or "I've left" replies), fromContactsOnly (default true); it runs privately for the user on their own inbox and gives {{email.subject}}, {{email.from}}, {{email.fromName}}, {{email.text}}, {{email.kind}}, {{email.failedRecipient}} and {{email.url}}. Any trigger except manual, schedule and email_received can take mine: true to only fire for the user's own changes.
+const WORKFLOW_GUIDE = `A definition is {trigger, steps}. trigger.type is one of: ${TRIGGER_TYPES.join(", ")}. call_summary_ready, task_completed: no other fields. record_created and manual: object (company or contact). field_changed: object, field (company: lifecycle, health (healthy, watch or at_risk; set from every summarised call), ownerId, industry, sizeCategory, source, description; contact: ownerId, jobTitle, companyId, source, notes), optional to. stage_changed: optional pipelineId (board id; omit for Opportunities) and stageId. added_to_board: boardId. activity_logged: optional activityType (call, email, meeting, note). schedule: frequency (daily, weekly or monthly), weekday (0 Sunday to 6 Saturday, for weekly), dayOfMonth (1 to 28, for monthly), time (HH:mm London). email_received: kind (any: any new email from a contact; reply: a reply to an email the user sent; bounce: an undeliverable notice, where the contact is the person whose address bounced; auto_reply: out of office or "I've left" replies), fromContactsOnly (default true); it runs privately for the user on their own inbox and gives {{email.subject}}, {{email.from}}, {{email.fromName}}, {{email.text}}, {{email.kind}}, {{email.failedRecipient}} and {{email.url}}. proposal_event: event (sent, viewed (first open), signed (by the client), completed (countersigned) or declined), optional kind (proposal or nda); it gives {{proposal.title}}, {{proposal.status}}, {{proposal.total}}, {{proposal.signedBy}}, {{proposal.declineReason}} and {{proposal.url}}, with the proposal's company and contact. Any trigger except manual, schedule and email_received can take mine: true to only fire for the user's own changes.
 steps is a list run in order. Each step is {id, type, label, config}; ids are lowercase like ai_1, if_1, notify_1 and unique. type is one of: ${STEP_TYPES.join(", ")}. An if step has then and else lists; a loop step has a body list run once per item; a path that ends simply stops (inside a loop it moves to the next item).
 config by type: ai {prompt, model (claude-haiku-5-5, claude-sonnet-5-5 or claude-opus-5-5), outputs: [{key, type: text|number|boolean|list|choice, description, choices}], webSearch (true lets it search the web and adds a sources list output), context (true adds the record's details, recent activity, deals and the user's recent emails with the contact)}. find_records {object: contact|company, lifecycles: [lifecycle names; for contacts, their company's], tag, owner: ""|owner|<member id>, openOpportunity: any|yes|no, quietDays (no activity for at least this many days), search, order: least_contacted|oldest|newest|name, limit (1 to 100), skipDays (skip records this workflow found within this many days, so weekly runs work through a list in batches)}; it outputs records and count. Feed {{steps.find_records_1.records}} to a loop: inside it, company and contact steps act on each record in turn. upsert_record {object: company|contact, company: name, domain, website; contact: email, firstName, lastName, jobTitle, companyId; create (default true; new companies are enriched when auto-enrichment is on), useInRun (true makes it the run's record for later steps)}; it outputs id, name, created, found and url, so update_record {object: contact, field: companyId, value: "{{steps.upsert_record_1.id}}"} moves a contact to it. webhook {url (https), body (optional template; empty sends the run's company, contact and step results as JSON)} posts to Slack, Zapier, Make or any service and outputs status and response. if and filter {match: all|any, conditions: [{left: "{{path}}", op: is|is_not|contains|not_contains|is_empty|is_not_empty|greater_than|less_than, right}]}; filter stops the path when false. loop {items: "{{steps.ai_1.requests}}", limit}. delay {amount, unit: minutes|hours|days}. approval {title, details} pauses for the user to approve. create_task {title, notes, dueInDays, assignee: owner|record_owner|<member id>, link: company|contact|none, clickup: boolean}. add_note {title, body}. update_record {object, field, value}; fields: company lifecycle, health, ownerId, industry, sizeCategory, source, description, name, domain, website, linkedinUrl, phone; contact ownerId, jobTitle, companyId, source, notes, firstName, lastName, email, phone, linkedinUrl. board {boardId, stageId} adds the company to a board or moves its card. notify {to: owner|record_owner|<member id>, title, body}. send_email {subject, body} to the run's contact. linear_issue {title, description, priority: urgent|high|medium|low}.
 Text fields take {{company.name}}, {{company.id}}, {{company.url}}, {{contact.id}}, {{contact.companyName}}, {{contact.linkedinUrl}}, {{company.health}}, {{company.healthReason}}, {{call.sentiment}}, {{contact.name}}, {{contact.firstName}}, {{contact.email}}, {{call.summary}}, {{call.keyPoints}}, {{call.transcript}}, {{activity.title}}, {{deal.name}}, {{deal.stage}}, {{change.to}}, {{task.title}}, {{owner.name}}, {{today}}, {{steps.<id>.<output key>}} and {{loop.item}}. Keep workflows small: only the nodes the job needs.`;
@@ -1594,6 +1596,185 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     },
   },
   {
+    name: "list_proposals",
+    label: "Looking at proposals",
+    description:
+      "List proposals and NDAs, newest first, with status (draft, sent, viewed, client_signed, completed, declined, withdrawn or expired), value, views and links. Filter by company, contact, status (or open for anything waiting on a signature) or search.",
+    parameters: {
+      type: "object",
+      properties: {
+        companyId: idParam("Company id."),
+        contactId: idParam("Contact id."),
+        status: { type: "string", enum: ["all", "draft", "open", "sent", "viewed", "client_signed", "completed", "declined", "withdrawn", "expired"] },
+        kind: { type: "string", enum: ["proposal", "nda"] },
+        search: { type: "string" },
+      },
+    },
+    run: async (actor, args) => ({
+      proposals: await listDocuments(actor, {
+        companyId: optionalStr(args.companyId),
+        contactId: optionalStr(args.contactId),
+        status: optionalStr(args.status),
+        kind: oneOf(args.kind, ["proposal", "nda"] as const),
+        search: optionalStr(args.search),
+        limit: 50,
+      }),
+    }),
+  },
+  {
+    name: "get_proposal",
+    label: "Reading a proposal",
+    description: "One proposal or NDA: its products and prices, wording, status, the client's link once sent, signatures and every event (sent, opened, signed).",
+    parameters: { type: "object", properties: { id: idParam("Proposal id.") }, required: ["id"] },
+    run: async (actor, args) => {
+      const detail = await getDocument(actor, required(args.id, "A proposal id"));
+      return {
+        ...detail,
+        preview: undefined,
+        version: detail.version ? { number: detail.version.number, hash: detail.version.hash } : null,
+        events: detail.events.slice(-30),
+      };
+    },
+  },
+  {
+    name: "list_products",
+    label: "Looking at products",
+    description: "The products you sell, with descriptions, prices in pounds and dollars and billing (one-off, monthly or yearly), for proposals.",
+    parameters: { type: "object", properties: {} },
+    run: async (actor) => ({ products: await listProducts(actor) }),
+  },
+  {
+    name: "list_proposal_templates",
+    label: "Looking at proposal templates",
+    description: "Proposal and NDA templates. Only active ones can be used to create and send.",
+    parameters: { type: "object", properties: {} },
+    run: async (actor) => ({ templates: (await listTemplates(actor)).map((template) => ({ id: template.id, name: template.name, kind: template.kind, status: template.status })) }),
+  },
+  {
+    name: "create_proposal",
+    label: "Creating a proposal",
+    write: true,
+    description:
+      "Create a draft proposal or NDA from an active template for a person at a company (the contact must work there). For proposals, add products by id with a quantity (and optionally a unitPrice to override the list price) in GBP or USD. It stays a draft until sent.",
+    parameters: {
+      type: "object",
+      properties: {
+        templateId: idParam("Active template id from list_proposal_templates."),
+        companyId: idParam("Company id."),
+        contactId: idParam("Contact id, a person at that company."),
+        currency: { type: "string", enum: ["GBP", "USD"] },
+        items: {
+          type: "array",
+          items: { type: "object", properties: { productId: { type: "string" }, quantity: { type: "integer", minimum: 1 }, unitPrice: { type: "number" } }, required: ["productId"] },
+        },
+        title: { type: "string" },
+      },
+      required: ["templateId", "companyId", "contactId"],
+    },
+    describe: (args, name) => ({
+      title: `Create proposal${str(args.title) ? `: ${str(args.title)}` : ""}`,
+      lines: [
+        `For ${name(args.contactId)} at ${name(args.companyId)}`,
+        `Template: ${name(args.templateId)}`,
+        ...(Array.isArray(args.items) ? (args.items as Args[]).map((item) => `${name(item.productId)}${Number(item.quantity) > 1 ? ` × ${item.quantity}` : ""}`) : []),
+        str(args.currency) ? `Currency: ${str(args.currency)}` : "",
+      ].filter(Boolean),
+    }),
+    run: async (actor, args) => {
+      const id = await createDocument(actor, args, { operation: "create_proposal", source: "assistant" });
+      const detail = await getDocument(actor, id);
+      return { id, href: detail.href, title: detail.title, total: detail.totalLabel, missing: detail.missing, placeholders: detail.placeholders };
+    },
+  },
+  {
+    name: "update_proposal",
+    label: "Editing a proposal",
+    write: true,
+    description: "Change a draft proposal: title, currency, valid-until date (YYYY-MM-DD), products (replaces the list) or wording blocks (replaces them; read them with get_proposal first).",
+    parameters: {
+      type: "object",
+      properties: {
+        id: idParam("Proposal id."),
+        title: { type: "string" },
+        currency: { type: "string", enum: ["GBP", "USD"] },
+        validUntil: { type: "string" },
+        items: {
+          type: "array",
+          items: { type: "object", properties: { productId: { type: "string" }, quantity: { type: "integer", minimum: 1 }, unitPrice: { type: "number" }, description: { type: "string" } }, required: ["productId"] },
+        },
+        blocks: { type: "array", items: { type: "object" } },
+      },
+      required: ["id"],
+    },
+    describe: (args, name) => ({
+      title: `Edit ${name(args.id)}`,
+      lines: [
+        str(args.title) ? `Title: ${str(args.title)}` : "",
+        str(args.validUntil) ? `Valid until: ${str(args.validUntil)}` : "",
+        Array.isArray(args.items) ? `Products: ${(args.items as Args[]).map((item) => name(item.productId)).join(", ")}` : "",
+        Array.isArray(args.blocks) ? "Updates the wording" : "",
+      ].filter(Boolean),
+    }),
+    run: async (actor, args) => {
+      const id = required(args.id, "A proposal id");
+      await updateDocument(actor, id, args, { operation: "update_proposal", source: "assistant" });
+      const detail = await getDocument(actor, id);
+      return { id, href: detail.href, total: detail.totalLabel, missing: detail.missing, placeholders: detail.placeholders };
+    },
+  },
+  {
+    name: "send_proposal",
+    label: "Sending a proposal",
+    write: true,
+    description:
+      "Send a draft proposal or NDA: locks this version, makes a private link for the contact and emails it from the user's mailbox with an optional subject and message. On a sent one, emails the same link again. The client signs first, then the user countersigns in Orbit.",
+    parameters: {
+      type: "object",
+      properties: { id: idParam("Proposal id."), subject: { type: "string" }, message: { type: "string", description: "Plain text; the link is added below it." } },
+      required: ["id"],
+    },
+    describe: (args, name) => ({
+      title: `Send ${name(args.id)}`,
+      lines: [str(args.subject) ? `Subject: ${str(args.subject)}` : "", str(args.message)].filter(Boolean),
+    }),
+    run: async (actor, args) => {
+      const id = required(args.id, "A proposal id");
+      const sent = await sendDocument(actor, id, { subject: optionalStr(args.subject), message: optionalStr(args.message) }, { provenance: { operation: "send_proposal", source: "assistant" } });
+      return { sent: true, link: sent.url, warning: sent.warning, href: `/proposals/${id}` };
+    },
+  },
+  {
+    name: "save_product",
+    label: "Saving a product",
+    write: true,
+    description: "Create a product for proposals, or update one when id is given: name, description, priceGbp, priceUsd and billing (one_off, monthly or yearly).",
+    parameters: {
+      type: "object",
+      properties: {
+        id: idParam("Product id, to update."),
+        name: { type: "string" },
+        description: { type: "string" },
+        priceGbp: { type: "number" },
+        priceUsd: { type: "number" },
+        billing: { type: "string", enum: ["one_off", "monthly", "yearly"] },
+      },
+    },
+    describe: (args, name) => ({
+      title: args.id ? `Update ${name(args.id)}` : `Add product: ${str(args.name)}`,
+      lines: [
+        typeof args.priceGbp === "number" ? `£${args.priceGbp}` : "",
+        typeof args.priceUsd === "number" ? `$${args.priceUsd}` : "",
+        str(args.billing).replace("_", "-"),
+        str(args.description),
+      ].filter(Boolean),
+    }),
+    run: async (actor, args) => {
+      const id = optionalStr(args.id);
+      const product = id ? await updateProduct(actor, id, args, { operation: "update_product", source: "assistant" }) : await createProduct(actor, args, { operation: "create_product", source: "assistant" });
+      return { product };
+    },
+  },
+  {
     name: "save_email_draft",
     label: "Saving a draft",
     write: true,
@@ -1882,6 +2063,12 @@ export async function recordNames(actor: UserActor, args: Args[]) {
        select id, name from crm.pipelines where id = any($1::uuid[]) and kind = 'board'
        union all
        select id, name from crm.workflows where id = any($1::uuid[])
+       union all
+       select id, name from crm.products where id = any($1::uuid[])
+       union all
+       select id, name from crm.document_templates where id = any($1::uuid[])
+       union all
+       select id, title from crm.documents where id = any($1::uuid[])
        union all
        select p.id, coalesce(nullif(p.full_name, ''), p.email) from crm.profiles p
          join crm.workspace_members m on m.user_id = p.id and m.workspace_id = $2

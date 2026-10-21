@@ -11,6 +11,7 @@ export const TRIGGER_TYPES = [
   "manual",
   "schedule",
   "email_received",
+  "proposal_event",
 ] as const;
 export type TriggerType = (typeof TRIGGER_TYPES)[number];
 
@@ -57,6 +58,17 @@ export const EMAIL_KIND_LABELS: Record<EmailKind, string> = {
   reply: "A reply to an email I sent",
   bounce: "A bounce (couldn't be delivered)",
   auto_reply: "An automatic reply (out of office or left the company)",
+};
+
+export const PROPOSAL_EVENTS = ["sent", "viewed", "signed", "completed", "declined"] as const;
+export type ProposalEvent = (typeof PROPOSAL_EVENTS)[number];
+
+export const PROPOSAL_EVENT_LABELS: Record<ProposalEvent, string> = {
+  sent: "Is sent",
+  viewed: "Is opened for the first time",
+  signed: "Is signed by the client",
+  completed: "Is fully signed",
+  declined: "Is declined",
 };
 
 export const AI_OUTPUT_TYPES = ["text", "number", "boolean", "list", "choice"] as const;
@@ -127,6 +139,7 @@ const triggerSchema = z.discriminatedUnion("type", [
     dayOfMonth: z.number().int().min(1).max(28).nullable().optional(),
     time: z.string().regex(/^\d{2}:\d{2}$/),
   }),
+  z.object({ type: z.literal("proposal_event"), event: z.enum(PROPOSAL_EVENTS), kind: z.enum(["proposal", "nda"]).nullable().optional() }),
   z.object({
     type: z.literal("email_received"),
     kind: z.enum(EMAIL_KINDS),
@@ -323,6 +336,7 @@ export const TRIGGER_LABELS: Record<TriggerType, string> = {
   manual: "Run from a record",
   schedule: "On a schedule",
   email_received: "An email arrives",
+  proposal_event: "A proposal or NDA changes",
 };
 
 export const STEP_LABELS: Record<StepType, string> = {
@@ -382,6 +396,7 @@ export function eventTriggerTypes(eventType: string, entityType: string, changes
   if (eventType === "activity.created" && entityType === "activity") return ["activity_logged"];
   if (eventType === "task.completed") return ["task_completed"];
   if (eventType === "email.received") return ["email_received"];
+  if (["document.sent", "document.viewed", "document.signed", "document.completed", "document.declined"].includes(eventType)) return ["proposal_event"];
   return [];
 }
 

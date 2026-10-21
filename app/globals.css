@@ -254,6 +254,49 @@
 }
 
 @layer base {
+  .paper {
+    color-scheme: light;
+    --background: #f6f6f3;
+    --foreground: #17171b;
+    --card: #ffffff;
+    --card-foreground: #17171b;
+    --popover: #ffffff;
+    --popover-foreground: #17171b;
+    --secondary: #ececea;
+    --secondary-foreground: #17171b;
+    --muted: #ececea;
+    --muted-foreground: #6b6b73;
+    --accent: #ececea;
+    --accent-foreground: #17171b;
+    --border: #e4e4e0;
+    --input: #d6d6d2;
+    --ring: #9a9aa3;
+    --line-strong: #d6d6d2;
+    --subtle: #6b6b73;
+    --faint: #a8a8b0;
+    --soft: #45454d;
+    background-color: var(--background);
+    color: var(--foreground);
+  }
+
+  .paper .doc-title {
+    @apply text-[clamp(30px,6vw,46px)] leading-[1.05] font-semibold tracking-[-0.025em] text-balance;
+  }
+
+  .paper .doc-heading {
+    @apply text-[21px] leading-[1.25] font-semibold tracking-[-0.012em];
+  }
+
+  .paper .doc-body {
+    @apply text-[16px] leading-[1.7];
+  }
+
+  .paper .doc-lead {
+    @apply text-[18px] leading-[1.55];
+  }
+}
+
+@layer base {
   * {
     @apply border-border outline-ring/50;
     scrollbar-width: thin;

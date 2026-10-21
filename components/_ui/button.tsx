@@ -52,6 +52,14 @@ export default function Button({
 }: ButtonProps) {
   const classes = cn(buttonVariants({ variant, size }), className);
 
+  if (typeof href === "string" && (href.startsWith("/api/") || href.startsWith("#"))) {
+    return (
+      <a href={href} className={classes} {...(props as ComponentProps<"a">)}>
+        {children}
+      </a>
+    );
+  }
+
   if (href) {
     return (
       <Link

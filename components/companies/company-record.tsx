@@ -21,6 +21,8 @@ import CompanyEnrichButton from "@/components/companies/detail/company-enrich-bu
 import CompanyLogo from "@/components/companies/company-logo";
 import { QuickLinks, SocialLinks, employeesLabel, sectorLabel } from "@/components/companies/detail/company-brand";
 import RunWorkflowButton from "@/components/workflows/run-workflow-button";
+import ProposalsCard from "@/components/proposals/proposals-card";
+import type { DocumentSummary } from "@/lib/proposals/documents";
 import SectionHeader from "@/components/crm/section-header";
 import RecordSequence from "@/components/shortcuts/record-sequence";
 import RecordTags from "@/components/crm/tags";
@@ -53,6 +55,7 @@ export default function CompanyRecord({
   tags,
   enrichment,
   workflows = [],
+  proposals = [],
 }: {
   viewer: Viewer;
   context: CompanyContext;
@@ -63,6 +66,7 @@ export default function CompanyRecord({
   tags: TagCount[];
   enrichment: EnrichmentAvailability;
   workflows?: { id: string; name: string }[];
+  proposals?: DocumentSummary[];
 }) {
   const router = useRouter();
   const listHref = useListHref("companies");
@@ -338,6 +342,8 @@ export default function CompanyRecord({
             )}
 
             <MeetingsCard meetings={meetings} />
+
+            {!company.archivedAt && <ProposalsCard documents={proposals} company={{ id: company.id, name: company.name }} />}
 
             <RelationshipPanel context={context} clickup={clickup} findEmail={enrichment.email} />
           </>

@@ -45,6 +45,9 @@ import { formatDateLabel } from "@/lib/date-input";
 import { startPointerGesture, type GestureResult } from "@/lib/pointer-gesture";
 import { companyHref } from "@/lib/crm/hrefs";
 import type { Board, Opportunity, OpportunityStatus, PipelineStage } from "@/lib/crm/types";
+import Link from "next/link";
+import { statusTag } from "@/components/proposals/status";
+import type { DealProposal } from "@/lib/proposals/documents";
 
 export default function OpportunitiesScreen({
   viewer,
@@ -55,8 +58,10 @@ export default function OpportunitiesScreen({
   stages,
   view,
   board,
+  proposals = {},
 }: {
   viewer: Viewer;
+  proposals?: Record<string, DealProposal>;
   opportunities: Opportunity[];
   total: number;
   page: number;
@@ -599,6 +604,9 @@ export default function OpportunitiesScreen({
                             ? cardMeta(opportunity) || "No contact"
                             : `${opportunity.companyName ?? "No company"} · ${formatMoney(opportunity.value, opportunity.currency)}`}
                         </span>
+                        {!board && proposals[opportunity.id] && (
+                          <span className="caption-style text-subtle">Proposal: {statusTag(proposals[opportunity.id].status).label}</span>
+                        )}
                       </div>
                     ))}
                     {composerStage === stage.id ? (
@@ -678,6 +686,16 @@ export default function OpportunitiesScreen({
             onClick={() => edit(opportunity)}
             action={
               <span className="flex items-center gap-2">
+                {proposals[opportunity.id] ? (
+                  <Link
+                    href={proposals[opportunity.id].href}
+                    onClick={(event) => event.stopPropagation()}
+                    title={`Proposal: ${proposals[opportunity.id].title}`}
+                    className="hidden rounded-full sm:inline-flex"
+                  >
+                    <Tag tone={statusTag(proposals[opportunity.id].status).tone}>Proposal {statusTag(proposals[opportunity.id].status).label.toLowerCase()}</Tag>
+                  </Link>
+                ) : null}
                 {opportunity.companyName && opportunity.companyId ? (
                   <EntityChip name={opportunity.companyName} href={companyHref(opportunity.companyId)} />
                 ) : null}

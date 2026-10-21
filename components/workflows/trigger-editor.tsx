@@ -4,7 +4,7 @@ import { Checkbox } from "@/components/_ui/checkbox";
 import { Input } from "@/components/_ui/input";
 import { recordSelectClass } from "@/components/crm/record-form";
 import { matchLifecycleOption, type BuilderOptions } from "@/components/workflows/step-config";
-import { EMAIL_KIND_LABELS, EMAIL_KINDS, FIELD_OPTIONS, TRIGGER_LABELS, TRIGGER_TYPES, type EmailKind, type Trigger, type TriggerType } from "@/lib/workflows/definition";
+import { EMAIL_KIND_LABELS, EMAIL_KINDS, FIELD_OPTIONS, PROPOSAL_EVENT_LABELS, PROPOSAL_EVENTS, TRIGGER_LABELS, TRIGGER_TYPES, type EmailKind, type ProposalEvent, type Trigger, type TriggerType } from "@/lib/workflows/definition";
 import { cn } from "@/lib/utils";
 
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -26,6 +26,8 @@ function blank(type: TriggerType, options: BuilderOptions): Trigger {
       return { type, frequency: "weekly", weekday: 1, time: "08:00" };
     case "email_received":
       return { type, kind: "any", fromContactsOnly: true };
+    case "proposal_event":
+      return { type, event: "signed", kind: null };
     default:
       return { type } as Trigger;
   }
@@ -275,11 +277,42 @@ export default function TriggerEditor({
         </div>
       )}
 
+      {trigger.type === "proposal_event" && (
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Labelled id="trigger-document-kind" label="Which">
+            <select
+              id="trigger-document-kind"
+              value={trigger.kind ?? ""}
+              onChange={(event) => onChange({ ...trigger, kind: (event.target.value || null) as "proposal" | "nda" | null })}
+              className={recordSelectClass}
+            >
+              <option value="">Proposals and NDAs</option>
+              <option value="proposal">Proposals</option>
+              <option value="nda">NDAs</option>
+            </select>
+          </Labelled>
+          <Labelled id="trigger-document-event" label="When it">
+            <select
+              id="trigger-document-event"
+              value={trigger.event}
+              onChange={(event) => onChange({ ...trigger, event: event.target.value as ProposalEvent })}
+              className={recordSelectClass}
+            >
+              {PROPOSAL_EVENTS.map((item) => (
+                <option key={item} value={item}>
+                  {PROPOSAL_EVENT_LABELS[item]}
+                </option>
+              ))}
+            </select>
+          </Labelled>
+        </div>
+      )}
+
       {trigger.type === "manual" && (
         <p className="caption-style text-subtle">Adds a Run workflow button to {trigger.object === "company" ? "company" : "contact"} pages once it&apos;s on.</p>
       )}
 
-      {trigger.type !== "manual" && trigger.type !== "schedule" && trigger.type !== "email_received" && (
+      {trigger.type !== "manual" && trigger.type !== "schedule" && trigger.type !== "email_received" && trigger.type !== "proposal_event" && (
         <label className="caption-style text-subtle flex items-center gap-2">
           <Checkbox checked={Boolean(trigger.mine)} onCheckedChange={(value) => onChange({ ...trigger, mine: value === true })} />
           Only when it&apos;s mine (my call, my change or my task)

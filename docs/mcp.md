@@ -94,3 +94,19 @@ That reads `CRM_AGENT_TOKEN` from the environment or `.env.local` and speaks MCP
 `configure_pipeline`: replace default stages. Keep one won stage and one lost stage.
 
 Matching is the domain and name rules in `docs/architecture.md`. An agent that calls `upsert_company` twice with the same domain gets one company. An agent that calls `add_lead` twice with the same email gets one contact.
+
+Proposals and NDAs (`server/mcp/proposals.ts`):
+
+`list_proposals`: `status` (`all`, `draft`, `open`, `sent`, `viewed`, `client_signed`, `completed`, `declined`, `withdrawn`, `expired`), `company_id`, `contact_id`, `kind`, `search`. Up to 100, newest first.
+
+`get_proposal`: `id`. Products, wording, status, the client's link once sent, signatures and events.
+
+`list_products`, `list_proposal_templates`: what a proposal can use. Only active templates can be used.
+
+`create_proposal`: `template_id`, `company_id`, `contact_id` (someone at that company), `currency` (`GBP` or `USD`), `items` (`productId`, `quantity`, `unitPrice`, `description`), `title`. Agent tokens pass `owner_id`, the member who sends and countersigns. Returns `missing` fields and `placeholders` to fix before sending.
+
+`update_proposal`: a draft's `title`, `currency`, `valid_until`, `items` or `blocks`.
+
+`save_product`: create a product, or update it with `id`: `name`, `description`, `price_gbp`, `price_usd`, `billing`.
+
+No tool sends or signs. A person sends from the proposal in Orbit (or approves the assistant's `send_proposal`), the client signs on their page, and a member countersigns in Orbit.
