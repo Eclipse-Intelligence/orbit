@@ -4,7 +4,7 @@ import { Checkbox } from "@/components/_ui/checkbox";
 import { Input } from "@/components/_ui/input";
 import { recordSelectClass } from "@/components/crm/record-form";
 import { matchLifecycleOption, type BuilderOptions } from "@/components/workflows/step-config";
-import { FIELD_OPTIONS, TRIGGER_LABELS, TRIGGER_TYPES, type Trigger, type TriggerType } from "@/lib/workflows/definition";
+import { EMAIL_KIND_LABELS, EMAIL_KINDS, FIELD_OPTIONS, TRIGGER_LABELS, TRIGGER_TYPES, type EmailKind, type Trigger, type TriggerType } from "@/lib/workflows/definition";
 import { cn } from "@/lib/utils";
 
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -24,6 +24,8 @@ function blank(type: TriggerType, options: BuilderOptions): Trigger {
       return { type, activityType: null };
     case "schedule":
       return { type, frequency: "weekly", weekday: 1, time: "08:00" };
+    case "email_received":
+      return { type, kind: "any", fromContactsOnly: true };
     default:
       return { type } as Trigger;
   }
@@ -196,13 +198,30 @@ export default function TriggerEditor({
             <select
               id="trigger-frequency"
               value={trigger.frequency}
-              onChange={(event) => onChange({ ...trigger, frequency: event.target.value as "daily" | "weekly" })}
+              onChange={(event) => onChange({ ...trigger, frequency: event.target.value as "daily" | "weekly" | "monthly" })}
               className={recordSelectClass}
             >
               <option value="daily">Day</option>
               <option value="weekly">Week</option>
+              <option value="monthly">Month</option>
             </select>
           </Labelled>
+          {trigger.frequency === "monthly" && (
+            <Labelled id="trigger-day" label="On day">
+              <select
+                id="trigger-day"
+                value={String(trigger.dayOfMonth ?? 1)}
+                onChange={(event) => onChange({ ...trigger, dayOfMonth: Number(event.target.value) })}
+                className={recordSelectClass}
+              >
+                {Array.from({ length: 28 }, (_, index) => index + 1).map((day) => (
+                  <option key={day} value={day}>
+                    {day}
+                  </option>
+                ))}
+              </select>
+            </Labelled>
+          )}
           {trigger.frequency === "weekly" && (
             <Labelled id="trigger-weekday" label="On">
               <select
@@ -225,11 +244,42 @@ export default function TriggerEditor({
         </div>
       )}
 
+      {trigger.type === "email_received" && (
+        <div className="flex flex-col gap-3">
+          <Labelled id="trigger-email-kind" label="Which emails">
+            <select
+              id="trigger-email-kind"
+              value={trigger.kind}
+              onChange={(event) => onChange({ ...trigger, kind: event.target.value as EmailKind })}
+              className={recordSelectClass}
+            >
+              {EMAIL_KINDS.map((kind) => (
+                <option key={kind} value={kind}>
+                  {EMAIL_KIND_LABELS[kind]}
+                </option>
+              ))}
+            </select>
+          </Labelled>
+          {(trigger.kind === "any" || trigger.kind === "reply" || trigger.kind === "auto_reply") && (
+            <label className="caption-style text-subtle flex items-center gap-2">
+              <Checkbox
+                checked={trigger.fromContactsOnly !== false}
+                onCheckedChange={(value) => onChange({ ...trigger, fromContactsOnly: value === true })}
+              />
+              Only from people who are contacts in Orbit
+            </label>
+          )}
+          <p className="caption-style text-subtle">
+            Runs on new email in your inbox, privately for you. {trigger.kind === "bounce" ? "The contact is the person whose address bounced." : "The contact is the sender."}
+          </p>
+        </div>
+      )}
+
       {trigger.type === "manual" && (
         <p className="caption-style text-subtle">Adds a Run workflow button to {trigger.object === "company" ? "company" : "contact"} pages once it&apos;s on.</p>
       )}
 
-      {trigger.type !== "manual" && trigger.type !== "schedule" && (
+      {trigger.type !== "manual" && trigger.type !== "schedule" && trigger.type !== "email_received" && (
         <label className="caption-style text-subtle flex items-center gap-2">
           <Checkbox checked={Boolean(trigger.mine)} onCheckedChange={(value) => onChange({ ...trigger, mine: value === true })} />
           Only when it&apos;s mine (my call, my change or my task)

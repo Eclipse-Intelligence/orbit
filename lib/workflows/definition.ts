@@ -10,6 +10,7 @@ export const TRIGGER_TYPES = [
   "task_completed",
   "manual",
   "schedule",
+  "email_received",
 ] as const;
 export type TriggerType = (typeof TRIGGER_TYPES)[number];
 
@@ -27,6 +28,9 @@ export const STEP_TYPES = [
   "notify",
   "send_email",
   "linear_issue",
+  "find_records",
+  "upsert_record",
+  "webhook",
 ] as const;
 export type StepType = (typeof STEP_TYPES)[number];
 
@@ -45,6 +49,16 @@ export const CONDITION_OPS = [
 ] as const;
 export type ConditionOp = (typeof CONDITION_OPS)[number];
 
+export const EMAIL_KINDS = ["any", "reply", "bounce", "auto_reply"] as const;
+export type EmailKind = (typeof EMAIL_KINDS)[number];
+
+export const EMAIL_KIND_LABELS: Record<EmailKind, string> = {
+  any: "Any email from a contact",
+  reply: "A reply to an email I sent",
+  bounce: "A bounce (couldn't be delivered)",
+  auto_reply: "An automatic reply (out of office or left the company)",
+};
+
 export const AI_OUTPUT_TYPES = ["text", "number", "boolean", "list", "choice"] as const;
 
 export const AI_MODELS = [
@@ -62,6 +76,11 @@ export const FIELD_OPTIONS: Record<RecordObject, { key: string; label: string }[
     { key: "sizeCategory", label: "Size" },
     { key: "source", label: "Source" },
     { key: "description", label: "Description" },
+    { key: "name", label: "Name" },
+    { key: "domain", label: "Domain" },
+    { key: "website", label: "Website" },
+    { key: "linkedinUrl", label: "LinkedIn" },
+    { key: "phone", label: "Phone" },
   ],
   contact: [
     { key: "ownerId", label: "Owner" },
@@ -69,6 +88,11 @@ export const FIELD_OPTIONS: Record<RecordObject, { key: string; label: string }[
     { key: "companyId", label: "Company" },
     { key: "source", label: "Source" },
     { key: "notes", label: "Notes" },
+    { key: "firstName", label: "First name" },
+    { key: "lastName", label: "Last name" },
+    { key: "email", label: "Email" },
+    { key: "phone", label: "Phone" },
+    { key: "linkedinUrl", label: "LinkedIn" },
   ],
 };
 
@@ -98,9 +122,15 @@ const triggerSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("manual"), object: z.enum(RECORD_OBJECTS) }),
   z.object({
     type: z.literal("schedule"),
-    frequency: z.enum(["daily", "weekly"]),
+    frequency: z.enum(["daily", "weekly", "monthly"]),
     weekday: z.number().int().min(0).max(6).nullable().optional(),
+    dayOfMonth: z.number().int().min(1).max(28).nullable().optional(),
     time: z.string().regex(/^\d{2}:\d{2}$/),
+  }),
+  z.object({
+    type: z.literal("email_received"),
+    kind: z.enum(EMAIL_KINDS),
+    fromContactsOnly: z.boolean().optional(),
   }),
 ]);
 export type Trigger = z.infer<typeof triggerSchema>;
@@ -292,6 +322,7 @@ export const TRIGGER_LABELS: Record<TriggerType, string> = {
   task_completed: "A task is completed",
   manual: "Run from a record",
   schedule: "On a schedule",
+  email_received: "An email arrives",
 };
 
 export const STEP_LABELS: Record<StepType, string> = {
@@ -308,6 +339,9 @@ export const STEP_LABELS: Record<StepType, string> = {
   notify: "Notify someone",
   send_email: "Send email",
   linear_issue: "Create Linear issue",
+  find_records: "Find records",
+  upsert_record: "Find or create record",
+  webhook: "Send to a webhook",
 };
 
 export const STEP_HINTS: Record<StepType, string> = {
@@ -322,8 +356,11 @@ export const STEP_HINTS: Record<StepType, string> = {
   update_record: "Change a field on the company or contact.",
   board: "Put the company on a board, or move its card to a stage.",
   notify: "Send an in-app notification.",
-  send_email: "Email the contact from your Outlook.",
+  send_email: "Email the contact from your mailbox.",
   linear_issue: "Create an issue in Linear.",
+  find_records: "List companies or contacts that match filters, to go through with For each item.",
+  upsert_record: "Find a company or contact, or create it if it isn't in Orbit yet.",
+  webhook: "Post the run's data to another app, such as Slack, Zapier or Make.",
 };
 
 export function safeDefinition(value: unknown): WorkflowDefinition | null {
@@ -344,12 +381,13 @@ export function eventTriggerTypes(eventType: string, entityType: string, changes
   }
   if (eventType === "activity.created" && entityType === "activity") return ["activity_logged"];
   if (eventType === "task.completed") return ["task_completed"];
+  if (eventType === "email.received") return ["email_received"];
   return [];
 }
 
 export function nextScheduleRun(trigger: Extract<Trigger, { type: "schedule" }>, after: Date, timeZone: string) {
   const [hour, minute] = trigger.time.split(":").map(Number);
-  for (let offset = 0; offset < 9; offset += 1) {
+  for (let offset = 0; offset < 64; offset += 1) {
     const day = new Date(after.getTime() + offset * 86_400_000);
     const parts = Object.fromEntries(
       new Intl.DateTimeFormat("en-GB", {
@@ -364,6 +402,7 @@ export function nextScheduleRun(trigger: Extract<Trigger, { type: "schedule" }>,
     );
     const weekday = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(parts.weekday);
     if (trigger.frequency === "weekly" && weekday !== (trigger.weekday ?? 1)) continue;
+    if (trigger.frequency === "monthly" && Number(parts.day) !== (trigger.dayOfMonth ?? 1)) continue;
     const candidate = zonedTime(Number(parts.year), Number(parts.month), Number(parts.day), hour, minute, timeZone);
     if (candidate > after) return candidate;
   }

@@ -1,10 +1,13 @@
 import type { ComponentType, SVGProps } from "react";
-import { AI_MODELS, STEP_LABELS, TRIGGER_LABELS, type StepType, type Trigger, type WorkflowNode } from "@/lib/workflows/definition";
+import { AI_MODELS, EMAIL_KIND_LABELS, STEP_LABELS, TRIGGER_LABELS, type StepType, type Trigger, type WorkflowNode } from "@/lib/workflows/definition";
 import type { Condition } from "@/lib/workflows/variables";
 import SparkleIcon from "@/public/assets/images/assistant/sparkle.svg";
 import CheckIcon from "@/public/assets/images/booking/check.svg";
 import ClockIcon from "@/public/assets/images/booking/clock.svg";
 import FilterIcon from "@/public/assets/images/_common/filter.svg";
+import SearchIcon from "@/public/assets/images/_common/search.svg";
+import BracesIcon from "@/public/assets/images/_common/braces.svg";
+import BuildingIcon from "@/public/assets/images/companies/sidebar/building.svg";
 import BellIcon from "@/public/assets/images/companies/header/bell.svg";
 import ColumnsIcon from "@/public/assets/images/companies/sidebar/columns.svg";
 import ZapIcon from "@/public/assets/images/companies/sidebar/zap.svg";
@@ -41,6 +44,9 @@ export const STEP_META: Record<StepType, { icon: Icon; group: NodeGroup }> = {
   notify: { icon: BellIcon, group: "action" },
   send_email: { icon: EmailIcon, group: "action" },
   linear_issue: { icon: LinearIcon, group: "action" },
+  find_records: { icon: SearchIcon, group: "logic" },
+  upsert_record: { icon: BuildingIcon, group: "action" },
+  webhook: { icon: BracesIcon, group: "action" },
 };
 
 export const TRIGGER_ICON = ZapIcon;
@@ -48,7 +54,8 @@ export const TRIGGER_ICON = ZapIcon;
 export const PALETTE: { label: string; types: StepType[] }[] = [
   { label: "AI", types: ["ai"] },
   { label: "Logic", types: ["if", "filter", "loop", "delay", "approval"] },
-  { label: "Actions", types: ["create_task", "add_note", "update_record", "board", "notify", "send_email", "linear_issue"] },
+  { label: "Records", types: ["find_records", "upsert_record", "update_record"] },
+  { label: "Actions", types: ["create_task", "add_note", "board", "notify", "send_email", "linear_issue", "webhook"] },
 ];
 
 function text(value: unknown) {
@@ -80,8 +87,10 @@ const OPS: Record<string, string> = {
 export function triggerSummary(trigger: Trigger) {
   if (trigger.type === "schedule") {
     const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    if (trigger.frequency === "monthly") return `Day ${trigger.dayOfMonth ?? 1} of each month at ${trigger.time}`;
     return trigger.frequency === "daily" ? `Every day at ${trigger.time}` : `${days[trigger.weekday ?? 1]}s at ${trigger.time}`;
   }
+  if (trigger.type === "email_received") return EMAIL_KIND_LABELS[trigger.kind];
   if (trigger.type === "manual" || trigger.type === "record_created") return trigger.object === "company" ? "Companies" : "Contacts";
   return TRIGGER_LABELS[trigger.type];
 }
@@ -92,7 +101,25 @@ export function nodeSummary(node: WorkflowNode) {
     case "ai": {
       const model = AI_MODELS.find((item) => item.id === c.model)?.label.split(" (")[0] ?? "AI";
       const prompt = short(plain(text(c.prompt)), 40);
-      return prompt ? `${model}: ${prompt}` : "Write a prompt";
+      const label = c.webSearch === true ? `${model} with web` : model;
+      return prompt ? `${label}: ${prompt}` : "Write a prompt";
+    }
+    case "find_records": {
+      const what = c.object === "company" ? "companies" : "contacts";
+      const quiet = Number(c.quietDays) > 0 ? `, quiet ${Number(c.quietDays)}+ days` : "";
+      return `Up to ${Number(c.limit) || 25} ${what}${quiet}`;
+    }
+    case "upsert_record": {
+      const target = c.object === "contact" ? plain(text(c.email)) : plain(text(c.domain) || text(c.name));
+      return target ? short(`${c.create === false ? "Find" : "Find or create"} ${target}`) : "Say what to find";
+    }
+    case "webhook": {
+      const url = text(c.url);
+      try {
+        return url ? `Post to ${new URL(url).hostname}` : "Add an address";
+      } catch {
+        return url ? short(plain(url)) : "Add an address";
+      }
     }
     case "if":
     case "filter": {

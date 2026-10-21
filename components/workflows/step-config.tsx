@@ -258,6 +258,18 @@ export default function StepConfig({
             ))}
           </Select>
           {field("prompt", "Prompt", { rows: 8, placeholder: "Review this call with {{company.name}} and…" })}
+          <div className="flex flex-col gap-2">
+            <label className="caption-style text-subtle flex items-start gap-2">
+              <Checkbox className="mt-0.5" checked={c.webSearch === true} onCheckedChange={(value) => update({ ...c, webSearch: value === true })} />
+              <span>
+                Search the web. The AI looks things up (news, LinkedIn, company sites) and lists its sources in a sources answer.
+              </span>
+            </label>
+            <label className="caption-style text-subtle flex items-start gap-2">
+              <Checkbox className="mt-0.5" checked={c.context === true} onCheckedChange={(value) => update({ ...c, context: value === true })} />
+              <span>Give it what Orbit knows: the record&apos;s details, recent activity, deals and your recent emails with the contact.</span>
+            </label>
+          </div>
           <Outputs step={step} update={update} />
         </div>
       );
@@ -420,6 +432,140 @@ export default function StepConfig({
           <p className="caption-style text-subtle">Sends to the run&apos;s contact from your Outlook, and logs it on their timeline.</p>
           {field("subject", "Subject")}
           {field("body", "Email", { rows: 6 })}
+        </div>
+      );
+    case "find_records": {
+      const object = str(c.object) === "company" ? "company" : "contact";
+      const chosen = Array.isArray(c.lifecycles) ? (c.lifecycles as string[]) : [];
+      const number = (key: string, label: string, placeholder: string, max: number) => (
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <label htmlFor={`${step.id}-${key}`} className="caption-style text-subtle">
+            {label}
+          </label>
+          <Input
+            id={`${step.id}-${key}`}
+            type="number"
+            min={1}
+            max={max}
+            placeholder={placeholder}
+            value={str(c[key])}
+            onChange={(event) => update({ ...c, [key]: event.target.value })}
+          />
+        </div>
+      );
+      return (
+        <div className="flex flex-col gap-3">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Select id={`${step.id}-object`} label="Find" value={object} onChange={(value) => update({ ...c, object: value })}>
+              <option value="contact">Contacts</option>
+              <option value="company">Companies</option>
+            </Select>
+            <Select id={`${step.id}-order`} label="Take first" value={str(c.order) || "least_contacted"} onChange={(value) => update({ ...c, order: value })}>
+              <option value="least_contacted">Longest since last contact</option>
+              <option value="oldest">Oldest records</option>
+              <option value="newest">Newest records</option>
+              <option value="name">By name</option>
+            </Select>
+          </div>
+          <fieldset className="flex flex-col gap-1.5">
+            <legend className="caption-style text-subtle pb-1">{object === "company" ? "Lifecycle" : "Their company's lifecycle"} (none ticked means any)</legend>
+            <div className="flex flex-wrap gap-x-4 gap-y-2">
+              {options.lifecycles.map((option) => (
+                <label key={option.value} className="flex items-center gap-2 text-[13.5px]">
+                  <Checkbox
+                    checked={chosen.includes(option.value)}
+                    onCheckedChange={(value) =>
+                      update({ ...c, lifecycles: value === true ? [...chosen, option.value] : chosen.filter((item) => item !== option.value) })
+                    }
+                  />
+                  {option.label}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Select id={`${step.id}-deal`} label="Open deal" value={str(c.openOpportunity) || "any"} onChange={(value) => update({ ...c, openOpportunity: value })}>
+              <option value="any">Either way</option>
+              <option value="yes">Has an open deal</option>
+              <option value="no">No open deal</option>
+            </Select>
+            <Select id={`${step.id}-owner`} label="Owner" value={str(c.owner)} onChange={(value) => update({ ...c, owner: value })}>
+              <option value="">Anyone</option>
+              <option value="owner">Me</option>
+              {options.members.map((member) => (
+                <option key={member.id} value={member.id}>
+                  {member.name}
+                </option>
+              ))}
+            </Select>
+            <div className="flex min-w-0 flex-col gap-1.5">
+              <label htmlFor={`${step.id}-tag`} className="caption-style text-subtle">
+                Tag
+              </label>
+              <Input id={`${step.id}-tag`} value={str(c.tag)} placeholder="Any tag" onChange={(event) => update({ ...c, tag: event.target.value })} />
+            </div>
+            <div className="flex min-w-0 flex-col gap-1.5">
+              <label htmlFor={`${step.id}-search`} className="caption-style text-subtle">
+                Name, email or title contains
+              </label>
+              <Input id={`${step.id}-search`} value={str(c.search)} placeholder="Anything" onChange={(event) => update({ ...c, search: event.target.value })} />
+            </div>
+            {number("quietDays", "No contact for at least (days)", "Any", 3650)}
+            {number("limit", "At most", "25", 100)}
+          </div>
+          {number("skipDays", "Skip records this workflow found in the last (days)", "Never skip", 365)}
+          <p className="caption-style text-subtle">
+            Connect this to For each item with the list {`{{steps.${step.id}.records}}`}. Inside the loop, the company and contact steps work on each record in turn. Skipping lets a weekly run work through a long list in batches.
+          </p>
+        </div>
+      );
+    }
+    case "upsert_record": {
+      const object = str(c.object) === "contact" ? "contact" : "company";
+      return (
+        <div className="flex flex-col gap-3">
+          <Select id={`${step.id}-object`} label="Record" value={object} onChange={(value) => update({ ...c, object: value })} className="sm:w-56">
+            <option value="company">Company</option>
+            <option value="contact">Contact</option>
+          </Select>
+          {object === "company" ? (
+            <>
+              {field("domain", "Domain", { placeholder: "{{steps.ai_1.newDomain}}" })}
+              {field("name", "Name", { placeholder: "{{steps.ai_1.newCompany}}" })}
+              {field("website", "Website (optional)")}
+            </>
+          ) : (
+            <>
+              {field("email", "Email")}
+              <div className="grid gap-3 sm:grid-cols-2">
+                {field("firstName", "First name")}
+                {field("lastName", "Last name")}
+              </div>
+              {field("jobTitle", "Job title")}
+              {field("companyId", "Company id (optional)", { placeholder: "{{steps.upsert_record_1.id}}" })}
+            </>
+          )}
+          <label className="caption-style text-subtle flex items-center gap-2">
+            <Checkbox checked={c.create !== false} onCheckedChange={(value) => update({ ...c, create: value === true })} />
+            Create it if it isn&apos;t in Orbit{object === "company" ? " (new companies are enriched when auto-enrichment is on)" : ""}
+          </label>
+          <label className="caption-style text-subtle flex items-center gap-2">
+            <Checkbox checked={c.useInRun === true} onCheckedChange={(value) => update({ ...c, useInRun: value === true })} />
+            Make it the run&apos;s {object} for the steps after this one
+          </label>
+          <p className="caption-style text-subtle">Later steps can use its id, for example to move a contact with Update record, Company set to {`{{steps.${step.id}.id}}`}.</p>
+        </div>
+      );
+    }
+    case "webhook":
+      return (
+        <div className="flex flex-col gap-3">
+          {field("url", "Address (https)", { placeholder: "https://hooks.slack.com/services/…" })}
+          {field("body", "Body (optional)", {
+            rows: 6,
+            placeholder: '{"text": "{{contact.name}} may have moved to {{steps.ai_1.newCompany}}"}',
+            hint: "Leave empty to send the run's company, contact and step results as JSON.",
+          })}
         </div>
       );
     case "linear_issue":

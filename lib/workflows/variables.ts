@@ -97,6 +97,8 @@ const COMPANY: VariableOption[] = [
   { path: "company.healthReason", label: "Health reason", group: "Company" },
   { path: "company.industry", label: "Industry", group: "Company" },
   { path: "company.ownerName", label: "Owner", group: "Company" },
+  { path: "company.website", label: "Website", group: "Company" },
+  { path: "company.id", label: "Id", group: "Company" },
   { path: "company.url", label: "Link in Orbit", group: "Company" },
 ];
 
@@ -105,6 +107,9 @@ const CONTACT: VariableOption[] = [
   { path: "contact.firstName", label: "First name", group: "Contact" },
   { path: "contact.email", label: "Email", group: "Contact" },
   { path: "contact.jobTitle", label: "Job title", group: "Contact" },
+  { path: "contact.companyName", label: "Company name", group: "Contact" },
+  { path: "contact.linkedinUrl", label: "LinkedIn", group: "Contact" },
+  { path: "contact.id", label: "Id", group: "Contact" },
   { path: "contact.url", label: "Link in Orbit", group: "Contact" },
 ];
 
@@ -117,7 +122,20 @@ const BASE: VariableOption[] = [
 export function variableOptions(definition: WorkflowDefinition | null, nodeId?: string): VariableOption[] {
   const options = [...BASE];
   const type = definition?.trigger.type;
-  if (type && type !== "schedule") options.push(...COMPANY, ...CONTACT);
+  const findsRecords = Boolean(definition?.nodes.some((node) => node.type === "find_records" || node.type === "upsert_record"));
+  if (type && (type !== "schedule" || findsRecords)) options.push(...COMPANY, ...CONTACT);
+  if (type === "email_received") {
+    options.push(
+      { path: "email.subject", label: "Subject", group: "Email" },
+      { path: "email.fromName", label: "From", group: "Email" },
+      { path: "email.from", label: "From address", group: "Email" },
+      { path: "email.text", label: "Text", group: "Email" },
+      { path: "email.kind", label: "Kind", group: "Email" },
+      { path: "email.failedRecipient", label: "Address that bounced", group: "Email" },
+      { path: "email.receivedAt", label: "Received", group: "Email" },
+      { path: "email.url", label: "Link in Mail", group: "Email" },
+    );
+  }
   if (type === "call_summary_ready" || type === "activity_logged") {
     options.push(
       { path: "activity.type", label: "Type", group: "Activity" },
@@ -162,6 +180,24 @@ export function variableOptions(definition: WorkflowDefinition | null, nodeId?: 
       for (const output of outputs) {
         if (output.key) options.push({ path: `steps.${step.id}.${output.key}`, label: output.key, group });
       }
+      if (step.config.webSearch === true && !outputs.some((output) => output.key === "sources")) {
+        options.push({ path: `steps.${step.id}.sources`, label: "sources", group });
+      }
+    }
+    if (step.type === "find_records") {
+      options.push({ path: `steps.${step.id}.records`, label: "Records found", group }, { path: `steps.${step.id}.count`, label: "How many", group });
+    }
+    if (step.type === "upsert_record") {
+      options.push(
+        { path: `steps.${step.id}.id`, label: "Id", group },
+        { path: `steps.${step.id}.name`, label: "Name", group },
+        { path: `steps.${step.id}.created`, label: "Was created", group },
+        { path: `steps.${step.id}.found`, label: "Was found", group },
+        { path: `steps.${step.id}.url`, label: "Link in Orbit", group },
+      );
+    }
+    if (step.type === "webhook") {
+      options.push({ path: `steps.${step.id}.status`, label: "Status", group }, { path: `steps.${step.id}.response`, label: "Response", group });
     }
     if (step.type === "loop") {
       options.push({ path: "loop.item", label: "Current item", group }, { path: "loop.index", label: "Item number", group });

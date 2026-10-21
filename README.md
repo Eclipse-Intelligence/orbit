@@ -581,7 +581,7 @@ When an opportunity is marked won, its company becomes a Customer, and every boa
 
 ## Workflows
 
-Workflows automate work around your records. Each person builds their own on the Workflows page, and runs use that person's permissions. Share as a template (under More on a workflow) lets everyone in the workspace copy it. Orbit's starter templates are Follow up when a client turns at risk and Product requests to Linear.
+Workflows automate work around your records. Each person builds their own on the Workflows page, and runs use that person's permissions. Share as a template (under More on a workflow) lets everyone in the workspace copy it. Orbit's starter templates are Follow up when a client turns at risk, Product requests to Linear, Spot job changes (each month, check the contacts you've been quietest with on the web, and when someone has moved and you approve, note it, move them to their new company and create two follow-up tasks) and Check if someone moved when an email bounces.
 
 A workflow is built on a canvas, like n8n. It always starts with a When node (the trigger). The list on the left holds every other node: click one to add it below the selected node (already connected), or drag it onto the canvas. Connect nodes by dragging from the dot under a node to the next one. If has a Yes and a No output, and For each item has Each item and Done. Click a node to edit just that node in the panel on the right; Backspace or Delete removes the selected node or connection. Nodes can be dragged anywhere, and the canvas pans and zooms. On a phone, Add node opens the list and a node's settings open in a sheet.
 
@@ -595,28 +595,32 @@ A workflow is built on a canvas, like n8n. It always starts with a When node (th
 | An activity is logged | Optionally of one type (call, email, meeting, note) |
 | A task is completed | Any task you can see |
 | Run from a record | You choose it from the lightning button on a company or contact page |
-| On a schedule | Daily or weekly at a time, London time |
+| On a schedule | Daily, weekly or monthly (day 1 to 28) at a time, London time |
+| An email arrives | A new email in your inbox: any email from a contact, a reply to an email you sent, a bounce (the contact is the person whose address bounced), or an automatic reply such as out of office or "I've left". It runs privately for you and gives the email's subject, sender, text and link. |
 
-"Only when it's mine" limits a trigger to your own calls, changes and tasks.
+"Only when it's mine" limits a trigger to your own calls, changes and tasks. Email triggers are always yours alone: another member's workflows never see your mail.
 
 | Node | What it does |
 | --- | --- |
-| Ask AI | Sends a prompt to the LLM API with the model you choose and returns the named answers you define (text, number, yes or no, list, or one of a set of choices). Each answer becomes a field for later steps. |
+| Ask AI | Sends a prompt to the LLM API with the model you choose and returns the named answers you define (text, number, yes or no, list, or one of a set of choices). Each answer becomes a field for later steps. Search the web lets it look things up (news, LinkedIn, company sites) and adds a sources answer with the addresses it used. Give it what Orbit knows adds the record's details, recent activity, deals and your recent emails with the contact. Emails and web pages are treated as material to read, never as instructions. |
 | If, Continue only if | Branch on a condition, or stop this path unless it is true (is, is not, contains, is empty, more than, less than). |
 | For each item | Runs the nodes connected to Each item once per item of a list, then carries on from Done. |
 | Wait | Pauses for minutes, hours or days. |
 | Wait for approval | Optional. Pauses until you approve or reject it on the Workflows page; rejecting stops the run. |
-| Create task, Add note, Update record | Act on the run's company or contact. Tasks can go to ClickUp too. |
+| Find records | Lists up to 100 companies or contacts by lifecycle, tag, owner, open deal, how long since you were last in touch and a search, ordered by longest since last contact, oldest, newest or name. Skip records found in the last N days so a weekly or monthly run works through a long list in batches. Give its records to For each item, and inside the loop the company and contact nodes act on each record in turn. |
+| Find or create record | Finds a company (by domain, then name) or a contact (by email), or creates it. New companies are enriched when auto-enrichment is on. Its id lets later nodes use it, for example Update record setting a contact's Company to `{{steps.upsert_record_1.id}}` to move them; it can also become the run's company or contact. |
+| Create task, Add note, Update record | Act on the run's company or contact. Tasks can go to ClickUp too. Update record covers lifecycle, health, owner, industry, size, source, description, name, domain, website, LinkedIn and phone on companies, and owner, job title, company, source, notes, name, email, phone and LinkedIn on contacts. |
 | Add to or move on a board | Puts the company on a board or moves its card. |
 | Notify someone | Sends an in-app notification to you, the record's owner, or a member. |
-| Send email | Emails the run's contact from your Outlook and logs it. |
+| Send email | Emails the run's contact from your mailbox and logs it. |
 | Create Linear issue | Creates an issue in the Linear team. |
+| Send to a webhook | Posts to an https address, such as a Slack incoming webhook, Zapier or Make: your own body with fields, or the run's company, contact and node results as JSON. Private and local addresses are refused. |
 
 Every text field has Insert field, which adds a value such as `{{company.name}}`, `{{call.summary}}`, `{{steps.ai_1.health}}` or `{{loop.item}}`, from the trigger and the nodes above it. Lists are written one item per line. A path simply ends at a node with nothing connected below it.
 
 Test run runs a workflow against a record you choose: AI and logic run for real, and actions only show what they would have done. The Runs tab lists runs; selecting one marks each node on the canvas as Done, Failed or Waiting and shows every node's result. Failed runs notify you with the reason. A workflow's own changes never trigger it again, and runs set off by other workflows stop three levels deep.
 
-Event triggers run straight away. Waits, approvals and schedules continue when someone uses Orbit and on every `/api/cron/sync` call (every 10 minutes in production), so they can be up to ten minutes late. `/api/cron/workflows` runs only workflows if you want them more often.
+Event triggers run straight away; email triggers start when the mail arrives (Outlook tells Orbit about new mail within seconds, and the five-minute mail job catches the rest). Waits, approvals and schedules continue when someone uses Orbit and on every `/api/cron/sync` call (every 10 minutes in production), so they can be up to ten minutes late. `/api/cron/workflows` runs only workflows if you want them more often.
 
 ## Linear
 
