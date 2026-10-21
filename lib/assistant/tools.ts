@@ -1,6 +1,8 @@
 import { getBookingPage } from "@/lib/booking/pages";
 import { listLifecycles } from "@/lib/crm/lifecycles";
 import { getMailThread, mailSyncStatus, searchMail } from "@/lib/mail/store";
+import { saveDraftForAgent } from "@/lib/mail/compose";
+import { mailOrigin } from "@/lib/mail/origin";
 import { archiveBoard, createBoard, getBoard, listBoards, updateBoard } from "@/lib/crm/boards";
 import { savePipelineStages } from "@/lib/crm/pipeline";
 import { definitionFromInput, STEP_TYPES, TRIGGER_TYPES } from "@/lib/workflows/definition";
@@ -1589,6 +1591,54 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       if (strings(args.add).length) await addTags(actor, kind, ids, strings(args.add));
       if (strings(args.remove).length) await removeTags(actor, kind, ids, strings(args.remove));
       return { kind, ids, added: strings(args.add), removed: strings(args.remove) };
+    },
+  },
+  {
+    name: "save_email_draft",
+    label: "Saving a draft",
+    write: true,
+    description:
+      "Save an email as a draft in Orbit Mail (it also appears in the mailbox's Drafts folder in Outlook) for the user to review and send. It never sends. Use this whenever the user asks for a draft. For a reply, pass replyToEmailId (an email id from search_email or get_email_thread) so it lands in that conversation; otherwise give to and a subject. to can hold email addresses, and contactId adds that contact.",
+    parameters: {
+      type: "object",
+      properties: {
+        replyToEmailId: idParam("Email to reply to, from search_email or get_email_thread. Leave out for a new email."),
+        replyAll: { type: "boolean", description: "Reply to everyone on that email." },
+        contactId: idParam("Contact to send to."),
+        to: { type: "array", items: { type: "string" }, description: "Email addresses." },
+        cc: { type: "array", items: { type: "string" } },
+        subject: { type: "string", description: "Needed for a new email. Replies keep the conversation's subject." },
+        body: { type: "string", description: "Plain text with a greeting and sign-off. Orbit adds the signature." },
+        from: { type: "string", description: "Address to send from. Leave out for the main mailbox, or the account the conversation is in for a reply." },
+      },
+      required: ["body"],
+    },
+    describe: (args, name) => ({
+      title: `Save draft: ${str(args.subject) || "reply"}`,
+      lines: [
+        [args.contactId ? name(args.contactId) : "", ...strings(args.to)].filter(Boolean).length
+          ? `To: ${[args.contactId ? name(args.contactId) : "", ...strings(args.to)].filter(Boolean).join(", ")}`
+          : str(args.replyToEmailId)
+            ? `Reply${args.replyAll ? " all" : ""} in the conversation`
+            : "",
+        str(args.from) ? `From: ${str(args.from)}` : "",
+        "Saved to Drafts in Orbit Mail. Nothing is sent.",
+        str(args.body),
+      ].filter(Boolean),
+    }),
+    run: async (actor, args) => {
+      const contactId = optionalStr(args.contactId);
+      const contact = contactId ? await getContact(actor, contactId) : null;
+      if (contact && !contact.email) return { error: `${contact.name} has no email address in Orbit.` };
+      const to = [...(contact?.email ? [contact.email] : []), ...strings(args.to)];
+      const replyTo = optionalStr(args.replyToEmailId) ?? null;
+      if (!replyTo && to.length === 0) return { error: "Say who the email is to." };
+      const saved = await saveDraftForAgent(
+        actor,
+        { replyTo, replyAll: args.replyAll === true, from: optionalStr(args.from) ?? null, to, cc: strings(args.cc), subject: optionalStr(args.subject), body: required(args.body, "A message") },
+        { origin: mailOrigin() },
+      );
+      return { saved: true, sent: false, subject: saved.draft.subject, to: saved.draft.to.map((item) => item.address), href: saved.href };
     },
   },
   {

@@ -5,7 +5,7 @@ import type { UserActor } from "@/lib/crm/types";
 import { askMail } from "@/lib/mail/ai";
 import { attachmentNotes } from "@/lib/mail/attachment-context";
 import { listMailAttachments } from "@/lib/mail/attachments";
-import { composeAccounts, discardMailDraft, readDraftInput, saveMailDraft } from "@/lib/mail/compose";
+import { composeAccounts, discardMailDraft, readDraftInput, resolveSendAccount, saveMailDraft } from "@/lib/mail/compose";
 import { stripQuoted } from "@/lib/mail/format";
 import { mailOrigin } from "@/lib/mail/origin";
 import { getThread, listThreads } from "@/lib/mail/threads";
@@ -39,13 +39,6 @@ function viewFor(value: (typeof VIEWS)[number] | undefined): MailView {
   if (!value || value === "inbox") return { role: "inbox" };
   if ((MAIL_SPLITS as readonly string[]).includes(value)) return { role: "inbox", split: value as (typeof MAIL_SPLITS)[number] };
   return { role: value as "snoozed" | "sent" | "drafts" | "archive" | "trash" };
-}
-
-async function resolveFrom(actor: UserActor, from: string | undefined) {
-  if (!from) return { sourceId: null, identityId: null };
-  const account = (await composeAccounts(actor)).find((item) => item.id === from || item.email.toLowerCase() === from.toLowerCase());
-  if (!account) throw new CrmError("invalid_input", "Choose an account from mail_accounts.", 400, { field: "from" });
-  return { sourceId: account.sourceId ?? account.id, identityId: account.identityId ?? null };
 }
 
 export function registerMailTools(server: McpServer, actor: UserActor, options: Fetcher = {}) {
@@ -166,8 +159,8 @@ export function registerMailTools(server: McpServer, actor: UserActor, options: 
     },
     async (args) =>
       run(async () => {
-        const from = await resolveFrom(actor, args.from);
-        const sourceId = from.sourceId ?? (args.mode === "new" ? (await composeAccounts(actor)).find((item) => !item.identityId)?.id ?? null : null);
+        const from = args.from || args.mode === "new" ? await resolveSendAccount(actor, args.from) : { sourceId: null, identityId: null };
+        const sourceId = from.sourceId;
         const draft = await saveMailDraft(
           actor,
           readDraftInput({
