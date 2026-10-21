@@ -3,6 +3,7 @@ import { memberActor } from "@/lib/crm/conversations";
 import { query } from "@/lib/db/pool";
 import { prepareMail } from "@/lib/mail/prepare";
 import { syncMail } from "@/lib/mail/sync";
+import { runWorkflowTick } from "@/lib/workflows/engine";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -20,6 +21,7 @@ async function syncOwner(subscriptionId: string, clientState: string) {
   for (let attempt = 0; attempt < RETRIES; attempt += 1) {
     const report = await syncMail(actor, { budgetMs: 15_000, backfill: false });
     if (report.sources > 0) {
+      if (report.workflowEvents > 0) await runWorkflowTick({ budgetMs: 15_000 }).catch((error) => console.error("Workflow tick failed", error));
       if (report.stored > 0) await prepareMail(actor, { deadline: Date.now() + 30_000 }).catch((error) => console.error("Preparing mail failed", error));
       return;
     }

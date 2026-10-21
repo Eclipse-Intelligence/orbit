@@ -2,6 +2,7 @@ import { backgroundTargets } from "@/lib/crm/conversations";
 import { cronAuthorization } from "@/lib/crm/scheduler";
 import { processDueMail } from "@/lib/mail/due";
 import { prepareMail } from "@/lib/mail/prepare";
+import { runWorkflowTick } from "@/lib/workflows/engine";
 import { syncMail, type MailSyncReport } from "@/lib/mail/sync";
 import { microsoftConfigured } from "@/lib/microsoft/oauth";
 
@@ -32,6 +33,9 @@ async function handle(request: Request) {
     } catch (error) {
       users.push({ userId: target.actor.userId, report: { error: error instanceof Error ? error.message : "Mail sync failed." } });
     }
+  }
+  if (users.some((user) => "workflowEvents" in user.report && user.report.workflowEvents > 0) && deadline - Date.now() > 15_000) {
+    await runWorkflowTick({ budgetMs: Math.min(deadline - Date.now() - 5_000, 40_000) }).catch((error) => console.error("Workflow tick failed", error));
   }
   return Response.json({ users });
 }

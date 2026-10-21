@@ -26,12 +26,25 @@ type LlmJsonRequest<T> = {
   timeoutMs?: number;
   deadline?: number;
   model?: string;
+  webSearch?: boolean;
 };
 
 type LlmJsonResult<T> = {
   data: T;
   model: string;
+  citations: string[];
 };
+
+function citationsOf(message: unknown) {
+  const annotations = (message as { annotations?: unknown } | undefined)?.annotations;
+  if (!Array.isArray(annotations)) return [];
+  const urls = annotations.flatMap((item) => {
+    const citation = (item as { url_citation?: { url?: unknown }; url?: unknown } | null) ?? {};
+    const url = citation.url_citation?.url ?? citation.url;
+    return typeof url === "string" && /^https?:\/\//.test(url) ? [url] : [];
+  });
+  return [...new Set(urls)].slice(0, 20);
+}
 
 function llmModel() {
   return process.env.LLM_MODEL?.trim() || DEFAULT_MODEL;
@@ -109,6 +122,7 @@ async function attempt<T>(
           { role: "system", content: request.system },
           { role: "user", content: request.user },
         ],
+        ...(request.webSearch ? { web_search_options: { search_context_size: "medium" } } : {}),
       }),
       signal: AbortSignal.timeout(timeoutMs),
     });
@@ -129,7 +143,7 @@ async function attempt<T>(
   }
   let body: {
     model?: unknown;
-    choices?: { message?: { content?: unknown }; finish_reason?: unknown }[];
+    choices?: { message?: { content?: unknown; annotations?: unknown }; finish_reason?: unknown }[];
   };
   try {
     body = await response.json();
@@ -149,6 +163,7 @@ async function attempt<T>(
   return {
     data: parsed.data,
     model: typeof body.model === "string" && body.model ? body.model : model,
+    citations: citationsOf(choice?.message),
   };
 }
 

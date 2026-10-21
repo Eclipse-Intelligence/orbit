@@ -18,6 +18,7 @@ import {
 } from "@/lib/mail/microsoft";
 import { trackingIdIn } from "@/lib/mail/html";
 import { notifyNewMail } from "@/lib/mail/notify";
+import { queueMailWorkflowEvents } from "@/lib/workflows/mail-events";
 import type { PushSender } from "@/lib/push";
 import { MailSyncReset, type MailRole, type ProviderMessage } from "@/lib/mail/types";
 import type { MicrosoftToken } from "@/lib/microsoft/oauth";
@@ -58,6 +59,7 @@ export type MailSyncReport = {
   paused: boolean;
   errors: string[];
   arrived: string[];
+  workflowEvents: number;
 };
 
 function mailStorageLimitBytes() {
@@ -462,7 +464,7 @@ export async function syncMail(
 ): Promise<MailSyncReport> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const deadline = options.deadline ?? Date.now() + (options.budgetMs ?? 20_000);
-  const report: MailSyncReport = { sources: 0, stored: 0, removed: 0, backfilling: 0, paused: false, errors: [], arrived: [] };
+  const report: MailSyncReport = { sources: 0, stored: 0, removed: 0, backfilling: 0, paused: false, errors: [], arrived: [], workflowEvents: 0 };
   const sources = await loadSources(actor);
   const hardStop = await withActor(actor, async (db) => (await databaseBytes(db)) >= mailHardStopBytes());
   if (hardStop) {
@@ -523,6 +525,10 @@ export async function syncMail(
   }
   if (report.arrived.length) {
     await notifyNewMail(actor, report.arrived, { send: options.push }).catch((error) => console.error("Mail notification failed", error));
+    report.workflowEvents = await queueMailWorkflowEvents(actor, report.arrived).catch((error) => {
+      console.error("Queueing mail workflows failed", error);
+      return 0;
+    });
   }
   return report;
 }
