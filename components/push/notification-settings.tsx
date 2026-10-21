@@ -195,7 +195,7 @@ export default function NotificationSettings({
           <Switch checked={reads} onChange={chooseReads} label="Notify me when someone reads my email" />
         </div>
         <p className="caption-style text-subtle">
-          Orbit also lets you know when a scheduled email can&apos;t send, when nobody has replied by your reminder, and when a snoozed email comes back.
+          Orbit also lets you know when a workflow needs your approval, when a scheduled email can&apos;t send, when nobody has replied by your reminder, and when a snoozed email comes back.
         </p>
         {message && (
           <p role={message.tone} className={message.tone === "alert" ? "caption-style text-danger" : "caption-style text-subtle"}>
