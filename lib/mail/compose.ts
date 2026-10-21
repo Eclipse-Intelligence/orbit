@@ -598,3 +598,62 @@ export async function deleteDraftMessage(actor: UserActor, messageId: string, fe
   await deleteMicrosoftDraft(token, row.provider_message_id, fetchImpl).catch(graphProblem);
   await withActor(actor, (db) => db.query("delete from crm.mail_messages where id = $1", [row.id]));
 }
+
+export async function resolveSendAccount(actor: UserActor, from: string | null | undefined) {
+  const accounts = await composeAccounts(actor);
+  const wanted = from?.trim().toLowerCase();
+  const account = wanted
+    ? accounts.find((item) => item.id === from || item.email.toLowerCase() === wanted)
+    : accounts.find((item) => !item.identityId);
+  if (!account) {
+    const choices = accounts.map((item) => item.email).join(", ");
+    throw new CrmError("invalid_input", wanted ? `You can't send from ${from}. You can send from: ${choices || "no connected accounts"}.` : "Connect a mailbox in Capture first.", 400, {
+      field: "from",
+    });
+  }
+  return { sourceId: account.sourceId ?? account.id, identityId: account.identityId ?? null, email: account.email };
+}
+
+type ToolDraftInput = {
+  replyTo?: string | null;
+  replyAll?: boolean;
+  from?: string | null;
+  to: string[];
+  cc?: string[];
+  subject?: string;
+  body: string;
+};
+
+export async function saveDraftForAgent(actor: UserActor, input: ToolDraftInput, options: { origin: string | null; fetchImpl?: typeof fetch }) {
+  const replying = Boolean(input.replyTo);
+  const account = replying && !input.from ? null : await resolveSendAccount(actor, input.from);
+  const thread = replying
+    ? await withActor(actor, async (db) => {
+        if (!isUuid(input.replyTo!)) return null;
+        const result = await db.query<{ source_id: string; tk: string }>(
+          "select source_id, coalesce(thread_key, 'm:' || id::text) as tk from crm.mail_messages where id = $1 and user_id = $2",
+          [input.replyTo, actor.userId],
+        );
+        return result.rows[0] ?? null;
+      })
+    : null;
+  if (replying && !thread) throw new CrmError("not_found", "That email isn't in Orbit Mail. Search for it again.", 404);
+  if (!replying && !input.subject?.trim()) throw new CrmError("invalid_input", "Add a subject.", 400, { field: "subject" });
+  const draft = await saveMailDraft(
+    actor,
+    readDraftInput({
+      mode: replying ? (input.replyAll ? "reply_all" : "reply") : "new",
+      messageId: input.replyTo ?? null,
+      sourceId: account?.sourceId ?? thread?.source_id ?? null,
+      identityId: account?.identityId ?? null,
+      to: input.to,
+      cc: input.cc ?? [],
+      bcc: [],
+      subject: input.subject ?? "",
+      body: input.body,
+    }),
+    options,
+  );
+  const href = thread ? `/mail?thread=${encodeURIComponent(`${thread.source_id}|${thread.tk}`)}` : "/mail?view=drafts";
+  return { draft, href };
+}
