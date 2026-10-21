@@ -17,6 +17,7 @@ import { getTask } from "@/lib/crm/tasks";
 import type { Company, CompanyWrite, Contact, ContactWrite, Provenance, UserActor } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
 import { createLinearIssue, LinearError } from "@/lib/linear";
+import { pushToUser, type PushSender } from "@/lib/push";
 import { completeJson, LlmError } from "@/lib/llm";
 import { siteOrigin } from "@/lib/site-url";
 import { appTimeZone } from "@/lib/time";
@@ -89,7 +90,7 @@ type Ctx = {
   deadline: number;
 };
 
-type TickOptions = { budgetMs?: number; fetchImpl?: typeof fetch; limit?: number };
+type TickOptions = { budgetMs?: number; fetchImpl?: typeof fetch; limit?: number; push?: PushSender };
 
 const DEFAULT_BUDGET_MS = 45_000;
 const STEP_RESERVE_MS = 8_000;
@@ -862,7 +863,12 @@ async function workflowName(actor: UserActor, workflowId: string) {
   });
 }
 
-export async function executeRun(runId: string, ownerId: string, workspaceId: string, options: { deadline: number; fetchImpl?: typeof fetch }) {
+export async function executeRun(
+  runId: string,
+  ownerId: string,
+  workspaceId: string,
+  options: { deadline: number; fetchImpl?: typeof fetch; push?: PushSender },
+) {
   const actor = await ownerActor(ownerId, workspaceId);
   if (!actor) return "skipped" as const;
   const run = await readRun(actor, runId);
@@ -966,12 +972,14 @@ export async function executeRun(runId: string, ownerId: string, workspaceId: st
       state.approval = { stepId: step.id, title: result.title, details: result.details };
       await logStep(ctx, step, "waiting", input, { title: result.title }, null, started);
       await saveRun(actor, run.id, { state: { ...state, at, vars }, status: "waiting", waiting_for: "approval" });
-      await notify(actor, actor.userId, {
-        title: `Approval needed: ${result.title}`.slice(0, 200),
-        body: result.details.slice(0, 4000) || null,
-        href: `/workflows?approve=${run.id}`,
-        source: "workflow_approval",
-      });
+      const title = `Approval needed: ${result.title}`.slice(0, 200);
+      const href = `/workflows?approve=${run.id}`;
+      await notify(actor, actor.userId, { title, body: result.details.slice(0, 4000) || null, href, source: "workflow_approval" });
+      await pushToUser(
+        actor,
+        { title, body: result.details.replace(/\s+/g, " ").trim().slice(0, 300) || "Open Orbit to approve or reject it.", url: href, tag: `approval-${run.id}` },
+        { send: options.push },
+      ).catch((error) => console.error("Approval push failed", error));
       return "waiting" as const;
     }
     (vars.steps as Record<string, unknown>)[step.id] = result.output ?? null;
@@ -1034,7 +1042,7 @@ export async function runWorkflowTick(options: TickOptions = {}) {
     if (claimed.rows.length === 0) break;
     for (const row of claimed.rows) {
       try {
-        await executeRun(row.run_id, row.owner_id, row.workspace_id, { deadline, fetchImpl: options.fetchImpl });
+        await executeRun(row.run_id, row.owner_id, row.workspace_id, { deadline, fetchImpl: options.fetchImpl, push: options.push });
       } catch (error) {
         console.error("Workflow run failed", error);
       }

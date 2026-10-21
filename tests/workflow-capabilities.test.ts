@@ -9,6 +9,7 @@ import { listTasks } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { syncMail } from "@/lib/mail/sync";
+import { savePushSubscription, type PushSender } from "@/lib/push";
 import { nextScheduleRun, type WorkflowDefinition } from "@/lib/workflows/definition";
 import { runWorkflowTick } from "@/lib/workflows/engine";
 import { classifyEmail, failedRecipient } from "@/lib/workflows/mail-events";
@@ -129,9 +130,18 @@ describe("workflow capabilities", () => {
     await setWorkflowStatus(owner, workflow.id, "active");
     await getAdminPool().query("update crm.workflows set next_run_at = now() - interval '1 minute' where id = $1", [workflow.id]);
 
+    await savePushSubscription(owner, { endpoint: "https://push.example/phone", keys: { p256dh: "BKey", auth: "auth" } }, "iPhone");
+    const pushed: Record<string, unknown>[] = [];
+    const push: PushSender = async (_subscription, payload) => {
+      pushed.push(JSON.parse(payload));
+    };
     const llm = fakes([MOVED]);
-    await runWorkflowTick({ fetchImpl: llm.fetchImpl, budgetMs: 30_000 });
+    await runWorkflowTick({ fetchImpl: llm.fetchImpl, budgetMs: 30_000, push });
     assert.equal(llm.seen.ai.length, 1);
+    assert.equal(pushed.length, 1);
+    assert.equal(pushed[0].title, "Approval needed: Andrew Sanaghan seems to have moved to Secro");
+    assert.match(String(pushed[0].body), /LinkedIn shows Andrew joined Secro/);
+    assert.match(String(pushed[0].url), /^\/workflows\?approve=[0-9a-f-]{36}$/);
     assert.ok(llm.seen.ai[0].webSearch);
     assert.match(llm.seen.ai[0].user, /Andrew Sanaghan \(MD\) still works at Pulse/);
     assert.match(llm.seen.ai[0].user, /What Orbit knows:/);
