@@ -1,10 +1,9 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/_ui/dialog";
 import { Input } from "@/components/_ui/input";
 import Tag from "@/components/_ui/tag";
 import SectionHeader from "@/components/crm/section-header";
@@ -18,6 +17,7 @@ import type { Product, Template } from "@/lib/proposals/catalogue";
 import type { DocumentSummary } from "@/lib/proposals/documents";
 import { BILLING_LABELS, BILLINGS, formatMoney, KIND_LABELS, type Billing } from "@/lib/proposals/model";
 import { cn } from "@/lib/utils";
+import PlusIcon from "@/public/assets/images/_common/plus.svg";
 
 type Tab = "proposals" | "templates" | "products";
 
@@ -62,7 +62,7 @@ export default function ProposalsScreen({
   const router = useRouter();
   const [filter, setFilter] = useState<string>("all");
   const [creating, setCreating] = useState(false);
-  const [editing, setEditing] = useState<Product | "new" | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const shown = documents.filter((item) => matches(filter, item));
@@ -85,7 +85,7 @@ export default function ProposalsScreen({
         New proposal
       </Button>
     ) : tab === "products" ? (
-      <Button variant="primary" size="sm" data-shortcut="add-record" onClick={() => setEditing("new")}>
+      <Button variant="primary" size="sm" data-shortcut="add-record" onClick={() => document.getElementById("product-new-name")?.focus()}>
         New product
       </Button>
     ) : (
@@ -197,70 +197,91 @@ export default function ProposalsScreen({
             </>
           )}
 
-          {tab === "products" &&
-            (products.length === 0 ? (
-              <p className="caption-style text-subtle">No products yet. Add what you sell, such as Agency Pilot, Free Trial or Pro, with prices in pounds and dollars.</p>
-            ) : (
-              <ul className="border-border flex flex-col rounded-xl border">
-                {products.map((item) => (
-                  <li key={item.id} className="border-border border-b last:border-b-0">
-                    <button type="button" onClick={() => setEditing(item)} className="flex w-full cursor-pointer items-center gap-3 px-4 py-3 text-left hover:bg-white/3">
-                      <span className="flex min-w-0 flex-1 flex-col gap-1">
-                        <span className="truncate text-[14px] leading-5">{item.name}</span>
-                        {item.description && <span className="caption-style text-subtle line-clamp-1">{item.description}</span>}
-                      </span>
-                      <span className="text-soft shrink-0 text-right text-[13px] tabular-nums">
-                        {[item.priceGbp !== null ? formatMoney(item.priceGbp, "GBP") : null, item.priceUsd !== null ? formatMoney(item.priceUsd, "USD") : null]
-                          .filter(Boolean)
-                          .join(" · ")}
-                        <span className="caption-style text-subtle block">{BILLING_LABELS[item.billing]}</span>
-                      </span>
-                      {item.archived && <Tag tone="neutral">Archived</Tag>}
-                    </button>
-                  </li>
-                ))}
+          {tab === "products" && (
+            <div className="flex flex-col gap-3">
+              <p className="caption-style text-subtle leading-[1.45]">
+                Choosing a product on a proposal fills in its name, description and price. Changing it later doesn&apos;t change proposals already sent.
+              </p>
+              <ul aria-label="Products" className="bg-card border-line-strong divide-line-strong flex flex-col divide-y overflow-hidden rounded-2xl border">
+                <li>
+                  <ProductEditor onDone={() => router.refresh()} />
+                </li>
+                {products.map((item) =>
+                  editing === item.id ? (
+                    <li key={item.id}>
+                      <ProductEditor
+                        product={item}
+                        onDone={() => {
+                          setEditing(null);
+                          router.refresh();
+                        }}
+                        onCancel={() => setEditing(null)}
+                      />
+                    </li>
+                  ) : (
+                    <li key={item.id}>
+                      <button
+                        type="button"
+                        onClick={() => setEditing(item.id)}
+                        aria-label={`Edit ${item.name}`}
+                        className={cn("flex w-full cursor-pointer items-center gap-3 px-4 py-3 text-left hover:bg-white/3", item.archived && "opacity-60")}
+                      >
+                        <span className="flex min-w-0 flex-1 flex-col gap-1">
+                          <span className="truncate text-[14px] leading-5">{item.name}</span>
+                          {item.description && <span className="caption-style text-subtle line-clamp-1 leading-[1.4]">{item.description}</span>}
+                        </span>
+                        {item.archived && <Tag tone="neutral">Archived</Tag>}
+                        <span className="text-soft shrink-0 text-right text-[13px] tabular-nums">
+                          {[item.priceGbp !== null ? formatMoney(item.priceGbp, "GBP") : null, item.priceUsd !== null ? formatMoney(item.priceUsd, "USD") : null]
+                            .filter(Boolean)
+                            .join(" · ")}
+                          <span className="caption-style text-subtle block pt-1">{BILLING_LABELS[item.billing]}</span>
+                        </span>
+                      </button>
+                    </li>
+                  ),
+                )}
               </ul>
-            ))}
+            </div>
+          )}
         </div>
       </div>
       <CreateProposalDialog open={creating} onOpenChange={setCreating} />
-      <Dialog open={editing !== null} onOpenChange={(open) => !open && setEditing(null)}>
-        <DialogContent className="max-w-[520px]">
-          {editing !== null && (
-            <ProductForm
-              product={editing === "new" ? null : editing}
-              onDone={() => {
-                setEditing(null);
-                router.refresh();
-              }}
-            />
-          )}
-        </DialogContent>
-      </Dialog>
     </section>
   );
 }
 
-function ProductForm({ product, onDone }: { product: Product | null; onDone: () => void }) {
+function ProductEditor({ product, onDone, onCancel }: { product?: Product; onDone: () => void; onCancel?: () => void }) {
+  const adding = !product;
+  const [open, setOpen] = useState(!adding);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [added, setAdded] = useState<string | null>(null);
+  const form = useRef<HTMLFormElement>(null);
+  const prefix = product ? `product-${product.id}` : "product-new";
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
+    const values = new FormData(event.currentTarget);
+    const name = String(values.get("name") ?? "").trim();
     setBusy(true);
     setError(null);
     const result = await saveProductAction(product?.id ?? null, {
-      name: String(form.get("name") ?? ""),
-      description: String(form.get("description") ?? ""),
-      priceGbp: String(form.get("priceGbp") ?? ""),
-      priceUsd: String(form.get("priceUsd") ?? ""),
-      billing: String(form.get("billing") ?? "one_off"),
+      name,
+      description: String(values.get("description") ?? ""),
+      priceGbp: String(values.get("priceGbp") ?? ""),
+      priceUsd: String(values.get("priceUsd") ?? ""),
+      billing: String(values.get("billing") ?? "one_off"),
     });
     setBusy(false);
     if (result.error) {
       setError(result.error);
       return;
+    }
+    if (adding) {
+      form.current?.reset();
+      setAdded(name);
+      document.getElementById(`${prefix}-name`)?.focus();
     }
     onDone();
   }
@@ -274,61 +295,106 @@ function ProductForm({ product, onDone }: { product: Product | null; onDone: () 
     else onDone();
   }
 
+  function close() {
+    if (adding) {
+      form.current?.reset();
+      setOpen(false);
+      setError(null);
+      (document.activeElement as HTMLElement | null)?.blur();
+    } else onCancel?.();
+  }
+
   return (
-    <form onSubmit={submit} className="flex flex-col gap-4">
-      <DialogHeader>
-        <DialogTitle>{product ? "Edit product" : "New product"}</DialogTitle>
-        <DialogDescription>Choosing it on a proposal fills in its name, description and price. Changing it later doesn&apos;t change proposals already sent.</DialogDescription>
-      </DialogHeader>
-      <label className="flex flex-col gap-1.5">
-        <span className="caption-style text-subtle">Name</span>
-        <Input name="name" defaultValue={product?.name ?? ""} required maxLength={120} autoFocus />
-      </label>
-      <label className="flex flex-col gap-1.5">
-        <span className="caption-style text-subtle">Description</span>
-        <textarea
-          name="description"
-          defaultValue={product?.description ?? ""}
-          maxLength={4000}
-          rows={3}
-          className="bg-transparent focus-visible:ring-ring/60 min-h-20 rounded-lg px-3 py-2 text-[14px] shadow-[0_0_0_1px_var(--input)] outline-none focus-visible:ring-2"
+    <form
+      ref={form}
+      onSubmit={submit}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          close();
+        }
+      }}
+      aria-label={product ? `Edit ${product.name}` : "Add a product"}
+      className={cn("flex flex-col gap-2.5 px-4 py-3", product && "bg-white/[0.03]")}
+    >
+      <div className="flex items-center gap-2.5">
+        {adding && <PlusIcon aria-hidden className="text-subtle size-3.5 shrink-0" />}
+        <label htmlFor={`${prefix}-name`} className="sr-only">
+          Product name
+        </label>
+        <input
+          id={`${prefix}-name`}
+          name="name"
+          defaultValue={product?.name ?? ""}
+          required
+          maxLength={120}
+          autoFocus={!adding}
+          autoComplete="off"
+          placeholder={adding ? "Add a product, such as Agency Pilot" : "Product name"}
+          onFocus={() => setOpen(true)}
+          onChange={() => setAdded(null)}
+          className="placeholder:text-subtle text-foreground h-8 min-w-0 flex-1 bg-transparent text-[14px] outline-none"
         />
-      </label>
-      <div className="grid gap-3 sm:grid-cols-3">
-        <label className="flex flex-col gap-1.5">
-          <span className="caption-style text-subtle">Price in pounds</span>
-          <Input name="priceGbp" inputMode="decimal" defaultValue={product?.priceGbp ?? ""} placeholder="£" />
-        </label>
-        <label className="flex flex-col gap-1.5">
-          <span className="caption-style text-subtle">Price in dollars</span>
-          <Input name="priceUsd" inputMode="decimal" defaultValue={product?.priceUsd ?? ""} placeholder="$" />
-        </label>
-        <label className="flex flex-col gap-1.5">
-          <span className="caption-style text-subtle">Billing</span>
-          <select name="billing" defaultValue={product?.billing ?? "one_off"} className={recordSelectClass}>
-            {BILLINGS.map((billing: Billing) => (
-              <option key={billing} value={billing}>
-                {BILLING_LABELS[billing]}
-              </option>
-            ))}
-          </select>
-        </label>
       </div>
+      {open && (
+        <div className={cn("flex flex-col gap-2.5", adding && "pl-6")}>
+          <label htmlFor={`${prefix}-description`} className="sr-only">
+            Description
+          </label>
+          <textarea
+            id={`${prefix}-description`}
+            name="description"
+            defaultValue={product?.description ?? ""}
+            maxLength={4000}
+            rows={2}
+            placeholder="Description, shown on the proposal (optional)"
+            className="placeholder:text-subtle bg-secondary text-foreground focus-visible:ring-ring/60 min-h-14 w-full resize-y rounded-lg px-3 py-2 text-[14px] leading-5 shadow-[0_0_0_1px_var(--input)] outline-none focus-visible:ring-2"
+          />
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="flex items-center gap-1.5">
+              <span className="text-subtle text-[13px]">£</span>
+              <Input name="priceGbp" inputMode="decimal" aria-label="Price in pounds" defaultValue={product?.priceGbp ?? ""} placeholder="Price" className="w-28" />
+            </label>
+            <label className="flex items-center gap-1.5">
+              <span className="text-subtle text-[13px]">$</span>
+              <Input name="priceUsd" inputMode="decimal" aria-label="Price in dollars" defaultValue={product?.priceUsd ?? ""} placeholder="Price" className="w-28" />
+            </label>
+            <label htmlFor={`${prefix}-billing`} className="sr-only">
+              Billing
+            </label>
+            <select id={`${prefix}-billing`} name="billing" defaultValue={product?.billing ?? "one_off"} className={cn(recordSelectClass, "w-32")}>
+              {BILLINGS.map((billing: Billing) => (
+                <option key={billing} value={billing}>
+                  {BILLING_LABELS[billing]}
+                </option>
+              ))}
+            </select>
+            <span className="ml-auto flex items-center gap-1">
+              {product && (
+                <Button variant="ghost" size="sm" disabled={busy} onClick={() => void archive(!product.archived)}>
+                  {product.archived ? "Restore" : "Archive"}
+                </Button>
+              )}
+              <Button variant="ghost" size="sm" onClick={close}>
+                {adding ? "Close" : "Cancel"}
+              </Button>
+              <Button type="submit" variant="primary" size="sm" disabled={busy}>
+                {busy ? "Saving…" : adding ? "Add" : "Save"}
+              </Button>
+            </span>
+          </div>
+        </div>
+      )}
       {error && (
         <p role="alert" className="caption-style text-danger">
           {error}
         </p>
       )}
-      <DialogFooter>
-        {product && (
-          <Button variant="ghost" disabled={busy} onClick={() => void archive(!product.archived)} className="mr-auto">
-            {product.archived ? "Restore" : "Archive"}
-          </Button>
-        )}
-        <Button type="submit" variant="primary" disabled={busy}>
-          {busy ? "Saving…" : "Save"}
-        </Button>
-      </DialogFooter>
+      {added && !error && (
+        <p role="status" className="caption-style text-soft pl-6">
+          Added {added}. Add another, or press Esc to close.
+        </p>
+      )}
     </form>
   );
 }
