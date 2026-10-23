@@ -2,6 +2,7 @@ import { bookingUrl } from "@/lib/assistant/links";
 import { ARTICLES_URL, DOCS_URL, eclipseDocsIndex, listEclipseArticles, readEclipsePage } from "@/lib/eclipse-sources";
 import { readWebPage, WebPageError } from "@/lib/web-page";
 import { MindcaseError } from "@/lib/mindcase";
+import { callEclipseTool, EclipseMcpError, eclipseGuide, findEclipseTools } from "@/lib/eclipse-mcp";
 import { checkColdEmail, COLD_EMAIL_PLAYBOOK, ECLIPSE_OUTREACH_BRIEF } from "@/lib/assistant/cold-email";
 import { socialLookup } from "@/lib/social-lookup";
 import { getBookingPage } from "@/lib/booking/pages";
@@ -913,6 +914,67 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         error: error instanceof WebPageError ? error.message : "That page couldn't be read.",
       }));
     },
+  },
+  {
+    name: "eclipse_guide",
+    label: "Reading the Eclipse guide",
+    description:
+      "How the Eclipse app works for agents: clients and clientId, which tools are reads and which need confirmation, previews and costs, long-running operations, canvases, images, integrations, uploads, limits and error codes. Read it once in a conversation before working in Eclipse.",
+    parameters: { type: "object", properties: {} },
+    run: async () => ({ guide: await eclipseGuide().catch((error: Error) => (error instanceof EclipseMcpError ? error.message : "Eclipse didn't answer.")) }),
+  },
+  {
+    name: "eclipse_tools",
+    label: "Finding an Eclipse tool",
+    description:
+      "Search the Eclipse app's own tools (over 300, through its MCP server) by what you want to do, for example 'list clients', 'article status', 'geo visibility trends', 'keyword rankings' or 'create canvas'. Returns matching tool names, whether each is a read or needs approval, their descriptions and exact inputs. Always find a tool here before calling it.",
+    parameters: { type: "object", properties: { query: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 20 } }, required: ["query"] },
+    run: async (_actor, args) =>
+      findEclipseTools(required(args.query, "What to look for"), { limit: typeof args.limit === "number" ? args.limit : 8 }).catch((error: Error) => ({
+        error: error instanceof EclipseMcpError ? error.message : "Eclipse didn't answer.",
+      })),
+  },
+  {
+    name: "eclipse_read",
+    label: "Reading Eclipse",
+    description:
+      "Run a read-only Eclipse tool (found with eclipse_tools) and return its result, for example list_clients, get_content or geo_trends. Also previews a tool that costs credits or has consequences: it shows what would happen and the cost, without running it. Pass the tool name and its arguments exactly as its input describes.",
+    parameters: {
+      type: "object",
+      properties: { tool: { type: "string" }, arguments: { type: "object", description: "The tool's arguments." } },
+      required: ["tool"],
+    },
+    run: async (_actor, args) =>
+      callEclipseTool(required(args.tool, "A tool name"), args.arguments && typeof args.arguments === "object" ? (args.arguments as Record<string, unknown>) : {}, "read").catch(
+        (error: Error) => ({ error: error instanceof EclipseMcpError ? error.message : "Eclipse didn't answer." }),
+      ),
+  },
+  {
+    name: "eclipse_action",
+    label: "Acting in Eclipse",
+    write: true,
+    description:
+      "Run an Eclipse tool that changes data, spends credits or AI balance, publishes or deletes (found with eclipse_tools), after the user approves the card. Preview costly or consequential tools with eclipse_read first and tell the user the cost. Pass the tool name and its arguments exactly as its input describes; Orbit adds the confirmation and a retry key.",
+    parameters: {
+      type: "object",
+      properties: { tool: { type: "string" }, arguments: { type: "object", description: "The tool's arguments." }, summary: { type: "string", description: "One plain sentence for the approval card on what this does and any cost." } },
+      required: ["tool", "summary"],
+    },
+    describe: (args) => ({
+      title: `Eclipse: ${str(args.tool)}`,
+      lines: [
+        str(args.summary),
+        ...Object.entries(args.arguments && typeof args.arguments === "object" ? (args.arguments as Record<string, unknown>) : {})
+          .filter(([key]) => key !== "confirm" && key !== "idempotencyKey")
+          .slice(0, 12)
+          .map(([key, value]) => `${key}: ${typeof value === "string" ? value.slice(0, 200) : JSON.stringify(value).slice(0, 200)}`),
+        "Runs in Eclipse as you. Anything it costs is charged to your Eclipse account.",
+      ].filter(Boolean),
+    }),
+    run: async (_actor, args) =>
+      callEclipseTool(required(args.tool, "A tool name"), args.arguments && typeof args.arguments === "object" ? (args.arguments as Record<string, unknown>) : {}, "action").catch(
+        (error: Error) => ({ error: error instanceof EclipseMcpError ? error.message : "Eclipse didn't answer." }),
+      ),
   },
   {
     name: "cold_email_playbook",
