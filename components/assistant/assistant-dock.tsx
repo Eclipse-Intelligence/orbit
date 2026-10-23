@@ -334,7 +334,9 @@ function MentionChip({ mention }: { mention: Mention }) {
         ? companyHref(mention.id)
         : mention.kind === "task"
           ? "/tasks"
-          : "/opportunities";
+          : mention.kind === "proposal"
+            ? `/proposals/${mention.id}`
+            : "/opportunities";
   return (
     <a
       href={href}

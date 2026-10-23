@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import { searchMentionsAction, type MentionOption } from "@/app/(crm)/search";
 import { liveMentions, type Mention, type MentionKind } from "@/lib/mentions";
 import { stripMention } from "@/lib/task-pad";
 import { cn } from "@/lib/utils";
 
-const KIND_LABELS: Record<MentionKind, string> = { contact: "Person", company: "Company", task: "Task", opportunity: "Opportunity" };
+const KIND_LABELS: Record<MentionKind, string> = { contact: "Person", company: "Company", task: "Task", opportunity: "Opportunity", proposal: "Proposal" };
 
 type Open = { start: number; end: number; query: string };
 
@@ -87,6 +88,8 @@ export default function MentionInput({
   const [highlight, setHighlight] = useState(0);
   const [scrollTop, setScrollTop] = useState(0);
   const picked = useRef<Mention[]>([]);
+  const box = useRef<HTMLDivElement>(null);
+  const [place, setPlace] = useState<CSSProperties | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -161,8 +164,30 @@ export default function MentionInput({
   const listId = `${id}-mentions`;
   const showList = open !== null && options.length > 0;
 
+  useLayoutEffect(() => {
+    if (!showList) return;
+    const measure = () => {
+      const rect = box.current?.getBoundingClientRect();
+      if (!rect) return;
+      const width = Math.min(352, Math.max(rect.width, 240), window.innerWidth - 16);
+      const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
+      setPlace(
+        listPlacement === "above"
+          ? { left, width, bottom: window.innerHeight - rect.top + 8, maxHeight: Math.min(288, rect.top - 16) }
+          : { left, width, top: rect.bottom + 8, maxHeight: Math.min(288, window.innerHeight - rect.bottom - 16) },
+      );
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    window.addEventListener("scroll", measure, true);
+    return () => {
+      window.removeEventListener("resize", measure);
+      window.removeEventListener("scroll", measure, true);
+    };
+  }, [showList, listPlacement]);
+
   return (
-    <div className="relative min-w-0">
+    <div ref={box} className="relative min-w-0">
       <div
         aria-hidden
         className="text-foreground pointer-events-none absolute inset-0 overflow-hidden text-[14px] leading-6 break-words whitespace-pre-wrap [@media(pointer:coarse)]:text-[16px]"
@@ -206,15 +231,13 @@ export default function MentionInput({
         placeholder={placeholder}
         className="placeholder:text-subtle caret-foreground selection:bg-primary/40 relative block max-h-[200px] min-h-6 w-full resize-none bg-transparent text-[14px] leading-6 text-transparent outline-none"
       />
-      {showList && (
+      {showList && place && createPortal(
         <ul
           id={listId}
           role="listbox"
-          aria-label={kinds ? "Tag a person or company" : "Tag a person, company, task or opportunity"}
-          className={cn(
-            "bg-popover border-line-strong shadow-overlay absolute left-0 z-30 max-h-72 w-[min(22rem,100%)] overflow-y-auto rounded-xl border p-1",
-            listPlacement === "above" ? "bottom-full mb-2" : "top-full mt-2",
-          )}
+          aria-label={kinds ? "Tag a person or company" : "Tag a person, company, task, opportunity or proposal"}
+          style={place}
+          className="bg-popover border-line-strong shadow-overlay fixed z-[100] overflow-y-auto rounded-xl border p-1"
         >
           {options.map((option, index) => (
             <li key={`${option.kind}-${option.id}`} role="option" aria-selected={index === highlight}>
@@ -235,7 +258,8 @@ export default function MentionInput({
               </button>
             </li>
           ))}
-        </ul>
+        </ul>,
+        document.body,
       )}
     </div>
   );
