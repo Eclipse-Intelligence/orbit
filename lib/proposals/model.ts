@@ -47,9 +47,17 @@ export const BLOCK_LABELS: Record<BlockType, string> = { cover: "Cover", section
 
 export const blocksSchema = z.array(blockSchema).max(60);
 
+export const LOGO_MAX_LENGTH = 300_000;
+
 export const settingsSchema = z.object({
   accent: z.string().regex(/^#[0-9a-fA-F]{6}$/).default("#4124fb"),
   validDays: z.coerce.number().int().min(1).max(365).default(30),
+  logo: z
+    .string()
+    .max(LOGO_MAX_LENGTH)
+    .regex(/^data:image\/png;base64,[A-Za-z0-9+/]+=*$/)
+    .nullable()
+    .default(null),
 });
 export type TemplateSettings = z.infer<typeof settingsSchema>;
 
@@ -74,6 +82,7 @@ export type Content = {
   currency: Currency;
   validUntil: string | null;
   accent: string;
+  logo?: string | null;
   client: Party;
   sender: Party;
   blocks: RenderedBlock[];

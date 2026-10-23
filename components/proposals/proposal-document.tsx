@@ -9,6 +9,7 @@ import {
   type Content,
   type Inline,
 } from "@/lib/proposals/model";
+import Asset from "@/components/_ui/asset";
 import { cn } from "@/lib/utils";
 
 type SignatureView = { role: "client" | "sender"; name: string; title: string | null; signatureText: string; signedAt: string };
@@ -75,6 +76,22 @@ function Body({ value }: { value: string }) {
   return <div className="flex flex-col gap-4">{out}</div>;
 }
 
+export function ProposalLogo({ src, company, className }: { src: string; company: string; className?: string }) {
+  return (
+    <Asset
+      type="image"
+      src={src}
+      alt={company}
+      width={4}
+      height={1}
+      fit="contain"
+      mediaClassName="object-left"
+      unoptimized
+      className={cn("h-10 w-40", className)}
+    />
+  );
+}
+
 function sectionId(index: number) {
   return `section-${index + 1}`;
 }
@@ -97,7 +114,11 @@ export default function ProposalDocument({
         if (block.type === "cover") {
           return (
             <header key={block.id} id={sectionId(index)} className="flex scroll-mt-24 flex-col gap-5">
-              <span aria-hidden className="block h-1.5 w-14 rounded-full" style={{ backgroundColor: content.accent }} />
+              {content.logo ? (
+                <ProposalLogo src={content.logo} company={content.sender.company} className="mb-2" />
+              ) : (
+                <span aria-hidden className="block h-1.5 w-14 rounded-full" style={{ backgroundColor: content.accent }} />
+              )}
               <h1 className="doc-title">{block.title || content.title}</h1>
               {block.subtitle && <p className="doc-lead text-soft max-w-[34em]">{block.subtitle}</p>}
               <dl className="text-subtle flex flex-wrap gap-x-6 gap-y-1 text-[13.5px]">

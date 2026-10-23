@@ -257,10 +257,16 @@ async function partiesFor(db: Db, actor: Actor, row: { company_id: string; conta
   };
 }
 
+async function templateLogo(db: Db, templateId: string, fallback: string | null) {
+  const result = await db.query<{ settings: unknown }>("select settings from crm.document_templates where id = $1", [templateId]);
+  return result.rows[0] ? readSettings(result.rows[0].settings).logo : fallback;
+}
+
 async function buildContent(db: Db, actor: Actor, row: DocumentRow, issuedAt: string) {
   const parties = await partiesFor(db, actor, row);
   const items = Array.isArray(row.items) ? row.items : [];
   const settings = readSettings(row.settings);
+  const logo = row.status === "draft" && row.template_id ? await templateLogo(db, row.template_id, settings.logo) : settings.logo;
   const values = fieldValues({
     company: { name: parties.company.name, domain: parties.company.domain, website: parties.company.website },
     contact: {
@@ -281,6 +287,7 @@ async function buildContent(db: Db, actor: Actor, row: DocumentRow, issuedAt: st
     currency: row.currency,
     validUntil: row.valid_until,
     accent: settings.accent,
+    logo,
     client: { name: parties.contact.name, email: parties.contact.email ?? "", title: parties.contact.jobTitle, company: parties.company.name },
     sender: { name: parties.sender.name, email: parties.sender.email, title: null, company: parties.workspaceName },
     blocks,

@@ -2,7 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import Button from "@/components/_ui/button";
-import ProposalDocument from "@/components/proposals/proposal-document";
+import ProposalDocument, { ProposalLogo } from "@/components/proposals/proposal-document";
 import { KIND_LABELS, longDate } from "@/lib/proposals/model";
 import type { PublicDocument, PublicState } from "@/lib/proposals/public";
 import { cn } from "@/lib/utils";
@@ -59,7 +59,14 @@ export default function ProposalPage({ token, initial, preview }: { token: strin
     <div className="paper min-h-dvh">
       <header className="bg-background/85 border-border sticky top-0 z-20 border-b backdrop-blur-xl">
         <div className="mx-auto flex h-16 max-w-[56em] items-center gap-3 px-5 sm:px-8">
-          <span aria-hidden className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: content.accent }} />
+          {content.logo ? (
+            <>
+              <ProposalLogo src={content.logo} company={content.sender.company} className="h-7 w-24 shrink-0 max-sm:w-16" />
+              <span aria-hidden className="bg-border h-6 w-px shrink-0" />
+            </>
+          ) : (
+            <span aria-hidden className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: content.accent }} />
+          )}
           <div className="flex min-w-0 flex-1 flex-col">
             <span className="truncate text-[14.5px] leading-5 font-semibold">{content.title}</span>
             <span className="text-subtle truncate text-[12.5px] leading-4">

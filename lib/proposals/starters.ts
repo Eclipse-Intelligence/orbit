@@ -10,7 +10,7 @@ export const STARTER_TEMPLATES: Starter[] = [
     key: "proposal",
     kind: "proposal",
     name: "Proposal",
-    settings: { accent: "#4124fb", validDays: 30 },
+    settings: { accent: "#4124fb", validDays: 30, logo: null },
     blocks: [
       { id: "b1", type: "cover", title: "{{proposal.title}}", subtitle: "Prepared for {{contact.name}} at {{company.name}} by {{sender.name}}, {{workspace.name}}." },
       {
@@ -46,7 +46,7 @@ export const STARTER_TEMPLATES: Starter[] = [
     key: "mutual-nda",
     kind: "nda",
     name: "Mutual NDA",
-    settings: { accent: "#4124fb", validDays: 30 },
+    settings: { accent: "#4124fb", validDays: 30, logo: null },
     blocks: [
       { id: "b1", type: "cover", title: "Mutual non-disclosure agreement", subtitle: "Between {{workspace.name}} and {{company.name}}, dated {{today}}." },
       {
@@ -86,7 +86,7 @@ export const STARTER_TEMPLATES: Starter[] = [
     key: "one-way-nda",
     kind: "nda",
     name: "One-way NDA",
-    settings: { accent: "#4124fb", validDays: 30 },
+    settings: { accent: "#4124fb", validDays: 30, logo: null },
     blocks: [
       { id: "b1", type: "cover", title: "Non-disclosure agreement", subtitle: "From {{company.name}} to {{workspace.name}}, dated {{today}}." },
       {

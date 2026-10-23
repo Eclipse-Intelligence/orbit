@@ -222,4 +222,23 @@ describe("proposals", () => {
     assert.equal((await listDocuments(owner, { status: "expired" })).length, 1);
     assert.equal(await openDocument("not-a-real-token-at-all-xxxxxx", { track: false }), null);
   });
+
+  it("puts the template's logo on drafts, the sent copy and the PDF", async () => {
+    const logo =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+    await assert.rejects(
+      () => updateTemplate(owner, ndaTemplateId, { settings: { accent: "#4124fb", validDays: 30, logo: "data:image/svg+xml;base64,PHN2Zz4=" } }),
+      /logo must be a PNG/,
+    );
+    const id = await createDocument(owner, { templateId: ndaTemplateId, companyId: pulseId, contactId: andrewId });
+    assert.equal((await getDocument(owner, id)).preview.logo, null);
+    await updateTemplate(owner, ndaTemplateId, { settings: { accent: "#4124fb", validDays: 30, logo } });
+    assert.equal((await getDocument(owner, id)).preview.logo, logo);
+    const token = tokenOf((await sendDocument(owner, id, { email: false })).url);
+    assert.equal((await openDocument(token, { track: false }))!.content.logo, logo);
+    const issued = await documentFile(owner, id, "issued");
+    assert.ok(issued && issued.data.subarray(0, 5).toString() === "%PDF-");
+    await updateTemplate(owner, ndaTemplateId, { settings: { accent: "#4124fb", validDays: 30, logo: null } });
+    assert.equal((await openDocument(token, { track: false }))!.content.logo, logo);
+  });
 });
