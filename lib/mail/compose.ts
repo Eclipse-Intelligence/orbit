@@ -7,7 +7,7 @@ import { isUuid } from "@/lib/crm/mutate";
 import { canonicalEmail } from "@/lib/crm/normalize";
 import type { UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
-import { composeEmailHtml, TRACKING_PATH } from "@/lib/mail/html";
+import { composeEmailHtml, imageMarkers, TRACKING_PATH } from "@/lib/mail/html";
 import {
   createMicrosoftDraft,
   deleteMicrosoftDraft,
@@ -261,7 +261,7 @@ async function readDraftContext(actor: UserActor, input: DraftInput, row: DraftR
   });
 }
 
-async function writeDraft(actor: UserActor, input: DraftInput, options: { origin: string | null; fetchImpl: typeof fetch }) {
+async function writeDraft(actor: UserActor, input: DraftInput, options: { origin: string | null; fetchImpl: typeof fetch; inline?: Record<string, string> }) {
   const first = await withActor(actor, async (db) => {
     const found = input.id
       ? (await db.query<DraftRow>(`select ${DRAFT_COLUMNS} from crm.mail_drafts where id = $1 and user_id = $2`, [input.id, actor.userId])).rows[0] ?? null
@@ -280,9 +280,10 @@ async function writeDraft(actor: UserActor, input: DraftInput, options: { origin
   const token = await mailSourceToken(actor, target.source_id, options.fetchImpl);
   let row = existing ?? (await createDraft(actor, input, target, token, options.origin, options.fetchImpl));
   const html = () =>
-    composeEmailHtml({ body: input.body, signature, pixel: pixelUrl(options.origin, row.tracking_id), quote: row.quote_html });
+    composeEmailHtml({ body: input.body, signature, pixel: pixelUrl(options.origin, row.tracking_id), quote: row.quote_html, inline: options.inline });
   const subject = input.subject || row.subject || "";
-  const hash = contentHash(input, signature, subject);
+  const inlineKey = Object.entries(options.inline ?? {}).map(([name, cid]) => `${name}=${cid}`).join("|");
+  const hash = contentHash(input, signature, inlineKey ? `${subject}\u0000${inlineKey}` : subject);
   if (existing && existing.content_hash === hash) return { row: existing, target, token };
   try {
     await updateMicrosoftDraft(token, row.provider_draft_id, { subject, html: html(), to: input.to, cc: input.cc, bcc: input.bcc }, options.fetchImpl);
@@ -362,6 +363,25 @@ export function readAttachmentIds(value: unknown) {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && isUuid(item)).slice(0, 10) : [];
 }
 
+async function inlineImages(actor: UserActor, body: string, ids: string[]) {
+  const wanted = imageMarkers(body);
+  const attachmentIds = ids.filter(isUuid);
+  if (wanted.length === 0 || attachmentIds.length === 0) return {};
+  const rows = await withActor(actor, async (db) => {
+    const result = await db.query<{ name: string; content_type: string }>(
+      "select name, content_type from crm.email_attachments where id = any($1::uuid[])",
+      [attachmentIds],
+    );
+    return result.rows;
+  });
+  const inline: Record<string, string> = {};
+  for (const row of rows) {
+    if (!row.content_type.startsWith("image/") || !wanted.includes(row.name) || inline[row.name]) continue;
+    inline[row.name] = `image${Object.keys(inline).length + 1}@orbit`;
+  }
+  return inline;
+}
+
 export async function sendMailDraft(
   actor: UserActor,
   input: DraftInput & { attachments?: string[] },
@@ -369,9 +389,10 @@ export async function sendMailDraft(
 ): Promise<{ warning: string | null }> {
   checkSendable(input);
   const fetchImpl = options.fetchImpl ?? fetch;
+  const inline = await inlineImages(actor, input.body, input.attachments ?? []);
   const [attached, written, identity] = await Promise.all([
     loadAttachments(actor, input.attachments ?? [], fetchImpl),
-    writeDraft(actor, input, { origin: options.origin, fetchImpl }),
+    writeDraft(actor, input, { origin: options.origin, fetchImpl, inline }),
     input.identityId ? identityForSend(actor, input.identityId) : Promise.resolve(null),
   ]);
   let { row } = written;
@@ -381,7 +402,9 @@ export async function sendMailDraft(
   }
   const deliver = async (draft: DraftRow) => {
     const draftUrl = `https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(draft.provider_draft_id)}`;
-    if (attached.files.length) await attachToDraft(token, draftUrl, attached.files, fetchImpl);
+    if (attached.files.length) {
+      await attachToDraft(token, draftUrl, attached.files.map((file) => (inline[file.name] ? { ...file, contentId: inline[file.name] } : file)), fetchImpl);
+    }
     if (!identity) {
       await sendMicrosoftDraft(token, draft.provider_draft_id, fetchImpl);
       return;

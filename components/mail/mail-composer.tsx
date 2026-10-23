@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent } from "react";
 import Button from "@/components/_ui/button";
 import { AttachButton, AttachmentList, useEmailAttachments } from "@/components/crm/email-attachments";
 import {
@@ -223,6 +223,59 @@ export default function MailComposer({
     [],
   );
 
+  function takeFiles(files: File[]) {
+    const taken = attachments.items.map((item) => item.name);
+    const images: string[] = [];
+    const stamp = new Date().toTimeString().slice(0, 8).replace(/:/g, ".");
+    const named = files.map((file, index) => {
+      const base = file.name && !/^image\.(png|jpe?g|gif|webp)$/i.test(file.name) ? file.name : `Pasted image ${stamp}${files.length > 1 ? ` ${index + 1}` : ""}.${file.type.split("/")[1]?.replace("jpeg", "jpg") || "png"}`;
+      let name = base;
+      for (let copy = 2; taken.includes(name); copy += 1) name = base.replace(/(\.[^.]+)?$/, ` (${copy})$1`);
+      taken.push(name);
+      if (file.type.startsWith("image/")) images.push(name);
+      return name === file.name ? file : new File([file], name, { type: file.type, lastModified: file.lastModified });
+    });
+    void attachments.add(named);
+    if (images.length === 0) return;
+    const element = textarea.current;
+    const markers = images.map((name) => `[Image: ${name}]`).join("\n");
+    let caret = 0;
+    dirty.current = true;
+    setBody((current) => {
+      const at = Math.min(element && element.value === current ? element.selectionEnd : current.length, current.length);
+      const before = current.slice(0, at);
+      const insert = `${before && !before.endsWith("\n") ? "\n" : ""}${markers}\n`;
+      caret = at + insert.length;
+      return `${before}${insert}${current.slice(at)}`;
+    });
+    window.requestAnimationFrame(() => {
+      element?.focus();
+      element?.setSelectionRange(caret, caret);
+    });
+  }
+
+  function dropFiles(event: DragEvent) {
+    const files = Array.from(event.dataTransfer.files);
+    if (files.length) {
+      event.preventDefault();
+      setError(null);
+      takeFiles(files);
+      return;
+    }
+    if (/^file:/i.test(event.dataTransfer.getData("text/uri-list") || event.dataTransfer.getData("text/plain"))) {
+      event.preventDefault();
+      setError("That's a link to a file on your computer, which no one else can open. Drag the screenshot itself, or copy it and paste it here.");
+    }
+  }
+
+  function pasteFiles(event: ClipboardEvent) {
+    const files = Array.from(event.clipboardData.files);
+    if (files.length === 0) return;
+    event.preventDefault();
+    setError(null);
+    takeFiles(files);
+  }
+
   function change<T>(setter: (value: T) => void) {
     return (value: T) => {
       dirty.current = true;
@@ -330,6 +383,10 @@ export default function MailComposer({
           openAi();
         }
       }}
+      onDragOver={(event) => {
+        if (event.dataTransfer.types.includes("Files") || event.dataTransfer.types.includes("text/uri-list")) event.preventDefault();
+      }}
+      onDrop={dropFiles}
       aria-label={MODE_LABEL[start.mode]}
       className={cn(
         "flex min-h-0 flex-col gap-1",
@@ -472,6 +529,7 @@ export default function MailComposer({
         data-composer-body=""
         value={body}
         onChange={(event) => change(setBody)(event.target.value)}
+        onPaste={pasteFiles}
         placeholder={start.mode === "forward" ? "Add a note" : start.mode === "new" ? "Write your email" : "Write your reply"}
         rows={card ? 8 : 4}
         className={cn(

@@ -409,7 +409,7 @@ function inboxUrl(since: Date, order: boolean) {
   return url.toString();
 }
 
-export type MailAttachment = { name: string; contentType: string; bytes: Uint8Array };
+export type MailAttachment = { name: string; contentType: string; bytes: Uint8Array; contentId?: string };
 
 const INLINE_ATTACHMENT_LIMIT = 3 * 1024 * 1024;
 const UPLOAD_CHUNK = 320 * 1024 * 10;
@@ -490,6 +490,7 @@ export async function attachToDraft(
           name: item.name,
           contentType: item.contentType,
           contentBytes: base64(item.bytes),
+          ...(item.contentId ? { isInline: true, contentId: item.contentId } : {}),
         }),
         signal: AbortSignal.timeout(60_000),
       });
@@ -499,7 +500,9 @@ export async function attachToDraft(
     const session = await fetchImpl(`${draftUrl}/attachments/createUploadSession`, {
       method: "POST",
       headers: { ...auth, "content-type": "application/json" },
-      body: JSON.stringify({ AttachmentItem: { attachmentType: "file", name: item.name, size: item.bytes.byteLength } }),
+      body: JSON.stringify({
+        AttachmentItem: { attachmentType: "file", name: item.name, size: item.bytes.byteLength, ...(item.contentId ? { isInline: true, contentId: item.contentId } : {}) },
+      }),
       signal: AbortSignal.timeout(15_000),
     });
     if (!session.ok) throw await sendFailure(session);
