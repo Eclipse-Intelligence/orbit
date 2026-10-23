@@ -323,7 +323,8 @@
 
   h4,
   h5,
-  h6 {
+  h6,
+  .h4-style {
     @apply text-[14px] leading-none font-medium tracking-normal;
   }
 

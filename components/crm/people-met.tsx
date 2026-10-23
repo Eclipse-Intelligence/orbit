@@ -25,8 +25,10 @@ export default function PeopleMet({ people }: { people: MetPerson[] }) {
   const [notice, setNotice] = useState<CreatedNotice | null>(null);
   if (people.length === 0 && !notice) return null;
   return (
-    <section className="flex flex-col gap-2 px-4 pb-4" aria-labelledby="people-met-heading">
-      <h2 id="people-met-heading">People you&apos;ve met who aren&apos;t in Orbit</h2>
+    <section className="flex flex-col gap-2" aria-labelledby="people-met-heading">
+      <h3 id="people-met-heading" className="h4-style">
+        People you&apos;ve met who aren&apos;t in Orbit
+      </h3>
       <p role="status" className={notice ? "caption-style text-soft" : "sr-only"}>
         {notice && (
           <>
@@ -40,7 +42,7 @@ export default function PeopleMet({ people }: { people: MetPerson[] }) {
       {people.length === 0 ? (
         <p className="caption-style text-subtle">Everyone from your recent meetings is in Orbit.</p>
       ) : (
-        <ul className="flex max-w-[640px] flex-col gap-2">
+        <ul className="bg-card border-line-strong divide-line-strong flex flex-col divide-y overflow-hidden rounded-2xl border">
           {people.map((person) => (
             <PersonItem key={person.email} person={person} onCreated={setNotice} />
           ))}
@@ -93,35 +95,33 @@ function PersonItem({
   }
 
   return (
-    <li data-list-row="" className={cn(KEYBOARD_ROW_CLASS, "border-border flex flex-col gap-2 rounded-xl border p-3")}>
-      <div className="flex items-start gap-2.5">
-        <Monogram name={label} />
-        <span className="flex min-w-0 flex-1 flex-col">
-          <span className="truncate text-[14px] leading-5">{label}</span>
-          <span className="caption-style text-subtle truncate">
-            {person.name ? `${person.email} · ` : ""}
-            {person.meetings} {person.meetings === 1 ? "meeting" : "meetings"}
-          </span>
-          {lines.map((line) => (
-            <span key={line} className="caption-style text-subtle truncate">
-              {line}
-            </span>
-          ))}
+    <li data-list-row="" className={cn(KEYBOARD_ROW_CLASS, "flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3")}>
+      <Monogram name={label} />
+      <span className="flex min-w-0 flex-1 basis-48 flex-col gap-1">
+        <span className="truncate text-[14px] leading-5">{label}</span>
+        <span className="caption-style text-subtle truncate leading-[1.4]">
+          {person.name ? `${person.email} · ` : ""}
+          {person.meetings} {person.meetings === 1 ? "meeting" : "meetings"}
         </span>
-      </div>
-      {error && (
-        <p role="alert" className="caption-style text-danger">
-          {error}
-        </p>
-      )}
-      <div className="flex flex-wrap items-center gap-2">
+        {lines.map((line) => (
+          <span key={line} className="caption-style text-subtle truncate leading-[1.4]">
+            {line}
+          </span>
+        ))}
+        {error && (
+          <span role="alert" className="caption-style text-danger leading-[1.4]">
+            {error}
+          </span>
+        )}
+      </span>
+      <span className="flex shrink-0 items-center gap-1 max-sm:pl-11">
         <Button variant="secondary" size="sm" disabled={pending !== null} onClick={create} data-row-key="a" title="Create contact (A)">
           {pending === "create" ? "Creating…" : "Create contact"}
         </Button>
         <Button variant="ghost" size="sm" disabled={pending !== null} onClick={hide} data-row-key="h" title="Hide (H)">
           {pending === "hide" ? "Hiding…" : "Hide"}
         </Button>
-      </div>
+      </span>
     </li>
   );
 }

@@ -66,7 +66,7 @@ export function displayInitials(name: string) {
 }
 
 export function formatDate(iso: string) {
-  return new Intl.DateTimeFormat("en-US", {
+  return new Intl.DateTimeFormat("en-GB", {
     month: "short",
     day: "numeric",
     year: "numeric",
@@ -120,12 +120,13 @@ export function relativeWhen(iso: string | null | undefined, now = Date.now()) {
 
 export function formatWhen(iso: string | null) {
   if (!iso) return "No date";
-  return new Intl.DateTimeFormat("en-US", {
+  return new Intl.DateTimeFormat("en-GB", {
     month: "short",
     day: "numeric",
     year: "numeric",
-    hour: "numeric",
+    hour: "2-digit",
     minute: "2-digit",
+    hourCycle: "h23",
     timeZone: appTimeZone(),
   }).format(new Date(iso));
 }

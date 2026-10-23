@@ -48,9 +48,12 @@ export default function UnfiledConversations({
   conversations: UnfiledImport[];
 }) {
   const [notice, setNotice] = useState<FiledNotice | null>(null);
+  if (conversations.length === 0 && !notice) return null;
   return (
-    <section className="flex flex-col gap-2 px-4 pb-4" aria-labelledby="unfiled-heading">
-      <h2 id="unfiled-heading">Unfiled conversations</h2>
+    <section className="flex flex-col gap-2" aria-labelledby="unfiled-heading">
+      <h3 id="unfiled-heading" className="h4-style">
+        Meetings and calls with no contact
+      </h3>
       <p role="status" className={notice ? "caption-style text-soft" : "sr-only"}>
         {notice && (
           <>
@@ -66,7 +69,7 @@ export default function UnfiledConversations({
           Every imported meeting and call is filed on a contact.
         </p>
       ) : (
-        <ul className="flex max-w-[640px] flex-col gap-2">
+        <ul className="flex flex-col gap-2">
           {conversations.map((conversation) => (
             <UnfiledItem key={conversation.id} conversation={conversation} onFiled={setNotice} />
           ))}
@@ -126,16 +129,16 @@ function UnfiledItem({
   }
 
   return (
-    <li data-list-row="" className={cn(KEYBOARD_ROW_CLASS, "border-border flex flex-col gap-2 rounded-xl border p-3")}>
-      <div className="flex items-start gap-2">
+    <li data-list-row="" className={cn(KEYBOARD_ROW_CLASS, "bg-card border-line-strong flex flex-col gap-3 rounded-2xl border p-4")}>
+      <div className="flex items-start gap-2.5">
         <Tag tone={conversation.source === "granola" ? "teal" : "purple"} size="sm" className="text-[12px]">
           {SOURCE_LABELS[conversation.source]}
         </Tag>
-        <span className="flex min-w-0 flex-1 flex-col">
+        <span className="flex min-w-0 flex-1 flex-col gap-1">
           <span className="truncate text-[14px] leading-5">
             {conversation.title || (conversation.kind === "call" ? "Teams call" : "Meeting")}
           </span>
-          <span className="caption-style text-subtle">
+          <span className="caption-style text-subtle leading-[1.4]">
             {conversation.occurredAt ? formatWhen(conversation.occurredAt) : "No date"}
             {people ? ` · ${people}` : ""}
           </span>
@@ -145,7 +148,7 @@ function UnfiledItem({
         <div className="flex flex-col gap-1">
           <p
             id={summaryId}
-            className={`caption-style text-soft whitespace-pre-wrap ${expanded ? "" : "line-clamp-3"}`}
+            className={`caption-style text-soft leading-[1.5] whitespace-pre-wrap ${expanded ? "" : "line-clamp-3"}`}
           >
             {summary}
           </p>
