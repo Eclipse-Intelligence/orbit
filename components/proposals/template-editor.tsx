@@ -7,7 +7,7 @@ import { Input } from "@/components/_ui/input";
 import SectionHeader from "@/components/crm/section-header";
 import { recordSelectClass } from "@/components/crm/record-form";
 import type { Viewer } from "@/components/crm/viewer";
-import ProposalDocument from "@/components/proposals/proposal-document";
+import ProposalDocument, { ProposalLogo } from "@/components/proposals/proposal-document";
 import { createTemplateAction, saveTemplateAction } from "@/app/(crm)/proposals/actions";
 import type { Template } from "@/lib/proposals/catalogue";
 import {
@@ -16,6 +16,7 @@ import {
   FIELD_OPTIONS,
   fieldValues,
   KIND_LABELS,
+  LOGO_MAX_LENGTH,
   newBlockId,
   renderBlocks,
   totalsOf,
@@ -42,7 +43,83 @@ function blankBlock(type: BlockType, id: string): Block {
   return { id, type, heading: "New section", body: "" };
 }
 
-function samplePreview(template: { kind: Template["kind"]; blocks: Block[]; accent: string; validDays: number }, viewer: Viewer, now: number): Content {
+async function logoPng(file: File) {
+  const url = URL.createObjectURL(file);
+  try {
+    const image = new Image();
+    image.src = url;
+    await image.decode();
+    const vector = file.type === "image/svg+xml";
+    const width = image.naturalWidth || 800;
+    const height = image.naturalHeight || 240;
+    const scale = Math.min(vector ? Infinity : 1, 800 / width, 240 / height);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(width * scale));
+    canvas.height = Math.max(1, Math.round(height * scale));
+    canvas.getContext("2d")?.drawImage(image, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/png");
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+function LogoField({ logo, company, onChange }: { logo: string | null; company: string; onChange: (logo: string | null) => void }) {
+  const input = useRef<HTMLInputElement>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function pick(file: File | undefined) {
+    if (input.current) input.current.value = "";
+    if (!file) return;
+    setError(null);
+    try {
+      const png = await logoPng(file);
+      if (png.length > LOGO_MAX_LENGTH) {
+        setError("That logo is too detailed to use. Try a simpler or smaller image.");
+        return;
+      }
+      onChange(png);
+    } catch {
+      setError("That file couldn't be read as an image. Use a PNG, JPEG or SVG.");
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <label htmlFor="template-logo" className="caption-style text-subtle">
+        Logo
+      </label>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="flex h-14 w-44 items-center rounded-lg bg-white px-3 shadow-[0_0_0_1px_var(--input)]">
+          {logo ? <ProposalLogo src={logo} company={company} className="h-9 w-full" /> : <span className="caption-style text-[#6b6b6b]">No logo yet</span>}
+        </span>
+        <input
+          ref={input}
+          id="template-logo"
+          type="file"
+          accept="image/png,image/jpeg,image/svg+xml,image/webp"
+          className="sr-only"
+          onChange={(event) => void pick(event.target.files?.[0])}
+        />
+        <Button variant="secondary" size="sm" onClick={() => input.current?.click()}>
+          {logo ? "Change" : "Upload logo"}
+        </Button>
+        {logo && (
+          <Button variant="ghost" size="sm" onClick={() => onChange(null)}>
+            Remove
+          </Button>
+        )}
+      </div>
+      <p className="caption-style text-subtle leading-[1.4]">Shown at the top of the client&apos;s page and the PDF. A PNG or SVG made for a white background works best.</p>
+      {error && (
+        <p role="alert" className="caption-style text-danger">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function samplePreview(template: { kind: Template["kind"]; blocks: Block[]; accent: string; logo: string | null; validDays: number }, viewer: Viewer, now: number): Content {
   const validUntil = new Date(now + template.validDays * 86_400_000).toISOString().slice(0, 10);
   const items = template.kind === "proposal" ? SAMPLE_ITEMS : [];
   const values = fieldValues({
@@ -58,6 +135,7 @@ function samplePreview(template: { kind: Template["kind"]; blocks: Block[]; acce
     currency: "GBP",
     validUntil,
     accent: template.accent,
+    logo: template.logo,
     client: { name: "Jane Doe", email: "jane@acme.com", title: "Operations Director", company: "Acme Ltd" },
     sender: { name: viewer.name, email: viewer.email, title: null, company: viewer.workspaceName },
     blocks: renderBlocks(template.blocks, values).blocks,
@@ -191,17 +269,18 @@ export default function TemplateEditor({ viewer, template }: { viewer: Viewer; t
   const [status, setStatus] = useState<TemplateStatus>(template.status);
   const [blocks, setBlocks] = useState(template.blocks);
   const [accent, setAccent] = useState(template.settings.accent);
+  const [logo, setLogo] = useState(template.settings.logo);
   const [validDays, setValidDays] = useState(String(template.settings.validDays));
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ text: string; tone: "status" | "alert" } | null>(null);
   const [view, setView] = useState<"edit" | "preview">("edit");
   const [now] = useState(() => Date.now());
-  const preview = samplePreview({ kind: template.kind, blocks, accent, validDays: Number(validDays) || 30 }, viewer, now);
+  const preview = samplePreview({ kind: template.kind, blocks, accent, logo, validDays: Number(validDays) || 30 }, viewer, now);
 
   async function save(nextStatus = status) {
     setBusy(true);
     setMessage(null);
-    const result = await saveTemplateAction(template.id, { name, status: nextStatus, blocks, settings: { accent, validDays: Number(validDays) || 30 } });
+    const result = await saveTemplateAction(template.id, { name, status: nextStatus, blocks, settings: { accent, logo, validDays: Number(validDays) || 30 } });
     setBusy(false);
     if (!result.data) {
       setMessage({ text: result.error ?? "That didn't save.", tone: "alert" });
@@ -289,6 +368,7 @@ export default function TemplateEditor({ viewer, template }: { viewer: Viewer; t
                 <Input id="template-days" type="number" min={1} max={365} value={validDays} onChange={(event) => setValidDays(event.target.value)} />
               </div>
             </div>
+            <LogoField logo={logo} company={viewer.workspaceName} onChange={setLogo} />
             <p className="caption-style text-subtle">
               {KIND_LABELS[template.kind]} template. Only active templates can be used to create and send.
               {template.kind === "nda" ? " Have a solicitor check the wording before you rely on it." : ""}

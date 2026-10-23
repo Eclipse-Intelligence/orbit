@@ -358,7 +358,7 @@ Adding is inline. `components/crm/record-combobox.tsx` is a search box with a li
 | Table | What it holds |
 | --- | --- |
 | `crm.products` | Name, description, `price_gbp`, `price_usd` (at least one), `billing` (`one_off`, `monthly`, `yearly`), `archived_at`. |
-| `crm.document_templates` | `kind` (`proposal`, `nda`), name, `status` (`draft`, `active`, `archived`), `blocks` and `settings` (accent colour, valid days) as JSON, checked by the zod schemas in `lib/proposals/model.ts`. |
+| `crm.document_templates` | `kind` (`proposal`, `nda`), name, `status` (`draft`, `active`, `archived`), `blocks` and `settings` (accent colour, valid days, and `logo`, a PNG data URL of up to 300,000 characters made in the browser) as JSON, checked by the zod schemas in `lib/proposals/model.ts`. |
 | `crm.documents` | One proposal or NDA: template, title, `status` (`draft`, `sent`, `viewed`, `client_signed`, `completed`, `declined`, `withdrawn`), company, contact, optional opportunity, owner, currency, `items` and `blocks` copied from the template and products, `valid_until`, `current_version_id`, view counts and the time of each step. |
 | `crm.document_versions` | What was sent: `content` (the filled-in blocks, items, totals, both parties and the consent text) and `content_hash`, a SHA-256 of its stable JSON. |
 | `crm.document_links` | The client's link for a version: `token_hash` (SHA-256), `token_cipher` (encrypted with `APP_SECRET` so Orbit can show the link again), `revoked_at`. |

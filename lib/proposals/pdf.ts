@@ -255,6 +255,12 @@ export async function renderPdf(input: {
   for (const block of input.content.blocks) {
     if (block.type === "cover") {
       writer.gap(30);
+      if (input.content.logo) {
+        const image = await pdf.embedPng(Buffer.from(input.content.logo.slice(input.content.logo.indexOf(",") + 1), "base64"));
+        const scaled = image.scaleToFit(170, 44);
+        writer.page.drawImage(image, { x: MARGIN, y: writer.y - scaled.height, width: scaled.width, height: scaled.height });
+        writer.gap(scaled.height + 22);
+      }
       writer.lines([{ text: block.title || input.content.title }], { size: 26, font: fonts.bold, leading: 32 });
       if (block.subtitle) {
         writer.gap(4);

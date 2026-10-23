@@ -251,7 +251,10 @@ export async function updateTemplate(
   let settings = current.settings;
   if (input.settings !== undefined) {
     const parsed = settingsSchema.safeParse(input.settings);
-    if (!parsed.success) throw invalid("Use a colour like #4124fb and between 1 and 365 days.", "settings");
+    if (!parsed.success) {
+      if (parsed.error.issues.some((issue) => issue.path[0] === "logo")) throw invalid("The logo must be a PNG image of up to about 200 KB.", "logo");
+      throw invalid("Use a colour like #4124fb and between 1 and 365 days.", "settings");
+    }
     settings = parsed.data;
   }
   if (status === "active" && blocks.length === 0) throw invalid("Add at least one section before making it active.", "status");
