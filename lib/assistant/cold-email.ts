@@ -1,3 +1,5 @@
+import { midSentenceColons, piecesOf } from "@/lib/writing-style";
+
 export const COLD_EMAIL_PLAYBOOK = `# Writing a first email to a prospect
 
 Goal: earn a useful human reply from someone who doesn't know the user yet. Not a meeting, not an open.
@@ -28,7 +30,8 @@ Pick ONE verified, business-relevant signal and say to yourself why it connects 
 - Use filler: "I hope this finds you well", "just checking in", "quick question", "I came across your profile", "I'd love to", "touch base", "circle back".
 - Use hype words: delve, unlock, leverage, game-changing, revolutionise, cutting-edge, seamless, synergy, supercharge, elevate, empower.
 - Mention personal details from their social life, or anything that would feel like surveillance.
-- Use em dashes or en dashes. Use commas, full stops or colons.
+- Use em dashes or en dashes, or a colon in the middle of a sentence. Use commas or full stops.
+- Call an article a "piece". It's an "article".
 
 ## 5. Check, revise, then propose
 Run cold_email_check with the subject, body and your evidence list. Fix every failed check (at most two rounds), then propose send_email. In your message to the user, list the signal you used with its source, and anything you weren't sure of.
@@ -162,6 +165,20 @@ export function lintColdEmail(input: { subject: string; body: string; firstTouch
       pass: !/[–—]| - /.test(`${subject}\n${core}`),
       note: /[–—]| - /.test(`${subject}\n${core}`) ? "Uses a dash." : "No dashes.",
       fix: "Replace dashes with a comma, full stop or colon.",
+    },
+    {
+      id: "no_colons",
+      label: "No colons mid-sentence",
+      pass: midSentenceColons(`${subject}\n${core}`).length === 0,
+      note: midSentenceColons(`${subject}\n${core}`).length ? `Colon in: "${midSentenceColons(`${subject}\n${core}`)[0].slice(0, 80)}".` : "None.",
+      fix: "Replace each colon in the middle of a sentence with a full stop or a comma.",
+    },
+    {
+      id: "no_piece",
+      label: "Says article, not piece",
+      pass: piecesOf(`${subject}\n${core}`).length === 0,
+      note: piecesOf(`${subject}\n${core}`).length ? 'Uses "piece".' : "Fine.",
+      fix: 'Call it an "article", never a "piece".',
     },
     {
       id: "about_them",

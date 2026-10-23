@@ -1,3 +1,4 @@
+import { WRITING_STYLE } from "@/lib/writing-style";
 import { z } from "zod";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
@@ -206,7 +207,7 @@ async function prepareReply(actor: UserActor, candidate: ReplyCandidate, deadlin
       "Write in UK English, plain and direct. Match the tone, length and greeting style of the examples, and the changes the user made to earlier drafts. " +
       "Use only facts from the conversation, its attachments and the CRM and call notes, and refer to an attachment by its name when it matters. Never invent prices, dates, availability, attachments or promises: write [square brackets] for anything the user must fill in. " +
       `meeting is true when the latest email asks to find a time to meet or talk and no time is fixed yet. Then put ${TIMES_MARK} on its own line where the times go (Orbit fills in free times from the calendar and the booking link) and never suggest times yourself. ` +
-      `When needsReply is false, body is null. ${UNTRUSTED} No em dashes. Today is ${today()}.`,
+      `When needsReply is false, body is null. ${UNTRUSTED} ${WRITING_STYLE} Today is ${today()}.`,
     user: contextBlocks(first, context, attachments).join("\n\n"),
     schema: REPLY_SCHEMA,
     maxTokens: 1_200,
@@ -264,7 +265,7 @@ export async function prepareNudge(
       `${name} sent the latest email in this conversation and nobody has replied. Write a short, friendly follow-up from ${name} to send in the same thread. Reply with JSON only: {"body": string}. ` +
       `body is two or three sentences at most: a greeting, a light nudge that refers to what was asked, and a sign-off with "${first}". No subject and no signature block. ` +
       "Don't apologise for following up and don't add new facts. Write in UK English and match the tone of the examples. " +
-      `${UNTRUSTED} No em dashes. Today is ${today()}.`,
+      `${UNTRUSTED} ${WRITING_STYLE} Today is ${today()}.`,
     user: contextBlocks(first, context, []).join("\n\n"),
     schema: NUDGE_SCHEMA,
     maxTokens: 500,
