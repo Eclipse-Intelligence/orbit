@@ -1,3 +1,4 @@
+import type { Relationship } from "@/lib/crm/relationship-score";
 import type { Scope } from "@/lib/crm/scopes";
 
 export const LIFECYCLES = ["lead", "prospect", "customer", "churned"] as const;
@@ -86,6 +87,7 @@ export type Company = {
   createdAt: string;
   updatedAt: string;
   lastInteractionAt: string | null;
+  relationship?: Relationship;
   openTaskCount: number;
   tags: string[];
   health: AccountHealth | null;
@@ -136,6 +138,7 @@ export type CompanyListQuery = {
   missing?: CompanyPresence[];
   limit?: number;
   offset?: number;
+  relationships?: boolean;
 };
 
 export type Member = {
@@ -477,6 +480,7 @@ export type CompanyContext = {
   lastInteraction: Activity | null;
   openTaskCount: number;
   relationshipStatus: RelationshipStatus;
+  relationship: Relationship;
 };
 
 export type StaleRelationship = {

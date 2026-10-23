@@ -6,6 +6,7 @@ import ContactRecord from "@/components/crm/contact-record";
 import { getUserActor } from "@/lib/auth/user";
 import { manualWorkflows } from "@/lib/workflows/store";
 import { listDocuments } from "@/lib/proposals/documents";
+import { relationshipsFor } from "@/lib/crm/relationship-signals";
 import { listActivitiesByContact } from "@/lib/crm/activities";
 import { getMeetings } from "@/lib/crm/calendar";
 import { getInsightsForActivities } from "@/lib/crm/call-insights";
@@ -62,6 +63,7 @@ export default async function ContactPage({
     openTasks,
     workflows,
     proposals,
+    relationships,
   ] = await Promise.all([
     listCompanies(user, { limit: 100, sort: "name", order: "asc" }),
     listMembers(user),
@@ -73,6 +75,7 @@ export default async function ContactPage({
     listTasks(user, { contactId: contact.id, view: "all", limit: 50 }),
     manualWorkflows(user, "contact"),
     listDocuments(user, { contactId: contact.id, limit: 20 }),
+    relationshipsFor(user, "contact", [contact.id]),
   ]);
   const available = enrichmentAvailability();
   const lookups = available.email || available.linkedin || available.phone ? await contactLookups(user, [contact.id]) : {};
@@ -98,6 +101,7 @@ export default async function ContactPage({
       contact={contact}
       workflows={workflows}
       proposals={proposals}
+      relationship={relationships[contact.id]}
       tasks={openTasks.data}
       companies={companies.data.map((company) => ({
         id: company.id,

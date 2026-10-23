@@ -202,7 +202,7 @@ A contact lookup has 75 seconds; no provider starts with less than five left, ea
 
 ### List sorting and filters
 
-`lib/sorting.ts` holds the defaults and per-column directions, and `nextSort` flips the active column and leaves defaults out of the URL. `components/crm/list-controls.tsx` provides `useListParams`, `SortHeader` and `PresenceFilter`. `contactQueryFromSearchParams` and `companyQueryFromSearchParams` in `lib/crm/validation.ts` parse the same parameters for the pages and `/api/v1`; unknown values are ignored. `listCompanies` sorts `interaction` and `strength` by `last_interaction_at`, with nulls last except ascending `strength`; ties break by lowercased name, then id. `RememberList` and `useListHref` keep each list's query in `sessionStorage` for the back link on record pages.
+`lib/sorting.ts` holds the defaults and per-column directions, and `nextSort` flips the active column and leaves defaults out of the URL. `components/crm/list-controls.tsx` provides `useListParams`, `SortHeader` and `PresenceFilter`. `contactQueryFromSearchParams` and `companyQueryFromSearchParams` in `lib/crm/validation.ts` parse the same parameters for the pages and `/api/v1`; unknown values are ignored. `listCompanies` sorts `interaction` and `strength` (Longest since contact) by `last_interaction_at`, with nulls last except ascending `strength`; ties break by lowercased name, then id. `RememberList` and `useListHref` keep each list's query in `sessionStorage` for the back link on record pages.
 
 ### Activity pad
 
@@ -346,6 +346,12 @@ Attachment text: `attachmentNotes` (`lib/mail/attachment-context.ts`) takes the 
 ### Mail AI
 
 `lib/mail/ai.ts` uses `completeJson` with the default model. Thread text comes from the mirror's plain text with quoted history cut (`stripQuoted`), newest messages first up to 16,000 characters. `summariseThread` stores one row per thread in `crm.mail_summaries` (owner-only) with the newest message id, so it is reused until new mail arrives; a single message under 280 characters isn't summarised. `draftWithAi` adds the people's CRM context and up to four of the user's own recent sent emails as examples of their voice, and asks for the body only. `askMail` first turns the question into up to four keyword searches with optional sender and date limits, runs them against the full-text index (falling back to no limits), then answers from the twelve best matches with numbered sources, which become thread links. Em and en dashes are replaced in everything the model writes. Routes: `GET /api/mail/summary`, `POST /api/mail/ai/draft`, `POST /api/mail/ai/ask`, each rate limited per user through `private.consume_rate_limit`. Semantic vector search is left out to keep the database within the Free plan.
+
+## Relationship
+
+`lib/crm/relationship-signals.ts` gathers signals per company or contact in two queries. The first reads email, meeting and call activities up to now, skipping titles that look like automatic replies or bounces and emails whose tone row says `automatic`. It splits them into inbound (`direction = inbound`, or old inbox mail with a `from`), outbound and meetings, with counts, latest dates, the outbound emails since they last replied or met, and engagements in the last 90 days. The second finds the latest tone in the last 120 days from `crm.activity_tones` or a call's `sentiment` (healthy, watch and at risk map to positive, neutral and negative). `scoreRelationship` (`lib/crm/relationship-score.ts`) turns them into a label and a reason. `listCompanies` adds `relationship` when asked with `relationships: true` (the Companies page, `/api/v1/companies`, the assistant and MCP), `getCompanyContext` always does, and the contact page, Quiet and Tasks call `relationshipsFor`.
+
+`crm.activity_tones` holds one row per inbound email activity: `tone`, `automatic`, a short `reason` and the model. Members read and write their workspace's rows; agents only read. `classifyEmailTones` (`lib/crm/email-tone.ts`) runs at the end of `syncMail` when ten seconds or more remain, sending up to 12 unclassified inbound emails from the last 120 days to `completeJson` in one request.
 
 ## Boards
 

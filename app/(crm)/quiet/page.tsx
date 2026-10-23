@@ -7,6 +7,7 @@ import KeyboardList from "@/components/shortcuts/keyboard-list";
 import { getUserActor } from "@/lib/auth/user";
 import { relativeWhen } from "@/lib/companies";
 import { companyHref } from "@/lib/crm/hrefs";
+import { relationshipsFor } from "@/lib/crm/relationship-signals";
 import { findStaleRelationships } from "@/lib/crm/relationships";
 
 export const dynamic = "force-dynamic";
@@ -15,6 +16,7 @@ export default async function QuietPage() {
   const user = await getUserActor();
   if (!user) redirect("/login");
   const rows = await findStaleRelationships(user, 21, 100);
+  const relationships = await relationshipsFor(user, "company", rows.map((row) => row.company.id));
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -41,7 +43,7 @@ export default async function QuietPage() {
             meta={`${relativeWhen(row.lastActivityAt)} · ${row.openTaskCount} open task${row.openTaskCount === 1 ? "" : "s"}`}
             action={
               <span className="flex items-center gap-3">
-                <ConnectionMark at={row.lastActivityAt} />
+                <ConnectionMark relationship={relationships[row.company.id]} />
                 <Button variant="ghost" size="sm" href={companyHref(row.company.id)}>
                   Open
                 </Button>

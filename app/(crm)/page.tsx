@@ -38,7 +38,7 @@ export default async function CompaniesPage({
   filters.offset = pageOffset(page);
 
   const [listed, members, mailbox, tags, lifecycles] = await Promise.all([
-    listCompanies(user, filters),
+    listCompanies(user, { ...filters, relationships: true }),
     listMembers(user),
     getMailbox(user),
     listTags(user),

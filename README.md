@@ -247,7 +247,22 @@ On a call in a contact's or company's activity, choose Add transcript, paste the
 
 ### Account health
 
-Every summary also judges how the relationship stands after the call, from the other side: Healthy (engaged, on track), Watch (concerns, hesitation, slipping timelines) or At risk (frustration, talk of cancelling, not renewing or competitors), with a one-sentence reason. The call shows it under Sentiment, and the company takes it as its Health, unless the company already has a health from a later call or one set by hand after the call. Health is a separate signal from Connection strength, which only measures how recently you were in touch (14 days or less is Very strong, up to 45 days Weak, older Very weak).
+Every summary also judges how the relationship stands after the call, from the other side: Healthy (engaged, on track), Watch (concerns, hesitation, slipping timelines) or At risk (frustration, talk of cancelling, not renewing or competitors), with a one-sentence reason. The call shows it under Sentiment, and the company takes it as its Health, unless the company already has a health from a later call or one set by hand after the call. Health is a separate signal from the Relationship label below, and both feed it: a call judged At risk makes a recent relationship Cooling.
+
+### Relationship
+
+Every company and contact has a Relationship label with a one-line reason, shown on the company page (under Relationship), under a contact's name, in the Relationship column of Companies, on Quiet and on Tasks. It reads the whole exchange, not just the last date: when they last replied (separately from when you last wrote), how many of your emails went unanswered in a row, meetings and calls held, and the tone of their recent emails and calls. Automatic replies, bounces and internal notes don't count as contact.
+
+| Label | Means |
+| --- | --- |
+| Strong | They replied or met in the last 30 days, at least twice in the last 90, and the tone is good (or three or more times) |
+| Warm | Two-way within the last 60 days, but slower or neutral |
+| Cooling | Nothing back from them for 60 to 180 days, or their latest message or call sounded unhappy |
+| One-sided | Three or more of your emails in a row without a reply (two if they have been quiet for 60 days), or they have never replied or met |
+| Cold | Nothing from them for over 180 days |
+| New | No exchange yet, or a single email from you in the last two weeks |
+
+After each mail sync, Orbit reads up to 12 new emails from contacts (the last 120 days) with the AI and marks each positive, neutral or negative, and whether it was an automatic reply. Call summaries already carry their own sentiment. The assistant, `GET /api/v1/companies` and the MCP `search_companies` tool include each company's `relationship`.
 
 Health shows on the company page (with the reason and where it came from, and a menu to set it by hand), as a column and a filter on Companies (At risk, Watch, Healthy, Not set), and on board and opportunity cards. Each change is recorded as a company update, so workflows can react with When a field changes, Health, changes to At risk; the starter template Follow up when a client turns at risk notifies the account owner and adds a check-in task for the next day. Calls summarised before health existed are judged once each by the scheduled sync, one per run. The assistant can filter companies by health and set it when asked.
 
@@ -410,7 +425,7 @@ The Contacts list (`/contacts`) and the Companies list (`/`) keep their sort and
 | `has`, `missing` | Comma-separated: `email`, `phone`, `linkedin`, `company` | Comma-separated: `domain`, `contacts`, `interactions` |
 | Other | `q`, `tag`, `owner`, `company_id`, `page`, `include_archived=true` | `q`, `tag`, `owner`, `lifecycle`, `health` (`healthy`, `watch`, `at_risk`, `none`), `page`, `include_archived=true` |
 
-Name, company, domain and owner sort A to Z; updated, created, interaction and strength sort newest first. Records without a company, domain, owner or interaction go last, except `strength` in ascending order (Weakest connection), which puts never-contacted companies first. Ties are sorted by name. Click a column header to sort and again to reverse; on phones a Sort menu replaces the headers. Filter (F) sets each field to Any, Has or No. `GET /api/v1/contacts` and `GET /api/v1/companies` accept the same parameters (use `limit` and `offset` instead of `page`).
+Name, company, domain and owner sort A to Z; updated, created, interaction and strength sort newest first. Records without a company, domain, owner or interaction go last, except `strength` in ascending order (Longest since contact), which puts never-contacted companies first. Ties are sorted by name. Click a column header to sort and again to reverse; on phones a Sort menu replaces the headers. Filter (F) sets each field to Any, Has or No. `GET /api/v1/contacts` and `GET /api/v1/companies` accept the same parameters (use `limit` and `offset` instead of `page`).
 
 ## Tasks
 

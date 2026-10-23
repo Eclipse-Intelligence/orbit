@@ -20,7 +20,7 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const result = await listCompanies(
       actor,
-      companyQueryFromSearchParams(url.searchParams),
+      { ...companyQueryFromSearchParams(url.searchParams), relationships: true },
     );
     return Response.json(result);
   });

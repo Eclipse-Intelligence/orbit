@@ -6,6 +6,7 @@ import { listContacts } from "@/lib/crm/contacts";
 import { CrmError } from "@/lib/crm/errors";
 import { iso, isUuid } from "@/lib/crm/mutate";
 import { listOpportunities } from "@/lib/crm/opportunities";
+import { relationshipsFor, relationshipsInDb } from "@/lib/crm/relationship-signals";
 import { assertScope } from "@/lib/crm/scopes";
 import { listTasks, mineFilter } from "@/lib/crm/tasks";
 import type {
@@ -37,6 +38,7 @@ export async function getCompanyContext(actor: Actor, id: string): Promise<Compa
     listTasks(actor, { companyId: id, limit: 50 }),
   ]);
   const openTasks = tasks.data.filter((task) => !task.completedAt && !task.archivedAt);
+  const relationship = (await relationshipsFor(actor, "company", [id]))[id];
   const insights = await getInsightsForActivities(
     actor,
     timeline.filter((activity) => activity.type === "call" || activity.type === "meeting").map((activity) => activity.id),
@@ -52,6 +54,7 @@ export async function getCompanyContext(actor: Actor, id: string): Promise<Compa
     lastInteraction: activities.data[0] ?? null,
     openTaskCount: openTasks.length,
     relationshipStatus: relationshipStatus(activities.data[0] ?? null, openTasks.length),
+    relationship,
   };
 }
 
@@ -208,7 +211,8 @@ export async function getDueActions(
         const company = await readCompanyInDb(db, item.id, actor.workspaceId);
         if (company) companies.push(company);
       }
-      return { view, tasks: [], companies };
+      const relationships = await relationshipsInDb(db, actor.workspaceId, "company", companies.map((company) => company.id));
+      return { view, tasks: [], companies: companies.map((company) => ({ ...company, relationship: relationships[company.id] })) };
     });
   }
   const tasks = await listTasks(actor, { view, limit: 100, mine: options.mine });

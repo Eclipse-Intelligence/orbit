@@ -36,7 +36,7 @@ export const SORT_OPTIONS: { value: string; label: string; sort: CompanySort; or
   { value: "name:asc", label: "Name A to Z", sort: "name", order: "asc" },
   { value: "name:desc", label: "Name Z to A", sort: "name", order: "desc" },
   { value: "interaction:desc", label: "Last interaction", sort: "interaction", order: "desc" },
-  { value: "strength:asc", label: "Weakest connection", sort: "strength", order: "asc" },
+  { value: "strength:asc", label: "Longest since contact", sort: "strength", order: "asc" },
   { value: "updated:desc", label: "Recently updated", sort: "updated", order: "desc" },
   { value: "created:desc", label: "Newest", sort: "created", order: "desc" },
   { value: "domain:asc", label: "Domain", sort: "domain", order: "asc" },
@@ -72,30 +72,6 @@ export function formatDate(iso: string) {
     year: "numeric",
     timeZone: appTimeZone(),
   }).format(new Date(iso));
-}
-
-export type ConnectionStrength = "strong" | "weak" | "veryweak" | "none";
-
-export const CONNECTION_STRENGTH: Record<
-  ConnectionStrength,
-  { label: string; color: string }
-> = {
-  strong: { label: "Very strong", color: "var(--success)" },
-  weak: { label: "Weak", color: "var(--warning)" },
-  veryweak: { label: "Very weak", color: "var(--danger)" },
-  none: { label: "No communication", color: "var(--faint)" },
-};
-
-export function connectionStrength(
-  iso: string | null | undefined,
-  now = Date.now(),
-): ConnectionStrength {
-  if (!iso) return "none";
-  const days = (now - new Date(iso).getTime()) / 86_400_000;
-  if (!Number.isFinite(days) || days < 0) return "strong";
-  if (days <= 14) return "strong";
-  if (days <= 45) return "weak";
-  return "veryweak";
 }
 
 export function relativeWhen(iso: string | null | undefined, now = Date.now()) {

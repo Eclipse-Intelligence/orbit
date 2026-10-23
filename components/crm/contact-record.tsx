@@ -3,7 +3,7 @@
 import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
 import Button, { buttonVariants } from "@/components/_ui/button";
-import { EntityChip, Monogram } from "@/components/beautifui/record-marks";
+import { ConnectionMark, EntityChip, Monogram } from "@/components/beautifui/record-marks";
 import DetailSection from "@/components/companies/detail/detail-section";
 import ContactActivities from "@/components/crm/contact-activities";
 import ContactEditor from "@/components/crm/contact-editor";
@@ -13,6 +13,7 @@ import InviteDialog, { InviteNotice } from "@/components/crm/invite-dialog";
 import MeetingsCard from "@/components/crm/meetings-card";
 import ProposalsCard from "@/components/proposals/proposals-card";
 import type { DocumentSummary } from "@/lib/proposals/documents";
+import type { Relationship } from "@/lib/crm/relationship-score";
 import { useQuickAddRecord } from "@/components/crm/quick-add";
 import RecordLayout from "@/components/crm/record-layout";
 import { CallLink, Detail, DetailList } from "@/components/crm/record-form";
@@ -56,6 +57,7 @@ export default function ContactRecord({
   enrichment,
   workflows = [],
   proposals = [],
+  relationship,
 }: {
   viewer: Viewer;
   contact: Contact;
@@ -71,6 +73,7 @@ export default function ContactRecord({
   enrichment: { available: EnrichmentAvailability; lookups: ContactLookups[string] };
   workflows?: { id: string; name: string }[];
   proposals?: DocumentSummary[];
+  relationship?: Relationship;
 }) {
   const router = useRouter();
   const [editing, setEditing] = useState(false);
@@ -202,6 +205,12 @@ export default function ContactRecord({
                       />
                     )}
                   </div>
+                )}
+                {relationship && (
+                  <span className="flex flex-col gap-1">
+                    <ConnectionMark relationship={relationship} className="text-soft" />
+                    <span className="caption-style text-subtle leading-[1.45]">{relationship.reason}</span>
+                  </span>
                 )}
                 <RecordTags
                   kind="contact"
