@@ -26,6 +26,10 @@ describe("mention tokens", () => {
     assert.equal(expandMentions(encoded), `Email Jane Doe [person id ${JANE.id}] about the Acme Ltd [company id ${ACME_LTD.id}] renewal`);
     assert.deepEqual(splitMentions("no tags here"), [{ text: "no tags here" }]);
     assert.equal(encodeMentions("@Acme and @Acme", [ACME]), `@[Acme](company:${ACME.id}) and @Acme`);
+    const pilot = { kind: "proposal" as const, id: "44444444-4444-4444-8444-444444444444", name: "Acme pilot" };
+    const tagged = encodeMentions("Chase the @Acme pilot", [pilot]);
+    assert.deepEqual(mentionsIn(tagged), [pilot]);
+    assert.equal(expandMentions(tagged), `Chase the Acme pilot [proposal id ${pilot.id}]`);
   });
 });
 

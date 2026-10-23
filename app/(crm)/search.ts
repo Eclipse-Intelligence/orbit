@@ -6,6 +6,8 @@ import { findContactsToLink, listContacts } from "@/lib/crm/contacts";
 import { listOpportunities } from "@/lib/crm/opportunities";
 import { listTasks } from "@/lib/crm/tasks";
 import type { Mention } from "@/lib/mentions";
+import { listDocuments } from "@/lib/proposals/documents";
+import { KIND_LABELS, STATUS_LABELS } from "@/lib/proposals/model";
 
 export type MentionOption = Mention & { detail: string | null };
 
@@ -13,11 +15,12 @@ export async function searchMentionsAction(query: string): Promise<MentionOption
   const user = await getUserActor();
   if (!user) return [];
   const text = query.trim().slice(0, 80);
-  const [contacts, companies, tasks, opportunities] = await Promise.all([
+  const [contacts, companies, tasks, opportunities, proposals] = await Promise.all([
     listContacts(user, text ? { query: text, limit: 5 } : { limit: 4, sort: "updated" }),
     listCompanies(user, text ? { query: text, limit: 4, sort: "name", order: "asc" } : { limit: 3, sort: "updated" }),
     text ? listTasks(user, { query: text, view: "all", limit: 3 }) : Promise.resolve({ data: [] }),
     text ? listOpportunities(user, { query: text, limit: 3 }) : Promise.resolve({ data: [] }),
+    text ? listDocuments(user, { search: text, limit: 3 }).catch(() => []) : Promise.resolve([]),
   ]);
   const options: MentionOption[] = [
     ...contacts.data.map((contact) => ({
@@ -33,6 +36,12 @@ export async function searchMentionsAction(query: string): Promise<MentionOption
       id: opportunity.id,
       name: opportunity.name,
       detail: opportunity.companyName ?? null,
+    })),
+    ...proposals.map((proposal) => ({
+      kind: "proposal" as const,
+      id: proposal.id,
+      name: proposal.title,
+      detail: [proposal.kind === "nda" ? KIND_LABELS.nda : null, proposal.companyName, STATUS_LABELS[proposal.status]].filter(Boolean).join(" · "),
     })),
   ];
   const lower = text.toLowerCase();
