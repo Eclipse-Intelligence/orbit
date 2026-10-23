@@ -14,6 +14,8 @@ import { nextScheduleRun, type WorkflowDefinition } from "@/lib/workflows/defini
 import { runWorkflowTick } from "@/lib/workflows/engine";
 import { classifyEmail, failedRecipient } from "@/lib/workflows/mail-events";
 import { createWorkflow, decideApproval, getRunSteps, listApprovals, listRuns, saveWorkflow, setWorkflowStatus, startRun } from "@/lib/workflows/store";
+import { createProduct, createTemplate, updateTemplate } from "@/lib/proposals/catalogue";
+import { listDocuments } from "@/lib/proposals/documents";
 import { createUser, resetDatabase } from "./helpers";
 
 const GRAPH = "https://graph.microsoft.com/v1.0";
@@ -251,5 +253,50 @@ describe("workflow capabilities", () => {
     const refused = await startRun(owner, bad.id, { test: false, record: { type: "contact", id: andrewId }, fetchImpl: llm.fetchImpl });
     assert.equal(refused.status, "failed");
     assert.equal(llm.seen.hooks.length, 2);
+  });
+
+  it("drafts a proposal with products the AI picks from the live catalogue", async () => {
+    const pilot = await createProduct(owner, { name: "Agency Pilot", description: "Three months", priceGbp: 2500, priceUsd: 3200, billing: "one_off" });
+    const pro = await createProduct(owner, { name: "Pro", priceGbp: 900, billing: "monthly" });
+    const template = await createTemplate(owner, { starter: "proposal" });
+    await updateTemplate(owner, template.id, { status: "active" });
+    const workflow = await createWorkflow(owner, { name: "Proposal after a call" });
+    const definition: WorkflowDefinition = {
+      version: 2,
+      trigger: { type: "manual", object: "contact" },
+      triggerPosition: { x: 0, y: 0 },
+      nodes: [
+        { id: "create_proposal_1", type: "create_proposal", config: { templateId: template.id, currency: "GBP", products: "ai", guidance: "Pilot for new work." }, position: { x: 0, y: 0 } },
+      ],
+      edges: [{ source: "trigger", handle: "out", target: "create_proposal_1" }],
+    };
+    await saveWorkflow(owner, workflow.id, { definition });
+    await setWorkflowStatus(owner, workflow.id, "active");
+    const reply = { items: [{ productId: pilot.id, quantity: 1, reason: "They asked for a trial" }, { productId: "made-up", quantity: 1, reason: "x" }], reason: "They want to try it first." };
+
+    const test = fakes([reply]);
+    const tried = await startRun(owner, workflow.id, { test: true, record: { type: "contact", id: andrewId }, fetchImpl: test.fetchImpl });
+    assert.equal(tried.status, "succeeded");
+    assert.match(test.seen.ai[0].user, new RegExp(`id ${pilot.id}: Agency Pilot, £2,500 one-off\\. Three months`));
+    assert.match(test.seen.ai[0].user, new RegExp(`id ${pro.id}: Pro, £900 monthly`));
+    assert.match(test.seen.ai[0].user, /How to choose:\nPilot for new work\./);
+    assert.equal((await listDocuments(owner, { contactId: andrewId })).length, 0);
+
+    const real = fakes([reply]);
+    const done = await startRun(owner, workflow.id, { test: false, record: { type: "contact", id: andrewId }, fetchImpl: real.fetchImpl });
+    assert.equal(done.status, "succeeded");
+    const output = (await getRunSteps(owner, done.runId)).steps.find((step) => step.stepId === "create_proposal_1")?.output as { url: string; products: string[]; reason: string; total: string };
+    assert.deepEqual(output.products, ["Agency Pilot"]);
+    assert.equal(output.total, "£2,500 one-off");
+    assert.equal(output.reason, "They want to try it first.");
+    const drafts = await listDocuments(owner, { contactId: andrewId });
+    assert.equal(drafts.length, 1);
+    assert.equal(drafts[0].status, "draft");
+    assert.match(output.url, new RegExp(`/proposals/${drafts[0].id}$`));
+
+    const nothing = fakes([{ items: [], reason: "They only wanted advice." }]);
+    const skipped = await startRun(owner, workflow.id, { test: false, record: { type: "contact", id: andrewId }, fetchImpl: nothing.fetchImpl });
+    assert.equal(skipped.status, "succeeded");
+    assert.equal((await listDocuments(owner, { contactId: andrewId })).length, 1);
   });
 });

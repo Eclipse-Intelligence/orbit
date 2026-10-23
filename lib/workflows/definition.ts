@@ -32,6 +32,7 @@ export const STEP_TYPES = [
   "find_records",
   "upsert_record",
   "webhook",
+  "create_proposal",
 ] as const;
 export type StepType = (typeof STEP_TYPES)[number];
 
@@ -356,6 +357,7 @@ export const STEP_LABELS: Record<StepType, string> = {
   find_records: "Find records",
   upsert_record: "Find or create record",
   webhook: "Send to a webhook",
+  create_proposal: "Create proposal",
 };
 
 export const STEP_HINTS: Record<StepType, string> = {
@@ -375,6 +377,7 @@ export const STEP_HINTS: Record<StepType, string> = {
   find_records: "List companies or contacts that match filters, to go through with For each item.",
   upsert_record: "Find a company or contact, or create it if it isn't in Orbit yet.",
   webhook: "Post the run's data to another app, such as Slack, Zapier or Make.",
+  create_proposal: "Draft a proposal for the run's contact, with products the AI picks from the call or ones you choose.",
 };
 
 export function safeDefinition(value: unknown): WorkflowDefinition | null {

@@ -62,6 +62,7 @@ const DEFAULTS: Record<StepType, Record<string, unknown>> = {
   find_records: { object: "contact", lifecycles: [], tag: "", owner: "", openOpportunity: "any", quietDays: "", search: "", order: "least_contacted", limit: 25, skipDays: "" },
   upsert_record: { object: "company", name: "", domain: "", website: "", create: true, useInRun: false },
   webhook: { url: "", body: "" },
+  create_proposal: { templateId: "", currency: "GBP", products: "ai", productIds: [], guidance: "", title: "" },
 };
 
 function narrow() {

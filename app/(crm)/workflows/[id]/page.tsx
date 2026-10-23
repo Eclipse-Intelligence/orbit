@@ -5,6 +5,7 @@ import { cache } from "react";
 import WorkflowEditor from "@/components/workflows/workflow-editor";
 import { getUserActor } from "@/lib/auth/user";
 import { getBoard, listBoards } from "@/lib/crm/boards";
+import { listProducts, listTemplates } from "@/lib/proposals/catalogue";
 import { listCompanies, listMembers } from "@/lib/crm/companies";
 import { listContacts } from "@/lib/crm/contacts";
 import { CrmError } from "@/lib/crm/errors";
@@ -42,7 +43,7 @@ export default async function WorkflowPage({
   if (!user) redirect("/login");
   if (!workflow) notFound();
   const query = await searchParams;
-  const [runs, boards, pipeline, members, companies, contacts, lifecycles] = await Promise.all([
+  const [runs, boards, pipeline, members, companies, contacts, lifecycles, proposalTemplates, products] = await Promise.all([
     workflow.mine ? listRuns(user, workflow.id) : Promise.resolve([]),
     listBoards(user),
     listPipeline(user),
@@ -50,6 +51,8 @@ export default async function WorkflowPage({
     listCompanies(user, { limit: 100, sort: "name", order: "asc" }),
     listContacts(user, { limit: 100 }),
     listLifecycles(user),
+    listTemplates(user, { status: "usable", kind: "proposal" }),
+    listProducts(user),
   ]);
   const fullBoards = await Promise.all(boards.map((board) => getBoard(user, board.id)));
   return (
@@ -68,6 +71,8 @@ export default async function WorkflowPage({
         salesStages: pipeline.stages.map((stage) => ({ id: stage.id, name: stage.name })),
         members: members.filter((member) => member.id !== user.userId).map((member) => ({ id: member.id, name: member.name })),
         lifecycles: lifecycles.map((item) => ({ value: item.value, label: item.label })),
+        proposalTemplates: proposalTemplates.map((template) => ({ id: template.id, name: template.name })),
+        products: products.map((product) => ({ id: product.id, name: product.name, priceGbp: product.priceGbp, priceUsd: product.priceUsd })),
       }}
       records={{
         companies: companies.data.map((company) => ({ id: company.id, name: company.name })),
