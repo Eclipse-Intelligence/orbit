@@ -165,7 +165,11 @@ Read statuses show when people open what you send from Mail. Your own emails in 
 
 ### Email from anywhere
 
-Compose on Mail, `C` then `M` anywhere, and Send email in the plus menu (or `Q`) open a new email as a card that floats over the page. Open as many as six at once, each to someone different: drag a card by its top bar, minimise it to a pill in the corner, and send each when you're ready (`⌘ Enter`). A card has From (any connected account), To, Cc and Bcc with suggestions, a subject, the message, the signature for that address and attachments. Each card is an Outlook draft saved as you type, so closing it keeps the draft; the Drafts view in Mail opens it again with Continue writing, and the trash icon deletes it. Opened on a contact's page, To starts with that person. Emails to contacts are logged on their timelines.
+Compose on Mail, `C` then `M` anywhere, and Send email in the plus menu (or `Q`) open a new email as a card that floats over the page. Open as many as six at once, each to someone different: drag a card by its top bar, minimise it to a pill in the corner, and send each when you're ready (`⌘ Enter`). A card has From (any connected account), To, Cc and Bcc with suggestions, a subject, the message, the signature for that address and attachments. Each card is an Outlook draft saved as you type, so closing it keeps the draft; the Drafts view in Mail opens it again with Continue writing, and the trash icon deletes it. Opened on a contact's page, To starts with that person.
+
+### Every email on the contact
+
+Every email to or from a contact is logged on that contact's activity, whichever mailbox it is in and whichever app sent it (Orbit, Outlook or your phone). After each mail sync, Orbit files emails from a contact (on the sender) and emails you sent (on each contact in To and Cc), with the text of the message without the quoted history. Drafts and junk are skipped, and each email is filed once even if it was also logged when you sent it from a contact. Emails from the last 60 days are caught up a hundred at a time; older ones are not filed. Catch-up filings older than a day don't start "An activity is logged" workflows. Logged emails are activities, so everyone in the workspace can see them on the contact.
 
 ### Outlook calendar
 

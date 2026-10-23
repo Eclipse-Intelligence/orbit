@@ -665,6 +665,15 @@ async function fileActivity(
   >,
   match: PartyMatch,
 ) {
+  if (message.internetMessageId) {
+    const existing = await db.query<{ id: string }>(
+      `select id from crm.activities
+       where workspace_id = $1 and type = 'email' and metadata->>'internetMessageId' = $2
+         and contact_id is not distinct from $3 limit 1`,
+      [actor.workspaceId, message.internetMessageId, match.contactId],
+    );
+    if (existing.rows[0]) return existing.rows[0].id;
+  }
   const activity = await createActivityInDb(
     db,
     actor,
