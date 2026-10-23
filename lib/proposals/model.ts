@@ -120,7 +120,7 @@ const TOKEN = /\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g;
 const PLACEHOLDER = /\[([^\]\n]{2,160})\](?!\()/g;
 
 export function formatMoney(amount: number, currency: Currency) {
-  return new Intl.NumberFormat("en-GB", { style: "currency", currency, minimumFractionDigits: amount % 1 === 0 ? 0 : 2 }).format(amount);
+  return new Intl.NumberFormat(currency === "USD" ? "en-US" : "en-GB", { style: "currency", currency, minimumFractionDigits: amount % 1 === 0 ? 0 : 2 }).format(amount);
 }
 
 export function longDate(value: string | Date | null) {
