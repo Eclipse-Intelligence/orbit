@@ -514,6 +514,12 @@ Proposed changes appear as cards under the reply, each with a title and the fiel
 
 Approved changes run one after another on the server. Each shows Done, Didn't work (with the reason) or Cancelled. Once nothing is left waiting, the model gets the results and carries on, usually with a short summary. If you send a new message instead, the waiting changes are cancelled and the model is told you moved on.
 
+### Reading web pages, Eclipse articles and docs
+
+The assistant can open any public web page with `read_web_page`: a link you give it, a prospect's website, a news story or a search result. Orbit fetches the page from its own server (no browser), checks the address resolves to a public internet address (private, local and cloud metadata addresses are refused, after every redirect too), reads up to 3 MB for 12 seconds, and gives the assistant the title, description, the main text (the `<article>` or `<main>` part when there is one) and the links on the page, so it can click through. It can't run JavaScript, so pages that only draw their text in the browser come back nearly empty, and sites that block automated reading (LinkedIn profiles, for example) say so. PDFs aren't read. This works whether web search is on or off; web search is for finding pages you don't have the address of.
+
+`eclipse_articles` lists Eclipse's articles at https://geteclipse.co/articles (from the site map, newest first, with summaries), finds them by topic and reads them in full. The assistant uses them as sales collateral: when writing outreach or a follow-up, it looks for an article that fits the prospect and uses it as the reason to get in touch, with its exact link. `eclipse_docs` reads the Eclipse documentation at https://docs.geteclipse.co (the `llms.txt` index and each page as markdown) so it can check how a feature works before explaining it. Both are cached for an hour.
+
 ### Web search
 
 The globe button (Web) turns web search on for the chat, and the setting is saved with the chat. Gateway models get `web_search_options`, ChatGPT models the `web_search` tool, and Claude account models Claude Code's `WebSearch` tool. Up to 30 cited pages show as links under the reply. With web search off, the assistant says you can turn it on when a question needs the web.
