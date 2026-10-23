@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { createCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
+import { createOpportunity, listOpportunities, listPipeline } from "@/lib/crm/opportunities";
 import { withActor } from "@/lib/crm/context";
 import { scopesForRole } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
@@ -240,5 +241,38 @@ describe("proposals", () => {
     assert.ok(issued && issued.data.subarray(0, 5).toString() === "%PDF-");
     await updateTemplate(owner, ndaTemplateId, { settings: { accent: "#4124fb", validDays: 30, logo: null } });
     assert.equal((await openDocument(token, { track: false }))!.content.logo, logo);
+  });
+
+  it("puts the company's deal in the Proposal stage, or adds one there", async () => {
+    const stages = (await listPipeline(owner)).stages;
+    const newStage = stages.find((stage) => stage.name === "New")!;
+    const make = async (name: string) => {
+      const companyId = (await createCompany(owner, { name, domain: `${name.toLowerCase()}.test` })).body.company.id;
+      const contactId = (await createContact(owner, { firstName: name, email: `ceo@${name.toLowerCase()}.test`, companyId })).body.contact.id;
+      return { companyId, contactId };
+    };
+
+    const fresh = await make("Freshco");
+    const added = await createDocument(owner, { templateId: proposalTemplateId, companyId: fresh.companyId, contactId: fresh.contactId, items: [{ productId: pilotId }, { productId: proId }] });
+    const deals = (await listOpportunities(owner, { companyId: fresh.companyId })).data;
+    assert.equal(deals.length, 1);
+    assert.equal(deals[0].stageName, "Proposal");
+    assert.equal(deals[0].name, "Freshco");
+    const detail = await getDocument(owner, added);
+    assert.equal(Number(deals[0].value), detail.totals.one_off + detail.totals.monthly * 12 + detail.totals.yearly);
+    assert.ok(detail.totals.one_off > 0 && detail.totals.monthly > 0);
+    assert.equal(detail.opportunityId, deals[0].id);
+
+    const early = await make("Earlyco");
+    const deal = (await createOpportunity(owner, { companyId: early.companyId, name: "Earlyco pilot", stageId: newStage.id })).body.opportunity;
+    await createDocument(owner, { templateId: proposalTemplateId, companyId: early.companyId, contactId: early.contactId, items: [{ productId: pilotId }] });
+    const moved = (await listOpportunities(owner, { companyId: early.companyId })).data;
+    assert.equal(moved.length, 1);
+    assert.equal(moved[0].id, deal.id);
+    assert.equal(moved[0].stageName, "Proposal");
+
+    const nda = await make("Ndaco");
+    await createDocument(owner, { templateId: ndaTemplateId, companyId: nda.companyId, contactId: nda.contactId });
+    assert.equal((await listOpportunities(owner, { companyId: nda.companyId })).data.length, 0);
   });
 });
