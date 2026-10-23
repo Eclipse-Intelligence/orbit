@@ -9,6 +9,7 @@ import type { Viewer } from "@/components/crm/viewer";
 import { displayInitials } from "@/lib/companies";
 import { RECORD_LISTS, type RecordListKey } from "@/lib/crm/hrefs";
 import { useCompaniesStore } from "@/stores/companies-store";
+import { cn } from "@/lib/utils";
 import { useShortcuts } from "@/components/shortcuts/shortcuts-provider";
 import { ExpandSidebarButton } from "@/components/_common/sidebar/sidebar-toggle";
 import ChevronLeftIcon from "@/public/assets/images/_common/chevron-left.svg";
@@ -35,8 +36,8 @@ export default function SectionHeader({
 
   return (
     <header className="border-border shrink-0 border-b">
-      <div className="flex flex-col gap-3 px-4 py-[14px] sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex min-w-0 items-center gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-3 py-2.5 sm:flex-nowrap sm:px-4 sm:py-[14px]">
+        <div className={cn("flex min-w-0 items-center gap-2", list ? "flex-1" : "flex-[1_1_auto]")}>
           <Button
             variant="secondary"
             size="icon"
@@ -50,10 +51,10 @@ export default function SectionHeader({
           {list ? (
             <RecordBreadcrumb list={list} title={title} />
           ) : (
-            <div className="flex min-w-0 flex-col">{heading ?? <h1 className="truncate">{title}</h1>}</div>
+            <div className="flex min-w-0 flex-1 flex-col">{heading ?? <h1 className="truncate">{title}</h1>}</div>
           )}
         </div>
-        <div className="flex flex-wrap items-center justify-start gap-2 sm:justify-end">
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5 sm:shrink-0 sm:flex-nowrap sm:gap-2">
           {action}
           <Button
             variant="secondary"

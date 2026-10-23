@@ -5,6 +5,7 @@ import { tagBase } from "@/components/beautifui/record-marks";
 import { mailListWhen, personName, recipientList } from "@/lib/mail/format";
 import { laterDetail } from "@/lib/mail/later";
 import type { ThreadSummary } from "@/lib/mail/view";
+import { resisted, swipeCommit } from "@/components/mail/swipe";
 import { cn } from "@/lib/utils";
 import ArchiveIcon from "@/public/assets/images/mail/archive.svg";
 import EyeIcon from "@/public/assets/images/mail/eye.svg";
@@ -22,7 +23,16 @@ type SwipeActions = {
   onRight: (key: string) => void;
 };
 
-type Drag = { pointer: number; x: number; y: number; axis: "x" | "y" | null };
+type Drag = { pointer: number; x: number; y: number; axis: "x" | "y" | null; samples: { x: number; at: number }[] };
+
+const OUT_MS = 180;
+const COLLAPSE_MS = 220;
+
+function speedOf(samples: { x: number; at: number }[]) {
+  const last = samples[samples.length - 1];
+  const first = samples.find((sample) => last.at - sample.at <= 90) ?? samples[0];
+  return last.at > first.at ? (last.x - first.x) / (last.at - first.at) : 0;
+}
 
 function Row({
   thread,
@@ -53,13 +63,19 @@ function Row({
 }) {
   const [offset, setOffset] = useState(0);
   const [dragging, setDragging] = useState(false);
+  const [height, setHeight] = useState<number | null>(null);
   const drag = useRef<Drag | null>(null);
   const swiped = useRef(false);
+  const armedBefore = useRef(false);
   const row = useRef<HTMLLIElement>(null);
+  const [width, setWidth] = useState(360);
+  const allowed = { left: Boolean(swipe), right: Boolean(swipe?.rightLabel) };
+  const armed = offset !== 0 && swipeCommit(offset, 0, width, allowed) !== null;
 
   function down(event: PointerEvent<HTMLButtonElement>) {
-    if (!swipe || event.pointerType !== "touch") return;
-    drag.current = { pointer: event.pointerId, x: event.clientX, y: event.clientY, axis: null };
+    if (!swipe || event.pointerType !== "touch" || height !== null) return;
+    drag.current = { pointer: event.pointerId, x: event.clientX, y: event.clientY, axis: null, samples: [{ x: event.clientX, at: event.timeStamp }] };
+    setWidth(row.current?.offsetWidth ?? 360);
   }
 
   function move(event: PointerEvent<HTMLButtonElement>) {
@@ -75,12 +91,20 @@ function Row({
         setDragging(true);
       }
     }
-    if (state.axis === "x") setOffset(dx > 0 && !swipe?.rightLabel ? Math.min(dx, 24) : dx);
+    if (state.axis !== "x") return;
+    state.samples.push({ x: event.clientX, at: event.timeStamp });
+    if (state.samples.length > 8) state.samples.shift();
+    const next = resisted(dx, dx < 0 ? allowed.left : allowed.right);
+    const nowArmed = swipeCommit(next, 0, width, allowed) !== null;
+    if (nowArmed && !armedBefore.current) navigator.vibrate?.(8);
+    armedBefore.current = nowArmed;
+    setOffset(next);
   }
 
   function up(event: PointerEvent<HTMLButtonElement>) {
     const state = drag.current;
     drag.current = null;
+    armedBefore.current = false;
     if (!state || state.pointer !== event.pointerId || state.axis !== "x" || !swipe) {
       setDragging(false);
       return;
@@ -88,49 +112,60 @@ function Row({
     swiped.current = true;
     window.setTimeout(() => (swiped.current = false), 50);
     setDragging(false);
-    const width = row.current?.offsetWidth ?? 360;
-    const threshold = Math.min(110, width * 0.28);
     const dx = event.clientX - state.x;
-    if (dx < -threshold) {
+    state.samples.push({ x: event.clientX, at: event.timeStamp });
+    const commit = swipeCommit(dx, speedOf(state.samples), width, allowed);
+    if (commit === "left") {
       setOffset(-width);
-      window.setTimeout(() => swipe.onLeft(thread.key), 160);
+      window.setTimeout(() => {
+        setHeight(row.current?.offsetHeight ?? 64);
+        window.requestAnimationFrame(() => window.requestAnimationFrame(() => setHeight(0)));
+      }, OUT_MS);
+      window.setTimeout(() => swipe.onLeft(thread.key), OUT_MS + COLLAPSE_MS);
       return;
     }
     setOffset(0);
-    if (dx > threshold && swipe.rightLabel) swipe.onRight(thread.key);
+    if (commit === "right") swipe.onRight(thread.key);
   }
 
   function cancel() {
     drag.current = null;
+    armedBefore.current = false;
     setDragging(false);
     setOffset(0);
   }
 
-  const reveal = Math.min(1, Math.abs(offset) / 110);
   const LeftIcon = swipe?.restore ? InboxIcon : ArchiveIcon;
   const people = outgoing || thread.draft ? `To ${recipientList(thread.to, own) || "no one yet"}` : personName(thread.from);
   return (
-    <li ref={row} className="relative overflow-hidden rounded-xl">
+    <li
+      ref={row}
+      className={cn("relative overflow-hidden rounded-xl", height !== null && "ease-power3-in-out transition-[height,opacity] duration-200")}
+      style={height !== null ? { height, opacity: height === 0 ? 0 : 1 } : undefined}
+    >
       {offset !== 0 && swipe && (
         <span
           aria-hidden
           className={cn(
-            "absolute inset-0 flex items-center rounded-xl px-5 text-[13px] font-medium",
-            offset < 0 ? "text-success justify-end bg-[color-mix(in_srgb,var(--success)_16%,transparent)]" : "text-primary-foreground justify-start bg-[color-mix(in_srgb,var(--primary)_30%,transparent)]",
+            "ease-power3-out absolute inset-0 flex items-center rounded-xl px-5 text-[13px] font-medium transition-colors duration-150",
+            offset < 0 ? "justify-end" : "justify-start",
+            !armed
+              ? "text-soft bg-white/[0.06]"
+              : offset < 0
+                ? "bg-[color-mix(in_srgb,var(--success)_78%,black)] text-white"
+                : "bg-primary text-white",
           )}
-          style={{ opacity: 0.4 + reveal * 0.6 }}
         >
-          {offset < 0 ? (
-            <span className="flex items-center gap-2">
-              {swipe.leftLabel}
-              <LeftIcon className="size-4" />
-            </span>
-          ) : (
-            <span className="flex items-center gap-2">
-              <ClockIcon className="size-4" />
-              {swipe.rightLabel}
-            </span>
-          )}
+          <span
+            className={cn(
+              "ease-power3-out flex items-center gap-2 transition-transform duration-150",
+              armed ? "scale-100" : "scale-90",
+              offset < 0 && "flex-row-reverse",
+            )}
+          >
+            {offset < 0 ? <LeftIcon className="size-[18px]" /> : <ClockIcon className="size-[18px]" />}
+            {offset < 0 ? swipe.leftLabel : swipe.rightLabel}
+          </span>
         </span>
       )}
       <button
@@ -151,7 +186,7 @@ function Row({
         aria-current={active ? "true" : undefined}
         className={cn(
           "ease-power3-out group relative flex w-full cursor-pointer touch-pan-y flex-col gap-0.5 rounded-xl px-3 py-2.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
-          dragging ? "transition-none" : "transition-[background-color,transform] duration-200",
+          dragging ? "transition-none" : "transition-[background-color,transform] duration-200 ease-power3-out",
           offset !== 0
             ? "bg-background"
             : active

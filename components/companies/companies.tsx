@@ -1,6 +1,6 @@
 "use client";
 
-import CompaniesHeader from "./header/header";
+import SectionHeader from "@/components/crm/section-header";
 import CompaniesToolbar from "./toolbar/toolbar";
 import CompaniesTable from "./table/companies-table";
 import { RememberList } from "@/components/crm/list-memory";
@@ -45,7 +45,7 @@ export default function Companies({
   return (
     <section id="companies" className="flex min-h-0 min-w-0 flex-1 flex-col">
       <RememberList list="companies" />
-      <CompaniesHeader viewer={viewer} />
+      <SectionHeader title="Companies" viewer={viewer} />
       <CompaniesToolbar
         filters={filters}
         members={members}
