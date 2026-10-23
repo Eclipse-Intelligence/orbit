@@ -32,6 +32,7 @@ async function relationshipSignalsInDb(db: Db, workspaceId: string, target: Rela
   const rows = await db.query<SignalRow>(
     `with acts as (
        select a.${column} as id, a.occurred_at,
+         coalesce(a.metadata->>'internetMessageId', coalesce(a.title, '') || '|' || date_trunc('minute', a.occurred_at)::text) as message,
          case
            when a.type = 'email' and ${INBOUND} then 'in'
            when a.type = 'email' then 'out'
@@ -50,11 +51,11 @@ async function relationshipSignalsInDb(db: Db, workspaceId: string, target: Rela
      select acts.id,
        count(*) filter (where kind = 'in')::int as inbound_count,
        max(occurred_at) filter (where kind = 'in') as last_inbound,
-       count(*) filter (where kind = 'out')::int as outbound_count,
+       count(distinct message) filter (where kind = 'out')::int as outbound_count,
        max(occurred_at) filter (where kind = 'out') as last_outbound,
        count(*) filter (where kind = 'meet')::int as meeting_count,
        max(occurred_at) filter (where kind = 'meet') as last_meeting,
-       count(*) filter (where kind = 'out' and occurred_at > coalesce(theirs.last_theirs, '-infinity'::timestamptz))::int as unanswered,
+       count(distinct message) filter (where kind = 'out' and occurred_at > coalesce(theirs.last_theirs, '-infinity'::timestamptz))::int as unanswered,
        min(occurred_at) filter (where kind = 'out' and occurred_at > coalesce(theirs.last_theirs, '-infinity'::timestamptz)) as first_unanswered,
        count(*) filter (where kind in ('in', 'meet') and occurred_at > $3::timestamptz - interval '90 days')::int as recent
      from acts join theirs on theirs.id = acts.id

@@ -69,6 +69,14 @@ describe("relationship signals", () => {
     await email(200, "outbound", "Following up");
     await email(100, "outbound", "Any thoughts?");
     await email(9, "outbound", "One more try");
+    await createActivity(owner, {
+      type: "email",
+      title: "One more try",
+      body: "One more try",
+      companyId,
+      occurredAt: ago(9),
+      metadata: { source: "microsoft", direction: "outbound", to: "colleague@pmx.test" },
+    });
     await email(9, "inbound", "Automatic reply: One more try");
     await createActivity(owner, { type: "note", title: "Internal note", contactId, occurredAt: ago(1) });
   });
