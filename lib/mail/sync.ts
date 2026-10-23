@@ -17,6 +17,7 @@ import {
   listMicrosoftFolders,
 } from "@/lib/mail/microsoft";
 import { trackingIdIn } from "@/lib/mail/html";
+import { classifyEmailTones } from "@/lib/crm/email-tone";
 import { fileMailOnTimeline } from "@/lib/mail/timeline";
 import { notifyNewMail } from "@/lib/mail/notify";
 import { queueMailWorkflowEvents } from "@/lib/workflows/mail-events";
@@ -531,6 +532,9 @@ export async function syncMail(
       console.error("Filing mail on contacts failed", error);
       return 0;
     });
+  if (deadline - Date.now() > 10_000) {
+    await classifyEmailTones(actor, { deadline, fetchImpl: options.fetchImpl }).catch((error) => console.error("Reading email tone failed", error));
+  }
   if (report.arrived.length) {
     await notifyNewMail(actor, report.arrived, { send: options.push }).catch((error) => console.error("Mail notification failed", error));
     report.workflowEvents = await queueMailWorkflowEvents(actor, report.arrived).catch((error) => {

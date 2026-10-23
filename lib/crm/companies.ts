@@ -1,3 +1,4 @@
+import { relationshipsInDb } from "@/lib/crm/relationship-signals";
 import { after } from "next/server";
 
 import type { Db } from "@/lib/db/pool";
@@ -552,8 +553,9 @@ export async function listCompanies(actor: Actor, query: CompanyListQuery = {}) 
        limit $${listed.length - 1} offset $${listed.length}`,
       listed,
     );
+    const relationships = query.relationships ? await relationshipsInDb(db, actor.workspaceId, "company", rows.rows.map((row) => row.id)) : {};
     return {
-      data: rows.rows.map(mapCompany),
+      data: rows.rows.map((row) => ({ ...mapCompany(row), ...(relationships[row.id] ? { relationship: relationships[row.id] } : {}) })),
       total: count.rows[0]?.total ?? 0,
       limit,
       offset,

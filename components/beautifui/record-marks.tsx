@@ -1,12 +1,7 @@
 import type { MouseEvent } from "react";
 import Link from "next/link";
-import {
-  CONNECTION_STRENGTH,
-  connectionStrength,
-  HEALTH_LABELS,
-  lifecycleLabel,
-  type ConnectionStrength,
-} from "@/lib/companies";
+import { HEALTH_LABELS, lifecycleLabel } from "@/lib/companies";
+import { RELATIONSHIP_META, type Relationship } from "@/lib/crm/relationship-score";
 import type { AccountHealth, BuiltInLifecycle, Lifecycle } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
 
@@ -98,24 +93,21 @@ export function LifecycleMark({ lifecycle }: { lifecycle: Lifecycle }) {
 }
 
 export function ConnectionMark({
-  at,
-  now,
+  relationship,
   className,
 }: {
-  at: string | null | undefined;
-  now?: number;
+  relationship: Relationship | null | undefined;
   className?: string;
 }) {
-  const key: ConnectionStrength = connectionStrength(at, now);
-  const item = CONNECTION_STRENGTH[key];
+  const item = RELATIONSHIP_META[relationship?.label ?? "new"];
   return (
-    <span className={cn("text-subtle inline-flex items-center gap-2 text-[13px]", className)}>
-      <span
-        aria-hidden
-        className="size-2 shrink-0 rounded-full"
-        style={{ background: item.color }}
-      />
+    <span
+      title={relationship?.reason ?? item.meaning}
+      className={cn("text-subtle inline-flex items-center gap-2 text-[13px]", className)}
+    >
+      <span aria-hidden className="size-2 shrink-0 rounded-full" style={{ background: item.color }} />
       {item.label}
+      {relationship?.reason && <span className="sr-only">. {relationship.reason}</span>}
     </span>
   );
 }

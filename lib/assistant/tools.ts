@@ -427,6 +427,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         order: oneOf(args.order, ["asc", "desc"] as const),
         limit: int(args.limit, 50, 1, 100),
         offset: int(args.offset, 0, 0, 10000),
+        relationships: true,
       });
       return { ...result, data: result.data.map(withCompany) };
     },

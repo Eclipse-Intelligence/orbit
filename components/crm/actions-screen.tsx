@@ -128,7 +128,7 @@ export default function ActionsScreen({
               meta={`${relativeWhen(company.lastInteractionAt, now)} · ${company.domain ?? "No domain"}`}
               action={
                 <span className="flex items-center gap-3">
-                  <ConnectionMark at={company.lastInteractionAt} now={now} />
+                  <ConnectionMark relationship={company.relationship} />
                   <Button variant="ghost" size="sm" href={companyHref(company.id)}>
                     Open
                   </Button>

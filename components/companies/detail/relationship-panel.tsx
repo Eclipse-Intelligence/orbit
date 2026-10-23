@@ -28,7 +28,8 @@ export default function RelationshipPanel({
   return (
     <>
       <DetailSection title="Relationship">
-        <ConnectionMark at={last?.occurredAt ?? null} />
+        <ConnectionMark relationship={context.relationship} className="text-foreground text-[14px]" />
+        <p className="caption-style text-soft leading-[1.45]">{context.relationship.reason}</p>
         <p className="caption-style text-soft">
           {context.relationshipStatus === "quiet"
             ? "Quiet relationship"

@@ -110,6 +110,7 @@ export function createCrmMcpServer(actor: Actor) {
           limit: args.limit,
           sort: "updated",
           order: "desc",
+          relationships: true,
         });
         return toolResult(result);
       } catch (error) {

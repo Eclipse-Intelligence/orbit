@@ -131,7 +131,7 @@ export default function CompanyRow({
         {relativeWhen(company.lastInteractionAt, now)}
       </TableCell>
       <TableCell role="cell" className={cellClass("strength")}>
-        <ConnectionMark at={company.lastInteractionAt} now={now} />
+        <ConnectionMark relationship={company.relationship} />
       </TableCell>
       <TableCell role="cell" className={cellClass("health")} title={company.healthReason ?? undefined}>
         {company.health ? <HealthMark health={company.health} /> : <span className="text-subtle text-[13px]">Not set</span>}
