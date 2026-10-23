@@ -1,7 +1,7 @@
 import { getBookingPage } from "@/lib/booking/pages";
 import { listLifecycles } from "@/lib/crm/lifecycles";
 import { getMailThread, mailSyncStatus, searchMail } from "@/lib/mail/store";
-import { saveDraftForAgent } from "@/lib/mail/compose";
+import { composeAccounts, saveDraftForAgent, sendForAgent } from "@/lib/mail/compose";
 import { createProduct, listProducts, listTemplates, updateProduct } from "@/lib/proposals/catalogue";
 import { createDocument, getDocument, listDocuments, sendDocument, updateDocument } from "@/lib/proposals/documents";
 import { mailOrigin } from "@/lib/mail/origin";
@@ -36,7 +36,7 @@ import { listEmailTemplates } from "@/lib/crm/email-templates";
 import { CrmError } from "@/lib/crm/errors";
 import { getGranolaStatus } from "@/lib/crm/granola";
 import { companyHref, contactHref, opportunityHref } from "@/lib/crm/hrefs";
-import { getMailbox, listInbox, listSenders, sendContactEmail } from "@/lib/crm/inbox";
+import { getMailbox, listInbox } from "@/lib/crm/inbox";
 import { createInvite, getMeetingLink } from "@/lib/crm/invites";
 import { archiveOpportunity, createOpportunity, getOpportunity, listOpportunities, listPipeline, updateOpportunity } from "@/lib/crm/opportunities";
 import { getMyEmails } from "@/lib/crm/profile";
@@ -641,9 +641,9 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
   {
     name: "list_email_senders",
     label: "Checking email accounts",
-    description: "The email addresses the user can send from: the main mailbox connected in Capture (primary) and any other Microsoft accounts with sending allowed.",
+    description: "The email addresses the user can send from in Orbit Mail: their connected mailboxes and other sending addresses. The first is the main one.",
     parameters: { type: "object", properties: {} },
-    run: async (actor) => ({ senders: (await listSenders(actor)).map((item) => ({ email: item.email, primary: item.primary })) }),
+    run: async (actor) => ({ senders: (await composeAccounts(actor)).map((item, index) => ({ email: item.email, primary: index === 0 })) }),
   },
   {
     name: "list_lifecycles",
@@ -1780,7 +1780,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     label: "Saving a draft",
     write: true,
     description:
-      "Save an email as a draft in Orbit Mail (it also appears in the mailbox's Drafts folder in Outlook) for the user to review and send. It never sends. Use this whenever the user asks for a draft. For a reply, pass replyToEmailId (an email id from search_email or get_email_thread) so it lands in that conversation; otherwise give to and a subject. to can hold email addresses, and contactId adds that contact.",
+      "Save an email as a draft in Orbit Mail (it also appears in the mailbox's Drafts folder in Outlook) without sending it. Use this only when the user asks for a draft, wants to edit it themselves first, or says not to send; otherwise use send_email, which waits for their approval. For a reply, pass replyToEmailId (an email id from search_email or get_email_thread) so it lands in that conversation; otherwise give to and a subject. to can hold email addresses, and contactId adds that contact.",
     parameters: {
       type: "object",
       properties: {
@@ -1828,34 +1828,58 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     label: "Sending an email",
     write: true,
     description:
-      "Send an email to a person from one of the user's connected Microsoft accounts (the main mailbox unless from names another address the user can send from; list_email_senders shows them). It is logged on their timeline.",
+      "Send an email from Orbit Mail: a new email, or a reply (replyToEmailId, an email id from search_email or get_email_thread; replyAll for everyone on it). Nothing is sent until the user approves the card, which shows the whole email. Orbit adds the signature, saves it in Sent and logs it on the contacts' timelines. to can hold email addresses, and contactId adds that contact. Pass draftId (from save_email_draft) to send a draft you saved earlier, with its final wording. Replies go to the original sender (and everyone, with replyAll) automatically; to and cc add more people.",
     parameters: {
       type: "object",
       properties: {
-        contactId: idParam("Contact id."),
-        subject: { type: "string" },
-        body: { type: "string" },
-        from: { type: "string", description: "Email address to send from. Leave out for the main mailbox." },
+        replyToEmailId: idParam("Email to reply to. Leave out for a new email."),
+        replyAll: { type: "boolean", description: "Reply to everyone on that email." },
+        draftId: idParam("A draft saved with save_email_draft that this sends."),
+        contactId: idParam("Contact to send to."),
+        to: { type: "array", items: { type: "string" }, description: "Email addresses." },
+        cc: { type: "array", items: { type: "string" } },
+        subject: { type: "string", description: "Needed for a new email. Replies keep the conversation's subject." },
+        body: { type: "string", description: "Plain text with a greeting and sign-off. Orbit adds the signature." },
+        from: { type: "string", description: "Address to send from (list_email_senders). Leave out for the main mailbox, or the account the conversation is in for a reply." },
       },
-      required: ["contactId", "subject", "body"],
+      required: ["body"],
     },
-    describe: (args, name) => ({
-      title: `Send email: ${str(args.subject)}`,
-      lines: [`To: ${name(args.contactId)}`, str(args.from) ? `From: ${str(args.from)}` : "", str(args.body)],
-    }),
+    describe: (args, name) => {
+      const people = [args.contactId ? name(args.contactId) : "", ...strings(args.to)].filter(Boolean);
+      const replying = Boolean(str(args.replyToEmailId));
+      return {
+        title: `${replying ? "Send reply" : "Send email"}: ${str(args.subject) || "in the conversation"}`,
+        lines: [
+          replying ? `To: ${args.replyAll ? "everyone on the email" : "the sender"}${people.length ? `, plus ${people.join(", ")}` : ""}` : people.length ? `To: ${people.join(", ")}` : "",
+          strings(args.cc).length ? `Cc: ${strings(args.cc).join(", ")}` : "",
+          str(args.from) ? `From: ${str(args.from)}` : "",
+          "Sends from Orbit Mail when you approve.",
+          str(args.body),
+        ].filter(Boolean),
+      };
+    },
     run: async (actor, args) => {
-      const wanted = optionalStr(args.from)?.toLowerCase();
-      const senders = wanted ? await listSenders(actor) : [];
-      const sender = wanted ? senders.find((item) => item.email.toLowerCase() === wanted) : null;
-      if (wanted && !sender) {
-        return { error: `You can't send from ${args.from} yet. You can send from: ${senders.map((item) => item.email).join(", ") || "no connected accounts"}.` };
-      }
-      const result = await sendContactEmail(actor, required(args.contactId, "A contact id"), {
-        subject: required(args.subject, "A subject"),
-        body: required(args.body, "A message"),
-        from: sender?.id ?? null,
-      });
-      return { sent: true, from: sender?.email ?? null, warning: result.warning };
+      const contactId = optionalStr(args.contactId);
+      const contact = contactId ? await getContact(actor, contactId) : null;
+      if (contact && !contact.email) return { error: `${contact.name} has no email address in Orbit.` };
+      const to = [...(contact?.email ? [contact.email] : []), ...strings(args.to)];
+      const replyTo = optionalStr(args.replyToEmailId) ?? null;
+      if (!replyTo && to.length === 0) return { error: "Say who the email is to." };
+      const sent = await sendForAgent(
+        actor,
+        {
+          replyTo,
+          replyAll: args.replyAll === true,
+          draftId: optionalStr(args.draftId) ?? null,
+          from: optionalStr(args.from) ?? null,
+          to,
+          cc: strings(args.cc),
+          subject: optionalStr(args.subject),
+          body: required(args.body, "A message"),
+        },
+        { origin: mailOrigin() },
+      );
+      return { sent: true, to: sent.to, cc: sent.cc, subject: sent.subject, href: sent.href, warning: sent.warning };
     },
   },
   {

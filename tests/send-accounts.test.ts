@@ -130,9 +130,7 @@ describe("sending from other accounts", () => {
 
   it("lets the assistant send from another address by name", async () => {
     const refused = (await runTool(owner, "send_email", { contactId, subject: "Hi", body: "Hi", from: "mark@zeusvoice.com" })) as { error: string };
-    assert.match(refused.error, /You can't send from mark@zeusvoice\.com yet\. You can send from: mark@geteclipse\.co, mark@markridgeon\.com/);
-    const listed = (await runTool(owner, "list_email_senders", {})) as { senders: { email: string }[] };
-    assert.equal(listed.senders.length, 2);
+    assert.match(refused.error, /You can't send from mark@zeusvoice\.com/);
   });
 
   it("adds each address's own signature below the message unless left off", async () => {

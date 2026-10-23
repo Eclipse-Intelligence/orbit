@@ -22,7 +22,7 @@ import { notePreparedSent } from "@/lib/mail/prepare";
 import { mailSourceToken } from "@/lib/mail/sync";
 import { readStatusesOn } from "@/lib/mail/tracking";
 import type { MailAddress } from "@/lib/mail/types";
-import type { ComposeAccount, MailDraft } from "@/lib/mail/view";
+import { replyDefaults, type ComposeAccount, type MailDraft } from "@/lib/mail/view";
 import {
   defaultSentSaver,
   defaultSmtpSender,
@@ -656,4 +656,56 @@ export async function saveDraftForAgent(actor: UserActor, input: ToolDraftInput,
   );
   const href = thread ? `/mail?thread=${encodeURIComponent(`${thread.source_id}|${thread.tk}`)}` : "/mail?view=drafts";
   return { draft, href };
+}
+
+export async function sendForAgent(
+  actor: UserActor,
+  input: ToolDraftInput & { draftId?: string | null },
+  options: { origin: string | null; fetchImpl?: typeof fetch; smtp?: SmtpSender; saveSent?: SentSaver },
+) {
+  const replying = Boolean(input.replyTo);
+  const accounts = await composeAccounts(actor);
+  const account = replying && !input.from ? null : await resolveSendAccount(actor, input.from);
+  const original = replying
+    ? await withActor(actor, async (db) => {
+        if (!isUuid(input.replyTo!)) return null;
+        const result = await db.query<{ source_id: string; tk: string; subject: string | null; from_email: string | null; from_name: string | null; to_recipients: MailAddress[]; cc_recipients: MailAddress[] }>(
+          `select source_id, coalesce(thread_key, 'm:' || id::text) as tk, subject, from_email, from_name, to_recipients, cc_recipients
+           from crm.mail_messages where id = $1 and user_id = $2`,
+          [input.replyTo, actor.userId],
+        );
+        return result.rows[0] ?? null;
+      })
+    : null;
+  if (replying && !original) throw new CrmError("not_found", "That email isn't in Orbit Mail. Search for it again.", 404);
+  if (!replying && !input.subject?.trim()) throw new CrmError("invalid_input", "Add a subject.", 400, { field: "subject" });
+  const mode = replying ? (input.replyAll ? "reply_all" : "reply") : "new";
+  const defaults = original
+    ? replyDefaults(
+        mode,
+        { from: original.from_email ? { address: original.from_email, name: original.from_name } : null, to: original.to_recipients ?? [], cc: original.cc_recipients ?? [] },
+        original.subject,
+        [actor.email, ...accounts.map((item) => item.email)],
+      )
+    : { to: [], cc: [], subject: input.subject ?? "" };
+  const draft = readDraftInput({
+    id: input.draftId ?? null,
+    mode,
+    messageId: input.replyTo ?? null,
+    sourceId: account?.sourceId ?? original?.source_id ?? null,
+    identityId: account?.identityId ?? null,
+    to: [...defaults.to, ...input.to],
+    cc: [...defaults.cc, ...(input.cc ?? [])],
+    bcc: [],
+    subject: input.subject?.trim() || defaults.subject,
+    body: input.body,
+  });
+  const result = await sendMailDraft(actor, draft, options);
+  return {
+    warning: result.warning,
+    to: draft.to.map((item) => item.address),
+    cc: draft.cc.map((item) => item.address),
+    subject: draft.subject,
+    href: original ? `/mail?thread=${encodeURIComponent(`${original.source_id}|${original.tk}`)}` : "/mail?view=sent",
+  };
 }
