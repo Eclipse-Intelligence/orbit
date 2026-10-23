@@ -1,99 +1,145 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { bodyCore, checkColdEmail, lintColdEmail } from "@/lib/assistant/cold-email";
+import { bodyCore, checkColdEmail, figuresIn, lintColdEmail } from "@/lib/assistant/cold-email";
 import { systemPrompt } from "@/lib/assistant/prompt";
 import { runTool, toolDefinitions } from "@/lib/assistant/tools";
 import type { UserActor } from "@/lib/crm/types";
 
-const GOOD = {
-  subject: "Pulse in AI answers",
-  body: "Hi Andrew,\n\nI saw Pulse launched its agency reporting product last week. If agencies are asking how clients appear in ChatGPT, that may become part of the report. Eclipse runs weekly prompts across ten AI assistants and shows where your clients are mentioned against competitors. Would a short snapshot for two of your clients be useful?\n\nMark",
+const ARTICLE = "https://geteclipse.co/articles/why-your-ai-visibility-platform-needs-repeated-prompt-tests/";
+
+const STRONG = {
+  subject: "Runs behind AI visibility scores",
+  body: `Hi David,\n\nYour 2 Oct post asked how teams choose the prompts behind an AI visibility score. The next question is how many runs sit behind each prompt. A brand named in 6 of 20 runs scores 30%, but the plausible range is roughly 15% to 52%. Our article on repeated prompt tests shows how to separate a real lift from normal churn.\n\n${ARTICLE}\n\nHow many runs per prompt do you use before reporting a change to a client?\n\nMark`,
 };
 
-const BAD = {
-  subject: "Re: Quick question!",
-  body: "Hi Andrew,\n\nI hope this email finds you well. We are a game-changing platform that will unlock 10x ROI for your agency — our customers love us. We leverage AI to supercharge content. Do you have 15 minutes for a call next week? Or should I send a deck?\n\nMark",
+const WEAK = {
+  subject: "AI visibility prompts",
+  body: "Hi David,\n\nYour 2 Oct post asked how teams choose the prompts behind an AI visibility score. Our article reaches the same answer, that prompt choice decides what a score means. Eclipse shows how a brand is mentioned alongside competitors across ten AI assistants. Shall I send you the article?\n\nMark",
 };
+
+const EVIDENCE = [
+  { fact: "David's LinkedIn post asked how teams choose the prompts behind an AI visibility score.", source: "linkedin.com/posts/david 2 Oct 2026" },
+  { fact: "Article: a brand named in 6 of 20 runs scores 30%, but the plausible range is roughly 15% to 52%.", source: ARTICLE },
+];
+
+const OFFER = "Omniscient reports AI share of voice and citation share to clients on its own dashboard.";
 
 const actor = { type: "user", userId: "u", workspaceId: "w", email: "mark@eclipse.test", fullName: "Mark", role: "owner", scopes: [] } as unknown as UserActor;
 
-describe("cold email checks", () => {
+function failed(checks: { id: string; pass: boolean }[]) {
+  return checks.filter((check) => !check.pass).map((check) => check.id);
+}
+
+describe("cold email rule checks", () => {
+  it("passes the email that gives something new and flags one that gates the article", () => {
+    assert.ok(!bodyCore(STRONG.body).endsWith("Mark"));
+    assert.deepEqual(figuresIn(STRONG.body), ["6 of 20", "30%", "15%", "52%"]);
+    assert.deepEqual(failed(lintColdEmail({ ...STRONG, evidence: EVIDENCE })), []);
+    const weak = lintColdEmail({ ...WEAK, evidence: EVIDENCE });
+    assert.deepEqual(failed(weak), ["gives_first"]);
+    assert.match(weak.find((check) => check.id === "gives_first")!.note, /Offers to send something instead of including it/);
+  });
+
+  it("only allows figures that appear in the evidence, and still bans hype, meetings, colons and piece", () => {
+    const unsourced = lintColdEmail({ ...STRONG, evidence: EVIDENCE.slice(0, 1) });
+    assert.match(unsourced.find((check) => check.id === "numbers_sourced")!.note, /Not in your evidence: 6 of 20, 30%, 15%, 52%/);
+    const pushy = lintColdEmail({
+      subject: "Re: Quick question!",
+      body: "Hi David,\n\nI hope this email finds you well. Our game-changing platform delivers 10x results: I wrote a piece on it. Do you have 15 minutes for a call next week? Or should I send a deck?\n\nMark",
+      evidence: EVIDENCE,
+    });
+    for (const id of ["subject", "one_cta", "gives_first", "numbers_sourced", "no_meeting", "no_filler", "no_colons", "no_piece"]) assert.ok(failed(pushy).includes(id), id);
+  });
+});
+
+describe("cold email value grading", () => {
   afterEach(() => {
     delete process.env.TYPESAFE_API_KEY;
+    delete process.env.LLM_API_KEY;
   });
 
-  it("passes a short, specific email and flags a generic one", () => {
-    assert.match(bodyCore(GOOD.body), /^I saw Pulse/);
-    assert.ok(!bodyCore(GOOD.body).endsWith("Mark"));
-    const good = lintColdEmail(GOOD);
-    assert.deepEqual(good.filter((check) => !check.pass).map((check) => check.id), []);
-    const bad = lintColdEmail(BAD);
-    const failed = bad.filter((check) => !check.pass).map((check) => check.id);
-    for (const id of ["subject", "one_cta", "no_meeting", "no_filler", "no_roi", "no_dashes", "about_them"]) assert.ok(failed.includes(id), id);
-    const found = bad.find((check) => check.id === "no_filler")!.note;
-    for (const phrase of ["i hope this email finds you well", "quick question", "game-changing", "unlock", "leverage", "supercharge"]) assert.ok(found.includes(phrase), phrase);
-    assert.equal(lintColdEmail({ ...BAD, firstTouch: false }).find((check) => check.id === "no_meeting")!.pass, true);
-    const styled = lintColdEmail({
-      subject: "Pulse: AI answers",
-      body: "Hi Andrew,\n\nOne thing stood out: your launch last week. I wrote a piece on it at 14:30 yesterday, see https://geteclipse.co/articles/x. Eclipse tracks where your clients appear in AI answers. Would the article be useful?\n\nMark",
-    });
-    const colons = styled.find((check) => check.id === "no_colons")!;
-    assert.equal(colons.pass, false);
-    assert.match(colons.note, /Pulse: AI answers/);
-    assert.equal(styled.find((check) => check.id === "no_piece")!.pass, false);
-    const clean = lintColdEmail({ subject: "Pulse in AI answers", body: "Hi Andrew,\n\nI read your launch post at 14:30 on https://pulse.test/news. Eclipse tracks where your clients appear in AI answers. It shows mentions next to competitors each week. Would the article be useful?\n\nMark" });
-    assert.equal(clean.find((check) => check.id === "no_colons")!.pass, true);
-    assert.equal(clean.find((check) => check.id === "no_piece")!.pass, true);
-  });
-
-  it("adds Jev's grading when it's set up, and keeps going if Jev fails", async () => {
-    const sent: { url: string; auth: string | null; body: { model: string; state: { prospect_evidence: { id: string }[]; draft: { cta: string } }; questions: Record<string, { type: string }> } }[] = [];
+  it("asks Jev whether it tells them something new, gives value without a reply and avoids pitching what they have", async () => {
     process.env.TYPESAFE_API_KEY = "ts-test";
-    const fetchImpl: typeof fetch = async (input, init) => {
-      sent.push({ url: String(input), auth: new Headers(init?.headers).get("authorization"), body: JSON.parse(String(init?.body)) });
+    const sent: { questions: Record<string, { type: string; criteria: unknown }>; state: { prospect_company_already_offers: string } }[] = [];
+    const fetchImpl: typeof fetch = async (_input, init) => {
+      sent.push(JSON.parse(String(init?.body)));
       return Response.json({
-        model: "jev-1.13",
         answers: {
-          opener_grounded: { type: "noul", noul: 0.94 },
-          opener_relevant: { type: "noul", noul: 0.88 },
-          problem_hedged: { type: "noul", noul: 0.61 },
+          opener_grounded: { type: "noul", noul: 0.95 },
+          opener_relevant: { type: "noul", noul: 0.9 },
+          problem_hedged: { type: "noul", noul: 0.9 },
           claims_supported: { type: "noul", noul: 0.9 },
-          subject_honest: { type: "noul", noul: 0.97 },
-          coherent: { type: "noul", noul: 0.86 },
-          cta_kind: { type: "choice", choice: "useful_offer", confidence: 0.8, probabilities: {} },
-          sounds_human: { type: "score", score: 2.3, confidence: 0.6, probabilities: {} },
+          subject_honest: { type: "noul", noul: 0.95 },
+          coherent: { type: "noul", noul: 0.9 },
+          new_information: { type: "noul", noul: 0.2 },
+          value_without_reply: { type: "noul", noul: 0.1 },
+          not_their_own_product: { type: "noul", noul: 0.3 },
+          cta_kind: { type: "choice", choice: "useful_offer" },
+          worth_replying: { type: "score", score: 0.8 },
+          sounds_human: { type: "score", score: 2.1 },
         },
       });
     };
-    const result = await checkColdEmail({ ...GOOD, evidence: [{ fact: "Pulse launched agency reporting", source: "https://pulse.test/news 2026-10-16" }] }, { fetchImpl });
-    assert.equal(sent[0].url, "https://api.typesafe.ai/v1/systemone");
-    assert.equal(sent[0].auth, "Bearer ts-test");
-    assert.equal(sent[0].body.model, "jev-latest");
-    assert.equal(sent[0].body.state.prospect_evidence[0].id, "E1");
-    assert.equal(sent[0].body.state.draft.cta, "Would a short snapshot for two of your clients be useful?");
-    assert.equal(sent[0].body.questions.cta_kind.type, "choice");
-    assert.equal(result.ready, false);
-    assert.deepEqual(result.fixes, ["Problem framed honestly: Say the problem may apply ('if', 'may'), rather than telling them they have it."]);
-    assert.match(result.checks.find((check) => check.id === "problem_hedged")!.note, /61% likely yes, unsure/);
+    const result = await checkColdEmail({ ...WEAK, evidence: EVIDENCE, theirOffer: OFFER }, { fetchImpl });
+    assert.equal(sent[0].state.prospect_company_already_offers, OFFER);
+    assert.deepEqual(Object.keys((sent[0].questions.cta_kind.criteria as Record<string, string>)).slice(0, 2), ["question_about_their_work", "useful_offer"]);
     assert.equal(result.graded, "Rule checks and Jev grading.");
-
-    const down: typeof fetch = async () => new Response("no", { status: 503 });
-    const fallback = await checkColdEmail({ ...GOOD, evidence: [] }, { fetchImpl: down });
-    assert.equal(fallback.ready, true);
-    assert.match(fallback.graded, /Jev grading failed \(Jev answered 503\.\); only the rule checks ran\./);
+    assert.deepEqual(
+      result.checks.filter((check) => !check.pass).map((check) => check.id),
+      ["gives_first", "new_information", "value_without_reply", "not_their_own_product", "cta_kind", "worth_replying"],
+    );
+    assert.ok(result.fixes.some((fix) => fix.startsWith("Tells them something new: Take their point one step further")));
   });
 
-  it("gives the assistant the playbook and the check, and tells it when to use them", async () => {
+  it("uses Orbit's own AI for the value questions when Jev isn't available", async () => {
+    process.env.LLM_API_KEY = "llm-test";
+    const prompts: string[] = [];
+    const fetchImpl: typeof fetch = async (_input, init) => {
+      const body = JSON.parse(String(init?.body));
+      prompts.push(body.messages.map((message: { content: string }) => message.content).join("\n"));
+      return Response.json({
+        model: "test",
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                newInformation: true,
+                valueWithoutReply: true,
+                pitchesWhatTheyHave: false,
+                questionAboutTheirWork: true,
+                worthReplying: 2.5,
+                biggestGap: "",
+              }),
+            },
+            finish_reason: "stop",
+          },
+        ],
+      });
+    };
+    const result = await checkColdEmail({ ...STRONG, evidence: EVIDENCE, theirOffer: OFFER }, { fetchImpl });
+    assert.equal(result.ready, true);
+    assert.equal(result.graded, "Rule checks and an AI value review.");
+    assert.match(prompts[0], /What their company already offers:\nOmniscient reports AI share of voice/);
+    assert.match(prompts[0], /busy expert/);
+  });
+
+  it("says plainly when no value grading ran", async () => {
+    const result = await checkColdEmail({ ...STRONG, evidence: EVIDENCE });
+    assert.match(result.graded, /^Rule checks only\. The value review didn't run/);
+  });
+});
+
+describe("assistant guidance", () => {
+  it("gives the assistant the playbook and the check, and tells it to aim for value", async () => {
     const names = toolDefinitions().map((tool) => tool.function.name);
     assert.ok(names.includes("cold_email_playbook") && names.includes("cold_email_check"));
     const playbook = (await runTool(actor, "cold_email_playbook", {})) as { playbook: string; eclipseBrief: string };
-    assert.match(playbook.playbook, /NO-SEND/);
-    assert.match(playbook.eclipseBrief, /no customer results are approved/);
-    assert.match(systemPrompt(actor, { webSearch: false }), /Always read cold_email_playbook first/);
-    assert.match(systemPrompt(actor, { webSearch: false }), /Never put a colon in the middle of a sentence/);
-    assert.match(systemPrompt(actor, { webSearch: false }), /Never call an article a "piece"/);
-    const checked = (await runTool(actor, "cold_email_check", { ...BAD })) as { ready: boolean; graded: string };
-    assert.equal(checked.ready, false);
-    assert.match(checked.graded, /Rule checks only/);
+    assert.match(playbook.playbook, /what can this email tell them that they probably don't already know/);
+    assert.match(playbook.playbook, /Shall I send you the article/);
+    assert.match(playbook.eclipseBrief, /Figures and examples from Eclipse's own published articles may be quoted exactly/);
+    const prompt = systemPrompt(actor, { webSearch: false });
+    assert.match(prompt, /Always read cold_email_playbook first/);
+    assert.match(prompt, /worth a busy expert's time/);
+    assert.match(prompt, /Never put a colon in the middle of a sentence/);
   });
 });

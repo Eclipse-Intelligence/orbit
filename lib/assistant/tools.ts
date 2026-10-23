@@ -926,7 +926,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     name: "cold_email_check",
     label: "Checking the email",
     description:
-      "Check a draft first email to a prospect before proposing it: length, sentences, subject, one closing question, no meeting ask, no filler or hype, no unsupported numbers, no dashes, written about them; and, when Jev is set up, whether the opener matches your evidence and is relevant, the problem is framed honestly, Eclipse claims are allowed, the subject is honest, the call to action is useful and it sounds like a person. Pass the evidence you gathered (each fact with its source). Fix every item in fixes and check again, at most twice.",
+      "Check a draft first email to a prospect before proposing it. It checks value, not just format: whether it tells them something new rather than handing their point back, gives the useful part (finding and link) without needing a reply, avoids pitching what their company already offers, asks about their own work, and is worth a busy expert's reply; plus that every figure appears word for word in your evidence, the opener matches the evidence, claims are allowed, and the format rules (length, one closing question, no meeting ask, no filler, dashes, mid-sentence colons or 'piece'). Pass all your evidence (each fact with its source, including the exact figures you quote from an article) and what their company already offers. Fix every item in fixes and check again, at most twice.",
     parameters: {
       type: "object",
       properties: {
@@ -937,6 +937,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
           items: { type: "object", properties: { fact: { type: "string" }, source: { type: "string", description: "Link and date." } }, required: ["fact"] },
         },
         firstTouch: { type: "boolean", description: "False for a follow-up to someone who has engaged before. Defaults to true." },
+        theirOffer: { type: "string", description: "What the prospect's company already sells, reports or does, from their website, so the email doesn't pitch it back." },
       },
       required: ["subject", "body"],
     },
@@ -948,6 +949,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
           ? args.evidence.filter((item): item is { fact: string; source?: string } => Boolean(item && typeof item === "object" && typeof (item as { fact?: unknown }).fact === "string"))
           : [],
         firstTouch: args.firstTouch !== false,
+        theirOffer: optionalStr(args.theirOffer),
       }),
   },
   {
