@@ -120,6 +120,7 @@ export type Provenance = {
   sourceUrl?: string | null;
   workflowId?: string;
   depth?: number;
+  catchUp?: boolean;
 };
 
 export type CompanyListQuery = {

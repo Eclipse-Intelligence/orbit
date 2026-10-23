@@ -17,6 +17,7 @@ import {
   listMicrosoftFolders,
 } from "@/lib/mail/microsoft";
 import { trackingIdIn } from "@/lib/mail/html";
+import { fileMailOnTimeline } from "@/lib/mail/timeline";
 import { notifyNewMail } from "@/lib/mail/notify";
 import { queueMailWorkflowEvents } from "@/lib/workflows/mail-events";
 import type { PushSender } from "@/lib/push";
@@ -59,6 +60,7 @@ export type MailSyncReport = {
   paused: boolean;
   errors: string[];
   arrived: string[];
+  filed: number;
   workflowEvents: number;
 };
 
@@ -464,7 +466,7 @@ export async function syncMail(
 ): Promise<MailSyncReport> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const deadline = options.deadline ?? Date.now() + (options.budgetMs ?? 20_000);
-  const report: MailSyncReport = { sources: 0, stored: 0, removed: 0, backfilling: 0, paused: false, errors: [], arrived: [], workflowEvents: 0 };
+  const report: MailSyncReport = { sources: 0, stored: 0, removed: 0, backfilling: 0, paused: false, errors: [], arrived: [], workflowEvents: 0, filed: 0 };
   const sources = await loadSources(actor);
   const hardStop = await withActor(actor, async (db) => (await databaseBytes(db)) >= mailHardStopBytes());
   if (hardStop) {
@@ -523,6 +525,12 @@ export async function syncMail(
       );
     }
   }
+  report.filed = await fileMailOnTimeline(actor)
+    .then((result) => result.filed)
+    .catch((error) => {
+      console.error("Filing mail on contacts failed", error);
+      return 0;
+    });
   if (report.arrived.length) {
     await notifyNewMail(actor, report.arrived, { send: options.push }).catch((error) => console.error("Mail notification failed", error));
     report.workflowEvents = await queueMailWorkflowEvents(actor, report.arrived).catch((error) => {
