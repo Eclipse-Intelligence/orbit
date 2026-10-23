@@ -7,7 +7,7 @@ function count(value: number) {
 export default function MailMirrorStatus({ sources }: { sources: MailSourceStatus[] }) {
   if (sources.length === 0) return null;
   return (
-    <section aria-label="Mail sync" className="flex max-w-[640px] flex-col gap-3">
+    <section aria-label="Mail sync" className="flex flex-col gap-3">
       {sources.map((source) => {
         const total = Math.max(source.total, source.stored);
         const share = total > 0 ? Math.min(1, source.stored / total) : 1;

@@ -33,7 +33,7 @@ describe("configured time zone", () => {
       assert.equal(appTimeZone(), "Europe/London");
       process.env.NEXT_PUBLIC_TIMEZONE = "Mars/Olympus";
       assert.equal(appTimeZone(), "Europe/London");
-      assert.match(formatWhen("2026-07-01T08:30:00Z"), /^Jul 1, 2026, 9:30\sAM$/);
+      assert.equal(formatWhen("2026-07-01T08:30:00Z"), "1 Jul 2026, 09:30");
       process.env.NEXT_PUBLIC_TIMEZONE = "America/New_York";
       assert.equal(appTimeZone(), "America/New_York");
     } finally {

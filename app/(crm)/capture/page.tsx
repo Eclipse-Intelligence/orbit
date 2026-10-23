@@ -13,6 +13,10 @@ import { microsoftConfigured, microsoftRedirectUri } from "@/lib/microsoft/oauth
 
 export const dynamic = "force-dynamic";
 
+function requestTime() {
+  return Date.now();
+}
+
 export default async function CapturePage({
   searchParams,
 }: {
@@ -73,6 +77,7 @@ export default async function CapturePage({
       notice={notice}
       info={info}
       connected={connected}
+      now={requestTime()}
     />
   );
 }
