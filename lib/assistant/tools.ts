@@ -1,3 +1,4 @@
+import { bookingUrl } from "@/lib/assistant/links";
 import { getBookingPage } from "@/lib/booking/pages";
 import { listLifecycles } from "@/lib/crm/lifecycles";
 import { getMailThread, mailSyncStatus, searchMail } from "@/lib/mail/store";
@@ -910,7 +911,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       return {
         meetingLink,
         myEmails: emails,
-        bookingPage: { ...booking, publicUrl: booking.exists ? `/book/${booking.slug}` : null },
+        bookingPage: { ...booking, publicUrl: booking.exists ? bookingUrl(booking.slug) : null },
         microsoftMail: mailbox,
         calendar,
         clickup: clickup

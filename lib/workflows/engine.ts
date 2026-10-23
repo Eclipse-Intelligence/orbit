@@ -1,3 +1,4 @@
+import { userLinks } from "@/lib/assistant/links";
 import { z } from "zod";
 import { HEALTH_LABELS } from "@/lib/companies";
 import { membershipsFor } from "@/lib/auth/user";
@@ -171,9 +172,16 @@ function londonToday() {
 
 async function buildContext(actor: UserActor, trigger: Trigger, event: RunEvent): Promise<{ vars: Vars; matches: boolean }> {
   const data = event.data ?? {};
+  const links = await userLinks(actor).catch(() => null);
   const vars: Vars = {
     trigger: { type: event.type, at: event.at ?? new Date().toISOString() },
-    owner: { id: actor.userId, name: actor.fullName || actor.email, email: actor.email },
+    owner: {
+      id: actor.userId,
+      name: actor.fullName || actor.email,
+      email: actor.email,
+      bookingUrl: links?.booking?.enabled ? links.booking.url : "",
+      meetingLink: links?.meetingLink ?? "",
+    },
     today: londonToday(),
     steps: {},
   };

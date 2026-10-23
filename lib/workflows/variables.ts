@@ -116,6 +116,8 @@ const CONTACT: VariableOption[] = [
 const BASE: VariableOption[] = [
   { path: "trigger.at", label: "When it ran", group: "Run" },
   { path: "owner.name", label: "Your name", group: "Run" },
+  { path: "owner.bookingUrl", label: "Your booking page link", group: "Run" },
+  { path: "owner.meetingLink", label: "Your meeting link", group: "Run" },
   { path: "today", label: "Today's date", group: "Run" },
 ];
 
