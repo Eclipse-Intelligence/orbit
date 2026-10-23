@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { systemPrompt } from "@/lib/assistant/prompt";
-import { describeAction, toolDefinitions } from "@/lib/assistant/tools";
+import { describeAction, runTool, toolDefinitions } from "@/lib/assistant/tools";
 import { saveMailbox } from "@/lib/crm/inbox";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
-import { saveDraftForAgent } from "@/lib/mail/compose";
+import { saveDraftForAgent, sendForAgent } from "@/lib/mail/compose";
 import { syncMail } from "@/lib/mail/sync";
 import { createUser, resetDatabase } from "./helpers";
 
@@ -65,7 +65,10 @@ describe("assistant drafts", () => {
     assert.ok(tool);
     assert.match(describeAction("save_email_draft", { subject: "Pulse in ChatGPT", to: ["andrew@pulse.test"], body: "Hi Andrew" }).lines.join("\n"), /Nothing is sent/);
     const prompt = systemPrompt(owner, { webSearch: false });
-    assert.match(prompt, /save it with save_email_draft/);
+    assert.match(prompt, /call send_email with the finished email/);
+    assert.match(prompt, /never say you can't send/);
+    assert.match(describeAction("send_email", { replyToEmailId: "x", body: "Hi Andrew" }).lines.join("\n"), /To: the sender[\s\S]*Sends from Orbit Mail when you approve/);
+    assert.equal(toolDefinitions().find((item) => item.function.name === "send_email") !== undefined, true);
     assert.match(prompt, /Never tell the user to paste an email into Outlook/);
     assert.ok(!/the Outlook inbox/.test(prompt));
   });
@@ -83,5 +86,16 @@ describe("assistant drafts", () => {
     const stored = await getAdminPool().query<{ count: number }>("select count(*)::int as count from crm.mail_drafts");
     assert.equal(stored.rows[0].count, 2);
     await assert.rejects(() => saveDraftForAgent(owner, { from: "someone@else.test", to: ["andrew@pulse.test"], subject: "x", body: "y" }, { origin: null, fetchImpl }), /You can't send from someone@else.test/);
+  });
+
+  it("sends a reply to the original sender once approved, and lists the addresses it can send from", async () => {
+    const messageId = (await getAdminPool().query<{ id: string }>("select id from crm.mail_messages where provider_message_id = 'm-1'")).rows[0].id;
+    const { fetchImpl, calls } = outlook();
+    const sent = await sendForAgent(owner, { replyTo: messageId, to: [], body: "Hi Andrew,\n\nYes, let's run it.\n\nMark" }, { origin: null, fetchImpl, saveSent: async () => undefined });
+    assert.deepEqual(sent.to, ["andrew@pulse.test"]);
+    assert.match(sent.href, /^\/mail\?thread=/);
+    assert.ok(calls.some((call) => call.method === "POST" && call.url.endsWith("/send")));
+    const listed = (await runTool(owner, "list_email_senders", {})) as { senders: { email: string; primary: boolean }[] };
+    assert.deepEqual(listed.senders, [{ email: "mark@eclipse.test", primary: true }]);
   });
 });
