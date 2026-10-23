@@ -63,7 +63,7 @@ export default function RecordTransfer({
   }
 
   return (
-    <div className="flex items-center gap-1">
+    <div className="flex items-center gap-1 max-sm:hidden">
       {message && <span className="caption-style text-subtle max-w-40 truncate">{message}</span>}
       {canImport && (
         <>

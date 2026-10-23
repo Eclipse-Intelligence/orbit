@@ -292,8 +292,12 @@ export default function ThreadReader({
   onBack,
   onSent,
   onNext,
+  hasNext,
+  entered,
   onSplit,
 }: {
+  hasNext: boolean;
+  entered: boolean;
   onSplit: (sender: string, split: MailSplit) => void;
   summary: ThreadSummary | null;
   detail: ThreadDetail | null;
@@ -471,7 +475,36 @@ export default function ThreadReader({
   }
 
   useEffect(() => {
-    swipeHandlers.current = window.matchMedia("(min-width: 64rem)").matches ? {} : { onLeft: onNext, onRight: onBack };
+    if (window.matchMedia("(min-width: 64rem)").matches) {
+      swipeHandlers.current = {};
+      return;
+    }
+    const finish = (run: () => void) => () => {
+      run();
+      const element = surface.current;
+      if (!element) return;
+      element.style.transition = "none";
+      element.style.transform = "";
+      element.style.opacity = "";
+    };
+    swipeHandlers.current = {
+      onLeft: hasNext ? finish(onNext) : undefined,
+      onRight: finish(onBack),
+      onDrag: (dx) => {
+        const element = surface.current;
+        if (!element) return;
+        element.style.transition = "none";
+        element.style.transform = `translate3d(${dx}px, 0, 0)`;
+        element.style.opacity = String(1 - Math.min(0.4, Math.abs(dx) / 800));
+      },
+      onSettle: (commit) => {
+        const element = surface.current;
+        if (!element) return;
+        element.style.transition = "transform 200ms var(--ease-power3-out), opacity 200ms var(--ease-power3-out)";
+        element.style.transform = commit ? `translate3d(${commit === "left" ? "-100%" : "100%"}, 0, 0)` : "";
+        element.style.opacity = commit ? "0" : "";
+      },
+    };
   });
 
   useEffect(() => {
@@ -511,7 +544,13 @@ export default function ThreadReader({
     (summary?.from && !ownSet.has(summary.from.address.toLowerCase()) ? summary.from.address : null);
 
   return (
-    <div ref={surface} className="flex min-h-0 flex-1 touch-pan-y flex-col">
+    <div
+      ref={surface}
+      className={cn(
+        "flex min-h-0 flex-1 touch-pan-y flex-col will-change-transform",
+        entered && "animate-in fade-in slide-in-from-right-12 ease-power3-out duration-200",
+      )}
+    >
       <div className="flex shrink-0 items-center gap-1 px-3 py-2 sm:px-5">
         <Button variant="ghost" size="icon" aria-label="Back to the list" title="Back (Esc)" data-shortcut="back" onClick={onBack} className="lg:hidden">
           <ChevronLeftIcon aria-hidden className="size-3.5" />

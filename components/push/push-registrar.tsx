@@ -9,6 +9,7 @@ export const OPEN_THREAD_EVENT = "orbit:open-thread";
 const PENDING_CACHE = "orbit-pending";
 const PENDING_KEY = "/__orbit-pending";
 const FRESH_MS = 60_000;
+const PENDING_CHECKS_MS = [0, 300, 800, 1600, 3000, 5000];
 
 async function takeCachedPending() {
   if (!("caches" in window)) return null;
@@ -54,25 +55,31 @@ export default function PushRegistrar() {
         .then((url) => (url ? open(url) : askWorker()))
         .catch(() => askWorker().catch(() => undefined));
     };
+    let checks: number[] = [];
+    const watchPending = () => {
+      checks.forEach((timer) => window.clearTimeout(timer));
+      checks = PENDING_CHECKS_MS.map((delay) => window.setTimeout(checkPending, delay));
+    };
     const onMessage = (event: MessageEvent) => {
       if (event.data?.type === "orbit-open") open(event.data.url);
     };
     const onVisible = () => {
-      if (document.visibilityState === "visible") checkPending();
+      if (document.visibilityState === "visible") watchPending();
     };
     navigator.serviceWorker.addEventListener("message", onMessage);
     document.addEventListener("visibilitychange", onVisible);
-    window.addEventListener("pageshow", checkPending);
-    window.addEventListener("focus", checkPending);
+    window.addEventListener("pageshow", watchPending);
+    window.addEventListener("focus", watchPending);
     void registerServiceWorker().then(async () => {
       await refreshPush();
-      checkPending();
+      watchPending();
     });
     return () => {
+      checks.forEach((timer) => window.clearTimeout(timer));
       navigator.serviceWorker.removeEventListener("message", onMessage);
       document.removeEventListener("visibilitychange", onVisible);
-      window.removeEventListener("pageshow", checkPending);
-      window.removeEventListener("focus", checkPending);
+      window.removeEventListener("pageshow", watchPending);
+      window.removeEventListener("focus", watchPending);
     };
   }, [router]);
 

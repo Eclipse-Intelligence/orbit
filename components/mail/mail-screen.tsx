@@ -52,6 +52,7 @@ import SparkleIcon from "@/public/assets/images/mail/sparkle.svg";
 import FolderIcon from "@/public/assets/images/mail/folder.svg";
 import RefreshIcon from "@/public/assets/images/mail/refresh.svg";
 import ArchiveIcon from "@/public/assets/images/mail/archive.svg";
+import ComposeIcon from "@/public/assets/images/mail/compose.svg";
 import ClockIcon from "@/public/assets/images/mail/clock.svg";
 import InboxIcon from "@/public/assets/images/mail/inbox.svg";
 import MailOpenIcon from "@/public/assets/images/mail/mail-open.svg";
@@ -175,11 +176,13 @@ export default function MailScreen({
   const [search, setSearch] = useState(initialQuery.query);
   const [now, setNow] = useState(initialNow);
   const [syncing, setSyncing] = useState(false);
+  const [entered, setEntered] = useState<string | null>(null);
   const request = useRef(0);
   const removing = useRef(new Set<string>());
   const keptUnread = useRef(new Set<string>());
   const loadingMore = useRef(false);
   const searchInput = useRef<HTMLInputElement>(null);
+  const searchInputList = useRef<HTMLInputElement>(null);
   const latest = useRef({ query, page, cursor });
 
   useEffect(() => {
@@ -204,6 +207,7 @@ export default function MailScreen({
 
   const threads = page?.threads ?? [];
   const current = threads.find((thread) => thread.key === cursor) ?? null;
+  const currentIndex = current ? threads.indexOf(current) : -1;
   const detail = cursor ? (details[cursor] ?? null) : null;
   const viewParam = query.query ? "search" : query.view;
   const own = nav.accounts.map((account) => account.email).concat(viewer.email, ...accounts.map((account) => account.email));
@@ -715,16 +719,20 @@ export default function MailScreen({
     snooze([cursor]);
   });
   useShortcut("mail-refresh", () => refresh(true));
+  function visibleSearch() {
+    return window.matchMedia("(min-width: 64rem)").matches ? searchInput.current : searchInputList.current;
+  }
+
   useShortcut("search-list", () => {
-    searchInput.current?.focus();
-    searchInput.current?.select();
+    visibleSearch()?.focus();
+    visibleSearch()?.select();
   });
 
   function runAsk(question: string) {
     const token = ++askToken.current;
     setAsk({ question, result: null, error: null });
     setCursor(null);
-    searchInput.current?.blur();
+    visibleSearch()?.blur();
     askAi(question, query.account)
       .then((result) => {
         if (token === askToken.current) setAsk({ question, result, error: null });
@@ -744,7 +752,7 @@ export default function MailScreen({
     setAsk(null);
     if (text === query.query) return;
     show({ ...query, query: text, view: text ? query.view : query.view });
-    searchInput.current?.blur();
+    visibleSearch()?.blur();
   }
 
   function clearSearch() {
@@ -752,6 +760,66 @@ export default function MailScreen({
     askToken.current += 1;
     setAsk(null);
     if (query.query) show({ ...query, query: "" });
+  }
+
+  function searchForm(place: "header" | "list") {
+    return (
+    <form role="search" onSubmit={submitSearch} className={cn("relative", place === "header" && "w-full max-w-[26rem]")}>
+      <label htmlFor={`mail-search-${place}`} className="sr-only">
+        Search mail
+      </label>
+      <SearchIcon aria-hidden className="text-subtle pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2" />
+      <input
+        ref={place === "header" ? searchInput : searchInputList}
+        id={`mail-search-${place}`}
+        type="search"
+        value={search}
+        onChange={(event) => setSearch(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Escape" && search) {
+            event.preventDefault();
+            clearSearch();
+          }
+          if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && search.trim()) {
+            event.preventDefault();
+            event.stopPropagation();
+            runAsk(search.trim());
+          }
+        }}
+        placeholder="Search, or ask a question"
+        autoComplete="off"
+        className={cn("placeholder:text-subtle text-foreground ease-power3-out w-full rounded-xl bg-white/[0.04] pr-24 pl-9 text-[14px] transition-colors duration-150 outline-none focus:bg-white/[0.06] focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-search-cancel-button]:hidden", place === "header" ? "h-8" : "h-9")}
+      />
+      {search ? (
+        <>
+        <button
+          type="button"
+          onClick={() => runAsk(search.trim())}
+          aria-label="Ask AI about your email"
+          title="Ask AI (⌘ Enter)"
+          className="text-primary-foreground absolute top-1/2 right-9 flex h-6 -translate-y-1/2 cursor-pointer items-center gap-1 rounded-full bg-[color-mix(in_srgb,var(--primary)_22%,transparent)] px-2 text-[12px] outline-none hover:bg-[color-mix(in_srgb,var(--primary)_32%,transparent)] focus-visible:ring-2 focus-visible:ring-ring/60"
+        >
+          <SparkleIcon aria-hidden className="size-3" />
+          Ask
+        </button>
+        <button
+          type="button"
+          onClick={clearSearch}
+          aria-label="Clear search"
+          className="text-subtle hover:text-foreground absolute top-1/2 right-2 flex size-6 -translate-y-1/2 cursor-pointer items-center justify-center rounded-full outline-none hover:bg-white/6 focus-visible:ring-2 focus-visible:ring-ring/60"
+        >
+          <svg aria-hidden width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round">
+            <path d="M6 6 18 18M18 6 6 18" />
+          </svg>
+        </button>
+        </>
+      ) : (
+        <Kbd aria-hidden className="absolute top-1/2 right-2 -translate-y-1/2">
+          /
+        </Kbd>
+      )}
+    </form>
+    );
   }
 
   const empty = query.query
@@ -785,17 +853,28 @@ export default function MailScreen({
       <SectionHeader
         title="Mail"
         viewer={viewer}
+        heading={
+          <div className="flex min-w-0 items-center gap-5">
+            <h1 className="shrink-0">Mail</h1>
+            <div className="hidden min-w-0 flex-1 lg:flex">{searchForm("header")}</div>
+          </div>
+        }
         action={
           <>
-            <Button variant="primary" onClick={() => openComposer()} title="Write an email (C then M)">
-              Compose
+            <Button variant="primary" onClick={() => openComposer()} title="Write an email (C then M)" aria-label="Compose" className="max-sm:size-[30px] max-sm:p-0">
+              <ComposeIcon aria-hidden className="size-3.5 sm:hidden" />
+              <span className="max-sm:sr-only">Compose</span>
             </Button>
             {nav.accounts.length > 1 && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="secondary" aria-label={`Account: ${accountLabel}`} className="max-w-[16em]">
-                    {query.account && <span aria-hidden className="size-1.5 shrink-0 rounded-full" style={{ background: tagBase(accountLabel) }} />}
-                    <span className="truncate">{accountLabel}</span>
+                    {query.account ? (
+                      <span aria-hidden className="size-1.5 shrink-0 rounded-full" style={{ background: tagBase(accountLabel) }} />
+                    ) : (
+                      <InboxIcon aria-hidden className="size-3.5 shrink-0 sm:hidden" />
+                    )}
+                    <span className="truncate max-sm:sr-only">{accountLabel}</span>
                     <ChevronDownIcon aria-hidden className="text-subtle size-3" />
                   </Button>
                 </DropdownMenuTrigger>
@@ -839,63 +918,9 @@ export default function MailScreen({
       />
       <div className="flex min-h-0 flex-1">
         <div className={cn("min-h-0 w-full flex-col lg:flex lg:w-[25rem] lg:shrink-0 xl:w-[29rem]", open ? "hidden" : "flex")}>
-          <div className="flex shrink-0 flex-col gap-2 px-3 pt-3 pb-2">
+          <div className="flex shrink-0 flex-col gap-2 px-3 pt-2 pb-1.5 lg:pt-3">
             <PushPrompt />
-            <form role="search" onSubmit={submitSearch} className="relative">
-              <label htmlFor="mail-search" className="sr-only">
-                Search mail
-              </label>
-              <SearchIcon aria-hidden className="text-subtle pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2" />
-              <input
-                ref={searchInput}
-                id="mail-search"
-                type="search"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Escape" && search) {
-                    event.preventDefault();
-                    clearSearch();
-                  }
-                  if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && search.trim()) {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    runAsk(search.trim());
-                  }
-                }}
-                placeholder="Search, or ask a question"
-                autoComplete="off"
-                className="placeholder:text-subtle text-foreground ease-power3-out h-9 w-full rounded-xl bg-white/[0.04] pr-24 pl-9 text-[14px] transition-colors duration-150 outline-none focus:bg-white/[0.06] focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-search-cancel-button]:hidden"
-              />
-              {search ? (
-                <>
-                <button
-                  type="button"
-                  onClick={() => runAsk(search.trim())}
-                  aria-label="Ask AI about your email"
-                  title="Ask AI (⌘ Enter)"
-                  className="text-primary-foreground absolute top-1/2 right-9 flex h-6 -translate-y-1/2 cursor-pointer items-center gap-1 rounded-full bg-[color-mix(in_srgb,var(--primary)_22%,transparent)] px-2 text-[12px] outline-none hover:bg-[color-mix(in_srgb,var(--primary)_32%,transparent)] focus-visible:ring-2 focus-visible:ring-ring/60"
-                >
-                  <SparkleIcon aria-hidden className="size-3" />
-                  Ask
-                </button>
-                <button
-                  type="button"
-                  onClick={clearSearch}
-                  aria-label="Clear search"
-                  className="text-subtle hover:text-foreground absolute top-1/2 right-2 flex size-6 -translate-y-1/2 cursor-pointer items-center justify-center rounded-full outline-none hover:bg-white/6 focus-visible:ring-2 focus-visible:ring-ring/60"
-                >
-                  <svg aria-hidden width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round">
-                    <path d="M6 6 18 18M18 6 6 18" />
-                  </svg>
-                </button>
-                </>
-              ) : (
-                <Kbd aria-hidden className="absolute top-1/2 right-2 -translate-y-1/2">
-                  /
-                </Kbd>
-              )}
-            </form>
+            <div className="lg:hidden">{searchForm("list")}</div>
             <nav aria-label="Mail folders" className="-mx-1 flex items-center gap-0.5 overflow-x-auto px-1 [scrollbar-width:none]">
               {splitTabs.map((tab) => {
                 const active = !query.query && query.view === tab.id;
@@ -1056,7 +1081,13 @@ export default function MailScreen({
               else act(cursor, action);
             }}
             onBack={() => setOpen(false)}
-            onNext={() => step(1)}
+            onNext={() => {
+              const next = threads[currentIndex + 1];
+              if (next) setEntered(next.key);
+              step(1);
+            }}
+            hasNext={currentIndex !== -1 && currentIndex < threads.length - 1}
+            entered={entered !== null && entered === cursor}
             onSplit={(sender, split) => cursor && moveSender(cursor, sender, split)}
             onSent={() => cursor && sent(cursor)}
           />
