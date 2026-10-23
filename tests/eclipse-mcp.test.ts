@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { describeAction, toolDefinitions } from "@/lib/assistant/tools";
+import { z } from "zod";
+import { shapeFor } from "@/companion/src/schema";
+import { describeAction, runTool, toolDefinitions } from "@/lib/assistant/tools";
+import type { UserActor } from "@/lib/crm/types";
 import { callEclipseTool, clearEclipseToolCache, eclipseGuide, findEclipseTools } from "@/lib/eclipse-mcp";
+
+const actor = { type: "user", userId: "u", workspaceId: "w", email: "mark@eclipse.test", fullName: "Mark", role: "owner", scopes: [] } as unknown as UserActor;
 
 const TOOLS = [
   { name: "list_clients", description: "List the clients. This read is free and changes nothing.", inputSchema: { type: "object", properties: {} } },
@@ -85,10 +90,30 @@ describe("Eclipse MCP", () => {
     await assert.rejects(findEclipseTools("clients", { fetchImpl }), /Add ECLIPSE_MCP_TOKEN/);
   });
 
+  it("keeps the arguments when they come as JSON text, through the Orbit Agent's validator too", async () => {
+    const { fetchImpl, sent } = server();
+    const original = globalThis.fetch;
+    globalThis.fetch = fetchImpl;
+    try {
+      const read = (await runTool(actor, "eclipse_read", { tool: "geo_trends", argumentsJson: '{"profileId": 7}' })) as { result: string };
+      assert.match(read.result, /"profileId":7/);
+      assert.deepEqual(sent.at(-1)!.params.arguments, { profileId: 7 });
+      const bad = (await runTool(actor, "eclipse_read", { tool: "geo_trends", argumentsJson: "{profileId: 7" })) as { error: string };
+      assert.match(bad.error, /isn't valid JSON/);
+    } finally {
+      globalThis.fetch = original;
+    }
+    const definition = toolDefinitions().find((tool) => tool.function.name === "eclipse_read")!.function.parameters;
+    const parsed = z.object(shapeFor(definition)).parse({ tool: "get_canvas", argumentsJson: '{"canvasId": 12}' });
+    assert.equal(parsed.argumentsJson, '{"canvasId": 12}');
+    const loose = z.object(shapeFor({ type: "object", properties: { arguments: { type: "object" } } })).parse({ arguments: { canvasId: 12 } });
+    assert.deepEqual(loose.arguments, { canvasId: 12 });
+  });
+
   it("gives the assistant the guide, discovery, reads and approved actions", () => {
     const tools = Object.fromEntries(toolDefinitions().map((tool) => [tool.function.name, tool]));
     for (const name of ["eclipse_guide", "eclipse_tools", "eclipse_read", "eclipse_action"]) assert.ok(tools[name], name);
-    const card = describeAction("eclipse_action", { tool: "start_deep_research", summary: "Starts deep research on AI search leaders, costing about £0.28.", arguments: { question: "Who leads?", confirm: true } });
+    const card = describeAction("eclipse_action", { tool: "start_deep_research", summary: "Starts deep research on AI search leaders, costing about £0.28.", argumentsJson: '{"question": "Who leads?", "confirm": true}' });
     assert.equal(card.title, "Eclipse: start_deep_research");
     assert.deepEqual(card.lines, ["Starts deep research on AI search leaders, costing about £0.28.", "question: Who leads?", "Runs in Eclipse as you. Anything it costs is charged to your Eclipse account."]);
   });

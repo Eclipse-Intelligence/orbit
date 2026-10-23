@@ -31,7 +31,8 @@ function zodFor(input: unknown): z.ZodType {
   } else if (schema.type === "array") {
     out = z.array(schema.items ? zodFor(schema.items) : z.unknown());
   } else if (schema.type === "object") {
-    out = z.object(shapeFor(schema));
+    const shape = shapeFor(schema);
+    out = Object.keys(shape).length === 0 ? z.record(z.string(), z.unknown()) : z.looseObject(shape);
   } else {
     out = z.unknown();
   }

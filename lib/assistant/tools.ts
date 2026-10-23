@@ -133,6 +133,20 @@ function required(value: unknown, label: string) {
   return text;
 }
 
+function eclipseArguments(args: Args): Record<string, unknown> {
+  if (typeof args.argumentsJson === "string" && args.argumentsJson.trim()) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(args.argumentsJson);
+    } catch {
+      throw new CrmError("invalid_input", "argumentsJson isn't valid JSON. Send the arguments as a JSON object.", 400);
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new CrmError("invalid_input", "argumentsJson must be a JSON object.", 400);
+    return parsed as Record<string, unknown>;
+  }
+  return args.arguments && typeof args.arguments === "object" && !Array.isArray(args.arguments) ? (args.arguments as Record<string, unknown>) : {};
+}
+
 function withCompany(company: Company) {
   return { ...company, href: companyHref(company.id) };
 }
@@ -941,11 +955,14 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       "Run a read-only Eclipse tool (found with eclipse_tools) and return its result, for example list_clients, get_content or geo_trends. Also previews a tool that costs credits or has consequences: it shows what would happen and the cost, without running it. Pass the tool name and its arguments exactly as its input describes.",
     parameters: {
       type: "object",
-      properties: { tool: { type: "string" }, arguments: { type: "object", description: "The tool's arguments." } },
-      required: ["tool"],
+      properties: {
+        tool: { type: "string" },
+        argumentsJson: { type: "string", description: 'The tool\'s arguments as a JSON object, for example {"canvasId": 12}. Use "{}" when it takes none.' },
+      },
+      required: ["tool", "argumentsJson"],
     },
     run: async (_actor, args) =>
-      callEclipseTool(required(args.tool, "A tool name"), args.arguments && typeof args.arguments === "object" ? (args.arguments as Record<string, unknown>) : {}, "read").catch(
+      callEclipseTool(required(args.tool, "A tool name"), eclipseArguments(args), "read").catch(
         (error: Error) => ({ error: error instanceof EclipseMcpError ? error.message : "Eclipse didn't answer." }),
       ),
   },
@@ -957,14 +974,18 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       "Run an Eclipse tool that changes data, spends credits or AI balance, publishes or deletes (found with eclipse_tools), after the user approves the card. Preview costly or consequential tools with eclipse_read first and tell the user the cost. Pass the tool name and its arguments exactly as its input describes; Orbit adds the confirmation and a retry key.",
     parameters: {
       type: "object",
-      properties: { tool: { type: "string" }, arguments: { type: "object", description: "The tool's arguments." }, summary: { type: "string", description: "One plain sentence for the approval card on what this does and any cost." } },
-      required: ["tool", "summary"],
+      properties: {
+        tool: { type: "string" },
+        argumentsJson: { type: "string", description: 'The tool\'s arguments as a JSON object, for example {"canvasId": 12, "question": "..."}. Use "{}" when it takes none.' },
+        summary: { type: "string", description: "One plain sentence for the approval card on what this does and any cost." },
+      },
+      required: ["tool", "argumentsJson", "summary"],
     },
     describe: (args) => ({
       title: `Eclipse: ${str(args.tool)}`,
       lines: [
         str(args.summary),
-        ...Object.entries(args.arguments && typeof args.arguments === "object" ? (args.arguments as Record<string, unknown>) : {})
+        ...Object.entries(eclipseArguments(args))
           .filter(([key]) => key !== "confirm" && key !== "idempotencyKey")
           .slice(0, 12)
           .map(([key, value]) => `${key}: ${typeof value === "string" ? value.slice(0, 200) : JSON.stringify(value).slice(0, 200)}`),
@@ -972,7 +993,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       ].filter(Boolean),
     }),
     run: async (_actor, args) =>
-      callEclipseTool(required(args.tool, "A tool name"), args.arguments && typeof args.arguments === "object" ? (args.arguments as Record<string, unknown>) : {}, "action").catch(
+      callEclipseTool(required(args.tool, "A tool name"), eclipseArguments(args), "action").catch(
         (error: Error) => ({ error: error instanceof EclipseMcpError ? error.message : "Eclipse didn't answer." }),
       ),
   },
