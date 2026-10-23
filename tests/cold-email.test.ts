@@ -33,6 +33,17 @@ describe("cold email checks", () => {
     const found = bad.find((check) => check.id === "no_filler")!.note;
     for (const phrase of ["i hope this email finds you well", "quick question", "game-changing", "unlock", "leverage", "supercharge"]) assert.ok(found.includes(phrase), phrase);
     assert.equal(lintColdEmail({ ...BAD, firstTouch: false }).find((check) => check.id === "no_meeting")!.pass, true);
+    const styled = lintColdEmail({
+      subject: "Pulse: AI answers",
+      body: "Hi Andrew,\n\nOne thing stood out: your launch last week. I wrote a piece on it at 14:30 yesterday, see https://geteclipse.co/articles/x. Eclipse tracks where your clients appear in AI answers. Would the article be useful?\n\nMark",
+    });
+    const colons = styled.find((check) => check.id === "no_colons")!;
+    assert.equal(colons.pass, false);
+    assert.match(colons.note, /Pulse: AI answers/);
+    assert.equal(styled.find((check) => check.id === "no_piece")!.pass, false);
+    const clean = lintColdEmail({ subject: "Pulse in AI answers", body: "Hi Andrew,\n\nI read your launch post at 14:30 on https://pulse.test/news. Eclipse tracks where your clients appear in AI answers. It shows mentions next to competitors each week. Would the article be useful?\n\nMark" });
+    assert.equal(clean.find((check) => check.id === "no_colons")!.pass, true);
+    assert.equal(clean.find((check) => check.id === "no_piece")!.pass, true);
   });
 
   it("adds Jev's grading when it's set up, and keeps going if Jev fails", async () => {
@@ -79,6 +90,8 @@ describe("cold email checks", () => {
     assert.match(playbook.playbook, /NO-SEND/);
     assert.match(playbook.eclipseBrief, /no customer results are approved/);
     assert.match(systemPrompt(actor, { webSearch: false }), /Always read cold_email_playbook first/);
+    assert.match(systemPrompt(actor, { webSearch: false }), /Never put a colon in the middle of a sentence/);
+    assert.match(systemPrompt(actor, { webSearch: false }), /Never call an article a "piece"/);
     const checked = (await runTool(actor, "cold_email_check", { ...BAD })) as { ready: boolean; graded: string };
     assert.equal(checked.ready, false);
     assert.match(checked.graded, /Rule checks only/);
