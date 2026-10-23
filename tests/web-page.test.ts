@@ -4,6 +4,7 @@ import { systemPrompt } from "@/lib/assistant/prompt";
 import { toolDefinitions } from "@/lib/assistant/tools";
 import type { UserActor } from "@/lib/crm/types";
 import { allowedEclipseUrl, clearEclipseSourceCache, listEclipseArticles, readEclipsePage } from "@/lib/eclipse-sources";
+import { renderWithBrowserbase } from "@/lib/browserbase";
 import { privateAddress, readWebPage } from "@/lib/web-page";
 
 const PUBLIC: (host: string) => Promise<string[]> = async () => ["93.184.216.34"];
@@ -55,10 +56,75 @@ describe("reading web pages", () => {
     assert.deepEqual(hop.seen, ["https://short.test/x"]);
     const moved = site({ "https://old.test/": { status: 301, location: "https://acme.test/" }, "https://acme.test/": { body: ACME } });
     assert.equal((await readWebPage("https://old.test/", { fetchImpl: moved.fetchImpl, lookup: PUBLIC })).url, "https://acme.test/");
-    const pdf = site({ "https://acme.test/deck.pdf": { body: "%PDF", type: "application/pdf" } });
-    await assert.rejects(readWebPage("https://acme.test/deck.pdf", { fetchImpl: pdf.fetchImpl, lookup: PUBLIC }), /application\/pdf file/);
+    const zip = site({ "https://acme.test/files.zip": { body: "PK", type: "application/zip" } });
+    await assert.rejects(readWebPage("https://acme.test/files.zip", { fetchImpl: zip.fetchImpl, lookup: PUBLIC }), /application\/zip file/);
     const blocked = site({ "https://www.linkedin.com/in/x": { status: 403 } });
     await assert.rejects(readWebPage("https://www.linkedin.com/in/x", { fetchImpl: blocked.fetchImpl, lookup: PUBLIC }), /answered 403, so the page is private or blocks automated reading/);
+  });
+});
+
+describe("pages that need a browser, and documents", () => {
+  it("opens JavaScript pages and blocked pages in a browser, and reads PDFs", async () => {
+    const shell = '<html><head><title>App</title></head><body><div id="root"></div><script src="/app.js"></script></body></html>';
+    const rendered = '<html><head><title>Acme pricing</title></head><body><main><h1>Pricing</h1><p>Pro costs £900 a month and includes ten AI assistants with weekly reports for every client workspace you run.</p><p>Agency plans add client isolation, approvals and white-label reports, with onboarding included for the first month.</p></main></body></html>';
+    const calls: { url: string; proxies: boolean }[] = [];
+    const render = async (url: string, settings: { proxies: boolean }) => {
+      calls.push({ url, proxies: settings.proxies });
+      return { html: rendered, url };
+    };
+    const app = site({ "https://app.test/pricing": { body: shell } });
+    const page = await readWebPage("https://app.test/pricing", { fetchImpl: app.fetchImpl, lookup: PUBLIC, render });
+    assert.equal(page.via, "browser");
+    assert.match(page.text, /Pro costs £900 a month/);
+    assert.deepEqual(calls, [{ url: "https://app.test/pricing", proxies: false }]);
+    const thin = await readWebPage("https://app.test/pricing", { fetchImpl: app.fetchImpl, lookup: PUBLIC, render: null });
+    assert.equal(thin.via, "fetch");
+    assert.equal(thin.title, "App");
+
+    const shy = site({ "https://shy.test/": { status: 403 } });
+    assert.equal((await readWebPage("https://shy.test/", { fetchImpl: shy.fetchImpl, lookup: PUBLIC, render })).via, "browser");
+    assert.deepEqual(calls[1], { url: "https://shy.test/", proxies: true });
+    await assert.rejects(
+      readWebPage("https://shy.test/", { fetchImpl: shy.fetchImpl, lookup: PUBLIC, render: async () => { throw new Error("Browserbase answered 402"); } }),
+      /blocks automated reading\. Opening it in a browser didn't work either \(Browserbase answered 402\)/,
+    );
+
+    const { PDFDocument, StandardFonts } = await import("pdf-lib");
+    const pdf = await PDFDocument.create();
+    const font = await pdf.embedFont(StandardFonts.Helvetica);
+    pdf.addPage().drawText("Acme annual report 2026", { x: 50, y: 700, size: 18, font });
+    const bytes = await pdf.save();
+    const files: typeof fetch = async () => new Response(Buffer.from(bytes), { headers: { "content-type": "application/pdf" } });
+    const report = await readWebPage("https://acme.test/report.pdf", { fetchImpl: files, lookup: PUBLIC, render: null });
+    assert.equal(report.via, "file");
+    assert.equal(report.title, "report.pdf");
+    assert.match(report.text, /Acme annual report 2026/);
+  });
+});
+
+describe("Browserbase sessions", () => {
+  it("asks for proxies only when needed and always releases the session", async () => {
+    process.env.BROWSERBASE_API_KEY = "bb-test";
+    process.env.BROWSERBASE_PROJECT_ID = "project-1";
+    const requests: { url: string; body: Record<string, unknown>; key: string | null }[] = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      requests.push({ url: String(input), body: JSON.parse(String(init?.body ?? "{}")), key: new Headers(init?.headers).get("x-bb-api-key") });
+      return Response.json({ id: "session-1", connectUrl: "ws://127.0.0.1:9/devtools" }, { status: 201 });
+    };
+    try {
+      await assert.rejects(renderWithBrowserbase("https://shy.test/", { proxies: true, fetchImpl }));
+      assert.equal(requests[0].url, "https://api.browserbase.com/v1/sessions");
+      assert.equal(requests[0].key, "bb-test");
+      assert.equal(requests[0].body.projectId, "project-1");
+      assert.equal(requests[0].body.proxies, true);
+      assert.deepEqual(requests[1], { url: "https://api.browserbase.com/v1/sessions/session-1", body: { projectId: "project-1", status: "REQUEST_RELEASE" }, key: "bb-test" });
+      requests.length = 0;
+      await assert.rejects(renderWithBrowserbase("https://app.test/", { proxies: false, fetchImpl }));
+      assert.equal(requests[0].body.proxies, undefined);
+    } finally {
+      delete process.env.BROWSERBASE_API_KEY;
+      delete process.env.BROWSERBASE_PROJECT_ID;
+    }
   });
 });
 
