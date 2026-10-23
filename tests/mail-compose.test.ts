@@ -6,7 +6,8 @@ import { saveMailbox } from "@/lib/crm/inbox";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { deleteDraftMessage, discardMailDraft, readDraftInput, saveMailDraft, sendMailDraft } from "@/lib/mail/compose";
-import { composeEmailHtml, trackingIdIn } from "@/lib/mail/html";
+import { composeEmailHtml, imageMarkers, trackingIdIn } from "@/lib/mail/html";
+import { attachToDraft } from "@/lib/microsoft/oauth";
 import { syncMail } from "@/lib/mail/sync";
 import { getThread, listThreads } from "@/lib/mail/threads";
 import { addressHash, noteViewerAddress, readerAgent, recordOpen, setReadStatuses } from "@/lib/mail/tracking";
@@ -157,6 +158,32 @@ describe("mail replies and read statuses", () => {
     assert.equal(trackingIdIn(html), "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee");
     assert.ok(!html.includes(OLD_PIXEL));
     assert.ok(html.endsWith("<div>quoted</div></body></html>"));
+  });
+
+  it("puts pasted or dropped images in the email where the marker is", async () => {
+    const body = "Hi Jane,\n\nHere it is:\n[Image: CleanShot <1>.png]\n\n[Image: Missing.png]";
+    assert.deepEqual(imageMarkers(body), ["CleanShot <1>.png", "Missing.png"]);
+    const html = composeEmailHtml({ body, inline: { "CleanShot <1>.png": "image1@orbit" } });
+    assert.ok(html.includes('<img src="cid:image1@orbit" alt="CleanShot &lt;1&gt;.png"'));
+    assert.ok(html.includes("[Image: Missing.png]"));
+    assert.ok(!composeEmailHtml({ body }).includes("<img"));
+    const posted: Record<string, unknown>[] = [];
+    const fetchImpl: typeof fetch = async (_input, init) => {
+      posted.push(JSON.parse(String(init?.body)));
+      return Response.json({ id: "a" }, { status: 201 });
+    };
+    await attachToDraft(
+      "token",
+      `${GRAPH}/me/messages/d-1`,
+      [
+        { name: "CleanShot <1>.png", contentType: "image/png", bytes: new Uint8Array([1, 2, 3]), contentId: "image1@orbit" },
+        { name: "Terms.pdf", contentType: "application/pdf", bytes: new Uint8Array([4]) },
+      ],
+      fetchImpl,
+    );
+    assert.equal(posted[0].isInline, true);
+    assert.equal(posted[0].contentId, "image1@orbit");
+    assert.equal(posted[1].isInline, undefined);
   });
 
   it("checks addresses and modes before writing anything", () => {
