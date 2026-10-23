@@ -271,6 +271,10 @@ export default function StepConfig({
               <Checkbox className="mt-0.5" checked={c.context === true} onCheckedChange={(value) => update({ ...c, context: value === true })} />
               <span>Give it what Orbit knows: the record&apos;s details, recent activity, deals and your recent emails with the contact.</span>
             </label>
+            <label className="caption-style text-subtle flex items-start gap-2">
+              <Checkbox className="mt-0.5" checked={c.linkedin === true} onCheckedChange={(value) => update({ ...c, linkedin: value === true })} />
+              <span>Read their LinkedIn profile now (through Mindcase): headline, location and recent roles, for checking someone&apos;s current job. Needs the contact&apos;s LinkedIn link.</span>
+            </label>
           </div>
           <Outputs step={step} update={update} />
         </div>
