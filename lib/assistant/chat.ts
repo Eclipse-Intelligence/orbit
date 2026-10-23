@@ -5,6 +5,7 @@ import { ASSISTANT_TOOLS, TOOL_BY_NAME, describeAction, recordNames, runTool, to
 import type { CompanionResult, Effort } from "@/companion/src/protocol";
 import { cancelCompanionJob, enqueueCompanionJob, readCompanionJob } from "@/lib/companion/jobs";
 import { companionOfflineMessage, companionOnline } from "@/lib/companion/pairing";
+import { userLinks } from "@/lib/assistant/links";
 import { buildPrompt } from "@/lib/companion/transcript";
 import { expandMentions, plainMentions } from "@/lib/mentions";
 import { withActor } from "@/lib/crm/context";
@@ -361,7 +362,7 @@ async function runCompanionTurn(actor: UserActor, conversation: ConversationRow,
     model: apiModel,
     effort: conversation.reasoning as Effort,
     webSearch: conversation.web_search,
-    system: systemPrompt(actor, { webSearch: conversation.web_search }),
+    system: systemPrompt(actor, { webSearch: conversation.web_search, links: await userLinks(actor).catch(() => null) }),
     prompt: buildPrompt(history(rows)),
     tools: companionTools(),
   });
@@ -415,7 +416,7 @@ async function runLoop(
       model: conversation.model,
       reasoning: conversation.reasoning,
       webSearch: conversation.web_search,
-      messages: [{ role: "system", content: systemPrompt(actor, { webSearch: conversation.web_search }) }, ...history(rows)],
+      messages: [{ role: "system", content: systemPrompt(actor, { webSearch: conversation.web_search, links: await userLinks(actor).catch(() => null) }) }, ...history(rows)],
       timeoutMs: Math.min(240_000, remaining - 5_000),
       fetchImpl,
       actor,

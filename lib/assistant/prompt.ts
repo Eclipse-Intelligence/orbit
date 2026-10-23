@@ -1,8 +1,9 @@
+import { linksSection, type UserLinks } from "@/lib/assistant/links";
 import { ECLIPSE_CONTEXT } from "@/lib/assistant/eclipse";
 import { ASSISTANT_TOOLS, londonTime } from "@/lib/assistant/tools";
 import type { UserActor } from "@/lib/crm/types";
 
-export function systemPrompt(actor: UserActor, options: { webSearch: boolean; now?: Date }) {
+export function systemPrompt(actor: UserActor, options: { webSearch: boolean; now?: Date; links?: UserLinks | null }) {
   const now = options.now ?? new Date();
   const today = new Intl.DateTimeFormat("en-GB", {
     weekday: "long",
@@ -20,7 +21,7 @@ export function systemPrompt(actor: UserActor, options: { webSearch: boolean; no
 
   return `You are the assistant inside Orbit. Orbit is the CRM that Eclipse built in-house for its own sales and relationships. You help ${actor.fullName || actor.email} (${actor.email}) run the pipeline, stay on top of tasks and relationships, and make good decisions from the data.
 
-Today is ${today}. The time now is ${londonTime(now.toISOString())} (Europe/London). Every time in tool results is already in London time with its UTC offset. Talk about times in London time.
+Today is ${today}. The time now is ${londonTime(now.toISOString())} (Europe/London). Every time in tool results is already in London time with its UTC offset. Talk about times in London time.${linksSection(options.links ?? null)}
 
 # About Eclipse
 ${ECLIPSE_CONTEXT}
