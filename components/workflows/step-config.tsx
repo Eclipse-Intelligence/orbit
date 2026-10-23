@@ -20,6 +20,8 @@ export type BuilderOptions = {
   salesStages: { id: string; name: string }[];
   members: { id: string; name: string }[];
   lifecycles: { value: string; label: string }[];
+  proposalTemplates: { id: string; name: string }[];
+  products: { id: string; name: string; priceGbp: number | null; priceUsd: number | null }[];
 };
 
 export function matchLifecycleOption(options: BuilderOptions["lifecycles"], value: string) {
@@ -568,6 +570,64 @@ export default function StepConfig({
           })}
         </div>
       );
+    case "create_proposal": {
+      const currency = str(c.currency) === "USD" ? "USD" : "GBP";
+      const chosen = Array.isArray(c.productIds) ? (c.productIds as string[]) : [];
+      const priced = options.products.filter((product) => (currency === "USD" ? product.priceUsd : product.priceGbp) !== null);
+      return (
+        <div className="flex flex-col gap-3">
+          <div className="grid gap-3 sm:grid-cols-[1fr_9rem]">
+            <Select id={`${step.id}-template`} label="Template" value={str(c.templateId)} onChange={(value) => update({ ...c, templateId: value })}>
+              <option value="">Choose a template</option>
+              {options.proposalTemplates.map((template) => (
+                <option key={template.id} value={template.id}>
+                  {template.name}
+                </option>
+              ))}
+            </Select>
+            <Select id={`${step.id}-currency`} label="Currency" value={currency} onChange={(value) => update({ ...c, currency: value })}>
+              <option value="GBP">Pounds (£)</option>
+              <option value="USD">Dollars ($)</option>
+            </Select>
+          </div>
+          {options.proposalTemplates.length === 0 && (
+            <p className="caption-style text-subtle leading-[1.4]">Make a proposal template active on the Proposals page to use it here.</p>
+          )}
+          <Select id={`${step.id}-products`} label="Products" value={str(c.products) === "fixed" ? "fixed" : "ai"} onChange={(value) => update({ ...c, products: value })}>
+            <option value="ai">AI picks from the call</option>
+            <option value="fixed">Always the products I tick</option>
+          </Select>
+          {str(c.products) === "fixed" ? (
+            <fieldset className="flex flex-col gap-1.5">
+              <legend className="caption-style text-subtle pb-1.5">Products to add</legend>
+              {priced.length === 0 && <p className="caption-style text-subtle">No products have a {currency === "USD" ? "dollar" : "pound"} price yet.</p>}
+              {priced.map((product) => (
+                <label key={product.id} className="flex items-center gap-2 text-[14px]">
+                  <input
+                    type="checkbox"
+                    checked={chosen.includes(product.id)}
+                    onChange={(event) =>
+                      update({ ...c, productIds: event.target.checked ? [...chosen, product.id] : chosen.filter((id) => id !== product.id) })
+                    }
+                  />
+                  {product.name}
+                </label>
+              ))}
+            </fieldset>
+          ) : (
+            field("guidance", "How to choose (optional)", {
+              rows: 3,
+              placeholder: "Agency Pilot for new clients. Pro when they want ongoing monitoring.",
+              hint: `It picks from your ${priced.length} product${priced.length === 1 ? "" : "s"} with ${currency === "USD" ? "dollar" : "pound"} prices, reading the call summary and transcript, and says why.`,
+            })
+          )}
+          {field("title", "Title (optional)", { placeholder: "Proposal for {{company.name}}" })}
+          <p className="caption-style text-subtle leading-[1.4]">
+            Creates a draft for the run&apos;s contact at their company. Nothing is sent: check it on the Proposals page, or add Notify someone with the proposal link.
+          </p>
+        </div>
+      );
+    }
     case "linear_issue":
       return (
         <div className="flex flex-col gap-3">

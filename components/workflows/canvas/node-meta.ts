@@ -18,6 +18,7 @@ import BranchIcon from "@/public/assets/images/workflows/branch.svg";
 import EditIcon from "@/public/assets/images/workflows/edit.svg";
 import LinearIcon from "@/public/assets/images/workflows/linear.svg";
 import RepeatIcon from "@/public/assets/images/workflows/repeat.svg";
+import ProposalIcon from "@/public/assets/images/companies/sidebar/file-signature.svg";
 
 type Icon = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -47,6 +48,7 @@ export const STEP_META: Record<StepType, { icon: Icon; group: NodeGroup }> = {
   find_records: { icon: SearchIcon, group: "logic" },
   upsert_record: { icon: BuildingIcon, group: "action" },
   webhook: { icon: BracesIcon, group: "action" },
+  create_proposal: { icon: ProposalIcon, group: "action" },
 };
 
 export const TRIGGER_ICON = ZapIcon;
@@ -55,7 +57,7 @@ export const PALETTE: { label: string; types: StepType[] }[] = [
   { label: "AI", types: ["ai"] },
   { label: "Logic", types: ["if", "filter", "loop", "delay", "approval"] },
   { label: "Records", types: ["find_records", "upsert_record", "update_record"] },
-  { label: "Actions", types: ["create_task", "add_note", "board", "notify", "send_email", "linear_issue", "webhook"] },
+  { label: "Actions", types: ["create_task", "add_note", "board", "notify", "send_email", "create_proposal", "linear_issue", "webhook"] },
 ];
 
 function text(value: unknown) {
@@ -148,6 +150,8 @@ export function nodeSummary(node: WorkflowNode) {
       return short(plain(text(c.title))) || "Write a message";
     case "send_email":
       return short(plain(text(c.subject))) || "Write the email";
+    case "create_proposal":
+      return !text(c.templateId) ? "Choose a template" : text(c.products) === "fixed" ? "Draft with chosen products" : "Draft with products from the call";
     default:
       return STEP_LABELS[node.type];
   }

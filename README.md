@@ -651,6 +651,7 @@ A workflow is built on a canvas, like n8n. It always starts with a When node (th
 | Add to or move on a board | Puts the company on a board or moves its card. |
 | Notify someone | Sends an in-app notification to you, the record's owner, or a member. |
 | Send email | Emails the run's contact from your mailbox and logs it. |
+| Create proposal | Drafts a proposal for the run's contact at their company from an active template, in pounds or dollars. With AI picks from the call, it reads the call summary and transcript (or the record's recent history) and picks products and quantities from your live product list, with optional guidance on how to choose, so there is no product list to keep up to date in a prompt. Or, with Always the products I tick, it uses those. It outputs the proposal link, title, total, products and why it chose them, for a Notify someone step. If nothing fits, it stops without a draft. Nothing is sent, and test runs create nothing. |
 | Create Linear issue | Creates an issue in the Linear team. |
 | Send to a webhook | Posts to an https address, such as a Slack incoming webhook, Zapier or Make: your own body with fields, or the run's company, contact and node results as JSON. Private and local addresses are refused. |
 

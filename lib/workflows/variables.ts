@@ -219,6 +219,15 @@ export function variableOptions(definition: WorkflowDefinition | null, nodeId?: 
       options.push({ path: `steps.${step.id}.identifier`, label: "Issue", group }, { path: `steps.${step.id}.url`, label: "Issue link", group });
     }
     if (step.type === "approval") options.push({ path: `steps.${step.id}.note`, label: "Approval note", group });
+    if (step.type === "create_proposal") {
+      options.push(
+        { path: `steps.${step.id}.url`, label: "Proposal link", group },
+        { path: `steps.${step.id}.title`, label: "Proposal title", group },
+        { path: `steps.${step.id}.total`, label: "Total", group },
+        { path: `steps.${step.id}.products`, label: "Products", group },
+        { path: `steps.${step.id}.reason`, label: "Why these products", group },
+      );
+    }
   }
   return options;
 }
