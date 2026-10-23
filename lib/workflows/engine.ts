@@ -1,4 +1,5 @@
 import { userLinks } from "@/lib/assistant/links";
+import { socialLookup } from "@/lib/social-lookup";
 import { z } from "zod";
 import { HEALTH_LABELS } from "@/lib/companies";
 import { membershipsFor } from "@/lib/auth/user";
@@ -466,6 +467,7 @@ async function aiStep(ctx: Ctx, step: Step): Promise<StepResult> {
     outputs.push({ key: "sources", type: "list", description: "The web addresses you used, most useful first.", choices: [], optional: true });
   }
   const context = step.config.context === true ? await recordContext(ctx) : "";
+  const linkedin = step.config.linkedin === true ? await linkedinContext(ctx) : "";
   const shapeLines = outputs.map((output) => {
     const kind =
       output.type === "list"
@@ -486,7 +488,7 @@ async function aiStep(ctx: Ctx, step: Step): Promise<StepResult> {
       "Reply with a single JSON object with exactly these keys:",
       ...shapeLines,
     ].join("\n"),
-    user: context ? `${prompt}\n\nWhat Orbit knows:\n${context}` : prompt,
+    user: [prompt, linkedin, context ? `What Orbit knows:\n${context}` : ""].filter(Boolean).join("\n\n"),
     schema: aiSchema(outputs),
     model: str(step.config.model) || undefined,
     maxTokens: 4000,
@@ -579,6 +581,19 @@ async function proposalStep(ctx: Ctx, step: Step): Promise<StepResult> {
     kind: "next",
     output: { created: true, id, title: created.title, url: link(`/proposals/${id}`), total: created.totalLabel, products: names, reason },
   };
+}
+
+async function linkedinContext(ctx: Ctx) {
+  const contact = ctx.vars.contact as { linkedinUrl?: string | null; name?: string } | undefined;
+  if (!contact?.linkedinUrl) return "Their LinkedIn profile: Orbit has no LinkedIn link for this contact, so it wasn't read.";
+  try {
+    const found = await socialLookup(ctx.actor, "linkedin_profile", contact.linkedinUrl, 1, { fetchImpl: ctx.fetchImpl, source: "workflow" });
+    return "profile" in found
+      ? `Their LinkedIn profile, read just now from ${contact.linkedinUrl}. It is the most reliable source for their current role:\n${JSON.stringify(found.profile)}`
+      : `Their LinkedIn profile couldn't be read: ${found.error}`;
+  } catch (error) {
+    return `Their LinkedIn profile couldn't be read: ${error instanceof Error ? error.message : "the lookup failed"}`;
+  }
 }
 
 async function recordContext(ctx: Ctx) {

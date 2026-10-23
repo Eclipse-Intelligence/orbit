@@ -145,8 +145,9 @@ function moveCheckNodes(label: string): Omit<WorkflowNode, "position">[] {
         model: "claude-sonnet-5-5",
         webSearch: true,
         context: true,
+        linkedin: true,
         prompt:
-          "Find out whether {{contact.name}} ({{contact.jobTitle}}) still works at {{contact.companyName}}. Their email is {{contact.email}} and their LinkedIn is {{contact.linkedinUrl}}.\n\nSearch LinkedIn, the company's team page and recent news. Only say they have moved if a recent source names them at another organisation, and make sure it is the same person, not someone with the same name.",
+          "Find out whether {{contact.name}} ({{contact.jobTitle}}) still works at {{contact.companyName}}. Their email is {{contact.email}} and their LinkedIn is {{contact.linkedinUrl}}.\n\nWhen their LinkedIn profile is given below, trust its current role over anything else. Otherwise search LinkedIn, the company's team page and recent news. Only say they have moved if a recent source names them at another organisation, and make sure it is the same person, not someone with the same name.",
         outputs: [
           { key: "stillThere", type: "choice", choices: ["yes", "no", "unsure"], description: "Do they still work there?" },
           { key: "newCompany", type: "text", description: "Their new company, if they moved." },
