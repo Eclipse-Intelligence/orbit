@@ -718,3 +718,59 @@ export async function archiveOpportunity(
     }),
   );
 }
+
+export async function moveToProposalStageInDb(
+  db: Db,
+  actor: Actor,
+  input: { companyId: string; contactId: string | null; companyName: string; opportunityId: string | null; value: number; currency: string; ownerId: string | null },
+  provenance?: Provenance,
+) {
+  const stage = (
+    await db.query<{ id: string; pipeline_id: string; position: number }>(
+      `select s.id, s.pipeline_id, s.position
+       from crm.pipeline_stages s join crm.pipelines p on p.id = s.pipeline_id
+       where p.workspace_id = $1 and p.kind = 'sales' and p.archived_at is null
+         and not s.is_won and not s.is_lost and lower(s.name) like 'proposal%'
+       order by p.created_at, s.position limit 1`,
+      [actor.workspaceId],
+    )
+  ).rows[0];
+  if (!stage) return { opportunityId: input.opportunityId, moved: false, created: false };
+  if (input.opportunityId) {
+    const current = await readOpportunity(db, input.opportunityId);
+    if (!current || current.pipeline_id !== stage.pipeline_id || current.stage_id === stage.id) {
+      return { opportunityId: input.opportunityId, moved: false, created: false };
+    }
+    const position = current.stage_id
+      ? (await db.query<{ position: number }>("select position from crm.pipeline_stages where id = $1", [current.stage_id])).rows[0]?.position ?? 0
+      : 0;
+    if (position > stage.position) return { opportunityId: input.opportunityId, moved: false, created: false };
+    await applyOpportunity(db, actor, current, prepareOpportunity({ stageId: stage.id }, "patch"), provenance);
+    return { opportunityId: input.opportunityId, moved: true, created: false };
+  }
+  const open = await db.query<{ id: string }>(
+    `select o.id from crm.opportunities o join crm.pipelines p on p.id = o.pipeline_id
+     where o.workspace_id = $1 and o.company_id = $2 and o.status = 'open' and o.archived_at is null and p.kind = 'sales' limit 1`,
+    [actor.workspaceId, input.companyId],
+  );
+  if (open.rows[0]) return { opportunityId: null, moved: false, created: false };
+  await lockNamespace(db, actor.workspaceId, "opportunities");
+  const created = await insertOpportunity(
+    db,
+    actor,
+    prepareOpportunity(
+      {
+        companyId: input.companyId,
+        primaryContactId: input.contactId,
+        stageId: stage.id,
+        name: input.companyName,
+        value: input.value > 0 ? input.value : null,
+        currency: input.currency,
+        ownerId: input.ownerId,
+      },
+      "create",
+    ),
+    provenance,
+  );
+  return { opportunityId: created?.id ?? null, moved: false, created: Boolean(created) };
+}

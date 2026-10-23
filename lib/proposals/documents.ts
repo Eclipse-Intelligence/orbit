@@ -6,6 +6,7 @@ import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { sendContactEmail } from "@/lib/crm/inbox";
 import { isUuid, recordAudit } from "@/lib/crm/mutate";
+import { moveToProposalStageInDb } from "@/lib/crm/opportunities";
 import { stableStringify } from "@/lib/crm/normalize";
 import type { Actor, Provenance, UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
@@ -374,6 +375,24 @@ export async function createDocument(
         [actor.workspaceId, company.id],
       );
       if (open.rows.length === 1) opportunityId = open.rows[0].id;
+    }
+    if (template.kind === "proposal") {
+      const totals = totalsOf(items);
+      const placed = await moveToProposalStageInDb(
+        db,
+        actor,
+        {
+          companyId: company.id,
+          contactId: contact.id,
+          companyName: company.name,
+          opportunityId,
+          value: Math.round((totals.one_off + totals.monthly * 12 + totals.yearly) * 100) / 100,
+          currency,
+          ownerId,
+        },
+        { ...provenance, operation: "proposal_stage" },
+      );
+      opportunityId = placed.opportunityId;
     }
     const result = await db.query<{ id: string }>(
       `insert into crm.documents (workspace_id, kind, template_id, title, company_id, contact_id, opportunity_id, owner_id, currency, items, blocks, settings, valid_until, created_by)
