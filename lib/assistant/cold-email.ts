@@ -17,6 +17,7 @@ Goal: an email a busy, expert person finds worth replying to. They owe the user 
 ## 2. Find the value, or don't send
 Ask: what can this email tell them that they probably don't already know? The best answer takes their own question or claim one step further, with a specific number, finding or example from Eclipse's articles or research.
 - Agreeing with them, or repeating their point back ("our article reaches the same answer"), is not value.
+- Telling them about themselves is not value either. They know what their company does, its products and prices, their role, their clients, their posts and their numbers. Your research is for choosing what to say, not for reciting. Never open with a summary of their business ("Your CORE Analysis runs 200+ buyer prompts through five AI models, and your retainers include weekly tracking").
 - Offering something their own company already provides is not value; it reads as a pitch.
 - If you can't find something new and specific, it's a NO-SEND. Tell the user what's missing.
 
@@ -24,7 +25,7 @@ Ask: what can this email tell them that they probably don't already know? The be
 - Subject: 1 to 5 words naming the idea, accurate. No tricks, no "Re:", no urgency, no emoji.
 - Body: usually 60 to 100 words, in 3 to 6 short sentences. Keep the specific numbers and example even if that makes it longer; cut generic sentences first.
 - Shape:
-  1. Their signal, briefly: what they said or did, with the date.
+  1. At most one short reference to them, as a hook for your point, never a description of them: "Your 2 Oct post asked how teams choose prompts." Only reference something they said or asked publicly, in a few words. Often you can skip it and start with the point.
   2. The step further: the next question, and the specific number, finding or example that answers part of it.
   3. The link to the article or resource, included in the email, so they get the value without replying.
   4. One question about their own work or method, which an expert can answer from experience ("How many runs per prompt do you use before reporting a change?").
@@ -41,6 +42,12 @@ Ask: what can this email tell them that they probably don't already know? The be
 - Use hype words: delve, unlock, leverage, game-changing, revolutionise, cutting-edge, seamless, synergy, supercharge, elevate, empower.
 - Mention personal details, or anything that would feel like surveillance.
 - Use em dashes or en dashes, or a colon in the middle of a sentence. Call an article a "piece".
+
+## What not to do (a real draft that missed)
+Hi Tyler,
+Your CORE Analysis runs 200+ buyer prompts through five AI models, and your retainers include weekly AI visibility tracking. If the weekly budget is tighter than the analysis, one variance study suggests where to cut. ...
+
+Why it misses: the first sentence tells Tyler what his own product and retainers do. He knows. It spends his attention on our research instead of on something new. Start with the finding, or with a few words pointing at something he asked, then the finding.
 
 ## 5. Check, judge honestly, then propose
 Run cold_email_check with the subject, body, your evidence and what their company already offers. Fix every failed check (at most two rounds). Then ask yourself honestly: would this person, who gets a lot of these, find it worth replying to? If not, say so and improve it or call it a NO-SEND. When you propose send_email, tell the user the signal, the new information you gave and its source, and anything you couldn't verify.
@@ -146,6 +153,7 @@ export function lintColdEmail(input: { subject: string; body: string; firstTouch
   const sentences = sentencesOf(core);
   const questions = sentences.filter((sentence) => sentence.endsWith("?"));
   const subjectWords = words(subject);
+  const aboutThem = sentences.filter((sentence) => /^(your|you|i (saw|noticed|read|see)|i've (seen|noticed|read)|looks like you|congrat)/i.test(sentence) && !sentence.endsWith("?"));
   const asksMeeting = questions.some((question) => MEETING_WORDS.test(question)) || MEETING_TIME.test(core);
   const filler = FILLER.filter((phrase) => lower.includes(phrase));
   const hype = HYPE.filter((word) => new RegExp(`\\b${word}`, "i").test(lower));
@@ -191,6 +199,13 @@ export function lintColdEmail(input: { subject: string; body: string; firstTouch
       pass: unsourced.length === 0 && !/\broi\b/i.test(core),
       note: unsourced.length ? `Not in your evidence: ${unsourced.join(", ")}.` : /\broi\b/i.test(core) ? "Mentions ROI." : figures.length ? `${figures.length} figures, all in your evidence.` : "No figures.",
       fix: "Only use figures you copied exactly from a source in your evidence list (read the article in full), and never ROI or multiplier claims.",
+    },
+    {
+      id: "not_about_them",
+      label: "Doesn't describe them to themselves",
+      pass: aboutThem.length <= 1 && (aboutThem[0] ?? "").split(/\s+/).length <= 16,
+      note: aboutThem.length === 0 ? "Starts with the point." : aboutThem.length > 1 ? `${aboutThem.length} sentences about them.` : (aboutThem[0] ?? "").split(/\s+/).length > 16 ? `The sentence about them is long: "${aboutThem[0].slice(0, 90)}".` : "One short reference to them.",
+      fix: "Don't tell them what their company, products or role are. Use at most one short reference to something they said, as a hook, or start with your point.",
     },
     {
       id: "no_meeting",
@@ -259,6 +274,15 @@ export async function judgeColdEmail(
       type: "noul",
       instructions: "Does draft.opener use a fact that appears in prospect_evidence, without adding or embellishing detail?",
       criteria: { true: "The detail is supported by an evidence item and not embellished.", false: "The detail is absent from the evidence, contradicted or embellished." },
+    },
+    not_telling_them_about_themselves: {
+      type: "noul",
+      instructions:
+        "Apart from at most one short reference used as a hook (such as a question they asked publicly), does draft.full_body avoid telling the recipient things about themselves or their company that they already know, such as what their company or products do, their prices, role, clients, posts, achievements or numbers?",
+      criteria: {
+        true: "It spends its words on something new to them, with at most a brief hook about them.",
+        false: "It describes their own business, product, role or activity back to them.",
+      },
     },
     opener_relevant: {
       type: "noul",
@@ -356,6 +380,7 @@ export async function judgeColdEmail(
     yes("claims_supported", "Eclipse claims allowed", "Keep to what the outreach brief allows and remove invented results or numbers."),
     yes("subject_honest", "Subject is honest", "Make the subject a plain description of what the email is about."),
     yes("coherent", "Reads as one thought", "Connect their signal to the new information, then to the link, then to the question."),
+    yes("not_telling_them_about_themselves", "Doesn't tell them what they know", "Cut the description of their business, products or role. They know it. Keep at most a few words pointing at something they asked, then go straight to the new point."),
     yes("new_information", "Tells them something new", "Take their point one step further with a specific number, finding or example they probably don't know. Don't just agree with them."),
     yes("value_without_reply", "Value without a reply", "Put the finding and the link in the email so they get the value without replying."),
     yes("not_their_own_product", "Doesn't pitch what they have", "Remove the Eclipse line that offers what their company already does, or leave Eclipse out of this first email."),
@@ -395,6 +420,7 @@ const VALUE_SCHEMA = z.object({
   valueWithoutReply: z.boolean(),
   pitchesWhatTheyHave: z.boolean(),
   questionAboutTheirWork: z.boolean(),
+  describesThemToThemselves: z.boolean(),
   worthReplying: z.number().min(0).max(3),
   biggestGap: z.string(),
 });
@@ -412,6 +438,7 @@ export async function reviewColdEmailValue(
       "valueWithoutReply: true if they get the useful part (finding, number, link) without replying.",
       "pitchesWhatTheyHave: true if it offers or pitches something their company already provides.",
       "questionAboutTheirWork: true if it ends with a question about their own work or method that an expert can answer from experience.",
+      "describesThemToThemselves: true if, beyond at most one brief hook, it tells them what their own company, products, prices, role, clients, posts or numbers are.",
       "worthReplying: 0 not worth it, 1 slightly, 2 worth it, 3 clearly worth it.",
       "biggestGap: one plain sentence on what would most make it more worth replying to, or an empty string. UK English, no dashes, no mid-sentence colons.",
     ].join("\n"),
@@ -434,6 +461,14 @@ export async function reviewColdEmailValue(
       pass: review.newInformation,
       note: review.newInformation ? "Gives them something specific they probably don't know." : "Mostly hands their own view back or says nothing specific.",
       fix: "Take their point one step further with a specific number, finding or example they probably don't know. Don't just agree with them.",
+      source: "review",
+    },
+    {
+      id: "not_telling_them_about_themselves",
+      label: "Doesn't tell them what they know",
+      pass: !review.describesThemToThemselves,
+      note: review.describesThemToThemselves ? "Describes their own business or activity back to them." : "Spends its words on something new.",
+      fix: "Cut the description of their business, products or role. They know it. Keep at most a few words pointing at something they asked, then go straight to the new point.",
       source: "review",
     },
     {

@@ -17,6 +17,11 @@ const WEAK = {
   body: "Hi David,\n\nYour 2 Oct post asked how teams choose the prompts behind an AI visibility score. Our article reaches the same answer, that prompt choice decides what a score means. Eclipse shows how a brand is mentioned alongside competitors across ten AI assistants. Shall I send you the article?\n\nMark",
 };
 
+const TYLER = {
+  subject: "Repeats in weekly tracking",
+  body: "Hi Tyler,\n\nYour CORE Analysis runs 200+ buyer prompts through five AI models, and your retainers include weekly AI visibility tracking. If the weekly budget is tighter than the analysis, one variance study suggests where to cut. In LLM brand answers, a repeat past the fifth reduced relative-error variance by about 0.0003, while spreading the same budget across languages or models reduced it several times more. So paraphrases and engines may earn more than reruns. I covered it in this guide for agencies.\n\nhttps://geteclipse.co/articles/proving-client-ai-visibility-an-agency-evidence-guide/\n\nHow many repeats per prompt do you run in a client's weekly tracking?\n\nMark",
+};
+
 const EVIDENCE = [
   { fact: "David's LinkedIn post asked how teams choose the prompts behind an AI visibility score.", source: "linkedin.com/posts/david 2 Oct 2026" },
   { fact: "Article: a brand named in 6 of 20 runs scores 30%, but the plausible range is roughly 15% to 52%.", source: ARTICLE },
@@ -38,6 +43,13 @@ describe("cold email rule checks", () => {
     const weak = lintColdEmail({ ...WEAK, evidence: EVIDENCE });
     assert.deepEqual(failed(weak), ["gives_first"]);
     assert.match(weak.find((check) => check.id === "gives_first")!.note, /Offers to send something instead of including it/);
+  });
+
+  it("flags an email that describes the prospect's own business back to them", () => {
+    const check = lintColdEmail({ ...TYLER, evidence: [] }).find((item) => item.id === "not_about_them")!;
+    assert.equal(check.pass, false);
+    assert.match(check.note, /The sentence about them is long: "Your CORE Analysis runs 200\+ buyer prompts/);
+    assert.equal(lintColdEmail({ ...STRONG, evidence: EVIDENCE }).find((item) => item.id === "not_about_them")!.note, "One short reference to them.");
   });
 
   it("only allows figures that appear in the evidence, and still bans hype, meetings, colons and piece", () => {
@@ -66,6 +78,7 @@ describe("cold email value grading", () => {
       return Response.json({
         answers: {
           opener_grounded: { type: "noul", noul: 0.95 },
+          not_telling_them_about_themselves: { type: "noul", noul: 0.15 },
           opener_relevant: { type: "noul", noul: 0.9 },
           problem_hedged: { type: "noul", noul: 0.9 },
           claims_supported: { type: "noul", noul: 0.9 },
@@ -86,7 +99,7 @@ describe("cold email value grading", () => {
     assert.equal(result.graded, "Rule checks and Jev grading.");
     assert.deepEqual(
       result.checks.filter((check) => !check.pass).map((check) => check.id),
-      ["gives_first", "new_information", "value_without_reply", "not_their_own_product", "cta_kind", "worth_replying"],
+      ["gives_first", "not_telling_them_about_themselves", "new_information", "value_without_reply", "not_their_own_product", "cta_kind", "worth_replying"],
     );
     assert.ok(result.fixes.some((fix) => fix.startsWith("Tells them something new: Take their point one step further")));
   });
@@ -107,6 +120,7 @@ describe("cold email value grading", () => {
                 valueWithoutReply: true,
                 pitchesWhatTheyHave: false,
                 questionAboutTheirWork: true,
+                describesThemToThemselves: false,
                 worthReplying: 2.5,
                 biggestGap: "",
               }),
@@ -140,6 +154,8 @@ describe("assistant guidance", () => {
     const prompt = systemPrompt(actor, { webSearch: false });
     assert.match(prompt, /Always read cold_email_playbook first/);
     assert.match(prompt, /worth a busy expert's time/);
+    assert.match(prompt, /never tells them about themselves/);
+    assert.match(playbook.playbook, /Telling them about themselves is not value either/);
     assert.match(prompt, /Never put a colon in the middle of a sentence/);
   });
 });
