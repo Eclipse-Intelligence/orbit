@@ -175,7 +175,8 @@ export default function CompanyRecord({
         }
       />
       <RecordLayout
-        details={
+        activityCount={context.timeline.length}
+        summary={
           <>
             <div
               style={brandColor ? ({ "--brand": brandColor } as CSSProperties) : undefined}
@@ -246,7 +247,10 @@ export default function CompanyRecord({
                 {archiveError}
               </p>
             )}
-
+          </>
+        }
+        details={
+          <>
             <CompanyHealth company={company} />
 
             {editing ? (

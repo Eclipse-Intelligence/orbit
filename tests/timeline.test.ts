@@ -6,6 +6,7 @@ import {
   activityDirection,
   activitySource,
   activityTitle,
+  activityTime,
   activityWhen,
   callDuration,
   countKinds,
@@ -64,6 +65,8 @@ describe("timeline days", () => {
       activityWhen("2026-01-20T08:07:00Z", now, zone),
       "Tue 20 Jan, 08:07",
     );
+    assert.equal(activityTime("2026-10-14T13:05:00Z", zone), "14:05");
+    assert.equal(activityTime("2026-01-20T08:07:00Z", zone), "08:07");
     assert.equal(dayKey("2026-10-13T23:30:00Z", zone), "2026-10-14");
   });
 

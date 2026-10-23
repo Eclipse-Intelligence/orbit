@@ -178,8 +178,8 @@ export default function ContactRecord({
       )}
       <InviteNotice message={notice} onDone={clearNotice} />
       <RecordLayout
-        details={
-          <>
+        activityCount={activities.length}
+        summary={
             <div className="flex items-start gap-3 p-5 shadow-[inset_0_-1px_0_var(--line-strong)]">
               <Monogram
                 name={shown.name}
@@ -211,6 +211,9 @@ export default function ContactRecord({
                 />
               </div>
             </div>
+        }
+        details={
+          <>
             {editing ? (
               <ContactEditor
                 key={shown.id}
@@ -318,7 +321,6 @@ export default function ContactRecord({
             viewerId={viewer.id}
             activities={activities}
             insights={insights}
-            className="border-t-0 p-5"
           />
         }
       />

@@ -93,6 +93,11 @@ export function activityWhen(
   return `${dayLabel(iso, now, timeZone)}, ${pad(day.hour)}:${pad(day.minute)}`;
 }
 
+export function activityTime(iso: string, timeZone = appTimeZone()) {
+  const day = calendarDay(iso, timeZone);
+  return day ? `${pad(day.hour)}:${pad(day.minute)}` : "";
+}
+
 export function groupByDay<T extends Pick<Activity, "occurredAt">>(
   items: T[],
   now = Date.now(),
