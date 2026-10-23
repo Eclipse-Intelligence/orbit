@@ -2,6 +2,7 @@ import { bookingUrl } from "@/lib/assistant/links";
 import { ARTICLES_URL, DOCS_URL, eclipseDocsIndex, listEclipseArticles, readEclipsePage } from "@/lib/eclipse-sources";
 import { readWebPage, WebPageError } from "@/lib/web-page";
 import { MindcaseError } from "@/lib/mindcase";
+import { checkColdEmail, COLD_EMAIL_PLAYBOOK, ECLIPSE_OUTREACH_BRIEF } from "@/lib/assistant/cold-email";
 import { socialLookup } from "@/lib/social-lookup";
 import { getBookingPage } from "@/lib/booking/pages";
 import { listLifecycles } from "@/lib/crm/lifecycles";
@@ -912,6 +913,42 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         error: error instanceof WebPageError ? error.message : "That page couldn't be read.",
       }));
     },
+  },
+  {
+    name: "cold_email_playbook",
+    label: "Reading the cold email playbook",
+    description:
+      "How to research a prospect and write a first email to someone who doesn't know the user: research steps and tools, when not to send, the rules (length, one signal, one useful question, no meeting ask, no invented facts), a template, and the Eclipse outreach brief of what may and may not be claimed. Read it before writing any first email to a prospect.",
+    parameters: { type: "object", properties: {} },
+    run: async () => ({ playbook: COLD_EMAIL_PLAYBOOK, eclipseBrief: ECLIPSE_OUTREACH_BRIEF }),
+  },
+  {
+    name: "cold_email_check",
+    label: "Checking the email",
+    description:
+      "Check a draft first email to a prospect before proposing it: length, sentences, subject, one closing question, no meeting ask, no filler or hype, no unsupported numbers, no dashes, written about them; and, when Jev is set up, whether the opener matches your evidence and is relevant, the problem is framed honestly, Eclipse claims are allowed, the subject is honest, the call to action is useful and it sounds like a person. Pass the evidence you gathered (each fact with its source). Fix every item in fixes and check again, at most twice.",
+    parameters: {
+      type: "object",
+      properties: {
+        subject: { type: "string" },
+        body: { type: "string", description: "The whole email body, including greeting and sign-off." },
+        evidence: {
+          type: "array",
+          items: { type: "object", properties: { fact: { type: "string" }, source: { type: "string", description: "Link and date." } }, required: ["fact"] },
+        },
+        firstTouch: { type: "boolean", description: "False for a follow-up to someone who has engaged before. Defaults to true." },
+      },
+      required: ["subject", "body"],
+    },
+    run: async (_actor, args) =>
+      checkColdEmail({
+        subject: str(args.subject),
+        body: required(args.body, "The email"),
+        evidence: Array.isArray(args.evidence)
+          ? args.evidence.filter((item): item is { fact: string; source?: string } => Boolean(item && typeof item === "object" && typeof (item as { fact?: unknown }).fact === "string"))
+          : [],
+        firstTouch: args.firstTouch !== false,
+      }),
   },
   {
     name: "social_lookup",
