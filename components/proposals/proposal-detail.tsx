@@ -502,7 +502,7 @@ function SendDialog({
               : "Sends the same link again."}
           </DialogDescription>
         </DialogHeader>
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-4 px-6 py-5">
           <p className="text-[13.5px]">
             <span className="text-subtle">To </span>
             {doc.contactName} {doc.contactEmail ? <span className="text-subtle">({doc.contactEmail})</span> : <span className="text-danger">(no email address)</span>}
@@ -578,7 +578,7 @@ function CountersignDialog({
             {client ? `${client.name} signed on ${longDate(client.signedAt)}. ` : ""}Signing completes it for {doc.version?.content.sender.company ?? viewer.workspaceName}.
           </DialogDescription>
         </DialogHeader>
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-4 px-6 py-5">
           <label className="flex flex-col gap-1.5">
             <span className="caption-style text-subtle">Your job title</span>
             <Input value={title} maxLength={200} onChange={(event) => setTitle(event.target.value)} placeholder="Founder" />
@@ -587,8 +587,8 @@ function CountersignDialog({
             <span className="caption-style text-subtle">Type your name to sign</span>
             <Input value={typed} maxLength={200} placeholder={viewer.name} onChange={(event) => setTyped(event.target.value)} className="h-12 font-serif text-[22px] italic" />
           </label>
-          <label className="caption-style text-subtle flex items-start gap-2">
-            <input type="checkbox" checked={agree} onChange={(event) => setAgree(event.target.checked)} className="mt-0.5 size-4" />
+          <label className="caption-style text-soft flex items-start gap-2.5 rounded-xl bg-white/[0.03] p-3 leading-[1.5]">
+            <input type="checkbox" checked={agree} onChange={(event) => setAgree(event.target.checked)} className="mt-0.5 size-4 shrink-0" />
             <span>
               I agree to sign this electronically for {doc.version?.content.sender.company ?? viewer.workspaceName}. My electronic signature has the same effect as a handwritten
               signature.
