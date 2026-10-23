@@ -4,9 +4,9 @@ import { useId, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import Button, { buttonVariants } from "@/components/_ui/button";
 import { Input } from "@/components/_ui/input";
-import Tag from "@/components/_ui/tag";
 import { addActivityAction, type RecordActionState } from "@/app/(crm)/records";
 import CallInsightPanel from "@/components/crm/call-insight";
+import DetailSection from "@/components/companies/detail/detail-section";
 import { useShortcut } from "@/components/shortcuts/shortcuts-provider";
 import ActivityPad from "@/components/crm/activity-pad";
 import ContactEmail from "@/components/crm/contact-email";
@@ -16,6 +16,7 @@ import {
   activityDetails,
   activityDirection,
   activitySource,
+  activityTime,
   activityTitle,
   activityWhen,
   callDuration,
@@ -29,7 +30,7 @@ import {
 import { cn } from "@/lib/utils";
 import type { Recipient } from "@/lib/crm/personalise";
 import type { Activity, CallInsight } from "@/lib/crm/types";
-import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
+import SparkleIcon from "@/public/assets/images/mail/sparkle.svg";
 import CallIcon from "@/public/assets/images/crm/activity/call.svg";
 import EmailIcon from "@/public/assets/images/crm/activity/email.svg";
 import MeetingIcon from "@/public/assets/images/crm/activity/meeting.svg";
@@ -81,10 +82,47 @@ const OTHER_MARK = {
   tone: "bg-(--tag-neutral-bg) text-(--tag-neutral-text) shadow-[inset_0_0_0_1px_var(--tag-neutral-border)]",
 };
 
-type Badge = {
+export function QuietTabs<T extends string>({
+  label,
+  items,
+  value,
+  onChange,
+}: {
   label: string;
-  tone: "neutral" | "purple" | "blue" | "green" | "amber";
-};
+  items: { id: T; label: string; count?: number; shortcut?: string }[];
+  value: T;
+  onChange: (id: T) => void;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label={label}
+      className="-mx-1 flex min-w-0 items-center gap-0.5 overflow-x-auto px-1 [scrollbar-width:none]"
+    >
+      {items.map((item) => (
+        <Button
+          key={item.id}
+          variant="ghost"
+          size="none"
+          type="button"
+          aria-pressed={value === item.id}
+          data-shortcut={item.shortcut}
+          className={cn(
+            "h-8 gap-1 px-2.5 text-[13px] font-normal",
+            value === item.id &&
+              "text-foreground bg-white/[0.07] hover:bg-white/[0.07]",
+          )}
+          onClick={() => onChange(item.id)}
+        >
+          {item.label}
+          {item.count !== undefined && (
+            <span className="text-subtle tabular-nums">{item.count}</span>
+          )}
+        </Button>
+      ))}
+    </div>
+  );
+}
 
 export function useActivityDraft(save: SaveActivity) {
   const router = useRouter();
@@ -188,48 +226,25 @@ export function ActivityComposer({
     <div
       ref={root}
       data-shortcut-scope=""
-      className="border-line-strong bg-card flex flex-col gap-3 rounded-xl border p-3"
+      className="border-line-strong bg-card flex flex-col gap-2.5 rounded-xl border p-2.5"
     >
       {pad ? (
-        <div className="flex flex-wrap gap-1" role="group" aria-label="Activity type">
-          <Button
-            variant={kind !== "email" ? "primary" : "subtle"}
-            size="sm"
-            type="button"
-            aria-pressed={kind !== "email"}
-            onClick={() => compose("note")}
-          >
-            Log activity
-          </Button>
-          <Button
-            variant={kind === "email" ? "primary" : "subtle"}
-            size="sm"
-            type="button"
-            aria-pressed={kind === "email"}
-            onClick={() => compose("email")}
-          >
-            Send email
-          </Button>
-        </div>
+        <QuietTabs
+          label="Activity type"
+          items={[
+            { id: "note", label: "Log activity" },
+            { id: "email", label: "Send email" },
+          ]}
+          value={kind === "email" ? "email" : "note"}
+          onChange={compose}
+        />
       ) : (
-      <div
-        className="flex flex-wrap gap-1"
-        role="group"
-        aria-label="Activity type"
-      >
-        {KINDS.map((item) => (
-          <Button
-            key={item.id}
-            variant={kind === item.id ? "primary" : "subtle"}
-            size="sm"
-            type="button"
-            aria-pressed={kind === item.id}
-            onClick={() => draft.setKind(item.id)}
-          >
-            {item.label}
-          </Button>
-        ))}
-      </div>
+        <QuietTabs
+          label="Activity type"
+          items={KINDS.map((item) => ({ id: item.id, label: item.label }))}
+          value={kind}
+          onChange={draft.setKind}
+        />
       )}
       {pad && kind !== "email" ? pad : null}
       {(!pad || kind === "email") && about}
@@ -343,38 +358,23 @@ export function ActivityTimeline({
   return (
     <div className="flex flex-col gap-3">
       {activities.length > 0 && (
-        <div
-          className="bg-secondary flex max-w-full gap-0.5 self-start overflow-x-auto rounded-full p-0.5 shadow-[0_0_0_1px_var(--line-strong)]"
-          role="group"
-          aria-label="Filter activity by type"
-        >
-          {FILTERS.filter(
-            (item) => item.id === "all" || counts[item.id] > 0,
-          ).map((item) => (
-            <Button
-              key={item.id}
-              variant={active === item.id ? "muted" : "ghost"}
-              size="sm"
-              type="button"
-              data-shortcut={item.id === "all" ? "timeline-filter" : undefined}
-              className="px-2 sm:px-3"
-              aria-pressed={active === item.id}
-              onClick={() => setFilter(item.id)}
-            >
-              {item.label}
-              <span
-                className={cn(
-                  "tabular-nums",
-                  active === item.id ? "text-soft" : "text-subtle",
-                )}
-              >
-                {counts[item.id]}
-              </span>
-            </Button>
-          ))}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <QuietTabs
+            label="Filter activity by type"
+            items={FILTERS.filter(
+              (item) => item.id === "all" || counts[item.id] > 0,
+            ).map((item) => ({
+              id: item.id,
+              label: item.label,
+              count: counts[item.id],
+              shortcut: item.id === "all" ? "timeline-filter" : undefined,
+            }))}
+            value={active}
+            onChange={setFilter}
+          />
+          {filters}
         </div>
       )}
-      {filters}
       {groups.length === 0 ? (
         <p className="caption-style text-subtle">{empty}</p>
       ) : (
@@ -385,11 +385,11 @@ export function ActivityTimeline({
               <section key={group.key} aria-labelledby={headingId}>
                 <h3
                   id={headingId}
-                  className="caption-style text-subtle bg-background sticky top-0 z-10 px-2 py-2"
+                  className="caption-style text-subtle bg-background sticky top-0 z-10 px-2 pt-3 pb-1.5 font-medium"
                 >
                   {group.label}
                 </h3>
-                <ul className="divide-border flex flex-col divide-y">
+                <ul className="flex flex-col">
                   {group.items.map((activity) => (
                     <ActivityRow
                       key={activity.id}
@@ -442,13 +442,7 @@ export default function ContactActivities({
   );
 
   return (
-    <section
-      className={cn(
-        "border-line-strong flex flex-col gap-4 border-t pt-4",
-        className,
-      )}
-    >
-      <h2>Activities</h2>
+    <DetailSection title="Activity" className={cn("shadow-none", className)}>
       <ActivityComposer
         idPrefix={contactId}
         draft={draft}
@@ -468,27 +462,30 @@ export default function ContactActivities({
         viewerId={viewerId}
         empty="No activity yet."
       />
-    </section>
+    </DetailSection>
   );
 }
 
-function activityBadges(activity: Activity, insight: CallInsight | null) {
-  const badges: Badge[] = [];
-  if (insight?.status === "ready" && insight.summary) {
-    badges.push({ label: "Summary", tone: "purple" });
-  }
-  if (insight && insight.transcriptLength > 0) {
-    badges.push({ label: "Transcript", tone: "neutral" });
-  }
-  const source = activitySource(activity);
-  if (source) {
-    badges.push({ label: source, tone: source === "Teams" ? "blue" : "green" });
-  }
+function activityMeta(
+  activity: Activity,
+  byline: string | null,
+  contact: string | null,
+) {
   const direction = activityDirection(activity);
-  if (direction) badges.push({ label: direction, tone: "neutral" });
-  const duration = callDuration(activity);
-  if (duration) badges.push({ label: duration, tone: "neutral" });
-  return badges;
+  const received = direction === "Received";
+  const parts = [
+    received ? byline : contact,
+    direction && !received
+      ? direction === "Sent" && byline
+        ? `Sent ${byline}`
+        : direction
+      : null,
+    callDuration(activity),
+    activitySource(activity),
+    received || direction === "Sent" ? null : byline,
+  ].filter(Boolean) as string[];
+  const line = parts.join(" · ");
+  return line ? line.charAt(0).toUpperCase() + line.slice(1) : "";
 }
 
 function emailParty(activity: Activity) {
@@ -536,17 +533,10 @@ function ActivityRow({
   const mark = kind ? MARKS[kind] : OTHER_MARK;
   const Icon = mark.icon;
   const title = activityTitle(activity);
-  const badges = activityBadges(activity, insight);
   const byline = activityByline(activity, viewerId);
-  const contact =
-    showContact &&
-    activity.contactName &&
-    byline !== `from ${activity.contactName}`
-      ? activity.contactName
-      : null;
-  const meta = [byline, contact, activityWhen(activity.occurredAt, now)]
-    .filter(Boolean)
-    .join(" · ");
+  const contact = showContact ? (activity.contactName ?? null) : null;
+  const meta = activityMeta(activity, byline, contact);
+  const summarised = insight?.status === "ready" && Boolean(insight.summary);
   const details = activityDetails(activity);
   const granola = granolaUrl(activity);
   const party = activity.type === "email" ? emailParty(activity) : null;
@@ -561,61 +551,55 @@ function ActivityRow({
         variant="item"
         size="none"
         type="button"
-        className="group gap-3 px-2 py-2.5"
+        className={cn("group gap-3 px-2 py-2", open && "bg-white/[0.03]")}
         aria-expanded={open}
         aria-controls={panelId}
         onClick={onToggle}
       >
         <span
           className={cn(
-            "flex size-7 shrink-0 items-center justify-center rounded-full",
+            "mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full",
             mark.tone,
           )}
         >
           <Icon aria-hidden className="size-3.5" />
         </span>
-        <span className="flex min-w-0 flex-1 flex-col gap-1.5 pt-px">
-          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="flex min-w-0 items-baseline gap-2">
             <span
               className={cn(
-                "max-w-full min-w-0 text-[14px] leading-5",
+                "min-w-0 flex-1 text-[14px] leading-5",
                 open ? "break-words" : "truncate",
               )}
             >
               {title}
             </span>
-            {badges.map((badge) => (
-              <Tag
-                key={badge.label}
-                tone={badge.tone}
-                size="sm"
-                className="h-[18px] text-[11px]"
-              >
-                {badge.label}
-              </Tag>
-            ))}
-          </span>
-          {meta && (
-            <span
-              className="caption-style text-subtle leading-4"
+            {summarised && (
+              <SparkleIcon
+                aria-label="Has a summary"
+                className="text-primary-foreground size-3 shrink-0 self-center"
+              />
+            )}
+            <time
+              dateTime={activity.occurredAt}
+              title={activityWhen(activity.occurredAt, now)}
+              className="caption-style text-subtle shrink-0 tabular-nums"
               suppressHydrationWarning
             >
+              {activityTime(activity.occurredAt)}
+            </time>
+          </span>
+          {meta && (
+            <span className="caption-style text-subtle truncate leading-4">
               {meta}
             </span>
           )}
         </span>
-        <ChevronDownIcon
-          aria-hidden
-          className={cn(
-            "text-subtle ease-power3-out mt-2 size-3 shrink-0 transition-transform duration-150",
-            open && "rotate-180",
-          )}
-        />
       </Button>
       <div
         id={panelId}
         hidden={!open}
-        className="flex flex-col gap-3 pr-2 pb-3 pl-12"
+        className="flex flex-col gap-3 pr-2 pt-1 pb-3 pl-12"
       >
         {party && <span className="caption-style text-subtle">{party}</span>}
         {attached.length > 0 && (

@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import Button from "@/components/_ui/button";
 import {
   Select,
   SelectContent,
@@ -20,6 +19,7 @@ import ActivityPad from "@/components/crm/activity-pad";
 import ContactEmail from "@/components/crm/contact-email";
 import { contactRecipient } from "@/lib/crm/personalise";
 import type { Activity, CallInsight, Contact } from "@/lib/crm/types";
+import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
 
 const NONE = "none";
 const ALL = "all";
@@ -157,34 +157,26 @@ export default function CompanyActivity({
         viewerId={viewerId}
         empty="No activity yet."
         filters={
-          people.length > 0 && (
-            <div
-              className="flex flex-wrap gap-1"
-              role="group"
-              aria-label="Filter activity by contact"
-            >
-              <Button
-                variant={active === ALL ? "primary" : "subtle"}
-                size="sm"
-                type="button"
-                aria-pressed={active === ALL}
-                onClick={() => setFilter(ALL)}
+          people.length > 1 && (
+            <span className="relative flex items-center">
+              <label htmlFor={`${aboutId}-filter`} className="sr-only">
+                Show activity with
+              </label>
+              <select
+                id={`${aboutId}-filter`}
+                value={active}
+                onChange={(event) => setFilter(event.target.value)}
+                className="text-soft hover:text-foreground focus-visible:ring-ring/60 h-8 max-w-[14em] cursor-pointer appearance-none truncate rounded-full bg-white/[0.04] pr-7 pl-3 text-[13px] outline-none hover:bg-white/[0.07] focus-visible:ring-2"
               >
-                Everyone
-              </Button>
-              {people.map((person) => (
-                <Button
-                  key={person.id}
-                  variant={active === person.id ? "primary" : "subtle"}
-                  size="sm"
-                  type="button"
-                  aria-pressed={active === person.id}
-                  onClick={() => setFilter(person.id)}
-                >
-                  {person.name}
-                </Button>
-              ))}
-            </div>
+                <option value={ALL}>Everyone</option>
+                {people.map((person) => (
+                  <option key={person.id} value={person.id}>
+                    {person.name}
+                  </option>
+                ))}
+              </select>
+              <ChevronDownIcon aria-hidden className="text-subtle pointer-events-none absolute right-2.5 size-3" />
+            </span>
           )
         }
       />
