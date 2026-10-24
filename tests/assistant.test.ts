@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, beforeEach, describe, it } from "node:test";
-import { decideActions, getConversation, listConversations, sendMessage, type AssistantEvent } from "@/lib/assistant/chat";
+import { decideActions, getConversation, listConversations, MESSAGE_MAX, sendMessage, type AssistantEvent } from "@/lib/assistant/chat";
 import { settingsFor } from "@/lib/assistant/models";
 import { systemPrompt } from "@/lib/assistant/prompt";
 import { geminiTool } from "@/lib/assistant/gateway";
@@ -179,6 +179,27 @@ describe("assistant conversations", () => {
     assert.equal((await listConversations(owner))[0].id, conversation.id);
     await assert.rejects(getConversation(other, conversation.id), /Conversation not found/);
     assert.deepEqual(await listConversations(other), []);
+  });
+
+  it("takes long pasted messages and says how far over the limit one is", async () => {
+    const pasted = `Here is the research:\n${"Buyers ask AI assistants for vendor shortlists. ".repeat(1_000)}`;
+    assert.ok(pasted.length > 40_000);
+    const fake = gateway([{ content: "Read it." }]);
+    const { events, emit } = collect();
+    await sendMessage(owner, { message: pasted, model: "claude-sonnet-5-5", reasoning: "medium", webSearch: false }, emit, {
+      deadline: deadline(),
+      fetchImpl: fake.fetchImpl,
+    });
+    assert.equal(events.at(-1)!.type, "done");
+    const sent = fake.requests[0].messages as { role: string; content: string }[];
+    assert.equal(sent.at(-1)!.content, pasted.trim());
+    await assert.rejects(
+      sendMessage(owner, { message: "a".repeat(MESSAGE_MAX + 1_500), model: "claude-sonnet-5-5", reasoning: "medium", webSearch: false }, emit, {
+        deadline: deadline(),
+        fetchImpl: fake.fetchImpl,
+      }),
+      /That message is 201,500 characters\. The limit is 200,000\. Cut 1,500 characters and send it again\./,
+    );
   });
 
   it("adds web search alongside Orbit's tools when it's on", async () => {
