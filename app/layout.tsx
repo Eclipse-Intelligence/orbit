@@ -1,12 +1,11 @@
 import type { Metadata, Viewport } from "next";
 import { Geist } from "next/font/google";
+import { APPLE_TOUCH_ICON_DATA_URI } from "@/lib/apple-touch-icon";
 import { SITE_DESCRIPTION, SITE_NAME, SITE_URL, pageMetadata } from "@/lib/seo";
 import ScrollToTop from "@/components/_common/scroll-to-top";
 import StaleDeployReload from "@/components/_common/stale-deploy-reload";
 import { SIDEBAR_COLLAPSED_SCRIPT, SIDEBAR_WIDTH_SCRIPT } from "@/lib/sidebar";
 import "./globals.css";
-
-const APPLE_TOUCH_ICON_SIZES = [152, 167, 180];
 
 const geist = Geist({
   subsets: ["latin"],
@@ -42,9 +41,7 @@ export default function RootLayout({
     >
       <head>
         <link rel="icon" href="/icons/icon-192.png" sizes="192x192" type="image/png" />
-        {APPLE_TOUCH_ICON_SIZES.map((size) => (
-          <link key={size} rel="apple-touch-icon" href={`/apple-touch-icon-${size}x${size}.png?v=2`} sizes={`${size}x${size}`} />
-        ))}
+        <link rel="apple-touch-icon" href={APPLE_TOUCH_ICON_DATA_URI} sizes="180x180" />
         <script
           dangerouslySetInnerHTML={{
             __html: `history.scrollRestoration="manual";${SIDEBAR_WIDTH_SCRIPT}${SIDEBAR_COLLAPSED_SCRIPT}`,
