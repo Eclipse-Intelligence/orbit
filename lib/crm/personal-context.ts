@@ -131,6 +131,8 @@ export function aboutWriterNote(context: PersonalContext | null, name: string) {
   return parts.length ? `What ${name} has told Orbit about themselves:\n${parts.join("\n")}` : "";
 }
 
+const DRAFT_TOKENS = 6_000;
+
 const DRAFT_SCHEMA = z.object({
   jobTitle: z.string(),
   about: z.string(),
@@ -223,8 +225,8 @@ export async function draftPersonalContext(
         `UK English. ${WRITING_STYLE}`,
       user: material.join("\n\n---\n\n"),
       schema: DRAFT_SCHEMA,
-      maxTokens: 1_500,
-      timeoutMs: 45_000,
+      maxTokens: DRAFT_TOKENS,
+      timeoutMs: 60_000,
       deadline: options.deadline,
       fetchImpl: options.fetchImpl,
     });
