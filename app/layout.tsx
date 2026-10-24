@@ -6,6 +6,8 @@ import StaleDeployReload from "@/components/_common/stale-deploy-reload";
 import { SIDEBAR_COLLAPSED_SCRIPT, SIDEBAR_WIDTH_SCRIPT } from "@/lib/sidebar";
 import "./globals.css";
 
+const APPLE_TOUCH_ICON_SIZES = [152, 167, 180];
+
 const geist = Geist({
   subsets: ["latin"],
   variable: "--font-geist",
@@ -39,7 +41,10 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <head>
-        <link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180" />
+        <link rel="icon" href="/icons/icon-192.png" sizes="192x192" type="image/png" />
+        {APPLE_TOUCH_ICON_SIZES.map((size) => (
+          <link key={size} rel="apple-touch-icon" href={`/apple-touch-icon-${size}x${size}.png?v=2`} sizes={`${size}x${size}`} />
+        ))}
         <script
           dangerouslySetInnerHTML={{
             __html: `history.scrollRestoration="manual";${SIDEBAR_WIDTH_SCRIPT}${SIDEBAR_COLLAPSED_SCRIPT}`,
