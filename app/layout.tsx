@@ -39,6 +39,7 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <head>
+        <link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180" />
         <script
           dangerouslySetInnerHTML={{
             __html: `history.scrollRestoration="manual";${SIDEBAR_WIDTH_SCRIPT}${SIDEBAR_COLLAPSED_SCRIPT}`,
