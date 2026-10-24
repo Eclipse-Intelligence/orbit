@@ -11,9 +11,9 @@ import Button from "@/components/_ui/button";
 import InviteDialog, { InviteNotice, type InvitePrefill } from "@/components/crm/invite-dialog";
 import type { InviteSetup } from "@/lib/crm/invites";
 import { Monogram, tagBase } from "@/components/beautifui/record-marks";
-import EmailFrame from "@/components/mail/email-frame";
+import EmailFrame, { QuoteToggle } from "@/components/mail/email-frame";
 import { useShortcut, useShortcutHint } from "@/components/shortcuts/shortcuts-provider";
-import { mailFullWhen, personName, recipientList, stripQuoted } from "@/lib/mail/format";
+import { mailFullWhen, personName, recipientList, snippetCore, stripQuoted } from "@/lib/mail/format";
 import type { MailAddress } from "@/lib/mail/types";
 import {
   MAIL_SPLITS,
@@ -73,16 +73,77 @@ function ToolButton({
   );
 }
 
-function MessageBody({ message, title, swipe }: { message: ThreadMessage; title: string; swipe: () => SwipeHandlers }) {
-  if (message.html) return <EmailFrame html={message.html} rich={message.rich} title={title} swipe={swipe} />;
-  if (message.text) return <p className="text-foreground whitespace-pre-wrap">{message.text}</p>;
+function TextBody({ text, hideQuotes }: { text: string; hideQuotes: boolean }) {
+  const [shown, setShown] = useState(false);
+  const core = hideQuotes ? stripQuoted(text) : "";
+  const quoted = Boolean(core) && core !== text.trim();
+  return (
+    <>
+      <p className="text-foreground whitespace-pre-wrap">{quoted && !shown ? core : text}</p>
+      {quoted && <QuoteToggle shown={shown} onToggle={() => setShown((open) => !open)} />}
+    </>
+  );
+}
+
+function MessageBody({
+  message,
+  title,
+  swipe,
+  hideQuotes,
+}: {
+  message: ThreadMessage;
+  title: string;
+  swipe: () => SwipeHandlers;
+  hideQuotes: boolean;
+}) {
+  if (message.html) return <EmailFrame html={message.html} rich={message.rich} title={title} swipe={swipe} hideQuotes={hideQuotes} />;
+  if (message.text) return <TextBody text={message.text} hideQuotes={hideQuotes} />;
   return <p className="text-subtle">{message.snippet || "This email has no text."}</p>;
+}
+
+function fullAddress(address: MailAddress) {
+  const name = address.name?.trim();
+  return name && name.toLowerCase() !== address.address.toLowerCase() ? `${name} <${address.address}>` : address.address;
+}
+
+function AddressDetails({ id, message }: { id: string; message: ThreadMessage }) {
+  const rows: [string, MailAddress[]][] = [
+    ["From", message.from ? [message.from] : []],
+    ["To", message.to],
+    ["Cc", message.cc],
+  ];
+  return (
+    <dl id={id} className="animate-rise-in -mt-1 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 px-4 pb-3 text-[12px] leading-5 sm:pl-14">
+      {rows
+        .filter(([, addresses]) => addresses.length > 0)
+        .map(([label, addresses]) => (
+          <div key={label} className="contents">
+            <dt className="text-subtle">{label}</dt>
+            <dd className="text-soft flex min-w-0 flex-col select-text">
+              {addresses.map((address) => (
+                <span key={address.address} className="break-words">
+                  {fullAddress(address)}
+                </span>
+              ))}
+            </dd>
+          </div>
+        ))}
+      {message.at && (
+        <div className="contents">
+          <dt className="text-subtle">Date</dt>
+          <dd className="text-soft tabular-nums select-text">{mailFullWhen(message.at)}</dd>
+        </div>
+      )}
+    </dl>
+  );
 }
 
 function Message({
   message,
   own,
   expanded,
+  collapsible,
+  hideQuotes,
   onToggle,
   swipe,
   onEditDraft,
@@ -93,42 +154,60 @@ function Message({
   message: ThreadMessage;
   own: string[];
   expanded: boolean;
+  collapsible: boolean;
+  hideQuotes: boolean;
   onToggle: () => void;
   swipe: () => SwipeHandlers;
 }) {
+  const [details, setDetails] = useState(false);
+  const detailsId = `addresses-${message.id}`;
+  const showingDetails = expanded && details;
   const sender = personName(message.from);
   const to = recipientList(message.to, own);
   const cc = recipientList(message.cc, own);
   return (
     <article className={cn("ease-power3-out rounded-2xl transition-colors duration-150", expanded ? "bg-white/[0.025]" : "hover:bg-white/[0.025]")}>
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={expanded}
-        className="flex w-full cursor-pointer items-start gap-3 rounded-2xl px-4 py-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-      >
-        <Monogram name={sender} className="mt-0.5 size-7 rounded-full text-[11px]" />
-        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className="flex min-w-0 items-baseline gap-2">
-            <span className={cn("truncate text-[14px]", message.isRead ? "text-foreground" : "text-foreground font-medium")}>
-              {sender}
+      <div className="flex items-start">
+        <button
+          type="button"
+          onClick={expanded ? () => setDetails((open) => !open) : onToggle}
+          aria-expanded={expanded ? details : false}
+          aria-controls={showingDetails ? detailsId : undefined}
+          className="flex min-w-0 flex-1 cursor-pointer items-start gap-3 rounded-2xl px-4 py-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+        >
+          <Monogram name={sender} className="mt-0.5 size-7 rounded-full text-[11px]" />
+          <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+            <span className="flex min-w-0 items-baseline gap-2">
+              <span className={cn("truncate text-[14px]", message.isRead ? "text-foreground" : "text-foreground font-medium")}>
+                {sender}
+              </span>
+              {expanded && message.from && message.from.address !== sender && (
+                <span className="text-subtle hidden min-w-0 truncate text-[12px] sm:inline">{message.from.address}</span>
+              )}
+              {message.isDraft && message.folderRole === "drafts" && <span className="text-danger shrink-0 text-[12px]">Draft</span>}
+              <span className="text-subtle ml-auto shrink-0 text-[12px] tabular-nums">{mailFullWhen(message.at)}</span>
             </span>
-            {expanded && message.from && message.from.address !== sender && (
-              <span className="text-subtle hidden min-w-0 truncate text-[12px] sm:inline">{message.from.address}</span>
+            {expanded ? (
+              <span className="text-subtle flex min-w-0 items-center gap-1 text-[12px]">
+                <span className="truncate">
+                  {to ? `To ${to}` : "No recipients"}
+                  {cc ? ` · Cc ${cc}` : ""}
+                </span>
+                <ChevronDownIcon aria-hidden className={cn("ease-power3-out size-3 shrink-0 transition-transform duration-150", details && "rotate-180")} />
+                <span className="sr-only">{details ? "Hide addresses" : "Show addresses"}</span>
+              </span>
+            ) : (
+              <span className="text-subtle truncate text-[13px]">{snippetCore(message.snippet)}</span>
             )}
-            {message.isDraft && message.folderRole === "drafts" && <span className="text-danger shrink-0 text-[12px]">Draft</span>}
-            <span className="text-subtle ml-auto shrink-0 text-[12px] tabular-nums">{mailFullWhen(message.at)}</span>
           </span>
-          {expanded ? (
-            <span className="text-subtle truncate text-[12px]">
-              {to ? `To ${to}` : "No recipients"}
-              {cc ? ` · Cc ${cc}` : ""}
-            </span>
-          ) : (
-            <span className="text-subtle truncate text-[13px]">{message.snippet}</span>
-          )}
-        </span>
-      </button>
+        </button>
+        {expanded && collapsible && (
+          <Button variant="ghost" size="icon" aria-label="Collapse this email" title="Collapse" onClick={onToggle} className="mt-2 mr-2 shrink-0">
+            <ChevronDownIcon aria-hidden className="size-4 rotate-180" />
+          </Button>
+        )}
+      </div>
+      {showingDetails && <AddressDetails id={detailsId} message={message} />}
       {message.isDraft && message.folderRole === "drafts" && (
         <div className="-mt-1 flex flex-wrap items-center gap-2 px-4 pb-3 sm:pl-14">
           <span className="caption-style text-subtle mr-1">Draft made outside Orbit.</span>
@@ -142,7 +221,7 @@ function Message({
       )}
       {expanded && (
         <div className="flex flex-col gap-3 px-4 pb-4 sm:pl-14">
-          <MessageBody message={message} title={`Email from ${sender}`} swipe={swipe} />
+          <MessageBody message={message} title={`Email from ${sender}`} swipe={swipe} hideQuotes={hideQuotes} />
           {message.hasAttachments && <MessageAttachments messageId={message.id} />}
         </div>
       )}
@@ -249,6 +328,8 @@ function Thread({
             onEditDraft={onEditDraft}
             onDeleteDraft={onDeleteDraft}
             expanded={open.has(message.id)}
+            collapsible={detail.messages.length > 1}
+            hideQuotes={message.id !== detail.messages[0].id}
             onToggle={() =>
               setOpen((current) => {
                 const next = new Set(current);

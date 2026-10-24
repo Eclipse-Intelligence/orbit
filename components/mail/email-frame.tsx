@@ -2,7 +2,24 @@
 
 import { useEffect, useRef, useState } from "react";
 import { watchSwipe, type SwipeHandlers } from "@/components/mail/swipe";
+import Button from "@/components/_ui/button";
 import { cn } from "@/lib/utils";
+
+const QUOTE_SELECTORS = [
+  ".gmail_quote_container",
+  ".gmail_quote",
+  ".gmail_extra",
+  ".yahoo_quoted",
+  'blockquote[type="cite"]',
+  "#appendonsend ~ *",
+  '[id^="divRplyFwdMsg"]',
+  '[id^="divRplyFwdMsg"] ~ *',
+  "#mail-editor-reference-message-container",
+  "br:has(+ .gmail_quote)",
+  "br:has(+ .gmail_quote_container)",
+];
+
+const HIDE_QUOTES = "orbit-hide-quotes";
 
 const POLICY =
   "default-src 'none'; img-src https: http: data:; style-src 'unsafe-inline' https: http:; font-src https: http: data:; media-src https: data:";
@@ -18,6 +35,7 @@ img{max-width:100%;height:auto;}
 table{max-width:100%;}
 pre{white-space:pre-wrap;}
 blockquote{margin:0 0 0 .6em;padding-left:.8em;border-left:2px solid ${rich ? "#ddd" : "#3a3a3a"};}
+${QUOTE_SELECTORS.map((selector) => `html.${HIDE_QUOTES} ${selector}`).join(",")}{display:none !important;}
 ${theme}
 </style></head><body>${html}</body></html>`;
 }
@@ -27,14 +45,18 @@ export default function EmailFrame({
   rich,
   title,
   swipe,
+  hideQuotes = false,
 }: {
   html: string;
   rich: boolean;
   title: string;
   swipe?: () => SwipeHandlers;
+  hideQuotes?: boolean;
 }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState(rich ? 320 : 80);
+  const [quoted, setQuoted] = useState(false);
+  const [showQuotes, setShowQuotes] = useState(false);
 
   useEffect(() => {
     const element = frame.current;
@@ -47,6 +69,13 @@ export default function EmailFrame({
       setHeight(Math.max(24, Math.ceil(body.scrollHeight)));
     };
     const attach = () => {
+      const doc = element.contentDocument;
+      if (hideQuotes && doc?.body) {
+        doc.documentElement.classList.add(HIDE_QUOTES);
+        const found = Boolean(doc.querySelector(QUOTE_SELECTORS.join(","))) && Boolean(doc.body.innerText.trim());
+        if (!found) doc.documentElement.classList.remove(HIDE_QUOTES);
+        setQuoted(found);
+      }
       measure();
       unwatch?.();
       unwatch = swipe && element.contentDocument ? watchSwipe(element.contentDocument, swipe) : null;
@@ -64,17 +93,42 @@ export default function EmailFrame({
       observer?.disconnect();
       unwatch?.();
     };
-  }, [html, swipe]);
+  }, [html, swipe, hideQuotes]);
+
+  const toggleQuotes = () => {
+    const next = !showQuotes;
+    setShowQuotes(next);
+    frame.current?.contentDocument?.documentElement.classList.toggle(HIDE_QUOTES, !next);
+  };
 
   return (
-    <iframe
-      ref={frame}
-      title={title}
-      sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
-      referrerPolicy="no-referrer"
-      srcDoc={documentFor(html, rich)}
-      className={cn("block w-full border-0", rich && "rounded-xl bg-white")}
-      style={{ height }}
-    />
+    <>
+      <iframe
+        ref={frame}
+        title={title}
+        sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+        referrerPolicy="no-referrer"
+        srcDoc={documentFor(html, rich)}
+        className={cn("block w-full border-0", rich && "rounded-xl bg-white")}
+        style={{ height }}
+      />
+      {quoted && <QuoteToggle shown={showQuotes} onToggle={toggleQuotes} />}
+    </>
+  );
+}
+
+export function QuoteToggle({ shown, onToggle }: { shown: boolean; onToggle: () => void }) {
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      aria-expanded={shown}
+      aria-label={shown ? "Hide quoted text" : "Show quoted text"}
+      title={shown ? "Hide quoted text" : "Show quoted text"}
+      onClick={onToggle}
+      className="self-start px-2.5 tracking-[0.2em]"
+    >
+      •••
+    </Button>
   );
 }
