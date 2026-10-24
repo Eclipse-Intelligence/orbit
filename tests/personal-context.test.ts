@@ -130,6 +130,7 @@ describe("About you", () => {
     assert.deepEqual(result.sources, ["https://ridgeon.test/", "https://ridgeon.test/about", "https://www.linkedin.com/in/markridgeon"]);
     assert.deepEqual(result.notes, []);
     const llm = calls.find((call) => call.url.endsWith("/chat/completions"))!;
+    assert.equal(llm.body!.max_tokens, 6000);
     const messages = (llm.body!.messages as { role: string; content: string }[]).map((message) => message.content).join("\n");
     assert.match(messages, /repeated prompt tests, not one-off screenshots/);
     assert.match(messages, /One run of a prompt tells you nothing/);
