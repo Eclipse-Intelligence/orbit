@@ -18,7 +18,7 @@ const MAX_ROUNDS = 24;
 const COMPANION_POLL_MS = 1_000;
 const COMPANION_CLAIM_MS = 20_000;
 const TITLE_MAX = 80;
-const MESSAGE_MAX = 20_000;
+export const MESSAGE_MAX = 200_000;
 
 export type ActionStatus = "pending" | "running" | "done" | "failed" | "declined";
 
@@ -482,7 +482,11 @@ export async function sendMessage(
 ) {
   const message = input.message.trim();
   if (!message) throw new AssistantError("Type a message first.");
-  if (message.length > MESSAGE_MAX) throw new AssistantError("That message is too long.");
+  if (message.length > MESSAGE_MAX) {
+    throw new AssistantError(
+      `That message is ${message.length.toLocaleString("en-GB")} characters. The limit is ${MESSAGE_MAX.toLocaleString("en-GB")}. Cut ${(message.length - MESSAGE_MAX).toLocaleString("en-GB")} characters and send it again.`,
+    );
+  }
   const settings = settingsFor(input.model, input.reasoning);
   const conversation = await openConversation(actor, {
     conversationId: input.conversationId,
