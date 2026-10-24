@@ -37,6 +37,12 @@ export function recipientList(addresses: MailAddress[], own: string[]) {
   return addresses.map((address) => (mine.has(address.address.toLowerCase()) ? "me" : personName(address))).join(", ");
 }
 
+export function snippetCore(snippet: string | null) {
+  if (!snippet) return "";
+  const cut = snippet.search(/\s(?:_{8,}|-{5,}\s*Original Message|On \S[^]{2,200}? wrote:)/);
+  return (cut > 0 ? snippet.slice(0, cut) : snippet).trim();
+}
+
 export function stripQuoted(text: string) {
   const cut = text.search(/^(On .{3,200}wrote:|From: .+|-{3,}\s*Original Message\s*-{3,}|_{20,})\s*$/m);
   return (cut > 0 ? text.slice(0, cut) : text).replace(/\n{3,}/g, "\n\n").trim();

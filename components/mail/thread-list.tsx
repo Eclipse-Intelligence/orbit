@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { tagBase } from "@/components/beautifui/record-marks";
-import { mailListWhen, personName, recipientList } from "@/lib/mail/format";
+import { mailListWhen, personName, recipientList, snippetCore } from "@/lib/mail/format";
 import { laterDetail } from "@/lib/mail/later";
 import type { ThreadSummary } from "@/lib/mail/view";
 import { resisted, swipeCommit } from "@/components/mail/swipe";
@@ -259,7 +259,7 @@ function Row({
           <span className={cn("max-w-[70%] shrink-0 truncate", thread.unread ? "text-foreground" : "text-soft")}>
             {thread.subject?.trim() || "(no subject)"}
           </span>
-          <span className="text-subtle min-w-0 truncate">{thread.snippet}</span>
+          <span className="text-subtle min-w-0 truncate">{snippetCore(thread.snippet)}</span>
         </span>
         <span className="sr-only">
           {[thread.unread && "Unread", thread.flagged && "Flagged", showAccount && thread.account].filter(Boolean).join(", ")}
