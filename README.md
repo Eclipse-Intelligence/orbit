@@ -69,7 +69,7 @@ Removing someone moves their companies, contacts, deals and tasks to whoever rem
 
 | Page | Path | What it holds |
 | --- | --- | --- |
-| General | `/settings/general` | Your account, My email addresses, and the meeting link for invites |
+| General | `/settings/general` | Your account, About you, My email addresses, and the meeting link for invites |
 | Team | `/settings/team` | Who is in the workspace, their roles, invites (below) |
 | Templates and signatures | `/settings/email-templates` | Reusable emails (below) and a signature per sending address |
 | Calendars | `/settings/calendars` | Calendar accounts and links, Show and Use for CRM, Add mail for extra Microsoft accounts |
@@ -481,6 +481,10 @@ The Quiet page (`/quiet`, `G` then `Q`) lists up to 100 companies with no intera
 Every CRM page has an "Ask Orbit anything" bar at the bottom. Click it or press `O` to open the assistant; `Esc` minimises it. It answers from Orbit's data using tools, and proposes changes for you to approve. It works as you, with your role's permissions and the same row-level security as the app.
 
 Set `LLM_API_KEY` to turn it on. Without it, every request returns "Set LLM_API_KEY in Vercel to use the assistant.", including for ChatGPT and Claude account models.
+
+### About you
+
+Settings › General, About you tells the assistant who it's helping: your role, a few lines about you, what you care about (your interests and the views you hold) and how you write. Your role is shown to everyone in the workspace, so each person's assistant knows who does what; everything else is private to you (`crm.personal_context`, readable and writable only by its owner). Add your LinkedIn profile and website and press Draft from my LinkedIn and website: Orbit reads the site and its About page, your LinkedIn profile and recent posts (through Mindcase, recorded in data usage) and drafts the fields for you to check. Nothing is saved until you save. The assistant gets it at the start of every conversation, with your colleagues' names and roles, and Mail's Write with AI, prepared replies and follow-up nudges use your role, about and writing notes when drafting for you. With nothing filled in, the assistant may suggest it once.
 
 ### Models
 

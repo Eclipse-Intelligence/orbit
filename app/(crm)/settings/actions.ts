@@ -20,6 +20,7 @@ import { CrmError } from "@/lib/crm/errors";
 import { removeGranolaKey, saveGranolaKey } from "@/lib/crm/granola";
 import { saveMeetingLink } from "@/lib/crm/invites";
 import { savePipelineStages, type StageDraft } from "@/lib/crm/pipeline";
+import { draftPersonalContext, savePersonalContext, type PersonalContext, type PersonalDraft } from "@/lib/crm/personal-context";
 import { saveOtherEmails, type MyEmails } from "@/lib/crm/profile";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import type { PipelineStage } from "@/lib/crm/types";
@@ -81,6 +82,28 @@ export async function saveOtherEmailsAction(
     return { emails: saved };
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Could not save your email addresses." };
+  }
+}
+
+export async function saveAboutYouAction(input: unknown): Promise<{ error?: string; field?: string; saved?: PersonalContext }> {
+  const user = await requireUser();
+  try {
+    const saved = await savePersonalContext(user, input);
+    revalidatePath(SETTINGS_ROOT, "layout");
+    return { saved };
+  } catch (error) {
+    if (error instanceof CrmError) return { error: error.message, field: typeof error.details?.field === "string" ? error.details.field : undefined };
+    return { error: "Could not save About you." };
+  }
+}
+
+export async function draftAboutYouAction(input: { linkedinUrl: string; websiteUrl: string }): Promise<{ error?: string; field?: string; draft?: PersonalDraft }> {
+  const user = await requireUser();
+  try {
+    return { draft: await draftPersonalContext(user, input, { deadline: Date.now() + 100_000 }) };
+  } catch (error) {
+    if (error instanceof CrmError) return { error: error.message, field: typeof error.details?.field === "string" ? error.details.field : undefined };
+    return { error: "Could not draft About you. Try again, or fill it in yourself." };
   }
 }
 

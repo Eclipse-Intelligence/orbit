@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import AboutYouSettings from "@/components/crm/about-you-settings";
 import AccountSettings from "@/components/crm/account-settings";
 import MeetingLinkSettings from "@/components/crm/meeting-link-settings";
 import MyEmailsSettings from "@/components/crm/my-emails-settings";
@@ -9,22 +10,25 @@ import SettingsHashRedirect from "@/components/crm/settings-hash-redirect";
 import { SettingsPage } from "@/components/crm/settings-ui";
 import { getUserActor } from "@/lib/auth/user";
 import { getMeetingLink } from "@/lib/crm/invites";
+import { getPersonalContext } from "@/lib/crm/personal-context";
 import { getMyEmails } from "@/lib/crm/profile";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 120;
 
 export default async function GeneralSettingsPage() {
   const user = await getUserActor();
   if (!user) redirect("/login");
-  const [myEmails, meetingLink, notifications] = await Promise.all([
+  const [myEmails, meetingLink, notifications, about] = await Promise.all([
     getMyEmails(user),
     getMeetingLink(user),
     notificationSettings(user),
+    getPersonalContext(user),
   ]);
   return (
     <SettingsPage
       title="General"
-      description="Your account, the addresses Orbit treats as you, notifications, your meeting link and keyboard shortcuts."
+      description="Your account, what the assistant knows about you, the addresses Orbit treats as you, notifications, your meeting link and keyboard shortcuts."
     >
       <SettingsHashRedirect />
       <AccountSettings
@@ -32,6 +36,16 @@ export default async function GeneralSettingsPage() {
         email={user.email}
         role={user.role}
         workspaceName={user.workspaceName}
+      />
+      <AboutYouSettings
+        initial={{
+          jobTitle: about.jobTitle,
+          about: about.about,
+          interests: about.interests,
+          writing: about.writing,
+          linkedinUrl: about.linkedinUrl,
+          websiteUrl: about.websiteUrl,
+        }}
       />
       <MyEmailsSettings emails={myEmails} />
       <NotificationSettings

@@ -6,6 +6,7 @@ import type { CompanionResult, Effort } from "@/companion/src/protocol";
 import { cancelCompanionJob, enqueueCompanionJob, readCompanionJob } from "@/lib/companion/jobs";
 import { companionOfflineMessage, companionOnline } from "@/lib/companion/pairing";
 import { userLinks } from "@/lib/assistant/links";
+import { aboutYouSection, getColleagues, getPersonalContext } from "@/lib/crm/personal-context";
 import { buildPrompt } from "@/lib/companion/transcript";
 import { expandMentions, plainMentions } from "@/lib/mentions";
 import { withActor } from "@/lib/crm/context";
@@ -355,6 +356,15 @@ export async function applyCompanionResult(actor: UserActor, conversationId: str
   return ids;
 }
 
+async function promptFor(actor: UserActor, conversation: ConversationRow) {
+  const [links, about, colleagues] = await Promise.all([
+    userLinks(actor).catch(() => null),
+    getPersonalContext(actor).catch(() => null),
+    getColleagues(actor).catch(() => []),
+  ]);
+  return systemPrompt(actor, { webSearch: conversation.web_search, links, about: aboutYouSection(about, colleagues) });
+}
+
 async function runCompanionTurn(actor: UserActor, conversation: ConversationRow, apiModel: string, emit: Emit, deadline: number) {
   if (!(await companionOnline(actor))) throw new AssistantError(await companionOfflineMessage(actor));
   const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
@@ -362,7 +372,7 @@ async function runCompanionTurn(actor: UserActor, conversation: ConversationRow,
     model: apiModel,
     effort: conversation.reasoning as Effort,
     webSearch: conversation.web_search,
-    system: systemPrompt(actor, { webSearch: conversation.web_search, links: await userLinks(actor).catch(() => null) }),
+    system: await promptFor(actor, conversation),
     prompt: buildPrompt(history(rows)),
     tools: companionTools(),
   });
@@ -401,6 +411,7 @@ async function runLoop(
 ) {
   const chosen = assistantModel(conversation.model);
   if (chosen?.source === "claude") return runCompanionTurn(actor, conversation, chosen.apiModel, emit, deadline);
+  const system = await promptFor(actor, conversation);
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
     const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
     const remaining = deadline - Date.now();
@@ -416,7 +427,7 @@ async function runLoop(
       model: conversation.model,
       reasoning: conversation.reasoning,
       webSearch: conversation.web_search,
-      messages: [{ role: "system", content: systemPrompt(actor, { webSearch: conversation.web_search, links: await userLinks(actor).catch(() => null) }) }, ...history(rows)],
+      messages: [{ role: "system", content: system }, ...history(rows)],
       timeoutMs: Math.min(240_000, remaining - 5_000),
       fetchImpl,
       actor,

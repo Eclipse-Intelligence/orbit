@@ -1,4 +1,5 @@
 import { WRITING_STYLE } from "@/lib/writing-style";
+import { aboutWriterNote, getPersonalContext } from "@/lib/crm/personal-context";
 import { z } from "zod";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
@@ -251,6 +252,7 @@ export async function draftWithAi(
       context.thread ? `The conversation so far:\n${context.thread}` : "",
       attachments.length ? `Text read from the attachments in the conversation:\n\n${attachments.join("\n\n---\n\n")}` : "",
       context.voice.length ? `Examples of how ${first} writes:\n${context.voice.map((sample) => `"""\n${sample}\n"""`).join("\n")}` : "",
+      aboutWriterNote(await getPersonalContext(actor).catch(() => null), first),
     ]
       .filter(Boolean)
       .join("\n\n"),
