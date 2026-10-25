@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { bodyCore, checkColdEmail, figuresIn, lintColdEmail } from "@/lib/assistant/cold-email";
+import { bodyCore, checkColdEmail, COLD_EMAIL_PLAYBOOK, figuresIn, lintColdEmail } from "@/lib/assistant/cold-email";
 import { systemPrompt } from "@/lib/assistant/prompt";
 import { runTool, toolDefinitions } from "@/lib/assistant/tools";
 import type { UserActor } from "@/lib/crm/types";
@@ -42,7 +42,7 @@ describe("cold email rule checks", () => {
     assert.deepEqual(failed(lintColdEmail({ ...STRONG, evidence: EVIDENCE })), []);
     const weak = lintColdEmail({ ...WEAK, evidence: EVIDENCE });
     assert.deepEqual(failed(weak), ["gives_first"]);
-    assert.match(weak.find((check) => check.id === "gives_first")!.note, /Offers to send something instead of including it/);
+    assert.match(weak.find((check) => check.id === "gives_first")!.note, /Offers to send something general instead of including it/);
   });
 
   it("flags an email that describes the prospect's own business back to them", () => {
@@ -61,6 +61,37 @@ describe("cold email rule checks", () => {
       evidence: EVIDENCE,
     });
     for (const id of ["subject", "one_cta", "gives_first", "numbers_sourced", "no_meeting", "no_filler", "no_colons", "no_piece"]) assert.ok(failed(pushy).includes(id), id);
+  });
+});
+
+describe("cold email triggers, subjects and tailored offers", () => {
+  const base = {
+    body: `Hi Sam,\n\nSaw you're hiring a head of content. Teams that scale content quickly often can't tell whether it shows up in AI answers. A brand named in 6 of 20 runs scores 30%, but the plausible range is roughly 15% to 52%.\n\n${ARTICLE}\n\nWant me to send the five prompts where your brand doesn't appear?\n\nMark`,
+    evidence: [...EVIDENCE, { fact: "Pulse is hiring a Head of Content.", source: "market note, 20 Oct" }],
+  };
+
+  it("accepts a trigger hook, a hedged problem line and an offer of analysis made for them", () => {
+    assert.deepEqual(failed(lintColdEmail({ ...base, subject: "scaling content and AI answers" })), []);
+    const general = lintColdEmail({ ...base, subject: "scaling content", body: base.body.replace("Want me to send the five prompts where your brand doesn't appear?", "Shall I send you the full article?") });
+    assert.deepEqual(failed(general), ["gives_first"]);
+  });
+
+  it("flags subjects with numbers, hype, title case or filler", () => {
+    const subjectOf = (subject: string) => lintColdEmail({ ...base, subject }).find((check) => check.id === "subject")!;
+    assert.equal(subjectOf("runs behind AI visibility scores").pass, true);
+    assert.equal(subjectOf("Pulse and Profound compared").pass, true);
+    assert.match(subjectOf("Boost Your AI Visibility Today").note, /hype \("Boost"\), Title Case/);
+    assert.match(subjectOf("3 ideas for Pulse").note, /a number/);
+    assert.match(subjectOf("hi").note, /1 words/);
+    assert.ok(failed(lintColdEmail({ ...base, subject: "quick question" })).includes("no_filler"));
+  });
+
+  it("tells the assistant to look for triggers and when it may offer tailored analysis", () => {
+    assert.match(COLD_EMAIL_PLAYBOOK, /Triggers: something the company did recently/);
+    assert.match(COLD_EMAIL_PLAYBOOK, /market notes Orbit collects nightly/);
+    assert.match(COLD_EMAIL_PLAYBOOK, /Want me to send the five prompts where you don't appear\?/);
+    assert.match(COLD_EMAIL_PLAYBOOK, /we've helped teams like yours/);
+    assert.match(systemPrompt(actor, { webSearch: false }), /hooks on a recent trigger/);
   });
 });
 
@@ -95,7 +126,7 @@ describe("cold email value grading", () => {
     };
     const result = await checkColdEmail({ ...WEAK, evidence: EVIDENCE, theirOffer: OFFER }, { fetchImpl });
     assert.equal(sent[0].state.prospect_company_already_offers, OFFER);
-    assert.deepEqual(Object.keys((sent[0].questions.cta_kind.criteria as Record<string, string>)).slice(0, 2), ["question_about_their_work", "useful_offer"]);
+    assert.deepEqual(Object.keys((sent[0].questions.cta_kind.criteria as Record<string, string>)).slice(0, 3), ["question_about_their_work", "tailored_offer", "useful_offer"]);
     assert.equal(result.graded, "Rule checks and Jev grading.");
     assert.deepEqual(
       result.checks.filter((check) => !check.pass).map((check) => check.id),
