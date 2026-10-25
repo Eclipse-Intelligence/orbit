@@ -17,6 +17,7 @@ import BarChartIcon from "@/public/assets/images/companies/sidebar/bar-chart.svg
 import CalendarIcon from "@/public/assets/images/companies/sidebar/calendar.svg";
 import CodeIcon from "@/public/assets/images/settings/code.svg";
 import FileTextIcon from "@/public/assets/images/settings/file-text.svg";
+import LightbulbIcon from "@/public/assets/images/settings/lightbulb.svg";
 import LinkIcon from "@/public/assets/images/settings/link.svg";
 import PlugIcon from "@/public/assets/images/settings/plug.svg";
 import SlidersIcon from "@/public/assets/images/settings/sliders.svg";
@@ -32,6 +33,7 @@ type NavItem = {
 const NAV: NavItem[] = [
   { href: SETTINGS_PATHS.general, label: "General", icon: SlidersIcon },
   { href: SETTINGS_PATHS.team, label: "Team", icon: UsersIcon },
+  { href: SETTINGS_PATHS.learning, label: "Learning", icon: LightbulbIcon },
   {
     href: SETTINGS_PATHS.emailTemplates,
     label: "Templates and signatures",

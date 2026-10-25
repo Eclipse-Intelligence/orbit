@@ -169,7 +169,7 @@ async function attempt<T>(
 
 export async function completeJson<T>(request: LlmJsonRequest<T>): Promise<LlmJsonResult<T>> {
   const apiKey = process.env.LLM_API_KEY?.trim();
-  if (!apiKey) throw new LlmError("Set LLM_API_KEY to summarise calls.");
+  if (!apiKey) throw new LlmError("Set LLM_API_KEY in Vercel to use Orbit's AI.");
   const model = request.model?.trim() || llmModel();
   let last: unknown;
   for (let index = 0; index < MAX_ATTEMPTS; index += 1) {

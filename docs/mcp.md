@@ -55,6 +55,8 @@ That reads `CRM_AGENT_TOKEN` from the environment or `.env.local` and speaks MCP
 
 ## Tools
 
+A token with only the `market:write` scope (the Grok Bot token from Settings › Learning) sees just two tools: `get_watchlist`, which returns the topics, competitors, people, target accounts and sources to research, and `add_market_notes`, which takes `notes` (1 to 50, each `{kind, headline, summary?, url?, about?, publishedAt?}` with kind `news`, `post`, `launch`, `hire`, `funding`, `signal`, `research` or `other`) and returns `{added, duplicates, rejected}`. Other tokens see both alongside the CRM tools; an agent needs `market:write` (or `admin`) to add notes.
+
 `search_companies`: `query`, `lifecycle` (built in or custom), `owner_id`, `tag`, `limit`.
 
 `get_company`: `id`.

@@ -70,6 +70,7 @@ Removing someone moves their companies, contacts, deals and tasks to whoever rem
 | Page | Path | What it holds |
 | --- | --- | --- |
 | General | `/settings/general` | Your account, About you, My email addresses, and the meeting link for invites |
+| Learning | `/settings/learning` | What the assistant has learned, the market watchlist, market notes received and the Grok Bot connection |
 | Team | `/settings/team` | Who is in the workspace, their roles, invites (below) |
 | Templates and signatures | `/settings/email-templates` | Reusable emails (below) and a signature per sending address |
 | Calendars | `/settings/calendars` | Calendar accounts and links, Show and Use for CRM, Add mail for extra Microsoft accounts |
@@ -355,6 +356,7 @@ Mail needs two more jobs, made the same way with their own name, schedule and pa
 | --- | --- | --- | --- |
 | `orbit-mail` | `*/5 * * * *` (every five minutes) | `/api/cron/mail` | Syncs every connected mailbox into the Mail mirror (backfill included, up to four minutes a run), then for each user sends due mail and prepares replies and reminders (`prepareMail`). |
 | `orbit-mail-due` | `* * * * *` (every minute) | `/api/cron/mail-due` | Sends scheduled emails, brings snoozed conversations back, raises No reply reminders and sends meeting reminders. |
+| `orbit-learn` | `*/10 1-5 * * *` (every ten minutes, 1am to 6am UTC) | `/api/cron/learn` | Nightly learning (see Learning). Each part runs once a day, so the extra runs only pick up what an earlier run didn't finish. |
 
 ## Contact enrichment
 
@@ -549,6 +551,19 @@ The globe button (Web) turns web search on for the chat, and the setting is save
 Type `@` in the message box to tag a person, company, task or opportunity. Before you type a name, the list shows four recently updated people and three companies. As you type, it searches up to five people, four companies, three tasks and three opportunities: names that start with what you typed come first, then names with a word starting with it, then names that contain it.
 
 A tagged record is stored in the message as `@[Name](kind:uuid)`, where kind is `contact`, `company`, `task` or `opportunity`. The model sees it as `Name [person id <uuid>]` (`company`, `task` or `opportunity` for the others) and uses the id directly instead of searching. In the chat, tags show as chips that link to the record.
+
+### Learning
+
+Orbit learns every night so the assistant doesn't start from scratch. Settings › Learning shows everything it has learned, with sources, and lets you pin, edit, add or forget any note.
+
+- **About you** (private to each person, `crm.memories` with `scope = 'personal'`): preferences, corrections, standing instructions, people and goals, learned from your assistant conversations, the actions you approve or decline, and how you edit prepared replies.
+- **The business** (shared): ICP and audience, buying triggers, objections and the answers that worked, competitors, pricing reactions, messaging that gets replies, and win and loss patterns, learned from deal stage changes, won and lost deals, call summaries, the tone of emails received and logged notes and meetings. It never reads anyone's private mail mirror.
+- **The market** (shared): themes, competitor moves, launches, funding and buying signals on accounts, learned from market notes. Market notes not touched for 60 days are retired unless pinned.
+- **Morning brief** (per person, `crm.daily_briefs`): written after the shared learning, shown at the top of Capture and given to the assistant, with what changed in the market, accounts to act on and what Orbit learned.
+
+`/api/cron/learn` (the `orbit-learn` job) runs each part once a day per workspace and member. Every model call treats the material as untrusted and returns additions, updates and retirements; learning never rewrites or retires notes you pinned or wrote. Owners and admins can press Learn now to run all four parts straight away; members run their own and their brief. The assistant gets a briefing of the most relevant notes and this morning's brief in every conversation, and has `recall`, `get_daily_brief`, `remember`, `forget`, `list_watchlist` and `update_watchlist`.
+
+**Grok Bot.** The watchlist (topics, competitors, people, target accounts and sources) tells Grok Bot what to research. An owner or admin creates its token in Settings › Learning; the token has only the `market:write` scope, and the MCP server then offers it just `get_watchlist` and `add_market_notes` (up to 50 notes a call; a link Orbit already has is skipped). Add it in Grok Bot under Settings, Plugins as a custom MCP server pointing at `/api/mcp` with `Authorization: Bearer <token>`, and create a nightly routine with the instructions shown on the page. Replacing the token revokes the old one.
 
 ### Chats and privacy
 

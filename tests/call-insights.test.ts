@@ -288,7 +288,7 @@ describe("call insights", () => {
     });
     assert.equal(unused.requests.length, 0);
     assert.equal(missing.status, "failed");
-    assert.equal(missing.error, "Set LLM_API_KEY to summarise calls.");
+    assert.equal(missing.error, "Set LLM_API_KEY in Vercel to use Orbit's AI.");
   });
 
   it("accepts a suggested action as a task exactly once", async () => {

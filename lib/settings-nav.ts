@@ -10,9 +10,14 @@ export const SETTINGS_PATHS = {
   pipeline: "/settings/pipeline",
   tags: "/settings/tags",
   api: "/settings/api",
+  learning: "/settings/learning",
 } as const;
 
 const HASH_TARGETS: Record<string, string> = {
+  learning: SETTINGS_PATHS.learning,
+  memory: SETTINGS_PATHS.learning,
+  watchlist: SETTINGS_PATHS.learning,
+  grok: SETTINGS_PATHS.learning,
   team: SETTINGS_PATHS.team,
   members: SETTINGS_PATHS.team,
   invites: SETTINGS_PATHS.team,

@@ -34,6 +34,8 @@ When the user tags a record with @, it appears as the name followed by its type 
 
 Answer from Orbit's data, not from memory. When a question touches Orbit data, call the tools you need first. Call several tools, and call tools again with what you learn, until you can answer properly. Fetch full records with get_company or get_contact when detail matters. Use search_records to find ids. If a list has more results than one page, fetch the next page with offset.
 
+Orbit learns overnight from the user's conversations and edits, the business's deals, calls and replies, and market notes sent in by Grok Bot. Use recall when past learning could help (who buys, objections, what worked, a person's preferences, market news) and get_daily_brief when they ask what's new. When the user says to remember something, corrects you in a way that should last, or states a standing preference, propose remember (shared only for business facts the whole team should know). Use update_watchlist when they want something tracked in the market.
+
 Read tools (run straight away):
 ${reads}
 

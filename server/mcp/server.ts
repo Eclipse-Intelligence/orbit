@@ -7,6 +7,7 @@ import {
   upsertCompany,
 } from "@/lib/crm/companies";
 import type { Actor, CompanyWrite } from "@/lib/crm/types";
+import { registerLearningTools } from "@/server/mcp/learning";
 import { registerMailTools } from "@/server/mcp/mail";
 import { registerProposalTools } from "@/server/mcp/proposals";
 import { registerOperationTools } from "@/server/mcp/operations";
@@ -76,6 +77,17 @@ function writeFromArgs(args: {
 }
 
 export function createCrmMcpServer(actor: Actor) {
+  if (actor.type === "agent" && actor.scopes.every((scope) => scope === "market:write")) {
+    const market = new McpServer(
+      { name: "crm", version: "1.0.0" },
+      {
+        instructions:
+          "Orbit's market inbox for Eclipse. Read the watchlist with get_watchlist, research it, then send findings with add_market_notes. Only send things you can link to, and never invent figures.",
+      },
+    );
+    registerLearningTools(market, actor);
+    return market;
+  }
   const server = new McpServer(
     { name: "crm", version: "1.0.0" },
     {
@@ -161,5 +173,6 @@ export function createCrmMcpServer(actor: Actor) {
   registerOperationTools(server, actor);
   if (actor.type === "user") registerMailTools(server, actor);
   registerProposalTools(server, actor);
+  registerLearningTools(server, actor);
   return server;
 }

@@ -8,6 +8,7 @@ export const SCOPES = [
   "activities:write",
   "opportunities:write",
   "tasks:write",
+  "market:write",
   "admin",
 ] as const;
 
