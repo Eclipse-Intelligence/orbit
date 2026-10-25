@@ -10,6 +10,7 @@ import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { resetLinearCache } from "@/lib/linear";
 import { nextScheduleRun, safeDefinition, type WorkflowDefinition } from "@/lib/workflows/definition";
+import { automatedNote, workflowEmailBody } from "@/lib/workflows/engine";
 import { runWorkflowTick } from "@/lib/workflows/engine";
 import {
   approvalEmail,
@@ -215,6 +216,18 @@ describe("workflows", () => {
     ]);
     const { steps } = await getRunSteps(owner, unset.runId);
     assert.match(JSON.stringify(steps.at(-1)!.output), /isn't urgent, high, medium or low, so the issue has no priority/);
+  });
+
+  it("adds a line saying an email was sent automatically when the step asks for it", () => {
+    const actor = { workspaceName: "Eclipse", fullName: "Mark Ridgeon", email: "mark@eclipse.test" };
+    const vars = { contact: { firstName: "Sam" } };
+    assert.equal(workflowEmailBody({ body: "Hi {{contact.firstName}},\n\nLogged.\n\nEclipse Assistant" }, vars, actor), "Hi Sam,\n\nLogged.\n\nEclipse Assistant");
+    assert.equal(
+      workflowEmailBody({ body: "Hi {{contact.firstName}},\n\nLogged.", automated: true }, vars, actor),
+      "Hi Sam,\n\nLogged.\n\nThis reply was written and sent by Eclipse's automated assistant on Mark's behalf. Reply to this email if you'd like to reach Mark directly.",
+    );
+    assert.match(automatedNote({ workspaceName: "My workspace", fullName: null, email: "sam@x.test" }), /^This reply was written and sent by an automated assistant on sam@x\.test's behalf/);
+    assert.equal(workflowEmailBody({ body: "", automated: true }, vars, actor), "");
   });
 
   it("links an approval back to the email that started it", () => {

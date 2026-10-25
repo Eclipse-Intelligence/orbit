@@ -846,10 +846,10 @@ async function runStepAction(ctx: Ctx, step: Step): Promise<StepResult> {
     case "send_email": {
       const contactId = requireRecord(ctx, "contact");
       const subject = render(config.subject, ctx.vars).replace(/\s+/g, " ").trim();
-      const body = render(config.body, ctx.vars).trim();
+      const body = workflowEmailBody(config, ctx.vars, ctx.actor);
       if (!subject || !body) throw new CrmError("invalid_input", "The email needs a subject and a body.", 400);
       const sent = await sendContactEmail(ctx.actor, contactId, { subject, body }, ctx.fetchImpl);
-      return { kind: "next", output: { subject, warning: sent.warning } };
+      return { kind: "next", output: { subject, warning: sent.warning, automated: config.automated === true } };
     }
     case "find_records": {
       const records = await findRecords(ctx.actor, ctx.run.workflow_id, readFindConfig(config, ctx.actor.userId), { mark: !ctx.run.test });
@@ -909,6 +909,18 @@ async function runStepAction(ctx: Ctx, step: Step): Promise<StepResult> {
     default:
       throw new CrmError("invalid_input", "This step type isn't supported.", 400);
   }
+}
+
+export function automatedNote(actor: Pick<UserActor, "workspaceName" | "fullName" | "email">) {
+  const sender = (actor.fullName || actor.email).split(/\s+/)[0] || "them";
+  const assistant = actor.workspaceName && actor.workspaceName !== "My workspace" ? `${actor.workspaceName}'s automated assistant` : "an automated assistant";
+  return `This reply was written and sent by ${assistant} on ${sender}'s behalf. Reply to this email if you'd like to reach ${sender} directly.`;
+}
+
+export function workflowEmailBody(config: Record<string, unknown>, vars: Vars, actor: Pick<UserActor, "workspaceName" | "fullName" | "email">) {
+  const body = render(config.body, vars).trim();
+  if (!body || config.automated !== true) return body;
+  return `${body}\n\n${automatedNote(actor)}`;
 }
 
 export async function notify(
