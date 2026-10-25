@@ -72,6 +72,7 @@ export type Approval = {
   details: string;
   companyId: string | null;
   companyName: string | null;
+  email: { subject: string; href: string } | null;
   createdAt: string;
 };
 
@@ -445,6 +446,20 @@ export async function getRunSteps(actor: UserActor, runId: string): Promise<{ ru
   });
 }
 
+export function approvalEmail(state: RunState | null | undefined) {
+  const email = (state?.vars as { email?: { subject?: unknown; url?: unknown } } | undefined)?.email;
+  if (!email || typeof email.url !== "string" || !email.url) return null;
+  let href = email.url;
+  try {
+    const parsed = new URL(email.url, "http://orbit.local");
+    href = `${parsed.pathname}${parsed.search}`;
+  } catch {
+    return null;
+  }
+  if (!href.startsWith("/mail")) return null;
+  return { subject: typeof email.subject === "string" && email.subject.trim() ? email.subject.trim() : "the email", href };
+}
+
 export async function listApprovals(actor: UserActor): Promise<Approval[]> {
   return withActor(actor, async (db) => {
     const result = await db.query<{
@@ -472,6 +487,7 @@ export async function listApprovals(actor: UserActor): Promise<Approval[]> {
       details: row.state.approval?.details ?? "",
       companyId: row.company_id,
       companyName: row.company_name,
+      email: approvalEmail(row.state),
       createdAt: iso(row.updated_at) ?? "",
     }));
   });
