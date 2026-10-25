@@ -1,7 +1,7 @@
 import { AssistantError, complete, type ChatMessage, type ProviderState, type Source, type ToolCall } from "@/lib/assistant/gateway";
 import { assistantModel, settingsFor, type ReasoningLevel } from "@/lib/assistant/models";
 import { systemPrompt } from "@/lib/assistant/prompt";
-import { ASSISTANT_TOOLS, TOOL_BY_NAME, describeAction, recordNames, runTool, toolJson } from "@/lib/assistant/tools";
+import { ACTION_ALTERNATIVES, ASSISTANT_TOOLS, TOOL_BY_NAME, actionAlternative, describeAction, recordNames, runTool, toolJson } from "@/lib/assistant/tools";
 import type { CompanionResult, Effort } from "@/companion/src/protocol";
 import { cancelCompanionJob, enqueueCompanionJob, readCompanionJob } from "@/lib/companion/jobs";
 import { companionOfflineMessage, companionOnline } from "@/lib/companion/pairing";
@@ -32,6 +32,8 @@ export type AssistantAction = {
   lines: string[];
   status: ActionStatus;
   result?: string | null;
+  alternative?: { key: "send"; label: string };
+  chose?: "send";
 };
 
 export type ConversationSummary = {
@@ -351,6 +353,7 @@ export async function applyCompanionResult(actor: UserActor, conversationId: str
       id: call.id,
       name: call.function.name,
       ...describeAction(call.function.name, parseArgs(call.function.arguments), names),
+      ...(actionAlternative(call.function.name) ? { alternative: actionAlternative(call.function.name) } : {}),
       status: "pending",
     }));
     await saveActions(actor, last.id, actions);
@@ -485,6 +488,7 @@ async function runLoop(
         id: call.id,
         name: call.function.name,
         ...describeAction(call.function.name, parseArgs(call.function.arguments), names),
+        ...(actionAlternative(call.function.name) ? { alternative: actionAlternative(call.function.name) } : {}),
         status: "pending",
       }));
       await saveActions(actor, saved.id, actions);
@@ -529,7 +533,7 @@ export async function sendMessage(
   emit({ type: "done" });
 }
 
-export type ActionDecision = { id: string; approve: boolean };
+export type ActionDecision = { id: string; approve: boolean; variant?: "send" };
 
 export async function decideActions(
   actor: UserActor,
@@ -543,6 +547,7 @@ export async function decideActions(
   }));
   emit({ type: "conversation", conversation: summary(conversation) });
   const decisions = new Map(input.decisions.map((decision) => [decision.id, decision.approve]));
+  const variants = new Map(input.decisions.map((decision) => [decision.id, decision.variant]));
   const owner = rows.find((row) => (row.actions ?? []).some((action) => decisions.has(action.id)));
   if (!owner || decisions.size === 0) throw new AssistantError("That action is no longer available.");
   const chosen = (owner.actions ?? []).filter((action) => decisions.has(action.id));
@@ -566,16 +571,26 @@ export async function decideActions(
       await update(action.id, { status: "declined" });
       continue;
     }
+    const alternative = variants.get(action.id) ? ACTION_ALTERNATIVES[action.name] : undefined;
+    const chosenAlternative = alternative && alternative.key === variants.get(action.id) ? alternative : undefined;
     await update(action.id, { status: "running" });
-    const output = (await runTool(actor, call.function.name, parseArgs(call.function.arguments))) as Record<string, unknown> | null;
+    const output = (await runTool(actor, chosenAlternative?.tool ?? call.function.name, parseArgs(call.function.arguments))) as Record<string, unknown> | null;
     const failed = Boolean(output && typeof output === "object" && "error" in output);
     await insertMessage(actor, conversation.id, {
       role: "tool",
-      content: toolJson(output),
+      content: toolJson(
+        chosenAlternative && output && typeof output === "object"
+          ? { ...output, note: `The user chose ${chosenAlternative.label}, so this ran ${chosenAlternative.tool} instead of ${action.name}.` }
+          : output,
+      ),
       toolCallId: action.id,
       toolName: action.name,
     });
-    await update(action.id, { status: failed ? "failed" : "done", result: failed ? String((output as { error: unknown }).error) : null });
+    await update(action.id, {
+      status: failed ? "failed" : "done",
+      result: failed ? String((output as { error: unknown }).error) : null,
+      ...(chosenAlternative && !failed ? { chose: chosenAlternative.key, title: chosenAlternative.title(action.title), lines: chosenAlternative.lines(action.lines) } : {}),
+    });
   }
   if (actions.some((entry) => entry.status === "pending")) {
     emit({ type: "done" });
@@ -586,11 +601,12 @@ export async function decideActions(
 }
 
 export function readDecisions(body: Record<string, unknown>): ActionDecision[] | null {
-  if (typeof body.actionId === "string") return [{ id: body.actionId, approve: body.approve === true }];
+  const variant = (value: unknown) => (value === "send" ? { variant: "send" as const } : {});
+  if (typeof body.actionId === "string") return [{ id: body.actionId, approve: body.approve === true, ...variant(body.variant) }];
   if (!Array.isArray(body.decisions)) return null;
   const decisions = body.decisions.flatMap((entry) =>
     entry && typeof entry === "object" && typeof (entry as ActionDecision).id === "string"
-      ? [{ id: (entry as ActionDecision).id, approve: (entry as ActionDecision).approve === true }]
+      ? [{ id: (entry as ActionDecision).id, approve: (entry as ActionDecision).approve === true, ...variant((entry as ActionDecision).variant) }]
       : [],
   );
   return decisions.length > 0 && decisions.length <= 100 ? decisions : null;

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { systemPrompt } from "@/lib/assistant/prompt";
+import { decideActions, sendMessage, type AssistantEvent } from "@/lib/assistant/chat";
 import { describeAction, runTool, toolDefinitions } from "@/lib/assistant/tools";
 import { saveMailbox } from "@/lib/crm/inbox";
 import type { UserActor } from "@/lib/crm/types";
@@ -97,5 +98,39 @@ describe("assistant drafts", () => {
     assert.ok(calls.some((call) => call.method === "POST" && call.url.endsWith("/send")));
     const listed = (await runTool(owner, "list_email_senders", {})) as { senders: { email: string; primary: boolean }[] };
     assert.deepEqual(listed.senders, [{ email: "mark@eclipse.test", primary: true }]);
+  });
+
+  it("offers Confirm and send on a draft, which sends it instead of saving it", async () => {
+    process.env.LLM_API_KEY = "llm-test";
+    const replies = [
+      { tool_calls: [{ id: "call_draft", type: "function", function: { name: "save_email_draft", arguments: JSON.stringify({ to: ["andrew@pulse.test"], subject: "Pilot", body: "Hi Andrew,\n\nShall we start the pilot on Monday?\n\nMark" }) } }] },
+      { content: "Sent it to Andrew." },
+    ];
+    const model: typeof fetch = async () =>
+      Response.json({ model: "claude-sonnet-5-5", choices: [{ message: { role: "assistant", content: "", ...replies.shift() } }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
+    const events: AssistantEvent[] = [];
+    await sendMessage(owner, { message: "Email Andrew about the pilot", model: "claude-sonnet-5-5", reasoning: "medium", webSearch: false }, (event) => events.push(event), { deadline: Date.now() + 60_000, fetchImpl: model });
+    const proposed = events.filter((event): event is Extract<AssistantEvent, { type: "actions" }> => event.type === "actions").at(-1)!;
+    assert.deepEqual(proposed.actions[0].alternative, { key: "send", label: "Confirm and send" });
+    const conversationId = (events.find((event) => event.type === "conversation") as Extract<AssistantEvent, { type: "conversation" }>).conversation.id;
+    const { fetchImpl, calls } = outlook();
+    const original = globalThis.fetch;
+    globalThis.fetch = fetchImpl;
+    const decided: AssistantEvent[] = [];
+    try {
+      await decideActions(owner, { conversationId, decisions: [{ id: "call_draft", approve: true, variant: "send" }] }, (event) => decided.push(event), { deadline: Date.now() + 60_000, fetchImpl: model });
+    } finally {
+      globalThis.fetch = original;
+      delete process.env.LLM_API_KEY;
+    }
+    assert.ok(calls.some((call) => call.method === "POST" && call.url.endsWith("/send")));
+    const final = decided.filter((event): event is Extract<AssistantEvent, { type: "actions" }> => event.type === "actions").at(-1)!.actions[0];
+    assert.equal(final.status, "done");
+    assert.equal(final.chose, "send");
+    assert.equal(final.title, "Sent: Pilot");
+    assert.ok(final.lines.includes("Sent from Orbit Mail instead of saving a draft."));
+    const toolMessage = (await getAdminPool().query<{ content: string }>("select content from crm.assistant_messages where tool_call_id = 'call_draft'")).rows[0].content;
+    assert.match(toolMessage, /"sent":true/);
+    assert.match(toolMessage, /The user chose Confirm and send, so this ran send_email instead of save_email_draft/);
   });
 });
