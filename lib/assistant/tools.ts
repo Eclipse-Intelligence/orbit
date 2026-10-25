@@ -2013,7 +2013,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
             ? `Reply${args.replyAll ? " all" : ""} in the conversation`
             : "",
         str(args.from) ? `From: ${str(args.from)}` : "",
-        "Saved to Drafts in Orbit Mail. Nothing is sent.",
+        DRAFT_NOTE,
         str(args.body),
       ].filter(Boolean),
     }),
@@ -2349,6 +2349,25 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     }),
   },
 ];
+
+export const DRAFT_NOTE = "Saved to Drafts in Orbit Mail. Nothing is sent.";
+
+export type ActionAlternative = { key: "send"; label: string; tool: string; title: (title: string) => string; lines: (lines: string[]) => string[] };
+
+export const ACTION_ALTERNATIVES: Record<string, ActionAlternative> = {
+  save_email_draft: {
+    key: "send",
+    label: "Confirm and send",
+    tool: "send_email",
+    title: (title) => title.replace(/^Save draft: /, "Sent: "),
+    lines: (lines) => lines.map((line) => (line === DRAFT_NOTE ? "Sent from Orbit Mail instead of saving a draft." : line)),
+  },
+};
+
+export function actionAlternative(name: string) {
+  const alternative = ACTION_ALTERNATIVES[name];
+  return alternative ? { key: alternative.key, label: alternative.label } : undefined;
+}
 
 export const TOOL_BY_NAME = new Map(ASSISTANT_TOOLS.map((tool) => [tool.name, tool]));
 

@@ -115,6 +115,10 @@ function groupStatus(actions: AssistantAction[]) {
   return { label: parts.join(", "), tone };
 }
 
+function statusLabel(action: AssistantAction) {
+  return action.status === "done" && action.chose === "send" ? "Sent" : ACTION_STATUS[action.status];
+}
+
 function ActionLines({ action }: { action: AssistantAction }) {
   return (
     <>
@@ -137,14 +141,19 @@ function ActionCard({ action, busy, onDecide }: { action: AssistantAction; busy:
     <div className="flex flex-col gap-2 rounded-2xl bg-white/[0.04] p-3.5">
       <div className="flex items-start justify-between gap-3">
         <span className="text-foreground min-w-0 text-[13.5px] leading-5 font-medium">{action.title}</span>
-        <span className={cn("caption-style shrink-0", statusTone(action.status))}>{ACTION_STATUS[action.status]}</span>
+        <span className={cn("caption-style shrink-0", statusTone(action.status))}>{statusLabel(action)}</span>
       </div>
       <ActionLines action={action} />
       {action.status === "pending" && (
-        <div className="flex items-center gap-2 pt-1">
+        <div className="flex flex-wrap items-center gap-2 pt-1">
           <Button variant="primary" size="sm" disabled={busy} onClick={() => onDecide([{ id: action.id, approve: true }])}>
             Confirm
           </Button>
+          {action.alternative && (
+            <Button variant="secondary" size="sm" disabled={busy} onClick={() => onDecide([{ id: action.id, approve: true, variant: action.alternative!.key }])}>
+              {action.alternative.label}
+            </Button>
+          )}
           <Button variant="ghost" size="sm" disabled={busy} onClick={() => onDecide([{ id: action.id, approve: false }])}>
             Cancel
           </Button>
@@ -156,6 +165,7 @@ function ActionCard({ action, busy, onDecide }: { action: AssistantAction; busy:
 
 function ActionGroup({ actions, busy, onDecide }: { actions: AssistantAction[]; busy: boolean; onDecide: Decide }) {
   const [skipped, setSkipped] = useState<Set<string>>(() => new Set());
+  const [sending, setSending] = useState<Set<string>>(() => new Set());
   const [expanded, setExpanded] = useState(false);
   const pending = actions.filter((action) => action.status === "pending");
   const chosen = pending.filter((action) => !skipped.has(action.id));
@@ -172,7 +182,21 @@ function ActionGroup({ actions, busy, onDecide }: { actions: AssistantAction[]; 
   }
 
   function decideAll(approve: boolean) {
-    onDecide(pending.map((action) => ({ id: action.id, approve: approve && !skipped.has(action.id) })));
+    onDecide(
+      pending.map((action) => {
+        const approved = approve && !skipped.has(action.id);
+        return approved && action.alternative && sending.has(action.id) ? { id: action.id, approve: true, variant: action.alternative.key } : { id: action.id, approve: approved };
+      }),
+    );
+  }
+
+  function toggleSend(id: string) {
+    setSending((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   }
 
   return (
@@ -206,9 +230,21 @@ function ActionGroup({ actions, busy, onDecide }: { actions: AssistantAction[]; 
               <div className={cn("flex min-w-0 flex-1 flex-col gap-0.5", waiting && !included && "opacity-50")}>
                 <div className="flex items-start justify-between gap-3">
                   <span className="text-foreground min-w-0 text-[13px] leading-5">{action.title}</span>
-                  {!waiting && <span className={cn("caption-style shrink-0", statusTone(action.status))}>{ACTION_STATUS[action.status]}</span>}
+                  {!waiting && <span className={cn("caption-style shrink-0", statusTone(action.status))}>{statusLabel(action)}</span>}
                 </div>
                 <ActionLines action={action} />
+                {waiting && included && action.alternative && (
+                  <label className="caption-style text-soft mt-1 flex cursor-pointer items-center gap-2 self-start">
+                    <input
+                      type="checkbox"
+                      checked={sending.has(action.id)}
+                      disabled={busy}
+                      onChange={() => toggleSend(action.id)}
+                      className="accent-primary size-3.5"
+                    />
+                    Send it instead of saving a draft
+                  </label>
+                )}
               </div>
             </li>
           );
