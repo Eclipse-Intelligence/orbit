@@ -438,6 +438,12 @@ export default function StepConfig({
           <p className="caption-style text-subtle">Sends to the run&apos;s contact from your Outlook, and logs it on their timeline.</p>
           {field("subject", "Subject")}
           {field("body", "Email", { rows: 6 })}
+          <label className="caption-style text-subtle flex items-start gap-2">
+            <Checkbox className="mt-0.5" checked={c.automated === true} onCheckedChange={(value) => update({ ...c, automated: value === true })} />
+            <span>
+              Say it was sent automatically. Adds a closing line saying your workspace&apos;s automated assistant wrote and sent it on your behalf, and that they can reply to reach you.
+            </span>
+          </label>
         </div>
       );
     case "find_records": {
