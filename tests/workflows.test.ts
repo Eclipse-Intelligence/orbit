@@ -48,7 +48,7 @@ const HAPPY_SUMMARY = { ...SUMMARY, health: "healthy", healthReason: "Jane is pl
 
 function fakes(replies: Record<string, unknown>[], summary: Record<string, unknown> = SUMMARY) {
   const ai: { system: string; user: string; model: string }[] = [];
-  const linear: { title: string }[] = [];
+  const linear: { title: string; priority?: number }[] = [];
   const fetchImpl: typeof fetch = async (input, init) => {
     const url = String(input);
     const body = JSON.parse(String(init?.body ?? "{}"));
@@ -58,8 +58,8 @@ function fakes(replies: Record<string, unknown>[], summary: Record<string, unkno
           data: { teams: { nodes: [{ id: "team-1", key: "CNT", name: "Cntent", states: { nodes: [] }, labels: { nodes: [] } }] } },
         });
       }
-      const issueInput = body.variables.input as { title: string };
-      linear.push({ title: issueInput.title });
+      const issueInput = body.variables.input as { title: string; priority?: number };
+      linear.push({ title: issueInput.title, priority: issueInput.priority });
       const number = 40 + linear.length;
       return Response.json({
         data: {
@@ -187,6 +187,33 @@ describe("workflows", () => {
       ["ai_1", "if_1", "approval_1", "loop_1", "linear_issue_1", "linear_issue_1"],
     );
     assert.deepEqual(await listApprovals(owner), []);
+  });
+
+  it("fills a Linear priority from an earlier step, and leaves it unset when the value isn't a priority", async () => {
+    const workflow = await createWorkflow(owner, { name: "Priority from a step" });
+    const definition: WorkflowDefinition = {
+      version: 2,
+      trigger: { type: "manual", object: "company" },
+      triggerPosition: { x: 0, y: 0 },
+      nodes: [
+        { id: "linear_issue_1", type: "linear_issue", config: { title: "Issue for {{company.name}}", priority: "{{company.name}}" }, position: { x: 300, y: 0 } },
+      ],
+      edges: [{ source: "trigger", handle: "out", target: "linear_issue_1" }],
+    };
+    await saveWorkflow(owner, workflow.id, { definition });
+    await setWorkflowStatus(owner, workflow.id, "active");
+    const low = (await createCompany(owner, { name: "Low", domain: "low-priority.test" })).body.company.id;
+    const other = (await createCompany(owner, { name: "Someone Else", domain: "someone-else.test" })).body.company.id;
+    const llm = fakes([]);
+    assert.equal((await startRun(owner, workflow.id, { test: false, record: { type: "company", id: low }, fetchImpl: llm.fetchImpl })).status, "succeeded");
+    const unset = await startRun(owner, workflow.id, { test: false, record: { type: "company", id: other }, fetchImpl: llm.fetchImpl });
+    assert.equal(unset.status, "succeeded");
+    assert.deepEqual(llm.linear, [
+      { title: "Issue for Low", priority: 4 },
+      { title: "Issue for Someone Else", priority: undefined },
+    ]);
+    const { steps } = await getRunSteps(owner, unset.runId);
+    assert.match(JSON.stringify(steps.at(-1)!.output), /isn't urgent, high, medium or low, so the issue has no priority/);
   });
 
   it("takes the quiet path for a healthy call, and stops when an approval is rejected", async () => {
