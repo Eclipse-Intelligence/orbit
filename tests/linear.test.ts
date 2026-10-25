@@ -7,6 +7,7 @@ import { getPool } from "@/lib/db/pool";
 import {
   commentOnLinearIssue,
   createLinearIssue,
+  getLinearIssue,
   linearStatus,
   resetLinearCache,
   searchLinearIssues,
@@ -103,6 +104,21 @@ describe("linear client", () => {
     );
     await searchLinearIssues({ query: "cnt-12", includeDone: true }, { fetchImpl: fake.fetchImpl, apiKey: "k" });
     assert.deepEqual(fake.calls[1].variables.filter, { team: { key: { eq: "CNT" } }, number: { eq: 12 } });
+  });
+
+  it("keeps every query within Linear's complexity limit by sizing each list", async () => {
+    resetLinearCache();
+    const fake = fakeLinear();
+    await createLinearIssue({ title: "LinkedIn extension", labels: ["client"], assignToMe: true }, { fetchImpl: fake.fetchImpl, apiKey: "k" });
+    await searchLinearIssues({ query: "extension" }, { fetchImpl: fake.fetchImpl, apiKey: "k" });
+    await getLinearIssue("CNT-7", { fetchImpl: fake.fetchImpl, apiKey: "k" });
+    for (const { query } of fake.calls) {
+      for (const match of query.matchAll(/\b(teams|states|labels|issues|comments)\s*(\(([^)]*)\))?\s*\{/g)) {
+        assert.match(match[3] ?? "", /\bfirst:/, `${match[1]} has no page size in: ${query.replace(/\s+/g, " ").slice(0, 120)}`);
+      }
+    }
+    const team = fake.calls.find((call) => call.query.includes("teams("))!.query;
+    assert.match(team, /teams\(filter: \{ key: \{ eq: \$key \} \}, first: 1\)/);
   });
 
   it("creates an issue in the team with status, labels, priority and assignee", async () => {
