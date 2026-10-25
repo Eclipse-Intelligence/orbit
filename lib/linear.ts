@@ -60,7 +60,7 @@ const ISSUE_FIELDS = `
   state { name type }
   assignee { name }
   project { name }
-  labels { nodes { name } }
+  labels(first: 10) { nodes { name } }
 `;
 
 let teamCache: { key: string; at: number; team: LinearTeam } | null = null;
@@ -137,11 +137,11 @@ async function getLinearTeam(options: LinearOptions = {}): Promise<LinearTeam> {
     };
   }>(
     `query Team($key: String!) {
-      teams(filter: { key: { eq: $key } }) {
+      teams(filter: { key: { eq: $key } }, first: 1) {
         nodes {
           id key name
-          states { nodes { id name type position } }
-          labels(first: 250) { nodes { id name } }
+          states(first: 50) { nodes { id name type position } }
+          labels(first: 100) { nodes { id name } }
         }
       }
     }`,
