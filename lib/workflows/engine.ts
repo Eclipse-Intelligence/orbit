@@ -22,7 +22,7 @@ import { createDocument, getDocument } from "@/lib/proposals/documents";
 import { formatMoney, type Currency } from "@/lib/proposals/model";
 import type { Company, CompanyWrite, Contact, ContactWrite, Provenance, UserActor } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
-import { createLinearIssue, LinearError } from "@/lib/linear";
+import { createLinearIssue, LINEAR_PRIORITIES, LinearError } from "@/lib/linear";
 import { pushToUser, type PushSender } from "@/lib/push";
 import { completeJson, LlmError } from "@/lib/llm";
 import { siteOrigin } from "@/lib/site-url";
@@ -886,15 +886,25 @@ async function runStepAction(ctx: Ctx, step: Step): Promise<StepResult> {
     case "create_proposal":
       return proposalStep(ctx, step);
     case "linear_issue": {
+      const wanted = render(config.priority, ctx.vars).trim().toLowerCase().replace(/\s*priority$/, "");
+      const priority = (LINEAR_PRIORITIES as readonly string[]).includes(wanted) ? wanted : null;
       const issue = await createLinearIssue(
         {
           title: render(config.title, ctx.vars).trim(),
           description: render(config.description, ctx.vars).trim() || null,
-          priority: str(config.priority) || null,
+          priority,
         },
         { fetchImpl: ctx.fetchImpl },
       );
-      return { kind: "next", output: { identifier: issue.identifier, url: issue.url, title: issue.title } };
+      return {
+        kind: "next",
+        output: {
+          identifier: issue.identifier,
+          url: issue.url,
+          title: issue.title,
+          ...(wanted && !priority && wanted !== "none" ? { note: `"${wanted}" isn't urgent, high, medium or low, so the issue has no priority.` } : {}),
+        },
+      };
     }
     default:
       throw new CrmError("invalid_input", "This step type isn't supported.", 400);
