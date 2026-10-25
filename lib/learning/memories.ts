@@ -8,6 +8,40 @@ export type MemoryScope = (typeof MEMORY_SCOPES)[number];
 export type Confidence = "low" | "medium" | "high";
 export type MemorySource = { label: string; url?: string };
 
+const STOP_WORDS = new Set(
+  "about above after again against also among another anything around because been before being below between both cannot could does doing down during each either else even every from further have having here hers herself himself into itself just last made make many more most much must myself need never next only other ours ourselves over same shall should since some still such than that their theirs them themselves then there these they this those through today tomorrow under until upon very want were what when where which while whom whose will with within without would your yours yourself yourselves yesterday really thanks thank please hello regards best mark email emails call calls note notes said says week weeks month months year years time times".split(" "),
+);
+
+export function searchTerms(text: string, max = 24) {
+  const counts = new Map<string, number>();
+  for (const raw of text.toLowerCase().match(/[a-z][a-z'-]{3,}/g) ?? []) {
+    const word = raw.replace(/['-]/g, "");
+    if (word.length < 4 || word.length > 30 || STOP_WORDS.has(word)) continue;
+    counts.set(word, (counts.get(word) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .slice(0, max)
+    .map(([word]) => word);
+}
+
+const CORE_KINDS = new Set(["icp", "audience", "trigger", "objection", "messaging", "win_pattern", "loss_pattern", "pricing", "instruction", "correction", "preference", "writing", "theme", "signal"]);
+
+export function memoryScore(memory: Pick<Memory, "confidence" | "kind" | "updatedAt">, now: number) {
+  const days = (now - new Date(memory.updatedAt).getTime()) / 86_400_000;
+  const confidence = memory.confidence === "high" ? 3 : memory.confidence === "medium" ? 2 : 1;
+  const fresh = days <= 7 ? 3 : days <= 30 ? 2 : days <= 90 ? 1 : 0;
+  return confidence + fresh + (CORE_KINDS.has(memory.kind) ? 2 : 0);
+}
+
+export function pickForBriefing(items: Memory[], count: number, now: number) {
+  const pinned = items.filter((item) => item.pinned);
+  const rest = items
+    .filter((item) => !item.pinned)
+    .sort((left, right) => memoryScore(right, now) - memoryScore(left, now) || right.updatedAt.localeCompare(left.updatedAt));
+  return [...pinned, ...rest].slice(0, Math.max(count, pinned.length));
+}
+
 export const MEMORY_LIMITS = { title: 160, body: 1200, kind: 40, sources: 10, sourceLabel: 200, sourceUrl: 1000 } as const;
 
 export type Memory = {
@@ -185,18 +219,27 @@ function line(memory: Memory, now: number) {
   return `- ${memory.pinned ? "(pinned) " : ""}${memory.title}: ${memory.body.replace(/\s+/g, " ").slice(0, 400)} [${memory.kind}, ${memory.confidence} confidence, ${age(memory.updatedAt, now)}]`;
 }
 
-export async function memoryBriefing(actor: UserActor, options: { now?: Date; brief?: string | null } = {}) {
+export async function memoryBriefing(actor: UserActor, options: { now?: Date; brief?: string | null; focus?: string } = {}) {
   const now = (options.now ?? new Date()).getTime();
-  const [personal, business, market] = await Promise.all([
-    listMemories(actor, { scope: "personal", limit: 20 }),
-    listMemories(actor, { scope: "business", limit: 20 }),
-    listMemories(actor, { scope: "market", limit: 12, since: new Date(now - 21 * 86_400_000).toISOString() }),
+  const terms = searchTerms(options.focus ?? "", 12);
+  const [personal, business, market, related] = await Promise.all([
+    listMemories(actor, { scope: "personal", limit: 120 }),
+    listMemories(actor, { scope: "business", limit: 120 }),
+    listMemories(actor, { scope: "market", limit: 80, since: new Date(now - 21 * 86_400_000).toISOString() }),
+    terms.length ? listMemories(actor, { query: terms.join(" or "), limit: 8 }) : Promise.resolve([] as Memory[]),
   ]);
   if (!personal.length && !business.length && !market.length && !options.brief) return "";
+  const picked = {
+    personal: pickForBriefing(personal, 20, now),
+    business: pickForBriefing(business, 20, now),
+    market: pickForBriefing(market, 12, now),
+  };
+  const shown = new Set([...picked.personal, ...picked.business, ...picked.market].map((item) => item.id));
+  const relevant = related.filter((item) => !shown.has(item.id));
   const block = (title: string, items: Memory[]) => (items.length ? `\n\n## ${title}\n${items.map((item) => line(item, now)).join("\n")}` : "");
   const brief = options.brief ? `\n\n## This morning's brief\n${options.brief.slice(0, 2_500)}` : "";
   return `\n\n# What Orbit has learned
-Orbit learns every night from the user's conversations, edits and decisions, from the business's deals, calls and replies, and from market notes. These are the most relevant notes. They can be out of date or wrong: prefer fresh data from the tools when they disagree, mention the note when it shapes your answer, and use recall to search everything learned, with sources. When the user corrects you or states a lasting preference, offer to remember it.${block("About the user and how they like to work", personal)}${block("The business: customers, ICP, objections, what works", business)}${block("The market, last three weeks", market)}${brief}`;
+Orbit learns every night from the user's conversations, edits and decisions, from the business's deals, calls and replies, and from market notes. These are the most relevant notes. They can be out of date or wrong: prefer fresh data from the tools when they disagree, mention the note when it shapes your answer, and use recall to search everything learned, with sources. When the user corrects you or states a lasting preference, offer to remember it.${block("Related to this conversation", relevant)}${block("About the user and how they like to work", picked.personal)}${block("The business: customers, ICP, objections, what works", picked.business)}${block("The market, last three weeks", picked.market)}${brief}`;
 }
 
 export async function recall(actor: UserActor, query: string, limit = 12) {

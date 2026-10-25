@@ -51,9 +51,10 @@ function summaryText(status: LearningStatus) {
   if (status.status === "running") return "Running now";
   const summary = status.summary;
   if (!summary) return "Done";
-  if (summary.skipped) return summary.skipped;
+  if (summary.skipped && !summary.tidied) return summary.skipped;
   if (summary.brief) return "Brief written";
-  const parts = [summary.added ? `${summary.added} new` : "", summary.updated ? `${summary.updated} updated` : "", summary.archived ? `${summary.archived} retired` : ""].filter(Boolean);
+  const tidy = summary.tidied ? `weekly tidy: ${summary.tidied.merged} merged, ${summary.tidied.retired} retired` : summary.tidyError ? "weekly tidy failed" : "";
+  const parts = [summary.added ? `${summary.added} new` : "", summary.updated ? `${summary.updated} updated` : "", summary.archived ? `${summary.archived} retired` : "", tidy].filter(Boolean);
   return parts.length ? parts.join(", ") : "Nothing changed";
 }
 
