@@ -12,6 +12,7 @@ import { resetLinearCache } from "@/lib/linear";
 import { nextScheduleRun, safeDefinition, type WorkflowDefinition } from "@/lib/workflows/definition";
 import { runWorkflowTick } from "@/lib/workflows/engine";
 import {
+  approvalEmail,
   createWorkflow,
   decideApproval,
   getRunSteps,
@@ -214,6 +215,17 @@ describe("workflows", () => {
     ]);
     const { steps } = await getRunSteps(owner, unset.runId);
     assert.match(JSON.stringify(steps.at(-1)!.output), /isn't urgent, high, medium or low, so the issue has no priority/);
+  });
+
+  it("links an approval back to the email that started it", () => {
+    assert.deepEqual(approvalEmail({ vars: { email: { subject: "Fireflies", url: "https://orbit.test/mail?thread=s1%7Cm%3A1" } } }), {
+      subject: "Fireflies",
+      href: "/mail?thread=s1%7Cm%3A1",
+    });
+    assert.deepEqual(approvalEmail({ vars: { email: { subject: " ", url: "/mail?thread=x" } } }), { subject: "the email", href: "/mail?thread=x" });
+    assert.equal(approvalEmail({ vars: { email: { subject: "x", url: "https://evil.test/phish" } } }), null);
+    assert.equal(approvalEmail({ vars: { company: { name: "Acme" } } }), null);
+    assert.equal(approvalEmail(null), null);
   });
 
   it("takes the quiet path for a healthy call, and stops when an approval is rejected", async () => {

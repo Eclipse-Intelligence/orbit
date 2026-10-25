@@ -26,6 +26,10 @@ export default function ApprovalCard({ approval, focused = false }: { approval: 
       setError(result.error);
       return;
     }
+    if (approval.email) {
+      router.push(approval.email.href);
+      return;
+    }
     router.refresh();
   }
 
@@ -44,6 +48,14 @@ export default function ApprovalCard({ approval, focused = false }: { approval: 
               {" · "}
               <Link href={companyHref(approval.companyId)} className="hover:text-foreground">
                 {approval.companyName}
+              </Link>
+            </>
+          ) : null}
+          {approval.email ? (
+            <>
+              {" · "}
+              <Link href={approval.email.href} className="hover:text-foreground">
+                {approval.email.subject}
               </Link>
             </>
           ) : null}
