@@ -30,7 +30,14 @@ export function grokRoutine(mcpUrl: string) {
 
 1. Call get_watchlist on the Orbit plugin (${mcpUrl}). It lists the topics, competitors, people, target accounts and sources to watch.
 2. Search X and my news sources for the last 24 hours on everything in the watchlist, plus AI visibility, generative engine optimisation (GEO), AI search, content operations and agencies.
-3. Keep only what matters to Eclipse's sales and positioning: competitor launches and moves, funding, hires and leadership changes, product news, notable posts by the people on the list, data or research worth quoting, and anything a target account posts or announces that is a reason to contact them now.
-4. Call add_market_notes once with up to 30 notes. Each note has: kind (news, post, launch, hire, funding, signal or research), headline (one line), summary (two or three factual sentences, no opinion), url (the original post or article), about (the company or person it concerns, spelled as in the watchlist) and publishedAt (ISO date).
-5. Never invent a link or a figure. Skip anything you can't link to. If nothing qualifies, send nothing.`;
+3. Keep only what matters to Eclipse's sales and positioning: competitor launches and moves, funding, hires and leadership changes, product news, notable posts by the people on the list, data or research worth quoting, and anything a target account posts or announces that is a reason to contact them now. Skip anything that doesn't touch AI search, content or the watchlist.
+4. Prefer the original source (the study, the company's own announcement, the author's post) over reposts and roundups, and skip press-release wire sites unless the company is on the watchlist.
+5. Call add_market_notes once with up to 30 notes. Each note has:
+   - kind: news, post, launch, hire, funding, research, or signal. Use signal only when a target account, competitor or person on the watchlist did something that is a reason to contact them now; general statistics are research.
+   - headline: one line.
+   - summary: two or three factual sentences, no opinion.
+   - url: the original post or article.
+   - about: the specific company or person it concerns (for example "Semrush" or "Ross Simmonds"), spelled as in the watchlist when they're on it, not the topic.
+   - publishedAt: ISO date.
+6. Never invent a link or a figure. Skip anything you can't link to. If nothing qualifies, send nothing.`;
 }

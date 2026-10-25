@@ -359,13 +359,23 @@ export async function applyCompanionResult(actor: UserActor, conversationId: str
 }
 
 async function promptFor(actor: UserActor, conversation: ConversationRow) {
-  const [links, about, colleagues, brief] = await Promise.all([
+  const [links, about, colleagues, brief, focus] = await Promise.all([
     userLinks(actor).catch(() => null),
     getPersonalContext(actor).catch(() => null),
     getColleagues(actor).catch(() => []),
     latestBrief(actor).catch(() => null),
+    withActor(actor, async (db) =>
+      (
+        await db.query<{ content: string }>(
+          "select content from crm.assistant_messages where conversation_id = $1 and role = 'user' order by seq desc limit 2",
+          [conversation.id],
+        )
+      ).rows
+        .map((row) => row.content)
+        .join("\n"),
+    ).catch(() => ""),
   ]);
-  const learned = await memoryBriefing(actor, { brief: brief?.body ?? null }).catch(() => "");
+  const learned = await memoryBriefing(actor, { brief: brief?.body ?? null, focus }).catch(() => "");
   return systemPrompt(actor, { webSearch: conversation.web_search, links, about: aboutYouSection(about, colleagues) + learned });
 }
 

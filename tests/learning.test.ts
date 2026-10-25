@@ -9,8 +9,10 @@ import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { issueMarketAgentToken, marketAgentStatus } from "@/lib/learning/grok";
 import { addWatchItems, listMarketNotes } from "@/lib/learning/market";
-import { listMemories, memoryBriefing } from "@/lib/learning/memories";
-import { latestBrief, learnNow, londonDay, runNightlyLearning } from "@/lib/learning/nightly";
+import { insertMemory, listMemories, memoryBriefing, pickForBriefing, searchTerms, type Memory } from "@/lib/learning/memories";
+import { addMarketNotes } from "@/lib/learning/market";
+import { withActor } from "@/lib/crm/context";
+import { isTidyDay, latestBrief, learnNow, londonDay, runNightlyLearning } from "@/lib/learning/nightly";
 import { createUser, queryAsUser, resetDatabase } from "./helpers";
 
 type Kind = "personal" | "business" | "market" | "brief";
@@ -151,7 +153,7 @@ describe("nightly learning", () => {
       first.report.map((item) => `${item.kind}:${item.userId === sam.userId ? "sam" : item.userId ? "mark" : "shared"}`),
       ["business:shared", "market:shared", "personal:mark", "personal:sam", "brief:mark", "brief:sam"],
     );
-    assert.deepEqual(first.report.find((item) => item.kind === "personal" && item.userId === sam.userId)!.result, { skipped: "Nothing new to learn from." });
+    assert.equal(first.report.find((item) => item.kind === "personal" && item.userId === sam.userId)!.result.skipped, "Nothing new to learn from.");
     assert.deepEqual(calls.map((call) => call.kind).sort(), ["brief", "brief", "business", "market", "personal"]);
 
     const personalPrompt = calls.find((call) => call.kind === "personal")!;
@@ -215,5 +217,92 @@ describe("nightly learning", () => {
     const results = await learnNow(sam, { deadline: Date.now() + 600_000, fetchImpl });
     assert.deepEqual(Object.keys(results), ["personal", "brief"]);
     assert.equal(calls.filter((call) => call.kind === "business" || call.kind === "market").length, 0);
+  });
+
+  it("keeps checking for Grok's notes until 3am before calling the market done, and only then writes the brief", async () => {
+    const { fetchImpl, calls } = gateway(() => pulseId);
+    const early = await runNightlyLearning({ deadline: Date.now() + 600_000, fetchImpl, now: new Date("2026-11-02T01:05:00Z") });
+    const marketEarly = early.report.find((item) => item.kind === "market");
+    assert.deepEqual(marketEarly?.result, { skipped: "No new market notes." });
+    assert.equal(early.report.some((item) => item.kind === "brief"), false);
+    const admin = getAdminPool();
+    await admin.query("update crm.market_notes set processed_at = now() - interval '100 days' where url = 'https://news.test/profound-agencies'");
+    await addMarketNotes(owner, [{ kind: "hire", headline: "Pulse hires a Head of Content", url: "https://news.test/pulse-hire", about: "Pulse" }]);
+    const later = await runNightlyLearning({ deadline: Date.now() + 600_000, fetchImpl, now: new Date("2026-11-02T01:25:00Z") });
+    assert.deepEqual(later.report.find((item) => item.kind === "market")?.result, { added: 1, updated: 0, archived: 0 });
+    assert.ok(later.report.some((item) => item.kind === "brief" && item.userId === owner.userId));
+    assert.equal(calls.filter((call) => call.kind === "market").length, 1);
+    assert.deepEqual((await admin.query("select 1 from crm.market_notes where url = 'https://news.test/profound-agencies'")).rows, []);
+    assert.deepEqual((await runNightlyLearning({ deadline: Date.now() + 600_000, fetchImpl, now: new Date("2026-11-02T01:35:00Z") })).report, []);
+    const lateEmpty = await runNightlyLearning({ deadline: Date.now() + 600_000, fetchImpl, now: new Date("2026-11-03T03:10:00Z") });
+    assert.deepEqual(lateEmpty.report.find((item) => item.kind === "market")?.result, { skipped: "No new market notes." });
+    assert.ok(lateEmpty.report.some((item) => item.kind === "brief"));
+  });
+
+  it("tidies memory on Sunday nights, merging duplicates, retiring stale notes and keeping each scope under its limit", async () => {
+    assert.equal(isTidyDay(new Date("2026-11-08T01:00:00Z")), true);
+    assert.equal(isTidyDay(new Date("2026-11-09T01:00:00Z")), false);
+    const admin = getAdminPool();
+    await admin.query(
+      `insert into crm.memories (workspace_id, scope, kind, title, body, confidence, updated_at)
+       select $1, 'business', 'fact', 'Old note ' || n, 'Filler fact number ' || n, 'low', now() - make_interval(days => n) from generate_series(1, 160) n`,
+      [owner.workspaceId],
+    );
+    const made = await withActor(owner, async (db) => ({
+      keep: await insertMemory(db, owner, "business", { kind: "objection", title: "Price objection from agencies", body: "Agencies say £2k a month is too much." }, "learning"),
+      duplicate: await insertMemory(db, owner, "business", { kind: "objection", title: "Agencies find the price high", body: "Pulse said £2k a month was steep.", sources: [{ label: "Call with Pulse" }] }, "learning"),
+      stale: await insertMemory(db, owner, "business", { kind: "fact", title: "Webinar planned for October", body: "A webinar was planned for October." }, "learning"),
+      pinned: await insertMemory(db, owner, "business", { kind: "icp", title: "Pinned ICP note", body: "Agencies of 20 to 80 people.", pinned: true }, "learning"),
+      typed: await insertMemory(db, owner, "business", { kind: "fact", title: "Written by Mark", body: "We never discount below £1.5k." }, "manual"),
+    }));
+    const calls: string[] = [];
+    const fetchImpl: typeof fetch = async (_input, init) => {
+      const system = (JSON.parse(String(init?.body)) as { messages: { content: string }[] }).messages[0].content;
+      calls.push(system);
+      const reply = system.includes("You tidy the shared business")
+        ? { merge: [{ keepId: made.keep.id, mergeIds: [made.duplicate.id, made.pinned.id], title: "Agencies push back on £2k a month", body: "Agencies, Pulse among them, say £2k a month is steep." }], archive: [{ id: made.stale.id }, { id: made.typed.id }] }
+        : system.includes("You tidy")
+          ? { merge: [], archive: [] }
+          : { add: [], update: [], archive: [], brief: "x" };
+      return Response.json({ model: "test", choices: [{ message: { content: JSON.stringify(reply) }, finish_reason: "stop" }] });
+    };
+    const sunday = await runNightlyLearning({ deadline: Date.now() + 600_000, fetchImpl, now: new Date("2026-11-08T04:00:00Z") });
+    const business = sunday.report.find((item) => item.kind === "business")!.result;
+    assert.equal(business.tidied!.merged, 1);
+    assert.ok(business.tidied!.retired >= 1);
+    assert.match(calls.find((call) => call.includes("You tidy the shared business"))!, /There are 16\d notes and the limit is 150, so archive or merge away at least 1\d/);
+    const active = await listMemories(owner, { scope: "business", limit: 200 });
+    assert.ok(active.length <= 150);
+    const byId = new Map(active.map((memory) => [memory.id, memory]));
+    assert.equal(byId.get(made.keep.id)!.title, "Agencies push back on £2k a month");
+    assert.deepEqual(byId.get(made.keep.id)!.sources, [{ label: "Call with Pulse" }]);
+    assert.equal(byId.has(made.duplicate.id), false);
+    assert.equal(byId.has(made.stale.id), false);
+    assert.ok(byId.has(made.pinned.id) && byId.has(made.typed.id));
+    assert.ok(byId.has(made.keep.id));
+  });
+
+  it("chooses briefing notes by confidence, freshness and kind, and adds notes related to the conversation", async () => {
+    const now = Date.now();
+    const note = (id: string, extra: Partial<Memory>): Memory => ({ id, scope: "business", kind: "fact", title: id, body: id, sources: [], confidence: "medium", pinned: false, companyId: null, origin: "learning", observedAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString(), ...extra });
+    const picked = pickForBriefing(
+      [
+        note("old-low", { confidence: "low", updatedAt: new Date(now - 200 * 86_400_000).toISOString() }),
+        note("icp", { kind: "icp", confidence: "high", updatedAt: new Date(now - 40 * 86_400_000).toISOString() }),
+        note("pinned", { pinned: true, confidence: "low", updatedAt: new Date(now - 300 * 86_400_000).toISOString() }),
+        note("fresh", { updatedAt: new Date(now - 86_400_000).toISOString() }),
+      ],
+      3,
+      now,
+    );
+    assert.deepEqual(picked.map((item) => item.id), ["pinned", "icp", "fresh"]);
+    assert.deepEqual(searchTerms("The Kraken pilot pilot and the pricing for Kraken agencies"), ["kraken", "pilot", "agencies", "pricing"]);
+    await getAdminPool().query(
+      "insert into crm.memories (workspace_id, scope, kind, title, body, confidence, updated_at) values ($1, 'business', 'fact', 'Kraken runs procurement through legal', 'Kraken sends every contract to legal first.', 'low', now() - interval '300 days')",
+      [owner.workspaceId],
+    );
+    const briefing = await memoryBriefing(owner, { focus: "How should I approach Kraken?" });
+    assert.match(briefing, /## Related to this conversation\n- Kraken runs procurement through legal/);
+    assert.doesNotMatch(await memoryBriefing(owner), /Kraken runs procurement/);
   });
 });
