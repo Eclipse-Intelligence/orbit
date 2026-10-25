@@ -1,4 +1,6 @@
 import type { ComponentType, ReactNode, SVGProps } from "react";
+import MorningBrief from "@/components/crm/morning-brief";
+import type { Brief } from "@/lib/learning/nightly";
 import Button from "@/components/_ui/button";
 import { EntityChip, Monogram } from "@/components/beautifui/record-marks";
 import PeopleMet from "@/components/crm/people-met";
@@ -140,6 +142,7 @@ export default function InboxScreen({
   calendar,
   people,
   mirror,
+  brief,
   notice,
   info,
   connected,
@@ -157,6 +160,7 @@ export default function InboxScreen({
   calendar: CalendarStatus | null;
   people: MetPerson[];
   mirror: MailSourceStatus[];
+  brief: Brief | null;
   notice: string | null;
   info: string | null;
   connected: boolean;
@@ -174,6 +178,8 @@ export default function InboxScreen({
           <p className="text-soft max-w-[40em] leading-[1.5]">
             Orbit brings in your email, calls and meetings and files each one on the right person. Anything it can&apos;t place waits here for you.
           </p>
+
+          {brief && <MorningBrief brief={brief} />}
 
           {(connected || notice || info || (!notice && mailbox?.lastError)) && (
             <div className="flex flex-col gap-2">

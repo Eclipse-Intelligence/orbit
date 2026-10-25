@@ -1,3 +1,6 @@
+import { forgetMemory, recall, rememberNote } from "@/lib/learning/memories";
+import { addWatchItems, listWatchlist, removeWatchItems, WATCH_KINDS } from "@/lib/learning/market";
+import { latestBrief } from "@/lib/learning/nightly";
 import { bookingUrl } from "@/lib/assistant/links";
 import { ARTICLES_URL, DOCS_URL, eclipseDocsIndex, listEclipseArticles, readEclipsePage } from "@/lib/eclipse-sources";
 import { readWebPage, WebPageError } from "@/lib/web-page";
@@ -2254,6 +2257,95 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         status: optionalStr(args.status),
         priority: optionalStr(args.priority),
       }),
+    }),
+  },
+  {
+    name: "recall",
+    label: "Checking what Orbit has learned",
+    description:
+      "Search everything Orbit has learned: notes about the user and how they like to work, the business (ICP, audience, objections, competitors, what messaging works, win and loss patterns) and the market (themes, competitor moves, signals), plus the market notes received. Each result has its sources and date.",
+    parameters: { type: "object", properties: { query: { type: "string", description: "Words to look for, for example \"objections price agencies\"." } }, required: ["query"] },
+    run: async (actor, args) => recall(actor, required(args.query, "A search")),
+  },
+  {
+    name: "get_daily_brief",
+    label: "Reading the morning brief",
+    description: "The user's latest morning brief: what changed in the market, accounts to act on and what Orbit learned overnight.",
+    parameters: { type: "object", properties: {} },
+    run: async (actor) => ({ brief: await latestBrief(actor) }),
+  },
+  {
+    name: "remember",
+    label: "Remembering",
+    write: true,
+    description:
+      "Save a lasting note to Orbit's memory: a preference, correction or standing instruction from the user (private to them), or with shared true a fact about the business that the whole team's assistants should know.",
+    parameters: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "At most 12 words." },
+        body: { type: "string", description: "The note, at most 70 words, written as a fact." },
+        kind: { type: "string", description: "preference, correction, instruction, person, goal, writing, icp, objection, competitor, messaging or fact." },
+        shared: { type: "boolean", description: "True for business knowledge the whole workspace should share." },
+      },
+      required: ["body"],
+    },
+    describe: (args) => ({
+      title: args.shared === true ? "Remember for the whole team" : "Remember for you",
+      lines: [str(args.title), str(args.body)].filter(Boolean),
+    }),
+    run: async (actor, args) => ({ memory: await rememberNote(actor, args, "assistant") }),
+  },
+  {
+    name: "forget",
+    label: "Forgetting",
+    write: true,
+    description: "Forget a note Orbit learned, by its id from recall or the briefing, when the user says it's wrong or out of date.",
+    parameters: { type: "object", properties: { memoryId: { type: "string" }, title: { type: "string", description: "The note's title, for the approval card." } }, required: ["memoryId"] },
+    describe: (args) => ({ title: "Forget a note", lines: [str(args.title) || "The note you chose"] }),
+    run: async (actor, args) => forgetMemory(actor, required(args.memoryId, "A memory")),
+  },
+  {
+    name: "list_watchlist",
+    label: "Reading the watchlist",
+    description: "The topics, competitors, people, target accounts and sources the market research (Grok Bot) watches every night.",
+    parameters: { type: "object", properties: {} },
+    run: async (actor) => ({ watchlist: await listWatchlist(actor) }),
+  },
+  {
+    name: "update_watchlist",
+    label: "Updating the watchlist",
+    write: true,
+    description: "Add things to the nightly market watchlist, or remove them by id.",
+    parameters: {
+      type: "object",
+      properties: {
+        add: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              kind: { type: "string", enum: [...WATCH_KINDS] },
+              label: { type: "string" },
+              url: { type: "string", description: "Optional link, for example an X or LinkedIn profile." },
+              notes: { type: "string", description: "Why it's watched." },
+            },
+            required: ["kind", "label"],
+          },
+        },
+        remove: { type: "array", items: { type: "string" }, description: "Watchlist ids to remove." },
+      },
+    },
+    describe: (args) => ({
+      title: "Update the watchlist",
+      lines: [
+        ...(Array.isArray(args.add) ? (args.add as Args[]).map((item) => `Watch ${str(item.kind)}: ${str(item.label)}`) : []),
+        ...(strings(args.remove).length ? [`Stop watching ${strings(args.remove).length} ${strings(args.remove).length === 1 ? "item" : "items"}`] : []),
+      ],
+    }),
+    run: async (actor, args) => ({
+      added: Array.isArray(args.add) && args.add.length ? await addWatchItems(actor, args.add) : [],
+      ...(strings(args.remove).length ? await removeWatchItems(actor, strings(args.remove)) : { removed: [] }),
     }),
   },
 ];

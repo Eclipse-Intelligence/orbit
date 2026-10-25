@@ -7,6 +7,8 @@ import { cancelCompanionJob, enqueueCompanionJob, readCompanionJob } from "@/lib
 import { companionOfflineMessage, companionOnline } from "@/lib/companion/pairing";
 import { userLinks } from "@/lib/assistant/links";
 import { aboutYouSection, getColleagues, getPersonalContext } from "@/lib/crm/personal-context";
+import { memoryBriefing } from "@/lib/learning/memories";
+import { latestBrief } from "@/lib/learning/nightly";
 import { buildPrompt } from "@/lib/companion/transcript";
 import { expandMentions, plainMentions } from "@/lib/mentions";
 import { withActor } from "@/lib/crm/context";
@@ -357,12 +359,14 @@ export async function applyCompanionResult(actor: UserActor, conversationId: str
 }
 
 async function promptFor(actor: UserActor, conversation: ConversationRow) {
-  const [links, about, colleagues] = await Promise.all([
+  const [links, about, colleagues, brief] = await Promise.all([
     userLinks(actor).catch(() => null),
     getPersonalContext(actor).catch(() => null),
     getColleagues(actor).catch(() => []),
+    latestBrief(actor).catch(() => null),
   ]);
-  return systemPrompt(actor, { webSearch: conversation.web_search, links, about: aboutYouSection(about, colleagues) });
+  const learned = await memoryBriefing(actor, { brief: brief?.body ?? null }).catch(() => "");
+  return systemPrompt(actor, { webSearch: conversation.web_search, links, about: aboutYouSection(about, colleagues) + learned });
 }
 
 async function runCompanionTurn(actor: UserActor, conversation: ConversationRow, apiModel: string, emit: Emit, deadline: number) {

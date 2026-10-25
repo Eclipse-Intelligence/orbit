@@ -9,6 +9,7 @@ import { getGranolaStatus } from "@/lib/crm/granola";
 import { getMailbox, listInbox, shouldSyncMailbox, syncMailbox } from "@/lib/crm/inbox";
 import { getTeamsTranscriptStatus } from "@/lib/crm/teams-transcripts";
 import { mailSyncStatus } from "@/lib/mail/store";
+import { latestBrief } from "@/lib/learning/nightly";
 import { microsoftConfigured, microsoftRedirectUri } from "@/lib/microsoft/oauth";
 
 export const dynamic = "force-dynamic";
@@ -40,7 +41,7 @@ export default async function CapturePage({
     mailbox = await getMailbox(user);
   }
   const live = mailbox?.status === "connected";
-  const [messages, calls, unfiled, granola, transcripts, calendar, people, mirror] = await Promise.all([
+  const [messages, calls, unfiled, granola, transcripts, calendar, people, mirror, brief] = await Promise.all([
     mailbox ? listInbox(user) : Promise.resolve([]),
     mailbox ? getCallSync(user) : Promise.resolve(null),
     listUnfiledImports(user),
@@ -49,6 +50,7 @@ export default async function CapturePage({
     live ? getCalendarStatus(user) : Promise.resolve(null),
     mailbox ? listPeopleMet(user) : Promise.resolve([]),
     mailSyncStatus(user),
+    latestBrief(user).catch(() => null),
   ]);
   const headerStore = await headers();
   const host = headerStore.get("x-forwarded-host") ?? headerStore.get("host") ?? "localhost:4173";
@@ -74,6 +76,7 @@ export default async function CapturePage({
       calendar={calendar}
       people={people}
       mirror={mirror}
+      brief={brief}
       notice={notice}
       info={info}
       connected={connected}
