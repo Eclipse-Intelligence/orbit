@@ -110,6 +110,42 @@ describe("Eclipse MCP", () => {
     assert.deepEqual(loose.arguments, { canvasId: 12 });
   });
 
+  it("stops a slow read, but lets an approved action finish and reuses its key on a retry", async () => {
+    const original = globalThis.fetch;
+    const keys: unknown[] = [];
+    let pause = 0;
+    const { fetchImpl } = server();
+    globalThis.fetch = (async (input, init) => {
+      const body = JSON.parse(String(init?.body));
+      if (body.method === "tools/call" && body.params.name === "geo_trends") return new Promise<Response>(() => undefined);
+      if (body.method === "tools/call") {
+        keys.push(body.params.arguments.idempotencyKey);
+        await new Promise((resolve) => setTimeout(resolve, pause));
+      }
+      return fetchImpl(input, init);
+    }) as typeof fetch;
+    try {
+      const started = Date.now();
+      const slow = (await runTool(actor, "eclipse_read", { tool: "geo_trends", argumentsJson: "{}" }, { deadline: Date.now() })) as { error: string };
+      assert.match(slow.error, /took too long and was stopped after 5 seconds/);
+      assert.ok(Date.now() - started < 8_000);
+
+      pause = 6_000;
+      const action = (await runTool(actor, "eclipse_action", { tool: "start_deep_research", summary: "Research", argumentsJson: '{"question": "Who leads?"}' }, { deadline: Date.now(), callId: "call_1" })) as { error?: string; result?: string };
+      assert.equal(action.error, undefined);
+      assert.match(String(action.result), /start_deep_research/);
+      pause = 0;
+      await runTool(actor, "eclipse_action", { tool: "start_deep_research", summary: "Research", argumentsJson: '{"question": "Who leads?"}' }, { callId: "call_1" });
+      await runTool(actor, "eclipse_action", { tool: "start_deep_research", summary: "Research", argumentsJson: '{"question": "Who leads?"}' }, { callId: "call_2" });
+      assert.equal(keys.length, 3);
+      assert.match(String(keys[0]), /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-a[0-9a-f]{3}-[0-9a-f]{12}$/);
+      assert.equal(keys[0], keys[1]);
+      assert.notEqual(keys[1], keys[2]);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
   it("gives the assistant the guide, discovery, reads and approved actions", () => {
     const tools = Object.fromEntries(toolDefinitions().map((tool) => [tool.function.name, tool]));
     for (const name of ["eclipse_guide", "eclipse_tools", "eclipse_read", "eclipse_action"]) assert.ok(tools[name], name);

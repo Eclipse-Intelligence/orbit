@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
-import { getConversation, history, sendMessage, type AssistantEvent } from "@/lib/assistant/chat";
-import { APPROVAL_NOTE, EXTERNAL_NOTICE, dropStrayNulls, runTool, toolDefinitions } from "@/lib/assistant/tools";
+import { decideActions, FULL_MESSAGE, getConversation, history, MAX_ROUNDS, sendMessage, STOPPED_MESSAGE, type AssistantEvent } from "@/lib/assistant/chat";
+import { APPROVAL_NOTE, EXTERNAL_NOTICE, describeAction, dropStrayNulls, recordNames, runTool, toolDefinitions } from "@/lib/assistant/tools";
+import { EXPIRED_MESSAGE, enqueueCompanionJob } from "@/lib/companion/jobs";
 import { saveMailbox } from "@/lib/crm/inbox";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
@@ -53,6 +54,40 @@ function londonIn(days: number) {
 }
 
 type Row = Parameters<typeof history>[0][number];
+
+type Call = { id: string; name: string; args: Record<string, unknown> };
+
+function model(reply: (index: number) => { content?: string; calls?: Call[] }) {
+  let index = 0;
+  const fetchImpl: typeof fetch = async () => {
+    const next = reply(index);
+    index += 1;
+    return Response.json({
+      model: "claude-sonnet-5-5",
+      choices: [
+        {
+          message: {
+            role: "assistant",
+            content: next.content ?? "",
+            tool_calls: next.calls?.map((call) => ({ id: call.id, type: "function", function: { name: call.name, arguments: JSON.stringify(call.args) } })),
+          },
+        },
+      ],
+      usage: { prompt_tokens: 1, completion_tokens: 1 },
+    });
+  };
+  return { fetchImpl, count: () => index };
+}
+
+function conversationOf(events: AssistantEvent[]) {
+  return (events.find((event) => event.type === "conversation") as Extract<AssistantEvent, { type: "conversation" }>).conversation.id;
+}
+
+async function ask(actor: UserActor, message: string, fetchImpl: typeof fetch, conversationId?: string) {
+  const events: AssistantEvent[] = [];
+  await sendMessage(actor, { conversationId, message, model: "claude-sonnet-5-5", reasoning: "low", webSearch: false }, (event) => events.push(event), { deadline: Date.now() + 120_000, fetchImpl });
+  return { events, conversationId: conversationOf(events) };
+}
 
 function row(role: Row["role"], content: string, extra: Partial<Row> = {}): Row {
   return { id: crypto.randomUUID(), role, content, tool_calls: null, tool_call_id: null, tool_name: null, actions: null, sources: null, provider_state: null, created_at: new Date(), ...extra };
@@ -207,5 +242,91 @@ describe("assistant safety and limits", () => {
     const saved = await getConversation(owner, conversationId);
     assert.deepEqual(saved.messages.map((message) => message.role), ["user", "assistant"]);
     assert.match(saved.messages[1].content, /^I couldn't finish that\. The LLM gateway returned 400/);
+  });
+
+  it("runs an approved email once even when it is approved twice at the same moment", async () => {
+    process.env.LLM_API_KEY = "llm-test";
+    const proposing = model((index) => (index === 0 ? { calls: [{ id: "call_twice", name: "send_email", args: { replyToEmailId: messageId, body: "Hi Andrew,\n\nMonday works.\n\nMark" } }] } : { content: "Sent." }));
+    const { conversationId } = await ask(owner, "Reply to Andrew", proposing.fetchImpl);
+    const { fetchImpl, calls } = outlook();
+    globalThis.fetch = fetchImpl;
+    try {
+      const after = model(() => ({ content: "Sent." }));
+      const decide = () => decideActions(owner, { conversationId, decisions: [{ id: "call_twice", approve: true }] }, () => undefined, { deadline: Date.now() + 120_000, fetchImpl: after.fetchImpl });
+      const results = await Promise.allSettled([decide(), decide()]);
+      assert.deepEqual(results.map((result) => result.status).sort(), ["fulfilled", "rejected"]);
+      assert.match(String((results.find((result) => result.status === "rejected") as PromiseRejectedResult).reason), /already been handled/);
+      assert.equal(calls.filter((call) => call.url.endsWith("/send")).length, 1);
+      const toolRows = await getAdminPool().query<{ count: number }>("select count(*)::int as count from crm.assistant_messages where tool_call_id = 'call_twice'");
+      assert.equal(toolRows.rows[0].count, 1);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it("shows the subjects of the emails a mail action will change", async () => {
+    const args = { emailIds: [messageId, messageId, "00000000-0000-0000-0000-000000000000"], action: "trash", summary: "Old newsletters" };
+    const card = describeAction("mail_action", args, await recordNames(owner, [args]));
+    assert.equal(card.title, "Move to Trash 2 conversations");
+    assert.deepEqual(card.lines, ["Pulse", "An email Orbit can't find", "Why: Old newsletters"]);
+  });
+
+  it("snoozes and trashes conversations", async () => {
+    const { fetchImpl, calls } = outlook();
+    globalThis.fetch = fetchImpl;
+    try {
+      const snoozed = (await runTool(owner, "mail_action", { emailIds: [messageId], action: "snooze", until: londonIn(2), summary: "Later" })) as { changed?: number; error?: string };
+      assert.equal(snoozed.error, undefined);
+      assert.equal(snoozed.changed, 1);
+      const trashed = (await runTool(owner, "mail_action", { emailIds: [messageId], action: "trash", summary: "Bin it" })) as { changed?: number; error?: string };
+      assert.equal(trashed.error, undefined);
+      assert.ok(calls.some((call) => call.method === "POST" && call.url.includes("/move")));
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it("stops after the round limit with a carry on message", async () => {
+    process.env.LLM_API_KEY = "llm-test";
+    const looping = model((index) => ({ calls: [{ id: `call_loop_${index}`, name: "list_tags", args: {} }] }));
+    const { conversationId } = await ask(owner, "Keep going", looping.fetchImpl);
+    assert.equal(looping.count(), MAX_ROUNDS);
+    const saved = await getConversation(owner, conversationId);
+    assert.equal(saved.messages.at(-1)!.content, STOPPED_MESSAGE);
+  });
+
+  it("stops a turn that has read more than the model can hold", async () => {
+    process.env.LLM_API_KEY = "llm-test";
+    const greedy = model((index) => (index === 0 ? { calls: Array.from({ length: 80 }, (_, call) => ({ id: `call_guide_${call}`, name: "workflow_guide", args: {} })) } : { content: "Answer." }));
+    const { conversationId } = await ask(owner, "Read everything", greedy.fetchImpl);
+    assert.equal(greedy.count(), 1);
+    const saved = await getConversation(owner, conversationId);
+    assert.equal(saved.messages.at(-1)!.content, FULL_MESSAGE);
+  });
+
+  it("never stores a blank reply, and leaves old blank replies out of the history", async () => {
+    process.env.LLM_API_KEY = "llm-test";
+    const blank = model(() => ({ content: "  " }));
+    const { conversationId } = await ask(owner, "Say nothing", blank.fetchImpl);
+    const saved = await getConversation(owner, conversationId);
+    assert.equal(saved.messages.at(-1)!.content, "I didn't get an answer back. Try again.");
+    const rows: Row[] = [row("user", "Hi"), row("assistant", ""), row("user", "Hello?"), row("assistant", "Hello.")];
+    assert.deepEqual(history(rows).map((message) => message.role), ["user", "user", "assistant"]);
+  });
+
+  it("tells the user when Orbit Agent never got to a queued question", async () => {
+    process.env.LLM_API_KEY = "llm-test";
+    const { conversationId } = await ask(owner, "Queued question", model(() => ({ content: "Hi." })).fetchImpl);
+    const request = { model: "claude-sonnet-5-5", effort: "low", webSearch: false, system: "", prompt: "Hi", tools: [] };
+    await getAdminPool().query(
+      "insert into crm.ai_companion_jobs (workspace_id, user_id, conversation_id, request, created_at) values ($1, $2, $3, $4::jsonb, now() - interval '25 minutes')",
+      [owner.workspaceId, owner.userId, conversationId, JSON.stringify(request)],
+    );
+    const { conversationId: other } = await ask(owner, "Another question", model(() => ({ content: "Hi." })).fetchImpl);
+    await enqueueCompanionJob(owner, other, request as Parameters<typeof enqueueCompanionJob>[2]);
+    const saved = await getConversation(owner, conversationId);
+    assert.equal(saved.messages.at(-1)!.content, EXPIRED_MESSAGE);
+    const jobs = await getAdminPool().query<{ status: string }>("select status from crm.ai_companion_jobs where conversation_id = $1", [conversationId]);
+    assert.deepEqual(jobs.rows.map((job) => job.status), ["cancelled"]);
   });
 });
