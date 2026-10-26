@@ -11,7 +11,7 @@ import { createContact } from "@/lib/crm/contacts";
 import { createOpportunity, listPipeline } from "@/lib/crm/opportunities";
 import { createTask, listTasks } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
-import { getPool } from "@/lib/db/pool";
+import { getAdminPool, getPool } from "@/lib/db/pool";
 import { createUser, queryAsUser, resetDatabase } from "./helpers";
 
 type Reply = { content?: string; tool_calls?: { id: string; name: string; args: Record<string, unknown> }[] };
@@ -109,6 +109,24 @@ describe("assistant tools", () => {
     const person = (await runTool(owner, "get_contact", { contactId })) as { contact: { name: string }; openTasks: unknown[] };
     assert.equal(person.contact.name, "Peter Gibbons");
     assert.equal(person.openTasks.length, 1);
+  });
+
+  it("won't log an email that's already on the timeline, but still takes notes", async () => {
+    const fresh = await runTool(owner, "log_activity", { type: "email", contactId, title: "Lunch invite", body: "Sent from my phone." });
+    assert.equal((fresh as { activity?: unknown }).activity !== undefined, true);
+    await getAdminPool().query(
+      `insert into crm.activities (workspace_id, type, title, body, occurred_at, company_id, contact_id, metadata)
+       values ($1, 'email', 'Re: TPS reports', 'Thanks Peter', now(), $2, $3, '{"source": "microsoft", "direction": "outbound"}'::jsonb)`,
+      [owner.workspaceId, companyId, contactId],
+    );
+    const duplicate = (await runTool(owner, "log_activity", { type: "email", contactId, title: "Reply to Peter", body: "Thanked Peter." })) as { error: string };
+    assert.match(duplicate.error, /already on the timeline \("Re: TPS reports"/);
+    assert.match(duplicate.error, /Don't log it again/);
+    const byCompany = (await runTool(owner, "log_activity", { type: "email", companyId, body: "Same email." })) as { error?: string };
+    assert.match(byCompany.error ?? "", /already on the timeline/);
+    const note = await runTool(owner, "log_activity", { type: "note", contactId, body: "Peter will decide by Friday." });
+    assert.equal((note as { activity?: unknown }).activity !== undefined, true);
+    assert.match(systemPrompt(owner, { webSearch: false }), /never propose log_activity or a note just to record an email/);
   });
 
   it("reports bad input as an error the model can read", async () => {

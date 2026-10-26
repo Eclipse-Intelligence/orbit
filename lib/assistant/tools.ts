@@ -1235,7 +1235,8 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     name: "log_activity",
     label: "Logging activity",
     write: true,
-    description: "Log a note, call or email against a company and/or person.",
+    description:
+      "Log a note, call or email against a company and/or person. Emails sent or received through the user's connected mailboxes, including everything sent from Orbit Mail, are filed on the timeline automatically, so never use this to record one of those. type email is only for an email that happened outside Orbit.",
     parameters: {
       type: "object",
       properties: {
@@ -1253,6 +1254,14 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     }),
     run: async (actor, args) => {
       const type = oneOf(args.type, ["note", "call", "email"] as const) ?? "note";
+      if (type === "email") {
+        const filed = await recentFiledEmail(actor, optionalStr(args.contactId) ?? null, optionalStr(args.companyId) ?? null);
+        if (filed) {
+          return {
+            error: `This email is already on the timeline ("${filed.title}", ${londonTime(filed.occurredAt)}), filed automatically from the mailbox. Don't log it again. Add a note only if there is something the email itself doesn't say.`,
+          };
+        }
+      }
       const activity = await logActivity(
         actor,
         { companyId: optionalStr(args.companyId) ?? null, contactId: optionalStr(args.contactId) ?? null },
@@ -2088,7 +2097,15 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         },
         { origin: mailOrigin() },
       );
-      return { sent: true, to: sent.to, cc: sent.cc, subject: sent.subject, href: sent.href, warning: sent.warning };
+      return {
+        sent: true,
+        to: sent.to,
+        cc: sent.cc,
+        subject: sent.subject,
+        href: sent.href,
+        warning: sent.warning,
+        timeline: sent.warning ? null : "Filed on the contacts' timelines automatically. Don't log it again.",
+      };
     },
   },
   {
@@ -2367,6 +2384,21 @@ export const ACTION_ALTERNATIVES: Record<string, ActionAlternative> = {
 export function actionAlternative(name: string) {
   const alternative = ACTION_ALTERNATIVES[name];
   return alternative ? { key: alternative.key, label: alternative.label } : undefined;
+}
+
+async function recentFiledEmail(actor: UserActor, contactId: string | null, companyId: string | null) {
+  if (!contactId && !companyId) return null;
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ title: string | null; occurred_at: Date }>(
+      `select title, occurred_at from crm.activities
+       where workspace_id = $1 and type = 'email' and metadata ? 'source' and created_at > now() - interval '6 hours'
+         and (($2::uuid is not null and contact_id = $2) or ($2::uuid is null and company_id = $3))
+       order by created_at desc limit 1`,
+      [actor.workspaceId, contactId, companyId],
+    );
+    const row = result.rows[0];
+    return row ? { title: row.title || "(no subject)", occurredAt: row.occurred_at.toISOString() } : null;
+  });
 }
 
 export const TOOL_BY_NAME = new Map(ASSISTANT_TOOLS.map((tool) => [tool.name, tool]));
