@@ -362,6 +362,31 @@ const REPLIES: { mode: Exclude<DraftMode, "new">; label: string; shortcut: strin
 
 type Echo = { body: string; to: MailAddress[]; count: number };
 
+function ThreadPeek({ thread, own, side }: { thread: ThreadSummary; own: string[]; side: "previous" | "next" }) {
+  const sender = thread.from ? personName(thread.from) : recipientList(thread.to, own) || "Unknown sender";
+  return (
+    <div
+      aria-hidden
+      className={cn("bg-background pointer-events-none absolute inset-y-0 flex w-full flex-col lg:hidden", side === "previous" ? "right-full" : "left-full")}
+    >
+      <div className="h-[52px] shrink-0" />
+      <div className="mx-auto flex w-full max-w-[52em] flex-col gap-4 overflow-hidden px-3 pt-3 sm:px-6">
+        <h2 className="px-4 text-pretty">{thread.subject?.trim() || "(no subject)"}</h2>
+        <div className="flex items-start gap-3 rounded-2xl bg-white/[0.025] px-4 py-3">
+          <Monogram name={sender} className="mt-0.5 size-7 rounded-full text-[11px]" />
+          <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+            <span className="flex min-w-0 items-baseline gap-2">
+              <span className={cn("truncate text-[14px]", thread.unread ? "text-foreground font-medium" : "text-foreground")}>{sender}</span>
+              <span className="text-subtle ml-auto shrink-0 text-[12px] tabular-nums">{mailFullWhen(thread.latestAt)}</span>
+            </span>
+            <span className="text-soft text-[14px] leading-5">{snippetCore(thread.snippet)}</span>
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ThreadReader({
   summary,
   detail,
@@ -373,11 +398,15 @@ export default function ThreadReader({
   onBack,
   onSent,
   onNext,
-  hasNext,
+  onPrevious,
+  previous,
+  next,
   entered,
   onSplit,
 }: {
-  hasNext: boolean;
+  previous: ThreadSummary | null;
+  next: ThreadSummary | null;
+  onPrevious: (swiped: boolean) => void;
   entered: boolean;
   onSplit: (sender: string, split: MailSplit) => void;
   summary: ThreadSummary | null;
@@ -389,9 +418,13 @@ export default function ThreadReader({
   onAction: (action: ReaderAction) => void;
   onBack: () => void;
   onSent: () => void;
-  onNext: () => void;
+  onNext: (swiped?: boolean) => void;
 }) {
   const surface = useRef<HTMLDivElement>(null);
+  const scroller = useRef<HTMLDivElement>(null);
+  const offset = useRef(0);
+  const settling = useRef(false);
+  const alive = useRef(true);
   const swipeHandlers = useRef<SwipeHandlers>({});
   const swipe = useCallback(() => swipeHandlers.current, []);
   const [composer, setComposer] = useState<ComposerStart | null>(null);
@@ -560,38 +593,56 @@ export default function ThreadReader({
       swipeHandlers.current = {};
       return;
     }
-    const finish = (run: () => void) => () => {
-      run();
+    const move = (dx: number, duration: number) => {
       const element = surface.current;
       if (!element) return;
-      element.style.transition = "none";
-      element.style.transform = "";
-      element.style.opacity = "";
+      element.style.transition = duration ? `transform ${duration}ms var(--ease-power3-out)` : "none";
+      element.style.transform = dx ? `translate3d(${dx}px, 0, 0)` : "";
     };
     swipeHandlers.current = {
-      onLeft: hasNext ? finish(onNext) : undefined,
-      onRight: finish(onBack),
+      canLeft: Boolean(next),
+      canRight: Boolean(previous),
+      scroller: () => scroller.current,
       onDrag: (dx) => {
-        const element = surface.current;
-        if (!element) return;
-        element.style.transition = "none";
-        element.style.transform = `translate3d(${dx}px, 0, 0)`;
-        element.style.opacity = String(1 - Math.min(0.4, Math.abs(dx) / 800));
+        if (settling.current) return;
+        offset.current = dx;
+        move(dx, 0);
       },
-      onSettle: (commit) => {
+      onRelease: (commit, velocity) => {
         const element = surface.current;
-        if (!element) return;
-        element.style.transition = "transform 200ms var(--ease-power3-out), opacity 200ms var(--ease-power3-out)";
-        element.style.transform = commit ? `translate3d(${commit === "left" ? "-100%" : "100%"}, 0, 0)` : "";
-        element.style.opacity = commit ? "0" : "";
+        if (!element || settling.current) return;
+        const width = element.offsetWidth || window.innerWidth;
+        const goal = commit === "left" ? -width : commit === "right" ? width : 0;
+        const remaining = Math.abs(goal - offset.current);
+        const duration = Math.round(Math.min(320, Math.max(160, remaining / Math.max(Math.abs(velocity), 0.6))));
+        offset.current = goal;
+        if (!commit) {
+          move(0, duration);
+          return;
+        }
+        settling.current = true;
+        const done = () => {
+          window.clearTimeout(fallback);
+          element.removeEventListener("transitionend", done);
+          if (!alive.current) return;
+          if (commit === "left") onNext(true);
+          else onPrevious(true);
+        };
+        const fallback = window.setTimeout(done, duration + 80);
+        element.addEventListener("transitionend", done);
+        move(goal, duration);
       },
     };
   });
 
   useEffect(() => {
+    alive.current = true;
     const element = surface.current;
-    if (!element) return;
-    return watchSwipe(element, swipe);
+    const stop = element ? watchSwipe(element, swipe) : undefined;
+    return () => {
+      alive.current = false;
+      stop?.();
+    };
   }, [swipe]);
 
   useShortcut("mail-reply", () => startReply("reply"), Boolean(detail));
@@ -628,7 +679,7 @@ export default function ThreadReader({
     <div
       ref={surface}
       className={cn(
-        "flex min-h-0 flex-1 touch-pan-y flex-col will-change-transform",
+        "relative flex min-h-0 flex-1 touch-pan-y flex-col will-change-transform",
         entered && "animate-in fade-in slide-in-from-right-12 ease-power3-out duration-200",
       )}
     >
@@ -696,7 +747,9 @@ export default function ThreadReader({
           <span className="caption-style text-subtle truncate">{account}</span>
         </span>
       </div>
-      <div className="min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-x-none">
+      {previous && <ThreadPeek thread={previous} own={own} side="previous" />}
+      {next && <ThreadPeek thread={next} own={own} side="next" />}
+      <div ref={scroller} className="min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-x-none">
         <div className="mx-auto flex w-full max-w-[52em] flex-col gap-4 px-3 pt-3 pb-32 sm:px-6">
           <h2 className="px-4 text-pretty">{subject?.trim() || "(no subject)"}</h2>
           {detail && target && <SummaryLine threadKey={detail.key} latestId={target.id} messages={detail.messages.length} />}

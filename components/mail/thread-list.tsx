@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState, type PointerEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 import { tagBase } from "@/components/beautifui/record-marks";
 import { mailListWhen, personName, recipientList, snippetCore } from "@/lib/mail/format";
 import { laterDetail } from "@/lib/mail/later";
 import type { ThreadSummary } from "@/lib/mail/view";
-import { resisted, swipeCommit } from "@/components/mail/swipe";
+import { swipeCommit, watchSwipe, type SwipeHandlers } from "@/components/mail/swipe";
 import { cn } from "@/lib/utils";
 import ArchiveIcon from "@/public/assets/images/mail/archive.svg";
 import EyeIcon from "@/public/assets/images/mail/eye.svg";
@@ -23,16 +23,8 @@ type SwipeActions = {
   onRight: (key: string) => void;
 };
 
-type Drag = { pointer: number; x: number; y: number; axis: "x" | "y" | null; samples: { x: number; at: number }[] };
-
 const OUT_MS = 180;
 const COLLAPSE_MS = 220;
-
-function speedOf(samples: { x: number; at: number }[]) {
-  const last = samples[samples.length - 1];
-  const first = samples.find((sample) => last.at - sample.at <= 90) ?? samples[0];
-  return last.at > first.at ? (last.x - first.x) / (last.at - first.at) : 0;
-}
 
 function Row({
   thread,
@@ -64,76 +56,66 @@ function Row({
   const [offset, setOffset] = useState(0);
   const [dragging, setDragging] = useState(false);
   const [height, setHeight] = useState<number | null>(null);
-  const drag = useRef<Drag | null>(null);
   const swiped = useRef(false);
   const armedBefore = useRef(false);
   const row = useRef<HTMLLIElement>(null);
+  const button = useRef<HTMLButtonElement>(null);
+  const handlers = useRef<SwipeHandlers>({});
+  const timers = useRef<number[]>([]);
   const [width, setWidth] = useState(360);
   const allowed = { left: Boolean(swipe), right: Boolean(swipe?.rightLabel) };
   const armed = offset !== 0 && swipeCommit(offset, 0, width, allowed) !== null;
 
-  function down(event: PointerEvent<HTMLButtonElement>) {
-    if (!swipe || event.pointerType !== "touch" || height !== null) return;
-    drag.current = { pointer: event.pointerId, x: event.clientX, y: event.clientY, axis: null, samples: [{ x: event.clientX, at: event.timeStamp }] };
-    setWidth(row.current?.offsetWidth ?? 360);
-  }
-
-  function move(event: PointerEvent<HTMLButtonElement>) {
-    const state = drag.current;
-    if (!state || state.pointer !== event.pointerId) return;
-    const dx = event.clientX - state.x;
-    const dy = event.clientY - state.y;
-    if (!state.axis) {
-      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
-      state.axis = Math.abs(dx) > Math.abs(dy) ? "x" : "y";
-      if (state.axis === "x") {
-        event.currentTarget.setPointerCapture(event.pointerId);
+  useEffect(() => {
+    const later = (run: () => void, ms: number) => timers.current.push(window.setTimeout(run, ms));
+    handlers.current = {
+      canLeft: allowed.left && height === null,
+      canRight: allowed.right && height === null,
+      scroller: () => row.current?.closest<HTMLElement>(".overflow-y-auto") ?? null,
+      onDrag: (dx) => {
+        if (!swipe || height !== null) return;
+        const rowWidth = row.current?.offsetWidth ?? 360;
+        setWidth(rowWidth);
         setDragging(true);
-      }
-    }
-    if (state.axis !== "x") return;
-    state.samples.push({ x: event.clientX, at: event.timeStamp });
-    if (state.samples.length > 8) state.samples.shift();
-    const next = resisted(dx, dx < 0 ? allowed.left : allowed.right);
-    const nowArmed = swipeCommit(next, 0, width, allowed) !== null;
-    if (nowArmed && !armedBefore.current) navigator.vibrate?.(8);
-    armedBefore.current = nowArmed;
-    setOffset(next);
-  }
+        const nowArmed = swipeCommit(dx, 0, rowWidth, allowed) !== null;
+        if (nowArmed && !armedBefore.current) navigator.vibrate?.(8);
+        armedBefore.current = nowArmed;
+        setOffset(dx);
+      },
+      onRelease: (commit) => {
+        armedBefore.current = false;
+        setDragging(false);
+        swiped.current = true;
+        later(() => (swiped.current = false), 50);
+        if (!swipe || !commit) {
+          setOffset(0);
+          return;
+        }
+        if (commit === "left") {
+          const rowWidth = row.current?.offsetWidth ?? width;
+          setOffset(-rowWidth);
+          later(() => {
+            setHeight(row.current?.offsetHeight ?? 64);
+            window.requestAnimationFrame(() => window.requestAnimationFrame(() => setHeight(0)));
+          }, OUT_MS);
+          later(() => swipe.onLeft(thread.key), OUT_MS + COLLAPSE_MS);
+          return;
+        }
+        setOffset(0);
+        swipe.onRight(thread.key);
+      },
+    };
+  });
 
-  function up(event: PointerEvent<HTMLButtonElement>) {
-    const state = drag.current;
-    drag.current = null;
-    armedBefore.current = false;
-    if (!state || state.pointer !== event.pointerId || state.axis !== "x" || !swipe) {
-      setDragging(false);
-      return;
-    }
-    swiped.current = true;
-    window.setTimeout(() => (swiped.current = false), 50);
-    setDragging(false);
-    const dx = event.clientX - state.x;
-    state.samples.push({ x: event.clientX, at: event.timeStamp });
-    const commit = swipeCommit(dx, speedOf(state.samples), width, allowed);
-    if (commit === "left") {
-      setOffset(-width);
-      window.setTimeout(() => {
-        setHeight(row.current?.offsetHeight ?? 64);
-        window.requestAnimationFrame(() => window.requestAnimationFrame(() => setHeight(0)));
-      }, OUT_MS);
-      window.setTimeout(() => swipe.onLeft(thread.key), OUT_MS + COLLAPSE_MS);
-      return;
-    }
-    setOffset(0);
-    if (commit === "right") swipe.onRight(thread.key);
-  }
-
-  function cancel() {
-    drag.current = null;
-    armedBefore.current = false;
-    setDragging(false);
-    setOffset(0);
-  }
+  useEffect(() => {
+    const element = button.current;
+    const pending = timers.current;
+    const stop = element ? watchSwipe(element, () => handlers.current) : undefined;
+    return () => {
+      stop?.();
+      pending.forEach((timer) => window.clearTimeout(timer));
+    };
+  }, []);
 
   const LeftIcon = swipe?.restore ? InboxIcon : ArchiveIcon;
   const people = outgoing || thread.draft ? `To ${recipientList(thread.to, own) || "no one yet"}` : personName(thread.from);
@@ -176,10 +158,7 @@ function Row({
           else onOpen();
         }}
         aria-pressed={selecting ? selected : undefined}
-        onPointerDown={down}
-        onPointerMove={move}
-        onPointerUp={up}
-        onPointerCancel={cancel}
+        ref={button}
         onMouseEnter={onHover}
         onFocus={onHover}
         data-mail-row={thread.key}
