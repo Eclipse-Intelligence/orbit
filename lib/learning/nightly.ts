@@ -177,7 +177,7 @@ async function learnPersonal(actor: UserActor, since: Date, options: Options): P
   const ops = await askForOps(
     `You keep the long-term memory that Orbit's assistant (in Eclipse's CRM) holds about ${name}, so it doesn't start from scratch in each conversation. ` +
       `From the material, keep only what will still be useful in future conversations: how ${name} likes things done, corrections they made to the assistant, standing instructions, people and relationships that matter to them and aren't obvious from CRM records, goals and priorities they're working towards, and patterns in how they edit drafts. ` +
-      "Write each note as a fact about them (for example \"Mark wants first emails under 90 words\"). Skip one-off requests, anything already obvious from CRM records, and personal matters unrelated to their work. Kinds: preference, correction, instruction, person, goal, writing, fact.",
+      "Write each note as a fact about them (for example \"Mark wants first emails under 90 words\"). Skip one-off requests, anything already obvious from CRM records, personal matters unrelated to their work, and habits Orbit now does automatically (every email sent or received with a contact is filed on the timeline by itself, so never keep a note that emails should be logged by hand, and archive any existing note that says so). Kinds: preference, correction, instruction, person, goal, writing, fact.",
     material,
     options,
   );
