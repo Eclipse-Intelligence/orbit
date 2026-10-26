@@ -10,6 +10,7 @@ import TaskPad from "@/components/crm/task-pad";
 import { formatMoney, formatWhen, relativeWhen } from "@/lib/companies";
 import type { ClickUpPicker } from "@/lib/crm/clickup";
 import type { CompanyContext } from "@/lib/crm/types";
+import { dealHref } from "@/lib/crm/hrefs";
 
 export default function RelationshipPanel({
   context,
@@ -69,9 +70,9 @@ export default function RelationshipPanel({
                 className="flex items-start justify-between gap-3"
               >
                 <span className="min-w-0">
-                  <span className="block truncate text-[14px] leading-5">
+                  <Link href={dealHref(opportunity.id)} className="block truncate text-[14px] leading-5 hover:underline hover:decoration-white/40 hover:underline-offset-2">
                     {opportunity.name}
-                  </span>
+                  </Link>
                   <span className="caption-style text-subtle block">
                     {opportunity.stageName ?? "No stage"} ·{" "}
                     {formatMoney(opportunity.value, opportunity.currency)}
@@ -86,7 +87,7 @@ export default function RelationshipPanel({
                         : "blue"
                   }
                 >
-                  {opportunity.status}
+                  {opportunity.status === "won" ? "Won" : opportunity.status === "lost" ? "Lost" : "Open"}
                 </Tag>
               </li>
             ))}
