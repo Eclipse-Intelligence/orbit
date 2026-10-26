@@ -322,6 +322,23 @@ describe("Orbit Agent job lifecycle", () => {
     assert.equal(await lastReply(quiet), LOST_MESSAGE);
   });
 
+  it("reports what the Mac is doing so a reopened chat shows progress", async () => {
+    const progress = await conversation("Progress check");
+    const job = await enqueueCompanionJob(owner, progress, request);
+    assert.deepEqual((await getConversation(owner, progress)).working?.where, "mac");
+    await nextCompanionJob(mac, 5_000);
+    await runCompanionTool(mac, job, { id: "p1", name: "list_tags", arguments: "{}" });
+    const working = (await getConversation(owner, progress)).working!;
+    assert.equal(working.steps, 1);
+    assert.equal(working.current, null);
+    await finishCompanionJob(mac, job, (actor, conversationId) =>
+      applyCompanionResult(actor, conversationId, { steps: [{ text: "All done.", calls: [] }], results: {}, sources: [], model: null, usage: null }),
+    );
+    const finished = await getConversation(owner, progress);
+    assert.equal(finished.working, null);
+    assert.equal(finished.messages.at(-1)!.content, "All done.");
+  });
+
   it("counts a Mac that is busy answering as available even when it hasn't polled lately", async () => {
     const busy = await conversation("Busy Mac");
     const job = await enqueueCompanionJob(owner, busy, request);

@@ -11,7 +11,7 @@ import MentionInput from "@/components/assistant/mention-input";
 import { useScreenState } from "@/components/crm/quick-add";
 import { useShortcut, useShortcuts } from "@/components/shortcuts/shortcuts-provider";
 import { connectedSourcesAction, deleteConversationAction, getConversationAction, listConversationsAction, stopConversationAction } from "@/app/(crm)/assistant";
-import type { ActionDecision, AssistantAction, AssistantEvent, ConversationSummary, DisplayMessage } from "@/lib/assistant/chat";
+import type { ActionDecision, AssistantAction, AssistantEvent, ConversationSummary, DisplayMessage, Working } from "@/lib/assistant/chat";
 import {
   ASSISTANT_MODELS,
   DEFAULT_MODEL,
@@ -42,6 +42,17 @@ const SETTINGS_KEY = "orbit-assistant-settings";
 const CONVERSATION_KEY = "orbit-assistant-conversation";
 
 type LiveTool = { id: string; label: string; status: "running" | "done" };
+
+const FOLLOW_MS = 30 * 60_000;
+const FOLLOW_EVERY_MS = 5_000;
+
+function workingText(working: Working) {
+  const steps = working.steps === 1 ? "1 step" : `${working.steps} steps`;
+  const now = working.current ? `, now ${working.current.charAt(0).toLowerCase()}${working.current.slice(1)}` : "";
+  return working.where === "mac"
+    ? `Claude is working on this on your Mac. ${steps} so far${now}. The answer will appear here when it's ready.`
+    : `Orbit is still working on this. ${steps} so far. The answer will appear here when it's ready.`;
+}
 
 function readSettings() {
   try {
@@ -399,6 +410,7 @@ export default function AssistantDock() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [working, setWorking] = useState<Working | null>(null);
   const [history, setHistory] = useState<ConversationSummary[] | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const input = useRef<HTMLTextAreaElement>(null);
@@ -424,6 +436,27 @@ export default function AssistantDock() {
     };
   }, [open]);
 
+  const follow = useCallback(
+    async (id: string) => {
+      const token = ++recovering.current;
+      const started = Date.now();
+      while (Date.now() - started < FOLLOW_MS) {
+        await new Promise((resolve) => window.setTimeout(resolve, FOLLOW_EVERY_MS));
+        if (conversationId.current !== id || recovering.current !== token) return;
+        const result = await getConversationAction(id).catch(() => null);
+        if (!result || conversationId.current !== id || recovering.current !== token) continue;
+        setMessages(result.messages);
+        setWorking(result.working);
+        if (!result.working) {
+          setNotice(null);
+          router.refresh();
+          return;
+        }
+      }
+    },
+    [router],
+  );
+
   useEffect(() => {
     const timer = window.setTimeout(() => {
       const saved = readSettings();
@@ -436,11 +469,13 @@ export default function AssistantDock() {
           if (!result) return;
           setConversation(result.conversation);
           setMessages(result.messages);
+          setWorking(result.working);
+          if (result.working) void follow(result.conversation.id);
         });
       }
     }, 0);
     return () => window.clearTimeout(timer);
-  }, []);
+  }, [follow]);
 
   useEffect(() => {
     try {
@@ -538,6 +573,7 @@ export default function AssistantDock() {
   async function run(body: Record<string, unknown>) {
     setBusy(true);
     recovering.current += 1;
+    setWorking(null);
     setError(null);
     setNotice(null);
     setLive([]);
@@ -550,7 +586,7 @@ export default function AssistantDock() {
         const dropped = caught instanceof TypeError;
         if (dropped && conversationId.current) {
           setNotice("The connection dropped. Orbit is still working, so the answer will appear here when it's ready.");
-          void recover(conversationId.current);
+          void follow(conversationId.current);
         } else {
           setError(caught instanceof Error ? caught.message : "The assistant is unavailable right now.");
         }
@@ -561,34 +597,11 @@ export default function AssistantDock() {
       setLive([]);
       if (waiting.current && conversationId.current) {
         waiting.current = false;
-        void recover(conversationId.current);
+        void follow(conversationId.current);
       }
       if (changed.current) {
         changed.current = false;
         router.refresh();
-      }
-    }
-  }
-
-  async function recover(id: string) {
-    const known = messages.length;
-    const token = ++recovering.current;
-    for (let attempt = 0; attempt < 30; attempt += 1) {
-      await new Promise((resolve) => window.setTimeout(resolve, 6_000));
-      if (conversationId.current !== id || recovering.current !== token) return;
-      const result = await getConversationAction(id).catch(() => null);
-      if (!result) continue;
-      const last = result.messages[result.messages.length - 1];
-      const settled =
-        last?.role === "assistant" &&
-        (last.content.trim() !== "" || last.actions.some((action) => action.status === "pending")) &&
-        result.messages.length > known;
-      if (settled) {
-        setMessages(result.messages);
-        setError(null);
-    setNotice(null);
-        router.refresh();
-        return;
       }
     }
   }
@@ -627,6 +640,8 @@ export default function AssistantDock() {
 
   function newChat() {
     abort.current?.abort();
+    recovering.current += 1;
+    setWorking(null);
     setConversation(null);
     setMessages([]);
     setLive([]);
@@ -651,6 +666,9 @@ export default function AssistantDock() {
     }
     setConversation(result.conversation);
     setMessages(result.messages);
+    setWorking(result.working);
+    if (result.working) void follow(result.conversation.id);
+    else recovering.current += 1;
     const settings = settingsFor(result.conversation.model, result.conversation.reasoning);
     setModel(settings.model);
     setReasoning(settings.reasoning);
@@ -805,10 +823,17 @@ export default function AssistantDock() {
               {error}
             </p>
           )}
-          {notice && !error && (
+          {working && !busy && !error ? (
             <p role="status" className="caption-style text-soft pt-3">
-              {notice}
+              {workingText(working)}
             </p>
+          ) : (
+            notice &&
+            !error && (
+              <p role="status" className="caption-style text-soft pt-3">
+                {notice}
+              </p>
+            )
           )}
         </div>
 
