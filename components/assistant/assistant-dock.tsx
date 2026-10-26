@@ -10,7 +10,7 @@ import Markdown from "@/components/assistant/markdown";
 import MentionInput from "@/components/assistant/mention-input";
 import { useScreenState } from "@/components/crm/quick-add";
 import { useShortcut, useShortcuts } from "@/components/shortcuts/shortcuts-provider";
-import { connectedSourcesAction, deleteConversationAction, getConversationAction, listConversationsAction } from "@/app/(crm)/assistant";
+import { connectedSourcesAction, deleteConversationAction, getConversationAction, listConversationsAction, stopConversationAction } from "@/app/(crm)/assistant";
 import type { ActionDecision, AssistantAction, AssistantEvent, ConversationSummary, DisplayMessage } from "@/lib/assistant/chat";
 import {
   ASSISTANT_MODELS,
@@ -262,7 +262,7 @@ function ActionGroup({ actions, busy, onDecide }: { actions: AssistantAction[]; 
       {pending.length > 0 && (
         <div className="flex items-center gap-2">
           <Button variant="primary" size="sm" disabled={busy || chosen.length === 0} onClick={() => decideAll(true)}>
-            {chosen.length === pending.length ? "Confirm all" : `Confirm ${chosen.length}`}
+            {chosen.length === pending.length ? "Confirm all" : `Confirm ${chosen.length} and cancel ${pending.length - chosen.length}`}
           </Button>
           <Button variant="ghost" size="sm" disabled={busy} onClick={() => decideAll(false)}>
             Cancel all
@@ -398,6 +398,7 @@ export default function AssistantDock() {
   const [live, setLive] = useState<LiveTool[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [history, setHistory] = useState<ConversationSummary[] | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const input = useRef<HTMLTextAreaElement>(null);
@@ -407,6 +408,7 @@ export default function AssistantDock() {
   const conversationId = useRef<string | null>(null);
   const pinned = useRef(true);
   const waiting = useRef(false);
+  const recovering = useRef(0);
   const [connected, setConnected] = useState<ModelSource[] | null>(null);
 
   useEffect(() => {
@@ -414,7 +416,7 @@ export default function AssistantDock() {
     let live = true;
     void connectedSourcesAction()
       .then((sources) => {
-        if (live) setConnected(sources);
+        if (live && sources) setConnected(sources);
       })
       .catch(() => undefined);
     return () => {
@@ -529,13 +531,15 @@ export default function AssistantDock() {
     if (event.type === "error") setError(event.message);
     if (event.type === "waiting") {
       waiting.current = true;
-      setError(event.message);
+      setNotice(event.message);
     }
   }, []);
 
   async function run(body: Record<string, unknown>) {
     setBusy(true);
+    recovering.current += 1;
     setError(null);
+    setNotice(null);
     setLive([]);
     const controller = new AbortController();
     abort.current = controller;
@@ -545,7 +549,7 @@ export default function AssistantDock() {
       if (!(caught instanceof Error && caught.name === "AbortError")) {
         const dropped = caught instanceof TypeError;
         if (dropped && conversationId.current) {
-          setError("The connection dropped. Orbit is still working, so the answer will appear here when it's ready.");
+          setNotice("The connection dropped. Orbit is still working, so the answer will appear here when it's ready.");
           void recover(conversationId.current);
         } else {
           setError(caught instanceof Error ? caught.message : "The assistant is unavailable right now.");
@@ -568,9 +572,10 @@ export default function AssistantDock() {
 
   async function recover(id: string) {
     const known = messages.length;
+    const token = ++recovering.current;
     for (let attempt = 0; attempt < 30; attempt += 1) {
       await new Promise((resolve) => window.setTimeout(resolve, 6_000));
-      if (conversationId.current !== id) return;
+      if (conversationId.current !== id || recovering.current !== token) return;
       const result = await getConversationAction(id).catch(() => null);
       if (!result) continue;
       const last = result.messages[result.messages.length - 1];
@@ -581,6 +586,7 @@ export default function AssistantDock() {
       if (settled) {
         setMessages(result.messages);
         setError(null);
+    setNotice(null);
         router.refresh();
         return;
       }
@@ -606,6 +612,14 @@ export default function AssistantDock() {
     void run({ conversationId: conversation.id, decisions });
   }
 
+  function stopTurn() {
+    abort.current?.abort();
+    recovering.current += 1;
+    waiting.current = false;
+    setNotice(null);
+    if (conversationId.current) void stopConversationAction(conversationId.current);
+  }
+
   function submit(event: FormEvent) {
     event.preventDefault();
     send(draft);
@@ -617,6 +631,7 @@ export default function AssistantDock() {
     setMessages([]);
     setLive([]);
     setError(null);
+    setNotice(null);
     setHistoryOpen(false);
     window.requestAnimationFrame(() => input.current?.focus());
   }
@@ -641,6 +656,7 @@ export default function AssistantDock() {
     setReasoning(settings.reasoning);
     setWebSearch(result.conversation.webSearch);
     setError(null);
+    setNotice(null);
   }
 
   async function remove(id: string) {
@@ -789,6 +805,11 @@ export default function AssistantDock() {
               {error}
             </p>
           )}
+          {notice && !error && (
+            <p role="status" className="caption-style text-soft pt-3">
+              {notice}
+            </p>
+          )}
         </div>
 
         <form onSubmit={submit} className="shrink-0 px-5 pt-1 pb-3">
@@ -870,7 +891,7 @@ export default function AssistantDock() {
               </button>
               <span className="flex-1" />
               {busy ? (
-                <Button variant="secondary" size="icon" type="button" aria-label="Stop" onClick={() => abort.current?.abort()}>
+                <Button variant="secondary" size="icon" type="button" aria-label="Stop" onClick={stopTurn}>
                   <StopIcon aria-hidden className="size-3.5" />
                 </Button>
               ) : (

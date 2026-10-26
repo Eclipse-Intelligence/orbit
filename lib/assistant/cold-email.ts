@@ -271,9 +271,17 @@ export function jevConfigured() {
   return Boolean(process.env.TYPESAFE_API_KEY?.trim());
 }
 
+type CheckOptions = { fetchImpl?: typeof fetch; deadline?: number };
+
+const MIN_CHECK_MS = 8_000;
+
+function timeLeft(options: CheckOptions, cap: number) {
+  return Math.min(cap, (options.deadline ?? Date.now() + cap) - Date.now() - 1_000);
+}
+
 export async function judgeColdEmail(
   input: { subject: string; body: string; evidence: Evidence[]; firstTouch?: boolean; theirOffer?: string },
-  options: { fetchImpl?: typeof fetch } = {},
+  options: CheckOptions = {},
 ): Promise<ColdEmailCheck[]> {
   if (!jevConfigured()) return [];
   const core = bodyCore(input.body);
@@ -376,7 +384,7 @@ export async function judgeColdEmail(
     method: "POST",
     headers: { authorization: `Bearer ${process.env.TYPESAFE_API_KEY!.trim()}`, "content-type": "application/json" },
     body: JSON.stringify({ model: process.env.TYPESAFE_MODEL?.trim() || "jev-latest", state, questions }),
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(Math.max(1_000, timeLeft(options, 30_000))),
   });
   if (!response.ok) throw new Error(`Jev answered ${response.status}.`);
   const answers = ((await response.json()) as { answers?: Record<string, JevAnswer> }).answers ?? {};
@@ -447,7 +455,7 @@ const VALUE_SCHEMA = z.object({
 
 export async function reviewColdEmailValue(
   input: { subject: string; body: string; evidence: Evidence[]; theirOffer?: string },
-  options: { fetchImpl?: typeof fetch } = {},
+  options: CheckOptions = {},
 ): Promise<ColdEmailCheck[]> {
   const result = await completeJson({
     system: [
@@ -471,6 +479,7 @@ export async function reviewColdEmailValue(
     schema: VALUE_SCHEMA,
     maxTokens: 400,
     timeoutMs: 25_000,
+    deadline: options.deadline,
     fetchImpl: options.fetchImpl,
   });
   const review = result.data;
@@ -530,20 +539,22 @@ export async function reviewColdEmailValue(
 
 export async function checkColdEmail(
   input: { subject: string; body: string; evidence: Evidence[]; firstTouch?: boolean; theirOffer?: string },
-  options: { fetchImpl?: typeof fetch } = {},
+  options: CheckOptions = {},
 ) {
   const rules = lintColdEmail(input);
   let judged: ColdEmailCheck[] = [];
   let jevError: string | null = null;
   let reviewError: string | null = null;
-  if (jevConfigured()) {
+  if (jevConfigured() && timeLeft(options, 30_000) >= MIN_CHECK_MS) {
     try {
       judged = await judgeColdEmail(input, options);
     } catch (error) {
       jevError = error instanceof Error ? error.message : "Jev didn't answer.";
     }
   }
-  if (judged.length === 0) {
+  if (judged.length === 0 && timeLeft(options, 25_000) < MIN_CHECK_MS) {
+    reviewError = "There wasn't time left for the value review.";
+  } else if (judged.length === 0) {
     try {
       judged = await reviewColdEmailValue(input, options);
     } catch (error) {

@@ -5,7 +5,11 @@ const CURRENT_RESULT_MAX = 40_000;
 const TRANSCRIPT_MAX = 600_000;
 
 function escape(text: string) {
-  return text.replace(/<\/(conversation|user|assistant|tool_call|tool_result)>/g, "<\\/$1>");
+  return text.replace(/<\s*\/\s*(conversation|user|assistant|tool_call|tool_result|learned_notes)\s*>/gi, "<\\/$1>");
+}
+
+function attribute(text: string) {
+  return text.replace(/[^\w-]/g, "").slice(0, 120);
 }
 
 function clip(text: string, max: number) {
@@ -28,12 +32,12 @@ export function buildPrompt(messages: ChatMessage[]) {
       if (message.content) blocks.push(`<assistant>\n${escape(message.content)}\n</assistant>`);
       for (const call of message.tool_calls ?? []) {
         names.set(call.id, call.function.name);
-        blocks.push(`<tool_call id="${call.id}" name="${call.function.name}">\n${escape(call.function.arguments || "{}")}\n</tool_call>`);
+        blocks.push(`<tool_call id="${attribute(call.id)}" name="${attribute(call.function.name)}">\n${escape(call.function.arguments || "{}")}\n</tool_call>`);
       }
     } else if (message.role === "tool") {
       const name = names.get(message.tool_call_id) ?? "tool";
       const body = clip(message.content, current ? CURRENT_RESULT_MAX : OLD_RESULT_MAX);
-      blocks.push(`<tool_result id="${message.tool_call_id}" name="${name}">\n${escape(body)}\n</tool_result>`);
+      blocks.push(`<tool_result id="${attribute(message.tool_call_id)}" name="${attribute(name)}">\n${escape(body)}\n</tool_result>`);
     }
   });
 

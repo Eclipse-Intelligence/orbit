@@ -102,7 +102,7 @@ type AssistantTool = {
 
 type Names = (id: unknown) => string;
 
-type ToolContext = { callId?: string };
+type ToolContext = { callId?: string; deadline?: number };
 
 const PROVENANCE = { source: "assistant" } as const;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -269,7 +269,7 @@ const offsetParam = { type: "integer", description: "How many to skip, for the n
 
 const TASK_FIELDS = {
   title: { type: "string", description: "What needs doing." },
-  description: { type: "string", description: "Extra detail." },
+  description: { type: "string", description: "Extra detail, or null to clear it." },
   dueAt: { type: "string", description: "Due date and time in London time as YYYY-MM-DDTHH:mm, or null to clear." },
   remindMinutes: {
     type: "integer",
@@ -356,7 +356,12 @@ function stageLines(args: Args, name: Names) {
   return stages.map((stage, index) => {
     const label = str(stage.name) || "Unnamed";
     const before = stage.id ? name(stage.id) : null;
-    const flags = [stage.isWon ? "won" : null, stage.isLost ? "lost" : null].filter(Boolean).join(", ");
+    const flagKey = `${str(stage.id)}:flag`;
+    const was = stage.id && name(flagKey) !== flagKey ? name(flagKey) : null;
+    const won = typeof stage.isWon === "boolean" ? stage.isWon : was === "won";
+    const lost = typeof stage.isLost === "boolean" ? stage.isLost : was === "lost";
+    const now = won ? "won" : lost ? "lost" : null;
+    const flags = now === was ? (now ?? "") : now ? (was ? `${now}, was ${was}` : `now ${now}`) : `no longer ${was}`;
     const change = !stage.id ? " (new)" : before && before !== label && before !== "Unknown record" ? ` (was ${before})` : "";
     return `${index + 1}. ${label}${change}${flags ? ` · ${flags}` : ""}`;
   });
@@ -756,10 +761,11 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       },
       required: ["workflowId"],
     },
-    run: async (actor, args) => {
+    run: async (actor, args, context) => {
       const recordId = optionalStr(args.recordId);
       const result = await startRun(actor, required(args.workflowId, "A workflow id"), {
         test: true,
+        deadline: context.deadline,
         record: recordId ? { type: args.recordType === "contact" ? "contact" : "company", id: recordId } : null,
       });
       return { ...result, ...(await getRunSteps(actor, result.runId)) };
@@ -987,7 +993,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
   {
     name: "list_team_members",
     label: "Reading the team",
-    description: "Workspace members with their ids, for owners.",
+    description: "Workspace members with their ids, for setting ownerId on companies and contacts.",
     parameters: { type: "object", properties: {} },
     run: async (actor) => ({ members: await listMembers(actor), you: { id: actor.userId, email: actor.email, name: actor.fullName } }),
   },
@@ -1057,7 +1063,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     label: "Acting in Eclipse",
     write: true,
     description:
-      "Run an Eclipse tool that changes data, spends credits or AI balance, publishes or deletes (found with eclipse_tools), after the user approves the card. Preview costly or consequential tools with eclipse_read first and tell the user the cost. Pass the tool name and its arguments exactly as its input describes; Orbit adds the confirmation and a retry key.",
+      "Run an Eclipse tool that changes data, spends credits or AI balance, publishes or deletes (found with eclipse_tools), after the user approves the card. Preview costly or consequential tools with eclipse_read first and tell the user the cost. Pass the tool name and its arguments exactly as its input describes; Orbit adds the confirmation and a retry key. Only workspace owners and admins can run these, because they use Orbit's shared Eclipse account.",
     parameters: {
       type: "object",
       properties: {
@@ -1078,10 +1084,14 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         "Runs through Orbit's shared Eclipse connection. Anything it costs comes from Eclipse's own account.",
       ].filter(Boolean),
     }),
-    run: async (_actor, args, context) =>
-      callEclipseTool(required(args.tool, "A tool name"), eclipseArguments(args), "action", { idempotencyKey: context.callId ? keyFor(context.callId) : undefined }).catch(
+    run: async (actor, args, context) => {
+      if (actor.role !== "owner" && actor.role !== "admin") {
+        return { error: "Only workspace owners and admins can run Eclipse actions, because they use Orbit's shared Eclipse account. Ask an owner or admin to do it." };
+      }
+      return callEclipseTool(required(args.tool, "A tool name"), eclipseArguments(args), "action", { idempotencyKey: context.callId ? keyFor(context.callId) : undefined }).catch(
         (error: Error) => ({ error: error instanceof EclipseMcpError ? error.message : "Eclipse didn't answer." }),
-      ),
+      );
+    },
   },
   {
     name: "cold_email_playbook",
@@ -1110,7 +1120,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       },
       required: ["subject", "body"],
     },
-    run: async (_actor, args) =>
+    run: async (_actor, args, context) =>
       checkColdEmail({
         subject: str(args.subject),
         body: required(args.body, "The email"),
@@ -1119,7 +1129,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
           : [],
         firstTouch: args.firstTouch !== false,
         theirOffer: optionalStr(args.theirOffer),
-      }),
+      }, { deadline: context.deadline }),
   },
   {
     name: "social_lookup",
@@ -1649,8 +1659,8 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
           ...(optionalStr(stage.id) ? { id: str(stage.id) } : {}),
           name: str(stage.name),
           ...(probability !== undefined ? { probability } : {}),
-          isWon: stage.isWon === true,
-          isLost: stage.isLost === true,
+          isWon: typeof stage.isWon === "boolean" ? stage.isWon : before?.isWon === true,
+          isLost: typeof stage.isLost === "boolean" ? stage.isLost : before?.isLost === true,
         };
       });
       const saved = await savePipelineStages(actor, stages, boardId);
@@ -2169,10 +2179,12 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     describe: (args, name) => {
       const people = [args.contactId ? name(args.contactId) : "", ...strings(args.to)].filter(Boolean);
       const replying = Boolean(str(args.replyToEmailId));
+      const senderKey = `${str(args.replyToEmailId)}:from`;
+      const sender = name(senderKey) !== senderKey ? name(senderKey) : "the sender";
       return {
         title: `${replying ? "Send reply" : "Send email"}: ${str(args.subject) || "in the conversation"}`,
         lines: [
-          replying ? `To: ${args.replyAll ? "everyone on the email" : "the sender"}${people.length ? `, plus ${people.join(", ")}` : ""}` : people.length ? `To: ${people.join(", ")}` : "",
+          replying ? `To: ${args.replyAll ? `everyone on the email from ${sender}` : sender}${people.length ? `, plus ${people.join(", ")}` : ""}` : people.length ? `To: ${people.join(", ")}` : "",
           strings(args.cc).length ? `Cc: ${strings(args.cc).join(", ")}` : "",
           str(args.from) ? `From: ${str(args.from)}` : "",
           "Sends from Orbit Mail when you approve.",
@@ -2476,7 +2488,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
   },
 ];
 
-export const DRAFT_NOTE = "Saved to Drafts in Orbit Mail. Nothing is sent.";
+export const DRAFT_NOTE = "Saved to Drafts in Orbit Mail unless you choose to send it.";
 
 export type ActionAlternative = { key: "send"; label: string; tool: string; title: (title: string) => string; lines: (lines: string[]) => string[] };
 
@@ -2550,6 +2562,14 @@ const EXTERNAL_TOOLS = new Set([
   "list_activities",
   "get_workflow_run",
   "get_proposal",
+  "list_calendar_events",
+  "get_overview",
+  "list_tasks",
+  "list_companies",
+  "list_contacts",
+  "get_board",
+  "get_workflow",
+  "list_email_templates",
 ]);
 
 const TOOL_TIMEOUT_MS = 90_000;
@@ -2600,6 +2620,7 @@ export async function recordNames(actor: UserActor, args: Args[]) {
        select id, name from crm.opportunities where id = any($1::uuid[])
        union all
        select id, name from crm.pipeline_stages where id = any($1::uuid[])
+
        union all
        select id, name from crm.pipelines where id = any($1::uuid[]) and kind = 'board'
        union all
@@ -2619,6 +2640,14 @@ export async function recordNames(actor: UserActor, args: Args[]) {
       [list, actor.workspaceId],
     );
     for (const row of result.rows) if (row.name) names.set(row.id, row.name);
+    const details = await db.query<{ id: string; name: string }>(
+      `select id::text || ':flag' as id, case when is_won then 'won' else 'lost' end as name
+         from crm.pipeline_stages where id = any($1::uuid[]) and (is_won or is_lost)
+       union all
+       select id::text || ':from', from_email from crm.mail_messages where id = any($1::uuid[]) and nullif(trim(from_email), '') is not null`,
+      [list],
+    );
+    for (const row of details.rows) names.set(row.id, row.name);
   });
   return names;
 }
@@ -2648,7 +2677,7 @@ export async function runTool(actor: UserActor, name: string, args: Args, option
     );
   });
   try {
-    const output = await Promise.race([tool.run(actor, cleaned, { callId: options.callId }), late]);
+    const output = await Promise.race([tool.run(actor, cleaned, { callId: options.callId, deadline: tool.write ? options.deadline : Date.now() + limit }), late]);
     return marked(name, output);
   } catch (error) {
     if (error instanceof CrmError) return { error: error.message, field: error.details?.field ?? null };

@@ -8,9 +8,10 @@ import { installLaunchAgent, LOG_FILE, uninstallLaunchAgent } from "./launch";
 import type { CompanionJob } from "./protocol";
 import { cleanEnv, runTurn, type Sdk } from "./turn";
 
-const VERSION = "1.2.0";
+const VERSION = "1.3.0";
 const DEFAULT_URL = "https://orbit.geteclipse.co";
 const ACCOUNT_TIMEOUT_MS = 45_000;
+const HEARTBEAT_MS = 15_000;
 const sdk: Sdk = { query, createSdkMcpServer, tool };
 
 type Args = { pair?: string; url?: string; name?: string; logout: boolean; help: boolean; version: boolean; install: boolean; uninstall: boolean };
@@ -81,28 +82,52 @@ async function pair(url: string, code: string, name: string) {
   return result.token;
 }
 
+let current: { api: Api; jobId: string } | null = null;
+
 async function handle(api: Api, job: CompanionJob, cwd: string) {
   const started = Date.now();
+  const cancel = new AbortController();
+  const cancelled = (error: unknown) => {
+    if (error instanceof ApiError && error.status === 409) cancel.abort();
+  };
+  const beat = setInterval(() => void api.heartbeat(job.id).catch(cancelled), HEARTBEAT_MS);
+  current = { api, jobId: job.id };
   log(`Answering on ${job.request.model}…`);
   try {
     const result = await runTurn(job.request, {
       sdk,
       cwd,
       env: process.env,
-      callTool: (call) => api.tool(job.id, call),
+      signal: cancel.signal,
+      callTool: (call) =>
+        api.tool(job.id, call).catch((error: unknown) => {
+          cancelled(error);
+          throw error;
+        }),
       onTool: (name) => log(`  ${name}`),
     });
+    if (cancel.signal.aborted) throw new ApiError("That question was cancelled in Orbit.", 409);
     await api.complete(job.id, result);
     log(`Done in ${Math.round((Date.now() - started) / 1000)}s.`);
   } catch (error) {
-    if (error instanceof ApiError && error.status === 409) {
+    if (cancel.signal.aborted || (error instanceof ApiError && error.status === 409)) {
       log("That question was cancelled in Orbit.");
       return;
     }
     const message = error instanceof Error ? error.message : String(error);
     log(`Couldn't answer: ${message}`);
     await api.fail(job.id, message).catch(() => undefined);
+  } finally {
+    clearInterval(beat);
+    current = null;
   }
+}
+
+async function shutdown() {
+  log("Stopped.");
+  const working = current;
+  if (working) await working.api.fail(working.jobId, "Orbit Agent was stopped on the Mac before it finished.", 5_000).catch(() => undefined);
+  process.exit(0);
 }
 
 async function serve(api: Api, cwd: string) {
@@ -218,10 +243,8 @@ async function main() {
       ? "Waiting for questions. Leave this running; press Ctrl+C to stop. To keep it running without this window, run it again with --install."
       : "Waiting for questions.",
   );
-  process.on("SIGINT", () => {
-    log("Stopped.");
-    process.exit(0);
-  });
+  process.on("SIGINT", () => void shutdown());
+  process.on("SIGTERM", () => void shutdown());
   await serve(api, cwd);
 }
 

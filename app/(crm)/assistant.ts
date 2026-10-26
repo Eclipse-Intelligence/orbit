@@ -1,9 +1,7 @@
 "use server";
 
-import { connectedProviders } from "@/lib/ai-accounts/store";
 import type { ModelSource } from "@/lib/assistant/models";
-import { listCompanions } from "@/lib/companion/pairing";
-import { deleteConversation, getConversation, listConversations } from "@/lib/assistant/chat";
+import { connectedSources, deleteConversation, getConversation, listConversations, stopConversation } from "@/lib/assistant/chat";
 import { getUserActor } from "@/lib/auth/user";
 import { CrmError } from "@/lib/crm/errors";
 
@@ -35,14 +33,24 @@ export async function deleteConversationAction(id: string) {
   }
 }
 
-export async function connectedSourcesAction(): Promise<ModelSource[]> {
+export async function stopConversationAction(id: string) {
   const user = await getUserActor();
-  if (!user) return [];
+  if (!user) return { error: "Sign in again." };
   try {
-    const [providers, companions] = await Promise.all([connectedProviders(user), listCompanions(user)]);
-    return [...providers, ...(companions.length > 0 ? (["claude"] as const) : [])];
+    await stopConversation(user, id);
+    return {};
+  } catch (error) {
+    return { error: error instanceof CrmError ? error.message : "Could not stop that answer." };
+  }
+}
+
+export async function connectedSourcesAction(): Promise<ModelSource[] | null> {
+  const user = await getUserActor();
+  if (!user) return null;
+  try {
+    return await connectedSources(user);
   } catch (error) {
     console.error("Could not read AI accounts", error);
-    return [];
+    return null;
   }
 }

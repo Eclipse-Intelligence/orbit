@@ -40,7 +40,8 @@ export function createApi(baseUrl: string, token: string | null, fetchImpl: type
     tool: (jobId: string, toolCall: CompanionCall) =>
       call<CompanionToolResult>(`/api/companion/jobs/${jobId}/tool`, { body: toolCall, timeoutMs: 130_000 }),
     complete: (jobId: string, result: CompanionResult) => call<{ ok: true }>(`/api/companion/jobs/${jobId}/complete`, { body: result }),
-    fail: (jobId: string, error: string) => call<{ ok: true }>(`/api/companion/jobs/${jobId}/fail`, { body: { error } }),
+    fail: (jobId: string, error: string, timeoutMs?: number) => call<{ ok: true }>(`/api/companion/jobs/${jobId}/fail`, { body: { error }, timeoutMs }),
+    heartbeat: (jobId: string) => call<{ ok: true }>(`/api/companion/jobs/${jobId}/heartbeat`, { body: {}, timeoutMs: 20_000 }),
   };
 }
 
