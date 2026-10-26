@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { SettingsCard } from "@/components/crm/settings-ui";
 import type { SendIdentity } from "@/lib/mail/identities";
+import { cn } from "@/lib/utils";
+import { Radio } from "@/components/_ui/radio";
 
 type Source = { id: string; email: string };
 
@@ -86,7 +88,7 @@ export default function SendingAddressesSettings({ identities, sources, suggeste
               <legend className="caption-style text-subtle pb-1.5">Provider</legend>
               {(["neo", "other"] as const).map((item) => (
                 <label key={item} className="flex cursor-pointer items-center gap-2 text-[14px]">
-                  <input type="radio" name="provider-choice" checked={provider === item} onChange={() => setProvider(item)} className="accent-primary" />
+                  <Radio name="provider-choice" checked={provider === item} onChange={() => setProvider(item)} />
                   {item === "neo" ? "Neo" : "Other (SMTP)"}
                 </label>
               ))}
@@ -129,7 +131,7 @@ export default function SendingAddressesSettings({ identities, sources, suggeste
             )}
             <label className="flex flex-col gap-1">
               <span className="caption-style text-subtle">Its mail arrives in</span>
-              <select name="sourceId" defaultValue={suggestedSource ?? sources[0]?.id} className={field}>
+              <select name="sourceId" defaultValue={suggestedSource ?? sources[0]?.id} className={cn(field, "select-chevron cursor-pointer")}>
                 {sources.map((source) => (
                   <option key={source.id} value={source.id}>
                     {source.email}

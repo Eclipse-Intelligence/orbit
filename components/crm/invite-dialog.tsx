@@ -28,6 +28,7 @@ import { parseDateTime } from "@/lib/time";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
 import { cn } from "@/lib/utils";
 import XIcon from "@/public/assets/images/companies/detail/x.svg";
+import { textareaClass } from "@/components/_ui/field-styles";
 
 export type InviteGuestDraft = {
   email: string;
@@ -466,7 +467,7 @@ function InviteForm({
             maxLength={INVITE_NOTES_MAX}
             placeholder="Agenda or anything guests should know"
             onChange={(event) => setNotes(event.target.value)}
-            className="border-line-strong bg-secondary focus-visible:border-ring placeholder:text-subtle min-h-24 w-full rounded-lg border px-3 py-2 text-[14px] leading-5 outline-none"
+            className={cn(textareaClass, "min-h-24")}
           />
         </Field>
         <div className="flex items-start gap-2">

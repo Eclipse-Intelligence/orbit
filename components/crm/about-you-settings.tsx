@@ -8,11 +8,11 @@ import { Input } from "@/components/_ui/input";
 import { SettingsCard } from "@/components/crm/settings-ui";
 import { draftAboutYouAction, saveAboutYouAction } from "@/app/(crm)/settings/actions";
 import { PERSONAL_LIMITS, type PersonalContextInput } from "@/lib/personal-context-rules";
+import { textareaClass } from "@/components/_ui/field-styles";
 
 type Key = keyof PersonalContextInput;
 
-const AREA =
-  "border-line-strong bg-secondary text-foreground placeholder:text-subtle focus-visible:border-ring w-full resize-y rounded-lg border px-3 py-2 text-[14px] leading-5 outline-none transition-[border-color] duration-150 ease-power3-out";
+const AREA = textareaClass;
 
 function same(left: PersonalContextInput, right: PersonalContextInput) {
   return (Object.keys(left) as Key[]).every((key) => left[key].trim() === right[key].trim());

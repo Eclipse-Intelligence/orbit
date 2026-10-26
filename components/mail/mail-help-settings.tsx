@@ -68,7 +68,7 @@ export default function MailHelpSettings({ initial }: { initial: Settings }) {
               const days = event.target.value === "off" ? null : Number(event.target.value);
               save({ ...settings, autoRemindDays: days }, { autoRemindDays: days });
             }}
-            className="bg-secondary text-foreground h-8 rounded-full px-3 text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+            className="bg-secondary text-foreground select-chevron h-8 cursor-pointer rounded-full pl-3 text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
           >
             {choices.map((choice) => (
               <option key={choice.value} value={choice.value}>

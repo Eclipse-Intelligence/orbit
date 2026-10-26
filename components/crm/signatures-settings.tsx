@@ -5,6 +5,8 @@ import Button from "@/components/_ui/button";
 import { SettingsCard } from "@/components/crm/settings-ui";
 import { saveSignatureAction } from "@/app/(crm)/capture/actions";
 import type { Sender } from "@/lib/crm/inbox";
+import { textareaClass } from "@/components/_ui/field-styles";
+import { cn } from "@/lib/utils";
 
 function SignatureEditor({ sender }: { sender: Sender }) {
   const [value, setValue] = useState(sender.signature ?? "");
@@ -40,7 +42,7 @@ function SignatureEditor({ sender }: { sender: Sender }) {
         maxLength={2000}
         placeholder={"Mark Ridgeon\nFounder, Eclipse\ngeteclipse.co"}
         onChange={(event) => setValue(event.target.value)}
-        className="border-line-strong bg-secondary focus-visible:border-ring placeholder:text-subtle w-full rounded-lg border px-3 py-2 text-[13.5px] leading-5 outline-none"
+        className={cn(textareaClass, "min-h-20 text-[13.5px]")}
       />
       <span className="flex items-center gap-2">
         <Button variant="secondary" size="sm" disabled={pending || value.trim() === saved.trim()} onClick={() => void save()}>

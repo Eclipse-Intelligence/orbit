@@ -13,6 +13,8 @@ import { contactHref } from "@/lib/crm/hrefs";
 import type { CalendarProvider } from "@/lib/crm/calendar-accounts";
 import type { CalendarItem, EventPerson } from "@/lib/crm/calendars";
 import { INVITE_COMMENT_MAX } from "@/lib/invite-rules";
+import { textareaClass } from "@/components/_ui/field-styles";
+import { cn } from "@/lib/utils";
 
 const ATTENDEES_SHOWN = 25;
 
@@ -216,7 +218,7 @@ function CancelMeeting({ item }: { item: CalendarItem }) {
         value={comment}
         maxLength={INVITE_COMMENT_MAX}
         onChange={(event) => setComment(event.target.value)}
-        className="border-line-strong bg-secondary focus-visible:border-ring min-h-16 w-full rounded-lg border px-3 py-2 text-[14px] leading-5 outline-none"
+        className={cn(textareaClass, "min-h-16")}
       />
       {error && (
         <p role="alert" className="caption-style text-danger">

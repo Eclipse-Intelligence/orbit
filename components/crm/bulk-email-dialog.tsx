@@ -25,6 +25,7 @@ import {
 } from "@/lib/crm/personalise";
 import { sendPaced } from "@/lib/crm/send-queue";
 import { cn } from "@/lib/utils";
+import { textareaClass } from "@/components/_ui/field-styles";
 
 type Status = "queued" | "sending" | "sent" | "failed" | "stopped";
 
@@ -344,7 +345,7 @@ export default function BulkEmailDialog({
           field.current = "body";
         }}
                   onChange={(event) => setBody(event.target.value)}
-                  className="border-line-strong bg-secondary focus-visible:border-ring min-h-32 w-full rounded-lg border px-3 py-2 text-[14px] leading-5 outline-none"
+                  className={cn(textareaClass, "min-h-32")}
                 />
               </div>
               <TokenChips onInsert={insert} text={`${subject}\n${body}`} />

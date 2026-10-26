@@ -6,6 +6,7 @@ import Switch from "@/components/_ui/switch";
 import { SettingsCard } from "@/components/crm/settings-ui";
 import { disablePush, enablePush, isAppleMobile, pushState, sendPushTest, type PushState } from "@/components/push/push-client";
 import type { NotifyMail } from "@/lib/mail/notify";
+import { Radio } from "@/components/_ui/radio";
 
 const LEVELS: { id: NotifyMail; label: string; detail: string }[] = [
   { id: "important", label: "Important only", detail: "People you know and conversations you're in, plus calendar replies." },
@@ -154,13 +155,12 @@ export default function NotificationSettings({
           <legend className="caption-style text-subtle pb-1">Notify me about</legend>
           {LEVELS.map((level) => (
             <label key={level.id} className="flex cursor-pointer items-start gap-3 rounded-lg px-1 py-1">
-              <input
-                type="radio"
+              <Radio
                 name="notify-mail"
                 value={level.id}
                 checked={mail === level.id}
                 onChange={() => void chooseMail(level.id)}
-                className="accent-primary mt-1"
+                className="mt-0.5"
               />
               <span className="flex flex-col">
                 <span className="text-[14px]">{level.label}</span>
@@ -178,7 +178,7 @@ export default function NotificationSettings({
             id="notify-calendar"
             value={calendar}
             onChange={(event) => chooseCalendar(event.target.value)}
-            className="bg-secondary text-foreground h-8 rounded-full px-3 text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+            className="bg-secondary text-foreground select-chevron h-8 cursor-pointer rounded-full pl-3 text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
           >
             {CALENDAR_CHOICES.map((choice) => (
               <option key={choice.value} value={choice.value}>

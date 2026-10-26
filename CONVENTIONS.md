@@ -42,6 +42,7 @@ How Orbit is built. Follow these when changing or adding code. `README.md` cover
 
 - Tailwind only. No CSS modules, no inline style objects except for computed values.
 - Always use `Button` from `components/_ui/button` with an explicit `variant`.
+- Form fields use `Input`, `Textarea`, `NativeSelect` and `Radio` from `components/_ui` (or `inputClass`, `textareaClass` and `selectClass` from `components/_ui/field-styles` when a raw element is needed). They share one border, focus ring and dropdown arrow.
 - Typography comes from `@layer base` in `app/globals.css` (`h1`, `h2`, `h3`, `p`, and `.lead-style`, `.caption-style`, `.eyebrow-style`). Don't restyle headings or paragraphs per component.
 - Icons are SVG files in `public/assets/images`, imported as components through SVGR (`import PlusIcon from "@/public/assets/images/_common/plus.svg"`). No icon libraries. Images, video, Rive and Lottie go through `Asset`.
 - Widths for text blocks use `em` (for example `max-w-[47.5em]`).

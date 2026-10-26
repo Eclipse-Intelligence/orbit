@@ -295,7 +295,7 @@ export default function ActivityPad({
 
       {(hasText || fixedContact || fixedCompany) && hasText && (
         <div className="flex flex-wrap items-center gap-1.5">
-          <label className={cn(CHIP, "relative cursor-pointer pr-2")}>
+          <label className={cn(CHIP, "focus-within:ring-ring/60 relative cursor-pointer pr-2 focus-within:ring-2")}>
             <span className="sr-only">Activity type</span>
             <select
               value={finalType}

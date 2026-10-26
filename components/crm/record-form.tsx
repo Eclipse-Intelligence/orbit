@@ -1,12 +1,12 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
+import { selectClass } from "@/components/_ui/field-styles";
 import { teamsCallUrl } from "@/lib/phone";
 import { KEYBOARD_ROW_CLASS } from "@/lib/shortcuts";
 import { cn } from "@/lib/utils";
 import PhoneIcon from "@/public/assets/images/_common/phone.svg";
 
-export const recordSelectClass =
-  "flex h-9 w-full rounded-lg border border-line-strong bg-secondary px-3 text-[14px] leading-none text-foreground outline-none";
+export const recordSelectClass = selectClass;
 
 export function RecordSelect({
   id,
