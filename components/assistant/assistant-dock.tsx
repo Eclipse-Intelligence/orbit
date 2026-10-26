@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Kbd } from "@/components/_ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popover";
@@ -42,6 +42,15 @@ const SETTINGS_KEY = "orbit-assistant-settings";
 const CONVERSATION_KEY = "orbit-assistant-conversation";
 
 type LiveTool = { id: string; label: string; status: "running" | "done" };
+
+const STARTERS: { match: RegExp; prompts: string[] }[] = [
+  { match: /^\/mail/, prompts: ["What needs a reply from me today?", "Summarise what customers emailed this week", "Draft a follow-up to anyone who hasn't replied"] },
+  { match: /^\/companies\/|^\/contacts\//, prompts: ["Summarise where we are with them", "What should my next step be?", "Draft a check-in email"] },
+  { match: /^\/opportunities/, prompts: ["Which deals need attention this week?", "What's likely to close this month?", "Which deals have gone quiet?"] },
+  { match: /^\/tasks/, prompts: ["What's overdue, and what should I do first?", "Plan my day from my tasks and meetings", "Which tasks can wait?"] },
+  { match: /^\/calendar/, prompts: ["Prepare me for my next meeting", "Who am I meeting this week, and what do I need to know?", "Find time for a call next week"] },
+  { match: /.*/, prompts: ["What should I focus on today?", "Which relationships are cooling?", "Summarise this morning's brief"] },
+];
 
 const FOLLOW_MS = 30 * 60_000;
 const FOLLOW_EVERY_MS = 5_000;
@@ -396,6 +405,7 @@ function MentionChip({ mention }: { mention: Mention }) {
 
 export default function AssistantDock() {
   const router = useRouter();
+  const pathname = usePathname();
   const { mac } = useShortcuts();
   const { covered, lift } = useScreenState();
   const [open, setOpen] = useState(false);
@@ -407,6 +417,7 @@ export default function AssistantDock() {
   const [conversation, setConversation] = useState<ConversationSummary | null>(null);
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [live, setLive] = useState<LiveTool[]>([]);
+  const [streamed, setStreamed] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -537,6 +548,8 @@ export default function AssistantDock() {
         return [...others, { id: event.id, label: event.label, status: event.status }];
       });
     }
+    if (event.type === "draft") setStreamed(event.text);
+    if (event.type === "message" || event.type === "actions" || event.type === "error") setStreamed(null);
     if (event.type === "message") {
       setLive([]);
       setMessages((current) => {
@@ -577,6 +590,7 @@ export default function AssistantDock() {
     setError(null);
     setNotice(null);
     setLive([]);
+    setStreamed(null);
     const controller = new AbortController();
     abort.current = controller;
     try {
@@ -595,6 +609,7 @@ export default function AssistantDock() {
       abort.current = null;
       setBusy(false);
       setLive([]);
+      setStreamed(null);
       if (waiting.current && conversationId.current) {
         waiting.current = false;
         void follow(conversationId.current);
@@ -789,7 +804,7 @@ export default function AssistantDock() {
           }}
           className={cn(
             "min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 [mask-image:linear-gradient(to_bottom,transparent,black_1rem,black_calc(100%-1.5rem),transparent)]",
-            messages.length > 0 || busy ? "py-3 md:min-h-[12rem]" : "md:flex-none",
+            messages.length > 0 || busy ? "py-3 md:min-h-[12rem]" : "pt-3 md:flex-none",
           )}
         >
           {messages.length > 0 || busy ? (
@@ -797,6 +812,11 @@ export default function AssistantDock() {
               {messages.map((message) => (
                 <Message key={message.id} message={message} busy={busy} onDecide={decide} />
               ))}
+              {busy && streamed && (
+                <div aria-busy="true">
+                  <Markdown text={streamed} />
+                </div>
+              )}
               {busy && (
                 <div className="flex flex-col gap-1.5" aria-live="polite">
                   {live.map((tool) => (
@@ -809,7 +829,7 @@ export default function AssistantDock() {
                       {tool.status === "done" ? " ✓" : "…"}
                     </span>
                   ))}
-                  {live.every((tool) => tool.status === "done") && (
+                  {live.every((tool) => tool.status === "done") && !streamed && (
                     <span className="caption-style text-subtle flex items-center gap-2">
                       <span aria-hidden className="bg-soft size-1.5 animate-pulse rounded-full" />
                       Thinking…
@@ -818,7 +838,24 @@ export default function AssistantDock() {
                 </div>
               )}
             </div>
-          ) : null}
+          ) : (
+            <div className="flex flex-col gap-3 pt-1 pb-2">
+              <ul className="flex flex-wrap gap-1.5" aria-label="Suggestions">
+                {(STARTERS.find((starter) => starter.match.test(pathname))?.prompts ?? []).map((prompt) => (
+                  <li key={prompt}>
+                    <button
+                      type="button"
+                      onClick={() => send(prompt)}
+                      className="text-soft hover:text-foreground focus-visible:ring-ring/60 rounded-full bg-white/[0.05] px-3 py-1.5 text-left text-[13px] leading-5 outline-none transition-colors duration-150 hover:bg-white/[0.09] focus-visible:ring-2"
+                    >
+                      {prompt}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              <p className="caption-style text-subtle">It reads your CRM, mail and calendar. Anything it changes waits for you to confirm.</p>
+            </div>
+          )}
           {error && (
             <p role="alert" className="caption-style text-danger pt-3">
               {error}
