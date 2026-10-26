@@ -645,6 +645,7 @@ type ToolDraftInput = {
   cc?: string[];
   subject?: string;
   body: string;
+  remindHours?: number | null;
 };
 
 export async function saveDraftForAgent(actor: UserActor, input: ToolDraftInput, options: { origin: string | null; fetchImpl?: typeof fetch }) {
@@ -722,6 +723,7 @@ export async function sendForAgent(
     bcc: [],
     subject: input.subject?.trim() || defaults.subject,
     body: input.body,
+    remindHours: input.remindHours ?? null,
   });
   const result = await sendMailDraft(actor, draft, options);
   return {

@@ -1,9 +1,9 @@
 import { AssistantError, complete, type ChatMessage, type ProviderState, type Source, type ToolCall } from "@/lib/assistant/gateway";
 import { assistantModel, settingsFor, type ReasoningLevel } from "@/lib/assistant/models";
 import { systemPrompt } from "@/lib/assistant/prompt";
-import { ACTION_ALTERNATIVES, ASSISTANT_TOOLS, TOOL_BY_NAME, actionAlternative, describeAction, recordNames, runTool, toolJson } from "@/lib/assistant/tools";
+import { ACTION_ALTERNATIVES, ASSISTANT_TOOLS, TOOL_BY_NAME, actionAlternative, describeAction, recordNames, runTool, toolDescription, toolJson } from "@/lib/assistant/tools";
 import type { CompanionResult, Effort } from "@/companion/src/protocol";
-import { cancelCompanionJob, enqueueCompanionJob, readCompanionJob } from "@/lib/companion/jobs";
+import { cancelCompanionJob, companionBusy, enqueueCompanionJob, readCompanionJob } from "@/lib/companion/jobs";
 import { companionOfflineMessage, companionOnline } from "@/lib/companion/pairing";
 import { userLinks } from "@/lib/assistant/links";
 import { aboutYouSection, getColleagues, getPersonalContext } from "@/lib/crm/personal-context";
@@ -17,7 +17,11 @@ import { iso, isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
 
-const MAX_ROUNDS = 24;
+export const MAX_ROUNDS = 40;
+export const STOPPED_MESSAGE = "I've stopped after a lot of steps. Ask again more narrowly, or say \"carry on\".";
+const HISTORY_BUDGET = 360_000;
+const OLD_RESULT_MAX = 4_000;
+const CURRENT_RESULT_MAX = 40_000;
 const COMPANION_POLL_MS = 1_000;
 const COMPANION_CLAIM_MS = 20_000;
 const TITLE_MAX = 80;
@@ -249,13 +253,26 @@ async function openConversation(
   });
 }
 
-function history(rows: MessageRow[]): ChatMessage[] {
+function clipResult(content: string, max: number) {
+  return content.length > max
+    ? `${content.slice(0, max)}\n[Cut ${content.length - max} characters to save space. Call the tool again if you need the rest.]`
+    : content;
+}
+
+function weight(message: ChatMessage) {
+  const calls = message.role === "assistant" && message.tool_calls ? message.tool_calls.reduce((sum, call) => sum + call.function.arguments.length, 0) : 0;
+  return (typeof message.content === "string" ? message.content.length : 0) + calls;
+}
+
+export function history(rows: MessageRow[], budget = HISTORY_BUDGET): ChatMessage[] {
   const answered = new Set(rows.filter((row) => row.role === "tool").map((row) => row.tool_call_id));
+  const lastUser = rows.map((row) => row.role).lastIndexOf("user");
   const messages: ChatMessage[] = [];
-  for (const row of rows) {
+  rows.forEach((row, index) => {
     if (row.role === "user") messages.push({ role: "user", content: expandMentions(row.content) });
-    else if (row.role === "tool" && row.tool_call_id) messages.push({ role: "tool", tool_call_id: row.tool_call_id, content: row.content });
-    else if (row.role === "assistant") {
+    else if (row.role === "tool" && row.tool_call_id) {
+      messages.push({ role: "tool", tool_call_id: row.tool_call_id, content: clipResult(row.content, index > lastUser ? CURRENT_RESULT_MAX : OLD_RESULT_MAX) });
+    } else if (row.role === "assistant") {
       const calls = (row.tool_calls ?? []).filter((call) => answered.has(call.id));
       const state = row.provider_state ?? null;
       messages.push(
@@ -264,8 +281,18 @@ function history(rows: MessageRow[]): ChatMessage[] {
           : { role: "assistant", content: row.content || "", state },
       );
     }
+  });
+  const suffix = new Array<number>(messages.length + 1).fill(0);
+  for (let index = messages.length - 1; index >= 0; index -= 1) suffix[index] = suffix[index + 1] + weight(messages[index]);
+  if (suffix[0] <= budget) return messages;
+  const starts = messages.flatMap((message, index) => (message.role === "user" ? [index] : []));
+  const start = starts.find((index) => suffix[index] <= budget) ?? starts[starts.length - 1] ?? 0;
+  const kept = messages.slice(start);
+  const first = kept[0];
+  if (first?.role === "user") {
+    kept[0] = { role: "user", content: `(Earlier parts of this conversation were left out to save space. Ask the user if you need something from them.)\n\n${first.content}` };
   }
-  return messages;
+  return kept;
 }
 
 function titleFrom(message: string) {
@@ -296,7 +323,7 @@ async function declinePending(actor: UserActor, conversationId: string, rows: Me
 function companionTools() {
   return ASSISTANT_TOOLS.map((tool) => ({
     name: tool.name,
-    description: tool.description,
+    description: toolDescription(tool),
     parameters: tool.parameters,
     write: Boolean(tool.write),
   }));
@@ -378,8 +405,8 @@ async function promptFor(actor: UserActor, conversation: ConversationRow) {
         .join("\n"),
     ).catch(() => ""),
   ]);
-  const learned = await memoryBriefing(actor, { brief: brief?.body ?? null, focus }).catch(() => "");
-  return systemPrompt(actor, { webSearch: conversation.web_search, links, about: aboutYouSection(about, colleagues) + learned });
+  const learned = await memoryBriefing(actor, { focus }).catch(() => "");
+  return systemPrompt(actor, { webSearch: conversation.web_search, links, about: aboutYouSection(about, colleagues) + learned, briefReady: Boolean(brief) });
 }
 
 async function runCompanionTurn(actor: UserActor, conversation: ConversationRow, apiModel: string, emit: Emit, deadline: number) {
@@ -395,6 +422,7 @@ async function runCompanionTurn(actor: UserActor, conversation: ConversationRow,
   });
   const started = Date.now();
   let seen = 0;
+  let queuedNotice = false;
   while (Date.now() < deadline - 5_000) {
     await new Promise((resolve) => setTimeout(resolve, COMPANION_POLL_MS));
     const job = await readCompanionJob(actor, jobId);
@@ -412,6 +440,11 @@ async function runCompanionTurn(actor: UserActor, conversation: ConversationRow,
     if (job.status === "failed") throw new AssistantError(job.error ?? "Orbit Agent couldn't answer.");
     if (job.status === "cancelled") return;
     if (job.status === "queued" && Date.now() - started > COMPANION_CLAIM_MS) {
+      if (await companionBusy(actor, jobId)) {
+        if (!queuedNotice) emit({ type: "waiting", message: "Claude is finishing another answer on your Mac. This one is next." });
+        queuedNotice = true;
+        continue;
+      }
       await cancelCompanionJob(actor, jobId);
       throw new AssistantError("Orbit Agent on your Mac isn't picking up. Check it's still running, then try again.");
     }
@@ -420,6 +453,25 @@ async function runCompanionTurn(actor: UserActor, conversation: ConversationRow,
 }
 
 async function runLoop(
+  actor: UserActor,
+  conversation: ConversationRow,
+  emit: Emit,
+  deadline: number,
+  fetchImpl?: typeof fetch,
+) {
+  try {
+    await runRounds(actor, conversation, emit, deadline, fetchImpl);
+  } catch (error) {
+    if (!(error instanceof AssistantError)) throw error;
+    const failed = await insertMessage(actor, conversation.id, {
+      role: "assistant",
+      content: `I couldn't finish that. ${error.message} Say "try again" to have another go.`,
+    });
+    emit({ type: "message", message: display(failed) });
+  }
+}
+
+async function runRounds(
   actor: UserActor,
   conversation: ConversationRow,
   emit: Emit,
@@ -469,7 +521,7 @@ async function runLoop(
       reads.map(async (call) => {
         const label = TOOL_BY_NAME.get(call.function.name)?.label ?? call.function.name;
         emit({ type: "tool", id: call.id, name: call.function.name, label, status: "running" });
-        const output = await runTool(actor, call.function.name, parseArgs(call.function.arguments));
+        const output = await runTool(actor, call.function.name, parseArgs(call.function.arguments), { deadline: deadline - 20_000 });
         await insertMessage(actor, conversation.id, {
           role: "tool",
           content: toolJson(output),
@@ -498,7 +550,7 @@ async function runLoop(
   }
   const stopped = await insertMessage(actor, conversation.id, {
     role: "assistant",
-    content: "I've stopped after a lot of steps. Ask again more narrowly, or say \"carry on\".",
+    content: STOPPED_MESSAGE,
   });
   emit({ type: "message", message: display(stopped) });
 }
@@ -574,7 +626,9 @@ export async function decideActions(
     const alternative = variants.get(action.id) ? ACTION_ALTERNATIVES[action.name] : undefined;
     const chosenAlternative = alternative && alternative.key === variants.get(action.id) ? alternative : undefined;
     await update(action.id, { status: "running" });
-    const output = (await runTool(actor, chosenAlternative?.tool ?? call.function.name, parseArgs(call.function.arguments))) as Record<string, unknown> | null;
+    const output = (await runTool(actor, chosenAlternative?.tool ?? call.function.name, parseArgs(call.function.arguments), {
+      deadline: options.deadline - 20_000,
+    })) as Record<string, unknown> | null;
     const failed = Boolean(output && typeof output === "object" && "error" in output);
     await insertMessage(actor, conversation.id, {
       role: "tool",

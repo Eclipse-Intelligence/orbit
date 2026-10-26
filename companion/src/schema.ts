@@ -39,11 +39,20 @@ function zodFor(input: unknown): z.ZodType {
   return typeof schema.description === "string" ? out.describe(schema.description) : out;
 }
 
+function allowsNull(input: unknown) {
+  const description = asSchema(input).description;
+  return typeof description === "string" && /\bnull\b/i.test(description);
+}
+
+function optional(input: unknown) {
+  return allowsNull(input) ? zodFor(input).nullable().optional() : zodFor(input).optional();
+}
+
 export function shapeFor(input: unknown): Record<string, z.ZodType> {
   const schema = asSchema(input);
   const properties = asSchema(schema.properties);
   const required = new Set(Array.isArray(schema.required) ? schema.required.filter((key): key is string => typeof key === "string") : []);
   return Object.fromEntries(
-    Object.entries(properties).map(([key, value]) => [key, required.has(key) ? zodFor(value) : zodFor(value).nullable().optional()]),
+    Object.entries(properties).map(([key, value]) => [key, required.has(key) ? zodFor(value) : optional(value)]),
   );
 }

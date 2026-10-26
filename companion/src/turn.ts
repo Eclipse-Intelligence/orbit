@@ -26,6 +26,8 @@ const SERVER = "orbit";
 const PREFIX = `mcp__${SERVER}__`;
 const MAX_TURNS = 40;
 
+export const STOPPED = "I've stopped after a lot of steps. Ask again more narrowly, or say \"carry on\".";
+
 export const PROPOSED =
   "Proposed. Orbit will show this change to the user for approval. It has not happened yet. Do not call this tool again for the same change. When you have proposed everything, say in one or two sentences what you proposed and stop.";
 
@@ -110,6 +112,7 @@ export async function runTurn(request: CompanionRequest, deps: TurnDeps): Promis
   let model: string | null = null;
   let usage: Record<string, unknown> | null = null;
   let failure: string | null = null;
+  let stopped = false;
 
   const stream = deps.sdk.query({ prompt: request.prompt, options: turnOptions(request, { [SERVER]: server }, deps, abort) });
   for await (const message of stream as AsyncIterable<SDKMessage>) {
@@ -144,10 +147,12 @@ export async function runTurn(request: CompanionRequest, deps: TurnDeps): Promis
       }
     } else if (message.type === "result") {
       usage = (message.usage as unknown as Record<string, unknown>) ?? null;
-      if (message.subtype !== "success") failure = message.errors.join(" ") || "Claude Code stopped before finishing.";
+      if (message.subtype === "error_max_turns") stopped = true;
+      else if (message.subtype !== "success") failure = message.errors.join(" ") || "Claude Code stopped before finishing.";
       else if (message.is_error) failure = message.result || "Claude Code couldn't answer.";
     }
   }
   if (failure) throw new Error(failure);
-  return { steps: [...steps.values()], results, sources: [...sources.values()], model, usage };
+  const finished = stopped ? [...steps.values(), { text: STOPPED, calls: [] }] : [...steps.values()];
+  return { steps: finished, results, sources: [...sources.values()], model, usage };
 }

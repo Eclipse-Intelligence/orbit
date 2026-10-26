@@ -31,6 +31,7 @@ function account(source: "chatgpt" | "claude", apiModel: string, label: string, 
 export const ASSISTANT_MODELS: AssistantModel[] = [
   orbit("claude-sonnet-5-5", "Sonnet 5.5", "Anthropic"),
   orbit("claude-opus-5-5", "Opus 5.5", "Anthropic"),
+  orbit("claude-haiku-5-5", "Haiku 5.5", "Anthropic"),
   orbit("gpt-6-astra", "GPT-6 Astra", "OpenAI"),
   orbit("gpt-6.1-sol", "GPT-6.1 Sol", "OpenAI"),
   orbit("grok-4.7", "Grok 4.7", "xAI", ["low", "medium", "high", "xhigh"]),

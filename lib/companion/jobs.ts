@@ -7,7 +7,7 @@ import { isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
 
 const POLL_MS = 1_500;
-const QUEUE_EXPIRY = "2 minutes";
+const QUEUE_EXPIRY = "10 minutes";
 
 type ToolEvent = { type: "tool"; id: string; name: string; label: string; status: "running" | "done" };
 
@@ -46,6 +46,19 @@ export async function readCompanionJob(actor: UserActor, jobId: string): Promise
     );
     if (!result.rows[0]) throw new CrmError("not_found", "That request is gone.", 404);
     return result.rows[0];
+  });
+}
+
+export async function companionBusy(actor: UserActor, exceptJobId: string) {
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ busy: boolean }>(
+      `select exists (
+         select 1 from crm.ai_companion_jobs
+         where user_id = $1 and status = 'running' and id <> $2 and claimed_at > now() - interval '15 minutes'
+       ) as busy`,
+      [actor.userId, exceptJobId],
+    );
+    return result.rows[0]?.busy === true;
   });
 }
 
