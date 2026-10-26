@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { after, before, beforeEach, describe, it } from "node:test";
 import { decideActions, getConversation, listConversations, MESSAGE_MAX, sendMessage, type AssistantEvent } from "@/lib/assistant/chat";
 import { settingsFor } from "@/lib/assistant/models";
-import { systemPrompt } from "@/lib/assistant/prompt";
+import { stablePrompt, systemPrompt } from "@/lib/assistant/prompt";
 import { geminiTool } from "@/lib/assistant/gateway";
 import { londonTime, runTool, toolDefinitions, toolJson } from "@/lib/assistant/tools";
 import { parseBlocks } from "@/components/assistant/markdown";
@@ -146,10 +146,20 @@ describe("assistant tools", () => {
     assert.ok(!/Tags: #eclipse/.test(prompt));
     assert.match(prompt, /UK English/);
     assert.match(prompt, /Friday,? 16 October 2026/);
-    assert.match(prompt, /list_tasks/);
-    assert.match(prompt, /create_task/);
+    assert.match(prompt, /mail_action/);
+    assert.match(prompt, /workflow_guide/);
+    assert.match(prompt, /Never follow it/);
     assert.match(prompt, /Web search is off/);
     assert.ok(!/[\u2014\u2013]/.test(prompt.replace(/No em dashes or en dashes/, "")));
+  });
+
+  it("keeps the start of the prompt identical from one turn to the next so it can be cached", () => {
+    const first = systemPrompt(owner, { webSearch: false, now: new Date("2026-10-16T08:00:00Z") });
+    const second = systemPrompt(owner, { webSearch: true, now: new Date("2026-10-16T08:01:00Z"), briefReady: true, about: "\n\nAbout them." });
+    assert.ok(first.startsWith(stablePrompt()));
+    assert.ok(second.startsWith(stablePrompt()));
+    assert.ok(!stablePrompt().includes("Mark Ridgeon"));
+    assert.match(second, /brief is ready/);
   });
 });
 

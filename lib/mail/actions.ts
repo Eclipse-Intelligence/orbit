@@ -207,3 +207,16 @@ export async function applyMailAction(
   if (failures.length > 0) throw new CrmError("mail_action_failed", failureMessage(failures[0]), 502);
   return { changed: done.length };
 }
+
+export async function threadForEmail(actor: UserActor, emailId: string) {
+  if (!isUuid(emailId)) throw new CrmError("not_found", "That email isn't in Orbit Mail. Search for it again.", 404);
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ source_id: string; tk: string; subject: string | null }>(
+      "select source_id, coalesce(thread_key, 'm:' || id::text) as tk, subject from crm.mail_messages where id = $1 and user_id = $2",
+      [emailId, actor.userId],
+    );
+    const row = result.rows[0];
+    if (!row) throw new CrmError("not_found", "That email isn't in Orbit Mail. Search for it again.", 404);
+    return { thread: `${row.source_id}|${row.tk}`, subject: row.subject };
+  });
+}

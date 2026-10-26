@@ -13,6 +13,7 @@ import { stripQuoted } from "@/lib/mail/format";
 import { workingDaysLater } from "@/lib/mail/later";
 import { offerTimes, refreshTimes, TIMES_MARK } from "@/lib/mail/scheduling";
 import { splitCase, splitJoin } from "@/lib/mail/split";
+import { parseThreadKey } from "@/lib/mail/threads";
 import type { MailAddress } from "@/lib/mail/types";
 
 const LOOKBACK_HOURS = 48;
@@ -486,6 +487,25 @@ export async function notePreparedSent(db: Db, actor: UserActor, messageId: stri
      where user_id = $1 and message_id = $2 and kind in ('reply', 'nudge') and state in ('ready', 'used')`,
     [actor.userId, messageId, body.slice(0, BODY_MAX)],
   );
+}
+
+export async function addFollowUp(actor: UserActor, input: { thread: string; dueAt: Date; subject: string | null }) {
+  if (Number.isNaN(input.dueAt.getTime()) || input.dueAt.getTime() < Date.now() + 60_000 || input.dueAt.getTime() > Date.now() + 365 * 86_400_000) {
+    throw new CrmError("invalid_input", "Choose a time at least a minute from now and within a year.", 400, { field: "until" });
+  }
+  const { sourceId, key } = parseThreadKey(input.thread);
+  return withActor(actor, async (db) => {
+    await db.query(
+      "update crm.mail_reminders set state = 'done' where user_id = $1 and source_id = $2 and thread_key = $3 and kind = 'follow_up' and state = 'waiting'",
+      [actor.userId, sourceId, key],
+    );
+    const result = await db.query<{ id: string; due_at: Date }>(
+      `insert into crm.mail_reminders (workspace_id, user_id, source_id, thread_key, kind, due_at, subject)
+       values ($1, $2, $3, $4, 'follow_up', $5, $6) returning id, due_at`,
+      [actor.workspaceId, actor.userId, sourceId, key, input.dueAt, input.subject?.slice(0, 2000) ?? null],
+    );
+    return { id: result.rows[0].id, dueAt: result.rows[0].due_at.toISOString() };
+  });
 }
 
 export async function cancelFollowUp(actor: UserActor, id: string) {

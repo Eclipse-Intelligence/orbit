@@ -180,7 +180,25 @@ export async function complete(input: CompleteInput): Promise<Completion> {
   }
 }
 
+const RETRY_STATUSES = new Set([429, 500, 502, 503, 504]);
+const RETRY_PAUSE_MS = 1_500;
+const RETRY_MIN_MS = 20_000;
+
+class RetryableGatewayError extends AssistantError {}
+
 async function completeGateway(input: CompleteInput): Promise<Completion> {
+  const started = Date.now();
+  try {
+    return await gatewayAttempt(input, input.timeoutMs);
+  } catch (error) {
+    const left = input.timeoutMs - (Date.now() - started) - RETRY_PAUSE_MS;
+    if (!(error instanceof RetryableGatewayError) || left < RETRY_MIN_MS) throw error;
+    await new Promise((resolve) => setTimeout(resolve, RETRY_PAUSE_MS));
+    return gatewayAttempt(input, left);
+  }
+}
+
+async function gatewayAttempt(input: CompleteInput, timeoutMs: number): Promise<Completion> {
   const apiKey = process.env.LLM_API_KEY?.trim();
   if (!apiKey) throw new AssistantError("Set LLM_API_KEY in Vercel to use the assistant.");
   const raw = input.tools ?? toolDefinitions();
@@ -199,17 +217,18 @@ async function completeGateway(input: CompleteInput): Promise<Completion> {
         max_tokens: MAX_TOKENS,
         ...(input.webSearch ? { web_search_options: { search_context_size: "medium" } } : {}),
       }),
-      signal: AbortSignal.timeout(input.timeoutMs),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (error) {
     if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
-      throw new AssistantError("The model took too long to reply. Try again, or pick a lower reasoning level.");
+      throw new RetryableGatewayError("The model took too long to reply. Try again, or pick a lower reasoning level.");
     }
-    throw new AssistantError("Could not reach the LLM gateway.");
+    throw new RetryableGatewayError("Could not reach the LLM gateway.");
   }
   if (!response.ok) {
     const reason = await detail(response);
-    throw new AssistantError(`The LLM gateway returned ${response.status}${reason ? `: ${reason}` : "."}`);
+    const message = `The LLM gateway returned ${response.status}${reason ? `: ${reason}` : "."}`;
+    throw RETRY_STATUSES.has(response.status) ? new RetryableGatewayError(message) : new AssistantError(message);
   }
   let body: Record<string, unknown>;
   try {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, beforeEach, describe, it } from "node:test";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import { applyCompanionResult, decideActions, getConversation, sendMessage, type AssistantEvent } from "@/lib/assistant/chat";
+import { applyCompanionResult, decideActions, getConversation, sendMessage, STOPPED_MESSAGE, type AssistantEvent } from "@/lib/assistant/chat";
 import { finishCompanionJob, nextCompanionJob, runCompanionTool } from "@/lib/companion/jobs";
 import {
   authenticateCompanion,
@@ -20,7 +20,7 @@ import { getPool } from "@/lib/db/pool";
 import type { CompanionJob, CompanionRequest, CompanionResult } from "@/companion/src/protocol";
 import { shapeFor } from "@/companion/src/schema";
 import { launchPath, launchPlist } from "@/companion/src/launch";
-import { PROPOSED, cleanEnv, runTurn, type Sdk } from "@/companion/src/turn";
+import { PROPOSED, STOPPED, cleanEnv, runTurn, type Sdk } from "@/companion/src/turn";
 import { createUser, resetDatabase } from "./helpers";
 
 function bearer(token: string) {
@@ -191,12 +191,15 @@ describe("Orbit Agent turns", () => {
 
   it("asks you to start Orbit Agent when no Mac is running", async () => {
     const lonely = await createUser("agent-none@orbit.test", "Mark Ridgeon");
-    await assert.rejects(
-      sendMessage(lonely, { message: "Hi", model: "claude/claude-opus-5-5", reasoning: "medium", webSearch: false }, () => undefined, {
-        deadline: deadline(),
-      }),
-      /pair your Mac in Settings › Integrations/,
-    );
+    const events: AssistantEvent[] = [];
+    await sendMessage(lonely, { message: "Hi", model: "claude/claude-opus-5-5", reasoning: "medium", webSearch: false }, (event) => events.push(event), {
+      deadline: deadline(),
+    });
+    const reply = events.find((event) => event.type === "message" && event.message.role === "assistant") as Extract<AssistantEvent, { type: "message" }>;
+    assert.match(reply.message.content, /^I couldn't finish that\. .*pair your Mac in Settings › Integrations/);
+    const conversationId = (events.find((event) => event.type === "conversation") as Extract<AssistantEvent, { type: "conversation" }>).conversation.id;
+    const saved = await getConversation(lonely, conversationId);
+    assert.match(saved.messages.at(-1)!.content, /pair your Mac/);
   });
 
   it("explains how to start Orbit Agent and when it was last seen", async () => {
@@ -326,12 +329,31 @@ describe("companion turn runner", () => {
     );
   });
 
+  it("ends with a stop message instead of failing when Claude runs out of turns", async () => {
+    const sdk = {
+      tool: () => ({}),
+      createSdkMcpServer: () => ({}),
+      query: () =>
+        (async function* () {
+          yield { type: "assistant", parent_tool_use_id: null, uuid: "u1", session_id: "s", message: { id: "m1", model: "claude-sonnet-5-5", content: [{ type: "text", text: "Looking." }] } } as unknown as SDKMessage;
+          yield { type: "result", subtype: "error_max_turns", is_error: true, errors: [], usage: {}, uuid: "r", session_id: "s" } as unknown as SDKMessage;
+        })(),
+    } as unknown as Sdk;
+    const result = await runTurn({ model: "claude-sonnet-5-5", effort: "low", webSearch: false, system: "", prompt: "Hi", tools: [] }, { sdk, cwd: "/tmp", env: {}, callTool: async () => ({ content: "", isError: false }) });
+    assert.deepEqual(result.steps, [
+      { text: "Looking.", calls: [] },
+      { text: STOPPED, calls: [] },
+    ]);
+    assert.equal(STOPPED, STOPPED_MESSAGE);
+  });
+
   it("converts Orbit's tool schemas for the SDK", () => {
     const shape = shapeFor({
       type: "object",
       properties: {
         title: { type: "string" },
         remindMinutes: { type: "integer", enum: [0, 5, 60] },
+        dueAt: { type: "string", description: "When it's due, or null to clear it." },
         priority: { type: "string", enum: ["low", "normal", "high"] },
         ids: { type: "array", items: { type: "string" } },
         attendees: { type: "array", items: { type: "object", properties: { email: { type: "string" } }, required: ["email"] } },
@@ -342,7 +364,9 @@ describe("companion turn runner", () => {
     assert.equal(shape.title.safeParse(undefined).success, false);
     assert.equal(shape.remindMinutes.safeParse(60).success, true);
     assert.equal(shape.remindMinutes.safeParse(7).success, false);
-    assert.equal(shape.remindMinutes.safeParse(null).success, true);
+    assert.equal(shape.remindMinutes.safeParse(undefined).success, true);
+    assert.equal(shape.remindMinutes.safeParse(null).success, false);
+    assert.equal(shape.dueAt.safeParse(null).success, true);
     assert.equal(shape.priority.safeParse("urgent").success, false);
     assert.equal(shape.attendees.safeParse([{ email: "a@b.c" }]).success, true);
     assert.equal(shape.attendees.safeParse([{ name: "x" }]).success, false);
