@@ -79,6 +79,7 @@ export default async function WorkflowPage({
         contacts: contacts.data.map((contact) => ({ id: contact.id, name: contact.name })),
       }}
       initialRun={typeof query.run === "string" ? query.run : null}
+      fresh={query.new === "1"}
     />
   );
 }

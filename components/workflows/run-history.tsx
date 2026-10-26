@@ -9,6 +9,7 @@ import { formatWhen, relativeWhen } from "@/lib/companies";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import type { RunStepLog, RunSummary } from "@/lib/workflows/store";
 import { cn } from "@/lib/utils";
+import { STEP_LABELS, type StepType } from "@/lib/workflows/definition";
 
 const TONES: Record<string, "green" | "red" | "amber" | "blue" | "neutral"> = {
   succeeded: "green",
@@ -38,7 +39,7 @@ function StepLog({ step }: { step: RunStepLog }) {
             step.status === "succeeded" ? "bg-success" : step.status === "failed" ? "bg-danger" : step.status === "waiting" ? "bg-warning" : "bg-faint",
           )}
         />
-        <span className="min-w-0 flex-1 truncate text-[13.5px] leading-5">{step.label || step.stepId}</span>
+        <span className="min-w-0 flex-1 truncate text-[13.5px] leading-5">{step.label || STEP_LABELS[step.stepType as StepType] || step.stepId}</span>
         <span className="caption-style text-subtle">{step.status === "waiting" ? "Waiting" : step.status === "failed" ? "Failed" : "Done"}</span>
       </button>
       {step.error && <p className="caption-style text-danger pl-3.5">{step.error}</p>}

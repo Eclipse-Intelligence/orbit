@@ -271,6 +271,20 @@ export async function setWorkflowTemplate(actor: UserActor, id: string, isTempla
   return getWorkflow(actor, id);
 }
 
+export async function discardUntouchedWorkflow(actor: UserActor, id: string) {
+  if (!isUuid(id)) return false;
+  const result = await withActor(actor, (db) =>
+    db.query(
+      `update crm.workflows w set archived_at = now(), status = 'paused', is_template = false
+       where w.id = $1 and w.owner_id = $2 and w.archived_at is null and w.status <> 'active'
+         and w.updated_at <= w.created_at + interval '2 seconds'
+         and not exists (select 1 from crm.workflow_runs r where r.workflow_id = w.id)`,
+      [id, actor.userId],
+    ),
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
 export async function archiveWorkflow(actor: UserActor, id: string) {
   await requireOwn(actor, id);
   await withActor(actor, (db) =>
