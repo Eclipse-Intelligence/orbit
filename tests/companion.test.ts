@@ -301,21 +301,25 @@ describe("Orbit Agent job lifecycle", () => {
     assert.ok(!secondEvents.some((event) => event.type === "error"));
   });
 
-  it("gives a reply when the Mac goes quiet or restarts in the middle of an answer", async () => {
+  it("gives a reply when an answer goes quiet, but not when a second copy of Orbit Agent asks for work", async () => {
+    const shared = await conversation("Two copies");
+    const sharedJob = await enqueueCompanionJob(owner, shared, request);
+    assert.equal((await nextCompanionJob(mac, 5_000))?.id, sharedJob);
+    assert.equal(await nextCompanionJob(mac, 1_000), null);
+    assert.equal(await status(sharedJob), "running");
+    await checkCompanionJob(mac, sharedJob);
+    await cancelCompanionJob(owner, sharedJob);
+
     const quiet = await conversation("Quiet Mac");
     const quietJob = await enqueueCompanionJob(owner, quiet, request);
     assert.equal((await nextCompanionJob(mac, 5_000))?.id, quietJob);
-    await getAdminPool().query("update crm.ai_companions set last_seen_at = now() - interval '5 minutes' where id = $1", [mac.companionId]);
-    assert.equal(await companionBusy(owner, "00000000-0000-0000-0000-000000000000"), false);
+    await getAdminPool().query("alter table crm.ai_companion_jobs disable trigger ai_companion_jobs_set_updated_at");
+    await getAdminPool().query("update crm.ai_companion_jobs set updated_at = now() - interval '4 minutes' where id = $1", [quietJob]);
+    await getAdminPool().query("alter table crm.ai_companion_jobs enable trigger ai_companion_jobs_set_updated_at");
+    assert.equal(await companionWorking(owner), false);
+    await companionBusy(owner, "00000000-0000-0000-0000-000000000000");
     assert.equal(await status(quietJob), "cancelled");
     assert.equal(await lastReply(quiet), LOST_MESSAGE);
-
-    const restarted = await conversation("Restarted Mac");
-    const restartedJob = await enqueueCompanionJob(owner, restarted, request);
-    assert.equal((await nextCompanionJob(mac, 5_000))?.id, restartedJob);
-    assert.equal(await nextCompanionJob(mac, 1_000), null);
-    assert.equal(await status(restartedJob), "cancelled");
-    assert.equal(await lastReply(restarted), LOST_MESSAGE);
   });
 
   it("counts a Mac that is busy answering as available even when it hasn't polled lately", async () => {

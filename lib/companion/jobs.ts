@@ -45,7 +45,7 @@ async function closeJobs(db: Db, actor: UserActor, conversationIds: string[], me
   }
 }
 
-async function expireStale(db: Db, actor: UserActor, idleCompanionId: string | null = null) {
+async function expireStale(db: Db, actor: UserActor) {
   const expired = await db.query<{ conversation_id: string }>(
     `update crm.ai_companion_jobs set status = 'cancelled', finished_at = now()
      where user_id = $1 and status = 'queued' and created_at < now() - interval '${QUEUE_EXPIRY}'
@@ -56,16 +56,9 @@ async function expireStale(db: Db, actor: UserActor, idleCompanionId: string | n
   const lost = await db.query<{ conversation_id: string }>(
     `update crm.ai_companion_jobs j set status = 'cancelled', finished_at = now()
      where j.user_id = $1 and j.status = 'running'
-       and (
-         j.companion_id = $2
-         or j.claimed_at < now() - interval '${RUNNING_LIMIT}'
-         or not exists (
-           select 1 from crm.ai_companions c
-           where c.id = j.companion_id and c.last_seen_at > now() - interval '${SILENT_LIMIT}'
-         )
-       )
+       and (j.claimed_at < now() - interval '${RUNNING_LIMIT}' or j.updated_at < now() - interval '${SILENT_LIMIT}')
      returning j.conversation_id`,
-    [actor.userId, idleCompanionId],
+    [actor.userId],
   );
   await closeJobs(db, actor, lost.rows.map((row) => row.conversation_id), LOST_MESSAGE);
 }
@@ -116,8 +109,11 @@ export async function companionBusy(actor: UserActor, exceptJobId: string) {
       `select exists (
          select 1 from crm.ai_companion_jobs j
          join crm.ai_companions c on c.id = j.companion_id and c.revoked_at is null
-         where j.user_id = $1 and j.id <> $2 and c.last_seen_at > now() - interval '${SILENT_LIMIT}'
-           and (j.status = 'running' or (j.status = 'cancelled' and j.finished_at > now() - interval '${WIND_DOWN}'))
+         where j.user_id = $1 and j.id <> $2
+           and (
+             (j.status = 'running' and j.updated_at > now() - interval '${SILENT_LIMIT}')
+             or (j.status = 'cancelled' and j.finished_at > now() - interval '${WIND_DOWN}' and c.last_seen_at > now() - interval '${SILENT_LIMIT}')
+           )
        ) as busy`,
       [actor.userId, exceptJobId],
     );
@@ -131,7 +127,7 @@ export async function companionWorking(actor: UserActor) {
       `select exists (
          select 1 from crm.ai_companion_jobs j
          join crm.ai_companions c on c.id = j.companion_id and c.revoked_at is null
-         where j.user_id = $1 and j.status = 'running' and c.last_seen_at > now() - interval '${SILENT_LIMIT}'
+         where j.user_id = $1 and j.status = 'running' and j.updated_at > now() - interval '${SILENT_LIMIT}'
        ) as working`,
       [actor.userId],
     );
@@ -150,7 +146,7 @@ export async function cancelCompanionJob(actor: UserActor, jobId: string) {
 
 async function claim(auth: AuthenticatedCompanion): Promise<CompanionJob | null> {
   return withActor(auth.actor, async (db) => {
-    await expireStale(db, auth.actor, auth.companionId);
+    await expireStale(db, auth.actor);
     const result = await db.query<{ id: string; request: CompanionRequest }>(
       `update crm.ai_companion_jobs set status = 'running', companion_id = $2, claimed_at = now()
        where id = (
@@ -217,6 +213,9 @@ export async function runCompanionTool(auth: AuthenticatedCompanion, jobId: stri
 
 export async function checkCompanionJob(auth: AuthenticatedCompanion, jobId: string) {
   await runningJob(auth, jobId);
+  await withActor(auth.actor, (db) =>
+    db.query("update crm.ai_companion_jobs set updated_at = now() where id = $1 and status = 'running'", [jobId]),
+  );
 }
 
 export async function finishCompanionJob(
