@@ -308,7 +308,7 @@
 
   h1,
   .h1-style {
-    @apply text-[16px] leading-none font-medium tracking-normal;
+    @apply text-[18px] leading-none font-semibold tracking-[-0.01em];
   }
 
   h2,
@@ -318,7 +318,7 @@
 
   h3,
   .h3-style {
-    @apply text-[16px] leading-none font-normal tracking-normal;
+    @apply text-[14px] leading-none font-medium tracking-normal;
   }
 
   h4,
@@ -330,15 +330,19 @@
 
   p,
   .p-style {
-    @apply text-[14px] leading-[1.15] font-normal tracking-normal;
+    @apply text-[14px] leading-[1.4] font-normal tracking-normal;
   }
 
   .lead-style {
     @apply text-[14px] leading-none font-normal tracking-normal;
   }
 
+  .ui-style {
+    @apply text-[13px] leading-[1.4] font-normal tracking-normal;
+  }
+
   .caption-style {
-    @apply text-[12px] leading-none font-normal tracking-normal;
+    @apply text-[12px] leading-[1.35] font-normal tracking-normal;
   }
 
   .eyebrow-style {

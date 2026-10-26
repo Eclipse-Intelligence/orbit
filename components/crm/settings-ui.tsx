@@ -26,7 +26,7 @@ export function SettingsPage({
     >
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-2">
-          <h2 className="text-[18px] leading-6 font-semibold">{title}</h2>
+          <h2 className="leading-6">{title}</h2>
           <p className="text-subtle text-[14px] leading-5">{description}</p>
         </div>
         {action}
