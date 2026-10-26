@@ -446,4 +446,16 @@ describe("assistant safety and limits", () => {
     const result = await checkColdEmail({ subject: "Idea", body: "Hi Sam,\n\nA thought.\n\nMark", evidence: [] }, { deadline: Date.now() + 2_000 });
     assert.match(JSON.stringify(result), /wasn't time left/);
   });
+
+  it("says a chat is still being worked on until the answer is saved or the user stops it", async () => {
+    process.env.LLM_API_KEY = "llm-test";
+    const { conversationId } = await ask(owner, "Short one", model(() => ({ content: "Done." })).fetchImpl);
+    assert.equal((await getConversation(owner, conversationId)).working, null);
+    await getAdminPool().query("insert into crm.assistant_messages (conversation_id, workspace_id, user_id, role, content) values ($1, $2, $3, 'user', 'Long one')", [conversationId, owner.workspaceId, owner.userId]);
+    await getAdminPool().query("update crm.assistant_conversations set updated_at = now() where id = $1", [conversationId]);
+    const working = (await getConversation(owner, conversationId)).working!;
+    assert.equal(working.where, "orbit");
+    await stopConversation(owner, conversationId);
+    assert.equal((await getConversation(owner, conversationId)).working, null);
+  });
 });

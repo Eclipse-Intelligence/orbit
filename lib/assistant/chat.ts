@@ -97,6 +97,7 @@ type ConversationRow = {
   reasoning: ReasoningLevel;
   web_search: boolean;
   updated_at: Date | string;
+  stopped_at: Date | string | null;
 };
 
 function summary(row: ConversationRow): ConversationSummary {
@@ -134,7 +135,7 @@ function parseArgs(raw: string) {
 }
 
 const MESSAGE_COLUMNS = "id, role, content, tool_calls, tool_call_id, tool_name, actions, sources, provider_state, created_at";
-const CONVERSATION_COLUMNS = "id, title, model, reasoning, web_search, updated_at";
+const CONVERSATION_COLUMNS = "id, title, model, reasoning, web_search, updated_at, stopped_at";
 
 async function readConversation(db: Db, actor: UserActor, id: string) {
   if (!isUuid(id)) throw new CrmError("not_found", "Conversation not found.", 404);
@@ -278,6 +279,28 @@ async function settleStuckActions(actor: UserActor, conversationId: string, rows
   return settled;
 }
 
+export type Working = { where: "mac" | "orbit"; steps: number; current: string | null; since: string };
+
+const MID_TURN_MS = 6 * 60_000;
+
+type JobProgress = { status: string; created_at: Date; claimed_at: Date | null; events: { id: string; label: string; status: string }[] };
+
+function workingState(rows: MessageRow[], conversation: ConversationRow, job: JobProgress | null): Working | null {
+  const updatedAt = conversation.updated_at;
+  if (job) {
+    const done = new Set(job.events.filter((event) => event.status === "done").map((event) => event.id));
+    const running = [...job.events].reverse().find((event) => event.status === "running" && !done.has(event.id));
+    return { where: "mac", steps: done.size, current: running?.label ?? null, since: new Date(job.claimed_at ?? job.created_at).toISOString() };
+  }
+  const last = rows.at(-1);
+  if (!last || Date.now() - new Date(updatedAt).getTime() > MID_TURN_MS) return null;
+  const waitingOnTools = last.role === "assistant" && (last.tool_calls ?? []).length > 0 && !(last.actions ?? []).some((action) => action.status === "pending");
+  if (last.role !== "user" && last.role !== "tool" && !waitingOnTools) return null;
+  const since = [...rows].reverse().find((row) => row.role === "user")?.created_at ?? updatedAt;
+  if (conversation.stopped_at && new Date(conversation.stopped_at) >= new Date(since)) return null;
+  return { where: "orbit", steps: rows.filter((row) => row.role === "tool" && new Date(row.created_at) >= new Date(since)).length, current: null, since: new Date(since).toISOString() };
+}
+
 export async function getConversation(actor: UserActor, id: string) {
   const before = await withActor(actor, async (db) => {
     await readConversation(db, actor, id);
@@ -287,12 +310,18 @@ export async function getConversation(actor: UserActor, id: string) {
   return withActor(actor, async (db) => {
     const conversation = await readConversation(db, actor, id);
     const messages = await readMessages(db, id);
+    const job = await db.query<JobProgress>(
+      `select status, created_at, claimed_at, events from crm.ai_companion_jobs
+       where conversation_id = $1 and status in ('queued', 'running') order by created_at desc limit 1`,
+      [id],
+    );
     return {
       conversation: summary(conversation),
       messages: messages
         .filter((row) => row.role !== "tool")
         .filter((row) => row.role === "user" || row.content || (row.tool_calls ?? []).length > 0 || (row.actions ?? []).length > 0)
         .map(display),
+      working: workingState(messages, conversation, job.rows[0] ?? null),
     };
   });
 }
