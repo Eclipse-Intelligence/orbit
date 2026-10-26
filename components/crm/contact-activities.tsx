@@ -35,6 +35,7 @@ import CallIcon from "@/public/assets/images/crm/activity/call.svg";
 import EmailIcon from "@/public/assets/images/crm/activity/email.svg";
 import MeetingIcon from "@/public/assets/images/crm/activity/meeting.svg";
 import NoteIcon from "@/public/assets/images/crm/activity/note.svg";
+import { textareaClass } from "@/components/_ui/field-styles";
 
 const KINDS = [
   { id: "note", label: "Note" },
@@ -265,7 +266,7 @@ export function ActivityComposer({
             onChange={(event) => draft.setBody(event.target.value)}
             placeholder="Write a note"
             maxLength={10000}
-            className="border-line-strong bg-secondary min-h-20 w-full rounded-lg border px-3 py-2 text-[14px] leading-5 outline-none"
+            className={cn(textareaClass, "min-h-20")}
           />
           <Button
             variant="secondary"
@@ -307,7 +308,7 @@ export function ActivityComposer({
             onChange={(event) => draft.setBody(event.target.value)}
             placeholder="Details"
             maxLength={10000}
-            className="border-line-strong bg-secondary min-h-20 w-full rounded-lg border px-3 py-2 text-[14px] leading-5 outline-none"
+            className={cn(textareaClass, "min-h-20")}
           />
           <Button
             variant="secondary"

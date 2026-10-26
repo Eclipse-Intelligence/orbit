@@ -10,6 +10,7 @@ import type { CompanySuggestion } from "@/lib/enrichment/companies";
 import type { Company, Contact, Member } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
 import CompanyLogo from "@/components/companies/company-logo";
+import { textareaClass } from "@/components/_ui/field-styles";
 
 export default function ContactEditor({
   editing,
@@ -204,7 +205,7 @@ export default function ContactEditor({
             id="contact-notes"
             name="notes"
             defaultValue={editing?.notes ?? ""}
-            className="border-line-strong bg-secondary min-h-24 w-full rounded-lg border px-3 py-2 text-[14px] leading-5 outline-none"
+            className={cn(textareaClass, "min-h-24")}
           />
         </label>
       </form>

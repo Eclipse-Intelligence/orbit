@@ -7,6 +7,7 @@ import { Input } from "@/components/_ui/input";
 import { SettingsCard, SettingsDisclosure } from "@/components/crm/settings-ui";
 import { saveStagesAction } from "@/app/(crm)/settings/actions";
 import type { PipelineStage } from "@/lib/crm/types";
+import { Radio } from "@/components/_ui/radio";
 
 export default function PipelineSettings({
   stages,
@@ -110,8 +111,7 @@ export default function PipelineSettings({
             />
             <div className="flex items-center gap-4 sm:contents">
               <label className="caption-style flex items-center gap-2">
-                <input
-                  type="radio"
+                <Radio
                   name="won-stage"
                   checked={stage.isWon}
                   onChange={() => {
@@ -130,8 +130,7 @@ export default function PipelineSettings({
                 Won
               </label>
               <label className="caption-style flex items-center gap-2">
-                <input
-                  type="radio"
+                <Radio
                   name="lost-stage"
                   checked={stage.isLost}
                   onChange={() => {

@@ -9,6 +9,7 @@ import { addOpportunityInlineAction } from "@/app/(crm)/records";
 import type { Board, PipelineStage } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
 import PlusIcon from "@/public/assets/images/_common/plus.svg";
+import { selectClass } from "@/components/_ui/field-styles";
 
 const FIELD_CLASS =
   "border-line-strong bg-secondary text-foreground placeholder:text-subtle focus-visible:border-ring flex h-9 w-full min-w-0 rounded-lg border px-3 text-[14px] leading-none outline-none";
@@ -189,7 +190,7 @@ export default function OpportunityComposer({
           aria-label="Stage"
           value={chosenStage}
           onChange={(event) => setChosenStage(event.target.value)}
-          className={cn(FIELD_CLASS, "md:w-[11em] md:flex-none")}
+          className={cn(selectClass, "md:w-[11em] md:flex-none")}
         >
           {stages.map((stage) => (
             <option key={stage.id} value={stage.id}>

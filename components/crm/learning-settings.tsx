@@ -22,11 +22,10 @@ import type { MarketNote, WatchItem, WatchKind } from "@/lib/learning/market";
 import type { Memory, MemoryScope } from "@/lib/learning/memories";
 import type { LearningKind, LearningStatus } from "@/lib/learning/nightly";
 import { cn } from "@/lib/utils";
+import { selectClass, textareaClass } from "@/components/_ui/field-styles";
 
-const AREA =
-  "border-line-strong bg-secondary text-foreground placeholder:text-subtle focus-visible:border-ring w-full resize-y rounded-lg border px-3 py-2 text-[14px] leading-5 outline-none transition-[border-color] duration-150 ease-power3-out";
-const SELECT =
-  "border-line-strong bg-secondary text-foreground focus-visible:border-ring h-9 w-full rounded-lg border px-2.5 text-[14px] outline-none transition-[border-color] duration-150 ease-power3-out";
+const AREA = textareaClass;
+const SELECT = selectClass;
 
 const SCOPE_LABELS: Record<MemoryScope, string> = { personal: "You", business: "Business", market: "Market" };
 const SCOPE_HINTS: Record<MemoryScope, string> = {

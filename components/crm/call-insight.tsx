@@ -16,6 +16,8 @@ import {
   type CallActionItem,
   type CallInsight,
 } from "@/lib/crm/types";
+import { textareaClass } from "@/components/_ui/field-styles";
+import { cn } from "@/lib/utils";
 
 function newest(server: CallInsight | null, local: CallInsight | null) {
   if (!local) return server;
@@ -132,7 +134,7 @@ export default function CallInsightPanel({
           onChange={(event) => setDraft(event.target.value)}
           placeholder="Paste the call transcript or the .vtt file text"
           disabled={summarising}
-          className="border-line-strong bg-secondary min-h-28 w-full rounded-lg border px-3 py-2 text-[14px] leading-5 outline-none"
+          className={cn(textareaClass, "min-h-28")}
         />
         {errorLine}
         <div className="flex flex-wrap gap-1">
