@@ -16,6 +16,7 @@ import {
 import type { AccountHealth, Company, CompanyListQuery, CompanyWrite, LifecycleCount } from "@/lib/crm/types";
 import { deleteLifecycle, listLifecycles, renameLifecycle } from "@/lib/crm/lifecycles";
 import { revalidateRecordPages } from "@/lib/revalidate";
+import { withActor } from "@/lib/crm/context";
 
 export type CompanyActionState = {
   error?: string;
@@ -198,6 +199,27 @@ export async function exportCompaniesAction(filters: CompanyListQuery) {
     offset += page.data.length;
   } while (rows.length < total && offset < 5000);
   return companiesCsvRows(rows);
+}
+
+export async function updateNameAction(name: string): Promise<{ error?: string }> {
+  const user = await requireUser();
+  const clean = name.replace(/\s+/g, " ").trim();
+  if (!clean) return { error: "Enter your name." };
+  if (clean.length > 120) return { error: "Keep your name under 120 characters." };
+  await withActor(user, (db) => db.query("update crm.profiles set full_name = $2 where id = $1", [user.userId, clean]));
+  revalidatePath("/", "layout");
+  return {};
+}
+
+export async function changePasswordAction(password: string, confirm: string): Promise<{ error?: string }> {
+  await requireUser();
+  if (!supabaseConfigured()) return { error: "Passwords are managed outside Orbit on this server." };
+  if (password.length < 8) return { error: "Use at least 8 characters." };
+  if (password !== confirm) return { error: "The two passwords don't match." };
+  const supabase = await createSupabaseServer();
+  const { error } = await supabase.auth.updateUser({ password });
+  if (error) return { error: error.message.includes("different") ? "Choose a password you haven't used here before." : "Your password couldn't be changed. Sign in again and retry." };
+  return {};
 }
 
 export async function signOutAction() {

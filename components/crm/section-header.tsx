@@ -2,6 +2,17 @@
 
 import type { ReactNode } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { signOutAction } from "@/app/(crm)/actions";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/_ui/dropdown-menu";
+import { SETTINGS_PATHS } from "@/lib/settings-nav";
 import Button from "@/components/_ui/button";
 import Notifications from "@/components/companies/header/notifications/notifications";
 import { useListHref } from "@/components/crm/list-memory";
@@ -31,7 +42,8 @@ export default function SectionHeader({
   heading?: ReactNode;
 }) {
   const setSidebarOpen = useCompaniesStore((state) => state.setSidebarOpen);
-  const { setPaletteOpen } = useShortcuts();
+  const { setPaletteOpen, setHelpOpen } = useShortcuts();
+  const router = useRouter();
   const openProfile = useCompaniesStore((state) => state.openProfile);
 
   return (
@@ -67,22 +79,40 @@ export default function SectionHeader({
             <SearchIcon aria-hidden className="size-3.5" />
           </Button>
           <Notifications />
-          <Button
-            variant="secondary"
-            size="none"
-            className="caption-style h-[30px] gap-1.5 py-[5px] pr-[7px] pl-[5px] font-normal"
-            aria-label={`Open account for ${viewer.name}`}
-            data-shortcut="account"
-            onClick={openProfile}
-          >
-            <span
-              aria-hidden
-              className="bg-muted text-foreground flex size-5 items-center justify-center rounded-full text-[10px] leading-none"
-            >
-              {displayInitials(viewer.name)}
-            </span>
-            <span className="hidden max-w-[12rem] truncate sm:inline">{viewer.name}</span>
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="secondary"
+                size="none"
+                className="caption-style data-[state=open]:bg-muted h-[30px] gap-1.5 py-[5px] pr-[7px] pl-[5px] font-normal"
+                aria-label={`Account menu for ${viewer.name}`}
+                data-shortcut="account"
+              >
+                <span
+                  aria-hidden
+                  className="bg-muted text-foreground flex size-5 items-center justify-center rounded-full text-[10px] leading-none"
+                >
+                  {displayInitials(viewer.name)}
+                </span>
+                <span className="hidden max-w-[12rem] truncate sm:inline">{viewer.name}</span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-60">
+              <DropdownMenuLabel className="flex flex-col gap-0.5 px-2 py-1.5">
+                <span className="text-foreground truncate text-[13px] font-medium">{viewer.name}</span>
+                <span className="caption-style text-subtle truncate">{viewer.email}</span>
+              </DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => router.push(SETTINGS_PATHS.general)}>Settings</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setHelpOpen(true)}>
+                Keyboard shortcuts
+                <span className="text-subtle ml-auto">?</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={openProfile}>Account details</DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => void signOutAction()}>Sign out</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
     </header>

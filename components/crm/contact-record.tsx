@@ -250,7 +250,6 @@ export default function ContactRecord({
                   <InlineField
                     label="Phone"
                     value={shown.phone ?? ""}
-                    emptyLabel="Add a phone number"
                     accessory={
                       shown.phone ? (
                         <CallLink phone={shown.phone} />
@@ -263,7 +262,6 @@ export default function ContactRecord({
                   <InlineField
                     label="Email"
                     value={shown.email ?? ""}
-                    emptyLabel="Add an email"
                     accessory={
                       !shown.email && enrichment.available.email ? (
                         <FindDetailButton contactId={shown.id} field="email" lookup={enrichment.lookups?.email} variant="text" />
@@ -275,7 +273,6 @@ export default function ContactRecord({
                     label="LinkedIn"
                     value={shown.linkedinUrl ?? ""}
                     display={shown.linkedinUrl ? shown.linkedinUrl.replace(/^https?:\/\/(www\.)?/, "") : undefined}
-                    emptyLabel="Add LinkedIn"
                     accessory={
                       shown.linkedinUrl ? (
                         <a
@@ -303,7 +300,7 @@ export default function ContactRecord({
                     emptyLabel="Unassigned"
                     onSave={(value) => patch({ ownerId: value || null })}
                   />
-                  <InlineField label="Source" value={shown.source ?? ""} emptyLabel="Add a source" onSave={(value) => patch({ source: value || null })} />
+                  <InlineField label="Source" value={shown.source ?? ""} onSave={(value) => patch({ source: value || null })} />
                 </DetailList>
                 {shown.notes && (
                   <div className="flex flex-col gap-2">

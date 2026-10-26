@@ -64,7 +64,7 @@ describe("assistant drafts", () => {
   it("offers a draft tool that needs approval and tells the assistant mail lives in Orbit", () => {
     const tool = toolDefinitions().find((item) => item.function.name === "save_email_draft");
     assert.ok(tool);
-    assert.match(describeAction("save_email_draft", { subject: "Pulse in ChatGPT", to: ["andrew@pulse.test"], body: "Hi Andrew" }).lines.join("\n"), /Saved to Drafts in Orbit Mail unless you choose to send it/);
+    assert.match(describeAction("save_email_draft", { subject: "Pulse in ChatGPT", to: ["andrew@pulse.test"], body: "Hi Andrew" }).lines.join("\n"), /Saved to Drafts\./);
     const prompt = systemPrompt(owner, { webSearch: false });
     assert.match(prompt, /call send_email with the finished email/);
     assert.match(prompt, /never say you can't send/);
@@ -128,7 +128,7 @@ describe("assistant drafts", () => {
     assert.equal(final.status, "done");
     assert.equal(final.chose, "send");
     assert.equal(final.title, "Sent: Pilot");
-    assert.ok(final.lines.includes("Sent from Orbit Mail instead of saving a draft."));
+    assert.ok(final.lines.includes("Sent."));
     const toolMessage = (await getAdminPool().query<{ content: string }>("select content from crm.assistant_messages where tool_call_id = 'call_draft'")).rows[0].content;
     assert.match(toolMessage, /"sent":true/);
     assert.match(toolMessage, /The user chose Confirm and send, so this ran send_email instead of save_email_draft/);

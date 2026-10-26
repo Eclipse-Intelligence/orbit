@@ -8,6 +8,7 @@ import NotificationSettings from "@/components/push/notification-settings";
 import { notificationSettings } from "@/lib/mail/notify";
 import SettingsHashRedirect from "@/components/crm/settings-hash-redirect";
 import { SettingsPage } from "@/components/crm/settings-ui";
+import { supabaseConfigured } from "@/lib/auth/config";
 import { getUserActor } from "@/lib/auth/user";
 import { getMeetingLink } from "@/lib/crm/invites";
 import { getPersonalContext } from "@/lib/crm/personal-context";
@@ -36,6 +37,7 @@ export default async function GeneralSettingsPage() {
         email={user.email}
         role={user.role}
         workspaceName={user.workspaceName}
+        passwords={supabaseConfigured()}
       />
       <AboutYouSettings
         initial={{

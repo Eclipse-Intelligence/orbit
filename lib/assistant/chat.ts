@@ -566,7 +566,7 @@ async function runCompanionTurn(actor: UserActor, conversation: ConversationRow,
     }
     if (job.status === "queued" && Date.now() - started > COMPANION_CLAIM_MS) {
       if (await companionBusy(actor, jobId)) {
-        if (!queuedNotice) emit({ type: "waiting", message: "Claude is finishing another answer on your Mac. This one is next." });
+        if (!queuedNotice) emit({ type: "waiting", message: "Waiting for your Mac to finish another answer." });
         queuedNotice = true;
         continue;
       }
@@ -574,7 +574,7 @@ async function runCompanionTurn(actor: UserActor, conversation: ConversationRow,
       throw new AssistantError("Orbit Agent on your Mac isn't picking up. Check it's still running, then try again.");
     }
   }
-  emit({ type: "waiting", message: "Claude is still working on your Mac. The answer will appear here when it's ready." });
+  emit({ type: "waiting", message: "Still working on your Mac." });
 }
 
 type TurnOptions = { deadline: number; fetchImpl?: typeof fetch; signal?: AbortSignal };
