@@ -17,6 +17,7 @@ import PlusIcon from "@/public/assets/images/_common/plus.svg";
 import Tag from "@/components/_ui/tag";
 import {
   Sheet,
+  SheetCloseButton,
   SheetContent,
   SheetDescription,
   SheetFooter,
@@ -553,7 +554,7 @@ export default function OpportunitiesScreen({
                   <p className="caption-style text-subtle">{cards.length}</p>
                   <div
                     data-stage-cards=""
-                    className="-mx-1 flex min-h-0 flex-1 cursor-default flex-col gap-2 overflow-y-auto overscroll-y-contain px-1 pb-1"
+                    className="relative -mx-1 flex min-h-0 flex-1 cursor-default flex-col gap-2 overflow-y-auto overscroll-y-contain px-1 pb-1"
                     onClick={(event) => {
                       if (event.target === event.currentTarget && !stage.isWon && !stage.isLost) setComposerStage(stage.id);
                     }}
@@ -723,6 +724,7 @@ export default function OpportunitiesScreen({
               {board ? (editing?.companyName ?? editing?.name) : "Edit opportunity"}
             </SheetTitle>
             <SheetDescription className="sr-only">{board ? "Card details" : "Opportunity details"}</SheetDescription>
+            <SheetCloseButton />
           </SheetHeader>
           {board ? (
             <BoardCardEditor
@@ -748,6 +750,7 @@ export default function OpportunitiesScreen({
             <SheetHeader>
               <SheetTitle>Board settings</SheetTitle>
               <SheetDescription className="sr-only">Name, stages and automation for {board.name}</SheetDescription>
+              <SheetCloseButton />
             </SheetHeader>
             {settingsOpen && (
               <BoardSettings

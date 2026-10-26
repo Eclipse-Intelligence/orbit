@@ -16,7 +16,7 @@ export default function Palette({ onAdd, disabled }: { onAdd: (type: StepType) =
     <nav aria-label="Nodes" className="flex flex-col gap-4">
       {PALETTE.map((group) => (
         <section key={group.label} className="flex flex-col gap-1">
-          <h3 className="eyebrow-style text-faint px-2">{group.label}</h3>
+          <h3 className="eyebrow-style text-subtle px-2">{group.label}</h3>
           <ul className="flex flex-col">
             {group.types.map((type) => {
               const meta = STEP_META[type];

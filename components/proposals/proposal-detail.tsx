@@ -118,6 +118,7 @@ export default function ProposalDetail({ viewer, initial }: { viewer: Viewer; in
   }
 
   const preview = { ...content, title: draft ? title : content.title };
+  const unsendable = !dirty && (doc.missing.length > 0 || doc.placeholders.length > 0);
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -131,7 +132,8 @@ export default function ProposalDetail({ viewer, initial }: { viewer: Viewer; in
               <Button
                 variant="primary"
                 size="sm"
-                disabled={busy !== null}
+                disabled={busy !== null || unsendable}
+                title={unsendable ? "Fill in the highlighted details before sending" : undefined}
                 onClick={async () => {
                   if (dirty && !(await save())) return;
                   setSending(true);
@@ -362,7 +364,7 @@ export default function ProposalDetail({ viewer, initial }: { viewer: Viewer; in
           </div>
         </div>
         <div className={cn("min-h-0 overflow-y-auto", view === "details" && "hidden lg:block")}>
-          <div className="paper min-h-full px-5 py-10 sm:px-10">
+          <div className="paper min-h-full px-5 pt-10 pb-28 sm:px-10">
             <div className="mx-auto max-w-[44em]">
               <p className="caption-style text-subtle pb-6">
                 {draft ? "Preview with this client's details" : `What ${doc.contactName.split(/\s+/)[0]} sees, version ${doc.version?.number ?? 1}`}

@@ -91,7 +91,7 @@ export default function CompanyRow({
           <span className="relative flex size-6 shrink-0 items-center justify-center">
             <span
               className={cn(
-                "text-faint text-[11.5px] tabular-nums transition-opacity duration-150 group-focus-within:opacity-0 [@media(hover:hover)]:group-hover:opacity-0",
+                "text-subtle text-[11.5px] tabular-nums transition-opacity duration-150 group-focus-within:opacity-0 [@media(hover:hover)]:group-hover:opacity-0",
                 revealed && "opacity-0",
               )}
             >

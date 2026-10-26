@@ -31,7 +31,7 @@ function Keys({ def, mac }: { def: ShortcutDef; mac: boolean }) {
     return (
       <span className="flex shrink-0 items-center gap-1">
         <Kbd>{def.sequence[0].toUpperCase()}</Kbd>
-        <span className="caption-style text-faint">then</span>
+        <span className="caption-style text-subtle">then</span>
         <Kbd>{def.sequence[1].toUpperCase()}</Kbd>
       </span>
     );
@@ -40,7 +40,7 @@ function Keys({ def, mac }: { def: ShortcutDef; mac: boolean }) {
     <span className="flex shrink-0 items-center gap-1.5">
       {(def.combos ?? []).map((combo, index) => (
         <span key={index} className="flex items-center gap-1">
-          {index > 0 && <span className="caption-style text-faint">or</span>}
+          {index > 0 && <span className="caption-style text-subtle">or</span>}
           {comboLabel(combo, mac).map((part, partIndex) => (
             <Kbd key={partIndex}>{part}</Kbd>
           ))}
@@ -80,7 +80,7 @@ export function ShortcutsReference() {
       <div className="columns-1 gap-10 md:columns-2">
         {groups.map(({ group, defs }) => (
           <section key={group} className="mb-6 break-inside-avoid last:mb-0">
-            <h3 className="eyebrow-style text-faint pb-1.5 font-medium">{group}</h3>
+            <h3 className="eyebrow-style text-subtle pb-1.5 font-medium">{group}</h3>
             <Rows defs={defs} mac={mac} />
           </section>
         ))}

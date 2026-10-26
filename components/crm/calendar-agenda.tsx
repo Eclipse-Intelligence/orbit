@@ -4,6 +4,7 @@ import { useState } from "react";
 import Button from "@/components/_ui/button";
 import {
   Sheet,
+  SheetCloseButton,
   SheetContent,
   SheetDescription,
   SheetTitle,
@@ -110,7 +111,8 @@ export default function CalendarAgenda({
         open={open !== null}
         onOpenChange={(next) => !next && setOpen(null)}
       >
-        <SheetContent side="bottom" className="overflow-y-auto px-5 pt-5 pb-8">
+        <SheetContent side="bottom" className="overflow-y-auto px-5 pt-5 pb-[calc(2rem+env(safe-area-inset-bottom))]">
+          <SheetCloseButton className="absolute top-3 right-4" />
           <SheetTitle className="sr-only">
             {open ? eventTitle(open) : "Event"}
           </SheetTitle>

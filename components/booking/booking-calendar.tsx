@@ -112,6 +112,7 @@ export default function BookingCalendar({
                 data-day={cell.key}
                 disabled={!available}
                 aria-pressed={available ? active : undefined}
+                aria-current={cell.key === today ? "date" : undefined}
                 aria-label={`${dayTitle(cell.key)}, ${count === 0 ? "no times" : `${count} time${count === 1 ? "" : "s"} available`}`}
                 tabIndex={cell.key === focusKey ? 0 : -1}
                 onClick={() => onSelect(cell.key)}
@@ -119,7 +120,7 @@ export default function BookingCalendar({
                 className={cn(
                   "focus-visible:ring-ring/80 relative flex size-10 cursor-pointer items-center justify-center rounded-full text-[14px] leading-none tabular-nums transition-[background-color,color,box-shadow] duration-150 ease-power3-out outline-none focus-visible:ring-2 disabled:cursor-default",
                   available && !active && "bg-white/[0.07] font-medium text-foreground hover:bg-white/[0.14]",
-                  !available && "text-white/25",
+                  !available && "text-white/45",
                   active &&
                     "bg-primary font-semibold text-white shadow-[0px_4px_14px_0px_rgba(65,36,251,0.45),inset_0px_1px_0px_0px_rgba(255,255,255,0.2)]",
                   loading && "animate-pulse",

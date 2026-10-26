@@ -93,17 +93,18 @@ function RecordBreadcrumb({ list, title }: { list: RecordListKey; title: string 
   const href = useListHref(list);
   const label = RECORD_LISTS[list].label;
   return (
-    <nav aria-label="Breadcrumb" className="min-w-0">
+    <nav aria-label="Breadcrumb" className="min-w-0 flex-1">
       <ol className="flex min-w-0 items-center gap-1.5">
         <li className="shrink-0">
           <Link
             href={href}
             data-shortcut="back"
             title={`Back to ${label} (Esc)`}
-            className="text-subtle hover:text-foreground flex h-[30px] items-center gap-1 rounded-full text-[14px] leading-5 transition-colors duration-150 max-sm:-ml-1 max-sm:pr-2.5 max-sm:pl-1.5 max-sm:hover:bg-white/6"
+            aria-label={`Back to ${label}`}
+            className="text-subtle hover:text-foreground flex h-[30px] items-center gap-1 rounded-full text-[14px] leading-5 transition-colors duration-150 max-sm:w-[30px] max-sm:justify-center max-sm:bg-secondary max-sm:hover:bg-white/6"
           >
             <ChevronLeftIcon aria-hidden className="size-3 sm:hidden" />
-            {label}
+            <span className="max-sm:sr-only">{label}</span>
           </Link>
         </li>
         <li aria-hidden className="text-faint hidden sm:block">

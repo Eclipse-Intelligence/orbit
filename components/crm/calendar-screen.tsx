@@ -6,6 +6,7 @@ import Button from "@/components/_ui/button";
 import { Checkbox } from "@/components/_ui/checkbox";
 import {
   Sheet,
+  SheetCloseButton,
   SheetContent,
   SheetDescription,
   SheetHeader,
@@ -114,7 +115,7 @@ function CalendarList({
             {group.label}
           </span>
           {group.calendars.length === 0 ? (
-            <span className="caption-style text-faint px-1">
+            <span className="caption-style text-subtle px-1">
               Not synced yet
             </span>
           ) : (
@@ -315,7 +316,7 @@ export default function CalendarScreen({
           <Button
             variant="ghost"
             size="icon"
-            className="hidden lg:inline-flex"
+            className="hidden md:inline-flex"
             aria-label={
               desktopMode === "week" ? "Previous week" : "Previous day"
             }
@@ -328,7 +329,7 @@ export default function CalendarScreen({
           <Button
             variant="ghost"
             size="icon"
-            className="hidden lg:inline-flex"
+            className="hidden md:inline-flex"
             aria-label={desktopMode === "week" ? "Next week" : "Next day"}
             href={calendarHref(shiftDateKey(date, step), mode)}
             data-shortcut="calendar-next"
@@ -339,7 +340,7 @@ export default function CalendarScreen({
           <Button
             variant="ghost"
             size="icon"
-            className="lg:hidden"
+            className="md:hidden"
             aria-label="Previous day"
             href={calendarHref(shiftDateKey(date, -1), mode)}
             data-shortcut="calendar-prev"
@@ -349,7 +350,7 @@ export default function CalendarScreen({
           <Button
             variant="ghost"
             size="icon"
-            className="lg:hidden"
+            className="md:hidden"
             aria-label="Next day"
             href={calendarHref(shiftDateKey(date, 1), mode)}
             data-shortcut="calendar-next"
@@ -361,15 +362,15 @@ export default function CalendarScreen({
           className="min-w-0 truncate text-[14px] leading-5 font-medium"
           aria-live="polite"
         >
-          <span className="hidden lg:inline">
+          <span className="hidden md:inline">
             {desktopMode === "week" ? weekLabel(days) : dayLabel(date)}
           </span>
-          <span className="lg:hidden">{dayLabel(date)}</span>
+          <span className="md:hidden">{dayLabel(date)}</span>
         </h2>
         <span
           role="group"
           aria-label="View"
-          className="bg-secondary ml-auto hidden items-center gap-0.5 rounded-full p-0.5 shadow-[0px_0px_0px_1px_rgba(0,0,0,0.4)] lg:inline-flex"
+          className="bg-secondary ml-auto hidden items-center gap-0.5 rounded-full p-0.5 shadow-[0px_0px_0px_1px_rgba(0,0,0,0.4)] md:inline-flex"
         >
           {(["day", "week"] as const).map((option) => (
             <Button
@@ -404,7 +405,7 @@ export default function CalendarScreen({
               {list}
             </aside>
           )}
-          <div className="hidden min-h-0 min-w-0 flex-1 lg:flex">
+          <div className="hidden min-h-0 min-w-0 flex-1 md:flex">
             <CalendarGrid
               days={days}
               today={today}
@@ -414,7 +415,7 @@ export default function CalendarScreen({
               onSlot={(day, time) => startInvite({ date: day, time })}
             />
           </div>
-          <div className="flex min-h-0 min-w-0 flex-1 lg:hidden">
+          <div className="flex min-h-0 min-w-0 flex-1 md:hidden">
             <CalendarAgenda
               date={date}
               today={today}
@@ -439,6 +440,7 @@ export default function CalendarScreen({
         <SheetContent side="left" className="w-[min(320px,86vw)]">
           <SheetHeader className="px-4">
             <SheetTitle>Calendars</SheetTitle>
+            <SheetCloseButton />
           </SheetHeader>
           <SheetDescription className="sr-only">
             Choose which calendars to show

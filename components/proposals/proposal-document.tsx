@@ -217,7 +217,7 @@ export default function ProposalDocument({
                 {signed ? (
                   <span className="font-serif text-[28px] leading-tight italic">{signed.signatureText}</span>
                 ) : (
-                  <span className="text-faint text-[15px] leading-[42px]">Waiting for signature</span>
+                  <span className="text-subtle text-[15px] leading-[42px]">Waiting for signature</span>
                 )}
                 <span className="border-border border-t pt-2 text-[14px]">
                   {signed?.name ?? party.name}

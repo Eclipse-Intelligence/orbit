@@ -184,7 +184,7 @@ function Message({
               {expanded && message.from && message.from.address !== sender && (
                 <span className="text-subtle hidden min-w-0 truncate text-[12px] sm:inline">{message.from.address}</span>
               )}
-              {message.isDraft && message.folderRole === "drafts" && <span className="text-danger shrink-0 text-[12px]">Draft</span>}
+              {message.isDraft && message.folderRole === "drafts" && <span className="shrink-0 text-[12px] text-[var(--tag-amber-text)]">Draft</span>}
               <span className="text-subtle ml-auto shrink-0 text-[12px] tabular-nums">{mailFullWhen(message.at)}</span>
             </span>
             {expanded ? (
@@ -684,7 +684,7 @@ export default function ThreadReader({
       )}
     >
       <div className="flex shrink-0 items-center gap-1 px-3 py-2 sm:px-5">
-        <Button variant="ghost" size="icon" aria-label="Back to the list" title="Back (Esc)" data-shortcut="back" onClick={onBack} className="lg:hidden">
+        <Button variant="ghost" size="icon" aria-label="Back to the list" title="Back (Esc)" data-shortcut="back" onClick={onBack} className="md:hidden">
           <ChevronLeftIcon aria-hidden className="size-3.5" />
         </Button>
         {restorable ? (

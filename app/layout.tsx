@@ -25,6 +25,7 @@ export const metadata: Metadata = {
 
 export const viewport: Viewport = {
   themeColor: "#161616",
+  viewportFit: "cover",
 };
 
 export default function RootLayout({
@@ -48,7 +49,7 @@ export default function RootLayout({
           }}
         />
       </head>
-      <body className="relative z-0 font-sans antialiased">
+      <body className="relative z-0 pr-[env(safe-area-inset-right)] pl-[env(safe-area-inset-left)] font-sans antialiased">
         <ScrollToTop />
         <StaleDeployReload />
         {children}

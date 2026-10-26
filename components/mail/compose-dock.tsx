@@ -413,7 +413,7 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
       )}
       <LaterPicker request={later} onClose={() => setLater(null)} />
       {(notice || toasts.length > 0) && (
-        <div className="pointer-events-none fixed inset-x-0 bottom-5 z-50 flex flex-col items-center gap-2 px-4">
+        <div className="pointer-events-none fixed inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+5rem)] z-50 flex flex-col items-center gap-2 px-4">
           {notice && (
             <p role="status" className="bg-popover border-line-strong shadow-overlay animate-rise-in rounded-full border px-4 py-2 text-[13px]">
               {notice}

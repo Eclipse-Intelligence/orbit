@@ -198,7 +198,7 @@ function Row({
             />
           )}
           <span className={cn("min-w-0 truncate text-[14px]", thread.unread ? "text-foreground font-medium" : "text-soft")}>
-            {thread.draft && <span className="text-danger mr-1">Draft</span>}
+            {thread.draft && <span className="mr-1 text-[var(--tag-amber-text)]">Draft</span>}
             {people}
           </span>
           {thread.count > 1 && <span className="text-subtle shrink-0 text-[12px] tabular-nums">{thread.count}</span>}
@@ -325,7 +325,7 @@ export default function ThreadList({
   }
 
   return (
-    <div className="flex flex-col pb-6">
+    <div className="flex flex-col pb-24">
       <ul aria-label="Conversations" className="flex flex-col gap-px px-2">
         {threads.map((thread) => (
           <Row

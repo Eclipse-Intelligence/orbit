@@ -2,6 +2,7 @@
 
 import {
   Sheet,
+  SheetCloseButton,
   SheetContent,
   SheetDescription,
   SheetTitle,
@@ -47,6 +48,7 @@ export default function Sidebar({ boards, approvals, companyCount, openActionCou
           <SheetDescription className="sr-only">
             Companies, contacts, opportunities, activities, and tasks.
           </SheetDescription>
+          <SheetCloseButton label="Close menu" className="absolute top-3 right-3 z-10 mr-0" />
           <SidebarContent
             boards={boards}
             approvals={approvals}

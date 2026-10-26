@@ -164,7 +164,7 @@
   --destructive: #f97373;
   --border: #232323;
   --input: #393939;
-  --ring: #676767;
+  --ring: #c8c8c8;
   --sidebar: #171717;
   --sidebar-foreground: #7f7f7f;
   --sidebar-primary: #2a2a2a;
@@ -172,10 +172,10 @@
   --sidebar-accent: #181818;
   --sidebar-accent-foreground: #f9fbff;
   --sidebar-border: #232323;
-  --sidebar-ring: #676767;
+  --sidebar-ring: #c8c8c8;
   --line-strong: #393939;
-  --subtle: #676767;
-  --faint: #454545;
+  --subtle: #8c8c8c;
+  --faint: #6a6a6a;
   --soft: #a4a4a4;
   --chip: #cfcfcf;
   --icon: #d0d4dd;
@@ -273,7 +273,7 @@
     --ring: #9a9aa3;
     --line-strong: #d6d6d2;
     --subtle: #6b6b73;
-    --faint: #a8a8b0;
+    --faint: #74747c;
     --soft: #45454d;
     background-color: var(--background);
     color: var(--foreground);
@@ -409,5 +409,20 @@ html[data-sidebar-resizing] * {
   textarea,
   select {
     font-size: 16px;
+  }
+}
+
+[role="alert"] {
+  overflow-wrap: anywhere;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

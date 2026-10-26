@@ -67,7 +67,7 @@ function ConnectionNotice({ setup }: { setup: InviteSetup }) {
   if (setup.connected && setup.canWriteCalendar) return null;
   return (
     <div role="alert" className="border-danger/40 flex flex-col items-start gap-1 rounded-lg border px-3 py-2.5">
-      <Button variant="link" size="none" className="text-danger" href="/capture">
+      <Button variant="link" size="none" className="text-danger text-left whitespace-normal" href="/capture">
         {setup.connected ? "Reconnect Microsoft to send invites" : "Connect Microsoft in Capture to send invites"}
       </Button>
       <p className="caption-style text-subtle">
@@ -503,7 +503,7 @@ function InviteForm({
         {errors.form && (
           <p role="alert" className="caption-style text-danger">
             {/Reconnect Microsoft|Connect Microsoft/.test(errors.form) ? (
-              <Button variant="link" size="none" className="text-danger" href="/capture">
+              <Button variant="link" size="none" className="text-danger text-left whitespace-normal" href="/capture">
                 {errors.form}
               </Button>
             ) : (
