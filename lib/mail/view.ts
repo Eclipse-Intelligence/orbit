@@ -54,10 +54,23 @@ export type ThreadMessage = {
   opens: { at: string; agent: string | null }[] | null;
 };
 
+export type ThreadPerson = {
+  email: string;
+  name: string | null;
+  contactId: string | null;
+  title: string | null;
+  companyId: string | null;
+  companyName: string | null;
+  dealId: string | null;
+  dealName: string | null;
+  dealStage: string | null;
+};
+
 export type ThreadDetail = {
   key: string;
   account: string;
   subject: string | null;
+  people: ThreadPerson[];
   messages: ThreadMessage[];
   drafts: MailDraft[];
   prepared: PreparedReply | null;
@@ -117,7 +130,7 @@ export function replyDefaults(
 }
 
 export type MailNav = {
-  accounts: { id: string; email: string; unread: number }[];
+  accounts: { id: string; email: string; unread: number; connected: boolean }[];
   folders: { id: string; sourceId: string; name: string; role: MailRole; unread: number }[];
   unread: number;
   snoozed: number;

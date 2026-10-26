@@ -23,6 +23,16 @@ type SwipeActions = {
   onRight: (key: string) => void;
 };
 
+const LONG_PRESS_MS = 450;
+
+function swallowNextClick() {
+  const swallow = (event: MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+  };
+  window.addEventListener("click", swallow, { capture: true, once: true });
+  window.setTimeout(() => window.removeEventListener("click", swallow, { capture: true }), 800);
+}
 const OUT_MS = 180;
 const COLLAPSE_MS = 220;
 
@@ -57,6 +67,8 @@ function Row({
   const [dragging, setDragging] = useState(false);
   const [height, setHeight] = useState<number | null>(null);
   const swiped = useRef(false);
+  const press = useRef<{ timer: number; x: number; y: number } | null>(null);
+  const pressed = useRef(false);
   const armedBefore = useRef(false);
   const row = useRef<HTMLLIElement>(null);
   const button = useRef<HTMLButtonElement>(null);
@@ -152,7 +164,44 @@ function Row({
       )}
       <button
         type="button"
+        onPointerDown={(event) => {
+          if (event.pointerType !== "touch") return;
+          const { clientX: x, clientY: y } = event;
+          press.current = {
+            x,
+            y,
+            timer: window.setTimeout(() => {
+              press.current = null;
+              pressed.current = true;
+              swallowNextClick();
+              navigator.vibrate?.(10);
+              onToggle();
+            }, LONG_PRESS_MS),
+          };
+        }}
+        onPointerMove={(event) => {
+          const start = press.current;
+          if (start && Math.hypot(event.clientX - start.x, event.clientY - start.y) > 8) {
+            window.clearTimeout(start.timer);
+            press.current = null;
+          }
+        }}
+        onPointerUp={() => {
+          if (press.current) window.clearTimeout(press.current.timer);
+          press.current = null;
+        }}
+        onPointerCancel={() => {
+          if (press.current) window.clearTimeout(press.current.timer);
+          press.current = null;
+        }}
+        onContextMenu={(event) => {
+          if (pressed.current || press.current) event.preventDefault();
+        }}
         onClick={(event) => {
+          if (pressed.current) {
+            pressed.current = false;
+            return;
+          }
           if (swiped.current) return;
           if (selecting || event.metaKey || event.ctrlKey || event.shiftKey) onToggle();
           else onOpen();
@@ -164,7 +213,7 @@ function Row({
         data-mail-row={thread.key}
         aria-current={active ? "true" : undefined}
         className={cn(
-          "ease-power3-out group relative flex w-full cursor-pointer touch-pan-y flex-col gap-0.5 rounded-xl px-3 py-2.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+          "ease-power3-out group relative flex w-full cursor-pointer touch-pan-y flex-col select-none [-webkit-touch-callout:none] gap-0.5 rounded-xl px-3 py-2.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
           dragging ? "transition-none" : "transition-[background-color,transform] duration-200 ease-power3-out",
           offset !== 0
             ? "bg-background"
