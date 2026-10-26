@@ -29,7 +29,7 @@ export default function ScheduledList({
     );
   }
   return (
-    <ul aria-label="Scheduled email" className="flex flex-col gap-px px-2 pb-6">
+    <ul aria-label="Scheduled email" className="flex flex-col gap-px px-2 pb-24">
       {drafts.map((draft) => (
         <li key={draft.id}>
           <button

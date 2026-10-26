@@ -106,7 +106,7 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
 
   return (
     <ShortcutsProvider>
-      <main className="flex h-dvh max-w-full overflow-hidden">
+      <main className="relative flex h-dvh max-w-full overflow-hidden">
         <Sidebar
           boards={boards}
           approvals={approvals}

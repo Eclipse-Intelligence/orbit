@@ -917,11 +917,14 @@ export default function MailScreen({
         }
       />
       <div className="flex min-h-0 flex-1">
-        <div className={cn("min-h-0 w-full flex-col lg:flex lg:w-[25rem] lg:shrink-0 xl:w-[29rem]", open ? "hidden" : "flex")}>
+        <div className={cn("min-h-0 w-full flex-col md:flex md:w-[20rem] md:shrink-0 lg:w-[25rem] xl:w-[29rem]", open ? "hidden" : "flex")}>
           <div className="flex shrink-0 flex-col gap-2 px-3 pt-2 pb-1.5 lg:pt-3">
             <PushPrompt />
             <div className="lg:hidden">{searchForm("list")}</div>
-            <nav aria-label="Mail folders" className="-mx-1 flex items-center gap-0.5 overflow-x-auto px-1 [scrollbar-width:none]">
+            <nav
+              aria-label="Mail folders"
+              className="-mx-1 flex items-center gap-0.5 overflow-x-auto px-1 pr-6 [mask-image:linear-gradient(to_right,black_calc(100%-1.5rem),transparent)] [scrollbar-width:none]"
+            >
               {splitTabs.map((tab) => {
                 const active = !query.query && query.view === tab.id;
                 return (
@@ -1066,7 +1069,7 @@ export default function MailScreen({
             )}
           </div>
         </div>
-        <div className={cn("min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:my-2 lg:mr-2 lg:flex lg:rounded-2xl lg:bg-white/[0.02]", open ? "flex" : "hidden")}>
+        <div className={cn("min-h-0 min-w-0 flex-1 flex-col overflow-hidden md:my-2 md:mr-2 md:flex md:rounded-2xl md:bg-white/[0.02]", open ? "flex" : "hidden")}>
           <ThreadReader
             key={cursor ?? "none"}
             summary={current}

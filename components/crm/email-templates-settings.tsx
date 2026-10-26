@@ -321,7 +321,7 @@ export default function EmailTemplatesSettings({
                               +{template.tags.length - 3}
                             </span>
                           )}
-                          <span className="caption-style text-faint whitespace-nowrap sm:ml-2">
+                          <span className="caption-style text-subtle whitespace-nowrap sm:ml-2">
                             Updated {formatWhen(template.updatedAt)}
                           </span>
                         </span>

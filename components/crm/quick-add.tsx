@@ -117,7 +117,7 @@ export function useScreenState() {
 
     function measure() {
       frame = 0;
-      setCovered(modalOpen());
+      setCovered(modalOpen() || (Boolean(document.querySelector("[data-assistant-open]")) && !window.matchMedia("(min-width: 64rem)").matches));
       const nodes = [...document.querySelectorAll<HTMLElement>("[data-quick-add-avoid]")];
       if (nodes.length !== watched.length || nodes.some((node, index) => node !== watched[index])) {
         resize.disconnect();

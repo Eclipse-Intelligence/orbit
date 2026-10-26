@@ -2,7 +2,9 @@
 
 import type { ComponentProps } from "react";
 import { Dialog as SheetPrimitive } from "radix-ui";
+import Button from "@/components/_ui/button";
 import { cn } from "@/lib/utils";
+import XIcon from "@/public/assets/images/companies/detail/x.svg";
 
 function Sheet(props: ComponentProps<typeof SheetPrimitive.Root>) {
   return <SheetPrimitive.Root data-slot="sheet" {...props} />;
@@ -14,6 +16,16 @@ function SheetTrigger(props: ComponentProps<typeof SheetPrimitive.Trigger>) {
 
 function SheetClose(props: ComponentProps<typeof SheetPrimitive.Close>) {
   return <SheetPrimitive.Close data-slot="sheet-close" {...props} />;
+}
+
+function SheetCloseButton({ className, label = "Close" }: { className?: string; label?: string }) {
+  return (
+    <SheetPrimitive.Close asChild>
+      <Button variant="ghost" size="icon-sm" className={cn("-mr-1", className)} aria-label={label}>
+        <XIcon aria-hidden className="text-foreground size-4" />
+      </Button>
+    </SheetPrimitive.Close>
+  );
 }
 
 function SheetOverlay({
@@ -53,6 +65,7 @@ function SheetContent({
             "border-line-strong data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right inset-y-0 right-0 h-dvh border-l",
           side === "left" &&
             "border-line-strong data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left inset-y-0 left-0 h-dvh border-r",
+          "pb-[env(safe-area-inset-bottom)]",
           side === "bottom" &&
             "border-line-strong shadow-overlay data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom inset-x-0 bottom-0 max-h-[85dvh] rounded-t-xl border-t",
           className,
@@ -121,6 +134,7 @@ export {
   Sheet,
   SheetTrigger,
   SheetClose,
+  SheetCloseButton,
   SheetContent,
   SheetHeader,
   SheetFooter,

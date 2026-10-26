@@ -65,7 +65,7 @@ function ClickUpChip({
         <div className="flex max-h-72 flex-col overflow-y-auto">
           {listGroups(picker.lists).map((group) => (
             <div key={group.label} className="flex flex-col">
-              <span className="caption-style text-faint px-2.5 pt-2 pb-1">{group.label}</span>
+              <span className="caption-style text-subtle px-2.5 pt-2 pb-1">{group.label}</span>
               {group.lists.map((list) => (
                 <button
                   key={list.id}

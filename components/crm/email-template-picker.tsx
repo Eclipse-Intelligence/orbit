@@ -89,7 +89,7 @@ export function TemplateTagFilter({
           )}
         >
           {tag.name}
-          <span className="text-faint">{tag.templates}</span>
+          <span className="text-subtle">{tag.templates}</span>
         </button>
       ))}
     </div>

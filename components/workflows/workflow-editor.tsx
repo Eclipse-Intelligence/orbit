@@ -13,7 +13,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/_ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popover";
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/_ui/sheet";
+import { Sheet, SheetCloseButton, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/_ui/sheet";
 import Switch from "@/components/_ui/switch";
 import { recordSelectClass } from "@/components/crm/record-form";
 import SectionHeader from "@/components/crm/section-header";
@@ -426,6 +426,7 @@ export default function WorkflowEditor({
           <SheetHeader>
             <SheetTitle>{panel === "runs" ? "Runs" : "Node"}</SheetTitle>
             <SheetDescription className="sr-only">Settings for the selected node, or recent runs</SheetDescription>
+            <SheetCloseButton />
           </SheetHeader>
           {sidePanel}
         </SheetContent>
@@ -435,6 +436,7 @@ export default function WorkflowEditor({
           <SheetHeader>
             <SheetTitle>Add a node</SheetTitle>
             <SheetDescription className="sr-only">Choose a node to add after the selected one</SheetDescription>
+            <SheetCloseButton />
           </SheetHeader>
           <div className="overflow-auto p-3">
             <Palette onAdd={(type) => addNode(type)} />

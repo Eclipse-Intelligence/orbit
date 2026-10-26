@@ -382,7 +382,7 @@ export default function TemplateEditor({ viewer, template }: { viewer: Viewer; t
           </div>
         </div>
         <div className={cn("min-h-0 overflow-y-auto", view === "edit" && "hidden lg:block")}>
-          <div className="paper min-h-full px-5 py-10 sm:px-10">
+          <div className="paper min-h-full px-5 pt-10 pb-28 sm:px-10">
             <div className="mx-auto max-w-[44em]">
               <p className="caption-style text-subtle pb-6">Preview with sample details</p>
               <ProposalDocument content={preview} compact />

@@ -58,7 +58,7 @@ export default function Notifications() {
                     >
                       <span aria-hidden className={cn("mt-1.5 size-1.5 shrink-0 rounded-full", fresh ? "bg-primary" : "bg-transparent")} />
                       <span className="flex min-w-0 flex-col gap-1">
-                        <span className="text-[14px] leading-5">{item.title}</span>
+                        <span className="text-foreground text-[14px] leading-5">{item.title}</span>
                         {item.body && <span className="caption-style text-subtle line-clamp-2 whitespace-pre-line">{item.body}</span>}
                         <span className="caption-style text-subtle">{relativeWhen(item.createdAt)}</span>
                       </span>

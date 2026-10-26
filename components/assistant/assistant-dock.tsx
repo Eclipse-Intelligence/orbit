@@ -312,7 +312,7 @@ function CopyableReply({ text }: { text: string }) {
         onClick={() => void copy()}
         aria-label={copied ? "Copied" : "Copy reply"}
         title={copied ? "Copied" : "Copy"}
-        className="text-faint hover:text-foreground focus-visible:ring-ring/60 ease-power3-out -ml-1.5 flex size-7 cursor-pointer items-center justify-center rounded-full transition-colors duration-150 outline-none hover:bg-white/5 focus-visible:ring-2"
+        className="text-subtle hover:text-foreground focus-visible:ring-ring/60 ease-power3-out -ml-1.5 flex size-7 cursor-pointer items-center justify-center rounded-full transition-colors duration-150 outline-none hover:bg-white/5 focus-visible:ring-2"
       >
         {copied ? <CheckIcon aria-hidden className="text-soft size-3.5" /> : <CopyIcon aria-hidden className="size-3.5" />}
       </button>
@@ -726,6 +726,7 @@ export default function AssistantDock() {
       )}
     >
       <section
+        data-assistant-open=""
         aria-label="Orbit assistant"
         className="animate-in fade-in-0 slide-in-from-bottom-3 zoom-in-[0.98] ease-power3-out flex h-full max-h-full flex-col overflow-hidden rounded-3xl bg-[#1c1c1c]/95 shadow-[0_24px_80px_rgba(0,0,0,0.6)] backdrop-blur-xl duration-200 md:h-auto md:max-h-[min(44rem,calc(100dvh-6rem))]"
       >

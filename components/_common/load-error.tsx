@@ -19,8 +19,8 @@ export default function LoadError({
     >
       <h1>This page could not be loaded</h1>
       <p className="text-muted-foreground max-w-[36rem]">
-        The workspace data is unavailable right now. Try again once the database
-        is reachable.
+        Orbit couldn&apos;t load this page. Check your connection, then try
+        again.
       </p>
       <Button variant="primary" size="md" onClick={retry}>
         Try again

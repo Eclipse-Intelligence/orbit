@@ -87,7 +87,7 @@ function DialogFooter({ className, ...props }: ComponentProps<"div">) {
     <div
       data-slot="dialog-footer"
       className={cn(
-        "border-line-strong flex items-center justify-end gap-2 border-t px-6 py-4",
+        "border-line-strong bg-popover sticky bottom-0 z-10 flex items-center justify-end gap-2 border-t px-6 py-4",
         className,
       )}
       {...props}
