@@ -1066,7 +1066,7 @@ export default function MailScreen({
             )}
           </div>
         </div>
-        <div className={cn("min-h-0 min-w-0 flex-1 flex-col lg:my-2 lg:mr-2 lg:flex lg:rounded-2xl lg:bg-white/[0.02]", open ? "flex" : "hidden")}>
+        <div className={cn("min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:my-2 lg:mr-2 lg:flex lg:rounded-2xl lg:bg-white/[0.02]", open ? "flex" : "hidden")}>
           <ThreadReader
             key={cursor ?? "none"}
             summary={current}
@@ -1081,12 +1081,17 @@ export default function MailScreen({
               else act(cursor, action);
             }}
             onBack={() => setOpen(false)}
-            onNext={() => {
+            onNext={(swiped) => {
               const next = threads[currentIndex + 1];
-              if (next) setEntered(next.key);
+              setEntered(next && !swiped ? next.key : null);
               step(1);
             }}
-            hasNext={currentIndex !== -1 && currentIndex < threads.length - 1}
+            onPrevious={() => {
+              setEntered(null);
+              step(-1);
+            }}
+            previous={currentIndex > 0 ? threads[currentIndex - 1] : null}
+            next={currentIndex !== -1 && currentIndex < threads.length - 1 ? threads[currentIndex + 1] : null}
             entered={entered !== null && entered === cursor}
             onSplit={(sender, split) => cursor && moveSender(cursor, sender, split)}
             onSent={() => cursor && sent(cursor)}

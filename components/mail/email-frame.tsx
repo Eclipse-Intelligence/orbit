@@ -87,7 +87,7 @@ export default function EmailFrame({
       }
     };
     element.addEventListener("load", attach);
-    if (element.contentDocument?.readyState === "complete") attach();
+    if (element.contentDocument?.readyState === "complete" && element.contentDocument.URL === "about:srcdoc") attach();
     return () => {
       element.removeEventListener("load", attach);
       observer?.disconnect();
