@@ -152,8 +152,10 @@ describe("proposals", () => {
     await assert.rejects(() => publicFile(token, "executed"), /ready once both sides/);
 
     await assert.rejects(() => countersignDocument(member, id, { signatureText: "Sam Colleague" }), /owner or an admin/);
-    const done = await countersignDocument(owner, id, { signatureText: "Mark Ridgeon", title: "Founder" });
+    const drawn = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+    const done = await countersignDocument(owner, id, { signatureText: "Mark Ridgeon", title: "Founder", signatureImage: drawn });
     assert.equal(done.status, "completed");
+    assert.equal(done.signatures.find((signature) => signature.role === "sender")?.signatureImage, drawn);
     assert.deepEqual(done.signatures.map((signature) => [signature.role, signature.method]), [
       ["client", "email_link"],
       ["sender", "orbit_login"],
