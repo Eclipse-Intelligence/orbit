@@ -708,7 +708,7 @@ export default function OpportunitiesScreen({
                   <EntityChip name={opportunity.companyName} href={companyHref(opportunity.companyId)} />
                 ) : null}
                 <Tag tone={opportunity.status === "won" ? "green" : opportunity.status === "lost" ? "red" : "blue"}>
-                  {opportunity.status}
+                  {opportunity.status === "won" ? "Won" : opportunity.status === "lost" ? "Lost" : "Open"}
                 </Tag>
               </span>
             }

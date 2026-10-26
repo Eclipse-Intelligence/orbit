@@ -133,7 +133,82 @@ type CompleteInput = {
   fetchImpl?: typeof fetch;
   actor?: UserActor;
   signal?: AbortSignal;
+  onText?: (text: string) => void;
 };
+
+class EmptyStreamError extends AssistantError {}
+
+type StreamedCall = { id?: string; name?: string; args: string };
+
+async function readStream(response: Response, input: CompleteInput): Promise<Completion> {
+  const reader = response.body?.getReader();
+  if (!reader) throw new EmptyStreamError("The model sent nothing back.");
+  const decoder = new TextDecoder();
+  const calls = new Map<number, StreamedCall>();
+  const annotations: unknown[] = [];
+  let citations: unknown[] = [];
+  let buffer = "";
+  let content = "";
+  let model = input.model;
+  let usage: Record<string, unknown> | null = null;
+  const take = (line: string) => {
+    if (!line.startsWith("data:")) return;
+    const data = line.slice(5).trim();
+    if (!data || data === "[DONE]") return;
+    let chunk: Record<string, unknown>;
+    try {
+      chunk = JSON.parse(data) as Record<string, unknown>;
+    } catch {
+      return;
+    }
+    if (chunk.error) {
+      const error = chunk.error as { message?: unknown } | string;
+      throw new AssistantError(`The LLM gateway stopped: ${typeof error === "string" ? error : String(error.message ?? "unknown error")}`);
+    }
+    if (typeof chunk.model === "string" && chunk.model) model = chunk.model;
+    if (chunk.usage && typeof chunk.usage === "object") usage = chunk.usage as Record<string, unknown>;
+    if (Array.isArray(chunk.citations)) citations = chunk.citations;
+    const choice = (Array.isArray(chunk.choices) ? chunk.choices[0] : null) as { delta?: Record<string, unknown>; message?: Record<string, unknown> } | null;
+    const delta = choice?.delta ?? choice?.message ?? {};
+    const piece = text(delta.content);
+    if (piece) {
+      content += piece;
+      input.onText?.(content);
+    }
+    for (const raw of Array.isArray(delta.tool_calls) ? delta.tool_calls : []) {
+      const call = raw as { index?: unknown; id?: unknown; function?: { name?: unknown; arguments?: unknown } };
+      const index = typeof call.index === "number" ? call.index : calls.size;
+      const entry = calls.get(index) ?? { args: "" };
+      if (typeof call.id === "string" && call.id) entry.id = call.id;
+      const name = call.function?.name;
+      if (typeof name === "string" && name) entry.name = entry.name && !name.startsWith(entry.name) ? entry.name + name : name;
+      const args = call.function?.arguments;
+      if (typeof args === "string") entry.args += args;
+      else if (args && typeof args === "object") entry.args = JSON.stringify(args);
+      calls.set(index, entry);
+    }
+    if (Array.isArray(delta.annotations)) annotations.push(...delta.annotations);
+  };
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let end = buffer.indexOf("\n");
+    while (end >= 0) {
+      take(buffer.slice(0, end).trim());
+      buffer = buffer.slice(end + 1);
+      end = buffer.indexOf("\n");
+    }
+  }
+  take(buffer.trim());
+  const toolCalls = [...calls.entries()]
+    .sort(([a], [b]) => a - b)
+    .flatMap(([index, call]): ToolCall[] =>
+      call.name ? [{ id: call.id ?? `call_${Date.now()}_${index}`, type: "function", function: { name: call.name, arguments: call.args || "{}" } }] : [],
+    );
+  if (!content.trim() && toolCalls.length === 0) throw new EmptyStreamError("The model sent nothing back.");
+  return { content: content.trim(), toolCalls, sources: readSources({ annotations }, { citations }), model, usage };
+}
 
 export class StoppedError extends AssistantError {}
 
@@ -194,6 +269,9 @@ async function completeGateway(input: CompleteInput): Promise<Completion> {
   try {
     return await gatewayAttempt(input, input.timeoutMs);
   } catch (error) {
+    if (error instanceof EmptyStreamError && !input.signal?.aborted) {
+      return gatewayAttempt({ ...input, onText: undefined }, Math.max(5_000, input.timeoutMs - (Date.now() - started)));
+    }
     const left = input.timeoutMs - (Date.now() - started) - RETRY_PAUSE_MS;
     if (!(error instanceof RetryableGatewayError) || left < RETRY_MIN_MS || input.signal?.aborted) throw error;
     await new Promise((resolve) => setTimeout(resolve, RETRY_PAUSE_MS));
@@ -219,6 +297,7 @@ async function gatewayAttempt(input: CompleteInput, timeoutMs: number): Promise<
         reasoning_effort: input.reasoning,
         max_tokens: MAX_TOKENS,
         ...(input.webSearch ? { web_search_options: { search_context_size: "medium" } } : {}),
+        ...(input.onText ? { stream: true, stream_options: { include_usage: true } } : {}),
       }),
       signal: input.signal ? AbortSignal.any([AbortSignal.timeout(timeoutMs), input.signal]) : AbortSignal.timeout(timeoutMs),
     });
@@ -233,6 +312,15 @@ async function gatewayAttempt(input: CompleteInput, timeoutMs: number): Promise<
     const reason = await detail(response);
     const message = `The LLM gateway returned ${response.status}${reason ? `: ${reason}` : "."}`;
     throw RETRY_STATUSES.has(response.status) ? new RetryableGatewayError(message) : new AssistantError(message);
+  }
+  if (input.onText && (response.headers.get("content-type") ?? "").includes("text/event-stream")) {
+    try {
+      return await readStream(response, input);
+    } catch (error) {
+      if (input.signal?.aborted) throw new StoppedError("Stopped.");
+      if (error instanceof AssistantError) throw error;
+      throw new EmptyStreamError("The model's reply was cut off.");
+    }
   }
   let body: Record<string, unknown>;
   try {

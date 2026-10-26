@@ -458,4 +458,48 @@ describe("assistant safety and limits", () => {
     await stopConversation(owner, conversationId);
     assert.equal((await getConversation(owner, conversationId)).working, null);
   });
+
+  it("streams a reply as drafts, then saves it, and reads tool calls from the stream", async () => {
+    process.env.LLM_API_KEY = "llm-test";
+    const sse = (chunks: unknown[]) =>
+      new Response(chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("") + "data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } });
+    let call = 0;
+    const requests: Record<string, unknown>[] = [];
+    const streaming: typeof fetch = async (_input, init) => {
+      requests.push(JSON.parse(String(init?.body)));
+      call += 1;
+      if (call === 1) {
+        return sse([
+          { model: "claude-sonnet-5-5", choices: [{ delta: { tool_calls: [{ index: 0, id: "call_tags", function: { name: "list_tags", arguments: "" } }] } }] },
+          { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: "{}" } }] }, finish_reason: "tool_calls" }] },
+        ]);
+      }
+      return sse([
+        { model: "claude-sonnet-5-5", choices: [{ delta: { content: "Here are " } }] },
+        { choices: [{ delta: { content: "your tags." } }] },
+        { choices: [{ delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 3, completion_tokens: 4 } },
+      ]);
+    };
+    const events: AssistantEvent[] = [];
+    await sendMessage(owner, { message: "Show my tags", model: "claude-sonnet-5-5", reasoning: "low", webSearch: false }, (event) => events.push(event), { deadline: Date.now() + 60_000, fetchImpl: streaming });
+    assert.equal(requests[0].stream, true);
+    assert.ok(events.some((event) => event.type === "tool" && event.name === "list_tags"));
+    assert.ok(events.some((event) => event.type === "draft"));
+    const saved = await getConversation(owner, conversationOf(events));
+    assert.equal(saved.messages.at(-1)!.content, "Here are your tags.");
+  });
+
+  it("falls back to a normal request when the stream comes back empty", async () => {
+    process.env.LLM_API_KEY = "llm-test";
+    const bodies: Record<string, unknown>[] = [];
+    const empty: typeof fetch = async (_input, init) => {
+      const body = JSON.parse(String(init?.body));
+      bodies.push(body);
+      if (body.stream) return new Response("data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } });
+      return Response.json({ model: "claude-sonnet-5-5", choices: [{ message: { role: "assistant", content: "Plain answer." } }], usage: {} });
+    };
+    const { conversationId } = await ask(owner, "Hello there again", empty);
+    assert.deepEqual(bodies.map((body) => Boolean(body.stream)), [true, false]);
+    assert.equal((await getConversation(owner, conversationId)).messages.at(-1)!.content, "Plain answer.");
+  });
 });

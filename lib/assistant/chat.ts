@@ -73,6 +73,7 @@ export type AssistantEvent =
   | { type: "done" }
   | { type: "ping" }
   | { type: "waiting"; message: string }
+  | { type: "draft"; text: string }
   | { type: "error"; message: string };
 
 type Emit = (event: AssistantEvent) => void;
@@ -633,6 +634,18 @@ async function runLoop(actor: UserActor, conversation: ConversationRow, emit: Em
   }
 }
 
+const DRAFT_EVERY_MS = 80;
+
+function draftEmitter(emit: Emit) {
+  let last = 0;
+  return (text: string) => {
+    const now = Date.now();
+    if (now - last < DRAFT_EVERY_MS) return;
+    last = now;
+    emit({ type: "draft", text });
+  };
+}
+
 async function runRounds(actor: UserActor, conversation: ConversationRow, emit: Emit, options: TurnOptions) {
   const { deadline, fetchImpl, signal } = options;
   const chosen = assistantModel(conversation.model);
@@ -665,6 +678,7 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
       fetchImpl,
       actor,
       signal,
+      onText: draftEmitter(emit),
     });
     if (signal?.aborted) return;
     const saved = await insertMessage(actor, conversation.id, {
