@@ -272,6 +272,7 @@ export default function CalendarScreen({
             size="sm"
             data-shortcut="new-event"
             title="New event (C then E)"
+            shortcut={["C", "E"]}
             onClick={() => startInvite()}
           >
             <PlusIcon aria-hidden className="size-3" />

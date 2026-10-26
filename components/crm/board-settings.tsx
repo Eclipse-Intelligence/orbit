@@ -10,6 +10,7 @@ import { archiveBoardAction, updateBoardAction } from "@/app/(crm)/boards";
 import { saveStagesAction } from "@/app/(crm)/settings/actions";
 import type { Board } from "@/lib/crm/types";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
+import HoldButton from "@/components/_ui/hold-button";
 
 type StageRow = { key: string; id?: string; name: string };
 
@@ -64,8 +65,6 @@ export default function BoardSettings({
   }
 
   async function remove() {
-    const cards = count === 1 ? "1 company" : `${count} companies`;
-    if (!window.confirm(`Delete ${board.name}? ${count > 0 ? `The ${cards} on it will be taken off.` : ""}`.trim())) return;
     setPending(true);
     const result = await archiveBoardAction(board.id);
     setPending(false);
@@ -164,9 +163,12 @@ export default function BoardSettings({
           <Switch checked={addOnWon} onChange={setAddOnWon} label="Add companies when a deal is won" />
         </div>
         <div className="border-border border-t pt-5">
-          <Button variant="ghost" size="sm" className="text-danger" disabled={pending} onClick={remove}>
-            Delete board
-          </Button>
+          <HoldButton disabled={pending} onConfirm={() => void remove()}>
+            Hold to delete board
+          </HoldButton>
+          <p className="caption-style text-subtle mt-2">
+            {count > 0 ? `The ${count === 1 ? "1 company" : `${count} companies`} on it will be taken off. The companies themselves stay.` : "The companies themselves stay."}
+          </p>
         </div>
       </div>
       <SheetFooter>

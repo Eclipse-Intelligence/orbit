@@ -42,6 +42,7 @@ How Orbit is built. Follow these when changing or adding code. `README.md` cover
 
 - Tailwind only. No CSS modules, no inline style objects except for computed values.
 - Always use `Button` from `components/_ui/button` with an explicit `variant`.
+- Never use `window.confirm`. Quick destructive actions use `HoldButton` ("Hold to delete"); ones that need their consequences explained use `ConfirmDialog`. Copy actions use `CopyButton`. Pass `shortcut` to `Button` to show its keyboard shortcut on desktop.
 - Form fields use `Input`, `Textarea`, `NativeSelect` and `Radio` from `components/_ui` (or `inputClass`, `textareaClass` and `selectClass` from `components/_ui/field-styles` when a raw element is needed). They share one border, focus ring and dropdown arrow.
 - Typography comes from `@layer base` in `app/globals.css` (`h1` 18px page titles, `h2` 16px sections, `h3` 14px, `p`, and `.lead-style`, `.ui-style` 13px for menus and dense rows, `.caption-style`, `.eyebrow-style`). Don't restyle headings or paragraphs per component.
 - Icons are SVG files in `public/assets/images`, imported as components through SVGR (`import PlusIcon from "@/public/assets/images/_common/plus.svg"`). No icon libraries. Images, video, Rive and Lottie go through `Asset`.
