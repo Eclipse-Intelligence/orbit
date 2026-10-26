@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { ReactFlowProvider } from "@xyflow/react";
@@ -26,6 +26,7 @@ import type { BuilderOptions } from "@/components/workflows/step-config";
 import {
   archiveWorkflowAction,
   createWorkflowAction,
+  discardNewWorkflowAction,
   runWorkflowAction,
   saveWorkflowAction,
   setWorkflowStatusAction,
@@ -66,6 +67,8 @@ const DEFAULTS: Record<StepType, Record<string, unknown>> = {
   create_proposal: { templateId: "", currency: "GBP", products: "ai", productIds: [], guidance: "", title: "" },
 };
 
+const pendingDiscards = new Map<string, number>();
+
 function narrow() {
   return typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches;
 }
@@ -88,8 +91,10 @@ export default function WorkflowEditor({
   options,
   records,
   initialRun,
+  fresh = false,
 }: {
   viewer: Viewer;
+  fresh?: boolean;
   workflow: Workflow;
   runs: RunSummary[];
   options: BuilderOptions;
@@ -113,8 +118,75 @@ export default function WorkflowEditor({
   const [testId, setTestId] = useState("");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [undo, setUndo] = useState<WorkflowDefinition | null>(null);
+  const [leaving, setLeaving] = useState<string | null>(null);
+  const current = useRef(definition);
+  const kept = useRef(!fresh);
+
+  useEffect(() => {
+    current.current = definition;
+  }, [definition]);
+
+  useEffect(() => {
+    window.clearTimeout(pendingDiscards.get(workflow.id));
+    return () => {
+      if (kept.current) return;
+      pendingDiscards.set(
+        workflow.id,
+        window.setTimeout(() => {
+          pendingDiscards.delete(workflow.id);
+          void discardNewWorkflowAction(workflow.id);
+        }, 300),
+      );
+    };
+  }, [workflow.id]);
+
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
+    const intercept = (event: MouseEvent) => {
+      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey) return;
+      const link = (event.target as HTMLElement | null)?.closest<HTMLAnchorElement>("a[href]");
+      if (!link || link.target === "_blank") return;
+      const url = new URL(link.href, window.location.href);
+      if (url.origin !== window.location.origin || url.pathname === window.location.pathname) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setLeaving(url.pathname + url.search);
+    };
+    window.addEventListener("beforeunload", warn);
+    document.addEventListener("click", intercept, true);
+    return () => {
+      window.removeEventListener("beforeunload", warn);
+      document.removeEventListener("click", intercept, true);
+    };
+  }, [dirty]);
+
+  function restore() {
+    if (!undo) return;
+    setDefinition(undo);
+    setUndo(null);
+    setDirty(true);
+  }
+
+  useEffect(() => {
+    if (!undo) return;
+    const timer = window.setTimeout(() => setUndo(null), 10_000);
+    const onKey = (event: KeyboardEvent) => {
+      const typing = (event.target as HTMLElement | null)?.closest("input, textarea, select, [contenteditable='true']");
+      if (typing || !(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "z" || event.shiftKey) return;
+      event.preventDefault();
+      restore();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("keydown", onKey);
+    };
+  });
 
   const change = useCallback((next: WorkflowDefinition) => {
+    if (next.nodes.length < current.current.nodes.length) setUndo(current.current);
     setDefinition(next);
     setDirty(true);
     setError(null);
@@ -176,6 +248,7 @@ export default function WorkflowEditor({
       return false;
     }
     setDirty(false);
+    kept.current = true;
     router.refresh();
     return true;
   }
@@ -455,6 +528,26 @@ export default function WorkflowEditor({
           </div>
         </SheetContent>
       </Sheet>
+      {undo && (
+        <div role="status" className="bg-popover border-line-strong shadow-overlay fixed bottom-[calc(env(safe-area-inset-bottom)+5rem)] left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 rounded-full border py-1.5 pr-1.5 pl-4 text-[13px]">
+          Node deleted
+          <Button variant="ghost" size="sm" onClick={restore} title="Undo (⌘Z)">
+            Undo
+          </Button>
+        </div>
+      )}
+      <ConfirmDialog
+        open={leaving !== null}
+        onOpenChange={(open) => !open && setLeaving(null)}
+        title="Leave without saving?"
+        description="Your changes to this workflow will be lost."
+        confirmLabel="Leave"
+        onConfirm={() => {
+          const target = leaving;
+          setDirty(false);
+          if (target) window.setTimeout(() => router.push(target), 0);
+        }}
+      />
       <ConfirmDialog
         open={confirmDelete}
         onOpenChange={setConfirmDelete}

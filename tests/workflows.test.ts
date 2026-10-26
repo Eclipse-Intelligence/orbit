@@ -16,6 +16,7 @@ import {
   approvalEmail,
   createWorkflow,
   decideApproval,
+  discardUntouchedWorkflow,
   getRunSteps,
   listApprovals,
   listNotifications,
@@ -132,6 +133,17 @@ describe("workflows", () => {
     const sam = (await admin.query<{ id: string }>("select private.create_local_user('sam@flows.test', 'password-123', 'Sam Colleague') as id")).rows[0].id;
     await admin.query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [owner.workspaceId, sam]);
     member = { ...owner, userId: sam, email: "sam@flows.test", fullName: "Sam Colleague", role: "member", scopes: scopesForRole("member") };
+  });
+
+  it("clears away a new workflow that was never saved, but keeps saved or other people's ones", async () => {
+    const empty = await createWorkflow(owner, {});
+    assert.equal(await discardUntouchedWorkflow(member, empty.id), false);
+    assert.equal(await discardUntouchedWorkflow(owner, empty.id), true);
+    assert.ok(!(await listWorkflows(owner)).mine.some((workflow) => workflow.id === empty.id));
+    const saved = await createWorkflow(owner, {});
+    await getAdminPool().query("update crm.workflows set created_at = created_at - interval '1 minute' where id = $1", [saved.id]);
+    assert.equal(await discardUntouchedWorkflow(owner, saved.id), false);
+    assert.ok((await listWorkflows(owner)).mine.some((workflow) => workflow.id === saved.id));
   });
 
   beforeEach(() => {

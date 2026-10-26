@@ -60,7 +60,7 @@ export default function WorkflowsScreen({
       setError(result.error ?? "Couldn't create the workflow.");
       return;
     }
-    router.push(`/workflows/${result.id}`);
+    router.push(`/workflows/${result.id}?new=1`);
   }
 
   return (

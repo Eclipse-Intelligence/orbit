@@ -6,6 +6,7 @@ import { getUserActor } from "@/lib/auth/user";
 import { CrmError } from "@/lib/crm/errors";
 import {
   archiveWorkflow,
+  discardUntouchedWorkflow,
   createWorkflow,
   decideApproval,
   getRunSteps,
@@ -81,6 +82,11 @@ export async function setWorkflowTemplateAction(id: string, shared: boolean): Pr
   } catch (error) {
     return failure(error, "Couldn't change sharing.");
   }
+}
+
+export async function discardNewWorkflowAction(id: string): Promise<void> {
+  const user = await requireUser();
+  if (await discardUntouchedWorkflow(user, id).catch(() => false)) refresh();
 }
 
 export async function archiveWorkflowAction(id: string): Promise<{ error?: string }> {
