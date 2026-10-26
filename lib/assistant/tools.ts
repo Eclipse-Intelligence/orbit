@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { applyMailAction, threadForEmail } from "@/lib/mail/actions";
 import { addFollowUp } from "@/lib/mail/prepare";
 import { forgetMemory, recall, rememberNote } from "@/lib/learning/memories";
@@ -95,11 +96,13 @@ type AssistantTool = {
   parameters: JsonSchema;
   write?: boolean;
   label: string;
-  run: (actor: UserActor, args: Args) => Promise<unknown>;
+  run: (actor: UserActor, args: Args, context: ToolContext) => Promise<unknown>;
   describe?: (args: Args, name: Names) => { title: string; lines: string[] };
 };
 
 type Names = (id: unknown) => string;
+
+type ToolContext = { callId?: string };
 
 const PROVENANCE = { source: "assistant" } as const;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -136,6 +139,11 @@ function required(value: unknown, label: string) {
   const text = str(value);
   if (!text) throw new CrmError("invalid_input", `${label} is required.`, 400);
   return text;
+}
+
+function keyFor(callId: string) {
+  const hex = createHash("sha256").update(`orbit-assistant:${callId}`).digest("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
 function eclipseArguments(args: Args): Record<string, unknown> {
@@ -907,8 +915,12 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       },
       required: ["emailIds", "action", "summary"],
     },
-    describe: (args) => {
-      const count = strings(args.emailIds).length;
+    describe: (args, name) => {
+      const ids = [...new Set(strings(args.emailIds))];
+      const count = ids.length;
+      const subjects = [...new Set(ids.map((id) => (isUuid(id) && name(id) !== "Unknown record" ? name(id) : "An email Orbit can't find")))];
+      const shown = subjects.slice(0, 8);
+      const more = subjects.length > shown.length ? [`and ${subjects.length - shown.length} more`] : [];
       const verb: Record<string, string> = {
         archive: "Archive",
         trash: "Move to Trash",
@@ -922,7 +934,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       };
       return {
         title: `${verb[str(args.action)] ?? "Update"} ${count} ${count === 1 ? "conversation" : "conversations"}`,
-        lines: [str(args.summary), str(args.until) ? `Until ${formatDateTimeLabel(str(args.until))}` : ""],
+        lines: [str(args.until) ? `Until ${formatDateTimeLabel(str(args.until))}` : "", ...shown, ...more, str(args.summary) ? `Why: ${str(args.summary)}` : ""],
       };
     },
     run: async (actor, args) => {
@@ -1066,8 +1078,8 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         "Runs through Orbit's shared Eclipse connection. Anything it costs comes from Eclipse's own account.",
       ].filter(Boolean),
     }),
-    run: async (_actor, args) =>
-      callEclipseTool(required(args.tool, "A tool name"), eclipseArguments(args), "action").catch(
+    run: async (_actor, args, context) =>
+      callEclipseTool(required(args.tool, "A tool name"), eclipseArguments(args), "action", { idempotencyKey: context.callId ? keyFor(context.callId) : undefined }).catch(
         (error: Error) => ({ error: error instanceof EclipseMcpError ? error.message : "Eclipse didn't answer." }),
       ),
   },
@@ -2536,6 +2548,8 @@ const EXTERNAL_TOOLS = new Set([
   "get_company",
   "get_contact",
   "list_activities",
+  "get_workflow_run",
+  "get_proposal",
 ]);
 
 const TOOL_TIMEOUT_MS = 90_000;
@@ -2597,6 +2611,8 @@ export async function recordNames(actor: UserActor, args: Args[]) {
        union all
        select id, title from crm.documents where id = any($1::uuid[])
        union all
+       select id, coalesce(nullif(trim(subject), ''), '(no subject)') from crm.mail_messages where id = any($1::uuid[])
+       union all
        select p.id, coalesce(nullif(p.full_name, ''), p.email) from crm.profiles p
          join crm.workspace_members m on m.user_id = p.id and m.workspace_id = $2
          where p.id = any($1::uuid[])`,
@@ -2618,20 +2634,21 @@ export function describeAction(name: string, args: Args, names: Map<string, stri
   return { title: described.title, lines: described.lines.filter(Boolean) };
 }
 
-export async function runTool(actor: UserActor, name: string, args: Args, options: { deadline?: number } = {}) {
+export async function runTool(actor: UserActor, name: string, args: Args, options: { deadline?: number; callId?: string } = {}) {
   const tool = TOOL_BY_NAME.get(name);
   if (!tool) return { error: `There is no tool called ${name}.` };
   const cleaned = dropStrayNulls(args, tool.parameters) as Args;
   const limit = Math.max(5_000, Math.min(TOOL_TIMEOUT_MS, (options.deadline ?? Date.now() + TOOL_TIMEOUT_MS) - Date.now()));
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<{ error: string }>((resolve) => {
+    if (tool.write) return;
     timer = setTimeout(
       () => resolve({ error: `${tool.label} took too long and was stopped after ${Math.round(limit / 1000)} seconds. Try a narrower request, or try again.` }),
       limit,
     );
   });
   try {
-    const output = await Promise.race([tool.run(actor, cleaned), late]);
+    const output = await Promise.race([tool.run(actor, cleaned, { callId: options.callId }), late]);
     return marked(name, output);
   } catch (error) {
     if (error instanceof CrmError) return { error: error.message, field: error.details?.field ?? null };

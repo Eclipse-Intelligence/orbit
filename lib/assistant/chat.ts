@@ -19,6 +19,8 @@ import type { Db } from "@/lib/db/pool";
 
 export const MAX_ROUNDS = 40;
 export const STOPPED_MESSAGE = "I've stopped after a lot of steps. Ask again more narrowly, or say \"carry on\".";
+export const FULL_MESSAGE = "I've read a lot in this step, more than the model can hold at once, so I've stopped here. Say \"carry on\" and I'll continue from what I found, or ask a narrower question.";
+const EMPTY_REPLY = "I didn't get an answer back. Try again.";
 const HISTORY_BUDGET = 360_000;
 const OLD_RESULT_MAX = 4_000;
 const CURRENT_RESULT_MAX = 40_000;
@@ -197,6 +199,45 @@ async function saveActions(actor: UserActor, messageId: string, actions: Assista
   );
 }
 
+async function claimActions(
+  actor: UserActor,
+  messageId: string,
+  next: (action: AssistantAction) => AssistantAction["status"] | null,
+  options: { strict: boolean },
+) {
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ actions: AssistantAction[] | null }>("select actions from crm.assistant_messages where id = $1 for update", [messageId]);
+    const current = result.rows[0]?.actions ?? [];
+    const claimed: AssistantAction[] = [];
+    const actions = current.map((action) => {
+      const status = next(action);
+      if (!status) return action;
+      if (action.status !== "pending") {
+        if (options.strict) throw new AssistantError("That action has already been handled.");
+        return action;
+      }
+      claimed.push(action);
+      return { ...action, status };
+    });
+    if (claimed.length > 0) await db.query("update crm.assistant_messages set actions = $2::jsonb where id = $1", [messageId, JSON.stringify(actions)]);
+    return { actions, claimed };
+  });
+}
+
+async function patchAction(actor: UserActor, messageId: string, id: string, patch: Partial<AssistantAction>) {
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ actions: AssistantAction[] }>(
+      `update crm.assistant_messages set actions = (
+         select jsonb_agg(case when entry.item->>'id' = $2 then entry.item || $3::jsonb else entry.item end order by entry.position)
+         from jsonb_array_elements(actions) with ordinality as entry(item, position)
+       )
+       where id = $1 returning actions`,
+      [messageId, id, JSON.stringify(patch)],
+    );
+    return result.rows[0]?.actions ?? [];
+  });
+}
+
 export async function listConversations(actor: UserActor): Promise<ConversationSummary[]> {
   return withActor(actor, async (db) => {
     const result = await db.query<ConversationRow>(
@@ -274,6 +315,7 @@ export function history(rows: MessageRow[], budget = HISTORY_BUDGET): ChatMessag
       messages.push({ role: "tool", tool_call_id: row.tool_call_id, content: clipResult(row.content, index > lastUser ? CURRENT_RESULT_MAX : OLD_RESULT_MAX) });
     } else if (row.role === "assistant") {
       const calls = (row.tool_calls ?? []).filter((call) => answered.has(call.id));
+      if (calls.length === 0 && !row.content.trim()) return;
       const state = row.provider_state ?? null;
       messages.push(
         calls.length > 0
@@ -302,9 +344,9 @@ function titleFrom(message: string) {
 
 async function declinePending(actor: UserActor, conversationId: string, rows: MessageRow[], reason: string) {
   for (const row of rows) {
-    const pending = (row.actions ?? []).filter((action) => action.status === "pending");
-    if (pending.length === 0) continue;
-    for (const action of pending) {
+    if (!(row.actions ?? []).some((action) => action.status === "pending")) continue;
+    const { claimed } = await claimActions(actor, row.id, (action) => (action.status === "pending" ? "declined" : null), { strict: false });
+    for (const action of claimed) {
       await insertMessage(actor, conversationId, {
         role: "tool",
         content: toolJson({ declined: true, message: reason }),
@@ -312,11 +354,6 @@ async function declinePending(actor: UserActor, conversationId: string, rows: Me
         toolName: action.name,
       });
     }
-    await saveActions(
-      actor,
-      row.id,
-      (row.actions ?? []).map((action) => (action.status === "pending" ? { ...action, status: "declined" as const } : action)),
-    );
   }
 }
 
@@ -346,7 +383,7 @@ export async function applyCompanionResult(actor: UserActor, conversationId: str
     }
     if (step.text.trim() || reads.length > 0) entries.push({ content: step.text.trim(), reads });
   }
-  if (entries.length === 0) entries.push({ content: writes.length > 0 ? "" : "I didn't get an answer back. Try again.", reads: [] });
+  if (entries.length === 0) entries.push({ content: writes.length > 0 ? "" : EMPTY_REPLY, reads: [] });
   const ids: string[] = [];
   let last: MessageRow | null = null;
   for (const [index, entry] of entries.entries()) {
@@ -465,7 +502,7 @@ async function runLoop(
     if (!(error instanceof AssistantError)) throw error;
     const failed = await insertMessage(actor, conversation.id, {
       role: "assistant",
-      content: `I couldn't finish that. ${error.message} Say "try again" to have another go.`,
+      content: `I couldn't finish that. ${/[.!?]$/.test(error.message.trim()) ? error.message.trim() : `${error.message.trim()}.`} Say "try again" to have another go.`,
     });
     emit({ type: "message", message: display(failed) });
   }
@@ -492,18 +529,24 @@ async function runRounds(
       emit({ type: "message", message: display(paused) });
       return;
     }
+    const messages = history(rows);
+    if (round > 0 && messages.reduce((sum, message) => sum + weight(message), 0) > HISTORY_BUDGET) {
+      const full = await insertMessage(actor, conversation.id, { role: "assistant", content: FULL_MESSAGE });
+      emit({ type: "message", message: display(full) });
+      return;
+    }
     const result = await complete({
       model: conversation.model,
       reasoning: conversation.reasoning,
       webSearch: conversation.web_search,
-      messages: [{ role: "system", content: system }, ...history(rows)],
+      messages: [{ role: "system", content: system }, ...messages],
       timeoutMs: Math.min(240_000, remaining - 5_000),
       fetchImpl,
       actor,
     });
     const saved = await insertMessage(actor, conversation.id, {
       role: "assistant",
-      content: result.content,
+      content: result.content.trim() || result.toolCalls.length > 0 ? result.content : EMPTY_REPLY,
       toolCalls: result.toolCalls,
       sources: result.sources,
       model: result.model,
@@ -605,29 +648,31 @@ export async function decideActions(
   const chosen = (owner.actions ?? []).filter((action) => decisions.has(action.id));
   if (chosen.length !== decisions.size) throw new AssistantError("Some of those actions are no longer available.");
   if (chosen.some((action) => action.status !== "pending")) throw new AssistantError("That action has already been handled.");
-  let actions = owner.actions ?? [];
+  const callFor = (id: string) => (owner.tool_calls ?? []).find((entry) => entry.id === id);
+  const runs = (action: AssistantAction) => Boolean(decisions.get(action.id) && callFor(action.id));
+  const claim = await claimActions(actor, owner.id, (action) => (decisions.has(action.id) ? (runs(action) ? "running" : "declined") : null), { strict: true });
+  let actions = claim.actions;
+  emit({ type: "actions", messageId: owner.id, actions });
   const update = async (id: string, patch: Partial<AssistantAction>) => {
-    actions = actions.map((entry) => (entry.id === id ? { ...entry, ...patch } : entry));
-    await saveActions(actor, owner.id, actions);
+    actions = await patchAction(actor, owner.id, id, patch);
     emit({ type: "actions", messageId: owner.id, actions });
   };
-  for (const action of chosen) {
-    const call = (owner.tool_calls ?? []).find((entry) => entry.id === action.id);
-    if (!decisions.get(action.id) || !call) {
+  for (const action of claim.claimed) {
+    const call = callFor(action.id);
+    if (!runs(action) || !call) {
       await insertMessage(actor, conversation.id, {
         role: "tool",
         content: toolJson({ declined: true, message: "The user declined this action." }),
         toolCallId: action.id,
         toolName: action.name,
       });
-      await update(action.id, { status: "declined" });
       continue;
     }
     const alternative = variants.get(action.id) ? ACTION_ALTERNATIVES[action.name] : undefined;
     const chosenAlternative = alternative && alternative.key === variants.get(action.id) ? alternative : undefined;
-    await update(action.id, { status: "running" });
     const output = (await runTool(actor, chosenAlternative?.tool ?? call.function.name, parseArgs(call.function.arguments), {
       deadline: options.deadline - 20_000,
+      callId: call.id,
     })) as Record<string, unknown> | null;
     const failed = Boolean(output && typeof output === "object" && "error" in output);
     await insertMessage(actor, conversation.id, {

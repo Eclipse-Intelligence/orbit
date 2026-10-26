@@ -5,9 +5,11 @@ import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
+import type { Db } from "@/lib/db/pool";
 
 const POLL_MS = 1_500;
-const QUEUE_EXPIRY = "10 minutes";
+const QUEUE_EXPIRY = "20 minutes";
+export const EXPIRED_MESSAGE = "I couldn't finish that. Orbit Agent on your Mac didn't get to it in time. Say \"try again\" to have another go.";
 
 type ToolEvent = { type: "tool"; id: string; name: string; label: string; status: "running" | "done" };
 
@@ -22,8 +24,26 @@ type JobState = {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+async function expireQueued(db: Db, actor: UserActor) {
+  const expired = await db.query<{ conversation_id: string }>(
+    `update crm.ai_companion_jobs set status = 'cancelled', finished_at = now()
+     where user_id = $1 and status = 'queued' and created_at < now() - interval '${QUEUE_EXPIRY}'
+     returning conversation_id`,
+    [actor.userId],
+  );
+  for (const conversationId of new Set(expired.rows.map((row) => row.conversation_id))) {
+    await db.query(
+      `insert into crm.assistant_messages (conversation_id, workspace_id, user_id, role, content)
+       values ($1, $2, $3, 'assistant', $4)`,
+      [conversationId, actor.workspaceId, actor.userId, EXPIRED_MESSAGE],
+    );
+    await db.query("update crm.assistant_conversations set updated_at = now() where id = $1", [conversationId]);
+  }
+}
+
 export async function enqueueCompanionJob(actor: UserActor, conversationId: string, request: CompanionRequest) {
   return withActor(actor, async (db) => {
+    await expireQueued(db, actor);
     await db.query(
       `update crm.ai_companion_jobs set status = 'cancelled', finished_at = now()
        where conversation_id = $1 and status in ('queued', 'running')`,
@@ -73,11 +93,7 @@ export async function cancelCompanionJob(actor: UserActor, jobId: string) {
 
 async function claim(auth: AuthenticatedCompanion): Promise<CompanionJob | null> {
   return withActor(auth.actor, async (db) => {
-    await db.query(
-      `update crm.ai_companion_jobs set status = 'cancelled', finished_at = now()
-       where user_id = $1 and status = 'queued' and created_at < now() - interval '${QUEUE_EXPIRY}'`,
-      [auth.actor.userId],
-    );
+    await expireQueued(db, auth.actor);
     const result = await db.query<{ id: string; request: CompanionRequest }>(
       `update crm.ai_companion_jobs set status = 'running', companion_id = $2, claimed_at = now()
        where id = (

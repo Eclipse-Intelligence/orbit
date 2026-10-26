@@ -121,7 +121,7 @@ export async function callEclipseTool(
   name: string,
   args: Record<string, unknown>,
   mode: "read" | "action",
-  options: { fetchImpl?: typeof fetch } = {},
+  options: { fetchImpl?: typeof fetch; idempotencyKey?: string } = {},
 ) {
   const tools = await eclipseTools(options);
   const tool = tools.find((item) => item.name === name);
@@ -133,7 +133,7 @@ export async function callEclipseTool(
       throw new EclipseMcpError(`${name} changes data in Eclipse, so it needs the user's approval. Use eclipse_action.`);
     }
   } else if (confirmGated(tool)) {
-    params = { ...rest, confirm: true, idempotencyKey: randomUUID() };
+    params = { ...rest, confirm: true, idempotencyKey: options.idempotencyKey ?? randomUUID() };
   }
   const result = await rpc("tools/call", { name, arguments: params }, options.fetchImpl ?? fetch);
   return {
