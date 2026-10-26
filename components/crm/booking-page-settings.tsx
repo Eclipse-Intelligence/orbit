@@ -39,8 +39,8 @@ import {
 import { TIME_OPTIONS } from "@/lib/invite-rules";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
 import { cn } from "@/lib/utils";
-import CopyIcon from "@/public/assets/images/booking/copy.svg";
 import ExternalIcon from "@/public/assets/images/booking/external.svg";
+import CopyButton from "@/components/_ui/copy-button";
 
 type Draft = {
   slug: string;
@@ -262,7 +262,6 @@ export default function BookingPageSettings({
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
   const [preview, setPreview] = useState(false);
   const [previewError, setPreviewError] = useState(false);
 
@@ -378,15 +377,6 @@ export default function BookingPageSettings({
     router.refresh();
   }
 
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(liveUrl);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      setCopied(false);
-    }
-  }
 
   const warnings: ReactNode[] = [];
   if (!setup.connected) {
@@ -500,10 +490,7 @@ export default function BookingPageSettings({
             <code className="text-soft bg-muted min-w-0 flex-1 truncate rounded-md px-2.5 py-2 text-[13px] leading-none">
               {liveUrl}
             </code>
-            <Button variant="secondary" size="sm" onClick={copy}>
-              <CopyIcon aria-hidden className="size-3.5" />
-              {copied ? "Copied" : "Copy"}
-            </Button>
+            <CopyButton text={liveUrl} />
             {page.enabled ? (
               <a
                 href={liveUrl}
@@ -520,9 +507,6 @@ export default function BookingPageSettings({
                 Open
               </Button>
             )}
-            <span role="status" className="sr-only">
-              {copied ? "Link copied" : ""}
-            </span>
           </div>
         )}
         {page.exists && slug !== page.slug && localSlug.ok && (

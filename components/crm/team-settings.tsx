@@ -13,6 +13,8 @@ import { formatDateLabel } from "@/lib/date-input";
 import type { Team } from "@/lib/crm/team";
 import type { WorkspaceRole } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
+import ConfirmDialog from "@/components/_ui/confirm-dialog";
+import CopyButton from "@/components/_ui/copy-button";
 
 const ROLE_LABELS: Record<WorkspaceRole, string> = { owner: "Owner", admin: "Admin", member: "Member" };
 const ROLE_TONES = { owner: "purple", admin: "blue", member: "neutral" } as const;
@@ -39,13 +41,12 @@ export default function TeamSettings({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState<Sent | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [removing, setRemoving] = useState<{ id: string; name: string } | null>(null);
 
   async function invite() {
     setPending(true);
     setError(null);
     setSent(null);
-    setCopied(false);
     const result = await inviteAction({ email, role, send: send && mailboxConnected });
     setPending(false);
     if (result.error || !result.link || !result.email) {
@@ -67,14 +68,6 @@ export default function TeamSettings({
     router.refresh();
   }
 
-  async function copy(link: string) {
-    try {
-      await navigator.clipboard.writeText(link);
-      setCopied(true);
-    } catch {
-      setCopied(false);
-    }
-  }
 
   return (
     <>
@@ -122,15 +115,7 @@ export default function TeamSettings({
                     variant="ghost"
                     size="sm"
                     className="text-danger"
-                    onClick={() => {
-                      if (
-                        window.confirm(
-                          `Remove ${member.name}? Their companies, contacts, deals and tasks move to you, and their email and calendar connections are disconnected. Everything they logged stays.`,
-                        )
-                      ) {
-                        void run(() => removeMemberAction(member.id));
-                      }
-                    }}
+                    onClick={() => setRemoving({ id: member.id, name: member.name })}
                   >
                     Remove
                   </Button>
@@ -190,9 +175,7 @@ export default function TeamSettings({
               {sent.sendError && <span className="caption-style text-danger">Couldn&apos;t email it: {sent.sendError}</span>}
               <div className="flex items-center gap-2">
                 <Input readOnly value={sent.link} aria-label="Invite link" className="flex-1" onFocus={(event) => event.currentTarget.select()} />
-                <Button variant="secondary" size="sm" className="h-9" onClick={() => void copy(sent.link)}>
-                  {copied ? "Copied" : "Copy"}
-                </Button>
+                <CopyButton text={sent.link} className="h-9" />
               </div>
             </div>
           )}
@@ -241,6 +224,17 @@ export default function TeamSettings({
           </SettingsDisclosure>
         </SettingsCard>
       )}
+      <ConfirmDialog
+        open={removing !== null}
+        onOpenChange={(open) => !open && setRemoving(null)}
+        title={`Remove ${removing?.name ?? "this member"}?`}
+        description="Their companies, contacts, deals and tasks move to you, and their email and calendar connections are disconnected. Everything they logged stays."
+        confirmLabel="Remove from workspace"
+        onConfirm={() => {
+          const member = removing;
+          if (member) void run(() => removeMemberAction(member.id));
+        }}
+      />
     </>
   );
 }

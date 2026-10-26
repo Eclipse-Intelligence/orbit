@@ -49,6 +49,7 @@ import type { Board, Opportunity, OpportunityStatus, PipelineStage } from "@/lib
 import Link from "next/link";
 import { statusTag } from "@/components/proposals/status";
 import type { DealProposal } from "@/lib/proposals/documents";
+import HoldButton from "@/components/_ui/hold-button";
 
 export default function OpportunitiesScreen({
   viewer,
@@ -447,6 +448,7 @@ export default function OpportunitiesScreen({
               size="sm"
               data-shortcut="add-record"
               title={board ? "Add a company (C then P)" : "Add opportunity (C then P)"}
+              shortcut={["C", "P"]}
               onClick={startAdding}
             >
               {board ? "Add company" : "Add opportunity"}
@@ -1111,7 +1113,6 @@ function BoardCardEditor({
 
   async function remove() {
     if (!editing) return;
-    if (!window.confirm(`Take ${editing.companyName ?? editing.name} off ${board.name}?`)) return;
     setRemoving(true);
     const result = await removeCardAction(editing.id);
     setRemoving(false);
@@ -1161,9 +1162,9 @@ function BoardCardEditor({
       </div>
       <SheetFooter>
         {editing ? (
-          <Button variant="ghost" size="sm" className="text-danger" disabled={removing} onClick={remove}>
-            Remove from board
-          </Button>
+          <HoldButton disabled={removing} onConfirm={() => void remove()}>
+            Hold to remove from board
+          </HoldButton>
         ) : (
           <span />
         )}

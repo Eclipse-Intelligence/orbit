@@ -154,6 +154,7 @@ export default function CompaniesToolbar({
           }}
           data-shortcut="add-record"
           title="Add company (C then O)"
+          shortcut={["C", "O"]}
         >
           <PlusIcon aria-hidden className="size-3" />
           Add company

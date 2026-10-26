@@ -42,6 +42,7 @@ import {
 import type { RunStepLog, RunSummary, Workflow } from "@/lib/workflows/store";
 import { cn } from "@/lib/utils";
 import PlusIcon from "@/public/assets/images/_common/plus.svg";
+import ConfirmDialog from "@/components/_ui/confirm-dialog";
 
 type Records = { companies: { id: string; name: string }[]; contacts: { id: string; name: string }[] };
 
@@ -102,6 +103,7 @@ export default function WorkflowEditor({
   const [selected, setSelected] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [panel, setPanel] = useState<"node" | "runs">(initialRun ? "runs" : "node");
   const [selectedRun, setSelectedRun] = useState<string | null>(initialRun);
@@ -221,7 +223,6 @@ export default function WorkflowEditor({
   }
 
   async function remove() {
-    if (!window.confirm(`Delete ${workflow.name}? It stops running straight away.`)) return;
     setBusy("delete");
     const result = await archiveWorkflowAction(workflow.id);
     setBusy(null);
@@ -372,7 +373,7 @@ export default function WorkflowEditor({
                     Show runs
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem className="text-danger" onSelect={() => void remove()}>
+                  <DropdownMenuItem className="text-danger" onSelect={() => setConfirmDelete(true)}>
                     Delete workflow
                   </DropdownMenuItem>
                 </DropdownMenuContent>
@@ -443,6 +444,14 @@ export default function WorkflowEditor({
           </div>
         </SheetContent>
       </Sheet>
+      <ConfirmDialog
+        open={confirmDelete}
+        onOpenChange={setConfirmDelete}
+        title={`Delete ${workflow.name}?`}
+        description="It stops running straight away. Past runs stay in the history."
+        confirmLabel="Delete workflow"
+        onConfirm={() => void remove()}
+      />
     </section>
   );
 }

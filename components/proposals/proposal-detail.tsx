@@ -25,6 +25,9 @@ import type { Product } from "@/lib/proposals/catalogue";
 import type { DocumentDetail } from "@/lib/proposals/documents";
 import { BILLING_LABELS, formatMoney, KIND_LABELS, longDate, totalsOf, type Block, type Currency, type Item } from "@/lib/proposals/model";
 import { cn } from "@/lib/utils";
+import HoldButton from "@/components/_ui/hold-button";
+import ConfirmDialog from "@/components/_ui/confirm-dialog";
+import CopyButton from "@/components/_ui/copy-button";
 
 const EVENT_LABELS: Record<string, string> = {
   created: "Created",
@@ -59,6 +62,7 @@ export default function ProposalDetail({ viewer, initial }: { viewer: Viewer; in
   const [products, setProducts] = useState<Product[]>([]);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  const [confirmRevise, setConfirmRevise] = useState(false);
   const [message, setMessage] = useState<{ text: string; tone: "status" | "alert" } | null>(null);
   const [sending, setSending] = useState(false);
   const [signing, setSigning] = useState(false);
@@ -97,6 +101,10 @@ export default function ProposalDetail({ viewer, initial }: { viewer: Viewer; in
     return true;
   }
 
+  function revise() {
+    return act("revise", () => changeProposalAction(doc.id, "revise"), (next) => next && apply(next));
+  }
+
   function apply(next: DocumentDetail) {
     setDoc(next);
     setTitle(next.title);
@@ -111,11 +119,6 @@ export default function ProposalDetail({ viewer, initial }: { viewer: Viewer; in
     return act("save", () => saveProposalAction(doc.id, { title, currency, validUntil: validUntil || null, items: items.map((item) => ({ ...item })), blocks }), apply);
   }
 
-  async function copyLink() {
-    if (!doc.link) return;
-    await navigator.clipboard.writeText(doc.link).catch(() => undefined);
-    setMessage({ text: "Link copied. Each view is tracked.", tone: "status" });
-  }
 
   const preview = { ...content, title: draft ? title : content.title };
   const unsendable = !dirty && (doc.missing.length > 0 || doc.placeholders.length > 0);
@@ -216,9 +219,7 @@ export default function ProposalDetail({ viewer, initial }: { viewer: Viewer; in
             {!draft && (
               <div className="flex flex-wrap gap-2">
                 {doc.link && (doc.status === "sent" || doc.status === "viewed" || doc.status === "expired" || doc.status === "client_signed") && (
-                  <Button variant="secondary" size="sm" onClick={() => void copyLink()}>
-                    Copy link
-                  </Button>
+                  <CopyButton text={doc.link} label="Copy link" copiedLabel="Link copied" />
                 )}
                 {(doc.status === "sent" || doc.status === "viewed") && (
                   <Button variant="secondary" size="sm" disabled={busy !== null} onClick={() => setSending(true)}>
@@ -246,25 +247,20 @@ export default function ProposalDetail({ viewer, initial }: { viewer: Viewer; in
                     size="sm"
                     disabled={busy !== null}
                     onClick={() => {
-                      if (doc.status !== "declined" && doc.status !== "withdrawn" && !window.confirm("Make changes? The link you sent stops working, and you send a new version when you're done.")) return;
-                      void act("revise", () => changeProposalAction(doc.id, "revise"), (next) => next && apply(next));
+                      if (doc.status !== "declined" && doc.status !== "withdrawn") setConfirmRevise(true);
+                      else void revise();
                     }}
                   >
                     Make changes
                   </Button>
                 )}
                 {(doc.status === "sent" || doc.status === "viewed" || doc.status === "expired" || doc.status === "client_signed") && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
+                  <HoldButton
                     disabled={busy !== null}
-                    onClick={() => {
-                      if (!window.confirm("Withdraw it? The client won't be able to sign it.")) return;
-                      void act("withdraw", () => changeProposalAction(doc.id, "withdraw"), (next) => next && apply(next));
-                    }}
+                    onConfirm={() => void act("withdraw", () => changeProposalAction(doc.id, "withdraw"), (next) => next && apply(next))}
                   >
-                    Withdraw
-                  </Button>
+                    Hold to withdraw
+                  </HoldButton>
                 )}
               </div>
             )}
@@ -327,16 +323,12 @@ export default function ProposalDetail({ viewer, initial }: { viewer: Viewer; in
                   <Button variant="secondary" disabled={!dirty || busy !== null} onClick={() => void save()}>
                     {busy === "save" ? "Saving…" : dirty ? "Save changes" : "Saved"}
                   </Button>
-                  <Button
-                    variant="ghost"
+                  <HoldButton
                     disabled={busy !== null}
-                    onClick={() => {
-                      if (!window.confirm("Delete this draft?")) return;
-                      void act("delete", () => changeProposalAction(doc.id, "archive"), () => router.push("/proposals"));
-                    }}
+                    onConfirm={() => void act("delete", () => changeProposalAction(doc.id, "archive"), () => router.push("/proposals"))}
                   >
-                    Delete draft
-                  </Button>
+                    Hold to delete draft
+                  </HoldButton>
                 </div>
               </div>
             )}
@@ -378,6 +370,15 @@ export default function ProposalDetail({ viewer, initial }: { viewer: Viewer; in
           </div>
         </div>
       </div>
+      <ConfirmDialog
+        open={confirmRevise}
+        onOpenChange={setConfirmRevise}
+        title="Make changes to this proposal?"
+        description="The link you sent stops working until you send the new version."
+        confirmLabel="Make changes"
+        tone="neutral"
+        onConfirm={() => void revise()}
+      />
       <SendDialog open={sending} onOpenChange={setSending} doc={doc} onSent={(next, text) => {
         apply(next);
         setMessage({ text, tone: "status" });

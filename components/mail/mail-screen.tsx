@@ -861,7 +861,7 @@ export default function MailScreen({
         }
         action={
           <>
-            <Button variant="primary" onClick={() => openComposer()} title="Write an email (C then M)" aria-label="Compose" className="max-sm:size-[30px] max-sm:p-0">
+            <Button variant="primary" onClick={() => openComposer()} title="Write an email (C then M)" aria-label="Compose" shortcut={["C", "M"]} className="max-sm:size-[30px] max-sm:p-0">
               <ComposeIcon aria-hidden className="size-3.5 sm:hidden" />
               <span className="max-sm:sr-only">Compose</span>
             </Button>
