@@ -57,7 +57,7 @@ function DropdownMenuItem({
     <DropdownMenuPrimitive.Item
       data-slot="dropdown-menu-item"
       className={cn(
-        "caption-style text-foreground ease-power3-out relative flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 transition-colors duration-150 outline-none select-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[highlighted]:bg-white/6",
+        "ui-style text-foreground ease-power3-out relative flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 transition-colors duration-150 outline-none select-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[highlighted]:bg-white/6",
         className,
       )}
       {...props}
