@@ -55,14 +55,21 @@ export default function ActionsScreen({
   };
   const router = useRouter();
   const [message, setMessage] = useState<string | null>(null);
+  const [done, setDone] = useState<Set<string>>(() => new Set());
 
   async function complete(id: string) {
+    setDone((current) => new Set(current).add(id));
+    setMessage(null);
     const result = await completeTaskAction(id);
     if (result.error) {
+      setDone((current) => {
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
       setMessage(result.error);
       return;
     }
-    setMessage(null);
     router.refresh();
   }
 
@@ -143,7 +150,7 @@ export default function ActionsScreen({
             <ActionTask
               key={task.id}
               task={task}
-              completed={view === "completed"}
+              completed={view === "completed" || done.has(task.id)}
               dueBadge={view === "all"}
               now={now}
               onComplete={view === "completed" ? undefined : () => complete(task.id)}

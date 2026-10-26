@@ -182,11 +182,16 @@ export default function WorkflowEditor({
 
   async function toggle(on: boolean) {
     if (dirty && !(await save())) return;
+    setSwitching(on);
     setBusy("status");
     setError(null);
     const result = await setWorkflowStatusAction(workflow.id, on ? "active" : "paused");
     setBusy(null);
-    if (result.error) setError(result.error);
+    if (result.error) {
+      setSwitching(null);
+      setError(result.error);
+      return;
+    }
     router.refresh();
   }
 
@@ -242,7 +247,13 @@ export default function WorkflowEditor({
   }
 
   const recordChoices = testKind === "company" ? records.companies : records.contacts;
-  const active = workflow.status === "active";
+  const [switching, setSwitching] = useState<boolean | null>(null);
+  const [statusSeen, setStatusSeen] = useState(workflow.status);
+  if (statusSeen !== workflow.status) {
+    setStatusSeen(workflow.status);
+    setSwitching(null);
+  }
+  const active = switching ?? workflow.status === "active";
   const statuses = panel === "runs" && selectedRun ? statusesFrom(runSteps) : null;
 
   const sidePanel = (
