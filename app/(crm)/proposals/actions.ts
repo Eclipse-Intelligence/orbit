@@ -95,7 +95,7 @@ export async function changeProposalAction(id: string, action: "revise" | "withd
   });
 }
 
-export async function countersignAction(id: string, input: { signatureText: string; title?: string }): Promise<Result<DocumentDetail>> {
+export async function countersignAction(id: string, input: { signatureText: string; title?: string; signatureImage?: string | null }): Promise<Result<DocumentDetail>> {
   const store = await headers();
   return run((user) => countersignDocument(user, id, input, { ip: clientIp(store), userAgent: store.get("user-agent") }));
 }

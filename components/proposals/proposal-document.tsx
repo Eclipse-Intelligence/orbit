@@ -11,8 +11,10 @@ import {
 } from "@/lib/proposals/model";
 import Asset from "@/components/_ui/asset";
 import { cn } from "@/lib/utils";
+import { signatureFont } from "@/components/proposals/signature-font";
+import Image from "next/image";
 
-type SignatureView = { role: "client" | "sender"; name: string; title: string | null; signatureText: string; signedAt: string };
+type SignatureView = { role: "client" | "sender"; name: string; title: string | null; signatureText: string; signatureImage?: string | null; signedAt: string };
 
 function Parts({ parts }: { parts: Inline[] }) {
   return (
@@ -215,7 +217,11 @@ export default function ProposalDocument({
               <div key={role} className="bg-card flex flex-col gap-2 rounded-2xl p-5 shadow-[0_0_0_1px_rgba(0,0,0,0.05)]">
                 <span className="text-subtle text-[12.5px] font-medium tracking-[0.04em] uppercase">For {party.company}</span>
                 {signed ? (
-                  <span className="font-serif text-[28px] leading-tight italic">{signed.signatureText}</span>
+                  signed.signatureImage ? (
+                    <Image src={signed.signatureImage} alt={`Signature of ${signed.name}`} width={240} height={54} unoptimized className="h-[54px] w-auto self-start object-contain" />
+                  ) : (
+                    <span className={cn(signatureFont.className, "text-[34px] leading-[42px]")}>{signed.signatureText}</span>
+                  )
                 ) : (
                   <span className="text-subtle text-[15px] leading-[42px]">Waiting for signature</span>
                 )}

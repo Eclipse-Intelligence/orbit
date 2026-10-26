@@ -6,6 +6,8 @@ import ProposalDocument, { ProposalLogo } from "@/components/proposals/proposal-
 import { KIND_LABELS, longDate } from "@/lib/proposals/model";
 import type { PublicDocument, PublicState } from "@/lib/proposals/public";
 import { cn } from "@/lib/utils";
+import SignaturePad, { type SignatureMode } from "@/components/proposals/signature-pad";
+import { signatureFont } from "@/components/proposals/signature-font";
 
 const field =
   "bg-card text-foreground placeholder:text-faint h-11 w-full rounded-xl px-3.5 text-[15px] shadow-[0_0_0_1px_var(--input)] outline-none focus-visible:shadow-[0_0_0_2px_var(--ring)]";
@@ -23,6 +25,8 @@ export default function ProposalPage({ token, initial, preview }: { token: strin
   const [title, setTitle] = useState(initial.content.client.title ?? "");
   const [company, setCompany] = useState(initial.content.client.company);
   const [typed, setTyped] = useState("");
+  const [mode, setMode] = useState<SignatureMode>("type");
+  const [image, setImage] = useState<string | null>(null);
   const [agree, setAgree] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -50,8 +54,11 @@ export default function ProposalPage({ token, initial, preview }: { token: strin
 
   function sign(event: FormEvent) {
     event.preventDefault();
-    void post("sign", { name, title, company, signatureText: typed, agree });
+    const drawn = mode === "draw" ? image : null;
+    void post("sign", { name, title, company, signatureText: drawn ? name : typed, signatureImage: drawn ?? undefined, agree });
   }
+
+  const ready = mode === "draw" ? Boolean(image) && name.trim().length >= 2 : typed.trim().length >= 2;
 
   const notice = NOTICES[doc.state];
 
@@ -104,7 +111,7 @@ export default function ProposalPage({ token, initial, preview }: { token: strin
                 <h3 id="sign-form-title" className="text-[18px] leading-7 font-semibold">
                   Sign this {label}
                 </h3>
-                <p className="doc-body text-soft">Check your details, type your name as your signature, then select Agree and sign.</p>
+                <p className="doc-body text-soft">Check your details, type or draw your signature, then select Agree and sign.</p>
               </div>
               <div className="grid gap-4 sm:grid-cols-2">
                 <label className="flex flex-col gap-1.5">
@@ -120,18 +127,17 @@ export default function ProposalPage({ token, initial, preview }: { token: strin
                   <input className={field} value={company} onChange={(event) => setCompany(event.target.value)} autoComplete="organization" maxLength={200} />
                 </label>
               </div>
-              <label className="flex flex-col gap-1.5">
-                <span className="text-[14px] font-medium">Type your name to sign</span>
-                <input
-                  className={cn(field, "h-16 font-serif text-[26px] italic")}
-                  value={typed}
-                  onChange={(event) => setTyped(event.target.value)}
-                  placeholder={name}
-                  required
-                  maxLength={200}
-                  aria-describedby="sign-consent"
-                />
-              </label>
+              <SignaturePad
+                mode={mode}
+                onMode={setMode}
+                typed={typed}
+                onTyped={setTyped}
+                placeholder={name}
+                onImage={setImage}
+                fontClass={signatureFont.className}
+                fieldClass={field}
+                describedBy="sign-consent"
+              />
               <label className="flex items-start gap-3">
                 <input
                   type="checkbox"
@@ -151,7 +157,7 @@ export default function ProposalPage({ token, initial, preview }: { token: strin
                 </p>
               )}
               <div className="flex flex-wrap items-center gap-3">
-                <Button type="submit" variant="primary" disabled={busy || !agree || typed.trim().length < 2} className="h-11 px-6 text-[15px]" style={{ backgroundColor: content.accent }}>
+                <Button type="submit" variant="primary" disabled={busy || !agree || !ready} className="h-11 px-6 text-[15px]" style={{ backgroundColor: content.accent }}>
                   {busy ? "Signing…" : "Agree and sign"}
                 </Button>
                 <Button variant="ghost" onClick={() => setDeclining(true)} className="text-subtle">

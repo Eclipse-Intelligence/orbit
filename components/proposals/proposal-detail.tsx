@@ -28,6 +28,9 @@ import { cn } from "@/lib/utils";
 import HoldButton from "@/components/_ui/hold-button";
 import ConfirmDialog from "@/components/_ui/confirm-dialog";
 import CopyButton from "@/components/_ui/copy-button";
+import { inputClass } from "@/components/_ui/field-styles";
+import { signatureFont } from "@/components/proposals/signature-font";
+import SignaturePad, { type SignatureMode } from "@/components/proposals/signature-pad";
 
 const EVENT_LABELS: Record<string, string> = {
   created: "Created",
@@ -363,7 +366,7 @@ export default function ProposalDetail({ viewer, initial }: { viewer: Viewer; in
               </p>
               <ProposalDocument
                 content={draft ? { ...preview, items, currency, totals: totalsOf(items) } : preview}
-                signatures={doc.signatures.map((signature) => ({ role: signature.role, name: signature.name, title: signature.title, signatureText: signature.signatureText, signedAt: signature.signedAt }))}
+                signatures={doc.signatures.map((signature) => ({ role: signature.role, name: signature.name, title: signature.title, signatureText: signature.signatureText, signatureImage: signature.signatureImage, signedAt: signature.signedAt }))}
                 compact
               />
             </div>
@@ -553,6 +556,8 @@ function CountersignDialog({
   onSigned: (next: DocumentDetail) => void;
 }) {
   const [typed, setTyped] = useState("");
+  const [mode, setMode] = useState<SignatureMode>("type");
+  const [image, setImage] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [agree, setAgree] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -562,7 +567,8 @@ function CountersignDialog({
   async function sign() {
     setBusy(true);
     setError(null);
-    const result = await countersignAction(doc.id, { signatureText: typed, title });
+    const drawn = mode === "draw" ? image : null;
+    const result = await countersignAction(doc.id, { signatureText: drawn ? viewer.name : typed, title, signatureImage: drawn });
     setBusy(false);
     if (!result.data) {
       setError(result.error ?? "It didn't sign.");
@@ -586,10 +592,16 @@ function CountersignDialog({
             <span className="caption-style text-subtle">Your job title</span>
             <Input value={title} maxLength={200} onChange={(event) => setTitle(event.target.value)} placeholder="Founder" />
           </label>
-          <label className="flex flex-col gap-1.5">
-            <span className="caption-style text-subtle">Type your name to sign</span>
-            <Input value={typed} maxLength={200} placeholder={viewer.name} onChange={(event) => setTyped(event.target.value)} className="h-12 font-serif text-[22px] italic" />
-          </label>
+          <SignaturePad
+            mode={mode}
+            onMode={setMode}
+            typed={typed}
+            onTyped={setTyped}
+            placeholder={viewer.name}
+            onImage={setImage}
+            fontClass={signatureFont.className}
+            fieldClass={inputClass}
+          />
           <label className="caption-style text-soft flex items-start gap-2.5 rounded-xl bg-white/[0.03] p-3 leading-[1.5]">
             <input type="checkbox" checked={agree} onChange={(event) => setAgree(event.target.checked)} className="mt-0.5 size-4 shrink-0" />
             <span>
@@ -604,7 +616,7 @@ function CountersignDialog({
           )}
         </div>
         <DialogFooter>
-          <Button variant="primary" disabled={busy || !agree || typed.trim().length < 2} onClick={() => void sign()}>
+          <Button variant="primary" disabled={busy || !agree || (mode === "draw" ? !image : typed.trim().length < 2)} onClick={() => void sign()}>
             {busy ? "Signing…" : "Countersign"}
           </Button>
         </DialogFooter>
