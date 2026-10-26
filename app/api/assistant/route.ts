@@ -35,9 +35,9 @@ export async function POST(request: Request) {
   }
 
   const encoder = new TextEncoder();
+  let open = true;
   const stream = new ReadableStream({
     async start(controller) {
-      let open = true;
       const emit = (event: AssistantEvent) => {
         if (open) controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
       };
@@ -68,9 +68,12 @@ export async function POST(request: Request) {
         emit({ type: "error", message });
       } finally {
         clearInterval(heartbeat);
+        if (open) controller.close();
         open = false;
-        controller.close();
       }
+    },
+    cancel() {
+      open = false;
     },
   });
 

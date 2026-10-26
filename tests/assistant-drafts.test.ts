@@ -64,7 +64,7 @@ describe("assistant drafts", () => {
   it("offers a draft tool that needs approval and tells the assistant mail lives in Orbit", () => {
     const tool = toolDefinitions().find((item) => item.function.name === "save_email_draft");
     assert.ok(tool);
-    assert.match(describeAction("save_email_draft", { subject: "Pulse in ChatGPT", to: ["andrew@pulse.test"], body: "Hi Andrew" }).lines.join("\n"), /Nothing is sent/);
+    assert.match(describeAction("save_email_draft", { subject: "Pulse in ChatGPT", to: ["andrew@pulse.test"], body: "Hi Andrew" }).lines.join("\n"), /Saved to Drafts in Orbit Mail unless you choose to send it/);
     const prompt = systemPrompt(owner, { webSearch: false });
     assert.match(prompt, /call send_email with the finished email/);
     assert.match(prompt, /never say you can't send/);

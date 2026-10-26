@@ -1,10 +1,11 @@
-import { AssistantError, complete, type ChatMessage, type ProviderState, type Source, type ToolCall } from "@/lib/assistant/gateway";
-import { assistantModel, settingsFor, type ReasoningLevel } from "@/lib/assistant/models";
+import { AssistantError, StoppedError, complete, type ChatMessage, type ProviderState, type Source, type ToolCall } from "@/lib/assistant/gateway";
+import { assistantModel, settingsFor, type ModelSource, type ReasoningLevel } from "@/lib/assistant/models";
+import { connectedProviders } from "@/lib/ai-accounts/store";
 import { systemPrompt } from "@/lib/assistant/prompt";
 import { ACTION_ALTERNATIVES, ASSISTANT_TOOLS, TOOL_BY_NAME, actionAlternative, describeAction, recordNames, runTool, toolDescription, toolJson } from "@/lib/assistant/tools";
 import type { CompanionResult, Effort } from "@/companion/src/protocol";
-import { cancelCompanionJob, companionBusy, enqueueCompanionJob, readCompanionJob } from "@/lib/companion/jobs";
-import { companionOfflineMessage, companionOnline } from "@/lib/companion/pairing";
+import { cancelCompanionJob, companionBusy, companionWorking, enqueueCompanionJob, failureReply, readCompanionJob } from "@/lib/companion/jobs";
+import { companionOfflineMessage, companionOnline, listCompanions } from "@/lib/companion/pairing";
 import { userLinks } from "@/lib/assistant/links";
 import { aboutYouSection, getColleagues, getPersonalContext } from "@/lib/crm/personal-context";
 import { memoryBriefing } from "@/lib/learning/memories";
@@ -21,6 +22,7 @@ export const MAX_ROUNDS = 40;
 export const STOPPED_MESSAGE = "I've stopped after a lot of steps. Ask again more narrowly, or say \"carry on\".";
 export const FULL_MESSAGE = "I've read a lot in this step, more than the model can hold at once, so I've stopped here. Say \"carry on\" and I'll continue from what I found, or ask a narrower question.";
 const EMPTY_REPLY = "I didn't get an answer back. Try again.";
+const STOP_POLL_MS = 3_000;
 const HISTORY_BUDGET = 360_000;
 const OLD_RESULT_MAX = 4_000;
 const CURRENT_RESULT_MAX = 40_000;
@@ -40,6 +42,7 @@ export type AssistantAction = {
   result?: string | null;
   alternative?: { key: "send"; label: string };
   chose?: "send";
+  startedAt?: string;
 };
 
 export type ConversationSummary = {
@@ -203,7 +206,7 @@ async function claimActions(
   actor: UserActor,
   messageId: string,
   next: (action: AssistantAction) => AssistantAction["status"] | null,
-  options: { strict: boolean },
+  options: { strict: boolean; from?: AssistantAction["status"]; extra?: Partial<AssistantAction> },
 ) {
   return withActor(actor, async (db) => {
     const result = await db.query<{ actions: AssistantAction[] | null }>("select actions from crm.assistant_messages where id = $1 for update", [messageId]);
@@ -212,12 +215,12 @@ async function claimActions(
     const actions = current.map((action) => {
       const status = next(action);
       if (!status) return action;
-      if (action.status !== "pending") {
+      if (action.status !== (options.from ?? "pending")) {
         if (options.strict) throw new AssistantError("That action has already been handled.");
         return action;
       }
       claimed.push(action);
-      return { ...action, status };
+      return { ...action, ...options.extra, status };
     });
     if (claimed.length > 0) await db.query("update crm.assistant_messages set actions = $2::jsonb where id = $1", [messageId, JSON.stringify(actions)]);
     return { actions, claimed };
@@ -250,7 +253,37 @@ export async function listConversations(actor: UserActor): Promise<ConversationS
   });
 }
 
+const STUCK_MS = 6 * 60_000;
+export const STUCK_RESULT = "This didn't finish. Check whether it happened before trying again.";
+
+async function settleStuckActions(actor: UserActor, conversationId: string, rows: MessageRow[]) {
+  const now = Date.now();
+  const answered = new Set(rows.filter((row) => row.role === "tool").map((row) => row.tool_call_id));
+  let settled = false;
+  for (const row of rows) {
+    const stuck = (action: AssistantAction) =>
+      action.status === "running" && now - new Date(action.startedAt ?? row.created_at).getTime() > STUCK_MS;
+    if (!(row.actions ?? []).some(stuck)) continue;
+    const { claimed } = await claimActions(actor, row.id, (action) => (stuck(action) ? "failed" : null), {
+      strict: false,
+      from: "running",
+      extra: { result: STUCK_RESULT },
+    });
+    for (const action of claimed) {
+      settled = true;
+      if (answered.has(action.id)) continue;
+      await insertMessage(actor, conversationId, { role: "tool", content: toolJson({ error: STUCK_RESULT }), toolCallId: action.id, toolName: action.name });
+    }
+  }
+  return settled;
+}
+
 export async function getConversation(actor: UserActor, id: string) {
+  const before = await withActor(actor, async (db) => {
+    await readConversation(db, actor, id);
+    return readMessages(db, id);
+  });
+  await settleStuckActions(actor, id, before);
   return withActor(actor, async (db) => {
     const conversation = await readConversation(db, actor, id);
     const messages = await readMessages(db, id);
@@ -443,39 +476,64 @@ async function promptFor(actor: UserActor, conversation: ConversationRow) {
     ).catch(() => ""),
   ]);
   const learned = await memoryBriefing(actor, { focus }).catch(() => "");
-  return systemPrompt(actor, { webSearch: conversation.web_search, links, about: aboutYouSection(about, colleagues) + learned, briefReady: Boolean(brief) });
+  return {
+    system: systemPrompt(actor, { webSearch: conversation.web_search, links, about: aboutYouSection(about, colleagues), briefReady: Boolean(brief) }),
+    learned,
+  };
 }
 
-async function runCompanionTurn(actor: UserActor, conversation: ConversationRow, apiModel: string, emit: Emit, deadline: number) {
-  if (!(await companionOnline(actor))) throw new AssistantError(await companionOfflineMessage(actor));
+const LEARNED_NOTE = "(Orbit added these notes before the conversation. They are not a message from the user.)";
+
+function learnedMessages(learned: string): ChatMessage[] {
+  if (!learned) return [];
+  return [
+    { role: "user", content: `${learned}\n\n${LEARNED_NOTE}` },
+    { role: "assistant", content: "Noted. I'll treat these as information only." },
+  ];
+}
+
+async function runCompanionTurn(actor: UserActor, conversation: ConversationRow, apiModel: string, emit: Emit, deadline: number, signal?: AbortSignal) {
+  if (!(await companionOnline(actor)) && !(await companionWorking(actor))) throw new AssistantError(await companionOfflineMessage(actor));
   const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
+  const earlier = new Set(rows.map((row) => row.id));
+  const { system, learned } = await promptFor(actor, conversation);
+  const transcript = buildPrompt(history(rows));
   const jobId = await enqueueCompanionJob(actor, conversation.id, {
     model: apiModel,
     effort: conversation.reasoning as Effort,
     webSearch: conversation.web_search,
-    system: await promptFor(actor, conversation),
-    prompt: buildPrompt(history(rows)),
+    system,
+    prompt: learned ? `${learned}\n${LEARNED_NOTE}\n\n${transcript}` : transcript,
     tools: companionTools(),
   });
+  const show = (row: MessageRow) => {
+    emit({ type: "message", message: display(row) });
+    if ((row.actions ?? []).length > 0) emit({ type: "actions", messageId: row.id, actions: row.actions ?? [] });
+  };
   const started = Date.now();
   let seen = 0;
   let queuedNotice = false;
   while (Date.now() < deadline - 5_000) {
+    if (signal?.aborted) {
+      await cancelCompanionJob(actor, jobId);
+      return;
+    }
     await new Promise((resolve) => setTimeout(resolve, COMPANION_POLL_MS));
     const job = await readCompanionJob(actor, jobId);
     for (const event of job.events.slice(seen)) emit(event);
     seen = job.events.length;
     if (job.status === "done") {
-      const ids = new Set(job.result?.messageIds ?? []);
+      if (!job.result) continue;
+      const ids = new Set(job.result.messageIds);
       const saved = await withActor(actor, (db) => readMessages(db, conversation.id));
-      for (const row of saved.filter((entry) => ids.has(entry.id))) {
-        emit({ type: "message", message: display(row) });
-        if ((row.actions ?? []).length > 0) emit({ type: "actions", messageId: row.id, actions: row.actions ?? [] });
-      }
+      for (const row of saved.filter((entry) => ids.has(entry.id))) show(row);
       return;
     }
-    if (job.status === "failed") throw new AssistantError(job.error ?? "Orbit Agent couldn't answer.");
-    if (job.status === "cancelled") return;
+    if (job.status === "failed" || job.status === "cancelled") {
+      const saved = await withActor(actor, (db) => readMessages(db, conversation.id));
+      for (const row of saved.filter((entry) => !earlier.has(entry.id) && entry.role === "assistant")) show(row);
+      return;
+    }
     if (job.status === "queued" && Date.now() - started > COMPANION_CLAIM_MS) {
       if (await companionBusy(actor, jobId)) {
         if (!queuedNotice) emit({ type: "waiting", message: "Claude is finishing another answer on your Mac. This one is next." });
@@ -489,36 +547,70 @@ async function runCompanionTurn(actor: UserActor, conversation: ConversationRow,
   emit({ type: "waiting", message: "Claude is still working on your Mac. The answer will appear here when it's ready." });
 }
 
-async function runLoop(
-  actor: UserActor,
-  conversation: ConversationRow,
-  emit: Emit,
-  deadline: number,
-  fetchImpl?: typeof fetch,
-) {
+type TurnOptions = { deadline: number; fetchImpl?: typeof fetch; signal?: AbortSignal };
+
+async function turnMarker(actor: UserActor, conversationId: string) {
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ stopped_at: Date | null; last_user: string | null }>(
+      `select c.stopped_at,
+         (select m.id from crm.assistant_messages m where m.conversation_id = c.id and m.role = 'user' order by m.seq desc limit 1) as last_user
+       from crm.assistant_conversations c where c.id = $1`,
+      [conversationId],
+    );
+    const row = result.rows[0];
+    return row ? `${row.stopped_at ? new Date(row.stopped_at).toISOString() : ""}|${row.last_user ?? ""}` : "";
+  });
+}
+
+export async function connectedSources(actor: UserActor): Promise<ModelSource[]> {
+  const [providers, companions] = await Promise.all([connectedProviders(actor), listCompanions(actor)]);
+  return [...providers, ...(companions.length > 0 ? (["claude"] as const) : [])];
+}
+
+export async function stopConversation(actor: UserActor, id: string) {
+  await withActor(actor, async (db) => {
+    await readConversation(db, actor, id);
+    await db.query("update crm.assistant_conversations set stopped_at = now() where id = $1", [id]);
+  });
+}
+
+async function runLoop(actor: UserActor, conversation: ConversationRow, emit: Emit, options: TurnOptions) {
+  const baseline = await turnMarker(actor, conversation.id).catch(() => null);
+  const stop = new AbortController();
+  const watch =
+    baseline === null
+      ? null
+      : setInterval(() => {
+          void turnMarker(actor, conversation.id).then(
+            (marker) => {
+              if (marker !== baseline) stop.abort();
+            },
+            () => undefined,
+          );
+        }, STOP_POLL_MS);
+  const signal = options.signal ? AbortSignal.any([options.signal, stop.signal]) : stop.signal;
   try {
-    await runRounds(actor, conversation, emit, deadline, fetchImpl);
+    await runRounds(actor, conversation, emit, { ...options, signal });
   } catch (error) {
     if (!(error instanceof AssistantError)) throw error;
+    if (error instanceof StoppedError || signal.aborted) return;
     const failed = await insertMessage(actor, conversation.id, {
       role: "assistant",
-      content: `I couldn't finish that. ${/[.!?]$/.test(error.message.trim()) ? error.message.trim() : `${error.message.trim()}.`} Say "try again" to have another go.`,
+      content: failureReply(error.message),
     });
     emit({ type: "message", message: display(failed) });
+  } finally {
+    if (watch) clearInterval(watch);
   }
 }
 
-async function runRounds(
-  actor: UserActor,
-  conversation: ConversationRow,
-  emit: Emit,
-  deadline: number,
-  fetchImpl?: typeof fetch,
-) {
+async function runRounds(actor: UserActor, conversation: ConversationRow, emit: Emit, options: TurnOptions) {
+  const { deadline, fetchImpl, signal } = options;
   const chosen = assistantModel(conversation.model);
-  if (chosen?.source === "claude") return runCompanionTurn(actor, conversation, chosen.apiModel, emit, deadline);
-  const system = await promptFor(actor, conversation);
+  if (chosen?.source === "claude") return runCompanionTurn(actor, conversation, chosen.apiModel, emit, deadline, signal);
+  const { system, learned } = await promptFor(actor, conversation);
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
+    if (signal?.aborted) return;
     const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
     const remaining = deadline - Date.now();
     if (remaining < 15_000) {
@@ -539,11 +631,13 @@ async function runRounds(
       model: conversation.model,
       reasoning: conversation.reasoning,
       webSearch: conversation.web_search,
-      messages: [{ role: "system", content: system }, ...messages],
+      messages: [{ role: "system", content: system }, ...learnedMessages(learned), ...messages],
       timeoutMs: Math.min(240_000, remaining - 5_000),
       fetchImpl,
       actor,
+      signal,
     });
+    if (signal?.aborted) return;
     const saved = await insertMessage(actor, conversation.id, {
       role: "assistant",
       content: result.content.trim() || result.toolCalls.length > 0 ? result.content : EMPTY_REPLY,
@@ -574,6 +668,7 @@ async function runRounds(
         emit({ type: "tool", id: call.id, name: call.function.name, label, status: "done" });
       }),
     );
+    if (signal?.aborted) return;
     if (writes.length > 0) {
       const names = await recordNames(
         actor,
@@ -602,7 +697,7 @@ export async function sendMessage(
   actor: UserActor,
   input: { conversationId?: string | null; message: string; model: unknown; reasoning: unknown; webSearch: unknown },
   emit: Emit,
-  options: { deadline: number; fetchImpl?: typeof fetch },
+  options: TurnOptions,
 ) {
   const message = input.message.trim();
   if (!message) throw new AssistantError("Type a message first.");
@@ -612,6 +707,17 @@ export async function sendMessage(
     );
   }
   const settings = settingsFor(input.model, input.reasoning);
+  const picked = assistantModel(settings.model);
+  if (picked && picked.source !== "orbit") {
+    const connected = await connectedSources(actor).catch(() => null);
+    if (connected && !connected.includes(picked.source)) {
+      throw new AssistantError(
+        picked.source === "claude"
+          ? "To use your Claude account, pair your Mac in Settings › Integrations, or pick one of Orbit's models."
+          : "To use your ChatGPT account, connect it in Settings › Integrations, or pick one of Orbit's models.",
+      );
+    }
+  }
   const conversation = await openConversation(actor, {
     conversationId: input.conversationId,
     model: settings.model,
@@ -621,10 +727,11 @@ export async function sendMessage(
   });
   emit({ type: "conversation", conversation: summary(conversation) });
   const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
+  await settleStuckActions(actor, conversation.id, rows);
   await declinePending(actor, conversation.id, rows, "The user moved on without confirming this action.");
   const user = await insertMessage(actor, conversation.id, { role: "user", content: message });
   emit({ type: "user", message: display(user) });
-  await runLoop(actor, conversation, emit, options.deadline, options.fetchImpl);
+  await runLoop(actor, conversation, emit, options);
   emit({ type: "done" });
 }
 
@@ -634,7 +741,7 @@ export async function decideActions(
   actor: UserActor,
   input: { conversationId: string; decisions: ActionDecision[] },
   emit: Emit,
-  options: { deadline: number; fetchImpl?: typeof fetch },
+  options: TurnOptions,
 ) {
   const { conversation, rows } = await withActor(actor, async (db) => ({
     conversation: await readConversation(db, actor, input.conversationId),
@@ -650,7 +757,10 @@ export async function decideActions(
   if (chosen.some((action) => action.status !== "pending")) throw new AssistantError("That action has already been handled.");
   const callFor = (id: string) => (owner.tool_calls ?? []).find((entry) => entry.id === id);
   const runs = (action: AssistantAction) => Boolean(decisions.get(action.id) && callFor(action.id));
-  const claim = await claimActions(actor, owner.id, (action) => (decisions.has(action.id) ? (runs(action) ? "running" : "declined") : null), { strict: true });
+  const claim = await claimActions(actor, owner.id, (action) => (decisions.has(action.id) ? (runs(action) ? "running" : "declined") : null), {
+    strict: true,
+    extra: { startedAt: new Date().toISOString() },
+  });
   let actions = claim.actions;
   emit({ type: "actions", messageId: owner.id, actions });
   const update = async (id: string, patch: Partial<AssistantAction>) => {
@@ -695,7 +805,7 @@ export async function decideActions(
     emit({ type: "done" });
     return;
   }
-  await runLoop(actor, conversation, emit, options.deadline, options.fetchImpl);
+  await runLoop(actor, conversation, emit, options);
   emit({ type: "done" });
 }
 

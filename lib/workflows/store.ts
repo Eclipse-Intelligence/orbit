@@ -339,7 +339,7 @@ async function testEvent(actor: UserActor, definition: WorkflowDefinition, recor
 export async function startRun(
   actor: UserActor,
   workflowId: string,
-  options: { test: boolean; record?: { type: "company" | "contact"; id: string } | null; fetchImpl?: typeof fetch },
+  options: { test: boolean; record?: { type: "company" | "contact"; id: string } | null; fetchImpl?: typeof fetch; deadline?: number },
 ): Promise<{ runId: string; status: string }> {
   const workflow = await readWorkflow(actor, workflowId);
   if (!workflow) throw new CrmError("not_found", "Workflow not found.", 404);
@@ -360,7 +360,7 @@ export async function startRun(
     );
     return result.rows[0].id;
   });
-  const status = await executeRun(runId, actor.userId, actor.workspaceId, { deadline: Date.now() + 50_000, fetchImpl: options.fetchImpl });
+  const status = await executeRun(runId, actor.userId, actor.workspaceId, { deadline: Math.min(Date.now() + 50_000, options.deadline ?? Infinity), fetchImpl: options.fetchImpl });
   return { runId, status };
 }
 

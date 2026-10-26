@@ -1,6 +1,12 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 
+const INTERNAL_HREF = /^\/(?![/\\])[\w\-./?=&%#~+:@]*$/;
+
+export function isInternalHref(href: string) {
+  return INTERNAL_HREF.test(href);
+}
+
 const INLINE = /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)\s]+\)|\*[^*\s][^*]*\*|_[^_\s][^_]*_)/g;
 
 function inline(text: string, key: string): ReactNode[] {
@@ -28,7 +34,7 @@ function inline(text: string, key: string): ReactNode[] {
       const close = token.indexOf("](");
       const label = token.slice(1, close);
       const href = token.slice(close + 2, -1);
-      if (href.startsWith("/") && !href.startsWith("//")) {
+      if (isInternalHref(href)) {
         parts.push(
           <Link key={id} href={href} className="text-foreground underline decoration-white/30 underline-offset-2 hover:decoration-white">
             {inline(label, id)}

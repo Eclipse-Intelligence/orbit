@@ -146,6 +146,23 @@ describe("Eclipse MCP", () => {
     }
   });
 
+  it("lets only owners and admins run Eclipse actions", async () => {
+    const original = globalThis.fetch;
+    const { fetchImpl, sent } = server();
+    globalThis.fetch = fetchImpl;
+    try {
+      const member = { ...actor, role: "member" } as UserActor;
+      const refused = (await runTool(member, "eclipse_action", { tool: "update_client_details", summary: "Update", argumentsJson: '{"website": "https://x.test"}' })) as { error: string };
+      assert.match(refused.error, /Only workspace owners and admins can run Eclipse actions/);
+      assert.ok(!sent.some((call) => call.method === "tools/call"));
+      const admin = { ...actor, role: "admin" } as UserActor;
+      const allowed = (await runTool(admin, "eclipse_action", { tool: "update_client_details", summary: "Update", argumentsJson: '{"website": "https://x.test"}' })) as { error?: string };
+      assert.equal(allowed.error, undefined);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
   it("gives the assistant the guide, discovery, reads and approved actions", () => {
     const tools = Object.fromEntries(toolDefinitions().map((tool) => [tool.function.name, tool]));
     for (const name of ["eclipse_guide", "eclipse_tools", "eclipse_read", "eclipse_action"]) assert.ok(tools[name], name);

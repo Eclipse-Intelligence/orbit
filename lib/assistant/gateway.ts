@@ -132,7 +132,10 @@ type CompleteInput = {
   tools?: unknown[];
   fetchImpl?: typeof fetch;
   actor?: UserActor;
+  signal?: AbortSignal;
 };
+
+export class StoppedError extends AssistantError {}
 
 function plain(messages: ChatMessage[]) {
   return messages.map((message) =>
@@ -192,7 +195,7 @@ async function completeGateway(input: CompleteInput): Promise<Completion> {
     return await gatewayAttempt(input, input.timeoutMs);
   } catch (error) {
     const left = input.timeoutMs - (Date.now() - started) - RETRY_PAUSE_MS;
-    if (!(error instanceof RetryableGatewayError) || left < RETRY_MIN_MS) throw error;
+    if (!(error instanceof RetryableGatewayError) || left < RETRY_MIN_MS || input.signal?.aborted) throw error;
     await new Promise((resolve) => setTimeout(resolve, RETRY_PAUSE_MS));
     return gatewayAttempt(input, left);
   }
@@ -217,9 +220,10 @@ async function gatewayAttempt(input: CompleteInput, timeoutMs: number): Promise<
         max_tokens: MAX_TOKENS,
         ...(input.webSearch ? { web_search_options: { search_context_size: "medium" } } : {}),
       }),
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: input.signal ? AbortSignal.any([AbortSignal.timeout(timeoutMs), input.signal]) : AbortSignal.timeout(timeoutMs),
     });
   } catch (error) {
+    if (input.signal?.aborted) throw new StoppedError("Stopped.");
     if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
       throw new RetryableGatewayError("The model took too long to reply. Try again, or pick a lower reasoning level.");
     }

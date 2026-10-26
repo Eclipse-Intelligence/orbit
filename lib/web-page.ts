@@ -1,5 +1,7 @@
+import { lookup as dnsLookupEach, type LookupAddress } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
-import { isIP } from "node:net";
+import { isIP, type LookupFunction } from "node:net";
+import { Agent, fetch as agentFetch } from "undici";
 import { browserbaseConfigured, renderWithBrowserbase, type Renderer } from "@/lib/browserbase";
 import { attachmentKind, readAttachmentText } from "@/lib/mail/attachment-text";
 import { htmlToText } from "@/lib/mail/text";
@@ -54,6 +56,29 @@ export function privateAddress(address: string) {
   const mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
   if (mapped) return privateV4(mapped[1]);
   return lower === "::" || lower === "::1" || /^f[cd]/.test(lower) || /^fe[89ab]/.test(lower) || lower.startsWith("ff");
+}
+
+const publicOnlyLookup: LookupFunction = (hostname, options, callback) => {
+  dnsLookupEach(hostname, { all: true, verbatim: true }, (error, addresses: LookupAddress[]) => {
+    if (error) return callback(error, "", 0);
+    if (addresses.length === 0 || addresses.some((entry) => privateAddress(entry.address))) {
+      return callback(Object.assign(new WebPageError("Private and local addresses can't be opened."), { code: "EPRIVATE" }), "", 0);
+    }
+    if (options.all) return (callback as unknown as (error: null, addresses: LookupAddress[]) => void)(null, addresses);
+    callback(null, addresses[0].address, addresses[0].family);
+  });
+};
+
+const publicOnly = new Agent({ connect: { lookup: publicOnlyLookup } });
+
+const publicFetch = ((input: string, init?: RequestInit) =>
+  agentFetch(input, { ...(init as object), dispatcher: publicOnly })) as unknown as typeof fetch;
+
+function privateCause(error: unknown): WebPageError | null {
+  for (let current = error; current && typeof current === "object"; current = (current as { cause?: unknown }).cause) {
+    if (current instanceof WebPageError) return current;
+  }
+  return null;
 }
 
 async function checkUrl(raw: string, lookup: Lookup) {
@@ -146,7 +171,9 @@ async function fetchDirect(url: URL, fetchImpl: typeof fetch, lookup: Lookup): P
         redirect: "manual",
         signal: AbortSignal.timeout(TIMEOUT_MS),
       });
-    } catch {
+    } catch (error) {
+      const refused = privateCause(error);
+      if (refused) throw refused;
       return { blocked: `${current.hostname} didn't answer in time.`, proxies: true };
     }
     if (response.status >= 300 && response.status < 400 && response.headers.get("location")) {
@@ -187,7 +214,7 @@ export async function readWebPage(
   raw: string,
   options: { fetchImpl?: typeof fetch; lookup?: Lookup; render?: Renderer | null } = {},
 ): Promise<WebPage> {
-  const fetchImpl = options.fetchImpl ?? fetch;
+  const fetchImpl = options.fetchImpl ?? publicFetch;
   const lookup = options.lookup ?? systemLookup;
   const url = await checkUrl(raw.trim(), lookup);
   const direct = await fetchDirect(url, fetchImpl, lookup);
