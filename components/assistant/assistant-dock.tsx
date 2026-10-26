@@ -57,10 +57,8 @@ const FOLLOW_EVERY_MS = 5_000;
 
 function workingText(working: Working) {
   const steps = working.steps === 1 ? "1 step" : `${working.steps} steps`;
-  const now = working.current ? `, now ${working.current.charAt(0).toLowerCase()}${working.current.slice(1)}` : "";
-  return working.where === "mac"
-    ? `Claude is working on this on your Mac. ${steps} so far${now}. The answer will appear here when it's ready.`
-    : `Orbit is still working on this. ${steps} so far. The answer will appear here when it's ready.`;
+  const now = working.current ? ` · ${working.current}` : "";
+  return working.where === "mac" ? `Working on your Mac · ${steps}${now}` : `Working · ${steps}`;
 }
 
 function readSettings() {
@@ -599,7 +597,7 @@ export default function AssistantDock() {
       if (!(caught instanceof Error && caught.name === "AbortError")) {
         const dropped = caught instanceof TypeError;
         if (dropped && conversationId.current) {
-          setNotice("The connection dropped. Orbit is still working, so the answer will appear here when it's ready.");
+          setNotice("Connection lost. Still working.");
           void follow(conversationId.current);
         } else {
           setError(caught instanceof Error ? caught.message : "The assistant is unavailable right now.");
@@ -853,7 +851,7 @@ export default function AssistantDock() {
                   </li>
                 ))}
               </ul>
-              <p className="caption-style text-subtle">It reads your CRM, mail and calendar. Anything it changes waits for you to confirm.</p>
+              <p className="caption-style text-subtle">Changes need your approval.</p>
             </div>
           )}
           {error && (

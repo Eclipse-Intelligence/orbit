@@ -168,7 +168,6 @@ export default function OpportunityRecord({
                   type="number"
                   value={opportunity.value ?? ""}
                   display={formatMoney(opportunity.value, opportunity.currency)}
-                  emptyLabel="Add a value"
                   onSave={(value) => patch({ value: value || null })}
                 />
                 <InlineField
@@ -183,7 +182,6 @@ export default function OpportunityRecord({
                   type="date"
                   value={opportunity.expectedCloseDate ?? ""}
                   display={opportunity.expectedCloseDate ? formatDateLabel(opportunity.expectedCloseDate) : undefined}
-                  emptyLabel="Add a date"
                   onSave={(value) => patch({ expectedCloseDate: value || null })}
                 />
                 <InlineField
@@ -191,7 +189,6 @@ export default function OpportunityRecord({
                   type="select"
                   value={opportunity.primaryContactId ?? ""}
                   options={[{ value: "", label: "No contact" }, ...context.contacts.map((contact) => ({ value: contact.id, label: personName(contact) }))]}
-                  emptyLabel="Choose a contact"
                   onSave={(value) => patch({ primaryContactId: value || null })}
                 />
                 <InlineField
@@ -210,7 +207,7 @@ export default function OpportunityRecord({
                   emptyLabel="From the stage"
                   onSave={(value) => patch({ probability: value === "" ? null : Number(value) })}
                 />
-                <InlineField label="Source" value={opportunity.source ?? ""} emptyLabel="Add a source" onSave={(value) => patch({ source: value || null })} />
+                <InlineField label="Source" value={opportunity.source ?? ""} onSave={(value) => patch({ source: value || null })} />
               </DetailList>
             </DetailSection>
             <DetailSection title={tasks.length ? `Open tasks · ${tasks.length}` : "Open tasks"}>

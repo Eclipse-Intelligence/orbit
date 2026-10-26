@@ -289,12 +289,11 @@ export default function CompanyRecord({
             ) : (
               <DetailSection title="Details">
                 <DetailList>
-                  <InlineField label="Domain" value={company.domain ?? ""} emptyLabel="Add a domain" onSave={(value) => patch({ domain: value || null })} />
+                  <InlineField label="Domain" value={company.domain ?? ""} onSave={(value) => patch({ domain: value || null })} />
                   <InlineField
                     label="Website"
                     value={company.website ?? ""}
                     display={company.website ? bareUrl(company.website) : undefined}
-                    emptyLabel="Add a website"
                     accessory={company.website ? <OpenLink href={externalUrl(company.website)} label="Open website" /> : null}
                     onSave={(value) => patch({ website: value || null })}
                   />
@@ -319,21 +318,20 @@ export default function CompanyRecord({
                       </p>
                     )}
                   </Detail>
-                  <InlineField label="Industry" value={company.industry ?? ""} emptyLabel="Add an industry" onSave={(value) => patch({ industry: value || null })} />
+                  <InlineField label="Industry" value={company.industry ?? ""} onSave={(value) => patch({ industry: value || null })} />
                   {company.brand && company.brand.industries.length > 0 && (
                     <Detail label="Sectors">{sectorLabel(company.brand.industries)}</Detail>
                   )}
-                  <InlineField label="Size" value={company.sizeCategory ?? ""} emptyLabel="Add a size" onSave={(value) => patch({ sizeCategory: value || null })} />
+                  <InlineField label="Size" value={company.sizeCategory ?? ""} onSave={(value) => patch({ sizeCategory: value || null })} />
                   {company.brand?.employees && <Detail label="Employees">{employeesLabel(company.brand.employees)}</Detail>}
                   <InlineField
                     label="LinkedIn"
                     value={company.linkedinUrl ?? ""}
                     display={company.linkedinUrl ? bareUrl(company.linkedinUrl) : undefined}
-                    emptyLabel="Add LinkedIn"
                     accessory={company.linkedinUrl ? <OpenLink href={externalUrl(company.linkedinUrl)} label="Open LinkedIn" /> : null}
                     onSave={(value) => patch({ linkedinUrl: value || null })}
                   />
-                  <InlineField label="Phone" value={company.phone ?? ""} emptyLabel="Add a phone number" onSave={(value) => patch({ phone: value || null })} />
+                  <InlineField label="Phone" value={company.phone ?? ""} onSave={(value) => patch({ phone: value || null })} />
                   {company.brand?.email && (
                     <Detail label="Email">
                       <a href={`mailto:${company.brand.email}`} className="block truncate hover:underline">
@@ -341,7 +339,7 @@ export default function CompanyRecord({
                       </a>
                     </Detail>
                   )}
-                  <InlineField label="Address" value={company.address ?? ""} emptyLabel="Add an address" onSave={(value) => patch({ address: value || null })} />
+                  <InlineField label="Address" value={company.address ?? ""} onSave={(value) => patch({ address: value || null })} />
                   {company.brand?.stock && (
                     <Detail label="Stock">{[company.brand.stock.ticker, company.brand.stock.exchange].filter(Boolean).join(" · ")}</Detail>
                   )}
@@ -359,7 +357,7 @@ export default function CompanyRecord({
                     emptyLabel="Unassigned"
                     onSave={(value) => patch({ ownerId: value || null })}
                   />
-                  <InlineField label="Source" value={company.source ?? ""} emptyLabel="Add a source" onSave={(value) => patch({ source: value || null })} />
+                  <InlineField label="Source" value={company.source ?? ""} onSave={(value) => patch({ source: value || null })} />
                 </DetailList>
                 {enrichment.company && (company.domain || company.website) && !company.archivedAt && (
                   <CompanyEnrichButton companyId={company.id} enrichedAt={company.enrichedAt} />

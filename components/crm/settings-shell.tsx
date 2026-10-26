@@ -30,22 +30,38 @@ type NavItem = {
   icon: ComponentType<SVGProps<SVGSVGElement>>;
 };
 
-const NAV: NavItem[] = [
-  { href: SETTINGS_PATHS.general, label: "General", icon: SlidersIcon },
-  { href: SETTINGS_PATHS.team, label: "Team", icon: UsersIcon },
-  { href: SETTINGS_PATHS.learning, label: "Learning", icon: LightbulbIcon },
+const GROUPS: { label: string; items: NavItem[] }[] = [
   {
-    href: SETTINGS_PATHS.emailTemplates,
-    label: "Templates and signatures",
-    icon: FileTextIcon,
+    label: "You",
+    items: [
+      { href: SETTINGS_PATHS.general, label: "General", icon: SlidersIcon },
+      { href: SETTINGS_PATHS.learning, label: "Learning", icon: LightbulbIcon },
+    ],
   },
-  { href: SETTINGS_PATHS.calendars, label: "Calendars", icon: CalendarIcon },
-  { href: SETTINGS_PATHS.bookingPage, label: "Booking page", icon: LinkIcon },
-  { href: SETTINGS_PATHS.integrations, label: "Integrations", icon: PlugIcon },
-  { href: SETTINGS_PATHS.pipeline, label: "Pipeline", icon: BarChartIcon },
-  { href: SETTINGS_PATHS.tags, label: "Tags and lifecycles", icon: TagIcon },
-  { href: SETTINGS_PATHS.api, label: "API and webhooks", icon: CodeIcon },
+  {
+    label: "Connections",
+    items: [
+      { href: SETTINGS_PATHS.integrations, label: "Integrations", icon: PlugIcon },
+      { href: SETTINGS_PATHS.calendars, label: "Calendars", icon: CalendarIcon },
+      { href: SETTINGS_PATHS.bookingPage, label: "Booking page", icon: LinkIcon },
+    ],
+  },
+  {
+    label: "Workspace",
+    items: [
+      { href: SETTINGS_PATHS.team, label: "Team", icon: UsersIcon },
+      { href: SETTINGS_PATHS.pipeline, label: "Pipeline", icon: BarChartIcon },
+      { href: SETTINGS_PATHS.tags, label: "Tags and lifecycles", icon: TagIcon },
+      { href: SETTINGS_PATHS.emailTemplates, label: "Templates and signatures", icon: FileTextIcon },
+    ],
+  },
+  {
+    label: "Developers",
+    items: [{ href: SETTINGS_PATHS.api, label: "API and webhooks", icon: CodeIcon }],
+  },
 ];
+
+const NAV: NavItem[] = GROUPS.flatMap((group) => group.items);
 
 function isActive(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`);
@@ -116,8 +132,12 @@ export default function SettingsShell({
           aria-label="Settings sections"
           className="border-border hidden w-[15em] shrink-0 border-r lg:block"
         >
-          <ul className="flex flex-col gap-0.5 p-3">
-            {NAV.map((item) => {
+          <div className="flex flex-col gap-4 p-3">
+          {GROUPS.map((group) => (
+          <div key={group.label} className="flex flex-col gap-1">
+          <h2 className="eyebrow-style text-subtle px-2 text-[11px]">{group.label}</h2>
+          <ul className="flex flex-col gap-0.5">
+            {group.items.map((item) => {
               const active = isActive(pathname, item.href);
               return (
                 <li key={item.href}>
@@ -137,6 +157,9 @@ export default function SettingsShell({
               );
             })}
           </ul>
+          </div>
+          ))}
+          </div>
         </nav>
         <div
           ref={content}

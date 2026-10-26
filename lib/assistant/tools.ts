@@ -2488,7 +2488,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
   },
 ];
 
-export const DRAFT_NOTE = "Saved to Drafts in Orbit Mail unless you choose to send it.";
+export const DRAFT_NOTE = "Saved to Drafts.";
 
 export type ActionAlternative = { key: "send"; label: string; tool: string; title: (title: string) => string; lines: (lines: string[]) => string[] };
 
@@ -2498,7 +2498,7 @@ export const ACTION_ALTERNATIVES: Record<string, ActionAlternative> = {
     label: "Confirm and send",
     tool: "send_email",
     title: (title) => title.replace(/^Save draft: /, "Sent: "),
-    lines: (lines) => lines.map((line) => (line === DRAFT_NOTE ? "Sent from Orbit Mail instead of saving a draft." : line)),
+    lines: (lines) => lines.map((line) => (line === DRAFT_NOTE ? "Sent." : line)),
   },
 };
 

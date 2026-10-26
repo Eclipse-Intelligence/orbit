@@ -14,6 +14,7 @@ export function appSecret() {
 }
 
 export const SESSION_COOKIE = "crm_session";
+export const RESET_COOKIE = "orbit_reset";
 export const WORKSPACE_COOKIE = "crm_workspace";
 
 export function sessionCookieOptions(maxAge = 60 * 60 * 24 * 7) {

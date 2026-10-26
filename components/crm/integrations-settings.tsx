@@ -63,17 +63,11 @@ export default function IntegrationsSettings({
         title="Microsoft 365"
         description="Outlook mail is filed onto the matching contact, and you can send from a contact. The main calendar and Teams calls come from the same account."
         action={
-          <Button
-            variant={live ? "secondary" : "primary"}
-            size="sm"
-            href="/capture"
-          >
-            {live
-              ? "Manage in Capture"
-              : configured
-                ? "Connect in Capture"
-                : "Set up in Capture"}
-          </Button>
+          configured ? (
+            <Button variant={live ? "secondary" : "primary"} size="sm" href="/api/microsoft/connect">
+              {live ? "Reconnect" : mailbox ? "Reconnect Microsoft" : "Connect Microsoft"}
+            </Button>
+          ) : undefined
         }
       >
         <div className="flex flex-col gap-1.5">
@@ -84,7 +78,7 @@ export default function IntegrationsSettings({
           ) : (
             <Status tone="off">
               {!configured
-                ? "The Microsoft app isn't set up on the server yet"
+                ? "Not set up on this server"
                 : mailbox
                   ? `Disconnected (${mailbox.email})`
                   : "Not connected"}

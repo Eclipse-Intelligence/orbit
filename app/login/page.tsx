@@ -22,6 +22,7 @@ export default async function LoginPage({
   return (
     <main className="flex min-h-dvh items-center justify-center px-4 py-10">
       <LoginForm
+        resets={supabaseConfigured()}
         notice={confirmed ? "Email confirmed. Sign in to continue." : undefined}
         hintEmail={
           process.env.NODE_ENV === "production" || supabaseConfigured()

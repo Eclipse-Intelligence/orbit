@@ -929,8 +929,7 @@ export default function MailScreen({
                     .filter((account) => !account.connected)
                     .map((account) => account.email)
                     .join(", ")}{" "}
-                  {nav.accounts.filter((account) => !account.connected).length === 1 ? "is" : "are"} disconnected, so Orbit can&apos;t sync or send from{" "}
-                  {nav.accounts.filter((account) => !account.connected).length === 1 ? "it" : "them"}.
+                  disconnected
                 </span>
                 <Button variant="secondary" size="sm" href="/capture" className="shrink-0">
                   Reconnect
