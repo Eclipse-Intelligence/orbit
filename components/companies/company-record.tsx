@@ -27,15 +27,32 @@ import SectionHeader from "@/components/crm/section-header";
 import RecordSequence from "@/components/shortcuts/record-sequence";
 import RecordTags from "@/components/crm/tags";
 import type { Viewer } from "@/components/crm/viewer";
-import { archiveCompanyAction, setCompanyLifecycleAction } from "@/app/(crm)/actions";
+import { archiveCompanyAction, patchCompanyAction, setCompanyLifecycleAction } from "@/app/(crm)/actions";
+import InlineField from "@/components/crm/inline-field";
+import ExternalIcon from "@/public/assets/images/booking/external.svg";
 import { formatDate, lifecycleLabel } from "@/lib/companies";
 import CompanyHealth from "@/components/companies/detail/company-health";
 import LifecyclePicker from "@/components/companies/lifecycle-picker";
 import type { MeetingsSummary } from "@/lib/crm/calendar";
 import type { ClickUpPicker } from "@/lib/crm/clickup";
-import type { Company, CompanyContext, Member, TagCount } from "@/lib/crm/types";
+import type { Company, CompanyContext, CompanyWrite, Member, TagCount } from "@/lib/crm/types";
 import type { EnrichmentAvailability } from "@/lib/enrichment/settings";
 import { cn } from "@/lib/utils";
+
+function OpenLink({ href, label }: { href: string; label: string }) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      aria-label={label}
+      title={label}
+      className="text-subtle hover:text-foreground focus-visible:ring-ring/60 inline-flex size-7 shrink-0 items-center justify-center rounded-full outline-none transition-colors duration-150 hover:bg-white/6 focus-visible:ring-2"
+    >
+      <ExternalIcon aria-hidden className="size-3.5" />
+    </a>
+  );
+}
 
 function externalUrl(value: string) {
   return /^https?:\/\//i.test(value) ? value : `https://${value}`;
@@ -81,6 +98,14 @@ export default function CompanyRecord({
       ? fresh
       : context.company;
   useQuickAddRecord({ type: "company", id: company.id, name: company.name });
+
+  async function patch(input: CompanyWrite) {
+    const result = await patchCompanyAction(company.id, input);
+    if (result.error || !result.company) return result.error ?? "That didn't save. Try again.";
+    setFresh(result.company);
+    router.refresh();
+    return null;
+  }
   const brandColor = company.brand?.colors[0] ?? null;
 
   const saved = useCallback(
@@ -264,19 +289,15 @@ export default function CompanyRecord({
             ) : (
               <DetailSection title="Details">
                 <DetailList>
-                  <Detail label="Domain">{company.domain}</Detail>
-                  <Detail label="Website">
-                    {company.website ? (
-                      <a
-                        href={externalUrl(company.website)}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="block truncate hover:underline"
-                      >
-                        {bareUrl(company.website)}
-                      </a>
-                    ) : null}
-                  </Detail>
+                  <InlineField label="Domain" value={company.domain ?? ""} emptyLabel="Add a domain" onSave={(value) => patch({ domain: value || null })} />
+                  <InlineField
+                    label="Website"
+                    value={company.website ?? ""}
+                    display={company.website ? bareUrl(company.website) : undefined}
+                    emptyLabel="Add a website"
+                    accessory={company.website ? <OpenLink href={externalUrl(company.website)} label="Open website" /> : null}
+                    onSave={(value) => patch({ website: value || null })}
+                  />
                   <Detail label="Lifecycle">
                     <LifecyclePicker
                       value={company.lifecycle}
@@ -298,20 +319,21 @@ export default function CompanyRecord({
                       </p>
                     )}
                   </Detail>
-                  <Detail label="Industry">{company.industry}</Detail>
+                  <InlineField label="Industry" value={company.industry ?? ""} emptyLabel="Add an industry" onSave={(value) => patch({ industry: value || null })} />
                   {company.brand && company.brand.industries.length > 0 && (
                     <Detail label="Sectors">{sectorLabel(company.brand.industries)}</Detail>
                   )}
-                  <Detail label="Size">{company.sizeCategory}</Detail>
+                  <InlineField label="Size" value={company.sizeCategory ?? ""} emptyLabel="Add a size" onSave={(value) => patch({ sizeCategory: value || null })} />
                   {company.brand?.employees && <Detail label="Employees">{employeesLabel(company.brand.employees)}</Detail>}
-                  <Detail label="LinkedIn">
-                    {company.linkedinUrl ? (
-                      <a href={company.linkedinUrl} target="_blank" rel="noreferrer" className="block truncate hover:underline">
-                        {bareUrl(company.linkedinUrl)}
-                      </a>
-                    ) : null}
-                  </Detail>
-                  <Detail label="Phone">{company.phone}</Detail>
+                  <InlineField
+                    label="LinkedIn"
+                    value={company.linkedinUrl ?? ""}
+                    display={company.linkedinUrl ? bareUrl(company.linkedinUrl) : undefined}
+                    emptyLabel="Add LinkedIn"
+                    accessory={company.linkedinUrl ? <OpenLink href={externalUrl(company.linkedinUrl)} label="Open LinkedIn" /> : null}
+                    onSave={(value) => patch({ linkedinUrl: value || null })}
+                  />
+                  <InlineField label="Phone" value={company.phone ?? ""} emptyLabel="Add a phone number" onSave={(value) => patch({ phone: value || null })} />
                   {company.brand?.email && (
                     <Detail label="Email">
                       <a href={`mailto:${company.brand.email}`} className="block truncate hover:underline">
@@ -319,7 +341,7 @@ export default function CompanyRecord({
                       </a>
                     </Detail>
                   )}
-                  <Detail label="Address">{company.address}</Detail>
+                  <InlineField label="Address" value={company.address ?? ""} emptyLabel="Add an address" onSave={(value) => patch({ address: value || null })} />
                   {company.brand?.stock && (
                     <Detail label="Stock">{[company.brand.stock.ticker, company.brand.stock.exchange].filter(Boolean).join(" · ")}</Detail>
                   )}
@@ -328,8 +350,16 @@ export default function CompanyRecord({
                       <QuickLinks links={company.brand.links} />
                     </Detail>
                   )}
-                  <Detail label="Owner">{company.ownerName ?? "Unassigned"}</Detail>
-                  <Detail label="Source">{company.source}</Detail>
+                  <InlineField
+                    label="Owner"
+                    type="select"
+                    value={company.ownerId ?? ""}
+                    display={company.ownerName ?? undefined}
+                    options={[{ value: "", label: "Unassigned" }, ...members.map((member) => ({ value: member.id, label: member.name }))]}
+                    emptyLabel="Unassigned"
+                    onSave={(value) => patch({ ownerId: value || null })}
+                  />
+                  <InlineField label="Source" value={company.source ?? ""} emptyLabel="Add a source" onSave={(value) => patch({ source: value || null })} />
                 </DetailList>
                 {enrichment.company && (company.domain || company.website) && !company.archivedAt && (
                   <CompanyEnrichButton companyId={company.id} enrichedAt={company.enrichedAt} />

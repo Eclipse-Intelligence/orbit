@@ -14,7 +14,7 @@ import { createOpportunity, updateOpportunity } from "@/lib/crm/opportunities";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 
 import { completeTask, listDueReminders, type DueReminder } from "@/lib/crm/tasks";
-import type { Activity, Contact, Opportunity, OpportunityStatus } from "@/lib/crm/types";
+import type { Activity, Contact, ContactWrite, Opportunity, OpportunityStatus, OpportunityWrite } from "@/lib/crm/types";
 import { clickupToken } from "@/lib/clickup";
 import { revalidateRecordPages } from "@/lib/revalidate";
 
@@ -62,6 +62,17 @@ function refresh() {
   revalidatePath("/boards", "layout");
   revalidatePath("/activities");
   revalidatePath(TASKS_PATH);
+}
+
+export async function patchContactAction(id: string, patch: ContactWrite): Promise<{ contact?: Contact; error?: string }> {
+  const user = await requireUser();
+  try {
+    const result = await updateContact(user, id, patch, { provenance: { operation: "update_contact", source: "web" } });
+    refresh();
+    return { contact: result.body.contact };
+  } catch (error) {
+    return { error: actionError(error).error };
+  }
 }
 
 export async function saveContactAction(
@@ -215,6 +226,27 @@ export async function addOpportunityInlineAction(input: {
     return { opportunity: created.body.opportunity };
   } catch (error) {
     return actionError(error);
+  }
+}
+
+export type OpportunityPatch = Pick<
+  OpportunityWrite,
+  "name" | "value" | "currency" | "expectedCloseDate" | "primaryContactId" | "ownerId" | "source" | "probability" | "stageId" | "status"
+>;
+
+export async function patchOpportunityAction(
+  id: string,
+  patch: OpportunityPatch,
+): Promise<{ opportunity?: Opportunity; error?: string }> {
+  const user = await requireUser();
+  try {
+    const result = await updateOpportunity(user, id, patch, {
+      provenance: { operation: "update_opportunity", source: "web" },
+    });
+    refresh();
+    return { opportunity: result.body.opportunity };
+  } catch (error) {
+    return { error: actionError(error).error };
   }
 }
 

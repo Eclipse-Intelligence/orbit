@@ -92,6 +92,18 @@ export async function updateCompanyAction(
   }
 }
 
+export async function patchCompanyAction(id: string, patch: CompanyWrite): Promise<{ company?: Company; error?: string }> {
+  const user = await requireUser();
+  try {
+    const result = await updateCompany(user, id, patch, { provenance: { operation: "update_company", source: "web" } });
+    revalidatePath("/");
+    revalidateRecordPages();
+    return { company: result.body.company };
+  } catch (error) {
+    return { error: actionError(error).error };
+  }
+}
+
 export async function setCompanyLifecycleAction(id: string, lifecycle: string): Promise<{ error?: string }> {
   const user = await requireUser();
   try {

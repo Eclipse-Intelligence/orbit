@@ -44,7 +44,7 @@ import type { StageDraft } from "@/lib/crm/pipeline";
 import { formatMoney } from "@/lib/companies";
 import { formatDateLabel } from "@/lib/date-input";
 import { startPointerGesture, type GestureResult } from "@/lib/pointer-gesture";
-import { companyHref } from "@/lib/crm/hrefs";
+import { companyHref, dealHref } from "@/lib/crm/hrefs";
 import type { Board, Opportunity, OpportunityStatus, PipelineStage } from "@/lib/crm/types";
 import Link from "next/link";
 import { statusTag } from "@/components/proposals/status";
@@ -296,7 +296,7 @@ export default function OpportunitiesScreen({
       setCardPreview(null);
       if (result === "tap") {
         const opportunity = previous.find((item) => item.id === opportunityId);
-        if (opportunity) edit(opportunity);
+        if (opportunity) openCard(opportunity);
         return;
       }
       if (result !== "drop") return;
@@ -408,6 +408,11 @@ export default function OpportunitiesScreen({
     setEditing(opportunity);
     setSession((current) => current + 1);
     setOpen(true);
+  }
+
+  function openCard(opportunity: Opportunity) {
+    if (board) edit(opportunity);
+    else router.push(dealHref(opportunity.id));
   }
 
   return (
@@ -573,7 +578,7 @@ export default function OpportunitiesScreen({
                         onKeyDown={(event) => {
                           if (event.key === "Enter") {
                             event.preventDefault();
-                            edit(opportunity);
+                            openCard(opportunity);
                             return;
                           }
                           if (event.key === "ArrowUp" || event.key === "ArrowDown") {
@@ -686,7 +691,7 @@ export default function OpportunitiesScreen({
             mark={<Monogram name={opportunity.companyName || opportunity.name} />}
             title={opportunity.name}
             meta={`${opportunity.stageName ?? "No stage"} · ${formatMoney(opportunity.value, opportunity.currency)}`}
-            onClick={() => edit(opportunity)}
+            href={dealHref(opportunity.id)}
             action={
               <span className="flex items-center gap-2">
                 {proposals[opportunity.id] ? (

@@ -1,6 +1,7 @@
 export const RECORD_LISTS = {
   companies: { label: "Companies", path: "/" },
   contacts: { label: "Contacts", path: "/contacts" },
+  opportunities: { label: "Opportunities", path: "/opportunities" },
 } as const;
 
 export type RecordListKey = keyof typeof RECORD_LISTS;
@@ -11,15 +12,19 @@ export function companyHref(id: string) {
   return `/companies/${encodeURIComponent(id)}`;
 }
 
+export function dealHref(id: string) {
+  return `/opportunities/${encodeURIComponent(id)}`;
+}
+
 export function contactHref(id: string) {
   return `/contacts/${encodeURIComponent(id)}`;
 }
 
-export function opportunityHref(opportunity: { name: string; companyName?: string | null; pipelineId: string | null; pipelineKind: string | null }) {
+export function opportunityHref(opportunity: { id: string; name: string; companyName?: string | null; pipelineId: string | null; pipelineKind: string | null }) {
   if (opportunity.pipelineKind === "board" && opportunity.pipelineId) {
     return `/boards/${encodeURIComponent(opportunity.pipelineId)}?view=list&q=${encodeURIComponent(opportunity.companyName ?? opportunity.name)}`;
   }
-  return `/opportunities?q=${encodeURIComponent(opportunity.name)}`;
+  return dealHref(opportunity.id);
 }
 
 export function listQuery(search: string | null | undefined) {

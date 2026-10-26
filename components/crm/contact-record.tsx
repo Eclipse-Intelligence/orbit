@@ -16,10 +16,13 @@ import type { DocumentSummary } from "@/lib/proposals/documents";
 import type { Relationship } from "@/lib/crm/relationship-score";
 import { useQuickAddRecord } from "@/components/crm/quick-add";
 import RecordLayout from "@/components/crm/record-layout";
-import { CallLink, Detail, DetailList } from "@/components/crm/record-form";
+import { CallLink, DetailList } from "@/components/crm/record-form";
 import SectionHeader from "@/components/crm/section-header";
 import RunWorkflowButton from "@/components/workflows/run-workflow-button";
 import RecordSequence from "@/components/shortcuts/record-sequence";
+import InlineField from "@/components/crm/inline-field";
+import { patchContactAction } from "@/app/(crm)/records";
+import ExternalIcon from "@/public/assets/images/booking/external.svg";
 import RecordTags from "@/components/crm/tags";
 import type { Viewer } from "@/components/crm/viewer";
 import type { MeetingsSummary } from "@/lib/crm/calendar";
@@ -32,6 +35,7 @@ import type {
   CallInsight,
   Company,
   Contact,
+  ContactWrite,
   Member,
   TagCount,
   Task,
@@ -87,6 +91,14 @@ export default function ContactRecord({
       : contact;
   const callUrl = teamsCallUrl(shown.phone);
   const owner = members.find((member) => member.id === shown.ownerId);
+
+  async function patch(input: ContactWrite) {
+    const result = await patchContactAction(shown.id, input);
+    if (result.error || !result.contact) return result.error ?? "That didn't save. Try again.";
+    setFresh(result.contact);
+    router.refresh();
+    return null;
+  }
   useQuickAddRecord({
     type: "contact",
     id: shown.id,
@@ -235,46 +247,63 @@ export default function ContactRecord({
             ) : (
               <DetailSection title="Details" className="gap-5 shadow-none">
                 <DetailList>
-                  <Detail label="Phone">
-                    {shown.phone ? (
-                      <span className="flex items-center gap-1">
-                        <span>{shown.phone}</span>
-                        <CallLink phone={shown.phone} className="-my-1" />
-                      </span>
-                    ) : enrichment.available.phone ? (
-                      <FindDetailButton contactId={shown.id} field="phone" lookup={enrichment.lookups?.phone} variant="text" className="-ml-1" />
-                    ) : null}
-                  </Detail>
-                  <Detail label="Email">
-                    {shown.email ? (
-                      <a
-                        href={`mailto:${shown.email}`}
-                        className="hover:underline"
-                      >
-                        {shown.email}
-                      </a>
-                    ) : enrichment.available.email ? (
-                      <FindDetailButton contactId={shown.id} field="email" lookup={enrichment.lookups?.email} variant="text" className="-ml-1" />
-                    ) : null}
-                  </Detail>
-                  <Detail label="LinkedIn">
-                    {shown.linkedinUrl ? (
-                      <a
-                        href={shown.linkedinUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="block truncate hover:underline"
-                      >
-                        {shown.linkedinUrl.replace(/^https?:\/\/(www\.)?/, "")}
-                      </a>
-                    ) : enrichment.available.linkedin ? (
-                      <FindDetailButton contactId={shown.id} field="linkedin" lookup={enrichment.lookups?.linkedin} variant="text" className="-ml-1" />
-                    ) : null}
-                  </Detail>
-                  <Detail label="Owner">
-                    {owner?.name ?? shown.ownerName}
-                  </Detail>
-                  <Detail label="Source">{shown.source}</Detail>
+                  <InlineField
+                    label="Phone"
+                    value={shown.phone ?? ""}
+                    emptyLabel="Add a phone number"
+                    accessory={
+                      shown.phone ? (
+                        <CallLink phone={shown.phone} />
+                      ) : enrichment.available.phone ? (
+                        <FindDetailButton contactId={shown.id} field="phone" lookup={enrichment.lookups?.phone} variant="text" />
+                      ) : null
+                    }
+                    onSave={(value) => patch({ phone: value || null })}
+                  />
+                  <InlineField
+                    label="Email"
+                    value={shown.email ?? ""}
+                    emptyLabel="Add an email"
+                    accessory={
+                      !shown.email && enrichment.available.email ? (
+                        <FindDetailButton contactId={shown.id} field="email" lookup={enrichment.lookups?.email} variant="text" />
+                      ) : null
+                    }
+                    onSave={(value) => patch({ email: value || null })}
+                  />
+                  <InlineField
+                    label="LinkedIn"
+                    value={shown.linkedinUrl ?? ""}
+                    display={shown.linkedinUrl ? shown.linkedinUrl.replace(/^https?:\/\/(www\.)?/, "") : undefined}
+                    emptyLabel="Add LinkedIn"
+                    accessory={
+                      shown.linkedinUrl ? (
+                        <a
+                          href={shown.linkedinUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          aria-label="Open LinkedIn"
+                          title="Open LinkedIn"
+                          className="text-subtle hover:text-foreground focus-visible:ring-ring/60 inline-flex size-7 shrink-0 items-center justify-center rounded-full outline-none transition-colors duration-150 hover:bg-white/6 focus-visible:ring-2"
+                        >
+                          <ExternalIcon aria-hidden className="size-3.5" />
+                        </a>
+                      ) : enrichment.available.linkedin ? (
+                        <FindDetailButton contactId={shown.id} field="linkedin" lookup={enrichment.lookups?.linkedin} variant="text" />
+                      ) : null
+                    }
+                    onSave={(value) => patch({ linkedinUrl: value || null })}
+                  />
+                  <InlineField
+                    label="Owner"
+                    type="select"
+                    value={shown.ownerId ?? ""}
+                    display={owner?.name ?? shown.ownerName ?? undefined}
+                    options={[{ value: "", label: "Unassigned" }, ...members.map((member) => ({ value: member.id, label: member.name }))]}
+                    emptyLabel="Unassigned"
+                    onSave={(value) => patch({ ownerId: value || null })}
+                  />
+                  <InlineField label="Source" value={shown.source ?? ""} emptyLabel="Add a source" onSave={(value) => patch({ source: value || null })} />
                 </DetailList>
                 {shown.notes && (
                   <div className="flex flex-col gap-2">
