@@ -8,6 +8,7 @@ import { emailRecipientAction } from "@/app/(crm)/quick-add";
 import type { MailAddress } from "@/lib/mail/types";
 import type { ComposeAccount, MailDraft } from "@/lib/mail/view";
 import { cn } from "@/lib/utils";
+import XIcon from "@/public/assets/images/companies/detail/x.svg";
 
 const MAX_CARDS = 6;
 const CARD_WIDTH = 544;
@@ -197,6 +198,7 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<ShownToast[]>([]);
   const [later, setLater] = useState<LaterRequest | null>(null);
   const toastCounter = useRef(0);
+  const shownMessages = useRef(new Map<string, number>());
   const toastTimers = useRef(new Map<number, number>());
   const outgoing = useRef(new Map<number, Outgoing>());
   const [viewport, setViewport] = useState(() => (typeof window === "undefined" ? 1440 : window.innerWidth));
@@ -259,12 +261,16 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
   const dismiss = useCallback((id: number) => {
     window.clearTimeout(toastTimers.current.get(id));
     toastTimers.current.delete(id);
+    for (const [message, shownId] of shownMessages.current) if (shownId === id) shownMessages.current.delete(message);
     setToasts((current) => current.filter((toast) => toast.id !== id));
   }, []);
 
   const showToast = useCallback(
     (toast: Toast) => {
+      const repeat = toast.action ? undefined : shownMessages.current.get(toast.message);
+      if (repeat !== undefined) return repeat;
       const id = ++toastCounter.current;
+      if (!toast.action) shownMessages.current.set(toast.message, id);
       setToasts((current) => [...current.slice(-2), { ...toast, id }]);
       toastTimers.current.set(
         id,
@@ -437,6 +443,10 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
                   title={toast.action.label === "Undo" ? "Undo (Z)" : undefined}
                 >
                   {toast.action.label}
+                </Button>
+              ) : toast.tone === "alert" ? (
+                <Button variant="ghost" size="icon-sm" aria-label="Dismiss" onClick={() => dismiss(toast.id)}>
+                  <XIcon aria-hidden className="size-3.5" />
                 </Button>
               ) : (
                 <span aria-hidden className="w-2" />

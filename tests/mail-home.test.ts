@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
+import { createCompany } from "@/lib/crm/companies";
+import { createContact } from "@/lib/crm/contacts";
 import { saveMailbox } from "@/lib/crm/inbox";
+import { createOpportunity, listPipeline } from "@/lib/crm/opportunities";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { applyMailAction } from "@/lib/mail/actions";
@@ -182,6 +185,17 @@ describe("mail home", () => {
       ],
     );
     assert.equal(thread.messages[0].html, "<p>Renewal price</p>");
+    assert.deepEqual(thread.people.map((person) => [person.email, person.name, person.contactId]), [["jane@acme.test", "Jane Doe", null]]);
+    const company = (await createCompany(owner, { name: "Acme", domain: "acme.test" })).body.company;
+    const contact = (await createContact(owner, { companyId: company.id, firstName: "Jane", lastName: "Doe", email: "Jane@Acme.test", jobTitle: "Head of Ops" })).body.contact;
+    const stage = (await listPipeline(owner)).stages[0];
+    await createOpportunity(owner, { companyId: company.id, name: "Acme renewal", stageId: stage.id });
+    const matched = (await getThread(owner, renewal)).people[0];
+    assert.equal(matched.contactId, contact.id);
+    assert.equal(matched.title, "Head of Ops");
+    assert.equal(matched.companyName, "Acme");
+    assert.equal(matched.dealName, "Acme renewal");
+    assert.equal(matched.dealStage, stage.name);
     await assert.rejects(() => getThread(other, renewal), /Conversation not found/);
     await assert.rejects(() => getThread(owner, "not-a-key"), /Conversation not found/);
   });

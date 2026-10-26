@@ -919,6 +919,24 @@ export default function MailScreen({
       <div className="flex min-h-0 flex-1">
         <div className={cn("min-h-0 w-full flex-col md:flex md:w-[20rem] md:shrink-0 lg:w-[25rem] xl:w-[29rem]", open ? "hidden" : "flex")}>
           <div className="flex shrink-0 flex-col gap-2 px-3 pt-2 pb-1.5 lg:pt-3">
+            {nav.accounts.some((account) => !account.connected) && (
+              <div
+                role="status"
+                className="flex items-center justify-between gap-3 rounded-xl border border-[var(--tag-amber-border)] bg-[var(--tag-amber-bg)] py-2 pr-2 pl-3 text-[13px] leading-5 text-[var(--tag-amber-text)]"
+              >
+                <span className="min-w-0">
+                  {nav.accounts
+                    .filter((account) => !account.connected)
+                    .map((account) => account.email)
+                    .join(", ")}{" "}
+                  {nav.accounts.filter((account) => !account.connected).length === 1 ? "is" : "are"} disconnected, so Orbit can&apos;t sync or send from{" "}
+                  {nav.accounts.filter((account) => !account.connected).length === 1 ? "it" : "them"}.
+                </span>
+                <Button variant="secondary" size="sm" href="/capture" className="shrink-0">
+                  Reconnect
+                </Button>
+              </div>
+            )}
             <PushPrompt />
             <div className="lg:hidden">{searchForm("list")}</div>
             <nav

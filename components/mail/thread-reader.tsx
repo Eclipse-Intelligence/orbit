@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import MessageAttachments from "@/components/mail/message-attachments";
 import ReadStatus from "@/components/mail/read-status";
+import ThreadPeople from "@/components/mail/thread-people";
 import { useComposer } from "@/components/mail/compose-dock";
 import { loadSummary, type ThreadSummaryText } from "@/components/mail/mail-cache";
 import { watchSwipe, type SwipeHandlers } from "@/components/mail/swipe";
@@ -752,6 +753,7 @@ export default function ThreadReader({
       <div ref={scroller} className="min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-x-none">
         <div className="mx-auto flex w-full max-w-[52em] flex-col gap-4 px-3 pt-3 pb-32 sm:px-6">
           <h2 className="px-4 text-pretty">{subject?.trim() || "(no subject)"}</h2>
+          {detail && <ThreadPeople key={detail.key} people={detail.people ?? []} />}
           {detail && target && <SummaryLine threadKey={detail.key} latestId={target.id} messages={detail.messages.length} />}
           {detail ? (
             <>

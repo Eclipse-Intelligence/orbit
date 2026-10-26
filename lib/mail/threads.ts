@@ -8,7 +8,7 @@ import { freshPrepared, preparedFor } from "@/lib/mail/prepare";
 import { cleanEmailHtml, richEmail } from "@/lib/mail/html";
 import type { MailAddress, MailRole } from "@/lib/mail/types";
 import { splitCase, splitJoin } from "@/lib/mail/split";
-import type { MailNav, MailSplit, MailView, ThreadCursor, ThreadDetail, ThreadSummary } from "@/lib/mail/view";
+import type { MailNav, MailSplit, MailView, ThreadCursor, ThreadDetail, ThreadPerson, ThreadSummary } from "@/lib/mail/view";
 
 const THREAD_KEY = "coalesce(m.thread_key, 'm:' || m.id::text)";
 
@@ -193,6 +193,72 @@ export async function getThread(actor: UserActor, key: string): Promise<ThreadDe
   return detail;
 }
 
+const PEOPLE_MAX = 4;
+
+async function threadPeople(
+  db: Db,
+  actor: UserActor,
+  rows: { from_email: string | null; from_name: string | null; to_recipients: MailAddress[]; cc_recipients: MailAddress[] }[],
+): Promise<ThreadPerson[]> {
+  const own = new Set(
+    (await db.query<{ email: string }>("select lower(email) as email from crm.mail_sources where user_id = $1", [actor.userId])).rows.map((row) => row.email),
+  );
+  const seen = new Map<string, string | null>();
+  for (const row of rows) {
+    const addresses = [{ address: row.from_email ?? "", name: row.from_name }, ...(row.to_recipients ?? []), ...(row.cc_recipients ?? [])];
+    for (const entry of addresses) {
+      const email = (entry.address ?? "").trim().toLowerCase();
+      if (!email || own.has(email) || seen.has(email)) continue;
+      seen.set(email, entry.name ?? null);
+    }
+  }
+  const emails = [...seen.keys()].slice(0, 20);
+  if (emails.length === 0) return [];
+  const matched = await db.query<{
+    email: string;
+    id: string;
+    name: string | null;
+    job_title: string | null;
+    company_id: string | null;
+    company_name: string | null;
+    deal_id: string | null;
+    deal_name: string | null;
+    deal_stage: string | null;
+  }>(
+    `select distinct on (lower(c.email)) lower(c.email) as email, c.id,
+       nullif(trim(concat_ws(' ', c.first_name, c.last_name)), '') as name, c.job_title, c.company_id, co.name as company_name,
+       deal.id as deal_id, deal.name as deal_name, deal.stage_name as deal_stage
+     from crm.contacts c
+     left join crm.companies co on co.id = c.company_id
+     left join lateral (
+       select o.id, o.name, s.name as stage_name from crm.opportunities o
+       left join crm.pipeline_stages s on s.id = o.stage_id
+       join crm.pipelines p on p.id = o.pipeline_id and p.kind = 'sales'
+       where o.company_id = c.company_id and o.status = 'open' and o.archived_at is null
+       order by o.updated_at desc limit 1
+     ) deal on true
+     where c.workspace_id = $1 and c.archived_at is null and lower(c.email) = any($2::text[])
+     order by lower(c.email), c.updated_at desc`,
+    [actor.workspaceId, emails],
+  );
+  const contacts = new Map(matched.rows.map((row) => [row.email, row]));
+  const ordered = [...emails].sort((a, b) => Number(contacts.has(b)) - Number(contacts.has(a)));
+  return ordered.slice(0, PEOPLE_MAX).map((email) => {
+    const contact = contacts.get(email);
+    return {
+      email,
+      name: contact?.name ?? seen.get(email) ?? null,
+      contactId: contact?.id ?? null,
+      title: contact?.job_title ?? null,
+      companyId: contact?.company_id ?? null,
+      companyName: contact?.company_name ?? null,
+      dealId: contact?.deal_id ?? null,
+      dealName: contact?.deal_name ?? null,
+      dealStage: contact?.deal_stage ?? null,
+    };
+  });
+}
+
 async function readThread(actor: UserActor, key: string): Promise<ThreadDetail> {
   const { sourceId, key: tk } = parseThreadKey(key);
   return withActor(actor, async (db) => {
@@ -246,10 +312,12 @@ async function readThread(actor: UserActor, key: string): Promise<ThreadDetail> 
       [actor.userId, sourceId, tk],
     );
     const followUp = reminder.rows[0];
+    const people = await threadPeople(db, actor, rows.length ? rows : result.rows);
     return {
       key,
       account: latest.account,
       subject: latest.subject,
+      people,
       drafts,
       prepared,
       followUp: followUp ? { id: followUp.id, at: iso(followUp.due_at)!, automatic: followUp.automatic } : null,
@@ -307,8 +375,14 @@ async function splitCounts(db: Db, actor: UserActor) {
 
 export async function mailNav(actor: UserActor): Promise<MailNav> {
   return withActor(actor, async (db) => {
-    const accounts = await db.query<{ id: string; email: string }>(
-      "select id, email from crm.mail_sources where user_id = $1 order by connection_id is null, created_at",
+    const accounts = await db.query<{ id: string; email: string; connected: boolean }>(
+      `select s.id, s.email,
+         coalesce(
+           (select c.status = 'connected' and c.refresh_token is not null from crm.mailbox_connections c where c.id = s.connection_id),
+           (select a.status = 'connected' and a.can_send and a.refresh_token is not null from crm.calendar_accounts a where a.id = s.account_id),
+           false
+         ) as connected
+       from crm.mail_sources s where s.user_id = $1 order by s.connection_id is null, s.created_at`,
       [actor.userId],
     );
     const folders = await db.query<{ id: string; source_id: string; name: string; role: MailRole; unread: number }>(
@@ -328,7 +402,7 @@ export async function mailNav(actor: UserActor): Promise<MailNav> {
     const inboxUnread = (sourceId: string | null) =>
       folders.rows.filter((folder) => folder.role === "inbox" && (!sourceId || folder.source_id === sourceId)).reduce((sum, folder) => sum + folder.unread, 0);
     return {
-      accounts: accounts.rows.map((row) => ({ id: row.id, email: row.email, unread: inboxUnread(row.id) })),
+      accounts: accounts.rows.map((row) => ({ id: row.id, email: row.email, unread: inboxUnread(row.id), connected: row.connected })),
       folders: folders.rows.map((row) => ({ id: row.id, sourceId: row.source_id, name: row.name, role: row.role, unread: row.unread })),
       unread: inboxUnread(null),
       snoozed: counts.rows[0]?.snoozed ?? 0,
