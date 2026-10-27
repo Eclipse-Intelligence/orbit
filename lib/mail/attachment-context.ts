@@ -5,8 +5,9 @@ import { mailFullWhen, personName } from "@/lib/mail/format";
 import { fetchMicrosoftAttachment, listMicrosoftAttachments } from "@/lib/mail/microsoft";
 import { mailSourceToken } from "@/lib/mail/sync";
 
-const SIZE_MAX = 15 * 1024 * 1024;
-const PER_MESSAGE = 4;
+const SIZE_MAX = 25 * 1024 * 1024;
+const PER_MESSAGE = 10;
+const TEXT_MAX = 200_000;
 const STEP_MS = 8_000;
 
 type MessageRow = {
@@ -83,7 +84,7 @@ async function readMessage(actor: UserActor, message: MessageRow, deadline: numb
     try {
       const response = await fetchMicrosoftAttachment(token, message.provider_message_id, item.id, fetchImpl);
       const bytes = await bytesOf(response, SIZE_MAX);
-      const text = bytes ? await readAttachmentText(bytes, item.name, item.contentType) : null;
+      const text = bytes ? await readAttachmentText(bytes, item.name, item.contentType, TEXT_MAX) : null;
       await store(actor, message.id, item, bytes ? (text ? "read" : "unreadable") : "too_large", text);
       if (text) report.read += 1;
       else report.skipped += 1;

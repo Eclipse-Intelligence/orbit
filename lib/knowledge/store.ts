@@ -11,7 +11,8 @@ export type KnowledgeKind = (typeof KNOWLEDGE_KINDS)[number];
 export type KnowledgeStatus = "pending" | "indexing" | "ready" | "failed";
 export type KnowledgeTarget = { companyId: string } | { eclipse: true };
 
-export const READ_WINDOW = 20_000;
+export const READ_WINDOW = 100_000;
+export const CONTENT_LIMIT = 2_000_000;
 export const STALE_MS = 5 * 60_000;
 export const UPLOAD_STALE_MS = 30 * 60_000;
 
@@ -270,7 +271,7 @@ export async function addKnowledgeText(
   input: { kind: KnowledgeKind; title: string; content: string; sourceRef?: string | null; sourceUrl?: string | null; mimeType?: string | null; sizeBytes?: number | null },
   provenance: Provenance,
 ) {
-  const content = input.content.trim().slice(0, 600_000);
+  const content = input.content.trim().slice(0, CONTENT_LIMIT);
   if (!content) throw new CrmError("invalid_input", "There's no text to add.", 400);
   return withActor(actor, async (db) => {
     const outcome = await insertItem(

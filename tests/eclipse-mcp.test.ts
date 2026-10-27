@@ -25,7 +25,7 @@ function server(options: { sse?: boolean; big?: boolean } = {}) {
     let result: unknown;
     if (body.method === "initialize") result = { instructions: "You are connected to Eclipse. Start with list_clients." };
     else if (body.method === "tools/list") result = { tools: TOOLS };
-    else result = { content: [{ type: "text", text: options.big ? "x".repeat(40_000) : JSON.stringify({ called: body.params.name, args: body.params.arguments }) }] };
+    else result = { content: [{ type: "text", text: options.big ? "x".repeat(250_000) : JSON.stringify({ called: body.params.name, args: body.params.arguments }) }] };
     const json = JSON.stringify({ jsonrpc: "2.0", id: body.id, result });
     return options.sse
       ? new Response(`event: message\ndata: ${json}\n\n`, { headers: { "content-type": "text/event-stream" } })
@@ -84,7 +84,7 @@ describe("Eclipse MCP", () => {
   it("cuts very long results and explains when Eclipse isn't connected", async () => {
     const { fetchImpl } = server({ big: true });
     const long = await callEclipseTool("list_clients", {}, "read", { fetchImpl });
-    assert.match(long.result, /Cut at 30000 characters/);
+    assert.match(long.result, /Cut at 200000 characters/);
     delete process.env.ECLIPSE_MCP_TOKEN;
     clearEclipseToolCache();
     await assert.rejects(findEclipseTools("clients", { fetchImpl }), /Add ECLIPSE_MCP_TOKEN/);

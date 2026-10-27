@@ -195,36 +195,49 @@ export const EMBEDDING_MODEL = "text-embedding-3-small";
 export const EMBEDDING_DIMENSIONS = 1536;
 const EMBEDDING_BATCH = 64;
 
+const EMBEDDING_PARALLEL = 4;
+
+async function embedBatch(batch: string[], apiKey: string, options: { fetchImpl?: typeof fetch; timeoutMs?: number }) {
+  let response: Response;
+  try {
+    response = await (options.fetchImpl ?? fetch)(`${baseUrl()}/embeddings`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ model: EMBEDDING_MODEL, input: batch }),
+      signal: AbortSignal.timeout(options.timeoutMs ?? 30_000),
+    });
+  } catch {
+    throw new LlmError("Couldn't reach the LLM gateway for embeddings.", true);
+  }
+  if (!response.ok) throw new LlmError(`The LLM gateway returned ${response.status} for embeddings.`, response.status >= 500 || response.status === 429);
+  const body = (await response.json().catch(() => null)) as { data?: { index?: number; embedding?: unknown }[] } | null;
+  const data = [...(body?.data ?? [])].sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+  if (data.length !== batch.length) throw new LlmError("The LLM gateway returned the wrong number of embeddings.");
+  return data.map((entry) => {
+    const embedding = entry.embedding;
+    if (!Array.isArray(embedding) || embedding.length !== EMBEDDING_DIMENSIONS || !embedding.every((value) => typeof value === "number")) {
+      throw new LlmError("The LLM gateway returned an embedding Orbit can't use.");
+    }
+    return embedding as number[];
+  });
+}
+
 export async function embedTexts(texts: string[], options: { fetchImpl?: typeof fetch; timeoutMs?: number } = {}): Promise<number[][]> {
   const apiKey = process.env.LLM_API_KEY?.trim();
   if (!apiKey) throw new LlmError("Set LLM_API_KEY in Vercel to use Orbit's AI.");
-  const vectors: number[][] = [];
-  for (let start = 0; start < texts.length; start += EMBEDDING_BATCH) {
-    const batch = texts.slice(start, start + EMBEDDING_BATCH);
-    let response: Response;
-    try {
-      response = await (options.fetchImpl ?? fetch)(`${baseUrl()}/embeddings`, {
-        method: "POST",
-        headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
-        body: JSON.stringify({ model: EMBEDDING_MODEL, input: batch }),
-        signal: AbortSignal.timeout(options.timeoutMs ?? 30_000),
-      });
-    } catch {
-      throw new LlmError("Couldn't reach the LLM gateway for embeddings.", true);
+  const batches: string[][] = [];
+  for (let start = 0; start < texts.length; start += EMBEDDING_BATCH) batches.push(texts.slice(start, start + EMBEDDING_BATCH));
+  const results: number[][][] = new Array(batches.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < batches.length) {
+      const index = next;
+      next += 1;
+      results[index] = await embedBatch(batches[index], apiKey, options);
     }
-    if (!response.ok) throw new LlmError(`The LLM gateway returned ${response.status} for embeddings.`, response.status >= 500 || response.status === 429);
-    const body = (await response.json().catch(() => null)) as { data?: { index?: number; embedding?: unknown }[] } | null;
-    const data = [...(body?.data ?? [])].sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
-    if (data.length !== batch.length) throw new LlmError("The LLM gateway returned the wrong number of embeddings.");
-    for (const entry of data) {
-      const embedding = entry.embedding;
-      if (!Array.isArray(embedding) || embedding.length !== EMBEDDING_DIMENSIONS || !embedding.every((value) => typeof value === "number")) {
-        throw new LlmError("The LLM gateway returned an embedding Orbit can't use.");
-      }
-      vectors.push(embedding as number[]);
-    }
-  }
-  return vectors;
+  };
+  await Promise.all(Array.from({ length: Math.min(EMBEDDING_PARALLEL, batches.length) }, worker));
+  return results.flat();
 }
 
 export const TRANSCRIBE_MODEL = "universal-2";

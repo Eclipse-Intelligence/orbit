@@ -2,14 +2,14 @@ import { z } from "zod";
 import { withActor } from "@/lib/crm/context";
 import type { UserActor } from "@/lib/crm/types";
 import { chunkText } from "@/lib/knowledge/chunk";
-import { ITEM_COLUMNS, ITEM_FROM, type ItemRow, type KnowledgeKind } from "@/lib/knowledge/store";
+import { CONTENT_LIMIT, ITEM_COLUMNS, ITEM_FROM, type ItemRow, type KnowledgeKind } from "@/lib/knowledge/store";
 import { completeJson, embedTexts, LlmError } from "@/lib/llm";
 import { readAttachmentText } from "@/lib/mail/attachment-text";
 import { looksLikeEpisode, MediaError, readPodcast, readYouTube, transcribeBytes, transcriptText } from "@/lib/knowledge/media";
 import { readObject, StorageError } from "@/lib/storage";
 import { readWebPage, WebPageError, type Lookup } from "@/lib/web-page";
 
-export const CONTENT_MAX = 600_000;
+export const CONTENT_MAX = CONTENT_LIMIT;
 const SUMMARY_INPUT = 24_000;
 
 export class KnowledgeReadError extends Error {}

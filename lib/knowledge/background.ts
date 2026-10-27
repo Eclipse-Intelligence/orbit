@@ -36,6 +36,6 @@ export function scheduleCallBackfill(actor: UserActor, companyId: string) {
 export function resumeStale(actor: UserActor, items: KnowledgeItem[]) {
   scheduleIndexing(
     actor,
-    items.filter((item) => isStale(item)).slice(0, 3).map((item) => item.id),
+    items.filter((item) => isStale(item)).slice(0, 10).map((item) => item.id),
   );
 }

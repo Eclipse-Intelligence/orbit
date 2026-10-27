@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 
 const DEFAULT_URL = "https://app.geteclipse.co/api/mcp";
 const LIST_TTL_MS = 10 * 60_000;
-const RESULT_MAX = 30_000;
+const RESULT_MAX = 200_000;
 
 export type EclipseTool = { name: string; description: string; inputSchema: Record<string, unknown> };
 

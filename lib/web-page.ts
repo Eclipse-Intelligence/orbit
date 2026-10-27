@@ -6,12 +6,12 @@ import { browserbaseConfigured, renderWithBrowserbase, type Renderer } from "@/l
 import { attachmentKind, readAttachmentText } from "@/lib/mail/attachment-text";
 import { htmlToText } from "@/lib/mail/text";
 
-const TEXT_MAX = 24_000;
+const TEXT_MAX = 200_000;
 const BYTES_MAX = 3_000_000;
 const TIMEOUT_MS = 12_000;
 const REDIRECTS_MAX = 4;
 const LINKS_MAX = 60;
-const DOCUMENT_MAX = 15_000_000;
+const DOCUMENT_MAX = 50_000_000;
 const THIN_TEXT = 200;
 
 export type Lookup = (hostname: string) => Promise<string[]>;
