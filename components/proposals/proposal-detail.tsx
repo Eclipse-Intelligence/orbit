@@ -11,6 +11,7 @@ import SectionHeader from "@/components/crm/section-header";
 import { recordSelectClass } from "@/components/crm/record-form";
 import type { Viewer } from "@/components/crm/viewer";
 import ProposalSite from "@/components/proposals/proposal-site";
+import StepsPanel from "@/components/proposals/steps-panel";
 import { statusTag } from "@/components/proposals/status";
 import { BlockEditor, type KnowledgeOption } from "@/components/proposals/block-editor";
 import {
@@ -46,7 +47,12 @@ const EVENT_LABELS: Record<string, string> = {
   downloaded: "PDF downloaded",
   downloaded_signed: "Signed PDF downloaded",
   document_opened: "Opened a document",
+  step_done: "Ticked off a step",
+  step_reopened: "Unticked a step",
+  steps_emailed: "Emailed the next steps",
 };
+
+const TITLED: Record<string, string> = { document_opened: "Opened", step_done: "Ticked off", step_reopened: "Unticked" };
 
 const textarea =
   "bg-transparent focus-visible:ring-ring/60 w-full rounded-lg px-3 py-2 text-[14px] leading-[1.5] shadow-[0_0_0_1px_var(--input)] outline-none focus-visible:ring-2";
@@ -320,7 +326,7 @@ export default function ProposalDetail({ viewer, initial, knowledge = [] }: { vi
                 <div className="flex flex-col gap-2">
                   <h2>Wording</h2>
                   <p className="caption-style text-subtle">Changes here only affect this proposal, not the template.</p>
-                  <BlockEditor blocks={blocks} onChange={edit(setBlocks)} kind={doc.kind} knowledge={knowledge} />
+                  <BlockEditor blocks={blocks} onChange={edit(setBlocks)} kind={doc.kind} knowledge={knowledge} context="proposal" />
                 </div>
 
                 <div className="flex flex-wrap gap-2">
@@ -337,6 +343,18 @@ export default function ProposalDetail({ viewer, initial, knowledge = [] }: { vi
               </div>
             )}
 
+            {doc.kind === "proposal" && (
+              <StepsPanel
+                documentId={doc.id}
+                initial={doc.steps}
+                clientCompany={doc.companyName}
+                ourCompany={viewer.workspaceName}
+                contactFirstName={doc.contactName.split(/\s+/)[0] || "them"}
+                canEmail={Boolean(doc.link)}
+                onSteps={(steps) => setDoc((current) => ({ ...current, steps }))}
+              />
+            )}
+
             <section aria-labelledby="timeline-heading" className="flex flex-col gap-3">
               <h2 id="timeline-heading">Timeline</h2>
               <ol className="flex flex-col gap-2.5">
@@ -345,7 +363,7 @@ export default function ProposalDetail({ viewer, initial, knowledge = [] }: { vi
                     <span aria-hidden className="bg-faint mt-2 size-1.5 shrink-0 rounded-full" />
                     <span className="flex min-w-0 flex-col">
                       <span>
-                        {event.type === "document_opened" && typeof event.data.title === "string" ? `Opened ${event.data.title}` : (EVENT_LABELS[event.type] ?? event.type)}
+                        {TITLED[event.type] && typeof event.data.title === "string" ? `${TITLED[event.type]} ${event.data.title}` : (EVENT_LABELS[event.type] ?? event.type)}
                         {event.name ? <span className="text-subtle">, {event.name}</span> : null}
                       </span>
                       <span className="caption-style text-subtle">
@@ -366,7 +384,7 @@ export default function ProposalDetail({ viewer, initial, knowledge = [] }: { vi
                 {draft ? "Preview with this client's details" : `What ${doc.contactName.split(/\s+/)[0]} sees, version ${doc.version?.number ?? 1}`}
               </p>
               <ProposalSite
-                extras={{ preview: true }}
+                extras={{ preview: true, steps: doc.steps }}
                 content={draft ? { ...preview, items, currency, totals: totalsOf(items) } : preview}
                 signatures={doc.signatures.map((signature) => ({ role: signature.role, name: signature.name, title: signature.title, signatureText: signature.signatureText, signatureImage: signature.signatureImage, signedAt: signature.signedAt }))}
                 compact

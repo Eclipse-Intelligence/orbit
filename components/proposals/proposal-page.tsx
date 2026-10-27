@@ -32,6 +32,8 @@ export default function ProposalPage({ token, initial, preview }: { token: strin
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [declining, setDeclining] = useState(false);
+  const [pendingStep, setPendingStep] = useState<string | null>(null);
+  const [stepError, setStepError] = useState<string | null>(null);
   const [reason, setReason] = useState("");
   const content = doc.content;
   const tabs = tabsOf(content.blocks);
@@ -52,6 +54,21 @@ export default function ProposalPage({ token, initial, preview }: { token: strin
       setError(problem instanceof Error ? problem.message : "That didn't go through. Try again.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function toggleStep(stepId: string, done: boolean) {
+    setPendingStep(stepId);
+    setStepError(null);
+    try {
+      const response = await fetch(`/api/p/${token}/steps/${stepId}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ done }) });
+      const json = (await response.json().catch(() => ({}))) as PublicDocument & { error?: string };
+      if (!response.ok) throw new Error(json.error ?? "That didn't save. Try again.");
+      setDoc(json);
+    } catch (problem) {
+      setStepError(problem instanceof Error ? problem.message : "That didn't save. Try again.");
+    } finally {
+      setPendingStep(null);
     }
   }
 
@@ -115,6 +132,11 @@ export default function ProposalPage({ token, initial, preview }: { token: strin
       )}
 
       <main className={cn("mx-auto flex max-w-[56em] flex-col gap-10 px-5 pb-28 sm:px-8", tabs ? "pt-0" : "pt-12 sm:pt-16")}>
+        {stepError && (
+          <p role="alert" className="bg-card rounded-2xl p-4 text-[14px] text-[#c2410c] shadow-[0_0_0_1px_rgba(0,0,0,0.06)]">
+            {stepError}
+          </p>
+        )}
         {notice && (
           <div role="status" className="bg-card flex flex-col gap-1 rounded-2xl p-5 shadow-[0_0_0_1px_rgba(0,0,0,0.06)]">
             <span className="text-[16px] font-semibold">{notice.title}</span>
@@ -132,6 +154,9 @@ export default function ProposalPage({ token, initial, preview }: { token: strin
             fileHref: (itemId) => `/api/p/${token}/files/${itemId}`,
             booking: doc.booking,
             bookingDefaults: { name: content.client.name, email: content.client.email },
+            steps: doc.steps,
+            onToggleStep: doc.state === "withdrawn" || doc.state === "replaced" ? undefined : (stepId, done) => void toggleStep(stepId, done),
+            pendingStep,
           }}
           signLabel={doc.state === "open" ? "Sign" : "Signatures"}
         >

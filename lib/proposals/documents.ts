@@ -25,10 +25,12 @@ import {
   type DocumentKind,
   type DocumentStatus,
   type Item,
+  type Step,
   type TemplateSettings,
   type Totals,
 } from "@/lib/proposals/model";
 import { renderPdf, type PdfEvent, type PdfSignature } from "@/lib/proposals/pdf";
+import { readSteps, seedSteps } from "@/lib/proposals/steps";
 import { siteOrigin } from "@/lib/site-url";
 import { appTimeZone, zonedParts } from "@/lib/time";
 
@@ -77,6 +79,7 @@ export type DocumentDetail = DocumentSummary & {
   files: { issued: boolean; executed: boolean };
   contactEmail: string | null;
   canCountersign: boolean;
+  steps: Step[];
 };
 
 type DocumentRow = {
@@ -436,6 +439,7 @@ export async function createDocument(
       ],
     );
     const id = result.rows[0].id;
+    await seedSteps(db, actor, id, template.blocks);
     await logEvent(db, { workspaceId: actor.workspaceId, documentId: id, type: "created", actor: actor.type === "agent" ? "agent" : "user", userId: actorUser(actor), data: { template: template.name } });
     await recordAudit(db, actor, "document.created", "document", id, provenance, { after: { title, kind: template.kind, companyId: company.id, contactId: contact.id } });
     return id;
@@ -488,6 +492,7 @@ export async function getDocument(actor: Actor, id: string): Promise<DocumentDet
       files: { issued: files.rows.some((file) => file.kind === "issued"), executed: files.rows.some((file) => file.kind === "executed") },
       contactEmail: built.contactEmail,
       canCountersign: row.status === "client_signed" && actor.type === "user" && (actor.userId === row.owner_id || role === "owner" || role === "admin"),
+      steps: await readSteps(db, row.id),
     };
   });
 }

@@ -5,7 +5,8 @@ import { recordAudit } from "@/lib/crm/mutate";
 import type { UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
 import { documentHref, hashToken, isExpired, logEvent, readRow, SIGNATURE_COLUMNS, toSignature, type SignatureRecord, type SignatureRow } from "@/lib/proposals/documents";
-import type { Content, DocumentStatus } from "@/lib/proposals/model";
+import type { Content, DocumentStatus, Step } from "@/lib/proposals/model";
+import { readSteps } from "@/lib/proposals/steps";
 import { pushToUser, type PushSender } from "@/lib/push";
 import { loadBookingPage, publicView, type PublicBookingPage } from "@/lib/booking/pages";
 import { readObject } from "@/lib/storage";
@@ -23,6 +24,7 @@ export type PublicDocument = {
   declineReason: string | null;
   hasExecuted: boolean;
   booking: PublicBookingPage | null;
+  steps: Step[];
 };
 
 type LinkRow = {
@@ -84,6 +86,7 @@ async function load(owner: UserActor, link: LinkRow) {
         declineReason: row.decline_reason,
         hasExecuted: executed.rows.length > 0,
         booking: null,
+        steps: await readSteps(db, row.id),
       } satisfies PublicDocument,
     };
   });
@@ -336,4 +339,45 @@ export async function publicKnowledgeFile(token: string, itemId: string, meta: M
   }
   if (item.source_url) return { kind: "link" as const, url: item.source_url };
   return { kind: "file" as const, data: new TextEncoder().encode(item.content ?? ""), name: `${item.title}.txt`, contentType: "text/plain; charset=utf-8" };
+}
+
+export async function clientStep(token: string, stepId: string, input: { done?: unknown }, meta: Meta = {}) {
+  const found = await resolve(token);
+  if (!found) throw new CrmError("not_found", "This link isn't valid.", 404);
+  const { row, view, versionId } = await load(found.owner, found.row);
+  if (view.state === "withdrawn" || view.state === "replaced") throw new CrmError("conflict", stateMessage(view.state), 409);
+  const step = view.steps.find((item) => item.id === stepId);
+  if (!step) throw new CrmError("not_found", "That step isn't on this plan.", 404);
+  if (step.side !== "client") throw new CrmError("invalid_input", `${view.content.sender.company} ticks off its own steps.`, 400);
+  const done = input.done === true;
+  if (Boolean(step.doneAt) === done) return (await openDocument(token, { track: false }))!;
+  await withActor(found.owner, async (db) => {
+    if (done) await db.query("update crm.document_steps set done_at = now(), done_by = 'client', done_name = $2 where id = $1", [stepId, view.content.client.name.slice(0, 200)]);
+    else await db.query("update crm.document_steps set done_at = null, done_by = null, done_name = null where id = $1", [stepId]);
+    await logEvent(db, {
+      workspaceId: found.owner.workspaceId,
+      documentId: row.id,
+      versionId,
+      type: done ? "step_done" : "step_reopened",
+      actor: "client",
+      name: view.content.client.name,
+      email: view.content.client.email,
+      ip: meta.ip,
+      userAgent: meta.userAgent,
+      data: { stepId, title: step.title },
+    });
+  });
+  if (done) {
+    await alertOwner(
+      found.owner,
+      {
+        key: `doc-step:${row.id}:${stepId}`,
+        title: `${row.contact_name ?? "Your contact"} completed ${step.title}`,
+        body: `${row.title}, ${row.company_name}.`,
+        href: documentHref(row.id),
+      },
+      meta.push,
+    ).catch(() => undefined);
+  }
+  return (await openDocument(token, { track: false }))!;
 }
