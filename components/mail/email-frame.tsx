@@ -20,6 +20,7 @@ const QUOTE_SELECTORS = [
 ];
 
 const HIDE_QUOTES = "orbit-hide-quotes";
+const EARLY_MS = 10_000;
 
 const POLICY =
   "default-src 'none'; img-src https: http: data:; style-src 'unsafe-inline' https: http:; font-src https: http: data:; media-src https: data:";
@@ -55,6 +56,7 @@ export default function EmailFrame({
   hideQuotes?: boolean;
 }) {
   const frame = useRef<HTMLIFrameElement>(null);
+  const shownHtml = useRef<string | null>(null);
   const [height, setHeight] = useState(rich ? 320 : 80);
   const [quoted, setQuoted] = useState(false);
   const [showQuotes, setShowQuotes] = useState(false);
@@ -64,6 +66,11 @@ export default function EmailFrame({
     if (!element) return;
     let observer: ResizeObserver | null = null;
     let unwatch: (() => void) | null = null;
+    let attached: Document | null = null;
+    let poll = 0;
+    const stale = shownHtml.current !== html ? element.contentDocument : null;
+    const giveUp = Date.now() + EARLY_MS;
+    shownHtml.current = html;
     const measure = () => {
       const body = element.contentDocument?.body;
       if (!body) return;
@@ -71,6 +78,12 @@ export default function EmailFrame({
     };
     const attach = () => {
       const doc = element.contentDocument;
+      if (!doc?.body || doc.URL !== "about:srcdoc" || doc === stale) return;
+      if (attached === doc) {
+        measure();
+        return;
+      }
+      attached = doc;
       if (hideQuotes && doc?.body) {
         doc.documentElement.classList.add(HIDE_QUOTES);
         const found = Boolean(doc.querySelector(QUOTE_SELECTORS.join(","))) && Boolean(doc.body.innerText.trim());
@@ -87,9 +100,18 @@ export default function EmailFrame({
         observer.observe(body);
       }
     };
+    const early = () => {
+      const doc = element.contentDocument;
+      if (doc && doc !== stale && doc.URL === "about:srcdoc" && doc.readyState !== "loading" && doc.body) {
+        attach();
+        return;
+      }
+      if (Date.now() < giveUp) poll = window.requestAnimationFrame(early);
+    };
     element.addEventListener("load", attach);
-    if (element.contentDocument?.readyState === "complete" && element.contentDocument.URL === "about:srcdoc") attach();
+    early();
     return () => {
+      window.cancelAnimationFrame(poll);
       element.removeEventListener("load", attach);
       observer?.disconnect();
       unwatch?.();
