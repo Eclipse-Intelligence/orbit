@@ -2,8 +2,9 @@
 
 import { useState, type FormEvent } from "react";
 import Button from "@/components/_ui/button";
-import ProposalDocument, { ProposalLogo } from "@/components/proposals/proposal-document";
-import { KIND_LABELS, longDate } from "@/lib/proposals/model";
+import { ProposalLogo } from "@/components/proposals/proposal-document";
+import ProposalSite, { SIGN_TAB } from "@/components/proposals/proposal-site";
+import { KIND_LABELS, longDate, tabsOf } from "@/lib/proposals/model";
 import type { PublicDocument, PublicState } from "@/lib/proposals/public";
 import { cn } from "@/lib/utils";
 import SignaturePad, { type SignatureMode } from "@/components/proposals/signature-pad";
@@ -33,6 +34,8 @@ export default function ProposalPage({ token, initial, preview }: { token: strin
   const [declining, setDeclining] = useState(false);
   const [reason, setReason] = useState("");
   const content = doc.content;
+  const tabs = tabsOf(content.blocks);
+  const [active, setActive] = useState(tabs?.[0]?.slug ?? SIGN_TAB);
   const label = KIND_LABELS[content.kind].toLowerCase();
   const clientSignature = doc.signatures.find((item) => item.role === "client");
 
@@ -83,11 +86,25 @@ export default function ProposalPage({ token, initial, preview }: { token: strin
           <Button variant="ghost" size="sm" href={`/api/p/${token}/pdf${doc.state === "completed" && doc.hasExecuted ? "?kind=signed" : ""}`} className="text-foreground hidden sm:inline-flex">
             {doc.state === "completed" ? "Download signed PDF" : "Download PDF"}
           </Button>
-          {doc.state === "open" && (
-            <Button variant="primary" size="sm" href="#sign" style={{ backgroundColor: content.accent }}>
-              Review and sign
-            </Button>
-          )}
+          {doc.state === "open" &&
+            (tabs ? (
+              <Button
+                variant="primary"
+                size="sm"
+                style={{ backgroundColor: content.accent }}
+                onClick={() => {
+                  setActive(SIGN_TAB);
+                  window.history.replaceState(null, "", `#${SIGN_TAB}`);
+                  window.scrollTo({ top: 0, behavior: "smooth" });
+                }}
+              >
+                Review and sign
+              </Button>
+            ) : (
+              <Button variant="primary" size="sm" href="#sign" style={{ backgroundColor: content.accent }}>
+                Review and sign
+              </Button>
+            ))}
         </div>
       </header>
 
@@ -97,14 +114,22 @@ export default function ProposalPage({ token, initial, preview }: { token: strin
         </p>
       )}
 
-      <main className="mx-auto flex max-w-[56em] flex-col gap-10 px-5 pt-12 pb-28 sm:px-8 sm:pt-16">
+      <main className={cn("mx-auto flex max-w-[56em] flex-col gap-10 px-5 pb-28 sm:px-8", tabs ? "pt-0" : "pt-12 sm:pt-16")}>
         {notice && (
           <div role="status" className="bg-card flex flex-col gap-1 rounded-2xl p-5 shadow-[0_0_0_1px_rgba(0,0,0,0.06)]">
             <span className="text-[16px] font-semibold">{notice.title}</span>
             <span className="doc-body text-soft">{notice.body}</span>
           </div>
         )}
-        <ProposalDocument content={content} signatures={doc.signatures}>
+        <ProposalSite
+          content={content}
+          signatures={doc.signatures}
+          active={active}
+          onActive={setActive}
+          followHash
+          sticky="top-16"
+          signLabel={doc.state === "open" ? "Sign" : "Signatures"}
+        >
           {doc.state === "open" && !declining && (
             <form onSubmit={sign} className="bg-card flex flex-col gap-5 rounded-2xl p-5 shadow-[0_0_0_1px_rgba(0,0,0,0.06)] sm:p-7" aria-labelledby="sign-form-title">
               <div className="flex flex-col gap-1">
@@ -208,7 +233,7 @@ export default function ProposalPage({ token, initial, preview }: { token: strin
               )}
             </div>
           )}
-        </ProposalDocument>
+        </ProposalSite>
         <footer className="text-subtle flex flex-wrap justify-between gap-2 border-t border-[var(--border)] pt-6 text-[12.5px]">
           <span>
             {content.sender.company} · Version {doc.versionNumber}

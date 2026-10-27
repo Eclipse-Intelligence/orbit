@@ -28,6 +28,8 @@ import {
   type DocumentDetail,
 } from "@/lib/proposals/documents";
 
+import { prepareProposalImage } from "@/lib/proposals/media";
+
 type Result<T> = { data?: T; error?: string };
 
 async function run<T>(work: (user: NonNullable<Awaited<ReturnType<typeof getUserActor>>>) => Promise<T>): Promise<Result<T>> {
@@ -115,4 +117,8 @@ export async function proposalOptionsAction(companyId: string | null): Promise<
       contacts: contacts.data.map((contact) => ({ id: contact.id, name: contact.name, email: contact.email, jobTitle: contact.jobTitle })),
     };
   });
+}
+
+export async function prepareProposalImageAction(file: { name: string; size: number; contentType: string }): Promise<Result<{ uploadUrl: string; url: string }>> {
+  return run((user) => prepareProposalImage(user, file));
 }

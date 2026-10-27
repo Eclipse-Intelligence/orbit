@@ -7,8 +7,11 @@ import { Input } from "@/components/_ui/input";
 import SectionHeader from "@/components/crm/section-header";
 import { recordSelectClass } from "@/components/crm/record-form";
 import type { Viewer } from "@/components/crm/viewer";
-import ProposalDocument, { ProposalLogo } from "@/components/proposals/proposal-document";
-import { createTemplateAction, saveTemplateAction } from "@/app/(crm)/proposals/actions";
+import { ProposalLogo } from "@/components/proposals/proposal-document";
+import ProposalSite from "@/components/proposals/proposal-site";
+import { createTemplateAction, prepareProposalImageAction, saveTemplateAction } from "@/app/(crm)/proposals/actions";
+import Asset from "@/components/_ui/asset";
+import { uploadToSignedUrl } from "@/lib/upload-client";
 import type { Template } from "@/lib/proposals/catalogue";
 import {
   BLOCK_LABELS,
@@ -37,10 +40,11 @@ const textarea =
   "bg-transparent focus-visible:ring-ring/60 w-full rounded-lg px-3 py-2 text-[14px] leading-[1.5] shadow-[0_0_0_1px_var(--input)] outline-none focus-visible:ring-2";
 
 function blankBlock(type: BlockType, id: string): Block {
-  if (type === "cover") return { id, type, title: "{{proposal.title}}", subtitle: "Prepared for {{contact.name}} at {{company.name}}." };
+  if (type === "cover") return { id, type, title: "{{proposal.title}}", subtitle: "Prepared for {{contact.name}} at {{company.name}}.", image: "" };
+  if (type === "tab") return { id, type, label: "New tab" };
   if (type === "pricing") return { id, type, heading: "Investment", intro: "" };
   if (type === "terms") return { id, type, heading: "Terms and conditions", body: "", linkLabel: "Read our terms and conditions", linkUrl: "" };
-  return { id, type, heading: "New section", body: "" };
+  return { id, type: "section", heading: "New section", body: "" };
 }
 
 async function logoPng(file: File) {
@@ -110,6 +114,58 @@ function LogoField({ logo, company, onChange }: { logo: string | null; company: 
         )}
       </div>
       <p className="caption-style text-subtle leading-[1.4]">Shown at the top of the client&apos;s page and the PDF. A PNG or SVG made for a white background works best.</p>
+      {error && (
+        <p role="alert" className="caption-style text-danger">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function CoverImageField({ id, value, onChange }: { id: string; value: string; onChange: (url: string) => void }) {
+  const input = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function pick(file: File | undefined) {
+    if (input.current) input.current.value = "";
+    if (!file) return;
+    setBusy(true);
+    setError(null);
+    const prepared = await prepareProposalImageAction({ name: file.name, size: file.size, contentType: file.type });
+    if (!prepared.data) {
+      setBusy(false);
+      setError(prepared.error ?? "Couldn't upload it.");
+      return;
+    }
+    try {
+      await uploadToSignedUrl(prepared.data.uploadUrl, file);
+      onChange(prepared.data.url);
+    } catch {
+      setError("The upload didn't finish. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <label htmlFor={id} className="caption-style text-subtle">
+        Cover image
+      </label>
+      {value && <Asset type="image" src={value} alt="" width={12} height={5} fit="cover" unoptimized className="rounded-lg shadow-[0_0_0_1px_var(--input)]" />}
+      <input ref={input} id={id} type="file" accept="image/jpeg,image/png,image/webp,image/gif" className="sr-only" onChange={(event) => void pick(event.target.files?.[0])} />
+      <div className="flex flex-wrap items-center gap-2">
+        <Button variant="secondary" size="sm" disabled={busy} onClick={() => input.current?.click()}>
+          {busy ? "Uploading" : value ? "Change" : "Upload image"}
+        </Button>
+        {value && (
+          <Button variant="ghost" size="sm" onClick={() => onChange("")}>
+            Remove
+          </Button>
+        )}
+      </div>
       {error && (
         <p role="alert" className="caption-style text-danger">
           {error}
@@ -199,14 +255,21 @@ export function BlockEditor({ blocks, onChange, kind }: { blocks: Block[]; onCha
       </div>
     );
   };
-  const addable: BlockType[] = kind === "proposal" ? ["section", "pricing", "terms", "cover"] : ["section", "terms", "cover"];
+  const addable: BlockType[] = kind === "proposal" ? ["tab", "section", "pricing", "terms", "cover"] : ["section", "terms", "cover"];
 
   return (
     <div className="flex flex-col gap-4">
       <FieldButtons onInsert={insert} />
       <ol className="flex flex-col gap-3">
         {blocks.map((block, index) => (
-          <li key={block.id} className="border-line-strong bg-card flex flex-col gap-3 rounded-xl border p-4">
+          <li
+            key={block.id}
+            className={cn(
+              "flex flex-col gap-3 rounded-xl border p-4",
+              block.type === "tab" ? "bg-secondary border-transparent" : "border-line-strong bg-card",
+              block.type === "tab" && index > 0 && "mt-3",
+            )}
+          >
             <div className="flex items-center gap-2">
               <span className="eyebrow-style text-subtle flex-1">{BLOCK_LABELS[block.type]}</span>
               <Button variant="ghost" size="sm" disabled={index === 0} onClick={() => move(index, -1)} aria-label={`Move ${BLOCK_LABELS[block.type]} up`}>
@@ -219,8 +282,10 @@ export function BlockEditor({ blocks, onChange, kind }: { blocks: Block[]; onCha
                 Remove
               </Button>
             </div>
+            {block.type === "tab" && text(block, "label", "Tab name")}
             {block.type === "cover" && (
               <>
+                <CoverImageField id={`${block.id}-image`} value={block.image} onChange={(image) => update(block.id, { image } as Partial<Block>)} />
                 {text(block, "title", "Title")}
                 {text(block, "subtitle", "Subtitle", 2)}
               </>
@@ -385,7 +450,7 @@ export default function TemplateEditor({ viewer, template }: { viewer: Viewer; t
           <div className="paper min-h-full px-5 pt-10 pb-28 sm:px-10">
             <div className="mx-auto max-w-[44em]">
               <p className="caption-style text-subtle pb-6">Preview with sample details</p>
-              <ProposalDocument content={preview} compact />
+              <ProposalSite content={preview} compact />
             </div>
           </div>
         </div>
