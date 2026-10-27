@@ -821,7 +821,7 @@ export default function ThreadReader({
                   <div className="flex flex-wrap items-center gap-2 px-4">
                     {tracked && (
                       <span className="order-last ml-auto">
-                        <ReadStatus opens={tracked.opens!} recipients={[...tracked.to, ...tracked.cc]} />
+                        <ReadStatus opens={tracked.opens!} recipients={[...tracked.to, ...tracked.cc]} sentAt={tracked.at} />
                       </span>
                     )}
                     {REPLIES.map((reply) => (

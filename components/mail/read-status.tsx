@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popover";
-import { mailFullWhen, personName } from "@/lib/mail/format";
+import { afterSending, mailFullWhen, personName } from "@/lib/mail/format";
 import type { MailAddress } from "@/lib/mail/types";
 import { cn } from "@/lib/utils";
 import EyeIcon from "@/public/assets/images/mail/eye.svg";
@@ -15,9 +15,11 @@ function readLabel(opens: { at: string }[], recipients: MailAddress[]) {
 export default function ReadStatus({
   opens,
   recipients,
+  sentAt = null,
 }: {
   opens: { at: string; agent: string | null }[];
   recipients: MailAddress[];
+  sentAt?: string | null;
 }) {
   const [open, setOpen] = useState(false);
   const closing = useRef<number | null>(null);
@@ -57,9 +59,12 @@ export default function ReadStatus({
         {read ? (
           <ol aria-label="Times this email was opened" className="flex max-h-64 flex-col overflow-y-auto">
             {opens.map((item, index) => (
-              <li key={`${item.at}-${index}`} className="flex items-center justify-between gap-3 rounded-lg px-2.5 py-1.5 text-[13px]">
-                <span className="text-foreground tabular-nums">{mailFullWhen(item.at)}</span>
-                <span className="text-subtle truncate">{item.agent ?? "Unknown device"}</span>
+              <li key={`${item.at}-${index}`} className="flex flex-col gap-0.5 rounded-lg px-2.5 py-1.5 text-[13px]">
+                <span className="flex items-center justify-between gap-3">
+                  <span className="text-foreground tabular-nums">{mailFullWhen(item.at)}</span>
+                  <span className="text-subtle truncate">{item.agent ?? "Unknown device"}</span>
+                </span>
+                {afterSending(item.at, sentAt) && <span className="caption-style text-subtle tabular-nums">{afterSending(item.at, sentAt)}</span>}
               </li>
             ))}
           </ol>

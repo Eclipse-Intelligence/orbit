@@ -32,6 +32,22 @@ export function mailFullWhen(iso: string | null) {
   }).format(new Date(iso));
 }
 
+export function afterSending(openedAt: string, sentAt: string | null) {
+  if (!sentAt) return null;
+  const seconds = Math.floor((Date.parse(openedAt) - Date.parse(sentAt)) / 1000);
+  if (!Number.isFinite(seconds)) return null;
+  const count = (value: number, word: string) => `${value} ${word}${value === 1 ? "" : "s"}`;
+  const span =
+    seconds < 60
+      ? count(Math.max(0, seconds), "second")
+      : seconds < 3600
+        ? count(Math.floor(seconds / 60), "minute")
+        : seconds < 86400
+          ? count(Math.floor(seconds / 3600), "hour")
+          : count(Math.floor(seconds / 86400), "day");
+  return `${span} after sending`;
+}
+
 export function recipientList(addresses: MailAddress[], own: string[]) {
   const mine = new Set(own.map((item) => item.toLowerCase()));
   return addresses.map((address) => (mine.has(address.address.toLowerCase()) ? "me" : personName(address))).join(", ");
