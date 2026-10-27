@@ -22,6 +22,8 @@ import CompanyLogo from "@/components/companies/company-logo";
 import { QuickLinks, SocialLinks, employeesLabel, sectorLabel } from "@/components/companies/detail/company-brand";
 import RunWorkflowButton from "@/components/workflows/run-workflow-button";
 import ProposalsCard from "@/components/proposals/proposals-card";
+import KnowledgePanel from "@/components/knowledge/knowledge-panel";
+import type { KnowledgeItem } from "@/lib/knowledge/store";
 import type { DocumentSummary } from "@/lib/proposals/documents";
 import SectionHeader from "@/components/crm/section-header";
 import RecordSequence from "@/components/shortcuts/record-sequence";
@@ -73,6 +75,7 @@ export default function CompanyRecord({
   enrichment,
   workflows = [],
   proposals = [],
+  knowledge = [],
 }: {
   viewer: Viewer;
   context: CompanyContext;
@@ -84,6 +87,7 @@ export default function CompanyRecord({
   enrichment: EnrichmentAvailability;
   workflows?: { id: string; name: string }[];
   proposals?: DocumentSummary[];
+  knowledge?: KnowledgeItem[];
 }) {
   const router = useRouter();
   const listHref = useListHref("companies");
@@ -376,6 +380,8 @@ export default function CompanyRecord({
             <MeetingsCard meetings={meetings} />
 
             {!company.archivedAt && <ProposalsCard documents={proposals} company={{ id: company.id, name: company.name }} />}
+
+            {!company.archivedAt && <KnowledgePanel key={company.id} target={{ companyId: company.id }} initial={knowledge} />}
 
             <RelationshipPanel context={context} clickup={clickup} findEmail={enrichment.email} />
           </>

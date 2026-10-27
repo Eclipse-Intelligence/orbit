@@ -145,23 +145,23 @@ function pageLinks(html: string, base: URL) {
   return links;
 }
 
-function fromHtml(html: string, url: URL, truncated: boolean, via: WebPage["via"]): WebPage {
+function fromHtml(html: string, url: URL, truncated: boolean, via: WebPage["via"], limit = TEXT_MAX): WebPage {
   const main = html.match(/<article\b[\s\S]*?<\/article>/i)?.[0] ?? html.match(/<main\b[\s\S]*?<\/main>/i)?.[0] ?? html;
   const text = htmlToText(main.replace(/<\/?(b|strong|i|em|span|u|small|mark|code|abbr|time)\b[^>]*>/gi, ""));
   return {
     url: url.href,
     title: meta(html, /<meta[^>]+property="og:title"[^>]+content="([^"]*)"/i) ?? meta(html, /<title[^>]*>([^<]*)<\/title>/i),
     description: meta(html, /<meta[^>]+name="description"[^>]+content="([^"]*)"/i) ?? meta(html, /<meta[^>]+property="og:description"[^>]+content="([^"]*)"/i),
-    text: text.slice(0, TEXT_MAX),
+    text: text.slice(0, limit),
     links: pageLinks(html, url),
-    truncated: truncated || text.length > TEXT_MAX,
+    truncated: truncated || text.length > limit,
     via,
   };
 }
 
 type Fetched = { page: WebPage } | { blocked: string; proxies: boolean; fallback?: WebPage };
 
-async function fetchDirect(url: URL, fetchImpl: typeof fetch, lookup: Lookup): Promise<Fetched> {
+async function fetchDirect(url: URL, fetchImpl: typeof fetch, lookup: Lookup, limit = TEXT_MAX): Promise<Fetched> {
   let current = url;
   let response: Response | null = null;
   for (let hop = 0; hop <= REDIRECTS_MAX; hop += 1) {
@@ -195,29 +195,30 @@ async function fetchDirect(url: URL, fetchImpl: typeof fetch, lookup: Lookup): P
   if (attachmentKind(name, type) && !/html|xml|text\/|json|markdown/.test(type)) {
     const { bytes, truncated } = await readBytes(response, DOCUMENT_MAX);
     if (truncated) throw new WebPageError("That file is too big to read here.");
-    const text = await readAttachmentText(bytes, name, type).catch(() => null);
+    const text = await readAttachmentText(bytes, name, type, limit).catch(() => null);
     if (!text) throw new WebPageError(`That ${type || "file"} has no text Orbit can read.`);
-    return { page: { url: current.href, title: name, description: null, text: text.slice(0, TEXT_MAX), links: [], truncated: text.length > TEXT_MAX, via: "file" } };
+    return { page: { url: current.href, title: name, description: null, text: text.slice(0, limit), links: [], truncated: text.length > limit, via: "file" } };
   }
   if (type && !/text\/|html|xml|json|markdown/.test(type)) throw new WebPageError(`That address is a ${type} file, not a page Orbit can read.`);
   const body = await readBytes(response, BYTES_MAX);
   const raw = new TextDecoder().decode(body.bytes);
   if (!/html|xml/.test(type) && !/^\s*</.test(raw)) {
-    return { page: { url: current.href, title: null, description: null, text: raw.slice(0, TEXT_MAX), links: [], truncated: body.truncated || raw.length > TEXT_MAX, via: "fetch" } };
+    return { page: { url: current.href, title: null, description: null, text: raw.slice(0, limit), links: [], truncated: body.truncated || raw.length > limit, via: "fetch" } };
   }
-  const page = fromHtml(raw, current, body.truncated, "fetch");
+  const page = fromHtml(raw, current, body.truncated, "fetch", limit);
   if (page.text.length < THIN_TEXT) return { blocked: "The page has almost no text without JavaScript.", proxies: false, fallback: page };
   return { page };
 }
 
 export async function readWebPage(
   raw: string,
-  options: { fetchImpl?: typeof fetch; lookup?: Lookup; render?: Renderer | null } = {},
+  options: { fetchImpl?: typeof fetch; lookup?: Lookup; render?: Renderer | null; textMax?: number } = {},
 ): Promise<WebPage> {
+  const limit = options.textMax ?? TEXT_MAX;
   const fetchImpl = options.fetchImpl ?? publicFetch;
   const lookup = options.lookup ?? systemLookup;
   const url = await checkUrl(raw.trim(), lookup);
-  const direct = await fetchDirect(url, fetchImpl, lookup);
+  const direct = await fetchDirect(url, fetchImpl, lookup, limit);
   if ("page" in direct) return direct.page;
   const render = options.render === undefined ? (browserbaseConfigured() ? (target: string, settings: { proxies: boolean }) => renderWithBrowserbase(target, settings) : null) : options.render;
   if (!render) {
@@ -232,5 +233,5 @@ export async function readWebPage(
     throw new WebPageError(`${direct.blocked} Opening it in a browser didn't work either${error instanceof Error && error.message ? ` (${error.message.slice(0, 160)})` : ""}.`);
   }
   const landed = await checkUrl(rendered.url, lookup).catch(() => url);
-  return fromHtml(rendered.html.slice(0, BYTES_MAX), landed, rendered.html.length > BYTES_MAX, "browser");
+  return fromHtml(rendered.html.slice(0, BYTES_MAX), landed, rendered.html.length > BYTES_MAX, "browser", limit);
 }

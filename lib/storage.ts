@@ -1,5 +1,12 @@
-const ATTACHMENT_BUCKET = "email-attachments";
 export const ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024;
+export const KNOWLEDGE_MAX_BYTES = 50 * 1024 * 1024;
+
+const BUCKETS = {
+  attachments: { id: "email-attachments", limit: ATTACHMENT_MAX_BYTES },
+  knowledge: { id: "knowledge", limit: KNOWLEDGE_MAX_BYTES },
+} as const;
+
+export type Bucket = keyof typeof BUCKETS;
 
 export class StorageError extends Error {}
 
@@ -37,32 +44,37 @@ async function failure(response: Response, action: string) {
   return new StorageError(`Couldn't ${action}${message ? `: ${message.slice(0, 200)}` : ""}.`);
 }
 
-let bucketReady: Promise<void> | null = null;
+const bucketsReady = new Map<Bucket, Promise<void>>();
 
-async function ensureBucket(fetchImpl: typeof fetch) {
+async function ensureBucket(bucket: Bucket, fetchImpl: typeof fetch) {
+  const { id, limit } = BUCKETS[bucket];
   const response = await fetchImpl(endpoint("/bucket"), {
     method: "POST",
     headers: headers({ "content-type": "application/json" }),
-    body: JSON.stringify({ id: ATTACHMENT_BUCKET, name: ATTACHMENT_BUCKET, public: false, file_size_limit: ATTACHMENT_MAX_BYTES }),
+    body: JSON.stringify({ id, name: id, public: false, file_size_limit: limit }),
     signal: AbortSignal.timeout(15_000),
   });
   if (response.ok || response.status === 409) return;
   const text = await response.text().catch(() => "");
   if (/already exists|Duplicate/i.test(text)) return;
-  throw new StorageError("Couldn't prepare storage for attachments.");
+  throw new StorageError("Couldn't prepare file storage.");
 }
 
 export function resetStorageBucketCache() {
-  bucketReady = null;
+  bucketsReady.clear();
 }
 
-export async function signedUploadUrl(path: string, fetchImpl: typeof fetch = fetch) {
-  bucketReady ??= ensureBucket(fetchImpl).catch((error) => {
-    bucketReady = null;
-    throw error;
-  });
-  await bucketReady;
-  const response = await fetchImpl(endpoint(`/object/upload/sign/${ATTACHMENT_BUCKET}/${path}`), {
+export async function signedUploadUrl(path: string, fetchImpl: typeof fetch = fetch, bucket: Bucket = "attachments") {
+  let ready = bucketsReady.get(bucket);
+  if (!ready) {
+    ready = ensureBucket(bucket, fetchImpl).catch((error) => {
+      bucketsReady.delete(bucket);
+      throw error;
+    });
+    bucketsReady.set(bucket, ready);
+  }
+  await ready;
+  const response = await fetchImpl(endpoint(`/object/upload/sign/${BUCKETS[bucket].id}/${path}`), {
     method: "POST",
     headers: headers({ "content-type": "application/json" }),
     body: "{}",
@@ -74,8 +86,8 @@ export async function signedUploadUrl(path: string, fetchImpl: typeof fetch = fe
   return endpoint(body.url);
 }
 
-export async function readObject(path: string, fetchImpl: typeof fetch = fetch) {
-  const response = await fetchImpl(endpoint(`/object/${ATTACHMENT_BUCKET}/${path}`), {
+export async function readObject(path: string, fetchImpl: typeof fetch = fetch, bucket: Bucket = "attachments") {
+  const response = await fetchImpl(endpoint(`/object/${BUCKETS[bucket].id}/${path}`), {
     headers: headers(),
     signal: AbortSignal.timeout(60_000),
   });
@@ -83,9 +95,9 @@ export async function readObject(path: string, fetchImpl: typeof fetch = fetch) 
   return new Uint8Array(await response.arrayBuffer());
 }
 
-export async function removeObjects(paths: string[], fetchImpl: typeof fetch = fetch) {
+export async function removeObjects(paths: string[], fetchImpl: typeof fetch = fetch, bucket: Bucket = "attachments") {
   if (paths.length === 0) return;
-  const response = await fetchImpl(endpoint(`/object/${ATTACHMENT_BUCKET}`), {
+  const response = await fetchImpl(endpoint(`/object/${BUCKETS[bucket].id}`), {
     method: "DELETE",
     headers: headers({ "content-type": "application/json" }),
     body: JSON.stringify({ prefixes: paths }),

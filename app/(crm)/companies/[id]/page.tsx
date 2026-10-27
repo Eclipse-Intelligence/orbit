@@ -13,6 +13,8 @@ import { getCompanyContext } from "@/lib/crm/relationships";
 import { listTags } from "@/lib/crm/tags";
 import { manualWorkflows } from "@/lib/workflows/store";
 import { listDocuments } from "@/lib/proposals/documents";
+import { resumeStale } from "@/lib/knowledge/background";
+import { listKnowledge } from "@/lib/knowledge/store";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -47,7 +49,7 @@ export default async function CompanyPage({
   if (!user) redirect("/login");
   if (!context) notFound();
 
-  const [members, mailbox, clickup, meetings, tags, workflows, proposals] = await Promise.all([
+  const [members, mailbox, clickup, meetings, tags, workflows, proposals, knowledge] = await Promise.all([
     listMembers(user),
     getMailbox(user),
     getClickUpPicker(user),
@@ -55,7 +57,12 @@ export default async function CompanyPage({
     listTags(user),
     manualWorkflows(user, "company"),
     listDocuments(user, { companyId: context.company.id, limit: 20 }),
+    listKnowledge(user, { companyId: context.company.id }).catch((error: unknown) => {
+      console.error("Knowledge failed to load", error);
+      return [];
+    }),
   ]);
+  resumeStale(user, knowledge);
 
   return (
     <CompanyRecord
@@ -73,6 +80,7 @@ export default async function CompanyPage({
       meetings={meetings}
       workflows={workflows}
       proposals={proposals}
+      knowledge={knowledge}
       tags={tags}
       enrichment={enrichmentAvailability()}
     />

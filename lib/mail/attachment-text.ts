@@ -35,7 +35,7 @@ function decodeEntities(text: string) {
     .replace(/&amp;/g, "&");
 }
 
-function tidy(text: string) {
+function tidy(text: string, limit: number) {
   return text
     .replace(/\r\n?/g, "\n")
     .replace(/[ \u00a0]+/g, " ")
@@ -44,7 +44,7 @@ function tidy(text: string) {
     .replace(/ *\n */g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim()
-    .slice(0, TEXT_MAX);
+    .slice(0, limit);
 }
 
 function htmlText(html: string) {
@@ -123,7 +123,7 @@ async function pdfText(bytes: Uint8Array) {
   return (Array.isArray(text) ? text : [text]).map((page, index) => `Page ${index + 1}:\n${page}`).join("\n\n");
 }
 
-export async function readAttachmentText(bytes: Uint8Array, name: string, contentType: string | null): Promise<string | null> {
+export async function readAttachmentText(bytes: Uint8Array, name: string, contentType: string | null, limit = TEXT_MAX): Promise<string | null> {
   const kind = attachmentKind(name, contentType);
   if (!kind) return null;
   let text = "";
@@ -134,6 +134,6 @@ export async function readAttachmentText(bytes: Uint8Array, name: string, conten
     const files = unzipSync(bytes, { filter: (file) => file.name.endsWith(".xml") && file.originalSize < 20_000_000 });
     text = kind === "docx" ? docxText(files) : kind === "pptx" ? pptxText(files) : xlsxText(files);
   }
-  const cleaned = tidy(text);
+  const cleaned = tidy(text, limit);
   return cleaned.replace(/(Page|Slide|Sheet) [^\n]*:\n?/g, "").trim() ? cleaned : null;
 }
