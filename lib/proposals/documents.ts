@@ -1,17 +1,17 @@
 import { assertScope } from "@/lib/crm/scopes";
 import { createHash, randomBytes } from "node:crypto";
-import { getCompany } from "@/lib/crm/companies";
-import { getContact } from "@/lib/crm/contacts";
+import { getCompany, readCompanyInDb } from "@/lib/crm/companies";
+import { getContact, readContactInDb } from "@/lib/crm/contacts";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { sendContactEmail } from "@/lib/crm/inbox";
-import { isUuid, recordAudit } from "@/lib/crm/mutate";
+import { assertOwner, isUuid, recordAudit } from "@/lib/crm/mutate";
 import { moveToProposalStageInDb } from "@/lib/crm/opportunities";
 import { stableStringify } from "@/lib/crm/normalize";
 import type { Actor, Provenance, UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
 import { decryptSecret, encryptSecret } from "@/lib/crypto/secret";
-import { getTemplate, readBlocks, readSettings } from "@/lib/proposals/catalogue";
+import { getTemplate, parseBlocks, readBlocks, readSettings } from "@/lib/proposals/catalogue";
 import {
   consentText,
   CURRENCIES,
@@ -30,6 +30,7 @@ import {
   type Totals,
 } from "@/lib/proposals/model";
 import { renderPdf, type PdfEvent, type PdfSignature } from "@/lib/proposals/pdf";
+import { signatureImage } from "@/lib/proposals/signature";
 import { readSteps, seedSteps } from "@/lib/proposals/steps";
 import { siteOrigin } from "@/lib/site-url";
 import { appTimeZone, zonedParts } from "@/lib/time";
@@ -120,6 +121,8 @@ const FROM = `crm.documents d
   left join crm.profiles p on p.id = d.owner_id`;
 
 const OPEN = new Set<DocumentStatus>(["sent", "viewed"]);
+const CERTIFICATE_EVENTS = new Set(["created", "sent", "resent", "viewed", "downloaded", "reopened", "declined", "withdrawn", "client_signed", "countersigned", "completed"]);
+const PRICE_MAX = 9_999_999_999;
 
 export function documentHref(id: string) {
   return `/proposals/${id}`;
@@ -186,9 +189,9 @@ function actorUser(actor: Actor) {
   return actor.type === "user" ? actor.userId : null;
 }
 
-async function readRow(db: Db, actor: Actor, id: string) {
+async function readRow(db: Db, actor: Actor, id: string, lock = false) {
   if (!isUuid(id)) throw new CrmError("not_found", "Proposal not found.", 404);
-  const result = await db.query<DocumentRow>(`select ${COLUMNS} from ${FROM} where d.id = $1 and d.workspace_id = $2`, [id, actor.workspaceId]);
+  const result = await db.query<DocumentRow>(`select ${COLUMNS} from ${FROM} where d.id = $1 and d.workspace_id = $2${lock ? " for update of d" : ""}`, [id, actor.workspaceId]);
   const row = result.rows[0];
   if (!row) throw new CrmError("not_found", "Proposal not found.", 404);
   return row;
@@ -221,6 +224,7 @@ export async function listDocuments(
   actor: Actor,
   filter: { companyId?: string; contactId?: string; opportunityIds?: string[]; status?: string; kind?: DocumentKind; search?: string; includeArchived?: boolean; limit?: number } = {},
 ) {
+  assertScope(actor.scopes, "crm:read");
   return withActor(actor, async (db) => {
     const values: unknown[] = [actor.workspaceId];
     const where = ["d.workspace_id = $1"];
@@ -249,8 +253,10 @@ export async function listDocuments(
 }
 
 async function partiesFor(db: Db, actor: Actor, row: { company_id: string; contact_id: string; owner_id: string }) {
-  const company = await getCompany(actor, row.company_id);
-  const contact = await getContact(actor, row.contact_id);
+  const company = await readCompanyInDb(db, row.company_id, actor.workspaceId);
+  const contact = await readContactInDb(db, row.contact_id, actor.workspaceId);
+  if (!company) throw new CrmError("not_found", "Company not found.", 404);
+  if (!contact) throw new CrmError("not_found", "Contact not found.", 404);
   const owner = await db.query<{ full_name: string | null; email: string | null }>("select full_name, email from crm.profiles where id = $1", [row.owner_id]);
   const workspace = await db.query<{ name: string }>("select name from crm.workspaces where id = $1", [actor.workspaceId]);
   return {
@@ -343,7 +349,7 @@ async function itemsFrom(db: Db, actor: Actor, input: unknown, currency: Currenc
     if (product) {
       const price = currency === "GBP" ? product.price_gbp : product.price_usd;
       if (price === null) throw invalid(`${product.name} has no ${currency === "GBP" ? "pound" : "dollar"} price. Add one in Products, or choose the other currency.`, "items");
-      const custom = typeof raw.unitPrice === "number" && Number.isFinite(raw.unitPrice) && raw.unitPrice >= 0 ? raw.unitPrice : null;
+      const custom = typeof raw.unitPrice === "number" && Number.isFinite(raw.unitPrice) && raw.unitPrice >= 0 && raw.unitPrice <= PRICE_MAX ? raw.unitPrice : null;
       return {
         productId: product.id,
         name: product.name,
@@ -356,6 +362,7 @@ async function itemsFrom(db: Db, actor: Actor, input: unknown, currency: Currenc
     const name = typeof raw?.name === "string" ? raw.name.trim().slice(0, 120) : "";
     const unitPrice = Number(raw?.unitPrice);
     if (!name || !Number.isFinite(unitPrice) || unitPrice < 0) throw invalid(`Line ${index + 1} needs a product, or a name and a price.`, "items");
+    if (unitPrice > PRICE_MAX) throw invalid(`Line ${index + 1} has a price over ${PRICE_MAX.toLocaleString("en-GB")}.`, "items");
     const billing = raw?.billing === "monthly" || raw?.billing === "yearly" ? raw.billing : "one_off";
     return { productId: null, name, description: typeof raw?.description === "string" ? raw.description.slice(0, 4000) : "", billing, unitPrice: Math.round(unitPrice * 100) / 100, quantity };
   });
@@ -389,6 +396,7 @@ export async function createDocument(
     (typeof input.title === "string" && input.title.replace(/\s+/g, " ").trim().slice(0, 200)) ||
     (template.kind === "nda" ? `NDA with ${company.name}` : `Proposal for ${company.name}`);
   return withActor(actor, async (db) => {
+    await assertOwner(db, actor.workspaceId, ownerId);
     const items = await itemsFrom(db, actor, input.items, currency);
     let opportunityId = typeof input.opportunityId === "string" && isUuid(input.opportunityId) ? input.opportunityId : null;
     if (!opportunityId && template.kind === "proposal") {
@@ -439,7 +447,16 @@ export async function createDocument(
       ],
     );
     const id = result.rows[0].id;
-    await seedSteps(db, actor, id, template.blocks);
+    const owner = await db.query<{ full_name: string | null; email: string | null }>("select full_name, email from crm.profiles where id = $1", [ownerId]);
+    const workspace = await db.query<{ name: string }>("select name from crm.workspaces where id = $1", [actor.workspaceId]);
+    const values = fieldValues({
+      company: { name: company.name, domain: company.domain, website: company.website },
+      contact: { name: contact.name, firstName: contact.firstName, lastName: contact.lastName, jobTitle: contact.jobTitle, email: contact.email },
+      sender: { name: owner.rows[0]?.full_name || owner.rows[0]?.email || "Sender", email: owner.rows[0]?.email ?? "" },
+      workspace: { name: workspace.rows[0]?.name ?? "Our company" },
+      proposal: { title, currency, validUntil: addDays(template.settings.validDays), items },
+    });
+    await seedSteps(db, actor, id, renderBlocks(template.blocks, values).blocks);
     await logEvent(db, { workspaceId: actor.workspaceId, documentId: id, type: "created", actor: actor.type === "agent" ? "agent" : "user", userId: actorUser(actor), data: { template: template.name } });
     await recordAudit(db, actor, "document.created", "document", id, provenance, { after: { title, kind: template.kind, companyId: company.id, contactId: contact.id } });
     return id;
@@ -447,6 +464,7 @@ export async function createDocument(
 }
 
 export async function getDocument(actor: Actor, id: string): Promise<DocumentDetail> {
+  assertScope(actor.scopes, "crm:read");
   return withActor(actor, async (db) => {
     const row = await readRow(db, actor, id);
     const built = await buildContent(db, actor, row, new Date().toISOString());
@@ -509,10 +527,12 @@ type SignatureRow = {
   signature_image: string | null;
   method: string;
   ip: string | null;
+  user_agent: string | null;
+  consent: string | null;
   signed_at: Date;
 };
 
-const SIGNATURE_COLUMNS = "id, version_id, role, name, email, title, company, signature_text, signature_image, method, ip, signed_at";
+const SIGNATURE_COLUMNS = "id, version_id, role, name, email, title, company, signature_text, signature_image, method, ip, user_agent, consent, signed_at";
 
 function toSignature(row: SignatureRow): SignatureRecord {
   return {
@@ -528,6 +548,8 @@ function toSignature(row: SignatureRow): SignatureRecord {
     signedAt: iso(row.signed_at)!,
     ip: row.ip,
     method: row.method,
+    userAgent: row.user_agent,
+    consent: row.consent,
   };
 }
 
@@ -540,7 +562,7 @@ export async function updateDocument(
   assertScope(actor.scopes, "opportunities:write");
   return withActor(actor, async (db) => {
     const row = await readRow(db, actor, id);
-    if (row.status !== "draft") throw invalid("This has been sent. Choose Make changes first, which withdraws the sent version.", "status");
+    if (row.status !== "draft") throw invalid("This has been sent. Choose Make changes first.", "status");
     const sets: string[] = [];
     const values: unknown[] = [id];
     const set = (column: string, value: unknown, cast = "") => {
@@ -557,13 +579,9 @@ export async function updateDocument(
     if (input.currency !== undefined) set("currency", currency);
     if (input.items !== undefined) set("items", JSON.stringify(await itemsFrom(db, actor, input.items, currency)), "::jsonb");
     else if (input.currency !== undefined && currency !== row.currency) {
-      set("items", JSON.stringify(await itemsFrom(db, actor, (row.items ?? []).map((item) => ({ ...item, unitPrice: undefined })), currency)), "::jsonb");
+      set("items", JSON.stringify(await itemsFrom(db, actor, (row.items ?? []).map((item) => (item.productId ? { ...item, unitPrice: undefined } : item)), currency)), "::jsonb");
     }
-    if (input.blocks !== undefined) {
-      const blocks = readBlocks(input.blocks);
-      if (Array.isArray(input.blocks) && blocks.length !== input.blocks.length) throw invalid("The sections couldn't be read.", "blocks");
-      set("blocks", JSON.stringify(blocks), "::jsonb");
-    }
+    if (input.blocks !== undefined) set("blocks", JSON.stringify(parseBlocks(input.blocks)), "::jsonb");
     if (input.validUntil !== undefined) {
       const value = typeof input.validUntil === "string" && /^\d{4}-\d{2}-\d{2}$/.test(input.validUntil) ? input.validUntil : null;
       if (input.validUntil && !value) throw invalid("Choose a valid date.", "validUntil");
@@ -571,7 +589,8 @@ export async function updateDocument(
     }
     if (input.contactId !== undefined) {
       if (typeof input.contactId !== "string" || !isUuid(input.contactId)) throw invalid("Choose a person at the company.", "contactId");
-      const contact = await getContact(actor, input.contactId);
+      const contact = await readContactInDb(db, input.contactId, actor.workspaceId);
+      if (!contact) throw new CrmError("not_found", "Contact not found.", 404);
       if (contact.companyId !== row.company_id) throw invalid(`${contact.name} isn't at ${row.company_name}.`, "contactId");
       set("contact_id", contact.id);
     }
@@ -584,10 +603,10 @@ export async function updateDocument(
 export async function reviseDocument(actor: Actor, id: string, provenance: Provenance = { operation: "revise_proposal" }) {
   assertScope(actor.scopes, "opportunities:write");
   await withActor(actor, async (db) => {
-    const row = await readRow(db, actor, id);
+    const row = await readRow(db, actor, id, true);
     if (!OPEN.has(row.status) && row.status !== "declined" && row.status !== "withdrawn") throw invalid("Only a sent, declined or withdrawn proposal can be changed.", "status");
     await db.query("update crm.documents set status = 'draft', withdrawn_at = null, declined_at = null, decline_reason = null, updated_at = now() where id = $1", [id]);
-    await logEvent(db, { workspaceId: actor.workspaceId, documentId: id, versionId: row.current_version_id, type: "reopened", actor: "user", userId: actorUser(actor) });
+    await logEvent(db, { workspaceId: actor.workspaceId, documentId: id, versionId: row.current_version_id, type: "reopened", actor: actor.type === "agent" ? "agent" : "user", userId: actorUser(actor) });
     await recordAudit(db, actor, "document.reopened", "document", id, provenance, {});
   });
 }
@@ -595,24 +614,29 @@ export async function reviseDocument(actor: Actor, id: string, provenance: Prove
 export async function withdrawDocument(actor: Actor, id: string, provenance: Provenance = { operation: "withdraw_proposal" }) {
   assertScope(actor.scopes, "opportunities:write");
   await withActor(actor, async (db) => {
-    const row = await readRow(db, actor, id);
-    if (!OPEN.has(row.status) && row.status !== "client_signed") throw invalid("Only a sent proposal can be withdrawn.", "status");
+    const row = await readRow(db, actor, id, true);
+    if (!OPEN.has(row.status) && row.status !== "client_signed" && !(row.status === "draft" && row.current_version_id)) throw invalid("Only a sent proposal can be withdrawn.", "status");
     await db.query("update crm.document_links set revoked_at = now() where document_id = $1 and revoked_at is null", [id]);
     await db.query("update crm.documents set status = 'withdrawn', withdrawn_at = now(), updated_at = now() where id = $1", [id]);
-    await logEvent(db, { workspaceId: actor.workspaceId, documentId: id, versionId: row.current_version_id, type: "withdrawn", actor: "user", userId: actorUser(actor) });
+    await logEvent(db, { workspaceId: actor.workspaceId, documentId: id, versionId: row.current_version_id, type: "withdrawn", actor: actor.type === "agent" ? "agent" : "user", userId: actorUser(actor) });
     await recordAudit(db, actor, "document.withdrawn", "document", id, provenance, {});
   });
 }
 
 export async function archiveDocument(actor: Actor, id: string, archived: boolean) {
+  assertScope(actor.scopes, "opportunities:write");
   await withActor(actor, async (db) => {
-    const row = await readRow(db, actor, id);
-    if (archived && row.status === "draft") {
-      await db.query("delete from crm.documents where id = $1 and status = 'draft'", [id]);
-      await recordAudit(db, actor, "document.deleted", "document", id, { operation: "delete_proposal" }, {});
+    const row = await readRow(db, actor, id, true);
+    if (archived && row.status === "draft" && !row.current_version_id) {
+      const removed = await db.query("delete from crm.documents where id = $1 and status = 'draft' and current_version_id is null returning id", [id]);
+      if ((removed.rowCount ?? 0) > 0) await recordAudit(db, actor, "document.deleted", "document", id, { operation: "delete_proposal" }, { title: row.title });
       return;
     }
+    if (archived && (OPEN.has(row.status) || row.status === "client_signed" || row.status === "draft")) {
+      throw invalid("Withdraw it first, so the client's link stops working.", "status");
+    }
     await db.query("update crm.documents set archived_at = $2, updated_at = now() where id = $1", [id, archived ? new Date().toISOString() : null]);
+    await recordAudit(db, actor, archived ? "document.archived" : "document.restored", "document", id, { operation: archived ? "archive_proposal" : "restore_proposal" }, { title: row.title });
   });
 }
 
@@ -624,9 +648,10 @@ export async function sendDocument(
 ) {
   const provenance = options.provenance ?? { operation: "send_proposal" };
   const prepared = await withActor(actor, async (db) => {
-    const row = await readRow(db, actor, id);
+    const row = await readRow(db, actor, id, true);
     if (row.status === "completed" || row.status === "client_signed") throw invalid("This has already been signed.", "status");
     if (OPEN.has(row.status) && row.current_version_id) {
+      if (isExpired(row.status, row.valid_until)) throw invalid("This has expired. Choose Make changes, set a later valid-until date and send it again.", "validUntil");
       const link = await db.query<{ token_cipher: string }>(
         "select token_cipher from crm.document_links where document_id = $1 and revoked_at is null order by created_at desc limit 1",
         [id],
@@ -672,11 +697,12 @@ export async function sendDocument(
         [actor.workspaceId, id, versionId, built.contactEmail.toLowerCase(), hashToken(token), encryptSecret(token)],
       );
     }
-    await db.query(
-      "update crm.documents set status = 'sent', current_version_id = $2, sent_at = now(), withdrawn_at = null, declined_at = null, decline_reason = null, updated_at = now() where id = $1",
+    const moved = await db.query(
+      "update crm.documents set status = 'sent', current_version_id = $2, sent_at = now(), withdrawn_at = null, declined_at = null, decline_reason = null, updated_at = now() where id = $1 and status = 'draft' returning id",
       [id, versionId],
     );
-    await logEvent(db, { workspaceId: actor.workspaceId, documentId: id, versionId, type: "sent", actor: "user", userId: actor.userId, email: built.contactEmail, data: { version: number, hash, emailed: input.email !== false } });
+    if (moved.rowCount === 0) throw new CrmError("conflict", "This changed while you were sending. Reload and try again.", 409);
+    await logEvent(db, { workspaceId: actor.workspaceId, documentId: id, versionId, type: "sent", actor: "user", userId: actor.userId, email: built.contactEmail, data: { version: number, hash, emailRequested: input.email !== false } });
     await recordAudit(db, actor, "document.sent", "document", id, provenance, { version: number, title: row.title });
     return { row, token, versionId, resend: false };
   });
@@ -690,6 +716,7 @@ export async function sendDocument(
         ? input.message.trim().slice(0, 8000)
         : `Hi ${first},\n\nHere is ${what} for ${prepared.row.company_name}. You can read it, download a PDF and sign it online.`;
     const subject = typeof input.subject === "string" && input.subject.trim() ? input.subject.trim().slice(0, 300) : prepared.row.title;
+    let emailed = true;
     try {
       const sent = await sendContactEmail(
         actor,
@@ -699,9 +726,10 @@ export async function sendDocument(
       );
       warning = sent.warning;
     } catch (error) {
+      emailed = false;
       warning = `The proposal is ready, but the email didn't send: ${error instanceof Error ? error.message : "try again"}. You can copy the link instead.`;
     }
-    if (prepared.resend) {
+    if (prepared.resend && emailed) {
       await withActor(actor, (db) =>
         logEvent(db, { workspaceId: actor.workspaceId, documentId: id, versionId: prepared.versionId, type: "resent", actor: "user", userId: actor.userId }),
       );
@@ -718,10 +746,13 @@ export async function countersignDocument(
 ) {
   const signatureText = typeof input.signatureText === "string" ? input.signatureText.replace(/\s+/g, " ").trim() : "";
   if (signatureText.length < 2 || signatureText.length > 200) throw invalid("Type your full name to sign.", "signatureText");
-  const image = typeof input.signatureImage === "string" && input.signatureImage.startsWith("data:image/png;base64,") && input.signatureImage.length < 300_000 ? input.signatureImage : null;
+  const image = input.signatureImage === undefined || input.signatureImage === null ? null : signatureImage(input.signatureImage);
+  if (input.signatureImage && !image) throw invalid("That signature couldn't be read. Clear it and draw it again.", "signatureImage");
   await withActor(actor, async (db) => {
-    const row = await readRow(db, actor, id);
+    const row = await readRow(db, actor, id, true);
     if (row.status !== "client_signed" || !row.current_version_id) throw invalid("It can be countersigned once the client has signed.", "status");
+    const clientSigned = await db.query("select 1 from crm.document_signatures where version_id = $1 and role = 'client'", [row.current_version_id]);
+    if (clientSigned.rowCount === 0) throw invalid("The client hasn't signed this version.", "status");
     if (actor.userId !== row.owner_id && actor.role !== "owner" && actor.role !== "admin") throw new CrmError("forbidden", "Only the proposal's owner or an admin can countersign.", 403);
     const version = await db.query<{ content: Content }>("select content from crm.document_versions where id = $1", [row.current_version_id]);
     const content = version.rows[0].content;
@@ -745,20 +776,28 @@ export async function countersignDocument(
       ],
     );
     await logEvent(db, { workspaceId: actor.workspaceId, documentId: id, versionId: row.current_version_id, type: "countersigned", actor: "user", userId: actor.userId, name: actor.fullName, email: actor.email, ip: meta.ip, userAgent: meta.userAgent });
-    await db.query("update crm.documents set status = 'completed', completed_at = now(), updated_at = now() where id = $1", [id]);
+    const moved = await db.query("update crm.documents set status = 'completed', completed_at = now(), updated_at = now() where id = $1 and status = 'client_signed' returning id", [id]);
+    if (moved.rowCount === 0) throw new CrmError("conflict", "This changed while you were signing. Reload and try again.", 409);
     await logEvent(db, { workspaceId: actor.workspaceId, documentId: id, versionId: row.current_version_id, type: "completed", actor: "system" });
     await storeExecuted(db, actor.workspaceId, id, row.current_version_id);
     await recordAudit(db, actor, "document.completed", "document", id, { operation: "countersign_proposal" }, { title: row.title });
   });
   const detail = await getDocument(actor, id);
+  let emailed = false;
   if (detail.link) {
     const first = detail.contactName.split(/\s+/)[0] || "there";
-    await sendContactEmail(actor, detail.contactId, {
+    emailed = await sendContactEmail(actor, detail.contactId, {
       subject: `Signed: ${detail.title}`,
       body: `Hi ${first},\n\nWe've countersigned ${detail.title}, so it's now fully signed. You can download the signed copy here:\n\n${detail.link}`,
-    }).catch((error) => console.error("Signed copy email failed", error));
+    }).then(
+      () => true,
+      (error) => {
+        console.error("Signed copy email failed", error);
+        return false;
+      },
+    );
   }
-  return detail;
+  return { ...detail, emailed };
 }
 
 async function storeExecuted(db: Db, workspaceId: string, documentId: string, versionId: string) {
@@ -768,7 +807,9 @@ async function storeExecuted(db: Db, workspaceId: string, documentId: string, ve
     "select type, occurred_at, name, email, ip from crm.document_events where document_id = $1 and (version_id = $2 or version_id is null) order by occurred_at, id",
     [documentId, versionId],
   );
-  const pdfEvents: PdfEvent[] = events.rows.map((event) => ({ type: event.type, at: new Date(event.occurred_at).toISOString(), who: event.name ?? event.email, ip: event.ip }));
+  const pdfEvents: PdfEvent[] = events.rows
+    .filter((event) => CERTIFICATE_EVENTS.has(event.type))
+    .map((event) => ({ type: event.type, at: new Date(event.occurred_at).toISOString(), who: event.name ?? event.email, ip: event.ip }));
   const pdf = await renderPdf({
     content: version.rows[0].content,
     contentHash: version.rows[0].content_hash,

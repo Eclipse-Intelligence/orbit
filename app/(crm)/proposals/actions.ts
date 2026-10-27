@@ -47,15 +47,15 @@ async function run<T>(work: (user: NonNullable<Awaited<ReturnType<typeof getUser
 }
 
 export async function saveProductAction(id: string | null, input: ProductInput & { archived?: boolean }): Promise<Result<Product>> {
-  return run((user) => (id ? updateProduct(user, id, input) : createProduct(user, input)));
+  return run((user) => (id ? updateProduct(user, id, input, { operation: "update_product", source: "web" }) : createProduct(user, input, { operation: "create_product", source: "web" })));
 }
 
 export async function createTemplateAction(input: { name?: string; kind?: string; starter?: string; copyOf?: string }): Promise<Result<Template>> {
-  return run((user) => createTemplate(user, input));
+  return run((user) => createTemplate(user, input, { operation: "create_template", source: "web" }));
 }
 
 export async function saveTemplateAction(id: string, input: { name?: string; status?: string; blocks?: unknown; settings?: unknown }): Promise<Result<Template>> {
-  return run((user) => updateTemplate(user, id, input));
+  return run((user) => updateTemplate(user, id, input, { operation: "update_template", source: "web" }));
 }
 
 export async function createProposalAction(input: {
@@ -66,12 +66,12 @@ export async function createProposalAction(input: {
   items: { productId: string; quantity: number }[];
   title?: string;
 }): Promise<Result<string>> {
-  return run((user) => createDocument(user, input));
+  return run((user) => createDocument(user, input, { operation: "create_proposal", source: "web" }));
 }
 
 export async function saveProposalAction(id: string, input: Record<string, unknown>): Promise<Result<DocumentDetail>> {
   return run(async (user) => {
-    await updateDocument(user, id, input);
+    await updateDocument(user, id, input, { operation: "update_proposal", source: "web" });
     return getDocument(user, id);
   });
 }
@@ -81,15 +81,15 @@ export async function sendProposalAction(
   input: { subject?: string; message?: string; from?: string; email: boolean },
 ): Promise<Result<{ detail: DocumentDetail; url: string; warning: string | null }>> {
   return run(async (user) => {
-    const sent = await sendDocument(user, id, input);
+    const sent = await sendDocument(user, id, input, { provenance: { operation: "send_proposal", source: "web" } });
     return { detail: await getDocument(user, id), url: sent.url, warning: sent.warning };
   });
 }
 
 export async function changeProposalAction(id: string, action: "revise" | "withdraw" | "archive" | "unarchive"): Promise<Result<DocumentDetail | null>> {
   return run(async (user) => {
-    if (action === "revise") await reviseDocument(user, id);
-    else if (action === "withdraw") await withdrawDocument(user, id);
+    if (action === "revise") await reviseDocument(user, id, { operation: "revise_proposal", source: "web" });
+    else if (action === "withdraw") await withdrawDocument(user, id, { operation: "withdraw_proposal", source: "web" });
     else {
       const detail = await getDocument(user, id);
       await archiveDocument(user, id, action === "archive");
@@ -99,7 +99,7 @@ export async function changeProposalAction(id: string, action: "revise" | "withd
   });
 }
 
-export async function countersignAction(id: string, input: { signatureText: string; title?: string; signatureImage?: string | null }): Promise<Result<DocumentDetail>> {
+export async function countersignAction(id: string, input: { signatureText: string; title?: string; signatureImage?: string | null }): Promise<Result<DocumentDetail & { emailed: boolean }>> {
   const store = await headers();
   return run((user) => countersignDocument(user, id, input, { ip: clientIp(store), userAgent: store.get("user-agent") }));
 }
@@ -126,19 +126,19 @@ export async function prepareProposalImageAction(file: { name: string; size: num
 }
 
 export async function addStepAction(documentId: string, input: { title: string; side: "client" | "us"; dueDate: string | null }): Promise<Result<Step[]>> {
-  return run((user) => addStep(user, documentId, input));
+  return run((user) => addStep(user, documentId, input, { operation: "add_step", source: "web" }));
 }
 
 export async function updateStepAction(stepId: string, input: { title?: string; side?: "client" | "us"; dueDate?: string | null; done?: boolean }): Promise<Result<Step[]>> {
-  return run((user) => updateStep(user, stepId, input));
+  return run((user) => updateStep(user, stepId, input, { operation: "update_step", source: "web" }));
 }
 
 export async function moveStepAction(stepId: string, by: -1 | 1): Promise<Result<Step[]>> {
-  return run((user) => moveStep(user, stepId, by));
+  return run((user) => moveStep(user, stepId, by, { operation: "move_step", source: "web" }));
 }
 
 export async function removeStepAction(stepId: string): Promise<Result<Step[]>> {
-  return run((user) => removeStep(user, stepId));
+  return run((user) => removeStep(user, stepId, { operation: "remove_step", source: "web" }));
 }
 
 export async function emailStepsAction(documentId: string): Promise<Result<{ warning: string | null }>> {

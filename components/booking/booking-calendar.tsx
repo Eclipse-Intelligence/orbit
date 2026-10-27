@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, type KeyboardEvent } from "react";
+import { useId, useRef, type KeyboardEvent } from "react";
 import Button from "@/components/_ui/button";
 import { dayTitle, monthGrid, monthTitle, WEEKDAY_INITIALS } from "@/lib/booking/format";
 import { cn } from "@/lib/utils";
@@ -19,7 +19,9 @@ export default function BookingCalendar({
   canNext,
   onMonth,
   onSelect,
+  embedded = false,
 }: {
+  embedded?: boolean;
   month: string;
   days: Record<string, string[]>;
   loading: boolean;
@@ -31,6 +33,8 @@ export default function BookingCalendar({
   onSelect: (key: string) => void;
 }) {
   const grid = useRef<HTMLDivElement>(null);
+  const monthId = useId();
+  const MonthHeading = embedded ? "h4" : "h2";
   const cells = monthGrid(month);
   const open = cells.filter((cell) => cell.inMonth && days[cell.key]?.length);
   const focusKey = selected && days[selected]?.length ? selected : open[0]?.key;
@@ -61,9 +65,9 @@ export default function BookingCalendar({
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between gap-2">
-        <h2 id="booking-month" aria-live="polite" suppressHydrationWarning className="text-[15px] leading-5 font-medium">
+        <MonthHeading id={monthId} aria-live="polite" suppressHydrationWarning className="text-[15px] leading-5 font-medium">
           {monthTitle(month)}
-        </h2>
+        </MonthHeading>
         <div className="flex items-center gap-1">
           <Button
             variant="ghost"
@@ -90,7 +94,7 @@ export default function BookingCalendar({
       <div
         ref={grid}
         role="group"
-        aria-labelledby="booking-month"
+        aria-labelledby={monthId}
         aria-busy={loading}
         className="grid grid-cols-7 gap-y-1 text-center"
       >

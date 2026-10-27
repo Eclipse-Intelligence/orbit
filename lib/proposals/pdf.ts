@@ -1,4 +1,7 @@
-import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage, type RGB } from "pdf-lib";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import fontkit from "@pdf-lib/fontkit";
+import { PDFDocument, rgb, type PDFFont, type PDFPage, type RGB } from "pdf-lib";
 import {
   BILLING_LABELS,
   BILLINGS,
@@ -20,6 +23,8 @@ export type PdfSignature = {
   ip: string | null;
   method: string;
   email: string;
+  userAgent?: string | null;
+  consent?: string | null;
 };
 
 export type PdfEvent = { type: string; at: string; who: string | null; ip: string | null };
@@ -33,13 +38,31 @@ const INK = rgb(0.11, 0.11, 0.13);
 const MUTED = rgb(0.42, 0.43, 0.47);
 const RULE = rgb(0.88, 0.88, 0.9);
 
-const REPLACEMENTS: Record<string, string> = { "→": "->", "←": "<-", "✓": "v", " ": " ", " ": " " };
-const ALLOWED = /[\x20-\x7e\xa1-\xff€‘’“”•…\u2013\u2014£]/;
+const REPLACEMENTS: Record<string, string> = { "\u00a0": " ", "\u202f": " " };
+const FONT_DIR = path.join(process.cwd(), "lib", "proposals", "fonts");
+let fontFiles: Promise<{ regular: Buffer; bold: Buffer; italic: Buffer }> | null = null;
+let glyphs: Set<number> = new Set();
+
+function loadFonts() {
+  fontFiles ??= Promise.all(["Regular", "Bold", "Italic"].map((style) => readFile(path.join(FONT_DIR, `NotoSans-${style}.ttf`)))).then(([regular, bold, italic]) => ({ regular, bold, italic }));
+  return fontFiles;
+}
 
 function clean(value: string) {
-  return [...value.replace(/\t/g, "  ")]
-    .map((char) => REPLACEMENTS[char] ?? (ALLOWED.test(char) ? char : char === "\n" ? char : "?"))
+  return [...value.normalize("NFC").replace(/\t/g, "  ")]
+    .map((char) => {
+      if (REPLACEMENTS[char]) return REPLACEMENTS[char];
+      if (char === "\n") return char;
+      const point = char.codePointAt(0) ?? 0;
+      return point < 0x20 ? " " : glyphs.size === 0 || glyphs.has(point) ? char : "?";
+    })
     .join("");
+}
+
+function londonTime(value: string) {
+  const date = new Date(value);
+  const time = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/London" }).format(date);
+  return `${longDate(date)} at ${time} UK time`;
 }
 
 function hexColour(value: string): RGB {
@@ -89,7 +112,23 @@ class Writer {
       const segments = value.split("\n");
       segments.forEach((segment, index) => {
         if (index > 0) words.push("\n");
-        for (const word of segment.split(/(\s+)/)) if (word) words.push({ text: word, font, color });
+        for (const word of segment.split(/(\s+)/)) {
+          if (!word) continue;
+          if (font.widthOfTextAtSize(word, options.size) <= maxWidth) {
+            words.push({ text: word, font, color });
+            continue;
+          }
+          let piece = "";
+          for (const char of word) {
+            if (piece && font.widthOfTextAtSize(piece + char, options.size) > maxWidth) {
+              words.push({ text: piece, font, color });
+              words.push({ text: " ", font, color });
+              piece = "";
+            }
+            piece += char;
+          }
+          if (piece) words.push({ text: piece, font, color });
+        }
       });
     }
     let line: Word[] = [];
@@ -159,7 +198,7 @@ function pricing(writer: Writer, fonts: Fonts, content: Content) {
   for (const [label, x] of [
     ["Billing", right - 230],
     ["Qty", right - 140],
-    ["Amount", right - 70],
+    ["Amount", right - fonts.bold.widthOfTextAtSize("Amount", 8.5)],
   ] as const) {
     writer.page.drawText(label, { x, y: writer.y - 9, size: 8.5, font: fonts.bold, color: MUTED });
   }
@@ -171,7 +210,8 @@ function pricing(writer: Writer, fonts: Fonts, content: Content) {
     const amount = formatMoney(item.unitPrice * item.quantity, content.currency);
     writer.page.drawText(BILLING_LABELS[item.billing], { x: right - 230, y: top - 10.5, size: 10, font: fonts.regular, color: INK });
     writer.page.drawText(String(item.quantity), { x: right - 140, y: top - 10.5, size: 10, font: fonts.regular, color: INK });
-    writer.page.drawText(clean(amount), { x: right - 70, y: top - 10.5, size: 10, font: fonts.regular, color: INK });
+    const amountText = clean(amount);
+    writer.page.drawText(amountText, { x: right - fonts.regular.widthOfTextAtSize(amountText, 10), y: top - 10.5, size: 10, font: fonts.regular, color: INK });
     const saved = writer.y;
     writer.y = top;
     const column = right - 230 - MARGIN - 14;
@@ -187,7 +227,8 @@ function pricing(writer: Writer, fonts: Fonts, content: Content) {
     writer.space(18);
     const label = billing === "one_off" ? "Total one-off" : billing === "monthly" ? "Total a month" : "Total a year";
     writer.page.drawText(label, { x: right - 230, y: writer.y - 11, size: 10.5, font: fonts.bold, color: INK });
-    writer.page.drawText(clean(formatMoney(total, content.currency)), { x: right - 70, y: writer.y - 11, size: 10.5, font: fonts.bold, color: INK });
+    const totalText = clean(formatMoney(total, content.currency));
+    writer.page.drawText(totalText, { x: right - fonts.bold.widthOfTextAtSize(totalText, 10.5), y: writer.y - 11, size: 10.5, font: fonts.bold, color: INK });
     writer.gap(18);
   }
 }
@@ -204,6 +245,7 @@ async function signatures(pdf: PDFDocument, writer: Writer, fonts: Fonts, conten
     const signature = signed.find((item) => item.role === role);
     writer.space(110);
     writer.lines([{ text: `For ${party.company}`, bold: true }], { size: 10 });
+    let drawn = false;
     if (signature?.signatureImage?.startsWith("data:image/png;base64,")) {
       try {
         const image = await pdf.embedPng(Buffer.from(signature.signatureImage.slice(22), "base64"));
@@ -211,10 +253,14 @@ async function signatures(pdf: PDFDocument, writer: Writer, fonts: Fonts, conten
         writer.space(56);
         writer.page.drawImage(image, { x: MARGIN, y: writer.y - scaled.height, width: scaled.width, height: scaled.height });
         writer.gap(scaled.height + 4);
-      } catch {}
-    } else if (signature) {
+        drawn = true;
+      } catch {
+        drawn = false;
+      }
+    }
+    if (signature && !drawn) {
       writer.lines([{ text: signature.signatureText }], { size: 20, font: fonts.italic });
-    } else {
+    } else if (!signature) {
       writer.gap(26);
     }
     writer.page.drawLine({ start: { x: MARGIN, y: writer.y }, end: { x: MARGIN + 240, y: writer.y }, thickness: 0.6, color: MUTED });
@@ -222,7 +268,7 @@ async function signatures(pdf: PDFDocument, writer: Writer, fonts: Fonts, conten
     const name = signature?.name ?? party.name;
     const title = signature?.title ?? party.title;
     writer.lines([{ text: `${name}${title ? `, ${title}` : ""}` }], { size: 9.5 });
-    writer.lines([{ text: signature ? `Signed ${longDate(signature.signedAt)} at ${new Date(signature.signedAt).toISOString().slice(11, 16)} UTC` : "Not signed yet" }], {
+    writer.lines([{ text: signature ? `Signed ${londonTime(signature.signedAt)}` : "Not signed yet" }], {
       size: 9,
       color: MUTED,
     });
@@ -244,11 +290,14 @@ export async function renderPdf(input: {
   pdf.setCreator("Orbit");
   pdf.setCreationDate(new Date(input.content.issuedAt));
   pdf.setModificationDate(new Date(input.content.issuedAt));
+  pdf.registerFontkit(fontkit);
+  const files = await loadFonts();
   const fonts: Fonts = {
-    regular: await pdf.embedFont(StandardFonts.Helvetica),
-    bold: await pdf.embedFont(StandardFonts.HelveticaBold),
-    italic: await pdf.embedFont(StandardFonts.HelveticaOblique),
+    regular: await pdf.embedFont(files.regular, { subset: true }),
+    bold: await pdf.embedFont(files.bold, { subset: true }),
+    italic: await pdf.embedFont(files.italic, { subset: true }),
   };
+  if (glyphs.size === 0) glyphs = new Set(fonts.regular.getCharacterSet());
   const accent = hexColour(input.content.accent);
   const writer = new Writer(pdf, fonts, `${input.content.title} · ${input.content.sender.company} · Reference ${input.documentId.slice(0, 8)} v${input.versionNumber}`);
   writer.page.drawRectangle({ x: 0, y: HEIGHT - 8, width: WIDTH, height: 8, color: accent });
@@ -259,10 +308,10 @@ export async function renderPdf(input: {
     if (block.type === "team" && !block.people.some((person) => person.name.trim())) continue;
     if (block.type === "cover") {
       writer.gap(30);
-      if (input.content.logo) {
-        const image = await pdf.embedPng(Buffer.from(input.content.logo.slice(input.content.logo.indexOf(",") + 1), "base64"));
-        const scaled = image.scaleToFit(170, 44);
-        writer.page.drawImage(image, { x: MARGIN, y: writer.y - scaled.height, width: scaled.width, height: scaled.height });
+      const logo = input.content.logo ? await pdf.embedPng(Buffer.from(input.content.logo.slice(input.content.logo.indexOf(",") + 1), "base64")).catch(() => null) : null;
+      if (logo) {
+        const scaled = logo.scaleToFit(170, 44);
+        writer.page.drawImage(logo, { x: MARGIN, y: writer.y - scaled.height, width: scaled.width, height: scaled.height });
         writer.gap(scaled.height + 22);
       }
       writer.lines([{ text: block.title || input.content.title }], { size: 26, font: fonts.bold, leading: 32 });
@@ -330,7 +379,7 @@ export async function renderPdf(input: {
       writer.lines(
         [
           {
-            text: `${signature.email}${signature.title ? `, ${signature.title}` : ""}${signature.company ? `, ${signature.company}` : ""}. Typed signature "${signature.signatureText}". Signed ${new Date(signature.signedAt).toISOString().replace("T", " ").slice(0, 19)} UTC by ${signature.method === "orbit_login" ? "signing in to Orbit" : "the link sent to their email address"}${signature.ip ? ` from IP ${signature.ip}` : ""}.`,
+            text: `${signature.email}${signature.title ? `, ${signature.title}` : ""}${signature.company ? `, ${signature.company}` : ""}. ${signature.signatureImage ? "Drawn signature" : `Typed signature "${signature.signatureText}"`}. Signed ${new Date(signature.signedAt).toISOString().replace("T", " ").slice(0, 19)} UTC by ${signature.method === "orbit_login" ? "signing in to Orbit" : "the link sent to their email address"}${signature.ip ? ` from IP ${signature.ip}` : ""}${signature.userAgent ? `, browser ${signature.userAgent}` : ""}.${signature.consent ? ` Agreed to: ${signature.consent}` : ""}`,
           },
         ],
         { size: 9, color: MUTED },

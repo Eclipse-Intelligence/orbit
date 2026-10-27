@@ -7,6 +7,7 @@ import { Input } from "@/components/_ui/input";
 import { NativeSelect } from "@/components/_ui/native-select";
 import { addStepAction, emailStepsAction, moveStepAction, removeStepAction, updateStepAction } from "@/app/(crm)/proposals/actions";
 import type { Step } from "@/lib/proposals/model";
+import { reloadIfStaleDeploy } from "@/lib/stale-deploy";
 import { cn } from "@/lib/utils";
 
 function shortDate(value: string) {
@@ -31,6 +32,7 @@ export default function StepsPanel({
   onSteps?: (steps: Step[]) => void;
 }) {
   const [steps, setSteps] = useState(initial);
+  const [synced, setSynced] = useState(initial);
   const [title, setTitle] = useState("");
   const [side, setSide] = useState<"client" | "us">("client");
   const [dueDate, setDueDate] = useState("");
@@ -40,16 +42,29 @@ export default function StepsPanel({
   const sideId = useId();
   const dueId = useId();
 
+  if (initial !== synced) {
+    setSynced(initial);
+    setSteps(initial);
+  }
+
   async function run(key: string, work: () => Promise<{ data?: Step[]; error?: string }>) {
     setBusy(key);
     setMessage(null);
-    const result = await work();
-    setBusy(null);
-    if (result.data) {
-      setSteps(result.data);
-      onSteps?.(result.data);
-    } else setMessage({ text: result.error ?? "That didn't save.", tone: "alert" });
-    return Boolean(result.data);
+    try {
+      const result = await work();
+      if (result.data) {
+        setSteps(result.data);
+        onSteps?.(result.data);
+        return true;
+      }
+      setMessage({ text: result.error ?? "That didn't save.", tone: "alert" });
+      return false;
+    } catch (problem) {
+      if (!reloadIfStaleDeploy(problem)) setMessage({ text: "That didn't save. Try again.", tone: "alert" });
+      return false;
+    } finally {
+      setBusy(null);
+    }
   }
 
   async function add(event: FormEvent) {
@@ -65,10 +80,15 @@ export default function StepsPanel({
   async function email() {
     setBusy("email");
     setMessage(null);
-    const result = await emailStepsAction(documentId);
-    setBusy(null);
-    if (result.data) setMessage({ text: result.data.warning ?? `Emailed ${contactFirstName} the open steps.`, tone: result.data.warning ? "alert" : "status" });
-    else setMessage({ text: result.error ?? "That didn't send.", tone: "alert" });
+    try {
+      const result = await emailStepsAction(documentId);
+      if (result.data) setMessage({ text: result.data.warning ?? `Emailed ${contactFirstName} the open steps.`, tone: result.data.warning ? "alert" : "status" });
+      else setMessage({ text: result.error ?? "That didn't send.", tone: "alert" });
+    } catch (problem) {
+      if (!reloadIfStaleDeploy(problem)) setMessage({ text: "That didn't send. Try again.", tone: "alert" });
+    } finally {
+      setBusy(null);
+    }
   }
 
   const openForClient = steps.filter((step) => step.side === "client" && !step.doneAt).length;

@@ -134,6 +134,7 @@ export function variableOptions(definition: WorkflowDefinition | null, nodeId?: 
       { path: "proposal.signedBy", label: "Signed by", group: "Proposal" },
       { path: "proposal.declineReason", label: "Decline reason", group: "Proposal" },
       { path: "proposal.url", label: "Link in Orbit", group: "Proposal" },
+      { path: "proposal.clientUrl", label: "Client's link", group: "Proposal" },
     );
   }
   if (type === "email_received") {

@@ -3,7 +3,7 @@ import { CrmError } from "@/lib/crm/errors";
 import { sendContactEmail } from "@/lib/crm/inbox";
 import { isUuid, recordAudit } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
-import type { Actor, UserActor } from "@/lib/crm/types";
+import type { Actor, Provenance, UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
 import { logEvent, readRow } from "@/lib/proposals/documents";
 import { readBlocks } from "@/lib/proposals/catalogue";
@@ -32,7 +32,7 @@ function cleanTitle(value: unknown) {
 
 function cleanDate(value: unknown) {
   if (value === null || value === "" || value === undefined) return null;
-  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) throw invalid("Choose a valid date.", "dueDate");
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value) || new Date(`${value}T12:00:00Z`).toISOString().slice(0, 10) !== value) throw invalid("Choose a valid date.", "dueDate");
   return value;
 }
 
@@ -76,7 +76,7 @@ export async function listSteps(actor: Actor, documentId: string) {
   });
 }
 
-export async function addStep(actor: Actor, documentId: string, input: { title?: unknown; side?: unknown; dueDate?: unknown }) {
+export async function addStep(actor: Actor, documentId: string, input: { title?: unknown; side?: unknown; dueDate?: unknown }, provenance: Provenance = { operation: "add_step" }) {
   assertScope(actor.scopes, "opportunities:write");
   return withActor(actor, async (db) => {
     const row = await documentFor(db, actor, documentId);
@@ -87,16 +87,16 @@ export async function addStep(actor: Actor, documentId: string, input: { title?:
       "insert into crm.document_steps (workspace_id, document_id, position, title, side, due_date, created_by) values ($1, $2, $3, $4, $5, $6, $7)",
       [actor.workspaceId, row.id, count.rows[0]?.next ?? 0, cleanTitle(input.title), side, cleanDate(input.dueDate), actor.type === "user" ? actor.userId : null],
     );
-    await recordAudit(db, actor, "document.steps_changed", "document", row.id, { operation: "add_step" }, { added: cleanTitle(input.title) });
+    await recordAudit(db, actor, "document.steps_changed", "document", row.id, provenance, { added: cleanTitle(input.title) });
     return readSteps(db, row.id);
   });
 }
 
-export async function updateStep(actor: Actor, stepId: string, input: { title?: unknown; side?: unknown; dueDate?: unknown; done?: unknown }) {
+export async function updateStep(actor: Actor, stepId: string, input: { title?: unknown; side?: unknown; dueDate?: unknown; done?: unknown }, provenance: Provenance = { operation: "update_step" }) {
   assertScope(actor.scopes, "opportunities:write");
   if (!isUuid(stepId)) throw new CrmError("not_found", "Step not found.", 404);
   return withActor(actor, async (db) => {
-    const found = await db.query<{ document_id: string }>("select document_id from crm.document_steps where id = $1 and workspace_id = $2", [stepId, actor.workspaceId]);
+    const found = await db.query<{ document_id: string; title: string }>("select document_id, title from crm.document_steps where id = $1 and workspace_id = $2", [stepId, actor.workspaceId]);
     const documentId = found.rows[0]?.document_id;
     if (!documentId) throw new CrmError("not_found", "Step not found.", 404);
     const sets: string[] = [];
@@ -114,24 +114,28 @@ export async function updateStep(actor: Actor, stepId: string, input: { title?: 
         set("done_name = ?", actor.type === "user" ? (actor.fullName || actor.email) : "Agent");
       } else sets.push("done_at = null", "done_by = null", "done_name = null");
     }
-    if (sets.length) await db.query(`update crm.document_steps set ${sets.join(", ")} where id = $1`, values);
+    if (sets.length) {
+      await db.query(`update crm.document_steps set ${sets.join(", ")} where id = $1`, values);
+      const changed = Object.fromEntries(Object.entries({ title: input.title, side: input.side, dueDate: input.dueDate, done: input.done }).filter(([, value]) => value !== undefined));
+      await recordAudit(db, actor, "document.steps_changed", "document", documentId, provenance, { updated: found.rows[0].title, changed });
+    }
     return readSteps(db, documentId);
   });
 }
 
-export async function removeStep(actor: Actor, stepId: string) {
+export async function removeStep(actor: Actor, stepId: string, provenance: Provenance = { operation: "remove_step" }) {
   assertScope(actor.scopes, "opportunities:write");
   if (!isUuid(stepId)) throw new CrmError("not_found", "Step not found.", 404);
   return withActor(actor, async (db) => {
     const removed = await db.query<{ document_id: string; title: string }>("delete from crm.document_steps where id = $1 and workspace_id = $2 returning document_id, title", [stepId, actor.workspaceId]);
     const row = removed.rows[0];
     if (!row) throw new CrmError("not_found", "Step not found.", 404);
-    await recordAudit(db, actor, "document.steps_changed", "document", row.document_id, { operation: "remove_step" }, { removed: row.title });
+    await recordAudit(db, actor, "document.steps_changed", "document", row.document_id, provenance, { removed: row.title });
     return readSteps(db, row.document_id);
   });
 }
 
-export async function moveStep(actor: Actor, stepId: string, by: -1 | 1) {
+export async function moveStep(actor: Actor, stepId: string, by: -1 | 1, provenance: Provenance = { operation: "move_step" }) {
   assertScope(actor.scopes, "opportunities:write");
   if (!isUuid(stepId)) throw new CrmError("not_found", "Step not found.", 404);
   return withActor(actor, async (db) => {
@@ -144,6 +148,7 @@ export async function moveStep(actor: Actor, stepId: string, by: -1 | 1) {
     if (target < 0 || target >= ids.length) return readSteps(db, documentId);
     [ids[index], ids[target]] = [ids[target], ids[index]];
     for (const [position, id] of ids.entries()) await db.query("update crm.document_steps set position = $2 where id = $1", [id, position]);
+    await recordAudit(db, actor, "document.steps_changed", "document", documentId, provenance, { moved: stepId, by });
     return readSteps(db, documentId);
   });
 }

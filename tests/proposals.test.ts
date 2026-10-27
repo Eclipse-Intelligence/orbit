@@ -20,13 +20,15 @@ import {
 } from "@/lib/proposals/documents";
 import { fieldValues, renderBlocks, tabsOf, totalLabel, totalsOf } from "@/lib/proposals/model";
 import { clientDecline, clientSign, clientStep, openDocument, publicFile, publicKnowledgeFile, recordReading } from "@/lib/proposals/public";
-import { runTool } from "@/lib/assistant/tools";
+import { describeAction, runTool } from "@/lib/assistant/tools";
+import { copyProposalImage } from "@/lib/proposals/media";
 import { addStep, moveStep, removeStep, updateStep } from "@/lib/proposals/steps";
 import { addKnowledgeText } from "@/lib/knowledge/store";
 import { saveBookingPage } from "@/lib/booking/pages";
 import { DEFAULT_WEEKLY_HOURS } from "@/lib/booking/rules";
 import { runWorkflowTick } from "@/lib/workflows/engine";
 import { createWorkflow, listNotifications, listRuns, saveWorkflow, setWorkflowStatus } from "@/lib/workflows/store";
+import { removeMember } from "@/lib/crm/team";
 import { createUser, resetDatabase } from "./helpers";
 
 function tokenOf(url: string) {
@@ -150,7 +152,9 @@ describe("proposals", () => {
     assert.equal(tracked.viewCount, 2);
 
     await assert.rejects(() => clientSign(token, { name: "Andrew Sanaghan", signatureText: "Andrew Sanaghan" }), /Tick the box/);
-    const signed = await clientSign(token, { name: "Andrew Sanaghan", title: "MD", signatureText: "Andrew Sanaghan", agree: true }, { ip: "203.0.113.5", userAgent: "Safari" });
+    await assert.rejects(() => clientSign(token, { name: "Andrew Sanaghan", signatureText: "Andrew Sanaghan", agree: true, hash: "0".repeat(64) }), /changed since you opened it/);
+    await assert.rejects(() => clientSign(token, { name: "Andrew Sanaghan", signatureText: "Andrew Sanaghan", agree: true, hash: view.hash, signatureImage: "data:image/png;base64,AAAA" }), /couldn't be read/);
+    const signed = await clientSign(token, { name: "Andrew Sanaghan", title: "MD", signatureText: "Andrew Sanaghan", agree: true, hash: view.hash }, { ip: "203.0.113.5", userAgent: "Safari" });
     assert.equal(signed.state, "client_signed");
     await assert.rejects(() => clientSign(token, { name: "Andrew", signatureText: "Andrew", agree: true }), /already signed/);
     assert.ok((await listNotifications(owner)).some((note) => /Andrew Sanaghan signed AI visibility pilot/.test(note.title)));
@@ -192,7 +196,7 @@ describe("proposals", () => {
     await setWorkflowStatus(owner, workflow.id, "active");
     const id = await createDocument(owner, { templateId: proposalTemplateId, companyId: pulseId, contactId: andrewId, items: [{ productId: proId }], title: "Pro plan" });
     const token = tokenOf((await sendDocument(owner, id, { email: false })).url);
-    await clientSign(token, { name: "Andrew Sanaghan", signatureText: "Andrew Sanaghan", agree: true });
+    await clientSign(token, { name: "Andrew Sanaghan", signatureText: "Andrew Sanaghan", agree: true, hash: (await openDocument(token, { track: false }))!.hash });
     await runWorkflowTick({ budgetMs: 20_000 });
     const runs = await listRuns(owner, workflow.id);
     assert.equal(runs.length, 1);
@@ -203,10 +207,13 @@ describe("proposals", () => {
   it("keeps the same link when a sent proposal is changed, shows the newest version, and records a decline", async () => {
     const id = await createDocument(owner, { templateId: proposalTemplateId, companyId: pulseId, contactId: andrewId, items: [{ productId: pilotId }] });
     const first = tokenOf((await sendDocument(owner, id, { email: false })).url);
+    const before = (await openDocument(first, { track: false }))!;
     await reviseDocument(owner, id);
     const during = (await openDocument(first, { track: false }))!;
-    assert.equal(during.state, "open");
+    assert.equal(during.state, "updating");
     assert.equal(during.versionNumber, 1);
+    await assert.rejects(() => clientSign(first, { name: "Andrew", signatureText: "Andrew", agree: true, hash: before.hash }), /being updated/);
+    await assert.rejects(() => clientDecline(first, { hash: before.hash }), /being updated/);
     assert.equal((await getDocument(owner, id)).link?.endsWith(first), true);
     await updateDocument(owner, id, { title: "Pilot, revised" });
     const second = tokenOf((await sendDocument(owner, id, { email: false })).url);
@@ -214,7 +221,8 @@ describe("proposals", () => {
     const latest = (await openDocument(first, { track: false }))!;
     assert.equal(latest.versionNumber, 2);
     assert.equal(latest.content.title, "Pilot, revised");
-    const declined = await clientDecline(first, { reason: "Budget is on hold until Q1." });
+    await assert.rejects(() => clientSign(first, { name: "Andrew", signatureText: "Andrew", agree: true, hash: before.hash }), /changed since you opened it/);
+    const declined = await clientDecline(first, { reason: "Budget is on hold until Q1.", hash: latest.hash });
     assert.equal(declined.state, "declined");
     const detail = await getDocument(owner, id);
     assert.equal(detail.status, "declined");
@@ -410,5 +418,78 @@ describe("proposals", () => {
     const ticked = (await runTool(owner, "update_proposal_steps", { id, action: "done", stepId: legal.id })) as { steps: { id: string; doneBy: string | null }[] };
     assert.equal(ticked.steps.find((step) => step.id === legal.id)?.doneBy, "user");
     assert.match(((await runTool(owner, "update_proposal_steps", { id, action: "explode" })) as { error: string }).error, /Choose add, done, undone or remove/);
+  });
+
+  it("lets the assistant change a sent proposal, build templates and copy images", async () => {
+    const created = (await runTool(owner, "create_proposal", { templateId: proposalTemplateId, companyId: pulseId, contactId: andrewId, currency: "GBP", items: [{ productId: pilotId, quantity: 1 }] })) as { id: string };
+    const id = created.id;
+    const swap = (await runTool(owner, "update_proposal", { id, contactId: outsiderId, title: "Pulse pilot" })) as { error?: string };
+    assert.equal(swap.error, undefined);
+    assert.equal((await getDocument(owner, id)).contactId, andrewId);
+    const card = describeAction("update_proposal", { id, blocks: [{ id: "e1", type: "embed", url: "https://www.figma.com/file/abc" }, { id: "s1", type: "section", body: "See [our deck](https://deck.test/x)." }] });
+    assert.ok(card.lines.includes("Link: https://www.figma.com/file/abc"));
+    assert.ok(card.lines.includes("Link: https://deck.test/x"));
+
+    const token = tokenOf((await sendDocument(owner, id, { email: false })).url);
+    assert.match(((await runTool(owner, "update_proposal", { id, title: "Pulse pilot v2" })) as { error: string }).error, /Make changes/);
+    const reopened = (await runTool(owner, "revise_proposal", { id })) as { status: string };
+    assert.equal(reopened.status, "draft");
+    assert.equal((await openDocument(token, { track: false }))?.state, "updating");
+    assert.equal(((await runTool(owner, "update_proposal", { id, title: "Pulse pilot v2" })) as { error?: string }).error, undefined);
+
+    const listed = (await runTool(owner, "list_proposal_templates", {})) as { starters: { key: string }[] };
+    assert.ok(listed.starters.some((starter) => starter.key === "one-way-nda"));
+    const made = (await runTool(owner, "create_proposal_template", { name: "Agency pilot", starter: "proposal", accent: "#123456", status: "active" })) as { template: { id: string; status: string; blocks: { id: string; type: string }[]; settings: { accent: string; logo: unknown } } };
+    assert.equal(made.template.status, "active");
+    assert.equal(made.template.settings.accent, "#123456");
+    const steps = { id: "z1", type: "steps", heading: "Next steps", intro: "", items: [{ title: "Kick-off call", side: "us", dueInDays: 3 }] };
+    const edited = (await runTool(owner, "update_proposal_template", { id: made.template.id, validDays: 14, blocks: [...made.template.blocks, steps] })) as {
+      template: { blocks: { type: string; items?: { title: string }[] }[]; settings: { accent: string; validDays: number } };
+    };
+    assert.equal(edited.template.settings.accent, "#123456");
+    assert.equal(edited.template.settings.validDays, 14);
+    assert.ok(edited.template.blocks.some((block) => block.type === "steps" && block.items?.some((item) => item.title === "Kick-off call")));
+    const long = (await runTool(owner, "update_proposal_template", { id: made.template.id, blocks: [{ id: "t1", type: "tab", label: "x".repeat(50) }] })) as { error: string };
+    assert.match(long.error, /too long/);
+    const read = (await runTool(owner, "get_proposal_template", { id: made.template.id })) as { template: { name: string } };
+    assert.equal(read.template.name, "Agency pilot");
+
+    const leaver = (await getAdminPool().query<{ id: string }>("select private.create_local_user('lee@props.test', 'password-123', 'Lee Leaver') as id")).rows[0].id;
+    await getAdminPool().query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [owner.workspaceId, leaver]);
+    const lee: UserActor = { ...member, userId: leaver, email: "lee@props.test", fullName: "Lee Leaver" };
+    const theirs = await createDocument(lee, { templateId: proposalTemplateId, companyId: pulseId, contactId: andrewId, currency: "GBP", items: [{ productId: pilotId, quantity: 1 }] });
+    const theirToken = tokenOf((await sendDocument(lee, theirs, { email: false })).url);
+    await removeMember(owner, leaver);
+    assert.equal((await getDocument(owner, theirs)).ownerId, owner.userId);
+    assert.equal((await openDocument(theirToken, { track: false }))?.state, "open");
+    const kim = (await getAdminPool().query<{ id: string }>("select private.create_local_user('kim@props.test', 'password-123', 'Kim Gone') as id")).rows[0].id;
+    await getAdminPool().query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [owner.workspaceId, kim]);
+    const kims = await createDocument({ ...member, userId: kim, email: "kim@props.test", fullName: "Kim Gone" }, { templateId: proposalTemplateId, companyId: pulseId, contactId: andrewId, currency: "GBP", items: [{ productId: pilotId, quantity: 1 }] });
+    const kimToken = tokenOf((await sendDocument({ ...member, userId: kim, email: "kim@props.test", fullName: "Kim Gone" }, kims, { email: false })).url);
+    await getAdminPool().query("delete from crm.workspace_members where user_id = $1", [kim]);
+    assert.equal((await openDocument(kimToken, { track: false }))?.state, "open");
+
+    process.env.NEXT_PUBLIC_SUPABASE_URL = "https://project.supabase.test";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "sb_secret_test";
+    try {
+      const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
+      const stored: string[] = [];
+      const storageFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/storage/v1/bucket")) return Response.json({ name: "proposal-media" });
+        stored.push(`${init?.method} ${url} ${(init?.headers as Record<string, string>)["content-type"]}`);
+        return Response.json({ Key: "ok" });
+      }) as typeof fetch;
+      const remote = (body: Uint8Array, type: string) => (async () => new Response(body as BodyInit, { headers: { "content-type": type } })) as typeof fetch;
+      const lookup = async () => ["93.184.216.34"];
+      const copied = await copyProposalImage(owner, "https://images.test/team.png", { fetchImpl: remote(png, "application/octet-stream"), storageFetch, lookup });
+      assert.match(copied.url, /^https:\/\/project\.supabase\.test\/storage\/v1\/object\/public\/proposal-media\/.+\.png$/);
+      assert.match(stored[0], /^POST .*\/object\/proposal-media\/.+\.png image\/png$/);
+      await assert.rejects(copyProposalImage(owner, "https://images.test/page.html", { fetchImpl: remote(new TextEncoder().encode("<html>"), "image/png"), storageFetch, lookup }), /isn't a JPEG/);
+      await assert.rejects(copyProposalImage(owner, "https://internal.test/a.png", { fetchImpl: remote(png, "image/png"), storageFetch, lookup: async () => ["10.0.0.5"] }), /Private and local/);
+    } finally {
+      delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+      delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    }
   });
 });

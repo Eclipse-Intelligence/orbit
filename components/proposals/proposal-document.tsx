@@ -3,9 +3,11 @@ import {
   BILLING_LABELS,
   BILLINGS,
   embedSource,
+  embedTakesForms,
   formatMoney,
   longDate,
   parseBody,
+  httpsImage,
   safeHref,
   shows,
   videoSource,
@@ -254,10 +256,10 @@ function Frame({ src, title, ratio = "aspect-video" }: { src: string; title: str
         src={src}
         title={title}
         loading="lazy"
-        allow="autoplay; fullscreen; picture-in-picture; clipboard-write; encrypted-media"
+        allow="autoplay; fullscreen; picture-in-picture; encrypted-media"
         allowFullScreen
         referrerPolicy="strict-origin-when-cross-origin"
-        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-presentation"
+        sandbox={cn("allow-scripts allow-same-origin allow-popups allow-presentation", embedTakesForms(src) && "allow-forms")}
         className="size-full border-0"
       />
     </div>
@@ -298,7 +300,7 @@ function Extra({ block, content, extras }: { block: Block; content: Content; ext
     const src = embedSource(block.url);
     return (
       <>
-        {src ? <Frame src={src} title={block.heading || "Embedded content"} ratio="aspect-[16/10]" /> : extras.preview && <Placeholder>Add a link to embed.</Placeholder>}
+        {src ? <Frame src={src} title={block.heading || "Embedded content"} ratio="aspect-[16/10]" /> : extras.preview && <Placeholder>{block.url.trim() ? "This site can't be embedded." : "Add a link to embed."}</Placeholder>}
         {(block.caption || src) && (
           <p className="text-subtle flex flex-wrap items-center gap-x-3 gap-y-1 text-[14px] leading-6">
             {block.caption && <span>{block.caption}</span>}
@@ -443,8 +445,7 @@ function Extra({ block, content, extras }: { block: Block; content: Content; ext
 }
 
 function imageSrc(value: string) {
-  const href = safeHref(value);
-  return href && href.startsWith("https:") ? href : null;
+  return httpsImage(value);
 }
 
 export default function ProposalDocument({
@@ -470,6 +471,7 @@ export default function ProposalDocument({
       {blocks.map((block, index) => {
         if (block.type === "tab") return null;
         if (!extras.preview && !shows(block, { booking: Boolean(extras.booking), steps: extras.steps ? extras.steps.length > 0 : undefined })) return null;
+        if (block.type === "pricing" && content.items.length === 0 && !extras.preview) return null;
         if (block.type === "cover") {
           const cover = imageSrc(block.image);
           return (
@@ -503,8 +505,9 @@ export default function ProposalDocument({
             </header>
           );
         }
+        const titled = "heading" in block && Boolean(block.heading);
         return (
-          <section key={block.id} id={sectionId(index)} aria-labelledby={`${sectionId(index)}-title`} className="flex scroll-mt-24 flex-col gap-5">
+          <section key={block.id} id={sectionId(index)} aria-labelledby={titled ? `${sectionId(index)}-title` : undefined} className="flex scroll-mt-24 flex-col gap-5">
             {"heading" in block && block.heading && (
               <h2 id={`${sectionId(index)}-title`} className="doc-heading">
                 {block.heading}

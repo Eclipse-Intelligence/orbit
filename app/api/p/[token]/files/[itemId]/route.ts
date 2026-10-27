@@ -1,7 +1,5 @@
-import { headers } from "next/headers";
-import { getUserActor } from "@/lib/auth/user";
-import { clientIp } from "@/lib/booking/book";
 import { CrmError } from "@/lib/crm/errors";
+import { guardPublic, signedIn } from "@/lib/proposals/guard";
 import { publicKnowledgeFile } from "@/lib/proposals/public";
 
 export const dynamic = "force-dynamic";
@@ -9,12 +7,12 @@ export const maxDuration = 60;
 
 const INLINE = /^(application\/pdf|image\/(png|jpe?g|gif|webp)|text\/plain)/i;
 
-export async function GET(_request: Request, { params }: { params: Promise<{ token: string; itemId: string }> }) {
+export async function GET(request: Request, { params }: { params: Promise<{ token: string; itemId: string }> }) {
   const { token, itemId } = await params;
-  const store = await headers();
-  const viewer = await getUserActor().catch(() => null);
+  const guard = await guardPublic(request, "file", 60);
+  if ("error" in guard) return new Response("Too many requests. Wait a few minutes and try again.", { status: 429 });
   try {
-    const file = await publicKnowledgeFile(token, itemId, { track: !viewer, ip: clientIp(store), userAgent: store.get("user-agent") });
+    const file = await publicKnowledgeFile(token, itemId, { track: !(await signedIn()), ip: guard.ip, userAgent: guard.userAgent });
     if (file.kind === "link") return Response.redirect(file.url, 302);
     const inline = INLINE.test(file.contentType);
     const name = file.name.replace(/[\r\n"]/g, "_");

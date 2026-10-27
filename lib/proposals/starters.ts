@@ -109,7 +109,7 @@ export const STARTER_TEMPLATES: Starter[] = [
     name: "One-way NDA",
     settings: { accent: "#4124fb", validDays: 30, logo: null },
     blocks: [
-      { id: "b1", type: "cover", title: "Non-disclosure agreement", subtitle: "From {{company.name}} to {{workspace.name}}, dated {{today}}.", image: "" },
+      { id: "b1", type: "cover", title: "Non-disclosure agreement", subtitle: "From {{workspace.name}} to {{company.name}}, dated {{today}}.", image: "" },
       {
         id: "b2",
         type: "section",

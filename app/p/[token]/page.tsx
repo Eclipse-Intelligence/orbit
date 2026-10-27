@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { headers } from "next/headers";
 import { notFound } from "next/navigation";
+import { cache } from "react";
 import ProposalPage from "@/components/proposals/proposal-page";
 import { getUserActor } from "@/lib/auth/user";
 import { clientIp } from "@/lib/booking/book";
@@ -10,20 +11,22 @@ export const dynamic = "force-dynamic";
 
 const ROBOTS = { index: false, follow: false, nocache: true };
 
-export const metadata: Metadata = { title: "Proposal", robots: ROBOTS, alternates: null, openGraph: null, twitter: null };
+const loadDocument = cache(async (token: string) => {
+  const store = await headers();
+  const viewer = await getUserActor().catch(() => null);
+  const document = await openDocument(token, { track: !viewer, ip: clientIp(store), userAgent: store.get("user-agent") });
+  return { document, preview: Boolean(viewer) };
+});
+
+export async function generateMetadata({ params }: { params: Promise<{ token: string }> }): Promise<Metadata> {
+  const { token } = await params;
+  const { document } = await loadDocument(token);
+  return { title: document?.content.title ?? "Proposal", robots: ROBOTS, alternates: null, openGraph: null, twitter: null };
+}
 
 export default async function PublicProposalPage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
-  const store = await headers();
-  const viewer = await getUserActor().catch(() => null);
-  const document = await openDocument(token, {
-    track: !viewer,
-    ip: clientIp(store),
-    userAgent: store.get("user-agent"),
-  }).catch((error) => {
-    console.error("Opening a proposal failed", error);
-    return null;
-  });
+  const { document, preview } = await loadDocument(token);
   if (!document) notFound();
-  return <ProposalPage token={token} initial={document} preview={Boolean(viewer)} />;
+  return <ProposalPage token={token} initial={document} preview={preview} />;
 }

@@ -24,6 +24,7 @@ import {
   type Item,
   type TemplateStatus,
 } from "@/lib/proposals/model";
+import { reloadIfStaleDeploy } from "@/lib/stale-deploy";
 import { cn } from "@/lib/utils";
 
 const SAMPLE_ITEMS: Item[] = [
@@ -151,21 +152,33 @@ export default function TemplateEditor({ viewer, template, knowledge = [] }: { v
   async function save(nextStatus = status) {
     setBusy(true);
     setMessage(null);
-    const result = await saveTemplateAction(template.id, { name, status: nextStatus, blocks, settings: { accent, logo, validDays: Number(validDays) || 30 } });
-    setBusy(false);
-    if (!result.data) {
-      setMessage({ text: result.error ?? "That didn't save.", tone: "alert" });
-      return;
+    try {
+      const result = await saveTemplateAction(template.id, { name, status: nextStatus, blocks, settings: { accent, logo, validDays: Number(validDays) || 30 } });
+      if (!result.data) {
+        setMessage({ text: result.error ?? "That didn't save.", tone: "alert" });
+        return false;
+      }
+      setStatus(result.data.status);
+      setMessage({ text: nextStatus === "active" ? `Saved and active. It can now be used for ${template.kind === "nda" ? "NDAs" : "proposals"}.` : "Saved.", tone: "status" });
+      router.refresh();
+      return true;
+    } catch (problem) {
+      if (!reloadIfStaleDeploy(problem)) setMessage({ text: "That didn't save. Try again.", tone: "alert" });
+      return false;
+    } finally {
+      setBusy(false);
     }
-    setStatus(result.data.status);
-    setMessage({ text: nextStatus === "active" ? "Saved and active. It can now be used for proposals." : "Saved.", tone: "status" });
-    router.refresh();
   }
 
   async function duplicate() {
-    const result = await createTemplateAction({ copyOf: template.id });
-    if (result.data) router.push(`/proposals/templates/${result.data.id}`);
-    else setMessage({ text: result.error ?? "Couldn't copy it.", tone: "alert" });
+    setMessage(null);
+    try {
+      const result = await createTemplateAction({ copyOf: template.id });
+      if (result.data) router.push(`/proposals/templates/${result.data.id}`);
+      else setMessage({ text: result.error ?? "Couldn't copy it.", tone: "alert" });
+    } catch (problem) {
+      if (!reloadIfStaleDeploy(problem)) setMessage({ text: "Couldn't copy it. Try again.", tone: "alert" });
+    }
   }
 
   return (
@@ -184,6 +197,11 @@ export default function TemplateEditor({ viewer, template, knowledge = [] }: { v
           </div>
         }
       />
+      {message && (
+        <p role={message.tone} className={cn("caption-style px-4 pt-3", message.tone === "alert" ? "text-danger" : "text-subtle")}>
+          {message.text}
+        </p>
+      )}
       <div className="flex gap-1 px-4 pt-3 lg:hidden" role="group" aria-label="View">
         {(["edit", "preview"] as const).map((item) => (
           <Button key={item} variant={view === item ? "secondary" : "ghost"} size="sm" aria-pressed={view === item} onClick={() => setView(item)}>
@@ -209,9 +227,12 @@ export default function TemplateEditor({ viewer, template, knowledge = [] }: { v
                   id="template-status"
                   value={status}
                   onChange={(event) => {
+                    const previous = status;
                     const next = event.target.value as TemplateStatus;
                     setStatus(next);
-                    void save(next);
+                    void save(next).then((saved) => {
+                      if (!saved) setStatus((current) => (current === next ? previous : current));
+                    });
                   }}
                   className={recordSelectClass}
                 >
@@ -244,11 +265,6 @@ export default function TemplateEditor({ viewer, template, knowledge = [] }: { v
               {KIND_LABELS[template.kind]} template. Only active templates can be used to create and send.
               {template.kind === "nda" ? " Have a solicitor check the wording before you rely on it." : ""}
             </p>
-            {message && (
-              <p role={message.tone} className={cn("caption-style", message.tone === "alert" ? "text-danger" : "text-subtle")}>
-                {message.text}
-              </p>
-            )}
             <BlockEditor blocks={blocks} onChange={setBlocks} kind={template.kind} knowledge={knowledge} />
           </div>
         </div>
