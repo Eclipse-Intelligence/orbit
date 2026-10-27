@@ -8,7 +8,7 @@ import { bookingUrl } from "@/lib/assistant/links";
 import { ARTICLES_URL, DOCS_URL, eclipseDocsIndex, listEclipseArticles, readEclipsePage } from "@/lib/eclipse-sources";
 import { readWebPage, WebPageError } from "@/lib/web-page";
 import { searchKnowledge } from "@/lib/knowledge/search";
-import { listKnowledge, readKnowledge, type KnowledgeItem } from "@/lib/knowledge/store";
+import { CONTENT_LIMIT, listKnowledge, readKnowledge, type KnowledgeItem } from "@/lib/knowledge/store";
 import { MindcaseError } from "@/lib/mindcase";
 import { callEclipseTool, EclipseMcpError, eclipseGuide, findEclipseTools } from "@/lib/eclipse-mcp";
 import { checkColdEmail, COLD_EMAIL_PLAYBOOK, ECLIPSE_OUTREACH_BRIEF } from "@/lib/assistant/cold-email";
@@ -502,7 +502,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       const [context, meetings, knowledge] = await Promise.all([
         getCompanyContext(actor, id),
         getMeetings(actor, { companyId: id }),
-        listKnowledge(actor, { companyId: id }, 20).catch(() => []),
+        listKnowledge(actor, { companyId: id }, 500).catch(() => []),
       ]);
       return {
         ...context,
@@ -513,7 +513,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         timeline: context.timeline.map(withActivity),
         activities: undefined,
         meetings,
-        knowledge: knowledge.map((item) => ({ ...withKnowledge(item), summary: item.summary && item.summary.length > 300 ? `${item.summary.slice(0, 297)}...` : item.summary })),
+        knowledge: knowledge.map(withKnowledge),
       };
     },
   },
@@ -927,7 +927,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     parameters: { type: "object", properties: { emailId: idParam("Email id from search_email.") }, required: ["emailId"] },
     run: async (actor, args) => {
       const thread = await getMailThread(actor, required(args.emailId, "An email id"));
-      return { messages: thread.map((message) => ({ ...message, bodyText: message.bodyText?.slice(0, 20_000) ?? null })) };
+      return { messages: thread };
     },
   },
   {
@@ -1058,7 +1058,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         companyId: idParam("Only this company's knowledge."),
         scope: { type: "string", enum: ["all", "company", "eclipse"] },
         withEclipse: { type: "boolean", description: "With companyId, also search Eclipse's own material." },
-        limit: { type: "integer", minimum: 1, maximum: 20 },
+        limit: { type: "integer", minimum: 1, maximum: 100, description: "How many passages to return, up to 100. Defaults to 10. Ask for more when a question needs a lot of one document." },
       },
       required: ["query"],
     },
@@ -1068,7 +1068,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         companyId: optionalStr(args.companyId) ?? null,
         scope: oneOf(args.scope, ["all", "company", "eclipse"] as const),
         withEclipse: args.withEclipse === true,
-        limit: int(args.limit, 8, 1, 20),
+        limit: int(args.limit, 10, 1, 100),
       });
       return {
         mode: result.mode,
@@ -1091,14 +1091,14 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     name: "read_knowledge",
     label: "Reading Knowledge",
     description:
-      "Read one Knowledge item in full, 20,000 characters at a time. Start at offset 0, or at the offset a search_knowledge result gave, and pass nextOffset to keep reading.",
+      "Read one Knowledge item in full, 100,000 characters at a time. Start at offset 0, or at the offset a search_knowledge result gave, and pass nextOffset to keep reading.",
     parameters: {
       type: "object",
       properties: { itemId: idParam("Knowledge item id."), offset: { type: "integer", minimum: 0 } },
       required: ["itemId"],
     },
     run: async (actor, args) => {
-      const result = await readKnowledge(actor, required(args.itemId, "A Knowledge item id"), int(args.offset, 0, 0, 600_000));
+      const result = await readKnowledge(actor, required(args.itemId, "A Knowledge item id"), int(args.offset, 0, 0, CONTENT_LIMIT));
       return { item: withKnowledge(result.item), offset: result.offset, text: result.text, nextOffset: result.nextOffset };
     },
   },
@@ -1112,7 +1112,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     },
     run: async (actor, args) => {
       const companyId = optionalStr(args.companyId);
-      const items = await listKnowledge(actor, companyId ? { companyId } : args.eclipse === true ? { eclipse: true } : "all", 100);
+      const items = await listKnowledge(actor, companyId ? { companyId } : args.eclipse === true ? { eclipse: true } : "all", 500);
       return { items: items.map(withKnowledge) };
     },
   },

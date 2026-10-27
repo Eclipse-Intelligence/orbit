@@ -1,8 +1,8 @@
 import type { ChatMessage } from "@/lib/assistant/gateway";
 
-const OLD_RESULT_MAX = 8_000;
-const CURRENT_RESULT_MAX = 40_000;
-const TRANSCRIPT_MAX = 600_000;
+const OLD_RESULT_MAX = 100_000;
+const CURRENT_RESULT_MAX = 400_000;
+const TRANSCRIPT_MAX = 900_000;
 
 function escape(text: string) {
   return text.replace(/<\s*\/\s*(conversation|user|assistant|tool_call|tool_result|learned_notes)\s*>/gi, "<\\/$1>");

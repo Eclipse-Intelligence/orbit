@@ -6,7 +6,7 @@ export const DOCS_URL = "https://docs.geteclipse.co";
 const SITEMAP = "https://geteclipse.co/sitemap.xml";
 const DOCS_INDEX = `${DOCS_URL}/llms.txt`;
 const CACHE_MS = 60 * 60_000;
-const TEXT_MAX = 40_000;
+const TEXT_MAX = 200_000;
 const TIMEOUT_MS = 10_000;
 
 export type EclipseArticle = { title: string; url: string; summary: string | null; published: string | null };

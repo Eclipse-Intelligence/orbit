@@ -189,7 +189,7 @@ async function oembedTitle(target: string, options: MediaOptions) {
 }
 
 function withHeader(parts: { title: string | null; author: string | null; description?: string | null }, transcript: string) {
-  const lines = [parts.author ? `Channel: ${parts.author}` : null, parts.description?.trim() ? `Description:\n${parts.description.trim().slice(0, 4000)}` : null].filter(Boolean);
+  const lines = [parts.author ? `Channel: ${parts.author}` : null, parts.description?.trim() ? `Description:\n${parts.description.trim()}` : null].filter(Boolean);
   return [...lines, `Transcript:\n${transcript}`].join("\n\n");
 }
 
@@ -442,7 +442,7 @@ export async function readPodcast(target: string, options: MediaOptions): Promis
   const episode = await resolveEpisode(target, options);
   const title = [episode.title, episode.show].filter(Boolean).join(" · ") || null;
   const header = (description: string | null) =>
-    [episode.show ? `Show: ${episode.show}` : null, description?.trim() ? `Episode notes:\n${htmlToText(description).trim().slice(0, 4000)}` : null].filter(Boolean).join("\n\n");
+    [episode.show ? `Show: ${episode.show}` : null, description?.trim() ? `Episode notes:\n${htmlToText(description).trim()}` : null].filter(Boolean).join("\n\n");
   const published = await feedTranscript(episode, options);
   if (published) return { title, text: [header(published.description), `Transcript:\n${published.text}`].filter(Boolean).join("\n\n") };
   let audio;

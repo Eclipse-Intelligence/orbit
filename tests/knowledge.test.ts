@@ -198,7 +198,7 @@ describe("knowledge", () => {
 
   it("reads long items in windows, renames, removes, and hides them from other workspaces", async () => {
     const { fetchImpl } = world();
-    const long = Array.from({ length: 300 }, (_, index) => `Paragraph ${index} talks about onboarding milestones and training plans.`).join("\n\n");
+    const long = Array.from({ length: 2_000 }, (_, index) => `Paragraph ${index} talks about onboarding milestones and training plans.`).join("\n\n");
     const { item, created } = await addKnowledgeText(owner, { companyId: globex }, { kind: "transcript", title: "Kick-off call", content: long, sourceRef: "activity:1" }, { operation: "index_transcript" });
     assert.equal(created, true);
     const again = await addKnowledgeText(owner, { companyId: globex }, { kind: "transcript", title: "Kick-off call", content: long, sourceRef: "activity:1" }, { operation: "index_transcript" });
@@ -207,8 +207,8 @@ describe("knowledge", () => {
     await indexKnowledgeItem(owner, item.id, { fetchImpl });
 
     const first = await readKnowledge(owner, item.id);
-    assert.equal(first.text.length, 20_000);
-    assert.equal(first.nextOffset, 20_000);
+    assert.equal(first.text.length, 100_000);
+    assert.equal(first.nextOffset, 100_000);
     const last = await readKnowledge(owner, item.id, first.nextOffset!);
     assert.equal(last.nextOffset, null);
     assert.equal(first.text.length + last.text.length, long.length);
@@ -298,12 +298,12 @@ describe("knowledge", () => {
     assert.equal((await indexKnowledgeItem(owner, prepared.item.id, { fetchImpl }))?.status, "failed");
   });
 
-  it("returns at most two passages from one document", async () => {
+  it("returns as many passages from one document as the question needs", async () => {
     const { fetchImpl } = world();
     const long = Array.from({ length: 12 }, (_, index) => `Section ${index}: the renewal clause sets a ninety day notice period. ${"Filler text about the contract. ".repeat(30)}`).join("\n\n");
     const { item } = await addKnowledgeText(owner, { companyId: globex }, { kind: "attachment", title: "Globex contract", content: long, sourceRef: "attachment:contract" }, { operation: "add_knowledge_attachment" });
     await indexKnowledgeItem(owner, item.id, { fetchImpl });
     const result = await searchKnowledge(owner, { query: "renewal clause notice period", companyId: globex, limit: 10 }, { fetchImpl });
-    assert.equal(result.hits.filter((hit) => hit.itemId === item.id).length, 2);
+    assert.ok(result.hits.filter((hit) => hit.itemId === item.id).length > 2);
   });
 });

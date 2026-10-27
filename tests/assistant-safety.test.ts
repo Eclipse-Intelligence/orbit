@@ -200,7 +200,7 @@ describe("assistant safety and limits", () => {
   });
 
   it("keeps long histories inside the budget and clips old tool results", () => {
-    const big = "x".repeat(10_000);
+    const big = "x".repeat(150_000);
     const rows: Row[] = [
       row("user", "First question"),
       row("assistant", "", { tool_calls: [{ id: "t1", type: "function", function: { name: "search_email", arguments: "{}" } }] }),
@@ -213,11 +213,11 @@ describe("assistant safety and limits", () => {
     const full = history(rows);
     const old = full[2] as { content: string };
     const current = full[6] as { content: string };
-    assert.ok(old.content.length < 5_000);
+    assert.ok(old.content.length < 101_000);
     assert.match(old.content, /Cut \d[\d,]* characters/);
     assert.equal(current.content, big);
 
-    const trimmed = history(rows, 12_000);
+    const trimmed = history(rows, 160_000);
     assert.equal(trimmed[0].role, "user");
     assert.match(String(trimmed[0].content), /^\(Earlier parts of this conversation were left out/);
     assert.match(String(trimmed[0].content), /Second question$/);
@@ -302,7 +302,7 @@ describe("assistant safety and limits", () => {
 
   it("stops a turn that has read more than the model can hold", async () => {
     process.env.LLM_API_KEY = "llm-test";
-    const greedy = model((index) => (index === 0 ? { calls: Array.from({ length: 80 }, (_, call) => ({ id: `call_guide_${call}`, name: "workflow_guide", args: {} })) } : { content: "Answer." }));
+    const greedy = model((index) => (index === 0 ? { calls: Array.from({ length: 240 }, (_, call) => ({ id: `call_guide_${call}`, name: "workflow_guide", args: {} })) } : { content: "Answer." }));
     const { conversationId } = await ask(owner, "Read everything", greedy.fetchImpl);
     assert.equal(greedy.count(), 1);
     const saved = await getConversation(owner, conversationId);

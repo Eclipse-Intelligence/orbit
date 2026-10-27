@@ -45,7 +45,7 @@ export async function addCallToKnowledge(actor: UserActor, insightId: string) {
   );
 }
 
-export async function backfillCalls(actor: UserActor, companyId: string, limit = 5) {
+export async function backfillCalls(actor: UserActor, companyId: string, limit = 25) {
   const pending = await withActor(actor, async (db) => {
     const result = await db.query<{ id: string }>(
       `with activity as (

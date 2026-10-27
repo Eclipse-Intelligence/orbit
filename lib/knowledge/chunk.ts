@@ -1,6 +1,6 @@
 export const CHUNK_SIZE = 1_200;
 export const CHUNK_OVERLAP = 150;
-export const CHUNKS_MAX = 600;
+export const CHUNKS_MAX = 2_000;
 
 const MARKER = /^(Page|Slide|Sheet) [^\n]{1,80}:$/;
 

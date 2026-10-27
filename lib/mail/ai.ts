@@ -120,7 +120,7 @@ export async function summariseThread(
   const attachments = await attachmentNotes(
     actor,
     messages.slice(-4).map((message) => message.id),
-    { budget: 6_000, deadline: Date.now() + 15_000, fetchImpl: options.fetchImpl },
+    { budget: 100_000, deadline: Date.now() + 15_000, fetchImpl: options.fetchImpl },
   );
   const length = messages.reduce((sum, message) => sum + message.text.length, 0);
   if (messages.length === 1 && length < SHORT_THREAD && attachments.length === 0) return null;
@@ -226,7 +226,7 @@ export async function draftWithAi(
     const addresses = [...new Set([...input.to.map((item) => item.address.toLowerCase()), ...replyTo.map((item) => item.toLowerCase())])].slice(0, 10);
     return { thread, messageIds, people: await recipientContext(db, actor, addresses), voice: await voiceSamples(db, actor) };
   });
-  const attachments = await attachmentNotes(actor, context.messageIds, { budget: 12_000, deadline: Date.now() + 15_000, fetchImpl: options.fetchImpl });
+  const attachments = await attachmentNotes(actor, context.messageIds, { budget: 100_000, deadline: Date.now() + 15_000, fetchImpl: options.fetchImpl });
   const name = actor.fullName || actor.email;
   const first = name.split(/\s+/)[0];
   const task =
