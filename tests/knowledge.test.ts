@@ -15,6 +15,7 @@ import {
   listKnowledge,
   prepareKnowledgeUpload,
   readKnowledge,
+  isStale,
   renameKnowledge,
 } from "@/lib/knowledge/store";
 import { resetStorageBucketCache } from "@/lib/storage";
@@ -22,6 +23,17 @@ import { createUser, resetDatabase } from "./helpers";
 
 const SUPABASE = "https://project.supabase.test";
 const LLM = "https://llm.test/v1";
+
+async function backdate(id: string, by: string) {
+  const client = await getAdminPool().connect();
+  try {
+    await client.query("begin; set local session_replication_role = replica");
+    await client.query(`update crm.knowledge_items set updated_at = now() - interval '${by}' where id = $1`, [id]);
+    await client.query("commit");
+  } finally {
+    client.release();
+  }
+}
 
 function embed(text: string) {
   const vector = new Array(1536).fill(0);
@@ -239,5 +251,59 @@ describe("knowledge", () => {
     } finally {
       globalThis.fetch = original;
     }
+  });
+
+  it("adds the same source once under a race, and keeps a reclaimed run from being overwritten", async () => {
+    const { fetchImpl } = world();
+    const both = await Promise.all(
+      [1, 2].map(() => addKnowledgeText(owner, { companyId: acme }, { kind: "transcript", title: "Race call", content: "Both tabs opened at once.", sourceRef: "call:race" }, { operation: "index_call_transcript" })),
+    );
+    assert.equal(both[0].item.id, both[1].item.id);
+    assert.deepEqual(both.map((entry) => entry.created).sort(), [false, true]);
+
+    const id = both[0].item.id;
+    const admin = getAdminPool();
+    await admin.query("update crm.knowledge_items set status = 'indexing' where id = $1", [id]);
+    await backdate(id, "10 minutes");
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const slow = indexKnowledgeItem(owner, id, {
+      fetchImpl: async (input, init) => {
+        if (String(input).endsWith("/embeddings")) {
+          await held;
+          return Response.json({ error: "late" }, { status: 400 });
+        }
+        return fetchImpl(input, init);
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await backdate(id, "10 minutes");
+    assert.deepEqual(await indexKnowledgeItem(owner, id, { fetchImpl }), { status: "ready", chunks: 1 });
+    release();
+    await slow;
+    const [item] = (await listKnowledge(owner, { companyId: acme })).filter((entry) => entry.id === id);
+    assert.equal(item.status, "ready");
+    assert.equal(item.error, null);
+  });
+
+  it("fails abandoned uploads after half an hour so they can be retried or removed", async () => {
+    const { fetchImpl } = world();
+    const prepared = await prepareKnowledgeUpload(owner, { companyId: acme }, { name: "...", size: 10, contentType: "text/plain" }, fetchImpl);
+    assert.match(prepared.uploadUrl, /\/knowledge\/[^/]+\/[^/]+\/file\?token=signed$/);
+    await backdate(prepared.item.id, "31 minutes");
+    const [stale] = (await listKnowledge(owner, { companyId: acme })).filter((entry) => entry.id === prepared.item.id);
+    assert.equal(isStale(stale), true);
+    assert.equal((await indexKnowledgeItem(owner, prepared.item.id, { fetchImpl }))?.status, "failed");
+  });
+
+  it("returns at most two passages from one document", async () => {
+    const { fetchImpl } = world();
+    const long = Array.from({ length: 12 }, (_, index) => `Section ${index}: the renewal clause sets a ninety day notice period. ${"Filler text about the contract. ".repeat(30)}`).join("\n\n");
+    const { item } = await addKnowledgeText(owner, { companyId: globex }, { kind: "attachment", title: "Globex contract", content: long, sourceRef: "attachment:contract" }, { operation: "add_knowledge_attachment" });
+    await indexKnowledgeItem(owner, item.id, { fetchImpl });
+    const result = await searchKnowledge(owner, { query: "renewal clause notice period", companyId: globex, limit: 10 }, { fetchImpl });
+    assert.equal(result.hits.filter((hit) => hit.itemId === item.id).length, 2);
   });
 });

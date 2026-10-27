@@ -5,7 +5,7 @@ import { toolDefinitions } from "@/lib/assistant/tools";
 import type { UserActor } from "@/lib/crm/types";
 import { allowedEclipseUrl, clearEclipseSourceCache, listEclipseArticles, readEclipsePage } from "@/lib/eclipse-sources";
 import { renderWithBrowserbase } from "@/lib/browserbase";
-import { privateAddress, readWebPage } from "@/lib/web-page";
+import { downloadPublic, privateAddress, readWebPage } from "@/lib/web-page";
 
 const PUBLIC: (host: string) => Promise<string[]> = async () => ["93.184.216.34"];
 
@@ -49,6 +49,12 @@ describe("reading web pages", () => {
     assert.equal(privateAddress("::ffff:127.0.0.1"), true);
     assert.equal(privateAddress("fd00::1"), true);
     assert.equal(privateAddress("93.184.216.34"), false);
+    for (const address of ["::ffff:7f00:1", "::ffff:a9fe:a9fe", "64:ff9b::a9fe:a9fe", "2002:7f00:1::1", "::127.0.0.1", "::1", "::", "fe80::1", "ff02::1"]) {
+      assert.equal(privateAddress(address), true, address);
+    }
+    for (const address of ["::ffff:8.8.8.8", "2606:4700::1111", "2002:808:808::1"]) assert.equal(privateAddress(address), false, address);
+    await assert.rejects(downloadPublic("http://[::ffff:7f00:1]:8080/", { maxBytes: 1000 }), /Private and local/);
+    await assert.rejects(downloadPublic("http://[::ffff:a9fe:a9fe]/latest/meta-data", { maxBytes: 1000 }), /Private and local/);
     await assert.rejects(readWebPage("http://localhost:3000/admin", { lookup: PUBLIC }), /Private and local/);
     await assert.rejects(readWebPage("https://sneaky.test/", { lookup: async () => ["192.168.1.4"] }), /Private and local/);
     const hop = site({ "https://short.test/x": { status: 302, location: "http://169.254.169.254/latest/meta-data" } });

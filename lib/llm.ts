@@ -234,7 +234,7 @@ export async function transcribeAudio(
   bytes: Uint8Array,
   name: string,
   contentType: string,
-  options: { fetchImpl?: typeof fetch; timeoutMs?: number; language?: string } = {},
+  options: { fetchImpl?: typeof fetch; timeoutMs?: number; language?: string; signal?: AbortSignal } = {},
 ): Promise<string> {
   const apiKey = process.env.LLM_API_KEY?.trim();
   if (!apiKey) throw new LlmError("Set LLM_API_KEY in Vercel to use Orbit's AI.");
@@ -249,7 +249,7 @@ export async function transcribeAudio(
       method: "POST",
       headers: { authorization: `Bearer ${apiKey}` },
       body: form,
-      signal: AbortSignal.timeout(options.timeoutMs ?? 180_000),
+      signal: options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(options.timeoutMs ?? 180_000)]) : AbortSignal.timeout(options.timeoutMs ?? 180_000),
     });
   } catch {
     throw new LlmError("Couldn't reach the LLM gateway to transcribe.", true);

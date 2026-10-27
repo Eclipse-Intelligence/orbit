@@ -8,6 +8,7 @@ import { embedTexts } from "@/lib/llm";
 const CANDIDATES = 40;
 const RRF_K = 60;
 const MAX_DISTANCE = 0.75;
+const PER_ITEM = 2;
 
 export type KnowledgeScope = "all" | "company" | "eclipse";
 
@@ -60,28 +61,38 @@ export async function searchKnowledge(
     const filter =
       scope === "company"
         ? input.withEclipse
-          ? "and ((i.scope = 'company' and i.company_id = $3::uuid) or i.scope = 'eclipse')"
-          : "and i.scope = 'company' and i.company_id = $3::uuid"
+          ? "and ((i.scope = 'company' and i.company_id = $2::uuid) or i.scope = 'eclipse')"
+          : "and i.scope = 'company' and i.company_id = $2::uuid"
         : scope === "eclipse"
-          ? "and i.scope = 'eclipse'"
-          : "and $3::uuid is null";
-    const base = `from crm.knowledge_chunks c join crm.knowledge_items i on i.id = c.item_id
-      where c.workspace_id = $1 and i.workspace_id = $1 and i.archived_at is null and i.status = 'ready' ${filter}`;
+          ? "and i.scope = 'eclipse' and $2::uuid is null"
+          : "and $2::uuid is null";
+    const items = await db.query<{ id: string }>(
+      `select i.id from crm.knowledge_items i
+       where i.workspace_id = $1 and i.archived_at is null and i.status = 'ready' ${filter}`,
+      [actor.workspaceId, scope === "company" ? input.companyId : null],
+    );
+    const ids = items.rows.map((row) => row.id);
+    if (ids.length === 0) return { mode: vector ? ("hybrid" as const) : ("keyword" as const), hits: [] };
     if (vector) await db.query("set local hnsw.ef_search = 100; set local hnsw.iterative_scan = relaxed_order");
     const result = await db.query<HitRow>(
-      `with semantic as (
+      `with nearest as (
          ${
            vector
-             ? `select c.id, row_number() over (order by c.embedding operator(extensions.<=>) $4::extensions.vector) as rank
-                ${base} and c.embedding is not null and c.embedding operator(extensions.<=>) $4::extensions.vector < ${MAX_DISTANCE}
+             ? `select c.id, c.embedding operator(extensions.<=>) $4::extensions.vector as distance
+                from crm.knowledge_chunks c
+                where c.workspace_id = $1 and c.item_id = any($2::uuid[]) and c.embedding is not null
                 order by c.embedding operator(extensions.<=>) $4::extensions.vector
                 limit ${CANDIDATES}`
-             : "select null::uuid as id, null::bigint as rank where $4::text is null and false"
+             : "select null::uuid as id, null::float8 as distance where $4::text is null and false"
          }
+       ),
+       semantic as (
+         select id, row_number() over (order by distance) as rank from nearest where distance < ${MAX_DISTANCE}
        ),
        keyword as (
          select c.id, row_number() over (order by ts_rank_cd(c.search, q) desc) as rank
-         ${base.replace("where", ", websearch_to_tsquery('english', $2) q where")} and c.search @@ q
+         from crm.knowledge_chunks c, websearch_to_tsquery('english', $3) q
+         where c.workspace_id = $1 and c.item_id = any($2::uuid[]) and c.search @@ q
          order by ts_rank_cd(c.search, q) desc
          limit ${CANDIDATES}
        ),
@@ -89,17 +100,22 @@ export async function searchKnowledge(
          select id, sum(1.0 / (${RRF_K} + rank)) as score
          from (select id, rank from semantic union all select id, rank from keyword) ranked
          group by id
+       ),
+       spread as (
+         select f.id, f.score, c.item_id, row_number() over (partition by c.item_id order by f.score desc) as place
+         from fused f join crm.knowledge_chunks c on c.id = f.id
        )
        select c.item_id, i.title, i.kind, i.scope, i.company_id, co.name as company_name, i.source_url, c.position,
          nullif(strpos(i.content, left(c.content, 80)), 0) - 1 as offset,
-         c.content, f.score::float8 as score
-       from fused f
-       join crm.knowledge_chunks c on c.id = f.id
-       join crm.knowledge_items i on i.id = c.item_id
+         c.content, s.score::float8 as score
+       from spread s
+       join crm.knowledge_chunks c on c.id = s.id
+       join crm.knowledge_items i on i.id = c.item_id and i.status = 'ready' and i.archived_at is null
        left join crm.companies co on co.id = i.company_id
-       order by f.score desc, c.position asc
+       where s.place <= ${PER_ITEM}
+       order by s.score desc, c.position asc
        limit $5`,
-      [actor.workspaceId, query, scope === "company" ? input.companyId : null, vector, limit],
+      [actor.workspaceId, ids, query, vector, limit],
     );
     return {
       mode: vector ? "hybrid" : "keyword",

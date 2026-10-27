@@ -48,10 +48,14 @@ export async function addCallToKnowledge(actor: UserActor, insightId: string) {
 export async function backfillCalls(actor: UserActor, companyId: string, limit = 5) {
   const pending = await withActor(actor, async (db) => {
     const result = await db.query<{ id: string }>(
-      `select i.id from crm.call_insights i
+      `with activity as (
+         select a.id from crm.activities a where a.workspace_id = $1 and a.company_id = $2
+         union
+         select a.id from crm.activities a join crm.contacts ct on ct.id = a.contact_id where a.workspace_id = $1 and ct.company_id = $2
+       )
+       select i.id from crm.call_insights i
        join crm.activities a on a.id = i.activity_id
-       left join crm.contacts ct on ct.id = coalesce(i.contact_id, a.contact_id)
-       where i.workspace_id = $1 and i.status = 'ready' and coalesce(i.company_id, a.company_id, ct.company_id) = $2
+       where i.workspace_id = $1 and i.status = 'ready' and (i.company_id = $2 or i.activity_id in (select id from activity))
          and not exists (select 1 from crm.knowledge_items k where k.workspace_id = $1 and k.source_ref = 'call:' || i.id::text)
        order by a.occurred_at desc
        limit $3`,
