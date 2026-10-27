@@ -1,7 +1,7 @@
 import { OAuthError } from "@/lib/ai-accounts/oauth";
 import { aiAccess, noteAiError } from "@/lib/ai-accounts/store";
 import { assistantModel } from "@/lib/assistant/models";
-import { completeChatGpt } from "@/lib/assistant/providers/chatgpt";
+import { chatGptRequest, completeChatGpt, readResponses } from "@/lib/assistant/providers/chatgpt";
 import { ProviderAuthError, ProviderError, type FunctionTool } from "@/lib/assistant/providers/shared";
 import { toolDefinitions } from "@/lib/assistant/tools";
 import type { UserActor } from "@/lib/crm/types";
@@ -222,6 +222,7 @@ function plain(messages: ChatMessage[]) {
 
 export async function complete(input: CompleteInput): Promise<Completion> {
   const chosen = assistantModel(input.model);
+  if (chosen?.source === "orbit" && chosen.responses) return completeGatewayResponses({ ...input, model: chosen.apiModel }, chosen.id);
   if (!chosen || chosen.source === "orbit") return completeGateway({ ...input, model: chosen?.apiModel ?? input.model });
   if (chosen.source === "claude") throw new AssistantError("Claude account models run through Orbit Agent on your Mac.");
   if (!input.actor) throw new AssistantError("Sign in again to use your connected accounts.");
@@ -255,6 +256,60 @@ export async function complete(input: CompleteInput): Promise<Completion> {
     }
     if (error instanceof ProviderError || error instanceof OAuthError) throw new AssistantError(error.message);
     throw error;
+  }
+}
+
+class ResponsesUnsupportedError extends AssistantError {}
+
+async function gatewayResponsesAttempt(input: CompleteInput, modelId: string): Promise<Completion> {
+  const apiKey = process.env.LLM_API_KEY?.trim();
+  if (!apiKey) throw new AssistantError("Set LLM_API_KEY in Vercel to use the assistant.");
+  const request = chatGptRequest({
+    modelId,
+    apiModel: input.model,
+    reasoning: input.reasoning,
+    messages: input.messages,
+    webSearch: input.webSearch,
+    timeoutMs: input.timeoutMs,
+    tools: (input.tools ?? toolDefinitions()) as FunctionTool[],
+  });
+  let response: Response;
+  try {
+    response = await (input.fetchImpl ?? fetch)(`${baseUrl()}/responses`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json", accept: "text/event-stream" },
+      body: JSON.stringify({ ...request, max_output_tokens: MAX_TOKENS }),
+      signal: input.signal ? AbortSignal.any([AbortSignal.timeout(input.timeoutMs), input.signal]) : AbortSignal.timeout(input.timeoutMs),
+    });
+  } catch (error) {
+    if (input.signal?.aborted) throw new StoppedError("Stopped.");
+    if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+      throw new AssistantError("The model took too long to reply. Try again, or pick a lower reasoning level.");
+    }
+    throw new AssistantError("Could not reach the LLM gateway.");
+  }
+  if (!response.ok || !response.body) {
+    const reason = await detail(response);
+    const message = `The LLM gateway returned ${response.status}${reason ? `: ${reason}` : "."}`;
+    if ([400, 404, 405, 422].includes(response.status)) throw new ResponsesUnsupportedError(message);
+    throw new AssistantError(message);
+  }
+  try {
+    return await readResponses(response.body, { label: "The model", modelId, onText: input.onText });
+  } catch (error) {
+    if (input.signal?.aborted) throw new StoppedError("Stopped.");
+    if (error instanceof ProviderError) throw new AssistantError(error.message);
+    throw error;
+  }
+}
+
+async function completeGatewayResponses(input: CompleteInput, modelId: string): Promise<Completion> {
+  try {
+    return await gatewayResponsesAttempt(input, modelId);
+  } catch (error) {
+    if (!(error instanceof ResponsesUnsupportedError)) throw error;
+    console.error("Responses request refused, retrying without reasoning", error.message);
+    return completeGateway({ ...input, reasoning: "none", messages: input.messages.map((message) => (message.role === "assistant" ? { ...message, state: null } : message)) });
   }
 }
 

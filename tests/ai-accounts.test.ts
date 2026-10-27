@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { aiAccess, listAiAccounts, pollChatGptLogin, startChatGptLogin } from "@/lib/ai-accounts/store";
 import { settingsFor, availableModels } from "@/lib/assistant/models";
+import { complete } from "@/lib/assistant/gateway";
 import { chatGptRequest, completeChatGpt } from "@/lib/assistant/providers/chatgpt";
 import { toolDefinitions } from "@/lib/assistant/tools";
 import type { FunctionTool } from "@/lib/assistant/providers/shared";
@@ -218,6 +219,58 @@ describe("ChatGPT adapter", () => {
     assert.deepEqual(result.toolCalls, [{ id: "call_b", type: "function", function: { name: "list_tasks", arguments: '{"view":"all"}' } }]);
     assert.deepEqual(result.sources, [{ url: "https://geteclipse.co", title: "Eclipse" }]);
     assert.equal(result.state?.content.length, 3);
+  });
+
+  it("runs GPT-6.1 Terra through the gateway's Responses endpoint, and without reasoning when that is refused", async () => {
+    process.env.LLM_API_KEY = "test-gateway-key";
+    try {
+      const gateway = recorder(() =>
+        sse([
+          { data: { type: "response.output_text.delta", delta: "On " } },
+          { data: { type: "response.output_text.delta", delta: "it." } },
+          { data: { type: "response.output_item.done", item: { type: "message", role: "assistant", content: [{ type: "output_text", text: "On it.", annotations: [] }] } } },
+          { data: { type: "response.output_item.done", item: { type: "function_call", call_id: "call_t", name: "list_tasks", arguments: "{}" } } },
+          { data: { type: "response.completed", response: { usage: { input_tokens: 3 } } } },
+        ]),
+      );
+      const streamed: string[] = [];
+      const result = await complete({
+        model: "gpt-6.1-terra",
+        reasoning: "high",
+        webSearch: false,
+        timeoutMs: 10_000,
+        tools: TOOLS,
+        messages: [{ role: "system", content: "x" }, { role: "user", content: "Tasks?" }],
+        fetchImpl: gateway.fetchImpl,
+        onText: (text) => streamed.push(text),
+      });
+      assert.equal(gateway.calls[0].url, "https://api.llmapi.ai/v1/responses");
+      assert.equal((gateway.calls[0].init.headers as Record<string, string>).authorization, "Bearer test-gateway-key");
+      assert.deepEqual((gateway.calls[0].body as { reasoning: unknown }).reasoning, { effort: "high", summary: "auto" });
+      assert.equal(result.content, "On it.");
+      assert.deepEqual(streamed, ["On ", "On it."]);
+      assert.equal(result.toolCalls[0].function.name, "list_tasks");
+
+      const refused = recorder((call) =>
+        call.url.endsWith("/responses")
+          ? Response.json({ error: { message: "Not supported" } }, { status: 400 })
+          : Response.json({ model: "gpt-6.1-terra", choices: [{ message: { content: "Fallback reply." } }] }),
+      );
+      const fallback = await complete({
+        model: "gpt-6.1-terra",
+        reasoning: "high",
+        webSearch: false,
+        timeoutMs: 10_000,
+        tools: TOOLS,
+        messages: [{ role: "system", content: "x" }, { role: "user", content: "Tasks?" }],
+        fetchImpl: refused.fetchImpl,
+      });
+      assert.equal(fallback.content, "Fallback reply.");
+      assert.equal(refused.calls[1].url, "https://api.llmapi.ai/v1/chat/completions");
+      assert.equal((refused.calls[1].body as { reasoning_effort: string }).reasoning_effort, "none");
+    } finally {
+      delete process.env.LLM_API_KEY;
+    }
   });
 
   it("explains ChatGPT errors", async () => {
