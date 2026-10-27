@@ -102,6 +102,23 @@ describe("knowledge sites", () => {
     assert.deepEqual(map.pages.map((page) => page.path), ["/", "/brochure.pdf", "/team", "/work", "/team/jane"]);
   });
 
+  it("says why when a site can't be reached, and opens blocked sites in a browser", async () => {
+    await assert.rejects(mapSite("26pmx.con", { fetchImpl: web({}).fetchImpl, lookup: async () => Promise.reject(new Error("ENOTFOUND")), render: null }), /26pmx\.con couldn't be found/);
+    const blocked: typeof fetch = async () => new Response("denied", { status: 403 });
+    await assert.rejects(mapSite("https://guarded.test/", { fetchImpl: blocked, lookup, render: null }), /guarded\.test answered 403/);
+    const rendered: string[] = [];
+    const map = await mapSite("https://guarded.test/", {
+      fetchImpl: blocked,
+      lookup,
+      render: async (url) => {
+        rendered.push(url);
+        return { url, html: `<a href="/services">Services</a><a href="/contact">Contact</a>` };
+      },
+    });
+    assert.deepEqual(rendered, ["https://guarded.test/"]);
+    assert.deepEqual(map.pages.map((page) => page.path), ["/", "/contact", "/services"]);
+  });
+
   it("refuses to map private addresses", async () => {
     await assert.rejects(mapSite("http://127.0.0.1/", { lookup }), /Private and local/);
   });
