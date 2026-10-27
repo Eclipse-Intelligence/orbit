@@ -24,7 +24,7 @@ export type KnowledgeTargetProp = { companyId: string } | { eclipse: true };
 const POLL_MS = 3_000;
 const POLL_LIMIT_MS = 4 * 60_000;
 const MAX_BYTES = 50 * 1024 * 1024;
-const ACCEPT = ".pdf,.docx,.pptx,.xlsx,.txt,.md,.csv,.html,.htm,.json";
+const ACCEPT = ".pdf,.docx,.pptx,.xlsx,.txt,.md,.csv,.html,.htm,.json,.vtt,.srt,.mp3,.m4a,.wav";
 
 const KIND_LABEL: Record<KnowledgeItem["kind"], string> = {
   file: "File",
