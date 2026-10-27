@@ -30,6 +30,7 @@ function documentFor(html: string, rich: boolean) {
     : "html,body{background:transparent;color:#e6e8ec;} body *{color:inherit !important;background-color:transparent !important;border-color:#333 !important;} a,a *{color:#9db4ff !important;}";
   return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${POLICY}"><base target="_blank"><meta name="color-scheme" content="${rich ? "light" : "dark"}"><style>
 html,body{margin:0;padding:0;touch-action:pan-y;}
+html:root,html:root body{height:auto !important;min-height:0 !important;max-height:none !important;overflow:visible !important;}
 body{display:flow-root;font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Geist,Helvetica,Arial,sans-serif;overflow-wrap:anywhere;padding:${rich ? "20px" : "0"};}
 img{max-width:100%;height:auto;}
 table{max-width:100%;}
