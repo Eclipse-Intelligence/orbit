@@ -2,7 +2,7 @@ import { z } from "zod";
 import { withActor } from "@/lib/crm/context";
 import type { UserActor } from "@/lib/crm/types";
 import { chunkText } from "@/lib/knowledge/chunk";
-import { CONTENT_LIMIT, ITEM_COLUMNS, ITEM_FROM, type ItemRow, type KnowledgeKind } from "@/lib/knowledge/store";
+import { CONTENT_LIMIT, ITEM_COLUMNS, ITEM_FROM, placeholderTitles, type ItemRow, type KnowledgeKind } from "@/lib/knowledge/store";
 import { completeJson, embedTexts, LlmError } from "@/lib/llm";
 import { readAttachmentText } from "@/lib/mail/attachment-text";
 import { looksLikeEpisode, MediaError, readPodcast, readYouTube, transcribeBytes, transcriptText } from "@/lib/knowledge/media";
@@ -153,8 +153,8 @@ export async function indexKnowledgeItem(actor: UserActor, id: string, options: 
       const extracted = await extract(row, options);
       text = extracted.text.trim().slice(0, CONTENT_MAX);
       kind = extracted.kind ?? kind;
-      const host = row.source_url ? new URL(row.source_url).hostname.replace(/^www\./, "") : null;
-      if (extracted.title?.trim() && (title === host || !title.trim())) title = extracted.title.replace(/\s+/g, " ").trim().slice(0, 300);
+      const placeholders = row.source_url ? placeholderTitles(row.source_url) : [];
+      if (extracted.title?.trim() && (placeholders.includes(title) || !title.trim())) title = extracted.title.replace(/\s+/g, " ").trim().slice(0, 300);
     }
     if (!text) throw new KnowledgeReadError("There's no text to index.");
     const chunks = chunkText(text);

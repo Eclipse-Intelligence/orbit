@@ -27,7 +27,7 @@ function decode(text: string) {
   });
 }
 
-export function htmlToText(html: string) {
+export function htmlToText(html: string, limit = BODY_TEXT_MAX) {
   const text = html
     .replace(/<(head|style|script|title)[^>]*>[\s\S]*?<\/\1>/gi, " ")
     .replace(/<!--[\s\S]*?-->/g, " ")
@@ -40,5 +40,5 @@ export function htmlToText(html: string) {
     .replace(/ *\n */g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim()
-    .slice(0, BODY_TEXT_MAX);
+    .slice(0, limit);
 }
