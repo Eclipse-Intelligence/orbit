@@ -615,6 +615,8 @@ function scheduleEnrichment(actor: Actor, companyId: string) {
   const run = () => {
     void import("@/lib/enrichment/companies")
       .then((module) => module.autoEnrichCompany(actor, companyId))
+      .then(() => import("@/lib/enrichment/web-checks"))
+      .then((module) => module.autoCheckCompany(actor, companyId))
       .catch(() => undefined);
   };
   try {
