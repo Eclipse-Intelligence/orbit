@@ -169,9 +169,27 @@ function pageLinks(html: string, base: URL) {
   return links;
 }
 
+const MAIN_SHARE = 0.6;
+
+function pageText(html: string, limit: number) {
+  return htmlToText(html.replace(/\r\n?/g, "\n").replace(/<\/?(b|strong|i|em|span|u|small|mark|code|abbr|time)\b[^>]*>/gi, ""), limit);
+}
+
+export function mainText(html: string, limit = TEXT_MAX) {
+  const body = (html.match(/<body\b[\s\S]*<\/body>/i)?.[0] ?? html).replace(/<(nav|footer|script|style|noscript|svg|template)\b[\s\S]*?<\/\1>/gi, " ");
+  const whole = pageText(body, Number.MAX_SAFE_INTEGER);
+  const main = body.match(/<main\b[\s\S]*<\/main>/i)?.[0];
+  const articles = body.match(/<article\b[\s\S]*?<\/article>/gi) ?? [];
+  for (const candidate of [main, articles.length ? articles.join("\n") : null]) {
+    if (!candidate) continue;
+    const text = pageText(candidate, Number.MAX_SAFE_INTEGER);
+    if (text.length >= whole.length * MAIN_SHARE) return text.slice(0, limit);
+  }
+  return whole.slice(0, limit);
+}
+
 function fromHtml(html: string, url: URL, truncated: boolean, via: WebPage["via"], limit = TEXT_MAX): WebPage {
-  const main = html.match(/<article\b[\s\S]*?<\/article>/i)?.[0] ?? html.match(/<main\b[\s\S]*?<\/main>/i)?.[0] ?? html;
-  const text = htmlToText(main.replace(/<\/?(b|strong|i|em|span|u|small|mark|code|abbr|time)\b[^>]*>/gi, ""));
+  const text = mainText(html, limit + 1);
   return {
     url: url.href,
     title: meta(html, /<meta[^>]+property="og:title"[^>]+content="([^"]*)"/i) ?? meta(html, /<title[^>]*>([^<]*)<\/title>/i),

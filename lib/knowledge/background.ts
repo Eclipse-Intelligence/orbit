@@ -33,9 +33,12 @@ export function scheduleCallBackfill(actor: UserActor, companyId: string) {
   } catch {}
 }
 
+const RUNNERS = 2;
+const RESUME_BATCH = 25;
+
 export function resumeStale(actor: UserActor, items: KnowledgeItem[]) {
-  scheduleIndexing(
-    actor,
-    items.filter((item) => isStale(item)).slice(0, 10).map((item) => item.id),
-  );
+  const stale = items.filter((item) => isStale(item));
+  const running = items.filter((item) => item.status === "indexing" && !isStale(item)).length;
+  const waiting = running < RUNNERS ? items.filter((item) => item.status === "pending" && item.kind !== "file" && !isStale(item)).reverse() : [];
+  scheduleIndexing(actor, [...stale, ...waiting].slice(0, RESUME_BATCH).map((item) => item.id));
 }

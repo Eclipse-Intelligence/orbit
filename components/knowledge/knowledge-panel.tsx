@@ -13,16 +13,21 @@ import {
   listKnowledgeAction,
   prepareKnowledgeUploadAction,
   removeKnowledgeAction,
+  removeKnowledgeItemsAction,
   retryKnowledgeAction,
+  retryKnowledgeItemsAction,
 } from "@/app/(crm)/knowledge";
+import SitePicker from "@/components/knowledge/site-picker";
 import type { KnowledgeItem } from "@/lib/knowledge/store";
 import { cn } from "@/lib/utils";
+import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
 import TrashIcon from "@/public/assets/images/mail/trash.svg";
 
 export type KnowledgeTargetProp = { companyId: string } | { eclipse: true };
 
 const POLL_MS = 3_000;
-const POLL_LIMIT_MS = 10 * 60_000;
+const POLL_LIMIT_MS = 30 * 60_000;
+const GROUP_FROM = 3;
 const AUDIO_PIECE_BYTES = 10 * 1024 * 1024;
 const MAX_BYTES = 50 * 1024 * 1024;
 const ACCEPT = ".pdf,.docx,.pptx,.xlsx,.txt,.md,.csv,.html,.htm,.json,.vtt,.srt,.mp3,.m4a,.wav";
@@ -37,6 +42,50 @@ const KIND_LABEL: Record<KnowledgeItem["kind"], string> = {
 };
 
 type Uploading = { key: string; name: string; error: string | null };
+type Removal = { label: string; ids: string[]; title: string; description: string };
+type Entry = { type: "item"; item: KnowledgeItem } | { type: "site"; host: string; items: KnowledgeItem[] };
+
+function hostOf(item: KnowledgeItem) {
+  if (item.kind !== "link" || !item.sourceUrl) return null;
+  try {
+    return new URL(item.sourceUrl).hostname.replace(/^www\./, "");
+  } catch {
+    return null;
+  }
+}
+
+function entriesOf(items: KnowledgeItem[]): Entry[] {
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    const host = hostOf(item);
+    if (host) counts.set(host, (counts.get(host) ?? 0) + 1);
+  }
+  const groups = new Map<string, KnowledgeItem[]>();
+  const entries: Entry[] = [];
+  for (const item of items) {
+    const host = hostOf(item);
+    if (!host || (counts.get(host) ?? 0) < GROUP_FROM) {
+      entries.push({ type: "item", item });
+      continue;
+    }
+    const group = groups.get(host);
+    if (group) {
+      group.push(item);
+      continue;
+    }
+    const created = [item];
+    groups.set(host, created);
+    entries.push({ type: "site", host, items: created });
+  }
+  return entries;
+}
+
+function siteStatus(items: KnowledgeItem[]) {
+  const reading = items.filter(working).length;
+  const failed = items.filter((item) => item.status === "failed").length;
+  const parts = [reading ? `${reading} reading` : null, failed ? `${failed} failed` : null].filter(Boolean);
+  return parts.length ? parts.join(" · ") : null;
+}
 
 async function upload(url: string, file: File) {
   const body = new FormData();
@@ -81,7 +130,9 @@ export default function KnowledgePanel({
   const [link, setLink] = useState("");
   const [linkError, setLinkError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
-  const [removing, setRemoving] = useState<KnowledgeItem | null>(null);
+  const [removing, setRemoving] = useState<Removal | null>(null);
+  const [siteOpen, setSiteOpen] = useState(false);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [round, setRound] = useState(0);
@@ -169,15 +220,127 @@ export default function KnowledgePanel({
     if (result.error) setError(result.error);
   }
 
-  async function remove(item: KnowledgeItem) {
+  async function remove(ids: string[]) {
     setError(null);
     const before = items;
-    setItems((current) => current.filter((entry) => entry.id !== item.id));
-    const result = await removeKnowledgeAction(item.id);
+    const gone = new Set(ids);
+    setItems((current) => current.filter((entry) => !gone.has(entry.id)));
+    const result = ids.length === 1 ? await removeKnowledgeAction(ids[0]) : await removeKnowledgeItemsAction(ids);
     if (result.error) {
       setItems(before);
       setError(result.error);
     }
+  }
+
+  async function retryAll(group: KnowledgeItem[]) {
+    setError(null);
+    const failed = new Set(group.filter((item) => item.status === "failed").map((item) => item.id));
+    setItems((current) => current.map((item) => (failed.has(item.id) ? { ...item, status: "indexing", error: null } : item)));
+    setRound((value) => value + 1);
+    const result = await retryKnowledgeItemsAction([...failed]);
+    if (result.error) setError(result.error);
+  }
+
+  function askRemove(item: KnowledgeItem) {
+    setRemoving({ label: "Remove", ids: [item.id], title: "Remove from Knowledge?", description: `The assistant will no longer use ${item.title}.` });
+  }
+
+  function renderItem(item: KnowledgeItem) {
+    const status = statusLine(item);
+    const meta = [KIND_LABEL[item.kind], sizeLabel(item.sizeBytes), item.createdBy].filter(Boolean).join(" · ");
+    return (
+      <li key={item.id} className="group flex items-start gap-2">
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          {item.sourceUrl ? (
+            <a href={item.sourceUrl} target="_blank" rel="noreferrer" className="truncate text-[14px] leading-5 hover:underline">
+              {item.title}
+            </a>
+          ) : (
+            <span className="truncate text-[14px] leading-5">{item.title}</span>
+          )}
+          <span className="caption-style text-subtle truncate">{meta}</span>
+          {status ? (
+            <span role={item.status === "failed" ? "alert" : "status"} className={cn("caption-style", item.status === "failed" ? "text-danger" : "text-subtle")}>
+              {status}
+            </span>
+          ) : (
+            item.summary && <p className="caption-style text-soft line-clamp-2">{item.summary}</p>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          {item.status === "failed" && (
+            <Button variant="ghost" size="sm" onClick={() => void retry(item)}>
+              Retry
+            </Button>
+          )}
+          <Button variant="ghost" size="icon-sm" aria-label={`Remove ${item.title}`} onClick={() => askRemove(item)}>
+            <TrashIcon aria-hidden className="size-3.5" />
+          </Button>
+        </div>
+      </li>
+    );
+  }
+
+  function renderSite(host: string, group: KnowledgeItem[]) {
+    const open = expanded.has(host);
+    const status = siteStatus(group);
+    const listId = `site-${host}`;
+    return (
+      <li key={`site-${host}`} className="flex flex-col gap-3">
+        <div className="flex items-start gap-2">
+          <button
+            type="button"
+            aria-expanded={open}
+            aria-controls={listId}
+            onClick={() =>
+              setExpanded((current) => {
+                const next = new Set(current);
+                if (next.has(host)) next.delete(host);
+                else next.add(host);
+                return next;
+              })
+            }
+            className="focus-visible:ring-ring/60 flex min-w-0 flex-1 cursor-pointer flex-col items-start gap-0.5 rounded-lg text-left outline-none focus-visible:ring-2"
+          >
+            <span className="flex max-w-full items-center gap-1.5 text-[14px] leading-5">
+              <span className="truncate">{host}</span>
+              <ChevronDownIcon aria-hidden className={cn("text-subtle ease-power3-out size-3.5 shrink-0 transition-transform duration-150", open && "rotate-180")} />
+            </span>
+            <span className="caption-style text-subtle">{`Website · ${group.length.toLocaleString("en-GB")} pages`}</span>
+            {status && (
+              <span role="status" className="caption-style text-subtle">
+                {status}
+              </span>
+            )}
+          </button>
+          {group.some((item) => item.status === "failed") && (
+            <Button variant="ghost" size="sm" onClick={() => void retryAll(group)}>
+              Retry
+            </Button>
+          )}
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={`Remove all ${host} pages`}
+            onClick={() =>
+              setRemoving({
+                label: "Remove all",
+                ids: group.map((item) => item.id),
+                title: `Remove ${group.length.toLocaleString("en-GB")} pages?`,
+                description: `The assistant will no longer use any of the ${host} pages.`,
+              })
+            }
+          >
+            <TrashIcon aria-hidden className="size-3.5" />
+          </Button>
+        </div>
+        {open && (
+          <ul id={listId} className="flex flex-col gap-3 pl-3 shadow-[inset_1px_0_0_var(--line-strong)]">
+            {group.map(renderItem)}
+          </ul>
+        )}
+      </li>
+    );
   }
 
   function onDrop(event: DragEvent) {
@@ -206,6 +369,7 @@ export default function KnowledgePanel({
         >
           Add link
         </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => setSiteOpen(true)}>Add website</DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -303,41 +467,7 @@ export default function KnowledgePanel({
               )}
             </li>
           ))}
-          {items.map((item) => {
-            const status = statusLine(item);
-            const meta = [KIND_LABEL[item.kind], sizeLabel(item.sizeBytes), item.createdBy].filter(Boolean).join(" · ");
-            return (
-              <li key={item.id} className="group flex items-start gap-2">
-                <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                  {item.sourceUrl ? (
-                    <a href={item.sourceUrl} target="_blank" rel="noreferrer" className="truncate text-[14px] leading-5 hover:underline">
-                      {item.title}
-                    </a>
-                  ) : (
-                    <span className="truncate text-[14px] leading-5">{item.title}</span>
-                  )}
-                  <span className="caption-style text-subtle truncate">{meta}</span>
-                  {status ? (
-                    <span role={item.status === "failed" ? "alert" : "status"} className={cn("caption-style", item.status === "failed" ? "text-danger" : "text-subtle")}>
-                      {status}
-                    </span>
-                  ) : (
-                    item.summary && <p className="caption-style text-soft line-clamp-2">{item.summary}</p>
-                  )}
-                </div>
-                <div className="flex shrink-0 items-center gap-1">
-                  {item.status === "failed" && (
-                    <Button variant="ghost" size="sm" onClick={() => void retry(item)}>
-                      Retry
-                    </Button>
-                  )}
-                  <Button variant="ghost" size="icon-sm" aria-label={`Remove ${item.title}`} onClick={() => setRemoving(item)}>
-                    <TrashIcon aria-hidden className="size-3.5" />
-                  </Button>
-                </div>
-              </li>
-            );
-          })}
+          {entriesOf(items).map((entry) => (entry.type === "item" ? renderItem(entry.item) : renderSite(entry.host, entry.items)))}
         </ul>
       )}
       {error && (
@@ -350,11 +480,20 @@ export default function KnowledgePanel({
         onOpenChange={(open) => {
           if (!open) setRemoving(null);
         }}
-        title="Remove from Knowledge?"
-        description={`The assistant will no longer use ${removing?.title ?? "it"}.`}
-        confirmLabel="Remove"
+        title={removing?.title ?? "Remove from Knowledge?"}
+        description={removing?.description ?? ""}
+        confirmLabel={removing?.label ?? "Remove"}
         onConfirm={() => {
-          if (removing) void remove(removing);
+          if (removing) void remove(removing.ids);
+        }}
+      />
+      <SitePicker
+        open={siteOpen}
+        onOpenChange={setSiteOpen}
+        target={target}
+        onAdded={(next) => {
+          setItems(next);
+          setRound((value) => value + 1);
         }}
       />
     </div>

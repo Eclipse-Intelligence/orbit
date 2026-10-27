@@ -246,6 +246,43 @@ export async function prepareKnowledgeUpload(
   }
 }
 
+export const PAGES_ADD_MAX = 5_000;
+
+export function placeholderTitles(url: string) {
+  const parsed = new URL(url);
+  const host = parsed.hostname.replace(/^www\./, "");
+  const path = parsed.pathname.replace(/\/+$/, "");
+  return [host, `${host}${path}`.slice(0, 300)];
+}
+
+export async function addKnowledgePages(actor: UserActor, target: KnowledgeTarget, urls: unknown) {
+  const list = Array.isArray(urls) ? urls : [];
+  if (list.length === 0) throw new CrmError("invalid_input", "Choose at least one page.", 400, { field: "urls" });
+  if (list.length > PAGES_ADD_MAX) throw new CrmError("invalid_input", `Choose up to ${PAGES_ADD_MAX.toLocaleString("en-GB")} pages at a time.`, 400, { field: "urls" });
+  const clean = [...new Set(list.map((url) => cleanUrl(url)))];
+  return withActor(actor, async (db) => {
+    const { scope, companyId } = targetColumns(target);
+    const existing = await db.query<{ source_url: string }>(
+      `select source_url from crm.knowledge_items
+       where workspace_id = $1 and archived_at is null and source_url = any($2::text[]) and scope = $3 and company_id is not distinct from $4`,
+      [actor.workspaceId, clean, scope, companyId],
+    );
+    const have = new Set(existing.rows.map((row) => row.source_url));
+    const ids: string[] = [];
+    for (const url of clean) {
+      if (have.has(url)) continue;
+      const { id } = await insertItem(
+        db,
+        actor,
+        { target, kind: linkKind(url), title: cleanTitle(placeholderTitles(url)[1]), status: "pending", sourceUrl: url },
+        { operation: "add_knowledge_page", sourceUrl: url },
+      );
+      ids.push(id);
+    }
+    return { ids, skipped: clean.length - ids.length };
+  });
+}
+
 export async function addKnowledgeLink(actor: UserActor, target: KnowledgeTarget, input: { url: unknown; title?: unknown }) {
   const url = cleanUrl(input.url);
   const kind = linkKind(url);
@@ -302,7 +339,7 @@ export async function getKnowledgeItem(actor: UserActor, id: string) {
   });
 }
 
-export async function listKnowledge(actor: UserActor, target: KnowledgeTarget | "all", limit = 200): Promise<KnowledgeItem[]> {
+export async function listKnowledge(actor: UserActor, target: KnowledgeTarget | "all", limit = 10_000): Promise<KnowledgeItem[]> {
   return withActor(actor, async (db) => {
     const filter =
       target === "all" ? "" : "companyId" in target ? "and i.scope = 'company' and i.company_id = $2" : "and i.scope = 'eclipse'";
@@ -311,7 +348,7 @@ export async function listKnowledge(actor: UserActor, target: KnowledgeTarget | 
       if (!isUuid(target.companyId)) return [];
       params.push(target.companyId);
     }
-    params.push(Math.min(500, Math.max(1, limit)));
+    params.push(Math.min(10_000, Math.max(1, limit)));
     const result = await db.query<ItemRow>(
       `select ${ITEM_COLUMNS} from ${ITEM_FROM}
        where i.workspace_id = $1 and i.archived_at is null ${filter}

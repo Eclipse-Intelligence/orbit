@@ -4,12 +4,15 @@ import { getUserActor } from "@/lib/auth/user";
 import { CrmError } from "@/lib/crm/errors";
 import { addMailAttachmentToKnowledge } from "@/lib/knowledge/attachments";
 import { resumeStale, scheduleIndexing } from "@/lib/knowledge/background";
+import { mapSite, type SiteMap } from "@/lib/knowledge/site";
 import {
   addKnowledgeLink,
+  addKnowledgePages,
   archiveKnowledge,
   getKnowledgeItem,
   listKnowledge,
   mapItem,
+  PAGES_ADD_MAX,
   prepareKnowledgeUpload,
   renameKnowledge,
   targetFrom,
@@ -114,5 +117,46 @@ export async function addAttachmentToKnowledgeAction(messageId: string, attachme
     return { added: created };
   } catch (error) {
     return failure(error, "Couldn't add it to Knowledge.");
+  }
+}
+
+export async function mapSiteAction(url: string): Promise<{ map?: SiteMap; error?: string }> {
+  const user = await getUserActor();
+  if (!user) return { error: "Sign in to map a site." };
+  try {
+    return { map: await mapSite(url, { deadline: Date.now() + 90_000 }) };
+  } catch (error) {
+    return failure(error, "Couldn't map that site.");
+  }
+}
+
+export async function addKnowledgePagesAction(target: Target, urls: string[]): Promise<{ items?: KnowledgeItem[]; added?: number; skipped?: number; error?: string }> {
+  const user = await getUserActor();
+  if (!user) return { error: "Sign in to add pages." };
+  try {
+    const parsed = targetFrom(target);
+    const { ids, skipped } = await addKnowledgePages(user, parsed, urls);
+    scheduleIndexing(user, ids);
+    return { items: await listKnowledge(user, parsed), added: ids.length, skipped };
+  } catch (error) {
+    return failure(error, "Couldn't add those pages.");
+  }
+}
+
+export async function retryKnowledgeItemsAction(ids: string[]): Promise<{ error?: string }> {
+  const user = await getUserActor();
+  if (!user) return { error: "Sign in to retry." };
+  scheduleIndexing(user, ids.slice(0, PAGES_ADD_MAX));
+  return {};
+}
+
+export async function removeKnowledgeItemsAction(ids: string[]): Promise<{ error?: string }> {
+  const user = await getUserActor();
+  if (!user) return { error: "Sign in to remove." };
+  try {
+    for (const id of ids.slice(0, PAGES_ADD_MAX)) await archiveKnowledge(user, id);
+    return {};
+  } catch (error) {
+    return failure(error, "Couldn't remove them.");
   }
 }
