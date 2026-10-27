@@ -739,7 +739,6 @@ export default function AssistantDock() {
       )}
     >
       <section
-        data-assistant-open=""
         aria-label="Orbit assistant"
         className="animate-in fade-in-0 slide-in-from-bottom-3 zoom-in-[0.98] ease-power3-out flex h-full max-h-full flex-col overflow-hidden rounded-3xl bg-[#1c1c1c]/95 shadow-[0_24px_80px_rgba(0,0,0,0.6)] backdrop-blur-xl duration-200 md:h-auto md:max-h-[min(44rem,calc(100dvh-6rem))]"
       >
