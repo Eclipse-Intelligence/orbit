@@ -5,16 +5,18 @@ import { getUserActor } from "@/lib/auth/user";
 import { CrmError } from "@/lib/crm/errors";
 import { createSuggestedCompany, suggestCompanyForEmail, type CompanySuggestion } from "@/lib/enrichment/companies";
 import { enrichmentAllowed } from "@/lib/enrichment/limits";
-import { saveEnrichmentSettings, type EnrichmentSettings } from "@/lib/enrichment/settings";
-import { backfillWebChecks, ensureDefaultSignals, listWebChecks, removeWebCheck, saveWebCheck, type CompanyCheck, type WebCheck } from "@/lib/enrichment/web-checks";
+import { getEnrichmentSettings, saveEnrichmentSettings, type EnrichmentSettings } from "@/lib/enrichment/settings";
+import { backfillWebChecks, ensureDefaultSignals, markAllDue, listWebChecks, removeWebCheck, saveWebCheck, type CompanyCheck, type WebCheck } from "@/lib/enrichment/web-checks";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
 
 export async function saveEnrichmentSettingsAction(input: Partial<EnrichmentSettings>): Promise<EnrichmentSettings | { error: string }> {
   const user = await getUserActor();
   if (!user) return { error: "Sign in again." };
   try {
+    const before = await getEnrichmentSettings(user);
     const saved = await saveEnrichmentSettings(user, input);
     if (input.webSignals === true) await ensureDefaultSignals(user);
+    if ((saved.webTags && !before.webTags) || (saved.webGaps && !before.webGaps)) await markAllDue(user);
     revalidatePath(SETTINGS_PATHS.integrations);
     return saved;
   } catch (error) {
