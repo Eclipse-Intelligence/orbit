@@ -153,7 +153,7 @@ export default function EnrichmentSettingsCard({
     setCurrent(next);
     setBusy(true);
     setError(null);
-    const result = await saveEnrichmentSettingsAction(next);
+    const result = await saveEnrichmentSettingsAction({ emailOrder: next.emailOrder, linkedinOrder: next.linkedinOrder, autoCompanies: next.autoCompanies });
     setBusy(false);
     if ("error" in result) {
       setCurrent(previous);

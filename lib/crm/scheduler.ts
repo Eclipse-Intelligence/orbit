@@ -15,6 +15,7 @@ import { ensureTranscriptSubscription, syncTeamsTranscripts } from "@/lib/crm/te
 import type { UserActor } from "@/lib/crm/types";
 import { granolaApiKey, granolaClient } from "@/lib/granola";
 import { query } from "@/lib/db/pool";
+import { runWebSignals, webChecksConfigured } from "@/lib/enrichment/web-checks";
 import { microsoftConfigured } from "@/lib/microsoft/oauth";
 
 const CRON_BUDGET_MS = 50_000;
@@ -137,6 +138,12 @@ export const DEFAULT_STEPS: SyncStep[] = [
         deadline: context.deadline,
       }),
     }),
+  },
+  {
+    name: "web_signals",
+    minMs: 8_000,
+    applies: () => webChecksConfigured(),
+    run: (target, context) => runWebSignals(target.actor, { deadline: Math.min(context.deadline, Date.now() + 20_000), fetchImpl: context.fetchImpl }),
   },
 ];
 

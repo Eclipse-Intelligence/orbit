@@ -10,6 +10,9 @@ export type EnrichmentSettings = {
   emailOrder: ProviderId[];
   linkedinOrder: ProviderId[];
   autoCompanies: boolean;
+  webTags: boolean;
+  webGaps: boolean;
+  webSignals: boolean;
 };
 
 export type ProviderStatus = { id: ProviderId; name: string; envKey: string; configured: boolean; fields: ContactField[] };
@@ -50,8 +53,8 @@ export function enrichmentAvailability(env: Record<string, string | undefined> =
 
 export async function getEnrichmentSettings(actor: Actor): Promise<EnrichmentSettings> {
   const row = await withActor(actor, async (db) => {
-    const result = await db.query<{ email_order: string[]; linkedin_order: string[]; auto_companies: boolean }>(
-      "select email_order, linkedin_order, auto_companies from crm.enrichment_settings where workspace_id = $1",
+    const result = await db.query<{ email_order: string[]; linkedin_order: string[]; auto_companies: boolean; web_tags: boolean; web_gaps: boolean; web_signals: boolean }>(
+      "select email_order, linkedin_order, auto_companies, web_tags, web_gaps, web_signals from crm.enrichment_settings where workspace_id = $1",
       [actor.workspaceId],
     );
     return result.rows[0] ?? null;
@@ -60,6 +63,9 @@ export async function getEnrichmentSettings(actor: Actor): Promise<EnrichmentSet
     emailOrder: cleanOrder(row?.email_order, "email", DEFAULT_EMAIL_ORDER),
     linkedinOrder: cleanOrder(row?.linkedin_order, "linkedin", DEFAULT_LINKEDIN_ORDER),
     autoCompanies: row?.auto_companies ?? true,
+    webTags: row?.web_tags ?? false,
+    webGaps: row?.web_gaps ?? false,
+    webSignals: row?.web_signals ?? false,
   };
 }
 
@@ -72,14 +78,18 @@ export async function saveEnrichmentSettings(actor: UserActor, input: Partial<En
     emailOrder: input.emailOrder ? cleanOrder(input.emailOrder, "email", current.emailOrder) : current.emailOrder,
     linkedinOrder: input.linkedinOrder ? cleanOrder(input.linkedinOrder, "linkedin", current.linkedinOrder) : current.linkedinOrder,
     autoCompanies: typeof input.autoCompanies === "boolean" ? input.autoCompanies : current.autoCompanies,
+    webTags: typeof input.webTags === "boolean" ? input.webTags : current.webTags,
+    webGaps: typeof input.webGaps === "boolean" ? input.webGaps : current.webGaps,
+    webSignals: typeof input.webSignals === "boolean" ? input.webSignals : current.webSignals,
   };
   await withActor(actor, (db) =>
     db.query(
-      `insert into crm.enrichment_settings (workspace_id, email_order, linkedin_order, auto_companies)
-       values ($1, $2, $3, $4)
+      `insert into crm.enrichment_settings (workspace_id, email_order, linkedin_order, auto_companies, web_tags, web_gaps, web_signals)
+       values ($1, $2, $3, $4, $5, $6, $7)
        on conflict (workspace_id) do update set
-         email_order = excluded.email_order, linkedin_order = excluded.linkedin_order, auto_companies = excluded.auto_companies`,
-      [actor.workspaceId, next.emailOrder, next.linkedinOrder, next.autoCompanies],
+         email_order = excluded.email_order, linkedin_order = excluded.linkedin_order, auto_companies = excluded.auto_companies,
+         web_tags = excluded.web_tags, web_gaps = excluded.web_gaps, web_signals = excluded.web_signals`,
+      [actor.workspaceId, next.emailOrder, next.linkedinOrder, next.autoCompanies, next.webTags, next.webGaps, next.webSignals],
     ),
   );
   return next;
