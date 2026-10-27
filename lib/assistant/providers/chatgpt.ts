@@ -152,24 +152,31 @@ export async function completeChatGpt(input: ProviderInput & { token: string; ac
     throw new ProviderError("Couldn't reach ChatGPT.");
   }
   if (!response.ok || !response.body) throw await failure(response);
+  return readResponses(response.body, { label: "ChatGPT", modelId: input.modelId });
+}
 
+export async function readResponses(body: ReadableStream<Uint8Array>, options: { label: string; modelId: string; onText?: (text: string) => void }): Promise<Completion> {
   const items: Item[] = [];
   let finished: Item | null = null;
+  let streamed = "";
   try {
-    for await (const event of events(response.body)) {
-      if (event.type === "response.output_item.done" && event.item && typeof event.item === "object") items.push(event.item as Item);
+    for await (const event of events(body)) {
+      if (event.type === "response.output_text.delta" && typeof event.delta === "string" && options.onText) {
+        streamed += event.delta;
+        options.onText(streamed);
+      } else if (event.type === "response.output_item.done" && event.item && typeof event.item === "object") items.push(event.item as Item);
       else if (event.type === "response.completed" || event.type === "response.incomplete") finished = (event.response as Item) ?? {};
       else if (event.type === "response.failed" || event.type === "error") {
         const problem = ((event.response as Item | undefined)?.error ?? event.error ?? event) as { message?: unknown };
-        throw new ProviderError(`ChatGPT stopped: ${typeof problem.message === "string" ? problem.message : "unknown error"}`);
+        throw new ProviderError(`${options.label} stopped: ${typeof problem.message === "string" ? problem.message : "unknown error"}`);
       }
     }
   } catch (error) {
     if (error instanceof ProviderError) throw error;
     if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
-      throw new ProviderError("ChatGPT took too long to reply. Try again, or pick a lower reasoning level.");
+      throw new ProviderError(`${options.label} took too long to reply. Try again, or pick a lower reasoning level.`);
     }
-    throw new ProviderError("The ChatGPT connection dropped. Try again.");
+    throw new ProviderError(`The ${options.label} connection dropped. Try again.`);
   }
   if (items.length === 0 && Array.isArray(finished?.output)) items.push(...(finished.output as Item[]));
   const reply = readItems(items);
@@ -177,8 +184,8 @@ export async function completeChatGpt(input: ProviderInput & { token: string; ac
     content: reply.text,
     toolCalls: reply.toolCalls,
     sources: reply.sources,
-    model: input.modelId,
+    model: options.modelId,
     usage: finished?.usage && typeof finished.usage === "object" ? (finished.usage as Record<string, unknown>) : null,
-    state: { model: input.modelId, content: items },
+    state: { model: options.modelId, content: items },
   };
 }

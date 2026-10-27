@@ -10,6 +10,7 @@ type AssistantModel = {
   maker: string;
   source: ModelSource;
   reasoning: readonly ReasoningLevel[];
+  responses?: boolean;
 };
 
 const CODEX_LEVELS: readonly ReasoningLevel[] = ["low", "medium", "high", "xhigh"];
@@ -20,8 +21,8 @@ export const MODEL_SOURCES: { id: ModelSource; label: string }[] = [
   { id: "chatgpt", label: "ChatGPT account" },
 ];
 
-function orbit(id: string, label: string, maker: string, reasoning: readonly ReasoningLevel[] = REASONING_LEVELS): AssistantModel {
-  return { id, apiModel: id, label, maker, source: "orbit", reasoning };
+function orbit(id: string, label: string, maker: string, reasoning: readonly ReasoningLevel[] = REASONING_LEVELS, responses = false): AssistantModel {
+  return { id, apiModel: id, label, maker, source: "orbit", reasoning, ...(responses ? { responses } : {}) };
 }
 
 function account(source: "chatgpt" | "claude", apiModel: string, label: string, reasoning: readonly ReasoningLevel[]): AssistantModel {
@@ -34,7 +35,7 @@ export const ASSISTANT_MODELS: AssistantModel[] = [
   orbit("claude-haiku-5-5", "Haiku 5.5", "Anthropic"),
   orbit("gpt-6-astra", "GPT-6 Astra", "OpenAI"),
   orbit("gpt-6.1-sol", "GPT-6.1 Sol", "OpenAI"),
-  orbit("gpt-6.1-terra", "GPT-6.1 Terra", "OpenAI"),
+  orbit("gpt-6.1-terra", "GPT-6.1 Terra", "OpenAI", REASONING_LEVELS, true),
   orbit("grok-4.7", "Grok 4.7", "xAI", ["low", "medium", "high", "xhigh"]),
   orbit("gemini-4-argon", "Gemini 4 Argon", "Google", ["low", "medium", "high"]),
   account("claude", "claude-fable-5-1", "Fable 5.1", REASONING_LEVELS),
