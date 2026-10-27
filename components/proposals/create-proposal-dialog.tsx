@@ -10,6 +10,7 @@ import { searchCompaniesAction } from "@/app/(crm)/actions";
 import { createProposalAction, proposalOptionsAction } from "@/app/(crm)/proposals/actions";
 import type { Product, Template } from "@/lib/proposals/catalogue";
 import { BILLING_LABELS, formatMoney, KIND_LABELS, totalLabel, totalsOf, type Currency } from "@/lib/proposals/model";
+import { reloadIfStaleDeploy } from "@/lib/stale-deploy";
 import { cn } from "@/lib/utils";
 
 type ContactOption = { id: string; name: string; email: string | null; jobTitle: string | null };
@@ -53,6 +54,7 @@ function CreateForm({ company: preset, contactId, onClose }: { company: { id: st
     void proposalOptionsAction(company?.id ?? null).then((result) => {
       if (!live) return;
       if (result.error || !result.data) {
+        setTemplates([]);
         setError(result.error ?? "Couldn't load templates.");
         return;
       }
@@ -61,6 +63,10 @@ function CreateForm({ company: preset, contactId, onClose }: { company: { id: st
       setContacts(result.data.contacts);
       setTemplateId((current) => current || result.data!.templates[0]?.id || "");
       setContact((current) => (current && result.data!.contacts.some((item) => item.id === current) ? current : (result.data!.contacts[0]?.id ?? "")));
+    }, (problem: unknown) => {
+      if (!live) return;
+      setTemplates([]);
+      if (!reloadIfStaleDeploy(problem)) setError("Couldn't load templates. Try again.");
     });
     return () => {
       live = false;
@@ -72,7 +78,13 @@ function CreateForm({ company: preset, contactId, onClose }: { company: { id: st
     if (company || text.length < 2) return;
     let live = true;
     const timer = window.setTimeout(() => {
-      void searchCompaniesAction(text).then((rows) => live && setResults(rows.map((row) => ({ id: row.id, name: row.name }))));
+      void searchCompaniesAction(text).then((rows) => {
+        if (!live) return;
+        const found = rows.map((row) => ({ id: row.id, name: row.name }));
+        const exact = found.filter((row) => row.name.trim().toLowerCase() === text.toLowerCase());
+        if (exact.length === 1) setCompany(exact[0]);
+        else setResults(found);
+      });
     }, 200);
     return () => {
       live = false;
@@ -86,19 +98,37 @@ function CreateForm({ company: preset, contactId, onClose }: { company: { id: st
     .filter((product) => chosen[product.id])
     .map((product) => ({ productId: product.id, name: product.name, description: "", billing: product.billing, unitPrice: priceOf(product) ?? 0, quantity: chosen[product.id] }));
   const total = totalLabel(totalsOf(items), currency);
+  const blocker = !company
+    ? "Choose a company."
+    : !templates
+      ? null
+      : contacts.length === 0
+        ? `Add a contact at ${company.name} first.`
+        : !contact
+          ? "Choose a person."
+          : !template
+            ? "Make a template active first."
+            : null;
 
   async function create() {
     if (!company || !contact || !template) return;
     setBusy(true);
     setError(null);
-    const result = await createProposalAction({
-      templateId: template.id,
-      companyId: company.id,
-      contactId: contact,
-      currency,
-      items: items.map((item) => ({ productId: item.productId, quantity: item.quantity })),
-      title: title.trim() || undefined,
-    });
+    let result: Awaited<ReturnType<typeof createProposalAction>>;
+    try {
+      result = await createProposalAction({
+        templateId: template.id,
+        companyId: company.id,
+        contactId: contact,
+        currency,
+        items: items.map((item) => ({ productId: item.productId, quantity: item.quantity })),
+        title: title.trim() || undefined,
+      });
+    } catch (problem) {
+      setBusy(false);
+      if (!reloadIfStaleDeploy(problem)) setError("Couldn't create it. Try again.");
+      return;
+    }
     if (!result.data) {
       setBusy(false);
       setError(result.error ?? "Couldn't create it.");
@@ -251,13 +281,15 @@ function CreateForm({ company: preset, contactId, onClose }: { company: { id: st
             onChange={(event) => setTitle(event.target.value)}
           />
         </div>
-        {error && (
-          <p role="alert" className="caption-style text-danger">
-            {error}
-          </p>
-        )}
       </div>
       <DialogFooter>
+        {error ? (
+          <p role="alert" className="caption-style text-danger mr-auto min-w-0">
+            {error}
+          </p>
+        ) : (
+          blocker && <p className="caption-style text-subtle mr-auto min-w-0">{blocker}</p>
+        )}
         <Button variant="ghost" onClick={onClose}>
           Cancel
         </Button>
