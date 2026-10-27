@@ -257,10 +257,11 @@ async function learnMarket(actor: UserActor, options: Options): Promise<UnitResu
     const notes = await db.query<Parameters<typeof mapNote>[0]>(`${NOTE_SELECT} where n.workspace_id = $1 and n.processed_at is null order by n.created_at limit 80`, [actor.workspaceId]);
     const watch = await db.query<{ kind: string; label: string; notes: string | null }>("select kind, label, notes from crm.watchlist where workspace_id = $1 order by kind, label limit 100", [actor.workspaceId]);
     const abouts = [...new Set(notes.rows.map((row) => row.about?.toLowerCase().trim()).filter((value): value is string => Boolean(value)))];
-    const companies = abouts.length
+    const linked = [...new Set(notes.rows.map((row) => row.company_id).filter((value): value is string => Boolean(value)))];
+    const companies = abouts.length || linked.length
       ? await db.query<{ id: string; name: string }>(
-          "select id, name from crm.companies where workspace_id = $1 and archived_at is null and lower(name) = any($2::text[]) limit 100",
-          [actor.workspaceId, abouts],
+          "select id, name from crm.companies where workspace_id = $1 and archived_at is null and (lower(name) = any($2::text[]) or id = any($3::uuid[])) limit 100",
+          [actor.workspaceId, abouts, linked],
         )
       : { rows: [] as { id: string; name: string }[] };
     await db.query(

@@ -244,6 +244,38 @@ export function graphProblem(definition: WorkflowDefinition): string | null {
     return false;
   };
   for (const id of [TRIGGER_NODE, ...ids]) if (visit(id)) return "Connections can't loop back. Use For each item to repeat steps.";
+  for (const node of definition.nodes) {
+    const problem = node.type === "decide" ? webQuestionProblem(node.config.questions) : null;
+    if (problem) return `${node.label || node.id}: ${problem}`;
+  }
+  return null;
+}
+
+export const WEB_QUESTION_TYPES = ["yes_no", "choice", "score"] as const;
+const MAX_WEB_QUESTIONS = 20;
+const WEB_QUESTION_KEY = /^[a-z][a-zA-Z0-9_]{0,39}$/;
+
+export function webQuestionOptions(item: Record<string, unknown> | undefined) {
+  return (Array.isArray(item?.options) ? item.options : []).map((option) => (typeof option === "string" ? option.trim() : "")).filter(Boolean);
+}
+
+export function webQuestionProblem(value: unknown): string | null {
+  const raw = Array.isArray(value) ? (value as (Record<string, unknown> | undefined)[]) : [];
+  if (raw.length === 0) return "Add a question to check.";
+  if (raw.length > MAX_WEB_QUESTIONS) return `A web check can ask up to ${MAX_WEB_QUESTIONS} questions.`;
+  const seen = new Set<string>(["sources"]);
+  for (const [index, item] of raw.entries()) {
+    const key = typeof item?.key === "string" ? item.key.trim() : "";
+    const type = WEB_QUESTION_TYPES.find((entry) => entry === item?.type);
+    const count = webQuestionOptions(item).length;
+    if (!WEB_QUESTION_KEY.test(key)) return `${key || `Question ${index + 1}`}: start the key with a lowercase letter and use only letters, numbers and underscores.`;
+    if (seen.has(key) || seen.has(`${key}Confidence`)) return `${key}: use a different key, this one is already taken.`;
+    if (!type) return `${key}: choose Yes or no, Pick one or Score.`;
+    if (type === "choice" && (count < 2 || count > 50)) return `${key}: give 2 to 50 options.`;
+    if (type === "score" && (count < 2 || count > 10)) return `${key}: give 2 to 10 levels.`;
+    seen.add(key);
+    if (type === "choice") seen.add(`${key}Confidence`);
+  }
   return null;
 }
 

@@ -36,7 +36,7 @@ function Toggle({ title, caption, on, canAdmin, disabled, onChange }: { title: s
         <span className="text-foreground text-[13.5px] leading-5">{title}</span>
         <span className="caption-style text-subtle leading-[1.4]">{caption}</span>
       </span>
-      {canAdmin ? <Switch checked={on} label={title} onChange={change} /> : <Status on={on}>{on ? "On" : "Off"}</Status>}
+      {canAdmin ? <Switch checked={on} label={title} disabled={disabled} onChange={change} /> : <Status on={on}>{on ? "On" : "Off"}</Status>}
     </label>
   );
 }
@@ -166,7 +166,7 @@ function Rules({
   );
 }
 
-function Backfill({ initial }: { initial: number }) {
+function Backfill({ initial, blocked }: { initial: number; blocked: string | null }) {
   const router = useRouter();
   const [remaining, setRemaining] = useState(initial);
   const [running, setRunning] = useState(false);
@@ -180,7 +180,7 @@ function Backfill({ initial }: { initial: number }) {
     let updated = 0;
     let left = remaining;
     try {
-      for (let round = 0; round < 200; round += 1) {
+      for (let round = 0; round < 50; round += 1) {
         const payload = await backfillWebChecksAction();
         if ("error" in payload) {
           setMessage({ text: payload.error, error: true });
@@ -207,7 +207,9 @@ function Backfill({ initial }: { initial: number }) {
       <span className="flex min-w-0 flex-col gap-0.5">
         <span className="text-foreground text-[13.5px] leading-5">Check existing companies</span>
         <span className="caption-style text-subtle">
-          {running
+          {blocked
+            ? blocked
+            : running
             ? `Checking… ${done} done, ${remaining} to go`
             : remaining > 0
               ? `${remaining} ${remaining === 1 ? "company hasn't" : "companies haven't"} been checked. $0.001 each.`
@@ -219,7 +221,7 @@ function Backfill({ initial }: { initial: number }) {
           </span>
         )}
       </span>
-      <Button variant="secondary" size="sm" disabled={running || remaining === 0} onClick={run}>
+      <Button variant="secondary" size="sm" disabled={running || remaining === 0 || Boolean(blocked)} onClick={run}>
         {running ? "Checking…" : "Check now"}
       </Button>
     </div>
@@ -260,14 +262,19 @@ function IdealCustomer({ initial, learned, canAdmin, onSaved }: { initial: strin
         maxLength={20000}
         value={value}
         readOnly={!canAdmin}
-        placeholder={learned ?? "UK content and SEO agencies of 10 to 50 people that sell to B2B brands"}
+        placeholder="UK content and SEO agencies of 10 to 50 people that sell to B2B brands"
         onChange={(event) => setValue(event.target.value)}
       />
       <span className="caption-style text-subtle leading-[1.4]">
-        {value.trim() ? "Used instead of what Orbit has learned." : learned ? "Empty, so Orbit uses what it has learned about your ICP, shown above." : "Nothing learned yet. Describe your ideal customer to score companies."}
+        {value.trim() ? "Companies are scored against this. Saving a change makes them due for rescoring." : "Describe your ideal customer to score companies."}
       </span>
       {canAdmin && (
         <div className="flex flex-wrap items-center justify-end gap-3">
+          {learned && learned !== value.trim() && (
+            <Button variant="ghost" size="sm" disabled={busy} onClick={() => setValue(learned)}>
+              Use what Orbit has learned
+            </Button>
+          )}
           {message && (
             <span role={message.error ? "alert" : "status"} className={cn("caption-style", message.error ? "text-danger" : "text-subtle")}>
               {message.text}
@@ -303,13 +310,14 @@ export default function WebChecksSettings({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function save(next: EnrichmentSettings) {
+  async function save(key: "webTags" | "webGaps" | "webSignals" | "webIcp", value: boolean) {
     const previous = current;
+    const next = { ...current, [key]: value };
     setCurrent(next);
     setBusy(true);
     setError(null);
     try {
-      const result = await saveEnrichmentSettingsAction({ webTags: next.webTags, webGaps: next.webGaps, webSignals: next.webSignals, webIcp: next.webIcp });
+      const result = await saveEnrichmentSettingsAction({ [key]: value });
       if ("error" in result) {
         setCurrent(previous);
         setError(result.error);
@@ -329,8 +337,14 @@ export default function WebChecksSettings({
     }
   }
 
-  const saved = (check: WebCheck) => setChecks((list) => [...list.filter((item) => item.id !== check.id), check]);
-  const removed = (id: string) => setChecks((list) => list.filter((item) => item.id !== id));
+  const saved = (check: WebCheck) => {
+    setChecks((list) => [...list.filter((item) => item.id !== check.id), check]);
+    router.refresh();
+  };
+  const removed = (id: string) => {
+    setChecks((list) => list.filter((item) => item.id !== id));
+    router.refresh();
+  };
   const tags = checks.filter((check) => check.kind === "tag");
   const signals = checks.filter((check) => check.kind === "signal");
 
@@ -343,7 +357,7 @@ export default function WebChecksSettings({
       <div className="flex flex-col gap-5">
         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
           <span className="text-foreground text-[13.5px] leading-5">Parallel</span>
-          <Status on={configured}>{configured ? "Connected" : "Add PARALLEL_API_KEY in Vercel"}</Status>
+          <Status on={configured}>{configured ? "Key set" : "Add PARALLEL_API_KEY in Vercel"}</Status>
         </div>
         <div className="flex flex-col gap-3">
           <Toggle
@@ -352,7 +366,7 @@ export default function WebChecksSettings({
             on={current.webTags}
             canAdmin={canAdmin}
             disabled={busy}
-            onChange={(value) => void save({ ...current, webTags: value })}
+            onChange={(value) => void save("webTags", value)}
           />
           <Rules kind="tag" checks={tags} canAdmin={canAdmin} onSaved={saved} onRemoved={removed} />
         </div>
@@ -362,7 +376,7 @@ export default function WebChecksSettings({
           on={current.webGaps}
           canAdmin={canAdmin}
           disabled={busy}
-          onChange={(value) => void save({ ...current, webGaps: value })}
+          onChange={(value) => void save("webGaps", value)}
         />
         <div className="flex flex-col gap-3">
           <Toggle
@@ -371,16 +385,22 @@ export default function WebChecksSettings({
             on={current.webIcp}
             canAdmin={canAdmin}
             disabled={busy}
-            onChange={(value) => void save({ ...current, webIcp: value })}
+            onChange={(value) => void save("webIcp", value)}
           />
           {current.webIcp && (
-            <IdealCustomer initial={current.icpText ?? ""} learned={learnedIcp} canAdmin={canAdmin} onSaved={(value) => {
+            <IdealCustomer key={current.icpText ?? ""} initial={current.icpText ?? ""} learned={learnedIcp} canAdmin={canAdmin} onSaved={(value) => {
               setCurrent((settings) => ({ ...settings, icpText: value }));
               router.refresh();
             }} />
           )}
         </div>
-        {canAdmin && configured && (current.webTags || current.webGaps || current.webIcp) && <Backfill key={unchecked} initial={unchecked} />}
+        {canAdmin && configured && (current.webTags || current.webGaps || current.webIcp) && (
+          <Backfill
+            key={unchecked}
+            initial={unchecked}
+            blocked={current.webIcp && !current.webTags && !current.webGaps && !current.icpText ? "Describe your ideal customer first." : null}
+          />
+        )}
         <div className="flex flex-col gap-3">
           <Toggle
             title="Weekly signals"
@@ -388,7 +408,7 @@ export default function WebChecksSettings({
             on={current.webSignals}
             canAdmin={canAdmin}
             disabled={busy}
-            onChange={(value) => void save({ ...current, webSignals: value })}
+            onChange={(value) => void save("webSignals", value)}
           />
           {(current.webSignals || signals.length > 0) && <Rules kind="signal" checks={signals} canAdmin={canAdmin} onSaved={saved} onRemoved={removed} />}
         </div>

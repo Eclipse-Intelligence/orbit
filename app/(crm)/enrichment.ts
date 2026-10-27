@@ -6,7 +6,7 @@ import { CrmError } from "@/lib/crm/errors";
 import { createSuggestedCompany, suggestCompanyForEmail, type CompanySuggestion } from "@/lib/enrichment/companies";
 import { enrichmentAllowed } from "@/lib/enrichment/limits";
 import { getEnrichmentSettings, saveEnrichmentSettings, type EnrichmentSettings } from "@/lib/enrichment/settings";
-import { backfillWebChecks, ensureDefaultSignals, markAllDue, listWebChecks, removeWebCheck, saveWebCheck, type CompanyCheck, type WebCheck } from "@/lib/enrichment/web-checks";
+import { backfillWebChecks, ensureDefaultSignals, icpProfile, markAllDue, listWebChecks, removeWebCheck, saveWebCheck, type CompanyCheck, type WebCheck } from "@/lib/enrichment/web-checks";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
 
 export async function saveEnrichmentSettingsAction(input: Partial<EnrichmentSettings>): Promise<EnrichmentSettings | { error: string }> {
@@ -17,6 +17,7 @@ export async function saveEnrichmentSettingsAction(input: Partial<EnrichmentSett
     const saved = await saveEnrichmentSettings(user, input);
     if (input.webSignals === true) await ensureDefaultSignals(user);
     if ((saved.webTags && !before.webTags) || (saved.webGaps && !before.webGaps)) await markAllDue(user);
+    if (saved.webIcp && !saved.icpText && (await icpProfile(user))) return await getEnrichmentSettings(user);
     revalidatePath(SETTINGS_PATHS.integrations);
     return saved;
   } catch (error) {

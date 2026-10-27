@@ -57,7 +57,7 @@ function fromParallel(asked: Asked, answer: DecisionAnswer | undefined) {
 }
 
 export async function checkWeb(args: Record<string, unknown>, options: { fetchImpl?: typeof fetch; env?: Record<string, string | undefined> } = {}) {
-  const about = text(args.about, 4000);
+  const about = text(args.about, 1000);
   if (!about) return { error: "Say who or what the questions are about." };
   const asked = readQuestions(args.questions);
   if (typeof asked === "string") return { error: asked };

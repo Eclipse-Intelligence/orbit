@@ -51,6 +51,10 @@ function empty(value: unknown) {
   return false;
 }
 
+function blank(value: unknown) {
+  return value === null || value === undefined || value === "";
+}
+
 function text(value: unknown) {
   return display(value).trim().toLowerCase();
 }
@@ -72,9 +76,9 @@ export function check(condition: Condition, vars: Vars) {
     case "not_contains":
       return Array.isArray(left) ? !left.some((item) => text(item) === right.toLowerCase()) : !text(left).includes(right.toLowerCase());
     case "greater_than":
-      return Number(display(left)) > Number(right);
+      return !blank(left) && Number(display(left)) > Number(right);
     case "less_than":
-      return Number(display(left)) < Number(right);
+      return !blank(left) && Number(display(left)) < Number(right);
     default:
       return false;
   }
@@ -88,6 +92,30 @@ export function conditionsPass(config: Record<string, unknown>, vars: Vars) {
 }
 
 export type VariableOption = { path: string; label: string; group: string };
+
+const WEB_CHECK_FIELDS: Record<string, string[]> = {
+  company: ["name", "domain", "website", "industry", "sizeCategory", "lifecycle"],
+  contact: ["name", "firstName", "lastName", "jobTitle", "linkedinUrl"],
+  loop: ["item", "index"],
+  trigger: ["at"],
+};
+
+export function webCheckVars(vars: Vars): Vars {
+  const allowed: Vars = { today: vars.today, steps: vars.steps };
+  for (const [root, fields] of Object.entries(WEB_CHECK_FIELDS)) {
+    const source = vars[root];
+    if (!source || typeof source !== "object") continue;
+    allowed[root] = Object.fromEntries(fields.map((field) => [field, (source as Record<string, unknown>)[field]]));
+  }
+  return allowed;
+}
+
+export function webCheckAllows(path: string) {
+  const [root, field] = path.split(".");
+  if (root === "today") return path === "today";
+  if (root === "steps") return Boolean(field);
+  return Boolean(field && WEB_CHECK_FIELDS[root]?.includes(field));
+}
 
 const COMPANY: VariableOption[] = [
   { path: "company.name", label: "Name", group: "Company" },
@@ -239,5 +267,5 @@ export function variableOptions(definition: WorkflowDefinition | null, nodeId?: 
       );
     }
   }
-  return options;
+  return definition?.nodes.find((node) => node.id === nodeId)?.type === "decide" ? options.filter((option) => webCheckAllows(option.path)) : options;
 }
