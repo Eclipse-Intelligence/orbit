@@ -430,6 +430,7 @@ export default function AssistantDock() {
   const pinned = useRef(true);
   const waiting = useRef(false);
   const recovering = useRef(0);
+  const view = useRef(0);
   const [connected, setConnected] = useState<ModelSource[] | null>(null);
 
   useEffect(() => {
@@ -474,8 +475,9 @@ export default function AssistantDock() {
       setWebSearch(saved.webSearch);
       const last = sessionStorage.getItem(CONVERSATION_KEY);
       if (last) {
+        const mine = view.current;
         void getConversationAction(last).then((result) => {
-          if (!result) return;
+          if (!result || view.current !== mine) return;
           setConversation(result.conversation);
           setMessages(result.messages);
           setWorking(result.working);
@@ -581,7 +583,21 @@ export default function AssistantDock() {
     }
   }, []);
 
+  function detach() {
+    view.current += 1;
+    abort.current?.abort();
+    abort.current = null;
+    recovering.current += 1;
+    waiting.current = false;
+    setBusy(false);
+    setStreamed(null);
+    setLive([]);
+    return view.current;
+  }
+
   async function run(body: Record<string, unknown>) {
+    const mine = ++view.current;
+    const current = () => view.current === mine;
     setBusy(true);
     recovering.current += 1;
     setWorking(null);
@@ -592,8 +608,15 @@ export default function AssistantDock() {
     const controller = new AbortController();
     abort.current = controller;
     try {
-      await streamAssistant(body, onEvent, controller.signal);
+      await streamAssistant(
+        body,
+        (event) => {
+          if (current()) onEvent(event);
+        },
+        controller.signal,
+      );
     } catch (caught) {
+      if (!current()) return;
       if (!(caught instanceof Error && caught.name === "AbortError")) {
         const dropped = caught instanceof TypeError;
         if (dropped && conversationId.current) {
@@ -604,11 +627,13 @@ export default function AssistantDock() {
         }
       }
     } finally {
-      abort.current = null;
-      setBusy(false);
-      setLive([]);
-      setStreamed(null);
-      if (waiting.current && conversationId.current) {
+      if (abort.current === controller) abort.current = null;
+      if (current()) {
+        setBusy(false);
+        setLive([]);
+        setStreamed(null);
+      }
+      if (current() && waiting.current && conversationId.current) {
         waiting.current = false;
         void follow(conversationId.current);
       }
@@ -652,8 +677,7 @@ export default function AssistantDock() {
   }
 
   function newChat() {
-    abort.current?.abort();
-    recovering.current += 1;
+    detach();
     setWorking(null);
     setConversation(null);
     setMessages([]);
@@ -672,7 +696,9 @@ export default function AssistantDock() {
   async function load(id: string) {
     setHistoryOpen(false);
     pinned.current = true;
+    const mine = detach();
     const result = await getConversationAction(id);
+    if (view.current !== mine) return;
     if (!result) {
       setError("That chat couldn't be opened.");
       return;
