@@ -98,24 +98,72 @@ function sectionId(index: number) {
   return `section-${index + 1}`;
 }
 
+export function Signatures({ content, signatures, children }: { content: Content; signatures: SignatureView[]; children?: ReactNode }) {
+  return (
+    <section id="sign" aria-labelledby="sign-title" className="flex scroll-mt-32 flex-col gap-5">
+      <h2 id="sign-title" className="doc-heading">
+        Signatures
+      </h2>
+      <div className="grid gap-4 sm:grid-cols-2">
+        {(["client", "sender"] as const).map((role) => {
+          const party = role === "client" ? content.client : content.sender;
+          const signed = signatures.find((item) => item.role === role);
+          return (
+            <div key={role} className="bg-card flex flex-col gap-2 rounded-2xl p-5 shadow-[0_0_0_1px_rgba(0,0,0,0.05)]">
+              <span className="text-subtle text-[12.5px] font-medium tracking-[0.04em] uppercase">For {party.company}</span>
+              {signed ? (
+                signed.signatureImage ? (
+                  <Image src={signed.signatureImage} alt={`Signature of ${signed.name}`} width={240} height={54} unoptimized className="h-[54px] w-auto self-start object-contain" />
+                ) : (
+                  <span className={cn(signatureFont.className, "text-[34px] leading-[42px]")}>{signed.signatureText}</span>
+                )
+              ) : (
+                <span className="text-subtle text-[15px] leading-[42px]">Waiting for signature</span>
+              )}
+              <span className="border-border border-t pt-2 text-[14px]">
+                {signed?.name ?? party.name}
+                {(signed?.title ?? party.title) && <span className="text-subtle">, {signed?.title ?? party.title}</span>}
+              </span>
+              {signed && <span className="text-subtle text-[13px]">Signed {longDate(signed.signedAt)}</span>}
+            </div>
+          );
+        })}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function imageSrc(value: string) {
+  const href = safeHref(value);
+  return href && href.startsWith("https:") ? href : null;
+}
+
 export default function ProposalDocument({
   content,
+  blocks = content.blocks,
   signatures = [],
   children,
   compact,
+  withSignatures = true,
 }: {
   content: Content;
+  blocks?: Content["blocks"];
   signatures?: SignatureView[];
   children?: ReactNode;
   compact?: boolean;
+  withSignatures?: boolean;
 }) {
   const totals = BILLINGS.filter((billing) => content.totals[billing]);
   return (
     <article className={cn("flex flex-col", compact ? "gap-10" : "gap-14 sm:gap-16")}>
-      {content.blocks.map((block, index) => {
+      {blocks.map((block, index) => {
+        if (block.type === "tab") return null;
         if (block.type === "cover") {
+          const cover = imageSrc(block.image);
           return (
             <header key={block.id} id={sectionId(index)} className="flex scroll-mt-24 flex-col gap-5">
+              {cover && <Asset type="image" src={cover} alt="" width={12} height={5} fit="cover" unoptimized className="mb-2 rounded-2xl shadow-[0_0_0_1px_rgba(0,0,0,0.05)]" />}
               {content.logo ? (
                 <ProposalLogo src={content.logo} company={content.sender.company} className="mb-2" />
               ) : (
@@ -205,37 +253,11 @@ export default function ProposalDocument({
           </section>
         );
       })}
-      <section id="sign" aria-labelledby="sign-title" className="flex scroll-mt-24 flex-col gap-5">
-        <h2 id="sign-title" className="doc-heading">
-          Signatures
-        </h2>
-        <div className="grid gap-4 sm:grid-cols-2">
-          {(["client", "sender"] as const).map((role) => {
-            const party = role === "client" ? content.client : content.sender;
-            const signed = signatures.find((item) => item.role === role);
-            return (
-              <div key={role} className="bg-card flex flex-col gap-2 rounded-2xl p-5 shadow-[0_0_0_1px_rgba(0,0,0,0.05)]">
-                <span className="text-subtle text-[12.5px] font-medium tracking-[0.04em] uppercase">For {party.company}</span>
-                {signed ? (
-                  signed.signatureImage ? (
-                    <Image src={signed.signatureImage} alt={`Signature of ${signed.name}`} width={240} height={54} unoptimized className="h-[54px] w-auto self-start object-contain" />
-                  ) : (
-                    <span className={cn(signatureFont.className, "text-[34px] leading-[42px]")}>{signed.signatureText}</span>
-                  )
-                ) : (
-                  <span className="text-subtle text-[15px] leading-[42px]">Waiting for signature</span>
-                )}
-                <span className="border-border border-t pt-2 text-[14px]">
-                  {signed?.name ?? party.name}
-                  {(signed?.title ?? party.title) && <span className="text-subtle">, {signed?.title ?? party.title}</span>}
-                </span>
-                {signed && <span className="text-subtle text-[13px]">Signed {longDate(signed.signedAt)}</span>}
-              </div>
-            );
-          })}
-        </div>
-        {children}
-      </section>
+      {withSignatures && (
+        <Signatures content={content} signatures={signatures}>
+          {children}
+        </Signatures>
+      )}
     </article>
   );
 }

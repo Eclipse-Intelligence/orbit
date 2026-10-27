@@ -10,7 +10,7 @@ import Tag from "@/components/_ui/tag";
 import SectionHeader from "@/components/crm/section-header";
 import { recordSelectClass } from "@/components/crm/record-form";
 import type { Viewer } from "@/components/crm/viewer";
-import ProposalDocument from "@/components/proposals/proposal-document";
+import ProposalSite from "@/components/proposals/proposal-site";
 import { statusTag } from "@/components/proposals/status";
 import { BlockEditor } from "@/components/proposals/template-editor";
 import {
@@ -364,7 +364,7 @@ export default function ProposalDetail({ viewer, initial }: { viewer: Viewer; in
               <p className="caption-style text-subtle pb-6">
                 {draft ? "Preview with this client's details" : `What ${doc.contactName.split(/\s+/)[0]} sees, version ${doc.version?.number ?? 1}`}
               </p>
-              <ProposalDocument
+              <ProposalSite
                 content={draft ? { ...preview, items, currency, totals: totalsOf(items) } : preview}
                 signatures={doc.signatures.map((signature) => ({ role: signature.role, name: signature.name, title: signature.title, signatureText: signature.signatureText, signatureImage: signature.signatureImage, signedAt: signature.signedAt }))}
                 compact
@@ -377,7 +377,7 @@ export default function ProposalDetail({ viewer, initial }: { viewer: Viewer; in
         open={confirmRevise}
         onOpenChange={setConfirmRevise}
         title="Make changes to this proposal?"
-        description="The link you sent stops working until you send the new version."
+        description="Your client keeps seeing the version you sent until you send the new one, on the same link."
         confirmLabel="Make changes"
         tone="neutral"
         onConfirm={() => void revise()}

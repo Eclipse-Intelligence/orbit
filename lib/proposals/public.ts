@@ -60,15 +60,17 @@ function stateFor(status: DocumentStatus, validUntil: string | null, revoked: bo
 async function load(owner: UserActor, link: LinkRow) {
   return withActor(owner, async (db) => {
     const row = await readRow(db, owner, link.document_id);
+    const versionId = link.revoked ? link.version_id : (row.current_version_id ?? link.version_id);
     const version = await db.query<{ number: number; content: Content; content_hash: string }>(
       "select number, content, content_hash from crm.document_versions where id = $1",
-      [link.version_id],
+      [versionId],
     );
-    const signatures = await db.query<SignatureRow>(`select ${SIGNATURE_COLUMNS} from crm.document_signatures where version_id = $1 order by signed_at`, [link.version_id]);
-    const executed = await db.query<{ id: string }>("select id from crm.document_files where version_id = $1 and kind = 'executed'", [link.version_id]);
-    const current = row.current_version_id === link.version_id;
+    const signatures = await db.query<SignatureRow>(`select ${SIGNATURE_COLUMNS} from crm.document_signatures where version_id = $1 order by signed_at`, [versionId]);
+    const executed = await db.query<{ id: string }>("select id from crm.document_files where version_id = $1 and kind = 'executed'", [versionId]);
+    const current = row.current_version_id === versionId;
     return {
       row,
+      versionId,
       view: {
         documentId: row.id,
         state: stateFor(row.status, row.valid_until, link.revoked, current),
@@ -99,7 +101,7 @@ async function alertOwner(owner: UserActor, input: { key: string; title: string;
 export async function openDocument(token: string, meta: Meta & { track: boolean }) {
   const found = await resolve(token);
   if (!found) return null;
-  const { row, view } = await load(found.owner, found.row);
+  const { row, view, versionId } = await load(found.owner, found.row);
   if (!meta.track || found.row.revoked) return view;
   const outcome = await withActor(found.owner, async (db) => {
     const before = await db.query<{ last_viewed_at: Date | null; status: DocumentStatus }>("select last_viewed_at, status from crm.documents where id = $1", [row.id]);
@@ -112,7 +114,7 @@ export async function openDocument(token: string, meta: Meta & { track: boolean 
     await logEvent(db, {
       workspaceId: found.owner.workspaceId,
       documentId: row.id,
-      versionId: found.row.version_id,
+      versionId,
       type: "viewed",
       actor: "client",
       name: view.content.client.name,
@@ -148,7 +150,7 @@ export async function clientSign(
 ) {
   const found = await resolve(token);
   if (!found) throw new CrmError("not_found", "This link isn't valid.", 404);
-  const { row, view } = await load(found.owner, found.row);
+  const { row, view, versionId } = await load(found.owner, found.row);
   if (view.state !== "open") throw new CrmError("conflict", stateMessage(view.state), 409);
   const name = typeof input.name === "string" ? input.name.replace(/\s+/g, " ").trim() : "";
   const signatureText = typeof input.signatureText === "string" ? input.signatureText.replace(/\s+/g, " ").trim() : "";
@@ -166,7 +168,7 @@ export async function clientSign(
       [
         found.owner.workspaceId,
         row.id,
-        found.row.version_id,
+        versionId,
         name,
         view.content.client.email,
         title,
@@ -181,7 +183,7 @@ export async function clientSign(
     await logEvent(db, {
       workspaceId: found.owner.workspaceId,
       documentId: row.id,
-      versionId: found.row.version_id,
+      versionId,
       type: "client_signed",
       actor: "client",
       name,
@@ -196,7 +198,7 @@ export async function clientSign(
   await alertOwner(
     found.owner,
     {
-      key: `doc-signed:${row.id}:${found.row.version_id}`,
+      key: `doc-signed:${row.id}:${versionId}`,
       title: `${name} signed ${row.title}`,
       body: `${row.company_name}. Countersign it in Orbit to complete it.`,
       href: documentHref(row.id),
@@ -209,7 +211,7 @@ export async function clientSign(
 export async function clientDecline(token: string, input: { reason?: unknown }, meta: Meta = {}) {
   const found = await resolve(token);
   if (!found) throw new CrmError("not_found", "This link isn't valid.", 404);
-  const { row, view } = await load(found.owner, found.row);
+  const { row, view, versionId } = await load(found.owner, found.row);
   if (view.state !== "open") throw new CrmError("conflict", stateMessage(view.state), 409);
   const reason = typeof input.reason === "string" ? input.reason.trim().slice(0, 2000) || null : null;
   await withActor(found.owner, async (db) => {
@@ -217,7 +219,7 @@ export async function clientDecline(token: string, input: { reason?: unknown }, 
     await logEvent(db, {
       workspaceId: found.owner.workspaceId,
       documentId: row.id,
-      versionId: found.row.version_id,
+      versionId,
       type: "declined",
       actor: "client",
       email: view.content.client.email,
@@ -229,7 +231,7 @@ export async function clientDecline(token: string, input: { reason?: unknown }, 
   });
   await alertOwner(
     found.owner,
-    { key: `doc-declined:${row.id}:${found.row.version_id}`, title: `${row.contact_name ?? "Your contact"} declined ${row.title}`, body: reason ?? row.company_name, href: documentHref(row.id) },
+    { key: `doc-declined:${row.id}:${versionId}`, title: `${row.contact_name ?? "Your contact"} declined ${row.title}`, body: reason ?? row.company_name, href: documentHref(row.id) },
     meta.push,
   );
   return (await openDocument(token, { track: false }))!;
@@ -238,14 +240,15 @@ export async function clientDecline(token: string, input: { reason?: unknown }, 
 export async function publicFile(token: string, kind: "issued" | "executed") {
   const found = await resolve(token);
   if (!found) throw new CrmError("not_found", "This link isn't valid.", 404);
+  const { versionId } = await load(found.owner, found.row);
   return withActor(found.owner, async (db) => {
     const file = await db.query<{ data: Buffer; title: string }>(
       "select f.data, d.title from crm.document_files f join crm.documents d on d.id = f.document_id where f.version_id = $1 and f.kind = $2",
-      [found.row.version_id, kind],
+      [versionId, kind],
     );
     if (!file.rows[0]) throw new CrmError("not_found", kind === "executed" ? "The signed copy is ready once both sides have signed." : "PDF not found.", 404);
     if (kind === "issued" && found.row.revoked) throw new CrmError("not_found", "This version has been replaced.", 404);
-    await logEvent(db, { workspaceId: found.owner.workspaceId, documentId: found.row.document_id, versionId: found.row.version_id, type: kind === "executed" ? "downloaded_signed" : "downloaded", actor: "client" });
+    await logEvent(db, { workspaceId: found.owner.workspaceId, documentId: found.row.document_id, versionId, type: kind === "executed" ? "downloaded_signed" : "downloaded", actor: "client" });
     return { data: file.rows[0].data, filename: `${file.rows[0].title.replace(/[^\w\s.-]+/g, "").trim().slice(0, 80) || "document"}${kind === "executed" ? " (signed)" : ""}.pdf` };
   });
 }

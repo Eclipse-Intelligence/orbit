@@ -19,6 +19,7 @@ import {
 } from "@/app/(crm)/knowledge";
 import SitePicker from "@/components/knowledge/site-picker";
 import type { KnowledgeItem } from "@/lib/knowledge/store";
+import { uploadToSignedUrl } from "@/lib/upload-client";
 import { cn } from "@/lib/utils";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
 import TrashIcon from "@/public/assets/images/mail/trash.svg";
@@ -85,15 +86,6 @@ function siteStatus(items: KnowledgeItem[]) {
   const failed = items.filter((item) => item.status === "failed").length;
   const parts = [reading ? `${reading} reading` : null, failed ? `${failed} failed` : null].filter(Boolean);
   return parts.length ? parts.join(" · ") : null;
-}
-
-async function upload(url: string, file: File) {
-  const body = new FormData();
-  body.append("cacheControl", "3600");
-  body.append("", file);
-  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  const response = await fetch(url, { method: "PUT", body, headers: { "x-upsert": "false", ...(key ? { apikey: key } : {}) } });
-  if (!response.ok) throw new Error("The upload didn't finish.");
 }
 
 function sizeLabel(bytes: number | null) {
@@ -184,7 +176,7 @@ export default function KnowledgePanel({
         continue;
       }
       try {
-        await upload(prepared.uploadUrl, file);
+        await uploadToSignedUrl(prepared.uploadUrl, file);
       } catch {
         await removeKnowledgeAction(prepared.item.id);
         setUploads((current) => current.map((entry) => (entry.key === key ? { ...entry, error: `${file.name} didn't finish uploading.` } : entry)));

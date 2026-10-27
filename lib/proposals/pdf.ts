@@ -253,6 +253,7 @@ export async function renderPdf(input: {
   const writer = new Writer(pdf, fonts, `${input.content.title} · ${input.content.sender.company} · Reference ${input.documentId.slice(0, 8)} v${input.versionNumber}`);
   writer.page.drawRectangle({ x: 0, y: HEIGHT - 8, width: WIDTH, height: 8, color: accent });
   for (const block of input.content.blocks) {
+    if (block.type === "tab") continue;
     if (block.type === "cover") {
       writer.gap(30);
       if (input.content.logo) {

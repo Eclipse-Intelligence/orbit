@@ -29,7 +29,8 @@ export const BILLING_LABELS: Record<Billing, string> = { one_off: "One-off", mon
 const text = (max: number) => z.string().max(max).default("");
 
 const blockSchema = z.discriminatedUnion("type", [
-  z.object({ id: z.string().min(1).max(40), type: z.literal("cover"), title: text(300), subtitle: text(1000) }),
+  z.object({ id: z.string().min(1).max(40), type: z.literal("cover"), title: text(300), subtitle: text(1000), image: text(1000) }),
+  z.object({ id: z.string().min(1).max(40), type: z.literal("tab"), label: text(40) }),
   z.object({ id: z.string().min(1).max(40), type: z.literal("section"), heading: text(300), body: text(40000) }),
   z.object({ id: z.string().min(1).max(40), type: z.literal("pricing"), heading: text(300), intro: text(4000) }),
   z.object({
@@ -43,7 +44,38 @@ const blockSchema = z.discriminatedUnion("type", [
 ]);
 export type Block = z.infer<typeof blockSchema>;
 export type BlockType = Block["type"];
-export const BLOCK_LABELS: Record<BlockType, string> = { cover: "Cover", section: "Section", pricing: "Pricing table", terms: "Terms" };
+export const BLOCK_LABELS: Record<BlockType, string> = { cover: "Cover", tab: "Tab", section: "Section", pricing: "Pricing table", terms: "Terms" };
+
+export type Tab = { id: string; label: string; slug: string; blocks: Block[] };
+
+function slugOf(label: string, taken: Set<string>) {
+  const base =
+    label
+      .toLowerCase()
+      .normalize("NFKD")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "") || "tab";
+  let slug = base;
+  for (let index = 2; taken.has(slug); index += 1) slug = `${base}-${index}`;
+  taken.add(slug);
+  return slug;
+}
+
+export function tabsOf(blocks: Block[]): Tab[] | null {
+  if (!blocks.some((block) => block.type === "tab")) return null;
+  const taken = new Set<string>(["sign"]);
+  const tabs: Tab[] = [];
+  for (const block of blocks) {
+    if (block.type === "tab") {
+      const label = block.label.trim() || `Tab ${tabs.length + 1}`;
+      tabs.push({ id: block.id, label, slug: slugOf(label, taken), blocks: [] });
+      continue;
+    }
+    if (tabs.length === 0) tabs.push({ id: "start", label: "Overview", slug: slugOf("Overview", taken), blocks: [] });
+    tabs[tabs.length - 1].blocks.push(block);
+  }
+  return tabs;
+}
 
 export const blocksSchema = z.array(blockSchema).max(60);
 
@@ -184,7 +216,7 @@ export function renderBlocks(blocks: Block[], values: Record<string, string>) {
   const rendered = blocks.map((block) => {
     const out: Record<string, unknown> = { ...block };
     for (const [key, value] of Object.entries(block)) {
-      if (key === "id" || key === "type" || key === "linkUrl" || typeof value !== "string") continue;
+      if (key === "id" || key === "type" || key === "linkUrl" || key === "image" || typeof value !== "string") continue;
       for (const match of value.replace(TOKEN, "").matchAll(PLACEHOLDER)) placeholders.add(`[${match[1]}]`);
       out[key] = fill(value, values, missing);
     }

@@ -18,7 +18,7 @@ import {
   sendDocument,
   updateDocument,
 } from "@/lib/proposals/documents";
-import { fieldValues, renderBlocks, totalLabel, totalsOf } from "@/lib/proposals/model";
+import { fieldValues, renderBlocks, tabsOf, totalLabel, totalsOf } from "@/lib/proposals/model";
 import { clientDecline, clientSign, openDocument, publicFile } from "@/lib/proposals/public";
 import { runWorkflowTick } from "@/lib/workflows/engine";
 import { createWorkflow, listNotifications, listRuns, saveWorkflow, setWorkflowStatus } from "@/lib/workflows/store";
@@ -195,21 +195,46 @@ describe("proposals", () => {
     assert.ok((await listNotifications(owner)).some((note) => note.title === "Andrew Sanaghan signed Pro plan for Pulse (£900 a month)"));
   });
 
-  it("replaces the link when a sent proposal is changed, and records a decline", async () => {
+  it("keeps the same link when a sent proposal is changed, shows the newest version, and records a decline", async () => {
     const id = await createDocument(owner, { templateId: proposalTemplateId, companyId: pulseId, contactId: andrewId, items: [{ productId: pilotId }] });
     const first = tokenOf((await sendDocument(owner, id, { email: false })).url);
     await reviseDocument(owner, id);
-    assert.equal((await openDocument(first, { track: false }))!.state, "replaced");
-    await assert.rejects(() => clientSign(first, { name: "Andrew", signatureText: "Andrew", agree: true }), /newer version/);
+    const during = (await openDocument(first, { track: false }))!;
+    assert.equal(during.state, "open");
+    assert.equal(during.versionNumber, 1);
+    assert.equal((await getDocument(owner, id)).link?.endsWith(first), true);
     await updateDocument(owner, id, { title: "Pilot, revised" });
     const second = tokenOf((await sendDocument(owner, id, { email: false })).url);
-    assert.notEqual(first, second);
-    const declined = await clientDecline(second, { reason: "Budget is on hold until Q1." });
+    assert.equal(second, first);
+    const latest = (await openDocument(first, { track: false }))!;
+    assert.equal(latest.versionNumber, 2);
+    assert.equal(latest.content.title, "Pilot, revised");
+    const declined = await clientDecline(first, { reason: "Budget is on hold until Q1." });
     assert.equal(declined.state, "declined");
     const detail = await getDocument(owner, id);
     assert.equal(detail.status, "declined");
     assert.equal(detail.declineReason, "Budget is on hold until Q1.");
     assert.equal(detail.version?.number, 2);
+  });
+
+  it("splits a proposal into tabs and leaves tab markers out of the PDF", () => {
+    const tabs = tabsOf([
+      { id: "c", type: "cover", title: "Hi", subtitle: "", image: "" },
+      { id: "t1", type: "tab", label: "Proposal" },
+      { id: "s", type: "section", heading: "Scope", body: "Work" },
+      { id: "t2", type: "tab", label: "Proposal" },
+      { id: "t3", type: "tab", label: "Sign" },
+    ])!;
+    assert.deepEqual(
+      tabs.map((tab) => [tab.label, tab.slug, tab.blocks.map((block) => block.id)]),
+      [
+        ["Overview", "overview", ["c"]],
+        ["Proposal", "proposal", ["s"]],
+        ["Proposal", "proposal-2", []],
+        ["Sign", "sign-2", []],
+      ],
+    );
+    assert.equal(tabsOf([{ id: "s", type: "section", heading: "Scope", body: "Work" }]), null);
   });
 
   it("sends an NDA without products, and stops signing once it expires", async () => {

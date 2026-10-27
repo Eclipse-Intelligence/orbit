@@ -1,9 +1,11 @@
 export const ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024;
 export const KNOWLEDGE_MAX_BYTES = 50 * 1024 * 1024;
+export const MEDIA_MAX_BYTES = 10 * 1024 * 1024;
 
 const BUCKETS = {
-  attachments: { id: "email-attachments", limit: ATTACHMENT_MAX_BYTES },
-  knowledge: { id: "knowledge", limit: KNOWLEDGE_MAX_BYTES },
+  attachments: { id: "email-attachments", limit: ATTACHMENT_MAX_BYTES, public: false },
+  knowledge: { id: "knowledge", limit: KNOWLEDGE_MAX_BYTES, public: false },
+  media: { id: "proposal-media", limit: MEDIA_MAX_BYTES, public: true },
 } as const;
 
 export type Bucket = keyof typeof BUCKETS;
@@ -47,11 +49,11 @@ async function failure(response: Response, action: string) {
 const bucketsReady = new Map<Bucket, Promise<void>>();
 
 async function ensureBucket(bucket: Bucket, fetchImpl: typeof fetch) {
-  const { id, limit } = BUCKETS[bucket];
+  const { id, limit, public: open } = BUCKETS[bucket];
   const response = await fetchImpl(endpoint("/bucket"), {
     method: "POST",
     headers: headers({ "content-type": "application/json" }),
-    body: JSON.stringify({ id, name: id, public: false, file_size_limit: limit }),
+    body: JSON.stringify({ id, name: id, public: open, file_size_limit: limit }),
     signal: AbortSignal.timeout(15_000),
   });
   if (response.ok || response.status === 409) return;
@@ -104,4 +106,8 @@ export async function removeObjects(paths: string[], fetchImpl: typeof fetch = f
     signal: AbortSignal.timeout(15_000),
   });
   if (!response.ok) throw await failure(response, "remove the attachments");
+}
+
+export function publicObjectUrl(path: string, bucket: Bucket = "media") {
+  return endpoint(`/object/public/${BUCKETS[bucket].id}/${path}`);
 }

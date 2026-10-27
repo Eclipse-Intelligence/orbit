@@ -436,8 +436,8 @@ export async function getDocument(actor: Actor, id: string): Promise<DocumentDet
     const link = row.current_version_id
       ? (
           await db.query<{ token_cipher: string }>(
-            "select token_cipher from crm.document_links where document_id = $1 and version_id = $2 and revoked_at is null order by created_at desc limit 1",
-            [row.id, row.current_version_id],
+            "select token_cipher from crm.document_links where document_id = $1 and revoked_at is null order by created_at desc limit 1",
+            [row.id],
           )
         ).rows[0]
       : undefined;
@@ -560,7 +560,6 @@ export async function reviseDocument(actor: Actor, id: string, provenance: Prove
   await withActor(actor, async (db) => {
     const row = await readRow(db, actor, id);
     if (!OPEN.has(row.status) && row.status !== "declined" && row.status !== "withdrawn") throw invalid("Only a sent, declined or withdrawn proposal can be changed.", "status");
-    await db.query("update crm.document_links set revoked_at = now() where document_id = $1 and revoked_at is null", [id]);
     await db.query("update crm.documents set status = 'draft', withdrawn_at = null, declined_at = null, decline_reason = null, updated_at = now() where id = $1", [id]);
     await logEvent(db, { workspaceId: actor.workspaceId, documentId: id, versionId: row.current_version_id, type: "reopened", actor: "user", userId: actorUser(actor) });
     await recordAudit(db, actor, "document.reopened", "document", id, provenance, {});
@@ -603,8 +602,8 @@ export async function sendDocument(
     if (row.status === "completed" || row.status === "client_signed") throw invalid("This has already been signed.", "status");
     if (OPEN.has(row.status) && row.current_version_id) {
       const link = await db.query<{ token_cipher: string }>(
-        "select token_cipher from crm.document_links where document_id = $1 and version_id = $2 and revoked_at is null order by created_at desc limit 1",
-        [id, row.current_version_id],
+        "select token_cipher from crm.document_links where document_id = $1 and revoked_at is null order by created_at desc limit 1",
+        [id],
       );
       if (link.rows[0]) return { row, token: decryptSecret(link.rows[0].token_cipher), versionId: row.current_version_id, resend: true };
     }
@@ -632,12 +631,21 @@ export async function sendDocument(
       "insert into crm.document_files (workspace_id, document_id, version_id, kind, data, sha256) values ($1, $2, $3, 'issued', $4, $5)",
       [actor.workspaceId, id, versionId, pdf, sha256(pdf)],
     );
-    const token = randomBytes(24).toString("base64url");
-    await db.query("update crm.document_links set revoked_at = now() where document_id = $1 and revoked_at is null", [id]);
-    await db.query(
-      "insert into crm.document_links (workspace_id, document_id, version_id, email, token_hash, token_cipher) values ($1, $2, $3, $4, $5, $6)",
-      [actor.workspaceId, id, versionId, built.contactEmail.toLowerCase(), hashToken(token), encryptSecret(token)],
+    const kept = await db.query<{ token_cipher: string; email: string }>(
+      "select token_cipher, email from crm.document_links where document_id = $1 and revoked_at is null order by created_at desc limit 1",
+      [id],
     );
+    let token: string;
+    if (kept.rows[0] && kept.rows[0].email === built.contactEmail.toLowerCase()) {
+      token = decryptSecret(kept.rows[0].token_cipher);
+    } else {
+      token = randomBytes(24).toString("base64url");
+      await db.query("update crm.document_links set revoked_at = now() where document_id = $1 and revoked_at is null", [id]);
+      await db.query(
+        "insert into crm.document_links (workspace_id, document_id, version_id, email, token_hash, token_cipher) values ($1, $2, $3, $4, $5, $6)",
+        [actor.workspaceId, id, versionId, built.contactEmail.toLowerCase(), hashToken(token), encryptSecret(token)],
+      );
+    }
     await db.query(
       "update crm.documents set status = 'sent', current_version_id = $2, sent_at = now(), withdrawn_at = null, declined_at = null, decline_reason = null, updated_at = now() where id = $1",
       [id, versionId],

@@ -12,13 +12,15 @@ export const STARTER_TEMPLATES: Starter[] = [
     name: "Proposal",
     settings: { accent: "#4124fb", validDays: 30, logo: null },
     blocks: [
-      { id: "b1", type: "cover", title: "{{proposal.title}}", subtitle: "Prepared for {{contact.name}} at {{company.name}} by {{sender.name}}, {{workspace.name}}." },
+      { id: "t1", type: "tab", label: "Overview" },
+      { id: "b1", type: "cover", title: "{{proposal.title}}", subtitle: "Prepared for {{contact.name}} at {{company.name}} by {{sender.name}}, {{workspace.name}}.", image: "" },
       {
         id: "b2",
         type: "section",
         heading: "Why we're writing",
         body: "Hi {{contact.firstName}},\n\nThank you for your time. This proposal sets out how {{workspace.name}} can help {{company.name}}, what is included and what it costs.",
       },
+      { id: "t2", type: "tab", label: "Proposal" },
       {
         id: "b3",
         type: "section",
@@ -32,6 +34,7 @@ export const STARTER_TEMPLATES: Starter[] = [
         heading: "Next steps",
         body: "Sign below to accept. We'll countersign, send you a signed copy and book a kick-off call within two working days.",
       },
+      { id: "t3", type: "tab", label: "Terms" },
       {
         id: "b6",
         type: "terms",
@@ -48,7 +51,7 @@ export const STARTER_TEMPLATES: Starter[] = [
     name: "Mutual NDA",
     settings: { accent: "#4124fb", validDays: 30, logo: null },
     blocks: [
-      { id: "b1", type: "cover", title: "Mutual non-disclosure agreement", subtitle: "Between {{workspace.name}} and {{company.name}}, dated {{today}}." },
+      { id: "b1", type: "cover", title: "Mutual non-disclosure agreement", subtitle: "Between {{workspace.name}} and {{company.name}}, dated {{today}}.", image: "" },
       {
         id: "b2",
         type: "section",
@@ -88,7 +91,7 @@ export const STARTER_TEMPLATES: Starter[] = [
     name: "One-way NDA",
     settings: { accent: "#4124fb", validDays: 30, logo: null },
     blocks: [
-      { id: "b1", type: "cover", title: "Non-disclosure agreement", subtitle: "From {{company.name}} to {{workspace.name}}, dated {{today}}." },
+      { id: "b1", type: "cover", title: "Non-disclosure agreement", subtitle: "From {{company.name}} to {{workspace.name}}, dated {{today}}.", image: "" },
       {
         id: "b2",
         type: "section",
