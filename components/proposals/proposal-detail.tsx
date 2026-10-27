@@ -24,7 +24,7 @@ import {
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import type { Product } from "@/lib/proposals/catalogue";
 import type { DocumentDetail } from "@/lib/proposals/documents";
-import { BILLING_LABELS, formatMoney, KIND_LABELS, longDate, totalsOf, type Block, type Currency, type Item } from "@/lib/proposals/model";
+import { BILLING_LABELS, formatMoney, KIND_LABELS, longDate, readingLabel, readingTotals, totalsOf, type Block, type Currency, type Item } from "@/lib/proposals/model";
 import { cn } from "@/lib/utils";
 import HoldButton from "@/components/_ui/hold-button";
 import ConfirmDialog from "@/components/_ui/confirm-dialog";
@@ -80,6 +80,7 @@ export default function ProposalDetail({ viewer, initial, knowledge = [] }: { vi
   const draft = doc.status === "draft";
   const tag = statusTag(doc.status);
   const content = draft || !doc.version ? doc.preview : doc.version.content;
+  const reading = Object.entries(readingTotals(doc.events)).sort((a, b) => b[1] - a[1]);
 
   useEffect(() => {
     if (!draft) return;
@@ -209,6 +210,15 @@ export default function ProposalDetail({ viewer, initial, knowledge = [] }: { vi
                   <dt className="text-subtle">Opened</dt>
                   <dd>
                     {doc.viewCount} {doc.viewCount === 1 ? "time" : "times"}, last {when(doc.lastViewedAt)}
+                  </dd>
+                </>
+              )}
+              {reading.length > 0 && (
+                <>
+                  <dt className="text-subtle">Read</dt>
+                  <dd>
+                    {readingLabel(reading.reduce((sum, [, seconds]) => sum + seconds, 0))}
+                    <span className="text-subtle">: {reading.map(([label, seconds]) => `${label} ${readingLabel(seconds)}`).join(", ")}</span>
                   </dd>
                 </>
               )}
@@ -363,7 +373,11 @@ export default function ProposalDetail({ viewer, initial, knowledge = [] }: { vi
                     <span aria-hidden className="bg-faint mt-2 size-1.5 shrink-0 rounded-full" />
                     <span className="flex min-w-0 flex-col">
                       <span>
-                        {TITLED[event.type] && typeof event.data.title === "string" ? `${TITLED[event.type]} ${event.data.title}` : (EVENT_LABELS[event.type] ?? event.type)}
+                        {event.type === "reading" && typeof event.data.seconds === "number"
+                          ? `Read for ${readingLabel(event.data.seconds)}`
+                          : TITLED[event.type] && typeof event.data.title === "string"
+                            ? `${TITLED[event.type]} ${event.data.title}`
+                            : (EVENT_LABELS[event.type] ?? event.type)}
                         {event.name ? <span className="text-subtle">, {event.name}</span> : null}
                       </span>
                       <span className="caption-style text-subtle">

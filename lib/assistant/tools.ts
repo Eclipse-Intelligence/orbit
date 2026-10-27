@@ -19,6 +19,8 @@ import { getMailThread, mailSyncStatus, searchMail } from "@/lib/mail/store";
 import { composeAccounts, saveDraftForAgent, sendForAgent } from "@/lib/mail/compose";
 import { createProduct, listProducts, listTemplates, updateProduct } from "@/lib/proposals/catalogue";
 import { createDocument, getDocument, listDocuments, sendDocument, updateDocument } from "@/lib/proposals/documents";
+import { addStep, removeStep, updateStep } from "@/lib/proposals/steps";
+import { readingTotals } from "@/lib/proposals/model";
 import { mailOrigin } from "@/lib/mail/origin";
 import { archiveBoard, createBoard, getBoard, listBoards, updateBoard } from "@/lib/crm/boards";
 import { savePipelineStages } from "@/lib/crm/pipeline";
@@ -2033,7 +2035,8 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
   {
     name: "get_proposal",
     label: "Reading a proposal",
-    description: "One proposal or NDA: its products and prices, wording, status, the client's link once sent, signatures and every event (sent, opened, signed).",
+    description:
+      "One proposal or NDA: its products and prices, blocks (tabs and sections), status, the client's link once sent, signatures, the live Next steps plan, reading time per tab, and every event (sent, opened, documents opened, steps ticked off, signed).",
     parameters: { type: "object", properties: { id: idParam("Proposal id.") }, required: ["id"] },
     run: async (actor, args) => {
       const detail = await getDocument(actor, required(args.id, "A proposal id"));
@@ -2041,7 +2044,8 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         ...detail,
         preview: undefined,
         version: detail.version ? { number: detail.version.number, hash: detail.version.hash } : null,
-        events: detail.events.slice(-30),
+        readingSecondsByTab: readingTotals(detail.events),
+        events: detail.events.filter((event) => event.type !== "reading").slice(-40),
       };
     },
   },
@@ -2099,7 +2103,8 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     name: "update_proposal",
     label: "Editing a proposal",
     write: true,
-    description: "Change a draft proposal: title, currency, valid-until date (YYYY-MM-DD), products (replaces the list) or wording blocks (replaces them; read them with get_proposal first).",
+    description:
+      "Change a draft proposal: title, currency, valid-until date (YYYY-MM-DD), products (replaces the list) or blocks (replaces them; read them with get_proposal first). Blocks make the client's page: a tab block starts a tab (label) and the blocks after it belong to it; cover (title, subtitle, image url), section (heading, body with blank lines between paragraphs, - bullets, **bold**, [text](https://…)), pricing (heading, intro), terms (heading, body, linkLabel, linkUrl), video (heading, url of YouTube, Loom or Vimeo, caption), image (url, caption), documents (heading, intro, items of Knowledge item ids from list_knowledge or search_knowledge), steps (heading, intro; the live plan is changed with update_proposal_steps), booking (heading, intro; shows the owner's booking calendar), faq (heading, items of question and answer), quote (quote, name, role), team (heading, people with name, role, email), embed (heading, url, caption). Fields like {{contact.firstName}} are filled in.",
     parameters: {
       type: "object",
       properties: {
@@ -2117,15 +2122,42 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
           items: {
             type: "object",
             properties: {
-              id: { type: "string" },
-              type: { type: "string", enum: ["cover", "section", "pricing", "terms"] },
+              id: { type: "string", description: "Keep existing ids; new blocks need a new short id such as b20." },
+              type: { type: "string", enum: ["tab", "cover", "section", "pricing", "terms", "video", "image", "documents", "steps", "booking", "faq", "quote", "team", "embed"] },
+              label: { type: "string", description: "tab" },
               title: { type: "string", description: "cover" },
               subtitle: { type: "string", description: "cover" },
-              heading: { type: "string", description: "section, pricing and terms" },
+              image: { type: "string", description: "cover image url" },
+              heading: { type: "string" },
               body: { type: "string", description: "section and terms" },
-              intro: { type: "string", description: "pricing" },
+              intro: { type: "string", description: "pricing, documents, steps and booking" },
               linkLabel: { type: "string", description: "terms" },
               linkUrl: { type: "string", description: "terms" },
+              url: { type: "string", description: "video, image and embed" },
+              caption: { type: "string", description: "video, image and embed" },
+              quote: { type: "string", description: "quote" },
+              name: { type: "string", description: "quote" },
+              role: { type: "string", description: "quote" },
+              items: {
+                type: "array",
+                description: "documents: [{id}] of Knowledge items. faq: [{question, answer}]. steps: [{title, side (client or us), dueInDays}] (template defaults only).",
+                items: {
+                  type: "object",
+                  properties: {
+                    id: { type: "string" },
+                    question: { type: "string" },
+                    answer: { type: "string" },
+                    title: { type: "string" },
+                    side: { type: "string", enum: ["client", "us"] },
+                    dueInDays: { type: "integer" },
+                  },
+                },
+              },
+              people: {
+                type: "array",
+                description: "team",
+                items: { type: "object", properties: { name: { type: "string" }, role: { type: "string" }, email: { type: "string" }, photo: { type: "string" } } },
+              },
             },
             required: ["id", "type"],
           },
@@ -2147,6 +2179,42 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       await updateDocument(actor, id, args, { operation: "update_proposal", source: "assistant" });
       const detail = await getDocument(actor, id);
       return { id, href: detail.href, total: detail.totalLabel, missing: detail.missing, placeholders: detail.placeholders };
+    },
+  },
+  {
+    name: "update_proposal_steps",
+    label: "Updating next steps",
+    write: true,
+    description:
+      "Change a proposal's live Next steps plan, in any status (sent ones too): add a step (title, side client or us, optional dueDate YYYY-MM-DD), tick one off or untick it, or remove it (stepId from get_proposal). The client sees changes straight away and ticks off their own steps.",
+    parameters: {
+      type: "object",
+      properties: {
+        id: idParam("Proposal id."),
+        action: { type: "string", enum: ["add", "done", "undone", "remove"] },
+        stepId: { type: "string" },
+        title: { type: "string" },
+        side: { type: "string", enum: ["client", "us"] },
+        dueDate: { type: "string" },
+      },
+      required: ["id", "action"],
+    },
+    describe: (args, name) => ({
+      title: `${str(args.action) === "add" ? "Add a step to" : str(args.action) === "remove" ? "Remove a step from" : "Update a step on"} ${name(args.id)}`,
+      lines: [
+        str(args.title) ? `Step: ${str(args.title)}${str(args.side) === "us" ? ", for us" : ", for the client"}` : "",
+        str(args.dueDate) ? `Due: ${str(args.dueDate)}` : "",
+        str(args.action) === "done" ? "Mark it done" : str(args.action) === "undone" ? "Mark it not done" : "",
+      ].filter(Boolean),
+    }),
+    run: async (actor, args) => {
+      const id = required(args.id, "A proposal id");
+      const action = oneOf(args.action, ["add", "done", "undone", "remove"] as const);
+      if (!action) throw new CrmError("invalid_input", "Choose add, done, undone or remove.", 400, { field: "action" });
+      if (action === "add") return { steps: await addStep(actor, id, { title: args.title, side: args.side, dueDate: args.dueDate }) };
+      const stepId = required(args.stepId, "A step id");
+      if (action === "remove") return { steps: await removeStep(actor, stepId) };
+      return { steps: await updateStep(actor, stepId, { done: action === "done" }) };
     },
   },
   {

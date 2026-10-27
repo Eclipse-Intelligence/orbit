@@ -435,3 +435,25 @@ export function embedSource(raw: string): string | null {
   if (video?.kind === "frame") return video.src;
   return url.href;
 }
+
+export const READING_TABS_MAX = 20;
+export const READING_SECONDS_MAX = 7200;
+
+export function readingTotals(events: { type: string; data: Record<string, unknown> }[]) {
+  const totals: Record<string, number> = {};
+  for (const event of events) {
+    if (event.type !== "reading") continue;
+    const tabs = event.data.tabs;
+    if (!tabs || typeof tabs !== "object") continue;
+    for (const [label, seconds] of Object.entries(tabs as Record<string, unknown>)) {
+      if (typeof seconds === "number" && Number.isFinite(seconds)) totals[label] = (totals[label] ?? 0) + seconds;
+    }
+  }
+  return totals;
+}
+
+export function readingLabel(seconds: number) {
+  if (seconds < 60) return `${Math.max(1, Math.round(seconds))} sec`;
+  const minutes = Math.round(seconds / 60);
+  return minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} hr ${minutes % 60} min`;
+}

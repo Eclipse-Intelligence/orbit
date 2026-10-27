@@ -4,6 +4,7 @@ import { useState, type FormEvent } from "react";
 import Button from "@/components/_ui/button";
 import { ProposalLogo } from "@/components/proposals/proposal-document";
 import ProposalSite, { SIGN_TAB } from "@/components/proposals/proposal-site";
+import { useReadingTime } from "@/components/proposals/use-reading-time";
 import { KIND_LABELS, longDate, tabsOf } from "@/lib/proposals/model";
 import type { PublicDocument, PublicState } from "@/lib/proposals/public";
 import { cn } from "@/lib/utils";
@@ -38,6 +39,8 @@ export default function ProposalPage({ token, initial, preview }: { token: strin
   const content = doc.content;
   const tabs = tabsOf(content.blocks);
   const [active, setActive] = useState(tabs?.[0]?.slug ?? SIGN_TAB);
+  const activeLabel = !tabs ? "Proposal" : active === SIGN_TAB ? "Sign" : (tabs.find((tab) => tab.slug === active)?.label ?? tabs[0]?.label ?? "Proposal");
+  useReadingTime(token, activeLabel, !preview);
   const label = KIND_LABELS[content.kind].toLowerCase();
   const clientSignature = doc.signatures.find((item) => item.role === "client");
 
