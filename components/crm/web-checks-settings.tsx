@@ -177,6 +177,7 @@ function Backfill({ initial }: { initial: number }) {
     setMessage(null);
     let total = 0;
     let updated = 0;
+    let left = remaining;
     try {
       for (let round = 0; round < 200; round += 1) {
         const payload = await backfillWebChecksAction();
@@ -188,7 +189,8 @@ function Backfill({ initial }: { initial: number }) {
         updated += payload.results.filter((result) => result.status === "updated").length;
         setDone(total);
         setRemaining(payload.remaining);
-        if (payload.results.length === 0 || payload.remaining === 0) break;
+        if (payload.results.length === 0 || payload.remaining === 0 || payload.remaining >= left) break;
+        left = payload.remaining;
       }
       setMessage({ text: `Checked ${total} ${total === 1 ? "company" : "companies"} and updated ${updated}.`, error: false });
       router.refresh();

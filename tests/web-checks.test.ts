@@ -123,6 +123,17 @@ describe("web checks", () => {
     const run = await backfillWebChecks(owner, { fetchImpl: api.fetchImpl, env: ENV });
     assert.equal(run.results.length, before);
     assert.equal(run.remaining, 0);
+
+    const full = (await createCompany(owner, { name: "Full Co", domain: "full.test", sizeCategory: "11-50", industry: "Fintech", tags: ["agency", "fintech"] })).body.company;
+    const quiet = parallel(() => ({ answers: {}, citations: [] }));
+    const nothing = await checkCompany(owner, full.id, { tags: true, gaps: true, fetchImpl: quiet.fetchImpl, env: ENV });
+    assert.equal(nothing.message, "Nothing to check.");
+    assert.equal(quiet.sent.length, 0);
+    assert.equal(await uncheckedCompanyCount(owner), 0);
+
+    await saveWebCheck(owner, { kind: "tag", label: "saas", question: "Does the company sell software as a service?" });
+    const withSites = await getAdminPool().query<{ total: number }>("select count(*)::int as total from crm.companies where workspace_id = $1 and archived_at is null and domain is not null", [owner.workspaceId]);
+    assert.equal(await uncheckedCompanyCount(owner), withSites.rows[0].total);
   });
 
   it("flags weekly signals on customers into market notes, once", async () => {

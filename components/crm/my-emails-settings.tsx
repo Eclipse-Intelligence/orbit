@@ -7,6 +7,7 @@ import { Input } from "@/components/_ui/input";
 import { SettingsCard } from "@/components/crm/settings-ui";
 import { saveOtherEmailsAction } from "@/app/(crm)/settings/actions";
 import type { MyEmails } from "@/lib/crm/profile";
+import { reloadIfStaleDeploy } from "@/lib/stale-deploy";
 
 export default function MyEmailsSettings({ emails }: { emails: MyEmails }) {
   const router = useRouter();
@@ -20,9 +21,34 @@ export default function MyEmailsSettings({ emails }: { emails: MyEmails }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const dirty = drafts.join("\n") !== emails.otherEmails.join("\n");
 
-  function add(event: FormEvent<HTMLFormElement>) {
+  async function save(next: string[], done: string) {
+    const previous = drafts;
+    setDrafts(next);
+    setPending(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await saveOtherEmailsAction(next);
+      if (result.error || !result.emails) {
+        setDrafts(previous);
+        setError(result.error ?? "Could not save your email addresses.");
+        return false;
+      }
+      setDrafts(result.emails.otherEmails);
+      setMessage(done);
+      router.refresh();
+      return true;
+    } catch (problem) {
+      setDrafts(previous);
+      if (!reloadIfStaleDeploy(problem)) setError("Could not save your email addresses. Try again.");
+      return false;
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function add(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const email = value.trim().toLowerCase();
     if (!email) return;
@@ -32,23 +58,11 @@ export default function MyEmailsSettings({ emails }: { emails: MyEmails }) {
       return;
     }
     setError(null);
-    setValue("");
-    if (email === emails.loginEmail.toLowerCase() || drafts.includes(email)) return;
-    setDrafts((current) => [...current, email]);
-  }
-
-  async function save() {
-    setPending(true);
-    setError(null);
-    setMessage(null);
-    const result = await saveOtherEmailsAction(drafts);
-    setPending(false);
-    if (result.error) {
-      setError(result.error);
+    if (email === emails.loginEmail.toLowerCase() || drafts.includes(email)) {
+      setValue("");
       return;
     }
-    setMessage("Saved.");
-    router.refresh();
+    if (await save([...drafts, email], `Added ${email}.`)) setValue("");
   }
 
   return (
@@ -71,10 +85,7 @@ export default function MyEmailsSettings({ emails }: { emails: MyEmails }) {
               type="button"
               aria-label={`Remove ${email}`}
               disabled={pending}
-              onClick={() => {
-                setMessage(null);
-                setDrafts((current) => current.filter((item) => item !== email));
-              }}
+              onClick={() => void save(drafts.filter((item) => item !== email), `Removed ${email}.`)}
             >
               Remove
             </Button>
@@ -93,7 +104,7 @@ export default function MyEmailsSettings({ emails }: { emails: MyEmails }) {
           onChange={(event) => setValue(event.target.value)}
         />
         <Button variant="ghost" size="sm" type="submit" disabled={pending || !value.trim()}>
-          Add
+          {pending ? "Saving…" : "Add"}
         </Button>
       </form>
       {error && (
@@ -101,14 +112,9 @@ export default function MyEmailsSettings({ emails }: { emails: MyEmails }) {
           {error}
         </p>
       )}
-      <div className="flex items-center gap-3">
-        <Button variant="secondary" size="sm" type="button" disabled={pending || !dirty} onClick={save}>
-          {pending ? "Saving…" : "Save addresses"}
-        </Button>
-        <p role="status" className="caption-style text-subtle">
-          {message}
-        </p>
-      </div>
+      <p role="status" className="caption-style text-subtle empty:hidden">
+        {message}
+      </p>
     </SettingsCard>
   );
 }

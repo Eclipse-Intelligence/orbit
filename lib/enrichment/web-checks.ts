@@ -99,12 +99,22 @@ export async function saveWebCheck(actor: UserActor, input: { id?: unknown; kind
               [actor.workspaceId, kind, label, question, noteKind, actor.userId],
             );
       if (!result.rows[0]) throw new CrmError("not_found", "That check no longer exists.", 404);
+      if (kind === "tag") await resetChecked(db, actor.workspaceId);
       return toCheck(result.rows[0]);
     } catch (error) {
       if ((error as { code?: string }).code === "23505") throw new CrmError("conflict", `There's already a check for ${label}.`, 409, { field: "label" });
       throw error;
     }
   });
+}
+
+async function resetChecked(db: Db, workspaceId: string) {
+  await db.query("update crm.company_web_state set checked_at = null where workspace_id = $1 and checked_at is not null", [workspaceId]);
+}
+
+export async function markAllDue(actor: UserActor) {
+  assertAdmin(actor);
+  await withActor(actor, (db) => resetChecked(db, actor.workspaceId));
 }
 
 export async function removeWebCheck(actor: UserActor, id: string) {
@@ -155,13 +165,14 @@ function bestChoice(answer: { type: string; choice?: string; probabilities?: Rec
   return probability >= GAP_THRESHOLD ? answer.choice : null;
 }
 
-async function markChecked(actor: Actor, companyId: string, summary: string | null, found: boolean) {
+async function markChecked(actor: Actor, companyId: string, summary: string | null, found: boolean, asked = true) {
   await withActor(actor, async (db) => {
     await db.query(
       `insert into crm.company_web_state (company_id, workspace_id, checked_at) values ($1, $2, now())
        on conflict (company_id) do update set checked_at = now()`,
       [companyId, actor.workspaceId],
     );
+    if (!asked) return;
     await db.query(
       `insert into crm.enrichment_lookups (workspace_id, record_type, record_id, field, status, provider, value, created_by_user_id)
        values ($1, 'company', $2, 'company', $3, 'parallel', $4, $5)`,
@@ -200,7 +211,10 @@ export async function checkCompany(
       criteria: { ...Object.fromEntries(industries.map((industry, index) => [`i${index}`, industry])), other: "None of these describe the company." },
     };
   }
-  if (Object.keys(questions).length === 0) return { status: "unchanged", message: "Nothing to check.", tags: [], filled: [] };
+  if (Object.keys(questions).length === 0) {
+    await markChecked(actor, companyId, null, false, false);
+    return { status: "unchanged", message: "Nothing to check.", tags: [], filled: [] };
+  }
 
   let decision;
   try {
