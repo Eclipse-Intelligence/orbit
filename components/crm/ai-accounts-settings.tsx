@@ -124,7 +124,7 @@ function ChatGptRow({ account }: { account: AiAccountSummary }) {
       title="ChatGPT"
       on={account.connected}
       status={account.connected ? `Connected${account.label ? ` as ${account.label}` : ""}` : "Not connected"}
-      detail="GPT-6.1 Sol, GPT-6 Astra and GPT-6 Luna on your ChatGPT plan"
+      detail="GPT-6.1 Sol, GPT-6.1 Terra, GPT-6 Astra and GPT-6 Luna on your ChatGPT plan"
       action={
         code ? (
           <Button variant="ghost" size="sm" onClick={() => setCode(null)}>
@@ -262,7 +262,7 @@ function AgentRow({ companions }: { companions: CompanionSummary[] }) {
             ? "Orbit Agent paired, not running"
             : "Not connected"
       }
-      detail="Opus 5.5, Sonnet 5.5 and Haiku 5.5 through Claude Code on your Mac, on your Claude plan"
+      detail="Fable 5.1, Opus 5.5, Sonnet 5.5 and Haiku 5.5 through Claude Code on your Mac, on your Claude plan"
       action={
         pairing ? (
           <Button variant="ghost" size="sm" onClick={() => setPairing(null)}>

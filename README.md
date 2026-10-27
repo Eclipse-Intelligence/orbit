@@ -495,9 +495,9 @@ The model picker groups models by where they run:
 
 | Group | Models | Runs through |
 | --- | --- | --- |
-| Orbit | Sonnet 5.5 (default), Opus 5.5, Haiku 5.5, GPT-6 Astra, GPT-6.1 Sol, Grok 4.7, Gemini 4 Argon | The llmapi.ai gateway (OpenAI-compatible chat completions) with `LLM_API_KEY` |
-| Claude account | Opus 5.5, Sonnet 5.5, Haiku 5.5 | Orbit Agent on your Mac, on your Claude plan (below) |
-| ChatGPT account | GPT-6.1 Sol, GPT-6 Astra, GPT-6 Luna | Your ChatGPT sign-in (below) |
+| Orbit | Sonnet 5.5 (default), Opus 5.5, Haiku 5.5, GPT-6 Astra, GPT-6.1 Sol, GPT-6.1 Terra, Grok 4.7, Gemini 4 Argon | The llmapi.ai gateway (OpenAI-compatible chat completions) with `LLM_API_KEY` |
+| Claude account | Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5 | Orbit Agent on your Mac, on your Claude plan (below) |
+| ChatGPT account | GPT-6.1 Sol, GPT-6.1 Terra, GPT-6 Astra, GPT-6 Luna | Your ChatGPT sign-in (below) |
 
 The account groups only appear once the account is connected. Reasoning is Low, Medium (default), High, Extra high or Max. Each model offers only the levels it supports: Gemini goes up to High, and Grok and ChatGPT models go up to Extra high. A level a model doesn't support drops to the nearest lower one it does. The dock remembers your model, reasoning and web search choice in the browser.
 
