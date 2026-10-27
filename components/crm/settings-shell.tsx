@@ -14,6 +14,7 @@ import type { Viewer } from "@/components/crm/viewer";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
 import { cn } from "@/lib/utils";
 import BarChartIcon from "@/public/assets/images/companies/sidebar/bar-chart.svg";
+import BookIcon from "@/public/assets/images/companies/sidebar/book-closed.svg";
 import CalendarIcon from "@/public/assets/images/companies/sidebar/calendar.svg";
 import CodeIcon from "@/public/assets/images/settings/code.svg";
 import FileTextIcon from "@/public/assets/images/settings/file-text.svg";
@@ -53,6 +54,7 @@ const GROUPS: { label: string; items: NavItem[] }[] = [
       { href: SETTINGS_PATHS.pipeline, label: "Pipeline", icon: BarChartIcon },
       { href: SETTINGS_PATHS.tags, label: "Tags and lifecycles", icon: TagIcon },
       { href: SETTINGS_PATHS.emailTemplates, label: "Templates and signatures", icon: FileTextIcon },
+      { href: SETTINGS_PATHS.knowledge, label: "Knowledge", icon: BookIcon },
     ],
   },
   {

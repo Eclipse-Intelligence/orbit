@@ -11,6 +11,7 @@ export const SETTINGS_PATHS = {
   tags: "/settings/tags",
   api: "/settings/api",
   learning: "/settings/learning",
+  knowledge: "/settings/knowledge",
 } as const;
 
 const HASH_TARGETS: Record<string, string> = {

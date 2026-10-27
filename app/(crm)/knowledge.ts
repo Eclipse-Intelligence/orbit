@@ -1,0 +1,105 @@
+"use server";
+
+import { getUserActor } from "@/lib/auth/user";
+import { CrmError } from "@/lib/crm/errors";
+import { resumeStale, scheduleIndexing } from "@/lib/knowledge/background";
+import {
+  addKnowledgeLink,
+  archiveKnowledge,
+  getKnowledgeItem,
+  listKnowledge,
+  mapItem,
+  prepareKnowledgeUpload,
+  renameKnowledge,
+  targetFrom,
+  type KnowledgeItem,
+} from "@/lib/knowledge/store";
+
+type Target = { companyId?: string; eclipse?: boolean };
+
+function failure(error: unknown, fallback: string) {
+  if (!(error instanceof CrmError)) console.error(fallback, error);
+  return { error: error instanceof CrmError ? error.message : fallback };
+}
+
+export async function listKnowledgeAction(target: Target): Promise<{ items?: KnowledgeItem[]; error?: string }> {
+  const user = await getUserActor();
+  if (!user) return { error: "Sign in to see Knowledge." };
+  try {
+    const items = await listKnowledge(user, targetFrom(target));
+    resumeStale(user, items);
+    return { items };
+  } catch (error) {
+    return failure(error, "Couldn't load Knowledge.");
+  }
+}
+
+export async function prepareKnowledgeUploadAction(
+  target: Target,
+  file: { name: string; size: number; contentType: string },
+): Promise<{ item?: KnowledgeItem; uploadUrl?: string; error?: string }> {
+  const user = await getUserActor();
+  if (!user) return { error: "Sign in to upload." };
+  try {
+    return await prepareKnowledgeUpload(user, targetFrom(target), file);
+  } catch (error) {
+    return failure(error, "Couldn't start the upload.");
+  }
+}
+
+export async function finishKnowledgeUploadAction(id: string): Promise<{ item?: KnowledgeItem; error?: string }> {
+  const user = await getUserActor();
+  if (!user) return { error: "Sign in to upload." };
+  try {
+    const row = await getKnowledgeItem(user, id);
+    scheduleIndexing(user, [row.id]);
+    return { item: mapItem(row) };
+  } catch (error) {
+    return failure(error, "Couldn't finish the upload.");
+  }
+}
+
+export async function addKnowledgeLinkAction(target: Target, url: string): Promise<{ item?: KnowledgeItem; error?: string }> {
+  const user = await getUserActor();
+  if (!user) return { error: "Sign in to add links." };
+  try {
+    const item = await addKnowledgeLink(user, targetFrom(target), { url });
+    scheduleIndexing(user, [item.id]);
+    return { item };
+  } catch (error) {
+    return failure(error, "Couldn't add the link.");
+  }
+}
+
+export async function retryKnowledgeAction(id: string): Promise<{ error?: string }> {
+  const user = await getUserActor();
+  if (!user) return { error: "Sign in to retry." };
+  try {
+    const row = await getKnowledgeItem(user, id);
+    scheduleIndexing(user, [row.id], { force: row.status === "ready" });
+    return {};
+  } catch (error) {
+    return failure(error, "Couldn't retry it.");
+  }
+}
+
+export async function renameKnowledgeAction(id: string, title: string): Promise<{ item?: KnowledgeItem; error?: string }> {
+  const user = await getUserActor();
+  if (!user) return { error: "Sign in to rename." };
+  try {
+    return { item: await renameKnowledge(user, id, title) };
+  } catch (error) {
+    return failure(error, "Couldn't rename it.");
+  }
+}
+
+export async function removeKnowledgeAction(id: string): Promise<{ error?: string }> {
+  const user = await getUserActor();
+  if (!user) return { error: "Sign in to remove." };
+  try {
+    await archiveKnowledge(user, id);
+    return {};
+  } catch (error) {
+    return failure(error, "Couldn't remove it.");
+  }
+}
