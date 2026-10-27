@@ -1,6 +1,7 @@
 import { gunzipSync } from "node:zlib";
 import { CrmError } from "@/lib/crm/errors";
 import { cleanUrl } from "@/lib/knowledge/store";
+import { browserbaseConfigured, renderWithBrowserbase, type Renderer } from "@/lib/browserbase";
 import { downloadPublic, WebPageError, type Lookup } from "@/lib/web-page";
 
 const PAGES_MAX = 5_000;
@@ -11,7 +12,7 @@ const SKIP = /\.(png|jpe?g|gif|webp|svg|ico|bmp|avif|css|js|mjs|json|xml|txt|zip
 
 export type SitePage = { url: string; path: string; depth: number; lastModified: string | null };
 export type SiteMap = { origin: string; host: string; pages: SitePage[]; source: "sitemap" | "links"; truncated: boolean };
-type Options = { fetchImpl?: typeof fetch; lookup?: Lookup; deadline?: number };
+type Options = { fetchImpl?: typeof fetch; lookup?: Lookup; deadline?: number; render?: Renderer | null };
 type Rules = { allow: string[]; disallow: string[]; sitemaps: string[] };
 
 function bare(host: string) {
@@ -120,12 +121,29 @@ export function pageLinksOf(html: string, base: URL) {
   return links;
 }
 
+function renderer(options: Options): Renderer | null {
+  if (options.render !== undefined) return options.render;
+  return browserbaseConfigured() ? (target, settings) => renderWithBrowserbase(target, settings) : null;
+}
+
 async function fromLinks(start: URL, rules: Rules, options: Options) {
   const pages = new Map<string, string | null>([[start.href, null]]);
   const depth = new Map<string, number>([[start.href, 0]]);
   const queue = [start.href];
   let fetched = 0;
   let active = 0;
+  let reached = 0;
+  let problem: string | null = null;
+  const collect = (html: string, pageUrl: string, from: string) => {
+    reached += 1;
+    for (const url of pageLinksOf(html, new URL(pageUrl))) {
+      if (!sameSite(url, start.hostname) || SKIP.test(url.pathname) || !allowed(rules, url.pathname) || pages.has(url.href)) continue;
+      pages.set(url.href, null);
+      depth.set(url.href, (depth.get(from) ?? 0) + 1);
+      if ((depth.get(url.href) ?? 0) < 4 && !/\.(pdf|docx?|pptx?|xlsx?)$/i.test(url.pathname)) queue.push(url.href);
+      if (pages.size >= PAGES_MAX) break;
+    }
+  };
   const worker = async () => {
     while ((queue.length || active) && fetched < CRAWL_MAX && pages.size < PAGES_MAX && timeLeft(options)) {
       if (!queue.length) {
@@ -138,23 +156,27 @@ async function fromLinks(start: URL, rules: Rules, options: Options) {
       let page;
       try {
         page = await text(current, options, 5_000_000);
-      } catch {
+      } catch (error) {
+        if (current === start.href) {
+          problem = error instanceof WebPageError ? error.message : "Orbit couldn't open that site.";
+          const render = renderer(options);
+          if (render && !/couldn't be found|Private and local/.test(problem)) {
+            try {
+              const rendered = await render(start.href, { proxies: true });
+              collect(rendered.html, rendered.url, current);
+            } catch {}
+          }
+        }
         continue;
       } finally {
         active -= 1;
       }
       if (!/html/.test(page.contentType) && !/^\s*</.test(page.body)) continue;
-      for (const url of pageLinksOf(page.body, new URL(page.url))) {
-        if (!sameSite(url, start.hostname) || SKIP.test(url.pathname) || !allowed(rules, url.pathname) || pages.has(url.href)) continue;
-        pages.set(url.href, null);
-        depth.set(url.href, (depth.get(current) ?? 0) + 1);
-        if ((depth.get(url.href) ?? 0) < 4 && !/\.(pdf|docx?|pptx?|xlsx?)$/i.test(url.pathname)) queue.push(url.href);
-        if (pages.size >= PAGES_MAX) break;
-      }
+      collect(page.body, page.url, current);
     }
   };
   await Promise.all(Array.from({ length: CRAWL_PARALLEL }, worker));
-  return { pages, complete: queue.length === 0 };
+  return { pages, complete: queue.length === 0, reached, problem };
 }
 
 function readable(path: string) {
@@ -180,6 +202,7 @@ export async function mapSite(raw: unknown, options: Options = {}): Promise<Site
   if (pages.size === 0) {
     source = "links";
     const crawled = await fromLinks(start, rules, options);
+    if (crawled.reached === 0) throw new CrmError("invalid_input", crawled.problem ?? "Orbit couldn't open that site.", 400, { field: "url" });
     pages = crawled.pages;
     truncated = !crawled.complete || pages.size >= PAGES_MAX;
   }
