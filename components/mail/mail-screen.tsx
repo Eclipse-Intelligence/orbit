@@ -59,7 +59,7 @@ import MailOpenIcon from "@/public/assets/images/mail/mail-open.svg";
 import TrashIcon from "@/public/assets/images/mail/trash.svg";
 import { usePullToRefresh } from "@/components/mail/pull-refresh";
 
-const HOME_VIEW = "inbox:important";
+const HOME_VIEW = "inbox";
 
 const MORE_VIEWS = [
   { id: "inbox", label: "All inbox" },
@@ -831,7 +831,7 @@ export default function MailScreen({
   const empty = query.query
     ? `No emails match “${query.query}”.`
     : inInbox(query.view)
-      ? query.view === HOME_VIEW
+      ? query.view === "inbox:important"
         ? "Inbox zero. Nothing important is waiting for you."
         : "Nothing here."
       : activeFolder
