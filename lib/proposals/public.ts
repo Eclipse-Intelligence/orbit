@@ -7,6 +7,8 @@ import { query } from "@/lib/db/pool";
 import { documentHref, hashToken, isExpired, logEvent, readRow, SIGNATURE_COLUMNS, toSignature, type SignatureRecord, type SignatureRow } from "@/lib/proposals/documents";
 import type { Content, DocumentStatus } from "@/lib/proposals/model";
 import { pushToUser, type PushSender } from "@/lib/push";
+import { loadBookingPage, publicView, type PublicBookingPage } from "@/lib/booking/pages";
+import { readObject } from "@/lib/storage";
 import { notify } from "@/lib/workflows/engine";
 
 export type PublicState = "open" | "client_signed" | "completed" | "declined" | "withdrawn" | "replaced" | "expired";
@@ -20,6 +22,7 @@ export type PublicDocument = {
   signatures: SignatureRecord[];
   declineReason: string | null;
   hasExecuted: boolean;
+  booking: PublicBookingPage | null;
 };
 
 type LinkRow = {
@@ -80,6 +83,7 @@ async function load(owner: UserActor, link: LinkRow) {
         signatures: signatures.rows.map(toSignature),
         declineReason: row.decline_reason,
         hasExecuted: executed.rows.length > 0,
+        booking: null,
       } satisfies PublicDocument,
     };
   });
@@ -98,10 +102,24 @@ async function alertOwner(owner: UserActor, input: { key: string; title: string;
   await pushToUser(owner, { title: input.title, body: input.body, url: input.href, tag: input.key }, { send: push }).catch((error) => console.error("Proposal push failed", error));
 }
 
+async function bookingFor(owner: UserActor) {
+  const page = await withActor(owner, async (db) => {
+    const result = await db.query<{ slug: string; enabled: boolean }>("select slug, enabled from crm.booking_pages where user_id = $1 and workspace_id = $2", [
+      owner.userId,
+      owner.workspaceId,
+    ]);
+    return result.rows[0] ?? null;
+  });
+  if (!page?.enabled) return null;
+  const loaded = await loadBookingPage(page.slug);
+  return loaded ? publicView(loaded) : null;
+}
+
 export async function openDocument(token: string, meta: Meta & { track: boolean }) {
   const found = await resolve(token);
   if (!found) return null;
-  const { row, view, versionId } = await load(found.owner, found.row);
+  const { row, view: loaded, versionId } = await load(found.owner, found.row);
+  const view = loaded.content.blocks.some((block) => block.type === "booking") ? { ...loaded, booking: await bookingFor(found.owner).catch(() => null) } : loaded;
   if (!meta.track || found.row.revoked) return view;
   const outcome = await withActor(found.owner, async (db) => {
     const before = await db.query<{ last_viewed_at: Date | null; status: DocumentStatus }>("select last_viewed_at, status from crm.documents where id = $1", [row.id]);
@@ -270,4 +288,52 @@ function stateMessage(state: PublicState) {
     default:
       return "";
   }
+}
+
+export async function publicKnowledgeFile(token: string, itemId: string, meta: Meta & { track: boolean }) {
+  const found = await resolve(token);
+  if (!found) throw new CrmError("not_found", "This link isn't valid.", 404);
+  const { row, view, versionId } = await load(found.owner, found.row);
+  if (view.state === "withdrawn" || view.state === "replaced") throw new CrmError("not_found", stateMessage(view.state), 404);
+  const listed = view.content.blocks.some((block) => block.type === "documents" && block.items.some((item) => item.id === itemId));
+  if (!listed) throw new CrmError("not_found", "That document isn't part of this proposal.", 404);
+  const item = await withActor(found.owner, async (db) => {
+    const result = await db.query<{ title: string; kind: string; source_url: string | null; file_path: string | null; mime_type: string | null; content: string | null }>(
+      "select title, kind, source_url, file_path, mime_type, content from crm.knowledge_items where id = $1 and workspace_id = $2 and archived_at is null",
+      [itemId, found.owner.workspaceId],
+    );
+    const current = result.rows[0];
+    if (!current || !meta.track) return current ?? null;
+    await logEvent(db, {
+      workspaceId: found.owner.workspaceId,
+      documentId: row.id,
+      versionId,
+      type: "document_opened",
+      actor: "client",
+      name: view.content.client.name,
+      email: view.content.client.email,
+      ip: meta.ip,
+      userAgent: meta.userAgent,
+      data: { itemId, title: current.title },
+    });
+    return current;
+  });
+  if (!item) throw new CrmError("not_found", "That document has been removed.", 404);
+  if (meta.track) await alertOwner(
+    found.owner,
+    {
+      key: `doc-file:${row.id}:${itemId}:${Math.floor(Date.now() / VIEW_ALERT_GAP_MS)}`,
+      title: `${row.contact_name ?? "Your contact"} opened ${item.title}`,
+      body: `In ${row.title}, ${row.company_name}.`,
+      href: documentHref(row.id),
+    },
+    meta.push,
+  ).catch(() => undefined);
+  if (item.file_path) {
+    const data = await readObject(item.file_path, fetch, "knowledge");
+    const name = item.file_path.split("/").pop() ?? item.title;
+    return { kind: "file" as const, data, name, contentType: item.mime_type ?? "application/octet-stream" };
+  }
+  if (item.source_url) return { kind: "link" as const, url: item.source_url };
+  return { kind: "file" as const, data: new TextEncoder().encode(item.content ?? ""), name: `${item.title}.txt`, contentType: "text/plain; charset=utf-8" };
 }

@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import ProposalDocument, { Signatures } from "@/components/proposals/proposal-document";
-import { tabsOf, type Content } from "@/lib/proposals/model";
+import ProposalDocument, { Signatures, type SiteExtras } from "@/components/proposals/proposal-document";
+import { shows, tabsOf, type Content } from "@/lib/proposals/model";
 import { cn } from "@/lib/utils";
 
 type SignatureView = Parameters<typeof Signatures>[0]["signatures"][number];
@@ -19,6 +19,7 @@ export default function ProposalSite({
   signLabel = "Sign",
   sticky,
   followHash,
+  extras,
 }: {
   content: Content;
   signatures?: SignatureView[];
@@ -29,10 +30,12 @@ export default function ProposalSite({
   signLabel?: string;
   sticky?: string;
   followHash?: boolean;
+  extras?: SiteExtras;
 }) {
-  const tabs = tabsOf(content.blocks);
+  const all = tabsOf(content.blocks);
+  const tabs = all && !extras?.preview ? all.filter((tab) => tab.blocks.some((block) => shows(block, { booking: Boolean(extras?.booking) }))) : all;
   const [own, setOwn] = useState(tabs?.[0]?.slug ?? SIGN_TAB);
-  const active = controlled ?? own;
+  const requested = controlled ?? own;
   const list = useRef<HTMLDivElement>(null);
   const base = useId();
   const choose = (slug: string) => {
@@ -58,17 +61,18 @@ export default function ProposalSite({
 
   useEffect(() => {
     list.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [active]);
+  }, [requested]);
 
   if (!tabs) {
     return (
-      <ProposalDocument content={content} signatures={signatures} compact={compact}>
+      <ProposalDocument content={content} signatures={signatures} compact={compact} extras={extras}>
         {children}
       </ProposalDocument>
     );
   }
 
   const entries = [...tabs.map((tab) => ({ slug: tab.slug, label: tab.label })), { slug: SIGN_TAB, label: signLabel }];
+  const active = entries.some((entry) => entry.slug === requested) ? requested : entries[0].slug;
   const current = tabs.find((tab) => tab.slug === active);
 
   function select(slug: string) {
@@ -126,7 +130,7 @@ export default function ProposalSite({
       </div>
       <div role="tabpanel" id={`${base}-${active}-panel`} aria-labelledby={`${base}-${active}-tab`} tabIndex={-1} className="outline-none">
         {current ? (
-          <ProposalDocument content={content} blocks={current.blocks} compact={compact} withSignatures={false} />
+          <ProposalDocument content={content} blocks={current.blocks} compact={compact} withSignatures={false} extras={extras} />
         ) : (
           <Signatures content={content} signatures={signatures}>
             {children}

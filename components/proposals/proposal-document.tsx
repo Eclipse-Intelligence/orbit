@@ -2,13 +2,22 @@ import type { ReactNode } from "react";
 import {
   BILLING_LABELS,
   BILLINGS,
+  embedSource,
   formatMoney,
   longDate,
   parseBody,
   safeHref,
+  shows,
+  videoSource,
+  type Block,
   type Content,
   type Inline,
 } from "@/lib/proposals/model";
+import { BookingPanel } from "@/components/booking/booking-screen";
+import type { PublicBookingPage } from "@/lib/booking/pages";
+import ExternalIcon from "@/public/assets/images/booking/external.svg";
+import FileIcon from "@/public/assets/images/settings/file-text.svg";
+import LinkIcon from "@/public/assets/images/settings/link.svg";
 import Asset from "@/components/_ui/asset";
 import { cn } from "@/lib/utils";
 import { signatureFont } from "@/components/proposals/signature-font";
@@ -134,6 +143,227 @@ export function Signatures({ content, signatures, children }: { content: Content
   );
 }
 
+const KIND_LABEL: Record<string, string> = {
+  file: "Document",
+  link: "Web page",
+  youtube: "Video",
+  podcast: "Podcast",
+  transcript: "Transcript",
+  attachment: "Document",
+};
+
+export type SiteExtras = {
+  fileHref?: (itemId: string) => string | null;
+  booking?: PublicBookingPage | null;
+  bookingDefaults?: { name?: string; email?: string };
+  preview?: boolean;
+};
+
+function initialsOf(name: string) {
+  return (
+    name
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0]?.toUpperCase() ?? "")
+      .join("") || "?"
+  );
+}
+
+function Frame({ src, title, ratio = "aspect-video" }: { src: string; title: string; ratio?: string }) {
+  return (
+    <div className={cn("bg-secondary overflow-hidden rounded-2xl shadow-[0_0_0_1px_rgba(0,0,0,0.06)]", ratio)}>
+      <iframe
+        src={src}
+        title={title}
+        loading="lazy"
+        allow="autoplay; fullscreen; picture-in-picture; clipboard-write; encrypted-media"
+        allowFullScreen
+        referrerPolicy="strict-origin-when-cross-origin"
+        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-presentation"
+        className="size-full border-0"
+      />
+    </div>
+  );
+}
+
+function Placeholder({ children }: { children: ReactNode }) {
+  return <p className="bg-secondary text-subtle rounded-2xl px-5 py-8 text-center text-[14px]">{children}</p>;
+}
+
+function Extra({ block, content, extras }: { block: Block; content: Content; extras: SiteExtras }) {
+  if (block.type === "video") {
+    const video = videoSource(block.url);
+    return (
+      <>
+        {video?.kind === "frame" && <Frame src={video.src} title={block.heading || "Video"} />}
+        {video?.kind === "file" && <video src={video.src} controls playsInline preload="metadata" className="w-full rounded-2xl bg-black" />}
+        {!video && extras.preview && <Placeholder>Add a YouTube, Loom or Vimeo link.</Placeholder>}
+        {block.caption && <p className="text-subtle text-[14px] leading-6">{block.caption}</p>}
+      </>
+    );
+  }
+  if (block.type === "image") {
+    const src = imageSrc(block.url);
+    return (
+      <>
+        {src ? (
+          <Asset type="image" src={src} alt={block.caption || ""} width={16} height={9} fit="contain" unoptimized className="bg-secondary rounded-2xl" />
+        ) : (
+          extras.preview && <Placeholder>Upload an image.</Placeholder>
+        )}
+        {block.caption && <p className="text-subtle text-[14px] leading-6">{block.caption}</p>}
+      </>
+    );
+  }
+  if (block.type === "embed") {
+    const src = embedSource(block.url);
+    return (
+      <>
+        {src ? <Frame src={src} title={block.heading || "Embedded content"} ratio="aspect-[16/10]" /> : extras.preview && <Placeholder>Add a link to embed.</Placeholder>}
+        {(block.caption || src) && (
+          <p className="text-subtle flex flex-wrap items-center gap-x-3 gap-y-1 text-[14px] leading-6">
+            {block.caption && <span>{block.caption}</span>}
+            {src && safeHref(block.url) && (
+              <a href={safeHref(block.url)!} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 underline decoration-1 underline-offset-[3px]">
+                Open in a new tab
+                <ExternalIcon aria-hidden className="size-3.5" />
+              </a>
+            )}
+          </p>
+        )}
+      </>
+    );
+  }
+  if (block.type === "documents") {
+    return (
+      <>
+        {block.intro && <Body value={block.intro} />}
+        {block.items.length === 0 ? (
+          extras.preview && <Placeholder>Choose documents from Knowledge.</Placeholder>
+        ) : (
+          <ul className="grid gap-3 sm:grid-cols-2">
+            {block.items.map((item) => {
+              const href = extras.fileHref?.(item.id) ?? (safeHref(item.sourceUrl) || null);
+              const Icon = item.kind === "link" || item.kind === "youtube" || item.kind === "podcast" ? LinkIcon : FileIcon;
+              const inner = (
+                <>
+                  <span className="bg-secondary text-soft flex size-10 shrink-0 items-center justify-center rounded-xl">
+                    <Icon aria-hidden className="size-4" />
+                  </span>
+                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                    <span className="truncate text-[15px] leading-6 font-medium">{item.title}</span>
+                    <span className="text-subtle text-[13px]">{KIND_LABEL[item.kind] ?? "Document"}</span>
+                  </span>
+                  {href && <ExternalIcon aria-hidden className="text-subtle size-4 shrink-0" />}
+                </>
+              );
+              return (
+                <li key={item.id}>
+                  {href ? (
+                    <a
+                      href={href}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="bg-card flex items-center gap-3 rounded-2xl p-4 shadow-[0_0_0_1px_rgba(0,0,0,0.06)] transition-shadow duration-150 outline-none hover:shadow-[0_0_0_1px_rgba(0,0,0,0.14)] focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+                    >
+                      {inner}
+                    </a>
+                  ) : (
+                    <div className="bg-card flex items-center gap-3 rounded-2xl p-4 shadow-[0_0_0_1px_rgba(0,0,0,0.06)]">{inner}</div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </>
+    );
+  }
+  if (block.type === "booking") {
+    return (
+      <>
+        {block.intro && <Body value={block.intro} />}
+        {extras.booking ? (
+          <div className="night overflow-hidden rounded-3xl bg-[#0b0b10] shadow-[0_24px_60px_-20px_rgba(0,0,0,0.45)]">
+            <BookingPanel page={extras.booking} defaults={extras.bookingDefaults} embedded className="sm:px-7" />
+          </div>
+        ) : (
+          extras.preview && <Placeholder>Your booking calendar shows here for clients. Switch your booking page on in Settings.</Placeholder>
+        )}
+      </>
+    );
+  }
+  if (block.type === "faq") {
+    return (
+      <div className="flex flex-col gap-3">
+        {block.items
+          .filter((item) => item.question.trim())
+          .map((item, index) => (
+            <details key={index} className="group bg-card rounded-2xl shadow-[0_0_0_1px_rgba(0,0,0,0.06)] open:shadow-[0_0_0_1px_rgba(0,0,0,0.12)]">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-4 rounded-2xl px-5 py-4 text-[16px] leading-6 font-medium outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] [&::-webkit-details-marker]:hidden">
+                {item.question}
+                <span aria-hidden className="text-subtle text-[20px] leading-none transition-transform duration-150 group-open:rotate-45">
+                  +
+                </span>
+              </summary>
+              <div className="px-5 pb-5">
+                <Body value={item.answer} />
+              </div>
+            </details>
+          ))}
+      </div>
+    );
+  }
+  if (block.type === "quote") {
+    if (!block.quote.trim()) return extras.preview ? <Placeholder>Add a quote.</Placeholder> : null;
+    return (
+      <figure className="flex flex-col gap-4 border-l-[3px] pl-5" style={{ borderColor: content.accent }}>
+        <blockquote className="text-[22px] leading-[1.45] font-medium tracking-[-0.01em] text-balance">&ldquo;{block.quote.trim()}&rdquo;</blockquote>
+        {(block.name || block.role) && (
+          <figcaption className="text-subtle text-[14.5px]">
+            <span className="text-foreground font-medium">{block.name}</span>
+            {block.name && block.role ? ", " : ""}
+            {block.role}
+          </figcaption>
+        )}
+      </figure>
+    );
+  }
+  if (block.type === "team") {
+    const people = block.people.filter((person) => person.name.trim());
+    return (
+      <ul className="grid gap-3 sm:grid-cols-2">
+        {people.map((person, index) => {
+          const photo = imageSrc(person.photo);
+          const email = person.email.trim();
+          return (
+            <li key={index} className="bg-card flex items-center gap-4 rounded-2xl p-4 shadow-[0_0_0_1px_rgba(0,0,0,0.06)]">
+              {photo ? (
+                <Asset type="image" src={photo} alt="" width={1} height={1} fit="cover" unoptimized className="size-14 shrink-0 rounded-full" />
+              ) : (
+                <span aria-hidden className="flex size-14 shrink-0 items-center justify-center rounded-full text-[17px] font-semibold text-white" style={{ backgroundColor: content.accent }}>
+                  {initialsOf(person.name)}
+                </span>
+              )}
+              <span className="flex min-w-0 flex-col gap-0.5">
+                <span className="truncate text-[15.5px] leading-6 font-semibold">{person.name}</span>
+                {person.role && <span className="text-subtle truncate text-[14px]">{person.role}</span>}
+                {email && /^[^\s@]+@[^\s@]+$/.test(email) && (
+                  <a href={`mailto:${email}`} className="truncate text-[14px] underline decoration-1 underline-offset-[3px]" style={{ color: content.accent }}>
+                    {email}
+                  </a>
+                )}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    );
+  }
+  return null;
+}
+
 function imageSrc(value: string) {
   const href = safeHref(value);
   return href && href.startsWith("https:") ? href : null;
@@ -146,6 +376,7 @@ export default function ProposalDocument({
   children,
   compact,
   withSignatures = true,
+  extras = {},
 }: {
   content: Content;
   blocks?: Content["blocks"];
@@ -153,12 +384,14 @@ export default function ProposalDocument({
   children?: ReactNode;
   compact?: boolean;
   withSignatures?: boolean;
+  extras?: SiteExtras;
 }) {
   const totals = BILLINGS.filter((billing) => content.totals[billing]);
   return (
     <article className={cn("flex flex-col", compact ? "gap-10" : "gap-14 sm:gap-16")}>
       {blocks.map((block, index) => {
         if (block.type === "tab") return null;
+        if (!extras.preview && !shows(block, { booking: Boolean(extras.booking) })) return null;
         if (block.type === "cover") {
           const cover = imageSrc(block.image);
           return (
@@ -216,6 +449,7 @@ export default function ProposalDocument({
                 )}
               </>
             )}
+            <Extra block={block} content={content} extras={extras} />
             {block.type === "pricing" && (
               <>
                 {block.intro && <Body value={block.intro} />}

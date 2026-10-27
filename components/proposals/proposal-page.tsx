@@ -128,6 +128,11 @@ export default function ProposalPage({ token, initial, preview }: { token: strin
           onActive={setActive}
           followHash
           sticky="top-16"
+          extras={{
+            fileHref: (itemId) => `/api/p/${token}/files/${itemId}`,
+            booking: doc.booking,
+            bookingDefaults: { name: content.client.name, email: content.client.email },
+          }}
           signLabel={doc.state === "open" ? "Sign" : "Signatures"}
         >
           {doc.state === "open" && !declining && (

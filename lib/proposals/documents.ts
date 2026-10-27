@@ -263,6 +263,25 @@ async function templateLogo(db: Db, templateId: string, fallback: string | null)
   return result.rows[0] ? readSettings(result.rows[0].settings).logo : fallback;
 }
 
+async function withDocuments(db: Db, actor: Actor, blocks: Block[]): Promise<Block[]> {
+  const ids = [...new Set(blocks.flatMap((block) => (block.type === "documents" ? block.items.map((item) => item.id) : [])))];
+  if (ids.length === 0) return blocks;
+  const found = await db.query<{ id: string; title: string; kind: string; source_url: string | null; fingerprint: string | null }>(
+    `select id, title, kind, source_url, case when content is null then null else encode(sha256(convert_to(content, 'UTF8')), 'hex') end as fingerprint
+     from crm.knowledge_items where workspace_id = $1 and id = any($2::uuid[]) and archived_at is null`,
+    [actor.workspaceId, ids],
+  );
+  const byId = new Map(found.rows.map((item) => [item.id, item]));
+  return blocks.map((block) => {
+    if (block.type !== "documents") return block;
+    const items = block.items.flatMap((item) => {
+      const current = byId.get(item.id);
+      return current ? [{ id: current.id, title: current.title, kind: current.kind, sourceUrl: current.source_url ?? "", fingerprint: current.fingerprint ?? "" }] : [];
+    });
+    return { ...block, items };
+  });
+}
+
 async function buildContent(db: Db, actor: Actor, row: DocumentRow, issuedAt: string) {
   const parties = await partiesFor(db, actor, row);
   const items = Array.isArray(row.items) ? row.items : [];
@@ -281,7 +300,9 @@ async function buildContent(db: Db, actor: Actor, row: DocumentRow, issuedAt: st
     workspace: { name: parties.workspaceName },
     proposal: { title: row.title, currency: row.currency, validUntil: row.valid_until, items },
   });
-  const { blocks, missing, placeholders } = renderBlocks(readBlocks(row.blocks), values);
+  const rendered = renderBlocks(readBlocks(row.blocks), values);
+  const { missing, placeholders } = rendered;
+  const blocks = await withDocuments(db, actor, rendered.blocks);
   const content: Content = {
     kind: row.kind,
     title: row.title,

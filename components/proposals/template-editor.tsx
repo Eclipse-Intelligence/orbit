@@ -9,22 +9,17 @@ import { recordSelectClass } from "@/components/crm/record-form";
 import type { Viewer } from "@/components/crm/viewer";
 import { ProposalLogo } from "@/components/proposals/proposal-document";
 import ProposalSite from "@/components/proposals/proposal-site";
-import { createTemplateAction, prepareProposalImageAction, saveTemplateAction } from "@/app/(crm)/proposals/actions";
-import Asset from "@/components/_ui/asset";
-import { uploadToSignedUrl } from "@/lib/upload-client";
+import { createTemplateAction, saveTemplateAction } from "@/app/(crm)/proposals/actions";
+import { BlockEditor, type KnowledgeOption } from "@/components/proposals/block-editor";
 import type { Template } from "@/lib/proposals/catalogue";
 import {
-  BLOCK_LABELS,
   consentText,
-  FIELD_OPTIONS,
   fieldValues,
   KIND_LABELS,
   LOGO_MAX_LENGTH,
-  newBlockId,
   renderBlocks,
   totalsOf,
   type Block,
-  type BlockType,
   type Content,
   type Item,
   type TemplateStatus,
@@ -35,17 +30,6 @@ const SAMPLE_ITEMS: Item[] = [
   { productId: null, name: "Agency Pilot", description: "Three months of work, with weekly reporting.", billing: "one_off", unitPrice: 2500, quantity: 1 },
   { productId: null, name: "Pro", description: "Ongoing monitoring.", billing: "monthly", unitPrice: 900, quantity: 1 },
 ];
-
-const textarea =
-  "bg-transparent focus-visible:ring-ring/60 w-full rounded-lg px-3 py-2 text-[14px] leading-[1.5] shadow-[0_0_0_1px_var(--input)] outline-none focus-visible:ring-2";
-
-function blankBlock(type: BlockType, id: string): Block {
-  if (type === "cover") return { id, type, title: "{{proposal.title}}", subtitle: "Prepared for {{contact.name}} at {{company.name}}.", image: "" };
-  if (type === "tab") return { id, type, label: "New tab" };
-  if (type === "pricing") return { id, type, heading: "Investment", intro: "" };
-  if (type === "terms") return { id, type, heading: "Terms and conditions", body: "", linkLabel: "Read our terms and conditions", linkUrl: "" };
-  return { id, type: "section", heading: "New section", body: "" };
-}
 
 async function logoPng(file: File) {
   const url = URL.createObjectURL(file);
@@ -123,58 +107,6 @@ function LogoField({ logo, company, onChange }: { logo: string | null; company: 
   );
 }
 
-function CoverImageField({ id, value, onChange }: { id: string; value: string; onChange: (url: string) => void }) {
-  const input = useRef<HTMLInputElement>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function pick(file: File | undefined) {
-    if (input.current) input.current.value = "";
-    if (!file) return;
-    setBusy(true);
-    setError(null);
-    const prepared = await prepareProposalImageAction({ name: file.name, size: file.size, contentType: file.type });
-    if (!prepared.data) {
-      setBusy(false);
-      setError(prepared.error ?? "Couldn't upload it.");
-      return;
-    }
-    try {
-      await uploadToSignedUrl(prepared.data.uploadUrl, file);
-      onChange(prepared.data.url);
-    } catch {
-      setError("The upload didn't finish. Try again.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="flex flex-col gap-1.5">
-      <label htmlFor={id} className="caption-style text-subtle">
-        Cover image
-      </label>
-      {value && <Asset type="image" src={value} alt="" width={12} height={5} fit="cover" unoptimized className="rounded-lg shadow-[0_0_0_1px_var(--input)]" />}
-      <input ref={input} id={id} type="file" accept="image/jpeg,image/png,image/webp,image/gif" className="sr-only" onChange={(event) => void pick(event.target.files?.[0])} />
-      <div className="flex flex-wrap items-center gap-2">
-        <Button variant="secondary" size="sm" disabled={busy} onClick={() => input.current?.click()}>
-          {busy ? "Uploading" : value ? "Change" : "Upload image"}
-        </Button>
-        {value && (
-          <Button variant="ghost" size="sm" onClick={() => onChange("")}>
-            Remove
-          </Button>
-        )}
-      </div>
-      {error && (
-        <p role="alert" className="caption-style text-danger">
-          {error}
-        </p>
-      )}
-    </div>
-  );
-}
-
 function samplePreview(template: { kind: Template["kind"]; blocks: Block[]; accent: string; logo: string | null; validDays: number }, viewer: Viewer, now: number): Content {
   const validUntil = new Date(now + template.validDays * 86_400_000).toISOString().slice(0, 10);
   const items = template.kind === "proposal" ? SAMPLE_ITEMS : [];
@@ -202,133 +134,7 @@ function samplePreview(template: { kind: Template["kind"]; blocks: Block[]; acce
   };
 }
 
-function FieldButtons({ onInsert }: { onInsert: (token: string) => void }) {
-  return (
-    <details className="caption-style text-subtle">
-      <summary className="cursor-pointer select-none">Insert a field</summary>
-      <div className="flex flex-wrap gap-1.5 pt-2">
-        {FIELD_OPTIONS.map((option) => (
-          <Button key={option.path} variant="secondary" size="sm" onClick={() => onInsert(`{{${option.path}}}`)}>
-            {option.label}
-          </Button>
-        ))}
-      </div>
-    </details>
-  );
-}
-
-export function BlockEditor({ blocks, onChange, kind }: { blocks: Block[]; onChange: (blocks: Block[]) => void; kind: Template["kind"] }) {
-  const focused = useRef<{ id: string; key: string; element: HTMLInputElement | HTMLTextAreaElement } | null>(null);
-  const update = (id: string, patch: Partial<Block>) => onChange(blocks.map((block) => (block.id === id ? ({ ...block, ...patch } as Block) : block)));
-  const move = (index: number, by: number) => {
-    const next = [...blocks];
-    const [item] = next.splice(index, 1);
-    next.splice(index + by, 0, item);
-    onChange(next);
-  };
-  const insert = (token: string) => {
-    const target = focused.current;
-    if (!target) return;
-    const block = blocks.find((item) => item.id === target.id) as Record<string, unknown> | undefined;
-    if (!block) return;
-    const value = String(block[target.key] ?? "");
-    const start = target.element.selectionStart ?? value.length;
-    const end = target.element.selectionEnd ?? value.length;
-    update(target.id, { [target.key]: `${value.slice(0, start)}${token}${value.slice(end)}` } as Partial<Block>);
-  };
-  const text = (block: Block, key: string, label: string, rows?: number) => {
-    const value = String((block as Record<string, unknown>)[key] ?? "");
-    const common = {
-      id: `${block.id}-${key}`,
-      value,
-      onFocus: (event: { currentTarget: HTMLInputElement | HTMLTextAreaElement }) => {
-        focused.current = { id: block.id, key, element: event.currentTarget };
-      },
-      onChange: (event: { target: { value: string } }) => update(block.id, { [key]: event.target.value } as Partial<Block>),
-    };
-    return (
-      <div className="flex flex-col gap-1.5">
-        <label htmlFor={common.id} className="caption-style text-subtle">
-          {label}
-        </label>
-        {rows ? <textarea {...common} rows={rows} className={textarea} /> : <Input {...common} />}
-      </div>
-    );
-  };
-  const addable: BlockType[] = kind === "proposal" ? ["tab", "section", "pricing", "terms", "cover"] : ["section", "terms", "cover"];
-
-  return (
-    <div className="flex flex-col gap-4">
-      <FieldButtons onInsert={insert} />
-      <ol className="flex flex-col gap-3">
-        {blocks.map((block, index) => (
-          <li
-            key={block.id}
-            className={cn(
-              "flex flex-col gap-3 rounded-xl border p-4",
-              block.type === "tab" ? "bg-secondary border-transparent" : "border-line-strong bg-card",
-              block.type === "tab" && index > 0 && "mt-3",
-            )}
-          >
-            <div className="flex items-center gap-2">
-              <span className="eyebrow-style text-subtle flex-1">{BLOCK_LABELS[block.type]}</span>
-              <Button variant="ghost" size="sm" disabled={index === 0} onClick={() => move(index, -1)} aria-label={`Move ${BLOCK_LABELS[block.type]} up`}>
-                Up
-              </Button>
-              <Button variant="ghost" size="sm" disabled={index === blocks.length - 1} onClick={() => move(index, 1)} aria-label={`Move ${BLOCK_LABELS[block.type]} down`}>
-                Down
-              </Button>
-              <Button variant="ghost" size="sm" onClick={() => onChange(blocks.filter((item) => item.id !== block.id))} aria-label={`Remove ${BLOCK_LABELS[block.type]}`}>
-                Remove
-              </Button>
-            </div>
-            {block.type === "tab" && text(block, "label", "Tab name")}
-            {block.type === "cover" && (
-              <>
-                <CoverImageField id={`${block.id}-image`} value={block.image} onChange={(image) => update(block.id, { image } as Partial<Block>)} />
-                {text(block, "title", "Title")}
-                {text(block, "subtitle", "Subtitle", 2)}
-              </>
-            )}
-            {block.type === "section" && (
-              <>
-                {text(block, "heading", "Heading")}
-                {text(block, "body", "Text", 6)}
-                <p className="caption-style text-subtle">Leave a blank line between paragraphs. Start lines with - for bullets, and use **bold** or [link text](https://…).</p>
-              </>
-            )}
-            {block.type === "pricing" && (
-              <>
-                {text(block, "heading", "Heading")}
-                {text(block, "intro", "Text above the prices", 2)}
-                <p className="caption-style text-subtle">The products and totals chosen for each proposal appear here.</p>
-              </>
-            )}
-            {block.type === "terms" && (
-              <>
-                {text(block, "heading", "Heading")}
-                {text(block, "body", "Text", 4)}
-                <div className="grid gap-3 sm:grid-cols-2">
-                  {text(block, "linkLabel", "Link text")}
-                  {text(block, "linkUrl", "Link to your terms (https://…)")}
-                </div>
-              </>
-            )}
-          </li>
-        ))}
-      </ol>
-      <div className="flex flex-wrap gap-2">
-        {addable.map((type) => (
-          <Button key={type} variant="secondary" size="sm" onClick={() => onChange([...blocks, blankBlock(type, newBlockId(blocks.map((item) => item.id)))])}>
-            Add {BLOCK_LABELS[type].toLowerCase()}
-          </Button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-export default function TemplateEditor({ viewer, template }: { viewer: Viewer; template: Template }) {
+export default function TemplateEditor({ viewer, template, knowledge = [] }: { viewer: Viewer; template: Template; knowledge?: KnowledgeOption[] }) {
   const router = useRouter();
   const [name, setName] = useState(template.name);
   const [status, setStatus] = useState<TemplateStatus>(template.status);
@@ -443,14 +249,14 @@ export default function TemplateEditor({ viewer, template }: { viewer: Viewer; t
                 {message.text}
               </p>
             )}
-            <BlockEditor blocks={blocks} onChange={setBlocks} kind={template.kind} />
+            <BlockEditor blocks={blocks} onChange={setBlocks} kind={template.kind} knowledge={knowledge} />
           </div>
         </div>
         <div className={cn("min-h-0 overflow-y-auto", view === "edit" && "hidden lg:block")}>
           <div className="paper min-h-full px-5 pt-10 pb-28 sm:px-10">
             <div className="mx-auto max-w-[44em]">
               <p className="caption-style text-subtle pb-6">Preview with sample details</p>
-              <ProposalSite content={preview} compact />
+              <ProposalSite content={preview} compact extras={{ preview: true }} />
             </div>
           </div>
         </div>

@@ -19,7 +19,10 @@ import {
   updateDocument,
 } from "@/lib/proposals/documents";
 import { fieldValues, renderBlocks, tabsOf, totalLabel, totalsOf } from "@/lib/proposals/model";
-import { clientDecline, clientSign, openDocument, publicFile } from "@/lib/proposals/public";
+import { clientDecline, clientSign, openDocument, publicFile, publicKnowledgeFile } from "@/lib/proposals/public";
+import { addKnowledgeText } from "@/lib/knowledge/store";
+import { saveBookingPage } from "@/lib/booking/pages";
+import { DEFAULT_WEEKLY_HOURS } from "@/lib/booking/rules";
 import { runWorkflowTick } from "@/lib/workflows/engine";
 import { createWorkflow, listNotifications, listRuns, saveWorkflow, setWorkflowStatus } from "@/lib/workflows/store";
 import { createUser, resetDatabase } from "./helpers";
@@ -301,5 +304,41 @@ describe("proposals", () => {
     const nda = await make("Ndaco");
     await createDocument(owner, { templateId: ndaTemplateId, companyId: nda.companyId, contactId: nda.contactId });
     assert.equal((await listOpportunities(owner, { companyId: nda.companyId })).data.length, 0);
+  });
+
+  it("shares Knowledge documents with fingerprints, serves only listed ones, and embeds the owner's booking page", async () => {
+    const deck = await addKnowledgeText(owner, { companyId: pulseId }, { kind: "attachment", title: "Pulse case study", content: "Pulse grew organic leads by 40% in six months.", sourceRef: "test:deck" }, { operation: "test" });
+    const other = await addKnowledgeText(owner, { companyId: pulseId }, { kind: "attachment", title: "Not shared", content: "Private notes.", sourceRef: "test:other" }, { operation: "test" });
+    const id = await createDocument(owner, { templateId: proposalTemplateId, companyId: pulseId, contactId: andrewId, items: [{ productId: pilotId }] });
+    const detail = await getDocument(owner, id);
+    await updateDocument(owner, id, {
+      blocks: [
+        ...detail.blocks,
+        { id: "d1", type: "documents", heading: "Reading for {{contact.firstName}}", intro: "", items: [{ id: deck.item.id, title: "[old title]", kind: "", sourceUrl: "", fingerprint: "" }] },
+        { id: "k1", type: "booking", heading: "Book a call", intro: "" },
+        { id: "f1", type: "faq", heading: "Questions", items: [{ question: "When can {{company.name}} start?", answer: "Next week." }] },
+      ],
+    });
+    const token = tokenOf((await sendDocument(owner, id, { email: false })).url);
+    const opened = (await openDocument(token, { track: false }))!;
+    const documents = opened.content.blocks.find((block) => block.id === "d1");
+    assert.ok(documents && documents.type === "documents");
+    assert.equal(documents.heading, "Reading for Andrew");
+    assert.deepEqual(documents.items.map((item) => item.title), ["Pulse case study"]);
+    assert.equal(documents.items[0].fingerprint.length, 64);
+    const faq = opened.content.blocks.find((block) => block.type === "faq");
+    assert.ok(faq && faq.type === "faq" && faq.items[0].question === "When can Pulse start?");
+    assert.equal(opened.booking, null);
+
+    const file = await publicKnowledgeFile(token, deck.item.id, { track: true });
+    assert.equal(file.kind, "file");
+    assert.equal(file.kind === "file" && new TextDecoder().decode(file.data), "Pulse grew organic leads by 40% in six months.");
+    await assert.rejects(() => publicKnowledgeFile(token, other.item.id, { track: true }), /isn't part of this proposal/);
+    const events = (await getDocument(owner, id)).events.filter((event) => event.type === "document_opened");
+    assert.equal(events.length, 1);
+    assert.equal(events[0].data.title, "Pulse case study");
+
+    await saveBookingPage(owner, { slug: "mark-props", enabled: true, title: null, intro: "", durationMinutes: 30, bufferMinutes: 0, minNoticeMinutes: 0, horizonDays: 14, weeklyHours: DEFAULT_WEEKLY_HOURS, videoUrl: "" });
+    assert.equal((await openDocument(token, { track: false }))!.booking?.slug, "mark-props");
   });
 });

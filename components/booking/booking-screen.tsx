@@ -84,7 +84,7 @@ function Spinner() {
   return <span aria-hidden className="size-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />;
 }
 
-function Confirmation({ booking }: { booking: BookingConfirmation }) {
+function Confirmation({ booking, embedded }: { booking: BookingConfirmation; embedded: boolean }) {
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
     heading.current?.focus();
@@ -128,13 +128,24 @@ function Confirmation({ booking }: { booking: BookingConfirmation }) {
         <p className="text-soft text-[14px] leading-5">
           An invitation is on its way to <span className="text-foreground font-medium break-all">{booking.email}</span>.
         </p>
-        <p className="caption-style text-subtle leading-4">You can close this page.</p>
+        {!embedded && <p className="caption-style text-subtle leading-4">You can close this page.</p>}
       </div>
     </div>
   );
 }
 
-export default function BookingScreen({ page }: { page: PublicBookingPage }) {
+export function BookingPanel({
+  page,
+  defaults,
+  className,
+  embedded = false,
+}: {
+  page: PublicBookingPage;
+  defaults?: { name?: string; email?: string };
+  className?: string;
+  embedded?: boolean;
+}) {
+  const panel = useRef<HTMLDivElement>(null);
   const detected = useBrowserZone();
   const [chosenZone, setChosenZone] = useState<string | null>(null);
   const zone = chosenZone ?? detected;
@@ -143,8 +154,8 @@ export default function BookingScreen({ page }: { page: PublicBookingPage }) {
   const [reload, setReload] = useState(0);
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [slot, setSlot] = useState<string | null>(null);
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
+  const [name, setName] = useState(defaults?.name ?? "");
+  const [email, setEmail] = useState(defaults?.email ?? "");
   const [note, setNote] = useState("");
   const [website, setWebsite] = useState("");
   const [errors, setErrors] = useState<Errors>({});
@@ -262,7 +273,8 @@ export default function BookingScreen({ page }: { page: PublicBookingPage }) {
       } | null;
       if (response.ok && body?.booking) {
         setBooking(body.booking);
-        window.scrollTo({ top: 0 });
+        if (embedded) panel.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+        else window.scrollTo({ top: 0 });
         return;
       }
       const message = body?.error?.message ?? "Something went wrong. Try again.";
@@ -290,6 +302,238 @@ export default function BookingScreen({ page }: { page: PublicBookingPage }) {
   const zones = zone ? allZones(zone) : [];
 
   return (
+    <div ref={panel} className={cn("flex flex-1 scroll-mt-32 flex-col gap-7 px-5 pt-7 pb-8 sm:px-8", className)}>
+      {booking ? (
+        <Confirmation booking={booking} embedded={embedded} />
+      ) : (
+        <>
+          <header className="flex flex-col gap-4">
+            <div className="flex items-center gap-4">
+              <OwnerAvatar page={page} />
+              <div className="flex min-w-0 flex-col gap-1.5">
+                <p className="text-soft text-[13px] leading-4">{page.ownerName}</p>
+                <h1 className="text-[22px] leading-[1.15] font-semibold tracking-[-0.01em] text-balance">{page.title}</h1>
+              </div>
+            </div>
+            {page.intro && (
+              <p className="text-soft text-[14px] leading-[1.5] whitespace-pre-line text-pretty">{page.intro}</p>
+            )}
+            <MeetingChips page={page} />
+          </header>
+
+          <div className="h-px bg-white/[0.08]" />
+
+          {loaded && !loaded.ok ? (
+            <div role="alert" className="flex flex-col items-start gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.04] p-4">
+              <p className="text-soft text-[14px] leading-5">{loaded.error}</p>
+              <Button variant="secondary" size="md" onClick={refresh}>
+                Try again
+              </Button>
+            </div>
+          ) : (
+            <BookingCalendar
+              month={shownMonth ?? todayKey(page.timeZone).slice(0, 7)}
+              days={days}
+              loading={loading}
+              selected={activeDay}
+              today={today}
+              canPrev={Boolean(data && shownMonth && shownMonth > data.first)}
+              canNext={Boolean(data && shownMonth && shownMonth < data.last)}
+              onMonth={changeMonth}
+              onSelect={(day) => {
+                setSelectedDay(day);
+                setSlot(null);
+              }}
+            />
+          )}
+
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+              <h2 className="text-[15px] leading-5 font-medium">
+                {activeDay ? dayTitle(activeDay) : loading ? "Available times" : "No times this month"}
+              </h2>
+              <div className="text-subtle hover:text-soft relative flex h-7 max-w-[60%] items-center gap-1.5 rounded-full border border-white/[0.08] px-2.5 text-[12px] leading-none transition-colors duration-150 focus-within:ring-2 focus-within:ring-ring/80">
+                <GlobeIcon aria-hidden className="size-3.5 shrink-0" />
+                <span aria-hidden className="truncate">
+                  {zone ? zoneLabel(zone) : "Detecting time zone…"}
+                </span>
+                {zone && (
+                  <select
+                    aria-label="Time zone"
+                    value={zone}
+                    onChange={(event) => {
+                      setChosenZone(event.target.value);
+                      setMonth(null);
+                      setSelectedDay(null);
+                      setSlot(null);
+                    }}
+                    className="absolute inset-0 cursor-pointer opacity-0"
+                  >
+                    {zones.map((item) => (
+                      <option key={item} value={item}>
+                        {item.replace(/_/g, " ")}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            </div>
+            {errors.slot && (
+              <p role="alert" className="text-danger text-[13px] leading-5">
+                {errors.slot}
+              </p>
+            )}
+            {loading ? (
+              <div aria-hidden className="grid grid-cols-3 gap-2">
+                {Array.from({ length: 9 }, (_, index) => (
+                  <span key={index} className="h-10 animate-pulse rounded-full bg-white/[0.05]" />
+                ))}
+              </div>
+            ) : times.length > 0 ? (
+              <ul aria-label={activeDay ? `Times on ${dayTitle(activeDay)}` : "Times"} className="grid grid-cols-3 gap-2">
+                {times.map((time) => {
+                  const active = time === activeSlot;
+                  return (
+                    <li key={time}>
+                      <button
+                        type="button"
+                        aria-pressed={active}
+                        onClick={() => pickSlot(time)}
+                        className={cn(
+                          "focus-visible:ring-ring/80 flex h-10 w-full cursor-pointer items-center justify-center rounded-full border text-[13px] leading-none font-medium tabular-nums transition-[background-color,border-color,color,box-shadow] duration-150 ease-power3-out outline-none focus-visible:ring-2",
+                          active
+                            ? "bg-primary border-transparent text-white shadow-[0px_4px_14px_0px_rgba(65,36,251,0.45),inset_0px_1px_0px_0px_rgba(255,255,255,0.2)]"
+                            : "text-foreground border-white/10 bg-white/[0.04] hover:border-white/25 hover:bg-white/[0.08]",
+                        )}
+                      >
+                        {timeOf(time, zone ?? page.timeZone)}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : (
+              <div className="flex flex-col items-start gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.04] p-4">
+                <p className="text-soft text-[14px] leading-5">
+                  Every slot this month is taken or out of range.
+                </p>
+                {data && shownMonth && shownMonth < data.last && (
+                  <Button variant="secondary" size="md" onClick={() => changeMonth(1)}>
+                    See next month
+                  </Button>
+                )}
+              </div>
+            )}
+          </div>
+
+          {activeSlot && slotEnd && (
+            <form
+              ref={formRef}
+              noValidate
+              onSubmit={submit}
+              aria-label="Your details"
+              className="animate-rise-in flex scroll-mt-6 flex-col gap-4 motion-reduce:animate-none"
+            >
+              <div className="flex items-center gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.04] px-4 py-3">
+                <CalendarIcon aria-hidden className="text-soft size-4 shrink-0" />
+                <p className="text-[14px] leading-5">
+                  <span className="font-medium">{fullWhen(activeSlot, slotEnd, zone ?? page.timeZone)}</span>
+                </p>
+              </div>
+              <Field label="Name" htmlFor="booking-name" required error={errors.name}>
+                <Input
+                  id="booking-name"
+                  name="name"
+                  autoComplete="name"
+                  maxLength={BOOKING_NAME_MAX}
+                  value={name}
+                  aria-invalid={errors.name ? true : undefined}
+                  aria-describedby={errors.name ? "booking-name-error" : undefined}
+                  onChange={(event) => {
+                    setName(event.target.value);
+                    setErrors((current) => ({ ...current, name: undefined }));
+                  }}
+                  className="h-11 rounded-xl border-white/10 bg-white/[0.04] focus-visible:border-white/40"
+                />
+              </Field>
+              <Field label="Email" htmlFor="booking-email" required error={errors.email}>
+                <Input
+                  id="booking-email"
+                  name="email"
+                  type="email"
+                  inputMode="email"
+                  autoComplete="email"
+                  spellCheck={false}
+                  maxLength={200}
+                  value={email}
+                  aria-invalid={errors.email ? true : undefined}
+                  aria-describedby={errors.email ? "booking-email-error" : undefined}
+                  onChange={(event) => {
+                    setEmail(event.target.value);
+                    setErrors((current) => ({ ...current, email: undefined }));
+                  }}
+                  className="h-11 rounded-xl border-white/10 bg-white/[0.04] focus-visible:border-white/40"
+                />
+              </Field>
+              <Field
+                label="Note"
+                htmlFor="booking-note"
+                hint="Optional. Anything you'd like to cover?"
+                error={errors.note}
+              >
+                <textarea
+                  id="booking-note"
+                  name="note"
+                  rows={3}
+                  maxLength={BOOKING_NOTE_MAX}
+                  value={note}
+                  aria-invalid={errors.note ? true : undefined}
+                  aria-describedby={errors.note ? "booking-note-error" : "booking-note-hint"}
+                  onChange={(event) => {
+                    setNote(event.target.value);
+                    setErrors((current) => ({ ...current, note: undefined }));
+                  }}
+                  className="text-foreground placeholder:text-subtle min-h-[88px] w-full resize-y rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2.5 text-[14px] leading-5 outline-none transition-[border-color] duration-150 ease-power3-out focus-visible:border-white/40"
+                />
+              </Field>
+              <div aria-hidden className="absolute -left-[9999px] size-px overflow-hidden">
+                <label htmlFor="booking-website">Website</label>
+                <input
+                  id="booking-website"
+                  name="website"
+                  tabIndex={-1}
+                  autoComplete="off"
+                  value={website}
+                  onChange={(event) => setWebsite(event.target.value)}
+                />
+              </div>
+              {errors.form && (
+                <p role="alert" className="text-danger text-[13px] leading-5">
+                  {errors.form}
+                </p>
+              )}
+              <Button
+                variant="primary"
+                size="md"
+                type="submit"
+                disabled={pending}
+                aria-busy={pending}
+                className="h-12 w-full text-[15px]"
+              >
+                {pending && <Spinner />}
+                {pending ? "Booking…" : "Book"}
+              </Button>
+            </form>
+          )}
+        </>
+      )}
+      {!embedded && <p className="caption-style text-soft mt-auto pt-2 text-center">Scheduling by Orbit from Eclipse</p>}
+    </div>
+  );
+}
+
+export default function BookingScreen({ page }: { page: PublicBookingPage }) {
+  return (
     <main className="relative min-h-dvh">
       <BookingBackground videoUrl={page.videoUrl} posterUrl={page.posterUrl} />
       <div className="relative flex min-h-dvh flex-col max-lg:pt-[22svh] lg:block">
@@ -297,233 +541,7 @@ export default function BookingScreen({ page }: { page: PublicBookingPage }) {
           aria-label={page.title}
           className="animate-panel-in flex min-h-0 flex-1 flex-col rounded-t-[28px] border border-white/10 bg-[#0b0b10]/65 shadow-[0px_24px_80px_0px_rgba(0,0,0,0.55),inset_0px_1px_0px_0px_rgba(255,255,255,0.08)] backdrop-blur-2xl backdrop-saturate-150 motion-reduce:animate-none max-lg:border-b-0 lg:fixed lg:inset-y-6 lg:right-6 lg:w-[440px] lg:rounded-[28px]"
         >
-          <div className="flex flex-1 flex-col gap-7 px-5 pt-7 pb-8 sm:px-8 lg:overflow-y-auto lg:overscroll-contain">
-            {booking ? (
-              <Confirmation booking={booking} />
-            ) : (
-              <>
-                <header className="flex flex-col gap-4">
-                  <div className="flex items-center gap-4">
-                    <OwnerAvatar page={page} />
-                    <div className="flex min-w-0 flex-col gap-1.5">
-                      <p className="text-soft text-[13px] leading-4">{page.ownerName}</p>
-                      <h1 className="text-[22px] leading-[1.15] font-semibold tracking-[-0.01em] text-balance">{page.title}</h1>
-                    </div>
-                  </div>
-                  {page.intro && (
-                    <p className="text-soft text-[14px] leading-[1.5] whitespace-pre-line text-pretty">{page.intro}</p>
-                  )}
-                  <MeetingChips page={page} />
-                </header>
-
-                <div className="h-px bg-white/[0.08]" />
-
-                {loaded && !loaded.ok ? (
-                  <div role="alert" className="flex flex-col items-start gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.04] p-4">
-                    <p className="text-soft text-[14px] leading-5">{loaded.error}</p>
-                    <Button variant="secondary" size="md" onClick={refresh}>
-                      Try again
-                    </Button>
-                  </div>
-                ) : (
-                  <BookingCalendar
-                    month={shownMonth ?? todayKey(page.timeZone).slice(0, 7)}
-                    days={days}
-                    loading={loading}
-                    selected={activeDay}
-                    today={today}
-                    canPrev={Boolean(data && shownMonth && shownMonth > data.first)}
-                    canNext={Boolean(data && shownMonth && shownMonth < data.last)}
-                    onMonth={changeMonth}
-                    onSelect={(day) => {
-                      setSelectedDay(day);
-                      setSlot(null);
-                    }}
-                  />
-                )}
-
-                <div className="flex flex-col gap-3">
-                  <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
-                    <h2 className="text-[15px] leading-5 font-medium">
-                      {activeDay ? dayTitle(activeDay) : loading ? "Available times" : "No times this month"}
-                    </h2>
-                    <div className="text-subtle hover:text-soft relative flex h-7 max-w-[60%] items-center gap-1.5 rounded-full border border-white/[0.08] px-2.5 text-[12px] leading-none transition-colors duration-150 focus-within:ring-2 focus-within:ring-ring/80">
-                      <GlobeIcon aria-hidden className="size-3.5 shrink-0" />
-                      <span aria-hidden className="truncate">
-                        {zone ? zoneLabel(zone) : "Detecting time zone…"}
-                      </span>
-                      {zone && (
-                        <select
-                          aria-label="Time zone"
-                          value={zone}
-                          onChange={(event) => {
-                            setChosenZone(event.target.value);
-                            setMonth(null);
-                            setSelectedDay(null);
-                            setSlot(null);
-                          }}
-                          className="absolute inset-0 cursor-pointer opacity-0"
-                        >
-                          {zones.map((item) => (
-                            <option key={item} value={item}>
-                              {item.replace(/_/g, " ")}
-                            </option>
-                          ))}
-                        </select>
-                      )}
-                    </div>
-                  </div>
-                  {errors.slot && (
-                    <p role="alert" className="text-danger text-[13px] leading-5">
-                      {errors.slot}
-                    </p>
-                  )}
-                  {loading ? (
-                    <div aria-hidden className="grid grid-cols-3 gap-2">
-                      {Array.from({ length: 9 }, (_, index) => (
-                        <span key={index} className="h-10 animate-pulse rounded-full bg-white/[0.05]" />
-                      ))}
-                    </div>
-                  ) : times.length > 0 ? (
-                    <ul aria-label={activeDay ? `Times on ${dayTitle(activeDay)}` : "Times"} className="grid grid-cols-3 gap-2">
-                      {times.map((time) => {
-                        const active = time === activeSlot;
-                        return (
-                          <li key={time}>
-                            <button
-                              type="button"
-                              aria-pressed={active}
-                              onClick={() => pickSlot(time)}
-                              className={cn(
-                                "focus-visible:ring-ring/80 flex h-10 w-full cursor-pointer items-center justify-center rounded-full border text-[13px] leading-none font-medium tabular-nums transition-[background-color,border-color,color,box-shadow] duration-150 ease-power3-out outline-none focus-visible:ring-2",
-                                active
-                                  ? "bg-primary border-transparent text-white shadow-[0px_4px_14px_0px_rgba(65,36,251,0.45),inset_0px_1px_0px_0px_rgba(255,255,255,0.2)]"
-                                  : "text-foreground border-white/10 bg-white/[0.04] hover:border-white/25 hover:bg-white/[0.08]",
-                              )}
-                            >
-                              {timeOf(time, zone ?? page.timeZone)}
-                            </button>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  ) : (
-                    <div className="flex flex-col items-start gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.04] p-4">
-                      <p className="text-soft text-[14px] leading-5">
-                        Every slot this month is taken or out of range.
-                      </p>
-                      {data && shownMonth && shownMonth < data.last && (
-                        <Button variant="secondary" size="md" onClick={() => changeMonth(1)}>
-                          See next month
-                        </Button>
-                      )}
-                    </div>
-                  )}
-                </div>
-
-                {activeSlot && slotEnd && (
-                  <form
-                    ref={formRef}
-                    noValidate
-                    onSubmit={submit}
-                    aria-label="Your details"
-                    className="animate-rise-in flex scroll-mt-6 flex-col gap-4 motion-reduce:animate-none"
-                  >
-                    <div className="flex items-center gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.04] px-4 py-3">
-                      <CalendarIcon aria-hidden className="text-soft size-4 shrink-0" />
-                      <p className="text-[14px] leading-5">
-                        <span className="font-medium">{fullWhen(activeSlot, slotEnd, zone ?? page.timeZone)}</span>
-                      </p>
-                    </div>
-                    <Field label="Name" htmlFor="booking-name" required error={errors.name}>
-                      <Input
-                        id="booking-name"
-                        name="name"
-                        autoComplete="name"
-                        maxLength={BOOKING_NAME_MAX}
-                        value={name}
-                        aria-invalid={errors.name ? true : undefined}
-                        aria-describedby={errors.name ? "booking-name-error" : undefined}
-                        onChange={(event) => {
-                          setName(event.target.value);
-                          setErrors((current) => ({ ...current, name: undefined }));
-                        }}
-                        className="h-11 rounded-xl border-white/10 bg-white/[0.04] focus-visible:border-white/40"
-                      />
-                    </Field>
-                    <Field label="Email" htmlFor="booking-email" required error={errors.email}>
-                      <Input
-                        id="booking-email"
-                        name="email"
-                        type="email"
-                        inputMode="email"
-                        autoComplete="email"
-                        spellCheck={false}
-                        maxLength={200}
-                        value={email}
-                        aria-invalid={errors.email ? true : undefined}
-                        aria-describedby={errors.email ? "booking-email-error" : undefined}
-                        onChange={(event) => {
-                          setEmail(event.target.value);
-                          setErrors((current) => ({ ...current, email: undefined }));
-                        }}
-                        className="h-11 rounded-xl border-white/10 bg-white/[0.04] focus-visible:border-white/40"
-                      />
-                    </Field>
-                    <Field
-                      label="Note"
-                      htmlFor="booking-note"
-                      hint="Optional. Anything you'd like to cover?"
-                      error={errors.note}
-                    >
-                      <textarea
-                        id="booking-note"
-                        name="note"
-                        rows={3}
-                        maxLength={BOOKING_NOTE_MAX}
-                        value={note}
-                        aria-invalid={errors.note ? true : undefined}
-                        aria-describedby={errors.note ? "booking-note-error" : "booking-note-hint"}
-                        onChange={(event) => {
-                          setNote(event.target.value);
-                          setErrors((current) => ({ ...current, note: undefined }));
-                        }}
-                        className="text-foreground placeholder:text-subtle min-h-[88px] w-full resize-y rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2.5 text-[14px] leading-5 outline-none transition-[border-color] duration-150 ease-power3-out focus-visible:border-white/40"
-                      />
-                    </Field>
-                    <div aria-hidden className="absolute -left-[9999px] size-px overflow-hidden">
-                      <label htmlFor="booking-website">Website</label>
-                      <input
-                        id="booking-website"
-                        name="website"
-                        tabIndex={-1}
-                        autoComplete="off"
-                        value={website}
-                        onChange={(event) => setWebsite(event.target.value)}
-                      />
-                    </div>
-                    {errors.form && (
-                      <p role="alert" className="text-danger text-[13px] leading-5">
-                        {errors.form}
-                      </p>
-                    )}
-                    <Button
-                      variant="primary"
-                      size="md"
-                      type="submit"
-                      disabled={pending}
-                      aria-busy={pending}
-                      className="h-12 w-full text-[15px]"
-                    >
-                      {pending && <Spinner />}
-                      {pending ? "Booking…" : "Book"}
-                    </Button>
-                  </form>
-                )}
-              </>
-            )}
-            <p className="caption-style text-soft mt-auto pt-2 text-center">Scheduling by Orbit from Eclipse</p>
-          </div>
+          <BookingPanel page={page} className="lg:overflow-y-auto lg:overscroll-contain" />
         </section>
       </div>
     </main>
