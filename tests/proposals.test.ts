@@ -19,7 +19,8 @@ import {
   updateDocument,
 } from "@/lib/proposals/documents";
 import { fieldValues, renderBlocks, tabsOf, totalLabel, totalsOf } from "@/lib/proposals/model";
-import { clientDecline, clientSign, clientStep, openDocument, publicFile, publicKnowledgeFile } from "@/lib/proposals/public";
+import { clientDecline, clientSign, clientStep, openDocument, publicFile, publicKnowledgeFile, recordReading } from "@/lib/proposals/public";
+import { runTool } from "@/lib/assistant/tools";
 import { addStep, moveStep, removeStep, updateStep } from "@/lib/proposals/steps";
 import { addKnowledgeText } from "@/lib/knowledge/store";
 import { saveBookingPage } from "@/lib/booking/pages";
@@ -376,5 +377,38 @@ describe("proposals", () => {
     assert.equal((await getDocument(owner, id)).version?.number, 1);
     await removeStep(owner, security.id);
     assert.equal((await openDocument(token, { track: false }))!.steps.length, 4);
+  });
+
+  it("records reading time per tab, and lets the assistant build sections and change the plan", async () => {
+    const id = await createDocument(owner, { templateId: proposalTemplateId, companyId: pulseId, contactId: andrewId, items: [{ productId: pilotId }] });
+    const deck = await addKnowledgeText(owner, { companyId: pulseId }, { kind: "attachment", title: "Pulse onboarding plan", content: "Week one: access and kick-off.", sourceRef: "test:plan" }, { operation: "test" });
+    const detail = await getDocument(owner, id);
+    const built = (await runTool(owner, "update_proposal", {
+      id,
+      blocks: [
+        ...detail.blocks,
+        { id: "b90", type: "tab", label: "Onboarding" },
+        { id: "b91", type: "documents", heading: "How we'll start", items: [{ id: deck.item.id }] },
+        { id: "b92", type: "quote", quote: "They shipped in week one.", name: "Jo", role: "COO" },
+      ],
+    })) as { error?: string };
+    assert.equal(built.error, undefined);
+    const token = tokenOf((await sendDocument(owner, id, { email: false })).url);
+    const page = (await openDocument(token, { track: false }))!;
+    assert.ok(page.content.blocks.some((block) => block.type === "documents" && block.items[0]?.title === "Pulse onboarding plan"));
+
+    assert.deepEqual(await recordReading(token, { tabs: { Overview: 1 } }), { recorded: false });
+    assert.deepEqual(await recordReading(token, { tabs: { Overview: 40.4, Proposal: 95, "": 9, Terms: 99999 } }), { recorded: true });
+    await recordReading(token, { tabs: { Proposal: 30 } });
+    await assert.rejects(() => recordReading(token, { tabs: "nope" }), /Nothing to record/);
+    const read = (await runTool(owner, "get_proposal", { id })) as { readingSecondsByTab: Record<string, number>; events: { type: string }[] };
+    assert.deepEqual(read.readingSecondsByTab, { Overview: 40, Proposal: 125, Terms: 7200 });
+    assert.ok(!read.events.some((event) => event.type === "reading"));
+
+    const added = (await runTool(owner, "update_proposal_steps", { id, action: "add", title: "Legal review", side: "client", dueDate: "2026-12-10" })) as { steps: { id: string; title: string }[] };
+    const legal = added.steps.find((step) => step.title === "Legal review")!;
+    const ticked = (await runTool(owner, "update_proposal_steps", { id, action: "done", stepId: legal.id })) as { steps: { id: string; doneBy: string | null }[] };
+    assert.equal(ticked.steps.find((step) => step.id === legal.id)?.doneBy, "user");
+    assert.match(((await runTool(owner, "update_proposal_steps", { id, action: "explode" })) as { error: string }).error, /Choose add, done, undone or remove/);
   });
 });

@@ -5,7 +5,7 @@ import { recordAudit } from "@/lib/crm/mutate";
 import type { UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
 import { documentHref, hashToken, isExpired, logEvent, readRow, SIGNATURE_COLUMNS, toSignature, type SignatureRecord, type SignatureRow } from "@/lib/proposals/documents";
-import type { Content, DocumentStatus, Step } from "@/lib/proposals/model";
+import { READING_SECONDS_MAX, READING_TABS_MAX, type Content, type DocumentStatus, type Step } from "@/lib/proposals/model";
 import { readSteps } from "@/lib/proposals/steps";
 import { pushToUser, type PushSender } from "@/lib/push";
 import { loadBookingPage, publicView, type PublicBookingPage } from "@/lib/booking/pages";
@@ -380,4 +380,36 @@ export async function clientStep(token: string, stepId: string, input: { done?: 
     ).catch(() => undefined);
   }
   return (await openDocument(token, { track: false }))!;
+}
+
+export async function recordReading(token: string, input: unknown, meta: Meta = {}) {
+  const tabs = (input as { tabs?: unknown } | null)?.tabs;
+  if (!tabs || typeof tabs !== "object" || Array.isArray(tabs)) throw new CrmError("invalid_input", "Nothing to record.", 400);
+  const clean: Record<string, number> = {};
+  for (const [label, seconds] of Object.entries(tabs as Record<string, unknown>).slice(0, READING_TABS_MAX)) {
+    if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds <= 0) continue;
+    const name = label.replace(/\s+/g, " ").trim().slice(0, 60);
+    if (name) clean[name] = Math.min(READING_SECONDS_MAX, Math.round(seconds));
+  }
+  const total = Object.values(clean).reduce((sum, value) => sum + value, 0);
+  if (total < 3) return { recorded: false };
+  const found = await resolve(token);
+  if (!found) throw new CrmError("not_found", "This link isn't valid.", 404);
+  const { row, view, versionId } = await load(found.owner, found.row);
+  if (view.state === "withdrawn" || view.state === "replaced") return { recorded: false };
+  await withActor(found.owner, (db) =>
+    logEvent(db, {
+      workspaceId: found.owner.workspaceId,
+      documentId: row.id,
+      versionId,
+      type: "reading",
+      actor: "client",
+      name: view.content.client.name,
+      email: view.content.client.email,
+      ip: meta.ip,
+      userAgent: meta.userAgent,
+      data: { tabs: clean, seconds: total },
+    }),
+  );
+  return { recorded: true };
 }
