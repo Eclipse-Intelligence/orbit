@@ -27,6 +27,7 @@ const FILTERS = [
   { id: "open", label: "Waiting" },
   { id: "completed", label: "Signed" },
   { id: "closed", label: "Declined or expired" },
+  { id: "withdrawn", label: "Withdrawn" },
 ] as const;
 
 const TEMPLATE_TAGS = { draft: { label: "Draft", tone: "neutral" }, active: { label: "Active", tone: "green" }, archived: { label: "Archived", tone: "neutral" } } as const;
@@ -35,7 +36,8 @@ function matches(filter: string, item: DocumentSummary) {
   if (filter === "draft") return item.status === "draft";
   if (filter === "open") return item.status === "sent" || item.status === "viewed" || item.status === "client_signed";
   if (filter === "completed") return item.status === "completed";
-  if (filter === "closed") return item.status === "declined" || item.status === "expired" || item.status === "withdrawn";
+  if (filter === "closed") return item.status === "declined" || item.status === "expired";
+  if (filter === "withdrawn") return item.status === "withdrawn";
   return true;
 }
 
@@ -333,7 +335,7 @@ function ProductEditor({ product, onDone, onCancel }: { product?: Product; onDon
           placeholder={adding ? "Add a product, such as Agency Pilot" : "Product name"}
           onFocus={() => setOpen(true)}
           onChange={() => setAdded(null)}
-          className="placeholder:text-subtle text-foreground h-8 min-w-0 flex-1 bg-transparent text-[14px] outline-none"
+          className="placeholder:text-subtle text-foreground focus-visible:ring-ring/60 -mx-1.5 h-8 min-w-0 flex-1 rounded-md bg-transparent px-1.5 text-[14px] outline-none focus-visible:ring-2"
         />
       </div>
       {open && (

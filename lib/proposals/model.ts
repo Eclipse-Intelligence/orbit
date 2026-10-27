@@ -72,7 +72,18 @@ const blockSchema = z.discriminatedUnion("type", [
     heading: text(300),
     intro: text(2000),
     items: z
-      .array(z.object({ title: text(300), side: z.enum(["client", "us"]).default("client"), dueInDays: z.coerce.number().int().min(0).max(365).nullable().default(null) }))
+      .array(
+        z.object({
+          title: text(300),
+          side: z.enum(["client", "us"]).default("client"),
+          dueInDays: z
+            .preprocess(
+              (value) => (value === "" || value === null || value === undefined ? null : typeof value === "string" && /^\d+$/.test(value) ? Number(value) : value),
+              z.number().int().min(0).max(365).nullable(),
+            )
+            .default(null),
+        }),
+      )
       .max(40)
       .default([]),
   }),
@@ -142,7 +153,7 @@ export function shows(block: Block, extras: { booking?: boolean; steps?: boolean
     case "video":
       return Boolean(videoSource(block.url));
     case "image":
-      return Boolean(safeHref(block.url));
+      return Boolean(httpsImage(block.url));
     case "embed":
       return Boolean(embedSource(block.url));
     case "documents":
@@ -160,6 +171,11 @@ export function shows(block: Block, extras: { booking?: boolean; steps?: boolean
     default:
       return true;
   }
+}
+
+export function httpsImage(value: string) {
+  const href = safeHref(value);
+  return href && href.startsWith("https:") ? href : null;
 }
 
 export function tabsOf(blocks: Block[]): Tab[] | null {
@@ -300,6 +316,10 @@ export function fieldValues(context: FieldContext): Record<string, string> {
   };
 }
 
+function plain(value: string) {
+  return value.replace(/\*\*/g, "*").replace(/\]\s*\(/g, "] (");
+}
+
 function fill(template: string, values: Record<string, string>, missing: Set<string>) {
   return template.replace(TOKEN, (_, path: string) => {
     const value = values[path];
@@ -307,7 +327,7 @@ function fill(template: string, values: Record<string, string>, missing: Set<str
       missing.add(path);
       return `[${path}]`;
     }
-    return value;
+    return plain(value);
   });
 }
 
@@ -433,27 +453,57 @@ export function embedSource(raw: string): string | null {
   }
   const video = videoSource(href);
   if (video?.kind === "frame") return video.src;
-  return url.href;
+  return embeddable(host) ? url.href : null;
+}
+
+const EMBED_HOSTS = ["figma.com", "docs.google.com", "miro.com", "canva.com", "typeform.com", "tally.so", "pitch.com", "airtable.com", "gamma.app", "notion.site", "youtube-nocookie.com", "loom.com", "player.vimeo.com"];
+const FORM_HOSTS = ["typeform.com", "tally.so", "airtable.com", "docs.google.com"];
+
+function onHost(host: string, list: string[]) {
+  return list.some((allowed) => host === allowed || host.endsWith(`.${allowed}`));
+}
+
+function embeddable(host: string) {
+  return onHost(host, EMBED_HOSTS);
+}
+
+export function embedTakesForms(src: string) {
+  try {
+    const url = new URL(src);
+    return onHost(url.hostname.replace(/^www\./, ""), FORM_HOSTS) && (url.hostname !== "docs.google.com" || url.pathname.startsWith("/forms/"));
+  } catch {
+    return false;
+  }
 }
 
 export const READING_TABS_MAX = 20;
 export const READING_SECONDS_MAX = 7200;
 
 export function readingTotals(events: { type: string; data: Record<string, unknown> }[]) {
-  const totals: Record<string, number> = {};
+  const totals = new Map<string, number>();
   for (const event of events) {
     if (event.type !== "reading") continue;
     const tabs = event.data.tabs;
-    if (!tabs || typeof tabs !== "object") continue;
+    if (!tabs || typeof tabs !== "object" || Array.isArray(tabs)) continue;
     for (const [label, seconds] of Object.entries(tabs as Record<string, unknown>)) {
-      if (typeof seconds === "number" && Number.isFinite(seconds)) totals[label] = (totals[label] ?? 0) + seconds;
+      if (typeof seconds === "number" && Number.isFinite(seconds) && seconds > 0) totals.set(label, (totals.get(label) ?? 0) + seconds);
     }
   }
-  return totals;
+  return Object.fromEntries(totals);
 }
 
 export function readingLabel(seconds: number) {
   if (seconds < 60) return `${Math.max(1, Math.round(seconds))} sec`;
   const minutes = Math.round(seconds / 60);
   return minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} hr ${minutes % 60} min`;
+}
+
+export function accentText(hex: string) {
+  const match = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+  if (!match) return "#ffffff";
+  const [r, g, b] = match.slice(1).map((part) => {
+    const value = parseInt(part, 16) / 255;
+    return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.4 ? "#17171b" : "#ffffff";
 }

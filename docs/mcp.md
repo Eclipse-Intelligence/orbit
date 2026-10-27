@@ -107,7 +107,13 @@ Proposals and NDAs (`server/mcp/proposals.ts`):
 
 `create_proposal`: `template_id`, `company_id`, `contact_id` (someone at that company), `currency` (`GBP` or `USD`), `items` (`productId`, `quantity`, `unitPrice`, `description`), `title`. Agent tokens pass `owner_id`, the member who sends and countersigns. Returns `missing` fields and `placeholders` to fix before sending.
 
-`update_proposal`: a draft's `title`, `currency`, `valid_until`, `items` or `blocks`.
+`update_proposal`: a draft's `title`, `currency`, `valid_until`, `items` or `blocks` (tabs and sections, described in the tool).
+
+`revise_proposal`: `id`. Makes a sent, declined or withdrawn one a draft again so it can be edited. The client can't sign until a person sends it again.
+
+`update_proposal_steps`: `id`, `action` (`add`, `done`, `undone`, `remove`), `step_id`, `title`, `side` (`client` or `us`), `due_date`. Changes the live Next steps plan.
+
+`get_proposal_template`, `create_proposal_template` (`name`, `kind`, `starter` or `copy_of`, `blocks`, `accent`, `valid_days`, `status`), `update_proposal_template` (`id`, `name`, `status`, `accent`, `valid_days`, `blocks`). Default Next steps are items on a template's steps block.
 
 `save_product`: create a product, or update it with `id`: `name`, `description`, `price_gbp`, `price_usd`, `billing`.
 

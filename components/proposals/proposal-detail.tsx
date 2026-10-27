@@ -25,6 +25,7 @@ import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import type { Product } from "@/lib/proposals/catalogue";
 import type { DocumentDetail } from "@/lib/proposals/documents";
 import { BILLING_LABELS, formatMoney, KIND_LABELS, longDate, readingLabel, readingTotals, totalsOf, type Block, type Currency, type Item } from "@/lib/proposals/model";
+import { reloadIfStaleDeploy } from "@/lib/stale-deploy";
 import { cn } from "@/lib/utils";
 import HoldButton from "@/components/_ui/hold-button";
 import ConfirmDialog from "@/components/_ui/confirm-dialog";
@@ -57,8 +58,23 @@ const TITLED: Record<string, string> = { document_opened: "Opened", step_done: "
 const textarea =
   "bg-transparent focus-visible:ring-ring/60 w-full rounded-lg px-3 py-2 text-[14px] leading-[1.5] shadow-[0_0_0_1px_var(--input)] outline-none focus-visible:ring-2";
 
+function londonYear(date: Date) {
+  return new Intl.DateTimeFormat("en-GB", { year: "numeric", timeZone: "Europe/London" }).format(date);
+}
+
 function when(iso: string) {
-  return new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Europe/London" }).format(new Date(iso));
+  const date = new Date(iso);
+  const year = londonYear(date) === londonYear(new Date()) ? undefined : "numeric";
+  return new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year, hour: "2-digit", minute: "2-digit", timeZone: "Europe/London" }).format(date);
+}
+
+async function copyText(text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export default function ProposalDetail({ viewer, initial, knowledge = [] }: { viewer: Viewer; initial: DocumentDetail; knowledge?: KnowledgeOption[] }) {
@@ -78,6 +94,7 @@ export default function ProposalDetail({ viewer, initial, knowledge = [] }: { vi
   const [signing, setSigning] = useState(false);
   const [view, setView] = useState<"details" | "preview">("details");
   const draft = doc.status === "draft";
+  const noun = doc.kind === "nda" ? "NDA" : "proposal";
   const tag = statusTag(doc.status);
   const content = draft || !doc.version ? doc.preview : doc.version.content;
   const reading = Object.entries(readingTotals(doc.events)).sort((a, b) => b[1] - a[1]);
@@ -85,7 +102,16 @@ export default function ProposalDetail({ viewer, initial, knowledge = [] }: { vi
   useEffect(() => {
     if (!draft) return;
     let live = true;
-    void proposalOptionsAction(null).then((result) => live && result.data && setProducts(result.data.products));
+    void proposalOptionsAction(null).then(
+      (result) => {
+        if (!live) return;
+        if (result.data) setProducts(result.data.products);
+        else setMessage({ text: result.error ?? "Couldn't load products.", tone: "alert" });
+      },
+      (problem: unknown) => {
+        if (live && !reloadIfStaleDeploy(problem)) setMessage({ text: "Couldn't load products. Reload to try again.", tone: "alert" });
+      },
+    );
     return () => {
       live = false;
     };
@@ -101,15 +127,21 @@ export default function ProposalDetail({ viewer, initial, knowledge = [] }: { vi
   async function act<T>(name: string, work: () => Promise<{ data?: T; error?: string }>, done?: (data: T) => void) {
     setBusy(name);
     setMessage(null);
-    const result = await work();
-    setBusy(null);
-    if (result.error) {
-      setMessage({ text: result.error, tone: "alert" });
+    try {
+      const result = await work();
+      if (result.error) {
+        setMessage({ text: result.error, tone: "alert" });
+        return false;
+      }
+      if (done && result.data !== undefined) done(result.data);
+      router.refresh();
+      return true;
+    } catch (problem) {
+      if (!reloadIfStaleDeploy(problem)) setMessage({ text: "That didn't go through. Try again.", tone: "alert" });
       return false;
+    } finally {
+      setBusy(null);
     }
-    if (done && result.data !== undefined) done(result.data);
-    router.refresh();
-    return true;
   }
 
   function revise() {
@@ -171,6 +203,11 @@ export default function ProposalDetail({ viewer, initial, knowledge = [] }: { vi
           </Button>
         ))}
       </div>
+      {message && (
+        <p role={message.tone} className={cn("caption-style px-4 pt-3", message.tone === "alert" ? "text-danger" : "text-subtle")}>
+          {message.text}
+        </p>
+      )}
       <div className="grid min-h-0 flex-1 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)]">
         <div className={cn("border-border min-h-0 overflow-y-auto border-r px-4 py-5 pb-24", view === "preview" && "hidden lg:block")}>
           <div className="flex flex-col gap-6">
@@ -230,15 +267,9 @@ export default function ProposalDetail({ viewer, initial, knowledge = [] }: { vi
               )}
             </dl>
 
-            {message && (
-              <p role={message.tone} className={cn("caption-style", message.tone === "alert" ? "text-danger" : "text-subtle")}>
-                {message.text}
-              </p>
-            )}
-
-            {!draft && (
+            {(!draft || doc.link) && (
               <div className="flex flex-wrap gap-2">
-                {doc.link && (doc.status === "sent" || doc.status === "viewed" || doc.status === "expired" || doc.status === "client_signed") && (
+                {doc.link && (draft || doc.status === "sent" || doc.status === "viewed" || doc.status === "expired" || doc.status === "client_signed") && (
                   <CopyButton text={doc.link} label="Copy link" copiedLabel="Link copied" />
                 )}
                 {(doc.status === "sent" || doc.status === "viewed") && (
@@ -246,12 +277,12 @@ export default function ProposalDetail({ viewer, initial, knowledge = [] }: { vi
                     Email again
                   </Button>
                 )}
-                {doc.files.executed && (
+                {!draft && doc.files.executed && (
                   <Button variant="secondary" size="sm" href={`/api/proposals/${doc.id}/pdf?kind=signed`}>
                     Signed PDF
                   </Button>
                 )}
-                {doc.files.issued && (
+                {!draft && doc.files.issued && (
                   <Button variant="ghost" size="sm" href={`/api/proposals/${doc.id}/pdf`}>
                     PDF
                   </Button>
@@ -335,7 +366,7 @@ export default function ProposalDetail({ viewer, initial, knowledge = [] }: { vi
 
                 <div className="flex flex-col gap-2">
                   <h2>Wording</h2>
-                  <p className="caption-style text-subtle">Changes here only affect this proposal, not the template.</p>
+                  <p className="caption-style text-subtle">Changes here only affect this {noun}, not the template.</p>
                   <BlockEditor blocks={blocks} onChange={edit(setBlocks)} kind={doc.kind} knowledge={knowledge} context="proposal" />
                 </div>
 
@@ -410,8 +441,8 @@ export default function ProposalDetail({ viewer, initial, knowledge = [] }: { vi
       <ConfirmDialog
         open={confirmRevise}
         onOpenChange={setConfirmRevise}
-        title="Make changes to this proposal?"
-        description="Your client keeps seeing the version you sent until you send the new one, on the same link."
+        title={`Make changes to this ${noun}?`}
+        description="Your client can still read the version you sent, but can't sign it until you send the new one on the same link."
         confirmLabel="Make changes"
         tone="neutral"
         onConfirm={() => void revise()}
@@ -422,7 +453,7 @@ export default function ProposalDetail({ viewer, initial, knowledge = [] }: { vi
       }} />
       <CountersignDialog open={signing} onOpenChange={setSigning} doc={doc} viewer={viewer} onSigned={(next) => {
         apply(next);
-        setMessage({ text: "Countersigned. It's fully signed, and the client has been emailed the signed copy.", tone: "status" });
+        setMessage({ text: next.emailed ? "Countersigned. It's fully signed, and the client has been emailed the signed copy." : "Countersigned. It's fully signed.", tone: "status" });
       }} />
     </section>
   );
@@ -495,6 +526,11 @@ function Items({ items, currency, products, onChange }: { items: Item[]; currenc
   );
 }
 
+function sendMessage(doc: DocumentDetail) {
+  const first = doc.contactName.split(/\s+/)[0] || "there";
+  return `Hi ${first},\n\nHere is ${doc.kind === "nda" ? "the non-disclosure agreement" : "our proposal"} for ${doc.companyName}. You can read it, download a PDF and sign it online.`;
+}
+
 function SendDialog({
   open,
   onOpenChange,
@@ -506,36 +542,51 @@ function SendDialog({
   doc: DocumentDetail;
   onSent: (next: DocumentDetail, message: string) => void;
 }) {
-  const first = doc.contactName.split(/\s+/)[0] || "there";
   const [subject, setSubject] = useState(doc.title);
-  const [message, setMessage] = useState(
-    `Hi ${first},\n\nHere is ${doc.kind === "nda" ? "the non-disclosure agreement" : "our proposal"} for ${doc.companyName}. You can read it, download a PDF and sign it online.`,
-  );
+  const [message, setMessage] = useState(() => sendMessage(doc));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [shown, setShown] = useState(open);
+
+  if (open !== shown) {
+    setShown(open);
+    if (open) {
+      setSubject(doc.title);
+      setMessage(sendMessage(doc));
+      setError(null);
+    }
+  }
 
   async function send(email: boolean) {
+    const known = email ? null : doc.link;
+    const early = known ? copyText(known) : null;
     setBusy(true);
     setError(null);
-    const result = await sendProposalAction(doc.id, { subject, message, email });
-    setBusy(false);
-    if (!result.data) {
-      setError(result.error ?? "It didn't send.");
-      return;
+    try {
+      const result = await sendProposalAction(doc.id, { subject, message, email });
+      if (!result.data) {
+        setError(result.error ?? "It didn't send.");
+        return;
+      }
+      const copied = email ? false : early && result.data.url === known ? await early : await copyText(result.data.url);
+      onOpenChange(false);
+      onSent(
+        result.data.detail,
+        result.data.warning ??
+          (email ? `Sent to ${doc.contactEmail}. You'll be notified when they open and sign it.` : copied ? "Ready to share. The link is copied." : "Ready to share. Use Copy link to copy it."),
+      );
+    } catch (problem) {
+      if (!reloadIfStaleDeploy(problem)) setError("It didn't send. Try again.");
+    } finally {
+      setBusy(false);
     }
-    if (!email) await navigator.clipboard.writeText(result.data.url).catch(() => undefined);
-    onOpenChange(false);
-    onSent(
-      result.data.detail,
-      result.data.warning ?? (email ? `Sent to ${doc.contactEmail}. You'll be notified when they open and sign it.` : "Ready to share. The link is copied."),
-    );
   }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-[540px]">
         <DialogHeader>
-          <DialogTitle>{doc.status === "draft" ? `Send ${KIND_LABELS[doc.kind].toLowerCase()}` : "Email it again"}</DialogTitle>
+          <DialogTitle>{doc.status === "draft" ? `Send ${doc.kind === "nda" ? "NDA" : "proposal"}` : "Email it again"}</DialogTitle>
           <DialogDescription>
             {doc.status === "draft"
               ? "Sending locks this version: later changes need a new version. The email comes from your mailbox with a private link."
@@ -587,7 +638,7 @@ function CountersignDialog({
   onOpenChange: (open: boolean) => void;
   doc: DocumentDetail;
   viewer: Viewer;
-  onSigned: (next: DocumentDetail) => void;
+  onSigned: (next: DocumentDetail & { emailed?: boolean }) => void;
 }) {
   const [typed, setTyped] = useState("");
   const [mode, setMode] = useState<SignatureMode>("type");
@@ -596,20 +647,38 @@ function CountersignDialog({
   const [agree, setAgree] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [shown, setShown] = useState(open);
   const client = doc.signatures.find((item) => item.role === "client");
+
+  if (open !== shown) {
+    setShown(open);
+    if (open) {
+      setTyped("");
+      setMode("type");
+      setImage(null);
+      setTitle("");
+      setAgree(false);
+      setError(null);
+    }
+  }
 
   async function sign() {
     setBusy(true);
     setError(null);
-    const drawn = mode === "draw" ? image : null;
-    const result = await countersignAction(doc.id, { signatureText: drawn ? viewer.name : typed, title, signatureImage: drawn });
-    setBusy(false);
-    if (!result.data) {
-      setError(result.error ?? "It didn't sign.");
-      return;
+    try {
+      const drawn = mode === "draw" ? image : null;
+      const result = await countersignAction(doc.id, { signatureText: drawn ? viewer.name : typed, title, signatureImage: drawn });
+      if (!result.data) {
+        setError(result.error ?? "It didn't sign.");
+        return;
+      }
+      onOpenChange(false);
+      onSigned(result.data);
+    } catch (problem) {
+      if (!reloadIfStaleDeploy(problem)) setError("It didn't sign. Try again.");
+    } finally {
+      setBusy(false);
     }
-    onOpenChange(false);
-    onSigned(result.data);
   }
 
   return (

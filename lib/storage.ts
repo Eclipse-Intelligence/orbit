@@ -1,12 +1,13 @@
 export const ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024;
 export const KNOWLEDGE_MAX_BYTES = 50 * 1024 * 1024;
 export const MEDIA_MAX_BYTES = 10 * 1024 * 1024;
+export const MEDIA_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
 
-const BUCKETS = {
+const BUCKETS: Record<"attachments" | "knowledge" | "media", { id: string; limit: number; public: boolean; types?: string[] }> = {
   attachments: { id: "email-attachments", limit: ATTACHMENT_MAX_BYTES, public: false },
   knowledge: { id: "knowledge", limit: KNOWLEDGE_MAX_BYTES, public: false },
-  media: { id: "proposal-media", limit: MEDIA_MAX_BYTES, public: true },
-} as const;
+  media: { id: "proposal-media", limit: MEDIA_MAX_BYTES, public: true, types: MEDIA_TYPES },
+};
 
 export type Bucket = keyof typeof BUCKETS;
 
@@ -49,24 +50,32 @@ async function failure(response: Response, action: string) {
 const bucketsReady = new Map<Bucket, Promise<void>>();
 
 async function ensureBucket(bucket: Bucket, fetchImpl: typeof fetch) {
-  const { id, limit, public: open } = BUCKETS[bucket];
+  const { id, limit, public: open, types } = BUCKETS[bucket];
+  const settings = { public: open, file_size_limit: limit, ...(types ? { allowed_mime_types: types } : {}) };
   const response = await fetchImpl(endpoint("/bucket"), {
     method: "POST",
     headers: headers({ "content-type": "application/json" }),
-    body: JSON.stringify({ id, name: id, public: open, file_size_limit: limit }),
+    body: JSON.stringify({ id, name: id, ...settings }),
     signal: AbortSignal.timeout(15_000),
   });
-  if (response.ok || response.status === 409) return;
+  if (response.ok) return;
   const text = await response.text().catch(() => "");
-  if (/already exists|Duplicate/i.test(text)) return;
-  throw new StorageError("Couldn't prepare file storage.");
+  if (response.status !== 409 && !/already exists|Duplicate/i.test(text)) throw new StorageError("Couldn't prepare file storage.");
+  if (!types) return;
+  const updated = await fetchImpl(endpoint(`/bucket/${id}`), {
+    method: "PUT",
+    headers: headers({ "content-type": "application/json" }),
+    body: JSON.stringify(settings),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!updated.ok) throw new StorageError("Couldn't prepare file storage.");
 }
 
 export function resetStorageBucketCache() {
   bucketsReady.clear();
 }
 
-export async function signedUploadUrl(path: string, fetchImpl: typeof fetch = fetch, bucket: Bucket = "attachments") {
+async function bucketReady(bucket: Bucket, fetchImpl: typeof fetch) {
   let ready = bucketsReady.get(bucket);
   if (!ready) {
     ready = ensureBucket(bucket, fetchImpl).catch((error) => {
@@ -76,6 +85,21 @@ export async function signedUploadUrl(path: string, fetchImpl: typeof fetch = fe
     bucketsReady.set(bucket, ready);
   }
   await ready;
+}
+
+export async function putObject(path: string, bytes: Uint8Array, contentType: string, fetchImpl: typeof fetch = fetch, bucket: Bucket = "attachments") {
+  await bucketReady(bucket, fetchImpl);
+  const response = await fetchImpl(endpoint(`/object/${BUCKETS[bucket].id}/${path}`), {
+    method: "POST",
+    headers: headers({ "content-type": contentType, "x-upsert": "false" }),
+    body: new Blob([bytes as BlobPart], { type: contentType }),
+    signal: AbortSignal.timeout(60_000),
+  });
+  if (!response.ok) throw await failure(response, "store the file");
+}
+
+export async function signedUploadUrl(path: string, fetchImpl: typeof fetch = fetch, bucket: Bucket = "attachments") {
+  await bucketReady(bucket, fetchImpl);
   const response = await fetchImpl(endpoint(`/object/upload/sign/${BUCKETS[bucket].id}/${path}`), {
     method: "POST",
     headers: headers({ "content-type": "application/json" }),

@@ -9,6 +9,20 @@ type SignatureView = Parameters<typeof Signatures>[0]["signatures"][number];
 
 export const SIGN_TAB = "sign";
 
+export function visibleTabs(content: Content, extras?: SiteExtras) {
+  const all = tabsOf(content.blocks);
+  if (!all || extras?.preview) return all;
+  return all.filter((tab) => tab.blocks.some((block) => shows(block, { booking: Boolean(extras?.booking), steps: extras?.steps ? extras.steps.length > 0 : undefined })));
+}
+
+function scrollTop(element: HTMLElement) {
+  for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+    const overflow = getComputedStyle(parent).overflowY;
+    if ((overflow === "auto" || overflow === "scroll") && parent.scrollHeight > parent.clientHeight) return parent.getBoundingClientRect().top;
+  }
+  return 0;
+}
+
 export default function ProposalSite({
   content,
   signatures = [],
@@ -32,11 +46,13 @@ export default function ProposalSite({
   followHash?: boolean;
   extras?: SiteExtras;
 }) {
-  const all = tabsOf(content.blocks);
-  const tabs = all && !extras?.preview ? all.filter((tab) => tab.blocks.some((block) => shows(block, { booking: Boolean(extras?.booking), steps: extras?.steps ? extras.steps.length > 0 : undefined }))) : all;
+  const tabs = visibleTabs(content, extras);
   const [own, setOwn] = useState(tabs?.[0]?.slug ?? SIGN_TAB);
   const requested = controlled ?? own;
   const list = useRef<HTMLDivElement>(null);
+  const root = useRef<HTMLDivElement>(null);
+  const bar = useRef<HTMLDivElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
   const base = useId();
   const choose = (slug: string) => {
     if (onActive) onActive(slug);
@@ -75,7 +91,21 @@ export default function ProposalSite({
   const active = entries.some((entry) => entry.slug === requested) ? requested : entries[0].slug;
   const current = tabs.find((tab) => tab.slug === active);
 
+  function reveal() {
+    const element = panel.current;
+    const top = root.current;
+    const strip = bar.current;
+    if (!element || !top || !strip) return;
+    const stuck = Boolean(sticky);
+    const edge = stuck ? strip.getBoundingClientRect().bottom : scrollTop(top);
+    if (element.getBoundingClientRect().top >= edge) return;
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    top.style.scrollMarginTop = stuck ? `${strip.getBoundingClientRect().top}px` : "";
+    top.scrollIntoView({ block: "start", behavior: reduce ? "auto" : "smooth" });
+  }
+
   function select(slug: string) {
+    reveal();
     choose(slug);
     if (followHash) window.history.replaceState(null, "", `#${slug}`);
   }
@@ -91,8 +121,8 @@ export default function ProposalSite({
   }
 
   return (
-    <div className={cn("flex flex-col", compact ? "gap-8" : "gap-10 sm:gap-12")}>
-      <div className={cn("paper -mx-5 px-5 sm:-mx-8 sm:px-8", sticky && "sticky z-10", sticky)}>
+    <div ref={root} className={cn("flex flex-col", compact ? "gap-8" : "gap-10 sm:gap-12")}>
+      <div ref={bar} className={cn("paper -mx-5 px-5 sm:-mx-8 sm:px-8", sticky && "sticky z-10", sticky)}>
         <div
           ref={list}
           role="tablist"
@@ -109,7 +139,7 @@ export default function ProposalSite({
                 role="tab"
                 id={`${base}-${entry.slug}-tab`}
                 aria-selected={selected}
-                aria-controls={`${base}-${entry.slug}-panel`}
+                aria-controls={selected ? `${base}-${entry.slug}-panel` : undefined}
                 tabIndex={selected ? 0 : -1}
                 onClick={() => select(entry.slug)}
                 className={cn(
@@ -128,7 +158,7 @@ export default function ProposalSite({
           })}
         </div>
       </div>
-      <div role="tabpanel" id={`${base}-${active}-panel`} aria-labelledby={`${base}-${active}-tab`} tabIndex={-1} className="outline-none">
+      <div ref={panel} role="tabpanel" id={`${base}-${active}-panel`} aria-labelledby={`${base}-${active}-tab`} tabIndex={-1} className="outline-none">
         {current ? (
           <ProposalDocument content={content} blocks={current.blocks} compact={compact} withSignatures={false} extras={extras} />
         ) : (

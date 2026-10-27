@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Asset from "@/components/_ui/asset";
 import Button from "@/components/_ui/button";
 import { Checkbox } from "@/components/_ui/checkbox";
@@ -9,6 +9,7 @@ import { Input } from "@/components/_ui/input";
 import { NativeSelect } from "@/components/_ui/native-select";
 import { prepareProposalImageAction } from "@/app/(crm)/proposals/actions";
 import { BLOCK_LABELS, FIELD_OPTIONS, newBlockId, type Block, type BlockType, type DocumentKind } from "@/lib/proposals/model";
+import { reloadIfStaleDeploy } from "@/lib/stale-deploy";
 import { uploadToSignedUrl } from "@/lib/upload-client";
 import { cn } from "@/lib/utils";
 
@@ -19,6 +20,31 @@ const textarea =
 
 const PROPOSAL_SECTIONS: BlockType[] = ["section", "pricing", "video", "image", "documents", "steps", "booking", "faq", "quote", "team", "embed", "terms", "cover"];
 const NDA_SECTIONS: BlockType[] = ["section", "terms", "cover"];
+
+const LIMITS: Record<string, number> = {
+  label: 40,
+  title: 300,
+  heading: 300,
+  subtitle: 1000,
+  url: 1000,
+  caption: 1000,
+  body: 40000,
+  quote: 2000,
+  name: 200,
+  role: 200,
+  linkLabel: 200,
+  linkUrl: 1000,
+};
+
+function limitOf(type: BlockType, key: string) {
+  if (key === "intro") return type === "booking" || type === "steps" ? 2000 : 4000;
+  return LIMITS[key];
+}
+
+function blockName(block: Block, index: number) {
+  const named = "heading" in block ? block.heading : block.type === "tab" ? block.label : block.type === "cover" ? block.title : "";
+  return `${BLOCK_LABELS[block.type]} ${index + 1}${named.trim() ? `, ${named.trim()}` : ""}`;
+}
 
 function blankBlock(type: BlockType, id: string): Block {
   switch (type) {
@@ -72,17 +98,16 @@ export function ImageField({ id, label, value, onChange, round }: { id: string; 
     if (!file) return;
     setBusy(true);
     setError(null);
-    const prepared = await prepareProposalImageAction({ name: file.name, size: file.size, contentType: file.type });
-    if (!prepared.data) {
-      setBusy(false);
-      setError(prepared.error ?? "Couldn't upload it.");
-      return;
-    }
     try {
+      const prepared = await prepareProposalImageAction({ name: file.name, size: file.size, contentType: file.type });
+      if (!prepared.data) {
+        setError(prepared.error ?? "Couldn't upload it.");
+        return;
+      }
       await uploadToSignedUrl(prepared.data.uploadUrl, file);
       onChange(prepared.data.url);
-    } catch {
-      setError("The upload didn't finish. Try again.");
+    } catch (problem) {
+      if (!reloadIfStaleDeploy(problem)) setError("The upload didn't finish. Try again.");
     } finally {
       setBusy(false);
     }
@@ -189,20 +214,56 @@ export function BlockEditor({
   context = "template",
 }: {
   blocks: Block[];
-  onChange: (blocks: Block[]) => void;
+  onChange: (change: (current: Block[]) => Block[]) => void;
   kind: DocumentKind;
   knowledge?: KnowledgeOption[];
   context?: "template" | "proposal";
 }) {
   const focused = useRef<{ id: string; key: string; element: HTMLInputElement | HTMLTextAreaElement } | null>(null);
-  const update = (id: string, patch: Record<string, unknown>) => onChange(blocks.map((block) => (block.id === id ? ({ ...block, ...patch } as Block) : block)));
-  const move = (index: number, by: number) => {
-    const next = [...blocks];
-    const [item] = next.splice(index, 1);
-    next.splice(index + by, 0, item);
-    onChange(next);
+  const root = useRef<HTMLDivElement>(null);
+  const pendingFocus = useRef<{ id: string; control: "field" | "remove" } | "add" | null>(null);
+  const picked = useRef(false);
+
+  useEffect(() => {
+    const target = pendingFocus.current;
+    if (!target) return;
+    pendingFocus.current = null;
+    if (target === "add") {
+      root.current?.querySelector<HTMLElement>('[data-control="add-section"]')?.focus();
+      return;
+    }
+    const item = root.current?.querySelector(`[data-block="${CSS.escape(target.id)}"]`);
+    const control =
+      target.control === "remove"
+        ? item?.querySelector<HTMLElement>('[data-control="remove"]')
+        : item?.querySelector<HTMLElement>('input:not([type="file"]), textarea, select');
+    control?.focus();
+  }, [blocks]);
+
+  const update = (id: string, patch: Record<string, unknown> | ((block: Block) => Record<string, unknown>)) =>
+    onChange((current) => current.map((block) => (block.id === id ? ({ ...block, ...(typeof patch === "function" ? patch(block) : patch) } as Block) : block)));
+  const move = (id: string, by: number) =>
+    onChange((current) => {
+      const index = current.findIndex((item) => item.id === id);
+      const target = index + by;
+      if (index < 0 || target < 0 || target >= current.length) return current;
+      const next = [...current];
+      const [item] = next.splice(index, 1);
+      next.splice(target, 0, item);
+      return next;
+    });
+  const add = (type: BlockType) => {
+    const id = newBlockId(blocks.map((item) => item.id));
+    pendingFocus.current = { id, control: "field" };
+    onChange((current) => [...current, blankBlock(type, current.some((item) => item.id === id) ? newBlockId(current.map((item) => item.id)) : id)]);
   };
-  const add = (type: BlockType) => onChange([...blocks, blankBlock(type, newBlockId(blocks.map((item) => item.id)))]);
+  const remove = (id: string) => {
+    const index = blocks.findIndex((item) => item.id === id);
+    const rest = blocks.filter((item) => item.id !== id);
+    const neighbour = rest[Math.min(index, rest.length - 1)];
+    pendingFocus.current = neighbour ? { id: neighbour.id, control: "remove" } : "add";
+    onChange((current) => current.filter((item) => item.id !== id));
+  };
   const insert = (token: string) => {
     const target = focused.current;
     if (!target) return;
@@ -213,11 +274,18 @@ export function BlockEditor({
     const end = target.element.selectionEnd ?? value.length;
     update(target.id, { [target.key]: `${value.slice(0, start)}${token}${value.slice(end)}` });
   };
-  const field = (id: string, label: string, value: string, onValue: (value: string) => void, options: { rows?: number; focusKey?: { block: string; key: string }; type?: string; placeholder?: string } = {}) => {
+  const field = (
+    id: string,
+    label: string,
+    value: string,
+    onValue: (value: string) => void,
+    options: { rows?: number; focusKey?: { block: string; key: string }; type?: string; placeholder?: string; maxLength?: number } = {},
+  ) => {
     const common = {
       id,
       value,
       placeholder: options.placeholder,
+      maxLength: options.maxLength,
       onFocus: (event: { currentTarget: HTMLInputElement | HTMLTextAreaElement }) => {
         focused.current = options.focusKey ? { id: options.focusKey.block, key: options.focusKey.key, element: event.currentTarget } : null;
       },
@@ -237,16 +305,18 @@ export function BlockEditor({
       rows,
       placeholder,
       focusKey: { block: block.id, key },
+      maxLength: limitOf(block.type, key),
     });
   const sections = kind === "proposal" ? PROPOSAL_SECTIONS : NDA_SECTIONS;
 
   return (
-    <div className="flex flex-col gap-4">
+    <div ref={root} className="flex flex-col gap-4">
       <FieldButtons onInsert={insert} />
       <ol className="flex flex-col gap-3">
         {blocks.map((block, index) => (
           <li
             key={block.id}
+            data-block={block.id}
             className={cn(
               "flex flex-col gap-3 rounded-xl border p-4",
               block.type === "tab" ? "bg-secondary border-transparent" : "border-line-strong bg-card",
@@ -255,13 +325,13 @@ export function BlockEditor({
           >
             <div className="flex items-center gap-2">
               <span className="eyebrow-style text-subtle flex-1">{BLOCK_LABELS[block.type]}</span>
-              <Button variant="ghost" size="sm" disabled={index === 0} onClick={() => move(index, -1)} aria-label={`Move ${BLOCK_LABELS[block.type]} up`}>
+              <Button variant="ghost" size="sm" disabled={index === 0} onClick={() => move(block.id, -1)} aria-label={`Move ${blockName(block, index)} up`}>
                 Up
               </Button>
-              <Button variant="ghost" size="sm" disabled={index === blocks.length - 1} onClick={() => move(index, 1)} aria-label={`Move ${BLOCK_LABELS[block.type]} down`}>
+              <Button variant="ghost" size="sm" disabled={index === blocks.length - 1} onClick={() => move(block.id, 1)} aria-label={`Move ${blockName(block, index)} down`}>
                 Down
               </Button>
-              <Button variant="ghost" size="sm" onClick={() => onChange(blocks.filter((item) => item.id !== block.id))} aria-label={`Remove ${BLOCK_LABELS[block.type]}`}>
+              <Button variant="ghost" size="sm" data-control="remove" onClick={() => remove(block.id)} aria-label={`Remove ${blockName(block, index)}`}>
                 Remove
               </Button>
             </div>
@@ -339,7 +409,7 @@ export function BlockEditor({
                           update(block.id, { items: block.items.map((entry, position) => (position === itemIndex ? { ...entry, ...patch } : entry)) });
                         return (
                           <li key={itemIndex} className="border-border flex flex-col gap-2 border-t pt-3">
-                            {field(`${block.id}-s${itemIndex}`, `Step ${itemIndex + 1}`, item.title, (title) => set({ title }))}
+                            {field(`${block.id}-s${itemIndex}`, `Step ${itemIndex + 1}`, item.title, (title) => set({ title }), { maxLength: 300 })}
                             <div className="grid grid-cols-2 gap-3">
                               <div className="flex flex-col gap-1.5">
                                 <label htmlFor={`${block.id}-w${itemIndex}`} className="caption-style text-subtle">
@@ -399,15 +469,19 @@ export function BlockEditor({
                 <ol className="flex flex-col gap-3">
                   {block.items.map((item, itemIndex) => (
                     <li key={itemIndex} className="border-border flex flex-col gap-2 border-t pt-3">
-                      {field(`${block.id}-q${itemIndex}`, `Question ${itemIndex + 1}`, item.question, (question) =>
-                        update(block.id, { items: block.items.map((entry, position) => (position === itemIndex ? { ...entry, question } : entry)) }),
+                      {field(
+                        `${block.id}-q${itemIndex}`,
+                        `Question ${itemIndex + 1}`,
+                        item.question,
+                        (question) => update(block.id, { items: block.items.map((entry, position) => (position === itemIndex ? { ...entry, question } : entry)) }),
+                        { maxLength: 500 },
                       )}
                       {field(
                         `${block.id}-a${itemIndex}`,
                         "Answer",
                         item.answer,
                         (answer) => update(block.id, { items: block.items.map((entry, position) => (position === itemIndex ? { ...entry, answer } : entry)) }),
-                        { rows: 3 },
+                        { rows: 3, maxLength: 4000 },
                       )}
                       <Button variant="ghost" size="sm" className="self-start" onClick={() => update(block.id, { items: block.items.filter((_, position) => position !== itemIndex) })}>
                         Remove question
@@ -426,14 +500,16 @@ export function BlockEditor({
                 <ol className="flex flex-col gap-3">
                   {block.people.map((person, personIndex) => {
                     const set = (patch: Partial<typeof person>) =>
-                      update(block.id, { people: block.people.map((entry, position) => (position === personIndex ? { ...entry, ...patch } : entry)) });
+                      update(block.id, (current) => ({
+                        people: (current.type === "team" ? current.people : []).map((entry, position) => (position === personIndex ? { ...entry, ...patch } : entry)),
+                      }));
                     return (
                       <li key={personIndex} className="border-border flex flex-col gap-2 border-t pt-3">
                         <div className="grid gap-3 sm:grid-cols-2">
-                          {field(`${block.id}-n${personIndex}`, "Name", person.name, (name) => set({ name }))}
-                          {field(`${block.id}-r${personIndex}`, "Role", person.role, (role) => set({ role }))}
+                          {field(`${block.id}-n${personIndex}`, "Name", person.name, (name) => set({ name }), { maxLength: 200 })}
+                          {field(`${block.id}-r${personIndex}`, "Role", person.role, (role) => set({ role }), { maxLength: 200 })}
                         </div>
-                        {field(`${block.id}-e${personIndex}`, "Email", person.email, (email) => set({ email }), { type: "text" })}
+                        {field(`${block.id}-e${personIndex}`, "Email", person.email, (email) => set({ email }), { type: "text", maxLength: 200 })}
                         <ImageField id={`${block.id}-p${personIndex}`} label="Photo" value={person.photo} round onChange={(photo) => set({ photo })} />
                         <Button variant="ghost" size="sm" className="self-start" onClick={() => update(block.id, { people: block.people.filter((_, position) => position !== personIndex) })}>
                           Remove person
@@ -463,13 +539,27 @@ export function BlockEditor({
         )}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="secondary" size="sm">
+            <Button variant="secondary" size="sm" data-control="add-section">
               Add section
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-48">
+          <DropdownMenuContent
+            align="start"
+            className="w-48"
+            onCloseAutoFocus={(event) => {
+              if (!picked.current) return;
+              picked.current = false;
+              event.preventDefault();
+            }}
+          >
             {sections.map((type) => (
-              <DropdownMenuItem key={type} onSelect={() => add(type)}>
+              <DropdownMenuItem
+                key={type}
+                onSelect={() => {
+                  picked.current = true;
+                  add(type);
+                }}
+              >
                 {BLOCK_LABELS[type]}
               </DropdownMenuItem>
             ))}

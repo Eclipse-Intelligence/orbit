@@ -77,7 +77,30 @@ function toProduct(row: ProductRow): Product {
 
 export function readBlocks(value: unknown): Block[] {
   const parsed = blocksSchema.safeParse(value);
-  return parsed.success ? parsed.data : [];
+  if (parsed.success) return parsed.data;
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    const one = blocksSchema.safeParse([entry]);
+    return one.success ? one.data : [];
+  });
+}
+
+const BLOCKS_BYTES_MAX = 380_000;
+
+export function parseBlocks(value: unknown): Block[] {
+  if (!Array.isArray(value)) throw invalid("The sections couldn't be read.", "blocks");
+  const parsed = blocksSchema.safeParse(value);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const index = typeof issue?.path[0] === "number" ? issue.path[0] : null;
+    const field = issue?.path.slice(1).filter((part) => typeof part === "string").join(" ");
+    const where = index === null ? "A section" : `Section ${index + 1}`;
+    const tooBig = issue?.code === "too_big";
+    throw invalid(`${where}${field ? ` (${field})` : ""} ${tooBig ? "is too long" : "couldn't be read"}.`, "blocks");
+  }
+  if (new Set(parsed.data.map((block) => block.id)).size !== parsed.data.length) throw invalid("Two sections share an id.", "blocks");
+  if (JSON.stringify(parsed.data).length > BLOCKS_BYTES_MAX) throw invalid("The sections are too long to save. Shorten the text or split it up.", "blocks");
+  return parsed.data;
 }
 
 export function readSettings(value: unknown): TemplateSettings {
@@ -99,7 +122,8 @@ function toTemplate(row: TemplateRow): Template {
 
 function price(value: unknown, field: string) {
   if (value === null || value === undefined || value === "") return null;
-  const number = typeof value === "number" ? value : Number(String(value).replace(/[£$,\s]/g, ""));
+  const cleaned = String(value).replace(/[£$,\s]/g, "");
+  const number = typeof value === "number" ? value : /^\d+(\.\d{1,2})?$/.test(cleaned) ? Number(cleaned) : NaN;
   if (!Number.isFinite(number) || number < 0 || number > 9_999_999_999) throw invalid("Enter a price of zero or more.", field);
   return Math.round(number * 100) / 100;
 }
@@ -129,6 +153,7 @@ function readProduct(input: ProductInput, partial: boolean) {
 }
 
 export async function listProducts(actor: Actor, options: { includeArchived?: boolean } = {}) {
+  assertScope(actor.scopes, "crm:read");
   return withActor(actor, async (db) => {
     const result = await db.query<ProductRow>(
       `select ${PRODUCT_COLUMNS} from crm.products where workspace_id = $1 ${options.includeArchived ? "" : "and archived_at is null"} order by archived_at nulls first, lower(name)`,
@@ -175,6 +200,7 @@ export async function updateProduct(actor: Actor, id: string, input: ProductInpu
 }
 
 export async function listTemplates(actor: Actor, options: { status?: TemplateStatus | "usable"; kind?: DocumentKind } = {}) {
+  assertScope(actor.scopes, "crm:read");
   return withActor(actor, async (db) => {
     const values: unknown[] = [actor.workspaceId];
     const where = ["workspace_id = $1"];
@@ -196,6 +222,7 @@ export async function listTemplates(actor: Actor, options: { status?: TemplateSt
 }
 
 export async function getTemplate(actor: Actor, id: string) {
+  assertScope(actor.scopes, "crm:read");
   if (!isUuid(id)) throw new CrmError("not_found", "Template not found.", 404);
   return withActor(actor, async (db) => {
     const result = await db.query<TemplateRow>(`select ${TEMPLATE_COLUMNS} from crm.document_templates where id = $1 and workspace_id = $2`, [id, actor.workspaceId]);
@@ -241,13 +268,7 @@ export async function updateTemplate(
   if (!name || name.length > 120) throw invalid("Give the template a name of up to 120 characters.", "name");
   const status = input.status === undefined ? current.status : TEMPLATE_STATUSES.find((item) => item === input.status);
   if (!status) throw invalid("Choose draft, active or archived.", "status");
-  let blocks = current.blocks;
-  if (input.blocks !== undefined) {
-    const parsed = blocksSchema.safeParse(input.blocks);
-    if (!parsed.success) throw invalid("The template's sections couldn't be read.", "blocks");
-    blocks = parsed.data;
-  }
-  if (new Set(blocks.map((block) => block.id)).size !== blocks.length) throw invalid("Two sections share an id.", "blocks");
+  const blocks = input.blocks === undefined ? current.blocks : parseBlocks(input.blocks);
   let settings = current.settings;
   if (input.settings !== undefined) {
     const parsed = settingsSchema.safeParse(input.settings);
@@ -260,9 +281,9 @@ export async function updateTemplate(
   if (status === "active" && blocks.length === 0) throw invalid("Add at least one section before making it active.", "status");
   return withActor(actor, async (db) => {
     const result = await db.query<TemplateRow>(
-      `update crm.document_templates set name = $3, status = $4, blocks = $5::jsonb, settings = $6::jsonb, updated_at = now()
+      `update crm.document_templates set name = $3, status = $4, blocks = coalesce($5::jsonb, blocks), settings = $6::jsonb, updated_at = now()
        where id = $1 and workspace_id = $2 returning ${TEMPLATE_COLUMNS}`,
-      [id, actor.workspaceId, name, status, JSON.stringify(blocks), JSON.stringify(settings)],
+      [id, actor.workspaceId, name, status, input.blocks === undefined ? null : JSON.stringify(blocks), JSON.stringify(settings)],
     );
     const template = toTemplate(result.rows[0]);
     await recordAudit(db, actor, "template.updated", "document_template", template.id, provenance, { after: { name, status } });

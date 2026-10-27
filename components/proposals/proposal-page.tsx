@@ -3,9 +3,9 @@
 import { useState, type FormEvent } from "react";
 import Button from "@/components/_ui/button";
 import { ProposalLogo } from "@/components/proposals/proposal-document";
-import ProposalSite, { SIGN_TAB } from "@/components/proposals/proposal-site";
+import ProposalSite, { SIGN_TAB, visibleTabs } from "@/components/proposals/proposal-site";
 import { useReadingTime } from "@/components/proposals/use-reading-time";
-import { KIND_LABELS, longDate, tabsOf } from "@/lib/proposals/model";
+import { accentText, longDate } from "@/lib/proposals/model";
 import type { PublicDocument, PublicState } from "@/lib/proposals/public";
 import { cn } from "@/lib/utils";
 import SignaturePad, { type SignatureMode } from "@/components/proposals/signature-pad";
@@ -15,6 +15,7 @@ const field =
   "bg-card text-foreground placeholder:text-faint h-11 w-full rounded-xl px-3.5 text-[15px] shadow-[0_0_0_1px_var(--input)] outline-none focus-visible:shadow-[0_0_0_2px_var(--ring)]";
 
 const NOTICES: Partial<Record<PublicState, { title: string; body: string }>> = {
+  updating: { title: "Being updated", body: "The sender is making changes. Check back shortly to read and sign the new version." },
   declined: { title: "Declined", body: "This was declined. If that was a mistake, reply to the email you were sent." },
   withdrawn: { title: "Withdrawn", body: "The sender has withdrawn this. Reply to the email you were sent if you have questions." },
   replaced: { title: "There's a newer version", body: "This version was replaced. Use the latest link you were sent." },
@@ -37,11 +38,12 @@ export default function ProposalPage({ token, initial, preview }: { token: strin
   const [stepError, setStepError] = useState<string | null>(null);
   const [reason, setReason] = useState("");
   const content = doc.content;
-  const tabs = tabsOf(content.blocks);
+  const tabs = visibleTabs(content, { booking: doc.booking, steps: doc.steps });
   const [active, setActive] = useState(tabs?.[0]?.slug ?? SIGN_TAB);
   const activeLabel = !tabs ? "Proposal" : active === SIGN_TAB ? "Sign" : (tabs.find((tab) => tab.slug === active)?.label ?? tabs[0]?.label ?? "Proposal");
   useReadingTime(token, activeLabel, !preview);
-  const label = KIND_LABELS[content.kind].toLowerCase();
+  const label = content.kind === "nda" ? "NDA" : "proposal";
+  const signable = doc.state === "open" && !preview;
   const clientSignature = doc.signatures.find((item) => item.role === "client");
 
   async function post(path: string, body: unknown) {
@@ -78,7 +80,7 @@ export default function ProposalPage({ token, initial, preview }: { token: strin
   function sign(event: FormEvent) {
     event.preventDefault();
     const drawn = mode === "draw" ? image : null;
-    void post("sign", { name, title, company, signatureText: drawn ? name : typed, signatureImage: drawn ?? undefined, agree });
+    void post("sign", { name, title, company, signatureText: drawn ? name : typed, signatureImage: drawn ?? undefined, agree, hash: doc.hash });
   }
 
   const ready = mode === "draw" ? Boolean(image) && name.trim().length >= 2 : typed.trim().length >= 2;
@@ -95,7 +97,7 @@ export default function ProposalPage({ token, initial, preview }: { token: strin
               <span aria-hidden className="bg-border h-6 w-px shrink-0" />
             </>
           ) : (
-            <span aria-hidden className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: content.accent }} />
+            <span aria-hidden className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: content.accent, color: accentText(content.accent) }} />
           )}
           <div className="flex min-w-0 flex-1 flex-col">
             <span className="truncate text-[14.5px] leading-5 font-semibold">{content.title}</span>
@@ -103,15 +105,17 @@ export default function ProposalPage({ token, initial, preview }: { token: strin
               {content.sender.company} for {content.client.company}
             </span>
           </div>
-          <Button variant="ghost" size="sm" href={`/api/p/${token}/pdf${doc.state === "completed" && doc.hasExecuted ? "?kind=signed" : ""}`} className="text-foreground hidden sm:inline-flex">
-            {doc.state === "completed" ? "Download signed PDF" : "Download PDF"}
-          </Button>
-          {doc.state === "open" &&
+          {doc.state !== "withdrawn" && doc.state !== "replaced" && (
+            <Button variant="ghost" size="sm" href={`/api/p/${token}/pdf${doc.state === "completed" && doc.hasExecuted ? "?kind=signed" : ""}`} className="text-foreground hidden sm:inline-flex">
+              {doc.state === "completed" ? "Download signed PDF" : "Download PDF"}
+            </Button>
+          )}
+          {signable &&
             (tabs ? (
               <Button
                 variant="primary"
                 size="sm"
-                style={{ backgroundColor: content.accent }}
+                style={{ backgroundColor: content.accent, color: accentText(content.accent) }}
                 onClick={() => {
                   setActive(SIGN_TAB);
                   window.history.replaceState(null, "", `#${SIGN_TAB}`);
@@ -121,7 +125,7 @@ export default function ProposalPage({ token, initial, preview }: { token: strin
                 Review and sign
               </Button>
             ) : (
-              <Button variant="primary" size="sm" href="#sign" style={{ backgroundColor: content.accent }}>
+              <Button variant="primary" size="sm" href="#sign" style={{ backgroundColor: content.accent, color: accentText(content.accent) }}>
                 Review and sign
               </Button>
             ))}
@@ -130,7 +134,7 @@ export default function ProposalPage({ token, initial, preview }: { token: strin
 
       {preview && (
         <p role="status" className="bg-[var(--tag-amber-bg)] px-5 py-2 text-center text-[13px] text-[var(--tag-amber-text)]">
-          You&apos;re signed in to Orbit, so this visit isn&apos;t counted as a view.
+          You&apos;re signed in to Orbit, so this visit isn&apos;t counted and signing is off.
         </p>
       )}
 
@@ -158,12 +162,12 @@ export default function ProposalPage({ token, initial, preview }: { token: strin
             booking: doc.booking,
             bookingDefaults: { name: content.client.name, email: content.client.email },
             steps: doc.steps,
-            onToggleStep: doc.state === "withdrawn" || doc.state === "replaced" ? undefined : (stepId, done) => void toggleStep(stepId, done),
+            onToggleStep: preview || doc.state === "withdrawn" || doc.state === "replaced" ? undefined : (stepId, done) => void toggleStep(stepId, done),
             pendingStep,
           }}
           signLabel={doc.state === "open" ? "Sign" : "Signatures"}
         >
-          {doc.state === "open" && !declining && (
+          {signable && !declining && (
             <form onSubmit={sign} className="bg-card flex flex-col gap-5 rounded-2xl p-5 shadow-[0_0_0_1px_rgba(0,0,0,0.06)] sm:p-7" aria-labelledby="sign-form-title">
               <div className="flex flex-col gap-1">
                 <h3 id="sign-form-title" className="text-[18px] leading-7 font-semibold">
@@ -215,7 +219,7 @@ export default function ProposalPage({ token, initial, preview }: { token: strin
                 </p>
               )}
               <div className="flex flex-wrap items-center gap-3">
-                <Button type="submit" variant="primary" disabled={busy || !agree || !ready} className="h-11 px-6 text-[15px]" style={{ backgroundColor: content.accent }}>
+                <Button type="submit" variant="primary" disabled={busy || !agree || !ready} className="h-11 px-6 text-[15px]" style={{ backgroundColor: content.accent, color: accentText(content.accent) }}>
                   {busy ? "Signing…" : "Agree and sign"}
                 </Button>
                 <Button variant="ghost" onClick={() => setDeclining(true)} className="text-subtle">
@@ -224,7 +228,7 @@ export default function ProposalPage({ token, initial, preview }: { token: strin
               </div>
             </form>
           )}
-          {doc.state === "open" && declining && (
+          {signable && declining && (
             <div className="bg-card flex flex-col gap-4 rounded-2xl p-5 shadow-[0_0_0_1px_rgba(0,0,0,0.06)] sm:p-7">
               <label className="flex flex-col gap-1.5">
                 <span className="text-[15px] font-semibold">Decline this {label}</span>
@@ -242,7 +246,7 @@ export default function ProposalPage({ token, initial, preview }: { token: strin
                 </p>
               )}
               <div className="flex flex-wrap gap-3">
-                <Button variant="secondary" disabled={busy} onClick={() => void post("decline", { reason })}>
+                <Button variant="secondary" disabled={busy} onClick={() => void post("decline", { reason, hash: doc.hash })}>
                   {busy ? "Sending…" : "Decline"}
                 </Button>
                 <Button variant="ghost" onClick={() => setDeclining(false)}>
@@ -260,7 +264,7 @@ export default function ProposalPage({ token, initial, preview }: { token: strin
             <div role="status" className="bg-card flex flex-col items-start gap-3 rounded-2xl p-5 shadow-[0_0_0_1px_rgba(0,0,0,0.06)]">
               <p className="doc-body">Signed by both sides. Keep a copy for your records.</p>
               {doc.hasExecuted && (
-                <Button variant="primary" href={`/api/p/${token}/pdf?kind=signed`} style={{ backgroundColor: content.accent }}>
+                <Button variant="primary" href={`/api/p/${token}/pdf?kind=signed`} style={{ backgroundColor: content.accent, color: accentText(content.accent) }}>
                   Download signed PDF
                 </Button>
               )}
@@ -271,11 +275,13 @@ export default function ProposalPage({ token, initial, preview }: { token: strin
           <span>
             {content.sender.company} · Version {doc.versionNumber}
           </span>
-          <span className="sm:hidden">
-            <a href={`/api/p/${token}/pdf${doc.state === "completed" && doc.hasExecuted ? "?kind=signed" : ""}`} className="underline underline-offset-2">
-              Download PDF
-            </a>
-          </span>
+          {doc.state !== "withdrawn" && doc.state !== "replaced" && (
+            <span className="sm:hidden">
+              <a href={`/api/p/${token}/pdf${doc.state === "completed" && doc.hasExecuted ? "?kind=signed" : ""}`} className="underline underline-offset-2">
+                Download PDF
+              </a>
+            </span>
+          )}
         </footer>
       </main>
     </div>

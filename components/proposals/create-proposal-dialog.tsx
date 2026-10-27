@@ -15,6 +15,10 @@ import { cn } from "@/lib/utils";
 
 type ContactOption = { id: string; name: string; email: string | null; jobTitle: string | null };
 
+function sameName(name: string, text: string) {
+  return name.trim().toLowerCase() === text.trim().toLowerCase();
+}
+
 export default function CreateProposalDialog({
   open,
   onOpenChange,
@@ -37,10 +41,10 @@ function CreateForm({ company: preset, contactId, onClose }: { company: { id: st
   const router = useRouter();
   const [company, setCompany] = useState(preset);
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<{ id: string; name: string }[]>([]);
+  const [search, setSearch] = useState<{ text: string; rows: { id: string; name: string }[] }>({ text: "", rows: [] });
   const [templates, setTemplates] = useState<Template[] | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
-  const [contacts, setContacts] = useState<ContactOption[]>([]);
+  const [contactOptions, setContactOptions] = useState<{ companyId: string | null; list: ContactOption[] }>({ companyId: null, list: [] });
   const [contact, setContact] = useState(contactId ?? "");
   const [templateId, setTemplateId] = useState("");
   const [currency, setCurrency] = useState<Currency>("GBP");
@@ -60,7 +64,7 @@ function CreateForm({ company: preset, contactId, onClose }: { company: { id: st
       }
       setTemplates(result.data.templates);
       setProducts(result.data.products);
-      setContacts(result.data.contacts);
+      setContactOptions({ companyId: company?.id ?? null, list: result.data.contacts });
       setTemplateId((current) => current || result.data!.templates[0]?.id || "");
       setContact((current) => (current && result.data!.contacts.some((item) => item.id === current) ? current : (result.data!.contacts[0]?.id ?? "")));
     }, (problem: unknown) => {
@@ -81,9 +85,11 @@ function CreateForm({ company: preset, contactId, onClose }: { company: { id: st
       void searchCompaniesAction(text).then((rows) => {
         if (!live) return;
         const found = rows.map((row) => ({ id: row.id, name: row.name }));
-        const exact = found.filter((row) => row.name.trim().toLowerCase() === text.toLowerCase());
-        if (exact.length === 1) setCompany(exact[0]);
-        else setResults(found);
+        if (found.length === 1 && sameName(found[0].name, text)) {
+          setCompany(found[0]);
+          setContact("");
+          setContactOptions({ companyId: null, list: [] });
+        } else setSearch({ text, rows: found });
       });
     }, 200);
     return () => {
@@ -92,26 +98,57 @@ function CreateForm({ company: preset, contactId, onClose }: { company: { id: st
     };
   }, [query, company]);
 
+  const results = search.rows;
+  const contacts = company && contactOptions.companyId === company.id ? contactOptions.list : [];
+  const loadingContacts = Boolean(company) && contactOptions.companyId !== company?.id;
+  const person = contacts.some((item) => item.id === contact) ? contact : "";
   const template = templates?.find((item) => item.id === templateId) ?? null;
-  const priceOf = (product: Product) => (currency === "GBP" ? product.priceGbp : product.priceUsd);
+  const priceIn = (product: Product, money: Currency) => (money === "GBP" ? product.priceGbp : product.priceUsd);
+  const priceOf = (product: Product) => priceIn(product, currency);
+
+  function chooseCompany(next: { id: string; name: string } | null) {
+    setCompany(next);
+    setContact("");
+    setContactOptions({ companyId: null, list: [] });
+  }
+
+  function pickFromSearch() {
+    const text = query.trim();
+    if (search.text !== text) return;
+    const match = search.rows.find((row) => sameName(row.name, text)) ?? search.rows[0];
+    if (match) chooseCompany(match);
+  }
+
+  function changeCurrency(next: Currency) {
+    setCurrency(next);
+    setChosen((current) =>
+      Object.fromEntries(
+        Object.entries(current).filter(([id]) => {
+          const product = products.find((item) => item.id === id);
+          return product ? priceIn(product, next) !== null : false;
+        }),
+      ),
+    );
+  }
+
   const items = products
     .filter((product) => chosen[product.id])
     .map((product) => ({ productId: product.id, name: product.name, description: "", billing: product.billing, unitPrice: priceOf(product) ?? 0, quantity: chosen[product.id] }));
   const total = totalLabel(totalsOf(items), currency);
   const blocker = !company
     ? "Choose a company."
-    : !templates
+    : !templates || loadingContacts
       ? null
       : contacts.length === 0
         ? `Add a contact at ${company.name} first.`
-        : !contact
+        : !person
           ? "Choose a person."
           : !template
             ? "Make a template active first."
             : null;
 
   async function create() {
-    if (!company || !contact || !template) return;
+    if (!company || !person || !template) return;
     setBusy(true);
     setError(null);
     let result: Awaited<ReturnType<typeof createProposalAction>>;
@@ -119,7 +156,7 @@ function CreateForm({ company: preset, contactId, onClose }: { company: { id: st
       result = await createProposalAction({
         templateId: template.id,
         companyId: company.id,
-        contactId: contact,
+        contactId: person,
         currency,
         items: items.map((item) => ({ productId: item.productId, quantity: item.quantity })),
         title: title.trim() || undefined,
@@ -152,7 +189,7 @@ function CreateForm({ company: preset, contactId, onClose }: { company: { id: st
               <span className="text-[14px]">{company.name}</span>
             </span>
             {!preset && (
-              <Button variant="ghost" size="sm" onClick={() => setCompany(null)}>
+              <Button variant="ghost" size="sm" onClick={() => chooseCompany(null)}>
                 Change
               </Button>
             )}
@@ -162,12 +199,23 @@ function CreateForm({ company: preset, contactId, onClose }: { company: { id: st
             <label htmlFor="proposal-company" className="caption-style text-subtle">
               Company
             </label>
-            <Input id="proposal-company" value={query} placeholder="Search companies" onChange={(event) => setQuery(event.target.value)} autoFocus />
+            <Input
+              id="proposal-company"
+              value={query}
+              placeholder="Search companies"
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter") return;
+                event.preventDefault();
+                pickFromSearch();
+              }}
+              autoFocus
+            />
             {results.length > 0 && (
               <ul className="border-border flex flex-col rounded-lg border">
                 {results.slice(0, 6).map((row) => (
                   <li key={row.id}>
-                    <button type="button" onClick={() => setCompany(row)} className="w-full cursor-pointer px-3 py-2 text-left text-[14px] hover:bg-white/5">
+                    <button type="button" onClick={() => chooseCompany(row)} className="w-full cursor-pointer px-3 py-2 text-left text-[14px] hover:bg-white/5">
                       {row.name}
                     </button>
                   </li>
@@ -183,7 +231,7 @@ function CreateForm({ company: preset, contactId, onClose }: { company: { id: st
               Person
             </label>
             {contacts.length === 0 ? (
-              <p className="caption-style text-subtle">{templates ? `Add a contact at ${company.name} first. A proposal goes to a person.` : "Loading…"}</p>
+              <p className="caption-style text-subtle">{templates && !loadingContacts ? `Add a contact at ${company.name} first. A proposal goes to a person.` : "Loading…"}</p>
             ) : (
               <select id="proposal-contact" value={contact} onChange={(event) => setContact(event.target.value)} className={recordSelectClass}>
                 {contacts.map((item) => (
@@ -222,9 +270,12 @@ function CreateForm({ company: preset, contactId, onClose }: { company: { id: st
 
         {template?.kind === "proposal" && (
           <fieldset className="flex flex-col gap-2">
+            <legend className="sr-only">What you&apos;re offering</legend>
             <div className="flex items-center justify-between gap-3">
-              <legend className="caption-style text-subtle">What you&apos;re offering</legend>
-              <select aria-label="Currency" value={currency} onChange={(event) => setCurrency(event.target.value as Currency)} className={cn(recordSelectClass, "h-8 w-auto")}>
+              <span aria-hidden className="caption-style text-subtle">
+                What you&apos;re offering
+              </span>
+              <select aria-label="Currency" value={currency} onChange={(event) => changeCurrency(event.target.value as Currency)} className={cn(recordSelectClass, "h-8 w-auto")}>
                 <option value="GBP">Pounds (£)</option>
                 <option value="USD">Dollars ($)</option>
               </select>
@@ -293,7 +344,7 @@ function CreateForm({ company: preset, contactId, onClose }: { company: { id: st
         <Button variant="ghost" onClick={onClose}>
           Cancel
         </Button>
-        <Button variant="primary" disabled={busy || !company || !contact || !template} onClick={() => void create()}>
+        <Button variant="primary" disabled={busy || !company || !person || !template} onClick={() => void create()}>
           {busy ? "Creating…" : "Create"}
         </Button>
       </DialogFooter>

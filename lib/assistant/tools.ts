@@ -8,7 +8,9 @@ import { bookingUrl } from "@/lib/assistant/links";
 import { ARTICLES_URL, DOCS_URL, eclipseDocsIndex, listEclipseArticles, readEclipsePage } from "@/lib/eclipse-sources";
 import { readWebPage, WebPageError } from "@/lib/web-page";
 import { searchKnowledge } from "@/lib/knowledge/search";
-import { CONTENT_LIMIT, listKnowledge, readKnowledge, type KnowledgeItem } from "@/lib/knowledge/store";
+import { addKnowledgePages, CONTENT_LIMIT, listKnowledge, readKnowledge, targetFrom, type KnowledgeItem } from "@/lib/knowledge/store";
+import { scheduleIndexing } from "@/lib/knowledge/background";
+import { mapSite } from "@/lib/knowledge/site";
 import { MindcaseError } from "@/lib/mindcase";
 import { callEclipseTool, EclipseMcpError, eclipseGuide, findEclipseTools } from "@/lib/eclipse-mcp";
 import { checkColdEmail, COLD_EMAIL_PLAYBOOK, ECLIPSE_OUTREACH_BRIEF } from "@/lib/assistant/cold-email";
@@ -17,10 +19,12 @@ import { getBookingPage } from "@/lib/booking/pages";
 import { listLifecycles } from "@/lib/crm/lifecycles";
 import { getMailThread, mailSyncStatus, searchMail } from "@/lib/mail/store";
 import { composeAccounts, saveDraftForAgent, sendForAgent } from "@/lib/mail/compose";
-import { createProduct, listProducts, listTemplates, updateProduct } from "@/lib/proposals/catalogue";
-import { createDocument, getDocument, listDocuments, sendDocument, updateDocument } from "@/lib/proposals/documents";
+import { createProduct, createTemplate, getTemplate, listProducts, listTemplates, updateProduct, updateTemplate } from "@/lib/proposals/catalogue";
+import { createDocument, getDocument, listDocuments, reviseDocument, sendDocument, updateDocument } from "@/lib/proposals/documents";
+import { copyProposalImage } from "@/lib/proposals/media";
+import { STARTER_TEMPLATES as PROPOSAL_STARTERS } from "@/lib/proposals/starters";
 import { addStep, removeStep, updateStep } from "@/lib/proposals/steps";
-import { readingTotals } from "@/lib/proposals/model";
+import { blockLinks, BLOCKS_GUIDE, onlyFields, proposalForAgent, templateForAgent, templateSettings } from "@/lib/proposals/agent";
 import { mailOrigin } from "@/lib/mail/origin";
 import { archiveBoard, createBoard, getBoard, listBoards, updateBoard } from "@/lib/crm/boards";
 import { savePipelineStages } from "@/lib/crm/pipeline";
@@ -368,7 +372,7 @@ function pick(args: Args, keys: string[]) {
   return out;
 }
 
-const WORKFLOW_GUIDE = `A definition is {trigger, steps}. trigger.type is one of: ${TRIGGER_TYPES.join(", ")}. call_summary_ready, task_completed: no other fields. record_created and manual: object (company or contact). field_changed: object, field (company: lifecycle, health (healthy, watch or at_risk; set from every summarised call), ownerId, industry, sizeCategory, source, description; contact: ownerId, jobTitle, companyId, source, notes), optional to. stage_changed: optional pipelineId (board id; omit for Opportunities) and stageId. added_to_board: boardId. activity_logged: optional activityType (call, email, meeting, note). schedule: frequency (daily, weekly or monthly), weekday (0 Sunday to 6 Saturday, for weekly), dayOfMonth (1 to 28, for monthly), time (HH:mm London). email_received: kind (any: any new email from a contact; reply: a reply to an email the user sent; bounce: an undeliverable notice, where the contact is the person whose address bounced; auto_reply: out of office or "I've left" replies), fromContactsOnly (default true); it runs privately for the user on their own inbox and gives {{email.subject}}, {{email.from}}, {{email.fromName}}, {{email.text}}, {{email.kind}}, {{email.failedRecipient}} and {{email.url}}. proposal_event: event (sent, viewed (first open), signed (by the client), completed (countersigned) or declined), optional kind (proposal or nda); it gives {{proposal.title}}, {{proposal.status}}, {{proposal.total}}, {{proposal.signedBy}}, {{proposal.declineReason}} and {{proposal.url}}, with the proposal's company and contact. Any trigger except manual, schedule and email_received can take mine: true to only fire for the user's own changes.
+const WORKFLOW_GUIDE = `A definition is {trigger, steps}. trigger.type is one of: ${TRIGGER_TYPES.join(", ")}. call_summary_ready, task_completed: no other fields. record_created and manual: object (company or contact). field_changed: object, field (company: lifecycle, health (healthy, watch or at_risk; set from every summarised call), ownerId, industry, sizeCategory, source, description; contact: ownerId, jobTitle, companyId, source, notes), optional to. stage_changed: optional pipelineId (board id; omit for Opportunities) and stageId. added_to_board: boardId. activity_logged: optional activityType (call, email, meeting, note). schedule: frequency (daily, weekly or monthly), weekday (0 Sunday to 6 Saturday, for weekly), dayOfMonth (1 to 28, for monthly), time (HH:mm London). email_received: kind (any: any new email from a contact; reply: a reply to an email the user sent; bounce: an undeliverable notice, where the contact is the person whose address bounced; auto_reply: out of office or "I've left" replies), fromContactsOnly (default true); it runs privately for the user on their own inbox and gives {{email.subject}}, {{email.from}}, {{email.fromName}}, {{email.text}}, {{email.kind}}, {{email.failedRecipient}} and {{email.url}}. proposal_event: event (sent, viewed (first open), signed (by the client), completed (countersigned) or declined), optional kind (proposal or nda); it gives {{proposal.title}}, {{proposal.status}}, {{proposal.total}}, {{proposal.signedBy}}, {{proposal.declineReason}}, {{proposal.url}} (in Orbit) and {{proposal.clientUrl}} (the client's link), with the proposal's company and contact. Any trigger except manual, schedule, email_received and proposal_event can take mine: true to only fire for the user's own changes.
 steps is a list run in order. Each step is {id, type, label, config}; ids are lowercase like ai_1, if_1, notify_1 and unique. type is one of: ${STEP_TYPES.join(", ")}. An if step has then and else lists; a loop step has a body list run once per item; a path that ends simply stops (inside a loop it moves to the next item).
 config by type: ai {prompt, model (claude-haiku-5-5, claude-sonnet-5-5 or claude-opus-5-5), outputs: [{key, type: text|number|boolean|list|choice, description, choices}], webSearch (true lets it search the web and adds a sources list output), context (true adds the record's details, recent activity, deals and the user's recent emails with the contact), linkedin (true reads the contact's LinkedIn profile now through Mindcase and adds it; best for checking job changes)}. find_records {object: contact|company, lifecycles: [lifecycle names; for contacts, their company's], tag, owner: ""|owner|<member id>, openOpportunity: any|yes|no, quietDays (no activity for at least this many days), search, order: least_contacted|oldest|newest|name, limit (1 to 100), skipDays (skip records this workflow found within this many days, so weekly runs work through a list in batches)}; it outputs records and count. Feed {{steps.find_records_1.records}} to a loop: inside it, company and contact steps act on each record in turn. upsert_record {object: company|contact, company: name, domain, website; contact: email, firstName, lastName, jobTitle, companyId; create (default true; new companies are enriched when auto-enrichment is on), useInRun (true makes it the run's record for later steps)}; it outputs id, name, created, found and url, so update_record {object: contact, field: companyId, value: "{{steps.upsert_record_1.id}}"} moves a contact to it. webhook {url (https), body (optional template; empty sends the run's company, contact and step results as JSON)} posts to Slack, Zapier, Make or any service and outputs status and response. if and filter {match: all|any, conditions: [{left: "{{path}}", op: is|is_not|contains|not_contains|is_empty|is_not_empty|greater_than|less_than, right}]}; filter stops the path when false. loop {items: "{{steps.ai_1.requests}}", limit}. delay {amount, unit: minutes|hours|days}. approval {title, details} pauses for the user to approve. create_task {title, notes, dueInDays, assignee: owner|record_owner|<member id>, link: company|contact|none, clickup: boolean}. add_note {title, body}. update_record {object, field, value}; fields: company lifecycle, health, ownerId, industry, sizeCategory, source, description, name, domain, website, linkedinUrl, phone; contact ownerId, jobTitle, companyId, source, notes, firstName, lastName, email, phone, linkedinUrl. board {boardId, stageId} adds the company to a board or moves its card. notify {to: owner|record_owner|<member id>, title, body}. send_email {subject, body} to the run's contact. linear_issue {title, description, priority: urgent|high|medium|low}. create_proposal {templateId (an active proposal template from list_proposal_templates), currency: GBP|USD, products: ai|fixed, productIds (for fixed), guidance (for ai: how to choose), title (optional)} drafts a proposal for the run's contact at their company; with products ai it reads the call summary and transcript (or the record's history) and picks from the live product catalogue, so the prompt never needs the product list. It outputs url, title, total, products and reason, and creates nothing in test runs.
 Text fields take {{company.name}}, {{company.id}}, {{company.url}}, {{contact.id}}, {{contact.companyName}}, {{contact.linkedinUrl}}, {{company.health}}, {{company.healthReason}}, {{call.sentiment}}, {{contact.name}}, {{contact.firstName}}, {{contact.email}}, {{call.summary}}, {{call.keyPoints}}, {{call.transcript}}, {{activity.title}}, {{deal.name}}, {{deal.stage}}, {{change.to}}, {{task.title}}, {{owner.name}}, {{today}}, {{steps.<id>.<output key>}} and {{loop.item}}. Keep workflows small: only the nodes the job needs.`;
@@ -409,6 +413,54 @@ function workflowSummary(workflow: Awaited<ReturnType<typeof getWorkflow>>) {
     edges: workflow.definition.edges,
   };
 }
+
+const BLOCK_ITEM = {
+  type: "object",
+  properties: {
+    id: { type: "string", description: "Keep existing ids; new blocks need a new short id such as b20." },
+    type: { type: "string", enum: ["tab", "cover", "section", "pricing", "terms", "video", "image", "documents", "steps", "booking", "faq", "quote", "team", "embed"] },
+    label: { type: "string", description: "tab" },
+    title: { type: "string", description: "cover" },
+    subtitle: { type: "string", description: "cover" },
+    image: { type: "string", description: "cover image url" },
+    heading: { type: "string" },
+    body: { type: "string", description: "section and terms" },
+    intro: { type: "string", description: "pricing, documents, steps and booking" },
+    linkLabel: { type: "string", description: "terms" },
+    linkUrl: { type: "string", description: "terms" },
+    url: { type: "string", description: "video, image and embed" },
+    caption: { type: "string", description: "video, image and embed" },
+    quote: { type: "string", description: "quote" },
+    name: { type: "string", description: "quote" },
+    role: { type: "string", description: "quote" },
+    items: {
+      type: "array",
+      description: "documents: [{id}] of Knowledge items. faq: [{question, answer}]. steps: [{title, side (client or us), dueInDays}] (template defaults only).",
+      items: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          question: { type: "string" },
+          answer: { type: "string" },
+          title: { type: "string" },
+          side: { type: "string", enum: ["client", "us"] },
+          dueInDays: { type: "integer" },
+        },
+      },
+    },
+    people: {
+      type: "array",
+      description: "team",
+      items: { type: "object", properties: { name: { type: "string" }, role: { type: "string" }, email: { type: "string" }, photo: { type: "string" } } },
+    },
+  },
+  required: ["id", "type"],
+};
+
+function blocksParam(description: string) {
+  return { type: "array", description, items: BLOCK_ITEM };
+}
+
 
 export const ASSISTANT_TOOLS: AssistantTool[] = [
   {
@@ -1116,6 +1168,50 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       const companyId = optionalStr(args.companyId);
       const items = await listKnowledge(actor, companyId ? { companyId } : args.eclipse === true ? { eclipse: true } : "all", 500);
       return { items: items.map(withKnowledge) };
+    },
+  },
+  {
+    name: "map_website",
+    label: "Mapping a website",
+    description: "List the pages of a website from its sitemap, or by following its links, so the user can choose which to add to Knowledge with add_to_knowledge.",
+    parameters: { type: "object", properties: { url: { type: "string", description: "The site's address, such as geteclipse.co." } }, required: ["url"] },
+    run: async (_actor, args) => {
+      try {
+        const map = await mapSite(args.url, { deadline: Date.now() + 75_000 });
+        return { host: map.host, source: map.source, truncated: map.truncated, count: map.pages.length, pages: map.pages.map((page) => page.url) };
+      } catch (error) {
+        if (error instanceof WebPageError) return { error: error.message };
+        throw error;
+      }
+    },
+  },
+  {
+    name: "add_to_knowledge",
+    label: "Adding to Knowledge",
+    write: true,
+    description:
+      "Add links to Knowledge for a company, or for Eclipse (the business's own material): web pages, files by link (PDF, Word, PowerPoint, Excel), YouTube videos and podcast episodes. Orbit reads and indexes them in the background. For a whole website, list its pages with map_website and pass the ones the user wants.",
+    parameters: {
+      type: "object",
+      properties: {
+        urls: { type: "array", items: { type: "string" }, description: "One or more links." },
+        companyId: idParam("Company the knowledge is about."),
+        eclipse: { type: "boolean", description: "True for Eclipse's own knowledge instead of a company's." },
+      },
+      required: ["urls"],
+    },
+    describe: (args, name) => {
+      const urls = Array.isArray(args.urls) ? args.urls.map(str).filter(Boolean) : [];
+      return {
+        title: `Add ${urls.length === 1 ? "a link" : `${urls.length} links`} to Knowledge for ${args.eclipse === true ? "Eclipse" : name(args.companyId)}`,
+        lines: [...urls.slice(0, 12), urls.length > 12 ? `and ${urls.length - 12} more` : ""].filter(Boolean),
+      };
+    },
+    run: async (actor, args) => {
+      const target = targetFrom({ companyId: args.companyId, eclipse: args.eclipse });
+      const { ids, skipped } = await addKnowledgePages(actor, target, args.urls);
+      scheduleIndexing(actor, ids);
+      return { added: ids.length, alreadyThere: skipped, ids, href: "companyId" in target ? companyHref(target.companyId) : "/settings/knowledge" };
     },
   },
   {
@@ -2039,14 +2135,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       "One proposal or NDA: its products and prices, blocks (tabs and sections), status, the client's link once sent, signatures, the live Next steps plan, reading time per tab, and every event (sent, opened, documents opened, steps ticked off, signed).",
     parameters: { type: "object", properties: { id: idParam("Proposal id.") }, required: ["id"] },
     run: async (actor, args) => {
-      const detail = await getDocument(actor, required(args.id, "A proposal id"));
-      return {
-        ...detail,
-        preview: undefined,
-        version: detail.version ? { number: detail.version.number, hash: detail.version.hash } : null,
-        readingSecondsByTab: readingTotals(detail.events),
-        events: detail.events.filter((event) => event.type !== "reading").slice(-40),
-      };
+      return proposalForAgent(await getDocument(actor, required(args.id, "A proposal id")));
     },
   },
   {
@@ -2059,9 +2148,12 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
   {
     name: "list_proposal_templates",
     label: "Looking at proposal templates",
-    description: "Proposal and NDA templates. Only active ones can be used to create and send.",
+    description: "Proposal and NDA templates, and the starters a new template can begin from. Only active templates can be used to create and send.",
     parameters: { type: "object", properties: {} },
-    run: async (actor) => ({ templates: (await listTemplates(actor)).map((template) => ({ id: template.id, name: template.name, kind: template.kind, status: template.status })) }),
+    run: async (actor) => ({
+      templates: (await listTemplates(actor)).map((template) => ({ id: template.id, name: template.name, kind: template.kind, status: template.status })),
+      starters: PROPOSAL_STARTERS.map((starter) => ({ key: starter.key, name: starter.name, kind: starter.kind })),
+    }),
   },
   {
     name: "create_proposal",
@@ -2094,7 +2186,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       ].filter(Boolean),
     }),
     run: async (actor, args) => {
-      const id = await createDocument(actor, args, { operation: "create_proposal", source: "assistant" });
+      const id = await createDocument(actor, onlyFields(args, ["templateId", "companyId", "contactId", "currency", "items", "title"]), { operation: "create_proposal", source: "assistant" });
       const detail = await getDocument(actor, id);
       return { id, href: detail.href, title: detail.title, total: detail.totalLabel, missing: detail.missing, placeholders: detail.placeholders };
     },
@@ -2104,7 +2196,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     label: "Editing a proposal",
     write: true,
     description:
-      "Change a draft proposal: title, currency, valid-until date (YYYY-MM-DD), products (replaces the list) or blocks (replaces them; read them with get_proposal first). Blocks make the client's page: a tab block starts a tab (label) and the blocks after it belong to it; cover (title, subtitle, image url), section (heading, body with blank lines between paragraphs, - bullets, **bold**, [text](https://…)), pricing (heading, intro), terms (heading, body, linkLabel, linkUrl), video (heading, url of YouTube, Loom or Vimeo, caption), image (url, caption), documents (heading, intro, items of Knowledge item ids from list_knowledge or search_knowledge), steps (heading, intro; the live plan is changed with update_proposal_steps), booking (heading, intro; shows the owner's booking calendar), faq (heading, items of question and answer), quote (quote, name, role), team (heading, people with name, role, email), embed (heading, url, caption). Fields like {{contact.firstName}} are filled in.",
+      `Change a draft proposal: title, currency, valid-until date (YYYY-MM-DD), products (replaces the list) or blocks (replaces them; read them with get_proposal first). A sent one needs revise_proposal first. The live Next steps plan is changed with update_proposal_steps. ${BLOCKS_GUIDE} Before adding a booking block, check with get_settings that the booking page is enabled. Copy image, cover and photo links in with add_proposal_image first.`,
     parameters: {
       type: "object",
       properties: {
@@ -2116,52 +2208,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
           type: "array",
           items: { type: "object", properties: { productId: { type: "string" }, quantity: { type: "integer", minimum: 1 }, unitPrice: { type: "number" }, description: { type: "string" } }, required: ["productId"] },
         },
-        blocks: {
-          type: "array",
-          description: "Every block, in order, as get_proposal returns them. Keep each block's id.",
-          items: {
-            type: "object",
-            properties: {
-              id: { type: "string", description: "Keep existing ids; new blocks need a new short id such as b20." },
-              type: { type: "string", enum: ["tab", "cover", "section", "pricing", "terms", "video", "image", "documents", "steps", "booking", "faq", "quote", "team", "embed"] },
-              label: { type: "string", description: "tab" },
-              title: { type: "string", description: "cover" },
-              subtitle: { type: "string", description: "cover" },
-              image: { type: "string", description: "cover image url" },
-              heading: { type: "string" },
-              body: { type: "string", description: "section and terms" },
-              intro: { type: "string", description: "pricing, documents, steps and booking" },
-              linkLabel: { type: "string", description: "terms" },
-              linkUrl: { type: "string", description: "terms" },
-              url: { type: "string", description: "video, image and embed" },
-              caption: { type: "string", description: "video, image and embed" },
-              quote: { type: "string", description: "quote" },
-              name: { type: "string", description: "quote" },
-              role: { type: "string", description: "quote" },
-              items: {
-                type: "array",
-                description: "documents: [{id}] of Knowledge items. faq: [{question, answer}]. steps: [{title, side (client or us), dueInDays}] (template defaults only).",
-                items: {
-                  type: "object",
-                  properties: {
-                    id: { type: "string" },
-                    question: { type: "string" },
-                    answer: { type: "string" },
-                    title: { type: "string" },
-                    side: { type: "string", enum: ["client", "us"] },
-                    dueInDays: { type: "integer" },
-                  },
-                },
-              },
-              people: {
-                type: "array",
-                description: "team",
-                items: { type: "object", properties: { name: { type: "string" }, role: { type: "string" }, email: { type: "string" }, photo: { type: "string" } } },
-              },
-            },
-            required: ["id", "type"],
-          },
-        },
+        blocks: blocksParam("Every block, in order, as get_proposal returns them. Keep each block's id."),
       },
       required: ["id"],
     },
@@ -2171,12 +2218,13 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         str(args.title) ? `Title: ${str(args.title)}` : "",
         str(args.validUntil) ? `Valid until: ${str(args.validUntil)}` : "",
         Array.isArray(args.items) ? `Products: ${(args.items as Args[]).map((item) => name(item.productId)).join(", ")}` : "",
-        Array.isArray(args.blocks) ? "Updates the wording" : "",
+        Array.isArray(args.blocks) ? `Replaces the sections (${args.blocks.length})` : "",
+        ...blockLinks(args.blocks).map((link) => `Link: ${link}`),
       ].filter(Boolean),
     }),
     run: async (actor, args) => {
       const id = required(args.id, "A proposal id");
-      await updateDocument(actor, id, args, { operation: "update_proposal", source: "assistant" });
+      await updateDocument(actor, id, onlyFields(args, ["title", "currency", "validUntil", "items", "blocks"]), { operation: "update_proposal", source: "assistant" });
       const detail = await getDocument(actor, id);
       return { id, href: detail.href, total: detail.totalLabel, missing: detail.missing, placeholders: detail.placeholders };
     },
@@ -2203,6 +2251,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       title: `${str(args.action) === "add" ? "Add a step to" : str(args.action) === "remove" ? "Remove a step from" : "Update a step on"} ${name(args.id)}`,
       lines: [
         str(args.title) ? `Step: ${str(args.title)}${str(args.side) === "us" ? ", for us" : ", for the client"}` : "",
+        str(args.action) !== "add" && str(args.stepId) ? `Step: ${name(args.stepId)}` : "",
         str(args.dueDate) ? `Due: ${str(args.dueDate)}` : "",
         str(args.action) === "done" ? "Mark it done" : str(args.action) === "undone" ? "Mark it not done" : "",
       ].filter(Boolean),
@@ -2211,10 +2260,11 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       const id = required(args.id, "A proposal id");
       const action = oneOf(args.action, ["add", "done", "undone", "remove"] as const);
       if (!action) throw new CrmError("invalid_input", "Choose add, done, undone or remove.", 400, { field: "action" });
-      if (action === "add") return { steps: await addStep(actor, id, { title: args.title, side: args.side, dueDate: args.dueDate }) };
+      const provenance = { operation: "update_proposal_steps", source: "assistant" };
+      if (action === "add") return { steps: await addStep(actor, id, { title: args.title, side: args.side, dueDate: args.dueDate }, provenance) };
       const stepId = required(args.stepId, "A step id");
-      if (action === "remove") return { steps: await removeStep(actor, stepId) };
-      return { steps: await updateStep(actor, stepId, { done: action === "done" }) };
+      if (action === "remove") return { steps: await removeStep(actor, stepId, provenance) };
+      return { steps: await updateStep(actor, stepId, { done: action === "done" }, provenance) };
     },
   },
   {
@@ -2237,6 +2287,121 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       const sent = await sendDocument(actor, id, { subject: optionalStr(args.subject), message: optionalStr(args.message) }, { provenance: { operation: "send_proposal", source: "assistant" } });
       return { sent: true, link: sent.url, warning: sent.warning, href: `/proposals/${id}` };
     },
+  },
+  {
+    name: "revise_proposal",
+    label: "Reopening a proposal",
+    write: true,
+    description:
+      "Make changes to a sent, declined or withdrawn proposal or NDA: it becomes a draft again so update_proposal can edit it. Until send_proposal sends it again (to the same link), the client's page says it's being updated and can't be signed. Not possible once the client has signed.",
+    parameters: { type: "object", properties: { id: idParam("Proposal id.") }, required: ["id"] },
+    describe: (args, name) => ({ title: `Make changes to ${name(args.id)}`, lines: ["The client can't sign it until it's sent again."] }),
+    run: async (actor, args) => {
+      const id = required(args.id, "A proposal id");
+      await reviseDocument(actor, id, { operation: "revise_proposal", source: "assistant" });
+      const detail = await getDocument(actor, id);
+      return { id, status: detail.status, href: detail.href };
+    },
+  },
+  {
+    name: "get_proposal_template",
+    label: "Reading a proposal template",
+    description: "One proposal or NDA template: name, kind, status, settings (accent colour, days valid) and every block, including the default Next steps that new proposals start with.",
+    parameters: { type: "object", properties: { id: idParam("Template id from list_proposal_templates.") }, required: ["id"] },
+    run: async (actor, args) => ({ template: templateForAgent(await getTemplate(actor, required(args.id, "A template id"))) }),
+  },
+  {
+    name: "create_proposal_template",
+    label: "Creating a proposal template",
+    write: true,
+    description:
+      "Create a proposal or NDA template from a starter (list_proposal_templates lists them), as a copy of another template (copyOf), or from blocks, which work as update_proposal describes, with default Next steps as items on a steps block. It starts as a draft; status active lets people use it.",
+    parameters: {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        kind: { type: "string", enum: ["proposal", "nda"] },
+        starter: { type: "string", description: "Starter key, such as proposal, mutual-nda or one-way-nda." },
+        copyOf: idParam("Template id to copy."),
+        blocks: blocksParam("Every block, in order. Replaces the starter's or copy's blocks."),
+        accent: { type: "string", description: "Accent colour such as #4124fb." },
+        validDays: { type: "integer", minimum: 1, maximum: 365, description: "Days a proposal stays valid after it's created." },
+        status: { type: "string", enum: ["draft", "active"] },
+      },
+    },
+    describe: (args, name) => ({
+      title: `Create template${str(args.name) ? `: ${str(args.name)}` : ""}`,
+      lines: [
+        str(args.kind) === "nda" ? "NDA" : "",
+        str(args.starter) ? `Starts from: ${str(args.starter)}` : "",
+        str(args.copyOf) ? `Copy of ${name(args.copyOf)}` : "",
+        Array.isArray(args.blocks) ? `Sections: ${args.blocks.length}` : "",
+        str(args.accent) ? `Accent: ${str(args.accent)}` : "",
+        typeof args.validDays === "number" ? `Valid for ${args.validDays} days` : "",
+        str(args.status) === "active" ? "Active, so people can use it" : "",
+        ...blockLinks(args.blocks).map((link) => `Link: ${link}`),
+      ].filter(Boolean),
+    }),
+    run: async (actor, args) => {
+      const provenance = { operation: "create_proposal_template", source: "assistant" };
+      let template = await createTemplate(actor, onlyFields(args, ["name", "kind", "starter", "copyOf"]), provenance);
+      const settings = templateSettings(template, args);
+      if (args.blocks !== undefined || args.status !== undefined || settings) {
+        template = await updateTemplate(actor, template.id, { blocks: args.blocks, status: args.status, settings }, provenance);
+      }
+      return { template: templateForAgent(template), href: `/proposals/templates/${template.id}` };
+    },
+  },
+  {
+    name: "update_proposal_template",
+    label: "Editing a proposal template",
+    write: true,
+    description:
+      "Change a proposal or NDA template: name, status (draft, active or archived), accent colour, days valid, or blocks (replaces them; read them with get_proposal_template first). Blocks work as update_proposal describes; default Next steps are items on a steps block (title, side client or us, dueInDays). Changes apply to proposals created afterwards.",
+    parameters: {
+      type: "object",
+      properties: {
+        id: idParam("Template id."),
+        name: { type: "string" },
+        status: { type: "string", enum: ["draft", "active", "archived"] },
+        accent: { type: "string", description: "Accent colour such as #4124fb." },
+        validDays: { type: "integer", minimum: 1, maximum: 365 },
+        blocks: blocksParam("Every block, in order, as get_proposal_template returns them. Keep each block's id."),
+      },
+      required: ["id"],
+    },
+    describe: (args, name) => ({
+      title: `Edit template ${name(args.id)}`,
+      lines: [
+        str(args.name) ? `Name: ${str(args.name)}` : "",
+        str(args.status) ? `Status: ${str(args.status)}` : "",
+        str(args.accent) ? `Accent: ${str(args.accent)}` : "",
+        typeof args.validDays === "number" ? `Valid for ${args.validDays} days` : "",
+        Array.isArray(args.blocks) ? `Replaces the sections (${args.blocks.length})` : "",
+        ...blockLinks(args.blocks).map((link) => `Link: ${link}`),
+      ].filter(Boolean),
+    }),
+    run: async (actor, args) => {
+      const id = required(args.id, "A template id");
+      const current = await getTemplate(actor, id);
+      const template = await updateTemplate(
+        actor,
+        id,
+        { name: args.name, status: args.status, blocks: args.blocks, settings: templateSettings(current, args) },
+        { operation: "update_proposal_template", source: "assistant" },
+      );
+      return { template: templateForAgent(template), href: `/proposals/templates/${template.id}` };
+    },
+  },
+  {
+    name: "add_proposal_image",
+    label: "Copying an image",
+    write: true,
+    description:
+      "Copy an image (JPEG, PNG, WebP or GIF, up to 10 MB) from a public link into Orbit and get back its new url, for a cover, image or team block, so the proposal doesn't depend on the other site.",
+    parameters: { type: "object", properties: { url: { type: "string", description: "Public https link to the image file." } }, required: ["url"] },
+    describe: (args) => ({ title: "Copy an image into Orbit", lines: [str(args.url)].filter(Boolean) }),
+    run: async (actor, args) => copyProposalImage(actor, args.url),
   },
   {
     name: "save_product",
@@ -2711,6 +2876,7 @@ const EXTERNAL_TOOLS = new Set([
   "get_email_thread",
   "get_capture",
   "read_web_page",
+  "map_website",
   "social_lookup",
   "eclipse_articles",
   "eclipse_docs",
@@ -2797,6 +2963,8 @@ export async function recordNames(actor: UserActor, args: Args[]) {
        select id, name from crm.document_templates where id = any($1::uuid[])
        union all
        select id, title from crm.documents where id = any($1::uuid[])
+       union all
+       select id, title from crm.document_steps where id = any($1::uuid[])
        union all
        select id, coalesce(nullif(trim(subject), ''), '(no subject)') from crm.mail_messages where id = any($1::uuid[])
        union all

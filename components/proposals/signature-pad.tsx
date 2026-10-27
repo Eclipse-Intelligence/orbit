@@ -37,18 +37,49 @@ export default function SignaturePad({
     if (mode !== "draw") return;
     const element = canvas.current;
     if (!element) return;
-    const ratio = window.devicePixelRatio || 1;
-    const { width, height } = element.getBoundingClientRect();
-    element.width = Math.round(width * ratio);
-    element.height = Math.round(height * ratio);
-    const context = element.getContext("2d");
-    if (!context) return;
-    context.scale(ratio, ratio);
-    context.lineCap = "round";
-    context.lineJoin = "round";
-    context.lineWidth = 2.4;
-    context.strokeStyle = INK;
+    const target = element;
+    function fit() {
+      const ratio = window.devicePixelRatio || 1;
+      const { width, height } = target.getBoundingClientRect();
+      const nextWidth = Math.round(width * ratio);
+      const nextHeight = Math.round(height * ratio);
+      if (nextWidth === 0 || nextHeight === 0) return;
+      if (target.width === nextWidth && target.height === nextHeight) return;
+      let previous: HTMLCanvasElement | null = null;
+      if (target.width > 0 && target.height > 0) {
+        previous = document.createElement("canvas");
+        previous.width = target.width;
+        previous.height = target.height;
+        previous.getContext("2d")?.drawImage(target, 0, 0);
+      }
+      drawing.current = false;
+      last.current = null;
+      target.width = nextWidth;
+      target.height = nextHeight;
+      const context = target.getContext("2d");
+      if (context) {
+        context.setTransform(ratio, 0, 0, ratio, 0, 0);
+        context.lineCap = "round";
+        context.lineJoin = "round";
+        context.lineWidth = 2.4;
+        context.strokeStyle = INK;
+        if (previous) context.drawImage(previous, 0, 0, width, height);
+      }
+    }
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(target);
+    return () => observer.disconnect();
   }, [mode]);
+
+  function choose(next: SignatureMode) {
+    if (next === mode) return;
+    drawing.current = false;
+    last.current = null;
+    setInked(false);
+    onImage(null);
+    onMode(next);
+  }
 
   function point(event: PointerEvent<HTMLCanvasElement>) {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -56,6 +87,7 @@ export default function SignaturePad({
   }
 
   function down(event: PointerEvent<HTMLCanvasElement>) {
+    if (!event.isPrimary) return;
     event.currentTarget.setPointerCapture(event.pointerId);
     drawing.current = true;
     last.current = point(event);
@@ -68,7 +100,7 @@ export default function SignaturePad({
   }
 
   function move(event: PointerEvent<HTMLCanvasElement>) {
-    if (!drawing.current || !last.current) return;
+    if (!event.isPrimary || !drawing.current || !last.current) return;
     const context = event.currentTarget.getContext("2d");
     if (!context) return;
     const next = point(event);
@@ -81,8 +113,8 @@ export default function SignaturePad({
     last.current = next;
   }
 
-  function up() {
-    if (!drawing.current) return;
+  function up(event: PointerEvent<HTMLCanvasElement>) {
+    if (!event.isPrimary || !drawing.current) return;
     drawing.current = false;
     last.current = null;
     setInked(true);
@@ -107,7 +139,7 @@ export default function SignaturePad({
               key={option}
               type="button"
               aria-pressed={mode === option}
-              onClick={() => onMode(option)}
+              onClick={() => choose(option)}
               className={cn(
                 "focus-visible:ring-ring/60 rounded-full px-3 py-1 outline-none transition-colors duration-150 focus-visible:ring-2",
                 mode === option ? "bg-card text-foreground shadow-[0_0_0_1px_rgba(0,0,0,0.06)]" : "text-subtle hover:text-foreground",
@@ -141,7 +173,7 @@ export default function SignaturePad({
             onPointerCancel={up}
             className="h-36 w-full cursor-crosshair touch-none rounded-xl bg-white shadow-[0_0_0_1px_var(--input)]"
           />
-          {!inked && <span className="pointer-events-none absolute inset-0 flex items-center justify-center text-[14px] text-[#8a8a90]">Sign here</span>}
+          {!inked && <span className="pointer-events-none absolute inset-0 flex items-center justify-center text-[14px] text-[#6b6b73]">Sign here</span>}
           {inked && (
             <button type="button" onClick={clear} className="focus-visible:ring-ring/60 absolute top-2 right-2 rounded-full px-2.5 py-1 text-[12.5px] text-[#6b6b73] outline-none hover:text-[#17171b] focus-visible:ring-2">
               Clear

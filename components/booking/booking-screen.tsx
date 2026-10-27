@@ -2,6 +2,7 @@
 
 import {
   useEffect,
+  useId,
   useRef,
   useState,
   useSyncExternalStore,
@@ -90,15 +91,16 @@ function Confirmation({ booking, embedded }: { booking: BookingConfirmation; emb
     heading.current?.focus();
   }, []);
   const sameZone = booking.timeZone === booking.pageTimeZone;
+  const Heading = embedded ? "h3" : "h1";
   return (
     <div className="animate-rise-in flex flex-col items-center gap-6 py-6 text-center motion-reduce:animate-none">
       <div className="bg-success/15 text-success flex size-14 items-center justify-center rounded-full shadow-[inset_0px_0px_0px_1px_rgba(34,197,94,0.35),0px_0px_32px_0px_rgba(34,197,94,0.25)]">
         <CheckIcon aria-hidden className="size-6" />
       </div>
       <div className="flex flex-col gap-2">
-        <h1 ref={heading} tabIndex={-1} className="text-[24px] leading-tight font-semibold outline-none">
+        <Heading ref={heading} tabIndex={-1} className="text-[24px] leading-tight font-semibold outline-none">
           You&apos;re booked
-        </h1>
+        </Heading>
         <p className="text-soft text-[15px] leading-5">{booking.subject}</p>
       </div>
       <div className="flex w-full flex-col gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.04] p-4 text-left">
@@ -163,6 +165,10 @@ export function BookingPanel({
   const [booking, setBooking] = useState<BookingConfirmation | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const loadedKeys = useRef(new Set<string>());
+  const idBase = useId();
+  const fieldId = (field: FieldName | "website") => `${idBase}-booking-${field}`;
+  const Title = embedded ? "h3" : "h1";
+  const Subheading = embedded ? "h4" : "h2";
 
   const key = zone ? `${zone}|${month ?? ""}` : null;
   const loaded = key ? results[key] : undefined;
@@ -257,7 +263,7 @@ export function BookingPanel({
     setErrors(found);
     if (Object.keys(found).length > 0) {
       const first = (["name", "email", "note"] as const).find((field) => found[field]);
-      if (first) document.getElementById(`booking-${first}`)?.focus();
+      if (first) document.getElementById(fieldId(first))?.focus();
       return;
     }
     setPending(true);
@@ -287,7 +293,7 @@ export function BookingPanel({
       }
       if (field && FIELDS.has(field)) {
         setErrors({ [field]: message });
-        document.getElementById(`booking-${field}`)?.focus();
+        document.getElementById(fieldId(field as FieldName))?.focus();
         return;
       }
       setErrors({ form: message });
@@ -312,7 +318,7 @@ export function BookingPanel({
               <OwnerAvatar page={page} />
               <div className="flex min-w-0 flex-col gap-1.5">
                 <p className="text-soft text-[13px] leading-4">{page.ownerName}</p>
-                <h1 className="text-[22px] leading-[1.15] font-semibold tracking-[-0.01em] text-balance">{page.title}</h1>
+                <Title className="text-[22px] leading-[1.15] font-semibold tracking-[-0.01em] text-balance">{page.title}</Title>
               </div>
             </div>
             {page.intro && (
@@ -332,6 +338,7 @@ export function BookingPanel({
             </div>
           ) : (
             <BookingCalendar
+              embedded={embedded}
               month={shownMonth ?? todayKey(page.timeZone).slice(0, 7)}
               days={days}
               loading={loading}
@@ -349,9 +356,9 @@ export function BookingPanel({
 
           <div className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
-              <h2 className="text-[15px] leading-5 font-medium">
+              <Subheading className="text-[15px] leading-5 font-medium">
                 {activeDay ? dayTitle(activeDay) : loading ? "Available times" : "No times this month"}
-              </h2>
+              </Subheading>
               <div className="text-subtle hover:text-soft relative flex h-7 max-w-[60%] items-center gap-1.5 rounded-full border border-white/[0.08] px-2.5 text-[12px] leading-none transition-colors duration-150 focus-within:ring-2 focus-within:ring-ring/80">
                 <GlobeIcon aria-hidden className="size-3.5 shrink-0" />
                 <span aria-hidden className="truncate">
@@ -440,15 +447,15 @@ export function BookingPanel({
                   <span className="font-medium">{fullWhen(activeSlot, slotEnd, zone ?? page.timeZone)}</span>
                 </p>
               </div>
-              <Field label="Name" htmlFor="booking-name" required error={errors.name}>
+              <Field label="Name" htmlFor={fieldId("name")} required error={errors.name}>
                 <Input
-                  id="booking-name"
+                  id={fieldId("name")}
                   name="name"
                   autoComplete="name"
                   maxLength={BOOKING_NAME_MAX}
                   value={name}
                   aria-invalid={errors.name ? true : undefined}
-                  aria-describedby={errors.name ? "booking-name-error" : undefined}
+                  aria-describedby={errors.name ? `${fieldId("name")}-error` : undefined}
                   onChange={(event) => {
                     setName(event.target.value);
                     setErrors((current) => ({ ...current, name: undefined }));
@@ -456,9 +463,9 @@ export function BookingPanel({
                   className="h-11 rounded-xl border-white/10 bg-white/[0.04] focus-visible:border-white/40"
                 />
               </Field>
-              <Field label="Email" htmlFor="booking-email" required error={errors.email}>
+              <Field label="Email" htmlFor={fieldId("email")} required error={errors.email}>
                 <Input
-                  id="booking-email"
+                  id={fieldId("email")}
                   name="email"
                   type="email"
                   inputMode="email"
@@ -467,7 +474,7 @@ export function BookingPanel({
                   maxLength={200}
                   value={email}
                   aria-invalid={errors.email ? true : undefined}
-                  aria-describedby={errors.email ? "booking-email-error" : undefined}
+                  aria-describedby={errors.email ? `${fieldId("email")}-error` : undefined}
                   onChange={(event) => {
                     setEmail(event.target.value);
                     setErrors((current) => ({ ...current, email: undefined }));
@@ -477,18 +484,18 @@ export function BookingPanel({
               </Field>
               <Field
                 label="Note"
-                htmlFor="booking-note"
+                htmlFor={fieldId("note")}
                 hint="Optional. Anything you'd like to cover?"
                 error={errors.note}
               >
                 <textarea
-                  id="booking-note"
+                  id={fieldId("note")}
                   name="note"
                   rows={3}
                   maxLength={BOOKING_NOTE_MAX}
                   value={note}
                   aria-invalid={errors.note ? true : undefined}
-                  aria-describedby={errors.note ? "booking-note-error" : "booking-note-hint"}
+                  aria-describedby={errors.note ? `${fieldId("note")}-error` : `${fieldId("note")}-hint`}
                   onChange={(event) => {
                     setNote(event.target.value);
                     setErrors((current) => ({ ...current, note: undefined }));
@@ -497,9 +504,9 @@ export function BookingPanel({
                 />
               </Field>
               <div aria-hidden className="absolute -left-[9999px] size-px overflow-hidden">
-                <label htmlFor="booking-website">Website</label>
+                <label htmlFor={fieldId("website")}>Website</label>
                 <input
-                  id="booking-website"
+                  id={fieldId("website")}
                   name="website"
                   tabIndex={-1}
                   autoComplete="off"
