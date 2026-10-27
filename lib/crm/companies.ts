@@ -42,6 +42,8 @@ import type {
   WorkspaceRole,
 } from "@/lib/crm/types";
 
+const CURRENT_FIT = "(case when es.web_icp and ws.icp_hash = es.icp_hash then ws.icp_score end)";
+
 const COMPANY_SQL = `
   select
     c.id,
@@ -87,10 +89,11 @@ const COMPANY_SQL = `
         and t.archived_at is null
         and t.completed_at is null
     ) as open_task_count,
-    ws.icp_score
+    ${CURRENT_FIT} as icp_score
   from crm.companies c
   left join crm.profiles p on p.id = c.owner_id
   left join crm.company_web_state ws on ws.company_id = c.id
+  left join crm.enrichment_settings es on es.workspace_id = c.workspace_id
 `;
 
 type CompanyRow = {
@@ -138,7 +141,7 @@ const SORT_COLUMNS: Record<CompanySort, string> = {
   interaction: "last_interaction_at",
   strength: "last_interaction_at",
   owner: "lower(coalesce(nullif(p.full_name, ''), p.email))",
-  fit: "ws.icp_score",
+  fit: CURRENT_FIT,
 };
 
 const NULLS_LAST = new Set<CompanySort>(["domain", "interaction", "strength", "owner", "fit"]);

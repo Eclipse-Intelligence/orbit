@@ -4,9 +4,11 @@ import { createActivity } from "@/lib/crm/activities";
 import { createCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
 import type { UserActor } from "@/lib/crm/types";
-import { getPool } from "@/lib/db/pool";
+import { getAdminPool, getPool } from "@/lib/db/pool";
 import type { WorkflowDefinition, WorkflowNode } from "@/lib/workflows/definition";
+import { executeRun, runWorkflowTick } from "@/lib/workflows/engine";
 import { createWorkflow, getRunSteps, saveWorkflow, setWorkflowStatus, startRun } from "@/lib/workflows/store";
+import { check, variableOptions } from "@/lib/workflows/variables";
 import { createUser, resetDatabase } from "./helpers";
 
 type Sent = { url: string; key: string | null; body: { state: Record<string, unknown>; questions: Record<string, Record<string, unknown>> } };
@@ -163,7 +165,7 @@ describe("workflow web checks", () => {
     }
   });
 
-  it("fails clearly without a key, when Parallel fails, and when a question is incomplete", async () => {
+  it("fails clearly without a key and when a test run's check fails", async () => {
     const id = await workflowWith(graph([node("decide_1", "decide", { questions: [QUESTIONS[0]] })], [{ source: "trigger", handle: "out", target: "decide_1" }]));
     delete process.env.PARALLEL_API_KEY;
     const unused = parallel(() => ({}));
@@ -176,17 +178,155 @@ describe("workflow web checks", () => {
 
     process.env.PARALLEL_API_KEY = "test-parallel-key";
     const broken = parallel(() => new Response("down", { status: 500 }));
-    const failed = await startRun(owner, id, { test: false, record: { type: "contact", id: andrewId }, fetchImpl: broken.fetchImpl });
+    const failed = await startRun(owner, id, { test: true, record: { type: "contact", id: andrewId }, fetchImpl: broken.fetchImpl });
     assert.equal(failed.status, "failed");
     assert.equal((await getRunSteps(owner, failed.runId)).run.error, "decide_1: Parallel returned 500.");
+  });
 
-    const short = await workflowWith(
-      graph([node("decide_1", "decide", { questions: [{ key: "funding", type: "choice", question: "How is it funded?", options: ["Bootstrapped"] }] })], [{ source: "trigger", handle: "out", target: "decide_1" }]),
+  it("rejects a bad key, a taken key or a wrong option count when the workflow is saved", async () => {
+    const workflow = await createWorkflow(owner, { name: "Bad check" });
+    const save = (questions: unknown[]) =>
+      saveWorkflow(owner, workflow.id, { definition: graph([node("decide_1", "decide", { questions })], [{ source: "trigger", handle: "out", target: "decide_1" }]) });
+    await assert.rejects(save([{ key: "funding", type: "choice", question: "How is it funded?", options: ["Bootstrapped", " "] }]), {
+      message: "decide_1: funding: give 2 to 50 options.",
+    });
+    await assert.rejects(save([{ key: "momentum", type: "score", question: "How busy?", options: Array.from({ length: 11 }, (_, index) => `Level ${index}`) }]), {
+      message: "decide_1: momentum: give 2 to 10 levels.",
+    });
+    await assert.rejects(save([{ key: "Hiring", type: "yes_no", question: "Hiring?" }]), {
+      message: "decide_1: Hiring: start the key with a lowercase letter and use only letters, numbers and underscores.",
+    });
+    await assert.rejects(save([{ key: "sources", type: "yes_no", question: "Any?" }]), { message: "decide_1: sources: use a different key, this one is already taken." });
+    await assert.rejects(
+      save([
+        { key: "funding", type: "choice", question: "How is it funded?", options: ["Bootstrapped", "Venture backed"] },
+        { key: "fundingConfidence", type: "yes_no", question: "Sure?" },
+      ]),
+      { message: "decide_1: fundingConfidence: use a different key, this one is already taken." },
     );
-    const none = parallel(() => ({}));
-    const invalid = await startRun(owner, short, { test: false, record: { type: "contact", id: andrewId }, fetchImpl: none.fetchImpl });
-    assert.equal(invalid.status, "failed");
-    assert.equal(none.sent.length, 0);
-    assert.equal((await getRunSteps(owner, invalid.runId)).run.error, "decide_1: funding: give 2 to 50 options.");
+    await save([QUESTIONS[0]]);
+  });
+
+  it("never sends email, call, note or contact details, even when a question or About asks for them", async () => {
+    const definition = graph(
+      [
+        node("decide_1", "decide", {
+          about: "{{email.text}} | {{call.transcript}} | {{call.summary}} | {{activity.body}} | {{contact.email}} | {{contact.phone}} | {{contact.jobTitle}}",
+          questions: [{ key: "hiring", type: "yes_no", question: "Is {{company.name}} hiring? {{email.text}} {{call.transcript}} {{steps.ai_1.text}} {{loop.index}}" }],
+        }),
+      ],
+      [{ source: "trigger", handle: "out", target: "decide_1" }],
+    );
+    const id = await workflowWith(definition);
+    const vars = {
+      trigger: { type: "manual", at: "2026-10-27T09:00:00.000Z" },
+      today: "Tue 27 Oct 2026",
+      owner: { id: owner.userId, name: "Mark Ridgeon", email: "mark@decide.test" },
+      company: { id: "c1", name: "Pulse", domain: "pulse.test", website: "https://pulse.test/", healthReason: "Secret health reason" },
+      contact: { id: "p1", name: "Andrew Sanaghan", email: "andrew@pulse.test", phone: "+44 7700 900123", jobTitle: "MD" },
+      email: { text: "Secret email body", subject: "Secret subject" },
+      call: { transcript: "Secret transcript", summary: "Secret call summary" },
+      activity: { body: "Secret pricing talk" },
+      loop: { item: "Pulse", index: 2, total: 3 },
+      steps: { ai_1: { text: "Earlier answer" } },
+    };
+    const inserted = await getAdminPool().query<{ id: string }>(
+      `insert into crm.workflow_runs (workspace_id, workflow_id, owner_id, status, definition, state, claimed_at, started_at)
+       values ($1, $2, $3, 'running', $4::jsonb, $5::jsonb, now(), now()) returning id`,
+      [owner.workspaceId, id, owner.userId, JSON.stringify(definition), JSON.stringify({ started: true, at: "decide_1", vars, frames: [] })],
+    );
+    const api = parallel(() => ({ answers: { hiring: { type: "noul", noul: 0.5 } }, citations: [] }));
+    const status = await executeRun(inserted.rows[0].id, owner.userId, owner.workspaceId, { deadline: Date.now() + 50_000, fetchImpl: api.fetchImpl });
+    assert.equal(status, "succeeded");
+    assert.equal(api.sent.length, 1);
+    const raw = JSON.stringify(api.sent[0].body);
+    for (const secret of [/Secret/, /andrew@pulse\.test/, /7700/]) assert.doesNotMatch(raw, secret);
+    assert.equal(api.sent[0].body.state.about, "|  |  |  |  |  | MD");
+    assert.equal(api.sent[0].body.questions.hiring.instructions, "Is Pulse hiring?   Earlier answer 2");
+    const logged = JSON.stringify((await getRunSteps(owner, inserted.rows[0].id)).steps[0].input);
+    assert.doesNotMatch(logged, /Secret/);
+  });
+
+  it("offers only public fields and earlier answers in a web check's picker", () => {
+    const definition: WorkflowDefinition = {
+      version: 2,
+      trigger: { type: "call_summary_ready" },
+      triggerPosition: { x: 0, y: 0 },
+      nodes: [
+        node("ai_1", "ai", { prompt: "Read it", outputs: [{ key: "need", type: "text" }] }),
+        node("decide_1", "decide", { questions: [QUESTIONS[0]] }),
+        node("notify_1", "notify", { title: "Done" }),
+      ],
+      edges: [
+        { source: "trigger", handle: "out", target: "ai_1" },
+        { source: "ai_1", handle: "out", target: "decide_1" },
+        { source: "decide_1", handle: "out", target: "notify_1" },
+      ],
+    };
+    const paths = variableOptions(definition, "decide_1").map((option) => option.path);
+    for (const path of ["company.name", "company.domain", "company.website", "company.industry", "company.lifecycle", "contact.name", "contact.jobTitle", "contact.linkedinUrl", "today", "trigger.at", "steps.ai_1.need"]) {
+      assert.ok(paths.includes(path), path);
+    }
+    for (const path of ["call.transcript", "call.summary", "activity.body", "contact.email", "company.healthReason", "owner.name", "company.id"]) assert.ok(!paths.includes(path), path);
+    const later = variableOptions(definition, "notify_1").map((option) => option.path);
+    assert.ok(later.includes("call.transcript") && later.includes("contact.email"));
+  });
+
+  it("never counts a missing answer as 0 in more than or less than", () => {
+    const vars = { steps: { decide_1: { refused: null, empty: "", zero: 0, score: 1.5 } } };
+    for (const left of ["{{steps.decide_1.refused}}", "{{steps.decide_1.empty}}", "{{steps.decide_1.missing}}"]) {
+      assert.equal(check({ left, op: "less_than", right: "60" }, vars), false);
+      assert.equal(check({ left, op: "greater_than", right: "-1" }, vars), false);
+    }
+    assert.equal(check({ left: "{{steps.decide_1.zero}}", op: "less_than", right: "60" }, vars), true);
+    assert.equal(check({ left: "{{steps.decide_1.score}}", op: "greater_than", right: "1" }, vars), true);
+  });
+
+  it("stops a question that is too long once its options and formatting are counted", async () => {
+    const options = Array.from({ length: 50 }, (_, index) => `Option ${String(index).padStart(2, "0")}`);
+    const id = await workflowWith(
+      graph([node("decide_1", "decide", { questions: [{ key: "segment", type: "choice", question: "x".repeat(4000), options }] })], [{ source: "trigger", handle: "out", target: "decide_1" }]),
+    );
+    const api = parallel(() => ({}));
+    const result = await startRun(owner, id, { test: true, record: { type: "contact", id: andrewId }, fetchImpl: api.fetchImpl });
+    assert.equal(result.status, "failed");
+    assert.equal(api.sent.length, 0);
+    assert.equal((await getRunSteps(owner, result.runId)).run.error, "decide_1: segment: too long for a web check. Shorten the question or its options.");
+
+    const about = await workflowWith(graph([node("decide_1", "decide", { about: "y".repeat(4001), questions: [QUESTIONS[0]] })], [{ source: "trigger", handle: "out", target: "decide_1" }]));
+    const long = await startRun(owner, about, { test: true, record: { type: "contact", id: andrewId }, fetchImpl: api.fetchImpl });
+    assert.equal((await getRunSteps(owner, long.runId)).run.error, "decide_1: About is too long for a web check. Shorten it.");
+    assert.equal(api.sent.length, 0);
+  });
+
+  it("tries a busy check once more a minute later, then fails", async () => {
+    const id = await workflowWith(graph([node("decide_1", "decide", { questions: [QUESTIONS[0]] })], [{ source: "trigger", handle: "out", target: "decide_1" }]));
+    const due = (runId: string) => getAdminPool().query("update crm.workflow_runs set resume_at = now() - interval '1 second' where id = $1", [runId]);
+
+    const busy = parallel(() => new Response("slow down", { status: 429 }));
+    const first = await startRun(owner, id, { test: false, record: { type: "contact", id: andrewId }, fetchImpl: busy.fetchImpl });
+    assert.equal(first.status, "waiting");
+    const waiting = await getRunSteps(owner, first.runId);
+    assert.equal(waiting.run.waitingFor, "delay");
+    assert.equal(waiting.steps[0].status, "waiting");
+    assert.equal((waiting.steps[0].output as { retrying: string }).retrying, "Parallel is rate limiting. Try again shortly.");
+    const resumeAt = (await getAdminPool().query<{ resume_at: Date }>("select resume_at from crm.workflow_runs where id = $1", [first.runId])).rows[0].resume_at;
+    assert.ok(resumeAt.getTime() > Date.now() + 50_000);
+
+    await due(first.runId);
+    const healthy = parallel(() => ({ answers: { hiring: { type: "noul", noul: 0.9 } }, citations: [] }));
+    await runWorkflowTick({ fetchImpl: healthy.fetchImpl, budgetMs: 30_000 });
+    const recovered = await getRunSteps(owner, first.runId);
+    assert.equal(recovered.run.status, "succeeded");
+    assert.equal((recovered.steps.at(-1)?.output as { hiring: number }).hiring, 90);
+
+    const down = parallel(() => new Response("down", { status: 503 }));
+    const second = await startRun(owner, id, { test: false, record: { type: "contact", id: andrewId }, fetchImpl: down.fetchImpl });
+    assert.equal(second.status, "waiting");
+    await due(second.runId);
+    await runWorkflowTick({ fetchImpl: down.fetchImpl, budgetMs: 30_000 });
+    const gaveUp = await getRunSteps(owner, second.runId);
+    assert.equal(gaveUp.run.status, "failed");
+    assert.equal(gaveUp.run.error, "decide_1: Parallel returned 503.");
   });
 });

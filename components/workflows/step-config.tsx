@@ -1,5 +1,6 @@
 "use client";
 
+import { useRef, useState } from "react";
 import Button from "@/components/_ui/button";
 import { Checkbox } from "@/components/_ui/checkbox";
 import { Input } from "@/components/_ui/input";
@@ -247,13 +248,24 @@ function Outputs({ step, update }: { step: Step; update: (config: Record<string,
 
 function Questions({ step, update, variables }: { step: Step; update: (config: Record<string, unknown>) => void; variables: VariableOption[] }) {
   const questions = (Array.isArray(step.config.questions) ? step.config.questions : []) as Question[];
+  const [ids, setIds] = useState(() => questions.map((_, index) => `question-${index}`));
+  const nextId = useRef(questions.length);
+  const rowKeys = questions.map((_, index) => ids[index] ?? `extra-${index}`);
   const set = (next: Question[]) => update({ ...step.config, questions: next });
   const change = (index: number, patch: Partial<Question>) => set(questions.map((item, at) => (at === index ? { ...item, ...patch } : item)));
+  const add = () => {
+    setIds([...rowKeys, `question-${nextId.current++}`]);
+    set([...questions, { key: "", type: "yes_no", question: "" }]);
+  };
+  const remove = (index: number) => {
+    setIds(rowKeys.filter((_, at) => at !== index));
+    set(questions.filter((_, at) => at !== index));
+  };
   return (
     <fieldset className="flex flex-col gap-2">
       <legend className="caption-style text-subtle pb-1.5">Questions (later nodes can use the answers)</legend>
       {questions.map((question, index) => (
-        <div key={index} className="border-border flex flex-col gap-2 rounded-lg border p-3">
+        <div key={rowKeys[index]} className="border-border flex flex-col gap-2 rounded-lg border p-3">
           <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
             <Input
               aria-label="Answer name"
@@ -288,14 +300,14 @@ function Questions({ step, update, variables }: { step: Step; update: (config: R
           )}
           <p className="caption-style text-subtle">{questionHint(question)}</p>
           {questions.length > 1 && (
-            <Button variant="ghost" size="sm" className="self-start" onClick={() => set(questions.filter((_, at) => at !== index))}>
+            <Button variant="ghost" size="sm" className="self-start" aria-label={`Remove question ${question.key || index + 1}`} onClick={() => remove(index)}>
               Remove
             </Button>
           )}
         </div>
       ))}
       {questions.length < 20 && (
-        <Button variant="ghost" size="sm" className="self-start" onClick={() => set([...questions, { key: "", type: "yes_no", question: "" }])}>
+        <Button variant="ghost" size="sm" className="self-start" onClick={add}>
           Add question
         </Button>
       )}
@@ -361,8 +373,9 @@ export default function StepConfig({
       return (
         <div className="flex flex-col gap-3">
           {field("about", "About (optional)", { rows: 2, placeholder: "{{contact.name}}, {{contact.jobTitle}}" })}
-          <Questions step={step} update={update} variables={variables} />
+          <Questions key={step.id} step={step} update={update} variables={variables} />
           <p className="caption-style text-subtle leading-[1.4]">Sends the company&apos;s name and website, the questions and About. Each check costs $0.001.</p>
+          <p className="caption-style text-subtle leading-[1.4]">Email, call and note content can&apos;t be sent.</p>
         </div>
       );
     case "if":

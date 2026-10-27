@@ -5,7 +5,11 @@ import { scopesForRole } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool } from "@/lib/db/pool";
 import { getEnrichmentSettings, saveEnrichmentSettings } from "@/lib/enrichment/settings";
-import { backfillWebChecks, checkCompany, ensureDefaultSignals, getCompanyFit, icpProfile, runWebSignals, saveWebCheck, uncheckedCompanyCount } from "@/lib/enrichment/web-checks";
+import { readFileSync } from "node:fs";
+import { backfillWebChecks, checkCompany, ensureDefaultSignals, getCompanyFit, icpProfile, learnedIcp, runWebSignals, saveWebCheck, uncheckedCompanyCount } from "@/lib/enrichment/web-checks";
+import { icpHashOf } from "@/lib/enrichment/settings";
+import { runScheduledSync } from "@/lib/crm/scheduler";
+import { createAgent } from "./helpers";
 import { listCompanies } from "@/lib/crm/companies";
 import { checkWeb } from "@/lib/assistant/check-web";
 import { decide } from "@/lib/parallel";
@@ -164,7 +168,8 @@ describe("web checks", () => {
     assert.equal(notes.rows[0].kind, "funding");
     assert.equal(notes.rows[0].url, "https://press.test/client-raises");
     assert.equal(notes.rows[0].company_id, client.id);
-    assert.match(notes.rows[0].summary, /raised £5m/);
+    assert.equal(notes.rows[0].summary, "Web check: Raised money (91% likely), New leader (85% likely). Source: Client Ltd raises £5m");
+    assert.equal((api.sent[0].body as { include_excerpts?: boolean }).include_excerpts, false);
 
     const again = await runWebSignals(owner, { deadline: Date.now() + 30_000, fetchImpl: api.fetchImpl, env: ENV });
     assert.deepEqual(again, { checked: 0, flagged: 0, failed: 0 });
@@ -193,11 +198,24 @@ describe("web checks", () => {
       "insert into crm.memories (workspace_id, scope, kind, title, body) values ($1, 'business', 'icp', 'Content agencies', 'UK content and SEO agencies of 10 to 50 people.')",
       [owner.workspaceId],
     );
-    const learned = await icpProfile(owner);
-    assert.equal(learned?.source, "learned");
-    assert.match(learned!.text, /Ideal customer: Content agencies/);
-
+    assert.equal(await icpProfile(owner), null);
     await saveEnrichmentSettings(owner, { webIcp: true, webTags: false, webGaps: false });
+    const learned = await icpProfile(owner);
+    assert.match(learned!.text, /Ideal customer: Content agencies/);
+    assert.equal((await getEnrichmentSettings(owner)).icpText, learned!.text);
+    await getAdminPool().query(
+      "insert into crm.memories (workspace_id, scope, kind, title, body) values ($1, 'business', 'audience', 'Founders', 'Agency founders who run delivery themselves.')",
+      [owner.workspaceId],
+    );
+    assert.equal((await icpProfile(owner))?.hash, learned!.hash);
+
+    const snapshot = readFileSync("supabase/migrations/20261206100000_parallel_review.sql", "utf8");
+    await getAdminPool().query("update crm.enrichment_settings set icp_text = null, icp_hash = null where workspace_id = $1", [owner.workspaceId]);
+    await getAdminPool().query(snapshot.slice(snapshot.indexOf("with learned as")));
+    const fromSql = await getEnrichmentSettings(owner);
+    assert.equal(fromSql.icpText, await learnedIcp(owner));
+    assert.equal(fromSql.icpHash, icpHashOf(fromSql.icpText!));
+    await getAdminPool().query("update crm.enrichment_settings set icp_text = $2, icp_hash = $3 where workspace_id = $1", [owner.workspaceId, learned!.text, learned!.hash]);
     const target = (await createCompany(owner, { name: "Fit Agency", domain: "fit.test", sizeCategory: "11-50", industry: "Fintech" })).body.company;
     const api = parallel((body) => ({
       answers: { ...(body.questions.icp ? { icp: { type: "score", score: 3.27, probabilities: { "3": 0.7, "4": 0.3 }, legend: {} } } : {}) },
@@ -221,9 +239,13 @@ describe("web checks", () => {
 
     const dueBefore = await uncheckedCompanyCount(owner);
     await saveEnrichmentSettings(owner, { icpText: "B2B SaaS companies in fintech with 50 to 200 staff." });
-    assert.equal((await icpProfile(owner))?.source, "custom");
+    assert.equal((await icpProfile(owner))?.text, "B2B SaaS companies in fintech with 50 to 200 staff.");
     assert.equal(await uncheckedCompanyCount(owner), dueBefore + 1);
     assert.equal((await getCompanyFit(owner, target.id))?.stale, true);
+    assert.equal((await listCompanies(owner, { sort: "fit", order: "desc", limit: 100 })).data.find((company) => company.id === target.id)?.icpFit, null);
+    await saveEnrichmentSettings(owner, { webIcp: false });
+    assert.equal(await getCompanyFit(owner, target.id), null);
+    await saveEnrichmentSettings(owner, { webIcp: true });
     await assert.rejects(saveEnrichmentSettings(owner, { icpText: "x".repeat(20_001) }), /under 20,000/);
   });
 
@@ -259,5 +281,86 @@ describe("web checks", () => {
     assert.deepEqual(result.sources[0].excerpts, ["Pulse raised £2m.", "Second passage."]);
     assert.deepEqual(await checkWeb({ about: "Pulse", questions: [{ key: "x", type: "choice", question: "Which?", options: ["One"] }] }, { env: ENV }), { error: "x: give 2 to 50 options." });
     assert.deepEqual(await checkWeb({ about: "Pulse", questions: [{ key: "x", type: "yes_no", question: "Q?" }] }, { env: {} }), { error: "Add PARALLEL_API_KEY in Vercel to run web checks." });
+  });
+
+  it("saves the check for companies an agent creates", async () => {
+    const { actor: agent } = await createAgent(owner.workspaceId, ["crm:read", "companies:write"]);
+    await saveEnrichmentSettings(owner, { webTags: true, webGaps: false, webIcp: false });
+    const made = (await createCompany(agent, { name: "Agent Co", domain: "agentco.test" })).body.company;
+    const api = parallel((body) => ({ answers: Object.fromEntries(Object.keys(body.questions).map((key) => [key, noul(0.1)])), citations: [] }));
+    const result = await checkCompany(agent, made.id, { tags: true, gaps: false, fetchImpl: api.fetchImpl, env: ENV });
+    assert.notEqual(result.status, "failed");
+    const state = await getAdminPool().query<{ checked: boolean }>("select checked_at is not null as checked from crm.company_web_state where company_id = $1", [made.id]);
+    assert.equal(state.rows[0]?.checked, true);
+  });
+
+  it("marks a company checked when saving fails after the paid call, so it isn't asked again", async () => {
+    const full = (await createCompany(owner, { name: "Twenty Tags", domain: "twenty.test", tags: Array.from({ length: 20 }, (_, index) => `tag${index}`) })).body.company;
+    const api = parallel((body) => ({ answers: Object.fromEntries(Object.keys(body.questions).map((key) => [key, noul(0.99)])), citations: [] }));
+    const result = await checkCompany(owner, full.id, { tags: true, gaps: false, fetchImpl: api.fetchImpl, env: ENV });
+    assert.equal(result.status, "failed");
+    assert.match(result.message, /20 tags/);
+    const state = await getAdminPool().query<{ checked: boolean }>("select checked_at is not null as checked from crm.company_web_state where company_id = $1", [full.id]);
+    assert.equal(state.rows[0]?.checked, true);
+  });
+
+  it("never pays twice for a company when two people check existing companies at once", async () => {
+    for (let index = 0; index < 6; index += 1) await createCompany(owner, { name: `Batch ${index}`, domain: `batch${index}.test` });
+    await getAdminPool().query("update crm.company_web_state set checked_at = null, check_claimed_at = null where workspace_id = $1", [owner.workspaceId]);
+    const asked = new Map<string, number>();
+    const api = parallel((body) => {
+      const name = String(body.state.company);
+      asked.set(name, (asked.get(name) ?? 0) + 1);
+      return { answers: {}, citations: [] };
+    });
+    await Promise.all([backfillWebChecks(owner, { fetchImpl: api.fetchImpl, env: ENV }), backfillWebChecks(owner, { fetchImpl: api.fetchImpl, env: ENV })]);
+    assert.ok(asked.size > 0);
+    assert.ok([...asked.values()].every((count) => count === 1), JSON.stringify([...asked]));
+  });
+
+  it("keeps a note for each company when two signals cite the same article", async () => {
+    await saveEnrichmentSettings(owner, { webSignals: true });
+    const first = (await createCompany(owner, { name: "Shared One", domain: "shared1.test", lifecycle: "customer" })).body.company;
+    const second = (await createCompany(owner, { name: "Shared Two", domain: "shared2.test", lifecycle: "customer" })).body.company;
+    await getAdminPool().query(
+      "update crm.company_web_state set signals_checked_at = now() where workspace_id = $1 and company_id <> all($2::uuid[])",
+      [owner.workspaceId, [first.id, second.id]],
+    );
+    await getAdminPool().query(
+      `insert into crm.company_web_state (company_id, workspace_id, signals_checked_at)
+       select c.id, c.workspace_id, now() from crm.companies c where c.workspace_id = $1 and c.id <> all($2::uuid[])
+       on conflict (company_id) do update set signals_checked_at = now()`,
+      [owner.workspaceId, [first.id, second.id]],
+    );
+    const api = parallel(() => ({ answers: { signal_0: noul(0.95) }, citations: [{ url: "https://news.test/roundup", title: "Funding roundup", excerpts: [] }] }));
+    await runWebSignals(owner, { deadline: Date.now() + 30_000, fetchImpl: api.fetchImpl, env: ENV });
+    const notes = await getAdminPool().query<{ company_id: string; url: string | null }>(
+      "select company_id, url from crm.market_notes where company_id = any($1::uuid[]) order by created_at",
+      [[first.id, second.id]],
+    );
+    assert.equal(notes.rows.length, 2);
+    assert.deepEqual(notes.rows.map((row) => row.url), ["https://news.test/roundup", null]);
+  });
+
+  it("retries Parallel once when it is busy and refuses requests over its limits", async () => {
+    let calls = 0;
+    const busy = (async () => {
+      calls += 1;
+      return calls === 1 ? new Response("slow down", { status: 429 }) : Response.json({ answers: { q: noul(0.7) }, citations: [] });
+    }) as typeof fetch;
+    const decision = await decide({ company: "X" }, { q: { type: "noul", instructions: "Q?" } }, { fetchImpl: busy, env: ENV, retryPauseMs: 1 });
+    assert.equal(calls, 2);
+    assert.deepEqual(decision.answers.q, { type: "noul", noul: 0.7 });
+    const many = Object.fromEntries(Array.from({ length: 101 }, (_, index) => [`q${index}`, { type: "noul" as const, instructions: "Q?" }]));
+    await assert.rejects(decide({}, many, { env: ENV }), /up to 100 questions/);
+    await assert.rejects(decide({}, { long: { type: "noul", instructions: "x".repeat(5_000) } }, { env: ENV }), /too long/);
+  });
+
+  it("runs weekly signals once per workspace in each sync", async () => {
+    let runs = 0;
+    const step = { name: "once", oncePerWorkspace: true, applies: () => true, run: async () => ({ runs: ++runs }) };
+    const target = { actor: owner, mailbox: false, members: [owner, member], granola: null };
+    await runScheduledSync({ steps: [step], targets: [target, { ...target, actor: member }], budgetMs: 30_000 });
+    assert.equal(runs, 1);
   });
 });

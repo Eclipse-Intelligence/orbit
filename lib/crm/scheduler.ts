@@ -34,6 +34,7 @@ type StepContext = { deadline: number; fetchImpl?: typeof fetch };
 type SyncStep = {
   name: string;
   minMs?: number;
+  oncePerWorkspace?: boolean;
   applies: (target: SyncTarget) => boolean;
   run: (target: SyncTarget, context: StepContext) => Promise<object>;
 };
@@ -141,9 +142,10 @@ export const DEFAULT_STEPS: SyncStep[] = [
   },
   {
     name: "web_signals",
-    minMs: 8_000,
+    minMs: 10_000,
+    oncePerWorkspace: true,
     applies: () => webChecksConfigured(),
-    run: (target, context) => runWebSignals(target.actor, { deadline: Math.min(context.deadline, Date.now() + 20_000), fetchImpl: context.fetchImpl }),
+    run: (target, context) => runWebSignals(target.actor, { deadline: Math.min(context.deadline, Date.now() + 8_000), fetchImpl: context.fetchImpl }),
   },
 ];
 
@@ -222,6 +224,7 @@ export async function runScheduledSync(
     ...(granolaError ? { granolaError } : {}),
     workspaces: [],
   };
+  const ranOnce = new Set<string>();
   for (const target of targets) {
     const entry = {
       workspaceId: target.actor.workspaceId,
@@ -231,10 +234,13 @@ export async function runScheduledSync(
     report.workspaces.push(entry);
     for (const step of steps) {
       if (!step.applies(target)) continue;
+      const onceKey = `${step.name}:${target.actor.workspaceId}`;
+      if (step.oncePerWorkspace && ranOnce.has(onceKey)) continue;
       if (deadline - Date.now() < (step.minMs ?? STEP_MIN_MS)) {
         entry.steps[step.name] = { ok: false, skipped: "Out of time for this run." };
         continue;
       }
+      if (step.oncePerWorkspace) ranOnce.add(onceKey);
       try {
         const outcome = (await step.run(target, {
           deadline,

@@ -33,11 +33,14 @@ import {
   nextScheduleRun,
   TRIGGER_NODE,
   safeDefinition,
+  WEB_QUESTION_TYPES,
+  webQuestionOptions,
+  webQuestionProblem,
   type Step,
   type Trigger,
   type WorkflowDefinition,
 } from "@/lib/workflows/definition";
-import { conditionsPass, display, render, resolve, type Vars } from "@/lib/workflows/variables";
+import { conditionsPass, display, render, resolve, webCheckVars, type Vars } from "@/lib/workflows/variables";
 import { findRecords, isRecordItem, readFindConfig, upsertRecord } from "@/lib/workflows/records";
 
 type LoopFrame = {
@@ -55,6 +58,7 @@ export type RunState = {
   vars?: Vars;
   frames?: LoopFrame[];
   waitingStep?: string | null;
+  retried?: string | null;
   decisions?: Record<string, { approved: boolean; note: string | null; by: string | null }>;
   approval?: { stepId: string; title: string; details: string } | null;
 };
@@ -513,37 +517,28 @@ async function aiStep(ctx: Ctx, step: Step): Promise<StepResult> {
   return { kind: "next", output: { ...data, model: result.model } };
 }
 
-const QUESTION_KEY = /^[a-z][a-zA-Z0-9_]{0,39}$/;
-const QUESTION_TYPES = ["yes_no", "choice", "score"] as const;
-const MAX_QUESTIONS = 20;
-const MAX_QUESTION_CHARS = 4500;
-const MAX_ABOUT_CHARS = 60_000;
+const MAX_QUESTION_SIZE = 4800;
+const MAX_ABOUT_CHARS = 4000;
 const DECIDE_TIMEOUT_MS = 20_000;
 const UNKNOWN_OPTION = "unknown";
+const PARALLEL_BUSY = /rate limiting|returned 5\d\d|didn't respond/;
+const RETRY_DELAY_MS = 60_000;
 
-type WebQuestion = { key: string; type: (typeof QUESTION_TYPES)[number]; question: string; options: string[] };
+type WebQuestion = { key: string; type: (typeof WEB_QUESTION_TYPES)[number]; question: string; options: string[] };
 
-function webQuestions(config: Record<string, unknown>, vars: Record<string, unknown>): WebQuestion[] {
-  const raw = Array.isArray(config.questions) ? (config.questions as Record<string, unknown>[]) : [];
-  if (raw.length === 0) throw new CrmError("invalid_input", "Add a question to check.", 400);
-  if (raw.length > MAX_QUESTIONS) throw new CrmError("invalid_input", `A web check can ask up to ${MAX_QUESTIONS} questions.`, 400);
-  const seen = new Set<string>(["sources"]);
-  return raw.map((item, index) => {
-    const key = str(item?.key).trim();
-    const type = QUESTION_TYPES.find((entry) => entry === item?.type);
-    const question = render(item?.question, vars).trim();
-    const options = (Array.isArray(item?.options) ? item.options : []).map((option) => str(option).trim()).filter(Boolean);
-    const name = key || `Question ${index + 1}`;
-    if (!QUESTION_KEY.test(key)) throw new CrmError("invalid_input", `${name}: start the key with a lowercase letter and use only letters, numbers and underscores.`, 400);
-    if (seen.has(key) || seen.has(`${key}Confidence`)) throw new CrmError("invalid_input", `${key}: use a different key, this one is already taken.`, 400);
-    if (!type) throw new CrmError("invalid_input", `${key}: choose Yes or no, Pick one or Score.`, 400);
+function webQuestions(config: Record<string, unknown>, vars: Vars): WebQuestion[] {
+  const problem = webQuestionProblem(config.questions);
+  if (problem) throw new CrmError("invalid_input", problem, 400);
+  return (config.questions as Record<string, unknown>[]).map((item) => {
+    const key = str(item.key).trim();
+    const type = WEB_QUESTION_TYPES.find((entry) => entry === item.type)!;
+    const question = render(item.question, vars).trim();
     if (!question) throw new CrmError("invalid_input", `${key}: write the question.`, 400);
-    if (type === "choice" && (options.length < 2 || options.length > 50)) throw new CrmError("invalid_input", `${key}: give 2 to 50 options.`, 400);
-    if (type === "score" && (options.length < 2 || options.length > 10)) throw new CrmError("invalid_input", `${key}: give 2 to 10 levels.`, 400);
-    if (question.length + options.join("").length > MAX_QUESTION_CHARS) throw new CrmError("invalid_input", `${key}: shorten the question or its options.`, 400);
-    seen.add(key);
-    if (type === "choice") seen.add(`${key}Confidence`);
-    return { key, type, question, options: type === "yes_no" ? [] : options };
+    const built: WebQuestion = { key, type, question, options: type === "yes_no" ? [] : webQuestionOptions(item) };
+    if (JSON.stringify(parallelQuestion(built)).length + key.length > MAX_QUESTION_SIZE) {
+      throw new CrmError("invalid_input", `${key}: too long for a web check. Shorten the question or its options.`, 400);
+    }
+    return built;
   });
 }
 
@@ -581,8 +576,9 @@ function webState(ctx: Ctx, about: string) {
 }
 
 async function decideStep(ctx: Ctx, step: Step): Promise<StepResult> {
-  const questions = webQuestions(step.config, ctx.vars);
-  const about = render(step.config.about, ctx.vars).trim();
+  const allowed = webCheckVars(ctx.vars);
+  const questions = webQuestions(step.config, allowed);
+  const about = render(step.config.about, allowed).trim();
   if (about.length > MAX_ABOUT_CHARS) throw new CrmError("invalid_input", "About is too long for a web check. Shorten it.", 400);
   let decision: Decision;
   try {
@@ -591,7 +587,9 @@ async function decideStep(ctx: Ctx, step: Step): Promise<StepResult> {
       timeoutMs: Math.min(Math.max(ctx.deadline - Date.now(), 5_000), DECIDE_TIMEOUT_MS),
     });
   } catch (error) {
-    if (error instanceof ParallelError) throw new CrmError(parallelKey() ? "upstream_error" : "invalid_input", error.message, parallelKey() ? 502 : 400);
+    if (error instanceof ParallelError) {
+      throw new CrmError(parallelKey() ? "upstream_error" : "invalid_input", error.message, parallelKey() ? 502 : 400, { retry: PARALLEL_BUSY.test(error.message) });
+    }
     throw error;
   }
   const output: Record<string, unknown> = {};
@@ -1174,10 +1172,18 @@ export async function executeRun(
     let input: unknown = null;
     try {
       await applyLoopRecord(ctx, state);
-      input = renderedInput(step, vars);
+      input = renderedInput(step, step.type === "decide" ? webCheckVars(vars) : vars);
       result = await runStepAction(ctx, step);
+      if (state.retried) state.retried = null;
     } catch (error) {
       const message = errorText(error);
+      if (error instanceof CrmError && error.details?.retry === true && !run.test && state.retried !== step.id) {
+        state.retried = step.id;
+        const until = new Date(Date.now() + RETRY_DELAY_MS).toISOString();
+        await logStep(ctx, step, "waiting", input, { until, retrying: message }, null, started);
+        await saveRun(actor, run.id, { state: { ...state, at, vars }, status: "waiting", waiting_for: "delay", resume_at: until });
+        return "waiting" as const;
+      }
       await logStep(ctx, step, "failed", input, null, message, started);
       await saveRun(actor, run.id, {
         state: { ...state, at, vars },

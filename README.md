@@ -411,13 +411,13 @@ A company context.dev doesn't know is marked as checked, so it isn't tried again
 
 ### Web checks
 
-With `PARALLEL_API_KEY` set, Orbit can answer questions about each company from the live web with the Parallel Decisions API, at $0.001 a company. It only adds to what context.dev finds and never replaces it. Settings › Integrations, Web checks has three switches, all off to start, that only owners and admins can change:
+With `PARALLEL_API_KEY` set, Orbit can answer questions about each company from the live web with the Parallel Decisions API, at $0.001 a company. It only adds to what context.dev finds and never replaces it. Settings › Integrations, Web checks has four switches, all off to start, that only owners and admins can change:
 
 - **Tag new companies.** Each rule is a tag and a question, such as "agency" with "Is the company a marketing, content or SEO agency?". After context.dev runs on a new company, Orbit asks every rule the company doesn't already match and adds the tag when the answer is at least 85% likely. It never removes a tag.
 - **Fill gaps.** When context.dev leaves size or industry empty, Orbit asks for them. Size is one of 1-10, 11-50, 51-200, 201-1000 or 1000+. Industry is picked from the industries the workspace already uses, so it stays consistent. Either is saved only at 70% or more, and only if the field is still empty.
-- **Weekly signals.** Once a week, Orbit checks every customer, prospect and company with an open deal against the signals listed (six to start: Raised money, New leader, Acquired or merged, Layoffs, Launch, Hiring in marketing; remove them or add your own). A signal at 80% or more becomes a market note on the company, with the best source link, so it reaches market memory and the morning brief. The same signal isn't raised again for that company for 90 days. The checks run in the 10 minute sync, a few companies at a time.
+- **Weekly signals.** Once a week, Orbit checks every customer, prospect and company with an open deal against the signals listed (six to start: Raised money, New leader, Acquired or merged, Layoffs, Launch, Hiring in marketing; remove them or add your own). A signal at 80% or more becomes a market note on the company with how likely it is, the best source link and that page's title (never text from the page), so it reaches market memory and the morning brief. When another company's note already uses the same link, the note is kept without the link. The same signal isn't raised again for that company for 90 days. The checks run in the 10 minute sync, a few companies at a time.
 
-- **ICP fit.** Scores each company from 0 (not a fit) to 4 (strong fit) against your ideal customer, with up to eight source links shown under ICP fit on the company page. The ideal customer is what you write in the box, or, when it's empty, what Orbit has learned (ICP, audience, why we win and why we lose notes from Learning). Companies gain a Fit column you can sort by (Best ICP fit on phones). When the description changes, companies are due for rescoring, and the company page marks an old score.
+- **ICP fit.** Scores each company from 0 (not a fit) to 4 (strong fit) against your ideal customer, with up to eight source links shown under ICP fit on the company page. The ideal customer is the text in the box. Turning ICP fit on with the box empty fills it from what Orbit has learned (ICP, audience, why we win and why we lose notes from Learning), and Use what Orbit has learned refreshes it, so scores only change when an admin saves a new description. Companies gain a Fit column you can sort by (Best ICP fit on phones). When the description changes, companies are due for rescoring, and the company page marks an old score.
 
 Only the company's name, domain and website are sent to Parallel, plus your ideal customer description for ICP fit. Check existing companies runs the tag rules and gap filling through every company with a website that hasn't been checked. A check that comes back with no answer changes nothing.
 
@@ -760,7 +760,7 @@ Every variable Orbit reads. `.env.example` lists them with comments (aliases suc
 | `CLICKUP_API_TOKEN`, `CLICKUP_API_BASE_URL` | ClickUp | |
 | `LINEAR_API_KEY`, `LINEAR_TEAM_KEY`, `LINEAR_API_URL` | Linear | Team key default `CNT`. |
 | `CONTEXT_DEV_API_KEY`, `HUNTER_API_KEY`, `ENROW_API_KEY`, `ICYPEAS_API_KEY` | Enrichment | Each key turns its provider on. |
-| `PARALLEL_API_KEY` | Web checks | Turns on tagging, filling gaps and weekly signals from the Parallel Decisions API. |
+| `PARALLEL_API_KEY` | Web checks | Turns on the Parallel Decisions API for tagging, filling gaps, weekly signals and ICP fit, the Check the web workflow step, and the assistant's `check_web`. |
 | `NEXT_PUBLIC_CONTEXT_LOGO_CLIENT_ID` | Logos in lists | context.dev Logo Link public client id. |
 
 ## Hosted Supabase

@@ -1,5 +1,8 @@
 const DECISIONS_URL = "https://api.parallel.ai/v1/decisions";
 const TIMEOUT_MS = 20_000;
+const QUESTIONS_MAX = 100;
+const QUESTION_CHARS_MAX = 5_000;
+const RETRY_PAUSE_MS = 1_500;
 
 export type DecisionQuestion =
   | { type: "noul"; instructions: string; criteria?: { true: string; false: string } }
@@ -57,25 +60,51 @@ function readCitation(value: unknown): DecisionCitation | null {
   };
 }
 
+function checkLimits(questions: Record<string, DecisionQuestion>) {
+  const names = Object.keys(questions);
+  if (names.length > QUESTIONS_MAX) throw new ParallelError(`A web check can ask up to ${QUESTIONS_MAX} questions at once.`);
+  for (const name of names) {
+    const question = questions[name];
+    if (name.length + JSON.stringify(question).length > QUESTION_CHARS_MAX) throw new ParallelError(`The question ${name} is too long for Parallel. Shorten it or its options.`);
+    if (question.type === "choice" && (Object.keys(question.criteria).length < 2 || Object.keys(question.criteria).length > 255)) {
+      throw new ParallelError(`The question ${name} needs 2 to 255 options.`);
+    }
+    if (question.type === "score" && (question.criteria.length < 2 || question.criteria.length > 10)) throw new ParallelError(`The question ${name} needs 2 to 10 levels.`);
+  }
+}
+
+function retryable(status: number) {
+  return status === 429 || status >= 500;
+}
+
 export async function decide(
   state: Record<string, unknown>,
   questions: Record<string, DecisionQuestion>,
-  options: { fetchImpl?: typeof fetch; env?: Record<string, string | undefined>; timeoutMs?: number } = {},
+  options: { fetchImpl?: typeof fetch; env?: Record<string, string | undefined>; timeoutMs?: number; excerpts?: boolean; retryPauseMs?: number } = {},
 ): Promise<Decision> {
   const key = parallelKey(options.env);
   if (!key) throw new ParallelError("Add PARALLEL_API_KEY in Vercel to run web checks.");
   if (Object.keys(questions).length === 0) return { answers: {}, citations: [], id: null };
-  let response: Response;
-  try {
-    response = await (options.fetchImpl ?? fetch)(DECISIONS_URL, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-api-key": key },
-      body: JSON.stringify({ state, questions }),
-      signal: AbortSignal.timeout(options.timeoutMs ?? TIMEOUT_MS),
-    });
-  } catch {
-    throw new ParallelError("Parallel didn't respond. Try again.");
+  checkLimits(questions);
+  const send = async () => {
+    try {
+      return await (options.fetchImpl ?? fetch)(DECISIONS_URL, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": key },
+        body: JSON.stringify({ state, questions, ...(options.excerpts === false ? { include_excerpts: false } : {}) }),
+        signal: AbortSignal.timeout(options.timeoutMs ?? TIMEOUT_MS),
+      });
+    } catch {
+      return null;
+    }
+  };
+  let response = await send();
+  if (!response || retryable(response.status)) {
+    await response?.body?.cancel().catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, options.retryPauseMs ?? RETRY_PAUSE_MS));
+    response = await send();
   }
+  if (!response) throw new ParallelError("Parallel didn't respond. Try again.");
   if (!response.ok) {
     throw new ParallelError(
       response.status === 401 || response.status === 403

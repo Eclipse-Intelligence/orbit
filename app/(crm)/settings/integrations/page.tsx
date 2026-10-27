@@ -10,7 +10,7 @@ import { getUserActor } from "@/lib/auth/user";
 import { listCompanions } from "@/lib/companion/pairing";
 import { unenrichedCompanyCount } from "@/lib/enrichment/companies";
 import { enrichmentAvailability, getEnrichmentSettings, providerStatuses } from "@/lib/enrichment/settings";
-import { icpProfile, listWebChecks, uncheckedCompanyCount, webChecksConfigured } from "@/lib/enrichment/web-checks";
+import { learnedIcp, listWebChecks, uncheckedCompanyCount, webChecksConfigured } from "@/lib/enrichment/web-checks";
 import { getCallSync } from "@/lib/crm/calls";
 import { getClickUpSettings } from "@/lib/crm/clickup";
 import { getGranolaStatus } from "@/lib/crm/granola";
@@ -31,12 +31,12 @@ export default async function IntegrationSettingsPage() {
     listCompanions(user),
     linearStatus(),
   ]);
-  const [enrichment, unenriched, webChecks, unchecked, learnedIcp] = await Promise.all([
+  const [enrichment, unenriched, webChecks, unchecked, learned] = await Promise.all([
     getEnrichmentSettings(user),
     unenrichedCompanyCount(user),
     listWebChecks(user),
     uncheckedCompanyCount(user),
-    icpProfile(user, { learnedOnly: true }),
+    learnedIcp(user),
   ]);
   const calls = mailbox ? await getCallSync(user) : null;
   const canAdmin = user.role === "owner" || user.role === "admin";
@@ -61,7 +61,7 @@ export default async function IntegrationSettingsPage() {
         unenriched={unenriched}
         logoLinkReady={Boolean(enrichmentAvailability().logoClientId)}
       />
-      <WebChecksSettings settings={enrichment} checks={webChecks} configured={webChecksConfigured()} canAdmin={canAdmin} unchecked={unchecked} learnedIcp={learnedIcp?.text ?? null} />
+      <WebChecksSettings settings={enrichment} checks={webChecks} configured={webChecksConfigured()} canAdmin={canAdmin} unchecked={unchecked} learnedIcp={learned} />
     </SettingsPage>
   );
 }
