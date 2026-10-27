@@ -6,6 +6,7 @@ import Button from "@/components/_ui/button";
 import { Checkbox } from "@/components/_ui/checkbox";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/_ui/dropdown-menu";
 import { Input } from "@/components/_ui/input";
+import { NativeSelect } from "@/components/_ui/native-select";
 import { prepareProposalImageAction } from "@/app/(crm)/proposals/actions";
 import { BLOCK_LABELS, FIELD_OPTIONS, newBlockId, type Block, type BlockType, type DocumentKind } from "@/lib/proposals/model";
 import { uploadToSignedUrl } from "@/lib/upload-client";
@@ -16,7 +17,7 @@ export type KnowledgeOption = { id: string; title: string; kind: string; group: 
 const textarea =
   "bg-transparent focus-visible:ring-ring/60 w-full rounded-lg px-3 py-2 text-[14px] leading-[1.5] shadow-[0_0_0_1px_var(--input)] outline-none focus-visible:ring-2";
 
-const PROPOSAL_SECTIONS: BlockType[] = ["section", "pricing", "video", "image", "documents", "booking", "faq", "quote", "team", "embed", "terms", "cover"];
+const PROPOSAL_SECTIONS: BlockType[] = ["section", "pricing", "video", "image", "documents", "steps", "booking", "faq", "quote", "team", "embed", "terms", "cover"];
 const NDA_SECTIONS: BlockType[] = ["section", "terms", "cover"];
 
 function blankBlock(type: BlockType, id: string): Block {
@@ -45,6 +46,17 @@ function blankBlock(type: BlockType, id: string): Block {
       return { id, type, heading: "Your team", people: [{ name: "{{sender.name}}", role: "", email: "{{sender.email}}", photo: "" }] };
     case "embed":
       return { id, type, heading: "", url: "", caption: "" };
+    case "steps":
+      return {
+        id,
+        type,
+        heading: "Next steps",
+        intro: "",
+        items: [
+          { title: "Review the proposal", side: "client", dueInDays: 3 },
+          { title: "Kick-off call", side: "us", dueInDays: 10 },
+        ],
+      };
     default:
       return { id, type: "section", heading: "New section", body: "" };
   }
@@ -174,11 +186,13 @@ export function BlockEditor({
   onChange,
   kind,
   knowledge = [],
+  context = "template",
 }: {
   blocks: Block[];
   onChange: (blocks: Block[]) => void;
   kind: DocumentKind;
   knowledge?: KnowledgeOption[];
+  context?: "template" | "proposal";
 }) {
   const focused = useRef<{ id: string; key: string; element: HTMLInputElement | HTMLTextAreaElement } | null>(null);
   const update = (id: string, patch: Record<string, unknown>) => onChange(blocks.map((block) => (block.id === id ? ({ ...block, ...patch } as Block) : block)));
@@ -308,6 +322,59 @@ export function BlockEditor({
                 {text(block, "heading", "Heading")}
                 {text(block, "intro", "Text above the documents", 2)}
                 <DocumentPicker block={block} knowledge={knowledge} onChange={(items) => update(block.id, { items })} />
+              </>
+            )}
+            {block.type === "steps" && (
+              <>
+                {text(block, "heading", "Heading")}
+                {text(block, "intro", "Text above the steps", 2)}
+                {context === "proposal" ? (
+                  <p className="caption-style text-subtle">Manage this proposal&apos;s steps in Next steps below.</p>
+                ) : (
+                  <>
+                    <p className="caption-style text-subtle">Every proposal from this template starts with these steps.</p>
+                    <ol className="flex flex-col gap-3">
+                      {block.items.map((item, itemIndex) => {
+                        const set = (patch: Partial<typeof item>) =>
+                          update(block.id, { items: block.items.map((entry, position) => (position === itemIndex ? { ...entry, ...patch } : entry)) });
+                        return (
+                          <li key={itemIndex} className="border-border flex flex-col gap-2 border-t pt-3">
+                            {field(`${block.id}-s${itemIndex}`, `Step ${itemIndex + 1}`, item.title, (title) => set({ title }))}
+                            <div className="grid grid-cols-2 gap-3">
+                              <div className="flex flex-col gap-1.5">
+                                <label htmlFor={`${block.id}-w${itemIndex}`} className="caption-style text-subtle">
+                                  Who
+                                </label>
+                                <NativeSelect id={`${block.id}-w${itemIndex}`} value={item.side} onChange={(event) => set({ side: event.target.value === "us" ? "us" : "client" })}>
+                                  <option value="client">The client</option>
+                                  <option value="us">Us</option>
+                                </NativeSelect>
+                              </div>
+                              {field(
+                                `${block.id}-d${itemIndex}`,
+                                "Due, days after creating",
+                                item.dueInDays === null ? "" : String(item.dueInDays),
+                                (value) => set({ dueInDays: value === "" ? null : Math.max(0, Math.min(365, Math.trunc(Number(value)) || 0)) }),
+                                { type: "number" },
+                              )}
+                            </div>
+                            <Button variant="ghost" size="sm" className="self-start" onClick={() => update(block.id, { items: block.items.filter((_, position) => position !== itemIndex) })}>
+                              Remove step
+                            </Button>
+                          </li>
+                        );
+                      })}
+                    </ol>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="self-start"
+                      onClick={() => update(block.id, { items: [...block.items, { title: "", side: "client", dueInDays: null }] })}
+                    >
+                      Add step
+                    </Button>
+                  </>
+                )}
               </>
             )}
             {block.type === "booking" && (

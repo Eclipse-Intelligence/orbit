@@ -29,6 +29,8 @@ import {
 } from "@/lib/proposals/documents";
 
 import { prepareProposalImage } from "@/lib/proposals/media";
+import { addStep, emailOpenSteps, moveStep, removeStep, updateStep } from "@/lib/proposals/steps";
+import type { Step } from "@/lib/proposals/model";
 
 type Result<T> = { data?: T; error?: string };
 
@@ -121,4 +123,28 @@ export async function proposalOptionsAction(companyId: string | null): Promise<
 
 export async function prepareProposalImageAction(file: { name: string; size: number; contentType: string }): Promise<Result<{ uploadUrl: string; url: string }>> {
   return run((user) => prepareProposalImage(user, file));
+}
+
+export async function addStepAction(documentId: string, input: { title: string; side: "client" | "us"; dueDate: string | null }): Promise<Result<Step[]>> {
+  return run((user) => addStep(user, documentId, input));
+}
+
+export async function updateStepAction(stepId: string, input: { title?: string; side?: "client" | "us"; dueDate?: string | null; done?: boolean }): Promise<Result<Step[]>> {
+  return run((user) => updateStep(user, stepId, input));
+}
+
+export async function moveStepAction(stepId: string, by: -1 | 1): Promise<Result<Step[]>> {
+  return run((user) => moveStep(user, stepId, by));
+}
+
+export async function removeStepAction(stepId: string): Promise<Result<Step[]>> {
+  return run((user) => removeStep(user, stepId));
+}
+
+export async function emailStepsAction(documentId: string): Promise<Result<{ warning: string | null }>> {
+  return run(async (user) => {
+    const document = await getDocument(user, documentId);
+    if (!document.link) throw new CrmError("invalid_input", "Send the proposal first.", 400);
+    return emailOpenSteps(user, documentId, document.link);
+  });
 }

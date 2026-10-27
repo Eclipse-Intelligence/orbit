@@ -66,6 +66,16 @@ const blockSchema = z.discriminatedUnion("type", [
     people: z.array(z.object({ name: text(200), role: text(200), email: text(200), photo: text(1000) })).max(20).default([]),
   }),
   z.object({ id: z.string().min(1).max(40), type: z.literal("embed"), heading: text(300), url: text(1000), caption: text(1000) }),
+  z.object({
+    id: z.string().min(1).max(40),
+    type: z.literal("steps"),
+    heading: text(300),
+    intro: text(2000),
+    items: z
+      .array(z.object({ title: text(300), side: z.enum(["client", "us"]).default("client"), dueInDays: z.coerce.number().int().min(0).max(365).nullable().default(null) }))
+      .max(40)
+      .default([]),
+  }),
   z.object({ id: z.string().min(1).max(40), type: z.literal("section"), heading: text(300), body: text(40000) }),
   z.object({ id: z.string().min(1).max(40), type: z.literal("pricing"), heading: text(300), intro: text(4000) }),
   z.object({
@@ -93,9 +103,22 @@ export const BLOCK_LABELS: Record<BlockType, string> = {
   quote: "Quote",
   team: "Team",
   embed: "Embed",
+  steps: "Next steps",
 };
 
-export const RAW_KEYS = new Set(["id", "type", "linkUrl", "image", "url", "photo", "sourceUrl", "fingerprint", "kind"]);
+export type StepSide = "client" | "us";
+
+export type Step = {
+  id: string;
+  title: string;
+  side: StepSide;
+  dueDate: string | null;
+  doneAt: string | null;
+  doneBy: "client" | "user" | null;
+  doneName: string | null;
+};
+
+export const RAW_KEYS = new Set(["id", "type", "linkUrl", "image", "url", "photo", "sourceUrl", "fingerprint", "kind", "side", "dueInDays"]);
 
 export type Tab = { id: string; label: string; slug: string; blocks: Block[] };
 
@@ -112,7 +135,7 @@ function slugOf(label: string, taken: Set<string>) {
   return slug;
 }
 
-export function shows(block: Block, extras: { booking?: boolean } = {}) {
+export function shows(block: Block, extras: { booking?: boolean; steps?: boolean } = {}) {
   switch (block.type) {
     case "tab":
       return false;
@@ -132,6 +155,8 @@ export function shows(block: Block, extras: { booking?: boolean } = {}) {
       return Boolean(block.quote.trim());
     case "team":
       return block.people.some((person) => person.name.trim());
+    case "steps":
+      return extras.steps ?? block.items.length > 0;
     default:
       return true;
   }

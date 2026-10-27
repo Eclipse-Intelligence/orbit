@@ -12,9 +12,11 @@ import {
   type Block,
   type Content,
   type Inline,
+  type Step,
 } from "@/lib/proposals/model";
 import { BookingPanel } from "@/components/booking/booking-screen";
 import type { PublicBookingPage } from "@/lib/booking/pages";
+import CheckIcon from "@/public/assets/images/booking/check.svg";
 import ExternalIcon from "@/public/assets/images/booking/external.svg";
 import FileIcon from "@/public/assets/images/settings/file-text.svg";
 import LinkIcon from "@/public/assets/images/settings/link.svg";
@@ -157,7 +159,82 @@ export type SiteExtras = {
   booking?: PublicBookingPage | null;
   bookingDefaults?: { name?: string; email?: string };
   preview?: boolean;
+  steps?: Step[];
+  onToggleStep?: (stepId: string, done: boolean) => void;
+  pendingStep?: string | null;
 };
+
+function shortDate(value: string) {
+  return new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", timeZone: "Europe/London" }).format(new Date(value.length === 10 ? `${value}T12:00:00Z` : value));
+}
+
+function Steps({ block, content, extras }: { block: Extract<Block, { type: "steps" }>; content: Content; extras: SiteExtras }) {
+  const steps: Step[] =
+    extras.steps ??
+    block.items
+      .filter((item) => item.title.trim())
+      .map((item, index) => ({ id: `sample-${index}`, title: item.title, side: item.side, dueDate: null, doneAt: null, doneBy: null, doneName: null }));
+  if (steps.length === 0) return extras.preview ? <Placeholder>Add steps for both sides.</Placeholder> : null;
+  const done = steps.filter((step) => step.doneAt).length;
+  return (
+    <div className="flex flex-col gap-4">
+      {block.intro && <Body value={block.intro} />}
+      <div className="flex items-center gap-3">
+        <div className="bg-secondary h-1.5 flex-1 overflow-hidden rounded-full">
+          <div className="h-full rounded-full transition-[width] duration-300" style={{ width: `${Math.round((done / steps.length) * 100)}%`, backgroundColor: content.accent }} />
+        </div>
+        <span className="text-subtle shrink-0 text-[13.5px] tabular-nums">
+          {done} of {steps.length} done
+        </span>
+      </div>
+      <ol className="bg-card divide-border flex flex-col divide-y overflow-hidden rounded-2xl shadow-[0_0_0_1px_rgba(0,0,0,0.06)]">
+        {steps.map((step) => {
+          const owner = step.side === "client" ? content.client.company : content.sender.company;
+          const tickable = step.side === "client" && Boolean(extras.onToggleStep);
+          const meta = [
+            owner,
+            step.doneAt ? `Done${step.doneName ? ` by ${step.doneName}` : ""}, ${shortDate(step.doneAt)}` : step.dueDate ? `By ${shortDate(step.dueDate)}` : null,
+          ].filter(Boolean);
+          const mark = (
+            <span
+              aria-hidden
+              className={cn(
+                "flex size-6 shrink-0 items-center justify-center rounded-full text-[13px] font-semibold text-white transition-colors duration-150",
+                !step.doneAt && "shadow-[inset_0_0_0_1.5px_var(--input)]",
+              )}
+              style={step.doneAt ? { backgroundColor: content.accent } : undefined}
+            >
+              {step.doneAt && <CheckIcon className="size-3.5" />}
+            </span>
+          );
+          return (
+            <li key={step.id} className="flex items-start gap-3 px-5 py-4">
+              {tickable ? (
+                <button
+                  type="button"
+                  role="checkbox"
+                  aria-checked={Boolean(step.doneAt)}
+                  aria-label={step.title}
+                  disabled={extras.pendingStep === step.id}
+                  onClick={() => extras.onToggleStep?.(step.id, !step.doneAt)}
+                  className="-m-1 cursor-pointer rounded-full p-1 outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] disabled:opacity-60"
+                >
+                  {mark}
+                </button>
+              ) : (
+                mark
+              )}
+              <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <span className={cn("text-[15.5px] leading-6", step.doneAt && "text-subtle line-through decoration-1")}>{step.title}</span>
+                <span className="text-subtle text-[13.5px]">{meta.join(" · ")}</span>
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
+}
 
 function initialsOf(name: string) {
   return (
@@ -192,6 +269,7 @@ function Placeholder({ children }: { children: ReactNode }) {
 }
 
 function Extra({ block, content, extras }: { block: Block; content: Content; extras: SiteExtras }) {
+  if (block.type === "steps") return <Steps block={block} content={content} extras={extras} />;
   if (block.type === "video") {
     const video = videoSource(block.url);
     return (
@@ -391,7 +469,7 @@ export default function ProposalDocument({
     <article className={cn("flex flex-col", compact ? "gap-10" : "gap-14 sm:gap-16")}>
       {blocks.map((block, index) => {
         if (block.type === "tab") return null;
-        if (!extras.preview && !shows(block, { booking: Boolean(extras.booking) })) return null;
+        if (!extras.preview && !shows(block, { booking: Boolean(extras.booking), steps: extras.steps ? extras.steps.length > 0 : undefined })) return null;
         if (block.type === "cover") {
           const cover = imageSrc(block.image);
           return (

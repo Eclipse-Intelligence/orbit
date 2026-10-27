@@ -19,7 +19,8 @@ import {
   updateDocument,
 } from "@/lib/proposals/documents";
 import { fieldValues, renderBlocks, tabsOf, totalLabel, totalsOf } from "@/lib/proposals/model";
-import { clientDecline, clientSign, openDocument, publicFile, publicKnowledgeFile } from "@/lib/proposals/public";
+import { clientDecline, clientSign, clientStep, openDocument, publicFile, publicKnowledgeFile } from "@/lib/proposals/public";
+import { addStep, moveStep, removeStep, updateStep } from "@/lib/proposals/steps";
 import { addKnowledgeText } from "@/lib/knowledge/store";
 import { saveBookingPage } from "@/lib/booking/pages";
 import { DEFAULT_WEEKLY_HOURS } from "@/lib/booking/rules";
@@ -340,5 +341,40 @@ describe("proposals", () => {
 
     await saveBookingPage(owner, { slug: "mark-props", enabled: true, title: null, intro: "", durationMinutes: 30, bufferMinutes: 0, minNoticeMinutes: 0, horizonDays: 14, weeklyHours: DEFAULT_WEEKLY_HOURS, videoUrl: "" });
     assert.equal((await openDocument(token, { track: false }))!.booking?.slug, "mark-props");
+  });
+
+  it("keeps a shared plan the client ticks off, with alerts, separate from the signed version", async () => {
+    const id = await createDocument(owner, { templateId: proposalTemplateId, companyId: pulseId, contactId: andrewId, items: [{ productId: pilotId }] });
+    const seeded = (await getDocument(owner, id)).steps;
+    assert.deepEqual(seeded.map((step) => [step.title, step.side]), [
+      ["Review the proposal", "client"],
+      ["Sign the proposal", "client"],
+      ["Kick-off call", "us"],
+      ["Share access to your website and analytics", "client"],
+    ]);
+    assert.ok(seeded.every((step) => step.dueDate && /^\d{4}-\d{2}-\d{2}$/.test(step.dueDate)));
+    const token = tokenOf((await sendDocument(owner, id, { email: false })).url);
+    const added = await addStep(owner, id, { title: "Security review", side: "client", dueDate: "2026-12-01" });
+    const security = added.find((step) => step.title === "Security review")!;
+    assert.equal((await openDocument(token, { track: false }))!.steps.length, 5);
+
+    const ticked = await clientStep(token, security.id, { done: true });
+    const after = ticked.steps.find((step) => step.id === security.id)!;
+    assert.equal(after.doneBy, "client");
+    assert.equal(after.doneName, "Andrew Sanaghan");
+    const kickoff = ticked.steps.find((step) => step.side === "us")!;
+    await assert.rejects(() => clientStep(token, kickoff.id, { done: true }), /ticks off its own steps/);
+    await assert.rejects(() => clientStep(token, "00000000-0000-4000-8000-000000000000", { done: true }), /isn't on this plan/);
+    const ours = await updateStep(owner, kickoff.id, { done: true });
+    assert.equal(ours.find((step) => step.id === kickoff.id)?.doneBy, "user");
+    const moved = await moveStep(owner, security.id, -1);
+    assert.equal(moved.at(-2)?.id, security.id);
+    const events = (await getDocument(owner, id)).events.map((event) => event.type);
+    assert.ok(events.includes("step_done"));
+    const notifications = await listNotifications(owner);
+    assert.ok(notifications.some((item) => item.title === "Andrew Sanaghan completed Security review"));
+    assert.equal((await getDocument(owner, id)).version?.number, 1);
+    await removeStep(owner, security.id);
+    assert.equal((await openDocument(token, { track: false }))!.steps.length, 4);
   });
 });

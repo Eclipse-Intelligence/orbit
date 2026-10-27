@@ -253,7 +253,7 @@ export async function renderPdf(input: {
   const writer = new Writer(pdf, fonts, `${input.content.title} · ${input.content.sender.company} · Reference ${input.documentId.slice(0, 8)} v${input.versionNumber}`);
   writer.page.drawRectangle({ x: 0, y: HEIGHT - 8, width: WIDTH, height: 8, color: accent });
   for (const block of input.content.blocks) {
-    if (block.type === "tab" || block.type === "video" || block.type === "image" || block.type === "embed" || block.type === "booking") continue;
+    if (block.type === "tab" || block.type === "video" || block.type === "image" || block.type === "embed" || block.type === "booking" || block.type === "steps") continue;
     if (block.type === "documents" && block.items.length === 0) continue;
     if (block.type === "quote" && !block.quote.trim()) continue;
     if (block.type === "team" && !block.people.some((person) => person.name.trim())) continue;

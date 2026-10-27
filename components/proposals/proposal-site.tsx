@@ -33,7 +33,7 @@ export default function ProposalSite({
   extras?: SiteExtras;
 }) {
   const all = tabsOf(content.blocks);
-  const tabs = all && !extras?.preview ? all.filter((tab) => tab.blocks.some((block) => shows(block, { booking: Boolean(extras?.booking) }))) : all;
+  const tabs = all && !extras?.preview ? all.filter((tab) => tab.blocks.some((block) => shows(block, { booking: Boolean(extras?.booking), steps: extras?.steps ? extras.steps.length > 0 : undefined }))) : all;
   const [own, setOwn] = useState(tabs?.[0]?.slug ?? SIGN_TAB);
   const requested = controlled ?? own;
   const list = useRef<HTMLDivElement>(null);

@@ -39,6 +39,19 @@ export const STARTER_TEMPLATES: Starter[] = [
       { id: "b9", type: "booking", heading: "Talk it through", intro: "Pick a time that suits you." },
       { id: "t4", type: "tab", label: "Documents" },
       { id: "b10", type: "documents", heading: "Documents", intro: "", items: [] },
+      { id: "t5", type: "tab", label: "Next steps" },
+      {
+        id: "b11",
+        type: "steps",
+        heading: "Next steps",
+        intro: "What happens next, and who does it. Tick off your steps as you go.",
+        items: [
+          { title: "Review the proposal", side: "client", dueInDays: 3 },
+          { title: "Sign the proposal", side: "client", dueInDays: 7 },
+          { title: "Kick-off call", side: "us", dueInDays: 10 },
+          { title: "Share access to your website and analytics", side: "client", dueInDays: 14 },
+        ],
+      },
       { id: "t3", type: "tab", label: "Terms" },
       {
         id: "b6",
