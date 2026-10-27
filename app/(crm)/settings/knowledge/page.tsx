@@ -6,7 +6,7 @@ import { resumeStale } from "@/lib/knowledge/background";
 import { listKnowledge } from "@/lib/knowledge/store";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 export default async function KnowledgeSettingsPage() {
   const user = await getUserActor();

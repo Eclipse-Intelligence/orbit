@@ -3,6 +3,7 @@ import { CrmError } from "@/lib/crm/errors";
 import { isUuid, recordAudit } from "@/lib/crm/mutate";
 import type { Provenance, UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
+import { linkKind } from "@/lib/knowledge/media";
 import { KNOWLEDGE_MAX_BYTES, removeObjects, signedUploadUrl, storageConfigured, StorageError } from "@/lib/storage";
 
 export const KNOWLEDGE_KINDS = ["file", "link", "youtube", "podcast", "transcript", "attachment"] as const;
@@ -241,8 +242,9 @@ export async function prepareKnowledgeUpload(
   }
 }
 
-export async function addKnowledgeLink(actor: UserActor, target: KnowledgeTarget, input: { url: unknown; title?: unknown }, kind: KnowledgeKind = "link") {
+export async function addKnowledgeLink(actor: UserActor, target: KnowledgeTarget, input: { url: unknown; title?: unknown }) {
   const url = cleanUrl(input.url);
+  const kind = linkKind(url);
   const host = new URL(url).hostname.replace(/^www\./, "");
   const title = cleanTitle(typeof input.title === "string" && input.title.trim() ? input.title : host);
   return withActor(actor, async (db) => {

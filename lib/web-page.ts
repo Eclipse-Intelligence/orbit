@@ -235,3 +235,38 @@ export async function readWebPage(
   const landed = await checkUrl(rendered.url, lookup).catch(() => url);
   return fromHtml(rendered.html.slice(0, BYTES_MAX), landed, rendered.html.length > BYTES_MAX, "browser", limit);
 }
+
+export type Download = { url: string; contentType: string; bytes: Uint8Array; truncated: boolean };
+
+export async function downloadPublic(
+  raw: string,
+  options: { fetchImpl?: typeof fetch; lookup?: Lookup; maxBytes: number; timeoutMs?: number; accept?: string; headers?: Record<string, string>; method?: string; body?: string },
+): Promise<Download> {
+  const fetchImpl = options.fetchImpl ?? publicFetch;
+  const lookup = options.lookup ?? systemLookup;
+  let current = await checkUrl(raw.trim(), lookup);
+  for (let hop = 0; hop <= REDIRECTS_MAX; hop += 1) {
+    let response: Response;
+    try {
+      response = await fetchImpl(current.href, {
+        method: options.method ?? "GET",
+        body: options.body,
+        headers: { accept: options.accept ?? "*/*", "user-agent": "Mozilla/5.0 (compatible; OrbitAssistant/1.0)", ...options.headers },
+        redirect: "manual",
+        signal: AbortSignal.timeout(options.timeoutMs ?? 60_000),
+      });
+    } catch (error) {
+      const refused = privateCause(error);
+      if (refused) throw refused;
+      throw new WebPageError(`${current.hostname} didn't answer in time.`);
+    }
+    if (response.status >= 300 && response.status < 400 && response.headers.get("location")) {
+      current = await checkUrl(new URL(response.headers.get("location")!, current).href, lookup);
+      continue;
+    }
+    if (!response.ok) throw new WebPageError(`${current.hostname} answered ${response.status}.`);
+    const { bytes, truncated } = await readBytes(response, options.maxBytes);
+    return { url: current.href, contentType: (response.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase(), bytes, truncated };
+  }
+  throw new WebPageError("That address redirected too many times.");
+}

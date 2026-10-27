@@ -226,3 +226,39 @@ export async function embedTexts(texts: string[], options: { fetchImpl?: typeof 
   }
   return vectors;
 }
+
+export const TRANSCRIBE_MODEL = "universal-2";
+export const TRANSCRIBE_MAX_BYTES = 10 * 1024 * 1024;
+
+export async function transcribeAudio(
+  bytes: Uint8Array,
+  name: string,
+  contentType: string,
+  options: { fetchImpl?: typeof fetch; timeoutMs?: number; language?: string } = {},
+): Promise<string> {
+  const apiKey = process.env.LLM_API_KEY?.trim();
+  if (!apiKey) throw new LlmError("Set LLM_API_KEY in Vercel to use Orbit's AI.");
+  const form = new FormData();
+  form.append("model", TRANSCRIBE_MODEL);
+  form.append("response_format", "json");
+  if (options.language) form.append("language", options.language);
+  form.append("file", new Blob([bytes.slice()], { type: contentType || "audio/mpeg" }), name);
+  let response: Response;
+  try {
+    response = await (options.fetchImpl ?? fetch)(`${baseUrl()}/audio/transcriptions`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${apiKey}` },
+      body: form,
+      signal: AbortSignal.timeout(options.timeoutMs ?? 180_000),
+    });
+  } catch {
+    throw new LlmError("Couldn't reach the LLM gateway to transcribe.", true);
+  }
+  if (!response.ok) {
+    const detail = await gatewayDetail(response);
+    throw new LlmError(`The LLM gateway returned ${response.status} transcribing${detail ? `: ${detail}` : "."}`, response.status >= 500 || response.status === 429);
+  }
+  const body = (await response.json().catch(() => null)) as { text?: unknown } | null;
+  if (typeof body?.text !== "string") throw new LlmError("The LLM gateway returned a transcript Orbit can't read.");
+  return body.text.trim();
+}

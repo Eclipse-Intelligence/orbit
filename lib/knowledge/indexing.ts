@@ -5,8 +5,9 @@ import { chunkText } from "@/lib/knowledge/chunk";
 import { ITEM_COLUMNS, ITEM_FROM, type ItemRow, type KnowledgeKind } from "@/lib/knowledge/store";
 import { completeJson, embedTexts, LlmError } from "@/lib/llm";
 import { readAttachmentText } from "@/lib/mail/attachment-text";
+import { MediaError, readPodcast, readYouTube, transcribeBytes, transcriptText } from "@/lib/knowledge/media";
 import { readObject, StorageError } from "@/lib/storage";
-import { readWebPage, WebPageError } from "@/lib/web-page";
+import { readWebPage, WebPageError, type Lookup } from "@/lib/web-page";
 
 export const CONTENT_MAX = 600_000;
 const SUMMARY_INPUT = 24_000;
@@ -19,6 +20,7 @@ export type Extractor = (row: ItemRow, options: IndexOptions) => Promise<Extract
 
 export type IndexOptions = {
   fetchImpl?: typeof fetch;
+  lookup?: Lookup;
   deadline?: number;
   readPage?: (url: string) => Promise<{ title: string | null; text: string }>;
   extractors?: Partial<Record<KnowledgeKind, Extractor>>;
@@ -36,9 +38,43 @@ async function readFile(row: ItemRow, options: IndexOptions): Promise<Extracted>
     throw new KnowledgeReadError(error instanceof StorageError ? "The upload didn't finish. Upload it again." : "Couldn't open the file.");
   }
   const name = row.file_path.split("/").pop() ?? row.title;
+  if (isAudio(name, row.mime_type)) {
+    const transcript = await media(() => transcribeBytes(bytes, name, row.mime_type ?? "", options));
+    if (!transcript.trim()) throw new KnowledgeReadError("The recording had no speech to transcribe.");
+    return { text: `Transcript:\n${transcript}` };
+  }
+  if (/\.(vtt|srt)$/i.test(name)) {
+    const cues = transcriptText(new TextDecoder("utf-8", { fatal: false }).decode(bytes), name.toLowerCase().endsWith(".vtt") ? "text/vtt" : "application/srt");
+    if (!cues) throw new KnowledgeReadError("That subtitle file has no text.");
+    return { text: `Transcript:\n${cues.slice(0, CONTENT_MAX)}` };
+  }
   const text = await readAttachmentText(bytes, name, row.mime_type, CONTENT_MAX).catch(() => null);
-  if (!text) throw new KnowledgeReadError("Orbit can't read text from this file. PDF, Word, PowerPoint, Excel, text and HTML files work.");
+  if (!text) throw new KnowledgeReadError("Orbit can't read text from this file. PDF, Word, PowerPoint, Excel, text, HTML and audio files work.");
   return { text };
+}
+
+function isAudio(name: string, type: string | null) {
+  return (type ?? "").startsWith("audio/") || /\.(mp3|m4a|aac|wav|ogg|oga|opus|flac|mpga)$/i.test(name);
+}
+
+async function media<T>(run: () => Promise<T>) {
+  try {
+    return await run();
+  } catch (error) {
+    if (error instanceof MediaError) throw new KnowledgeReadError(error.message);
+    if (error instanceof WebPageError) throw new KnowledgeReadError(error.message);
+    throw error;
+  }
+}
+
+async function readYouTubeItem(row: ItemRow, options: IndexOptions): Promise<Extracted> {
+  if (!row.source_url) throw new KnowledgeReadError("The link is missing.");
+  return media(() => readYouTube(row.source_url!, options));
+}
+
+async function readPodcastItem(row: ItemRow, options: IndexOptions): Promise<Extracted> {
+  if (!row.source_url) throw new KnowledgeReadError("The link is missing.");
+  return media(() => readPodcast(row.source_url!, options));
 }
 
 async function readLink(row: ItemRow, options: IndexOptions): Promise<Extracted> {
@@ -54,7 +90,7 @@ async function readLink(row: ItemRow, options: IndexOptions): Promise<Extracted>
   }
 }
 
-const EXTRACTORS: Partial<Record<KnowledgeKind, Extractor>> = { file: readFile, link: readLink };
+const EXTRACTORS: Partial<Record<KnowledgeKind, Extractor>> = { file: readFile, link: readLink, youtube: readYouTubeItem, podcast: readPodcastItem };
 
 function vectorLiteral(values: number[]) {
   return `[${values.join(",")}]`;
