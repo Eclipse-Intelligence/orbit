@@ -535,6 +535,8 @@ The assistant can open any public web page or document with `read_web_page`: a l
 
 Knowledge holds documents and links for the assistant to search, each tagged to a company (the Knowledge section on the company page) or to Eclipse (Settings › Knowledge). Upload PDF, Word, PowerPoint, Excel, text, HTML, subtitle (VTT, SRT) and audio files up to 50 MB, or add a link. Links to YouTube videos read the captions, and links to podcast episodes (Apple Podcasts, an episode page or an audio file) read the transcript the show publishes in its feed, or transcribe the audio through the LLM gateway (`universal-2`, in 9 MB pieces for long MP3s). Spotify doesn't share episode audio. YouTube refuses some requests from servers, so set `SUPADATA_API_KEY` to read any video.
 
+Call and meeting transcripts join their company's Knowledge when the call summary is ready, and opening a company page adds up to five of its earlier summarised calls each time. Removed transcripts stay removed. Mail is private, so attachments are only added when you ask: the book button next to a readable attachment in the Mail reader adds it to the company of anyone on the thread, or to Eclipse.
+
 Each item is read in the background, split into overlapping passages of about 1,200 characters, embedded with `text-embedding-3-small` into `crm.knowledge_chunks` (pgvector, HNSW) and summarised. The assistant's `search_knowledge` ranks passages by meaning and by keyword together (reciprocal rank fusion), and falls back to keyword search when embeddings are unavailable. `read_knowledge` reads an item 20,000 characters at a time, and `get_company` lists a company's items with their summaries. Items are shared with the workspace, and adding or removing one is audited.
 
 ### Eclipse app

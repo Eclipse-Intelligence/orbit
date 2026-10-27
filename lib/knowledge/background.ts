@@ -16,9 +16,7 @@ export function scheduleIndexing(actor: UserActor, ids: string[], options: Omit<
   };
   try {
     after(run);
-  } catch {
-    void run();
-  }
+  } catch {}
 }
 
 export function resumeStale(actor: UserActor, items: KnowledgeItem[]) {

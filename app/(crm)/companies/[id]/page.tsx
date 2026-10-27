@@ -13,7 +13,8 @@ import { getCompanyContext } from "@/lib/crm/relationships";
 import { listTags } from "@/lib/crm/tags";
 import { manualWorkflows } from "@/lib/workflows/store";
 import { listDocuments } from "@/lib/proposals/documents";
-import { resumeStale } from "@/lib/knowledge/background";
+import { resumeStale, scheduleIndexing } from "@/lib/knowledge/background";
+import { backfillCalls } from "@/lib/knowledge/calls";
 import { listKnowledge } from "@/lib/knowledge/store";
 
 export const dynamic = "force-dynamic";
@@ -49,6 +50,11 @@ export default async function CompanyPage({
   if (!user) redirect("/login");
   if (!context) notFound();
 
+  const backfilled = await backfillCalls(user, context.company.id).catch((error: unknown) => {
+    console.error("Call backfill failed", error);
+    return [];
+  });
+  scheduleIndexing(user, backfilled);
   const [members, mailbox, clickup, meetings, tags, workflows, proposals, knowledge] = await Promise.all([
     listMembers(user),
     getMailbox(user),
