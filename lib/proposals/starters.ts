@@ -20,6 +20,8 @@ export const STARTER_TEMPLATES: Starter[] = [
         heading: "Why we're writing",
         body: "Hi {{contact.firstName}},\n\nThank you for your time. This proposal sets out how {{workspace.name}} can help {{company.name}}, what is included and what it costs.",
       },
+      { id: "b7", type: "video", heading: "A quick walkthrough", url: "", caption: "" },
+      { id: "b8", type: "team", heading: "Your team", people: [{ name: "{{sender.name}}", role: "", email: "{{sender.email}}", photo: "" }] },
       { id: "t2", type: "tab", label: "Proposal" },
       {
         id: "b3",
@@ -34,6 +36,9 @@ export const STARTER_TEMPLATES: Starter[] = [
         heading: "Next steps",
         body: "Sign below to accept. We'll countersign, send you a signed copy and book a kick-off call within two working days.",
       },
+      { id: "b9", type: "booking", heading: "Talk it through", intro: "Pick a time that suits you." },
+      { id: "t4", type: "tab", label: "Documents" },
+      { id: "b10", type: "documents", heading: "Documents", intro: "", items: [] },
       { id: "t3", type: "tab", label: "Terms" },
       {
         id: "b6",

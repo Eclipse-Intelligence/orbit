@@ -253,7 +253,10 @@ export async function renderPdf(input: {
   const writer = new Writer(pdf, fonts, `${input.content.title} · ${input.content.sender.company} · Reference ${input.documentId.slice(0, 8)} v${input.versionNumber}`);
   writer.page.drawRectangle({ x: 0, y: HEIGHT - 8, width: WIDTH, height: 8, color: accent });
   for (const block of input.content.blocks) {
-    if (block.type === "tab") continue;
+    if (block.type === "tab" || block.type === "video" || block.type === "image" || block.type === "embed" || block.type === "booking") continue;
+    if (block.type === "documents" && block.items.length === 0) continue;
+    if (block.type === "quote" && !block.quote.trim()) continue;
+    if (block.type === "team" && !block.people.some((person) => person.name.trim())) continue;
     if (block.type === "cover") {
       writer.gap(30);
       if (input.content.logo) {
@@ -285,6 +288,29 @@ export async function renderPdf(input: {
     if (block.type === "pricing") {
       if (block.intro) body(writer, fonts, block.intro);
       pricing(writer, fonts, input.content);
+    }
+    if (block.type === "documents") {
+      if (block.intro) body(writer, fonts, block.intro);
+      for (const item of block.items) {
+        writer.lines([{ text: `- ${item.title}` }], { size: 10.5 });
+        if (item.fingerprint) writer.lines([{ text: `  Fingerprint (SHA-256) ${item.fingerprint}` }], { size: 8, color: MUTED });
+      }
+    }
+    if (block.type === "faq") {
+      for (const item of block.items.filter((entry) => entry.question.trim())) {
+        writer.lines([{ text: item.question }], { size: 11, font: fonts.bold, leading: 15 });
+        body(writer, fonts, item.answer);
+        writer.gap(4);
+      }
+    }
+    if (block.type === "quote") {
+      writer.lines([{ text: `"${block.quote.trim()}"` }], { size: 12, font: fonts.italic, leading: 17 });
+      if (block.name || block.role) writer.lines([{ text: [block.name, block.role].filter(Boolean).join(", ") }], { size: 9.5, color: MUTED });
+    }
+    if (block.type === "team") {
+      for (const person of block.people.filter((entry) => entry.name.trim())) {
+        writer.lines([{ text: [person.name, person.role, person.email].filter(Boolean).join(", ") }], { size: 10.5 });
+      }
     }
     if (block.type === "terms") {
       body(writer, fonts, block.body);

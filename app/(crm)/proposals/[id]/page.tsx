@@ -3,6 +3,7 @@ import ProposalDetail from "@/components/proposals/proposal-detail";
 import { getUserActor } from "@/lib/auth/user";
 import { CrmError } from "@/lib/crm/errors";
 import { getDocument } from "@/lib/proposals/documents";
+import { knowledgeOptions } from "@/lib/proposals/knowledge";
 
 export const dynamic = "force-dynamic";
 
@@ -17,11 +18,13 @@ export default async function ProposalPage({ params }: { params: Promise<{ id: s
     throw error;
   });
   if (!document) notFound();
+  const knowledge = await knowledgeOptions(user, document.companyId);
   return (
     <ProposalDetail
       key={`${document.id}-${document.status}-${document.version?.id ?? "draft"}`}
       viewer={{ id: user.userId, name: user.fullName || user.email, email: user.email, role: user.role, workspaceName: user.workspaceName }}
       initial={document}
+      knowledge={knowledge}
     />
   );
 }

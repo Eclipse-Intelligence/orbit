@@ -31,6 +31,41 @@ const text = (max: number) => z.string().max(max).default("");
 const blockSchema = z.discriminatedUnion("type", [
   z.object({ id: z.string().min(1).max(40), type: z.literal("cover"), title: text(300), subtitle: text(1000), image: text(1000) }),
   z.object({ id: z.string().min(1).max(40), type: z.literal("tab"), label: text(40) }),
+  z.object({ id: z.string().min(1).max(40), type: z.literal("video"), heading: text(300), url: text(1000), caption: text(1000) }),
+  z.object({ id: z.string().min(1).max(40), type: z.literal("image"), url: text(1000), caption: text(1000) }),
+  z.object({
+    id: z.string().min(1).max(40),
+    type: z.literal("documents"),
+    heading: text(300),
+    intro: text(4000),
+    items: z
+      .array(
+        z.object({
+          id: z.string().uuid(),
+          title: text(300),
+          kind: text(40),
+          sourceUrl: text(2000),
+          fingerprint: text(64),
+        }),
+      )
+      .max(50)
+      .default([]),
+  }),
+  z.object({ id: z.string().min(1).max(40), type: z.literal("booking"), heading: text(300), intro: text(2000) }),
+  z.object({
+    id: z.string().min(1).max(40),
+    type: z.literal("faq"),
+    heading: text(300),
+    items: z.array(z.object({ question: text(500), answer: text(4000) })).max(40).default([]),
+  }),
+  z.object({ id: z.string().min(1).max(40), type: z.literal("quote"), quote: text(2000), name: text(200), role: text(200) }),
+  z.object({
+    id: z.string().min(1).max(40),
+    type: z.literal("team"),
+    heading: text(300),
+    people: z.array(z.object({ name: text(200), role: text(200), email: text(200), photo: text(1000) })).max(20).default([]),
+  }),
+  z.object({ id: z.string().min(1).max(40), type: z.literal("embed"), heading: text(300), url: text(1000), caption: text(1000) }),
   z.object({ id: z.string().min(1).max(40), type: z.literal("section"), heading: text(300), body: text(40000) }),
   z.object({ id: z.string().min(1).max(40), type: z.literal("pricing"), heading: text(300), intro: text(4000) }),
   z.object({
@@ -44,7 +79,23 @@ const blockSchema = z.discriminatedUnion("type", [
 ]);
 export type Block = z.infer<typeof blockSchema>;
 export type BlockType = Block["type"];
-export const BLOCK_LABELS: Record<BlockType, string> = { cover: "Cover", tab: "Tab", section: "Section", pricing: "Pricing table", terms: "Terms" };
+export const BLOCK_LABELS: Record<BlockType, string> = {
+  cover: "Cover",
+  tab: "Tab",
+  section: "Section",
+  pricing: "Pricing table",
+  terms: "Terms",
+  video: "Video",
+  image: "Image",
+  documents: "Documents",
+  booking: "Booking",
+  faq: "Questions",
+  quote: "Quote",
+  team: "Team",
+  embed: "Embed",
+};
+
+export const RAW_KEYS = new Set(["id", "type", "linkUrl", "image", "url", "photo", "sourceUrl", "fingerprint", "kind"]);
 
 export type Tab = { id: string; label: string; slug: string; blocks: Block[] };
 
@@ -59,6 +110,31 @@ function slugOf(label: string, taken: Set<string>) {
   for (let index = 2; taken.has(slug); index += 1) slug = `${base}-${index}`;
   taken.add(slug);
   return slug;
+}
+
+export function shows(block: Block, extras: { booking?: boolean } = {}) {
+  switch (block.type) {
+    case "tab":
+      return false;
+    case "video":
+      return Boolean(videoSource(block.url));
+    case "image":
+      return Boolean(safeHref(block.url));
+    case "embed":
+      return Boolean(embedSource(block.url));
+    case "documents":
+      return block.items.length > 0;
+    case "booking":
+      return extras.booking ?? true;
+    case "faq":
+      return block.items.some((item) => item.question.trim());
+    case "quote":
+      return Boolean(block.quote.trim());
+    case "team":
+      return block.people.some((person) => person.name.trim());
+    default:
+      return true;
+  }
 }
 
 export function tabsOf(blocks: Block[]): Tab[] | null {
@@ -210,17 +286,26 @@ function fill(template: string, values: Record<string, string>, missing: Set<str
   });
 }
 
+function fillDeep(value: unknown, key: string, values: Record<string, string>, missing: Set<string>, placeholders: Set<string>): unknown {
+  if (RAW_KEYS.has(key)) return value;
+  if (typeof value === "string") {
+    for (const match of value.replace(TOKEN, "").matchAll(PLACEHOLDER)) placeholders.add(`[${match[1]}]`);
+    return fill(value, values, missing);
+  }
+  if (Array.isArray(value)) return value.map((entry) => fillDeep(entry, "", values, missing, placeholders));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([entryKey, entry]) => [entryKey, fillDeep(entry, entryKey, values, missing, placeholders)]));
+  }
+  return value;
+}
+
 export function renderBlocks(blocks: Block[], values: Record<string, string>) {
   const missing = new Set<string>();
   const placeholders = new Set<string>();
   const rendered = blocks.map((block) => {
-    const out: Record<string, unknown> = { ...block };
-    for (const [key, value] of Object.entries(block)) {
-      if (key === "id" || key === "type" || key === "linkUrl" || key === "image" || typeof value !== "string") continue;
-      for (const match of value.replace(TOKEN, "").matchAll(PLACEHOLDER)) placeholders.add(`[${match[1]}]`);
-      out[key] = fill(value, values, missing);
-    }
-    return out as RenderedBlock;
+    if (block.type !== "documents") return fillDeep(block, "", values, missing, placeholders) as RenderedBlock;
+    const { items, ...rest } = block;
+    return { ...(fillDeep(rest, "", values, missing, placeholders) as object), items } as RenderedBlock;
   });
   return { blocks: rendered, missing: [...missing], placeholders: [...placeholders] };
 }
@@ -278,4 +363,50 @@ export function safeHref(value: string) {
   } catch {
     return null;
   }
+}
+
+function youtubeIdOf(url: URL) {
+  const host = url.hostname.replace(/^(www|m)\./, "");
+  if (host === "youtu.be") return url.pathname.slice(1).split("/")[0];
+  if (host !== "youtube.com" && host !== "youtube-nocookie.com") return null;
+  if (url.pathname === "/watch") return url.searchParams.get("v");
+  return url.pathname.match(/^\/(?:shorts|live|embed)\/([^/?]+)/)?.[1] ?? null;
+}
+
+export type Playable = { kind: "frame"; src: string } | { kind: "file"; src: string } | null;
+
+export function videoSource(raw: string): Playable {
+  const href = safeHref(raw);
+  if (!href || !href.startsWith("https:")) return null;
+  const url = new URL(href);
+  const host = url.hostname.replace(/^www\./, "");
+  const youtube = youtubeIdOf(url);
+  if (youtube && /^[\w-]{11}$/.test(youtube)) return { kind: "frame", src: `https://www.youtube-nocookie.com/embed/${youtube}?rel=0` };
+  const loom = host === "loom.com" ? url.pathname.match(/^\/(?:share|embed)\/([a-f0-9]{20,40})/)?.[1] : null;
+  if (loom) return { kind: "frame", src: `https://www.loom.com/embed/${loom}` };
+  const vimeo = host === "vimeo.com" ? url.pathname.match(/^\/(\d+)/)?.[1] : host === "player.vimeo.com" ? url.pathname.match(/^\/video\/(\d+)/)?.[1] : null;
+  if (vimeo) return { kind: "frame", src: `https://player.vimeo.com/video/${vimeo}` };
+  if (/\.(mp4|webm|mov)$/i.test(url.pathname)) return { kind: "file", src: url.href };
+  return null;
+}
+
+export function embedSource(raw: string): string | null {
+  const href = safeHref(raw);
+  if (!href || !href.startsWith("https:")) return null;
+  const url = new URL(href);
+  const host = url.hostname.replace(/^www\./, "");
+  if (host === "figma.com" && !url.pathname.startsWith("/embed")) return `https://www.figma.com/embed?embed_host=orbit&url=${encodeURIComponent(url.href)}`;
+  if (host === "docs.google.com" && /\/(edit|view)$/.test(url.pathname)) {
+    url.pathname = url.pathname.replace(/\/(edit|view)$/, url.pathname.includes("/presentation/") ? "/embed" : "/preview");
+    url.search = "";
+    return url.href;
+  }
+  if (host === "miro.com" && url.pathname.startsWith("/app/board/")) return url.href.replace("/app/board/", "/app/live-embed/");
+  if (host === "canva.com" && url.pathname.includes("/view") && !url.searchParams.has("embed")) {
+    url.searchParams.set("embed", "");
+    return url.href;
+  }
+  const video = videoSource(href);
+  if (video?.kind === "frame") return video.src;
+  return url.href;
 }

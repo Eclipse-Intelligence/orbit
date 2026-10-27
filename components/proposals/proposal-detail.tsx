@@ -12,7 +12,7 @@ import { recordSelectClass } from "@/components/crm/record-form";
 import type { Viewer } from "@/components/crm/viewer";
 import ProposalSite from "@/components/proposals/proposal-site";
 import { statusTag } from "@/components/proposals/status";
-import { BlockEditor } from "@/components/proposals/template-editor";
+import { BlockEditor, type KnowledgeOption } from "@/components/proposals/block-editor";
 import {
   changeProposalAction,
   countersignAction,
@@ -45,6 +45,7 @@ const EVENT_LABELS: Record<string, string> = {
   reopened: "Reopened for changes",
   downloaded: "PDF downloaded",
   downloaded_signed: "Signed PDF downloaded",
+  document_opened: "Opened a document",
 };
 
 const textarea =
@@ -54,7 +55,7 @@ function when(iso: string) {
   return new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Europe/London" }).format(new Date(iso));
 }
 
-export default function ProposalDetail({ viewer, initial }: { viewer: Viewer; initial: DocumentDetail }) {
+export default function ProposalDetail({ viewer, initial, knowledge = [] }: { viewer: Viewer; initial: DocumentDetail; knowledge?: KnowledgeOption[] }) {
   const router = useRouter();
   const [doc, setDoc] = useState(initial);
   const [title, setTitle] = useState(initial.title);
@@ -319,7 +320,7 @@ export default function ProposalDetail({ viewer, initial }: { viewer: Viewer; in
                 <div className="flex flex-col gap-2">
                   <h2>Wording</h2>
                   <p className="caption-style text-subtle">Changes here only affect this proposal, not the template.</p>
-                  <BlockEditor blocks={blocks} onChange={edit(setBlocks)} kind={doc.kind} />
+                  <BlockEditor blocks={blocks} onChange={edit(setBlocks)} kind={doc.kind} knowledge={knowledge} />
                 </div>
 
                 <div className="flex flex-wrap gap-2">
@@ -344,7 +345,7 @@ export default function ProposalDetail({ viewer, initial }: { viewer: Viewer; in
                     <span aria-hidden className="bg-faint mt-2 size-1.5 shrink-0 rounded-full" />
                     <span className="flex min-w-0 flex-col">
                       <span>
-                        {EVENT_LABELS[event.type] ?? event.type}
+                        {event.type === "document_opened" && typeof event.data.title === "string" ? `Opened ${event.data.title}` : (EVENT_LABELS[event.type] ?? event.type)}
                         {event.name ? <span className="text-subtle">, {event.name}</span> : null}
                       </span>
                       <span className="caption-style text-subtle">
@@ -365,6 +366,7 @@ export default function ProposalDetail({ viewer, initial }: { viewer: Viewer; in
                 {draft ? "Preview with this client's details" : `What ${doc.contactName.split(/\s+/)[0]} sees, version ${doc.version?.number ?? 1}`}
               </p>
               <ProposalSite
+                extras={{ preview: true }}
                 content={draft ? { ...preview, items, currency, totals: totalsOf(items) } : preview}
                 signatures={doc.signatures.map((signature) => ({ role: signature.role, name: signature.name, title: signature.title, signatureText: signature.signatureText, signatureImage: signature.signatureImage, signedAt: signature.signedAt }))}
                 compact
