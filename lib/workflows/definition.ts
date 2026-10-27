@@ -17,6 +17,7 @@ export type TriggerType = (typeof TRIGGER_TYPES)[number];
 
 export const STEP_TYPES = [
   "ai",
+  "decide",
   "if",
   "filter",
   "loop",
@@ -342,6 +343,7 @@ export const TRIGGER_LABELS: Record<TriggerType, string> = {
 
 export const STEP_LABELS: Record<StepType, string> = {
   ai: "Ask AI",
+  decide: "Check the web",
   if: "If",
   filter: "Continue only if",
   loop: "For each item",
@@ -362,6 +364,7 @@ export const STEP_LABELS: Record<StepType, string> = {
 
 export const STEP_HINTS: Record<StepType, string> = {
   ai: "Prompt an LLM and get back named fields you can use in later steps.",
+  decide: "Ask the live web yes or no, pick-one or score questions and branch on the answers.",
   if: "Go one way or another depending on a condition.",
   filter: "Stop here unless a condition is true.",
   loop: "Repeat steps for each item in a list, such as each risk the AI found.",

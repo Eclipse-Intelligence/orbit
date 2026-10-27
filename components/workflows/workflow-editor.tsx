@@ -49,6 +49,7 @@ type Records = { companies: { id: string; name: string }[]; contacts: { id: stri
 
 const DEFAULTS: Record<StepType, Record<string, unknown>> = {
   ai: { model: "claude-haiku-5-5", prompt: "", outputs: [{ key: "answer", type: "text", description: "" }] },
+  decide: { about: "", questions: [{ key: "answer", type: "yes_no", question: "" }] },
   if: { match: "all", conditions: [{ left: "", op: "is", right: "" }] },
   filter: { match: "all", conditions: [{ left: "", op: "is", right: "" }] },
   loop: { items: "", limit: 25 },

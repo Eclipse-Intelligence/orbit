@@ -21,7 +21,7 @@ type CompaniesProps = {
   lifecycles: LifecycleCount[];
   viewer: Viewer;
   mailboxConnected: boolean;
-  enrichment: { company: boolean; logoClientId: string | null };
+  enrichment: { company: boolean; logoClientId: string | null; fit?: boolean };
 };
 
 export default function Companies({
@@ -52,6 +52,7 @@ export default function Companies({
         tags={tags}
         lifecycles={lifecycles}
         selection={selection}
+        fit={Boolean(enrichment.fit)}
       />
       <CompaniesTable
         companies={companies}

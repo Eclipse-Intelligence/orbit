@@ -46,6 +46,7 @@ type MobileFiltersProps = {
   members: Member[];
   tagOptions: FilterOption[];
   lifecycleOptions: FilterOption[];
+  fit?: boolean;
   onChange: (updates: Record<string, string | null>) => void;
 };
 
@@ -55,6 +56,7 @@ export default function MobileFilters({
   members,
   tagOptions,
   lifecycleOptions,
+  fit = false,
   onChange,
 }: MobileFiltersProps) {
   const [open, setOpen] = useState(false);
@@ -141,7 +143,7 @@ export default function MobileFilters({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {SORT_OPTIONS.map((option) => (
+                  {SORT_OPTIONS.filter((option) => fit || option.sort !== "fit").map((option) => (
                     <SelectItem key={option.value} value={option.value}>
                       {option.label}
                     </SelectItem>

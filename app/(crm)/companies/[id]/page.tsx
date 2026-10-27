@@ -4,6 +4,7 @@ import { cache } from "react";
 import CompanyRecord from "@/components/companies/company-record";
 import { getUserActor } from "@/lib/auth/user";
 import { enrichmentAvailability } from "@/lib/enrichment/settings";
+import { getCompanyFit } from "@/lib/enrichment/web-checks";
 import { getMeetings } from "@/lib/crm/calendar";
 import { getClickUpPicker } from "@/lib/crm/clickup";
 import { listMembers } from "@/lib/crm/companies";
@@ -49,7 +50,7 @@ export default async function CompanyPage({
   if (!user) redirect("/login");
   if (!context) notFound();
 
-  const [members, mailbox, clickup, meetings, tags, workflows, proposals, knowledge] = await Promise.all([
+  const [members, mailbox, clickup, meetings, tags, workflows, proposals, knowledge, fit] = await Promise.all([
     listMembers(user),
     getMailbox(user),
     getClickUpPicker(user),
@@ -61,6 +62,7 @@ export default async function CompanyPage({
       console.error("Knowledge failed to load", error);
       return [];
     }),
+    getCompanyFit(user, context.company.id).catch(() => null),
   ]);
   resumeStale(user, knowledge);
   scheduleCallBackfill(user, context.company.id);
@@ -84,6 +86,7 @@ export default async function CompanyPage({
       knowledge={knowledge}
       tags={tags}
       enrichment={enrichmentAvailability()}
+      fit={fit}
     />
   );
 }

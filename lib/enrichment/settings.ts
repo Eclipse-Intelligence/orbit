@@ -13,6 +13,8 @@ export type EnrichmentSettings = {
   webTags: boolean;
   webGaps: boolean;
   webSignals: boolean;
+  webIcp: boolean;
+  icpText: string | null;
 };
 
 export type ProviderStatus = { id: ProviderId; name: string; envKey: string; configured: boolean; fields: ContactField[] };
@@ -53,8 +55,8 @@ export function enrichmentAvailability(env: Record<string, string | undefined> =
 
 export async function getEnrichmentSettings(actor: Actor): Promise<EnrichmentSettings> {
   const row = await withActor(actor, async (db) => {
-    const result = await db.query<{ email_order: string[]; linkedin_order: string[]; auto_companies: boolean; web_tags: boolean; web_gaps: boolean; web_signals: boolean }>(
-      "select email_order, linkedin_order, auto_companies, web_tags, web_gaps, web_signals from crm.enrichment_settings where workspace_id = $1",
+    const result = await db.query<{ email_order: string[]; linkedin_order: string[]; auto_companies: boolean; web_tags: boolean; web_gaps: boolean; web_signals: boolean; web_icp: boolean; icp_text: string | null }>(
+      "select email_order, linkedin_order, auto_companies, web_tags, web_gaps, web_signals, web_icp, icp_text from crm.enrichment_settings where workspace_id = $1",
       [actor.workspaceId],
     );
     return result.rows[0] ?? null;
@@ -66,7 +68,17 @@ export async function getEnrichmentSettings(actor: Actor): Promise<EnrichmentSet
     webTags: row?.web_tags ?? false,
     webGaps: row?.web_gaps ?? false,
     webSignals: row?.web_signals ?? false,
+    webIcp: row?.web_icp ?? false,
+    icpText: row?.icp_text ?? null,
   };
+}
+
+function cleanIcpText(value: unknown) {
+  if (value === null) return null;
+  if (typeof value !== "string") throw new CrmError("invalid_input", "Describe the ideal customer in text.", 400, { field: "icpText" });
+  const text = value.replace(/\r\n?/g, "\n").trim();
+  if (text.length > 20_000) throw new CrmError("invalid_input", "Keep the ideal customer under 20,000 characters.", 400, { field: "icpText" });
+  return text || null;
 }
 
 export async function saveEnrichmentSettings(actor: UserActor, input: Partial<EnrichmentSettings>) {
@@ -81,15 +93,18 @@ export async function saveEnrichmentSettings(actor: UserActor, input: Partial<En
     webTags: typeof input.webTags === "boolean" ? input.webTags : current.webTags,
     webGaps: typeof input.webGaps === "boolean" ? input.webGaps : current.webGaps,
     webSignals: typeof input.webSignals === "boolean" ? input.webSignals : current.webSignals,
+    webIcp: typeof input.webIcp === "boolean" ? input.webIcp : current.webIcp,
+    icpText: input.icpText === undefined ? current.icpText : cleanIcpText(input.icpText),
   };
   await withActor(actor, (db) =>
     db.query(
-      `insert into crm.enrichment_settings (workspace_id, email_order, linkedin_order, auto_companies, web_tags, web_gaps, web_signals)
-       values ($1, $2, $3, $4, $5, $6, $7)
+      `insert into crm.enrichment_settings (workspace_id, email_order, linkedin_order, auto_companies, web_tags, web_gaps, web_signals, web_icp, icp_text)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        on conflict (workspace_id) do update set
          email_order = excluded.email_order, linkedin_order = excluded.linkedin_order, auto_companies = excluded.auto_companies,
-         web_tags = excluded.web_tags, web_gaps = excluded.web_gaps, web_signals = excluded.web_signals`,
-      [actor.workspaceId, next.emailOrder, next.linkedinOrder, next.autoCompanies, next.webTags, next.webGaps, next.webSignals],
+         web_tags = excluded.web_tags, web_gaps = excluded.web_gaps, web_signals = excluded.web_signals,
+         web_icp = excluded.web_icp, icp_text = excluded.icp_text`,
+      [actor.workspaceId, next.emailOrder, next.linkedinOrder, next.autoCompanies, next.webTags, next.webGaps, next.webSignals, next.webIcp, next.icpText],
     ),
   );
   return next;

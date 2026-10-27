@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import HoldButton from "@/components/_ui/hold-button";
 import { Input } from "@/components/_ui/input";
+import { Textarea } from "@/components/_ui/textarea";
 import { NativeSelect } from "@/components/_ui/native-select";
 import Switch from "@/components/_ui/switch";
 import { SettingsCard } from "@/components/crm/settings-ui";
@@ -225,18 +226,76 @@ function Backfill({ initial }: { initial: number }) {
   );
 }
 
+function IdealCustomer({ initial, learned, canAdmin, onSaved }: { initial: string; learned: string | null; canAdmin: boolean; onSaved: (value: string | null) => void }) {
+  const [value, setValue] = useState(initial);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);
+  const id = useId();
+
+  async function save() {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const result = await saveEnrichmentSettingsAction({ icpText: value });
+      if ("error" in result) setMessage({ text: result.error, error: true });
+      else {
+        onSaved(result.icpText);
+        setMessage({ text: "Saved. Companies are rescored when you next check them.", error: false });
+      }
+    } catch (problem) {
+      if (!reloadIfStaleDeploy(problem)) setMessage({ text: "That didn't save. Try again.", error: true });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <label htmlFor={id} className="caption-style text-subtle">
+        Ideal customer
+      </label>
+      <Textarea
+        id={id}
+        rows={4}
+        maxLength={20000}
+        value={value}
+        readOnly={!canAdmin}
+        placeholder={learned ?? "UK content and SEO agencies of 10 to 50 people that sell to B2B brands"}
+        onChange={(event) => setValue(event.target.value)}
+      />
+      <span className="caption-style text-subtle leading-[1.4]">
+        {value.trim() ? "Used instead of what Orbit has learned." : learned ? "Empty, so Orbit uses what it has learned about your ICP, shown above." : "Nothing learned yet. Describe your ideal customer to score companies."}
+      </span>
+      {canAdmin && (
+        <div className="flex flex-wrap items-center justify-end gap-3">
+          {message && (
+            <span role={message.error ? "alert" : "status"} className={cn("caption-style", message.error ? "text-danger" : "text-subtle")}>
+              {message.text}
+            </span>
+          )}
+          <Button variant="secondary" size="sm" disabled={busy || value.trim() === initial.trim()} onClick={save}>
+            {busy ? "Saving…" : "Save"}
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function WebChecksSettings({
   settings,
   checks: initialChecks,
   configured,
   canAdmin,
   unchecked,
+  learnedIcp,
 }: {
   settings: EnrichmentSettings;
   checks: WebCheck[];
   configured: boolean;
   canAdmin: boolean;
   unchecked: number;
+  learnedIcp: string | null;
 }) {
   const router = useRouter();
   const [current, setCurrent] = useState(settings);
@@ -250,7 +309,7 @@ export default function WebChecksSettings({
     setBusy(true);
     setError(null);
     try {
-      const result = await saveEnrichmentSettingsAction({ webTags: next.webTags, webGaps: next.webGaps, webSignals: next.webSignals });
+      const result = await saveEnrichmentSettingsAction({ webTags: next.webTags, webGaps: next.webGaps, webSignals: next.webSignals, webIcp: next.webIcp });
       if ("error" in result) {
         setCurrent(previous);
         setError(result.error);
@@ -305,7 +364,23 @@ export default function WebChecksSettings({
           disabled={busy}
           onChange={(value) => void save({ ...current, webGaps: value })}
         />
-        {canAdmin && configured && (current.webTags || current.webGaps) && <Backfill initial={unchecked} />}
+        <div className="flex flex-col gap-3">
+          <Toggle
+            title="ICP fit"
+            caption="Scores each company from 0 to 4 against your ideal customer, with the sources it used. Adds a Fit column to Companies."
+            on={current.webIcp}
+            canAdmin={canAdmin}
+            disabled={busy}
+            onChange={(value) => void save({ ...current, webIcp: value })}
+          />
+          {current.webIcp && (
+            <IdealCustomer initial={current.icpText ?? ""} learned={learnedIcp} canAdmin={canAdmin} onSaved={(value) => {
+              setCurrent((settings) => ({ ...settings, icpText: value }));
+              router.refresh();
+            }} />
+          )}
+        </div>
+        {canAdmin && configured && (current.webTags || current.webGaps || current.webIcp) && <Backfill key={unchecked} initial={unchecked} />}
         <div className="flex flex-col gap-3">
           <Toggle
             title="Weekly signals"

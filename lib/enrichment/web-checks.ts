@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { editCompanyTags, getCompany, updateCompany } from "@/lib/crm/companies";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
@@ -6,6 +7,7 @@ import { normalizeTag } from "@/lib/crm/normalize";
 import type { Actor, Company, Provenance, UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
 import { getEnrichmentSettings } from "@/lib/enrichment/settings";
+import { fitLabel } from "@/lib/enrichment/fit";
 import { decide, parallelKey, ParallelError, type DecisionCitation, type DecisionQuestion } from "@/lib/parallel";
 
 export type WebCheckKind = "tag" | "signal";
@@ -181,12 +183,73 @@ async function markChecked(actor: Actor, companyId: string, summary: string | nu
   });
 }
 
+export const ICP_LEVELS = [
+  "Not a fit: it fails the most important parts of the profile.",
+  "Weak fit: it matches only a small part of the profile.",
+  "Partial fit: it matches some important parts of the profile and misses others.",
+  "Good fit: it matches most of the profile.",
+  "Strong fit: it matches the profile closely.",
+];
+const ICP_KINDS = ["icp", "audience", "win_pattern", "loss_pattern"];
+
+export type IcpProfile = { text: string; hash: string; source: "custom" | "learned" };
+
+export async function icpProfile(actor: Actor, options: { learnedOnly?: boolean } = {}): Promise<IcpProfile | null> {
+  const settings = options.learnedOnly ? null : await getEnrichmentSettings(actor);
+  let text = settings?.icpText?.trim() ?? "";
+  let source: IcpProfile["source"] = "custom";
+  if (!text) {
+    source = "learned";
+    const notes = await withActor(actor, async (db) => {
+      const result = await db.query<{ kind: string; title: string; body: string }>(
+        `select kind, title, body from crm.memories
+         where workspace_id = $1 and scope = 'business' and archived_at is null and kind = any($2::text[])
+         order by array_position($2::text[], kind), pinned desc, updated_at desc`,
+        [actor.workspaceId, ICP_KINDS],
+      );
+      return result.rows;
+    }).catch(() => []);
+    text = notes.map((note) => `- ${note.kind === "icp" ? "Ideal customer" : note.kind === "audience" ? "Audience" : note.kind === "win_pattern" ? "Why we win" : "Why we lose"}: ${note.title}. ${note.body}`).join("\n");
+  }
+  if (!text) return null;
+  return { text, hash: createHash("sha256").update(text).digest("hex").slice(0, 32), source };
+}
+
+export type CompanyFit = { score: number; label: string; checkedAt: string; sources: { url: string; title: string | null }[]; stale: boolean } | null;
+
+export async function getCompanyFit(actor: Actor, companyId: string): Promise<CompanyFit> {
+  if (!isUuid(companyId)) return null;
+  const row = await withActor(actor, async (db) => {
+    const result = await db.query<{ icp_score: number | null; icp_checked_at: Date | null; icp_hash: string | null; icp_sources: { url: string; title: string | null }[] }>(
+      "select icp_score, icp_checked_at, icp_hash, icp_sources from crm.company_web_state where company_id = $1 and workspace_id = $2",
+      [companyId, actor.workspaceId],
+    );
+    return result.rows[0] ?? null;
+  });
+  if (!row || row.icp_score === null || !row.icp_checked_at) return null;
+  const profile = await icpProfile(actor);
+  const score = Math.round(Number(row.icp_score) * 10) / 10;
+  return { score, label: fitLabel(score), checkedAt: new Date(row.icp_checked_at).toISOString(), sources: row.icp_sources ?? [], stale: Boolean(profile && profile.hash !== row.icp_hash) };
+}
+
+async function saveFit(actor: Actor, companyId: string, score: number | null, hash: string, citations: DecisionCitation[]) {
+  const sources = citations.slice(0, 8).map((citation) => ({ url: citation.url, title: citation.title }));
+  await withActor(actor, (db) =>
+    db.query(
+      `insert into crm.company_web_state (company_id, workspace_id, icp_score, icp_checked_at, icp_hash, icp_sources)
+       values ($1, $2, $3, now(), $4, $5::jsonb)
+       on conflict (company_id) do update set icp_score = excluded.icp_score, icp_checked_at = now(), icp_hash = excluded.icp_hash, icp_sources = excluded.icp_sources`,
+      [companyId, actor.workspaceId, score, hash, JSON.stringify(sources)],
+    ),
+  );
+}
+
 export type CompanyCheck = { status: "updated" | "unchanged" | "skipped" | "failed"; message: string; tags: string[]; filled: string[] };
 
 export async function checkCompany(
   actor: Actor,
   companyId: string,
-  options: { tags: boolean; gaps: boolean; fetchImpl?: typeof fetch; env?: Record<string, string | undefined> },
+  options: { tags: boolean; gaps: boolean; icp?: IcpProfile | null; fetchImpl?: typeof fetch; env?: Record<string, string | undefined> },
 ): Promise<CompanyCheck> {
   if (!parallelKey(options.env)) return { status: "skipped", message: "Add PARALLEL_API_KEY in Vercel to run web checks.", tags: [], filled: [] };
   const company = await getCompany(actor, companyId);
@@ -211,6 +274,13 @@ export async function checkCompany(
       criteria: { ...Object.fromEntries(industries.map((industry, index) => [`i${index}`, industry])), other: "None of these describe the company." },
     };
   }
+  if (options.icp) {
+    questions.icp = {
+      type: "score",
+      instructions: "How well does the company fit the ideal customer profile given in ideal_customer_profile? Judge from what the company does, who it serves, its size and where it works.",
+      criteria: ICP_LEVELS,
+    };
+  }
   if (Object.keys(questions).length === 0) {
     await markChecked(actor, companyId, null, false, false);
     return { status: "unchanged", message: "Nothing to check.", tags: [], filled: [] };
@@ -218,7 +288,8 @@ export async function checkCompany(
 
   let decision;
   try {
-    decision = await decide(publicState(company), questions, { fetchImpl: options.fetchImpl, env: options.env });
+    const state = options.icp ? { ...publicState(company), ideal_customer_profile: options.icp.text } : publicState(company);
+    decision = await decide(state, questions, { fetchImpl: options.fetchImpl, env: options.env });
   } catch (error) {
     return { status: "failed", message: error instanceof ParallelError ? error.message : "The web check failed.", tags: [], filled: [] };
   }
@@ -239,7 +310,14 @@ export async function checkCompany(
   const filled = Object.keys(write);
   if (filled.length > 0) await updateCompany(actor, companyId, write, { provenance: PROVENANCE });
 
-  const parts = [tags.length ? `tags: ${tags.join(", ")}` : null, write.sizeCategory ? `size: ${write.sizeCategory}` : null, write.industry ? `industry: ${write.industry}` : null].filter(Boolean);
+  let fit: string | null = null;
+  if (options.icp) {
+    const answer = decision.answers.icp;
+    const score = answer?.type === "score" ? Math.min(4, Math.max(0, answer.score)) : null;
+    await saveFit(actor, companyId, score, options.icp.hash, decision.citations);
+    if (score !== null) fit = `fit: ${fitLabel(score).toLowerCase()} (${score.toFixed(1)})`;
+  }
+  const parts = [tags.length ? `tags: ${tags.join(", ")}` : null, write.sizeCategory ? `size: ${write.sizeCategory}` : null, write.industry ? `industry: ${write.industry}` : null, fit].filter(Boolean);
   await markChecked(actor, companyId, parts.join("; ") || null, parts.length > 0);
   return parts.length > 0
     ? { status: "updated", message: `Added ${parts.join(", ")}.`, tags, filled }
@@ -250,8 +328,9 @@ export async function autoCheckCompany(actor: Actor, companyId: string) {
   try {
     if (!parallelKey()) return;
     const settings = await getEnrichmentSettings(actor);
-    if (!settings.webTags && !settings.webGaps) return;
-    await checkCompany(actor, companyId, { tags: settings.webTags, gaps: settings.webGaps });
+    if (!settings.webTags && !settings.webGaps && !settings.webIcp) return;
+    const icp = settings.webIcp ? await icpProfile(actor) : null;
+    await checkCompany(actor, companyId, { tags: settings.webTags, gaps: settings.webGaps, icp });
   } catch (error) {
     if (!(error instanceof CrmError)) console.error("Web check failed", error);
   }
@@ -260,11 +339,19 @@ export async function autoCheckCompany(actor: Actor, companyId: string) {
 const UNCHECKED_SQL = `
   from crm.companies c
   left join crm.company_web_state s on s.company_id = c.id
-  where c.workspace_id = $1 and c.archived_at is null and (c.domain is not null or c.website is not null) and s.checked_at is null`;
+  where c.workspace_id = $1 and c.archived_at is null and (c.domain is not null or c.website is not null)
+    and (($2 and s.checked_at is null) or ($3::text is not null and s.icp_hash is distinct from $3))`;
+
+async function dueParams(actor: Actor) {
+  const settings = await getEnrichmentSettings(actor);
+  const icp = settings.webIcp ? await icpProfile(actor) : null;
+  return { settings, icp, values: [actor.workspaceId, settings.webTags || settings.webGaps, icp?.hash ?? null] };
+}
 
 export async function uncheckedCompanyCount(actor: Actor) {
+  const { values } = await dueParams(actor);
   return withActor(actor, async (db) => {
-    const result = await db.query<{ total: number }>(`select count(*)::int as total ${UNCHECKED_SQL}`, [actor.workspaceId]);
+    const result = await db.query<{ total: number }>(`select count(*)::int as total ${UNCHECKED_SQL}`, values);
     return result.rows[0]?.total ?? 0;
   });
 }
@@ -284,15 +371,16 @@ async function inBatches<T, R>(items: T[], run: (item: T) => Promise<R>) {
 
 export async function backfillWebChecks(actor: UserActor, options: { fetchImpl?: typeof fetch; env?: Record<string, string | undefined> } = {}) {
   assertAdmin(actor);
-  const settings = await getEnrichmentSettings(actor);
-  if (!settings.webTags && !settings.webGaps) throw invalid("Turn on tagging or filling gaps first.");
+  const { settings, icp, values } = await dueParams(actor);
+  if (!settings.webTags && !settings.webGaps && !settings.webIcp) throw invalid("Turn on tagging, filling gaps or ICP fit first.");
+  if (settings.webIcp && !settings.webTags && !settings.webGaps && !icp) throw invalid("Describe your ideal customer first.");
   const ids = await withActor(actor, async (db) => {
-    const result = await db.query<{ id: string }>(`select c.id ${UNCHECKED_SQL} order by c.created_at limit ${BACKFILL_BATCH}`, [actor.workspaceId]);
+    const result = await db.query<{ id: string }>(`select c.id ${UNCHECKED_SQL} order by c.created_at limit ${BACKFILL_BATCH}`, values);
     return result.rows.map((row) => row.id);
   });
   const results = await inBatches(ids, async (id) => {
     try {
-      return { companyId: id, ...(await checkCompany(actor, id, { tags: settings.webTags, gaps: settings.webGaps, ...options })) };
+      return { companyId: id, ...(await checkCompany(actor, id, { tags: settings.webTags, gaps: settings.webGaps, icp, ...options })) };
     } catch (error) {
       return { companyId: id, status: "failed" as const, message: error instanceof CrmError ? error.message : "That check failed.", tags: [], filled: [] };
     }

@@ -8,7 +8,7 @@ export type LifecycleCount = { value: string; label: string; companies: number; 
 export const ACCOUNT_HEALTH = ["healthy", "watch", "at_risk"] as const;
 export type AccountHealth = (typeof ACCOUNT_HEALTH)[number];
 
-export const COMPANY_SORTS = ["name", "domain", "updated", "created", "interaction", "strength", "owner"] as const;
+export const COMPANY_SORTS = ["name", "domain", "updated", "created", "interaction", "strength", "owner", "fit"] as const;
 export type CompanySort = (typeof COMPANY_SORTS)[number];
 
 export const COMPANY_PRESENCE = ["domain", "contacts", "interactions"] as const;
@@ -89,6 +89,7 @@ export type Company = {
   lastInteractionAt: string | null;
   relationship?: Relationship;
   openTaskCount: number;
+  icpFit: number | null;
   tags: string[];
   health: AccountHealth | null;
   healthReason: string | null;

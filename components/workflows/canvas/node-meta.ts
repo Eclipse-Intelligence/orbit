@@ -2,6 +2,7 @@ import type { ComponentType, SVGProps } from "react";
 import { AI_MODELS, EMAIL_KIND_LABELS, PROPOSAL_EVENT_LABELS, STEP_LABELS, TRIGGER_LABELS, type StepType, type Trigger, type WorkflowNode } from "@/lib/workflows/definition";
 import type { Condition } from "@/lib/workflows/variables";
 import SparkleIcon from "@/public/assets/images/assistant/sparkle.svg";
+import GlobeIcon from "@/public/assets/images/assistant/globe.svg";
 import CheckIcon from "@/public/assets/images/booking/check.svg";
 import ClockIcon from "@/public/assets/images/booking/clock.svg";
 import FilterIcon from "@/public/assets/images/_common/filter.svg";
@@ -33,6 +34,7 @@ export const GROUP_STYLE: Record<NodeGroup, string> = {
 
 export const STEP_META: Record<StepType, { icon: Icon; group: NodeGroup }> = {
   ai: { icon: SparkleIcon, group: "ai" },
+  decide: { icon: GlobeIcon, group: "ai" },
   if: { icon: BranchIcon, group: "logic" },
   filter: { icon: FilterIcon, group: "logic" },
   loop: { icon: RepeatIcon, group: "logic" },
@@ -54,7 +56,7 @@ export const STEP_META: Record<StepType, { icon: Icon; group: NodeGroup }> = {
 export const TRIGGER_ICON = ZapIcon;
 
 export const PALETTE: { label: string; types: StepType[] }[] = [
-  { label: "AI", types: ["ai"] },
+  { label: "AI", types: ["ai", "decide"] },
   { label: "Logic", types: ["if", "filter", "loop", "delay", "approval"] },
   { label: "Records", types: ["find_records", "upsert_record", "update_record"] },
   { label: "Actions", types: ["create_task", "add_note", "board", "notify", "send_email", "create_proposal", "linear_issue", "webhook"] },
@@ -106,6 +108,11 @@ export function nodeSummary(node: WorkflowNode) {
       const prompt = short(plain(text(c.prompt)), 40);
       const label = c.webSearch === true ? `${model} with web` : model;
       return prompt ? `${label}: ${prompt}` : "Write a prompt";
+    }
+    case "decide": {
+      const questions = Array.isArray(c.questions) ? (c.questions as { question?: unknown }[]) : [];
+      if (questions.length > 1) return `${questions.length} questions`;
+      return short(text(questions[0]?.question)) || "Write a question";
     }
     case "find_records": {
       const what = c.object === "company" ? "companies" : "contacts";

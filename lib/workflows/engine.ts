@@ -25,6 +25,7 @@ import { query } from "@/lib/db/pool";
 import { createLinearIssue, LINEAR_PRIORITIES, LinearError } from "@/lib/linear";
 import { pushToUser, type PushSender } from "@/lib/push";
 import { completeJson, LlmError } from "@/lib/llm";
+import { decide, parallelKey, ParallelError, type Decision, type DecisionAnswer, type DecisionQuestion } from "@/lib/parallel";
 import { siteOrigin } from "@/lib/site-url";
 import { appTimeZone } from "@/lib/time";
 import {
@@ -512,6 +513,93 @@ async function aiStep(ctx: Ctx, step: Step): Promise<StepResult> {
   return { kind: "next", output: { ...data, model: result.model } };
 }
 
+const QUESTION_KEY = /^[a-z][a-zA-Z0-9_]{0,39}$/;
+const QUESTION_TYPES = ["yes_no", "choice", "score"] as const;
+const MAX_QUESTIONS = 20;
+const MAX_QUESTION_CHARS = 4500;
+const MAX_ABOUT_CHARS = 60_000;
+const DECIDE_TIMEOUT_MS = 20_000;
+const UNKNOWN_OPTION = "unknown";
+
+type WebQuestion = { key: string; type: (typeof QUESTION_TYPES)[number]; question: string; options: string[] };
+
+function webQuestions(config: Record<string, unknown>, vars: Record<string, unknown>): WebQuestion[] {
+  const raw = Array.isArray(config.questions) ? (config.questions as Record<string, unknown>[]) : [];
+  if (raw.length === 0) throw new CrmError("invalid_input", "Add a question to check.", 400);
+  if (raw.length > MAX_QUESTIONS) throw new CrmError("invalid_input", `A web check can ask up to ${MAX_QUESTIONS} questions.`, 400);
+  const seen = new Set<string>(["sources"]);
+  return raw.map((item, index) => {
+    const key = str(item?.key).trim();
+    const type = QUESTION_TYPES.find((entry) => entry === item?.type);
+    const question = render(item?.question, vars).trim();
+    const options = (Array.isArray(item?.options) ? item.options : []).map((option) => str(option).trim()).filter(Boolean);
+    const name = key || `Question ${index + 1}`;
+    if (!QUESTION_KEY.test(key)) throw new CrmError("invalid_input", `${name}: start the key with a lowercase letter and use only letters, numbers and underscores.`, 400);
+    if (seen.has(key) || seen.has(`${key}Confidence`)) throw new CrmError("invalid_input", `${key}: use a different key, this one is already taken.`, 400);
+    if (!type) throw new CrmError("invalid_input", `${key}: choose Yes or no, Pick one or Score.`, 400);
+    if (!question) throw new CrmError("invalid_input", `${key}: write the question.`, 400);
+    if (type === "choice" && (options.length < 2 || options.length > 50)) throw new CrmError("invalid_input", `${key}: give 2 to 50 options.`, 400);
+    if (type === "score" && (options.length < 2 || options.length > 10)) throw new CrmError("invalid_input", `${key}: give 2 to 10 levels.`, 400);
+    if (question.length + options.join("").length > MAX_QUESTION_CHARS) throw new CrmError("invalid_input", `${key}: shorten the question or its options.`, 400);
+    seen.add(key);
+    if (type === "choice") seen.add(`${key}Confidence`);
+    return { key, type, question, options: type === "yes_no" ? [] : options };
+  });
+}
+
+function parallelQuestion(question: WebQuestion): DecisionQuestion {
+  if (question.type === "yes_no") return { type: "noul", instructions: question.question };
+  if (question.type === "score") return { type: "score", instructions: question.question, criteria: question.options };
+  return {
+    type: "choice",
+    instructions: question.question,
+    criteria: { ...Object.fromEntries(question.options.map((option, index) => [`o${index}`, option])), [UNKNOWN_OPTION]: "The evidence doesn't settle it." },
+  };
+}
+
+function percent(value: number | undefined) {
+  return typeof value === "number" && Number.isFinite(value) ? Math.min(Math.max(Math.round(value * 100), 0), 100) : null;
+}
+
+function answerOutputs(question: WebQuestion, answer: DecisionAnswer | undefined): Record<string, unknown> {
+  if (question.type === "yes_no") return { [question.key]: answer?.type === "noul" ? percent(answer.noul) : null };
+  if (question.type === "score") return { [question.key]: answer?.type === "score" ? Math.round(answer.score * 10) / 10 : null };
+  if (answer?.type !== "choice") return { [question.key]: null, [`${question.key}Confidence`]: null };
+  const index = /^o\d+$/.test(answer.choice) ? Number(answer.choice.slice(1)) : -1;
+  return { [question.key]: question.options[index] ?? "", [`${question.key}Confidence`]: percent(answer.probabilities[answer.choice]) };
+}
+
+function webState(ctx: Ctx, about: string) {
+  const company = ctx.vars.company as { name?: string | null; domain?: string | null; website?: string | null } | undefined;
+  return {
+    ...(company?.name ? { company: company.name } : {}),
+    ...(company?.domain ? { domain: company.domain } : {}),
+    ...(company?.website ? { website: company.website } : {}),
+    today: new Intl.DateTimeFormat("en-CA", { timeZone: appTimeZone() }).format(new Date()),
+    ...(about ? { about } : {}),
+  };
+}
+
+async function decideStep(ctx: Ctx, step: Step): Promise<StepResult> {
+  const questions = webQuestions(step.config, ctx.vars);
+  const about = render(step.config.about, ctx.vars).trim();
+  if (about.length > MAX_ABOUT_CHARS) throw new CrmError("invalid_input", "About is too long for a web check. Shorten it.", 400);
+  let decision: Decision;
+  try {
+    decision = await decide(webState(ctx, about), Object.fromEntries(questions.map((question) => [question.key, parallelQuestion(question)])), {
+      fetchImpl: ctx.fetchImpl,
+      timeoutMs: Math.min(Math.max(ctx.deadline - Date.now(), 5_000), DECIDE_TIMEOUT_MS),
+    });
+  } catch (error) {
+    if (error instanceof ParallelError) throw new CrmError(parallelKey() ? "upstream_error" : "invalid_input", error.message, parallelKey() ? 502 : 400);
+    throw error;
+  }
+  const output: Record<string, unknown> = {};
+  for (const question of questions) Object.assign(output, answerOutputs(question, decision.answers[question.key]));
+  output.sources = [...new Set(decision.citations.map((citation) => citation.url))].slice(0, 10);
+  return { kind: "next", output };
+}
+
 const PICKED_SCHEMA = z.object({
   items: z.array(z.object({ productId: z.string(), quantity: z.number().int().min(1).max(1000), reason: z.string() })).max(20),
   reason: z.string(),
@@ -725,6 +813,8 @@ async function runStepAction(ctx: Ctx, step: Step): Promise<StepResult> {
   switch (step.type) {
     case "ai":
       return aiStep(ctx, step);
+    case "decide":
+      return decideStep(ctx, step);
     case "if":
       return { kind: "branch", branch: conditionsPass(config, ctx.vars) ? "true" : "false" };
     case "filter":

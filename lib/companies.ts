@@ -41,6 +41,7 @@ export const SORT_OPTIONS: { value: string; label: string; sort: CompanySort; or
   { value: "created:desc", label: "Newest", sort: "created", order: "desc" },
   { value: "domain:asc", label: "Domain", sort: "domain", order: "asc" },
   { value: "owner:asc", label: "Owner", sort: "owner", order: "asc" },
+  { value: "fit:desc", label: "Best ICP fit", sort: "fit", order: "desc" },
 ];
 
 export function sortValue(sort: CompanySort = DEFAULT_COMPANY_SORT, order?: "asc" | "desc") {

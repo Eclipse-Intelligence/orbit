@@ -5,7 +5,9 @@ import { scopesForRole } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool } from "@/lib/db/pool";
 import { getEnrichmentSettings, saveEnrichmentSettings } from "@/lib/enrichment/settings";
-import { backfillWebChecks, checkCompany, ensureDefaultSignals, runWebSignals, saveWebCheck, uncheckedCompanyCount } from "@/lib/enrichment/web-checks";
+import { backfillWebChecks, checkCompany, ensureDefaultSignals, getCompanyFit, icpProfile, runWebSignals, saveWebCheck, uncheckedCompanyCount } from "@/lib/enrichment/web-checks";
+import { listCompanies } from "@/lib/crm/companies";
+import { checkWeb } from "@/lib/assistant/check-web";
 import { decide } from "@/lib/parallel";
 import { createUser, resetDatabase } from "./helpers";
 
@@ -184,5 +186,78 @@ describe("web checks", () => {
 
     await saveEnrichmentSettings(owner, { webSignals: false });
     assert.deepEqual(await runWebSignals(owner, { deadline: Date.now() + 30_000, fetchImpl: api.fetchImpl, env: ENV }), { skipped: "Weekly signals are off." });
+  });
+
+  it("scores ICP fit with sources, sorts by it, and rescores when the ICP changes", async () => {
+    await getAdminPool().query(
+      "insert into crm.memories (workspace_id, scope, kind, title, body) values ($1, 'business', 'icp', 'Content agencies', 'UK content and SEO agencies of 10 to 50 people.')",
+      [owner.workspaceId],
+    );
+    const learned = await icpProfile(owner);
+    assert.equal(learned?.source, "learned");
+    assert.match(learned!.text, /Ideal customer: Content agencies/);
+
+    await saveEnrichmentSettings(owner, { webIcp: true, webTags: false, webGaps: false });
+    const target = (await createCompany(owner, { name: "Fit Agency", domain: "fit.test", sizeCategory: "11-50", industry: "Fintech" })).body.company;
+    const api = parallel((body) => ({
+      answers: { ...(body.questions.icp ? { icp: { type: "score", score: 3.27, probabilities: { "3": 0.7, "4": 0.3 }, legend: {} } } : {}) },
+      citations: [{ url: "https://fit.test/about", title: "About Fit", excerpts: ["We are a content agency"] }],
+    }));
+    const result = await checkCompany(owner, target.id, { tags: false, gaps: false, icp: learned, fetchImpl: api.fetchImpl, env: ENV });
+    assert.equal(result.status, "updated");
+    const sent = api.sent[0].body;
+    assert.equal(sent.questions.icp.type, "score");
+    assert.equal((sent.questions.icp.criteria as string[]).length, 5);
+    assert.match(String(sent.state.ideal_customer_profile), /UK content and SEO agencies/);
+    const fit = await getCompanyFit(owner, target.id);
+    assert.equal(fit?.score, 3.3);
+    assert.equal(fit?.label, "Good fit");
+    assert.deepEqual(fit?.sources, [{ url: "https://fit.test/about", title: "About Fit" }]);
+    assert.equal(fit?.stale, false);
+
+    const sorted = await listCompanies(owner, { sort: "fit", order: "desc", limit: 3 });
+    assert.equal(sorted.data[0].id, target.id);
+    assert.equal(sorted.data[0].icpFit, 3.3);
+
+    const dueBefore = await uncheckedCompanyCount(owner);
+    await saveEnrichmentSettings(owner, { icpText: "B2B SaaS companies in fintech with 50 to 200 staff." });
+    assert.equal((await icpProfile(owner))?.source, "custom");
+    assert.equal(await uncheckedCompanyCount(owner), dueBefore + 1);
+    assert.equal((await getCompanyFit(owner, target.id))?.stale, true);
+    await assert.rejects(saveEnrichmentSettings(owner, { icpText: "x".repeat(20_001) }), /under 20,000/);
+  });
+
+  it("checks facts for the assistant and reports refusals as unknown", async () => {
+    const api = parallel(() => ({
+      answers: {
+        has_funding: noul(0.81),
+        model: { type: "choice", choice: "o1", probabilities: { o0: 0.1, o1: 0.85, unknown: 0.05 } },
+        maturity: { type: "score", score: 1.44, probabilities: {} },
+        leader: { type: "refusal" },
+      },
+      citations: [{ url: "https://news.test/pulse", title: "Pulse raises", excerpts: ["Pulse raised £2m.", "Second passage."] }],
+    }));
+    const result = (await checkWeb(
+      {
+        about: "Pulse, pulse.test",
+        questions: [
+          { key: "has_funding", type: "yes_no", question: "Has Pulse raised money this year?" },
+          { key: "model", type: "choice", question: "How does Pulse sell?", options: ["Self-serve", "Sales-led"] },
+          { key: "maturity", type: "score", question: "How mature is Pulse's content marketing?", options: ["None", "Some", "Strong"] },
+          { key: "leader", type: "yes_no", question: "Is Jo the CEO?" },
+        ],
+      },
+      { fetchImpl: api.fetchImpl, env: ENV },
+    )) as { answers: Record<string, Record<string, unknown>>; sources: { excerpts: string[] }[] };
+    assert.deepEqual(api.sent[0].body.state.about, "Pulse, pulse.test");
+    assert.equal(result.answers.has_funding.likelihood, 81);
+    assert.equal(result.answers.model.choice, "Sales-led");
+    assert.equal(result.answers.model.confidence, 85);
+    assert.equal(result.answers.maturity.score, 1.4);
+    assert.equal(result.answers.maturity.of, 2);
+    assert.equal(result.answers.leader.answer, null);
+    assert.deepEqual(result.sources[0].excerpts, ["Pulse raised £2m.", "Second passage."]);
+    assert.deepEqual(await checkWeb({ about: "Pulse", questions: [{ key: "x", type: "choice", question: "Which?", options: ["One"] }] }, { env: ENV }), { error: "x: give 2 to 50 options." });
+    assert.deepEqual(await checkWeb({ about: "Pulse", questions: [{ key: "x", type: "yes_no", question: "Q?" }] }, { env: {} }), { error: "Add PARALLEL_API_KEY in Vercel to run web checks." });
   });
 });
