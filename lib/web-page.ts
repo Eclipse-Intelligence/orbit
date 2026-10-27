@@ -48,14 +48,38 @@ function privateV4(address: string) {
   );
 }
 
+function hextets(address: string) {
+  let text = address.toLowerCase().split("%")[0];
+  const dotted = text.match(/(\d+\.\d+\.\d+\.\d+)$/);
+  if (dotted) {
+    const [a, b, c, d] = dotted[1].split(".").map(Number);
+    text = `${text.slice(0, -dotted[1].length)}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+  }
+  const [head, tail] = text.split("::");
+  const left = head ? head.split(":") : [];
+  const right = tail ? tail.split(":") : [];
+  const fill = text.includes("::") ? 8 - left.length - right.length : 0;
+  const parts = [...left, ...new Array(Math.max(0, fill)).fill("0"), ...right].map((part) => parseInt(part || "0", 16));
+  return parts.length === 8 && parts.every((part) => Number.isInteger(part) && part >= 0 && part <= 0xffff) ? parts : null;
+}
+
+function embeddedV4(high: number, low: number) {
+  return `${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`;
+}
+
 export function privateAddress(address: string) {
   const version = isIP(address);
   if (version === 4) return privateV4(address);
   if (version !== 6) return true;
-  const lower = address.toLowerCase();
-  const mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  if (mapped) return privateV4(mapped[1]);
-  return lower === "::" || lower === "::1" || /^f[cd]/.test(lower) || /^fe[89ab]/.test(lower) || lower.startsWith("ff");
+  const parts = hextets(address);
+  if (!parts) return true;
+  const zeroUntil = (end: number) => parts.slice(0, end).every((part) => part === 0);
+  if (zeroUntil(8) || (zeroUntil(7) && parts[7] === 1)) return true;
+  if (zeroUntil(5) && (parts[5] === 0xffff || parts[5] === 0)) return privateV4(embeddedV4(parts[6], parts[7]));
+  if (parts[0] === 0x64 && parts[1] === 0xff9b && parts.slice(2, 6).every((part) => part === 0)) return privateV4(embeddedV4(parts[6], parts[7]));
+  if (parts[0] === 0x2002) return privateV4(embeddedV4(parts[1], parts[2]));
+  const first = parts[0];
+  return (first & 0xfe00) === 0xfc00 || (first & 0xffc0) === 0xfe80 || (first & 0xff00) === 0xff00;
 }
 
 const publicOnlyLookup: LookupFunction = (hostname, options, callback) => {

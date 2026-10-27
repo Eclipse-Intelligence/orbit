@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import MessageAttachments from "@/components/mail/message-attachments";
 import ReadStatus from "@/components/mail/read-status";
 import ThreadPeople from "@/components/mail/thread-people";
@@ -141,6 +141,7 @@ function AddressDetails({ id, message }: { id: string; message: ThreadMessage })
 
 function Message({
   message,
+  companies,
   own,
   expanded,
   collapsible,
@@ -153,6 +154,7 @@ function Message({
   onEditDraft: (message: ThreadMessage) => void;
   onDeleteDraft: (message: ThreadMessage) => void;
   message: ThreadMessage;
+  companies: { id: string; name: string }[];
   own: string[];
   expanded: boolean;
   collapsible: boolean;
@@ -223,7 +225,7 @@ function Message({
       {expanded && (
         <div className="flex flex-col gap-3 px-4 pb-4 sm:pl-14">
           <MessageBody message={message} title={`Email from ${sender}`} swipe={swipe} hideQuotes={hideQuotes} />
-          {message.hasAttachments && <MessageAttachments messageId={message.id} />}
+          {message.hasAttachments && <MessageAttachments messageId={message.id} companies={companies} />}
         </div>
       )}
     </article>
@@ -316,6 +318,11 @@ function Thread({
   );
   const [showAll, setShowAll] = useState(detail.messages.length <= 4);
   const hidden = showAll ? 0 : detail.messages.length - 3;
+  const companies = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const person of detail.people ?? []) if (person.companyId && person.companyName && !seen.has(person.companyId)) seen.set(person.companyId, person.companyName);
+    return [...seen].map(([id, name]) => ({ id, name }));
+  }, [detail.people]);
   const visible = showAll ? detail.messages : [detail.messages[0], ...detail.messages.slice(-2)];
 
   return (
@@ -324,6 +331,7 @@ function Thread({
         <div key={message.id} className="flex flex-col gap-1.5">
           <Message
             message={message}
+            companies={companies}
             own={own}
             swipe={swipe}
             onEditDraft={onEditDraft}

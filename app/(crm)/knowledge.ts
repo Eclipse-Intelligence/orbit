@@ -2,6 +2,7 @@
 
 import { getUserActor } from "@/lib/auth/user";
 import { CrmError } from "@/lib/crm/errors";
+import { addMailAttachmentToKnowledge } from "@/lib/knowledge/attachments";
 import { resumeStale, scheduleIndexing } from "@/lib/knowledge/background";
 import {
   addKnowledgeLink,
@@ -101,5 +102,17 @@ export async function removeKnowledgeAction(id: string): Promise<{ error?: strin
     return {};
   } catch (error) {
     return failure(error, "Couldn't remove it.");
+  }
+}
+
+export async function addAttachmentToKnowledgeAction(messageId: string, attachmentId: string, target: Target): Promise<{ added?: boolean; error?: string }> {
+  const user = await getUserActor();
+  if (!user) return { error: "Sign in to add to Knowledge." };
+  try {
+    const { item, created } = await addMailAttachmentToKnowledge(user, messageId, attachmentId, targetFrom(target));
+    if (created) scheduleIndexing(user, [item.id]);
+    return { added: created };
+  } catch (error) {
+    return failure(error, "Couldn't add it to Knowledge.");
   }
 }

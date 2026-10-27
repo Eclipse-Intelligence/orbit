@@ -502,7 +502,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       const [context, meetings, knowledge] = await Promise.all([
         getCompanyContext(actor, id),
         getMeetings(actor, { companyId: id }),
-        listKnowledge(actor, { companyId: id }, 50).catch(() => []),
+        listKnowledge(actor, { companyId: id }, 20).catch(() => []),
       ]);
       return {
         ...context,
@@ -513,7 +513,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         timeline: context.timeline.map(withActivity),
         activities: undefined,
         meetings,
-        knowledge: knowledge.map(withKnowledge),
+        knowledge: knowledge.map((item) => ({ ...withKnowledge(item), summary: item.summary && item.summary.length > 300 ? `${item.summary.slice(0, 297)}...` : item.summary })),
       };
     },
   },

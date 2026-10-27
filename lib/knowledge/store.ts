@@ -13,6 +13,7 @@ export type KnowledgeTarget = { companyId: string } | { eclipse: true };
 
 export const READ_WINDOW = 20_000;
 export const STALE_MS = 5 * 60_000;
+export const UPLOAD_STALE_MS = 30 * 60_000;
 
 export type KnowledgeItem = {
   id: string;
@@ -91,8 +92,8 @@ export function mapItem(row: ItemRow): KnowledgeItem {
 }
 
 export function isStale(item: Pick<KnowledgeItem, "status" | "updatedAt" | "kind">, now = Date.now()) {
-  if (item.status !== "indexing" && !(item.status === "pending" && item.kind !== "file")) return false;
-  return now - new Date(item.updatedAt).getTime() > STALE_MS;
+  if (item.status !== "indexing" && item.status !== "pending") return false;
+  return now - new Date(item.updatedAt).getTime() > (item.status === "pending" && item.kind === "file" ? UPLOAD_STALE_MS : STALE_MS);
 }
 
 function cleanTitle(value: unknown, fallback = "") {
@@ -127,6 +128,7 @@ export function cleanUrl(value: unknown) {
 }
 
 function storageKey(name: string) {
+  if (/^[.\s]*$/.test(name)) return "file";
   return name
     .normalize("NFKD")
     .replace(/[^\w.-]+/g, "-")
@@ -176,16 +178,11 @@ type NewItem = {
 export async function insertItem(db: Db, actor: UserActor, input: NewItem, provenance: Provenance) {
   const { scope, companyId } = targetColumns(input.target);
   if (companyId) await assertCompany(db, actor.workspaceId, companyId);
-  if (input.sourceRef) {
-    const existing = await db.query<{ id: string }>(
-      "select id from crm.knowledge_items where workspace_id = $1 and source_ref = $2 and archived_at is null",
-      [actor.workspaceId, input.sourceRef],
-    );
-    if (existing.rows[0]) return { id: existing.rows[0].id, created: false };
-  }
   const inserted = await db.query<{ id: string }>(
     `insert into crm.knowledge_items (workspace_id, scope, company_id, kind, title, source_url, source_ref, mime_type, size_bytes, status, content, char_count, created_by_user_id)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) returning id`,
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, coalesce(char_length($11), 0), $12)
+     on conflict (workspace_id, source_ref) where source_ref is not null and archived_at is null do nothing
+     returning id`,
     [
       actor.workspaceId,
       scope,
@@ -198,10 +195,16 @@ export async function insertItem(db: Db, actor: UserActor, input: NewItem, prove
       input.sizeBytes ?? null,
       input.status,
       input.content ?? null,
-      input.content?.length ?? 0,
       actor.userId,
     ],
   );
+  if (!inserted.rows[0]) {
+    const existing = await db.query<{ id: string }>(
+      "select id from crm.knowledge_items where workspace_id = $1 and source_ref = $2 and archived_at is null",
+      [actor.workspaceId, input.sourceRef],
+    );
+    return { id: existing.rows[0].id, created: false };
+  }
   const id = inserted.rows[0].id;
   await recordAudit(db, actor, "knowledge.added", "knowledge", id, provenance, {
     after: { title: input.title, kind: input.kind, scope, companyId, sourceUrl: input.sourceUrl ?? null },
@@ -311,7 +314,6 @@ export async function listKnowledge(actor: UserActor, target: KnowledgeTarget | 
     const result = await db.query<ItemRow>(
       `select ${ITEM_COLUMNS} from ${ITEM_FROM}
        where i.workspace_id = $1 and i.archived_at is null ${filter}
-         and not (i.kind = 'file' and i.status = 'pending' and i.updated_at < now() - interval '1 day')
        order by i.created_at desc
        limit $${params.length}`,
       params,
@@ -351,8 +353,8 @@ export async function archiveKnowledge(actor: UserActor, id: string, fetchImpl: 
 export async function readKnowledge(actor: UserActor, id: string, offset = 0) {
   return withActor(actor, async (db) => {
     if (!isUuid(id)) throw new CrmError("not_found", "That item isn't in Knowledge.", 404);
-    const result = await db.query<ItemRow & { window: string | null }>(
-      `select ${ITEM_COLUMNS}, substr(i.content, $3 + 1, $4) as window
+    const result = await db.query<ItemRow & { window: string | null; window_length: number | null }>(
+      `select ${ITEM_COLUMNS}, substr(i.content, $3 + 1, $4) as window, char_length(substr(i.content, $3 + 1, $4)) as window_length
        from ${ITEM_FROM}
        where i.id = $1 and i.workspace_id = $2 and i.archived_at is null`,
       [id, actor.workspaceId, Math.max(0, Math.floor(offset)), READ_WINDOW],
@@ -361,7 +363,7 @@ export async function readKnowledge(actor: UserActor, id: string, offset = 0) {
     if (!row) throw new CrmError("not_found", "That item isn't in Knowledge.", 404);
     const start = Math.max(0, Math.floor(offset));
     const text = row.window ?? "";
-    const end = start + text.length;
+    const end = start + (row.window_length ?? 0);
     return {
       item: mapItem(row),
       offset: start,

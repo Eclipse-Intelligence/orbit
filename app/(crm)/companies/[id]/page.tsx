@@ -13,7 +13,7 @@ import { getCompanyContext } from "@/lib/crm/relationships";
 import { listTags } from "@/lib/crm/tags";
 import { manualWorkflows } from "@/lib/workflows/store";
 import { listDocuments } from "@/lib/proposals/documents";
-import { resumeStale } from "@/lib/knowledge/background";
+import { resumeStale, scheduleCallBackfill } from "@/lib/knowledge/background";
 import { listKnowledge } from "@/lib/knowledge/store";
 
 export const dynamic = "force-dynamic";
@@ -63,6 +63,7 @@ export default async function CompanyPage({
     }),
   ]);
   resumeStale(user, knowledge);
+  scheduleCallBackfill(user, context.company.id);
 
   return (
     <CompanyRecord

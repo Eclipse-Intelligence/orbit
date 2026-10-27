@@ -1,3 +1,5 @@
+import { scheduleIndexing } from "@/lib/knowledge/background";
+import { addCallToKnowledge } from "@/lib/knowledge/calls";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { Db } from "@/lib/db/pool";
@@ -652,6 +654,14 @@ export async function summariseCall(
     }
     return saved;
   });
+  if (finished.status === "ready" && actor.type === "user") {
+    try {
+      const added = await addCallToKnowledge(actor, finished.id);
+      if (added?.created) scheduleIndexing(actor, [added.item.id]);
+    } catch (error) {
+      console.error("Call transcript wasn't added to Knowledge", error);
+    }
+  }
   return options.autoAccept === false ? finished : acceptAllActionItems(actor, finished);
 }
 

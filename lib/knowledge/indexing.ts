@@ -5,7 +5,7 @@ import { chunkText } from "@/lib/knowledge/chunk";
 import { ITEM_COLUMNS, ITEM_FROM, type ItemRow, type KnowledgeKind } from "@/lib/knowledge/store";
 import { completeJson, embedTexts, LlmError } from "@/lib/llm";
 import { readAttachmentText } from "@/lib/mail/attachment-text";
-import { MediaError, readPodcast, readYouTube, transcribeBytes, transcriptText } from "@/lib/knowledge/media";
+import { looksLikeEpisode, MediaError, readPodcast, readYouTube, transcribeBytes, transcriptText } from "@/lib/knowledge/media";
 import { readObject, StorageError } from "@/lib/storage";
 import { readWebPage, WebPageError, type Lookup } from "@/lib/web-page";
 
@@ -14,7 +14,7 @@ const SUMMARY_INPUT = 24_000;
 
 export class KnowledgeReadError extends Error {}
 
-export type Extracted = { text: string; title?: string | null };
+export type Extracted = { text: string; title?: string | null; kind?: KnowledgeKind };
 
 export type Extractor = (row: ItemRow, options: IndexOptions) => Promise<Extracted>;
 
@@ -79,6 +79,9 @@ async function readPodcastItem(row: ItemRow, options: IndexOptions): Promise<Ext
 
 async function readLink(row: ItemRow, options: IndexOptions): Promise<Extracted> {
   if (!row.source_url) throw new KnowledgeReadError("The link is missing.");
+  if (!options.readPage && (await looksLikeEpisode(row.source_url, options))) {
+    return { ...(await media(() => readPodcast(row.source_url!, options))), kind: "podcast" };
+  }
   const read = options.readPage ?? ((url: string) => readWebPage(url, { textMax: CONTENT_MAX }));
   try {
     const page = await read(row.source_url);
@@ -122,30 +125,34 @@ function failureMessage(error: unknown) {
 
 async function claim(actor: UserActor, id: string, force: boolean) {
   return withActor(actor, async (db) => {
-    const claimed = await db.query<{ id: string }>(
+    const claimed = await db.query<{ token: string }>(
       `update crm.knowledge_items set status = 'indexing', error = null
        where id = $1 and workspace_id = $2 and archived_at is null
          and (status in ('pending', 'failed') or ($3 and status = 'ready') or (status = 'indexing' and updated_at < now() - interval '5 minutes'))
-       returning id`,
+       returning updated_at::text as token`,
       [id, actor.workspaceId, force],
     );
-    if (claimed.rowCount === 0) return null;
+    const token = claimed.rows[0]?.token;
+    if (!token) return null;
     const result = await db.query<ItemRow & { content: string | null }>(`select ${ITEM_COLUMNS}, i.content from ${ITEM_FROM} where i.id = $1`, [id]);
-    return result.rows[0] ?? null;
+    return result.rows[0] ? { row: result.rows[0], token } : null;
   });
 }
 
 export async function indexKnowledgeItem(actor: UserActor, id: string, options: IndexOptions = {}) {
-  const row = await claim(actor, id, options.force ?? false);
-  if (!row) return null;
+  const claimed = await claim(actor, id, options.force ?? false);
+  if (!claimed) return null;
+  const { row, token } = claimed;
   try {
     let text = row.content?.trim() ?? "";
     let title = row.title;
+    let kind = row.kind;
     if (!text || (row.kind !== "transcript" && row.kind !== "attachment" && options.force)) {
       const extract = options.extractors?.[row.kind] ?? EXTRACTORS[row.kind];
       if (!extract) throw new KnowledgeReadError("Orbit can't read this kind of item yet.");
       const extracted = await extract(row, options);
       text = extracted.text.trim().slice(0, CONTENT_MAX);
+      kind = extracted.kind ?? kind;
       const host = row.source_url ? new URL(row.source_url).hostname.replace(/^www\./, "") : null;
       if (extracted.title?.trim() && (title === host || !title.trim())) title = extracted.title.replace(/\s+/g, " ").trim().slice(0, 300);
     }
@@ -159,10 +166,10 @@ export async function indexKnowledgeItem(actor: UserActor, id: string, options: 
     const stored = await withActor(actor, async (db) => {
       const updated = await db.query(
         `update crm.knowledge_items
-         set status = 'ready', error = null, title = $2, content = $3, char_count = $4, chunk_count = $5, summary = coalesce($6, summary), indexed_at = now()
-         where id = $1 and archived_at is null and status = 'indexing'
+         set status = 'ready', error = null, title = $2, content = $3, char_count = char_length($3), chunk_count = $4, summary = coalesce($5, summary), indexed_at = now(), kind = $7
+         where id = $1 and archived_at is null and status = 'indexing' and updated_at = $6::timestamptz
          returning id`,
-        [id, title, text, text.length, chunks.length, summary],
+        [id, title, text, chunks.length, summary, token, kind],
       );
       if (updated.rowCount === 0) return false;
       await db.query("delete from crm.knowledge_chunks where item_id = $1", [id]);
@@ -179,7 +186,7 @@ export async function indexKnowledgeItem(actor: UserActor, id: string, options: 
     if (!(error instanceof KnowledgeReadError)) console.error("Knowledge indexing failed", error);
     const message = failureMessage(error).slice(0, 500);
     await withActor(actor, (db) =>
-      db.query("update crm.knowledge_items set status = 'failed', error = $2 where id = $1 and archived_at is null", [id, message]),
+      db.query("update crm.knowledge_items set status = 'failed', error = $2 where id = $1 and archived_at is null and status = 'indexing' and updated_at = $3::timestamptz", [id, message, token]),
     ).catch(() => undefined);
     return { status: "failed" as const, error: message };
   }

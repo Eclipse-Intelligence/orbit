@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { captionSegments, linkKind, mp3Pieces, readPodcast, readYouTube, timedText, transcriptText, youtubeId } from "@/lib/knowledge/media";
+import { captionSegments, linkKind, looksLikeEpisode, transcribeBytes, mp3Pieces, readPodcast, readYouTube, timedText, transcriptText, youtubeId } from "@/lib/knowledge/media";
 
 const LLM = "https://llm.test/v1";
 const lookup = async () => ["93.184.216.34"];
@@ -173,5 +173,26 @@ describe("knowledge media", () => {
     assert.deepEqual(uploads, [9 * 1024 * 1024 + 100, 3 * 1024 * 1024 - 100]);
     assert.equal(result.text, "Transcript:\nPart one.\n\nPart two.");
     await assert.rejects(readPodcast("https://open.spotify.com/episode/abc", { fetchImpl, lookup }), /Spotify doesn't share episode audio/);
+  });
+
+  it("spots episode pages and feeds among plain links", async () => {
+    const { fetchImpl } = fake((url) => {
+      if (url === "https://show.example.com/ep/7") return new Response(`<html><head><meta property="og:audio" content="https://cdn.example.com/7.mp3"></head></html>`, { headers: { "content-type": "text/html" } });
+      if (url === "https://show.example.com/feed") return new Response(`<rss><channel><item><enclosure url="https://cdn.example.com/7.mp3"/></item></channel></rss>`, { headers: { "content-type": "application/rss+xml" } });
+      if (url === "https://news.example.com/story") return new Response(`<html><body><audio src="/clip.mp3"></audio><p>News.</p></body></html>`, { headers: { "content-type": "text/html" } });
+      return null;
+    });
+    assert.equal(await looksLikeEpisode("https://show.example.com/ep/7", { fetchImpl, lookup }), true);
+    assert.equal(await looksLikeEpisode("https://show.example.com/feed", { fetchImpl, lookup }), true);
+    assert.equal(await looksLikeEpisode("https://news.example.com/story", { fetchImpl, lookup }), false);
+    assert.equal(await looksLikeEpisode("https://missing.example.com/", { fetchImpl, lookup }), false);
+  });
+
+  it("refuses audio too long to finish before spending on it", async () => {
+    const { fetchImpl, calls } = fake(() => null);
+    const audio = new Uint8Array(60 * 1024 * 1024);
+    audio.set([0x49, 0x44, 0x33]);
+    await assert.rejects(transcribeBytes(audio, "long.mp3", "audio/mpeg", { fetchImpl, deadline: Date.now() + 60_000 }), /too long to transcribe here/);
+    assert.equal(calls.length, 0);
   });
 });

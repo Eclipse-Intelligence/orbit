@@ -22,7 +22,8 @@ import TrashIcon from "@/public/assets/images/mail/trash.svg";
 export type KnowledgeTargetProp = { companyId: string } | { eclipse: true };
 
 const POLL_MS = 3_000;
-const POLL_LIMIT_MS = 4 * 60_000;
+const POLL_LIMIT_MS = 10 * 60_000;
+const AUDIO_PIECE_BYTES = 10 * 1024 * 1024;
 const MAX_BYTES = 50 * 1024 * 1024;
 const ACCEPT = ".pdf,.docx,.pptx,.xlsx,.txt,.md,.csv,.html,.htm,.json,.vtt,.srt,.mp3,.m4a,.wav";
 
@@ -121,6 +122,10 @@ export default function KnowledgePanel({
         setUploads((current) => [...current, { key, name: file.name, error: `${file.name} is over 50 MB.` }]);
         continue;
       }
+      if (file.size > AUDIO_PIECE_BYTES && /\.(m4a|wav|aac|ogg|opus|flac)$/i.test(file.name)) {
+        setUploads((current) => [...current, { key, name: file.name, error: `Audio over 10 MB has to be MP3.` }]);
+        continue;
+      }
       setUploads((current) => [...current, { key, name: file.name, error: null }]);
       const prepared = await prepareKnowledgeUploadAction(target, { name: file.name, size: file.size, contentType: file.type });
       if (!prepared.item || !prepared.uploadUrl) {
@@ -213,7 +218,9 @@ export default function KnowledgePanel({
         event.preventDefault();
         setDragging(true);
       }}
-      onDragLeave={() => setDragging(false)}
+      onDragLeave={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false);
+      }}
       onDrop={onDrop}
     >
       <input

@@ -2,10 +2,11 @@ import { htmlToText } from "@/lib/mail/text";
 import { LlmError, transcribeAudio, TRANSCRIBE_MAX_BYTES } from "@/lib/llm";
 import { downloadPublic, WebPageError, type Lookup } from "@/lib/web-page";
 
-const AUDIO_MAX = 200 * 1024 * 1024;
+const AUDIO_MAX = 120 * 1024 * 1024;
+const ROUND_MS = 45_000;
+const SUPADATA_POLLS = 60;
 const PIECE_BYTES = 9 * 1024 * 1024;
 const PARALLEL = 3;
-const PIECE_MS = 60_000;
 const PARAGRAPH_MS = 60_000;
 const SUPADATA = "https://api.supadata.ai/v1";
 const ANDROID_CLIENT = { clientName: "ANDROID", clientVersion: "20.10.38", androidSdkVersion: 30, hl: "en", gl: "GB" };
@@ -93,7 +94,7 @@ async function supadata(target: string, options: MediaOptions) {
   if (response.status === 202 && body?.jobId) {
     const jobId = body.jobId;
     body = null;
-    while (!options.deadline || Date.now() < options.deadline - 15_000) {
+    for (let poll = 0; poll < SUPADATA_POLLS && (!options.deadline || Date.now() < options.deadline - 15_000); poll += 1) {
       await new Promise((resolve) => setTimeout(resolve, 3_000));
       const poll = await fetchImpl(`${SUPADATA}/transcript/${encodeURIComponent(jobId)}`, { headers, signal: AbortSignal.timeout(20_000) });
       const job = (await poll.json().catch(() => null)) as { status?: string; content?: unknown } | null;
@@ -398,18 +399,43 @@ export async function transcribeBytes(bytes: Uint8Array, name: string, type: str
   if (bytes.byteLength <= TRANSCRIBE_MAX_BYTES) return transcribeAudio(bytes, name, type, { fetchImpl: options.fetchImpl });
   if (!isMp3(bytes, type, name)) throw new MediaError("Audio over 10 MB has to be MP3 for Orbit to transcribe it.");
   const pieces = mp3Pieces(bytes);
+  if (options.deadline && Date.now() + Math.ceil(pieces.length / PARALLEL) * ROUND_MS > options.deadline) {
+    throw new MediaError("That audio is too long to transcribe here. Upload its transcript instead.");
+  }
   const results: string[] = new Array(pieces.length).fill("");
+  const stop = new AbortController();
   let next = 0;
   const worker = async () => {
-    while (next < pieces.length) {
+    while (next < pieces.length && !stop.signal.aborted) {
       const index = next;
       next += 1;
-      if (options.deadline && Date.now() > options.deadline - PIECE_MS) throw new MediaError("That audio is too long to transcribe in one go.");
-      results[index] = await transcribeAudio(pieces[index], `part-${index + 1}.mp3`, "audio/mpeg", { fetchImpl: options.fetchImpl });
+      if (options.deadline && Date.now() > options.deadline - ROUND_MS) {
+        stop.abort();
+        throw new MediaError("That audio is too long to transcribe here. Upload its transcript instead.");
+      }
+      try {
+        results[index] = await transcribeAudio(pieces[index], `part-${index + 1}.mp3`, "audio/mpeg", { fetchImpl: options.fetchImpl, signal: stop.signal });
+      } catch (error) {
+        stop.abort();
+        throw error;
+      }
     }
   };
   await Promise.all(Array.from({ length: Math.min(PARALLEL, pieces.length) }, worker));
   return results.filter(Boolean).join("\n\n");
+}
+
+export async function looksLikeEpisode(target: string, options: MediaOptions) {
+  if (linkKind(target) !== "link") return false;
+  try {
+    const page = await downloadPublic(target, { fetchImpl: options.fetchImpl, lookup: options.lookup, maxBytes: 3_000_000, timeoutMs: 12_000, accept: "text/html,application/rss+xml,application/xml;q=0.9,*/*;q=0.5" });
+    if (page.contentType.startsWith("audio/")) return true;
+    const head = new TextDecoder().decode(page.bytes.subarray(0, 3_000_000));
+    if (/xml|rss/.test(page.contentType) || /^\s*(<\?xml[^>]*>\s*)?<rss\b/i.test(head)) return /<enclosure\b/i.test(head);
+    return /<meta[^>]+property="og:audio(?::url|:secure_url)?"[^>]+content="[^"]+"/i.test(head);
+  } catch {
+    return false;
+  }
 }
 
 export async function readPodcast(target: string, options: MediaOptions): Promise<MediaText> {
@@ -425,7 +451,7 @@ export async function readPodcast(target: string, options: MediaOptions): Promis
   } catch (error) {
     throw new MediaError(error instanceof WebPageError ? `Couldn't download the episode: ${error.message}` : "Couldn't download the episode.");
   }
-  if (audio.truncated) throw new MediaError("That episode is over 200 MB.");
+  if (audio.truncated) throw new MediaError("That episode is over 120 MB.");
   let transcript: string;
   try {
     transcript = await transcribeBytes(audio.bytes, decodeURIComponent(parse(audio.url)?.pathname.split("/").pop() || "episode.mp3"), audio.contentType, options);
