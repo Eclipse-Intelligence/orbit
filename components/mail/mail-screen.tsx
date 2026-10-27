@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import Button from "@/components/_ui/button";
 import { Kbd } from "@/components/_ui/command";
 import {
@@ -57,6 +57,7 @@ import ClockIcon from "@/public/assets/images/mail/clock.svg";
 import InboxIcon from "@/public/assets/images/mail/inbox.svg";
 import MailOpenIcon from "@/public/assets/images/mail/mail-open.svg";
 import TrashIcon from "@/public/assets/images/mail/trash.svg";
+import { usePullToRefresh } from "@/components/mail/pull-refresh";
 
 const HOME_VIEW = "inbox:important";
 
@@ -566,6 +567,11 @@ export default function MailScreen({
   useEffect(() => {
     refreshRef.current = refresh;
   });
+  const listScroller = useRef<HTMLDivElement>(null);
+  const listBody = useRef<HTMLDivElement>(null);
+  const pullMark = useRef<HTMLSpanElement>(null);
+  const pullRefresh = useCallback(() => refreshRef.current(true), []);
+  usePullToRefresh(listScroller, listBody, pullMark, pullRefresh);
 
   useEffect(() => {
     if (!cursor || !current?.unread || keptUnread.current.has(cursor)) return;
@@ -1039,7 +1045,15 @@ export default function MailScreen({
               </p>
             )}
           </div>
-          <div className="min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-x-none">
+          <div ref={listScroller} className="relative min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-x-none">
+            <span
+              ref={pullMark}
+              aria-hidden
+              className="text-soft data-[ready=true]:text-foreground pointer-events-none absolute top-0 left-1/2 z-10 flex size-8 -translate-x-1/2 items-center justify-center rounded-full bg-white/[0.08] opacity-0"
+            >
+              <RefreshIcon className="size-3.5" />
+            </span>
+            <div ref={listBody}>
             {ask ? (
               <AskPanel ask={ask} now={now} onOpen={(key) => select(key, true)} />
             ) : query.view === "scheduled" && !query.query ? (
@@ -1084,6 +1098,7 @@ export default function MailScreen({
                 }
               />
             )}
+            </div>
           </div>
         </div>
         <div className={cn("min-h-0 min-w-0 flex-1 flex-col overflow-hidden md:my-2 md:mr-2 md:flex md:rounded-2xl md:bg-white/[0.02]", open ? "flex" : "hidden")}>
