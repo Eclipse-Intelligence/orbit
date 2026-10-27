@@ -17,6 +17,7 @@ import { lifecycleLabel, relativeWhen } from "@/lib/companies";
 import { companyHref } from "@/lib/crm/hrefs";
 import type { Company } from "@/lib/crm/types";
 import { KEYBOARD_ROW_CLASS } from "@/lib/shortcuts";
+import { fitLabel } from "@/lib/enrichment/fit";
 import { cn } from "@/lib/utils";
 import {
   TABLE_CELL_CLASS,
@@ -34,6 +35,7 @@ type CompanyRowProps = {
   selecting: boolean;
   onToggle: (range: boolean) => void;
   logoClientId: string | null;
+  showFit?: boolean;
 };
 
 function cellClass(key: TableColumnKey) {
@@ -53,6 +55,7 @@ export default function CompanyRow({
   selecting,
   onToggle,
   logoClientId,
+  showFit = false,
 }: CompanyRowProps) {
   const router = useRouter();
   const href = companyHref(company.id);
@@ -136,6 +139,18 @@ export default function CompanyRow({
       <TableCell role="cell" className={cellClass("health")} title={company.healthReason ?? undefined}>
         {company.health ? <HealthMark health={company.health} /> : <span className="text-subtle text-[13px]">Not set</span>}
       </TableCell>
+      {showFit && (
+        <TableCell role="cell" className={cn(cellClass("fit"), "text-[13px] tabular-nums")} title={company.icpFit === null ? undefined : fitLabel(company.icpFit)}>
+          {company.icpFit === null ? (
+            <span className="text-faint"><span aria-hidden>·</span><span className="sr-only">Not scored</span></span>
+          ) : (
+            <span>
+              {company.icpFit.toFixed(1)}
+              <span className="sr-only"> of 4, {fitLabel(company.icpFit)}</span>
+            </span>
+          )}
+        </TableCell>
+      )}
       <TableCell role="cell" className={cellClass("domain")} onClick={stop}>
         {company.domain ? (
           <a

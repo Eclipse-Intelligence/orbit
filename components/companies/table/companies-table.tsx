@@ -17,8 +17,9 @@ import TableFooter from "./table-footer";
 import { PAGE_SIZE } from "@/components/crm/paging";
 import {
   TABLE_CELL_CLASS,
-  TABLE_COLUMNS,
   TABLE_GRID_CLASS,
+  TABLE_GRID_FIT_CLASS,
+  tableColumns,
   TABLE_ROW_CLASS,
 } from "./table-columns";
 import {
@@ -40,6 +41,7 @@ const SORTABLE: Record<string, CompanySort | undefined> = {
   strength: "strength",
   domain: "domain",
   owner: "owner",
+  fit: "fit",
 };
 
 export default function CompaniesTable({
@@ -63,7 +65,7 @@ export default function CompaniesTable({
   mailboxConnected: boolean;
   tags: TagCount[];
   filters: CompanyListQuery;
-  enrichment: { company: boolean; logoClientId: string | null };
+  enrichment: { company: boolean; logoClientId: string | null; fit?: boolean };
 }) {
   const replaceParams = useListParams();
   const findDetails: BulkExtraAction = {
@@ -87,10 +89,10 @@ export default function CompaniesTable({
     <div className="border-border flex min-h-0 flex-1 flex-col border-t">
       <ScrollArea orientation="both" className="min-h-0 flex-1">
         <KeyboardList sequence>
-        <Table role="table" className={cn(TABLE_GRID_CLASS, "w-full pb-24")}>
+        <Table role="table" className={cn(enrichment.fit ? TABLE_GRID_FIT_CLASS : TABLE_GRID_CLASS, "w-full pb-24")}>
           <TableHeader role="rowgroup" className="contents">
             <TableRow role="row" className={cn(TABLE_ROW_CLASS, "group")}>
-              {TABLE_COLUMNS.map((column) => (
+              {tableColumns(Boolean(enrichment.fit)).map((column) => (
                 <TableHead
                   key={column.key}
                   role="columnheader"
@@ -125,6 +127,7 @@ export default function CompaniesTable({
                 selecting={selection.selecting}
                 onToggle={(range) => selection.toggle(company.id, range)}
                 logoClientId={enrichment.logoClientId}
+                showFit={Boolean(enrichment.fit)}
               />
             ))}
             {companies.length === 0 && (

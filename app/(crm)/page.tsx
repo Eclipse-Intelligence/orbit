@@ -8,7 +8,7 @@ import { getMailbox } from "@/lib/crm/inbox";
 import { listLifecycles } from "@/lib/crm/lifecycles";
 import { listTags } from "@/lib/crm/tags";
 import { companyQueryFromSearchParams } from "@/lib/crm/validation";
-import { enrichmentAvailability } from "@/lib/enrichment/settings";
+import { enrichmentAvailability, getEnrichmentSettings } from "@/lib/enrichment/settings";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -37,12 +37,13 @@ export default async function CompaniesPage({
   filters.limit = PAGE_SIZE;
   filters.offset = pageOffset(page);
 
-  const [listed, members, mailbox, tags, lifecycles] = await Promise.all([
+  const [listed, members, mailbox, tags, lifecycles, settings] = await Promise.all([
     listCompanies(user, { ...filters, relationships: true }),
     listMembers(user),
     getMailbox(user),
     listTags(user),
     listLifecycles(user),
+    getEnrichmentSettings(user),
   ]);
 
   const available = enrichmentAvailability();
@@ -58,7 +59,7 @@ export default async function CompaniesPage({
       tags={tags}
       lifecycles={lifecycles}
       mailboxConnected={mailbox?.status === "connected"}
-      enrichment={{ company: available.company, logoClientId: available.logoClientId }}
+      enrichment={{ company: available.company, logoClientId: available.logoClientId, fit: settings.webIcp }}
       viewer={{
         id: user.userId,
         name: user.fullName || user.email,

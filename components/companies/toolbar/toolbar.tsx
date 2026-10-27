@@ -36,6 +36,7 @@ type ToolbarProps = {
   tags?: TagCount[];
   lifecycles?: LifecycleCount[];
   selection: BulkSelection;
+  fit?: boolean;
 };
 
 export default function CompaniesToolbar({
@@ -43,6 +44,7 @@ export default function CompaniesToolbar({
   members = [],
   tags = [],
   lifecycles = [],
+  fit = false,
   selection,
 }: ToolbarProps) {
   const router = useRouter();
@@ -87,7 +89,7 @@ export default function CompaniesToolbar({
   return (
     <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 px-4 py-4">
       <div className="flex items-center gap-2 sm:hidden">
-        <MobileFilters filters={filters} members={members} tagOptions={tagOptions} lifecycleOptions={lifecycleOptions} onChange={replaceParams} />
+        <MobileFilters filters={filters} members={members} tagOptions={tagOptions} lifecycleOptions={lifecycleOptions} fit={fit} onChange={replaceParams} />
         <PresenceFilter
           fields={PRESENCE_FIELDS}
           has={filters.has ?? []}

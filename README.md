@@ -417,7 +417,9 @@ With `PARALLEL_API_KEY` set, Orbit can answer questions about each company from 
 - **Fill gaps.** When context.dev leaves size or industry empty, Orbit asks for them. Size is one of 1-10, 11-50, 51-200, 201-1000 or 1000+. Industry is picked from the industries the workspace already uses, so it stays consistent. Either is saved only at 70% or more, and only if the field is still empty.
 - **Weekly signals.** Once a week, Orbit checks every customer, prospect and company with an open deal against the signals listed (six to start: Raised money, New leader, Acquired or merged, Layoffs, Launch, Hiring in marketing; remove them or add your own). A signal at 80% or more becomes a market note on the company, with the best source link, so it reaches market memory and the morning brief. The same signal isn't raised again for that company for 90 days. The checks run in the 10 minute sync, a few companies at a time.
 
-Only the company's name, domain and website are sent to Parallel. Check existing companies runs the tag rules and gap filling through every company with a website that hasn't been checked. A check that comes back with no answer changes nothing.
+- **ICP fit.** Scores each company from 0 (not a fit) to 4 (strong fit) against your ideal customer, with up to eight source links shown under ICP fit on the company page. The ideal customer is what you write in the box, or, when it's empty, what Orbit has learned (ICP, audience, why we win and why we lose notes from Learning). Companies gain a Fit column you can sort by (Best ICP fit on phones). When the description changes, companies are due for rescoring, and the company page marks an old score.
+
+Only the company's name, domain and website are sent to Parallel, plus your ideal customer description for ICP fit. Check existing companies runs the tag rules and gap filling through every company with a website that hasn't been checked. A check that comes back with no answer changes nothing.
 
 ### Logos
 
@@ -437,12 +439,12 @@ The Contacts list (`/contacts`) and the Companies list (`/`) keep their sort and
 
 | Parameter | Contacts | Companies |
 | --- | --- | --- |
-| `sort` | `name` (default), `company`, `updated`, `created` | `name` (default), `domain`, `owner`, `interaction`, `strength`, `updated`, `created` |
+| `sort` | `name` (default), `company`, `updated`, `created` | `name` (default), `domain`, `owner`, `interaction`, `strength`, `updated`, `created`, `fit` |
 | `order` | `asc` or `desc` | `asc` or `desc` |
 | `has`, `missing` | Comma-separated: `email`, `phone`, `linkedin`, `company` | Comma-separated: `domain`, `contacts`, `interactions` |
 | Other | `q`, `tag`, `owner`, `company_id`, `page`, `include_archived=true` | `q`, `tag`, `owner`, `lifecycle`, `health` (`healthy`, `watch`, `at_risk`, `none`), `page`, `include_archived=true` |
 
-Name, company, domain and owner sort A to Z; updated, created, interaction and strength sort newest first. Records without a company, domain, owner or interaction go last, except `strength` in ascending order (Longest since contact), which puts never-contacted companies first. Ties are sorted by name. Click a column header to sort and again to reverse; on phones a Sort menu replaces the headers. Filter (F) sets each field to Any, Has or No. `GET /api/v1/contacts` and `GET /api/v1/companies` accept the same parameters (use `limit` and `offset` instead of `page`).
+Name, company, domain and owner sort A to Z; updated, created, interaction and strength sort newest first, and fit sorts the best ICP fit first. Records without a company, domain, owner or interaction go last, except `strength` in ascending order (Longest since contact), which puts never-contacted companies first. Ties are sorted by name. Click a column header to sort and again to reverse; on phones a Sort menu replaces the headers. Filter (F) sets each field to Any, Has or No. `GET /api/v1/contacts` and `GET /api/v1/companies` accept the same parameters (use `limit` and `offset` instead of `page`).
 
 ## Tasks
 
@@ -538,6 +540,8 @@ Approved changes run one after another on the server. Each shows Done, Didn't wo
 ### Reading web pages, Eclipse articles and docs
 
 The assistant can open any public web page or document with `read_web_page`: a link you give it, a prospect's website, a news story or a search result. Orbit first fetches the page from its own server, after checking the address resolves to a public internet address (private, local and cloud metadata addresses are refused, after every redirect too), and gives the assistant the title, description, the main text (the `<article>` or `<main>` part when there is one) and the links on the page, so it can click through. When that fetch is refused (401, 403, 429 or 503), times out, or the page has almost no text because it is drawn with JavaScript, Orbit opens it in a real browser on Browserbase (with Browserbase's proxies when the site blocked the plain request), waits for it to load, reads it and releases the browser straight away. Set `BROWSERBASE_API_KEY` and `BROWSERBASE_PROJECT_ID` to turn this on; without them, short pages come back as they are and blocked ones say so. PDF, Word, PowerPoint and Excel files (up to 50 MB) are read as text. Sites that forbid automated reading, LinkedIn in particular, may still refuse. This works whether web search is on or off; web search is for finding pages you don't have the address of.
+
+With `PARALLEL_API_KEY` set, the assistant can also check facts with `check_web` before it states them or writes to someone: yes or no questions (how likely, 0 to 100), pick-one questions and scores about a company or person, answered from the live web in about a second with the sources used, for $0.001 a call. No answer is treated as unknown, never as no.
 
 `social_lookup` reads LinkedIn and X through Mindcase (mindcase.co) as structured data, since LinkedIn blocks ordinary page reading: a LinkedIn profile (headline, location, about and recent roles, the reliable way to check someone's current job), a LinkedIn company, recent LinkedIn posts, an X profile or recent X posts. Give it a link or handle, or a contact or company and it uses the LinkedIn link Orbit has. Mindcase charges per record (a LinkedIn profile is $0.004, a tweet $0.00025); every lookup is logged in `crm.data_usage` with its cost, and lookups stop for the month once the workspace reaches `MINDCASE_MONTHLY_LIMIT_USD` (default $20). Workflow Ask AI steps have Read their LinkedIn profile, which adds the contact's current profile to the prompt; Spot job changes and Check if someone moved use it.
 
@@ -701,6 +705,7 @@ A workflow is built on a canvas, like n8n. It always starts with a When node (th
 | Node | What it does |
 | --- | --- |
 | Ask AI | Sends a prompt to the LLM API with the model you choose and returns the named answers you define (text, number, yes or no, list, or one of a set of choices). Each answer becomes a field for later steps. Search the web lets it look things up (news, LinkedIn, company sites) and adds a sources answer with the addresses it used. Give it what Orbit knows adds the record's details, recent activity, deals and your recent emails with the contact. Read their LinkedIn profile adds the contact's current LinkedIn profile, read through Mindcase. Emails and web pages are treated as material to read, never as instructions. |
+| Check the web | Asks the live web through Parallel (with `PARALLEL_API_KEY`), for $0.001 a check. Each question is yes or no (how likely, 0 to 100), pick one of your options (the option, or empty when the evidence doesn't settle it, plus its confidence) or a score on your levels (0 for the first level, to one decimal), and becomes a field for later steps, such as an If on the likelihood. A question with no answer is empty. It sends the run's company name, domain and website, the questions and the optional About text, and also gives the sources it used. It runs in test runs too. |
 | If, Continue only if | Branch on a condition, or stop this path unless it is true (is, is not, contains, is empty, more than, less than). |
 | For each item | Runs the nodes connected to Each item once per item of a list, then carries on from Done. |
 | Wait | Pauses for minutes, hours or days. |

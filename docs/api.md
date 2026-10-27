@@ -26,7 +26,7 @@ Optional `Idempotency-Key` header (printable ASCII, up to 200 characters). Reuse
 
 `GET /api/v1/companies`
 
-Query: `q`, `lifecycle` (`lead`, `prospect`, `customer`, `churned`, or a custom name; matching ignores case), `health` (`healthy`, `watch`, `at_risk`, or `none` for not set), `owner` (a user id or `unassigned`), `tag` (one tag; matching ignores case and extra spaces), `sort` (`name`, `domain`, `owner`, `interaction`, `strength`, `updated`, `created`; default `name`), `order` (`asc` or `desc`; each sort has its own default), `has` and `missing` (comma-separated `domain`, `contacts`, `interactions`), `limit` (1 to 100, default 50), `offset` (max 10000), `include_archived=true`. Each company in the list includes `relationship` (`label`: `strong`, `warm`, `cooling`, `one_sided`, `cold` or `new`, and a `reason`).
+Query: `q`, `lifecycle` (`lead`, `prospect`, `customer`, `churned`, or a custom name; matching ignores case), `health` (`healthy`, `watch`, `at_risk`, or `none` for not set), `owner` (a user id or `unassigned`), `tag` (one tag; matching ignores case and extra spaces), `sort` (`name`, `domain`, `owner`, `interaction`, `strength`, `updated`, `created`, `fit`; default `name`), `order` (`asc` or `desc`; each sort has its own default), `has` and `missing` (comma-separated `domain`, `contacts`, `interactions`), `limit` (1 to 100, default 50), `offset` (max 10000), `include_archived=true`. Each company in the list includes `relationship` (`label`: `strong`, `warm`, `cooling`, `one_sided`, `cold` or `new`, and a `reason`). `icpFit` is the company's ICP fit from 0 to 4 when Web checks has scored it, otherwise null.
 
 Response:
 

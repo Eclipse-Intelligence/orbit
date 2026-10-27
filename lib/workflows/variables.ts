@@ -197,6 +197,15 @@ export function variableOptions(definition: WorkflowDefinition | null, nodeId?: 
         options.push({ path: `steps.${step.id}.sources`, label: "sources", group });
       }
     }
+    if (step.type === "decide") {
+      const questions = Array.isArray(step.config.questions) ? (step.config.questions as { key?: string; type?: string }[]) : [];
+      for (const question of questions) {
+        if (!question.key) continue;
+        options.push({ path: `steps.${step.id}.${question.key}`, label: question.key, group });
+        if (question.type === "choice") options.push({ path: `steps.${step.id}.${question.key}Confidence`, label: `${question.key}Confidence`, group });
+      }
+      options.push({ path: `steps.${step.id}.sources`, label: "sources", group });
+    }
     if (step.type === "find_records") {
       options.push({ path: `steps.${step.id}.records`, label: "Records found", group }, { path: `steps.${step.id}.count`, label: "How many", group });
     }

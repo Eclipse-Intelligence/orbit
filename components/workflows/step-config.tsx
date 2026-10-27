@@ -3,6 +3,8 @@
 import Button from "@/components/_ui/button";
 import { Checkbox } from "@/components/_ui/checkbox";
 import { Input } from "@/components/_ui/input";
+import { NativeSelect } from "@/components/_ui/native-select";
+import { Textarea } from "@/components/_ui/textarea";
 import { recordSelectClass } from "@/components/crm/record-form";
 import TemplateField from "@/components/workflows/template-field";
 import {
@@ -31,6 +33,8 @@ export function matchLifecycleOption(options: BuilderOptions["lifecycles"], valu
 
 type Output = { key: string; type: string; description?: string; choices?: string[] };
 
+type Question = { key: string; type: string; question: string; options?: string[] };
+
 const OP_LABELS: Record<string, string> = {
   is: "is",
   is_not: "is not",
@@ -43,6 +47,22 @@ const OP_LABELS: Record<string, string> = {
 };
 
 const TYPE_LABELS: Record<string, string> = { text: "Text", number: "Number", boolean: "Yes or no", list: "List", choice: "One of" };
+
+const QUESTION_TYPES = [
+  { value: "yes_no", label: "Yes or no" },
+  { value: "choice", label: "Pick one" },
+  { value: "score", label: "Score" },
+];
+
+function questionHint(question: Question) {
+  const key = question.key || "answer";
+  if (question.type === "choice") return `${key}: the option, or empty if unclear. ${key}Confidence: 0 to 100.`;
+  if (question.type === "score") {
+    const top = Math.max((question.options ?? []).filter((option) => option.trim()).length - 1, 1);
+    return `${key}: 0 (first level) to ${top} (last), to one decimal.`;
+  }
+  return `${key}: how likely it's true, 0 to 100.`;
+}
 
 function Select({
   id,
@@ -225,6 +245,64 @@ function Outputs({ step, update }: { step: Step; update: (config: Record<string,
   );
 }
 
+function Questions({ step, update, variables }: { step: Step; update: (config: Record<string, unknown>) => void; variables: VariableOption[] }) {
+  const questions = (Array.isArray(step.config.questions) ? step.config.questions : []) as Question[];
+  const set = (next: Question[]) => update({ ...step.config, questions: next });
+  const change = (index: number, patch: Partial<Question>) => set(questions.map((item, at) => (at === index ? { ...item, ...patch } : item)));
+  return (
+    <fieldset className="flex flex-col gap-2">
+      <legend className="caption-style text-subtle pb-1.5">Questions (later nodes can use the answers)</legend>
+      {questions.map((question, index) => (
+        <div key={index} className="border-border flex flex-col gap-2 rounded-lg border p-3">
+          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+            <Input
+              aria-label="Answer name"
+              placeholder="answer_name"
+              value={question.key}
+              onChange={(event) => change(index, { key: event.target.value.replace(/[^a-zA-Z0-9_]/g, "").slice(0, 40) })}
+            />
+            <NativeSelect aria-label="Type" value={question.type} onChange={(event) => change(index, { type: event.target.value })} className="w-32">
+              {QUESTION_TYPES.map((type) => (
+                <option key={type.value} value={type.value}>
+                  {type.label}
+                </option>
+              ))}
+            </NativeSelect>
+          </div>
+          <TemplateField
+            id={`${step.id}-question-${index}`}
+            label="Question"
+            value={question.question}
+            options={variables}
+            placeholder={question.type === "score" ? "How actively is the company hiring?" : question.type === "choice" ? "How is the company funded?" : "Is {{contact.name}} still at {{company.name}}?"}
+            onChange={(value) => change(index, { question: value })}
+          />
+          {(question.type === "choice" || question.type === "score") && (
+            <Textarea
+              aria-label={question.type === "score" ? "Levels, lowest first, one per line" : "Options, one per line"}
+              placeholder={question.type === "score" ? "Levels, lowest first, one per line" : "Options, one per line"}
+              rows={4}
+              value={(question.options ?? []).join("\n")}
+              onChange={(event) => change(index, { options: event.target.value.split("\n") })}
+            />
+          )}
+          <p className="caption-style text-subtle">{questionHint(question)}</p>
+          {questions.length > 1 && (
+            <Button variant="ghost" size="sm" className="self-start" onClick={() => set(questions.filter((_, at) => at !== index))}>
+              Remove
+            </Button>
+          )}
+        </div>
+      ))}
+      {questions.length < 20 && (
+        <Button variant="ghost" size="sm" className="self-start" onClick={() => set([...questions, { key: "", type: "yes_no", question: "" }])}>
+          Add question
+        </Button>
+      )}
+    </fieldset>
+  );
+}
+
 export default function StepConfig({
   step,
   update,
@@ -277,6 +355,14 @@ export default function StepConfig({
             </label>
           </div>
           <Outputs step={step} update={update} />
+        </div>
+      );
+    case "decide":
+      return (
+        <div className="flex flex-col gap-3">
+          {field("about", "About (optional)", { rows: 2, placeholder: "{{contact.name}}, {{contact.jobTitle}}" })}
+          <Questions step={step} update={update} variables={variables} />
+          <p className="caption-style text-subtle leading-[1.4]">Sends the company&apos;s name and website, the questions and About. Each check costs $0.001.</p>
         </div>
       );
     case "if":

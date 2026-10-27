@@ -86,9 +86,11 @@ const COMPANY_SQL = `
       where t.company_id = c.id
         and t.archived_at is null
         and t.completed_at is null
-    ) as open_task_count
+    ) as open_task_count,
+    ws.icp_score
   from crm.companies c
   left join crm.profiles p on p.id = c.owner_id
+  left join crm.company_web_state ws on ws.company_id = c.id
 `;
 
 type CompanyRow = {
@@ -125,6 +127,7 @@ type CompanyRow = {
   updated_at: Date | string;
   last_interaction_at: Date | string | null;
   open_task_count: number;
+  icp_score: number | null;
 };
 
 const SORT_COLUMNS: Record<CompanySort, string> = {
@@ -135,9 +138,10 @@ const SORT_COLUMNS: Record<CompanySort, string> = {
   interaction: "last_interaction_at",
   strength: "last_interaction_at",
   owner: "lower(coalesce(nullif(p.full_name, ''), p.email))",
+  fit: "ws.icp_score",
 };
 
-const NULLS_LAST = new Set<CompanySort>(["domain", "interaction", "strength", "owner"]);
+const NULLS_LAST = new Set<CompanySort>(["domain", "interaction", "strength", "owner", "fit"]);
 
 const PRESENCE_SQL: Record<CompanyPresence, string> = {
   domain: "c.domain is not null",
@@ -175,6 +179,7 @@ function mapCompany(row: CompanyRow): Company {
     updatedAt: iso(row.updated_at) ?? new Date(0).toISOString(),
     lastInteractionAt: iso(row.last_interaction_at),
     openTaskCount: row.open_task_count ?? 0,
+    icpFit: row.icp_score === null || row.icp_score === undefined ? null : Math.round(Number(row.icp_score) * 10) / 10,
     tags: row.tags ?? [],
     health: row.health,
     healthReason: row.health_reason,
