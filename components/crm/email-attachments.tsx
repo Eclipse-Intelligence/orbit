@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import Button from "@/components/_ui/button";
 import { discardAttachmentsAction, prepareAttachmentAction } from "@/app/(crm)/capture/actions";
+import type { DraftFile } from "@/lib/mail/view";
 import { cn } from "@/lib/utils";
 import PaperclipIcon from "@/public/assets/images/_common/paperclip.svg";
 import XIcon from "@/public/assets/images/companies/detail/x.svg";
@@ -10,7 +11,16 @@ import XIcon from "@/public/assets/images/companies/detail/x.svg";
 const MAX_BYTES = 25 * 1024 * 1024;
 const MAX_COUNT = 10;
 
-type Item = { key: string; id: string | null; name: string; size: number; status: "uploading" | "ready" | "failed"; error?: string };
+type Item = {
+  key: string;
+  id: string | null;
+  name: string;
+  size: number;
+  contentType: string;
+  status: "uploading" | "ready" | "failed";
+  error?: string;
+  onDraft?: boolean;
+};
 
 function size(bytes: number) {
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
@@ -26,8 +36,10 @@ async function upload(url: string, file: File) {
   if (!response.ok) throw new Error("The upload didn't finish.");
 }
 
-export function useEmailAttachments() {
-  const [items, setItems] = useState<Item[]>([]);
+export function useEmailAttachments(onDraft: DraftFile[] = []) {
+  const [items, setItems] = useState<Item[]>(() =>
+    onDraft.map((file) => ({ key: `draft-${file.id}`, id: file.id, name: file.name, size: file.size, contentType: file.contentType, status: "ready", onDraft: true })),
+  );
   const counter = useRef(0);
 
   function patch(key: string, change: Partial<Item>) {
@@ -40,7 +52,7 @@ export function useEmailAttachments() {
     let count = kept.length;
     for (const file of files) {
       const key = `attachment-${(counter.current += 1)}`;
-      const base = { key, id: null, name: file.name, size: file.size };
+      const base = { key, id: null, name: file.name, size: file.size, contentType: file.type || "application/octet-stream" };
       if (count >= MAX_COUNT) {
         setItems((current) => [...current, { ...base, status: "failed", error: `Attach up to ${MAX_COUNT} files.` }]);
         continue;
@@ -71,13 +83,15 @@ export function useEmailAttachments() {
 
   function remove(key: string) {
     const item = items.find((entry) => entry.key === key);
-    if (item?.id) void discardAttachmentsAction([item.id]);
+    if (item?.id && !item.onDraft) void discardAttachmentsAction([item.id]);
     setItems((current) => current.filter((entry) => entry.key !== key));
   }
 
+  const ready = items.filter((item) => item.status === "ready" && item.id);
   return {
     items,
-    ids: items.filter((item) => item.status === "ready" && item.id).map((item) => item.id as string),
+    ids: ready.map((item) => item.id as string),
+    files: ready.map((item): DraftFile => ({ id: item.id as string, name: item.name, size: item.size, contentType: item.contentType })),
     uploading: items.some((item) => item.status === "uploading"),
     add,
     remove,

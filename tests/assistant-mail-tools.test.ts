@@ -4,6 +4,7 @@ import { after, afterEach, before, beforeEach, describe, it } from "node:test";
 import { describeAction, recordNames, runTool } from "@/lib/assistant/tools";
 import { createCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
+import { withActor } from "@/lib/crm/context";
 import { prepareAttachment, sweepEmailAttachments } from "@/lib/crm/email-attachments";
 import { listEmailTemplates } from "@/lib/crm/email-templates";
 import { saveMailbox } from "@/lib/crm/inbox";
@@ -11,7 +12,7 @@ import type { UserActor } from "@/lib/crm/types";
 import { encryptSecret } from "@/lib/crypto/secret";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { listKnowledge } from "@/lib/knowledge/store";
-import { listScheduledDrafts, readDraftInput, scheduleMailDraft, sendForAgent } from "@/lib/mail/compose";
+import { listScheduledDrafts, readDraftInput, saveMailDraft, scheduleMailDraft, sendForAgent, sendMailDraft, threadDrafts } from "@/lib/mail/compose";
 import { processDueMail } from "@/lib/mail/due";
 import { syncMail } from "@/lib/mail/sync";
 import { resetStorageBucketCache } from "@/lib/storage";
@@ -213,7 +214,7 @@ describe("assistant mail tools", () => {
         attachments: [prepared.id],
         sendAt: new Date(Date.now() + 3 * 24 * 3_600_000).toISOString(),
       },
-      { origin: null, fetchImpl: env.fetchImpl },
+      { storedFiles: "replace", origin: null, fetchImpl: env.fetchImpl },
     );
     await getAdminPool().query("update crm.email_attachments set created_at = now() - interval '2 days'");
     assert.equal(await sweepEmailAttachments(env.fetchImpl), 0);
@@ -410,12 +411,13 @@ describe("assistant mail tools", () => {
         attachments: [prepared.id],
         sendAt: new Date(Date.now() + 24 * 3_600_000).toISOString(),
       },
-      { origin: null, fetchImpl: env.fetchImpl },
+      { storedFiles: "replace", origin: null, fetchImpl: env.fetchImpl },
     );
     const failed = (await withFetch(env.fetchImpl, () => runTool(owner, "send_email", { draftId: draft.id, body: "Hi Jane, the quote is attached." }))) as { error: string };
     assert.equal(failed.error, "Quote.pdf didn't finish uploading. Attach it again.");
     const listed = (await listScheduledDrafts(owner)).find((item) => item.id === draft.id);
     assert.equal(listed?.sendError, "Quote.pdf didn't finish uploading. Attach it again.");
+    assert.deepEqual(listed?.attachments, [{ id: prepared.id, name: "Quote.pdf", size: 4, contentType: "application/pdf" }]);
     assert.deepEqual(await draftFiles(draft.id), [prepared.id]);
     await getAdminPool().query("delete from crm.mail_drafts where id = $1", [draft.id]);
   });
@@ -463,5 +465,43 @@ describe("assistant mail tools", () => {
     assert.ok(graphCalls(env.calls).includes(`DELETE /me/messages/${original}`));
     assert.deepEqual(postedFiles(env.calls, moved).map((file) => file.name), ["Eclipse deck.pdf"]);
     assert.ok(graphCalls(env.calls).includes(`POST /me/messages/${moved}/send`));
+  });
+
+  it("shows a draft's stored files when it's opened in compose, and sends only the files compose still lists", async () => {
+    const env = world();
+    env.objects.set(`knowledge/${owner.workspaceId}/deck/Eclipse-deck.pdf`, DECK);
+    const body = "Hi Jane,\n\nTwo files attached.\n\nMark";
+    const open = async (draftId: string) => {
+      const threadKey = (await getAdminPool().query<{ thread_key: string }>("select thread_key from crm.mail_drafts where id = $1", [draftId])).rows[0].thread_key;
+      const { drafts } = await withActor(owner, (db) => threadDrafts(db, owner, sourceId, threadKey));
+      return drafts.find((item) => item.id === draftId)!;
+    };
+    const twoFiles = async () => {
+      const saved = (await withFetch(env.fetchImpl, () => runTool(owner, "save_email_draft", { to: ["jane@acme.test"], subject: "Two files", body, attachmentIds: [deckId] }))) as { draftId: string };
+      const deck = (await open(saved.draftId)).attachments![0];
+      const notes = await prepareAttachment(owner, { name: "Notes.txt", size: 3, contentType: "text/plain" }, env.fetchImpl);
+      env.objects.set(`email-attachments/${notes.id}`, new Uint8Array([1, 2, 3]));
+      const input = readDraftInput({ id: saved.draftId, mode: "new", sourceId, to: ["jane@acme.test"], subject: "Two files", body });
+      await saveMailDraft(owner, { ...input, attachments: [deck.id, notes.id] }, { origin: null, fetchImpl: env.fetchImpl, storedFiles: "replace" });
+      return { draftId: saved.draftId, input, deck, notes };
+    };
+
+    const first = await twoFiles();
+    assert.deepEqual((await open(first.draftId)).attachments, [
+      { id: first.deck.id, name: "Eclipse deck.pdf", size: DECK.byteLength, contentType: "application/pdf" },
+      { id: first.notes.id, name: "Notes.txt", size: 3, contentType: "text/plain" },
+    ]);
+    await saveMailDraft(owner, { ...first.input, attachments: [first.notes.id] }, { origin: null, fetchImpl: env.fetchImpl, storedFiles: "replace" });
+    assert.deepEqual((await open(first.draftId)).attachments?.map((file) => file.name), ["Notes.txt"]);
+    await saveMailDraft(owner, { ...first.input, attachments: [first.deck.id, first.notes.id] }, { origin: null, fetchImpl: env.fetchImpl, storedFiles: "replace" });
+    env.calls.length = 0;
+    await sendMailDraft(owner, { ...first.input, attachments: [first.notes.id] }, { origin: null, fetchImpl: env.fetchImpl, storedFiles: "replace" });
+    assert.deepEqual(postedFiles(env.calls).map((file) => file.name), ["Notes.txt"]);
+
+    const second = await twoFiles();
+    env.calls.length = 0;
+    const sent = (await withFetch(env.fetchImpl, () => runTool(owner, "send_email", { draftId: second.draftId, body }))) as { sent: boolean };
+    assert.equal(sent.sent, true);
+    assert.deepEqual(postedFiles(env.calls).map((file) => file.name), ["Eclipse deck.pdf", "Notes.txt"]);
   });
 });

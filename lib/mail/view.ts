@@ -81,6 +81,8 @@ export type ComposeAccount = { id: string; email: string; signature: string | nu
 
 export type DraftMode = "new" | "reply" | "reply_all" | "forward";
 
+export type DraftFile = { id: string; name: string; size: number; contentType: string };
+
 export type MailDraft = {
   id: string;
   sourceId: string;
@@ -95,6 +97,7 @@ export type MailDraft = {
   sendAt: string | null;
   sendError: string | null;
   identityId?: string | null;
+  attachments?: DraftFile[];
 };
 
 function mine(address: MailAddress | null | undefined, own: Set<string>) {
