@@ -8,8 +8,16 @@ import GranolaKey from "@/components/crm/granola-key";
 import type { MailboxSummary } from "@/lib/crm/inbox";
 import { ReadwiseSync, ReadwiseToken } from "@/components/crm/readwise-settings";
 import type { ReadwiseStatus } from "@/lib/readwise/keys";
+import RecallKey from "@/components/crm/recall-settings";
+import type { RecallStatus } from "@/lib/recall/keys";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
 import { cn } from "@/lib/utils";
+
+const RECALL_TAGS: Record<RecallStatus["tags"], string> = {
+  names: "Tags: the assistant can use your Recall tag names.",
+  ids: "Tags: Recall's API filters by tag id, not name, and Orbit can't list your tags. An assistant connected to Recall's own MCP can list ids (explore_kb, list_tags).",
+  unknown: "Tags: not checked yet. Orbit checks when the assistant first filters by tag.",
+};
 
 function syncedLine(lastSyncedAt: string | null) {
   return lastSyncedAt
@@ -48,6 +56,7 @@ export default function IntegrationsSettings({
   calls,
   granola,
   readwise,
+  recall,
   linear,
 }: {
   configured: boolean;
@@ -55,6 +64,7 @@ export default function IntegrationsSettings({
   calls: CallSyncSummary | null;
   granola: GranolaStatus;
   readwise: ReadwiseStatus;
+  recall: RecallStatus;
   linear: LinearStatus;
 }) {
   const live = mailbox?.status === "connected";
@@ -199,6 +209,19 @@ export default function IntegrationsSettings({
           </ReadwiseSync>
         )}
         <ReadwiseToken connected={readwise.connected} hint={readwise.hint} />
+      </SettingsCard>
+
+      <SettingsCard
+        id="recall"
+        title="Recall"
+        description="The assistant can search and read your Recall when you ask. Nothing is copied into Orbit."
+      >
+        <RecallKey connected={recall.connected}>
+          <Status tone={recall.connected ? "on" : "off"}>
+            {recall.connected ? `Connected${recall.hint ? ` · key ending ${recall.hint}` : ""}` : "Not connected"}
+          </Status>
+        </RecallKey>
+        {recall.connected && <p className="caption-style text-subtle leading-[1.4]">{RECALL_TAGS[recall.tags]}</p>}
       </SettingsCard>
 
       <SettingsCard

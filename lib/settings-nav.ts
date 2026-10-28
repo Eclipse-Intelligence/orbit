@@ -32,6 +32,7 @@ const HASH_TARGETS: Record<string, string> = {
   microsoft: SETTINGS_PATHS.integrations,
   granola: SETTINGS_PATHS.integrations,
   readwise: SETTINGS_PATHS.integrations,
+  recall: SETTINGS_PATHS.integrations,
   clickup: SETTINGS_PATHS.integrations,
   linear: SETTINGS_PATHS.integrations,
   teams: SETTINGS_PATHS.integrations,

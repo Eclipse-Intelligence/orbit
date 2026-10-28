@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, afterEach, before, describe, it } from "node:test";
-import { TOOL_BY_NAME, describeAction, runTool } from "@/lib/assistant/tools";
+import { TOOL_BY_NAME, describeAction, findTool, runTool } from "@/lib/assistant/tools";
 import { createCompany } from "@/lib/crm/companies";
 import type { UserActor } from "@/lib/crm/types";
 import { getPool } from "@/lib/db/pool";
@@ -189,7 +189,10 @@ describe("linear in the assistant", () => {
   });
 
   it("only writes to Linear through approved actions", () => {
-    for (const name of ["linear_create_issue", "linear_comment", "linear_update_issue"]) assert.equal(TOOL_BY_NAME.get(name)?.write, true, name);
+    for (const name of ["linear_create_issue", "linear_update_issue"]) assert.equal(TOOL_BY_NAME.get(name)?.write, true, name);
+    assert.equal(TOOL_BY_NAME.has("linear_comment"), false);
+    assert.equal(findTool("linear_comment")?.name, "linear_update_issue");
+    assert.equal(findTool("linear_comment")?.write, true);
     for (const name of ["linear_search_issues", "linear_get_issue"]) assert.notEqual(TOOL_BY_NAME.get(name)?.write, true, name);
     assert.match(TOOL_BY_NAME.get("linear_create_issue")?.description ?? "", /never on your own initiative/);
     const card = describeAction(
@@ -227,5 +230,44 @@ describe("linear in the assistant", () => {
       read.issue.comments.map((comment) => comment.body),
       ["First", "Second"],
     );
+  });
+
+  it("comments through linear_update_issue, alone or with changes, and keeps the old linear_comment name working", async () => {
+    assert.deepEqual(describeAction("linear_update_issue", { issue: "CNT-7", comment: "Client  confirmed" }), {
+      title: "Comment on CNT-7",
+      lines: ["Comment: Client confirmed"],
+    });
+    assert.deepEqual(describeAction("linear_update_issue", { issue: "CNT-7", status: "Done", comment: "Shipped" }), {
+      title: "Update CNT-7",
+      lines: ["Status: Done", "Comment: Shipped"],
+    });
+    assert.deepEqual(describeAction("linear_comment", { issue: "CNT-7", body: "From an old card" }), {
+      title: "Comment on CNT-7",
+      lines: ["Comment: From an old card"],
+    });
+
+    process.env.LINEAR_API_KEY = "lin_api_test";
+    const fake = fakeLinear();
+    globalThis.fetch = fake.fetchImpl;
+    const nothing = (await runTool(owner, "linear_update_issue", { issue: "CNT-7" })) as { error: string };
+    assert.match(nothing.error, /or give a comment/);
+    assert.ok(!fake.calls.some((call) => call.query.includes("issueUpdate") || call.query.includes("commentCreate")));
+
+    const commentOnly = (await runTool(owner, "linear_update_issue", { issue: "CNT-7", comment: "Client confirmed" })) as Record<string, unknown>;
+    assert.deepEqual(Object.keys(commentOnly), ["comment"]);
+    assert.equal(fake.calls.filter((call) => call.query.includes("issueUpdate")).length, 0);
+    assert.deepEqual(fake.calls.at(-1)?.variables, { input: { issueId: "uuid-CNT-7", body: "Client confirmed" } });
+
+    const both = (await runTool(owner, "linear_update_issue", { issue: "CNT-7", status: "done", comment: "Shipped" })) as {
+      issue: { state: string };
+      comment: { issue: string };
+    };
+    assert.equal(both.issue.state, "Done");
+    assert.equal(both.comment.issue, "CNT-7");
+    assert.equal(fake.calls.filter((call) => call.query.includes("issueUpdate")).length, 1);
+
+    const old = (await runTool(owner, "linear_comment", { issue: "CNT-7", body: "Old card" })) as { comment: { issue: string } };
+    assert.equal(old.comment.issue, "CNT-7");
+    assert.deepEqual(fake.calls.at(-1)?.variables, { input: { issueId: "uuid-CNT-7", body: "Old card" } });
   });
 });
