@@ -8,6 +8,7 @@ import DetailSection from "@/components/companies/detail/detail-section";
 import ContactActivities from "@/components/crm/contact-activities";
 import ContactEditor from "@/components/crm/contact-editor";
 import FindDetailButton from "@/components/crm/find-detail";
+import CheckEmailButton from "@/components/crm/check-email";
 import { contactRecipient } from "@/lib/crm/personalise";
 import InviteDialog, { InviteNotice } from "@/components/crm/invite-dialog";
 import MeetingsCard from "@/components/crm/meetings-card";
@@ -29,6 +30,7 @@ import type { Viewer } from "@/components/crm/viewer";
 import type { MeetingsSummary } from "@/lib/crm/calendar";
 import type { InviteSetup } from "@/lib/crm/invites";
 import type { ContactLookups } from "@/lib/enrichment/contacts";
+import type { EmailCheck } from "@/lib/enrichment/email-check";
 import type { EnrichmentAvailability } from "@/lib/enrichment/settings";
 import { companyHref } from "@/lib/crm/hrefs";
 import type {
@@ -75,7 +77,12 @@ export default function ContactRecord({
   tasks: Task[];
   tags: TagCount[];
   invite: InviteSetup;
-  enrichment: { available: EnrichmentAvailability; lookups: ContactLookups[string] };
+  enrichment: {
+    available: EnrichmentAvailability;
+    lookups: ContactLookups[string];
+    canCheckEmail?: boolean;
+    emailCheck?: EmailCheck | null;
+  };
   workflows?: { id: string; name: string }[];
   proposals?: DocumentSummary[];
   relationship?: Relationship;
@@ -265,7 +272,11 @@ export default function ContactRecord({
                     label="Email"
                     value={shown.email ?? ""}
                     accessory={
-                      !shown.email && enrichment.available.email ? (
+                      shown.email ? (
+                        enrichment.canCheckEmail ? (
+                          <CheckEmailButton contactId={shown.id} email={shown.email} check={enrichment.emailCheck ?? null} />
+                        ) : null
+                      ) : enrichment.available.email ? (
                         <FindDetailButton contactId={shown.id} field="email" lookup={enrichment.lookups?.email} variant="text" />
                       ) : null
                     }
