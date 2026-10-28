@@ -52,7 +52,7 @@ export default function RecallKey({ connected, children }: { connected: boolean;
               placeholder="Your Recall API key"
               value={key}
               onChange={(event) => setKey(event.target.value)}
-              className="flex-1"
+              className="sm:flex-1"
             />
             <Button variant="secondary" size="sm" type="submit" className="h-9" disabled={pending || !key.trim()}>
               {pending ? "Checking…" : "Connect"}
