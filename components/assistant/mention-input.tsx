@@ -89,6 +89,7 @@ export default function MentionInput({
   const [scrollTop, setScrollTop] = useState(0);
   const picked = useRef<Mention[]>([]);
   const box = useRef<HTMLDivElement>(null);
+  const list = useRef<HTMLUListElement>(null);
   const [place, setPlace] = useState<CSSProperties | null>(null);
 
   useEffect(() => {
@@ -169,20 +170,28 @@ export default function MentionInput({
     const measure = () => {
       const rect = box.current?.getBoundingClientRect();
       if (!rect) return;
-      const width = Math.min(352, Math.max(rect.width, 240), window.innerWidth - 16);
-      const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
-      setPlace(
+      const width = Math.round(Math.min(352, Math.max(rect.width, 240), window.innerWidth - 16));
+      const left = Math.round(Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)));
+      const next =
         listPlacement === "above"
-          ? { left, width, bottom: window.innerHeight - rect.top + 8, maxHeight: Math.min(288, rect.top - 16) }
-          : { left, width, top: rect.bottom + 8, maxHeight: Math.min(288, window.innerHeight - rect.bottom - 16) },
+          ? { left, width, top: undefined, bottom: Math.round(window.innerHeight - rect.top + 8), maxHeight: Math.round(Math.min(288, rect.top - 16)) }
+          : { left, width, top: Math.round(rect.bottom + 8), bottom: undefined, maxHeight: Math.round(Math.min(288, window.innerHeight - rect.bottom - 16)) };
+      setPlace((current) =>
+        current && current.left === next.left && current.width === next.width && current.top === next.top && current.bottom === next.bottom && current.maxHeight === next.maxHeight
+          ? current
+          : next,
       );
+    };
+    const scrolled = (event: Event) => {
+      if (event.target instanceof Node && list.current?.contains(event.target)) return;
+      measure();
     };
     measure();
     window.addEventListener("resize", measure);
-    window.addEventListener("scroll", measure, true);
+    window.addEventListener("scroll", scrolled, true);
     return () => {
       window.removeEventListener("resize", measure);
-      window.removeEventListener("scroll", measure, true);
+      window.removeEventListener("scroll", scrolled, true);
     };
   }, [showList, listPlacement]);
 
@@ -233,11 +242,12 @@ export default function MentionInput({
       />
       {showList && place && createPortal(
         <ul
+          ref={list}
           id={listId}
           role="listbox"
           aria-label={kinds ? "Tag a person or company" : "Tag a person, company, task, opportunity or proposal"}
           style={place}
-          className="bg-popover border-line-strong shadow-overlay fixed z-[100] overflow-y-auto rounded-xl border p-1"
+          className="bg-popover border-line-strong shadow-overlay fixed z-[100] overflow-y-auto overscroll-contain rounded-xl border p-1"
         >
           {options.map((option, index) => (
             <li key={`${option.kind}-${option.id}`} role="option" aria-selected={index === highlight}>
