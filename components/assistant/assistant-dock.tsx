@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type DragEvent, type FormEvent } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type CSSProperties, type DragEvent, type FormEvent } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Kbd } from "@/components/_ui/command";
@@ -303,6 +303,66 @@ function ActionGroup({ actions, busy, onDecide }: { actions: AssistantAction[]; 
   );
 }
 
+type Shown = { key: string; message: DisplayMessage } | { key: string; tools: DisplayMessage["tools"] };
+
+function visible(message: DisplayMessage) {
+  return message.role === "user" || Boolean(message.content) || message.sources.length > 0 || message.actions.length > 0;
+}
+
+function shownItems(messages: DisplayMessage[], busy: boolean): Shown[] {
+  const segments: DisplayMessage[][] = [];
+  for (const message of messages) {
+    if (message.role === "user" || segments.length === 0) segments.push([message]);
+    else segments[segments.length - 1].push(message);
+  }
+  return segments.flatMap((segment, index) => {
+    const [first, ...rest] = segment;
+    const lead = first.role === "user" ? [first] : [];
+    const replies = first.role === "user" ? rest : segment;
+    const tools = replies.flatMap((message) => message.tools);
+    const live = busy && index === segments.length - 1;
+    return [
+      ...lead.map((message) => ({ key: message.id, message })),
+      ...(tools.length > 0 && !live ? [{ key: `tools-${first.id}`, tools }] : []),
+      ...replies.filter(visible).map((message) => ({ key: message.id, message })),
+    ];
+  });
+}
+
+function ToolTrail({ tools }: { tools: DisplayMessage["tools"] }) {
+  const [open, setOpen] = useState(false);
+  const panel = useId();
+  return (
+    <div className="flex flex-col items-start gap-1.5">
+      <Button
+        variant="ghost"
+        size="none"
+        type="button"
+        aria-expanded={open}
+        aria-controls={panel}
+        onClick={() => setOpen((value) => !value)}
+        className="caption-style -ml-1.5 gap-1 rounded-md px-1.5 py-1"
+      >
+        {open ? "Hide tool use" : "Show tool use"} · {tools.length}
+        <ChevronDownIcon aria-hidden className={cn("size-3 transition-transform duration-150 ease-power3-out", open && "rotate-180")} />
+      </Button>
+      {open && (
+        <div id={panel} className="w-full rounded-xl border border-dashed border-white/15 px-3 py-2">
+          <ol aria-label="Tool use" className="flex max-h-48 flex-col gap-1 overflow-y-auto overscroll-contain">
+            {tools.map((tool, index) => (
+              <li key={`${tool.id}-${index}`} className="text-subtle flex min-h-[18px] shrink-0 items-center gap-2 text-[12px] leading-[18px]">
+                <span aria-hidden className="bg-faint size-1.5 shrink-0 rounded-full" />
+                <span className="truncate">{tool.label}</span>
+                <span className="text-faint shrink-0">✓</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function LiveSteps({ tools, thinking }: { tools: LiveTool[]; thinking: boolean }) {
   const list = useRef<HTMLOListElement>(null);
   const rows = tools.length + (thinking ? 1 : 0);
@@ -416,15 +476,6 @@ function Message({
   }
   return (
     <div className="flex flex-col gap-2.5">
-      {message.tools.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {message.tools.map((tool) => (
-            <span key={tool.id} className="caption-style text-subtle bg-white/[0.04] rounded-full px-2 py-0.5">
-              {tool.label}
-            </span>
-          ))}
-        </div>
-      )}
       {message.content && <CopyableReply text={message.content} />}
       {message.sources.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
@@ -949,9 +1000,13 @@ export default function AssistantDock() {
         >
           {messages.length > 0 || busy ? (
             <div className="flex flex-col gap-5">
-              {messages.map((message) => (
-                <Message key={message.id} message={message} busy={busy} onDecide={decide} />
-              ))}
+              {shownItems(messages, busy).map((item) =>
+                "message" in item ? (
+                  <Message key={item.key} message={item.message} busy={busy} onDecide={decide} />
+                ) : (
+                  <ToolTrail key={item.key} tools={item.tools} />
+                ),
+              )}
               {busy && streamed && (
                 <div aria-busy="true">
                   <Markdown text={streamed} />
