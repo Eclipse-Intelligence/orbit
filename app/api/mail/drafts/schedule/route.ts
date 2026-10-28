@@ -11,7 +11,7 @@ export async function POST(request: Request) {
     scheduleMailDraft(
       actor,
       { ...readDraftInput(body), attachments: readAttachmentIds(body.attachments), sendAt: typeof body.sendAt === "string" ? body.sendAt : "" },
-      { origin: mailOrigin(request) },
+      { origin: mailOrigin(request), storedFiles: "replace" },
     ),
   );
 }

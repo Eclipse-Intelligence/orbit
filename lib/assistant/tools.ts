@@ -9,7 +9,12 @@ import { ARTICLES_URL, DOCS_URL, eclipseDocsIndex, listEclipseArticles, readEcli
 import { readWebPage, WebPageError } from "@/lib/web-page";
 import { checkWeb } from "@/lib/assistant/check-web";
 import { searchKnowledge } from "@/lib/knowledge/search";
-import { addKnowledgePages, CONTENT_LIMIT, listKnowledge, readKnowledge, targetFrom, type KnowledgeItem } from "@/lib/knowledge/store";
+import { addKnowledgePages, archiveKnowledge, CONTENT_LIMIT, listKnowledge, readKnowledge, targetFrom, type KnowledgeItem } from "@/lib/knowledge/store";
+import { addMailAttachmentToKnowledge } from "@/lib/knowledge/attachments";
+import { listMailAttachments } from "@/lib/mail/attachments";
+import { enrichContacts } from "@/lib/enrichment/contacts";
+import { enrichmentAllowed } from "@/lib/enrichment/limits";
+import { PROVIDER_BY_ID, type ContactField } from "@/lib/enrichment/providers";
 import { scheduleIndexing } from "@/lib/knowledge/background";
 import { mapSite } from "@/lib/knowledge/site";
 import { MindcaseError } from "@/lib/mindcase";
@@ -27,6 +32,7 @@ import { STARTER_TEMPLATES as PROPOSAL_STARTERS } from "@/lib/proposals/starters
 import { addStep, removeStep, updateStep } from "@/lib/proposals/steps";
 import { blockLinks, BLOCKS_GUIDE, onlyFields, proposalForAgent, templateForAgent, templateSettings } from "@/lib/proposals/agent";
 import { mailOrigin } from "@/lib/mail/origin";
+import type { MailAddress } from "@/lib/mail/types";
 import { archiveBoard, createBoard, getBoard, listBoards, updateBoard } from "@/lib/crm/boards";
 import { savePipelineStages } from "@/lib/crm/pipeline";
 import { definitionFromInput, STEP_TYPES, TRIGGER_TYPES } from "@/lib/workflows/definition";
@@ -46,21 +52,22 @@ import {
 } from "@/lib/workflows/store";
 import { STARTER_TEMPLATES } from "@/lib/workflows/templates";
 import { BULK_LIMIT, runBulk } from "@/lib/crm/bulk";
+import { attachableFiles, discardAttachments } from "@/lib/crm/email-attachments";
 import { listActivities } from "@/lib/crm/activities";
 import { getCalendarStatus, getMeetings, listPeopleMet, myAddresses, readPeople, readPerson } from "@/lib/crm/calendar";
 import { listCalendarItems } from "@/lib/crm/calendars";
 import { getInsightTranscript, getInsightsForActivities } from "@/lib/crm/call-insights";
 import { createTaskWithClickUp, getClickUpPicker, getClickUpState, pushClickUpTask } from "@/lib/crm/clickup";
-import { createCompany, getCompany, listCompanies, listMembers, updateCompany } from "@/lib/crm/companies";
-import { createContact, getContact, listContacts, updateContact } from "@/lib/crm/contacts";
+import { archiveCompany, createCompany, getCompany, listCompanies, listMembers, updateCompany } from "@/lib/crm/companies";
+import { archiveContact, createContact, getContact, listContacts, updateContact } from "@/lib/crm/contacts";
 import { mergeCompanies, mergeContacts } from "@/lib/crm/merge";
 import { listUnfiledImports } from "@/lib/crm/conversations";
-import { listEmailTemplates } from "@/lib/crm/email-templates";
+import { archiveEmailTemplate, createEmailTemplate, listEmailTemplates, updateEmailTemplate } from "@/lib/crm/email-templates";
 import { CrmError } from "@/lib/crm/errors";
 import { getGranolaStatus } from "@/lib/crm/granola";
 import { companyHref, contactHref, opportunityHref } from "@/lib/crm/hrefs";
 import { getMailbox, listInbox } from "@/lib/crm/inbox";
-import { createInvite, getMeetingLink, rescheduleInvite } from "@/lib/crm/invites";
+import { cancelInvite, createInvite, getMeetingLink, rescheduleInvite } from "@/lib/crm/invites";
 import { latestEmailCheck, verifyEmail } from "@/lib/enrichment/email-check";
 import { archiveOpportunity, createOpportunity, getOpportunity, listOpportunities, listPipeline, updateOpportunity } from "@/lib/crm/opportunities";
 import { pipelineReport, stageHistory, stalledDeals, STALLED_DAYS } from "@/lib/crm/pipeline-history";
@@ -68,7 +75,7 @@ import { getMyEmails } from "@/lib/crm/profile";
 import { REMINDER_OPTIONS } from "@/lib/crm/reminder-options";
 import { findStaleRelationships, getCompanyContext, listAttention } from "@/lib/crm/relationships";
 import { addTags, listTags, removeTags } from "@/lib/crm/tags";
-import { completeTask, listTasks, updateTask } from "@/lib/crm/tasks";
+import { archiveTask, completeTask, listTasks, updateTask } from "@/lib/crm/tasks";
 import { logActivity } from "@/lib/crm/activities";
 import {
   ACTIVITY_TYPES,
@@ -305,6 +312,63 @@ function counted(count: number, one: string, many: string) {
 
 const MERGE_ID_KEYS = ["keepId", "mergeId"];
 
+function detail(name: Names, key: string) {
+  const value = name(key);
+  return value === key ? "" : value;
+}
+
+function londonLabel(date: Date) {
+  return formatDateTimeLabel(londonTime(date.toISOString()).slice(0, 16));
+}
+
+function sendAtLine(value: unknown) {
+  const text = str(value);
+  if (!text) return "";
+  const at = parseDateTime(text);
+  return at ? `Sends ${londonLabel(at)} (London time)` : `Send time not understood: ${text}`;
+}
+
+function attachmentLine(args: Args, name: Names) {
+  const onDraft = str(args.draftId) ? detail(name, `${str(args.draftId)}:attachments`) : "";
+  const files = strings(args.attachmentIds).map((id) => (name(id) === "Unknown record" ? "A file Orbit can't find" : name(id)));
+  const all = [...new Set([...(onDraft ? onDraft.split(", ") : []), ...files])];
+  return all.length ? `Attachments: ${all.join(", ")}` : "";
+}
+
+function draftRecipients(args: Args, name: Names, draftId: string) {
+  const stored = (key: string) => detail(name, `${draftId}:${key}`).split(", ").filter(Boolean);
+  const [to, cc, bcc] = [stored("to"), stored("cc"), stored("bcc")];
+  if (to.length + cc.length + bcc.length === 0) return null;
+  const contactId = str(args.contactId);
+  const contact = contactId ? detail(name, `${contactId}:email`) || name(contactId) : "";
+  const taken = new Set<string>();
+  const pick = (list: string[]) =>
+    list.filter((item) => {
+      const key = item.trim().toLowerCase();
+      if (!key || taken.has(key)) return false;
+      taken.add(key);
+      return true;
+    });
+  const lines: [string, string[]][] = [
+    ["To", pick([...to, contact, ...strings(args.to)])],
+    ["Cc", pick([...cc, ...strings(args.cc)])],
+    ["Bcc", pick(bcc)],
+  ];
+  return lines.filter(([, list]) => list.length).map(([label, list]) => `${label}: ${list.join(", ")}`);
+}
+
+const KNOWLEDGE_REMOVE_MAX = 50;
+const LOOKUP_MAX = 6;
+
+function lookupIds(value: unknown) {
+  return [...new Set(strings(value).filter(isUuid))];
+}
+
+const READ_NOTE =
+  "opens are counted from a tracking image in emails the user sent. Security scanners and some mail apps load it automatically, so an open isn't proof that a person read it.";
+
+const FIELD_NOUNS: Record<ContactField, string> = { email: "work email", linkedin: "LinkedIn profile", phone: "phone number" };
+
 const idParam = (description: string) => ({ type: "string", description });
 const limitParam = { type: "integer", description: "How many to return, up to 100. Defaults to 50.", minimum: 1, maximum: 100 };
 const offsetParam = { type: "integer", description: "How many to skip, for the next page.", minimum: 0 };
@@ -319,6 +383,7 @@ const TASK_FIELDS = {
     description: "Reminder before the due time in minutes: 0, 5, 10, 15, 30, 60, 120, 1440, 2880 or 10080. Needs a due date.",
   },
   priority: { type: "string", enum: ["low", "normal", "high"] },
+  ownerId: { type: "string", description: "Team member id from list_team_members to assign it to. New tasks are the user's unless set." },
 };
 
 const LIFECYCLE_PARAM = {
@@ -429,6 +494,14 @@ function workflowSummary(workflow: Awaited<ReturnType<typeof getWorkflow>>) {
     edges: workflow.definition.edges,
   };
 }
+
+const ATTACHMENTS_PARAM = {
+  type: "array",
+  items: { type: "string" },
+  maxItems: 10,
+  description:
+    "Files to attach, up to 25 MB in total: Knowledge file ids from list_knowledge or search_knowledge (links and text can't be attached). A draft sent by draftId keeps the files already on it.",
+};
 
 const BLOCK_ITEM = {
   type: "object",
@@ -1026,7 +1099,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     name: "search_email",
     label: "Searching email",
     description:
-      "Search every email in the user's connected mailboxes (all accounts, all folders, full history as far as it has synced). Matches words in the subject, sender and body; filter by sender, account or folder. Returns newest or best matches with ids for get_email_thread.",
+      "Search every email in the user's connected mailboxes (all accounts, all folders, full history as far as it has synced). Matches words in the subject, sender and body; filter by sender, account or folder. Returns newest or best matches with ids for get_email_thread. Emails the user sent from Orbit show how many times they were opened.",
     parameters: {
       type: "object",
       properties: {
@@ -1037,25 +1110,41 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         limit: { type: "integer", minimum: 1, maximum: 50 },
       },
     },
-    run: async (actor, args) => ({
-      emails: await searchMail(actor, {
+    run: async (actor, args) => {
+      const emails = await searchMail(actor, {
         query: optionalStr(args.query),
         from: optionalStr(args.from),
         account: optionalStr(args.account),
         folder: oneOf(args.folder, ["inbox", "sent", "drafts", "archive", "trash", "other"] as const),
         limit: int(args.limit, 20, 1, 50),
-      }),
-    }),
+      });
+      return { emails, ...(emails.some((email) => email.opens) ? { readTracking: READ_NOTE } : {}) };
+    },
   },
   {
     name: "get_email_thread",
     label: "Reading an email thread",
-    description: "The whole conversation an email belongs to, oldest first, with each message's sender, recipients, time and text.",
+    description:
+      "The whole conversation an email belongs to, oldest first, with each message's sender, recipients, time and text. Emails the user sent from Orbit list their opens (time and device).",
     parameters: { type: "object", properties: { emailId: idParam("Email id from search_email.") }, required: ["emailId"] },
     run: async (actor, args) => {
       const thread = await getMailThread(actor, required(args.emailId, "An email id"));
-      return { messages: thread };
+      return { messages: thread, ...(thread.some((message) => message.opens?.length) ? { readTracking: READ_NOTE } : {}) };
     },
+  },
+  {
+    name: "list_email_attachments",
+    label: "Checking attachments",
+    description: "The files attached to an email (name, type and size), with ids for add_email_attachment_to_knowledge.",
+    parameters: { type: "object", properties: { emailId: idParam("Email id from search_email or get_email_thread.") }, required: ["emailId"] },
+    run: async (actor, args) => ({
+      attachments: (await listMailAttachments(actor, required(args.emailId, "An email id"))).map((item) => ({
+        id: item.id,
+        name: item.name,
+        type: item.contentType,
+        size: item.size,
+      })),
+    }),
   },
   {
     name: "mail_action",
@@ -1145,7 +1234,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
   {
     name: "list_team_members",
     label: "Reading the team",
-    description: "Workspace members with their ids, for setting ownerId on companies and contacts.",
+    description: "Workspace members with their ids, for setting ownerId on companies, contacts and tasks.",
     parameters: { type: "object", properties: {} },
     run: async (actor) => ({ members: await listMembers(actor), you: { id: actor.userId, email: actor.email, name: actor.fullName } }),
   },
@@ -1155,6 +1244,46 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     description: "Saved email templates with their subject, body and tags. Tokens like {{first_name}} are filled in per person.",
     parameters: { type: "object", properties: {} },
     run: async (actor) => ({ templates: await listEmailTemplates(actor) }),
+  },
+  {
+    name: "save_email_template",
+    label: "Saving an email template",
+    write: true,
+    description:
+      "Create an email template for the whole team, or update one when id is given (only the fields you pass change). Plain text. Tokens like {{first_name}} are filled in per person; copy the ones list_email_templates shows.",
+    parameters: {
+      type: "object",
+      properties: {
+        id: idParam("Template id from list_email_templates, to update."),
+        name: { type: "string" },
+        subject: { type: "string" },
+        body: { type: "string" },
+        tags: { type: "array", items: { type: "string" } },
+      },
+    },
+    describe: (args, name) => ({
+      title: optionalStr(args.id) ? titled("Update template", name(args.id)) : `Add template: ${str(args.name)}`,
+      lines: fieldLines(args, optionalStr(args.id) ? { name: "Name", subject: "Subject", tags: "Tags", body: "Message" } : { subject: "Subject", tags: "Tags", body: "Message" }),
+    }),
+    run: async (actor, args) => {
+      const id = optionalStr(args.id);
+      const input = onlyFields(args, ["name", "subject", "body", "tags"]);
+      const template = id
+        ? await updateEmailTemplate(actor, id, input, { operation: "update_email_template", ...PROVENANCE })
+        : await createEmailTemplate(actor, input, { operation: "create_email_template", ...PROVENANCE });
+      return { template };
+    },
+  },
+  {
+    name: "archive_email_template",
+    label: "Archiving an email template",
+    write: true,
+    description: "Archive an email template so it no longer appears in the list. Nothing is deleted.",
+    parameters: { type: "object", properties: { templateId: idParam("Template id from list_email_templates.") }, required: ["templateId"] },
+    describe: (args, name) => ({ title: titled("Archive template", name(args.templateId)), lines: [] }),
+    run: async (actor, args) => ({
+      template: await archiveEmailTemplate(actor, required(args.templateId, "A template id"), { operation: "archive_email_template", ...PROVENANCE }),
+    }),
   },
   {
     name: "read_web_page",
@@ -1312,6 +1441,84 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       const { ids, skipped } = await addKnowledgePages(actor, target, args.urls);
       scheduleIndexing(actor, ids);
       return { added: ids.length, alreadyThere: skipped, ids, href: "companyId" in target ? companyHref(target.companyId) : "/settings/knowledge" };
+    },
+  },
+  {
+    name: "add_email_attachment_to_knowledge",
+    label: "Adding an attachment to Knowledge",
+    write: true,
+    description:
+      "Add a file attached to one of the user's emails to Knowledge for a company, or for Eclipse. Orbit reads its text and indexes it in the background. Find the file with list_email_attachments.",
+    parameters: {
+      type: "object",
+      properties: {
+        emailId: idParam("Email id from search_email or get_email_thread."),
+        attachment: { type: "string", description: "The file's name from list_email_attachments. Leave out when the email has one file." },
+        companyId: idParam("Company the file is about."),
+        eclipse: { type: "boolean", description: "True for Eclipse's own knowledge instead of a company's." },
+      },
+      required: ["emailId"],
+    },
+    describe: (args, name) => ({
+      title: `Add to Knowledge for ${args.eclipse === true ? "Eclipse" : name(args.companyId)}`,
+      lines: [`File: ${str(args.attachment) && str(args.attachment).length <= 120 ? str(args.attachment) : "the attachment"}`, `From the email: ${name(args.emailId)}`],
+    }),
+    run: async (actor, args) => {
+      const emailId = required(args.emailId, "An email id");
+      const target = targetFrom({ companyId: args.companyId, eclipse: args.eclipse });
+      const files = await listMailAttachments(actor, emailId);
+      const wanted = str(args.attachment);
+      const picked = wanted
+        ? (files.find((file) => file.id === wanted) ?? files.find((file) => file.name.toLowerCase() === wanted.toLowerCase()))
+        : files.length === 1
+          ? files[0]
+          : undefined;
+      if (!picked) {
+        if (files.length === 0) return { error: "That email has no attachments." };
+        return { error: `Say which file. The email has: ${files.map((file) => file.name).join(", ")}.` };
+      }
+      const { item, created } = await addMailAttachmentToKnowledge(actor, emailId, picked.id, target, fetch, {
+        operation: "add_email_attachment_to_knowledge",
+        ...PROVENANCE,
+      });
+      if (created) scheduleIndexing(actor, [item.id]);
+      return { added: created, alreadyThere: !created, item: withKnowledge(item), href: "companyId" in target ? companyHref(target.companyId) : "/settings/knowledge" };
+    },
+  },
+  {
+    name: "remove_knowledge",
+    label: "Removing from Knowledge",
+    write: true,
+    description: "Remove items from Knowledge by id (from list_knowledge or search_knowledge). They're archived, so they're no longer searched or offered for proposals.",
+    parameters: {
+      type: "object",
+      properties: { itemIds: { type: "array", items: { type: "string" }, minItems: 1, maxItems: KNOWLEDGE_REMOVE_MAX, description: "Knowledge item ids." } },
+      required: ["itemIds"],
+    },
+    describe: (args, name) => {
+      const ids = [...new Set(strings(args.itemIds))];
+      return {
+        title: ids.length === 1 ? titled("Remove from Knowledge", name(ids[0])) : `Remove ${ids.length} items from Knowledge`,
+        lines: ids.length > 1 ? [nameList(ids, name, "Items")] : [],
+      };
+    },
+    run: async (actor, args) => {
+      const ids = [...new Set(strings(args.itemIds))];
+      if (ids.length === 0) return { error: "Say which items, using ids from list_knowledge." };
+      if (ids.length > KNOWLEDGE_REMOVE_MAX) return { error: `Remove up to ${KNOWLEDGE_REMOVE_MAX} items at a time.` };
+      const failed: { itemId: string; error: string }[] = [];
+      let removed = 0;
+      for (const id of ids) {
+        try {
+          await archiveKnowledge(actor, id, fetch, { operation: "remove_knowledge", ...PROVENANCE });
+          removed += 1;
+        } catch (error) {
+          if (!(error instanceof CrmError)) throw error;
+          failed.push({ itemId: id, error: error.message });
+        }
+      }
+      if (removed === 0) return { error: failed[0]?.error ?? "Nothing was removed.", failed };
+      return { removed, failed };
     },
   },
   {
@@ -1546,7 +1753,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     describe: (args, name) => ({
       title: `Create task: ${str(args.title)}`,
       lines: [
-        ...fieldLines(args, { companyId: "Company", contactId: "Person", dueAt: "Due", description: "Detail", priority: "Priority" }, name),
+        ...fieldLines(args, { companyId: "Company", contactId: "Person", ownerId: "Assignee", dueAt: "Due", description: "Detail", priority: "Priority" }, name),
         ...fieldLines(args, { remindMinutes: "Reminder" }),
         `ClickUp: ${args.sendToClickUp === false ? "no" : "yes"}`,
       ],
@@ -1563,6 +1770,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
           priority: oneOf(args.priority, ["low", "normal", "high"] as const) ?? "normal",
           companyId: optionalStr(args.companyId) ?? null,
           contactId: optionalStr(args.contactId) ?? null,
+          ...(optionalStr(args.ownerId) ? { ownerId: str(args.ownerId) } : {}),
         },
         picker?.listId ?? null,
         { provenance: { operation: "create_task", ...PROVENANCE } },
@@ -1574,7 +1782,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     name: "update_task",
     label: "Updating a task",
     write: true,
-    description: "Change a task's title, detail, due date, reminder or priority. ClickUp is updated too.",
+    description: "Change a task's title, detail, due date, reminder, priority or assignee. ClickUp is updated too.",
     parameters: {
       type: "object",
       properties: { taskId: idParam("Task id."), ...TASK_FIELDS },
@@ -1582,7 +1790,10 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     },
     describe: (args, name) => ({
       title: titled("Update task", name(args.taskId)),
-      lines: fieldLines(args, { title: "Title", dueAt: "Due", remindMinutes: "Reminder", priority: "Priority", description: "Detail" }),
+      lines: [
+        ...fieldLines(args, { title: "Title", dueAt: "Due", remindMinutes: "Reminder", priority: "Priority", description: "Detail" }),
+        ...fieldLines(args, { ownerId: "Assignee" }, name),
+      ],
     }),
     run: async (actor, args) => {
       const id = required(args.taskId, "A task id");
@@ -1595,6 +1806,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
           ...(args.dueAt !== undefined ? { dueAt: nullableStr(args.dueAt) ?? null } : {}),
           ...(args.remindMinutes !== undefined ? { remindMinutes: typeof args.remindMinutes === "number" ? args.remindMinutes : null } : {}),
           ...(args.priority !== undefined ? { priority: oneOf(args.priority, ["low", "normal", "high"] as const) } : {}),
+          ...(optionalStr(args.ownerId) ? { ownerId: str(args.ownerId) } : {}),
         },
         { provenance: { operation: "update_task", ...PROVENANCE } },
       );
@@ -1615,6 +1827,18 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       });
       await pushIfLinked(actor, done.body.task);
       return { task: withTask(done.body.task) };
+    },
+  },
+  {
+    name: "archive_task",
+    label: "Archiving a task",
+    write: true,
+    description: "Archive a task that isn't needed any more, so it leaves task lists. Nothing is deleted, and ClickUp isn't changed.",
+    parameters: { type: "object", properties: { taskId: idParam("Task id.") }, required: ["taskId"] },
+    describe: (args, name) => ({ title: titled("Archive task", name(args.taskId)), lines: [] }),
+    run: async (actor, args) => {
+      const archived = await archiveTask(actor, required(args.taskId, "A task id"), { provenance: { operation: "archive_task", ...PROVENANCE } });
+      return { task: withTask(archived.body.task) };
     },
   },
   {
@@ -1858,6 +2082,95 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     },
   },
   {
+    name: "find_contact_details",
+    label: "Finding contact details",
+    write: true,
+    description:
+      "Look up missing work emails, LinkedIn profiles or phone numbers for up to 6 people with the workspace's enrichment providers, tried in their set order, and save what's found to each contact. Each lookup spends provider credits. People who already have it are skipped. Each result says whether it was found and by which provider; report not found plainly.",
+    parameters: {
+      type: "object",
+      properties: {
+        contactIds: { type: "array", items: { type: "string" }, minItems: 1, maxItems: LOOKUP_MAX, description: "Contact ids." },
+        field: { type: "string", enum: ["email", "linkedin", "phone"] },
+      },
+      required: ["contactIds", "field"],
+    },
+    describe: (args, name) => {
+      const ids = lookupIds(args.contactIds);
+      const noun = FIELD_NOUNS[oneOf(args.field, ["email", "linkedin", "phone"] as const) ?? "email"];
+      return {
+        title: ids.length === 1 ? `Find ${noun}: ${name(ids[0])}` : `Find ${noun} for ${ids.length} people`,
+        lines: [ids.length > 1 ? nameList(ids, name, "People") : "", "Uses enrichment credits. Saves what's found to the contact."],
+      };
+    },
+    run: async (actor, args) => {
+      const field = oneOf(args.field, ["email", "linkedin", "phone"] as const);
+      if (!field) return { error: "Choose email, linkedin or phone." };
+      const ids = lookupIds(args.contactIds);
+      if (ids.length === 0) return { error: "Say who, using contact ids." };
+      if (ids.length > LOOKUP_MAX) return { error: `Look up at most ${LOOKUP_MAX} people at a time.` };
+      if (!(await enrichmentAllowed(actor.userId, ids.length))) return { error: "That's a lot of lookups this hour. Try again later." };
+      const results = await enrichContacts(actor, ids, field);
+      const providerName = (id: string) => PROVIDER_BY_ID.get(id as never)?.name ?? id;
+      return {
+        results: results.map((result) => ({
+          contactId: result.contactId,
+          href: contactHref(result.contactId),
+          status: result.status,
+          message: result.message,
+          found: field === "email" ? result.email : field === "linkedin" ? result.linkedinUrl : result.phone,
+          provider: result.provider ? providerName(result.provider) : null,
+          alsoSaved: {
+            ...(field !== "email" && result.email ? { email: result.email } : {}),
+            ...(field !== "linkedin" && result.linkedinUrl ? { linkedinUrl: result.linkedinUrl } : {}),
+          },
+          tried: result.attempts.map((attempt) => ({ provider: providerName(attempt.provider), outcome: attempt.outcome, detail: attempt.detail ?? null })),
+        })),
+      };
+    },
+  },
+  {
+    name: "archive_records",
+    label: "Archiving records",
+    write: true,
+    description: `Archive companies, people or opportunities by id, for duplicates or records the user no longer wants. Nothing is deleted. Up to ${BULK_LIMIT} of each per call. To take a company off a board, use remove_from_board.`,
+    parameters: {
+      type: "object",
+      properties: {
+        companyIds: { type: "array", items: { type: "string" } },
+        contactIds: { type: "array", items: { type: "string" } },
+        opportunityIds: { type: "array", items: { type: "string" } },
+      },
+    },
+    describe: (args, name) => {
+      const groups = [
+        { ids: [...new Set(strings(args.companyIds))], noun: "Companies" },
+        { ids: [...new Set(strings(args.contactIds))], noun: "People" },
+        { ids: [...new Set(strings(args.opportunityIds))], noun: "Opportunities" },
+      ].filter((group) => group.ids.length > 0);
+      const total = groups.reduce((sum, group) => sum + group.ids.length, 0);
+      return {
+        title: `Archive ${total} ${total === 1 ? "record" : "records"}`,
+        lines: [...groups.map((group) => nameList(group.ids, name, group.noun)), "Nothing is deleted."],
+      };
+    },
+    run: async (actor, args) => {
+      const options = { provenance: { operation: "archive_records", ...PROVENANCE } };
+      const groups = [
+        { ids: strings(args.companyIds), scope: "companies:write" as const, archive: (id: string) => archiveCompany(actor, id, options) },
+        { ids: strings(args.contactIds), scope: "contacts:write" as const, archive: (id: string) => archiveContact(actor, id, options) },
+        { ids: strings(args.opportunityIds), scope: "opportunities:write" as const, archive: (id: string) => archiveOpportunity(actor, id, options) },
+      ].filter((group) => group.ids.length > 0);
+      if (groups.length === 0) return { error: "Say which records, using their ids." };
+      const outcomes = [];
+      for (const group of groups) outcomes.push(...(await runBulk(actor, group.scope, group.ids, group.archive)));
+      const failed = outcomes.flatMap((outcome) => (outcome.ok ? [] : [{ id: outcome.id, error: outcome.error }]));
+      const archived = outcomes.length - failed.length;
+      if (archived === 0) return { error: failed[0]?.error ?? "Nothing was archived.", failed };
+      return { archived, failed };
+    },
+  },
+  {
     name: "create_opportunity",
     label: "Creating an opportunity",
     write: true,
@@ -2061,11 +2374,14 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     name: "remove_from_board",
     label: "Removing from a board",
     write: true,
-    description: "Take a company's card off a board.",
+    description: "Take a company's card off a board. Only for board cards, not sales opportunities.",
     parameters: { type: "object", properties: { cardId: idParam("Card id from get_board.") }, required: ["cardId"] },
     describe: (args, name) => ({ title: titled("Remove from board", name(args.cardId)), lines: [] }),
     run: async (actor, args) => {
-      const removed = await archiveOpportunity(actor, required(args.cardId, "A card id"), { provenance: { operation: "remove_from_board", ...PROVENANCE } });
+      const id = required(args.cardId, "A card id");
+      const card = await getOpportunity(actor, id);
+      if (card.pipelineKind !== "board") return { error: "That's a sales opportunity, not a board card, so it wasn't removed. Use archive_records if the user wants it archived." };
+      const removed = await archiveOpportunity(actor, id, { provenance: { operation: "remove_from_board", ...PROVENANCE } });
       return { card: withOpportunity(removed.body.opportunity) };
     },
   },
@@ -2567,7 +2883,8 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     name: "save_product",
     label: "Saving a product",
     write: true,
-    description: "Create a product for proposals, or update one when id is given: name, description, priceGbp, priceUsd and billing (one_off, monthly or yearly).",
+    description:
+      "Create a product for proposals, or update one when id is given: name, description, priceGbp, priceUsd and billing (one_off, monthly or yearly). archived true takes it out of the catalogue for new proposals; false brings it back.",
     parameters: {
       type: "object",
       properties: {
@@ -2577,11 +2894,14 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         priceGbp: { type: "number" },
         priceUsd: { type: "number" },
         billing: { type: "string", enum: ["one_off", "monthly", "yearly"] },
+        archived: { type: "boolean", description: "Only with id." },
       },
     },
     describe: (args, name) => ({
       title: args.id ? `Update ${name(args.id)}` : `Add product: ${str(args.name)}`,
       lines: [
+        args.id && args.archived === true ? "Archive it" : "",
+        args.id && args.archived === false ? "Bring it back" : "",
         typeof args.priceGbp === "number" ? `£${args.priceGbp}` : "",
         typeof args.priceUsd === "number" ? `$${args.priceUsd}` : "",
         str(args.billing).replace("_", "-"),
@@ -2599,7 +2919,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     label: "Saving a draft",
     write: true,
     description:
-      "Save an email as a draft in Orbit Mail (it also appears in the mailbox's Drafts folder in Outlook) without sending it. Use this only when the user asks for a draft, wants to edit it themselves first, or says not to send; otherwise use send_email, which waits for their approval. For a reply, pass replyToEmailId (an email id from search_email or get_email_thread) so it lands in that conversation; otherwise give to and a subject. to can hold email addresses, and contactId adds that contact.",
+      "Save an email as a draft in Orbit Mail without sending it. It also appears in the mailbox's Drafts folder in Outlook; attachments stay in Orbit and are added when Orbit sends it. Use this only when the user asks for a draft, wants to edit it themselves first, or says not to send; otherwise use send_email, which waits for their approval. For a reply, pass replyToEmailId (an email id from search_email or get_email_thread) so it lands in that conversation; otherwise give to and a subject. to can hold email addresses, and contactId adds that contact.",
     parameters: {
       type: "object",
       properties: {
@@ -2611,6 +2931,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         subject: { type: "string", description: "Needed for a new email. Replies keep the conversation's subject." },
         body: { type: "string", description: "Plain text with a greeting and sign-off. Orbit adds the signature." },
         from: { type: "string", description: "Address to send from. Leave out for the main mailbox, or the account the conversation is in for a reply." },
+        attachmentIds: ATTACHMENTS_PARAM,
       },
       required: ["body"],
     },
@@ -2623,6 +2944,8 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
             ? `Reply${args.replyAll ? " all" : ""} in the conversation`
             : "",
         str(args.from) ? `From: ${str(args.from)}` : "",
+        attachmentLine(args, name),
+        strings(args.attachmentIds).length ? DRAFT_FILES_NOTE : "",
         DRAFT_NOTE,
         str(args.body),
       ].filter(Boolean),
@@ -2634,12 +2957,25 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       const to = [...(contact?.email ? [contact.email] : []), ...strings(args.to)];
       const replyTo = optionalStr(args.replyToEmailId) ?? null;
       if (!replyTo && to.length === 0) return { error: "Say who the email is to." };
+      const body = required(args.body, "A message");
+      const files = await attachableFiles(actor, strings(args.attachmentIds));
       const saved = await saveDraftForAgent(
         actor,
-        { replyTo, replyAll: args.replyAll === true, from: optionalStr(args.from) ?? null, to, cc: strings(args.cc), subject: optionalStr(args.subject), body: required(args.body, "A message") },
+        { replyTo, replyAll: args.replyAll === true, from: optionalStr(args.from) ?? null, to, cc: strings(args.cc), subject: optionalStr(args.subject), body, attachments: files.ids },
         { origin: mailOrigin() },
-      );
-      return { saved: true, sent: false, subject: saved.draft.subject, to: saved.draft.to.map((item) => item.address), href: saved.href };
+      ).catch(async (error) => {
+        await discardAttachments(actor, files.copied).catch(() => undefined);
+        throw error;
+      });
+      return {
+        saved: true,
+        sent: false,
+        draftId: saved.draft.id,
+        subject: saved.draft.subject,
+        to: saved.draft.to.map((item) => item.address),
+        attachments: saved.attachments.map((file) => file.name),
+        href: saved.href,
+      };
     },
   },
   {
@@ -2647,7 +2983,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     label: "Sending an email",
     write: true,
     description:
-      "Send an email from Orbit Mail: a new email, or a reply (replyToEmailId, an email id from search_email or get_email_thread; replyAll for everyone on it). Nothing is sent until the user approves the card, which shows the whole email. Orbit adds the signature, saves it in Sent and logs it on the contacts' timelines. to can hold email addresses, and contactId adds that contact. Pass draftId (from save_email_draft) to send a draft you saved earlier, with its final wording. Replies go to the original sender (and everyone, with replyAll) automatically; to and cc add more people.",
+      "Send an email from Orbit Mail: a new email, or a reply (replyToEmailId, an email id from search_email or get_email_thread; replyAll for everyone on it). Nothing is sent until the user approves the card, which shows the whole email. Orbit adds the signature, saves it in Sent and logs it on the contacts' timelines. to can hold email addresses, and contactId adds that contact. Pass draftId (from save_email_draft) to send a draft you saved earlier, with its final wording; it keeps the draft's attachments. Replies go to the original sender (and everyone, with replyAll) automatically; to and cc add more people. sendAt schedules it for later instead of sending now.",
     parameters: {
       type: "object",
       properties: {
@@ -2661,21 +2997,31 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         body: { type: "string", description: "Plain text with a greeting and sign-off. Orbit adds the signature." },
         from: { type: "string", description: "Address to send from (list_email_senders). Leave out for the main mailbox, or the account the conversation is in for a reply." },
         remindAfterDays: { type: "integer", minimum: 1, maximum: 90, description: "Remind the user in Mail if nobody replies within this many days." },
+        sendAt: { type: "string", description: "Send later at this time, YYYY-MM-DDTHH:mm London time. At least a minute from now and within a year. Leave out to send on approval." },
+        attachmentIds: ATTACHMENTS_PARAM,
       },
       required: ["body"],
     },
     describe: (args, name) => {
+      const draftId = str(args.draftId);
+      const draftSubject = draftId ? detail(name, `${draftId}:subject`) : "";
+      const onDraft = draftId ? draftRecipients(args, name, draftId) : null;
       const people = [args.contactId ? name(args.contactId) : "", ...strings(args.to)].filter(Boolean);
       const replying = Boolean(str(args.replyToEmailId));
       const senderKey = `${str(args.replyToEmailId)}:from`;
       const sender = name(senderKey) !== senderKey ? name(senderKey) : "the sender";
+      const later = Boolean(str(args.sendAt));
       return {
-        title: `${replying ? "Send reply" : "Send email"}: ${str(args.subject) || "in the conversation"}`,
+        title: `${later ? (replying ? "Schedule reply" : "Schedule email") : replying ? "Send reply" : "Send email"}: ${str(args.subject) || draftSubject || "in the conversation"}`,
         lines: [
-          replying ? `To: ${args.replyAll ? `everyone on the email from ${sender}` : sender}${people.length ? `, plus ${people.join(", ")}` : ""}` : people.length ? `To: ${people.join(", ")}` : "",
-          strings(args.cc).length ? `Cc: ${strings(args.cc).join(", ")}` : "",
+          ...(onDraft ?? [
+            replying ? `To: ${args.replyAll ? `everyone on the email from ${sender}` : sender}${people.length ? `, plus ${people.join(", ")}` : ""}` : people.length ? `To: ${people.join(", ")}` : "",
+            strings(args.cc).length ? `Cc: ${strings(args.cc).join(", ")}` : "",
+          ]),
           str(args.from) ? `From: ${str(args.from)}` : "",
-          "Sends from Orbit Mail when you approve.",
+          sendAtLine(args.sendAt),
+          attachmentLine(args, name),
+          later ? "Scheduled in Orbit Mail when you approve." : "Sends from Orbit Mail when you approve.",
           str(args.body),
         ].filter(Boolean),
       };
@@ -2686,22 +3032,36 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       if (contact && !contact.email) return { error: `${contact.name} has no email address in Orbit.` };
       const to = [...(contact?.email ? [contact.email] : []), ...strings(args.to)];
       const replyTo = optionalStr(args.replyToEmailId) ?? null;
-      if (!replyTo && to.length === 0) return { error: "Say who the email is to." };
+      const draftId = optionalStr(args.draftId) ?? null;
+      if (!replyTo && !draftId && to.length === 0) return { error: "Say who the email is to." };
+      const body = required(args.body, "A message");
+      const sendAt = optionalStr(args.sendAt) ? parseDateTime(str(args.sendAt)) : null;
+      if (optionalStr(args.sendAt) && !sendAt) return { error: "Give sendAt as YYYY-MM-DDTHH:mm London time." };
+      if (sendAt && sendAt.getTime() <= Date.now()) return { error: "sendAt has to be in the future." };
+      const files = await attachableFiles(actor, strings(args.attachmentIds));
       const sent = await sendForAgent(
         actor,
         {
           replyTo,
           replyAll: args.replyAll === true,
-          draftId: optionalStr(args.draftId) ?? null,
+          draftId,
           from: optionalStr(args.from) ?? null,
           to,
           cc: strings(args.cc),
           subject: optionalStr(args.subject),
-          body: required(args.body, "A message"),
+          body,
           remindHours: typeof args.remindAfterDays === "number" ? int(args.remindAfterDays, 3, 1, 90) * 24 : null,
+          attachments: files.ids,
+          sendAt: sendAt?.toISOString() ?? null,
         },
         { origin: mailOrigin() },
-      );
+      ).catch(async (error) => {
+        await discardAttachments(actor, files.copied).catch(() => undefined);
+        throw error;
+      });
+      if (sent.scheduled) {
+        return { sent: false, scheduled: true, sendAt: sent.sendAt, draftId: sent.draftId, to: sent.to, cc: sent.cc, subject: sent.subject, href: sent.href };
+      }
       return {
         sent: true,
         to: sent.to,
@@ -2826,6 +3186,38 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         message: optionalStr(args.message) ?? null,
       });
       return { moved };
+    },
+  },
+  {
+    name: "cancel_meeting",
+    label: "Cancelling a meeting",
+    write: true,
+    description:
+      "Cancel a meeting the user organised, by its id from list_calendar_events. Outlook sends the cancellation to every guest, with message if given, and it's logged on the guests' timelines. Only meetings that haven't started, in the calendar of the mailbox connected in Capture.",
+    parameters: {
+      type: "object",
+      properties: {
+        eventId: idParam("Meeting id from list_calendar_events."),
+        message: { type: "string", description: "Optional note to the guests." },
+      },
+      required: ["eventId"],
+    },
+    describe: (args, name) => {
+      const id = str(args.eventId);
+      const guests = detail(name, `${id}:guests`);
+      return {
+        title: `Cancel meeting: ${name(id) === "Unknown record" ? "a meeting Orbit can't find" : name(id)}`,
+        lines: [
+          detail(name, `${id}:when`) ? `When: ${formatDateTimeLabel(detail(name, `${id}:when`))}` : "",
+          `Guests: ${guests || "none listed"}`,
+          str(args.message) ? `Message: ${str(args.message)}` : "",
+          "Outlook tells every guest when you approve.",
+        ],
+      };
+    },
+    run: async (actor, args) => {
+      const cancelled = await cancelInvite(actor, required(args.eventId, "A meeting id"), str(args.message));
+      return { cancelled: true, warning: cancelled.warning, loggedOn: cancelled.loggedOn };
     },
   },
   {
@@ -3043,6 +3435,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
 ];
 
 export const DRAFT_NOTE = "Saved to Drafts.";
+const DRAFT_FILES_NOTE = "The files stay in Orbit and are attached when Orbit sends it.";
 
 export type ActionAlternative = { key: "send"; label: string; tool: string; title: (title: string) => string; lines: (lines: string[]) => string[] };
 
@@ -3052,7 +3445,7 @@ export const ACTION_ALTERNATIVES: Record<string, ActionAlternative> = {
     label: "Confirm and send",
     tool: "send_email",
     title: (title) => title.replace(/^Save draft: /, "Sent: "),
-    lines: (lines) => lines.map((line) => (line === DRAFT_NOTE ? "Sent." : line)),
+    lines: (lines) => lines.filter((line) => line !== DRAFT_FILES_NOTE).map((line) => (line === DRAFT_NOTE ? "Sent." : line)),
   },
 };
 
@@ -3129,6 +3522,7 @@ const EXTERNAL_TOOLS = new Set([
   "get_board",
   "get_workflow",
   "list_email_templates",
+  "list_email_attachments",
 ]);
 
 const TOOL_TIMEOUT_MS = 90_000;
@@ -3195,18 +3589,31 @@ export async function recordNames(actor: UserActor, args: Args[]) {
        union all
        select id, coalesce(nullif(trim(subject), ''), '(no subject)') from crm.mail_messages where id = any($1::uuid[])
        union all
+       select id, title from crm.knowledge_items where id = any($1::uuid[]) and workspace_id = $2
+       union all
+       select id, name from crm.email_attachments where id = any($1::uuid[])
+       union all
+       select id, name from crm.email_templates where id = any($1::uuid[]) and workspace_id = $2
+       union all
+       select id, coalesce(nullif(trim(subject), ''), 'Untitled event') from crm.calendar_events where id = any($1::uuid[]) and user_id = $3
+       union all
        select p.id, coalesce(nullif(p.full_name, ''), p.email) from crm.profiles p
          join crm.workspace_members m on m.user_id = p.id and m.workspace_id = $2
          where p.id = any($1::uuid[])`,
-      [list, actor.workspaceId],
+      [list, actor.workspaceId, actor.userId],
     );
     for (const row of result.rows) if (row.name) names.set(row.id, row.name);
     const details = await db.query<{ id: string; name: string }>(
       `select id::text || ':flag' as id, case when is_won then 'won' else 'lost' end as name
          from crm.pipeline_stages where id = any($1::uuid[]) and (is_won or is_lost)
        union all
-       select id::text || ':from', from_email from crm.mail_messages where id = any($1::uuid[]) and nullif(trim(from_email), '') is not null`,
-      [list],
+       select id::text || ':from', from_email from crm.mail_messages where id = any($1::uuid[]) and nullif(trim(from_email), '') is not null
+       union all
+       select d.id::text || ':attachments', string_agg(a.name, ', ' order by a.name) from crm.mail_drafts d
+         join crm.email_attachments a on a.id = any(d.attachments)
+         where d.id = any($1::uuid[]) and d.user_id = $2
+         group by d.id`,
+      [list, actor.userId],
     );
     for (const row of details.rows) names.set(row.id, row.name);
     const merging = [...new Set(args.flatMap((entry) => MERGE_ID_KEYS.map((key) => str(entry[key])).filter(isUuid)))];
@@ -3238,6 +3645,21 @@ export async function recordNames(actor: UserActor, args: Args[]) {
           .join(", "),
       );
     }
+    const drafts = await db.query<{ id: string; subject: string | null; to_recipients: MailAddress[]; cc_recipients: MailAddress[]; bcc_recipients: MailAddress[] }>(
+      "select id, subject, to_recipients, cc_recipients, bcc_recipients from crm.mail_drafts where id = any($1::uuid[]) and user_id = $2",
+      [list, actor.userId],
+    );
+    for (const row of drafts.rows) {
+      if (row.subject?.trim()) names.set(`${row.id}:subject`, row.subject.trim());
+      for (const [key, people] of [["to", row.to_recipients], ["cc", row.cc_recipients], ["bcc", row.bcc_recipients]] as const) {
+        if (people?.length) names.set(`${row.id}:${key}`, people.map((person) => person.address).join(", "));
+      }
+    }
+    const emails = await db.query<{ id: string; email: string }>(
+      "select id, email from crm.contacts where id = any($1::uuid[]) and workspace_id = $2 and nullif(trim(email), '') is not null",
+      [list, actor.workspaceId],
+    );
+    for (const row of emails.rows) names.set(`${row.id}:email`, row.email);
     const events = await db.query<{ id: string; subject: string | null; starts_at: Date; ends_at: Date; organizer: unknown; attendees: unknown }>(
       `select id, subject, starts_at, ends_at, organizer, attendees from crm.calendar_events
        where id = any($1::uuid[]) and user_id = $2 and workspace_id = $3`,

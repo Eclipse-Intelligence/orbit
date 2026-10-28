@@ -127,7 +127,7 @@ describe("sending from another address", () => {
     await sendMailDraft(
       owner,
       readDraftInput({ mode: "reply", messageId, to: ["jane@acme.test"], bcc: ["secret@acme.test"], body: "Happy to help.", identityId: identity.id }),
-      { origin: "https://orbit.test", fetchImpl, smtp, saveSent },
+      { storedFiles: "replace", origin: "https://orbit.test", fetchImpl, smtp, saveSent },
     );
     assert.equal(smtpCalls.length, 1);
     assert.equal(smtpCalls[0].from, "mark@ridgeon.test");
@@ -146,7 +146,7 @@ describe("sending from another address", () => {
     const identity = (await listIdentities(owner))[0];
     await assert.rejects(
       () =>
-        sendMailDraft(owner, readDraftInput({ mode: "reply", messageId, to: ["jane@acme.test"], body: "Again", identityId: identity.id }), {
+        sendMailDraft(owner, readDraftInput({ mode: "reply", messageId, to: ["jane@acme.test"], body: "Again", identityId: identity.id }), { storedFiles: "replace",
           origin: null,
           fetchImpl: outlook().fetchImpl,
           smtp: async () => Promise.reject(new Error("Connection refused")),

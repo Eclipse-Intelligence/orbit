@@ -11,7 +11,7 @@ import {
   type EmailTemplateWrite,
   type TemplateTagCount,
 } from "@/lib/crm/email-template-rules";
-import { iso, isUuid } from "@/lib/crm/mutate";
+import { iso, isUuid, recordAudit } from "@/lib/crm/mutate";
 import {
   likePattern,
   normalizeTag,
@@ -19,7 +19,7 @@ import {
   TAG_LIMIT,
 } from "@/lib/crm/normalize";
 import { assertScope } from "@/lib/crm/scopes";
-import type { UserActor } from "@/lib/crm/types";
+import type { Provenance, UserActor } from "@/lib/crm/types";
 
 export { renderTemplate, SAMPLE_RECIPIENT, type EmailTemplate, type EmailTemplateWrite } from "@/lib/crm/email-template-rules";
 
@@ -236,19 +236,28 @@ export async function getEmailTemplate(actor: UserActor, id: string) {
   );
 }
 
-export async function createEmailTemplate(actor: UserActor, input: unknown) {
+function auditFields(template: EmailTemplate) {
+  return { name: template.name, subject: template.subject, tags: template.tags };
+}
+
+export async function createEmailTemplate(actor: UserActor, input: unknown, provenance: Provenance) {
   const values = cleanTemplateWrite(
     input,
     "create",
   ) as Required<EmailTemplateWrite>;
   assertContent(values.subject, values.body);
-  return withActor(actor, (db) => insertTemplate(db, actor, values));
+  return withActor(actor, async (db) => {
+    const template = await insertTemplate(db, actor, values);
+    await recordAudit(db, actor, "email_template.created", "email_template", template.id, provenance, { after: auditFields(template) });
+    return template;
+  });
 }
 
 export async function updateEmailTemplate(
   actor: UserActor,
   id: string,
   input: unknown,
+  provenance: Provenance,
 ) {
   const patch = cleanTemplateWrite(input, "patch");
   return withActor(actor, async (db) => {
@@ -268,21 +277,26 @@ export async function updateEmailTemplate(
          returning ${TEMPLATE_COLUMNS}`,
         [actor.workspaceId, id, next.name, next.subject, next.body, next.tags],
       );
-      return mapTemplate(result.rows[0]);
+      const template = mapTemplate(result.rows[0]);
+      await recordAudit(db, actor, "email_template.updated", "email_template", template.id, provenance, {
+        before: auditFields(current),
+        after: auditFields(template),
+      });
+      return template;
     } catch (error) {
       duplicateName(error, next.name);
     }
   });
 }
 
-export async function duplicateEmailTemplate(actor: UserActor, id: string) {
+export async function duplicateEmailTemplate(actor: UserActor, id: string, provenance: Provenance) {
   return withActor(actor, async (db) => {
     const source = mapTemplate(await readTemplate(db, actor, id));
     const names = await db.query<{ name: string }>(
       "select name from crm.email_templates where workspace_id = $1 and archived_at is null",
       [actor.workspaceId],
     );
-    return insertTemplate(db, actor, {
+    const template = await insertTemplate(db, actor, {
       name: copyName(
         source.name,
         names.rows.map((row) => row.name),
@@ -291,10 +305,12 @@ export async function duplicateEmailTemplate(actor: UserActor, id: string) {
       body: source.body,
       tags: source.tags,
     });
+    await recordAudit(db, actor, "email_template.created", "email_template", template.id, provenance, { after: auditFields(template), copiedFrom: source.id });
+    return template;
   });
 }
 
-export async function archiveEmailTemplate(actor: UserActor, id: string) {
+export async function archiveEmailTemplate(actor: UserActor, id: string, provenance: Provenance) {
   return withActor(actor, async (db) => {
     await readTemplate(db, actor, id, true);
     const result = await db.query<TemplateRow>(
@@ -303,18 +319,24 @@ export async function archiveEmailTemplate(actor: UserActor, id: string) {
        returning ${TEMPLATE_COLUMNS}`,
       [actor.workspaceId, id],
     );
-    return mapTemplate(result.rows[0]);
+    const template = mapTemplate(result.rows[0]);
+    await recordAudit(db, actor, "email_template.archived", "email_template", template.id, provenance, {
+      before: { archivedAt: null },
+      after: { archivedAt: template.archivedAt },
+    });
+    return template;
   });
 }
 
-export async function deleteEmailTemplate(actor: UserActor, id: string) {
+export async function deleteEmailTemplate(actor: UserActor, id: string, provenance: Provenance) {
   if (!isUuid(id)) notFound();
   return withActor(actor, async (db) => {
-    const result = await db.query(
-      "delete from crm.email_templates where workspace_id = $1 and id = $2",
+    const result = await db.query<TemplateRow>(
+      `delete from crm.email_templates where workspace_id = $1 and id = $2 returning ${TEMPLATE_COLUMNS}`,
       [actor.workspaceId, id],
     );
     if ((result.rowCount ?? 0) === 0) notFound();
+    await recordAudit(db, actor, "email_template.deleted", "email_template", id, provenance, { before: auditFields(mapTemplate(result.rows[0])) });
     return { id };
   });
 }

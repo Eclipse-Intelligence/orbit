@@ -177,10 +177,10 @@ describe("remind me, send later and follow-ups", () => {
     await sendMailDraft(
       owner,
       readDraftInput({ mode: "new", sourceId: (await mailNav(owner)).accounts[0].id, to: ["sam@acme.test"], subject: "Intro", body: "Hi Sam", remindHours: 48 }),
-      { origin: ORIGIN, fetchImpl: send.fetchImpl },
+      { storedFiles: "replace", origin: ORIGIN, fetchImpl: send.fetchImpl },
     );
     const quietKey = `conv-new-${draftCount}`;
-    await sendMailDraft(owner, readDraftInput({ mode: "reply", messageId: latestId, to: ["jane@acme.test"], body: "Thoughts?", remindHours: 24 }), {
+    await sendMailDraft(owner, readDraftInput({ mode: "reply", messageId: latestId, to: ["jane@acme.test"], body: "Thoughts?", remindHours: 24 }), { storedFiles: "replace",
       origin: ORIGIN,
       fetchImpl: send.fetchImpl,
     });
@@ -213,8 +213,8 @@ describe("remind me, send later and follow-ups", () => {
   it("sends a scheduled email when it is due and reports a failure", async () => {
     const sourceId = (await mailNav(owner)).accounts[0].id;
     const input = readDraftInput({ mode: "new", sourceId, to: ["sam@acme.test"], subject: "Monday plan", body: "See you Monday" });
-    await assert.rejects(() => scheduleMailDraft(owner, { ...input, sendAt: new Date(Date.now() + 5_000).toISOString() }, { origin: ORIGIN, fetchImpl: outlook(state).fetchImpl }), /at least a minute/);
-    const scheduled = await scheduleMailDraft(owner, { ...input, sendAt: new Date(Date.now() + 3_600_000).toISOString() }, { origin: ORIGIN, fetchImpl: outlook(state).fetchImpl });
+    await assert.rejects(() => scheduleMailDraft(owner, { ...input, sendAt: new Date(Date.now() + 5_000).toISOString() }, { storedFiles: "replace", origin: ORIGIN, fetchImpl: outlook(state).fetchImpl }), /at least a minute/);
+    const scheduled = await scheduleMailDraft(owner, { ...input, sendAt: new Date(Date.now() + 3_600_000).toISOString() }, { storedFiles: "replace", origin: ORIGIN, fetchImpl: outlook(state).fetchImpl });
     assert.ok(scheduled.sendAt);
     assert.equal((await mailNav(owner)).scheduled, 1);
     assert.equal((await processDueMail(owner, { fetchImpl: outlook(state).fetchImpl, origin: ORIGIN })).sent, 0);
@@ -228,7 +228,7 @@ describe("remind me, send later and follow-ups", () => {
     assert.ok(calls[0].url.endsWith("/send"));
     assert.equal((await listScheduledDrafts(owner)).length, 0);
 
-    const failing = await scheduleMailDraft(owner, { ...input, subject: "Will fail", sendAt: new Date(Date.now() + 3_600_000).toISOString() }, { origin: ORIGIN, fetchImpl: outlook(state).fetchImpl });
+    const failing = await scheduleMailDraft(owner, { ...input, subject: "Will fail", sendAt: new Date(Date.now() + 3_600_000).toISOString() }, { storedFiles: "replace", origin: ORIGIN, fetchImpl: outlook(state).fetchImpl });
     await admin.query("update crm.mail_drafts set send_at = now() - interval '1 minute' where id = $1", [failing.id]);
     const failed = await processDueMail(owner, { fetchImpl: outlook({ ...state, failSend: true }).fetchImpl, origin: ORIGIN });
     assert.equal(failed.failed, 1);
@@ -242,10 +242,10 @@ describe("remind me, send later and follow-ups", () => {
     const sourceId = (await mailNav(owner)).accounts[0].id;
     const input = readDraftInput({ mode: "new", sourceId, to: ["sam@acme.test"], subject: "Same", body: "Unchanged" });
     const first = outlook(state);
-    const draft = await saveMailDraft(owner, input, { origin: ORIGIN, fetchImpl: first.fetchImpl });
+    const draft = await saveMailDraft(owner, input, { storedFiles: "replace", origin: ORIGIN, fetchImpl: first.fetchImpl });
     assert.equal(first.calls.length, 2);
     const again = outlook(state);
-    await saveMailDraft(owner, { ...input, id: draft.id }, { origin: ORIGIN, fetchImpl: again.fetchImpl });
+    await saveMailDraft(owner, { ...input, id: draft.id }, { storedFiles: "replace", origin: ORIGIN, fetchImpl: again.fetchImpl });
     assert.equal(again.calls.length, 0);
   });
 });

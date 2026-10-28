@@ -17,7 +17,7 @@ import RecipientField from "@/components/mail/recipient-field";
 import { laterDetail, laterOptions } from "@/lib/mail/later";
 import { useShortcutHint } from "@/components/shortcuts/shortcuts-provider";
 import type { MailAddress } from "@/lib/mail/types";
-import type { ComposeAccount, DraftMode, MailDraft } from "@/lib/mail/view";
+import type { ComposeAccount, DraftFile, DraftMode, MailDraft } from "@/lib/mail/view";
 import { cn } from "@/lib/utils";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
 import BellIcon from "@/public/assets/images/mail/bell.svg";
@@ -41,6 +41,7 @@ export type SendPayload = {
   signature: boolean;
   remindHours: number | null;
   attachments: string[];
+  files: DraftFile[];
   replaces?: string | null;
   identityId?: string | null;
 };
@@ -127,7 +128,9 @@ export default function MailComposer({
   const [save, setSave] = useState<SaveState>(draft?.savedAt ? { kind: "saved" } : { kind: "idle" });
   const [scheduledFor, setScheduledFor] = useState(draft?.sendAt ?? null);
   const [error, setError] = useState<string | null>(null);
-  const attachments = useEmailAttachments();
+  const attachments = useEmailAttachments(draft?.attachments);
+  const fileKey = attachments.ids.join(",");
+  const savedFiles = useRef(fileKey);
   const draftId = useRef<string | null>(draft?.id || null);
   const chain = useRef<Promise<unknown>>(Promise.resolve());
   const dirty = useRef(false);
@@ -144,6 +147,7 @@ export default function MailComposer({
     body,
     signature: withSignature,
     replaces: start.replaces ?? null,
+    attachments: attachments.ids,
   });
   const account = fromAccount;
   const showSubject = start.mode === "new" || start.mode === "forward";
@@ -162,8 +166,15 @@ export default function MailComposer({
       body,
       signature: withSignature,
       replaces: start.replaces ?? null,
+      attachments: attachments.ids,
     };
   });
+
+  useEffect(() => {
+    if (savedFiles.current === fileKey) return;
+    savedFiles.current = fileKey;
+    dirty.current = true;
+  }, [fileKey]);
 
   useEffect(() => {
     onSubject?.(subject);
@@ -211,7 +222,7 @@ export default function MailComposer({
     if (!dirty.current) return;
     const timer = window.setTimeout(() => void saveRef.current(), SAVE_DELAY_MS);
     return () => window.clearTimeout(timer);
-  }, [fromId, to, cc, bcc, subject, body, withSignature]);
+  }, [fromId, to, cc, bcc, subject, body, withSignature, fileKey]);
 
   useEffect(
     () => () => {
@@ -304,7 +315,7 @@ export default function MailComposer({
   }
 
   function handOver(): Promise<SendPayload> {
-    const snapshot = { ...payload.current, remindHours, attachments: attachments.ids };
+    const snapshot = { ...payload.current, remindHours, attachments: attachments.ids, files: attachments.files };
     dirty.current = false;
     const pending = chain.current.catch(() => null);
     return pending.then(() => ({ ...snapshot, id: draftId.current }));

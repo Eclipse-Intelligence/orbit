@@ -68,6 +68,7 @@ function payloadDraft(payload: SendPayload): MailDraft {
     sendAt: null,
     sendError: null,
     identityId: payload.identityId ?? null,
+    attachments: payload.files,
   };
 }
 
