@@ -11,6 +11,8 @@ Person   -> /api/mcp       -> domain services and lib/mail -> PostgreSQL
 
 The MCP server lives in `server/mcp/`. Agent tokens and personal tokens both reach it (see Personal tokens and MCP mail).
 
+The references for agents are `docs/api.md` (REST endpoints, scopes and webhooks), `docs/mcp.md` (every MCP tool and which tokens see it) and `docs/assistant.md` (how the in-app assistant runs and every one of its tools).
+
 Zustand (`stores/companies-store.ts`) holds which panel is open and the Mail unread count. Lists are rendered from the database. A reload reads PostgreSQL again.
 
 ## Tenancy
@@ -216,7 +218,7 @@ A contact lookup has 75 seconds; no provider starts with less than five left, ea
 
 ### Assistant
 
-`lib/assistant/chat.ts` runs a turn, `lib/assistant/gateway.ts` calls the model, `lib/assistant/tools.ts` holds the tool registry, and `lib/assistant/prompt.ts` builds the system prompt. `POST /api/assistant` resolves the user, checks `LLM_API_KEY`, takes the rate limit (`private.consume_rate_limit('assistant:<user>', 60, 600)`) and streams newline-delimited JSON with a `ping` every 10 seconds. The route has `maxDuration` 300 and gives a turn a 285-second deadline. Event types are `conversation`, `user`, `tool` (`running` or `done`), `message`, `actions`, `waiting` (an Orbit Agent turn that outlives the request), `error`, `ping` and `done`. A body with `conversationId` and `decisions` (`[{id, approve}]`, 1 to 100) decides on actions; any other body sends a message.
+`lib/assistant/chat.ts` runs a turn, `lib/assistant/gateway.ts` calls the model, `lib/assistant/tools.ts` holds the tool registry (every tool is listed in `docs/assistant.md`), and `lib/assistant/prompt.ts` builds the system prompt. `POST /api/assistant` resolves the user, checks `LLM_API_KEY`, takes the rate limit (`private.consume_rate_limit('assistant:<user>', 60, 600)`) and streams newline-delimited JSON with a `ping` every 10 seconds. The route has `maxDuration` 300 and gives a turn a 285-second deadline. Event types are `conversation`, `user`, `tool` (`running` or `done`), `message`, `actions`, `waiting` (an Orbit Agent turn that outlives the request), `error`, `ping` and `done`. A body with `conversationId` and `decisions` (`[{id, approve}]`, 1 to 100) decides on actions; any other body sends a message.
 
 `crm.assistant_conversations` holds one row per chat (title, model, reasoning `low` to `max`, `web_search`, `archived_at`). `crm.assistant_messages` holds rows in `seq` order with `role` (`user`, `assistant`, `tool`), `content`, `tool_calls`, `tool_call_id`, `tool_name`, `actions` (the proposed changes and their status), `sources`, `model`, `usage` and `provider_state`. Both tables force row-level security with one `for all` policy to `authenticated` requiring `user_id = private.session_user_id()` in a workspace the user belongs to; `crm_agent` and `anon` get no grants. Updates are limited to the title, model, reasoning, web search, archive, `stopped_at` (set by Stop) and timestamp on conversations, and to content and actions on messages. Deleting a conversation cascades to its messages and Orbit Agent jobs.
 

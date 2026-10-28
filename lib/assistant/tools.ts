@@ -739,7 +739,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         query: { type: "string" },
         companyId: { type: "string" },
         contactId: { type: "string" },
-        limit: limitParam,
+        limit: { ...limitParam, description: "How many to return, up to 100. Defaults to 100." },
         offset: offsetParam,
       },
     },
