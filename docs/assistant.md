@@ -168,6 +168,7 @@ When a tool is merged into another, add its old name to `MERGED_TOOLS` in `tools
 | `list_activities` | Logged activity, newest first, with search and filters, plus call summaries for calls and meetings. | No | Yes | `limit` up to 100 (default 50). |
 | `log_activity` | Logs a note, call or email (only one that happened outside Orbit) on a company or person. | Yes | No | Refuses an email already filed from the mailbox in the last six hours. |
 | `archive_activity` | Removes a wrong or duplicate activity from timelines, counts and relationship labels. It is archived and can be undone. | Yes | No | Only the person who logged it, or an owner or admin. |
+| `update_activity` | Edits a logged activity: type, title, text, when it happened, and its company, person and opportunity. The card shows the activity and each change from and to. It can be undone. | Yes | No | Only the person who logged it, or an owner or admin. Emails filed from Mail take only a new company or opportunity; calls and meetings from Teams, Granola or a transcript take only a new title, company, person or opportunity. Refuses a deleted activity. |
 | `get_call_transcript` | The full transcript behind a call summary. | No | Yes | |
 
 ### Pipeline and deals
