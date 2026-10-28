@@ -172,8 +172,11 @@ describe("pipeline history", () => {
     await completeTask(owner, hooliTask);
     assert.deepEqual((await stalledDeals(owner, { days: 7, now })).map((item) => item.name), ["Initech deal", "Hal deal", "Hooli deal"]);
 
-    await createActivity(owner, { type: "note", title: "Chased", body: "Chased the decision.", companyId: deals.initech.companyId });
+    const chased = (await createActivity(owner, { type: "note", title: "Chased", body: "Chased the decision.", companyId: deals.initech.companyId })).body.activity;
     assert.deepEqual((await stalledDeals(owner, { days: 7, now: new Date(now.getTime() + 60_000) })).map((item) => item.name), ["Hal deal", "Hooli deal"]);
+    await getAdminPool().query("update crm.activities set archived_at = now() where id = $1", [chased.id]);
+    assert.deepEqual((await stalledDeals(owner, { days: 7, now: new Date(now.getTime() + 60_000) })).map((item) => item.name), ["Initech deal", "Hal deal", "Hooli deal"]);
+    await getAdminPool().query("update crm.activities set archived_at = null where id = $1", [chased.id]);
 
     await createTask(owner, { title: "Old chase", companyId: deals.hooli.companyId, dueAt: new Date(now.getTime() - 40 * DAY).toISOString() });
     await createTask(owner, { title: "Call Hal", companyId: deals.hal.companyId, dueAt: new Date(now.getTime() + DAY).toISOString() });
