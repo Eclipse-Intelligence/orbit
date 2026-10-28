@@ -1,25 +1,13 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useSyncExternalStore } from "react";
 import Button from "@/components/_ui/button";
+import { useStandalone } from "@/hooks/use-standalone";
 import ChevronLeftIcon from "@/public/assets/images/_common/chevron-left.svg";
-
-const QUERY = "(display-mode: standalone)";
-
-function subscribe(onChange: () => void) {
-  const media = window.matchMedia(QUERY);
-  media.addEventListener("change", onChange);
-  return () => media.removeEventListener("change", onChange);
-}
-
-function standalone() {
-  return window.matchMedia(QUERY).matches || (navigator as Navigator & { standalone?: boolean }).standalone === true;
-}
 
 export default function StandaloneBack() {
   const router = useRouter();
-  const inApp = useSyncExternalStore(subscribe, standalone, () => false);
+  const inApp = useStandalone();
   if (!inApp) return null;
   return (
     <Button
