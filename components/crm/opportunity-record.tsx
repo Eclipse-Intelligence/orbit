@@ -235,6 +235,7 @@ export default function OpportunityRecord({
             insights={context.insights}
             mailboxConnected={mailboxConnected}
             viewerId={viewer.id}
+            viewerRole={viewer.role}
           />
         }
       />

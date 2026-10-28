@@ -15,6 +15,8 @@ import {
 } from "@/lib/crm/companies";
 import type { AccountHealth, Company, CompanyListQuery, CompanyWrite, LifecycleCount } from "@/lib/crm/types";
 import { deleteLifecycle, listLifecycles, renameLifecycle } from "@/lib/crm/lifecycles";
+import { setRelationshipOverride } from "@/lib/crm/relationship-override";
+import type { RelationshipLabel } from "@/lib/crm/relationship-score";
 import { revalidateRecordPages } from "@/lib/revalidate";
 import { withActor } from "@/lib/crm/context";
 
@@ -155,6 +157,24 @@ export async function setCompanyHealthAction(id: string, health: AccountHealth |
     revalidateRecordPages();
     revalidatePath("/opportunities");
     revalidatePath("/boards", "layout");
+    return {};
+  } catch (error) {
+    return actionError(error);
+  }
+}
+
+export async function setRelationshipAction(
+  target: "company" | "contact",
+  id: string,
+  label: RelationshipLabel | null,
+): Promise<{ error?: string }> {
+  const user = await requireUser();
+  try {
+    await setRelationshipOverride(user, target, id, { label }, { operation: "set_relationship", source: "web" });
+    revalidatePath("/");
+    revalidatePath("/contacts");
+    revalidatePath("/quiet");
+    revalidateRecordPages();
     return {};
   } catch (error) {
     return actionError(error);

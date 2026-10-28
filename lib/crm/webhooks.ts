@@ -28,6 +28,7 @@ export const WEBHOOK_EVENTS = [
   "opportunity.stage_changed",
   "opportunity.archived",
   "activity.created",
+  "activity.archived",
   "task.created",
   "task.completed",
   "task.reopened",

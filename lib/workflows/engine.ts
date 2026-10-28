@@ -693,7 +693,7 @@ async function recordContext(ctx: Ctx) {
   const found = await withActor(ctx.actor, async (db) => {
     const activities = await db.query<{ occurred_at: Date; type: string; title: string | null; body: string | null }>(
       `select occurred_at, type, title, left(body, 400) as body from crm.activities
-       where workspace_id = $1 and (($2::uuid is not null and company_id = $2) or ($3::uuid is not null and contact_id = $3))
+       where workspace_id = $1 and archived_at is null and (($2::uuid is not null and company_id = $2) or ($3::uuid is not null and contact_id = $3))
        order by occurred_at desc limit 10`,
       [ctx.actor.workspaceId, company?.id ?? null, contact?.id ?? null],
     );

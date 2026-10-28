@@ -697,26 +697,61 @@ export async function archiveOpportunity(
   const provenance = options.provenance ?? { operation: "archive_opportunity" };
   const hash = requestHash("archive_opportunity", { id, provenance });
   return withActor(actor, (db) =>
-    replayOrRun(db, actor, options.idempotencyKey, hash, 200, async () => {
-      const current = await readOpportunity(db, id);
-      if (!current) throw new CrmError("not_found", "Opportunity not found.", 404);
-      if (current.archived_at) return { opportunity: mapOpportunity(current) };
-      await db.query("update crm.opportunities set archived_at = now() where id = $1", [id]);
-      const saved = await readOpportunity(db, id);
-      if (!saved) throw new CrmError("not_found", "Opportunity not found.", 404);
-      const opportunity = mapOpportunity(saved);
-      await recordAudit(
-        db,
-        actor,
-        "opportunity.archived",
-        "opportunity",
-        opportunity.id,
-        provenance,
-        { before: { archivedAt: null }, after: { archivedAt: opportunity.archivedAt } },
-      );
-      return { opportunity };
-    }),
+    replayOrRun(db, actor, options.idempotencyKey, hash, 200, () => archiveOpportunityInDb(db, actor, id, provenance)),
   );
+}
+
+export async function archiveOpportunityInDb(db: Db, actor: Actor, id: string, provenance: Provenance) {
+  const current = await readOpportunity(db, id);
+  if (!current) throw new CrmError("not_found", "Opportunity not found.", 404);
+  if (current.archived_at) return { opportunity: mapOpportunity(current) };
+  await db.query("update crm.opportunities set archived_at = now() where id = $1", [id]);
+  const saved = await readOpportunity(db, id);
+  if (!saved) throw new CrmError("not_found", "Opportunity not found.", 404);
+  const opportunity = mapOpportunity(saved);
+  await recordAudit(
+    db,
+    actor,
+    "opportunity.archived",
+    "opportunity",
+    opportunity.id,
+    provenance,
+    { before: { archivedAt: null }, after: { archivedAt: opportunity.archivedAt } },
+  );
+  return { opportunity };
+}
+
+export async function unarchiveOpportunityInDb(db: Db, actor: Actor, id: string, provenance: Provenance) {
+  await lockNamespace(db, actor.workspaceId, "opportunities");
+  const current = await readOpportunity(db, id);
+  if (!current) throw new CrmError("not_found", "Opportunity not found.", 404);
+  if (!current.archived_at) return { opportunity: mapOpportunity(current) };
+  try {
+    await db.query("update crm.opportunities set archived_at = null where id = $1", [id]);
+  } catch (error) {
+    constraintError(error, "duplicate_opportunity", "A matching opportunity already exists.");
+  }
+  const saved = await readOpportunity(db, id);
+  if (!saved) throw new CrmError("not_found", "Opportunity not found.", 404);
+  const opportunity = mapOpportunity(saved);
+  await recordAudit(db, actor, "opportunity.updated", "opportunity", opportunity.id, provenance, {
+    fields: ["archivedAt"],
+    before: { archivedAt: iso(current.archived_at) },
+    after: { archivedAt: null },
+  });
+  return { opportunity };
+}
+
+export async function readOpportunityInDb(db: Db, id: string) {
+  const row = await readOpportunity(db, id);
+  return row ? mapOpportunity(row) : null;
+}
+
+export async function updateOpportunityInDb(db: Db, actor: Actor, id: string, input: OpportunityWrite, provenance: Provenance) {
+  await lockNamespace(db, actor.workspaceId, "opportunities");
+  const current = await readOpportunity(db, id);
+  if (!current) throw new CrmError("not_found", "Opportunity not found.", 404);
+  return applyOpportunity(db, actor, current, prepareOpportunity(input, "patch"), provenance);
 }
 
 export async function moveToProposalStageInDb(

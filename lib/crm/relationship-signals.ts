@@ -1,7 +1,8 @@
 import { withActor } from "@/lib/crm/context";
 import type { Db } from "@/lib/db/pool";
 import { iso, isUuid } from "@/lib/crm/mutate";
-import { EMPTY_SIGNALS, scoreRelationship, type Relationship, type RelationshipSignals, type Tone } from "@/lib/crm/relationship-score";
+import { readRelationshipOverrides } from "@/lib/crm/relationship-override";
+import { EMPTY_SIGNALS, scoreRelationship, withOverride, type Relationship, type RelationshipSignals, type Tone } from "@/lib/crm/relationship-score";
 import type { Actor } from "@/lib/crm/types";
 
 export type RelationshipTarget = "company" | "contact";
@@ -41,6 +42,7 @@ async function relationshipSignalsInDb(db: Db, workspaceId: string, target: Rela
        from crm.activities a
        left join crm.activity_tones t on t.activity_id = a.id
        where a.workspace_id = $1 and a.${column} = any($2::uuid[]) and a.occurred_at <= $3::timestamptz
+         and a.archived_at is null
          and a.type in ('email', 'meeting', 'call')
          and coalesce(a.title, '') !~* $4
          and not coalesce(t.automatic, false)
@@ -66,12 +68,12 @@ async function relationshipSignalsInDb(db: Db, workspaceId: string, target: Rela
     `select distinct on (id) id, tone from (
        select a.${column} as id, t.tone, a.occurred_at
        from crm.activity_tones t join crm.activities a on a.id = t.activity_id
-       where a.workspace_id = $1 and a.${column} = any($2::uuid[]) and not t.automatic
+       where a.workspace_id = $1 and a.${column} = any($2::uuid[]) and not t.automatic and a.archived_at is null
          and a.occurred_at between $3::timestamptz - interval '120 days' and $3::timestamptz
        union all
        select a.${column}, case i.sentiment when 'healthy' then 'positive' when 'at_risk' then 'negative' else 'neutral' end, a.occurred_at
        from crm.call_insights i join crm.activities a on a.id = i.activity_id
-       where a.workspace_id = $1 and a.${column} = any($2::uuid[]) and i.sentiment is not null
+       where a.workspace_id = $1 and a.${column} = any($2::uuid[]) and i.sentiment is not null and a.archived_at is null
          and a.occurred_at between $3::timestamptz - interval '120 days' and $3::timestamptz
      ) found
      order by id, occurred_at desc`,
@@ -97,8 +99,9 @@ async function relationshipSignalsInDb(db: Db, workspaceId: string, target: Rela
 
 export async function relationshipsInDb(db: Db, workspaceId: string, target: RelationshipTarget, ids: string[], now = Date.now()) {
   const signals = await relationshipSignalsInDb(db, workspaceId, target, ids, now);
+  const overrides = await readRelationshipOverrides(db, workspaceId, target, ids);
   const result: Record<string, Relationship> = {};
-  for (const id of ids) result[id] = scoreRelationship(signals.get(id) ?? EMPTY_SIGNALS, now);
+  for (const id of ids) result[id] = withOverride(scoreRelationship(signals.get(id) ?? EMPTY_SIGNALS, now), overrides.get(id));
   return result;
 }
 
