@@ -25,6 +25,7 @@ import { saveOtherEmails, type MyEmails } from "@/lib/crm/profile";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import type { PipelineStage } from "@/lib/crm/types";
 import { removeReadwiseToken, saveReadwiseToken } from "@/lib/readwise/keys";
+import { removeRecallKey, saveRecallKey } from "@/lib/recall/keys";
 import { syncReaderToKnowledge } from "@/lib/readwise/sync";
 import { archiveWebhook, createWebhook } from "@/lib/crm/webhooks";
 import { SETTINGS_PATHS, SETTINGS_ROOT } from "@/lib/settings-nav";
@@ -251,6 +252,28 @@ export async function removeReadwiseTokenAction(): Promise<{ error?: string }> {
     return {};
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Couldn't disconnect Readwise Reader." };
+  }
+}
+
+export async function saveRecallKeyAction(key: string): Promise<{ error?: string }> {
+  const user = await requireUser();
+  try {
+    await saveRecallKey(user, key);
+    revalidatePath(SETTINGS_PATHS.integrations);
+    return {};
+  } catch (error) {
+    return { error: error instanceof CrmError ? error.message : "Couldn't save the Recall key." };
+  }
+}
+
+export async function removeRecallKeyAction(): Promise<{ error?: string }> {
+  const user = await requireUser();
+  try {
+    await removeRecallKey(user);
+    revalidatePath(SETTINGS_PATHS.integrations);
+    return {};
+  } catch (error) {
+    return { error: error instanceof CrmError ? error.message : "Couldn't disconnect Recall." };
   }
 }
 
