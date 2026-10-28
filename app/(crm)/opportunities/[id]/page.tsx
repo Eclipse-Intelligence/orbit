@@ -8,6 +8,7 @@ import { CrmError } from "@/lib/crm/errors";
 import { opportunityHref } from "@/lib/crm/hrefs";
 import { getMailbox } from "@/lib/crm/inbox";
 import { getOpportunity, listPipeline } from "@/lib/crm/opportunities";
+import { stageHistory } from "@/lib/crm/pipeline-history";
 import { getCompanyContext } from "@/lib/crm/relationships";
 
 export const dynamic = "force-dynamic";
@@ -35,11 +36,12 @@ export default async function OpportunityPage({ params }: { params: Promise<{ id
   if (!opportunity || opportunity.archivedAt) notFound();
   if (opportunity.pipelineKind === "board") redirect(opportunityHref(opportunity));
 
-  const [pipeline, context, members, mailbox] = await Promise.all([
+  const [pipeline, context, members, mailbox, history] = await Promise.all([
     listPipeline(user, opportunity.pipelineId),
     getCompanyContext(user, opportunity.companyId),
     listMembers(user),
     getMailbox(user),
+    stageHistory(user, opportunity.id),
   ]);
 
   return (
@@ -47,6 +49,7 @@ export default async function OpportunityPage({ params }: { params: Promise<{ id
       viewer={{ id: user.userId, name: user.fullName || user.email, email: user.email, role: user.role, workspaceName: user.workspaceName }}
       opportunity={opportunity}
       stages={pipeline.stages}
+      stays={history.stays}
       context={context}
       members={members}
       mailboxConnected={mailbox?.status === "connected"}

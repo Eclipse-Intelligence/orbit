@@ -652,6 +652,12 @@ Claude Code runs with Orbit's tools only, plus web search when it is on. It has 
 
 Every `/api/companion` route allows 600 requests a minute per Mac and answers with `cache-control: no-store`.
 
+## Opportunities
+
+### Stage history and stalled deals
+
+Stage history is read back from the `opportunity.stage_changed` audit events, and creating a deal counts as entering its first stage. A deal's page lists each stage it has been in, the date it entered and the days it spent there. A deal is stalled when it is open and nothing has happened for 7 days since it entered its stage: no activity or filed email on the deal, its company or its contact, and no open task with a due date (only tasks you can see count). The assistant has `get_deal_history`, `pipeline_report` (per stage: deals now, entries, median and average days, moves forward, won, lost, back and stalled, and conversion to won, plus the win rate since a date, 90 days by default) and `stalled_deals`. The morning brief lists your stalled deals and unassigned ones under Deals gone quiet.
+
 ## Boards
 
 Boards sit under Opportunities in the side menu and track clients through stages of your choosing, for example Onboarding. New board (at the bottom of the tree) creates one with To start, In progress and Done. Click the board title to rename it, double-click a stage to rename it, use the + between columns to add a stage, and drag columns to reorder them. Settings on the board edits the name and stages, deletes the board (its cards are archived), and has Add companies when a deal is won.
