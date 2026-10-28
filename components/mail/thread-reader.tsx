@@ -250,25 +250,23 @@ function SummaryLine({ threadKey, latestId, messages }: { threadKey: string; lat
   if (!current) {
     if (messages < 2) return null;
     return (
-      <div aria-label="Summarising" className="mx-4 flex items-center gap-2.5 rounded-xl bg-white/[0.025] px-3 py-3">
-        <SparkleIcon aria-hidden className="text-primary-foreground size-3.5 shrink-0 animate-pulse" />
+      <div aria-label="Summarising" className="mx-4 flex flex-col gap-2 rounded-xl border border-dashed border-white/15 px-3 py-2.5">
+        <span className="text-subtle font-mono text-[10.5px] leading-4 tracking-[0.08em] uppercase">Summary</span>
         <span className="h-2.5 w-2/3 animate-pulse rounded-full bg-white/[0.06]" />
       </div>
     );
   }
   if (current.failed || !current.data?.summary) return null;
   return (
-    <div className="animate-rise-in mx-4 flex items-start gap-2.5 rounded-xl bg-white/[0.025] px-3 py-2.5">
-      <SparkleIcon aria-hidden className="text-primary-foreground mt-0.5 size-3.5 shrink-0" />
-      <div className="flex min-w-0 flex-col gap-1 text-[13px] leading-5">
-        <p className="text-soft">{current.data.summary}</p>
-        {current.data.todo && (
-          <p className="text-foreground">
-            <span className="text-subtle">Next: </span>
-            {current.data.todo}
-          </p>
-        )}
-      </div>
+    <div className="animate-rise-in mx-4 flex flex-col gap-1.5 rounded-xl border border-dashed border-white/15 px-3 py-2.5 text-[13px] leading-5">
+      <span className="text-subtle font-mono text-[10.5px] leading-4 tracking-[0.08em] uppercase">Summary</span>
+      <p className="text-soft">{current.data.summary}</p>
+      {current.data.todo && (
+        <p className="text-foreground border-t border-dashed border-white/10 pt-1.5">
+          <span className="text-subtle mr-1.5 font-mono text-[10.5px] tracking-[0.08em] uppercase">Next</span>
+          {current.data.todo}
+        </p>
+      )}
     </div>
   );
 }
