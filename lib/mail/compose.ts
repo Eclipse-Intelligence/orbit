@@ -646,7 +646,27 @@ type ToolDraftInput = {
   subject?: string;
   body: string;
   remindHours?: number | null;
+  attachments?: string[];
 };
+
+const GRAPH_MESSAGES = "https://graph.microsoft.com/v1.0/me/messages";
+
+async function attachToSavedDraft(actor: UserActor, draftId: string, ids: string[], fetchImpl: typeof fetch) {
+  if (ids.length === 0) return [];
+  const row = await withActor(actor, async (db) => {
+    const result = await db.query<{ source_id: string; provider_draft_id: string }>(
+      "select source_id, provider_draft_id from crm.mail_drafts where id = $1 and user_id = $2",
+      [draftId, actor.userId],
+    );
+    return result.rows[0] ?? null;
+  });
+  if (!row) throw new CrmError("not_found", "That draft isn't in Orbit Mail any more.", 404);
+  const attached = await loadAttachments(actor, ids, fetchImpl);
+  const token = await mailSourceToken(actor, row.source_id, fetchImpl);
+  await attachToDraft(token, `${GRAPH_MESSAGES}/${encodeURIComponent(row.provider_draft_id)}`, attached.files, fetchImpl).catch(graphProblem);
+  await discardAttachments(actor, ids, fetchImpl).catch(() => undefined);
+  return attached.summary;
+}
 
 export async function saveDraftForAgent(actor: UserActor, input: ToolDraftInput, options: { origin: string | null; fetchImpl?: typeof fetch }) {
   const replying = Boolean(input.replyTo);
@@ -678,32 +698,69 @@ export async function saveDraftForAgent(actor: UserActor, input: ToolDraftInput,
     }),
     options,
   );
+  const attachments = await attachToSavedDraft(actor, draft.id, readAttachmentIds(input.attachments), options.fetchImpl ?? fetch);
   const href = thread ? `/mail?thread=${encodeURIComponent(`${thread.source_id}|${thread.tk}`)}` : "/mail?view=drafts";
-  return { draft, href };
+  return { draft, href, attachments };
+}
+
+type StoredDraft = {
+  id: string;
+  source_id: string;
+  identity_id: string | null;
+  mode: DraftMode;
+  reply_to: string | null;
+  subject: string | null;
+  to_recipients: MailAddress[];
+  cc_recipients: MailAddress[];
+  bcc_recipients: MailAddress[];
+  attachments: string[];
+  send_at: Date | string | null;
+};
+
+async function storedDraft(actor: UserActor, id: string) {
+  if (!isUuid(id)) return null;
+  return withActor(actor, async (db) => {
+    const result = await db.query<StoredDraft>(
+      `select id, source_id, identity_id, mode, reply_to, subject, to_recipients, cc_recipients, bcc_recipients, attachments, send_at
+       from crm.mail_drafts where id = $1 and user_id = $2`,
+      [id, actor.userId],
+    );
+    return result.rows[0] ?? null;
+  });
 }
 
 export async function sendForAgent(
   actor: UserActor,
-  input: ToolDraftInput & { draftId?: string | null },
+  input: ToolDraftInput & { draftId?: string | null; sendAt?: string | null },
   options: { origin: string | null; fetchImpl?: typeof fetch; smtp?: SmtpSender; saveSent?: SentSaver },
 ) {
-  const replying = Boolean(input.replyTo);
+  const stored = input.draftId ? await storedDraft(actor, input.draftId) : null;
+  if (input.draftId && !stored) throw new CrmError("not_found", "That draft isn't in Orbit Mail any more. Save it again.", 404);
+  const replyTo = input.replyTo ?? stored?.reply_to ?? null;
+  const replying = Boolean(replyTo);
   const accounts = await composeAccounts(actor);
-  const account = replying && !input.from ? null : await resolveSendAccount(actor, input.from);
+  const account = input.from
+    ? await resolveSendAccount(actor, input.from)
+    : stored
+      ? { sourceId: stored.source_id, identityId: stored.identity_id }
+      : replying
+        ? null
+        : await resolveSendAccount(actor, null);
   const original = replying
     ? await withActor(actor, async (db) => {
-        if (!isUuid(input.replyTo!)) return null;
+        if (!isUuid(replyTo!)) return null;
         const result = await db.query<{ source_id: string; tk: string; subject: string | null; from_email: string | null; from_name: string | null; to_recipients: MailAddress[]; cc_recipients: MailAddress[] }>(
           `select source_id, coalesce(thread_key, 'm:' || id::text) as tk, subject, from_email, from_name, to_recipients, cc_recipients
            from crm.mail_messages where id = $1 and user_id = $2`,
-          [input.replyTo, actor.userId],
+          [replyTo, actor.userId],
         );
         return result.rows[0] ?? null;
       })
     : null;
   if (replying && !original) throw new CrmError("not_found", "That email isn't in Orbit Mail. Search for it again.", 404);
-  if (!replying && !input.subject?.trim()) throw new CrmError("invalid_input", "Add a subject.", 400, { field: "subject" });
-  const mode = replying ? (input.replyAll ? "reply_all" : "reply") : "new";
+  const subject = input.subject?.trim() || stored?.subject?.trim() || "";
+  if (!replying && !subject) throw new CrmError("invalid_input", "Add a subject.", 400, { field: "subject" });
+  const mode: DraftMode = stored?.mode === "forward" && !input.replyTo ? "forward" : replying ? (input.replyAll ? "reply_all" : "reply") : "new";
   const defaults = original
     ? replyDefaults(
         mode,
@@ -711,26 +768,40 @@ export async function sendForAgent(
         original.subject,
         [actor.email, ...accounts.map((item) => item.email)],
       )
-    : { to: [], cc: [], subject: input.subject ?? "" };
+    : { to: [], cc: [], subject };
+  const keepRecipients = Boolean(stored) && input.to.length === 0 && (input.cc ?? []).length === 0 && (stored?.to_recipients ?? []).length + (stored?.cc_recipients ?? []).length > 0;
   const draft = readDraftInput({
     id: input.draftId ?? null,
     mode,
-    messageId: input.replyTo ?? null,
+    messageId: replyTo,
     sourceId: account?.sourceId ?? original?.source_id ?? null,
     identityId: account?.identityId ?? null,
-    to: [...defaults.to, ...input.to],
-    cc: [...defaults.cc, ...(input.cc ?? [])],
-    bcc: [],
-    subject: input.subject?.trim() || defaults.subject,
+    to: keepRecipients ? (stored?.to_recipients ?? []) : [...defaults.to, ...input.to],
+    cc: keepRecipients ? (stored?.cc_recipients ?? []) : [...defaults.cc, ...(input.cc ?? [])],
+    bcc: keepRecipients ? (stored?.bcc_recipients ?? []) : [],
+    subject: subject || defaults.subject,
     body: input.body,
     remindHours: input.remindHours ?? null,
   });
-  const result = await sendMailDraft(actor, draft, options);
-  return {
-    warning: result.warning,
+  const attachments = [...new Set([...(stored?.attachments ?? []), ...readAttachmentIds(input.attachments)])];
+  const summary = {
     to: draft.to.map((item) => item.address),
     cc: draft.cc.map((item) => item.address),
     subject: draft.subject,
-    href: original ? `/mail?thread=${encodeURIComponent(`${original.source_id}|${original.tk}`)}` : "/mail?view=sent",
   };
+  const threadHref = original ? `/mail?thread=${encodeURIComponent(`${original.source_id}|${original.tk}`)}` : null;
+  if (input.sendAt) {
+    const scheduled = await scheduleMailDraft(actor, { ...draft, attachments: stored?.attachments ?? [], sendAt: input.sendAt }, options);
+    const fresh = readAttachmentIds(input.attachments).filter((id) => !(stored?.attachments ?? []).includes(id));
+    try {
+      await attachToSavedDraft(actor, scheduled.id, fresh, options.fetchImpl ?? fetch);
+    } catch (error) {
+      await unscheduleMailDraft(actor, scheduled.id);
+      throw error;
+    }
+    return { ...summary, warning: null, scheduled: true, sendAt: scheduled.sendAt, draftId: scheduled.id, href: threadHref ?? "/mail?view=scheduled" };
+  }
+  if (stored?.send_at) await unscheduleMailDraft(actor, stored.id);
+  const result = await sendMailDraft(actor, { ...draft, attachments }, options);
+  return { ...summary, warning: result.warning, scheduled: false, sendAt: null, draftId: null, href: threadHref ?? "/mail?view=sent" };
 }
