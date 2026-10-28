@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { cache } from "react";
+import StandaloneBack from "@/components/_common/standalone-back";
 import ProposalPage from "@/components/proposals/proposal-page";
 import { getUserActor } from "@/lib/auth/user";
 import { clientIp } from "@/lib/booking/book";
@@ -28,5 +29,10 @@ export default async function PublicProposalPage({ params }: { params: Promise<{
   const { token } = await params;
   const { document, preview } = await loadDocument(token);
   if (!document) notFound();
-  return <ProposalPage token={token} initial={document} preview={preview} />;
+  return (
+    <>
+      <ProposalPage token={token} initial={document} preview={preview} />
+      <StandaloneBack />
+    </>
+  );
 }
