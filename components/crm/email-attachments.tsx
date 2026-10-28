@@ -22,7 +22,14 @@ type Item = {
   onDraft?: boolean;
 };
 
-function size(bytes: number) {
+type Uploads = {
+  prepare: (file: { name: string; size: number; contentType: string }) => Promise<{ attachment?: { id: string; uploadUrl: string }; error?: string }>;
+  discard: (ids: string[]) => Promise<void>;
+};
+
+const EMAIL_UPLOADS: Uploads = { prepare: prepareAttachmentAction, discard: discardAttachmentsAction };
+
+export function fileSize(bytes: number) {
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
@@ -36,7 +43,7 @@ async function upload(url: string, file: File) {
   if (!response.ok) throw new Error("The upload didn't finish.");
 }
 
-export function useEmailAttachments(onDraft: DraftFile[] = []) {
+export function useEmailAttachments(onDraft: DraftFile[] = [], uploads: Uploads = EMAIL_UPLOADS) {
   const [items, setItems] = useState<Item[]>(() =>
     onDraft.map((file) => ({ key: `draft-${file.id}`, id: file.id, name: file.name, size: file.size, contentType: file.contentType, status: "ready", onDraft: true })),
   );
@@ -65,7 +72,7 @@ export function useEmailAttachments(onDraft: DraftFile[] = []) {
       total += file.size;
       setItems((current) => [...current, { ...base, status: "uploading" }]);
       void (async () => {
-        const prepared = await prepareAttachmentAction({ name: file.name, size: file.size, contentType: file.type });
+        const prepared = await uploads.prepare({ name: file.name, size: file.size, contentType: file.type }).catch(() => ({ attachment: undefined, error: "Couldn't attach the file." }));
         if (!prepared.attachment) {
           patch(key, { status: "failed", error: prepared.error ?? "Couldn't attach the file." });
           return;
@@ -74,7 +81,7 @@ export function useEmailAttachments(onDraft: DraftFile[] = []) {
           await upload(prepared.attachment.uploadUrl, file);
           patch(key, { id: prepared.attachment.id, status: "ready" });
         } catch (error) {
-          void discardAttachmentsAction([prepared.attachment.id]);
+          void uploads.discard([prepared.attachment.id]);
           patch(key, { status: "failed", error: error instanceof Error ? error.message : "The upload didn't finish." });
         }
       })();
@@ -83,7 +90,7 @@ export function useEmailAttachments(onDraft: DraftFile[] = []) {
 
   function remove(key: string) {
     const item = items.find((entry) => entry.key === key);
-    if (item?.id && !item.onDraft) void discardAttachmentsAction([item.id]);
+    if (item?.id && !item.onDraft) void uploads.discard([item.id]);
     setItems((current) => current.filter((entry) => entry.key !== key));
   }
 
@@ -162,7 +169,7 @@ export function AttachmentList({ items, onRemove, disabled }: { items: Item[]; o
           <PaperclipIcon aria-hidden className="size-3 shrink-0" />
           <span className="min-w-0 truncate">{item.name}</span>
           <span className="caption-style text-subtle shrink-0">
-            {item.status === "uploading" ? "Uploading…" : item.status === "failed" ? "Failed" : size(item.size)}
+            {item.status === "uploading" ? "Uploading…" : item.status === "failed" ? "Failed" : fileSize(item.size)}
           </span>
           <button
             type="button"
