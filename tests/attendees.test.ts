@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
+import { describeAction, recordNames, runTool } from "@/lib/assistant/tools";
 import { listActivities } from "@/lib/crm/activities";
 import { createCompany } from "@/lib/crm/companies";
 import { archiveContact, createContact } from "@/lib/crm/contacts";
@@ -326,5 +327,55 @@ describe("create and file from an attendee", () => {
     const other = await unfiledImport(owner, "Private", [{ name: "Kim", email: "kim@private.io" }]);
     await assert.rejects(createContactAndFile(outsider, other, "kim@private.io", { summarise: false }), /not found/i);
     assert.deepEqual(await contactsByEmail(outsider.workspaceId, "kim@private.io"), []);
+  });
+
+  it("lets the assistant file a conversation on a contact or on a new person, with a card that shows both", async () => {
+    const review = await unfiledImport(owner, "Acme quarterly review", [
+      { name: "Jane Doe", email: "jane@acme.com" },
+      { name: "Founder", email: "founder@orbit-attendees.test" },
+    ]);
+    const args = { conversationId: review, contactId: janeId };
+    const card = describeAction("file_conversation", args, await recordNames(owner, [args], ["file_conversation"]));
+    assert.equal(card.title, "File conversation: Acme quarterly review");
+    assert.match(card.lines[0], /^Granola meeting, \w{3} \d{1,2} \w{3}, \d{2}:\d{2}$/);
+    assert.deepEqual(card.lines.slice(1), ["People: Jane Doe, Founder", "File on: Jane Doe (Acme)", "Orbit summarises the transcript afterwards."]);
+    const deferred: (() => Promise<unknown>)[] = [];
+    const defer = (work: () => Promise<unknown>) => void deferred.push(work);
+    const filed = (await runTool(owner, "file_conversation", args, { defer })) as { filed: boolean; activityId: string; contact: { id: string; name: string; created: boolean } };
+    assert.equal(filed.filed, true);
+    assert.deepEqual(filed.contact, { id: janeId, name: "Jane Doe", href: `/contacts/${janeId}`, created: false });
+    assert.equal(deferred.length, 1);
+    const row = await importRow(review);
+    assert.equal(row.status, "filed");
+    assert.equal(row.contact_id, janeId);
+    assert.equal(row.company_id, acmeId);
+    const audit = await getAdminPool().query<{ source: string; operation: string }>(
+      "select source, operation from crm.audit_events where entity_id = $1 and event_type = 'activity.created'",
+      [filed.activityId],
+    );
+    assert.deepEqual(audit.rows, [{ source: "assistant", operation: "assistant_file_conversation" }]);
+    const again = (await runTool(owner, "file_conversation", args, { defer })) as { error: string };
+    assert.equal(again.error, "This conversation is already filed.");
+    const filedCard = describeAction("file_conversation", args, await recordNames(owner, [args], ["file_conversation"]));
+    assert.ok(filedCard.lines.includes("This conversation is already filed."));
+
+    const intro = await unfiledImport(owner, "Initech intro", [{ name: "Peter Gibbons", email: "peter@initech.io" }]);
+    const newArgs = { conversationId: intro, email: "Peter@Initech.io" };
+    const newCard = describeAction("file_conversation", newArgs, await recordNames(owner, [newArgs], ["file_conversation"]));
+    assert.ok(newCard.lines.includes("Adds Peter Gibbons (peter@initech.io) as a contact, with a company from initech.io, then files it on them"), newCard.lines.join("\n"));
+    const both = (await runTool(owner, "file_conversation", { ...newArgs, contactId: janeId }, { defer })) as { error: string };
+    assert.match(both.error, /^Pass contactId for someone already in Orbit, or email/);
+    const stranger = (await runTool(owner, "file_conversation", { conversationId: intro, email: "bill@initech.io" }, { defer })) as { error: string };
+    assert.equal(stranger.error, "That person wasn't in this conversation.");
+    const created = (await runTool(owner, "file_conversation", newArgs, { defer })) as { contact: { id: string; name: string; created: boolean } };
+    assert.equal(created.contact.name, "Peter Gibbons");
+    assert.equal(created.contact.created, true);
+    assert.equal((await importRow(intro)).contact_id, created.contact.id);
+    const made = await getAdminPool().query<{ event_type: string; source: string; operation: string }>(
+      "select event_type, source, operation from crm.audit_events where entity_id = $1 and event_type = 'contact.created'",
+      [created.contact.id],
+    );
+    assert.deepEqual(made.rows, [{ event_type: "contact.created", source: "assistant", operation: "create_from_attendee" }]);
+    assert.equal(deferred.length, 2);
   });
 });

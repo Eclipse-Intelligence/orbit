@@ -207,6 +207,7 @@ Add it to `ASSISTANT_TOOLS` with a `name`, a `label` (shown while it runs, for e
 | `list_email_senders` | The addresses the user can send from; the first is the main one. | No | No | |
 | `get_mail_sync_status` | How far each mailbox has synced, per folder, with errors. | No | No | |
 | `get_capture` | The Capture page: recent mail filed to records, unfiled Teams and Granola conversations, and people met who aren't contacts. | No | Yes | Up to 50 unfiled conversations. |
+| `file_conversation` | Files an unfiled Teams or Granola conversation on a contact, or adds one of its people as a contact (with a company from their email domain) and files it on them, as Capture does. The transcript is summarised in the background. | Yes | No | Only conversations still waiting to be filed; the email must be one of its outside people. |
 | `mail_action` | Archives, trashes, moves back to the inbox, marks read or unread, flags, snoozes or sets a no-reply reminder on whole conversations. | Yes | No | Up to 50 emails a call; each stands for its conversation. |
 | `save_email_draft` | Saves a draft in Orbit Mail and Outlook Drafts without sending. The card also offers Confirm and send. | Yes | No | Up to 10 Knowledge files, 25 MB in total. |
 | `send_email` | Sends a new email or a reply from Orbit Mail once the card is approved, or schedules it with `sendAt`. Orbit adds the signature, saves it in Sent and logs it on the contacts. | Yes | No | Up to 10 files, 25 MB; `sendAt` at least a minute ahead and within a year; `remindAfterDays` up to 90. |

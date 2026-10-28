@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { after } from "next/server";
 import { applyMailAction, threadForEmail } from "@/lib/mail/actions";
 import { addFollowUp } from "@/lib/mail/prepare";
 import { forgetMemory, recall, rememberNote } from "@/lib/learning/memories";
@@ -54,14 +55,14 @@ import { STARTER_TEMPLATES } from "@/lib/workflows/templates";
 import { BULK_LIMIT, runBulk } from "@/lib/crm/bulk";
 import { attachableFiles, discardAttachments } from "@/lib/crm/email-attachments";
 import { activitySummaries, archiveActivity, listActivities } from "@/lib/crm/activities";
-import { getCalendarStatus, getMeetings, listPeopleMet, myAddresses, readPeople, readPerson } from "@/lib/crm/calendar";
+import { getCalendarStatus, getMeetings, listPeopleMet, myAddresses, readPeople, readPerson, relinkCalendar } from "@/lib/crm/calendar";
 import { listCalendarItems } from "@/lib/crm/calendars";
 import { getInsightTranscript, getInsightsForActivities } from "@/lib/crm/call-insights";
 import { createTaskWithClickUp, getClickUpPicker, getClickUpState, pushClickUpTask } from "@/lib/crm/clickup";
 import { archiveCompany, createCompany, getCompany, listCompanies, listMembers, updateCompany } from "@/lib/crm/companies";
 import { archiveContact, createContact, getContact, listContacts, updateContact } from "@/lib/crm/contacts";
 import { mergeCompanies, mergeContacts } from "@/lib/crm/merge";
-import { listUnfiledImports } from "@/lib/crm/conversations";
+import { createContactAndFile, fileImport, getConversationImport, listUnfiledImports, summariseImport, type ConversationImport } from "@/lib/crm/conversations";
 import { archiveEmailTemplate, createEmailTemplate, listEmailTemplates, updateEmailTemplate } from "@/lib/crm/email-templates";
 import { CrmError } from "@/lib/crm/errors";
 import { getGranolaStatus } from "@/lib/crm/granola";
@@ -128,7 +129,17 @@ type AssistantTool = {
 
 type Names = (id: unknown) => string;
 
-type ToolContext = { callId?: string; deadline?: number };
+type Defer = (work: () => Promise<unknown>) => void;
+
+type ToolContext = { callId?: string; deadline?: number; defer?: Defer };
+
+function afterResponse(work: () => Promise<unknown>) {
+  try {
+    after(work);
+  } catch {
+    void work();
+  }
+}
 
 const PROVENANCE = { source: "assistant" } as const;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -236,6 +247,17 @@ function withActivity(activity: Activity) {
     companyHref: activity.companyId ? companyHref(activity.companyId) : null,
     contactHref: activity.contactId ? contactHref(activity.contactId) : null,
   };
+}
+
+const CONVERSATION_SOURCES: Record<ConversationImport["source"], string> = { granola: "Granola", teams: "Teams" };
+
+function conversationTitle(conversation: ConversationImport) {
+  return conversation.title?.trim() || (conversation.kind === "call" ? "Teams call" : "Meeting");
+}
+
+function conversationLine(conversation: ConversationImport) {
+  const when = conversation.occurredAt ? formatDateTimeLabel(londonTime(conversation.occurredAt).slice(0, 16)) : "No date";
+  return `${CONVERSATION_SOURCES[conversation.source]} ${conversation.kind}, ${when}`;
 }
 
 const ACTIVITY_LABELS: Record<string, string> = { email: "Email", meeting: "Meeting", call: "Call", note: "Note", research: "Research", linkedin: "LinkedIn", agent_update: "Agent update", other: "Other" };
@@ -1118,6 +1140,88 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         listPeopleMet(actor),
       ]);
       return { mailbox, recentMail: messages, unfiledConversations: unfiled, peopleMet: people };
+    },
+  },
+  {
+    name: "file_conversation",
+    label: "Filing a conversation",
+    write: true,
+    description:
+      "File an unfiled Teams or Granola conversation from get_capture on a person's timeline (and their company's), as the Capture page does. Pass contactId for someone already in Orbit, or email for one of the conversation's people who isn't a contact yet (its newPeople): Orbit adds them as a contact, with a company from their email domain, then files it. If there's a transcript, Orbit summarises it afterwards.",
+    parameters: {
+      type: "object",
+      properties: {
+        conversationId: idParam("Unfiled conversation id from get_capture."),
+        contactId: idParam("Contact to file it on."),
+        email: { type: "string", description: "Email address of a person in the conversation who isn't a contact yet, to add them and file it on them." },
+      },
+      required: ["conversationId"],
+    },
+    details: async (actor, args) => {
+      const id = str(args.conversationId);
+      const conversation = await getConversationImport(actor, id);
+      if (!conversation) return {};
+      const contactId = str(args.contactId);
+      const email = str(args.email).toLowerCase();
+      const contact = isUuid(contactId) ? await getContact(actor, contactId).catch(() => null) : null;
+      const newPerson = email ? conversation.newPeople.find((person) => person.email === email) : undefined;
+      return {
+        [`${id}:title`]: conversationTitle(conversation),
+        [`${id}:what`]: conversationLine(conversation),
+        [`${id}:people`]: conversation.participants.map((person) => person.name || person.email).filter(Boolean).join(", "),
+        [`${id}:filed`]: conversation.status === "unfiled" ? "" : conversation.status === "filed" ? "This conversation is already filed." : "This conversation is no longer waiting to be filed.",
+        [`${id}:summary`]: conversation.transcriptLength > 0 ? "Orbit summarises the transcript afterwards." : "",
+        ...(contact ? { [`${contactId}:company`]: contact.companyName ?? "" } : {}),
+        ...(email ? { [`${id}:person`]: newPerson ? (newPerson.name ? `${newPerson.name} (${newPerson.email})` : newPerson.email) : "", [`${id}:known`]: newPerson ? "" : "yes" } : {}),
+      };
+    },
+    describe: (args, name) => {
+      const id = str(args.conversationId);
+      const contactId = str(args.contactId);
+      const email = str(args.email).toLowerCase();
+      const company = contactId ? detail(name, `${contactId}:company`) : "";
+      const person = detail(name, `${id}:person`);
+      const domain = email.split("@")[1] ?? "";
+      const target = contactId
+        ? `File on: ${name(contactId)}${company ? ` (${company})` : ""}`
+        : person
+          ? `Adds ${person} as a contact${domain ? `, with a company from ${domain}` : ""}, then files it on them`
+          : email
+            ? detail(name, `${id}:known`)
+              ? `File on: the contact with ${email}`
+              : `File on: ${email}, if they were in the conversation`
+            : "";
+      const people = detail(name, `${id}:people`);
+      return {
+        title: titled("File conversation", detail(name, `${id}:title`) || undefined),
+        lines: [detail(name, `${id}:what`), people ? `People: ${people}` : "", target, detail(name, `${id}:filed`), detail(name, `${id}:summary`)],
+      };
+    },
+    run: async (actor, args, context) => {
+      const conversationId = required(args.conversationId, "A conversation id");
+      const contactId = optionalStr(args.contactId);
+      const email = optionalStr(args.email);
+      if (Boolean(contactId) === Boolean(email)) {
+        throw new CrmError("invalid_input", "Pass contactId for someone already in Orbit, or email for a person in the conversation who isn't a contact yet, but not both.", 400, { field: "contactId" });
+      }
+      const provenance = { operation: "assistant_file_conversation", ...PROVENANCE };
+      const filed = contactId
+        ? { ...(await fileImport(actor, conversationId, contactId, { summarise: false, provenance })), contactId, created: false }
+        : await createContactAndFile(actor, conversationId, email!, { summarise: false, provenance });
+      (context.defer ?? afterResponse)(async () => {
+        try {
+          await summariseImport(actor, conversationId);
+        } catch (error) {
+          console.error("Conversation summary failed", error);
+        }
+      });
+      if (email) await relinkCalendar(actor).catch((error) => console.error("Could not relink calendar events", error));
+      return {
+        filed: true,
+        activityId: filed.activityId,
+        contact: { id: filed.contactId, name: filed.contactName, href: contactHref(filed.contactId), created: filed.created },
+        summary: "If there's a transcript, Orbit summarises it in the background. It appears on the timeline in a minute or two.",
+      };
     },
   },
   {
@@ -3921,7 +4025,7 @@ export function describeAction(name: string, args: Args, names: Map<string, stri
   return { title: described.title, lines: described.lines.filter(Boolean) };
 }
 
-export async function runTool(actor: UserActor, name: string, args: Args, options: { deadline?: number; callId?: string } = {}) {
+export async function runTool(actor: UserActor, name: string, args: Args, options: { deadline?: number; callId?: string; defer?: Defer } = {}) {
   const tool = TOOL_BY_NAME.get(name);
   if (!tool) return { error: `There is no tool called ${name}.` };
   const cleaned = dropStrayNulls(args, tool.parameters) as Args;
@@ -3935,7 +4039,7 @@ export async function runTool(actor: UserActor, name: string, args: Args, option
     );
   });
   try {
-    const output = await Promise.race([tool.run(actor, cleaned, { callId: options.callId, deadline: tool.write ? options.deadline : Date.now() + limit }), late]);
+    const output = await Promise.race([tool.run(actor, cleaned, { callId: options.callId, deadline: tool.write ? options.deadline : Date.now() + limit, defer: options.defer }), late]);
     return marked(name, output);
   } catch (error) {
     if (error instanceof CrmError) return { error: error.message, field: error.details?.field ?? null };
