@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { after } from "next/server";
 import { getUserActor } from "@/lib/auth/user";
-import { logActivity, type LoggedActivityType } from "@/lib/crm/activities";
+import { archiveActivity, logActivity, type LoggedActivityType } from "@/lib/crm/activities";
 import { actionError } from "@/lib/companies";
 import { pushClickUpTask } from "@/lib/crm/clickup";
 import { createCompany } from "@/lib/crm/companies";
@@ -315,6 +315,18 @@ export async function addActivityAction(
     });
     refresh();
     return { ok: true, activity };
+  } catch (error) {
+    return actionError(error);
+  }
+}
+
+export async function archiveActivityAction(id: string): Promise<RecordActionState> {
+  const user = await requireUser();
+  try {
+    await archiveActivity(user, id, { operation: "archive_activity", source: "web" });
+    refresh();
+    revalidatePath("/activities");
+    return { ok: true };
   } catch (error) {
     return actionError(error);
   }

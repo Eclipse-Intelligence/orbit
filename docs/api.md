@@ -154,6 +154,8 @@ Agent tokens see every task in the workspace; people in the app only see tasks t
 
 `POST /api/v1/webhooks` requires `admin`. Body: `{ "url", "events": ["lead.created"], "description" }`. `201` returns `{ "endpoint", "secret" }`. The secret is shown once. URLs must be `https`, except `http://127.0.0.1` and `http://localhost` for development.
 
+`events` takes any of `company.created`, `company.updated`, `company.archived`, `company.undone`, `contact.created`, `contact.updated`, `contact.archived`, `contact.undone`, `lead.created`, `opportunity.created`, `opportunity.updated`, `opportunity.stage_changed`, `opportunity.archived`, `opportunity.undone`, `activity.created`, `activity.updated`, `activity.archived`, `activity.undone`, `task.created`, `task.completed`, `task.reopened`, `task.updated`, `task.archived` and `task.undone`, or `*` for every event. Restoring a record from the archive fires `*.updated` with `fields: ["archivedAt"]`. When someone undoes a change through the assistant, the change it puts back fires its normal event first, then `*.undone` fires with `data` of `{ "undoes", "undoneEventType", "restored" }`: the id of the audit event that was undone, its type, and a sentence saying what was put back.
+
 Knowledge isn't in the agent API, but adding, renaming and removing an item fire `knowledge.added`, `knowledge.updated` and `knowledge.removed` with the item's title, kind, scope and company.
 
 `GET /api/v1/webhooks` lists endpoints without the secret. `DELETE /api/v1/webhooks/:id` archives one. `GET /api/v1/webhooks/deliveries` lists recent attempts.

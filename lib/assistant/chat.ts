@@ -475,6 +475,7 @@ export async function applyCompanionResult(actor: UserActor, conversationId: str
     const names = await recordNames(
       actor,
       writes.map((call) => parseArgs(call.function.arguments)),
+      writes.map((call) => call.function.name),
     ).catch(() => new Map<string, string>());
     const actions: AssistantAction[] = writes.map((call) => ({
       id: call.id,
@@ -721,6 +722,7 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
       const names = await recordNames(
         actor,
         writes.map((call) => parseArgs(call.function.arguments)),
+        writes.map((call) => call.function.name),
       ).catch(() => new Map<string, string>());
       const actions: AssistantAction[] = writes.map((call) => ({
         id: call.id,

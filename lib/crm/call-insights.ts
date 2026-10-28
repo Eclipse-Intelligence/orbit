@@ -379,7 +379,7 @@ async function readCall(db: Db, actor: Actor, activityId: string) {
      left join crm.contacts ct on ct.id = a.contact_id
      left join crm.companies co on co.id = a.company_id
      left join crm.companies cco on cco.id = ct.company_id
-     where a.id = $1 and a.workspace_id = $2`,
+     where a.id = $1 and a.workspace_id = $2 and a.archived_at is null`,
     [activityId, actor.workspaceId],
   );
   return result.rows[0] ?? null;

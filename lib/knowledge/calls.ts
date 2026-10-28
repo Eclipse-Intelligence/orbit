@@ -23,7 +23,7 @@ export async function addCallToKnowledge(actor: UserActor, insightId: string) {
        from crm.call_insights i
        join crm.activities a on a.id = i.activity_id
        left join crm.contacts ct on ct.id = coalesce(i.contact_id, a.contact_id)
-       where i.id = $1 and i.workspace_id = $2 and i.status = 'ready'`,
+       where i.id = $1 and i.workspace_id = $2 and i.status = 'ready' and a.archived_at is null`,
       [insightId, actor.workspaceId],
     );
     return result.rows[0] ?? null;
@@ -55,7 +55,7 @@ export async function backfillCalls(actor: UserActor, companyId: string, limit =
        )
        select i.id from crm.call_insights i
        join crm.activities a on a.id = i.activity_id
-       where i.workspace_id = $1 and i.status = 'ready' and (i.company_id = $2 or i.activity_id in (select id from activity))
+       where i.workspace_id = $1 and i.status = 'ready' and a.archived_at is null and (i.company_id = $2 or i.activity_id in (select id from activity))
          and not exists (select 1 from crm.knowledge_items k where k.workspace_id = $1 and k.source_ref = 'call:' || i.id::text)
        order by a.occurred_at desc
        limit $3`,

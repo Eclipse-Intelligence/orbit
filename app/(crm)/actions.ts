@@ -17,6 +17,9 @@ import { mergeCompanies } from "@/lib/crm/merge";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import type { AccountHealth, Company, CompanyListQuery, CompanyWrite, LifecycleCount } from "@/lib/crm/types";
 import { deleteLifecycle, listLifecycles, renameLifecycle } from "@/lib/crm/lifecycles";
+import { CrmError } from "@/lib/crm/errors";
+import { isRelationshipTarget, setRelationshipOverride } from "@/lib/crm/relationship-override";
+import type { RelationshipLabel } from "@/lib/crm/relationship-score";
 import { revalidateRecordPages } from "@/lib/revalidate";
 import { withActor } from "@/lib/crm/context";
 
@@ -157,6 +160,27 @@ export async function setCompanyHealthAction(id: string, health: AccountHealth |
     revalidateRecordPages();
     revalidatePath("/opportunities");
     revalidatePath("/boards", "layout");
+    return {};
+  } catch (error) {
+    return actionError(error);
+  }
+}
+
+export async function setRelationshipAction(
+  target: "company" | "contact",
+  id: string,
+  label: RelationshipLabel | null,
+): Promise<{ error?: string }> {
+  const user = await requireUser();
+  try {
+    if (!isRelationshipTarget(target)) {
+      throw new CrmError("invalid_input", "Choose a company or a person to set the relationship on.", 400, { field: "target" });
+    }
+    await setRelationshipOverride(user, target, id, { label }, { operation: "set_relationship", source: "web" });
+    revalidatePath("/");
+    revalidatePath("/contacts");
+    revalidatePath("/quiet");
+    revalidateRecordPages();
     return {};
   } catch (error) {
     return actionError(error);

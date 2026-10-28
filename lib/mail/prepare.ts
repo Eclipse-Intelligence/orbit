@@ -101,7 +101,7 @@ async function callNotes(db: Db, actor: UserActor, addresses: string[]) {
   if (addresses.length === 0) return [];
   const result = await db.query<{ title: string | null; body: string | null; occurred_at: Date | string }>(
     `select a.title, a.body, a.occurred_at from crm.activities a
-     where a.workspace_id = $1 and a.type in ('call', 'meeting') and a.body is not null
+     where a.workspace_id = $1 and a.type in ('call', 'meeting') and a.body is not null and a.archived_at is null
        and a.occurred_at > now() - interval '60 days'
        and (
          a.contact_id in (select c.id from crm.contacts c where c.workspace_id = $1 and c.normalized_email = any($2::text[]))

@@ -962,6 +962,7 @@ export async function getMeetings(
          left join lateral (
            select a.id from crm.activities a
            where a.workspace_id = m.workspace_id
+             and a.archived_at is null
              and a.type = 'meeting'
              and a.metadata->>'source' = 'granola'
              and a.occurred_at between m.starts_at - interval '2 hours' and m.starts_at + interval '2 hours'

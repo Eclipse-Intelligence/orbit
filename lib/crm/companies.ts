@@ -80,7 +80,7 @@ const COMPANY_SQL = `
     (
       select max(a.occurred_at)
       from crm.activities a
-      where a.company_id = c.id
+      where a.company_id = c.id and a.archived_at is null
     ) as last_interaction_at,
     (
       select count(*)::int
@@ -149,7 +149,7 @@ const NULLS_LAST = new Set<CompanySort>(["domain", "interaction", "strength", "o
 const PRESENCE_SQL: Record<CompanyPresence, string> = {
   domain: "c.domain is not null",
   contacts: "exists (select 1 from crm.contacts ct where ct.company_id = c.id and ct.archived_at is null)",
-  interactions: "exists (select 1 from crm.activities a where a.company_id = c.id)",
+  interactions: "exists (select 1 from crm.activities a where a.company_id = c.id and a.archived_at is null)",
 };
 
 function mapCompany(row: CompanyRow): Company {
@@ -751,24 +751,26 @@ export async function archiveCompany(
   const provenance = options.provenance ?? { operation: "archive_company" };
   const hash = requestHash("archive_company", { id, provenance });
   return withActor(actor, (db) =>
-    replayOrRun(db, actor, options.idempotencyKey, hash, 200, async () => {
-      await lockCompanies(db, actor.workspaceId);
-      const current = await readCompany(db, actor.workspaceId, id);
-      if (!current) throw new CrmError("not_found", "Company not found.", 404);
-      if (current.archivedAt) return { company: current };
-      await db.query(
-        "update crm.companies set archived_at = now() where id = $1 and workspace_id = $2",
-        [id, actor.workspaceId],
-      );
-      const company = await readCompany(db, actor.workspaceId, id);
-      if (!company) throw new CrmError("not_found", "Company not found.", 404);
-      await recordAudit(db, actor, "company.archived", "company", company.id, provenance, {
-        before: { archivedAt: null },
-        after: { archivedAt: company.archivedAt },
-      });
-      return { company };
-    }),
+    replayOrRun(db, actor, options.idempotencyKey, hash, 200, () => archiveCompanyInDb(db, actor, id, provenance)),
   );
+}
+
+export async function archiveCompanyInDb(db: Db, actor: Actor, id: string, provenance: Provenance) {
+  await lockCompanies(db, actor.workspaceId);
+  const current = await readCompany(db, actor.workspaceId, id);
+  if (!current) throw new CrmError("not_found", "Company not found.", 404);
+  if (current.archivedAt) return { company: current };
+  await db.query(
+    "update crm.companies set archived_at = now() where id = $1 and workspace_id = $2",
+    [id, actor.workspaceId],
+  );
+  const company = await readCompany(db, actor.workspaceId, id);
+  if (!company) throw new CrmError("not_found", "Company not found.", 404);
+  await recordAudit(db, actor, "company.archived", "company", company.id, provenance, {
+    before: { archivedAt: null },
+    after: { archivedAt: company.archivedAt },
+  });
+  return { company };
 }
 
 export async function unarchiveCompany(
@@ -781,36 +783,45 @@ export async function unarchiveCompany(
   const provenance = options.provenance ?? { operation: "unarchive_company" };
   const hash = requestHash("unarchive_company", { id, provenance });
   return withActor(actor, (db) =>
-    replayOrRun(db, actor, options.idempotencyKey, hash, 200, async () => {
-      await lockCompanies(db, actor.workspaceId);
-      const current = await readCompany(db, actor.workspaceId, id);
-      if (!current) throw new CrmError("not_found", "Company not found.", 404);
-      if (!current.archivedAt) return { company: current };
-      try {
-        await db.query(
-          "update crm.companies set archived_at = null where id = $1 and workspace_id = $2",
-          [id, actor.workspaceId],
-        );
-      } catch (error) {
-        if (isPgError(error) && error.code === "23505") {
-          throw new CrmError(
-            "duplicate_company",
-            "Another company already uses this domain or name.",
-            409,
-          );
-        }
-        throw error;
-      }
-      const company = await readCompany(db, actor.workspaceId, id);
-      if (!company) throw new CrmError("not_found", "Company not found.", 404);
-      await recordAudit(db, actor, "company.updated", "company", company.id, provenance, {
-        fields: ["archivedAt"],
-        before: { archivedAt: current.archivedAt },
-        after: { archivedAt: null },
-      });
-      return { company };
-    }),
+    replayOrRun(db, actor, options.idempotencyKey, hash, 200, () => unarchiveCompanyInDb(db, actor, id, provenance)),
   );
+}
+
+export async function unarchiveCompanyInDb(db: Db, actor: Actor, id: string, provenance: Provenance) {
+  await lockCompanies(db, actor.workspaceId);
+  const current = await readCompany(db, actor.workspaceId, id);
+  if (!current) throw new CrmError("not_found", "Company not found.", 404);
+  if (!current.archivedAt) return { company: current };
+  try {
+    await db.query(
+      "update crm.companies set archived_at = null where id = $1 and workspace_id = $2",
+      [id, actor.workspaceId],
+    );
+  } catch (error) {
+    if (isPgError(error) && error.code === "23505") {
+      throw new CrmError(
+        "duplicate_company",
+        "Another company already uses this domain or name.",
+        409,
+      );
+    }
+    throw error;
+  }
+  const company = await readCompany(db, actor.workspaceId, id);
+  if (!company) throw new CrmError("not_found", "Company not found.", 404);
+  await recordAudit(db, actor, "company.updated", "company", company.id, provenance, {
+    fields: ["archivedAt"],
+    before: { archivedAt: current.archivedAt },
+    after: { archivedAt: null },
+  });
+  return { company };
+}
+
+export async function updateCompanyInDb(db: Db, actor: Actor, id: string, input: CompanyWrite, provenance: Provenance) {
+  await lockCompanies(db, actor.workspaceId);
+  const current = await readCompany(db, actor.workspaceId, id);
+  if (!current) throw new CrmError("not_found", "Company not found.", 404);
+  return applyUpdate(db, actor, current, normalizeCompanyWrite(input, "patch"), provenance, "company.updated");
 }
 
 export async function getCompaniesByIds(actor: Actor, ids: string[]) {

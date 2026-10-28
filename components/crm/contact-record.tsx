@@ -23,6 +23,7 @@ import SectionHeader from "@/components/crm/section-header";
 import RunWorkflowButton from "@/components/workflows/run-workflow-button";
 import RecordSequence from "@/components/shortcuts/record-sequence";
 import InlineField from "@/components/crm/inline-field";
+import { RelationshipError, RelationshipSelect, RelationshipSource, useRelationshipPicker } from "@/components/crm/relationship-picker";
 import { patchContactAction } from "@/app/(crm)/records";
 import ExternalIcon from "@/public/assets/images/booking/external.svg";
 import RecordTags from "@/components/crm/tags";
@@ -99,6 +100,7 @@ export default function ContactRecord({
       : contact;
   const callUrl = teamsCallUrl(shown.phone);
   const owner = members.find((member) => member.id === shown.ownerId);
+  const picker = useRelationshipPicker("contact", contact.id);
 
   async function patch(input: ContactWrite) {
     const result = await patchContactAction(shown.id, input);
@@ -229,8 +231,21 @@ export default function ContactRecord({
                 )}
                 {relationship && (
                   <span className="flex flex-col gap-1">
-                    <ConnectionMark relationship={relationship} className="text-soft" />
-                    <span className="caption-style text-subtle leading-[1.45]">{relationship.reason}</span>
+                    <span className="flex flex-wrap items-center gap-2">
+                      <ConnectionMark relationship={relationship} className="text-soft" />
+                      <RelationshipSelect
+                        relationship={relationship}
+                        pending={picker.pending}
+                        disabled={Boolean(shown.archivedAt)}
+                        onChange={picker.change}
+                        className="h-7"
+                      />
+                    </span>
+                    {(!relationship.override || relationship.override.reason) && (
+                      <span className="caption-style text-subtle leading-[1.45]">{relationship.reason}</span>
+                    )}
+                    <RelationshipSource relationship={relationship} viewerId={viewer.id} />
+                    <RelationshipError error={picker.error} />
                   </span>
                 )}
                 <RecordTags
@@ -367,6 +382,7 @@ export default function ContactRecord({
             recipient={contactRecipient(shown)}
             mailboxConnected={mailboxConnected}
             viewerId={viewer.id}
+            viewerRole={viewer.role}
             activities={activities}
             insights={insights}
           />

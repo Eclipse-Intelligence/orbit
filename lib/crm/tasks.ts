@@ -109,6 +109,7 @@ type PreparedTask = {
   contactId?: string | null;
   opportunityId?: string | null;
   completed?: boolean;
+  completedAt?: string | null;
 };
 
 function mapTask(row: TaskRow): Task {
@@ -252,11 +253,13 @@ async function applyTask(
     },
   );
   const completedAt =
-    write.completed === undefined
-      ? undefined
-      : write.completed
-        ? (iso(current.completed_at) ?? new Date().toISOString())
-        : null;
+    write.completedAt !== undefined
+      ? write.completedAt
+      : write.completed === undefined
+        ? undefined
+        : write.completed
+          ? (iso(current.completed_at) ?? new Date().toISOString())
+          : null;
   const change = assignColumns([
     [write.title !== undefined, "title", "title", write.title ?? null],
     [write.description !== undefined, "description", "description", write.description ?? null],
@@ -497,21 +500,59 @@ export async function archiveTask(
   const provenance = options.provenance ?? { operation: "archive_task" };
   const hash = requestHash("archive_task", { id, provenance });
   return withActor(actor, (db) =>
-    replayOrRun(db, actor, options.idempotencyKey, hash, 200, async () => {
-      const current = await readTask(db, id);
-      if (!current) throw new CrmError("not_found", "Task not found.", 404);
-      if (current.archived_at) return { task: mapTask(current) };
-      await db.query("update crm.tasks set archived_at = now() where id = $1", [id]);
-      const saved = await readTask(db, id);
-      if (!saved) throw new CrmError("not_found", "Task not found.", 404);
-      const task = mapTask(saved);
-      await recordAudit(db, actor, "task.archived", "task", task.id, provenance, {
-        before: { archivedAt: null },
-        after: { archivedAt: task.archivedAt },
-      });
-      return { task };
-    }),
+    replayOrRun(db, actor, options.idempotencyKey, hash, 200, () => archiveTaskInDb(db, actor, id, provenance)),
   );
+}
+
+export async function archiveTaskInDb(db: Db, actor: Actor, id: string, provenance: Provenance) {
+  const current = await readTask(db, id);
+  if (!current) throw new CrmError("not_found", "Task not found.", 404);
+  if (current.archived_at) return { task: mapTask(current) };
+  await db.query("update crm.tasks set archived_at = now() where id = $1", [id]);
+  const saved = await readTask(db, id);
+  if (!saved) throw new CrmError("not_found", "Task not found.", 404);
+  const task = mapTask(saved);
+  await recordAudit(db, actor, "task.archived", "task", task.id, provenance, {
+    before: { archivedAt: null },
+    after: { archivedAt: task.archivedAt },
+  });
+  return { task };
+}
+
+export async function unarchiveTaskInDb(db: Db, actor: Actor, id: string, provenance: Provenance) {
+  const current = await readTask(db, id);
+  if (!current) throw new CrmError("not_found", "Task not found.", 404);
+  if (!current.archived_at) return { task: mapTask(current) };
+  await db.query("update crm.tasks set archived_at = null where id = $1", [id]);
+  const saved = await readTask(db, id);
+  if (!saved) throw new CrmError("not_found", "Task not found.", 404);
+  const task = mapTask(saved);
+  await recordAudit(db, actor, "task.updated", "task", task.id, provenance, {
+    fields: ["archivedAt"],
+    before: { archivedAt: iso(current.archived_at) },
+    after: { archivedAt: null },
+  });
+  return { task };
+}
+
+export async function readTaskInDb(db: Db, id: string) {
+  const row = await readTask(db, id);
+  return row ? mapTask(row) : null;
+}
+
+export async function restoreTaskInDb(
+  db: Db,
+  actor: Actor,
+  id: string,
+  input: TaskWrite,
+  completedAt: string | null | undefined,
+  provenance: Provenance,
+) {
+  const current = await readTask(db, id);
+  if (!current) throw new CrmError("not_found", "Task not found.", 404);
+  const write = prepareTask(input, "patch");
+  if (completedAt !== undefined) write.completedAt = completedAt;
+  return applyTask(db, actor, current, write, provenance);
 }
 
 export type DueReminder = {

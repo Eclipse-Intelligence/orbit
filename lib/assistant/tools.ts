@@ -53,7 +53,7 @@ import {
 import { STARTER_TEMPLATES } from "@/lib/workflows/templates";
 import { BULK_LIMIT, runBulk } from "@/lib/crm/bulk";
 import { attachableFiles, discardAttachments } from "@/lib/crm/email-attachments";
-import { listActivities } from "@/lib/crm/activities";
+import { activitySummaries, archiveActivity, listActivities } from "@/lib/crm/activities";
 import { getCalendarStatus, getMeetings, listPeopleMet, myAddresses, readPeople, readPerson } from "@/lib/crm/calendar";
 import { listCalendarItems } from "@/lib/crm/calendars";
 import { getInsightTranscript, getInsightsForActivities } from "@/lib/crm/call-insights";
@@ -74,6 +74,10 @@ import { pipelineReport, stageHistory, stalledDeals, STALLED_DAYS } from "@/lib/
 import { getMyEmails } from "@/lib/crm/profile";
 import { REMINDER_OPTIONS } from "@/lib/crm/reminder-options";
 import { findStaleRelationships, getCompanyContext, listAttention } from "@/lib/crm/relationships";
+import { setRelationshipOverride } from "@/lib/crm/relationship-override";
+import { isRelationshipLabel, RELATIONSHIP_LABELS, RELATIONSHIP_META } from "@/lib/crm/relationship-score";
+import { relationshipsFor } from "@/lib/crm/relationship-signals";
+import { describeUndo, listRecentChanges, undoAuditEvent } from "@/lib/crm/undo";
 import { addTags, listTags, removeTags } from "@/lib/crm/tags";
 import { archiveTask, completeTask, listTasks, updateTask } from "@/lib/crm/tasks";
 import { logActivity } from "@/lib/crm/activities";
@@ -117,6 +121,7 @@ type AssistantTool = {
   label: string;
   run: (actor: UserActor, args: Args, context: ToolContext) => Promise<unknown>;
   describe?: (args: Args, name: Names) => { title: string; lines: string[] };
+  details?: (actor: UserActor, args: Args) => Promise<Record<string, string>>;
 };
 
 type Names = (id: unknown) => string;
@@ -230,6 +235,8 @@ function withActivity(activity: Activity) {
     contactHref: activity.contactId ? contactHref(activity.contactId) : null,
   };
 }
+
+const ACTIVITY_LABELS: Record<string, string> = { email: "Email", meeting: "Meeting", call: "Call", note: "Note", research: "Research", linkedin: "LinkedIn", agent_update: "Agent update", other: "Other" };
 
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 
@@ -1052,6 +1059,22 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       );
       return { ...result, data: result.data.map(withActivity), callSummaries: insights };
     },
+  },
+  {
+    name: "list_recent_changes",
+    label: "Reading recent changes",
+    description:
+      "The user's own recent changes in Orbit (record edits, stage moves, archives, created records, deleted activity), newest first. Each has an id, a readable summary, whether it can be undone and, if so, what undoing it restores. Use it to find the change when the user says \"undo that\" or \"put it back\".",
+    parameters: {
+      type: "object",
+      properties: {
+        entityType: { type: "string", enum: ["company", "contact", "opportunity", "task", "activity"], description: "Only changes to this kind of record." },
+        limit: { type: "integer", description: "How many to return, up to 50. Defaults to 20.", minimum: 1, maximum: 50 },
+      },
+    },
+    run: async (actor, args) => ({
+      changes: await listRecentChanges(actor, { limit: int(args.limit, 20, 1, 50), entityType: optionalStr(args.entityType) }),
+    }),
   },
   {
     name: "get_call_transcript",
@@ -1884,6 +1907,66 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     },
   },
   {
+    name: "archive_activity",
+    label: "Deleting an activity",
+    write: true,
+    description:
+      "Delete a logged activity (a note, call, email or meeting on a timeline) that is wrong or a duplicate, by its id from list_activities, get_company or get_contact. It disappears from timelines, counts and relationship labels, and can be undone with undo_change. Only the person who logged it, or an owner or admin, can delete it.",
+    parameters: { type: "object", properties: { activityId: idParam("Activity id.") }, required: ["activityId"] },
+    details: async (actor, args) => {
+      const id = str(args.activityId);
+      if (!isUuid(id)) return {};
+      const found = (await withActor(actor, (db) => activitySummaries(db, actor.workspaceId, [id]))).get(id);
+      if (!found) return {};
+      return {
+        [`${id}:type`]: ACTIVITY_LABELS[found.type] ?? found.type,
+        [`${id}:title`]: found.title || "(no title)",
+        [`${id}:date`]: found.occurredAt ? formatDateTimeLabel(londonTime(found.occurredAt).slice(0, 16)) : "",
+      };
+    },
+    describe: (args, name) => {
+      const id = str(args.activityId);
+      const line = (key: string, label: string) => {
+        const value = name(`${id}:${key}`);
+        return value && value !== `${id}:${key}` ? `${label}: ${value}` : "";
+      };
+      return { title: "Delete activity", lines: [line("type", "Type"), line("title", "Title"), line("date", "Date")] };
+    },
+    run: async (actor, args) => ({
+      activity: await archiveActivity(actor, required(args.activityId, "An activity id"), {
+        operation: "assistant_archive_activity",
+        ...PROVENANCE,
+      }),
+    }),
+  },
+  {
+    name: "undo_change",
+    label: "Undoing a change",
+    write: true,
+    description:
+      "Undo one of the user's own changes by its id from list_recent_changes, putting back what was there before. Only changes list_recent_changes marks canUndo can be undone; it refuses if the record has changed again since.",
+    parameters: { type: "object", properties: { changeId: idParam("Change id from list_recent_changes.") }, required: ["changeId"] },
+    details: async (actor, args) => {
+      const id = str(args.changeId);
+      const described = await describeUndo(actor, id);
+      return {
+        [`${id}:summary`]: described.summary,
+        [`${id}:restores`]: described.canUndo ? (described.restores ?? "") : `Can't be undone: ${described.reason ?? ""}`,
+      };
+    },
+    describe: (args, name) => {
+      const id = str(args.changeId);
+      const summary = name(`${id}:summary`);
+      const restores = name(`${id}:restores`);
+      return {
+        title: "Undo change",
+        lines: [summary !== `${id}:summary` ? summary : "", restores !== `${id}:restores` ? restores : ""],
+      };
+    },
+    run: async (actor, args) =>
+      undoAuditEvent(actor, required(args.changeId, "A change id"), { operation: "undo_change", ...PROVENANCE }),
+  },
+  {
     name: "create_company",
     label: "Creating a company",
     write: true,
@@ -2027,6 +2110,65 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         provenance: { operation: "update_contact", ...PROVENANCE },
       });
       return { contact: withContact(updated.body.contact) };
+    },
+  },
+  {
+    name: "set_relationship",
+    label: "Setting a relationship",
+    write: true,
+    description:
+      "Set the relationship label on a company or person by hand when the automatic one is wrong, with a one-sentence reason from the user. It stays until cleared; relationship auto clears it so Orbit judges it again from emails, calls and meetings. Pass companyId or contactId.",
+    parameters: {
+      type: "object",
+      properties: {
+        companyId: idParam("Company id."),
+        contactId: idParam("Contact id."),
+        relationship: { type: "string", enum: [...RELATIONSHIP_LABELS, "auto"], description: "strong, warm, cooling, one_sided, cold or new; auto clears the override." },
+        reason: { type: "string", description: "Why, in one sentence." },
+      },
+      required: ["relationship"],
+    },
+    details: async (actor, args) => {
+      const target = str(args.companyId) ? "company" : "contact";
+      const id = str(args.companyId) || str(args.contactId);
+      if (!isUuid(id)) return {};
+      const current = (await relationshipsFor(actor, target, [id]))[id];
+      if (!current) return {};
+      const automatic = current.automatic ?? current;
+      return {
+        [`${id}:relationship`]: `${RELATIONSHIP_META[current.label].label}${current.override ? " (set by hand)" : " (automatic)"}`,
+        [`${id}:automatic`]: RELATIONSHIP_META[automatic.label].label,
+      };
+    },
+    describe: (args, name) => {
+      const id = str(args.companyId) || str(args.contactId);
+      const current = name(`${id}:relationship`);
+      const automatic = name(`${id}:automatic`);
+      const next = isRelationshipLabel(args.relationship)
+        ? RELATIONSHIP_META[args.relationship].label
+        : `Automatic${automatic !== `${id}:automatic` ? ` (${automatic})` : ""}`;
+      return {
+        title: titled("Set relationship", name(id)),
+        lines: [current !== `${id}:relationship` ? `From: ${current}` : "", `To: ${next}`, str(args.reason) ? `Why: ${str(args.reason)}` : ""],
+      };
+    },
+    run: async (actor, args) => {
+      const companyId = optionalStr(args.companyId);
+      const contactId = optionalStr(args.contactId);
+      if (!companyId && !contactId) throw new CrmError("invalid_input", "Pass a companyId or a contactId.", 400, { field: "companyId" });
+      if (!isRelationshipLabel(args.relationship) && args.relationship !== "auto") {
+        throw new CrmError("invalid_input", "relationship is strong, warm, cooling, one_sided, cold, new or auto.", 400, { field: "relationship" });
+      }
+      const target = companyId ? "company" : "contact";
+      const id = (companyId ?? contactId)!;
+      await setRelationshipOverride(
+        actor,
+        target,
+        id,
+        { label: isRelationshipLabel(args.relationship) ? args.relationship : null, reason: optionalStr(args.reason) ?? null },
+        { operation: "set_relationship", ...PROVENANCE },
+      );
+      return { relationship: (await relationshipsFor(actor, target, [id]))[id], href: target === "company" ? companyHref(id) : contactHref(id) };
     },
   },
   {
@@ -3459,7 +3601,7 @@ async function recentFiledEmail(actor: UserActor, contactId: string | null, comp
   return withActor(actor, async (db) => {
     const result = await db.query<{ title: string | null; occurred_at: Date }>(
       `select title, occurred_at from crm.activities
-       where workspace_id = $1 and type = 'email' and metadata ? 'source' and created_at > now() - interval '6 hours'
+       where workspace_id = $1 and type = 'email' and metadata ? 'source' and created_at > now() - interval '6 hours' and archived_at is null
          and (($2::uuid is not null and contact_id = $2) or ($2::uuid is null and company_id = $3))
        order by created_at desc limit 1`,
       [actor.workspaceId, contactId, companyId],
@@ -3556,10 +3698,21 @@ function collectIds(value: unknown, into: Set<string>) {
   else if (value && typeof value === "object") for (const item of Object.values(value)) collectIds(item, into);
 }
 
-export async function recordNames(actor: UserActor, args: Args[]) {
+async function toolDetails(actor: UserActor, args: Args[], tools: string[], names: Map<string, string>) {
+  for (let index = 0; index < tools.length; index += 1) {
+    const details = TOOL_BY_NAME.get(tools[index])?.details;
+    if (!details) continue;
+    try {
+      for (const [key, value] of Object.entries(await details(actor, args[index] ?? {}))) if (value) names.set(key, value);
+    } catch {}
+  }
+}
+
+export async function recordNames(actor: UserActor, args: Args[], tools: string[] = []) {
   const ids = new Set<string>();
   for (const entry of args) for (const value of Object.values(entry)) collectIds(value, ids);
   const names = new Map<string, string>();
+  await toolDetails(actor, args, tools, names);
   if (ids.size === 0) return names;
   const list = [...ids];
   await withActor(actor, async (db) => {
