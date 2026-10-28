@@ -4,7 +4,7 @@ import { applyMailAction, threadForEmail } from "@/lib/mail/actions";
 import { addFollowUp } from "@/lib/mail/prepare";
 import { forgetMemory, recall, rememberNote } from "@/lib/learning/memories";
 import { addWatchItems, listWatchlist, removeWatchItems, WATCH_KINDS } from "@/lib/learning/market";
-import { latestBrief } from "@/lib/learning/nightly";
+import { latestBrief, learningKinds, learnNow, LEARNING_KINDS, type LearningKind } from "@/lib/learning/nightly";
 import { bookingUrl } from "@/lib/assistant/links";
 import { ARTICLES_URL, DOCS_URL, eclipseDocsIndex, listEclipseArticles, readEclipsePage } from "@/lib/eclipse-sources";
 import { readWebPage, WebPageError } from "@/lib/web-page";
@@ -430,6 +430,14 @@ function withdrawRefusal(proposal: DocumentDetail) {
   if (proposal.status === "declined") return `The client declined this ${noun}, so it's already closed.`;
   if (proposal.status === "withdrawn") return `This ${noun} is already withdrawn.`;
   return null;
+}
+
+const LEARNING_LABELS: Record<LearningKind, string> = { business: "Business", market: "Market", personal: "About you", brief: "Morning brief" };
+const LEARN_NOW_MS = 270_000;
+const LEARN_MIN_MS = 30_000;
+
+function learningChoice(value: unknown): LearningKind | "all" {
+  return oneOf(value, LEARNING_KINDS) ?? "all";
 }
 
 const KNOWLEDGE_REMOVE_MAX = 50;
@@ -3853,6 +3861,61 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     description: "The user's latest morning brief: what changed in the market, accounts to act on and what Orbit learned overnight.",
     parameters: { type: "object", properties: {} },
     run: async (actor) => ({ brief: await latestBrief(actor) }),
+  },
+  {
+    name: "run_learning",
+    label: "Starting learning",
+    write: true,
+    description:
+      "Run Orbit's learning now instead of waiting for tonight, as Learn now does in Settings, Learning. kind all (the default) runs everything the user may run: the business and the market (owners and admins only), what Orbit knows about the user, then their morning brief. kind brief only rebuilds today's morning brief, from everything since yesterday's. It runs in the background for up to a few minutes, so tell the user it has started and that get_daily_brief or recall will show the results once it finishes.",
+    parameters: {
+      type: "object",
+      properties: { kind: { type: "string", enum: ["all", ...LEARNING_KINDS], description: "all, business, market, personal (about the user) or brief (rebuild the morning brief). Defaults to all." } },
+    },
+    details: async (actor, args): Promise<Record<string, string>> => {
+      const choice = learningChoice(args.kind);
+      try {
+        return { [`learning:${choice}:kinds`]: (await learningKinds(actor, choice)).join(",") };
+      } catch (error) {
+        return { [`learning:${choice}:refused`]: error instanceof CrmError ? `This will be refused: ${error.message}` : "" };
+      }
+    },
+    describe: (args, name) => {
+      const choice = learningChoice(args.kind);
+      const refused = detail(name, `learning:${choice}:refused`);
+      const kinds = (detail(name, `learning:${choice}:kinds`) || (choice === "all" ? "" : choice)).split(",").filter((kind): kind is LearningKind => kind in LEARNING_LABELS);
+      const onlyBrief = choice === "brief";
+      if (refused) return { title: onlyBrief ? "Rebuild the morning brief" : "Run learning now", lines: [refused] };
+      return {
+        title: onlyBrief ? "Rebuild the morning brief" : "Run learning now",
+        lines: [
+          kinds.length ? `Runs: ${kinds.map((kind) => LEARNING_LABELS[kind]).join(", ")}` : "",
+          kinds.length ? `Takes up to about ${counted(kinds.length, "minute", "minutes")} in the background. You can keep chatting.` : "",
+          onlyBrief
+            ? "Uses a model call and replaces today's brief with one covering everything since yesterday's."
+            : "Uses model calls and updates what Orbit has learned, which the assistant uses from then on.",
+        ],
+      };
+    },
+    run: async (actor, args, context) => {
+      const kinds = await learningKinds(actor, learningChoice(args.kind));
+      const deadline = Math.min(context.deadline ?? Infinity, Date.now() + LEARN_NOW_MS);
+      if (deadline - Date.now() < LEARN_MIN_MS) return { error: "There isn't enough time left in this turn to run learning. Ask again in a new message." };
+      (context.defer ?? afterResponse)(async () => {
+        try {
+          await learnNow(actor, { deadline, kinds, rebuildBrief: true });
+        } catch (error) {
+          console.error("Learning from the assistant failed", error);
+        }
+      });
+      return {
+        started: true,
+        inBackground: true,
+        runs: kinds.map((kind) => LEARNING_LABELS[kind]),
+        note: `Learning has started in the background and takes up to about ${counted(kinds.length, "minute", "minutes")}. ${kinds.includes("brief") ? "Read the new brief with get_daily_brief once it's done. " : ""}Settings, Learning shows how each part went.`,
+        href: "/settings/learning",
+      };
+    },
   },
   {
     name: "remember",

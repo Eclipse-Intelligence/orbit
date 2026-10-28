@@ -97,7 +97,7 @@ Two tools read in parts. The assistant reads every part before judging a whole d
 
 ## Tools that spend money
 
-`social_lookup` (Mindcase, per record, with a monthly workspace cap), `check_web` (Parallel, $0.001 a call), `cold_email_check` (model calls), `test_workflow` (its AI steps run for real), `read_web_page` when a page needs a real browser (Browserbase), `find_contact_details` (enrichment credits) and `verify_email` (an email checker credit). The last two need approval. `eclipse_action` can spend Eclipse credits and needs approval.
+`social_lookup` (Mindcase, per record, with a monthly workspace cap), `check_web` (Parallel, $0.001 a call), `cold_email_check` (model calls), `test_workflow` (its AI steps run for real), `read_web_page` when a page needs a real browser (Browserbase), `find_contact_details` (enrichment credits) and `verify_email` (an email checker credit). The last two need approval. `eclipse_action` can spend Eclipse credits and needs approval. `run_learning` spends model calls and needs approval.
 
 ## Adding a tool
 
@@ -323,6 +323,7 @@ Add it to `ASSISTANT_TOOLS` with a `name`, a `label` (shown while it runs, for e
 | --- | --- | --- | --- | --- |
 | `recall` | Searches what Orbit has learned about the user, the business and the market, and the market notes received. | No | Yes | |
 | `get_daily_brief` | The user's latest morning brief. | No | Yes | |
+| `run_learning` | Runs Orbit's learning now, as Learn now does in Settings, Learning, or with kind `brief` rebuilds today's morning brief from everything since yesterday's. It runs after the reply with `after()` and the result says so. | Yes | No | Business and market for owners and admins only; refused while a run is already going; stops starting new parts after about 4.5 minutes. |
 | `remember` | Saves a lasting note: private to the user, or shared with the team for business facts. | Yes | No | Title up to 12 words, body up to 70. |
 | `forget` | Forgets a learned note by id. | Yes | No | |
 | `list_watchlist` | What the nightly market research (Grok Bot) watches. | No | No | |
