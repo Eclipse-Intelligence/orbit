@@ -9,7 +9,7 @@ import { CrmError } from "@/lib/crm/errors";
 import { disconnectCalendarAccount } from "@/lib/crm/calendar-accounts";
 import { addCalendarFeed } from "@/lib/crm/calendar-feeds";
 import { createContactFromEvent, setCalendarForCrm, setCalendarVisible } from "@/lib/crm/calendars";
-import { cancelInvite, createInvite, rescheduleInvite, type InviteInput } from "@/lib/crm/invites";
+import { cancelInvite, createInvite, rescheduleInvite, respondToInvite, type InviteInput } from "@/lib/crm/invites";
 import type { UserActor } from "@/lib/crm/types";
 import { revalidateRecordPages } from "@/lib/revalidate";
 import { SETTINGS_ROOT } from "@/lib/settings-nav";
@@ -174,6 +174,30 @@ export async function moveInviteAction(
     });
     refreshInvites();
     return { ok: true, warning: moved.warning, startsAt: moved.startsAt, endsAt: moved.endsAt };
+  } catch (error) {
+    if (error instanceof CrmError && error.code === "gone") {
+      refreshInvites();
+      return { error: error.message, gone: true };
+    }
+    return actionError(error);
+  }
+}
+
+export async function respondToInviteAction(
+  eventId: string,
+  input: { response: string; note: string; sendResponse: boolean },
+): Promise<InviteActionState & { responseStatus?: string; gone?: boolean }> {
+  const user = await getUserActor();
+  if (!user) return { error: "Sign in to answer invites." };
+  try {
+    const answered = await respondToInvite(user, {
+      eventId: typeof eventId === "string" ? eventId : "",
+      response: input?.response,
+      note: input?.note,
+      sendResponse: input?.sendResponse,
+    });
+    refreshInvites();
+    return { ok: true, warning: answered.warning, responseStatus: answered.responseStatus };
   } catch (error) {
     if (error instanceof CrmError && error.code === "gone") {
       refreshInvites();

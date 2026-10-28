@@ -8,7 +8,9 @@ import {
   cancelInviteAction,
   createContactFromEventAction,
   moveInviteAction,
+  respondToInviteAction,
 } from "@/app/(crm)/calendar/actions";
+import { Checkbox } from "@/components/_ui/checkbox";
 import { DatePicker } from "@/components/_ui/date-picker";
 import Field from "@/components/_ui/field";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/_ui/select";
@@ -354,6 +356,128 @@ function MoveMeeting({ item }: { item: CalendarItem }) {
   );
 }
 
+const ANSWERS = [
+  { response: "accept", status: "accepted", label: "Accept", done: "Accepted", busy: "Accepting…" },
+  { response: "tentative", status: "tentativelyAccepted", label: "Maybe", done: "Said maybe to", busy: "Sending…" },
+  { response: "decline", status: "declined", label: "Decline", done: "Declined", busy: "Declining…" },
+] as const;
+
+const MY_RESPONSE: Record<string, string> = {
+  accepted: "Accepted",
+  tentativelyAccepted: "Maybe",
+  declined: "Declined",
+};
+
+function RespondToMeeting({ item }: { item: CalendarItem }) {
+  const router = useRouter();
+  const notify = useContext(NoticeContext);
+  const [answered, setAnswered] = useState<string | null>(null);
+  const [pending, setPending] = useState<string | null>(null);
+  const [noteOpen, setNoteOpen] = useState(false);
+  const [note, setNote] = useState("");
+  const [tell, setTell] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+  const ids = `respond-${item.id}`;
+  const current = answered ?? item.myResponse;
+  const organiser = item.organizer?.name ?? item.organizer?.email ?? "the organiser";
+
+  async function respond(answer: (typeof ANSWERS)[number]) {
+    if (pending) return;
+    setPending(answer.response);
+    setError(null);
+    setDone(null);
+    const result = await respondToInviteAction(item.id, {
+      response: answer.response,
+      note: tell ? note : "",
+      sendResponse: tell,
+    });
+    setPending(null);
+    if (result.gone && result.error) {
+      notify(result.error);
+      router.refresh();
+      return;
+    }
+    if (result.error) {
+      setError(result.error);
+      return;
+    }
+    setAnswered(result.responseStatus ?? answer.status);
+    const message =
+      result.warning ??
+      `${answer.done} ${eventTitle(item)}. ${tell ? `Outlook let ${organiser} know.` : "The organiser wasn't told."}`;
+    setDone(message);
+    setNote("");
+    setNoteOpen(false);
+    notify(message);
+    router.refresh();
+  }
+
+  return (
+    <div role="group" aria-labelledby={`${ids}-label`} className="flex flex-col gap-2">
+      <p id={`${ids}-label`} className="caption-style text-subtle">
+        Your response: <span className="text-soft">{(current && MY_RESPONSE[current]) || "Not answered"}</span>
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        {ANSWERS.map((answer) => {
+          const chosen = current === answer.status;
+          return (
+            <Button
+              key={answer.response}
+              variant={chosen ? "primary" : "secondary"}
+              size="sm"
+              aria-pressed={chosen}
+              disabled={pending !== null}
+              onClick={() => respond(answer)}
+            >
+              {pending === answer.response ? answer.busy : answer.label}
+            </Button>
+          );
+        })}
+        {!noteOpen && tell && (
+          <Button variant="ghost" size="sm" disabled={pending !== null} onClick={() => setNoteOpen(true)}>
+            Add note
+          </Button>
+        )}
+      </div>
+      {noteOpen && tell && (
+        <div className="flex flex-col gap-1.5">
+          <label className="caption-style text-subtle" htmlFor={`${ids}-note`}>
+            Note to {organiser} (optional)
+          </label>
+          <textarea
+            id={`${ids}-note`}
+            value={note}
+            maxLength={INVITE_COMMENT_MAX}
+            autoFocus
+            onChange={(event) => setNote(event.target.value)}
+            className={cn(textareaClass, "min-h-16")}
+          />
+        </div>
+      )}
+      <div className="flex items-center gap-2">
+        <Checkbox
+          id={`${ids}-tell`}
+          checked={tell}
+          disabled={pending !== null}
+          onCheckedChange={(next) => setTell(next === true)}
+        />
+        <label htmlFor={`${ids}-tell`} className="caption-style text-subtle cursor-pointer">
+          Let {organiser} know
+        </label>
+      </div>
+      {error && (
+        <p role="alert" className="caption-style text-danger">
+          {error}
+        </p>
+      )}
+      <p role="status" className="caption-style text-soft empty:hidden">
+        {done}
+      </p>
+    </div>
+  );
+}
+
 export default function CalendarEventDetails({
   item,
   calendar,
@@ -448,6 +572,7 @@ export default function CalendarEventDetails({
           )}
         </div>
       )}
+      {item.canRespond && <RespondToMeeting item={item} />}
       {item.canCancel && (
         <div className="flex flex-wrap items-start gap-2">
           {!item.isAllDay && <MoveMeeting item={item} />}
