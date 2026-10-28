@@ -11,6 +11,19 @@ export function addressHash(address: string | null | undefined) {
   return createHmac("sha256", appSecret()).update(`viewer:${value}`).digest("hex").slice(0, 40);
 }
 
+export function opensSql(alias: string) {
+  return `case when ${alias}.tracking_id is not null then (
+    select coalesce(json_agg(json_build_object('at', o.opened_at, 'agent', o.agent) order by o.opened_at desc), '[]'::json)
+    from crm.mail_opens o where o.tracking_id = ${alias}.tracking_id
+  ) end`;
+}
+
+export function readsSql(alias: string) {
+  return `case when ${alias}.tracking_id is not null then (
+    select json_build_object('count', count(*)::int, 'last', max(o.opened_at)) from crm.mail_opens o where o.tracking_id = ${alias}.tracking_id
+  ) end`;
+}
+
 export function readerAgent(userAgent: string | null | undefined) {
   const agent = userAgent ?? "";
   if (/GoogleImageProxy|ggpht/i.test(agent)) return "Gmail";

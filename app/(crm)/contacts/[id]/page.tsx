@@ -17,6 +17,8 @@ import { getMailbox } from "@/lib/crm/inbox";
 import { getInviteSetup } from "@/lib/crm/invites";
 import { listTags } from "@/lib/crm/tags";
 import { contactLookups } from "@/lib/enrichment/contacts";
+import { latestEmailCheck } from "@/lib/enrichment/email-check";
+import { configuredVerifiers } from "@/lib/enrichment/providers";
 import { enrichmentAvailability } from "@/lib/enrichment/settings";
 
 export const dynamic = "force-dynamic";
@@ -79,6 +81,8 @@ export default async function ContactPage({
   ]);
   const available = enrichmentAvailability();
   const lookups = available.email || available.linkedin || available.phone ? await contactLookups(user, [contact.id]) : {};
+  const canCheckEmail = configuredVerifiers().length > 0;
+  const emailCheck = canCheckEmail ? await latestEmailCheck(user, contact.email) : null;
   const activities = activitiesByContact[contact.id] ?? [];
   const insights = await getInsightsForActivities(
     user,
@@ -114,7 +118,7 @@ export default async function ContactPage({
       meetings={meetings}
       tags={tags}
       invite={invite}
-      enrichment={{ available, lookups: lookups[contact.id] ?? {} }}
+      enrichment={{ available, lookups: lookups[contact.id] ?? {}, canCheckEmail, emailCheck }}
     />
   );
 }

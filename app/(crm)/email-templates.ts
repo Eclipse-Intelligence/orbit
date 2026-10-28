@@ -47,7 +47,7 @@ export async function createEmailTemplateAction(
 ): Promise<TemplateResult> {
   const user = await requireUser();
   try {
-    const template = await createEmailTemplate(user, input);
+    const template = await createEmailTemplate(user, input, { operation: "create_email_template", source: "web" });
     refresh();
     return { template };
   } catch (error) {
@@ -61,7 +61,7 @@ export async function updateEmailTemplateAction(
 ): Promise<TemplateResult> {
   const user = await requireUser();
   try {
-    const template = await updateEmailTemplate(user, id, input);
+    const template = await updateEmailTemplate(user, id, input, { operation: "update_email_template", source: "web" });
     refresh();
     return { template };
   } catch (error) {
@@ -74,7 +74,7 @@ export async function duplicateEmailTemplateAction(
 ): Promise<TemplateResult> {
   const user = await requireUser();
   try {
-    const template = await duplicateEmailTemplate(user, id);
+    const template = await duplicateEmailTemplate(user, id, { operation: "duplicate_email_template", source: "web" });
     refresh();
     return { template };
   } catch (error) {
@@ -87,7 +87,7 @@ export async function deleteEmailTemplateAction(
 ): Promise<{ id: string } | { error: string }> {
   const user = await requireUser();
   try {
-    const result = await deleteEmailTemplate(user, id);
+    const result = await deleteEmailTemplate(user, id, { operation: "delete_email_template", source: "web" });
     refresh();
     return result;
   } catch (error) {

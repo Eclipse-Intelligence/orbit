@@ -196,7 +196,7 @@ describe("mail replies and read statuses", () => {
   it("saves a reply as an Outlook draft once, then updates it", async () => {
     const { fetchImpl, calls } = outlook(state);
     const input = readDraftInput({ mode: "reply", messageId: jane, to: ["jane@acme.test"], subject: "RE: Renewal pricing", body: "Hi Jane" });
-    const first = await saveMailDraft(owner, input, { origin: ORIGIN, fetchImpl });
+    const first = await saveMailDraft(owner, input, { storedFiles: "replace", origin: ORIGIN, fetchImpl });
     const draftId = `draft-${draftCount}`;
     assert.deepEqual(calls.map((call) => `${call.method} ${call.url.replace(GRAPH, "")}`), ["POST /me/messages/m-1/createReply", `PATCH /me/messages/${draftId}`]);
     const patch = calls[1].body as { subject: string; body: { content: string }; toRecipients: unknown[] };
@@ -206,7 +206,7 @@ describe("mail replies and read statuses", () => {
     const tracking = trackingIdIn(patch.body.content);
     assert.ok(tracking && tracking !== OLD_PIXEL);
 
-    const second = await saveMailDraft(owner, { ...input, id: first.id, body: "Hi Jane, updated" }, { origin: ORIGIN, fetchImpl });
+    const second = await saveMailDraft(owner, { ...input, id: first.id, body: "Hi Jane, updated" }, { storedFiles: "replace", origin: ORIGIN, fetchImpl });
     assert.equal(second.id, first.id);
     assert.equal(calls.length, 3);
     assert.equal(calls[2].method, "PATCH");
@@ -227,10 +227,10 @@ describe("mail replies and read statuses", () => {
 
   it("makes a new draft when the old one was deleted in Outlook", async () => {
     const input = readDraftInput({ mode: "forward", messageId: jane, to: ["sam@acme.test"], body: "FYI" });
-    const first = await saveMailDraft(owner, input, { origin: ORIGIN, fetchImpl: outlook(state).fetchImpl });
+    const first = await saveMailDraft(owner, input, { storedFiles: "replace", origin: ORIGIN, fetchImpl: outlook(state).fetchImpl });
     const oldDraft = `draft-${draftCount}`;
     const gone = outlook({ ...state, missing: new Set([oldDraft]) });
-    const again = await saveMailDraft(owner, { ...input, id: first.id, body: "FYI, see below" }, { origin: ORIGIN, fetchImpl: gone.fetchImpl });
+    const again = await saveMailDraft(owner, { ...input, id: first.id, body: "FYI, see below" }, { storedFiles: "replace", origin: ORIGIN, fetchImpl: gone.fetchImpl });
     assert.notEqual(again.id, first.id);
     assert.deepEqual(gone.calls.map((call) => `${call.method} ${call.url.replace(GRAPH, "").split("?")[0]}`), [
       `PATCH /me/messages/${oldDraft}`,
@@ -245,7 +245,7 @@ describe("mail replies and read statuses", () => {
     const result = await sendMailDraft(
       owner,
       readDraftInput({ mode: "reply", messageId: jane, to: ["jane@acme.test"], subject: "RE: Renewal pricing", body: "Deal. Sending terms." }),
-      { origin: ORIGIN, fetchImpl },
+      { storedFiles: "replace", origin: ORIGIN, fetchImpl },
     );
     assert.equal(result.warning, null);
     assert.deepEqual(calls.map((call) => call.method), ["POST", "PATCH", "POST"]);
@@ -292,7 +292,7 @@ describe("mail replies and read statuses", () => {
     assert.throws(() => readDraftInput({ mode: "new", to: ["sam@acme.test"] }), /Choose an account/);
     const { fetchImpl, calls } = outlook(state);
     const input = readDraftInput({ mode: "new", sourceId, to: ["sam@acme.test"], subject: "Intro", body: "Hi Sam" });
-    const draft = await saveMailDraft(owner, input, { origin: ORIGIN, fetchImpl });
+    const draft = await saveMailDraft(owner, input, { storedFiles: "replace", origin: ORIGIN, fetchImpl });
     assert.equal(draft.mode, "new");
     assert.equal(draft.sourceId, sourceId);
     assert.deepEqual(calls.map((call) => `${call.method} ${call.url.replace(GRAPH, "")}`), ["POST /me/messages", `PATCH /me/messages/draft-${draftCount}`]);
@@ -300,18 +300,18 @@ describe("mail replies and read statuses", () => {
     assert.ok(html.startsWith('<div style="font-family:Aptos'));
     assert.ok(trackingIdIn(html));
     await assert.rejects(
-      () => sendMailDraft(owner, { ...input, id: draft.id, subject: "" }, { origin: ORIGIN, fetchImpl }),
+      () => sendMailDraft(owner, { ...input, id: draft.id, subject: "" }, { storedFiles: "replace", origin: ORIGIN, fetchImpl }),
       /Add a subject/,
     );
     const send = outlook(state);
-    await sendMailDraft(owner, { ...input, id: draft.id }, { origin: ORIGIN, fetchImpl: send.fetchImpl });
+    await sendMailDraft(owner, { ...input, id: draft.id }, { storedFiles: "replace", origin: ORIGIN, fetchImpl: send.fetchImpl });
     assert.deepEqual(send.calls.map((call) => call.method), ["POST"]);
     assert.ok(send.calls[0].url.endsWith("/send"));
 
-    const kept = await saveMailDraft(owner, { ...input, subject: "Second" }, { origin: ORIGIN, fetchImpl: outlook(state).fetchImpl });
+    const kept = await saveMailDraft(owner, { ...input, subject: "Second" }, { storedFiles: "replace", origin: ORIGIN, fetchImpl: outlook(state).fetchImpl });
     const goneDraft = `draft-${draftCount}`;
     const resend = outlook({ ...state, missing: new Set([goneDraft]) });
-    await sendMailDraft(owner, { ...input, id: kept.id, subject: "Second" }, { origin: ORIGIN, fetchImpl: resend.fetchImpl });
+    await sendMailDraft(owner, { ...input, id: kept.id, subject: "Second" }, { storedFiles: "replace", origin: ORIGIN, fetchImpl: resend.fetchImpl });
     assert.deepEqual(resend.calls.map((call) => `${call.method} ${call.url.replace(GRAPH, "").split("?")[0]}`), [
       `POST /me/messages/${goneDraft}/send`,
       "POST /me/messages",
@@ -331,7 +331,7 @@ describe("mail replies and read statuses", () => {
       (await admin.query<{ id: string; provider_message_id: string }>("select id, provider_message_id from crm.mail_messages where is_draft")).rows.map((row) => [row.provider_message_id, row.id]),
     );
     const { fetchImpl, calls } = outlook(state);
-    await saveMailDraft(owner, readDraftInput({ mode: "reply", messageId: jane, to: ["jane@acme.test"], body: "Hi Jane, sure.", replaces: ids["outside-1"] }), { origin: ORIGIN, fetchImpl });
+    await saveMailDraft(owner, readDraftInput({ mode: "reply", messageId: jane, to: ["jane@acme.test"], body: "Hi Jane, sure.", replaces: ids["outside-1"] }), { storedFiles: "replace", origin: ORIGIN, fetchImpl });
     assert.ok(calls.some((call) => call.method === "DELETE" && call.url.endsWith("/me/messages/outside-1")));
     assert.equal((await admin.query("select 1 from crm.mail_messages where id = $1", [ids["outside-1"]])).rows.length, 0);
 
@@ -345,7 +345,7 @@ describe("mail replies and read statuses", () => {
   it("leaves read images out when read statuses are off", async () => {
     await setReadStatuses(owner, false);
     const { fetchImpl, calls } = outlook(state);
-    const draft = await saveMailDraft(owner, readDraftInput({ mode: "reply", messageId: jane, to: ["jane@acme.test"], body: "Quiet" }), {
+    const draft = await saveMailDraft(owner, readDraftInput({ mode: "reply", messageId: jane, to: ["jane@acme.test"], body: "Quiet" }), { storedFiles: "replace",
       origin: ORIGIN,
       fetchImpl,
     });

@@ -10,6 +10,7 @@ import { actionError } from "@/lib/companies";
 import { pushClickUpTask } from "@/lib/crm/clickup";
 import { createCompany } from "@/lib/crm/companies";
 import { createContact, getContact, updateContact } from "@/lib/crm/contacts";
+import { mergeContacts } from "@/lib/crm/merge";
 import { createOpportunity, updateOpportunity } from "@/lib/crm/opportunities";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 
@@ -70,6 +71,17 @@ export async function patchContactAction(id: string, patch: ContactWrite): Promi
     const result = await updateContact(user, id, patch, { provenance: { operation: "update_contact", source: "web" } });
     refresh();
     return { contact: result.body.contact };
+  } catch (error) {
+    return { error: actionError(error).error };
+  }
+}
+
+export async function mergeContactAction(keepId: string, mergeId: string): Promise<{ error?: string; keptId?: string }> {
+  const user = await requireUser();
+  try {
+    const result = await mergeContacts(user, keepId, mergeId, { operation: "merge_contacts", source: "web" });
+    refresh();
+    return { keptId: result.kept.id };
   } catch (error) {
     return { error: actionError(error).error };
   }
