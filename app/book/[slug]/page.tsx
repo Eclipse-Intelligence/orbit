@@ -1,3 +1,4 @@
+import StandaloneBack from "@/components/_common/standalone-back";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { cache } from "react";
@@ -28,5 +29,10 @@ export default async function BookingPage({ params }: { params: Promise<{ slug: 
   const { slug } = await params;
   const page = await loadPage(slug);
   if (!page) notFound();
-  return <BookingScreen page={publicView(page)} />;
+  return (
+    <>
+      <BookingScreen page={publicView(page)} />
+      <StandaloneBack />
+    </>
+  );
 }
