@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { after, afterEach, before, describe, it } from "node:test";
 import { POST as mcpRoute } from "@/app/api/mcp/route";
 import { systemPrompt } from "@/lib/assistant/prompt";
-import { runTool } from "@/lib/assistant/tools";
+import { describeAction, recordNames, runTool } from "@/lib/assistant/tools";
 import { createCompany } from "@/lib/crm/companies";
 import { scopesForRole } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
@@ -217,6 +217,51 @@ describe("nightly learning", () => {
     const results = await learnNow(sam, { deadline: Date.now() + 600_000, fetchImpl });
     assert.deepEqual(Object.keys(results), ["personal", "brief"]);
     assert.equal(calls.filter((call) => call.kind === "business" || call.kind === "market").length, 0);
+  });
+
+  it("lets the assistant run learning or rebuild the brief in the background, with a card saying what will run", async () => {
+    const card = async (actor: UserActor, args: Record<string, unknown>) => describeAction("run_learning", args, await recordNames(actor, [args], ["run_learning"]));
+    const briefCard = await card(owner, { kind: "brief" });
+    assert.equal(briefCard.title, "Rebuild the morning brief");
+    assert.deepEqual(briefCard.lines, [
+      "Runs: Morning brief",
+      "Takes up to about 1 minute in the background. You can keep chatting.",
+      "Uses a model call and replaces today's brief with one covering everything since yesterday's.",
+    ]);
+    const ownerCard = await card(owner, {});
+    assert.equal(ownerCard.title, "Run learning now");
+    assert.deepEqual(ownerCard.lines.slice(0, 2), ["Runs: Business, Market, About you, Morning brief", "Takes up to about 4 minutes in the background. You can keep chatting."]);
+    assert.equal((await card(sam, {})).lines[0], "Runs: About you, Morning brief");
+    const shared = "Only owners and admins can run the business and market learning. You can run learning about you, or rebuild your morning brief.";
+    assert.deepEqual((await card(sam, { kind: "market" })).lines, [`This will be refused: ${shared}`]);
+
+    const deferred: (() => Promise<unknown>)[] = [];
+    const defer = (work: () => Promise<unknown>) => void deferred.push(work);
+    assert.equal(((await runTool(sam, "run_learning", { kind: "market" }, { defer })) as { error: string }).error, shared);
+    const started = (await runTool(owner, "run_learning", { kind: "brief" }, { defer, deadline: Date.now() + 200_000 })) as { started: boolean; inBackground: boolean; runs: string[]; note: string };
+    assert.deepEqual([started.started, started.inBackground, started.runs], [true, true, ["Morning brief"]]);
+    assert.match(started.note, /^Learning has started in the background and takes up to about 1 minute\. Read the new brief with get_daily_brief/);
+    assert.equal(deferred.length, 1);
+    const { fetchImpl, calls } = gateway(() => pulseId);
+    const original = globalThis.fetch;
+    globalThis.fetch = fetchImpl;
+    try {
+      await deferred[0]();
+    } finally {
+      globalThis.fetch = original;
+    }
+    assert.deepEqual(calls.map((call) => call.kind), ["brief"]);
+    assert.match((await latestBrief(owner))?.body ?? "", /Pulse/);
+
+    const admin = getAdminPool();
+    const running = (await admin.query<{ id: string }>("insert into crm.learning_runs (workspace_id, user_id, kind) values ($1, $2, 'brief') returning id", [owner.workspaceId, owner.userId])).rows[0].id;
+    const busy = (await runTool(owner, "run_learning", { kind: "brief" }, { defer })) as { error: string };
+    assert.equal(busy.error, "Orbit is already learning right now. Wait a few minutes for it to finish, then check Settings, Learning.");
+    assert.equal(((await runTool(owner, "run_learning", { kind: "brief" }, { defer, deadline: Date.now() + 10_000 })) as { error: string }).error, busy.error);
+    await admin.query("delete from crm.learning_runs where id = $1", [running]);
+    const late = (await runTool(owner, "run_learning", { kind: "brief" }, { defer, deadline: Date.now() + 10_000 })) as { error: string };
+    assert.equal(late.error, "There isn't enough time left in this turn to run learning. Ask again in a new message.");
+    assert.equal(deferred.length, 1);
   });
 
   it("keeps checking for Grok's notes until 3am before calling the market done, and only then writes the brief", async () => {

@@ -517,16 +517,21 @@ export async function sendMailDraft(
   return { warning: logged ? null : "Sent, but Orbit couldn't add it to the contact's timeline." };
 }
 
+function scheduleTime(sendAt: string) {
+  const at = new Date(sendAt);
+  if (Number.isNaN(at.getTime()) || at.getTime() < Date.now() + SCHEDULE_MIN_MS || at.getTime() > Date.now() + SCHEDULE_MAX_MS) {
+    throw new CrmError("invalid_input", "Choose a time at least a minute from now and within a year.", 400, { field: "sendAt" });
+  }
+  return at;
+}
+
 export async function scheduleMailDraft(
   actor: UserActor,
   input: DraftInput & { attachments?: string[]; sendAt: string },
   options: { origin: string | null; fetchImpl?: typeof fetch; storedFiles: StoredFiles },
 ): Promise<MailDraft> {
   checkSendable(input);
-  const at = new Date(input.sendAt);
-  if (Number.isNaN(at.getTime()) || at.getTime() < Date.now() + SCHEDULE_MIN_MS || at.getTime() > Date.now() + SCHEDULE_MAX_MS) {
-    throw new CrmError("invalid_input", "Choose a time at least a minute from now and within a year.", 400, { field: "sendAt" });
-  }
+  const at = scheduleTime(input.sendAt);
   const ids = await draftFileList(actor, input, options.storedFiles);
   await attachmentSummary(actor, ids);
   const { row } = await writeDraft(actor, input, { origin: options.origin, fetchImpl: options.fetchImpl ?? fetch, attachments: ids });
@@ -565,6 +570,90 @@ export async function listScheduledDrafts(actor: UserActor): Promise<MailDraft[]
 }
 
 type DueDraft = DraftRow & { remind_hours: number | null; signature: boolean };
+
+const SCHEDULED_GONE = "That scheduled email isn't in Orbit Mail any more. It has probably been sent or discarded, so check Sent in Mail.";
+const SCHEDULED_NOT_WAITING =
+  "That email isn't waiting to send any more. Either it's sending now (check Sent in Mail) or it was unscheduled and is in Drafts.";
+
+async function scheduledRow(actor: UserActor, id: string) {
+  if (!isUuid(id)) return null;
+  return withActor(actor, async (db) => {
+    const result = await db.query<DueDraft>(`select ${DRAFT_COLUMNS}, remind_hours, signature from crm.mail_drafts where id = $1 and user_id = $2`, [id, actor.userId]);
+    return result.rows[0] ?? null;
+  });
+}
+
+function waiting(row: DraftRow) {
+  return Boolean(row.send_at || row.send_error);
+}
+
+export async function getScheduledDraft(actor: UserActor, id: string): Promise<MailDraft | null> {
+  const row = await scheduledRow(actor, id);
+  if (!row || !waiting(row)) return null;
+  return withActor(actor, async (db) => (await withFiles(db, [row]))[0]);
+}
+
+export async function cancelScheduledDraft(actor: UserActor, id: string): Promise<MailDraft> {
+  if (!isUuid(id)) throw new CrmError("not_found", SCHEDULED_GONE, 404);
+  const cancelled = await withActor(actor, async (db) => {
+    const result = await db.query<DraftRow>(
+      `update crm.mail_drafts set send_at = null, send_error = null
+       where id = $1 and user_id = $2 and (send_at is not null or send_error is not null)
+       returning ${DRAFT_COLUMNS}`,
+      [id, actor.userId],
+    );
+    return result.rows[0] ?? null;
+  });
+  if (cancelled) return toDraft(cancelled);
+  throw (await scheduledRow(actor, id)) ? new CrmError("conflict", SCHEDULED_NOT_WAITING, 409) : new CrmError("not_found", SCHEDULED_GONE, 404);
+}
+
+export type ScheduledChanges = { sendAt?: string; subject?: string; body?: string; to?: string[]; cc?: string[]; bcc?: string[] };
+
+export async function changeScheduledDraft(
+  actor: UserActor,
+  id: string,
+  changes: ScheduledChanges,
+  options: { origin: string | null; fetchImpl?: typeof fetch },
+): Promise<MailDraft> {
+  const row = await scheduledRow(actor, id);
+  if (!row) throw new CrmError("not_found", SCHEDULED_GONE, 404);
+  if (!waiting(row)) throw new CrmError("conflict", SCHEDULED_NOT_WAITING, 409);
+  const current = dueDraftInput(row);
+  const body = changes.body === undefined ? current.body : changes.body.replace(/\r\n/g, "\n");
+  if (body.length > BODY_MAX) throw new CrmError("invalid_input", "Keep the message under 20,000 characters.", 400, { field: "body" });
+  const subject = changes.subject === undefined ? current.subject : changes.subject.replace(/\s+/g, " ").trim();
+  if (subject.length > SUBJECT_MAX) throw new CrmError("invalid_input", "Keep the subject under 300 characters.", 400, { field: "subject" });
+  const input = {
+    ...current,
+    body,
+    subject,
+    to: changes.to === undefined ? current.to : cleanList(changes.to, "To"),
+    cc: changes.cc === undefined ? current.cc : cleanList(changes.cc, "Cc"),
+    bcc: changes.bcc === undefined ? current.bcc : cleanList(changes.bcc, "Bcc"),
+  };
+  const sendAt = changes.sendAt ?? (row.send_at ? new Date(row.send_at).toISOString() : null);
+  if (!sendAt) throw new CrmError("invalid_input", "This one didn't send, so give it a new send time.", 400, { field: "sendAt" });
+  scheduleTime(sendAt);
+  checkSendable(input);
+  const held = await withActor(actor, async (db) => {
+    const result = await db.query(
+      "update crm.mail_drafts set send_at = null where id = $1 and user_id = $2 and (send_at is not null or send_error is not null) returning id",
+      [id, actor.userId],
+    );
+    return (result.rowCount ?? 0) > 0;
+  });
+  if (!held) throw new CrmError("conflict", SCHEDULED_NOT_WAITING, 409);
+  try {
+    const draft = await scheduleMailDraft(actor, { ...input, sendAt }, { origin: options.origin, fetchImpl: options.fetchImpl, storedFiles: "keep" });
+    return (await getScheduledDraft(actor, draft.id)) ?? draft;
+  } catch (error) {
+    await withActor(actor, (db) =>
+      db.query("update crm.mail_drafts set send_at = $2, send_error = $3 where id = $1 and send_at is null", [id, row.send_at, row.send_error]),
+    ).catch(() => undefined);
+    throw error;
+  }
+}
 
 export async function claimDueDrafts(actor: UserActor, limit = 5): Promise<DueDraft[]> {
   return withActor(actor, async (db) => {
