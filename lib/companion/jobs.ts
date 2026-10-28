@@ -1,5 +1,5 @@
 import type { CompanionCall, CompanionJob, CompanionRequest, CompanionResult } from "@/companion/src/protocol";
-import { TOOL_BY_NAME, runTool, toolJson } from "@/lib/assistant/tools";
+import { EXTERNAL_NOTICE, TOOL_BY_NAME, runTool, toolJson } from "@/lib/assistant/tools";
 import type { AuthenticatedCompanion } from "@/lib/companion/pairing";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
@@ -200,8 +200,75 @@ function parseArgs(raw: string) {
   }
 }
 
+export const RESULT_PIECE_BYTES = 36_000;
+export const CONTINUE_RESULT_TOOL = {
+  name: "continue_result",
+  description:
+    "Read the next piece of a tool result that was too long to send in one go. Pass the resultId and offset from the note at the end of the last piece, and keep going until the note says it's the end before you answer.",
+  parameters: {
+    type: "object",
+    properties: {
+      resultId: { type: "string", description: "The resultId from the note." },
+      offset: { type: "integer", minimum: 0, description: "The offset from the note." },
+    },
+    required: ["resultId", "offset"],
+  },
+  write: false,
+};
+
+function pieceEnd(text: string, start: number) {
+  let end = Math.min(text.length, start + RESULT_PIECE_BYTES);
+  while (end > start + 1 && Buffer.byteLength(text.slice(start, end)) > RESULT_PIECE_BYTES) end = start + Math.floor((end - start) * 0.9);
+  const code = text.charCodeAt(end - 1);
+  return end < text.length && code >= 0xd800 && code <= 0xdbff ? end - 1 : end;
+}
+
+function piece(resultId: string, text: string, offset: number) {
+  const end = pieceEnd(text, offset);
+  const lead = offset > 0 && text.includes(EXTERNAL_NOTICE) ? `[Continued. ${EXTERNAL_NOTICE}]\n` : "";
+  const note =
+    end < text.length
+      ? `\n[This result is ${text.length} characters long and was sent in pieces. This piece is characters ${offset} to ${end}. Call continue_result with resultId "${resultId}" and offset ${end} for the next piece, and read to the end before you answer.]`
+      : offset > 0
+        ? `\n[End of the result: characters ${offset} to ${end} of ${text.length}.]`
+        : "";
+  return `${lead}${text.slice(offset, end)}${note}`;
+}
+
+async function sendResult(auth: AuthenticatedCompanion, jobId: string, resultId: string, content: string, isError: boolean) {
+  if (Buffer.byteLength(content) <= RESULT_PIECE_BYTES) return { content, isError };
+  await withActor(auth.actor, (db) =>
+    db.query("update crm.ai_companion_jobs set results = results || jsonb_build_object($2::text, $3::text) where id = $1 and user_id = $4", [
+      jobId,
+      resultId,
+      content,
+      auth.actor.userId,
+    ]),
+  );
+  return { content: piece(resultId, content, 0), isError };
+}
+
+async function continueResult(auth: AuthenticatedCompanion, jobId: string, raw: string) {
+  const args = parseArgs(raw);
+  const resultId = typeof args.resultId === "string" ? args.resultId.slice(0, 120) : "";
+  const offset = typeof args.offset === "number" && Number.isInteger(args.offset) && args.offset >= 0 ? args.offset : -1;
+  const stored = await withActor(auth.actor, async (db) => {
+    const result = await db.query<{ content: string | null }>(
+      "select results ->> $2 as content from crm.ai_companion_jobs where id = $1 and user_id = $3",
+      [jobId, resultId, auth.actor.userId],
+    );
+    return result.rows[0]?.content ?? null;
+  });
+  if (!stored) return { content: toolJson({ error: "That result isn't available any more. Run the tool again." }), isError: true };
+  if (offset < 0 || offset >= stored.length) {
+    return { content: toolJson({ error: `Use an offset from 0 to ${stored.length - 1}, as given in the note.` }), isError: true };
+  }
+  return { content: piece(resultId, stored, offset), isError: false };
+}
+
 export async function runCompanionTool(auth: AuthenticatedCompanion, jobId: string, call: CompanionCall) {
   await runningJob(auth, jobId);
+  if (call.name === CONTINUE_RESULT_TOOL.name) return continueResult(auth, jobId, call.arguments);
   const tool = TOOL_BY_NAME.get(call.name);
   if (!tool) return { content: toolJson({ error: `There is no tool called ${call.name}.` }), isError: true };
   if (tool.write) return { content: toolJson({ error: "Changes need the user's approval in Orbit." }), isError: true };
@@ -209,7 +276,7 @@ export async function runCompanionTool(auth: AuthenticatedCompanion, jobId: stri
   await addEvent(auth, jobId, { type: "tool", id, name: tool.name, label: tool.label, status: "running" });
   const output = (await runTool(auth.actor, tool.name, parseArgs(call.arguments))) as Record<string, unknown> | null;
   await addEvent(auth, jobId, { type: "tool", id, name: tool.name, label: tool.label, status: "done" });
-  return { content: toolJson(output), isError: Boolean(output && typeof output === "object" && "error" in output) };
+  return sendResult(auth, jobId, id, toolJson(output), Boolean(output && typeof output === "object" && "error" in output));
 }
 
 export const DRAFT_MAX = 200_000;
@@ -237,7 +304,7 @@ export async function finishCompanionJob(
   await runningJob(auth, jobId);
   const claimed = await withActor(auth.actor, (db) =>
     db.query<{ conversation_id: string }>(
-      "update crm.ai_companion_jobs set status = 'done', finished_at = now() where id = $1 and companion_id = $2 and status = 'running' returning conversation_id",
+      "update crm.ai_companion_jobs set status = 'done', finished_at = now(), results = '{}'::jsonb where id = $1 and companion_id = $2 and status = 'running' returning conversation_id",
       [jobId, auth.companionId],
     ),
   );
@@ -262,7 +329,7 @@ export async function failCompanionJob(auth: AuthenticatedCompanion, jobId: stri
   const message = typeof error === "string" && error.trim() ? error.trim().slice(0, 1_000) : "Orbit Agent couldn't answer.";
   await withActor(auth.actor, async (db) => {
     const failed = await db.query<{ conversation_id: string }>(
-      "update crm.ai_companion_jobs set status = 'failed', error = $2, finished_at = now() where id = $1 and status = 'running' returning conversation_id",
+      "update crm.ai_companion_jobs set status = 'failed', error = $2, finished_at = now(), results = '{}'::jsonb where id = $1 and status = 'running' returning conversation_id",
       [jobId, message],
     );
     await closeJobs(db, auth.actor, failed.rows.map((row) => row.conversation_id), failureReply(message));

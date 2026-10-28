@@ -52,7 +52,7 @@ Tool calls without a stored result are left out of the history.
 
 ### Claude account turns (Orbit Agent)
 
-`runRounds` hands a Claude account model to `runCompanionTurn`, which queues a job with the system prompt, the learned notes, the chat as a transcript (cut with the same budgets) and every tool with a `write` flag. Orbit Agent runs it with the Claude Agent SDK (`companion/src/turn.ts`): Orbit's tools as an in-process MCP server named `orbit`, no file, shell or other built-in tools, `WebSearch` only when Web is on, 40 turns at most, and tool results up to 60,000 output tokens.
+`runRounds` hands a Claude account model to `runCompanionTurn`, which queues a job with the system prompt, the learned notes, the chat as a transcript (cut with the same budgets) and every tool with a `write` flag. Orbit Agent runs it with the Claude Agent SDK (`companion/src/turn.ts`): Orbit's tools as an in-process MCP server named `orbit`, no file, shell or other built-in tools, `WebSearch` only when Web is on, 40 turns at most, and tool results up to 60,000 output tokens. Claude Code also moves any single tool result over about 50 KB into a file the model can't open, so Orbit sends a result over 36,000 bytes in pieces: the first piece ends with a note, and the model calls `continue_result` with the `resultId` and `offset` from it to read on. The full result is kept with the job and cleared when the job ends.
 
 - Read tools call back to `POST /api/companion/jobs/{id}/tool`, which runs `runTool` as the person. It refuses write tools.
 - Write tools never call Orbit. They return "Proposed … It has not happened yet" to Claude, and `applyCompanionResult` turns them into cards on the last message, exactly like gateway turns.
@@ -92,7 +92,7 @@ Web off only stops the model's own web search. `read_web_page`, `check_web` and 
 
 Two tools read in parts. The assistant reads every part before judging a whole document, and says which parts it read if it can't finish.
 
-- `reader_read` returns parts of up to 60,000 characters (`READER_PART_CHARS`), split near a paragraph, line or sentence break, with `part`, `parts`, `characters` and `nextPart`. Part 1 also has the document's note and every highlight. Keep calling with `part: nextPart` until `nextPart` is null.
+- `reader_read` returns parts of up to 35,000 characters (`READER_PART_CHARS`), split near a paragraph, line or sentence break, with `part`, `parts`, `characters` and `nextPart`. Part 1 also has the document's note and every highlight. Keep calling with `part: nextPart` until `nextPart` is null.
 - `read_knowledge` returns up to 100,000 characters from `offset` (`READ_WINDOW`; items hold up to 2,000,000) with `nextOffset`. Start at 0, or at the `offset` a `search_knowledge` passage gave, and keep going until `nextOffset` is null.
 
 ## Tools that spend money
@@ -309,7 +309,7 @@ Add it to `ASSISTANT_TOOLS` with a `name`, a `label` (shown while it runs, for e
 | Tool | What it does | Approval | Outside | Notable limits |
 | --- | --- | --- | --- | --- |
 | `reader_list` | Documents in the user's own Reader, by location, category, tags or date. Only when the user asks. | No | Yes | Default 20, up to 100; tags up to 5. |
-| `reader_read` | One Reader document in parts, with its note and highlights in part 1. Only when the user asks. | No | Yes | 60,000 characters a part; read to the last part. |
+| `reader_read` | One Reader document in parts, with its note and highlights in part 1. Only when the user asks. | No | Yes | 35,000 characters a part; read to the last part. |
 | `reader_highlights` | Recent highlights and notes, across documents or for one. Only when the user asks. | No | Yes | Default 50, up to 200. |
 
 ### Learning

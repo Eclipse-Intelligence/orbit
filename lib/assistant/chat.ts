@@ -4,7 +4,15 @@ import { connectedProviders } from "@/lib/ai-accounts/store";
 import { systemPrompt } from "@/lib/assistant/prompt";
 import { ACTION_ALTERNATIVES, ASSISTANT_TOOLS, TOOL_BY_NAME, actionAlternative, describeAction, recordNames, runTool, toolDescription, toolJson } from "@/lib/assistant/tools";
 import type { CompanionResult, Effort } from "@/companion/src/protocol";
-import { cancelCompanionJob, companionBusy, companionWorking, enqueueCompanionJob, failureReply, readCompanionJob } from "@/lib/companion/jobs";
+import {
+  CONTINUE_RESULT_TOOL,
+  cancelCompanionJob,
+  companionBusy,
+  companionWorking,
+  enqueueCompanionJob,
+  failureReply,
+  readCompanionJob,
+} from "@/lib/companion/jobs";
 import { companionOfflineMessage, companionOnline, listCompanions } from "@/lib/companion/pairing";
 import { userLinks } from "@/lib/assistant/links";
 import { aboutYouSection, getColleagues, getPersonalContext } from "@/lib/crm/personal-context";
@@ -421,12 +429,15 @@ async function declinePending(actor: UserActor, conversationId: string, rows: Me
 }
 
 function companionTools() {
-  return ASSISTANT_TOOLS.map((tool) => ({
-    name: tool.name,
-    description: toolDescription(tool),
-    parameters: tool.parameters,
-    write: Boolean(tool.write),
-  }));
+  return [
+    ...ASSISTANT_TOOLS.map((tool) => ({
+      name: tool.name,
+      description: toolDescription(tool),
+      parameters: tool.parameters,
+      write: Boolean(tool.write),
+    })),
+    CONTINUE_RESULT_TOOL,
+  ];
 }
 
 function toToolCall(call: { id: string; name: string; arguments: string }): ToolCall {
