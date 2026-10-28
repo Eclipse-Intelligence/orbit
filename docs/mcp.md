@@ -45,6 +45,14 @@ Mail tools. None of them sends email.
 
 `mail_discard_draft`: `draft_id`.
 
+Readwise Reader tools, for a person who has connected Reader in Settings, Integrations. They use only that person's own access token and never change anything in Reader.
+
+`reader_list`: `location`, `category`, `tags` (up to 5), `updated_after`, `limit` (up to 100), `page_cursor`. Titles, authors, links, locations, tags, dates and ids.
+
+`reader_read`: `id`. One document's full text, note, and its highlights with their notes.
+
+`reader_highlights`: `document_id` or `tag`, `updated_after`, `limit` (up to 200). Recent highlights and their notes.
+
 ## stdio
 
 ```bash

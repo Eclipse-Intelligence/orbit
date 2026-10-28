@@ -6,6 +6,8 @@ import type { GranolaStatus } from "@/lib/crm/granola";
 import type { LinearStatus } from "@/lib/linear";
 import GranolaKey from "@/components/crm/granola-key";
 import type { MailboxSummary } from "@/lib/crm/inbox";
+import { ReadwiseSync, ReadwiseToken } from "@/components/crm/readwise-settings";
+import type { ReadwiseStatus } from "@/lib/readwise/keys";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
 import { cn } from "@/lib/utils";
 
@@ -45,12 +47,14 @@ export default function IntegrationsSettings({
   mailbox,
   calls,
   granola,
+  readwise,
   linear,
 }: {
   configured: boolean;
   mailbox: MailboxSummary | null;
   calls: CallSyncSummary | null;
   granola: GranolaStatus;
+  readwise: ReadwiseStatus;
   linear: LinearStatus;
 }) {
   const live = mailbox?.status === "connected";
@@ -175,6 +179,26 @@ export default function IntegrationsSettings({
           </div>
         )}
         <GranolaKey connected={granola.personal.connected} hint={granola.personal.hint} />
+      </SettingsCard>
+
+      <SettingsCard
+        id="readwise"
+        title="Readwise Reader"
+        description="Documents you tag orbit in Reader are added to Knowledge with their highlights. The assistant can read your Reader when you ask. Orbit never changes anything in Reader."
+      >
+        {readwise.connected && (
+          <ReadwiseSync lastError={readwise.lastError}>
+            <Status tone={readwise.lastError ? "error" : "on"}>
+              {`${readwise.documents} ${readwise.documents === 1 ? "document" : "documents"} in Knowledge · ${syncedLine(readwise.lastSyncedAt)} · Checked every 10 minutes`}
+            </Status>
+            {readwise.lastError && (
+              <span className="caption-style text-danger leading-[1.4]">
+                {readwise.lastErrorAt ? `${readwise.lastError} (${formatWhen(readwise.lastErrorAt)})` : readwise.lastError}
+              </span>
+            )}
+          </ReadwiseSync>
+        )}
+        <ReadwiseToken connected={readwise.connected} hint={readwise.hint} />
       </SettingsCard>
 
       <SettingsCard

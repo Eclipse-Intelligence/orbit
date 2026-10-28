@@ -24,6 +24,8 @@ import { draftPersonalContext, savePersonalContext, type PersonalContext, type P
 import { saveOtherEmails, type MyEmails } from "@/lib/crm/profile";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import type { PipelineStage } from "@/lib/crm/types";
+import { removeReadwiseToken, saveReadwiseToken } from "@/lib/readwise/keys";
+import { syncReaderToKnowledge } from "@/lib/readwise/sync";
 import { archiveWebhook, createWebhook } from "@/lib/crm/webhooks";
 import { SETTINGS_PATHS, SETTINGS_ROOT } from "@/lib/settings-nav";
 
@@ -227,6 +229,47 @@ export async function saveGranolaKeyAction(key: string): Promise<{ error?: strin
     return {};
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Couldn't save the Granola key." };
+  }
+}
+
+export async function saveReadwiseTokenAction(token: string): Promise<{ error?: string }> {
+  const user = await requireUser();
+  try {
+    await saveReadwiseToken(user, token);
+    revalidatePath(SETTINGS_PATHS.integrations);
+    return {};
+  } catch (error) {
+    return { error: error instanceof CrmError ? error.message : "Couldn't save the Readwise token." };
+  }
+}
+
+export async function removeReadwiseTokenAction(): Promise<{ error?: string }> {
+  const user = await requireUser();
+  try {
+    await removeReadwiseToken(user);
+    revalidatePath(SETTINGS_PATHS.integrations);
+    return {};
+  } catch (error) {
+    return { error: error instanceof CrmError ? error.message : "Couldn't disconnect Readwise Reader." };
+  }
+}
+
+export async function syncReadwiseAction(): Promise<{ error?: string; message?: string }> {
+  const user = await requireUser();
+  try {
+    const result = await syncReaderToKnowledge(user, { full: true, deadline: Date.now() + 50_000 });
+    revalidatePath(SETTINGS_PATHS.integrations);
+    if (result.error) return { error: result.error };
+    if (!result.ran) return { message: "A sync is already running." };
+    const changed = result.added + result.updated;
+    const parts = [
+      changed ? `${changed} ${changed === 1 ? "document" : "documents"} added or updated` : "Nothing new",
+      result.archived ? `${result.archived} removed` : null,
+      result.complete ? null : "the rest follows on the next sync",
+    ].filter(Boolean);
+    return { message: `${parts.join(", ")}.` };
+  } catch (error) {
+    return { error: error instanceof CrmError ? error.message : "Couldn't sync Readwise Reader." };
   }
 }
 

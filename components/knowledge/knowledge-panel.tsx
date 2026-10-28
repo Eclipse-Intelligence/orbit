@@ -40,6 +40,7 @@ const KIND_LABEL: Record<KnowledgeItem["kind"], string> = {
   podcast: "Podcast",
   transcript: "Call",
   attachment: "Email attachment",
+  reader: "Reader",
 };
 
 type Uploading = { key: string; name: string; error: string | null };

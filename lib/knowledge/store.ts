@@ -6,7 +6,7 @@ import type { Db } from "@/lib/db/pool";
 import { linkKind } from "@/lib/knowledge/media";
 import { KNOWLEDGE_MAX_BYTES, removeObjects, signedUploadUrl, storageConfigured, StorageError } from "@/lib/storage";
 
-export const KNOWLEDGE_KINDS = ["file", "link", "youtube", "podcast", "transcript", "attachment"] as const;
+export const KNOWLEDGE_KINDS = ["file", "link", "youtube", "podcast", "transcript", "attachment", "reader"] as const;
 export type KnowledgeKind = (typeof KNOWLEDGE_KINDS)[number];
 export type KnowledgeStatus = "pending" | "indexing" | "ready" | "failed";
 export type KnowledgeTarget = { companyId: string } | { eclipse: true };

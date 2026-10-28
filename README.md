@@ -61,7 +61,7 @@ What is shared and what is private:
 - Private to each person: their inbox, calendars and calendar page, OAuth tokens and API keys, email signatures and unsent attachments, assistant conversations, workflow runs and approvals, notifications.
 - Tasks belong to their owner and creator. A member sees only tasks assigned to them or that they created, everywhere in Orbit (lists, record pages, search, the assistant). The owner and admins see everyone's, with a Mine or Everyone switch on Tasks once the workspace has more than one person. New tasks are owned by whoever creates them. Reminders, the side menu count and the notifications bell only cover your own tasks and unowned ones. A member can hand back a task they created, but not one someone else gave them.
 
-Removing someone moves their companies, contacts, deals and tasks to whoever removed them, disconnects their Microsoft and calendar accounts, AI account, Orbit Agent and Granola key, and keeps everything they logged.
+Removing someone moves their companies, contacts, deals and tasks to whoever removed them, disconnects their Microsoft and calendar accounts, AI account, Orbit Agent, Granola key and Readwise token, and keeps everything they logged.
 
 ## Settings
 
@@ -75,7 +75,7 @@ Removing someone moves their companies, contacts, deals and tasks to whoever rem
 | Templates and signatures | `/settings/email-templates` | Reusable emails (below) and a signature per sending address |
 | Calendars | `/settings/calendars` | Calendar accounts and links, Show and Use for CRM, Add mail for extra Microsoft accounts |
 | Booking page | `/settings/booking-page` | Your public booking page at `/book/<link>` (below) |
-| Integrations | `/settings/integrations` | Microsoft 365 and Teams calls (managed from Capture), your Granola key, Linear, ClickUp, AI accounts and Orbit Agent, enrichment providers |
+| Integrations | `/settings/integrations` | Microsoft 365 and Teams calls (managed from Capture), your Granola key, your Readwise Reader token, Linear, ClickUp, AI accounts and Orbit Agent, enrichment providers |
 | Pipeline | `/settings/pipeline` | Opportunity stages (each board has its own stages, set on the board) |
 | Tags and lifecycles | `/settings/tags` | Rename, merge, and delete tags and custom lifecycles |
 | API and webhooks | `/settings/api` | Your mail in Claude (personal MCP tokens), REST and MCP addresses, how to issue agent tokens, webhooks and recent deliveries |
@@ -292,6 +292,14 @@ Environment:
 Each person can connect their own Granola in Settings › Integrations: paste a personal API key (checked against Granola before it is saved, stored encrypted, visible only to them) and their notes sync as theirs. The server-wide `GRANOLA_API_KEY` keeps working for the member whose email owns it. Set `GRANOLA_API_KEY` and restart. Notes go into the workspace with a member whose email is the note owner's email, or into the only workspace when there is one. Each sync lists notes updated since the last sync less an hour (the first sync looks back 14 days) and imports each new note with its transcript. A note is filed as a `meeting` activity on the first attendee or calendar invitee whose email is a contact, otherwise on a company matched by email domain (free-mail domains such as gmail.com never match). Workspace members, and anyone at the note owner's or a member's own domain, are never matched, so internal meetings stay unfiled instead of landing on your own company. The meeting is titled after the note or the calendar event, dated at the scheduled start, lists the attendees, and links back with Open in Granola. Granola's own summary is kept and shown on unfiled conversations. A note is imported once; later edits in Granola do not change it. A note that fails to import is recorded with its error and retried on the next syncs; after three failures it moves to Unfiled conversations with the error, and it never holds back the rest of the sync.
 
 Enable instant Granola sync in Capture registers `/api/granola/webhook` with Granola for `note.generated` events and stores the signing secret encrypted. When Granola says webhooks are not available for the workspace, Orbit keeps checking every 10 minutes instead. The webhook route checks the signature before doing anything else, ignores a delivery id it has already seen, and never calls Granola before the request is verified.
+
+### Readwise Reader
+
+Each person can connect their own Readwise Reader in Settings › Integrations with the access token from readwise.io/access_token. Orbit checks it against Readwise before saving, stores it encrypted, and only that person can see it or use it. No environment variable is needed.
+
+Only documents tagged `orbit` in Reader are stored in Orbit. Each one becomes a Knowledge item (kind Reader) with its title, author, source link, full text, and its highlights with their notes. It is filed under the company whose name or domain matches one of the document's other tags (ignoring case, spaces, hyphens and underscores), otherwise under Eclipse. Orbit syncs every 10 minutes with the scheduled sync, and Sync now on the card syncs straight away and checks every tagged document. Changed text or highlights update the item and index it again, and a document that loses the `orbit` tag or is deleted in Reader is removed from Knowledge (a full check runs at least once a day). Highlights are found by listing highlights and matching their parent document, so a large library may take a few syncs the first time. Orbit stays under Reader's limit of 20 requests a minute and waits once when Readwise asks it to slow down.
+
+The assistant can read the rest of your Reader live when you ask, with `reader_list`, `reader_read` and `reader_highlights`, and so can Claude or ChatGPT over MCP with your personal token. These use only your own token, and nothing they read is stored. Orbit never saves, updates, tags, moves or deletes anything in Reader.
 
 ### Teams transcripts
 

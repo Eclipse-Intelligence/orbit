@@ -154,6 +154,7 @@ const KIND_LABEL: Record<string, string> = {
   podcast: "Podcast",
   transcript: "Transcript",
   attachment: "Document",
+  reader: "Article",
 };
 
 export type SiteExtras = {
