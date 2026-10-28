@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { describeAction, recordNames, runTool } from "@/lib/assistant/tools";
 import { createActivity } from "@/lib/crm/activities";
-import { createCompany, listCompanies } from "@/lib/crm/companies";
-import { createContact } from "@/lib/crm/contacts";
+import { archiveCompany, createCompany, listCompanies } from "@/lib/crm/companies";
+import { archiveContact, createContact } from "@/lib/crm/contacts";
 import { CrmError } from "@/lib/crm/errors";
 import { setRelationshipOverride } from "@/lib/crm/relationship-override";
 import type { RelationshipLabel } from "@/lib/crm/relationship-score";
-import { relationshipsFor } from "@/lib/crm/relationship-signals";
+import { relationshipsFor, type RelationshipTarget } from "@/lib/crm/relationship-signals";
 import { getCompanyContext } from "@/lib/crm/relationships";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
@@ -94,6 +94,28 @@ describe("relationship overrides", () => {
     await assert.rejects(
       setRelationshipOverride(stranger, "company", acme, { label: "cold" }, { operation: "set_relationship" }),
       (error: unknown) => error instanceof CrmError && error.code === "not_found",
+    );
+  });
+
+  it("refuses archived companies and people, and targets other than a company or person", async () => {
+    const gone = (await createCompany(owner, { name: "Gone Override", domain: "gone-override.test" })).body.company.id;
+    const left = (await createContact(owner, { firstName: "Lee", lastName: "Left", email: "lee@gone-override.test", companyId: gone })).body.contact.id;
+    await archiveContact(owner, left);
+    await archiveCompany(owner, gone);
+    await assert.rejects(
+      setRelationshipOverride(owner, "company", gone, { label: "cold" }, { operation: "set_relationship" }),
+      (error: unknown) => error instanceof CrmError && error.code === "archived" && error.status === 409 && /Restore it/.test(error.message),
+    );
+    await assert.rejects(
+      setRelationshipOverride(owner, "contact", left, { label: "cold" }, { operation: "set_relationship" }),
+      (error: unknown) => error instanceof CrmError && error.code === "archived" && /This person is archived/.test(error.message),
+    );
+    const stored = await getAdminPool().query("select relationship_override from crm.companies where id = $1", [gone]);
+    assert.equal(stored.rows[0].relationship_override, null);
+
+    await assert.rejects(
+      setRelationshipOverride(owner, "workspace_members" as RelationshipTarget, acme, { label: "cold" }, { operation: "set_relationship" }),
+      (error: unknown) => error instanceof CrmError && error.code === "invalid_input" && error.details?.field === "target",
     );
   });
 

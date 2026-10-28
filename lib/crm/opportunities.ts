@@ -457,6 +457,7 @@ async function applyOpportunity(
   current: OpportunityRow,
   write: PreparedOpportunity,
   provenance: Provenance | undefined,
+  options: { wonEffects?: boolean } = {},
 ) {
   const companyId = write.companyId ?? current.company_id;
   await requireCompany(db, actor.workspaceId, companyId);
@@ -548,7 +549,7 @@ async function applyOpportunity(
       stageChanged ? { ...diff, fields: otherFields } : diff,
     );
   }
-  if (statusMoved && opportunity.status === "won" && opportunity.pipelineKind !== "board") {
+  if (options.wonEffects !== false && statusMoved && opportunity.status === "won" && opportunity.pipelineKind !== "board") {
     await afterWon(db, actor, opportunity, provenance);
   }
   return { opportunity, changed: true };
@@ -747,11 +748,18 @@ export async function readOpportunityInDb(db: Db, id: string) {
   return row ? mapOpportunity(row) : null;
 }
 
-export async function updateOpportunityInDb(db: Db, actor: Actor, id: string, input: OpportunityWrite, provenance: Provenance) {
+export async function updateOpportunityInDb(
+  db: Db,
+  actor: Actor,
+  id: string,
+  input: OpportunityWrite,
+  provenance: Provenance,
+  options: { wonEffects?: boolean } = {},
+) {
   await lockNamespace(db, actor.workspaceId, "opportunities");
   const current = await readOpportunity(db, id);
   if (!current) throw new CrmError("not_found", "Opportunity not found.", 404);
-  return applyOpportunity(db, actor, current, prepareOpportunity(input, "patch"), provenance);
+  return applyOpportunity(db, actor, current, prepareOpportunity(input, "patch"), provenance, options);
 }
 
 export async function moveToProposalStageInDb(

@@ -16,6 +16,7 @@ import { relationshipsFor } from "@/lib/crm/relationship-signals";
 import { findStaleRelationships, getCompanyContext } from "@/lib/crm/relationships";
 import { scopesForRole } from "@/lib/crm/scopes";
 import type { AgentActor, UserActor } from "@/lib/crm/types";
+import { listRecentChanges, undoAuditEvent } from "@/lib/crm/undo";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { createAgent, createUser, queryAsUser, resetDatabase } from "./helpers";
 
@@ -143,6 +144,37 @@ describe("archiving activities", () => {
     assert.equal(done.changed, true);
     const reader = (await createAgent(owner.workspaceId, ["crm:read"], "Reader")).actor;
     await assert.rejects(archiveActivity(reader, human.id, { operation: "archive_activity" }));
+  });
+
+  it("clears health that came from a deleted call, and puts it back when the delete is undone", async () => {
+    const globex = (await createCompany(owner, { name: "Globex Health", domain: "globex-archive.test" })).body.company.id;
+    const call = (await createActivity(owner, { type: "call", title: "Renewal call", companyId: globex, occurredAt: "2026-10-21T10:00:00.000Z" })).body.activity;
+    await getAdminPool().query(
+      "update crm.companies set health = 'at_risk', health_reason = 'They are reviewing other vendors.', health_at = $2, health_activity_id = $3 where id = $1",
+      [globex, call.occurredAt, call.id],
+    );
+
+    await archiveActivity(owner, call.id, WEB);
+    const cleared = await getCompany(owner, globex);
+    assert.deepEqual([cleared.health, cleared.healthReason, cleared.healthAt, cleared.healthActivityId], [null, null, null, null]);
+    const audit = await getAdminPool().query<{ changes: { fields: string[]; before: Record<string, unknown>; after: Record<string, unknown> }; source: string }>(
+      "select changes, source from crm.audit_events where entity_id = $1 and event_type = 'company.updated'",
+      [globex],
+    );
+    assert.equal(audit.rows.length, 1);
+    assert.deepEqual(audit.rows[0].changes.fields, ["health", "healthReason"]);
+    assert.deepEqual(audit.rows[0].changes.before, { health: "at_risk", healthReason: "They are reviewing other vendors." });
+    assert.deepEqual(audit.rows[0].changes.after, { health: null, healthReason: null });
+    assert.equal(audit.rows[0].source, "web");
+
+    const deleted = (await listRecentChanges(owner, { entityType: "activity" })).find((item) => item.entityId === call.id && item.type === "activity.archived");
+    assert.ok(deleted?.canUndo);
+    await undoAuditEvent(owner, deleted.id, { operation: "undo_change", source: "web" });
+    const restored = await getCompany(owner, globex);
+    assert.deepEqual(
+      [restored.health, restored.healthReason, restored.healthAt, restored.healthActivityId],
+      ["at_risk", "They are reviewing other vendors.", call.occurredAt, call.id],
+    );
   });
 
   it("archives from the assistant, with the title, type and date on the card", async () => {

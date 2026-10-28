@@ -1,6 +1,6 @@
 import type { Db } from "@/lib/db/pool";
 import { formatDate, HEALTH_LABELS, lifecycleLabel } from "@/lib/companies";
-import { activitySummaries, archiveActivityInDb, restoreActivityInDb, type ActivitySummary } from "@/lib/crm/activities";
+import { activitySummaries, archiveActivityInDb, restoreActivityInDb, type ActivitySummary, type ClearedHealth } from "@/lib/crm/activities";
 import { archiveCompanyInDb, readCompanyInDb, unarchiveCompanyInDb, updateCompanyInDb } from "@/lib/crm/companies";
 import { archiveContactInDb, readContactInDb, unarchiveContactInDb, updateContactInDb } from "@/lib/crm/contacts";
 import { withActor } from "@/lib/crm/context";
@@ -25,6 +25,18 @@ const NOUNS: Record<EntityType, string> = {
   task: "task",
   activity: "activity",
 };
+
+const ENTITY_TYPES = Object.keys(NOUNS) as EntityType[];
+
+const TABLES: Record<EntityType, string> = {
+  company: "companies",
+  contact: "contacts",
+  opportunity: "opportunities",
+  task: "tasks",
+  activity: "activities",
+};
+
+const LOCKS: Partial<Record<EntityType, string>> = { company: "companies", contact: "contacts", opportunity: "opportunities" };
 
 const SCOPES: Record<EntityType, Scope> = {
   company: "companies:write",
@@ -97,7 +109,8 @@ const FIELDS: Record<RecordType, Record<string, string>> = {
   },
 };
 
-const UPDATE_EVENTS: Record<string, RecordType> = {
+const UPDATE_EVENTS: Record<string, EntityType> = {
+  "activity.updated": "activity",
   "company.updated": "company",
   "contact.updated": "contact",
   "opportunity.updated": "opportunity",
@@ -333,13 +346,30 @@ function archiveRun(db: Db, actor: Actor, entity: EntityType, id: string, proven
   };
 }
 
-function unarchiveRun(db: Db, actor: Actor, entity: EntityType, id: string, provenance: Provenance) {
+function clearedHealthIn(changes: Record<string, unknown> | null): ClearedHealth[] {
+  const list = changes?.clearedHealth;
+  if (!Array.isArray(list)) return [];
+  return list.flatMap((item) => {
+    const entry = record(item);
+    if (!entry || typeof entry.companyId !== "string" || typeof entry.health !== "string" || !(entry.health in HEALTH_LABELS)) return [];
+    return [
+      {
+        companyId: entry.companyId,
+        health: entry.health,
+        healthReason: typeof entry.healthReason === "string" ? entry.healthReason : null,
+        healthAt: typeof entry.healthAt === "string" ? entry.healthAt : null,
+      },
+    ];
+  });
+}
+
+function unarchiveRun(db: Db, actor: Actor, entity: EntityType, id: string, provenance: Provenance, changes: Record<string, unknown> | null) {
   return async () => {
     if (entity === "company") return unarchiveCompanyInDb(db, actor, id, provenance);
     if (entity === "contact") return unarchiveContactInDb(db, actor, id, provenance);
     if (entity === "opportunity") return unarchiveOpportunityInDb(db, actor, id, provenance);
     if (entity === "task") return unarchiveTaskInDb(db, actor, id, provenance);
-    return restoreActivityInDb(db, actor, id);
+    return restoreActivityInDb(db, actor, id, provenance, clearedHealthIn(changes));
   };
 }
 
@@ -352,13 +382,19 @@ async function describeEvent(
   provenance: Provenance,
 ): Promise<Described> {
   const entity = isEntity(event.entity_type) ? event.entity_type : null;
-  const current = entity ? await snapshot(db, actor, entity, event.entity_id) : null;
+  if (!entity || event.event_type.endsWith(".merged")) {
+    const name = eventName(event, entity);
+    return { entityName: name, summary: `${event.event_type.replace(/[._]/g, " ")}: ${name}`, plan: { ok: false, reason: "Orbit can't undo this kind of change." } };
+  }
+  const noun = NOUNS[entity];
+  const plain = (reason: string): Described => ({ entityName: `this ${noun}`, summary: `A change to this ${noun}`, plan: { ok: false, reason } });
+  if (!ownedBy(actor, event)) return plain("You can only undo your own changes.");
+  const current = await snapshot(db, actor, entity, event.entity_id);
+  if (!current && entity === "task") return plain("You can't see that task any more.");
   const entityName = current?.name ?? eventName(event, entity);
-  const noun = entity ? NOUNS[entity] : "record";
   const refuse = (summary: string, reason: string): Described => ({ entityName, summary, plan: { ok: false, reason } });
   const fallback = `${event.event_type.replace(/[._]/g, " ")}: ${entityName}`;
 
-  if (!entity || event.event_type.endsWith(".merged")) return refuse(fallback, "Orbit can't undo this kind of change.");
   if (event.event_type.endsWith(".undone")) return refuse(`Undid a change to ${entityName}`, "This is already an undo.");
 
   const changes = record(event.changes);
@@ -372,11 +408,11 @@ async function describeEvent(
   let run: (() => Promise<unknown>) | null = null;
 
   if (updateEntity && fields && fields.fields.length === 1 && fields.fields[0] === "archivedAt") {
-    summary = `Restored ${noun} ${entityName} from the archive`;
-    restores = `Archives ${entityName} again.`;
-    if (current && current.archivedAt) check = `This can't be undone because ${entityName} is archived again.`;
+    summary = entity === "activity" ? `Brought back ${entityName}` : `Restored ${noun} ${entityName} from the archive`;
+    restores = entity === "activity" ? `Deletes ${entityName} again.` : `Archives ${entityName} again.`;
+    if (current && current.archivedAt) check = `This can't be undone because ${entityName} is ${entity === "activity" ? "deleted" : "archived"} again.`;
     run = archiveRun(db, actor, entity, event.entity_id, provenance);
-  } else if (updateEntity && fields && fields.fields.every((field) => field in FIELDS[updateEntity])) {
+  } else if (updateEntity && updateEntity !== "activity" && fields && fields.fields.every((field) => field in FIELDS[updateEntity])) {
     const labels = FIELDS[updateEntity];
     const onlyCompletion = updateEntity === "task" && fields.fields.length === 1 && fields.fields[0] === "completedAt";
     if (onlyCompletion) {
@@ -409,13 +445,13 @@ async function describeEvent(
       check = `This can't be undone while ${entityName} is archived.`;
     }
     const stageId = before.stageId;
-    run = () => updateOpportunityInDb(db, actor, event.entity_id, { stageId }, provenance);
+    run = () => updateOpportunityInDb(db, actor, event.entity_id, { stageId }, provenance, { wonEffects: false });
   } else if (event.event_type === `${entity}.archived` && before && after && before.archivedAt === null && typeof after.archivedAt === "string") {
     summary = entity === "activity" ? `Deleted ${entityName}` : `Archived ${noun} ${entityName}`;
     restores = entity === "activity" ? `Brings back ${entityName}.` : `Restores ${noun} ${entityName} from the archive.`;
     if (current && !current.archivedAt) check = `This can't be undone because ${entityName} has been restored already.`;
     else if (current && !same(current.archivedAt, iso(after.archivedAt))) check = `This can't be undone because ${entityName} has changed again since.`;
-    run = unarchiveRun(db, actor, entity, event.entity_id, provenance);
+    run = unarchiveRun(db, actor, entity, event.entity_id, provenance, changes);
   } else if (event.event_type === `${entity}.created`) {
     summary = entity === "activity" ? `Logged ${entityName}` : `Created ${noun} ${entityName}`;
     restores = entity === "activity" ? `Deletes ${entityName}.` : `Archives ${noun} ${entityName}.`;
@@ -425,7 +461,6 @@ async function describeEvent(
     return refuse(fallback, "Orbit can't undo this kind of change.");
   }
 
-  if (!ownedBy(actor, event)) return refuse(summary, "You can only undo your own changes.");
   if (undone) return refuse(summary, "This change has already been undone.");
   if (!current) return refuse(summary, `That ${noun} no longer exists.`);
   if (!hasScope(actor.scopes, SCOPES[entity])) return refuse(summary, `You don't have permission to change this ${noun}.`);
@@ -468,9 +503,19 @@ export async function describeUndo(actor: Actor, auditEventId: string) {
   });
 }
 
+async function lockEntity(db: Db, workspaceId: string, entity: EntityType, id: string) {
+  const namespace = LOCKS[entity];
+  if (namespace) await lockNamespace(db, workspaceId, namespace);
+  await db.query(`select 1 from crm.${TABLES[entity]} where id = $1 and workspace_id = $2 for update`, [id, workspaceId]);
+}
+
 export async function undoAuditEvent(actor: Actor, auditEventId: string, provenance: Provenance) {
   return withActor(actor, async (db) => {
     await lockNamespace(db, actor.workspaceId, `undo:${auditEventId}`);
+    const target = isUuid(auditEventId) ? await readEvent(db, actor.workspaceId, auditEventId) : null;
+    if (target && isEntity(target.entity_type) && isUuid(target.entity_id)) {
+      await lockEntity(db, actor.workspaceId, target.entity_type, target.entity_id);
+    }
     const { event, described } = await describeById(db, actor, auditEventId, provenance);
     if (!described.plan.ok) throw new CrmError("cannot_undo", described.plan.reason, 409);
     await described.plan.run();
@@ -486,11 +531,13 @@ export async function undoAuditEvent(actor: Actor, auditEventId: string, provena
 export async function listRecentChanges(actor: Actor, options: { limit?: number; entityType?: string } = {}): Promise<RecentChange[]> {
   const limit = Math.min(50, Math.max(1, Math.trunc(options.limit ?? 20) || 20));
   return withActor(actor, async (db) => {
-    const values: unknown[] = [actor.workspaceId, actor.type === "user" ? actor.userId : actor.agentId, AUTOMATIC_SOURCES];
+    const values: unknown[] = [actor.workspaceId, actor.type === "user" ? actor.userId : actor.agentId, AUTOMATIC_SOURCES, ENTITY_TYPES];
     const where = [
       "e.workspace_id = $1",
       actor.type === "user" ? "e.actor_user_id = $2" : "e.actor_agent_id = $2",
+      "e.entity_type = any($4::text[])",
       "e.event_type not like '%.undone'",
+      "e.event_type not like '%.merged'",
       "not (e.event_type = 'activity.created' and coalesce(e.source, '') = any($3::text[]))",
     ];
     if (options.entityType && isEntity(options.entityType)) {

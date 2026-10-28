@@ -544,22 +544,84 @@ async function setArchived(db: Db, actor: Actor, row: ArchiveRow, archived: bool
   return iso(updated.rows[0].archived_at);
 }
 
+export type ClearedHealth = { companyId: string; health: string; healthReason: string | null; healthAt: string | null };
+
+async function clearHealthFrom(db: Db, actor: Actor, activityId: string, provenance: Provenance) {
+  const rows = await db.query<{ id: string; health: string | null; health_reason: string | null; health_at: Date | string | null }>(
+    `select id, health, health_reason, health_at from crm.companies
+     where workspace_id = $1 and health_activity_id = $2
+     for update`,
+    [actor.workspaceId, activityId],
+  );
+  const cleared: ClearedHealth[] = [];
+  for (const row of rows.rows) {
+    await db.query(
+      "update crm.companies set health = null, health_reason = null, health_at = null, health_activity_id = null where id = $1",
+      [row.id],
+    );
+    if (!row.health) continue;
+    cleared.push({ companyId: row.id, health: row.health, healthReason: row.health_reason, healthAt: iso(row.health_at) });
+    await recordAudit(db, actor, "company.updated", "company", row.id, provenance, {
+      fields: row.health_reason === null ? ["health"] : ["health", "healthReason"],
+      before: { health: row.health, healthReason: row.health_reason },
+      after: { health: null, healthReason: null },
+      activityId,
+    });
+  }
+  return cleared;
+}
+
+async function restoreHealthFrom(db: Db, actor: Actor, activityId: string, cleared: ClearedHealth[], provenance: Provenance) {
+  for (const item of cleared) {
+    if (!isUuid(item.companyId)) continue;
+    const restored = await db.query<{ id: string }>(
+      `update crm.companies
+       set health = $3, health_reason = $4, health_at = $5, health_activity_id = $6
+       where id = $1 and workspace_id = $2 and health is null and health_at is null and health_activity_id is null
+       returning id`,
+      [item.companyId, actor.workspaceId, item.health, item.healthReason, item.healthAt, activityId],
+    );
+    if (restored.rowCount === 0) continue;
+    await recordAudit(db, actor, "company.updated", "company", item.companyId, provenance, {
+      fields: item.healthReason === null ? ["health"] : ["health", "healthReason"],
+      before: { health: null, healthReason: null },
+      after: { health: item.health, healthReason: item.healthReason },
+      activityId,
+    });
+  }
+}
+
 export async function archiveActivityInDb(db: Db, actor: Actor, id: string, provenance: Provenance) {
   const row = await readForArchive(db, actor, id);
   if (row.archived_at) return { id, archivedAt: iso(row.archived_at), changed: false };
   const archivedAt = await setArchived(db, actor, row, true);
+  const clearedHealth = await clearHealthFrom(db, actor, id, provenance);
   await recordAudit(db, actor, "activity.archived", "activity", id, provenance, {
     before: { archivedAt: null },
     after: { archivedAt },
     activity: archiveSummary(row),
+    ...(clearedHealth.length > 0 ? { clearedHealth } : {}),
   });
   return { id, archivedAt, changed: true };
 }
 
-export async function restoreActivityInDb(db: Db, actor: Actor, id: string) {
+export async function restoreActivityInDb(
+  db: Db,
+  actor: Actor,
+  id: string,
+  provenance: Provenance,
+  clearedHealth: ClearedHealth[] = [],
+) {
   const row = await readForArchive(db, actor, id);
   if (!row.archived_at) return { id, archivedAt: null, changed: false };
   await setArchived(db, actor, row, false);
+  await recordAudit(db, actor, "activity.updated", "activity", id, provenance, {
+    fields: ["archivedAt"],
+    before: { archivedAt: iso(row.archived_at) },
+    after: { archivedAt: null },
+    activity: archiveSummary(row),
+  });
+  await restoreHealthFrom(db, actor, id, clearedHealth, provenance);
   return { id, archivedAt: null, changed: true, activity: archiveSummary(row) };
 }
 

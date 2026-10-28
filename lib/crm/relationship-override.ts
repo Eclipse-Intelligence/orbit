@@ -1,7 +1,7 @@
 import type { Db } from "@/lib/db/pool";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
-import { iso, isUuid, recordAudit } from "@/lib/crm/mutate";
+import { iso, isUuid, lockNamespace, recordAudit } from "@/lib/crm/mutate";
 import { cleanText } from "@/lib/crm/normalize";
 import { isRelationshipLabel, type RelationshipLabel, type RelationshipOverride } from "@/lib/crm/relationship-score";
 import type { RelationshipTarget } from "@/lib/crm/relationship-signals";
@@ -16,13 +16,14 @@ type OverrideRow = {
   relationship_override_reason: string | null;
   relationship_override_at: Date | string | null;
   relationship_override_by: string | null;
+  archived_at: Date | string | null;
   by_name: string | null;
 };
 
 export type RelationshipOverrideInput = { label: RelationshipLabel | null; reason?: string | null };
 
 function overrideSql(target: RelationshipTarget) {
-  return `select r.id, r.relationship_override, r.relationship_override_reason, r.relationship_override_at, r.relationship_override_by,
+  return `select r.id, r.relationship_override, r.relationship_override_reason, r.relationship_override_at, r.relationship_override_by, r.archived_at,
       coalesce(nullif(trim(p.full_name), ''), nullif(trim(p.email), '')) as by_name
     from crm.${TABLES[target]} r
     left join crm.profiles p on p.id = r.relationship_override_by`;
@@ -39,11 +40,22 @@ function mapOverride(row: OverrideRow): RelationshipOverride | null {
   };
 }
 
+export function isRelationshipTarget(value: unknown): value is RelationshipTarget {
+  return value === "company" || value === "contact";
+}
+
+function assertTarget(target: unknown): asserts target is RelationshipTarget {
+  if (!isRelationshipTarget(target)) {
+    throw new CrmError("invalid_input", "Choose a company or a person to set the relationship on.", 400, { field: "target" });
+  }
+}
+
 function notFound(target: RelationshipTarget) {
   return new CrmError("not_found", target === "company" ? "Company not found." : "Contact not found.", 404);
 }
 
 export async function readRelationshipOverrides(db: Db, workspaceId: string, target: RelationshipTarget, ids: string[]) {
+  assertTarget(target);
   const wanted = [...new Set(ids.filter(isUuid))];
   const found = new Map<string, RelationshipOverride>();
   if (wanted.length === 0) return found;
@@ -59,6 +71,7 @@ export async function readRelationshipOverrides(db: Db, workspaceId: string, tar
 }
 
 export async function readRelationshipOverride(db: Db, workspaceId: string, target: RelationshipTarget, id: string) {
+  assertTarget(target);
   const row = (await db.query<OverrideRow>(`${overrideSql(target)} where r.id = $1 and r.workspace_id = $2`, [id, workspaceId])).rows[0];
   if (!row) return undefined;
   return { label: row.relationship_override, reason: row.relationship_override_reason };
@@ -72,14 +85,25 @@ export async function setRelationshipOverrideInDb(
   input: RelationshipOverrideInput,
   provenance: Provenance,
 ) {
+  assertTarget(target);
   if (input.label !== null && !isRelationshipLabel(input.label)) {
     throw new CrmError("invalid_input", "Relationship is strong, warm, cooling, one_sided, cold or new.", 400, { field: "relationship" });
   }
   const reason = input.label ? cleanText(input.reason ?? null, 500, "reason") : null;
+  await lockNamespace(db, actor.workspaceId, TABLES[target]);
   const current = (
     await db.query<OverrideRow>(`${overrideSql(target)} where r.id = $1 and r.workspace_id = $2 for update of r`, [id, actor.workspaceId])
   ).rows[0];
   if (!current) throw notFound(target);
+  if (current.archived_at) {
+    throw new CrmError(
+      "archived",
+      target === "company"
+        ? "This company is archived. Restore it before changing the relationship."
+        : "This person is archived. Restore them before changing the relationship.",
+      409,
+    );
+  }
   const fields = [
     current.relationship_override !== input.label ? "relationshipOverride" : null,
     current.relationship_override_reason !== reason ? "relationshipOverrideReason" : null,
@@ -111,6 +135,7 @@ export async function setRelationshipOverride(
   input: RelationshipOverrideInput,
   provenance: Provenance,
 ) {
+  assertTarget(target);
   assertScope(actor.scopes, target === "company" ? "companies:write" : "contacts:write");
   if (!isUuid(id)) throw notFound(target);
   return withActor(actor, (db) => setRelationshipOverrideInDb(db, actor, target, id, input, provenance));

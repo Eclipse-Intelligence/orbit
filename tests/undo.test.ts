@@ -6,14 +6,14 @@ import { archiveActivity, createActivity, listActivities } from "@/lib/crm/activ
 import { archiveCompany, createCompany, getCompany, unarchiveCompany, updateCompany } from "@/lib/crm/companies";
 import { createContact, getContact, updateContact } from "@/lib/crm/contacts";
 import { CrmError } from "@/lib/crm/errors";
-import { createOpportunity, getOpportunity, listPipeline, updateOpportunity } from "@/lib/crm/opportunities";
+import { archiveOpportunity, createOpportunity, getOpportunity, listPipeline, updateOpportunity } from "@/lib/crm/opportunities";
 import { setRelationshipOverride } from "@/lib/crm/relationship-override";
 import { relationshipsFor } from "@/lib/crm/relationship-signals";
 import { scopesForRole } from "@/lib/crm/scopes";
 import { addTags } from "@/lib/crm/tags";
 import { completeTask, createTask, getTask, listTasks, updateTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
-import { listRecentChanges, undoAuditEvent } from "@/lib/crm/undo";
+import { describeUndo, listRecentChanges, undoAuditEvent } from "@/lib/crm/undo";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { createUser, resetDatabase } from "./helpers";
 
@@ -21,6 +21,17 @@ const UNDO = { operation: "undo_change", source: "web" };
 
 function refused(pattern: RegExp) {
   return (error: unknown) => error instanceof CrmError && error.code === "cannot_undo" && pattern.test(error.message);
+}
+
+async function lockWaiter() {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const waiting = await getAdminPool().query<{ total: number }>(
+      "select count(*)::int as total from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'",
+    );
+    if (waiting.rows[0].total > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error("the undo never waited for the lock");
 }
 
 async function latest(actor: UserActor, entityId: string, eventType: string) {
@@ -87,6 +98,30 @@ describe("undoing changes", () => {
     assert.equal((await getCompany(owner, company.id)).industry, "Health");
   });
 
+  it("waits for an edit in progress and refuses rather than overwrite it", async () => {
+    const company = (await createCompany(owner, { name: "Racer", domain: "racer-undo.test", industry: "Retail" })).body.company;
+    await updateCompany(owner, company.id, { industry: "Fintech" });
+    const change = await latest(owner, company.id, "company.updated");
+
+    const editor = await getAdminPool().connect();
+    try {
+      await editor.query("begin");
+      await editor.query("select 1 from crm.companies where id = $1 for update", [company.id]);
+      const undo = undoAuditEvent(owner, change.id, UNDO).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      await lockWaiter();
+      await editor.query("update crm.companies set industry = 'Health' where id = $1", [company.id]);
+      await editor.query("commit");
+      const error = await undo;
+      assert.ok(refused(/changed again since: Industry is now Health/)(error), `expected a refusal, got ${String(error)}`);
+    } finally {
+      editor.release();
+    }
+    assert.equal((await getCompany(owner, company.id)).industry, "Health");
+  });
+
   it("undoes tag edits, archiving and unarchiving", async () => {
     const company = (await createCompany(owner, { name: "Tagged", domain: "tagged-undo.test", tags: ["vip"] })).body.company;
     await addTags(owner, "company", [company.id], ["renewal"]);
@@ -145,6 +180,38 @@ describe("undoing changes", () => {
     assert.equal((await getOpportunity(owner, deal.id)).value, "1000.00");
   });
 
+  it("moves a deal back to Won without making the company a customer or adding a board card again", async () => {
+    const company = (await createCompany(owner, { name: "Winner", domain: "winner-undo.test", lifecycle: "prospect" })).body.company;
+    const board = (await runTool(owner, "create_board", { name: "Won accounts", stages: ["Kickoff"], addOnWon: true })) as { board: { id: string } };
+    const deal = (await createOpportunity(owner, { companyId: company.id, name: "Winner deal" })).body.opportunity;
+    const pipeline = await listPipeline(owner);
+    const won = pipeline.stages.find((stage) => stage.isWon)!;
+    const cards = async () =>
+      (
+        await getAdminPool().query<{ id: string }>(
+          "select id from crm.opportunities where pipeline_id = $1 and company_id = $2 and archived_at is null",
+          [board.board.id, company.id],
+        )
+      ).rows;
+
+    await updateOpportunity(owner, deal.id, { stageId: won.id });
+    assert.equal((await getCompany(owner, company.id)).lifecycle, "customer");
+    const [card] = await cards();
+    assert.ok(card, "winning adds a board card");
+
+    await updateOpportunity(owner, deal.id, { stageId: deal.stageId });
+    await updateCompany(owner, company.id, { lifecycle: "prospect" });
+    await archiveOpportunity(owner, card.id);
+
+    const reopened = await latest(owner, deal.id, "opportunity.stage_changed");
+    assert.equal(reopened.summary, `Moved opportunity Winner deal from ${won.name} to ${deal.stageName}`);
+    await undoAuditEvent(owner, reopened.id, UNDO);
+    const restored = await getOpportunity(owner, deal.id);
+    assert.deepEqual([restored.stageId, restored.status], [won.id, "won"]);
+    assert.equal((await getCompany(owner, company.id)).lifecycle, "prospect");
+    assert.deepEqual(await cards(), []);
+  });
+
   it("undoes task edits, completion and creation", async () => {
     const due = "2026-11-20T10:00:00.000Z";
     const task = (await createTask(owner, { title: "Send contract", dueAt: due })).body.task;
@@ -171,6 +238,37 @@ describe("undoing changes", () => {
     assert.equal((await listTasks(owner, { view: "all" })).data.some((item) => item.id === task.id), false);
   });
 
+  it("doesn't show a private task's title to a colleague who can't see it", async () => {
+    const task = (await createTask(owner, { title: "Plan Sam's salary review", ownerId: owner.userId })).body.task;
+    await updateTask(owner, task.id, { title: "Plan Sam's salary review for March" });
+    const change = await latest(owner, task.id, "task.updated");
+
+    const described = await describeUndo(colleague, change.id);
+    assert.deepEqual(described, { summary: "A change to this task", canUndo: false, reason: "You can only undo your own changes." });
+    const args = { changeId: change.id };
+    const card = describeAction("undo_change", args, await recordNames(colleague, [args], ["undo_change"]));
+    assert.doesNotMatch(JSON.stringify(card), /salary/i);
+    await assert.rejects(undoAuditEvent(colleague, change.id, UNDO), (error: unknown) => {
+      return refused(/only undo your own changes/)(error) && !/salary/i.test((error as Error).message);
+    });
+  });
+
+  it("says when your own change is on a task you can't see any more", async () => {
+    const task = (await createTask(owner, { title: "Prepare the board pack", ownerId: colleague.userId })).body.task;
+    await updateTask(colleague, task.id, { title: "Prepare the Q4 board pack" });
+    const change = await latest(colleague, task.id, "task.updated");
+    assert.equal(change.canUndo, true);
+
+    await updateTask(owner, task.id, { ownerId: owner.userId });
+    const hidden = (await listRecentChanges(colleague)).find((item) => item.id === change.id);
+    assert.deepEqual(
+      [hidden?.entityName, hidden?.summary, hidden?.canUndo, hidden?.reason],
+      ["this task", "A change to this task", false, "You can't see that task any more."],
+    );
+    await assert.rejects(undoAuditEvent(colleague, change.id, UNDO), refused(/^You can't see that task any more\.$/));
+    assert.equal((await getTask(owner, task.id)).title, "Prepare the Q4 board pack");
+  });
+
   it("brings back a deleted activity and deletes a logged one", async () => {
     const company = (await createCompany(owner, { name: "Noted", domain: "noted-undo.test" })).body.company;
     const note = (await createActivity(owner, { type: "note", title: "Kick-off notes", body: "Agreed scope.", companyId: company.id })).body.activity;
@@ -179,6 +277,18 @@ describe("undoing changes", () => {
     assert.match(deleted.summary, /^Deleted Note "Kick-off notes" on /);
     await undoAuditEvent(owner, deleted.id, UNDO);
     assert.equal((await listActivities(owner, { companyId: company.id })).data.some((item) => item.id === note.id), true);
+    const restoredEvents = await getAdminPool().query<{ changes: { fields: string[]; before: { archivedAt: string }; after: { archivedAt: null } }; source: string }>(
+      "select changes, source from crm.audit_events where entity_id = $1 and event_type = 'activity.updated'",
+      [note.id],
+    );
+    assert.equal(restoredEvents.rows.length, 1);
+    assert.deepEqual(restoredEvents.rows[0].changes.fields, ["archivedAt"]);
+    assert.ok(restoredEvents.rows[0].changes.before.archivedAt);
+    assert.equal(restoredEvents.rows[0].changes.after.archivedAt, null);
+    assert.equal(restoredEvents.rows[0].source, "web");
+    const broughtBack = await latest(owner, note.id, "activity.updated");
+    assert.match(broughtBack.summary, /^Brought back Note "Kick-off notes" on /);
+    assert.equal(broughtBack.canUndo, true);
 
     const logged = await latest(owner, note.id, "activity.created");
     await undoAuditEvent(owner, logged.id, UNDO);
@@ -186,11 +296,14 @@ describe("undoing changes", () => {
   });
 
   it("refuses changes it can't safely reverse, and other people's changes", async () => {
+    const admin = getAdminPool();
     const board = await createBoard(owner, { name: "Onboarding" });
-    const boardChange = await latest(owner, board.id, "board.created");
-    assert.equal(boardChange.canUndo, false);
-    assert.equal(boardChange.reason, "Orbit can't undo this kind of change.");
-    await assert.rejects(undoAuditEvent(owner, boardChange.id, UNDO), refused(/can't undo this kind/));
+    assert.equal((await listRecentChanges(owner, { limit: 50 })).some((item) => item.entityId === board.id), false);
+    const boardEvent = await admin.query<{ id: string }>("select id from crm.audit_events where entity_id = $1 and event_type = 'board.created'", [board.id]);
+    const boardDescribed = await describeUndo(owner, boardEvent.rows[0].id);
+    assert.equal(boardDescribed.canUndo, false);
+    assert.equal(boardDescribed.reason, "Orbit can't undo this kind of change.");
+    await assert.rejects(undoAuditEvent(owner, boardEvent.rows[0].id, UNDO), refused(/can't undo this kind/));
 
     const company = (await createCompany(owner, { name: "Shared", domain: "shared-undo.test" })).body.company;
     await updateCompany(owner, company.id, { industry: "Travel" });
@@ -198,7 +311,6 @@ describe("undoing changes", () => {
     await assert.rejects(undoAuditEvent(colleague, mine.id, UNDO), refused(/only undo your own changes/));
     assert.equal((await listRecentChanges(colleague)).some((item) => item.id === mine.id), false);
 
-    const admin = getAdminPool();
     const odd = await admin.query<{ id: string }>(
       `insert into crm.audit_events (workspace_id, event_type, entity_type, entity_id, actor_type, actor_user_id, operation, changes)
        values ($1, 'company.updated', 'company', $2, 'user', $3, 'update_company', '{"fields": ["normalizedName"], "before": {"normalizedName": "x"}, "after": {"normalizedName": "y"}}')
