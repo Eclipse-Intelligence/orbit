@@ -53,6 +53,7 @@ import { getInsightTranscript, getInsightsForActivities } from "@/lib/crm/call-i
 import { createTaskWithClickUp, getClickUpPicker, getClickUpState, pushClickUpTask } from "@/lib/crm/clickup";
 import { createCompany, getCompany, listCompanies, listMembers, updateCompany } from "@/lib/crm/companies";
 import { createContact, getContact, listContacts, updateContact } from "@/lib/crm/contacts";
+import { mergeCompanies, mergeContacts } from "@/lib/crm/merge";
 import { listUnfiledImports } from "@/lib/crm/conversations";
 import { listEmailTemplates } from "@/lib/crm/email-templates";
 import { CrmError } from "@/lib/crm/errors";
@@ -290,6 +291,18 @@ function nameList(ids: string[], name: Names, noun: string) {
 function titled(verb: string, label: string | undefined) {
   return label ? `${verb}: ${label}` : verb;
 }
+
+function mergeLine(label: string, id: unknown, name: Names) {
+  const key = `${str(id)}:merge`;
+  const detail = name(key);
+  return `${label}: ${name(id)}${detail !== key ? ` (${detail})` : ""}`;
+}
+
+function counted(count: number, one: string, many: string) {
+  return `${count} ${count === 1 ? one : many}`;
+}
+
+const MERGE_ID_KEYS = ["keepId", "mergeId"];
 
 const idParam = (description: string) => ({ type: "string", description });
 const limitParam = { type: "integer", description: "How many to return, up to 100. Defaults to 50.", minimum: 1, maximum: 100 };
@@ -1718,6 +1731,36 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       ),
   },
   {
+    name: "merge_companies",
+    label: "Merging companies",
+    write: true,
+    description:
+      "Merge a duplicate company into the one to keep. Its people, deals, board cards, tasks, activity, emails, proposals and Knowledge move to the kept company, empty fields on the kept company are filled from the duplicate, tags are combined, and the duplicate is archived. Nothing is deleted.",
+    parameters: {
+      type: "object",
+      properties: {
+        keepId: idParam("Company to keep."),
+        mergeId: idParam("Duplicate company to merge in and archive."),
+      },
+      required: ["keepId", "mergeId"],
+    },
+    describe: (args, name) => ({
+      title: titled("Merge companies", `${name(args.mergeId)} into ${name(args.keepId)}`),
+      lines: [
+        mergeLine("Keep", args.keepId, name),
+        mergeLine("Merge and archive", args.mergeId, name),
+        "People, deals, tasks, activity and emails move to the kept company",
+      ],
+    }),
+    run: async (actor, args) => {
+      const result = await mergeCompanies(actor, required(args.keepId, "The company to keep"), required(args.mergeId, "The company to merge"), {
+        operation: "merge_companies",
+        ...PROVENANCE,
+      });
+      return { company: withCompany(result.kept), archived: withCompany(result.merged), moved: result.moved, filled: result.filled };
+    },
+  },
+  {
     name: "create_contact",
     label: "Creating a contact",
     write: true,
@@ -1781,6 +1824,36 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       bulkUpdate(actor, "contacts:write", args.contactIds, (id) =>
         updateContact(actor, id, pick(args, BULK_CONTACT_KEYS), { provenance: { operation: "update_contacts", ...PROVENANCE } }),
       ),
+  },
+  {
+    name: "merge_contacts",
+    label: "Merging people",
+    write: true,
+    description:
+      "Merge a duplicate person into the one to keep. Their activity, tasks, deals, emails and proposals move to the kept person, empty fields are filled from the duplicate, tags are combined, and the duplicate is archived. The kept person's email stays; a different email from the duplicate is added to the notes.",
+    parameters: {
+      type: "object",
+      properties: {
+        keepId: idParam("Contact to keep."),
+        mergeId: idParam("Duplicate contact to merge in and archive."),
+      },
+      required: ["keepId", "mergeId"],
+    },
+    describe: (args, name) => ({
+      title: titled("Merge people", `${name(args.mergeId)} into ${name(args.keepId)}`),
+      lines: [
+        mergeLine("Keep", args.keepId, name),
+        mergeLine("Merge and archive", args.mergeId, name),
+        "Activity, tasks, deals and emails move to the kept person",
+      ],
+    }),
+    run: async (actor, args) => {
+      const result = await mergeContacts(actor, required(args.keepId, "The contact to keep"), required(args.mergeId, "The contact to merge"), {
+        operation: "merge_contacts",
+        ...PROVENANCE,
+      });
+      return { contact: withContact(result.kept), archived: withContact(result.merged), moved: result.moved, filled: result.filled };
+    },
   },
   {
     name: "create_opportunity",
@@ -3068,6 +3141,36 @@ export async function recordNames(actor: UserActor, args: Args[]) {
       [list],
     );
     for (const row of details.rows) names.set(row.id, row.name);
+    const merging = [...new Set(args.flatMap((entry) => MERGE_ID_KEYS.map((key) => str(entry[key])).filter(isUuid)))];
+    if (merging.length === 0) return;
+    const merges = await db.query<{ id: string; label: string | null; created: string; activities: number; deals: number; tasks: number }>(
+      `select c.id::text, c.domain as label, to_char(c.created_at at time zone 'Europe/London', 'FMDD Mon YYYY') as created,
+         (select count(*)::int from crm.activities a where a.company_id = c.id) as activities,
+         (select count(*)::int from crm.opportunities o where o.company_id = c.id and o.archived_at is null) as deals,
+         (select count(*)::int from crm.tasks t where t.company_id = c.id and t.archived_at is null) as tasks
+       from crm.companies c where c.id = any($1::uuid[]) and c.workspace_id = $2
+       union all
+       select p.id::text, p.email, to_char(p.created_at at time zone 'Europe/London', 'FMDD Mon YYYY'),
+         (select count(*)::int from crm.activities a where a.contact_id = p.id),
+         (select count(*)::int from crm.opportunities o where o.primary_contact_id = p.id and o.archived_at is null),
+         (select count(*)::int from crm.tasks t where t.contact_id = p.id and t.archived_at is null)
+       from crm.contacts p where p.id = any($1::uuid[]) and p.workspace_id = $2`,
+      [merging, actor.workspaceId],
+    );
+    for (const row of merges.rows) {
+      names.set(
+        `${row.id}:merge`,
+        [
+          row.label?.trim() || null,
+          `added ${row.created}`,
+          counted(row.activities, "activity", "activities"),
+          counted(row.deals, "deal", "deals"),
+          counted(row.tasks, "task", "tasks"),
+        ]
+          .filter(Boolean)
+          .join(", "),
+      );
+    }
   });
   return names;
 }
