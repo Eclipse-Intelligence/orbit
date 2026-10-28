@@ -26,6 +26,7 @@ type TurnDeps = {
 const SERVER = "orbit";
 const PREFIX = `mcp__${SERVER}__`;
 const MAX_TURNS = 40;
+const MCP_OUTPUT_TOKENS = "60000";
 
 export const STOPPED = "I've stopped after a lot of steps. Ask again more narrowly, or say \"carry on\".";
 
@@ -65,7 +66,7 @@ function turnOptions(request: CompanionRequest, server: Options["mcpServers"], d
     persistSession: false,
     includePartialMessages: true,
     maxTurns: MAX_TURNS,
-    env: cleanEnv(deps.env),
+    env: { ...cleanEnv(deps.env), MAX_MCP_OUTPUT_TOKENS: MCP_OUTPUT_TOKENS },
     abortController: abort,
   };
 }

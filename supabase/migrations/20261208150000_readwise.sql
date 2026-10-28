@@ -23,6 +23,12 @@ create table if not exists crm.readwise_keys (
   constraint readwise_keys_cursor_length check (scan_cursor is null or char_length(scan_cursor) <= 2000)
 );
 
+alter table crm.readwise_keys add column if not exists list_cursor text;
+alter table crm.readwise_keys add column if not exists list_full boolean not null default false;
+alter table crm.readwise_keys add column if not exists list_done boolean not null default false;
+alter table crm.readwise_keys drop constraint if exists readwise_keys_list_cursor_length;
+alter table crm.readwise_keys add constraint readwise_keys_list_cursor_length check (list_cursor is null or char_length(list_cursor) <= 2000);
+
 drop trigger if exists readwise_keys_set_updated_at on crm.readwise_keys;
 create trigger readwise_keys_set_updated_at
   before update on crm.readwise_keys
@@ -56,6 +62,8 @@ create table if not exists crm.readwise_documents (
   constraint readwise_documents_owner unique (workspace_id, user_id, document_id),
   constraint readwise_documents_id_length check (char_length(document_id) between 1 and 200)
 );
+
+alter table crm.readwise_documents add column if not exists listed_at timestamptz;
 
 create index if not exists readwise_documents_key_idx on crm.readwise_documents (key_id);
 create index if not exists readwise_documents_item_idx on crm.readwise_documents (knowledge_item_id);

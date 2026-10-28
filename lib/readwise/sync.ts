@@ -133,6 +133,19 @@ function sameHighlight(a: StoredHighlight | undefined, b: StoredHighlight) {
   return Boolean(a) && a!.text === b.text && a!.note === b.note && a!.offset === b.offset;
 }
 
+function orbitTagStamp(document: ReaderDocument) {
+  const value = document.tags;
+  if (!value || typeof value !== "object") return null;
+  const entries: [string | null, unknown][] = Array.isArray(value) ? value.map((item) => [null, item]) : Object.entries(value as Record<string, unknown>);
+  for (const [key, item] of entries) {
+    const details = item && typeof item === "object" ? (item as { key?: unknown; name?: unknown; created?: unknown }) : {};
+    const names = [key, details.key, details.name, typeof item === "string" ? item : null];
+    if (!names.some((name) => typeof name === "string" && normalise(name) === ORBIT_TAG)) continue;
+    return typeof details.created === "number" || typeof details.created === "string" ? String(details.created) : null;
+  }
+  return null;
+}
+
 function hashOf(parts: unknown[]) {
   return createHash("sha256").update(JSON.stringify(parts)).digest("hex");
 }
@@ -191,16 +204,20 @@ async function fileDocument(
   const title = cleanTitle(document);
   const url = readerUrl(document);
   const content = readerContent(document, Object.values(row.highlights));
-  const hash = hashOf([title, url, companyId, content]);
+  const hash = hashOf([title, url, companyId, content, orbitTagStamp(document)]);
   return withActor(actor, async (db) => {
     let itemId = row.knowledge_item_id;
+    if (!itemId && row.content_hash === hash) {
+      await db.query("update crm.readwise_documents set dirty = false where id = $1", [row.id]);
+      return { outcome: "unchanged" as const, itemId: null };
+    }
     if (itemId) {
       const current = await db.query<{ archived: boolean }>(
         "select archived_at is not null as archived from crm.knowledge_items where id = $1 and workspace_id = $2",
         [itemId, actor.workspaceId],
       );
       if (!current.rows[0] || current.rows[0].archived) {
-        await db.query("update crm.readwise_documents set dirty = false, content_hash = $2 where id = $1", [row.id, hash]);
+        await db.query("update crm.readwise_documents set knowledge_item_id = null, dirty = false, content_hash = $2 where id = $1", [row.id, hash]);
         return { outcome: "removed" as const, itemId: null };
       }
       if (row.content_hash === hash) {
@@ -256,11 +273,20 @@ async function claim(actor: UserActor, keyId: string) {
   });
 }
 
-async function saveState(
-  actor: UserActor,
-  keyId: string,
-  state: Partial<Record<"updated_after" | "full_sync_at" | "scan_cursor" | "scan_since" | "scan_started_at", string | null>> & { scan_full?: boolean },
-) {
+type PassState = Partial<Record<"updated_after" | "full_sync_at" | "scan_cursor" | "scan_since" | "scan_started_at" | "list_cursor", string | null>> &
+  Partial<Record<"scan_full" | "list_full" | "list_done", boolean>>;
+
+const PASS_RESET: PassState = {
+  scan_cursor: null,
+  scan_since: null,
+  scan_started_at: null,
+  scan_full: false,
+  list_cursor: null,
+  list_full: false,
+  list_done: false,
+};
+
+async function saveState(actor: UserActor, keyId: string, state: PassState) {
   const entries = Object.entries(state);
   if (entries.length === 0) return;
   const sets = entries.map(([column], index) => `${column} = $${index + 2}`);
@@ -284,17 +310,64 @@ function iso(value: Date | null, minus = 0) {
   return value ? new Date(value.getTime() - minus).toISOString() : null;
 }
 
-async function upsertDocuments(actor: UserActor, keyId: string, documents: ReaderDocument[]) {
+async function upsertDocuments(actor: UserActor, keyId: string, documents: ReaderDocument[], listedAt: string) {
   if (documents.length === 0) return;
   await withActor(actor, (db) =>
     db.query(
-      `insert into crm.readwise_documents (key_id, workspace_id, user_id, document_id, dirty, backfill_from)
-       select $1, $2, $3, source.id, true, source.since
+      `insert into crm.readwise_documents (key_id, workspace_id, user_id, document_id, dirty, backfill_from, listed_at)
+       select $1, $2, $3, source.id, true, source.since, $6
        from unnest($4::text[], $5::timestamptz[]) as source (id, since)
-       on conflict (workspace_id, user_id, document_id) do update set dirty = true, key_id = excluded.key_id`,
-      [keyId, actor.workspaceId, actor.userId, documents.map((item) => item.id), documents.map(savedFrom)],
+       on conflict (workspace_id, user_id, document_id) do update set dirty = true, key_id = excluded.key_id, listed_at = excluded.listed_at`,
+      [keyId, actor.workspaceId, actor.userId, documents.map((item) => item.id), documents.map(savedFrom), listedAt],
     ),
   );
+}
+
+async function unlistedRows(actor: UserActor, keyId: string, listedAt: string) {
+  return withActor(actor, async (db) => {
+    const result = await db.query<DocumentRow>(
+      `select id, document_id, knowledge_item_id, highlights, content_hash, dirty from crm.readwise_documents
+       where key_id = $1 and (listed_at is null or listed_at < $2::timestamptz)`,
+      [keyId, listedAt],
+    );
+    return result.rows;
+  });
+}
+
+function taggedDocuments(results: ReaderDocument[]) {
+  return results.filter((document) => !document.parent_id && hasReaderTag(document, ORBIT_TAG));
+}
+
+type ListOutcome = { done: boolean; cursor: string | null; documents: Map<string, ReaderDocument>; error?: unknown };
+
+async function listTagged(
+  actor: UserActor,
+  keyId: string,
+  api: ReaderClient,
+  pass: { since: string | null; cursor: string | null; listedAt: string },
+  deadline: number | undefined,
+): Promise<ListOutcome> {
+  const documents = new Map<string, ReaderDocument>();
+  let cursor = pass.cursor;
+  for (let page = 0; page < MAX_DOCUMENT_PAGES; page += 1) {
+    if (!api.canRequest() || !timeLeft(deadline, STEP_RESERVE_MS)) return { done: false, cursor, documents };
+    let body;
+    try {
+      body = await api.listPage({ tags: [ORBIT_TAG], withHtmlContent: true, updatedAfter: pass.since ?? undefined, pageCursor: cursor, limit: 100 });
+    } catch (error) {
+      return { done: false, cursor, documents, error };
+    }
+    const found = taggedDocuments(body.results);
+    for (const document of found) documents.set(document.id, document);
+    await upsertDocuments(actor, keyId, found, pass.listedAt);
+    cursor = body.nextPageCursor;
+    if (!cursor) return { done: true, cursor: null, documents };
+  }
+  return { done: false, cursor, documents };
+}
+
+function expiredCursor(error: unknown, cursor: string | null, resumed: string | null) {
+  return error instanceof ReadwiseError && error.status === 400 && cursor !== null && cursor === resumed;
 }
 
 function savedFrom(document: ReaderDocument) {
@@ -399,64 +472,70 @@ export async function syncReaderToKnowledge(actor: UserActor, options: ReaderSyn
   const toIndex: string[] = [];
   try {
     const now = new Date();
-    const resuming = Boolean(key.scan_started_at);
+    const inPass = Boolean(key.scan_started_at);
+    const restart = inPass && Boolean(options.full) && !key.list_full;
+    const resuming = inPass && !restart;
     const full = resuming ? key.scan_full : !key.updated_after || !key.full_sync_at || now.getTime() - key.full_sync_at.getTime() > FULL_EVERY_MS;
-    const reconcile = Boolean(options.full) || (!resuming && full);
+    const listFull = resuming ? key.list_full : Boolean(options.full) || full;
     const startedAt = resuming ? key.scan_started_at! : now;
-    const documentSince = reconcile ? null : resuming ? iso(startedAt, OVERLAP_MS) : iso(key.updated_after, OVERLAP_MS);
-
-    const listed = await api.listDocuments({
-      tags: [ORBIT_TAG],
-      withHtmlContent: true,
-      updatedAfter: documentSince ?? undefined,
-      limit: 100,
-      pages: MAX_DOCUMENT_PAGES,
-    });
-    const documents = new Map<string, ReaderDocument>();
-    for (const document of listed.results) {
-      if (!document.parent_id && hasReaderTag(document, ORBIT_TAG)) documents.set(document.id, document);
-    }
-    const documentsComplete = !listed.nextPageCursor;
-    result.documents = documents.size;
-    await upsertDocuments(actor, key.id, [...documents.values()]);
-    let highlightSince = resuming ? iso(key.scan_since) : full ? null : iso(key.updated_after, OVERLAP_MS);
+    const listedAt = startedAt.toISOString();
+    let highlightSince = resuming ? iso(key.scan_since) : full ? null : earliest(iso(key.updated_after, OVERLAP_MS), restart ? key.scan_since : null);
     if (!resuming) {
-      const backfill = await claimBackfill(actor, key.id);
-      if (!full) highlightSince = earliest(highlightSince, backfill);
-      await saveState(actor, key.id, { scan_cursor: null, scan_since: highlightSince, scan_started_at: startedAt.toISOString(), scan_full: full });
+      await saveState(actor, key.id, { ...PASS_RESET, scan_started_at: listedAt, scan_full: full, scan_since: highlightSince, list_full: listFull });
     }
 
-    if (reconcile && documentsComplete) {
-      const rows = await withActor(actor, (db) => documentRows(db, key.id));
-      for (const row of rows.values()) {
-        if (documents.has(row.document_id)) continue;
-        if (await dropDocument(actor, row)) result.archived += 1;
-      }
-    }
-
-    const resumedCursor = resuming ? key.scan_cursor : null;
-    const scan = await scanHighlights(actor, key, api, { since: highlightSince, startedAt: startedAt.toISOString(), full, cursor: resumedCursor }, options.deadline);
-    result.highlights = scan.seen;
-    if (scan.error) {
-      const expired = scan.error instanceof ReadwiseError && scan.error.status === 400 && scan.cursor !== null && scan.cursor === resumedCursor;
-      await saveState(
+    let listDone = resuming && key.list_done;
+    let documents = new Map<string, ReaderDocument>();
+    if (!listDone) {
+      const resumedList = resuming ? key.list_cursor : null;
+      const listed = await listTagged(
         actor,
         key.id,
-        expired ? { scan_cursor: null, scan_since: null, scan_started_at: null, scan_full: false, full_sync_at: null } : { scan_cursor: scan.cursor },
+        api,
+        { since: listFull ? null : iso(key.updated_after, OVERLAP_MS), cursor: resumedList, listedAt },
+        options.deadline,
       );
-      throw scan.error;
+      documents = listed.documents;
+      if (listed.error) {
+        await saveState(actor, key.id, expiredCursor(listed.error, listed.cursor, resumedList) ? { ...PASS_RESET, full_sync_at: null } : { list_cursor: listed.cursor });
+        throw listed.error;
+      }
+      if (listed.done) {
+        if (listFull) {
+          for (const row of await unlistedRows(actor, key.id, listedAt)) {
+            if (await dropDocument(actor, row)) result.archived += 1;
+          }
+        }
+        const backfill = await claimBackfill(actor, key.id);
+        if (!full) highlightSince = earliest(highlightSince, backfill);
+        await saveState(actor, key.id, { list_cursor: null, list_done: true, scan_since: highlightSince });
+        listDone = true;
+      } else {
+        await saveState(actor, key.id, { list_cursor: listed.cursor });
+      }
+    } else if (api.canRequest() && timeLeft(options.deadline, STEP_RESERVE_MS)) {
+      const recent = await api.listPage({ tags: [ORBIT_TAG], withHtmlContent: true, updatedAfter: iso(startedAt, OVERLAP_MS)!, limit: 100 });
+      const found = taggedDocuments(recent.results);
+      for (const document of found) documents.set(document.id, document);
+      await upsertDocuments(actor, key.id, found, listedAt);
     }
-    if (scan.done) {
-      await saveState(actor, key.id, {
-        scan_cursor: null,
-        scan_since: null,
-        scan_started_at: null,
-        scan_full: false,
-        ...(documentsComplete ? { updated_after: startedAt.toISOString() } : {}),
-        ...(documentsComplete && full ? { full_sync_at: startedAt.toISOString() } : {}),
-      });
-    } else {
-      await saveState(actor, key.id, { scan_cursor: scan.cursor });
+    result.documents = documents.size;
+
+    let scanDone = false;
+    if (listDone) {
+      const resumedCursor = resuming ? key.scan_cursor : null;
+      const scan = await scanHighlights(actor, key, api, { since: highlightSince, startedAt: listedAt, full, cursor: resumedCursor }, options.deadline);
+      result.highlights = scan.seen;
+      if (scan.error) {
+        await saveState(actor, key.id, expiredCursor(scan.error, scan.cursor, resumedCursor) ? { ...PASS_RESET, full_sync_at: null } : { scan_cursor: scan.cursor });
+        throw scan.error;
+      }
+      if (scan.done) {
+        await saveState(actor, key.id, { ...PASS_RESET, updated_after: listedAt, ...(full ? { full_sync_at: listedAt } : {}) });
+      } else {
+        await saveState(actor, key.id, { scan_cursor: scan.cursor });
+      }
+      scanDone = scan.done;
     }
 
     const list = await companies(actor);
@@ -486,7 +565,7 @@ export async function syncReaderToKnowledge(actor: UserActor, options: ReaderSyn
       if (filed.outcome === "updated") result.updated += 1;
       if ((filed.outcome === "added" || filed.outcome === "updated") && filed.itemId) toIndex.push(filed.itemId);
     }
-    result.complete = scan.done && documentsComplete && !pending;
+    result.complete = listDone && scanDone && !pending;
     await finish(actor, key.id, null);
   } catch (error) {
     const message = errorText(error, "Couldn't sync Readwise Reader.");

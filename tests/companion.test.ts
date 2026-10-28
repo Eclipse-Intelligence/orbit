@@ -490,7 +490,7 @@ describe("companion turn runner", () => {
     assert.equal(options.strictMcpConfig, true);
     assert.equal(options.permissionMode, "dontAsk");
     assert.equal(options.persistSession, false);
-    assert.deepEqual(options.env, { PATH: "/usr/bin", HOME: "/Users/mark" });
+    assert.deepEqual(options.env, { PATH: "/usr/bin", HOME: "/Users/mark", MAX_MCP_OUTPUT_TOKENS: "60000" });
     assert.deepEqual(calls, ["search_records"]);
     assert.deepEqual(result.steps, [
       { text: "Checking.", calls: [{ id: "t1", name: "search_records", arguments: '{"query":"Acme"}' }] },

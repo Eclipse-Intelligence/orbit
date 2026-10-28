@@ -184,7 +184,7 @@ export default function IntegrationsSettings({
       <SettingsCard
         id="readwise"
         title="Readwise Reader"
-        description="Documents you tag orbit in Reader are added to Knowledge with their highlights. The assistant can read your Reader when you ask. Orbit never changes anything in Reader."
+        description="Documents you tag orbit in Reader are added to Knowledge with their highlights. The assistant can read your Reader when you ask. Orbit never changes anything in Reader. If you disconnect, items already in Knowledge stay."
       >
         {readwise.connected && (
           <ReadwiseSync lastError={readwise.lastError}>

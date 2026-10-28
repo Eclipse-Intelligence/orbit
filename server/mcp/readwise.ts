@@ -7,7 +7,7 @@ import { readerHighlights, readerList, readerRead } from "@/lib/readwise/reader"
 
 type Fetcher = { fetchImpl?: typeof fetch };
 
-const BUDGET_MS = 80_000;
+const BUDGET_MS = 50_000;
 
 function toolResult(value: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
@@ -56,10 +56,11 @@ export function registerReaderTools(server: McpServer, actor: UserActor, options
   server.registerTool(
     "reader_read",
     {
-      description: "Read one document from this person's Readwise Reader in full, with its highlights and notes. Read-only.",
-      inputSchema: { id: z.string().min(1).max(200) },
+      description:
+        "Read one document from this person's Readwise Reader, 60,000 characters a part. Part 1 also has its note and every highlight with its note. To read, review, summarise or check a document, read every part in order until nextPart is null before answering, and never judge the whole document from part 1 alone. If you can't finish, say which parts you read. Read-only.",
+      inputSchema: { id: z.string().min(1).max(200), part: z.number().int().min(1).max(10_000).optional() },
     },
-    async (args) => run(() => readerRead(actor, args.id, live())),
+    async (args) => run(() => readerRead(actor, args.id, args.part ?? 1, live())),
   );
 
   server.registerTool(

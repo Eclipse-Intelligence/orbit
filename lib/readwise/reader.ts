@@ -20,6 +20,8 @@ import { requireReadwiseToken } from "@/lib/readwise/keys";
 const LIVE_REQUESTS = 15;
 const HIGHLIGHT_PAGES = 14;
 const OVERLAP_MS = 5 * 60 * 1000;
+export const READER_PART_CHARS = 60_000;
+const BREAK_WINDOW = 0.2;
 
 export type ReaderLiveOptions = { fetchImpl?: typeof fetch; deadline?: number; sleep?: (ms: number) => Promise<void> };
 
@@ -124,6 +126,35 @@ async function scan(
   return { highlights: found, complete: false };
 }
 
+function breakAt(window: string) {
+  const floor = Math.floor(window.length * (1 - BREAK_WINDOW));
+  const paragraph = window.lastIndexOf("\n\n");
+  if (paragraph >= floor) return paragraph + 2;
+  const line = window.lastIndexOf("\n");
+  if (line >= floor) return line + 1;
+  let sentence = -1;
+  for (const match of window.matchAll(/[.!?…]["'”’)\]]*\s+/g)) {
+    const end = (match.index ?? 0) + match[0].length;
+    if (end >= floor) sentence = end;
+  }
+  if (sentence > 0) return sentence;
+  const space = window.lastIndexOf(" ");
+  if (space >= floor) return space + 1;
+  return window.length;
+}
+
+export function readerParts(text: string, size = READER_PART_CHARS) {
+  const parts: string[] = [];
+  let start = 0;
+  while (text.length - start > size) {
+    const cut = breakAt(text.slice(start, start + size));
+    parts.push(text.slice(start, start + cut));
+    start += cut;
+  }
+  if (start < text.length || parts.length === 0) parts.push(text.slice(start));
+  return parts;
+}
+
 async function storedHighlights(actor: UserActor, documentId: string) {
   return withActor(actor, async (db) => {
     const result = await db.query<{ highlights: Record<string, { text: string; note: string | null; updatedAt: string | null }> }>(
@@ -147,14 +178,28 @@ export async function readerList(actor: UserActor, input: ReaderListInput, optio
   });
 }
 
-export async function readerRead(actor: UserActor, documentId: string, options: ReaderLiveOptions = {}) {
+export async function readerRead(actor: UserActor, documentId: string, part = 1, options: ReaderLiveOptions = {}) {
   const id = documentId.trim();
   if (!id || id.length > 200) throw new CrmError("invalid_input", "Give a Reader document id from reader_list.", 400, { field: "id" });
+  if (!Number.isInteger(part) || part < 1) throw new CrmError("invalid_input", "Give a part number from 1.", 400, { field: "part" });
   const api = await client(actor, options);
   return live(async () => {
     const page = await api.listPage({ id, withHtmlContent: true });
     const document = page.results.find((item) => item.id === id);
     if (!document) throw new CrmError("not_found", "That document isn't in your Reader.", 404);
+    const text = readerText(document);
+    const parts = readerParts(text);
+    if (part > parts.length) {
+      throw new CrmError("invalid_input", `That document has ${parts.length} ${parts.length === 1 ? "part" : "parts"}. Ask for part 1 to ${parts.length}.`, 400, { field: "part" });
+    }
+    const reading = {
+      document: summaryOf(document),
+      part,
+      parts: parts.length,
+      characters: text.length,
+      nextPart: part < parts.length ? part + 1 : null,
+    };
+    if (part > 1) return { ...reading, text: parts[part - 1] };
     const found = await scan(api, (item) => item.parent_id === id, { updatedAfter: since(document) });
     let highlights = found.highlights;
     if (!found.complete) {
@@ -165,9 +210,9 @@ export async function readerRead(actor: UserActor, documentId: string, options: 
       highlights = [...highlights, ...saved];
     }
     return {
-      document: summaryOf(document),
+      ...reading,
       notes: document.notes?.trim() || null,
-      text: readerText(document),
+      text: parts[0],
       highlights,
       highlightsComplete: found.complete,
     };
@@ -183,6 +228,7 @@ export async function readerHighlights(actor: UserActor, input: ReaderHighlights
   return live(async () => {
     const titles = new Map<string, string | null>();
     let after = updatedAfter;
+    let documentsTruncated = false;
     if (documentId) {
       const page = await api.listPage({ id: documentId });
       const document = page.results.find((item) => item.id === documentId);
@@ -192,7 +238,8 @@ export async function readerHighlights(actor: UserActor, input: ReaderHighlights
     } else if (tag) {
       const tagged = await api.listDocuments({ tags: [tag], limit: 100, pages: 3 });
       for (const document of tagged.results) if (!document.parent_id) titles.set(document.id, document.title);
-      if (titles.size === 0) return { highlights: [], complete: true, documents: 0 };
+      documentsTruncated = Boolean(tagged.nextPageCursor);
+      if (titles.size === 0) return { highlights: [], complete: !documentsTruncated, documentsTruncated };
     }
     const filter = (item: ReaderDocument) => {
       if (!item.parent_id) return false;
@@ -203,7 +250,8 @@ export async function readerHighlights(actor: UserActor, input: ReaderHighlights
     const found = await scan(api, filter, { updatedAfter: after, limit });
     return {
       highlights: found.highlights.map((item) => ({ ...item, documentTitle: item.documentId ? (titles.get(item.documentId) ?? null) : null })),
-      complete: found.complete,
+      complete: found.complete && !documentsTruncated,
+      ...(tag ? { documentsTruncated } : {}),
     };
   });
 }

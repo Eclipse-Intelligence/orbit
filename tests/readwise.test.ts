@@ -10,7 +10,8 @@ import { removeMember } from "@/lib/crm/team";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { indexKnowledgeItem } from "@/lib/knowledge/indexing";
-import { listReaderDocuments, listReaderTags, validateReadwiseToken, type ReaderDocument } from "@/lib/readwise";
+import { listReaderDocuments, listReaderTags, readerText, validateReadwiseToken, type ReaderDocument } from "@/lib/readwise";
+import { READER_PART_CHARS, readerParts } from "@/lib/readwise/reader";
 import { readwiseStatus, readwiseToken, removeReadwiseToken, saveReadwiseToken } from "@/lib/readwise/keys";
 import { matchCompany, syncReaderToKnowledge } from "@/lib/readwise/sync";
 import { createUser, queryAsUser, resetDatabase } from "./helpers";
@@ -35,6 +36,7 @@ function fakeReader(tokens: string[] = [GOOD, MEMBER_TOKEN]) {
   const requests: Request[] = [];
   let limited = 0;
   let limitedHighlights = 0;
+  let malformed = 0;
   const fetchImpl: typeof fetch = async (input, init) => {
     const url = new URL(String(input));
     const method = init?.method ?? "GET";
@@ -56,6 +58,10 @@ function fakeReader(tokens: string[] = [GOOD, MEMBER_TOKEN]) {
       return Response.json({ count: keys.size, nextPageCursor: null, results: [...keys].map((key) => ({ key, name: key })) });
     }
     if (url.pathname !== "/api/v3/list/") return Response.json({ detail: "Not found." }, { status: 404 });
+    if (malformed > 0) {
+      malformed -= 1;
+      return Response.json({ count: 0, nextPageCursor: null, results: null });
+    }
     const query = url.searchParams;
     let list = [...documents.values()];
     if (query.get("id")) list = list.filter((item) => item.id === query.get("id"));
@@ -82,6 +88,9 @@ function fakeReader(tokens: string[] = [GOOD, MEMBER_TOKEN]) {
     },
     limitHighlights(count: number) {
       limitedHighlights = count;
+    },
+    malform(count: number) {
+      malformed = count;
     },
     put(document: Partial<ReaderDocument> & { id: string }, updatedAt = new Date().toISOString()) {
       documents.set(document.id, {
@@ -412,6 +421,188 @@ describe("readwise reader", () => {
     assert.equal(done.rows[0].scan_cursor, null);
   });
 
+  it("carries a long document list on over several syncs and removes untagged items only once the whole list is read", async () => {
+    reader.put({ id: "doc-stale", title: "Old news", tags: tags("orbit"), html_content: "<p>Out of date.</p>" });
+    assert.equal((await syncReaderToKnowledge(owner, { fetchImpl: reader.fetchImpl, index, sleep: async () => undefined })).added, 1);
+    reader.put({ id: "doc-stale", tags: tags("archive-me") });
+    for (let index = 0; index < 320; index += 1) {
+      reader.put({ id: `doc-many-${index}`, title: `Market note ${index}`, tags: tags("orbit", "bulk"), html_content: `<p>Note number ${index}.</p>` });
+    }
+    const key = async () =>
+      (
+        await getAdminPool().query<{ list_cursor: string | null; list_done: boolean; list_full: boolean; scan_started_at: Date | null; updated_after: Date }>(
+          "select list_cursor, list_done, list_full, scan_started_at, updated_after from crm.readwise_keys where user_id = $1",
+          [owner.userId],
+        )
+      ).rows[0];
+    const before = await key();
+    const first = await syncReaderToKnowledge(owner, { fetchImpl: reader.fetchImpl, index, sleep: async () => undefined, full: true, maxRequests: 2 });
+    assert.equal(first.error, undefined);
+    assert.equal(first.complete, false);
+    assert.equal(first.archived, 0);
+    const cut = await key();
+    assert.equal(cut.list_cursor, "200");
+    assert.equal(cut.list_done, false);
+    assert.equal(cut.list_full, true);
+    assert.equal(cut.updated_after.getTime(), before.updated_after.getTime());
+    const stale = () => items(owner.workspaceId).then((rows) => rows.find((row) => row.source_ref === "reader:doc-stale")!);
+    assert.equal((await stale()).archived_at, null);
+
+    const seen = reader.requests.length;
+    let archived = 0;
+    let runs = 1;
+    let last = first;
+    while (!last.complete && runs < 10) {
+      last = await syncReaderToKnowledge(owner, { fetchImpl: reader.fetchImpl, index, sleep: async () => undefined, maxRequests: 2 });
+      assert.equal(last.error, undefined);
+      archived += last.archived;
+      runs += 1;
+    }
+    assert.equal(last.complete, true);
+    assert.equal(archived, 1);
+    assert.ok((await stale()).archived_at);
+    assert.ok(reader.requests.slice(seen).some((request) => request.url.searchParams.get("pageCursor") === "200" && request.url.searchParams.get("tag") === "orbit"));
+    const live = (await items(owner.workspaceId)).filter((row) => row.source_ref.startsWith("reader:doc-many-") && !row.archived_at);
+    assert.equal(live.length, 320);
+    const done = await key();
+    assert.equal(done.list_cursor, null);
+    assert.equal(done.scan_started_at, null);
+    assert.ok(done.updated_after.getTime() > before.updated_after.getTime());
+
+    const original = globalThis.fetch;
+    globalThis.fetch = reader.fetchImpl;
+    try {
+      const tagged = (await runTool(owner, "reader_highlights", { tag: "bulk" })) as { complete: boolean; documentsTruncated: boolean };
+      assert.equal(tagged.documentsTruncated, true);
+      assert.equal(tagged.complete, false);
+      const research = (await runTool(owner, "reader_highlights", { tag: "research", limit: 200 })) as { complete: boolean; documentsTruncated: boolean };
+      assert.equal(research.documentsTruncated, false);
+    } finally {
+      globalThis.fetch = original;
+    }
+
+    for (let index = 0; index < 320; index += 1) reader.documents.delete(`doc-many-${index}`);
+    reader.documents.delete("doc-stale");
+    const cleared = await syncReaderToKnowledge(owner, { fetchImpl: reader.fetchImpl, index, sleep: async () => undefined, full: true });
+    assert.equal(cleared.error, undefined);
+    assert.equal(cleared.archived, 320);
+  });
+
+  it("never removes anything when Readwise sends a list it can't read", async () => {
+    const liveBefore = (await items(owner.workspaceId)).filter((row) => !row.archived_at).length;
+    assert.ok(liveBefore > 0);
+    reader.malform(1);
+    const broken = await syncReaderToKnowledge(owner, { fetchImpl: reader.fetchImpl, index, sleep: async () => undefined, full: true });
+    assert.match(broken.error ?? "", /Readwise sent a reply Orbit couldn't read/);
+    assert.equal(broken.archived, 0);
+    assert.equal((await items(owner.workspaceId)).filter((row) => !row.archived_at).length, liveBefore);
+    const rows = await getAdminPool().query<{ total: number }>("select count(*)::int as total from crm.readwise_documents where user_id = $1", [owner.userId]);
+    assert.ok(rows.rows[0].total >= liveBefore);
+    const recovered = await syncReaderToKnowledge(owner, { fetchImpl: reader.fetchImpl, index, sleep: async () => undefined });
+    assert.equal(recovered.error, undefined);
+    assert.equal(recovered.complete, true);
+    assert.equal(recovered.archived, 0);
+    assert.equal((await items(owner.workspaceId)).filter((row) => !row.archived_at).length, liveBefore);
+  });
+
+  it("keeps an item archived in Knowledge out until the document is tagged orbit again", async () => {
+    reader.put({ id: "doc-return", title: "Come back later", tags: tags("orbit"), html_content: "<p>Worth another look.</p>" });
+    assert.equal((await syncReaderToKnowledge(owner, { fetchImpl: reader.fetchImpl, index, sleep: async () => undefined })).added, 1);
+    const first = (await items(owner.workspaceId)).find((row) => row.source_ref === "reader:doc-return" && !row.archived_at)!;
+    await getAdminPool().query("update crm.knowledge_items set archived_at = now() where id = $1", [first.id]);
+    reader.put({ id: "doc-return", location: "archive" });
+    const removed = await syncReaderToKnowledge(owner, { fetchImpl: reader.fetchImpl, index, sleep: async () => undefined });
+    assert.equal(removed.added + removed.updated, 0);
+    const link = async () =>
+      (await getAdminPool().query<{ knowledge_item_id: string | null }>("select knowledge_item_id from crm.readwise_documents where document_id = 'doc-return'")).rows[0];
+    assert.equal((await link()).knowledge_item_id, null);
+    const again = await syncReaderToKnowledge(owner, { fetchImpl: reader.fetchImpl, index, sleep: async () => undefined, full: true });
+    assert.equal(again.added + again.updated, 0);
+    const live = () => items(owner.workspaceId).then((rows) => rows.filter((row) => row.source_ref === "reader:doc-return" && !row.archived_at));
+    assert.equal((await live()).length, 0);
+
+    reader.put({ id: "doc-return", tags: { orbit: { name: "orbit", type: "manual", created: 2 } } });
+    const retagged = await syncReaderToKnowledge(owner, { fetchImpl: reader.fetchImpl, index, sleep: async () => undefined });
+    assert.equal(retagged.added, 1);
+    const back = await live();
+    assert.equal(back.length, 1);
+    assert.notEqual(back[0].id, first.id);
+    assert.equal((await link()).knowledge_item_id, back[0].id);
+    reader.documents.delete("doc-return");
+    await syncReaderToKnowledge(owner, { fetchImpl: reader.fetchImpl, index, sleep: async () => undefined, full: true });
+  });
+
+  it("reads a long document in parts that together give the whole text, and checks highlights only on part 1", async () => {
+    const paragraphs: string[] = [];
+    for (let index = 0; paragraphs.join("").length < 750_000; index += 1) {
+      const sentences = Array.from({ length: 3 + (index % 9) }, (_, sentence) => `Chapter ${Math.floor(index / 40) + 1} paragraph ${index} line ${sentence} says something “worth” keeping.`);
+      paragraphs.push(`<p>${sentences.join(" ")}</p>`);
+    }
+    reader.put({ id: "doc-book", title: "A long book", category: "epub", tags: tags("books"), notes: "Read for the board meeting", html_content: paragraphs.join("") });
+    reader.put({ id: "hl-book-1", category: "highlight", parent_id: "doc-book", content: "worth keeping", notes: "Quote this" });
+    const book = reader.documents.get("doc-book")!;
+    const full = readerText({ content: book.content ?? null, html_content: book.html_content ?? null });
+    assert.ok(full.length > 700_000);
+    const original = globalThis.fetch;
+    globalThis.fetch = reader.fetchImpl;
+    try {
+      const texts: string[] = [];
+      let part: number | null = 1;
+      let parts = 0;
+      while (part !== null) {
+        const seen = reader.requests.length;
+        const read = (await runTool(owner, "reader_read", { id: "doc-book", part })) as {
+          part: number;
+          parts: number;
+          characters: number;
+          nextPart: number | null;
+          text: string;
+          notes?: string | null;
+          highlights?: { text: string; note: string | null }[];
+        };
+        const sent = reader.requests.slice(seen);
+        assert.equal(read.part, part);
+        assert.equal(read.characters, full.length);
+        assert.ok(read.text.length <= READER_PART_CHARS);
+        if (part === 1) {
+          parts = read.parts;
+          assert.equal(read.notes, "Read for the board meeting");
+          assert.deepEqual(read.highlights!.map((item) => [item.text, item.note]), [["worth keeping", "Quote this"]]);
+          assert.ok(sent.some((request) => request.url.searchParams.get("category") === "highlight"));
+        } else {
+          assert.equal(read.parts, parts);
+          assert.equal(read.notes, undefined);
+          assert.equal(read.highlights, undefined);
+          assert.equal(sent.length, 1);
+          assert.equal(sent[0].url.searchParams.get("id"), "doc-book");
+          assert.ok(!sent.some((request) => request.url.searchParams.get("category") === "highlight"));
+        }
+        if (read.nextPart !== null) assert.match(read.text, /(\n|[.!?”’]\s)$/);
+        texts.push(read.text);
+        part = read.nextPart;
+      }
+      assert.ok(parts >= 13);
+      assert.equal(texts.length, parts);
+      assert.equal(texts.join(""), full);
+      assert.deepEqual(readerParts(full), texts);
+    } finally {
+      globalThis.fetch = original;
+      reader.documents.delete("doc-book");
+      reader.documents.delete("hl-book-1");
+    }
+  });
+
+  it("splits text without breaks into parts that lose nothing", () => {
+    const solid = "x".repeat(READER_PART_CHARS * 2 + 5);
+    assert.deepEqual(readerParts(solid).map((part) => part.length), [READER_PART_CHARS, READER_PART_CHARS, 5]);
+    const sentences = "One idea here. ".repeat(10_000).trim();
+    const split = readerParts(sentences);
+    assert.equal(split.join(""), sentences);
+    assert.ok(split.slice(0, -1).every((part) => part.endsWith(". ") && part.length <= READER_PART_CHARS));
+    assert.deepEqual(readerParts(""), [""]);
+    assert.deepEqual(readerParts("Short."), ["Short."]);
+  });
+
   it("lets only the person who connected read their Reader through the assistant", async () => {
     const original = globalThis.fetch;
     globalThis.fetch = reader.fetchImpl;
@@ -430,13 +621,26 @@ describe("readwise reader", () => {
       const read = (await runTool(owner, "reader_read", { id: "doc-later" })) as {
         notice: string;
         text: string;
+        part: number;
+        parts: number;
+        characters: number;
+        nextPart: number | null;
         highlights: { text: string; note: string | null }[];
         highlightsComplete: boolean;
       };
       assert.equal(read.notice, EXTERNAL_NOTICE);
-      assert.ok(read.text.length > 300_000);
+      assert.equal(read.part, 1);
+      assert.ok(read.characters > 300_000);
+      assert.ok(read.parts >= 6);
+      assert.equal(read.nextPart, 2);
+      assert.ok(read.text.length <= READER_PART_CHARS);
       assert.deepEqual(read.highlights.map((item) => [item.text, item.note]), [["Long text", "Worth a look"]]);
       assert.equal(read.highlightsComplete, true);
+      const last = (await runTool(owner, "reader_read", { id: "doc-later", part: read.parts })) as { nextPart: number | null; highlights?: unknown };
+      assert.equal(last.nextPart, null);
+      assert.equal(last.highlights, undefined);
+      const beyond = (await runTool(owner, "reader_read", { id: "doc-later", part: read.parts + 1 })) as { error: string };
+      assert.equal(beyond.error, `That document has ${read.parts} parts. Ask for part 1 to ${read.parts}.`);
       const highlights = (await runTool(owner, "reader_highlights", { tag: "research" })) as { highlights: { id: string; documentTitle: string | null }[] };
       assert.equal(highlights.highlights.length, 50);
       assert.equal(highlights.highlights[0].id, "hl-4");
@@ -477,6 +681,13 @@ describe("readwise reader", () => {
       const read = await rpc(ownerToken, "tools/call", { name: "reader_read", arguments: { id: "doc-eclipse" } });
       assert.ok(!read.result!.isError);
       assert.ok(read.result!.content![0].text.includes("Answer engines cite sources they trust."));
+      const second = await rpc(ownerToken, "tools/call", { name: "reader_read", arguments: { id: "doc-later", part: 2 } });
+      assert.ok(!second.result!.isError);
+      const secondBody = JSON.parse(second.result!.content![0].text) as { part: number; parts: number; nextPart: number | null; text: string; highlights?: unknown };
+      assert.equal(secondBody.part, 2);
+      assert.equal(secondBody.nextPart, 3);
+      assert.ok(secondBody.text.length > 0 && secondBody.text.length <= READER_PART_CHARS);
+      assert.equal(secondBody.highlights, undefined);
       const refused = await rpc(memberToken, "tools/call", { name: "reader_list", arguments: {} });
       assert.equal(refused.result!.isError, true);
       assert.match(refused.result!.content![0].text, /isn't connected/);

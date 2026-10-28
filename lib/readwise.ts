@@ -4,6 +4,7 @@ const BASE_URL = "https://readwise.io/api";
 const TIMEOUT_MS = 20_000;
 const MAX_WAIT_MS = 65_000;
 const NO_LIMIT = Number.MAX_SAFE_INTEGER;
+const UNREADABLE = "Readwise sent a reply Orbit couldn't read. Try again in a few minutes.";
 
 export const READER_LOCATIONS = ["new", "later", "shortlist", "archive", "feed"] as const;
 export const READER_CATEGORIES = ["article", "email", "rss", "highlight", "note", "pdf", "epub", "tweet", "video"] as const;
@@ -129,10 +130,22 @@ export function readerClient(options: ReaderClientOptions) {
     }
   }
 
-  async function json<T>(path: string, query?: URLSearchParams) {
+  async function json(path: string, query?: URLSearchParams): Promise<Record<string, unknown>> {
     const response = await get(path, query);
     if (!response.ok) throw new ReadwiseError(failure(response.status), response.status);
-    return (await response.json()) as T;
+    const body: unknown = await response.json().catch(() => null);
+    if (!body || typeof body !== "object" || Array.isArray(body)) throw new ReadwiseError(UNREADABLE, 502);
+    return body as Record<string, unknown>;
+  }
+
+  async function resultsPage(path: string, query: URLSearchParams) {
+    const body = await json(path, query);
+    if (!Array.isArray(body.results)) throw new ReadwiseError(UNREADABLE, 502);
+    return {
+      count: typeof body.count === "number" ? body.count : 0,
+      nextPageCursor: typeof body.nextPageCursor === "string" && body.nextPageCursor ? body.nextPageCursor : null,
+      results: body.results as unknown[],
+    };
   }
 
   async function validate() {
@@ -152,11 +165,11 @@ export function readerClient(options: ReaderClientOptions) {
     if (params.limit) query.set("limit", String(Math.min(100, Math.max(1, Math.trunc(params.limit)))));
     if (params.pageCursor) query.set("pageCursor", params.pageCursor);
     if (params.withHtmlContent) query.set("withHtmlContent", "true");
-    const body = await json<{ count?: unknown; nextPageCursor?: unknown; results?: unknown }>("/v3/list/", query);
+    const body = await resultsPage("/v3/list/", query);
     return {
-      count: typeof body.count === "number" ? body.count : 0,
-      nextPageCursor: typeof body.nextPageCursor === "string" && body.nextPageCursor ? body.nextPageCursor : null,
-      results: Array.isArray(body.results) ? (body.results as ReaderDocument[]).filter((item) => item && typeof item.id === "string") : [],
+      count: body.count,
+      nextPageCursor: body.nextPageCursor,
+      results: (body.results as ReaderDocument[]).filter((item) => item && typeof item === "object" && typeof item.id === "string"),
     };
   }
 
@@ -181,12 +194,12 @@ export function readerClient(options: ReaderClientOptions) {
     for (let page = 0; page < 20; page += 1) {
       const query = new URLSearchParams();
       if (cursor) query.set("pageCursor", cursor);
-      const body: { nextPageCursor?: unknown; results?: unknown } = await json("/v3/tags/", query);
-      for (const item of Array.isArray(body.results) ? body.results : []) {
-        const entry = item as { key?: unknown; name?: unknown };
+      const body = await resultsPage("/v3/tags/", query);
+      for (const item of body.results) {
+        const entry = (item ?? {}) as { key?: unknown; name?: unknown };
         if (typeof entry.key === "string") tags.push({ key: entry.key, name: typeof entry.name === "string" ? entry.name : entry.key });
       }
-      cursor = typeof body.nextPageCursor === "string" && body.nextPageCursor ? body.nextPageCursor : null;
+      cursor = body.nextPageCursor;
       if (!cursor) break;
     }
     return tags;

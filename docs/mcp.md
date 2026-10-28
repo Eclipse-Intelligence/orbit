@@ -49,7 +49,7 @@ Readwise Reader tools, for a person who has connected Reader in Settings, Integr
 
 `reader_list`: `location`, `category`, `tags` (up to 5), `updated_after`, `limit` (up to 100), `page_cursor`. Titles, authors, links, locations, tags, dates and ids.
 
-`reader_read`: `id`. One document's full text, note, and its highlights with their notes.
+`reader_read`: `id`, `part` (from 1). One document's text in parts of up to 60,000 characters, with `part`, `parts`, `characters` and `nextPart`. Part 1 also has the note and every highlight with its note.
 
 `reader_highlights`: `document_id` or `tag`, `updated_after`, `limit` (up to 200). Recent highlights and their notes.
 

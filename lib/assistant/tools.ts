@@ -1176,7 +1176,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     name: "read_knowledge",
     label: "Reading Knowledge",
     description:
-      "Read one Knowledge item in full, 100,000 characters at a time. Start at offset 0, or at the offset a search_knowledge result gave, and pass nextOffset to keep reading.",
+      "Read one Knowledge item in full, 100,000 characters at a time. Start at offset 0, or at the offset a search_knowledge result gave, and pass nextOffset to keep reading. To read, review or check a whole item, keep going until nextOffset is null before answering.",
     parameters: {
       type: "object",
       properties: { itemId: idParam("Knowledge item id."), offset: { type: "integer", minimum: 0 } },
@@ -2789,13 +2789,18 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
   {
     name: "reader_read",
     label: "Reading from your Reader",
-    description: "Read one document from the user's Readwise Reader in full: its text, note, and every highlight with its note. Use an id from reader_list.",
+    description:
+      "Read one document from the user's Readwise Reader, 60,000 characters a part. Part 1 also has its note and every highlight with its note. Use an id from reader_list. To read, review, summarise or check a document, read every part in order until nextPart is null before answering, and never judge the whole document from part 1 alone. If you can't finish, say which parts you read.",
     parameters: {
       type: "object",
-      properties: { id: { type: "string", description: "The Reader document id." } },
+      properties: {
+        id: { type: "string", description: "The Reader document id." },
+        part: { type: "integer", minimum: 1, description: "Which part to read, from 1. Defaults to 1." },
+      },
       required: ["id"],
     },
-    run: async (actor, args, context) => readerRead(actor, required(args.id, "A Reader document id"), { deadline: context.deadline }),
+    run: async (actor, args, context) =>
+      readerRead(actor, required(args.id, "A Reader document id"), int(args.part, 1, 1, 10_000), { deadline: context.deadline }),
   },
   {
     name: "reader_highlights",

@@ -30,13 +30,16 @@ export type ReadwiseKeyRow = {
   scan_since: Date | null;
   scan_started_at: Date | null;
   scan_full: boolean;
+  list_cursor: string | null;
+  list_full: boolean;
+  list_done: boolean;
 };
 
 export async function readReadwiseKey(actor: UserActor) {
   return withActor(actor, async (db) => {
     const result = await db.query<ReadwiseKeyRow>(
       `select id, token_cipher, token_hint, connected_at, last_sync_at, last_error, last_error_at,
-         updated_after, full_sync_at, scan_cursor, scan_since, scan_started_at, scan_full
+         updated_after, full_sync_at, scan_cursor, scan_since, scan_started_at, scan_full, list_cursor, list_full, list_done
        from crm.readwise_keys where workspace_id = $1 and user_id = $2`,
       [actor.workspaceId, actor.userId],
     );
@@ -58,7 +61,7 @@ export async function readwiseToken(actor: UserActor) {
 }
 
 export async function requireReadwiseToken(actor: UserActor) {
-  const token = actor.type === "user" ? await readwiseToken(actor) : null;
+  const token = await readwiseToken(actor);
   if (!token) throw new CrmError("not_connected", READWISE_NOT_CONNECTED, 400);
   return token;
 }
@@ -85,7 +88,8 @@ export async function saveReadwiseToken(actor: UserActor, token: string, options
        on conflict (workspace_id, user_id)
        do update set token_cipher = excluded.token_cipher, token_hint = excluded.token_hint, connected_at = now(),
          last_error = null, last_error_at = null, updated_after = null, full_sync_at = null,
-         scan_cursor = null, scan_since = null, scan_started_at = null, scan_full = false`,
+         scan_cursor = null, scan_since = null, scan_started_at = null, scan_full = false,
+         list_cursor = null, list_full = false, list_done = false`,
       [actor.workspaceId, actor.userId, encryptSecret(trimmed), trimmed.slice(-4)],
     ),
   );

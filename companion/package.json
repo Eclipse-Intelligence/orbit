@@ -1,6 +1,6 @@
 {
   "name": "orbit-agent",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Runs your own Claude Code login on your Mac for the Orbit assistant.",
   "type": "module",
   "bin": {
