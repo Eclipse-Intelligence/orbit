@@ -19,6 +19,8 @@ import {
   inviteWindow,
   MEETING_GONE,
   rescheduleInvite,
+  RESPOND_NOT_CONNECTED,
+  respondToInvite,
   saveMeetingLink,
 } from "@/lib/crm/invites";
 import { describeAction, recordNames } from "@/lib/assistant/tools";
@@ -26,7 +28,7 @@ import { saveOtherEmails } from "@/lib/crm/profile";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { defaultInviteSlot, snapTime } from "@/lib/invite-rules";
-import { graphDateTimes, inviteBodyHtml, type GraphEvent } from "@/lib/microsoft/calendar";
+import { graphDateTimes, inviteBodyHtml, RESPOND_ORGANISER, type GraphEvent } from "@/lib/microsoft/calendar";
 import { grantsCalendarWrite, MICROSOFT_SCOPES } from "@/lib/microsoft/oauth";
 import { createUser, resetDatabase } from "./helpers";
 
@@ -84,6 +86,7 @@ function graph(
     events?: () => GraphEvent[];
     move?: (patch: Record<string, unknown>) => Response;
     read?: () => Response;
+    respond?: (action: string, body: Record<string, unknown>) => Response;
   } = {},
 ) {
   let creates = 0;
@@ -102,6 +105,10 @@ function graph(
       return options.token?.() ?? json({ access_token: "fresh-token", expires_in: 3600, scope: WRITE_SCOPES });
     }
     if (parsed.pathname.endsWith("/cancel")) return options.cancel?.() ?? json(null, 202);
+    const answer = /\/me\/events\/[^/]+\/(accept|tentativelyAccept|decline)$/.exec(parsed.pathname);
+    if (answer && init?.method === "POST") {
+      return options.respond?.(answer[1], body as Record<string, unknown>) ?? json(null, 202);
+    }
     if (init?.method === "POST" && parsed.pathname.endsWith("/events")) {
       creates += 1;
       const draft = body as Record<string, unknown>;
@@ -1026,6 +1033,332 @@ describe("moving invites", () => {
     assert.match(card.lines[1], /^To: .*22 Oct.*10:00 for 30 minutes$/);
     assert.equal(card.lines[2], "Guests: Jane Doe");
     assert.equal(card.lines[3], "Message to guests: New slot");
+  });
+});
+
+describe("answering invites", () => {
+  let owner: UserActor;
+  let connectionId: string;
+  let jane: string;
+  const days = { start: new Date("2026-10-19T00:00:00Z"), end: new Date("2026-10-24T00:00:00Z") };
+
+  beforeEach(async () => {
+    await resetDatabase();
+    owner = await createUser("founder@example.com", "Founder");
+    const acme = (await createCompany(owner, { name: "Acme", domain: "acme-invites.test" })).body.company.id;
+    jane = (
+      await createContact(owner, { firstName: "Jane", lastName: "Doe", email: "jane@acme-invites.test", companyId: acme })
+    ).body.contact.id;
+    connectionId = await connect(owner);
+    await addMainCalendar(owner, connectionId);
+  });
+
+  function invitation(extra: Partial<GraphEvent> = {}): GraphEvent {
+    return {
+      id: "inv-1",
+      iCalUId: "ical-inv-1",
+      subject: "Acme review",
+      start: utc("2026-10-21T10:00:00.000Z"),
+      end: utc("2026-10-21T11:00:00.000Z"),
+      isAllDay: false,
+      isCancelled: false,
+      organizer: { emailAddress: { name: "Jane Doe", address: "jane@acme-invites.test" } },
+      attendees: [
+        { type: "required", status: { response: "none" }, emailAddress: { name: "Founder", address: MAILBOX } },
+        { type: "required", status: { response: "accepted" }, emailAddress: { name: "Bob Stone", address: "bob@acme-invites.test" } },
+      ],
+      showAs: "tentative",
+      responseStatus: { response: "notResponded" },
+      ...extra,
+    };
+  }
+
+  async function invited(extra: Partial<GraphEvent> = {}) {
+    const sync = await syncCalendar(owner, { fetchImpl: graph([], { events: () => [invitation(extra)] }), force: true });
+    assert.equal(sync.error, undefined);
+    const row = await getAdminPool().query<{ id: string }>(
+      "select id from crm.calendar_events where provider_event_id = $1 and user_id = $2",
+      [extra.id ?? "inv-1", owner.userId],
+    );
+    return row.rows[0].id;
+  }
+
+  async function stored(eventId: string) {
+    const row = await getAdminPool().query<{
+      response_status: string | null;
+      show_as: string | null;
+      is_cancelled: boolean;
+      attendees: { email: string; response: string | null }[];
+    }>("select response_status, show_as, is_cancelled, attendees from crm.calendar_events where id = $1", [eventId]);
+    return row.rows[0];
+  }
+
+  async function responses() {
+    const rows = await getAdminPool().query<{ title: string; body: string; contact_id: string; metadata: Record<string, unknown> }>(
+      "select title, body, contact_id, metadata from crm.activities where metadata->>'kind' = 'response' order by created_at",
+    );
+    return rows.rows;
+  }
+
+  it("fills the user's response from Graph when the calendar syncs", async () => {
+    const calls: Call[] = [];
+    await syncCalendar(owner, { fetchImpl: graph(calls, { events: () => [invitation()] }), force: true });
+    const view = calls.find((call) => call.url.includes("/calendarView"));
+    assert.match(new URL(view!.url).searchParams.get("$select") ?? "", /responseStatus/);
+    const row = await getAdminPool().query<{ id: string; response_status: string | null }>(
+      "select id, response_status from crm.calendar_events where provider_event_id = 'inv-1'",
+    );
+    assert.equal(row.rows[0].response_status, "notResponded");
+    const [item] = await listCalendarItems(owner, days, NOW);
+    assert.equal(item.myResponse, "notResponded");
+    assert.equal(item.organisedByMe, false);
+    assert.equal(item.canRespond, true);
+    assert.equal(item.canCancel, false);
+
+    await invited({ responseStatus: { response: "TentativelyAccepted" } });
+    assert.equal((await stored(row.rows[0].id)).response_status, "tentativelyAccepted");
+    await invited({ responseStatus: { response: "somethingNew" } });
+    assert.equal((await stored(row.rows[0].id)).response_status, null);
+  });
+
+  it("accepts with a note, stores the response and logs it on the organiser", async () => {
+    const eventId = await invited();
+    const calls: Call[] = [];
+    const result = await respondToInvite(
+      owner,
+      { eventId, response: "accept", note: "  See you there.  " },
+      { fetchImpl: graph(calls), now: NOW },
+    );
+    const [post] = posts(calls);
+    assert.equal(posts(calls).length, 1);
+    assert.equal(post.url, "https://graph.microsoft.com/v1.0/me/events/inv-1/accept");
+    assert.deepEqual(post.body, { sendResponse: true, comment: "See you there." });
+    assert.equal(result.responseStatus, "accepted");
+    assert.equal(result.organizerTold, true);
+    assert.deepEqual(result.organizer, { name: "Jane Doe", email: "jane@acme-invites.test" });
+    assert.equal(result.loggedOn, 1);
+    assert.equal(result.warning, null);
+    const row = await stored(eventId);
+    assert.equal(row.response_status, "accepted");
+    assert.equal(row.show_as, "busy");
+    assert.deepEqual(
+      row.attendees.map((person) => [person.email, person.response]),
+      [
+        [MAILBOX, "accepted"],
+        ["bob@acme-invites.test", "accepted"],
+      ],
+    );
+    const logged = await responses();
+    assert.equal(logged.length, 1);
+    assert.equal(logged[0].title, "Accepted Acme review");
+    assert.equal(logged[0].contact_id, jane);
+    assert.equal(logged[0].body, "Wed, 21 Oct 2026, 11:00 to 12:00 London time\n\nNote to the organiser: See you there.");
+    assert.equal(logged[0].metadata.response, "accepted");
+    const [item] = await listCalendarItems(owner, days, NOW);
+    assert.equal(item.myResponse, "accepted");
+    assert.equal(item.canRespond, true);
+  });
+
+  it("says maybe without telling the organiser, then declines", async () => {
+    const eventId = await invited({ showAs: "busy" });
+    const calls: Call[] = [];
+    const maybe = await respondToInvite(
+      owner,
+      { eventId, response: "tentative", sendResponse: false },
+      { fetchImpl: graph(calls), now: NOW },
+    );
+    assert.equal(posts(calls)[0].url, "https://graph.microsoft.com/v1.0/me/events/inv-1/tentativelyAccept");
+    assert.deepEqual(posts(calls)[0].body, { sendResponse: false });
+    assert.equal(maybe.organizerTold, false);
+    assert.equal(maybe.loggedOn, 0);
+    const after = await stored(eventId);
+    assert.deepEqual([after.response_status, after.show_as], ["tentativelyAccepted", "tentative"]);
+    assert.equal((await responses()).length, 0);
+
+    const declined = await respondToInvite(owner, { eventId, response: "Decline" }, { fetchImpl: graph(calls), now: NOW });
+    assert.equal(posts(calls)[1].url, "https://graph.microsoft.com/v1.0/me/events/inv-1/decline");
+    assert.deepEqual(posts(calls)[1].body, { sendResponse: true });
+    assert.equal(declined.responseStatus, "declined");
+    assert.equal((await stored(eventId)).response_status, "declined");
+    const logged = await responses();
+    assert.deepEqual(
+      logged.map((entry) => [entry.title, entry.body, entry.contact_id]),
+      [["Declined Acme review", "Wed, 21 Oct 2026, 11:00 to 12:00 London time", jane]],
+    );
+  });
+
+  it("suggests a new time with maybe or decline, and checks it first", async () => {
+    const eventId = await invited();
+    const calls: Call[] = [];
+    const result = await respondToInvite(
+      owner,
+      { eventId, response: "decline", note: "Clash", proposedStartLocal: "2026-10-22T15:00" },
+      { fetchImpl: graph(calls), now: NOW },
+    );
+    assert.deepEqual(posts(calls)[0].body, {
+      sendResponse: true,
+      comment: "Clash",
+      proposedNewTime: {
+        start: { dateTime: "2026-10-22T15:00:00", timeZone: "GMT Standard Time" },
+        end: { dateTime: "2026-10-22T16:00:00", timeZone: "GMT Standard Time" },
+      },
+    });
+    assert.equal(result.proposedStartsAt, "2026-10-22T14:00:00.000Z");
+    assert.equal(result.proposedEndsAt, "2026-10-22T15:00:00.000Z");
+    const [logged] = await responses();
+    assert.equal(
+      logged.body,
+      "Wed, 21 Oct 2026, 11:00 to 12:00 London time\nSuggested instead: Thu, 22 Oct 2026, 15:00 to 16:00 London time\n\nNote to the organiser: Clash",
+    );
+
+    await respondToInvite(
+      owner,
+      { eventId, response: "tentative", proposedStartLocal: "2026-10-22T15:00", proposedDurationMinutes: 30 },
+      { fetchImpl: graph(calls), now: NOW },
+    );
+    assert.deepEqual((posts(calls)[1].body as { proposedNewTime: { end: unknown } }).proposedNewTime.end, {
+      dateTime: "2026-10-22T15:30:00",
+      timeZone: "GMT Standard Time",
+    });
+
+    const refused: Call[] = [];
+    const answer = (input: Record<string, unknown>) =>
+      respondToInvite(owner, { eventId, ...input }, { fetchImpl: graph(refused), now: NOW });
+    await rejects(() => answer({ response: "accept", proposedStartLocal: "2026-10-22T15:00" }), {
+      code: "invalid_input",
+      field: "proposedStartLocal",
+    });
+    await rejects(() => answer({ response: "decline", note: "Hi", sendResponse: false }), {
+      code: "invalid_input",
+      field: "note",
+    });
+    await rejects(() => answer({ response: "decline", proposedStartLocal: "2026-10-21T11:00" }), {
+      message: /already is/,
+      field: "proposedStartLocal",
+    });
+    await rejects(() => answer({ response: "decline", proposedStartLocal: "2026-10-01T11:00" }), {
+      message: "Pick a start time in the future.",
+      field: "proposedStartLocal",
+    });
+    await rejects(
+      () => answer({ response: "decline", proposedStartLocal: "2026-10-22T15:00", proposedDurationMinutes: 600 }),
+      { field: "proposedDurationMinutes" },
+    );
+    await rejects(() => answer({ response: "maybe" }), { field: "response" });
+    await rejects(() => answer({ response: "accept", sendResponse: "yes" }), { field: "sendResponse" });
+    assert.equal(refused.length, 0);
+
+    await rejects(
+      () =>
+        respondToInvite(owner, { eventId, response: "tentative", proposedStartLocal: "2026-10-22T15:00" }, {
+          fetchImpl: graph([], {
+            respond: () =>
+              json({ error: { code: "ErrorInvalidRequest", message: "The meeting organizer doesn't allow new time proposals." } }, 400),
+          }),
+          now: NOW,
+        }),
+      { code: "invalid_input", message: /isn't taking new time proposals/ },
+    );
+  });
+
+  it("refuses meetings the user organised", async () => {
+    const own = await createInvite(owner, baseInput(), { fetchImpl: graph([]), now: NOW });
+    const calls: Call[] = [];
+    await rejects(() => respondToInvite(owner, { eventId: own.eventId, response: "accept" }, { fetchImpl: graph(calls), now: NOW }), {
+      code: "forbidden",
+      message: RESPOND_ORGANISER,
+    });
+    const organised = await invited({
+      id: "inv-2",
+      organizer: { emailAddress: { name: "Founder", address: MAILBOX } },
+      responseStatus: { response: "organizer" },
+    });
+    await rejects(() => respondToInvite(owner, { eventId: organised, response: "decline" }, { fetchImpl: graph(calls), now: NOW }), {
+      code: "forbidden",
+      message: RESPOND_ORGANISER,
+    });
+    assert.equal(calls.length, 0);
+    const items = await listCalendarItems(owner, days, NOW);
+    assert.ok(items.length > 0);
+    for (const item of items) {
+      assert.equal(item.organisedByMe, true);
+      assert.equal(item.canRespond, false);
+    }
+  });
+
+  it("refuses meetings that have started or are cancelled", async () => {
+    const eventId = await invited();
+    const calls: Call[] = [];
+    const started = Date.UTC(2026, 9, 21, 10, 5);
+    await rejects(() => respondToInvite(owner, { eventId, response: "accept" }, { fetchImpl: graph(calls), now: started }), {
+      code: "invalid_input",
+      message: /already started/,
+    });
+    const [item] = await listCalendarItems(owner, days, started);
+    assert.equal(item.canRespond, false);
+    await getAdminPool().query("update crm.calendar_events set is_cancelled = true where id = $1", [eventId]);
+    await rejects(() => respondToInvite(owner, { eventId, response: "accept" }, { fetchImpl: graph(calls), now: NOW }), {
+      code: "conflict",
+    });
+    await rejects(() => respondToInvite(owner, { eventId: "nope", response: "accept" }, { fetchImpl: graph(calls), now: NOW }), {
+      code: "not_found",
+    });
+    assert.equal(calls.length, 0);
+  });
+
+  it("takes the meeting off the calendar when Outlook no longer has it", async () => {
+    const eventId = await invited();
+    await rejects(
+      () =>
+        respondToInvite(owner, { eventId, response: "accept" }, {
+          fetchImpl: graph([], {
+            respond: () => json({ error: { code: "ErrorItemNotFound", message: "The specified object was not found." } }, 404),
+          }),
+          now: NOW,
+        }),
+      { code: "gone", message: MEETING_GONE },
+    );
+    const row = await stored(eventId);
+    assert.equal(row.is_cancelled, true);
+    assert.equal(row.response_status, "notResponded");
+    assert.equal((await responses()).length, 0);
+  });
+
+  it("needs the connected mailbox with write access", async () => {
+    const eventId = await invited();
+    const calls: Call[] = [];
+    await withActor(owner, (db) => storeGrantedScopes(db, owner, connectionId, READ_SCOPES));
+    await rejects(() => respondToInvite(owner, { eventId, response: "accept" }, { fetchImpl: graph(calls), now: NOW }), {
+      code: "scope_missing",
+    });
+    await getAdminPool().query("update crm.mailbox_connections set status = 'disconnected' where id = $1", [connectionId]);
+    await rejects(() => respondToInvite(owner, { eventId, response: "accept" }, { fetchImpl: graph(calls), now: NOW }), {
+      code: "not_connected",
+      message: RESPOND_NOT_CONNECTED,
+    });
+    const [item] = await listCalendarItems(owner, days, NOW);
+    assert.equal(item.canRespond, false);
+    assert.equal(posts(calls).length, 0);
+  });
+
+  it("shows the meeting, organiser, response, note and who is told on the assistant's card", async () => {
+    const eventId = await invited();
+    const args = { eventId, response: "decline", note: "Clash", proposedStartLocal: "2026-10-22T15:00" };
+    const card = describeAction("respond_to_meeting", args, await recordNames(owner, [args]));
+    assert.equal(card.title, "Answer invite: Acme review");
+    assert.equal(card.lines.length, 6);
+    assert.match(card.lines[0], /^When: .*21 Oct.*11:00$/);
+    assert.equal(card.lines[1], "Organiser: Jane Doe (jane@acme-invites.test)");
+    assert.equal(card.lines[2], "Response: Decline");
+    assert.match(card.lines[3], /^Suggested time: .*22 Oct.*15:00 for 60 minutes$/);
+    assert.equal(card.lines[4], "Note to the organiser: Clash");
+    assert.equal(card.lines[5], "Outlook tells the organiser when you approve.");
+
+    const quiet = { eventId, response: "tentative", tellOrganiser: false };
+    const quietCard = describeAction("respond_to_meeting", quiet, await recordNames(owner, [quiet]));
+    assert.deepEqual(quietCard.lines.slice(2), ["Response: Maybe (tentative)", "The organiser isn't told."]);
+    const missing = describeAction("respond_to_meeting", { eventId: "6f1c1c55-8d0c-4a43-9a3e-3f3b8ad1e0c1", response: "accept" });
+    assert.equal(missing.title, "Answer invite: a meeting Orbit can't find");
   });
 });
 

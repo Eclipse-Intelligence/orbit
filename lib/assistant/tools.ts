@@ -67,7 +67,7 @@ import { CrmError } from "@/lib/crm/errors";
 import { getGranolaStatus } from "@/lib/crm/granola";
 import { companyHref, contactHref, opportunityHref } from "@/lib/crm/hrefs";
 import { getMailbox, listInbox } from "@/lib/crm/inbox";
-import { cancelInvite, createInvite, getMeetingLink, rescheduleInvite } from "@/lib/crm/invites";
+import { cancelInvite, createInvite, getMeetingLink, MEETING_RESPONSES, rescheduleInvite, respondToInvite } from "@/lib/crm/invites";
 import { latestEmailCheck, verifyEmail } from "@/lib/enrichment/email-check";
 import { archiveOpportunity, createOpportunity, getOpportunity, listOpportunities, listPipeline, updateOpportunity } from "@/lib/crm/opportunities";
 import { pipelineReport, stageHistory, stalledDeals, STALLED_DAYS } from "@/lib/crm/pipeline-history";
@@ -1088,7 +1088,8 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
   {
     name: "list_calendar_events",
     label: "Checking the calendar",
-    description: "Calendar events across the connected calendars between two dates (London), up to 62 days apart.",
+    description:
+      "Calendar events across the connected calendars between two dates (London), up to 62 days apart. Each has organisedByMe, myResponse (Outlook's: accepted, tentativelyAccepted, declined, notResponded, none or organizer), canCancel (move_meeting and cancel_meeting work) and canRespond (respond_to_meeting works).",
     parameters: {
       type: "object",
       properties: {
@@ -3365,6 +3366,55 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     },
   },
   {
+    name: "respond_to_meeting",
+    label: "Answering an invite",
+    write: true,
+    description:
+      "Accept, say maybe to (tentative) or decline a meeting someone else organised, by its id from list_calendar_events with canRespond true. Outlook sends the response to the organiser, with note if given, unless tellOrganiser is false. Tentative and decline can suggest a new time in London time, if the organiser allows new time proposals. Only meetings that haven't started, in the calendar of the mailbox connected in Capture.",
+    parameters: {
+      type: "object",
+      properties: {
+        eventId: idParam("Meeting id from list_calendar_events."),
+        response: { type: "string", enum: [...MEETING_RESPONSES] },
+        note: { type: "string", description: "Optional note to the organiser." },
+        tellOrganiser: { type: "boolean", description: "Defaults to true. False updates the calendar without telling the organiser, and can't carry a note or a new time." },
+        proposedStartLocal: { type: "string", description: "Optional new start to suggest with tentative or decline, YYYY-MM-DDTHH:mm London time." },
+        proposedDurationMinutes: { type: "integer", minimum: 5, maximum: 480, description: "Length of the suggested time. Defaults to the meeting's length." },
+      },
+      required: ["eventId", "response"],
+    },
+    describe: (args, name) => {
+      const id = str(args.eventId);
+      const organiser = detail(name, `${id}:organizer`);
+      const when = detail(name, `${id}:when`);
+      const minutes = Number(args.proposedDurationMinutes) || Number(detail(name, `${id}:minutes`)) || null;
+      const told = args.tellOrganiser !== false;
+      const answer = { accept: "Accept", tentative: "Maybe (tentative)", decline: "Decline" }[str(args.response)] ?? str(args.response);
+      return {
+        title: `Answer invite: ${name(id) === "Unknown record" ? "a meeting Orbit can't find" : name(id)}`,
+        lines: [
+          when ? `When: ${formatDateTimeLabel(when)}` : "",
+          `Organiser: ${organiser || "not listed"}`,
+          `Response: ${answer}`,
+          str(args.proposedStartLocal) ? `Suggested time: ${formatDateTimeLabel(str(args.proposedStartLocal))}${minutes ? ` for ${minutes} minutes` : ""}` : "",
+          str(args.note) ? `Note to the organiser: ${str(args.note)}` : "",
+          told ? "Outlook tells the organiser when you approve." : "The organiser isn't told.",
+        ],
+      };
+    },
+    run: async (actor, args) => {
+      const answered = await respondToInvite(actor, {
+        eventId: str(args.eventId),
+        response: str(args.response),
+        note: optionalStr(args.note) ?? null,
+        sendResponse: args.tellOrganiser === undefined ? undefined : args.tellOrganiser === true,
+        proposedStartLocal: optionalStr(args.proposedStartLocal),
+        proposedDurationMinutes: args.proposedDurationMinutes === undefined ? undefined : Number(args.proposedDurationMinutes),
+      });
+      return { answered };
+    },
+  },
+  {
     name: "linear_search_issues",
     label: "Searching Linear",
     description: `Search Linear issues in the ${linearTeamKey()} team by words in the title or description, or by identifier such as ${linearTeamKey()}-123. Open issues only unless includeDone is true. Use this to check for an existing issue before proposing a new one.`,
@@ -3904,6 +3954,8 @@ export async function recordNames(actor: UserActor, args: Args[], tools: string[
       names.set(row.id, row.subject?.trim() || "Untitled event");
       names.set(`${row.id}:when`, dateTimeInputValue(row.starts_at.toISOString(), appTimeZone()));
       names.set(`${row.id}:minutes`, String(Math.round((row.ends_at.getTime() - row.starts_at.getTime()) / 60_000)));
+      const organizer = readPerson(row.organizer);
+      if (organizer) names.set(`${row.id}:organizer`, organizer.name ? `${organizer.name} (${organizer.email})` : organizer.email);
       if (guests.length) names.set(`${row.id}:guests`, guests.join(", "));
     }
   });
