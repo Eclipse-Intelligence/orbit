@@ -76,7 +76,7 @@ export async function patchContactAction(id: string, patch: ContactWrite): Promi
   }
 }
 
-export async function mergeContactAction(mergeId: string, keepId: string): Promise<{ error?: string; keptId?: string }> {
+export async function mergeContactAction(keepId: string, mergeId: string): Promise<{ error?: string; keptId?: string }> {
   const user = await requireUser();
   try {
     const result = await mergeContacts(user, keepId, mergeId, { operation: "merge_contacts", source: "web" });

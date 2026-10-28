@@ -291,6 +291,18 @@ function titled(verb: string, label: string | undefined) {
   return label ? `${verb}: ${label}` : verb;
 }
 
+function mergeLine(label: string, id: unknown, name: Names) {
+  const key = `${str(id)}:merge`;
+  const detail = name(key);
+  return `${label}: ${name(id)}${detail !== key ? ` (${detail})` : ""}`;
+}
+
+function counted(count: number, one: string, many: string) {
+  return `${count} ${count === 1 ? one : many}`;
+}
+
+const MERGE_ID_KEYS = ["keepId", "mergeId"];
+
 const idParam = (description: string) => ({ type: "string", description });
 const limitParam = { type: "integer", description: "How many to return, up to 100. Defaults to 50.", minimum: 1, maximum: 100 };
 const offsetParam = { type: "integer", description: "How many to skip, for the next page.", minimum: 0 };
@@ -1679,9 +1691,9 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     describe: (args, name) => ({
       title: titled("Merge companies", `${name(args.mergeId)} into ${name(args.keepId)}`),
       lines: [
-        `Keep: ${name(args.keepId)}`,
-        `People, deals, tasks, activity and emails move to ${name(args.keepId)}`,
-        `${name(args.mergeId)} is archived`,
+        mergeLine("Keep", args.keepId, name),
+        mergeLine("Merge and archive", args.mergeId, name),
+        "People, deals, tasks, activity and emails move to the kept company",
       ],
     }),
     run: async (actor, args) => {
@@ -1774,9 +1786,9 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     describe: (args, name) => ({
       title: titled("Merge people", `${name(args.mergeId)} into ${name(args.keepId)}`),
       lines: [
-        `Keep: ${name(args.keepId)}`,
-        `Activity, tasks, deals and emails move to ${name(args.keepId)}`,
-        `${name(args.mergeId)} is archived`,
+        mergeLine("Keep", args.keepId, name),
+        mergeLine("Merge and archive", args.mergeId, name),
+        "Activity, tasks, deals and emails move to the kept person",
       ],
     }),
     run: async (actor, args) => {
@@ -3073,6 +3085,36 @@ export async function recordNames(actor: UserActor, args: Args[]) {
       [list],
     );
     for (const row of details.rows) names.set(row.id, row.name);
+    const merging = [...new Set(args.flatMap((entry) => MERGE_ID_KEYS.map((key) => str(entry[key])).filter(isUuid)))];
+    if (merging.length === 0) return;
+    const merges = await db.query<{ id: string; label: string | null; created: string; activities: number; deals: number; tasks: number }>(
+      `select c.id::text, c.domain as label, to_char(c.created_at at time zone 'Europe/London', 'FMDD Mon YYYY') as created,
+         (select count(*)::int from crm.activities a where a.company_id = c.id) as activities,
+         (select count(*)::int from crm.opportunities o where o.company_id = c.id and o.archived_at is null) as deals,
+         (select count(*)::int from crm.tasks t where t.company_id = c.id and t.archived_at is null) as tasks
+       from crm.companies c where c.id = any($1::uuid[]) and c.workspace_id = $2
+       union all
+       select p.id::text, p.email, to_char(p.created_at at time zone 'Europe/London', 'FMDD Mon YYYY'),
+         (select count(*)::int from crm.activities a where a.contact_id = p.id),
+         (select count(*)::int from crm.opportunities o where o.primary_contact_id = p.id and o.archived_at is null),
+         (select count(*)::int from crm.tasks t where t.contact_id = p.id and t.archived_at is null)
+       from crm.contacts p where p.id = any($1::uuid[]) and p.workspace_id = $2`,
+      [merging, actor.workspaceId],
+    );
+    for (const row of merges.rows) {
+      names.set(
+        `${row.id}:merge`,
+        [
+          row.label?.trim() || null,
+          `added ${row.created}`,
+          counted(row.activities, "activity", "activities"),
+          counted(row.deals, "deal", "deals"),
+          counted(row.tasks, "task", "tasks"),
+        ]
+          .filter(Boolean)
+          .join(", "),
+      );
+    }
   });
   return names;
 }

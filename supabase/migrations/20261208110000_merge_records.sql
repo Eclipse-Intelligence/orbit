@@ -101,6 +101,8 @@ begin
 end;
 $$;
 
+drop function if exists private.merge_move(text, text, uuid, uuid, uuid);
+
 create or replace function private.merge_move(
   p_table text,
   p_column text,
@@ -108,20 +110,19 @@ create or replace function private.merge_move(
   p_from uuid,
   p_to uuid
 )
-returns jsonb
+returns integer
 language plpgsql
 set search_path = ''
 as $$
 declare
-  moved jsonb;
+  moved integer;
 begin
   execute format(
-    'with moved as (update crm.%I set %I = $1 where workspace_id = $2 and %I = $3 returning id)
-     select coalesce(jsonb_agg(id order by id), ''[]''::jsonb) from moved',
+    'update crm.%I set %I = $1 where workspace_id = $2 and %I = $3',
     p_table, p_column, p_column
   )
-  into moved
   using p_to, p_workspace, p_from;
+  get diagnostics moved = row_count;
   return moved;
 end;
 $$;
@@ -165,9 +166,9 @@ declare
   merge_row crm.companies%rowtype;
   moved jsonb := '{}'::jsonb;
   target text;
-  calendar_replaced jsonb;
-  calendar_shared jsonb;
-  marks jsonb;
+  calendar_replaced integer;
+  calendar_shared integer;
+  marks integer;
   web_state text := 'none';
 begin
   perform private.merge_actor_check(p_workspace, p_user, p_agent);
@@ -209,14 +210,14 @@ begin
     where e.workspace_id = p_workspace and p_merge = any(e.company_ids) and not (p_keep = any(e.company_ids))
     returning e.id
   )
-  select coalesce(jsonb_agg(id order by id), '[]'::jsonb) into calendar_replaced from changed;
+  select count(*)::integer into calendar_replaced from changed;
   with changed as (
     update crm.calendar_events e
     set company_ids = array_remove(e.company_ids, p_merge)
     where e.workspace_id = p_workspace and p_merge = any(e.company_ids)
     returning e.id
   )
-  select coalesce(jsonb_agg(id order by id), '[]'::jsonb) into calendar_shared from changed;
+  select count(*)::integer into calendar_shared from changed;
 
   with changed as (
     update crm.workflow_record_marks m
@@ -228,7 +229,7 @@ begin
       )
     returning m.workflow_id
   )
-  select coalesce(jsonb_agg(workflow_id order by workflow_id), '[]'::jsonb) into marks from changed;
+  select count(*)::integer into marks from changed;
 
   if exists (select 1 from crm.company_web_state w where w.company_id = p_merge) then
     if exists (select 1 from crm.company_web_state w where w.company_id = p_keep) then
@@ -267,9 +268,9 @@ declare
   merge_row crm.contacts%rowtype;
   moved jsonb := '{}'::jsonb;
   target text;
-  calendar_replaced jsonb;
-  calendar_shared jsonb;
-  marks jsonb;
+  calendar_replaced integer;
+  calendar_shared integer;
+  marks integer;
 begin
   perform private.merge_actor_check(p_workspace, p_user, p_agent);
   if p_keep = p_merge then
@@ -316,14 +317,14 @@ begin
     where e.workspace_id = p_workspace and p_merge = any(e.contact_ids) and not (p_keep = any(e.contact_ids))
     returning e.id
   )
-  select coalesce(jsonb_agg(id order by id), '[]'::jsonb) into calendar_replaced from changed;
+  select count(*)::integer into calendar_replaced from changed;
   with changed as (
     update crm.calendar_events e
     set contact_ids = array_remove(e.contact_ids, p_merge)
     where e.workspace_id = p_workspace and p_merge = any(e.contact_ids)
     returning e.id
   )
-  select coalesce(jsonb_agg(id order by id), '[]'::jsonb) into calendar_shared from changed;
+  select count(*)::integer into calendar_shared from changed;
 
   with changed as (
     update crm.workflow_record_marks m
@@ -335,7 +336,7 @@ begin
       )
     returning m.workflow_id
   )
-  select coalesce(jsonb_agg(workflow_id order by workflow_id), '[]'::jsonb) into marks from changed;
+  select count(*)::integer into marks from changed;
 
   perform set_config('orbit.merging', 'off', true);
 

@@ -38,7 +38,7 @@ export default function MergeRecordMenu({ kind, id, name }: { kind: "company" | 
     if (!target) return;
     setBusy(true);
     setError(null);
-    const result = kind === "company" ? await mergeCompanyAction(id, target.id) : await mergeContactAction(id, target.id);
+    const result = kind === "company" ? await mergeCompanyAction(target.id, id) : await mergeContactAction(target.id, id);
     if (result.error || !result.keptId) {
       setBusy(false);
       setError(result.error ?? "That didn't merge. Try again.");
@@ -50,6 +50,11 @@ export default function MergeRecordMenu({ kind, id, name }: { kind: "company" | 
 
   return (
     <>
+      {busy && (
+        <span role="status" className="ui-style whitespace-nowrap text-subtle">
+          Merging…
+        </span>
+      )}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="secondary" size="icon" aria-label="More actions" title="More" disabled={busy}>

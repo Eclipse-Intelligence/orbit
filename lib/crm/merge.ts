@@ -8,8 +8,6 @@ import { canonicalEmail, TAG_LIMIT } from "@/lib/crm/normalize";
 import { assertScope } from "@/lib/crm/scopes";
 import type { Actor, Company, Contact, Provenance } from "@/lib/crm/types";
 
-export type MovedRows = Record<string, string[]>;
-
 export type MergeResult<T> = {
   kept: T;
   merged: T;
@@ -34,6 +32,7 @@ const COMPANY_FILLS: Fill<Company>[] = [
   { field: "logoUrl", columns: ["logo_url"] },
   { field: "brand", columns: ["brand"] },
   { field: "enrichedAt", columns: ["enriched_at"] },
+  { field: "lifecycle", columns: ["lifecycle"] },
   { field: "ownerId", columns: ["owner_id"] },
   { field: "source", columns: ["source"] },
   { field: "sourceReference", columns: ["source_reference"] },
@@ -53,12 +52,29 @@ const CONTACT_FILLS: Fill<Contact>[] = [
   { field: "sourceReference", columns: ["source_reference"] },
 ];
 
-function isEmpty(value: unknown) {
+const DEFAULT_LIFECYCLE = "lead";
+
+function isEmpty(field: string, value: unknown) {
+  if (field === "lifecycle" && typeof value === "string" && value.toLowerCase() === DEFAULT_LIFECYCLE) return true;
   return value === null || value === undefined || (typeof value === "string" && value.trim() === "");
 }
 
-function fillsFor<T>(fills: Fill<T>[], keep: T, merge: T) {
-  return fills.filter(({ field }) => isEmpty(keep[field]) && !isEmpty(merge[field]));
+async function currentMembers(db: Db, workspaceId: string, ids: (string | null)[]) {
+  const wanted = ids.filter((id): id is string => Boolean(id));
+  if (wanted.length === 0) return new Set<string>();
+  const result = await db.query<{ user_id: string }>(
+    "select user_id::text from crm.workspace_members where workspace_id = $1 and user_id = any($2::uuid[])",
+    [workspaceId, wanted],
+  );
+  return new Set(result.rows.map((row) => row.user_id));
+}
+
+async function fillsFor<T extends { ownerId: string | null }>(db: Db, workspaceId: string, fills: Fill<T>[], keep: T, merge: T) {
+  const members = await currentMembers(db, workspaceId, [merge.ownerId]);
+  return fills.filter(
+    ({ field }) =>
+      isEmpty(field, keep[field]) && !isEmpty(field, merge[field]) && (field !== "ownerId" || members.has(String(merge.ownerId))),
+  );
 }
 
 function unionTags(keep: string[], merge: string[]) {
@@ -68,15 +84,11 @@ function unionTags(keep: string[], merge: string[]) {
 }
 
 function rowsMoved(raw: Record<string, unknown>) {
-  const moved: MovedRows = {};
+  const moved: Record<string, number> = {};
   for (const [table, value] of Object.entries(raw)) {
-    if (Array.isArray(value)) moved[table] = value.map(String);
+    if (typeof value === "number") moved[table] = value;
   }
   return moved;
-}
-
-function countsOf(moved: MovedRows) {
-  return Object.fromEntries(Object.entries(moved).map(([table, ids]) => [table, ids.length]));
 }
 
 function mergeFailure(error: unknown): never {
@@ -139,6 +151,22 @@ async function archive(db: Db, table: "companies" | "contacts", workspaceId: str
   await db.query(`update crm.${table} set archived_at = now() where id = $1 and workspace_id = $2`, [id, workspaceId]);
 }
 
+async function recordArchived(
+  db: Db,
+  actor: Actor,
+  entity: "company" | "contact",
+  mergedId: string,
+  keepId: string,
+  archivedAt: string | null,
+  provenance: Provenance,
+) {
+  await recordAudit(db, actor, `${entity}.archived`, entity, mergedId, provenance, {
+    mergedInto: keepId,
+    before: { archivedAt: null },
+    after: { archivedAt },
+  });
+}
+
 function beforeFields<T>(fills: Fill<T>[], record: T) {
   return Object.fromEntries(fills.map(({ field }) => [field, record[field] ?? null]));
 }
@@ -162,7 +190,7 @@ export async function mergeCompanies(
       const keep = await readCompanyInDb(db, keepId, actor.workspaceId);
       const merge = await readCompanyInDb(db, mergeId, actor.workspaceId);
       if (!keep || !merge) throw new CrmError("not_found", "Company not found.", 404);
-      const fills = fillsFor(COMPANY_FILLS, keep, merge);
+      const fills = await fillsFor(db, actor.workspaceId, COMPANY_FILLS, keep, merge);
       const tags = unionTags(keep.tags, merge.tags);
       await archive(db, "companies", actor.workspaceId, mergeId);
       await copyColumns(
@@ -185,7 +213,6 @@ export async function mergeCompanies(
         keptName: keep.name,
         mergedName: merge.name,
         moved,
-        counts: countsOf(moved),
         webState: raw.company_web_state ?? "none",
         filled,
         tagsAdded: tags.added,
@@ -199,20 +226,22 @@ export async function mergeCompanies(
           merged: { archivedAt: merged.archivedAt },
         },
       });
-      return { kept, merged, moved: countsOf(moved), filled, tagsAdded: tags.added };
+      await recordArchived(db, actor, "company", mergeId, keepId, merged.archivedAt, provenance);
+      return { kept, merged, moved, filled, tagsAdded: tags.added };
     },
   );
 }
 
 function mergedNotes(keep: Contact, merge: Contact) {
-  const parts = [keep.notes?.trim() ?? ""];
+  const current = keep.notes?.trim() ?? "";
+  const parts = [current];
   const extra = merge.notes?.trim();
-  if (extra && extra !== parts[0]) parts.push(extra);
+  if (extra && extra !== current) parts.push(extra);
   const keepEmail = keep.email ? canonicalEmail(keep.email) : null;
   const mergeEmail = merge.email ? canonicalEmail(merge.email) : null;
   if (keepEmail && mergeEmail && keepEmail !== mergeEmail) parts.push(`Other email: ${merge.email}`);
   const notes = parts.filter(Boolean).join("\n\n").slice(0, NOTES_LIMIT);
-  return notes === (keep.notes ?? "") ? null : notes;
+  return notes === current ? null : notes;
 }
 
 export async function mergeContacts(
@@ -234,7 +263,7 @@ export async function mergeContacts(
       const keep = await readContactInDb(db, keepId, actor.workspaceId);
       const merge = await readContactInDb(db, mergeId, actor.workspaceId);
       if (!keep || !merge) throw new CrmError("not_found", "Contact not found.", 404);
-      const fills = fillsFor(CONTACT_FILLS, keep, merge);
+      const fills = await fillsFor(db, actor.workspaceId, CONTACT_FILLS, keep, merge);
       const tags = unionTags(keep.tags, merge.tags);
       const notes = mergedNotes(keep, merge);
       await archive(db, "contacts", actor.workspaceId, mergeId);
@@ -253,7 +282,6 @@ export async function mergeContacts(
         keptName: keep.name,
         mergedName: merge.name,
         moved,
-        counts: countsOf(moved),
         filled,
         tagsAdded: tags.added,
         tagsDropped: tags.dropped,
@@ -266,7 +294,8 @@ export async function mergeContacts(
           merged: { archivedAt: merged.archivedAt },
         },
       });
-      return { kept, merged, moved: countsOf(moved), filled, tagsAdded: tags.added };
+      await recordArchived(db, actor, "contact", mergeId, keepId, merged.archivedAt, provenance);
+      return { kept, merged, moved, filled, tagsAdded: tags.added };
     },
   );
 }
