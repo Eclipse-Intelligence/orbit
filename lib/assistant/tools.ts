@@ -79,7 +79,7 @@ import { isRelationshipLabel, RELATIONSHIP_LABELS, RELATIONSHIP_META } from "@/l
 import { relationshipsFor } from "@/lib/crm/relationship-signals";
 import { describeUndo, listRecentChanges, undoAuditEvent } from "@/lib/crm/undo";
 import { addTags, listTags, removeTags } from "@/lib/crm/tags";
-import { archiveTask, completeTask, listTasks, updateTask } from "@/lib/crm/tasks";
+import { archiveTask, listTasks, updateTask } from "@/lib/crm/tasks";
 import { logActivity } from "@/lib/crm/activities";
 import {
   ACTIVITY_TYPES,
@@ -397,7 +397,7 @@ const TASK_FIELDS = {
 
 const LIFECYCLE_PARAM = {
   type: "string",
-  description: "Built in: lead, prospect, customer, churned. Any other name, such as Consultant or Personal, works too; reuse the workspace's existing ones from list_lifecycles where they fit.",
+  description: "Built in: lead, prospect, customer, churned. Any other name, such as Consultant or Personal, works too; reuse the workspace's existing ones from get_settings where they fit.",
 };
 
 const COMPANY_FIELDS = {
@@ -441,16 +441,31 @@ const OPPORTUNITY_FIELDS = {
 const BULK_COMPANY_KEYS = ["ownerId", "lifecycle", "industry", "sizeCategory", "source"];
 const BULK_CONTACT_KEYS = ["ownerId", "companyId", "jobTitle", "source"];
 
-function pickSchema(fields: Record<string, JsonSchema>, keys: string[]) {
-  return Object.fromEntries(keys.map((key) => [key, fields[key]]));
-}
-
 async function bulkUpdate(actor: UserActor, scope: Scope, ids: unknown, update: (id: string) => Promise<unknown>) {
   const outcomes = await runBulk(actor, scope, ids, update);
   const failed = outcomes.flatMap((outcome) => (outcome.ok ? [] : [{ id: outcome.id, error: outcome.error }]));
   const updated = outcomes.length - failed.length;
   if (updated === 0) return { error: failed[0]?.error ?? "Nothing was updated.", failed };
   return { updated, failed };
+}
+
+function isMany(ids: unknown) {
+  return Array.isArray(ids) && ids.length > 0;
+}
+
+function bulkOnly(args: Args, oneKey: string, manyKey: string, allowed: string[], one: string, many: string) {
+  if (str(args[oneKey])) {
+    throw new CrmError("invalid_input", `Pass ${oneKey} for one ${one} or ${manyKey} for many ${many}, not both.`, 400, { field: oneKey });
+  }
+  const others = Object.keys(args).filter((key) => key !== manyKey && key !== oneKey && args[key] !== undefined && args[key] !== null && args[key] !== "" && !allowed.includes(key));
+  if (others.length > 0) {
+    throw new CrmError(
+      "invalid_input",
+      `${manyKey} can only change ${allowed.join(", ")}. Change ${others.join(", ")} one ${one} at a time with ${oneKey}.`,
+      400,
+      { field: others[0] },
+    );
+  }
 }
 
 function pick(args: Args, keys: string[]) {
@@ -919,13 +934,6 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     run: async (actor) => ({ senders: (await composeAccounts(actor)).map((item, index) => ({ email: item.email, primary: index === 0 })) }),
   },
   {
-    name: "list_lifecycles",
-    label: "Checking lifecycles",
-    description: "The lifecycles companies can have (built in and the workspace's own, such as Consultant) with how many companies each has.",
-    parameters: { type: "object", properties: {} },
-    run: async (actor) => ({ lifecycles: await listLifecycles(actor) }),
-  },
-  {
     name: "list_workflows",
     label: "Looking at workflows",
     description: "The user's workflows (with on or off status), workflows teammates shared as templates, and Orbit's starter templates (by key).",
@@ -1160,7 +1168,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
   {
     name: "list_email_attachments",
     label: "Checking attachments",
-    description: "The files attached to an email (name, type and size), with ids for add_email_attachment_to_knowledge.",
+    description: "The files attached to an email (name, type and size), with ids for add_to_knowledge.",
     parameters: { type: "object", properties: { emailId: idParam("Email id from search_email or get_email_thread.") }, required: ["emailId"] },
     run: async (actor, args) => ({
       attachments: (await listMailAttachments(actor, required(args.emailId, "An email id"))).map((item) => ({
@@ -1275,40 +1283,40 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     label: "Saving an email template",
     write: true,
     description:
-      "Create an email template for the whole team, or update one when id is given (only the fields you pass change). Plain text. Tokens like {{first_name}} are filled in per person; copy the ones list_email_templates shows.",
+      "Create an email template for the whole team, or update one when id is given (only the fields you pass change). Plain text. Tokens like {{first_name}} are filled in per person; copy the ones list_email_templates shows. archived true with id archives the template so it no longer appears in the list; nothing is deleted.",
     parameters: {
       type: "object",
       properties: {
-        id: idParam("Template id from list_email_templates, to update."),
+        id: idParam("Template id from list_email_templates, to update or archive."),
         name: { type: "string" },
         subject: { type: "string" },
         body: { type: "string" },
         tags: { type: "array", items: { type: "string" } },
+        archived: { type: "boolean", description: "True archives the template. Only with id, and on its own without other changes." },
       },
     },
-    describe: (args, name) => ({
-      title: optionalStr(args.id) ? titled("Update template", name(args.id)) : `Add template: ${str(args.name)}`,
-      lines: fieldLines(args, optionalStr(args.id) ? { name: "Name", subject: "Subject", tags: "Tags", body: "Message" } : { subject: "Subject", tags: "Tags", body: "Message" }),
-    }),
+    describe: (args, name) => {
+      if (args.archived === true) return { title: titled("Archive template", name(args.id)), lines: [] };
+      return {
+        title: optionalStr(args.id) ? titled("Update template", name(args.id)) : `Add template: ${str(args.name)}`,
+        lines: fieldLines(args, optionalStr(args.id) ? { name: "Name", subject: "Subject", tags: "Tags", body: "Message" } : { subject: "Subject", tags: "Tags", body: "Message" }),
+      };
+    },
     run: async (actor, args) => {
       const id = optionalStr(args.id);
       const input = onlyFields(args, ["name", "subject", "body", "tags"]);
+      if (args.archived === true) {
+        if (!id) throw new CrmError("invalid_input", "Pass the template id from list_email_templates to archive it.", 400, { field: "id" });
+        if (Object.keys(input).length > 0) {
+          throw new CrmError("invalid_input", "Archive a template on its own: pass only id and archived, then make any other change separately.", 400, { field: "archived" });
+        }
+        return { template: await archiveEmailTemplate(actor, id, { operation: "archive_email_template", ...PROVENANCE }) };
+      }
       const template = id
         ? await updateEmailTemplate(actor, id, input, { operation: "update_email_template", ...PROVENANCE })
         : await createEmailTemplate(actor, input, { operation: "create_email_template", ...PROVENANCE });
       return { template };
     },
-  },
-  {
-    name: "archive_email_template",
-    label: "Archiving an email template",
-    write: true,
-    description: "Archive an email template so it no longer appears in the list. Nothing is deleted.",
-    parameters: { type: "object", properties: { templateId: idParam("Template id from list_email_templates.") }, required: ["templateId"] },
-    describe: (args, name) => ({ title: titled("Archive template", name(args.templateId)), lines: [] }),
-    run: async (actor, args) => ({
-      template: await archiveEmailTemplate(actor, required(args.templateId, "A template id"), { operation: "archive_email_template", ...PROVENANCE }),
-    }),
   },
   {
     name: "read_web_page",
@@ -1444,53 +1452,45 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     label: "Adding to Knowledge",
     write: true,
     description:
-      "Add links to Knowledge for a company, or for Eclipse (the business's own material): web pages, files by link (PDF, Word, PowerPoint, Excel), YouTube videos and podcast episodes. Orbit reads and indexes them in the background. For a whole website, list its pages with map_website and pass the ones the user wants.",
+      "Add to Knowledge for a company, or for Eclipse (the business's own material). Pass one source per call: urls for links (web pages, files by link such as PDF, Word, PowerPoint or Excel, YouTube videos and podcast episodes), or emailId for a file attached to one of the user's emails (find it with list_email_attachments). Orbit reads and indexes it in the background. For a whole website, list its pages with map_website and pass the ones the user wants.",
     parameters: {
       type: "object",
       properties: {
-        urls: { type: "array", items: { type: "string" }, description: "One or more links." },
+        urls: { type: "array", items: { type: "string" }, description: "One or more links. Leave out when adding an email attachment." },
+        emailId: idParam("Email id from search_email or get_email_thread, to add one of its attachments. Leave out when adding links."),
+        attachment: { type: "string", description: "With emailId: the file's name from list_email_attachments. Leave out when the email has one file." },
         companyId: idParam("Company the knowledge is about."),
         eclipse: { type: "boolean", description: "True for Eclipse's own knowledge instead of a company's." },
       },
-      required: ["urls"],
     },
     describe: (args, name) => {
+      const owner = args.eclipse === true ? "Eclipse" : name(args.companyId);
+      if (str(args.emailId)) {
+        return {
+          title: `Add an email attachment to Knowledge for ${owner}`,
+          lines: [`File: ${str(args.attachment) && str(args.attachment).length <= 120 ? str(args.attachment) : "the attachment"}`, `From the email: ${name(args.emailId)}`],
+        };
+      }
       const urls = Array.isArray(args.urls) ? args.urls.map(str).filter(Boolean) : [];
       return {
-        title: `Add ${urls.length === 1 ? "a link" : `${urls.length} links`} to Knowledge for ${args.eclipse === true ? "Eclipse" : name(args.companyId)}`,
+        title: `Add ${urls.length === 1 ? "a link" : `${urls.length} links`} to Knowledge for ${owner}`,
         lines: [...urls.slice(0, 12), urls.length > 12 ? `and ${urls.length - 12} more` : ""].filter(Boolean),
       };
     },
     run: async (actor, args) => {
+      const emailId = str(args.emailId);
+      const hasUrls = Array.isArray(args.urls) && args.urls.length > 0;
+      if (emailId && hasUrls) {
+        throw new CrmError("invalid_input", "Add links or an email attachment, not both. Make one add_to_knowledge call for each.", 400, { field: "urls" });
+      }
+      if (!emailId && !hasUrls) throw new CrmError("invalid_input", "Pass urls to add links, or emailId to add a file from an email.", 400, { field: "urls" });
       const target = targetFrom({ companyId: args.companyId, eclipse: args.eclipse });
-      const { ids, skipped } = await addKnowledgePages(actor, target, args.urls);
-      scheduleIndexing(actor, ids);
-      return { added: ids.length, alreadyThere: skipped, ids, href: "companyId" in target ? companyHref(target.companyId) : "/settings/knowledge" };
-    },
-  },
-  {
-    name: "add_email_attachment_to_knowledge",
-    label: "Adding an attachment to Knowledge",
-    write: true,
-    description:
-      "Add a file attached to one of the user's emails to Knowledge for a company, or for Eclipse. Orbit reads its text and indexes it in the background. Find the file with list_email_attachments.",
-    parameters: {
-      type: "object",
-      properties: {
-        emailId: idParam("Email id from search_email or get_email_thread."),
-        attachment: { type: "string", description: "The file's name from list_email_attachments. Leave out when the email has one file." },
-        companyId: idParam("Company the file is about."),
-        eclipse: { type: "boolean", description: "True for Eclipse's own knowledge instead of a company's." },
-      },
-      required: ["emailId"],
-    },
-    describe: (args, name) => ({
-      title: `Add to Knowledge for ${args.eclipse === true ? "Eclipse" : name(args.companyId)}`,
-      lines: [`File: ${str(args.attachment) && str(args.attachment).length <= 120 ? str(args.attachment) : "the attachment"}`, `From the email: ${name(args.emailId)}`],
-    }),
-    run: async (actor, args) => {
-      const emailId = required(args.emailId, "An email id");
-      const target = targetFrom({ companyId: args.companyId, eclipse: args.eclipse });
+      const href = "companyId" in target ? companyHref(target.companyId) : "/settings/knowledge";
+      if (!emailId) {
+        const { ids, skipped } = await addKnowledgePages(actor, target, args.urls);
+        scheduleIndexing(actor, ids);
+        return { added: ids.length, alreadyThere: skipped, ids, href };
+      }
       const files = await listMailAttachments(actor, emailId);
       const wanted = str(args.attachment);
       const picked = wanted
@@ -1503,11 +1503,11 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         return { error: `Say which file. The email has: ${files.map((file) => file.name).join(", ")}.` };
       }
       const { item, created } = await addMailAttachmentToKnowledge(actor, emailId, picked.id, target, fetch, {
-        operation: "add_email_attachment_to_knowledge",
+        operation: "add_knowledge_attachment",
         ...PROVENANCE,
       });
       if (created) scheduleIndexing(actor, [item.id]);
-      return { added: created, alreadyThere: !created, item: withKnowledge(item), href: "companyId" in target ? companyHref(target.companyId) : "/settings/knowledge" };
+      return { added: created, alreadyThere: !created, item: withKnowledge(item), href };
     },
   },
   {
@@ -1721,10 +1721,11 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
   {
     name: "get_settings",
     label: "Checking settings",
-    description: "Your meeting link, your email addresses, the booking page, and the status of Microsoft mail and calendar, ClickUp and Granola.",
+    description:
+      "Your meeting link, your email addresses, the booking page, the status of Microsoft mail and calendar, ClickUp and Granola, and the lifecycles companies can have (built in and the workspace's own, such as Consultant) with how many companies each has.",
     parameters: { type: "object", properties: {} },
     run: async (actor) => {
-      const [meetingLink, emails, booking, mailbox, calendar, clickup, picker, granola] = await Promise.all([
+      const [meetingLink, emails, booking, mailbox, calendar, clickup, picker, granola, lifecycles] = await Promise.all([
         getMeetingLink(actor),
         getMyEmails(actor),
         getBookingPage(actor),
@@ -1733,6 +1734,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         getClickUpState(actor),
         getClickUpPicker(actor),
         getGranolaStatus(actor),
+        listLifecycles(actor),
       ]);
       return {
         meetingLink,
@@ -1756,6 +1758,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
           lastError: granola.lastError,
           instantSync: granola.webhookEnabled,
         },
+        lifecycles,
       };
     },
   },
@@ -1807,14 +1810,18 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     name: "update_task",
     label: "Updating a task",
     write: true,
-    description: "Change a task's title, detail, due date, reminder, priority or assignee. ClickUp is updated too.",
+    description: "Change a task's title, detail, due date, reminder, priority or assignee, or mark it done with completed true (false reopens it). ClickUp is updated too.",
     parameters: {
       type: "object",
-      properties: { taskId: idParam("Task id."), ...TASK_FIELDS },
+      properties: {
+        taskId: idParam("Task id."),
+        ...TASK_FIELDS,
+        completed: { type: "boolean", description: "True marks the task done; false reopens a done task." },
+      },
       required: ["taskId"],
     },
     describe: (args, name) => ({
-      title: titled("Update task", name(args.taskId)),
+      title: titled(args.completed === true ? "Complete task" : args.completed === false ? "Reopen task" : "Update task", name(args.taskId)),
       lines: [
         ...fieldLines(args, { title: "Title", dueAt: "Due", remindMinutes: "Reminder", priority: "Priority", description: "Detail" }),
         ...fieldLines(args, { ownerId: "Assignee" }, name),
@@ -1822,6 +1829,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     }),
     run: async (actor, args) => {
       const id = required(args.taskId, "A task id");
+      const completing = args.completed === true;
       const updated = await updateTask(
         actor,
         id,
@@ -1832,38 +1840,12 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
           ...(args.remindMinutes !== undefined ? { remindMinutes: typeof args.remindMinutes === "number" ? args.remindMinutes : null } : {}),
           ...(args.priority !== undefined ? { priority: oneOf(args.priority, ["low", "normal", "high"] as const) } : {}),
           ...(optionalStr(args.ownerId) ? { ownerId: str(args.ownerId) } : {}),
+          ...(typeof args.completed === "boolean" ? { completed: args.completed } : {}),
         },
-        { provenance: { operation: "update_task", ...PROVENANCE } },
+        { provenance: { operation: completing ? "complete_task" : "update_task", ...PROVENANCE } },
       );
       await pushIfLinked(actor, updated.body.task);
       return { task: withTask(updated.body.task) };
-    },
-  },
-  {
-    name: "complete_task",
-    label: "Completing a task",
-    write: true,
-    description: "Mark a task as done. ClickUp is updated too.",
-    parameters: { type: "object", properties: { taskId: idParam("Task id.") }, required: ["taskId"] },
-    describe: (args, name) => ({ title: titled("Mark task done", name(args.taskId)), lines: [] }),
-    run: async (actor, args) => {
-      const done = await completeTask(actor, required(args.taskId, "A task id"), {
-        provenance: { operation: "complete_task", ...PROVENANCE },
-      });
-      await pushIfLinked(actor, done.body.task);
-      return { task: withTask(done.body.task) };
-    },
-  },
-  {
-    name: "archive_task",
-    label: "Archiving a task",
-    write: true,
-    description: "Archive a task that isn't needed any more, so it leaves task lists. Nothing is deleted, and ClickUp isn't changed.",
-    parameters: { type: "object", properties: { taskId: idParam("Task id.") }, required: ["taskId"] },
-    describe: (args, name) => ({ title: titled("Archive task", name(args.taskId)), lines: [] }),
-    run: async (actor, args) => {
-      const archived = await archiveTask(actor, required(args.taskId, "A task id"), { provenance: { operation: "archive_task", ...PROVENANCE } });
-      return { task: withTask(archived.body.task) };
     },
   },
   {
@@ -1996,50 +1978,47 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     label: "Updating a company",
     write: true,
     description:
-      "Change a company's details. Only the fields you pass change. health is normally set from each summarised call; set it by hand only when the user asks, with a one-sentence healthReason.",
+      `Change a company's details with companyId, or make the same change to many companies at once with companyIds (up to ${BULK_LIMIT}; owner, lifecycle, industry, size and source only). Use companyIds instead of many single calls. Only the fields you pass change. health is normally set from each summarised call; set it by hand only when the user asks, with a one-sentence healthReason.`,
     parameters: {
       type: "object",
       properties: {
-        companyId: idParam("Company id."),
+        companyId: idParam("Company id, to change one company."),
+        companyIds: { type: "array", items: { type: "string" }, description: `Company ids, to make the same change to many (up to ${BULK_LIMIT}).` },
         ...COMPANY_FIELDS,
-        health: { type: "string", enum: [...ACCOUNT_HEALTH, "none"], description: "healthy, watch or at_risk; none clears it." },
+        health: { type: "string", enum: [...ACCOUNT_HEALTH, "none"], description: "healthy, watch or at_risk; none clears it. Only with companyId." },
         healthReason: { type: "string" },
       },
-      required: ["companyId"],
     },
-    describe: (args, name) => ({
-      title: titled("Update company", name(args.companyId)),
-      lines: fieldLines(args, { name: "Name", domain: "Domain", website: "Website", industry: "Industry", lifecycle: "Lifecycle", health: "Health", healthReason: "Why", ownerId: "Owner", description: "About" }, name),
-    }),
+    describe: (args, name) => {
+      if (isMany(args.companyIds)) {
+        const ids = strings(args.companyIds);
+        return {
+          title: `Update ${ids.length} ${ids.length === 1 ? "company" : "companies"}`,
+          lines: [...fieldLines(args, { ownerId: "Owner", lifecycle: "Lifecycle", industry: "Industry", sizeCategory: "Size", source: "Source" }, name), nameList(ids, name, "Companies")],
+        };
+      }
+      return {
+        title: titled("Update company", name(args.companyId)),
+        lines: fieldLines(
+          args,
+          { name: "Name", domain: "Domain", website: "Website", industry: "Industry", sizeCategory: "Size", lifecycle: "Lifecycle", health: "Health", healthReason: "Why", ownerId: "Owner", source: "Source", description: "About" },
+          name,
+        ),
+      };
+    },
     run: async (actor, args) => {
+      if (isMany(args.companyIds)) {
+        bulkOnly(args, "companyId", "companyIds", BULK_COMPANY_KEYS, "company", "companies");
+        return bulkUpdate(actor, "companies:write", args.companyIds, (id) =>
+          updateCompany(actor, id, pick(args, BULK_COMPANY_KEYS), { provenance: { operation: "update_company", ...PROVENANCE } }),
+        );
+      }
       const health = args.health === "none" ? { health: null } : pick(args, ["health", "healthReason"]);
-      const updated = await updateCompany(actor, required(args.companyId, "A company id"), { ...pick(args, Object.keys(COMPANY_FIELDS)), ...health }, {
+      const updated = await updateCompany(actor, required(args.companyId, "A companyId, or companyIds for many companies,"), { ...pick(args, Object.keys(COMPANY_FIELDS)), ...health }, {
         provenance: { operation: "update_company", ...PROVENANCE },
       });
       return { company: withCompany(updated.body.company) };
     },
-  },
-  {
-    name: "update_companies",
-    label: "Updating companies",
-    write: true,
-    description: `Make the same change to many companies at once, for example a new owner or lifecycle. Up to ${BULK_LIMIT} companies per call. Use this instead of many update_company calls.`,
-    parameters: {
-      type: "object",
-      properties: { companyIds: { type: "array", items: { type: "string" } }, ...pickSchema(COMPANY_FIELDS, BULK_COMPANY_KEYS) },
-      required: ["companyIds"],
-    },
-    describe: (args, name) => {
-      const ids = strings(args.companyIds);
-      return {
-        title: `Update ${ids.length} ${ids.length === 1 ? "company" : "companies"}`,
-        lines: [...fieldLines(args, { ownerId: "Owner", lifecycle: "Lifecycle", industry: "Industry", sizeCategory: "Size", source: "Source" }, name), nameList(ids, name, "Companies")],
-      };
-    },
-    run: (actor, args) =>
-      bulkUpdate(actor, "companies:write", args.companyIds, (id) =>
-        updateCompany(actor, id, pick(args, BULK_COMPANY_KEYS), { provenance: { operation: "update_companies", ...PROVENANCE } }),
-      ),
   },
   {
     name: "merge_companies",
@@ -2097,18 +2076,40 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     name: "update_contact",
     label: "Updating a contact",
     write: true,
-    description: "Change a person's details. Only the fields you pass change.",
-    parameters: { type: "object", properties: { contactId: idParam("Contact id."), ...CONTACT_FIELDS }, required: ["contactId"] },
-    describe: (args, name) => ({
-      title: titled("Update contact", name(args.contactId)),
-      lines: fieldLines(
-        args,
-        { firstName: "First name", lastName: "Last name", email: "Email", phone: "Phone", jobTitle: "Job title", companyId: "Company", ownerId: "Owner", notes: "Notes" },
-        name,
-      ),
-    }),
+    description: `Change a person's details with contactId, or make the same change to many people at once with contactIds (up to ${BULK_LIMIT}; owner, company, job title and source only). Use contactIds instead of many single calls. Only the fields you pass change.`,
+    parameters: {
+      type: "object",
+      properties: {
+        contactId: idParam("Contact id, to change one person."),
+        contactIds: { type: "array", items: { type: "string" }, description: `Contact ids, to make the same change to many (up to ${BULK_LIMIT}).` },
+        ...CONTACT_FIELDS,
+      },
+    },
+    describe: (args, name) => {
+      if (isMany(args.contactIds)) {
+        const ids = strings(args.contactIds);
+        return {
+          title: `Update ${ids.length} ${ids.length === 1 ? "person" : "people"}`,
+          lines: [...fieldLines(args, { ownerId: "Owner", companyId: "Company", jobTitle: "Job title", source: "Source" }, name), nameList(ids, name, "People")],
+        };
+      }
+      return {
+        title: titled("Update contact", name(args.contactId)),
+        lines: fieldLines(
+          args,
+          { firstName: "First name", lastName: "Last name", email: "Email", phone: "Phone", jobTitle: "Job title", linkedinUrl: "LinkedIn", companyId: "Company", ownerId: "Owner", source: "Source", notes: "Notes" },
+          name,
+        ),
+      };
+    },
     run: async (actor, args) => {
-      const updated = await updateContact(actor, required(args.contactId, "A contact id"), pick(args, Object.keys(CONTACT_FIELDS)), {
+      if (isMany(args.contactIds)) {
+        bulkOnly(args, "contactId", "contactIds", BULK_CONTACT_KEYS, "person", "people");
+        return bulkUpdate(actor, "contacts:write", args.contactIds, (id) =>
+          updateContact(actor, id, pick(args, BULK_CONTACT_KEYS), { provenance: { operation: "update_contact", ...PROVENANCE } }),
+        );
+      }
+      const updated = await updateContact(actor, required(args.contactId, "A contactId, or contactIds for many people,"), pick(args, Object.keys(CONTACT_FIELDS)), {
         provenance: { operation: "update_contact", ...PROVENANCE },
       });
       return { contact: withContact(updated.body.contact) };
@@ -2172,28 +2173,6 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       );
       return { relationship: (await relationshipsFor(actor, target, [id]))[id], href: target === "company" ? companyHref(id) : contactHref(id) };
     },
-  },
-  {
-    name: "update_contacts",
-    label: "Updating people",
-    write: true,
-    description: `Make the same change to many people at once, for example a new owner or company. Up to ${BULK_LIMIT} people per call. Use this instead of many update_contact calls.`,
-    parameters: {
-      type: "object",
-      properties: { contactIds: { type: "array", items: { type: "string" } }, ...pickSchema(CONTACT_FIELDS, BULK_CONTACT_KEYS) },
-      required: ["contactIds"],
-    },
-    describe: (args, name) => {
-      const ids = strings(args.contactIds);
-      return {
-        title: `Update ${ids.length} ${ids.length === 1 ? "person" : "people"}`,
-        lines: [...fieldLines(args, { ownerId: "Owner", companyId: "Company", jobTitle: "Job title", source: "Source" }, name), nameList(ids, name, "People")],
-      };
-    },
-    run: (actor, args) =>
-      bulkUpdate(actor, "contacts:write", args.contactIds, (id) =>
-        updateContact(actor, id, pick(args, BULK_CONTACT_KEYS), { provenance: { operation: "update_contacts", ...PROVENANCE } }),
-      ),
   },
   {
     name: "merge_contacts",
@@ -2277,13 +2256,14 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     name: "archive_records",
     label: "Archiving records",
     write: true,
-    description: `Archive companies, people or opportunities by id, for duplicates or records the user no longer wants. Nothing is deleted. Up to ${BULK_LIMIT} of each per call. To take a company off a board, use remove_from_board.`,
+    description: `Archive companies, people, opportunities or tasks by id, for duplicates or records the user no longer wants. Nothing is deleted. Archived tasks leave task lists, and ClickUp isn't changed. Up to ${BULK_LIMIT} of each per call. To take a company off a board, use remove_from_board.`,
     parameters: {
       type: "object",
       properties: {
         companyIds: { type: "array", items: { type: "string" } },
         contactIds: { type: "array", items: { type: "string" } },
         opportunityIds: { type: "array", items: { type: "string" } },
+        taskIds: { type: "array", items: { type: "string" }, description: "Task ids from list_tasks." },
       },
     },
     describe: (args, name) => {
@@ -2291,11 +2271,16 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         { ids: [...new Set(strings(args.companyIds))], noun: "Companies" },
         { ids: [...new Set(strings(args.contactIds))], noun: "People" },
         { ids: [...new Set(strings(args.opportunityIds))], noun: "Opportunities" },
+        { ids: [...new Set(strings(args.taskIds))], noun: "Tasks" },
       ].filter((group) => group.ids.length > 0);
       const total = groups.reduce((sum, group) => sum + group.ids.length, 0);
       return {
         title: `Archive ${total} ${total === 1 ? "record" : "records"}`,
-        lines: [...groups.map((group) => nameList(group.ids, name, group.noun)), "Nothing is deleted."],
+        lines: [
+          ...groups.map((group) => nameList(group.ids, name, group.noun)),
+          "Nothing is deleted.",
+          strings(args.taskIds).length > 0 ? "ClickUp isn't changed." : "",
+        ],
       };
     },
     run: async (actor, args) => {
@@ -2304,6 +2289,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         { ids: strings(args.companyIds), scope: "companies:write" as const, archive: (id: string) => archiveCompany(actor, id, options) },
         { ids: strings(args.contactIds), scope: "contacts:write" as const, archive: (id: string) => archiveContact(actor, id, options) },
         { ids: strings(args.opportunityIds), scope: "opportunities:write" as const, archive: (id: string) => archiveOpportunity(actor, id, options) },
+        { ids: strings(args.taskIds), scope: "tasks:write" as const, archive: (id: string) => archiveTask(actor, id, options) },
       ].filter((group) => group.ids.length > 0);
       if (groups.length === 0) return { error: "Say which records, using their ids." };
       const outcomes = [];
@@ -3687,6 +3673,28 @@ async function recentFiledEmail(actor: UserActor, contactId: string | null, comp
 
 export const TOOL_BY_NAME = new Map(ASSISTANT_TOOLS.map((tool) => [tool.name, tool]));
 
+const MERGED_TOOLS: Record<string, { tool: string; args: (args: Args) => Args }> = {
+  update_companies: { tool: "update_company", args: (args) => args },
+  update_contacts: { tool: "update_contact", args: (args) => args },
+  complete_task: { tool: "update_task", args: (args) => ({ taskId: args.taskId, completed: true }) },
+  archive_task: { tool: "archive_records", args: (args) => ({ taskIds: str(args.taskId) ? [str(args.taskId)] : [] }) },
+  archive_email_template: { tool: "save_email_template", args: (args) => ({ id: args.templateId, archived: true }) },
+  add_email_attachment_to_knowledge: { tool: "add_to_knowledge", args: ({ emailId, attachment, companyId, eclipse }) => ({ emailId, attachment, companyId, eclipse }) },
+  list_lifecycles: { tool: "get_settings", args: () => ({}) },
+};
+
+function resolveTool(name: string, args: Args = {}) {
+  const merged = Object.hasOwn(MERGED_TOOLS, name) ? MERGED_TOOLS[name] : undefined;
+  const tool = TOOL_BY_NAME.get(merged?.tool ?? name);
+  if (!tool) return null;
+  const input = merged ? merged.args(args) : args;
+  return { tool, args: Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined)) };
+}
+
+export function findTool(name: string) {
+  return resolveTool(name)?.tool;
+}
+
 export const APPROVAL_NOTE = "Needs the user's approval: proposing it shows them a card, and it only runs if they confirm.";
 
 export function toolDescription(tool: Pick<AssistantTool, "description" | "write">) {
@@ -3777,10 +3785,11 @@ function collectIds(value: unknown, into: Set<string>) {
 
 async function toolDetails(actor: UserActor, args: Args[], tools: string[], names: Map<string, string>) {
   for (let index = 0; index < tools.length; index += 1) {
-    const details = TOOL_BY_NAME.get(tools[index])?.details;
-    if (!details) continue;
+    const resolved = resolveTool(tools[index], args[index] ?? {});
+    const details = resolved?.tool.details;
+    if (!resolved || !details) continue;
     try {
-      for (const [key, value] of Object.entries(await details(actor, args[index] ?? {}))) if (value) names.set(key, value);
+      for (const [key, value] of Object.entries(await details(actor, resolved.args))) if (value) names.set(key, value);
     } catch {}
   }
 }
@@ -3911,20 +3920,22 @@ export async function recordNames(actor: UserActor, args: Args[], tools: string[
 }
 
 export function describeAction(name: string, args: Args, names: Map<string, string> = new Map()) {
-  const tool = TOOL_BY_NAME.get(name);
-  if (!tool?.describe) return { title: tool?.label ?? name, lines: [] };
+  const resolved = resolveTool(name, args);
+  const tool = resolved?.tool;
+  if (!resolved || !tool?.describe) return { title: tool?.label ?? name, lines: [] };
   const lookup: Names = (id) => {
     const key = str(id);
     return names.get(key) ?? (isUuid(key) ? "Unknown record" : key);
   };
-  const described = tool.describe(args, lookup);
+  const described = tool.describe(resolved.args, lookup);
   return { title: described.title, lines: described.lines.filter(Boolean) };
 }
 
 export async function runTool(actor: UserActor, name: string, args: Args, options: { deadline?: number; callId?: string } = {}) {
-  const tool = TOOL_BY_NAME.get(name);
-  if (!tool) return { error: `There is no tool called ${name}.` };
-  const cleaned = dropStrayNulls(args, tool.parameters) as Args;
+  const resolved = resolveTool(name, args);
+  if (!resolved) return { error: `There is no tool called ${name}.` };
+  const { tool } = resolved;
+  const cleaned = dropStrayNulls(resolved.args, tool.parameters) as Args;
   const limit = Math.max(5_000, Math.min(TOOL_TIMEOUT_MS, (options.deadline ?? Date.now() + TOOL_TIMEOUT_MS) - Date.now()));
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<{ error: string }>((resolve) => {
@@ -3936,11 +3947,11 @@ export async function runTool(actor: UserActor, name: string, args: Args, option
   });
   try {
     const output = await Promise.race([tool.run(actor, cleaned, { callId: options.callId, deadline: tool.write ? options.deadline : Date.now() + limit }), late]);
-    return marked(name, output);
+    return marked(tool.name, output);
   } catch (error) {
     if (error instanceof CrmError) return { error: error.message, field: error.details?.field ?? null };
     if (error instanceof LinearError) return { error: error.message };
-    console.error(`Assistant tool ${name} failed`, error);
+    console.error(`Assistant tool ${tool.name} failed`, error);
     return { error: "That did not work. Try again or check the details." };
   } finally {
     clearTimeout(timer);
