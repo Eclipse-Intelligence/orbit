@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { AttachmentDownload, AttachmentLink } from "@/components/_common/attachment-viewer";
 import Button from "@/components/_ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/_ui/dropdown-menu";
 import { addAttachmentToKnowledgeAction } from "@/app/(crm)/knowledge";
@@ -87,38 +88,44 @@ export default function MessageAttachments({ messageId, companies = [] }: { mess
   return (
     <div className="flex flex-col gap-1.5">
       <ul aria-label="Attachments" className="flex flex-wrap gap-1.5">
-        {current.items.map((item) => (
-          <li key={item.id} className="flex items-center gap-0.5">
-            <a
-              href={`/api/mail/attachment?message=${encodeURIComponent(messageId)}&id=${encodeURIComponent(item.id)}`}
-              target="_blank"
-              rel="noreferrer"
-              className="ease-power3-out bg-white/[0.05] hover:bg-white/[0.08] text-foreground flex h-8 max-w-[18rem] items-center gap-2 rounded-full pr-3 pl-2.5 text-[13px] transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-            >
-              <PaperclipIcon aria-hidden className="text-subtle size-3 shrink-0" />
-              <span className="min-w-0 truncate">{item.name}</span>
-              <span className="caption-style text-subtle shrink-0">{size(item.size)}</span>
-            </a>
-            {readable(item) && (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="icon" aria-label={`Add ${item.name} to Knowledge`} title="Add to Knowledge" disabled={saving === `${messageId}|${item.id}`} className="size-8">
-                    <BookIcon aria-hidden className="size-3.5" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-56">
-                  <DropdownMenuLabel className="caption-style text-subtle px-2 py-1.5 font-normal">Add to Knowledge</DropdownMenuLabel>
-                  {companies.map((company) => (
-                    <DropdownMenuItem key={company.id} onSelect={() => void addToKnowledge(item, { companyId: company.id }, company.name)}>
-                      <span className="truncate">{company.name}</span>
-                    </DropdownMenuItem>
-                  ))}
-                  <DropdownMenuItem onSelect={() => void addToKnowledge(item, { eclipse: true }, "Eclipse")}>Eclipse</DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
-          </li>
-        ))}
+        {current.items.map((item) => {
+          const key = `${messageId}|${item.id}`;
+          const url = `/api/mail/attachment?message=${encodeURIComponent(messageId)}&id=${encodeURIComponent(item.id)}`;
+          const file = { name: item.name, contentType: item.contentType, url, downloadUrl: `${url}&download=1` };
+          const failed = (text: string) => setSaved({ key, text, failed: true });
+          return (
+            <li key={item.id} className="flex items-center gap-0.5">
+              <AttachmentLink
+                file={file}
+                onError={failed}
+                className="ease-power3-out bg-white/[0.05] hover:bg-white/[0.08] text-foreground flex h-8 max-w-[18rem] items-center gap-2 rounded-full pr-3 pl-2.5 text-[13px] transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+              >
+                <PaperclipIcon aria-hidden className="text-subtle size-3 shrink-0" />
+                <span className="min-w-0 truncate">{item.name}</span>
+                <span className="caption-style text-subtle shrink-0">{size(item.size)}</span>
+              </AttachmentLink>
+              <AttachmentDownload file={file} onError={failed} />
+              {readable(item) && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="icon" aria-label={`Add ${item.name} to Knowledge`} title="Add to Knowledge" disabled={saving === key} className="size-8">
+                      <BookIcon aria-hidden className="size-3.5" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-56">
+                    <DropdownMenuLabel className="caption-style text-subtle px-2 py-1.5 font-normal">Add to Knowledge</DropdownMenuLabel>
+                    {companies.map((company) => (
+                      <DropdownMenuItem key={company.id} onSelect={() => void addToKnowledge(item, { companyId: company.id }, company.name)}>
+                        <span className="truncate">{company.name}</span>
+                      </DropdownMenuItem>
+                    ))}
+                    <DropdownMenuItem onSelect={() => void addToKnowledge(item, { eclipse: true }, "Eclipse")}>Eclipse</DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
+            </li>
+          );
+        })}
       </ul>
       {saving?.startsWith(`${messageId}|`) && (
         <p role="status" className="caption-style text-subtle">

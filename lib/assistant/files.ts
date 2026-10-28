@@ -107,7 +107,7 @@ export function chatFileNote(files: ChatFile[]) {
   const lines = files.map(
     (file) => `- ${file.name} (${file.contentType}, ${shownSize(file.size)}, chat file id ${file.id}${isImage(file.name, file.contentType) ? ", an image you can't see" : ""})`,
   );
-  return `[Orbit note: the user attached ${files.length === 1 ? "this file" : "these files"} to the message. Read text with read_chat_file, add one to Knowledge with add_chat_file_to_knowledge, or attach one to an email by putting its id in attachmentIds.]\n${lines.join("\n")}`;
+  return `[Orbit note: the user attached ${files.length === 1 ? "this file" : "these files"} to the message. Read text with read_chat_file, add one to Knowledge with add_to_knowledge and chatFileId, or attach one to an email by putting its id in attachmentIds.]\n${lines.join("\n")}`;
 }
 
 async function ownFile(actor: UserActor, id: string) {

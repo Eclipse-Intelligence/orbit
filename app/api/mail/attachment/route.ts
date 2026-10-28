@@ -1,4 +1,5 @@
 import { getUserActor } from "@/lib/auth/user";
+import { contentDisposition, wantsDownload } from "@/lib/content-disposition";
 import { CrmError } from "@/lib/crm/errors";
 import { openMailAttachment } from "@/lib/mail/attachments";
 
@@ -14,12 +15,11 @@ export async function GET(request: Request) {
   try {
     const { item, body } = await openMailAttachment(actor, params.get("message") ?? "", params.get("id") ?? "");
     const type = item.contentType && /^[\w.+-]+\/[\w.+-]+$/.test(item.contentType) ? item.contentType : "application/octet-stream";
-    const inline = SAFE_INLINE.test(type) && params.get("download") !== "1";
-    const name = item.name.replace(/[\r\n"]/g, "_");
+    const inline = SAFE_INLINE.test(type) && !wantsDownload(params);
     return new Response(body, {
       headers: {
         "content-type": inline ? type : "application/octet-stream",
-        "content-disposition": `${inline ? "inline" : "attachment"}; filename="${name.replace(/[^\x20-\x7e]/g, "_")}"; filename*=UTF-8''${encodeURIComponent(name)}`,
+        "content-disposition": contentDisposition(inline ? "inline" : "attachment", item.name),
         "cache-control": "private, no-store",
         "x-content-type-options": "nosniff",
         "content-security-policy": "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox",

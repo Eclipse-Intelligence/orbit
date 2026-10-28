@@ -190,7 +190,7 @@ describe("chat files", () => {
     assert.match(read.error, /That file isn't in your chats/);
     const email = (await withFetch(env.fetchImpl, () => runTool(other, "send_email", { to: ["x@acme.test"], subject: "Hi", body: "Hi", attachmentIds: [id] }))) as { error: string };
     assert.match(email.error, /isn't in Knowledge, on the draft or in your chats/);
-    const filed = (await withFetch(env.fetchImpl, () => runTool(other, "add_chat_file_to_knowledge", { fileId: id, eclipse: true }))) as { error: string };
+    const filed = (await withFetch(env.fetchImpl, () => runTool(other, "add_to_knowledge", { chatFileId: id, eclipse: true }))) as { error: string };
     assert.match(filed.error, /That file isn't in your chats/);
     await assert.rejects(sendWith(other, "Read this", [id]), /A file has expired/);
     const names = await recordNames(other, [{ fileId: id }]);
@@ -204,12 +204,12 @@ describe("chat files", () => {
     const company = (await createCompany(owner, { name: "Acme", domain: "acme-chat.test" })).body.company;
     const bytes = new TextEncoder().encode("Acme's pricing is £40,000 a year.");
     const id = await upload(env, "Acme pricing.txt", bytes, "text/plain");
-    const args = { fileId: id, companyId: company.id };
-    assert.deepEqual(describeAction("add_chat_file_to_knowledge", args, await recordNames(owner, [args])), {
+    const args = { chatFileId: id, companyId: company.id };
+    assert.deepEqual(describeAction("add_to_knowledge", args, await recordNames(owner, [args])), {
       title: "Add to Knowledge for Acme",
       lines: ["File: Acme pricing.txt", "Everyone in the workspace can see Knowledge."],
     });
-    const added = (await withFetch(env.fetchImpl, () => runTool(owner, "add_chat_file_to_knowledge", args))) as { added: boolean; item: { id: string; title: string; kind: string; companyId: string } };
+    const added = (await withFetch(env.fetchImpl, () => runTool(owner, "add_to_knowledge", args))) as { added: boolean; item: { id: string; title: string; kind: string; companyId: string } };
     assert.equal(added.added, true);
     assert.equal(added.item.title, "Acme pricing");
     assert.equal(added.item.kind, "file");
@@ -220,15 +220,17 @@ describe("chat files", () => {
     assert.deepEqual(env.objects.get(`knowledge/${item.file_path}`), bytes);
     const audit = await getAdminPool().query<{ source: string }>("select source from crm.audit_events where event_type = 'knowledge.added' and entity_id = $1", [added.item.id]);
     assert.equal(audit.rows[0].source, "assistant");
-    const again = (await withFetch(env.fetchImpl, () => runTool(owner, "add_chat_file_to_knowledge", args))) as { added: boolean; alreadyThere: boolean; item: { id: string } };
+    const again = (await withFetch(env.fetchImpl, () => runTool(owner, "add_to_knowledge", args))) as { added: boolean; alreadyThere: boolean; item: { id: string } };
     assert.equal(again.alreadyThere, true);
     assert.equal(again.item.id, added.item.id);
     assert.ok(env.objects.has(`email-attachments/chat/${id}`));
 
     const photo = await upload(env, "Logo.png", new Uint8Array([1, 2, 3]), "image/png");
-    const refused = (await withFetch(env.fetchImpl, () => runTool(owner, "add_chat_file_to_knowledge", { fileId: photo, eclipse: true }))) as { error: string };
+    const refused = (await withFetch(env.fetchImpl, () => runTool(owner, "add_to_knowledge", { chatFileId: photo, eclipse: true }))) as { error: string };
     assert.match(refused.error, /Knowledge can't read Logo\.png/);
-    const missing = describeAction("add_chat_file_to_knowledge", { fileId: "00000000-0000-4000-8000-000000000009", eclipse: true }, new Map());
+    const missing = describeAction("add_to_knowledge", { chatFileId: "00000000-0000-4000-8000-000000000009", eclipse: true }, new Map());
+    const both = (await withFetch(env.fetchImpl, () => runTool(owner, "add_to_knowledge", { chatFileId: id, urls: ["https://acme-chat.test"], companyId: company.id }))) as { error: string };
+    assert.match(both.error, /one at a time/);
     assert.deepEqual(missing.lines[0], "File: A file Orbit can't find");
   });
 
