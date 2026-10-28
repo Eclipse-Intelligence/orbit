@@ -357,6 +357,7 @@ export async function stalledDealsInDb(db: Db, actor: Actor, options: StalledOpt
        and not exists (
          select 1 from crm.tasks t
          where t.workspace_id = $1 and t.completed_at is null and t.archived_at is null and t.due_at is not null
+           and t.due_at >= $5::timestamptz - make_interval(days => $6::int)
            and (t.opportunity_id = d.id or t.company_id = d.company_id or (d.primary_contact_id is not null and t.contact_id = d.primary_contact_id))
        )
      order by greatest(d.entered_at, coalesce(last.occurred_at, d.entered_at)) asc, d.id

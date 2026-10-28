@@ -160,6 +160,7 @@ describe("pipeline history", () => {
     await createActivity(owner, { type: "note", title: "Chased", body: "Chased the decision.", companyId: deals.initech.companyId });
     assert.deepEqual((await stalledDeals(owner, { days: 7, now: new Date(now.getTime() + 60_000) })).map((item) => item.name), ["Hal deal", "Hooli deal"]);
 
+    await createTask(owner, { title: "Old chase", companyId: deals.hooli.companyId, dueAt: new Date(now.getTime() - 40 * DAY).toISOString() });
     await createTask(owner, { title: "Call Hal", companyId: deals.hal.companyId, dueAt: new Date(now.getTime() + DAY).toISOString() });
     assert.deepEqual((await stalledDeals(owner, { days: 7, now })).map((item) => item.name), ["Hooli deal"]);
   });

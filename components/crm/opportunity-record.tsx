@@ -229,7 +229,8 @@ export default function OpportunityRecord({
                     <li key={`${stay.stageId ?? "none"}-${stay.enteredAt}`} className="flex items-baseline justify-between gap-3 text-[14px] leading-5">
                       <span className="min-w-0 truncate">{stay.stageName ?? "No stage"}</span>
                       <span className="caption-style text-subtle shrink-0 tabular-nums">
-                        {formatDateLabel(LONDON_DAY.format(new Date(stay.enteredAt)))} · {stayDays(stay.daysInStage)}
+                        {formatDateLabel(LONDON_DAY.format(new Date(stay.enteredAt)))}
+                        {stay.leftAt === null && opportunity.status !== "open" ? "" : ` · ${stayDays(stay.daysInStage)}`}
                       </span>
                     </li>
                   ))}
