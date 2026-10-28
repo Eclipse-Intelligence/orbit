@@ -27,7 +27,8 @@ import { listLifecycles } from "@/lib/crm/lifecycles";
 import { getMailThread, mailSyncStatus, searchMail } from "@/lib/mail/store";
 import { cancelScheduledDraft, changeScheduledDraft, composeAccounts, getScheduledDraft, listScheduledDrafts, saveDraftForAgent, sendForAgent } from "@/lib/mail/compose";
 import { createProduct, createTemplate, getTemplate, listProducts, listTemplates, updateProduct, updateTemplate } from "@/lib/proposals/catalogue";
-import { createDocument, getDocument, listDocuments, reviseDocument, sendDocument, updateDocument } from "@/lib/proposals/documents";
+import { createDocument, getDocument, listDocuments, reviseDocument, sendDocument, updateDocument, withdrawDocument, type DocumentDetail } from "@/lib/proposals/documents";
+import { STATUS_LABELS } from "@/lib/proposals/model";
 import { copyProposalImage } from "@/lib/proposals/media";
 import { STARTER_TEMPLATES as PROPOSAL_STARTERS } from "@/lib/proposals/starters";
 import { addStep, removeStep, updateStep } from "@/lib/proposals/steps";
@@ -420,6 +421,15 @@ async function scheduledDetails(actor: UserActor, args: Args): Promise<Record<st
 function scheduledLines(id: string, name: Names) {
   const to = detail(name, `${id}:to`);
   return [detail(name, `${id}:gone`), to ? `To: ${to}` : "", detail(name, `${id}:due`)];
+}
+
+function withdrawRefusal(proposal: DocumentDetail) {
+  const noun = proposal.kind === "nda" ? "NDA" : "proposal";
+  if (proposal.status === "draft" && !proposal.version) return `This ${noun} hasn't been sent, so there's nothing to withdraw. Archive the draft instead.`;
+  if (proposal.status === "completed") return `This ${noun} has been signed by both sides, so it can't be withdrawn.`;
+  if (proposal.status === "declined") return `The client declined this ${noun}, so it's already closed.`;
+  if (proposal.status === "withdrawn") return `This ${noun} is already withdrawn.`;
+  return null;
 }
 
 const KNOWLEDGE_REMOVE_MAX = 50;
@@ -3059,6 +3069,49 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       await reviseDocument(actor, id, { operation: "revise_proposal", source: "assistant" });
       const detail = await getDocument(actor, id);
       return { id, status: detail.status, href: detail.href };
+    },
+  },
+  {
+    name: "withdraw_proposal",
+    label: "Withdrawing a proposal",
+    write: true,
+    description:
+      "Withdraw a sent proposal or NDA, as Withdraw does on its page: the client's link stops working and it can no longer be signed. Works while it's sent, viewed, being changed or signed by the client but not yet countersigned. It stays in Orbit, and revise_proposal can reopen it to send again.",
+    parameters: { type: "object", properties: { id: idParam("Proposal id from list_proposals.") }, required: ["id"] },
+    details: async (actor, args) => {
+      const id = str(args.id);
+      if (!isUuid(id)) return {};
+      const proposal = await getDocument(actor, id).catch(() => null);
+      if (!proposal) return {};
+      const refusal = withdrawRefusal(proposal);
+      return {
+        [`${id}:kind`]: proposal.kind === "nda" ? "NDA" : "proposal",
+        [`${id}:title`]: proposal.title,
+        [`${id}:client`]: `${proposal.contactName} at ${proposal.companyName}`,
+        [`${id}:status`]: `${STATUS_LABELS[proposal.status]}${proposal.sentAt ? `, sent ${formatDateLabel(londonTime(proposal.sentAt).slice(0, 10))}` : ""}${proposal.viewCount ? `, opened ${counted(proposal.viewCount, "time", "times")}` : ""}`,
+        [`${id}:value`]: proposal.kind === "proposal" && proposal.totalLabel ? proposal.totalLabel : "",
+        [`${id}:effect`]: refusal
+          ? `This will be refused: ${refusal}`
+          : proposal.status === "client_signed"
+            ? "The client has signed it. Withdrawing means you can't countersign it, and their link stops working."
+            : "The client's link stops working and it can't be signed.",
+      };
+    },
+    describe: (args, name) => {
+      const id = str(args.id);
+      const line = (key: string, label: string) => (detail(name, `${id}:${key}`) ? `${label}: ${detail(name, `${id}:${key}`)}` : "");
+      return {
+        title: `Withdraw ${detail(name, `${id}:kind`) || "proposal"}: ${detail(name, `${id}:title`) || name(id)}`,
+        lines: [line("client", "Client"), line("status", "Status"), line("value", "Value"), detail(name, `${id}:effect`)],
+      };
+    },
+    run: async (actor, args) => {
+      const id = required(args.id, "A proposal id");
+      const refusal = withdrawRefusal(await getDocument(actor, id));
+      if (refusal) throw new CrmError("conflict", refusal, 409, { field: "status" });
+      await withdrawDocument(actor, id, { operation: "withdraw_proposal", ...PROVENANCE });
+      const detailNow = await getDocument(actor, id);
+      return { withdrawn: true, id, title: detailNow.title, status: detailNow.status, href: detailNow.href };
     },
   },
   {

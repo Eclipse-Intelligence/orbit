@@ -242,6 +242,7 @@ Add it to `ASSISTANT_TOOLS` with a `name`, a `label` (shown while it runs, for e
 | `update_proposal_steps` | Adds, ticks, unticks or removes a step on the live Next steps plan, in any status. | Yes | No | The client sees it straight away. |
 | `send_proposal` | Locks the version, makes the client's private link and emails it from the user's mailbox; on a sent one, emails the link again. | Yes | No | Nobody can sign through the assistant. |
 | `revise_proposal` | Makes a sent, declined or withdrawn proposal a draft again so it can be edited. | Yes | No | Not once the client has signed. |
+| `withdraw_proposal` | Withdraws a sent proposal or NDA, as on its page: the client's link stops working and it can't be signed. | Yes | No | Not a draft that was never sent, one signed by both sides, a declined one or one already withdrawn. |
 | `create_proposal_template` | Creates a template from a starter, a copy or blocks. It starts as a draft. | Yes | No | |
 | `update_proposal_template` | Changes a template's name, status, accent, days valid or blocks. | Yes | No | Applies to proposals created afterwards. |
 | `add_proposal_image` | Copies an image from a public link into Orbit and returns its new url for a block. | Yes | No | JPEG, PNG, WebP or GIF, up to 10 MB. |
