@@ -82,7 +82,7 @@ export function ReadwiseToken({ connected, hint }: { connected: boolean; hint: s
             placeholder="Your Readwise access token"
             value={token}
             onChange={(event) => setToken(event.target.value)}
-            className="flex-1"
+            className="sm:flex-1"
           />
           <Button variant="secondary" size="sm" type="submit" className="h-9" disabled={pending || !token.trim()}>
             {pending ? "Checking…" : "Connect"}
