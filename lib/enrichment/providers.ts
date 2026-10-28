@@ -336,3 +336,32 @@ export function providerKey(id: ProviderId, env: Record<string, string | undefin
   const provider = PROVIDER_BY_ID.get(id);
   return provider ? env[provider.envKey]?.trim() || null : null;
 }
+
+export type VerifyAttempt = { provider: ProviderId; outcome: Verdict | "failed"; detail?: string };
+
+export function configuredVerifiers(env: Record<string, string | undefined> = process.env) {
+  return VERIFIER_ORDER.filter((id) => providerKey(id, env) && PROVIDER_BY_ID.get(id)?.verify);
+}
+
+export async function verifyWith(
+  email: string,
+  options: { env: Record<string, string | undefined>; fetchImpl: typeof fetch; deadline: number; pollMs?: number },
+): Promise<{ verdict: Verdict; by: ProviderId | null; attempts: VerifyAttempt[] }> {
+  const attempts: VerifyAttempt[] = [];
+  for (const id of configuredVerifiers(options.env)) {
+    const provider = PROVIDER_BY_ID.get(id)!;
+    try {
+      const verdict = await provider.verify!(email, {
+        key: providerKey(id, options.env)!,
+        fetchImpl: options.fetchImpl,
+        deadline: options.deadline,
+        pollMs: options.pollMs,
+      });
+      attempts.push({ provider: id, outcome: verdict });
+      if (verdict !== "unknown") return { verdict, by: id, attempts };
+    } catch (error) {
+      attempts.push({ provider: id, outcome: "failed", detail: error instanceof ProviderFailure ? error.message : "Check failed." });
+    }
+  }
+  return { verdict: "unknown", by: null, attempts };
+}

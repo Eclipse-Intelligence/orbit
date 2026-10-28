@@ -9,8 +9,8 @@ import type { Contact, ContactWrite, UserActor } from "@/lib/crm/types";
 import {
   PROVIDER_BY_ID,
   ProviderFailure,
-  VERIFIER_ORDER,
   providerKey,
+  verifyWith,
   type ContactField,
   type Finding,
   type PersonQuery,
@@ -74,16 +74,8 @@ function splitName(contact: Contact) {
 }
 
 async function verify(email: string, env: Record<string, string | undefined>, fetchImpl: typeof fetch, deadline: number, pollMs?: number): Promise<{ verdict: Verdict; by: ProviderId | null }> {
-  for (const id of VERIFIER_ORDER) {
-    const key = providerKey(id, env);
-    const provider = PROVIDER_BY_ID.get(id);
-    if (!key || !provider?.verify) continue;
-    try {
-      const verdict = await provider.verify(email, { key, fetchImpl, deadline, pollMs });
-      if (verdict !== "unknown") return { verdict, by: id };
-    } catch {}
-  }
-  return { verdict: "unknown", by: null };
+  const { verdict, by } = await verifyWith(email, { env, fetchImpl, deadline, pollMs });
+  return { verdict, by };
 }
 
 async function recordLookup(actor: UserActor, contactId: string, field: ContactField, status: "found" | "not_found" | "failed", provider: ProviderId | null, value: string | null, attempts: Attempt[]) {

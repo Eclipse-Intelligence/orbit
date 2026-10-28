@@ -32,6 +32,7 @@ import {
   cancelGraphEvent,
   createGraphEvent,
   inviteDraft,
+  moveGraphEvent,
   toCalendarEvent,
   type CalendarEvent,
   type InviteGuest,
@@ -688,33 +689,37 @@ export async function createInvite(
   );
 }
 
-export async function cancelInvite(
+type OrganisedRow = {
+  id: string;
+  provider_event_id: string;
+  connection_id: string | null;
+  subject: string | null;
+  starts_at: Date | string;
+  ends_at: Date | string;
+  is_all_day: boolean;
+  organizer: unknown;
+  attendees: unknown;
+  contact_ids: string[];
+  is_cancelled: boolean;
+  created_by_orbit: boolean;
+};
+
+const ORGANISER_ONLY = {
+  cancel: "Only the organiser can cancel this meeting. Decline it in Outlook instead.",
+  move: "Only the organiser can move this meeting. Propose a new time in Outlook instead.",
+};
+
+async function organisedEvent(
   actor: UserActor,
   eventId: string,
-  comment?: unknown,
-  options: InviteOptions = {},
-): Promise<CancelResult> {
-  assertScope(actor.scopes, "activities:write");
-  const fetchImpl = options.fetchImpl ?? fetch;
-  const now = options.now ?? Date.now();
+  verb: "cancel" | "move",
+  options: { fetchImpl: typeof fetch; now: number },
+) {
   if (!isUuid(eventId)) throw new CrmError("not_found", "That meeting isn't in your calendar.", 404);
-  const message = cleanNotes(comment, INVITE_COMMENT_MAX, "comment");
   const found = await withActor(actor, async (db) => {
     const stored = await readStored(db, actor);
-    const event = await db.query<{
-      id: string;
-      provider_event_id: string;
-      connection_id: string | null;
-      subject: string | null;
-      starts_at: Date | string;
-      ends_at: Date | string;
-      organizer: unknown;
-      attendees: unknown;
-      contact_ids: string[];
-      is_cancelled: boolean;
-      created_by_orbit: boolean;
-    }>(
-      `select id, provider_event_id, connection_id, subject, starts_at, ends_at, organizer, attendees,
+    const event = await db.query<OrganisedRow>(
+      `select id, provider_event_id, connection_id, subject, starts_at, ends_at, is_all_day, organizer, attendees,
               contact_ids, is_cancelled, created_by_orbit
        from crm.calendar_events
        where id = $1 and user_id = $2 and workspace_id = $3`,
@@ -729,25 +734,50 @@ export async function cancelInvite(
   });
   const row = found.event;
   if (!row) throw new CrmError("not_found", "That meeting isn't in your calendar.", 404);
-  if (row.is_cancelled) throw new CrmError("conflict", "This meeting is already cancelled.", 409);
+  if (row.is_cancelled) {
+    throw new CrmError("conflict", verb === "cancel" ? "This meeting is already cancelled." : "This meeting is cancelled.", 409);
+  }
   const organizer = readPerson(row.organizer);
   if (!row.created_by_orbit && !(organizer && found.own.has(organizer.email))) {
-    throw new CrmError("forbidden", "Only the organiser can cancel this meeting. Decline it in Outlook instead.", 403);
+    throw new CrmError("forbidden", ORGANISER_ONLY[verb], 403);
   }
+  if (verb === "move" && row.is_all_day) throw new CrmError("invalid_input", "Move all-day events in Outlook.", 400);
   const startsAt = new Date(row.starts_at);
-  if (startsAt.getTime() <= now) {
-    throw new CrmError("invalid_input", "This meeting has already started, so Orbit can't cancel it.", 400);
+  if (startsAt.getTime() <= options.now) {
+    throw new CrmError("invalid_input", `This meeting has already started, so Orbit can't ${verb} it.`, 400);
   }
   const stored = found.stored;
   if (!microsoftConfigured() || !isConnected(stored)) throw new CrmError("not_connected", INVITE_NOT_CONNECTED, 400);
   if (row.connection_id !== stored.id) {
     throw new CrmError(
       "invalid_input",
-      "Orbit can only cancel meetings in the calendar of the mailbox connected in Capture.",
+      `Orbit can only ${verb} meetings in the calendar of the mailbox connected in Capture.`,
       400,
     );
   }
-  const token = await writableToken(actor, stored, found.scopes, fetchImpl);
+  const token = await writableToken(actor, stored, found.scopes, options.fetchImpl);
+  const guests = [
+    ...new Set(
+      [organizer, ...readPeople(row.attendees)]
+        .map((person) => person?.email)
+        .filter((email): email is string => Boolean(email) && !found.own.has(email!)),
+    ),
+  ];
+  return { row, token, guests, startsAt, endsAt: new Date(row.ends_at) };
+}
+
+export async function cancelInvite(
+  actor: UserActor,
+  eventId: string,
+  comment?: unknown,
+  options: InviteOptions = {},
+): Promise<CancelResult> {
+  assertScope(actor.scopes, "activities:write");
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const now = options.now ?? Date.now();
+  if (!isUuid(eventId)) throw new CrmError("not_found", "That meeting isn't in your calendar.", 404);
+  const message = cleanNotes(comment, INVITE_COMMENT_MAX, "comment");
+  const { row, token, guests, startsAt, endsAt } = await organisedEvent(actor, eventId, "cancel", { fetchImpl, now });
   let warning: string | null = null;
   try {
     await cancelGraphEvent(token.accessToken, row.provider_event_id, message, fetchImpl);
@@ -756,18 +786,11 @@ export async function cancelInvite(
     warning = "Outlook had already removed this meeting, so no cancellation was sent.";
   }
   const subject = row.subject ?? "Untitled event";
-  const when = formatWhen(startsAt, new Date(row.ends_at), appTimeZone());
+  const when = formatWhen(startsAt, endsAt, appTimeZone());
   try {
     const loggedOn = await withActor(actor, async (db) => {
       await db.query("update crm.calendar_events set is_cancelled = true where id = $1", [row.id]);
-      const emails = [
-        ...new Set(
-          [organizer, ...readPeople(row.attendees)]
-            .map((person) => person?.email)
-            .filter((email): email is string => Boolean(email) && !found.own.has(email!)),
-        ),
-      ];
-      const contacts = await matchContacts(db, actor, emails, row.contact_ids ?? []);
+      const contacts = await matchContacts(db, actor, guests, row.contact_ids ?? []);
       for (const contact of contacts) {
         await createActivityInDb(
           db,
@@ -791,6 +814,157 @@ export async function cancelInvite(
     return {
       warning: "The meeting was cancelled in Outlook, but Orbit couldn't update it yet. It disappears after the next sync.",
       loggedOn: 0,
+    };
+  }
+}
+
+export type RescheduleInput = {
+  eventId?: unknown;
+  startLocal?: unknown;
+  endLocal?: unknown;
+  durationMinutes?: unknown;
+  message?: unknown;
+};
+
+export type RescheduleResult = {
+  eventId: string;
+  subject: string;
+  startsAt: string;
+  endsAt: string;
+  previousStartsAt: string;
+  previousEndsAt: string;
+  guests: string[];
+  loggedOn: number;
+  warning: string | null;
+};
+
+function localInstant(value: unknown, timeZone: string, field: string, missing: string) {
+  if (typeof value !== "string" || !LOCAL_START.test(value)) throw invalid(missing, field);
+  const instant = parseDateTime(value, timeZone);
+  if (!instant) throw invalid(missing, field);
+  if (dateTimeInputValue(instant.toISOString(), timeZone) !== value) {
+    throw invalid(
+      `${value.slice(11)} doesn't exist in ${zoneLabel(timeZone)} that day because the clocks go forward. Pick another time.`,
+      field,
+    );
+  }
+  return instant;
+}
+
+export function moveWindow(
+  input: Pick<RescheduleInput, "startLocal" | "endLocal" | "durationMinutes">,
+  currentMinutes: number,
+  options: { timeZone?: string; now?: number } = {},
+) {
+  const timeZone = options.timeZone ?? appTimeZone();
+  const hasEnd = input.endLocal !== undefined && input.endLocal !== null && input.endLocal !== "";
+  if (!hasEnd) {
+    const duration = input.durationMinutes === undefined || input.durationMinutes === null ? currentMinutes : input.durationMinutes;
+    return inviteWindow(input.startLocal, duration, { timeZone, now: options.now });
+  }
+  const start = localInstant(input.startLocal, timeZone, "startLocal", "Pick a date and start time.");
+  const end = localInstant(input.endLocal, timeZone, "endLocal", "Pick an end time.");
+  if (end.getTime() <= start.getTime()) throw invalid("End the meeting after it starts.", "endLocal");
+  const minutes = (end.getTime() - start.getTime()) / 60_000;
+  if (minutes < MIN_DURATION || minutes > MAX_DURATION) {
+    throw invalid("Pick a duration between 5 minutes and 8 hours.", "endLocal");
+  }
+  return inviteWindow(input.startLocal, minutes, { timeZone, now: options.now });
+}
+
+export async function rescheduleInvite(
+  actor: UserActor,
+  input: RescheduleInput,
+  options: InviteOptions = {},
+): Promise<RescheduleResult> {
+  assertScope(actor.scopes, "activities:write");
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const now = options.now ?? Date.now();
+  const eventId = typeof input.eventId === "string" ? input.eventId : "";
+  if (!isUuid(eventId)) throw new CrmError("not_found", "That meeting isn't in your calendar.", 404);
+  const message = cleanNotes(input.message, INVITE_COMMENT_MAX, "message");
+  const timeZone = appTimeZone();
+  const current = await withActor(actor, async (db) => {
+    const result = await db.query<{ starts_at: Date | string; ends_at: Date | string }>(
+      "select starts_at, ends_at from crm.calendar_events where id = $1 and user_id = $2 and workspace_id = $3",
+      [eventId, actor.userId, actor.workspaceId],
+    );
+    return result.rows[0] ?? null;
+  });
+  if (!current) throw new CrmError("not_found", "That meeting isn't in your calendar.", 404);
+  const currentMinutes = Math.round((new Date(current.ends_at).getTime() - new Date(current.starts_at).getTime()) / 60_000);
+  const window = moveWindow(input, currentMinutes, { timeZone, now });
+  if (
+    window.start.getTime() === new Date(current.starts_at).getTime() &&
+    window.end.getTime() === new Date(current.ends_at).getTime()
+  ) {
+    throw invalid("That's when the meeting already is. Pick another time.", "startLocal");
+  }
+  const { row, token, guests, startsAt, endsAt } = await organisedEvent(actor, eventId, "move", { fetchImpl, now });
+  let updated: Awaited<ReturnType<typeof moveGraphEvent>>;
+  try {
+    updated = await moveGraphEvent(
+      token.accessToken,
+      row.provider_event_id,
+      { start: window.start, end: window.end, timeZone, message },
+      fetchImpl,
+    );
+  } catch (error) {
+    throw writeFailure(error);
+  }
+  const subject = row.subject ?? "Untitled event";
+  const result: RescheduleResult = {
+    eventId: row.id,
+    subject,
+    startsAt: window.start.toISOString(),
+    endsAt: window.end.toISOString(),
+    previousStartsAt: startsAt.toISOString(),
+    previousEndsAt: endsAt.toISOString(),
+    guests,
+    loggedOn: 0,
+    warning: null,
+  };
+  const parsed = toCalendarEvent(updated);
+  const was = formatWhen(startsAt, endsAt, timeZone);
+  const when = formatWhen(window.start, window.end, timeZone);
+  try {
+    const loggedOn = await withActor(actor, async (db) => {
+      await db.query(
+        `update crm.calendar_events
+         set starts_at = $2, ends_at = $3, attendees = coalesce($4::jsonb, attendees)
+         where id = $1`,
+        [row.id, result.startsAt, result.endsAt, parsed ? JSON.stringify(parsed.attendees) : null],
+      );
+      const contacts = await matchContacts(db, actor, guests, row.contact_ids ?? []);
+      for (const contact of contacts) {
+        await createActivityInDb(
+          db,
+          actor,
+          {
+            type: "meeting",
+            title: clip(`Moved ${subject}`, 200),
+            body: [when, `Was ${was}`, message ? `\nMessage to guests: ${message}` : null].filter(Boolean).join("\n"),
+            contactId: contact.id,
+            companyId: contact.companyId,
+            metadata: {
+              source: "orbit",
+              kind: "move",
+              eventId: row.id,
+              startsAt: result.startsAt,
+              previousStartsAt: result.previousStartsAt,
+            },
+          },
+          { operation: "reschedule_invite", source: "microsoft" },
+        );
+      }
+      return contacts.length;
+    });
+    return { ...result, loggedOn };
+  } catch (error) {
+    console.error("Meeting moved but not saved", error);
+    return {
+      ...result,
+      warning: "The meeting was moved in Outlook, but Orbit couldn't update it yet. It moves after the next sync.",
     };
   }
 }

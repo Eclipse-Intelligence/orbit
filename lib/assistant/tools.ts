@@ -47,7 +47,7 @@ import {
 import { STARTER_TEMPLATES } from "@/lib/workflows/templates";
 import { BULK_LIMIT, runBulk } from "@/lib/crm/bulk";
 import { listActivities } from "@/lib/crm/activities";
-import { getCalendarStatus, getMeetings, listPeopleMet } from "@/lib/crm/calendar";
+import { getCalendarStatus, getMeetings, listPeopleMet, myAddresses, readPeople, readPerson } from "@/lib/crm/calendar";
 import { listCalendarItems } from "@/lib/crm/calendars";
 import { getInsightTranscript, getInsightsForActivities } from "@/lib/crm/call-insights";
 import { createTaskWithClickUp, getClickUpPicker, getClickUpState, pushClickUpTask } from "@/lib/crm/clickup";
@@ -59,7 +59,8 @@ import { CrmError } from "@/lib/crm/errors";
 import { getGranolaStatus } from "@/lib/crm/granola";
 import { companyHref, contactHref, opportunityHref } from "@/lib/crm/hrefs";
 import { getMailbox, listInbox } from "@/lib/crm/inbox";
-import { createInvite, getMeetingLink } from "@/lib/crm/invites";
+import { createInvite, getMeetingLink, rescheduleInvite } from "@/lib/crm/invites";
+import { latestEmailCheck, verifyEmail } from "@/lib/enrichment/email-check";
 import { archiveOpportunity, createOpportunity, getOpportunity, listOpportunities, listPipeline, updateOpportunity } from "@/lib/crm/opportunities";
 import { getMyEmails } from "@/lib/crm/profile";
 import { REMINDER_OPTIONS } from "@/lib/crm/reminder-options";
@@ -83,7 +84,7 @@ import { withActor } from "@/lib/crm/context";
 import { isUuid } from "@/lib/crm/mutate";
 import type { Scope } from "@/lib/crm/scopes";
 import { formatDateLabel, formatDateTimeLabel } from "@/lib/date-input";
-import { appTimeZone, parseDateTime, zonedParts } from "@/lib/time";
+import { appTimeZone, dateTimeInputValue, parseDateTime, zonedParts } from "@/lib/time";
 import {
   LINEAR_PRIORITIES,
   LinearError,
@@ -620,6 +621,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       );
       return {
         contact: withContact(contact),
+        emailCheck: await latestEmailCheck(actor, contact.email),
         openTasks: tasks.data.map(withTask),
         completedTasks: completed.data.map(withTask),
         timeline: activities.data.map(withActivity),
@@ -2583,6 +2585,31 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     },
   },
   {
+    name: "verify_email",
+    label: "Checking an email address",
+    write: true,
+    description:
+      "Check whether an email address can receive mail with the email checkers (Enrow, Icypeas, Hunter, in that order). Gives valid, invalid or unknown and the checker. A check from the last 30 days (a day for unknown), or an address Orbit found and confirmed, comes back without a new check. get_contact shows the last check as emailCheck.",
+    parameters: {
+      type: "object",
+      properties: {
+        email: { type: "string", description: "The address to check." },
+        contactId: { type: "string", description: "The Orbit contact with this address, to save the result on them." },
+      },
+      required: ["email"],
+    },
+    describe: (args, name) => ({
+      title: `Check address: ${str(args.email)}`,
+      lines: [optionalStr(args.contactId) ? `Contact: ${name(args.contactId)}` : "", "Uses an email checker credit."],
+    }),
+    run: async (actor, args, context) => ({
+      check: await verifyEmail(actor, required(args.email, "An email address"), {
+        contactId: optionalStr(args.contactId) ?? null,
+        deadline: context.deadline,
+      }),
+    }),
+  },
+  {
     name: "create_meeting_invite",
     label: "Sending an invite",
     write: true,
@@ -2629,6 +2656,47 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         includeMeetingLink: args.includeMeetingLink !== false,
       });
       return { invite: result };
+    },
+  },
+  {
+    name: "move_meeting",
+    label: "Moving a meeting",
+    write: true,
+    description:
+      "Move an Outlook meeting the user organises to a new time. Outlook sends the guests an updated invite and the meeting link stays. Times are London time. Use an event id from list_calendar_events with canCancel true.",
+    parameters: {
+      type: "object",
+      properties: {
+        eventId: { type: "string", description: "The event id from list_calendar_events." },
+        startLocal: { type: "string", description: "New start, YYYY-MM-DDTHH:mm London time." },
+        durationMinutes: { type: "integer", minimum: 5, maximum: 480, description: "Defaults to the current length." },
+        message: { type: "string", description: "A note for the guests, added to the invite." },
+      },
+      required: ["eventId", "startLocal"],
+    },
+    describe: (args, name) => {
+      const id = str(args.eventId);
+      const known = (key: string) => (name(`${id}:${key}`) === `${id}:${key}` ? "" : name(`${id}:${key}`));
+      const minutes = typeof args.durationMinutes === "number" ? args.durationMinutes : Number(known("minutes")) || null;
+      const from = known("when");
+      return {
+        title: `Move meeting: ${name(id)}`,
+        lines: [
+          from ? `From: ${formatDateTimeLabel(from)}${known("minutes") ? ` for ${known("minutes")} minutes` : ""}` : "",
+          `To: ${formatDateTimeLabel(str(args.startLocal))}${minutes ? ` for ${minutes} minutes` : ""}`,
+          known("guests") ? `Guests: ${known("guests")}` : "",
+          ...fieldLines(args, { message: "Message to guests" }),
+        ],
+      };
+    },
+    run: async (actor, args) => {
+      const moved = await rescheduleInvite(actor, {
+        eventId: str(args.eventId),
+        startLocal: str(args.startLocal),
+        durationMinutes: args.durationMinutes === undefined ? undefined : Number(args.durationMinutes),
+        message: optionalStr(args.message) ?? null,
+      });
+      return { moved };
     },
   },
   {
@@ -3012,6 +3080,22 @@ export async function recordNames(actor: UserActor, args: Args[]) {
       [list],
     );
     for (const row of details.rows) names.set(row.id, row.name);
+    const events = await db.query<{ id: string; subject: string | null; starts_at: Date; ends_at: Date; organizer: unknown; attendees: unknown }>(
+      `select id, subject, starts_at, ends_at, organizer, attendees from crm.calendar_events
+       where id = any($1::uuid[]) and user_id = $2 and workspace_id = $3`,
+      [list, actor.userId, actor.workspaceId],
+    );
+    if (events.rows.length === 0) return;
+    const own = await myAddresses(db, actor);
+    for (const row of events.rows) {
+      const guests = [...new Map([readPerson(row.organizer), ...readPeople(row.attendees)]
+        .filter((person): person is NonNullable<typeof person> => Boolean(person) && !own.has(person!.email))
+        .map((person) => [person.email, person.name ?? person.email])).values()];
+      names.set(row.id, row.subject?.trim() || "Untitled event");
+      names.set(`${row.id}:when`, dateTimeInputValue(row.starts_at.toISOString(), appTimeZone()));
+      names.set(`${row.id}:minutes`, String(Math.round((row.ends_at.getTime() - row.starts_at.getTime()) / 60_000)));
+      if (guests.length) names.set(`${row.id}:guests`, guests.join(", "));
+    }
   });
   return names;
 }

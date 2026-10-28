@@ -17,8 +17,10 @@ import {
   INVITE_NOT_CONNECTED,
   INVITE_RECONNECT,
   inviteWindow,
+  rescheduleInvite,
   saveMeetingLink,
 } from "@/lib/crm/invites";
+import { describeAction, recordNames } from "@/lib/assistant/tools";
 import { saveOtherEmails } from "@/lib/crm/profile";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
@@ -79,6 +81,8 @@ function graph(
     cancel?: () => Response;
     token?: () => Response;
     events?: () => GraphEvent[];
+    move?: (patch: Record<string, unknown>) => Response;
+    read?: () => Response;
   } = {},
 ) {
   let creates = 0;
@@ -106,12 +110,32 @@ function graph(
         201,
       );
     }
+    if (/\/me\/events\/[^/]+$/.test(parsed.pathname) && init?.method === "PATCH") {
+      const patch = body as Record<string, unknown>;
+      if (options.move) return options.move(patch);
+      return json({
+        ...createdEvent(
+          { subject: "Eclipse × Jane Doe", attendees: [{ emailAddress: { address: "jane@acme-invites.test", name: "Jane Doe" } }] },
+          "2026-10-20T13:00:00.000Z",
+          "2026-10-20T13:30:00.000Z",
+        ),
+        start: patch.start,
+        end: patch.end,
+      });
+    }
+    if (/\/me\/events\/[^/]+$/.test(parsed.pathname) && (init?.method ?? "GET") === "GET") {
+      return options.read?.() ?? json({ body: { contentType: "html", content: "" } });
+    }
     if (parsed.pathname.endsWith("/me/calendars")) {
       return json({ value: [{ id: "cal-main", name: "Calendar", isDefaultCalendar: true, canEdit: true }] });
     }
     if (parsed.pathname.includes("/calendarView")) return json({ value: options.events?.() ?? [] });
     return json({ error: { code: "NotFound", message: "Unexpected call" } }, 404);
   }) as typeof fetch;
+}
+
+function patches(calls: Call[]) {
+  return calls.filter((call) => call.method === "PATCH" && new URL(call.url).hostname === "graph.microsoft.com");
 }
 
 function posts(calls: Call[]) {
@@ -750,6 +774,216 @@ describe("cancelling invites", () => {
       code: "scope_missing",
     });
     assert.equal(calls.length, 0);
+  });
+});
+
+describe("moving invites", () => {
+  let owner: UserActor;
+  let connectionId: string;
+  let jane: string;
+  const days = { start: new Date("2026-10-19T00:00:00Z"), end: new Date("2026-10-24T00:00:00Z") };
+
+  beforeEach(async () => {
+    await resetDatabase();
+    owner = await createUser("founder@example.com", "Founder");
+    const acme = (await createCompany(owner, { name: "Acme", domain: "acme-invites.test" })).body.company.id;
+    jane = (
+      await createContact(owner, { firstName: "Jane", lastName: "Doe", email: "jane@acme-invites.test", companyId: acme })
+    ).body.contact.id;
+    connectionId = await connect(owner);
+    await addMainCalendar(owner, connectionId);
+  });
+
+  async function invite() {
+    const result = await createInvite(owner, baseInput(), { fetchImpl: graph([]), now: NOW });
+    return result.eventId!;
+  }
+
+  it("patches the existing event's times, keeps the link, updates the calendar and logs it", async () => {
+    const eventId = await invite();
+    const calls: Call[] = [];
+    const result = await rescheduleInvite(owner, { eventId, startLocal: "2026-10-22T10:00" }, { fetchImpl: graph(calls), now: NOW });
+    assert.equal(posts(calls).length, 0);
+    const [patch] = patches(calls);
+    assert.equal(patches(calls).length, 1);
+    assert.equal(patch.url, "https://graph.microsoft.com/v1.0/me/events/evt-1");
+    assert.equal(patch.headers.authorization, "Bearer access-token");
+    assert.deepEqual(patch.body, {
+      start: { dateTime: "2026-10-22T10:00:00", timeZone: "GMT Standard Time" },
+      end: { dateTime: "2026-10-22T10:30:00", timeZone: "GMT Standard Time" },
+    });
+    assert.deepEqual(result, {
+      eventId,
+      subject: "Eclipse × Jane Doe",
+      startsAt: "2026-10-22T09:00:00.000Z",
+      endsAt: "2026-10-22T09:30:00.000Z",
+      previousStartsAt: "2026-10-20T13:00:00.000Z",
+      previousEndsAt: "2026-10-20T13:30:00.000Z",
+      guests: ["jane@acme-invites.test"],
+      loggedOn: 1,
+      warning: null,
+    });
+    const row = await getAdminPool().query<{ starts_at: Date; ends_at: Date; location: string; is_cancelled: boolean }>(
+      "select starts_at, ends_at, location, is_cancelled from crm.calendar_events where id = $1",
+      [eventId],
+    );
+    assert.equal(row.rows[0].starts_at.toISOString(), "2026-10-22T09:00:00.000Z");
+    assert.equal(row.rows[0].ends_at.toISOString(), "2026-10-22T09:30:00.000Z");
+    assert.equal(row.rows[0].location, "https://whereby.com/eclipse");
+    assert.equal(row.rows[0].is_cancelled, false);
+    const items = await listCalendarItems(owner, days, NOW);
+    assert.deepEqual(
+      items.map((item) => [item.id, item.startsAt]),
+      [[eventId, "2026-10-22T09:00:00.000Z"]],
+    );
+    const logged = await getAdminPool().query<{ title: string; body: string; contact_id: string; metadata: Record<string, unknown> }>(
+      "select title, body, contact_id, metadata from crm.activities where title like 'Moved%'",
+    );
+    assert.deepEqual(
+      logged.rows.map(({ title, body, contact_id }) => ({ title, body, contact_id })),
+      [
+        {
+          title: "Moved Eclipse × Jane Doe",
+          body: "Thu, 22 Oct 2026, 10:00 to 10:30 London time\nWas Tue, 20 Oct 2026, 14:00 to 14:30 London time",
+          contact_id: jane,
+        },
+      ],
+    );
+    assert.equal(logged.rows[0].metadata.kind, "move");
+    const audit = await getAdminPool().query<{ count: string }>(
+      "select count(*) from crm.audit_events where operation = 'reschedule_invite'",
+    );
+    assert.equal(audit.rows[0].count, "1");
+  });
+
+  it("adds the message to the top of the invite and can change the length", async () => {
+    const eventId = await invite();
+    const calls: Call[] = [];
+    await rescheduleInvite(
+      owner,
+      { eventId, startLocal: "2026-11-03T09:30", durationMinutes: 60, message: "  Running late, <sorry>.  " },
+      {
+        fetchImpl: graph(calls, {
+          read: () =>
+            json({ body: { contentType: "html", content: '<html><body lang="en"><div>Join: https://whereby.com/eclipse</div></body></html>' } }),
+        }),
+        now: NOW,
+      },
+    );
+    const read = calls.find((call) => call.method === "GET" && call.url.includes("/me/events/evt-1"));
+    assert.equal(read?.url, "https://graph.microsoft.com/v1.0/me/events/evt-1?$select=body");
+    assert.deepEqual(patches(calls)[0].body, {
+      start: { dateTime: "2026-11-03T09:30:00", timeZone: "GMT Standard Time" },
+      end: { dateTime: "2026-11-03T10:30:00", timeZone: "GMT Standard Time" },
+      body: {
+        contentType: "HTML",
+        content: '<html><body lang="en"><p>Running late, &lt;sorry&gt;.</p><div>Join: https://whereby.com/eclipse</div></body></html>',
+      },
+    });
+    const logged = await getAdminPool().query<{ body: string }>("select body from crm.activities where title like 'Moved%'");
+    assert.equal(
+      logged.rows[0].body,
+      "Tue, 3 Nov 2026, 09:30 to 10:30 London time\nWas Tue, 20 Oct 2026, 14:00 to 14:30 London time\n\nMessage to guests: Running late, <sorry>.",
+    );
+  });
+
+  it("takes an end time, and refuses past, backwards, unchanged and impossible times before calling Outlook", async () => {
+    const eventId = await invite();
+    const ended = await rescheduleInvite(
+      owner,
+      { eventId, startLocal: "2026-10-21T15:00", endLocal: "2026-10-21T15:45" },
+      { fetchImpl: graph([]), now: NOW },
+    );
+    assert.equal(ended.endsAt, "2026-10-21T14:45:00.000Z");
+    const calls: Call[] = [];
+    const fetchImpl = graph(calls);
+    await rejects(() => rescheduleInvite(owner, { eventId, startLocal: "2026-10-14T10:00" }, { fetchImpl, now: NOW }), {
+      code: "invalid_input",
+      field: "startLocal",
+      message: "Pick a start time in the future.",
+    });
+    await rejects(
+      () => rescheduleInvite(owner, { eventId, startLocal: "2026-10-22T10:00", endLocal: "2026-10-22T09:00" }, { fetchImpl, now: NOW }),
+      { field: "endLocal", message: "End the meeting after it starts." },
+    );
+    await rejects(
+      () => rescheduleInvite(owner, { eventId, startLocal: "2026-10-22T10:00", endLocal: "2026-10-22T19:00" }, { fetchImpl, now: NOW }),
+      { field: "endLocal", message: /between 5 minutes and 8 hours/ },
+    );
+    await rejects(() => rescheduleInvite(owner, { eventId, startLocal: "2026-10-21T15:00", durationMinutes: 45 }, { fetchImpl, now: NOW }), {
+      field: "startLocal",
+      message: /already is/,
+    });
+    await rejects(() => rescheduleInvite(owner, { eventId, startLocal: "2027-03-28T01:30" }, { fetchImpl, now: NOW }), {
+      message: /clocks go forward/,
+    });
+    await rejects(() => rescheduleInvite(owner, { eventId, startLocal: "tomorrow" }, { fetchImpl, now: NOW }), { field: "startLocal" });
+    await rejects(() => rescheduleInvite(owner, { eventId: "nope", startLocal: "2026-10-22T10:00" }, { fetchImpl, now: NOW }), {
+      code: "not_found",
+    });
+    assert.equal(calls.length, 0);
+  });
+
+  it("uses the same organiser, start and connection checks as cancelling", async () => {
+    const eventId = await invite();
+    const calls: Call[] = [];
+    const fetchImpl = graph(calls);
+    await rejects(
+      () => rescheduleInvite(owner, { eventId, startLocal: "2026-10-22T10:00" }, { fetchImpl, now: Date.UTC(2026, 9, 20, 13, 5) }),
+      { message: "This meeting has already started, so Orbit can't move it." },
+    );
+    await getAdminPool().query(
+      `update crm.calendar_events
+       set created_by_orbit = false, organizer = '{"name":"Jane Doe","email":"jane@acme-invites.test"}'::jsonb
+       where id = $1`,
+      [eventId],
+    );
+    await rejects(() => rescheduleInvite(owner, { eventId, startLocal: "2026-10-22T10:00" }, { fetchImpl, now: NOW }), {
+      code: "forbidden",
+      message: /Only the organiser can move/,
+    });
+    await getAdminPool().query("update crm.calendar_events set created_by_orbit = true, is_all_day = true where id = $1", [eventId]);
+    await rejects(() => rescheduleInvite(owner, { eventId, startLocal: "2026-10-22T10:00" }, { fetchImpl, now: NOW }), {
+      message: "Move all-day events in Outlook.",
+    });
+    await getAdminPool().query("update crm.calendar_events set is_all_day = false, is_cancelled = true where id = $1", [eventId]);
+    await rejects(() => rescheduleInvite(owner, { eventId, startLocal: "2026-10-22T10:00" }, { fetchImpl, now: NOW }), {
+      code: "conflict",
+    });
+    assert.equal(calls.length, 0);
+
+    await getAdminPool().query("update crm.calendar_events set is_cancelled = false where id = $1", [eventId]);
+    await withActor(owner, (db) => storeGrantedScopes(db, owner, connectionId, READ_SCOPES));
+    await rejects(() => rescheduleInvite(owner, { eventId, startLocal: "2026-10-22T10:00" }, { fetchImpl, now: NOW }), {
+      code: "scope_missing",
+    });
+    assert.equal(calls.length, 0);
+  });
+
+  it("explains when Outlook no longer has the meeting and leaves the calendar alone", async () => {
+    const eventId = await invite();
+    await rejects(
+      () =>
+        rescheduleInvite(owner, { eventId, startLocal: "2026-10-22T10:00" }, {
+          fetchImpl: graph([], { move: () => json({ error: { code: "ErrorItemNotFound", message: "Not found." } }, 404) }),
+          now: NOW,
+        }),
+      { code: "invalid_input", message: "Outlook no longer has this meeting." },
+    );
+    const row = await getAdminPool().query<{ starts_at: Date }>("select starts_at from crm.calendar_events where id = $1", [eventId]);
+    assert.equal(row.rows[0].starts_at.toISOString(), "2026-10-20T13:00:00.000Z");
+  });
+
+  it("names the meeting, both times and the guests on the assistant's card", async () => {
+    const eventId = await invite();
+    const args = { eventId, startLocal: "2026-10-22T10:00", message: "New slot" };
+    const card = describeAction("move_meeting", args, await recordNames(owner, [args]));
+    assert.equal(card.title, "Move meeting: Eclipse × Jane Doe");
+    assert.equal(card.lines.length, 4);
+    assert.match(card.lines[0], /^From: .*20 Oct.*14:00 for 30 minutes$/);
+    assert.match(card.lines[1], /^To: .*22 Oct.*10:00 for 30 minutes$/);
+    assert.equal(card.lines[2], "Guests: Jane Doe");
+    assert.equal(card.lines[3], "Message to guests: New slot");
   });
 });
 

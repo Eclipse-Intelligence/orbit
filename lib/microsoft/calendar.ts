@@ -496,7 +496,7 @@ function retryAfter(response: Response) {
   return Number.isFinite(seconds) && seconds > 0 ? Math.ceil(seconds) : null;
 }
 
-async function writeError(response: Response, action: "create" | "cancel") {
+async function writeError(response: Response, action: "create" | "cancel" | "move") {
   const body = (await response.json().catch(() => ({}))) as { error?: { message?: string; code?: string } };
   const code = body.error?.code ?? "";
   const message = body.error?.message ?? "";
@@ -526,10 +526,18 @@ async function writeError(response: Response, action: "create" | "cancel") {
       code,
     );
   }
+  if (action === "move" && response.status === 400 && /organi[sz]er/i.test(message)) {
+    return new CalendarWriteError("Only the organiser can move this meeting.", 400, code);
+  }
   if (response.status === 404 || code === "ErrorItemNotFound") {
     return new CalendarWriteError("Outlook no longer has this meeting.", 404, code);
   }
-  const fallback = action === "create" ? "Microsoft could not create the meeting." : "Microsoft could not cancel the meeting.";
+  const fallback =
+    action === "create"
+      ? "Microsoft could not create the meeting."
+      : action === "move"
+        ? "Microsoft could not move the meeting."
+        : "Microsoft could not cancel the meeting.";
   return new CalendarWriteError(sanitizeMicrosoftError(message || fallback), response.status, code);
 }
 
@@ -539,9 +547,10 @@ async function graphWrite(
   payload: unknown,
   fetchImpl: typeof fetch,
   retry: boolean,
+  method: "POST" | "PATCH" = "POST",
 ) {
   const init = () => ({
-    method: "POST",
+    method,
     headers: {
       authorization: `Bearer ${accessToken}`,
       "content-type": "application/json",
@@ -580,4 +589,38 @@ export async function cancelGraphEvent(
   const url = `https://graph.microsoft.com/v1.0/me/events/${encodeURIComponent(eventId)}/cancel`;
   const response = await graphWrite(url, accessToken, comment ? { comment } : {}, fetchImpl, false);
   if (!response.ok) throw await writeError(response, "cancel");
+}
+
+function eventUrl(eventId: string) {
+  return `https://graph.microsoft.com/v1.0/me/events/${encodeURIComponent(eventId)}`;
+}
+
+async function readEventBody(accessToken: string, eventId: string, fetchImpl: typeof fetch) {
+  const response = await fetchImpl(`${eventUrl(eventId)}?$select=body`, {
+    headers: { authorization: `Bearer ${accessToken}`, prefer: 'outlook.body-content-type="html"' },
+    signal: AbortSignal.timeout(WRITE_TIMEOUT_MS),
+  });
+  if (!response.ok) throw await writeError(response, "move");
+  const event = (await response.json().catch(() => ({}))) as { body?: { contentType?: string; content?: string } };
+  const content = event.body?.content ?? "";
+  if (!content.trim()) return "";
+  return event.body?.contentType?.toLowerCase() === "text" ? `<p>${escapeHtml(content).replace(/\r\n|\r|\n/g, "<br>")}</p>` : content;
+}
+
+export async function moveGraphEvent(
+  accessToken: string,
+  eventId: string,
+  input: { start: Date; end: Date; timeZone: string; message: string | null },
+  fetchImpl: typeof fetch = fetch,
+) {
+  const patch: Record<string, unknown> = { ...graphDateTimes(input.start, input.end, input.timeZone) };
+  if (input.message) {
+    const note = `<p>${escapeHtml(input.message).replace(/\r\n|\r|\n/g, "<br>")}</p>`;
+    const current = await readEventBody(accessToken, eventId, fetchImpl);
+    const content = /<body[^>]*>/i.test(current) ? current.replace(/<body[^>]*>/i, (tag) => `${tag}${note}`) : `${note}${current}`;
+    patch.body = { contentType: "HTML", content };
+  }
+  const response = await graphWrite(eventUrl(eventId), accessToken, patch, fetchImpl, true, "PATCH");
+  if (!response.ok) throw await writeError(response, "move");
+  return (await response.json().catch(() => ({}))) as GraphEvent;
 }
