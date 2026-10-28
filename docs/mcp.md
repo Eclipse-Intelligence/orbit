@@ -115,7 +115,7 @@ claude mcp add --transport http orbit https://orbit.geteclipse.co/api/mcp --head
 | Tool | What it does | Main parameters | Scope | Changes | Tokens |
 | --- | --- | --- | --- | --- | --- |
 | `get_recent_activity` | The latest interactions, newest first. | `company_id`, `contact_id`, `limit` (up to 100, default 20) | `crm:read` | No | Both |
-| `add_activity` | Appends an interaction. Activities aren't edited. Attach a company, contact or opportunity. | `type` (`email`, `meeting`, `call`, `note`, `research`, `linkedin`, `agent_update`, `other`), `title`, `body`, `occurredAt`, `companyId`, `contactId`, `opportunityId`, provenance | `activities:write` | Yes | Both |
+| `add_activity` | Appends an interaction. Activities can't be edited over MCP (people edit them in the app or through the assistant). Attach a company, contact or opportunity. | `type` (`email`, `meeting`, `call`, `note`, `research`, `linkedin`, `agent_update`, `other`), `title`, `body`, `occurredAt`, `companyId`, `contactId`, `opportunityId`, provenance | `activities:write` | Yes | Both |
 | `add_note` | Appends a note (an activity of type `note`). | `body`, `title`, `companyId`, `contactId`, `opportunityId`, provenance | `activities:write` | Yes | Both |
 | `record_email` | Files an email on the contact matching a participant email, or the company with that domain. When it happened in the last 48 hours and the company has no open task, it also creates a follow-up task due in two days. | `title`, `body`, `occurredAt`, `participantEmails` (up to 20), `companyId`, `contactId` | `activities:write`; the follow-up also needs `tasks:write` and is skipped without it | Yes | Both |
 | `record_meeting` | As `record_email`, for a meeting. | As `record_email` | As `record_email` | Yes | Both |

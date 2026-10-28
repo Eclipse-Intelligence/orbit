@@ -513,6 +513,29 @@ function outsideAttendees(people: Participant[], isInternal: (email: string) => 
   return [...found.values()];
 }
 
+async function withNewPeople(db: Db, actor: UserActor, imports: ConversationImport[]): Promise<UnfiledImport[]> {
+  if (imports.length === 0) return [];
+  const internal = await internalAddresses(db, actor.workspaceId, [actor.email]);
+  const candidates = imports.map((item) => outsideAttendees(item.participants, internal.isInternal));
+  const emails = [...new Set(candidates.flat().map((person) => person.email))];
+  const existing =
+    emails.length === 0
+      ? new Set<string>()
+      : new Set(
+          (
+            await db.query<{ normalized_email: string }>(
+              `select normalized_email from crm.contacts
+               where workspace_id = $1 and archived_at is null and normalized_email = any($2::text[])`,
+              [actor.workspaceId, emails],
+            )
+          ).rows.map((row) => row.normalized_email),
+        );
+  return imports.map((item, index) => ({
+    ...item,
+    newPeople: candidates[index].filter((person) => !existing.has(person.email)),
+  }));
+}
+
 export async function listUnfiledImports(actor: UserActor, limit = 50): Promise<UnfiledImport[]> {
   assertScope(actor.scopes, "crm:read");
   return withActor(actor, async (db) => {
@@ -524,27 +547,19 @@ export async function listUnfiledImports(actor: UserActor, limit = 50): Promise<
        limit $2`,
       [actor.workspaceId, Math.min(Math.max(limit, 1), 200)],
     );
-    const imports = result.rows.map(mapImport);
-    if (imports.length === 0) return [];
-    const internal = await internalAddresses(db, actor.workspaceId, [actor.email]);
-    const candidates = imports.map((item) => outsideAttendees(item.participants, internal.isInternal));
-    const emails = [...new Set(candidates.flat().map((person) => person.email))];
-    const existing =
-      emails.length === 0
-        ? new Set<string>()
-        : new Set(
-            (
-              await db.query<{ normalized_email: string }>(
-                `select normalized_email from crm.contacts
-                 where workspace_id = $1 and archived_at is null and normalized_email = any($2::text[])`,
-                [actor.workspaceId, emails],
-              )
-            ).rows.map((row) => row.normalized_email),
-          );
-    return imports.map((item, index) => ({
-      ...item,
-      newPeople: candidates[index].filter((person) => !existing.has(person.email)),
-    }));
+    return withNewPeople(db, actor, result.rows.map(mapImport));
+  });
+}
+
+export async function getConversationImport(actor: UserActor, importId: string): Promise<UnfiledImport | null> {
+  assertScope(actor.scopes, "crm:read");
+  if (!isUuid(importId)) return null;
+  return withActor(actor, async (db) => {
+    const result = await db.query<ImportRow>(
+      `select ${IMPORT_COLUMNS} from crm.conversation_imports i where i.id = $1 and i.workspace_id = $2`,
+      [importId, actor.workspaceId],
+    );
+    return (await withNewPeople(db, actor, result.rows.map(mapImport)))[0] ?? null;
   });
 }
 
@@ -611,7 +626,7 @@ async function lockImport(db: Db, actor: UserActor, importId: string) {
   return result.rows[0] ?? null;
 }
 
-async function fileLockedImport(db: Db, actor: UserActor, row: LockedImport, contactId: string) {
+async function fileLockedImport(db: Db, actor: UserActor, row: LockedImport, contactId: string, provenance?: Provenance) {
   const found = await db.query<{ id: string; company_id: string | null; name: string | null }>(
     `select id, company_id,
             coalesce(nullif(trim(concat_ws(' ', first_name, last_name)), ''), email, phone) as name
@@ -629,7 +644,7 @@ async function fileLockedImport(db: Db, actor: UserActor, row: LockedImport, con
       companyId: contact.company_id,
       contactName: contact.name,
     }),
-    { operation: "file_conversation", source: row.source === "granola" ? "granola" : "microsoft" },
+    provenance ?? { operation: "file_conversation", source: row.source === "granola" ? "granola" : "microsoft" },
   );
   await db.query(
     `update crm.conversation_imports
@@ -658,19 +673,21 @@ async function lockUnfiled(db: Db, actor: UserActor, importId: string) {
   return row;
 }
 
+type FileOptions = { summarise?: boolean; fetchImpl?: typeof fetch; provenance?: Provenance };
+
 export async function fileImport(
   actor: UserActor,
   importId: string,
   contactId: string,
-  options: { summarise?: boolean; fetchImpl?: typeof fetch } = {},
+  options: FileOptions = {},
 ) {
   assertScope(actor.scopes, "activities:write");
   if (!isUuid(importId)) throw new CrmError("not_found", "Conversation not found.", 404);
   if (!isUuid(contactId)) throw new CrmError("not_found", "Contact not found.", 404);
   const filed = await withActor(actor, async (db) => {
     const row = await lockUnfiled(db, actor, importId);
-    const result = await fileLockedImport(db, actor, row, contactId);
-    return { activityId: result.activityId };
+    const result = await fileLockedImport(db, actor, row, contactId, options.provenance);
+    return { activityId: result.activityId, contactName: result.contactName };
   });
   if (options.summarise ?? true) {
     await summariseImport(actor, importId, { fetchImpl: options.fetchImpl });
@@ -705,6 +722,7 @@ export async function createContactFromAttendeeInDb(
   actor: UserActor,
   person: AttendeePerson,
   extraInternal: (string | null | undefined)[] = [],
+  provenance: Provenance = ATTENDEE_PROVENANCE,
 ) {
   const wanted = canonicalEmail(typeof person.email === "string" ? person.email : "");
   if (!wanted) {
@@ -752,7 +770,7 @@ export async function createContactFromAttendeeInDb(
             db,
             actor,
             { name: companyNameFromDomain(domain), domain, source: "meeting" },
-            ATTENDEE_PROVENANCE,
+            provenance,
           )
         ).company.id;
     }
@@ -761,14 +779,14 @@ export async function createContactFromAttendeeInDb(
       if (companyId) fill.companyId = companyId;
       if (!current.first_name && !current.last_name && names.firstName) Object.assign(fill, names);
       if (Object.keys(fill).length > 1) {
-        await upsertContactInDb(db, actor, fill, ATTENDEE_PROVENANCE);
+        await upsertContactInDb(db, actor, fill, provenance);
       }
     } else {
       const result = await upsertContactInDb(
         db,
         actor,
         { ...names, email: wanted, companyId, source: "meeting" },
-        ATTENDEE_PROVENANCE,
+        provenance,
       );
       contactId = result.contact.id;
       created = result.created;
@@ -808,7 +826,7 @@ export async function createContactAndFile(
   actor: UserActor,
   importId: string,
   email: string,
-  options: { summarise?: boolean; fetchImpl?: typeof fetch } = {},
+  options: FileOptions = {},
 ) {
   assertScope(actor.scopes, "activities:write");
   assertScope(actor.scopes, "contacts:write");
@@ -828,8 +846,8 @@ export async function createContactAndFile(
         field: "email",
       });
     }
-    const saved = await createContactFromAttendeeInDb(db, actor, { name: person.name, email: wanted });
-    const result = await fileLockedImport(db, actor, row, saved.contactId);
+    const saved = await createContactFromAttendeeInDb(db, actor, { name: person.name, email: wanted }, [], options.provenance && { ...options.provenance, operation: ATTENDEE_PROVENANCE.operation });
+    const result = await fileLockedImport(db, actor, row, saved.contactId, options.provenance);
     return {
       contactId: saved.contactId,
       contactName: result.contactName ?? wanted,

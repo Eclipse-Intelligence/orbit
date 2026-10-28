@@ -20,7 +20,7 @@ import {
 } from "@/lib/proposals/documents";
 import { fieldValues, renderBlocks, tabsOf, totalLabel, totalsOf } from "@/lib/proposals/model";
 import { clientDecline, clientSign, clientStep, openDocument, publicFile, publicKnowledgeFile, recordReading } from "@/lib/proposals/public";
-import { describeAction, runTool } from "@/lib/assistant/tools";
+import { describeAction, recordNames, runTool } from "@/lib/assistant/tools";
 import { copyProposalImage } from "@/lib/proposals/media";
 import { addStep, moveStep, removeStep, updateStep } from "@/lib/proposals/steps";
 import { addKnowledgeText } from "@/lib/knowledge/store";
@@ -418,6 +418,35 @@ describe("proposals", () => {
     const ticked = (await runTool(owner, "update_proposal_steps", { id, action: "done", stepId: legal.id })) as { steps: { id: string; doneBy: string | null }[] };
     assert.equal(ticked.steps.find((step) => step.id === legal.id)?.doneBy, "user");
     assert.match(((await runTool(owner, "update_proposal_steps", { id, action: "explode" })) as { error: string }).error, /Choose add, done, undone or remove/);
+  });
+
+  it("lets the assistant withdraw a sent proposal, with a card showing the client and status, and refuses ones it can't", async () => {
+    const id = await createDocument(owner, { templateId: proposalTemplateId, companyId: pulseId, contactId: andrewId, currency: "GBP", items: [{ productId: pilotId }], title: "Pulse renewal" });
+    assert.equal(((await runTool(owner, "withdraw_proposal", { id })) as { error: string }).error, "This proposal hasn't been sent, so there's nothing to withdraw. Archive the draft instead.");
+    const token = tokenOf((await sendDocument(owner, id, { email: false })).url);
+    const card = describeAction("withdraw_proposal", { id }, await recordNames(owner, [{ id }], ["withdraw_proposal"]));
+    assert.equal(card.title, "Withdraw proposal: Pulse renewal");
+    assert.equal(card.lines[0], "Client: Andrew Sanaghan at Pulse");
+    assert.match(card.lines[1], /^Status: Sent, sent \w{3} \d{1,2} \w{3}( \d{4})?$/);
+    assert.match(card.lines[2], /^Value: £[\d,]+ one-off$/);
+    assert.equal(card.lines[3], "The client's link stops working and it can't be signed.");
+    const withdrawn = (await runTool(owner, "withdraw_proposal", { id })) as { withdrawn: boolean; status: string; href: string };
+    assert.deepEqual([withdrawn.withdrawn, withdrawn.status, withdrawn.href], [true, "withdrawn", `/proposals/${id}`]);
+    assert.equal((await openDocument(token, { track: false }))?.state, "withdrawn");
+    const audit = await getAdminPool().query<{ source: string; operation: string }>("select source, operation from crm.audit_events where entity_id = $1 and event_type = 'document.withdrawn'", [id]);
+    assert.deepEqual(audit.rows, [{ source: "assistant", operation: "withdraw_proposal" }]);
+    assert.equal(((await runTool(owner, "withdraw_proposal", { id })) as { error: string }).error, "This proposal is already withdrawn.");
+    const again = describeAction("withdraw_proposal", { id }, await recordNames(owner, [{ id }], ["withdraw_proposal"]));
+    assert.equal(again.lines.at(-1), "This will be refused: This proposal is already withdrawn.");
+
+    const signed = await createDocument(owner, { templateId: proposalTemplateId, companyId: pulseId, contactId: andrewId, currency: "GBP", items: [{ productId: pilotId }] });
+    await sendDocument(owner, signed, { email: false });
+    await getAdminPool().query("update crm.documents set status = 'client_signed' where id = $1", [signed]);
+    const signedCard = describeAction("withdraw_proposal", { id: signed }, await recordNames(owner, [{ id: signed }], ["withdraw_proposal"]));
+    assert.equal(signedCard.lines.at(-1), "The client has signed it. Withdrawing means you can't countersign it, and their link stops working.");
+    await getAdminPool().query("update crm.documents set status = 'completed' where id = $1", [signed]);
+    assert.equal(((await runTool(owner, "withdraw_proposal", { id: signed })) as { error: string }).error, "This proposal has been signed by both sides, so it can't be withdrawn.");
+    assert.equal((await getDocument(owner, signed)).status, "completed");
   });
 
   it("lets the assistant change a sent proposal, build templates and copy images", async () => {

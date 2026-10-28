@@ -456,12 +456,13 @@ async function withTidy(actor: UserActor, kind: LearningKind, result: UnitResult
   }
 }
 
-async function lastDone(actor: UserActor, kind: LearningKind) {
+async function lastDone(actor: UserActor, kind: LearningKind, beforeDay: string | null = null) {
   return withActor(actor, async (db) => {
     const result = await db.query<{ finished_at: Date }>(
       `select finished_at from crm.learning_runs where workspace_id = $1 and kind = $2 and status = 'done' and ($3::uuid is null or user_id = $3)
+         and ($4::date is null or (finished_at at time zone 'Europe/London')::date < $4::date)
        order by finished_at desc limit 1`,
-      [actor.workspaceId, kind, kind === "personal" || kind === "brief" ? actor.userId : null],
+      [actor.workspaceId, kind, kind === "personal" || kind === "brief" ? actor.userId : null, beforeDay],
     );
     return result.rows[0]?.finished_at ?? null;
   });
@@ -483,7 +484,9 @@ async function unitState(actor: UserActor, kind: LearningKind, day: string, now:
   });
 }
 
-export async function runUnit(actor: UserActor, kind: LearningKind, options: Options & { trigger: "nightly" | "manual" }): Promise<UnitResult & { error?: string }> {
+type UnitOptions = Options & { trigger: "nightly" | "manual"; rebuildBrief?: boolean };
+
+export async function runUnit(actor: UserActor, kind: LearningKind, options: UnitOptions): Promise<UnitResult & { error?: string }> {
   const now = options.now ?? new Date();
   const owner = kind === "personal" || kind === "brief" ? actor.userId : null;
   const run = await withActor(actor, async (db) =>
@@ -498,7 +501,7 @@ export async function runUnit(actor: UserActor, kind: LearningKind, options: Opt
     ).rows[0].id,
   );
   try {
-    const previous = await lastDone(actor, kind);
+    const previous = await lastDone(actor, kind, kind === "brief" && options.rebuildBrief ? londonDay(now) : null);
     const since = previous ?? new Date(now.getTime() - (kind === "brief" ? 86_400_000 : FIRST_LOOKBACK_MS));
     const result =
       kind === "personal"
@@ -552,8 +555,13 @@ export async function runNightlyLearning(options: Options) {
   return { day, report };
 }
 
-export async function learnNow(actor: UserActor, options: Options) {
-  const kinds: LearningKind[] = actor.role === "owner" || actor.role === "admin" ? ["business", "market", "personal", "brief"] : ["personal", "brief"];
+function allowedKinds(actor: UserActor): LearningKind[] {
+  return actor.role === "owner" || actor.role === "admin" ? ["business", "market", "personal", "brief"] : ["personal", "brief"];
+}
+
+export async function learnNow(actor: UserActor, options: Options & { kinds?: LearningKind[]; rebuildBrief?: boolean }) {
+  const allowed = allowedKinds(actor);
+  const kinds = options.kinds ? allowed.filter((kind) => options.kinds!.includes(kind)) : allowed;
   const results: Partial<Record<LearningKind, UnitResult & { error?: string }>> = {};
   for (const kind of kinds) {
     if (options.deadline - Date.now() < UNIT_MIN_MS) {
@@ -563,6 +571,29 @@ export async function learnNow(actor: UserActor, options: Options) {
     results[kind] = await runUnit(actor, kind, { ...options, trigger: "manual" });
   }
   return results;
+}
+
+export const LEARNING_KINDS: LearningKind[] = ["business", "market", "personal", "brief"];
+
+export async function learningKinds(actor: UserActor, choice: LearningKind | "all") {
+  const allowed = allowedKinds(actor);
+  if (choice !== "all" && !allowed.includes(choice)) {
+    throw new CrmError("forbidden", "Only owners and admins can run the business and market learning. You can run learning about you, or rebuild your morning brief.", 403, { field: "kind" });
+  }
+  const kinds = choice === "all" ? allowed : [choice];
+  const running = await withActor(actor, async (db) => {
+    const result = await db.query<{ kind: LearningKind }>(
+      `select distinct kind from crm.learning_runs
+       where workspace_id = $1 and kind = any($2::text[]) and status = 'running' and started_at > now() - make_interval(secs => $3::double precision)
+         and (user_id is null or user_id = $4)`,
+      [actor.workspaceId, kinds, STALE_RUN_MS / 1000, actor.userId],
+    );
+    return result.rows.map((row) => row.kind);
+  });
+  if (running.length) {
+    throw new CrmError("conflict", "Orbit is already learning right now. Wait a few minutes for it to finish, then check Settings, Learning.", 409, { field: "kind" });
+  }
+  return kinds;
 }
 
 export type Brief = { id: string; day: string; body: string; createdAt: string };
