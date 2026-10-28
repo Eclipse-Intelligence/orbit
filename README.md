@@ -58,7 +58,7 @@ Settings › Team lists everyone in the workspace. The owner and admins invite p
 What is shared and what is private:
 
 - Shared with every member: companies, contacts, deals, boards, tags, email templates, and everything logged to a record (emails, calls, meetings, notes, call summaries, filed transcripts), plus meetings from calendars marked Use for CRM that include a contact or company.
-- Private to each person: their inbox, calendars and calendar page, OAuth tokens and API keys, email signatures and unsent attachments, assistant conversations, workflow runs and approvals, notifications.
+- Private to each person: their inbox, calendars and calendar page, OAuth tokens and API keys, email signatures and unsent attachments, assistant conversations and the files attached in them, workflow runs and approvals, notifications.
 - Tasks belong to their owner and creator. A member sees only tasks assigned to them or that they created, everywhere in Orbit (lists, record pages, search, the assistant). The owner and admins see everyone's, with a Mine or Everyone switch on Tasks once the workspace has more than one person. New tasks are owned by whoever creates them. Reminders, the side menu count and the notifications bell only cover your own tasks and unowned ones. A member can hand back a task they created, but not one someone else gave them.
 
 Removing someone moves their companies, contacts, deals and tasks to whoever removed them, disconnects their Microsoft and calendar accounts, AI account, Orbit Agent, Granola key and Readwise token, and keeps everything they logged.
@@ -508,6 +508,10 @@ The Quiet page (`/quiet`, `G` then `Q`) lists up to 100 companies with no intera
 Every CRM page has an "Ask Orbit anything" bar at the bottom. Click it or press `O` to open the assistant; `Esc` minimises it. It answers from Orbit's data using tools, and proposes changes for you to approve. It works as you, with your role's permissions and the same row-level security as the app.
 
 Set `LLM_API_KEY` to turn it on. Without it, every request returns "Set LLM_API_KEY in Vercel to use the assistant.", including for ChatGPT and Claude account models.
+
+### Files in the chat
+
+Attach files to a message with the paperclip next to Web, or drop them on the assistant: up to 10 a message and 25 MB in total. They upload straight to private storage and show as chips you can remove before sending, then stay on the message in the chat. The assistant can read PDF, Word, PowerPoint, Excel, text, CSV and HTML files, add a file to Knowledge for a company or Eclipse when you approve it, and attach it to an email it sends or drafts. It can't see images yet, and says so. Files are private to you until you add one to Knowledge. They're kept as long as the chat, deleted with it, and files you attach but never send are removed after a day.
 
 ### About you
 
