@@ -61,6 +61,7 @@ import { companyHref, contactHref, opportunityHref } from "@/lib/crm/hrefs";
 import { getMailbox, listInbox } from "@/lib/crm/inbox";
 import { createInvite, getMeetingLink } from "@/lib/crm/invites";
 import { archiveOpportunity, createOpportunity, getOpportunity, listOpportunities, listPipeline, updateOpportunity } from "@/lib/crm/opportunities";
+import { pipelineReport, stageHistory, stalledDeals, STALLED_DAYS } from "@/lib/crm/pipeline-history";
 import { getMyEmails } from "@/lib/crm/profile";
 import { REMINDER_OPTIONS } from "@/lib/crm/reminder-options";
 import { findStaleRelationships, getCompanyContext, listAttention } from "@/lib/crm/relationships";
@@ -709,6 +710,61 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         },
       };
     },
+  },
+  {
+    name: "get_deal_history",
+    label: "Reading the deal's history",
+    description:
+      "Every stage a deal or board card has been in, oldest first: stage, the stage it came from, when it entered and left, days in it and who moved it. Creating the deal counts as entering its first stage.",
+    parameters: {
+      type: "object",
+      properties: { opportunityId: idParam("Opportunity id.") },
+      required: ["opportunityId"],
+    },
+    run: async (actor, args) => stageHistory(actor, required(args.opportunityId, "opportunityId")),
+  },
+  {
+    name: "pipeline_report",
+    label: "Reporting on the pipeline",
+    description:
+      "Conversion and time in stage for the sales pipeline (or a board) since a date (default 90 days ago). Per stage: deals in it now, how many entered, median and average days in stage (current and past stays), how many moved forward, were won, lost, moved back or are stalled now, and the share of deals entering it that were won. Forward and back use the current stage order, and a move into a stage that has since been deleted counts as forward. Stalled uses only tasks that you can see, as stalled_deals does. Also the overall win rate of deals closed in the period. Use this for conversion, win rate and time in stage instead of reading deals one at a time.",
+    parameters: {
+      type: "object",
+      properties: {
+        boardId: idParam("A board id from list_boards. Omit for the sales pipeline."),
+        since: { type: "string", description: "Start of the period, YYYY-MM-DD. Defaults to 90 days ago." },
+        stalledDays: { type: "integer", minimum: 1, maximum: 365, description: `Days without activity that count as stalled. Defaults to ${STALLED_DAYS}.` },
+      },
+    },
+    run: async (actor, args) =>
+      pipelineReport(actor, {
+        pipelineId: optionalStr(args.boardId),
+        since: optionalStr(args.since),
+        stalledDays: int(args.stalledDays, STALLED_DAYS, 1, 365),
+      }),
+  },
+  {
+    name: "stalled_deals",
+    label: "Finding deals gone quiet",
+    description:
+      `Open deals where nothing has happened for N days (default ${STALLED_DAYS}) since they entered their current stage: no activity or email on the deal, its company or its contact, and no open task that you can see due in that time or later (a long-overdue task doesn't count). Returns each deal with its stage, days in stage, last activity date and why it's stalled, quietest first. Sales pipelines by default; pass boardId for a board. Use this for "which deals have gone quiet".`,
+    parameters: {
+      type: "object",
+      properties: {
+        days: { type: "integer", minimum: 1, maximum: 365, description: `Days without activity. Defaults to ${STALLED_DAYS}.` },
+        stageIds: { type: "array", items: { type: "string" }, description: "Only these stages (ids from get_pipeline or get_board)." },
+        boardId: idParam("A board id from list_boards. Omit for the sales pipeline."),
+        limit: limitParam,
+      },
+    },
+    run: async (actor, args) => ({
+      deals: await stalledDeals(actor, {
+        days: int(args.days, STALLED_DAYS, 1, 365),
+        stageIds: strings(args.stageIds),
+        pipelineId: optionalStr(args.boardId),
+        limit: int(args.limit, 50, 1, 100),
+      }),
+    }),
   },
   {
     name: "list_boards",
