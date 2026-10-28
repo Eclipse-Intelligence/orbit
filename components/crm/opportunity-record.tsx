@@ -221,21 +221,17 @@ export default function OpportunityRecord({
               </DetailList>
             </DetailSection>
             <DetailSection title="Stage history">
-              {stays.length === 0 ? (
-                <p className="caption-style text-subtle">No stage changes yet.</p>
-              ) : (
-                <ol className="flex flex-col gap-2">
-                  {[...stays].reverse().map((stay) => (
-                    <li key={`${stay.stageId ?? "none"}-${stay.enteredAt}`} className="flex items-baseline justify-between gap-3 text-[14px] leading-5">
-                      <span className="min-w-0 truncate">{stay.stageName ?? "No stage"}</span>
-                      <span className="caption-style text-subtle shrink-0 tabular-nums">
-                        {formatDateLabel(LONDON_DAY.format(new Date(stay.enteredAt)))}
-                        {stay.leftAt === null && opportunity.status !== "open" ? "" : ` · ${stayDays(stay.daysInStage)}`}
-                      </span>
-                    </li>
-                  ))}
-                </ol>
-              )}
+              <ol className="flex flex-col gap-2">
+                {[...stays].reverse().map((stay) => (
+                  <li key={`${stay.stageId ?? "none"}-${stay.enteredAt}`} className="flex items-baseline justify-between gap-3 text-[14px] leading-5">
+                    <span className="min-w-0 truncate">{stay.stageName ?? "No stage"}</span>
+                    <span className="caption-style text-subtle shrink-0 tabular-nums">
+                      {formatDateLabel(LONDON_DAY.format(new Date(stay.enteredAt)))}
+                      {stay.leftAt === null && opportunity.status !== "open" ? "" : ` · ${stayDays(stay.daysInStage)}`}
+                    </span>
+                  </li>
+                ))}
+              </ol>
             </DetailSection>
             <DetailSection title={tasks.length ? `Open tasks · ${tasks.length}` : "Open tasks"}>
               {tasks.length === 0 ? (

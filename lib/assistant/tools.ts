@@ -727,7 +727,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     name: "pipeline_report",
     label: "Reporting on the pipeline",
     description:
-      "Conversion and time in stage for the sales pipeline (or a board) since a date (default 90 days ago). Per stage: deals in it now, how many entered, median and average days in stage (current and past stays), how many moved forward, were won, lost, moved back or are stalled now, and the share of deals entering it that were won. Also the overall win rate of deals closed in the period. Use this for conversion, win rate and time in stage instead of reading deals one at a time.",
+      "Conversion and time in stage for the sales pipeline (or a board) since a date (default 90 days ago). Per stage: deals in it now, how many entered, median and average days in stage (current and past stays), how many moved forward, were won, lost, moved back or are stalled now, and the share of deals entering it that were won. Forward and back use the current stage order, and a move into a stage that has since been deleted counts as forward. Stalled uses only tasks that you can see, as stalled_deals does. Also the overall win rate of deals closed in the period. Use this for conversion, win rate and time in stage instead of reading deals one at a time.",
     parameters: {
       type: "object",
       properties: {
@@ -747,7 +747,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     name: "stalled_deals",
     label: "Finding deals gone quiet",
     description:
-      `Open deals where nothing has happened for N days (default ${STALLED_DAYS}) since they entered their current stage: no activity or email on the deal, its company or its contact, and no open task with a due date. Returns each deal with its stage, days in stage, last activity date and why it's stalled, quietest first. Sales pipelines by default; pass boardId for a board. Use this for "which deals have gone quiet".`,
+      `Open deals where nothing has happened for N days (default ${STALLED_DAYS}) since they entered their current stage: no activity or email on the deal, its company or its contact, and no open task that you can see due in that time or later (a long-overdue task doesn't count). Returns each deal with its stage, days in stage, last activity date and why it's stalled, quietest first. Sales pipelines by default; pass boardId for a board. Use this for "which deals have gone quiet".`,
     parameters: {
       type: "object",
       properties: {

@@ -5,6 +5,7 @@ import { createActivity } from "@/lib/crm/activities";
 import { createBoard, getBoard } from "@/lib/crm/boards";
 import { createCompany } from "@/lib/crm/companies";
 import { createOpportunity, listPipeline, updateOpportunity } from "@/lib/crm/opportunities";
+import { savePipelineStages } from "@/lib/crm/pipeline";
 import { pipelineReport, stageHistory, stalledDeals } from "@/lib/crm/pipeline-history";
 import { completeTask, createTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
@@ -138,6 +139,20 @@ describe("pipeline history", () => {
     await assert.rejects(pipelineReport(owner, { since: "soon" }), /Use a date like/);
   });
 
+  it("reads a since date as midnight in the app time zone", async () => {
+    const configured = process.env.NEXT_PUBLIC_TIMEZONE;
+    process.env.NEXT_PUBLIC_TIMEZONE = "Europe/London";
+    try {
+      assert.equal((await pipelineReport(owner, { since: "2026-07-01", now })).since, "2026-06-30T23:00:00.000Z");
+      assert.equal((await pipelineReport(owner, { since: "2026-01-15", now })).since, "2026-01-15T00:00:00.000Z");
+      assert.equal((await pipelineReport(owner, { since: "2026-07-01T00:00:00Z", now })).since, "2026-07-01T00:00:00.000Z");
+      await assert.rejects(pipelineReport(owner, { since: "2026-02-30", now }), /Use a date like/);
+    } finally {
+      if (configured === undefined) delete process.env.NEXT_PUBLIC_TIMEZONE;
+      else process.env.NEXT_PUBLIC_TIMEZONE = configured;
+    }
+  });
+
   it("finds open deals that have gone quiet in their stage, and activity or a due task un-stalls them", async () => {
     const stalled = await stalledDeals(owner, { days: 7, now });
     assert.deepEqual(stalled.map((item) => item.name), ["Initech deal", "Hal deal"]);
@@ -183,6 +198,38 @@ describe("pipeline history", () => {
     assert.equal(report.winRate, null);
     assert.equal(report.stages[1].outcomes.stalled, 1);
     assert.deepEqual(report.stages[0].daysInStage?.past, { count: 1, median: 10, average: 10 });
+  });
+
+  it("counts a move into a stage that has since been deleted as forward, so the outcomes add up", async () => {
+    const board = await createBoard(owner, { name: "Delivery" });
+    const [toStart, inProgress, done] = (await getBoard(owner, board.id)).stages;
+    const withReview = await savePipelineStages(
+      owner,
+      [{ id: toStart.id, name: toStart.name }, { name: "Review" }, { id: inProgress.id, name: inProgress.name }, { id: done.id, name: done.name }],
+      board.id,
+    );
+    const review = withReview[1].id;
+    const card = async (name: string, stageIds: string[]) => {
+      const company = (await createCompany(owner, { name, domain: `${name.toLowerCase()}.test` })).body.company.id;
+      const created = (await createOpportunity(owner, { companyId: company, pipelineId: board.id })).body.opportunity;
+      for (const stageId of stageIds) await updateOpportunity(owner, created.id, { stageId });
+      return created.id;
+    };
+    await backdate(await card("Reviewed", [review, inProgress.id]), 10, [8, 4]);
+    await backdate(await card("Direct", [inProgress.id]), 10, [6]);
+    await savePipelineStages(
+      owner,
+      [{ id: toStart.id, name: toStart.name }, { id: inProgress.id, name: inProgress.name }, { id: done.id, name: done.name }],
+      board.id,
+    );
+
+    const report = await pipelineReport(owner, { pipelineId: board.id, since: ago(60), now });
+    assert.deepEqual(report.stages.map((item) => item.name), [toStart.name, inProgress.name, done.name]);
+    const [first, second] = report.stages;
+    assert.deepEqual(first.outcomes, { forward: 2, won: 0, lost: 0, back: 0, stalled: 0 });
+    assert.equal(first.outcomes.forward + first.outcomes.won + first.outcomes.lost + first.outcomes.back, first.daysInStage?.past.count);
+    assert.equal(second.entered, 2);
+    assert.equal(second.inStageNow, 2);
   });
 
   it("gives the assistant read-only tools and puts stalled deals in the morning brief", async () => {

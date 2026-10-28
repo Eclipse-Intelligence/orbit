@@ -5,6 +5,7 @@ import { opportunityHref } from "@/lib/crm/hrefs";
 import { iso, isUuid } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
 import type { Actor, BoardKind, OpportunityStatus } from "@/lib/crm/types";
+import { appTimeZone, parseDateTime } from "@/lib/time";
 
 export const STALLED_DAYS = 7;
 const REPORT_DAYS = 90;
@@ -137,8 +138,8 @@ function rate(part: number, whole: number) {
 
 function parseSince(value: Date | string | null | undefined, now: Date) {
   if (value === undefined || value === null || value === "") return new Date(now.getTime() - REPORT_DAYS * DAY_MS);
-  const date = value instanceof Date ? value : new Date(/^\d{4}-\d{2}-\d{2}$/.test(value.trim()) ? `${value.trim()}T00:00:00Z` : value);
-  if (Number.isNaN(date.getTime())) throw new CrmError("invalid_input", "Use a date like 2026-09-01.", 400, { field: "since" });
+  const date = value instanceof Date ? value : parseDateTime(value, appTimeZone());
+  if (!date || Number.isNaN(date.getTime())) throw new CrmError("invalid_input", "Use a date like 2026-09-01.", 400, { field: "since" });
   return date;
 }
 
@@ -469,8 +470,9 @@ export async function pipelineReport(
         if (!closed && stay.leftAt && stay.leftAt >= since) tally.past.push(days(stay.enteredAt, stay.leftAt));
         const next = stays[position + 1];
         const nextStage = next?.stageId ? stages.get(next.stageId) : undefined;
-        if (!stay.leftAt || stay.leftAt < since || !nextStage) return;
-        if (nextStage.is_won) tally.won += 1;
+        if (!next || !stay.leftAt || stay.leftAt < since) return;
+        if (!nextStage) tally.forward += 1;
+        else if (nextStage.is_won) tally.won += 1;
         else if (nextStage.is_lost) tally.lost += 1;
         else if (nextStage.position > stage.position) tally.forward += 1;
         else tally.back += 1;
