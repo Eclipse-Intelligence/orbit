@@ -6,6 +6,8 @@ import Button from "@/components/_ui/button";
 import { addContactInlineAction } from "@/app/(crm)/records";
 import { companyHref, contactHref, dealHref } from "@/lib/crm/hrefs";
 import type { ThreadPerson } from "@/lib/mail/view";
+import { cn } from "@/lib/utils";
+import PlusIcon from "@/public/assets/images/_common/plus.svg";
 
 function fallbackName(person: ThreadPerson) {
   return person.name?.trim() || person.email.split("@")[0];
@@ -76,8 +78,17 @@ export default function ThreadPeople({ people }: { people: ThreadPerson[] }) {
                 </span>
               </span>
               {!contactId && (
-                <Button variant="secondary" size="sm" disabled={busy === person.email} onClick={() => void add(person)} className="shrink-0">
-                  {busy === person.email ? "Adding…" : "Add contact"}
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={busy === person.email}
+                  onClick={() => void add(person)}
+                  aria-label={`Add ${fallbackName(person)} as a contact`}
+                  title="Add contact"
+                  className="shrink-0 max-sm:size-8 max-sm:p-0"
+                >
+                  <PlusIcon aria-hidden className={cn("size-3.5 sm:hidden", busy === person.email && "animate-pulse")} />
+                  <span className="max-sm:hidden">{busy === person.email ? "Adding…" : "Add contact"}</span>
                 </Button>
               )}
             </li>
