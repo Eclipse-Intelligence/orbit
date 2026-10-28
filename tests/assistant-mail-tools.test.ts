@@ -431,9 +431,16 @@ describe("assistant mail tools", () => {
       runTool(owner, "send_email", { to: ["jane@acme.test"], subject: "Renewal", body: "Hi Jane,\n\nThe renewal.\n\nMark", sendAt: londonInput(first), attachmentIds: [deckId] }),
     )) as { draftId: string };
     const draftId = scheduled.draftId;
-    const listed = (await runTool(owner, "list_scheduled_emails", {})) as { scheduled: { id: string; to: string[]; subject: string; sendAt: string; attachments: string[]; didNotSend: string | null }[] };
+    type Listed = { scheduled: { id: string; to: string[]; subject: string; body: string; sendAt: string; attachments: string[]; didNotSend: string | null }[]; note?: string; emails?: unknown };
+    const listed = (await runTool(owner, "search_email", { folder: "scheduled" })) as Listed;
     const entry = listed.scheduled.find((item) => item.id === draftId)!;
-    assert.deepEqual([entry.to, entry.subject, entry.attachments, entry.didNotSend], [["jane@acme.test"], "Renewal", ["Eclipse deck.pdf"], null]);
+    assert.deepEqual([entry.to, entry.subject, entry.body, entry.attachments, entry.didNotSend], [["jane@acme.test"], "Renewal", "Hi Jane,\n\nThe renewal.\n\nMark", ["Eclipse deck.pdf"], null]);
+    assert.ok(entry.sendAt);
+    assert.equal(listed.note, undefined);
+    assert.equal(listed.emails, undefined);
+    const filtered = (await runTool(owner, "search_email", { folder: "scheduled", query: "nothing matches this", limit: 1 })) as Listed;
+    assert.ok(filtered.scheduled.some((item) => item.id === draftId));
+    assert.equal(filtered.note, "folder scheduled always lists every scheduled email, so query and limit were ignored.");
 
     const change = { draftId, sendAt: londonInput(later), subject: "Renewal terms", cc: ["ola@acme.test"], body: "Hi Jane,\n\nThe renewal terms.\n\nMark" };
     const card = describeAction("change_scheduled_email", change, await recordNames(owner, [change], ["change_scheduled_email"]));
@@ -454,22 +461,28 @@ describe("assistant mail tools", () => {
     assert.equal(Math.round(row.send_at.getTime() / 60_000), Math.floor(later.getTime() / 60_000));
     assert.equal(row.body, change.body);
     assert.equal((await draftFiles(draftId))?.length, 1);
-    assert.equal(((await runTool(owner, "change_scheduled_email", { draftId })) as { error: string }).error, "Say what to change: sendAt, subject, body, to, cc or bcc.");
+    assert.equal(((await runTool(owner, "change_scheduled_email", { draftId })) as { error: string }).error, "Say what to change (sendAt, subject, body, to, cc or bcc), or pass cancel true to stop it sending.");
+    const mixed = { draftId, cancel: true, subject: "Something else" };
+    const cancelAlone = "Cancel on its own: leave out sendAt, subject, body, to, cc and bcc to cancel, or leave out cancel to change it instead.";
+    assert.equal(((await runTool(owner, "change_scheduled_email", mixed)) as { error: string }).error, cancelAlone);
+    assert.equal(describeAction("change_scheduled_email", mixed, await recordNames(owner, [mixed], ["change_scheduled_email"])).lines.at(-1), `This will be refused: ${cancelAlone}`);
+    assert.ok((await listScheduledDrafts(owner)).some((item) => item.id === draftId));
 
     await admin.query("update crm.mail_drafts set send_at = null where id = $1", [draftId]);
     const sending = "That email isn't waiting to send any more. Either it's sending now (check Sent in Mail) or it was unscheduled and is in Drafts.";
     assert.equal(((await withFetch(env.fetchImpl, () => runTool(owner, "change_scheduled_email", change))) as { error: string }).error, sending);
-    assert.equal(((await runTool(owner, "cancel_scheduled_email", { draftId })) as { error: string }).error, sending);
-    const refusedCard = describeAction("cancel_scheduled_email", { draftId }, await recordNames(owner, [{ draftId }], ["cancel_scheduled_email"]));
+    const cancel = { draftId, cancel: true };
+    assert.equal(((await runTool(owner, "change_scheduled_email", cancel)) as { error: string }).error, sending);
+    const refusedCard = describeAction("change_scheduled_email", cancel, await recordNames(owner, [cancel], ["change_scheduled_email"]));
     assert.equal(refusedCard.lines[0], "This email isn't scheduled any more, so this will be refused.");
 
     await admin.query("update crm.mail_drafts set send_at = $2 where id = $1", [draftId, later]);
-    const cancelCard = describeAction("cancel_scheduled_email", { draftId }, await recordNames(owner, [{ draftId }], ["cancel_scheduled_email"]));
+    const cancelCard = describeAction("change_scheduled_email", cancel, await recordNames(owner, [cancel], ["change_scheduled_email"]));
     assert.equal(cancelCard.title, "Cancel scheduled email: Renewal terms");
     assert.equal(cancelCard.lines[0], "To: jane@acme.test");
     assert.match(cancelCard.lines[1], /^Due: /);
     assert.equal(cancelCard.lines[2], "It stays in Drafts, so you can send it or change it later.");
-    const cancelled = (await runTool(owner, "cancel_scheduled_email", { draftId })) as { cancelled: boolean; kept: string; draftId: string };
+    const cancelled = (await runTool(owner, "change_scheduled_email", cancel)) as { cancelled: boolean; kept: string; draftId: string };
     assert.deepEqual([cancelled.cancelled, cancelled.kept, cancelled.draftId], [true, "in Drafts", draftId]);
     const kept = (await admin.query<{ send_at: Date | null }>("select send_at from crm.mail_drafts where id = $1", [draftId])).rows[0];
     assert.equal(kept.send_at, null);
@@ -478,7 +491,7 @@ describe("assistant mail tools", () => {
 
     await admin.query("delete from crm.mail_drafts where id = $1", [draftId]);
     const gone = "That scheduled email isn't in Orbit Mail any more. It has probably been sent or discarded, so check Sent in Mail.";
-    assert.equal(((await runTool(owner, "cancel_scheduled_email", { draftId })) as { error: string }).error, gone);
+    assert.equal(((await runTool(owner, "change_scheduled_email", cancel)) as { error: string }).error, gone);
     assert.equal(((await withFetch(env.fetchImpl, () => runTool(owner, "change_scheduled_email", change))) as { error: string }).error, gone);
   });
 

@@ -201,7 +201,7 @@ Add it to `ASSISTANT_TOOLS` with a `name`, a `label` (shown while it runs, for e
 
 | Tool | What it does | Approval | Outside | Notable limits |
 | --- | --- | --- | --- | --- |
-| `search_email` | Searches every email in the user's connected mailboxes by words, sender, account or folder, with open counts for emails sent from Orbit. | No | Yes | Default 20, up to 50. |
+| `search_email` | Searches every email in the user's connected mailboxes by words, sender, account or folder, with open counts for emails sent from Orbit. `folder` `scheduled` lists the emails waiting to send later instead, with recipients, subject, message, files, send time and any send error. | No | Yes | Default 20, up to 50. `scheduled` lists them all (up to 200) and ignores the other options. |
 | `get_email_thread` | The whole conversation an email belongs to, oldest first, with opens for emails the user sent. | No | Yes | |
 | `list_email_attachments` | The files on an email, with ids for `add_email_attachment_to_knowledge`. | No | Yes | |
 | `list_email_senders` | The addresses the user can send from; the first is the main one. | No | No | |
@@ -211,9 +211,7 @@ Add it to `ASSISTANT_TOOLS` with a `name`, a `label` (shown while it runs, for e
 | `mail_action` | Archives, trashes, moves back to the inbox, marks read or unread, flags, snoozes or sets a no-reply reminder on whole conversations. | Yes | No | Up to 50 emails a call; each stands for its conversation. |
 | `save_email_draft` | Saves a draft in Orbit Mail and Outlook Drafts without sending. The card also offers Confirm and send. | Yes | No | Up to 10 Knowledge files, 25 MB in total. |
 | `send_email` | Sends a new email or a reply from Orbit Mail once the card is approved, or schedules it with `sendAt`. Orbit adds the signature, saves it in Sent and logs it on the contacts. | Yes | No | Up to 10 files, 25 MB; `sendAt` at least a minute ahead and within a year; `remindAfterDays` up to 90. |
-| `list_scheduled_emails` | The user's emails scheduled to send later, soonest first, with any that didn't send and why. | No | No | Up to 200. |
-| `cancel_scheduled_email` | Stops a scheduled email sending, as Unschedule does in Mail. It stays in Drafts. | Yes | No | Refused once it has started sending or been sent. |
-| `change_scheduled_email` | Changes a scheduled email's send time, subject, message or recipients. Its files stay attached. | Yes | No | The same time limits as `sendAt`; refused once it has started sending or been sent. |
+| `change_scheduled_email` | Changes a scheduled email's send time, subject, message or recipients, keeping its files, or with `cancel` true unschedules it as Unschedule does in Mail and keeps it in Drafts. | Yes | No | The same time limits as `sendAt`; `cancel` can't be combined with other changes; refused once it has started sending or been sent. |
 | `list_email_templates` | Saved email templates with subject, body and tags. | No | Yes | |
 | `save_email_template` | Creates a team email template, or updates one by id. | Yes | No | |
 | `archive_email_template` | Archives an email template. | Yes | No | |

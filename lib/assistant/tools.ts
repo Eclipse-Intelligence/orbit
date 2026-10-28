@@ -418,6 +418,12 @@ async function scheduledDetails(actor: UserActor, args: Args): Promise<Record<st
   };
 }
 
+const CANCEL_ALONE = "Cancel on its own: leave out sendAt, subject, body, to, cc and bcc to cancel, or leave out cancel to change it instead.";
+
+function scheduledChanges(args: Args) {
+  return ["sendAt", "subject", "body"].some((key) => optionalStr(args[key]) !== undefined) || ["to", "cc", "bcc"].some((key) => Array.isArray(args[key]));
+}
+
 function scheduledLines(id: string, name: Names) {
   const to = detail(name, `${id}:to`);
   return [detail(name, `${id}:gone`), to ? `To: ${to}` : "", detail(name, `${id}:due`)];
@@ -1280,18 +1286,30 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     name: "search_email",
     label: "Searching email",
     description:
-      "Search every email in the user's connected mailboxes (all accounts, all folders, full history as far as it has synced). Matches words in the subject, sender and body; filter by sender, account or folder. Returns newest or best matches with ids for get_email_thread. Emails the user sent from Orbit show how many times they were opened.",
+      "Search every email in the user's connected mailboxes (all accounts, all folders, full history as far as it has synced). Matches words in the subject, sender and body; filter by sender, account or folder. Returns newest or best matches with ids for get_email_thread. Emails the user sent from Orbit show how many times they were opened. folder scheduled instead lists the emails waiting to send later.",
     parameters: {
       type: "object",
       properties: {
         query: { type: "string", description: "Words to find, for example pricing renewal. Quotes match a phrase, a leading minus excludes a word." },
         from: { type: "string", description: "Part of the sender's name or address." },
         account: { type: "string", description: "One of the user's own addresses, to search only that mailbox." },
-        folder: { type: "string", enum: ["inbox", "sent", "drafts", "archive", "trash", "other"] },
+        folder: {
+          type: "string",
+          enum: ["inbox", "sent", "drafts", "archive", "trash", "other", "scheduled"],
+          description: "scheduled lists every email waiting to send later (Mail's Scheduled view), soonest first, with recipients, subject, message, files, send time and any send error, and ids for change_scheduled_email. The other options don't apply to it.",
+        },
         limit: { type: "integer", minimum: 1, maximum: 50 },
       },
     },
     run: async (actor, args) => {
+      if (args.folder === "scheduled") {
+        const ignored = ["query", "from", "account", "limit"].filter((key) => args[key] !== undefined && args[key] !== "");
+        return {
+          scheduled: (await listScheduledDrafts(actor)).map(scheduledSummary),
+          href: "/mail?view=scheduled",
+          ...(ignored.length ? { note: `folder scheduled always lists every scheduled email, so ${ignored.length > 1 ? `${ignored.slice(0, -1).join(", ")} and ${ignored.at(-1)}` : ignored[0]} ${ignored.length === 1 ? "was" : "were"} ignored.` } : {}),
+        };
+      }
       const emails = await searchMail(actor, {
         query: optionalStr(args.query),
         from: optionalStr(args.from),
@@ -3417,46 +3435,16 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     },
   },
   {
-    name: "list_scheduled_emails",
-    label: "Checking scheduled email",
-    description:
-      "The user's emails scheduled to send later (Mail's Scheduled view), soonest first: recipients, subject, message, files, when each sends, and any that didn't send with the reason. Use the ids with change_scheduled_email or cancel_scheduled_email.",
-    parameters: { type: "object", properties: {} },
-    run: async (actor) => ({
-      scheduled: (await listScheduledDrafts(actor)).map(scheduledSummary),
-      href: "/mail?view=scheduled",
-    }),
-  },
-  {
-    name: "cancel_scheduled_email",
-    label: "Cancelling a scheduled email",
-    write: true,
-    description:
-      "Stop a scheduled email from sending, by its id from list_scheduled_emails, as Unschedule does in Mail. The email is kept in Drafts, so the user can still send or change it. Refused once it has started sending or been sent.",
-    parameters: { type: "object", properties: { draftId: idParam("Scheduled email id from list_scheduled_emails.") }, required: ["draftId"] },
-    details: scheduledDetails,
-    describe: (args, name) => {
-      const id = str(args.draftId);
-      return {
-        title: titled("Cancel scheduled email", detail(name, `${id}:subject`) || undefined),
-        lines: [...scheduledLines(id, name), "It stays in Drafts, so you can send it or change it later."],
-      };
-    },
-    run: async (actor, args) => {
-      const draft = await cancelScheduledDraft(actor, required(args.draftId, "A scheduled email id"));
-      return { cancelled: true, kept: "in Drafts", draftId: draft.id, subject: draft.subject, to: draft.to.map((item) => item.address), href: "/mail?view=drafts" };
-    },
-  },
-  {
     name: "change_scheduled_email",
     label: "Changing a scheduled email",
     write: true,
     description:
-      "Change a scheduled email by its id from list_scheduled_emails: its send time, subject, message or recipients. Only pass what changes; to, cc and bcc replace those lists, and body replaces the whole message (Orbit still adds the signature). Its files stay attached. Refused once it has started sending or been sent.",
+      "Change or cancel a scheduled email by its id from search_email with folder scheduled. To change it, pass only what changes: its send time, subject, message or recipients; to, cc and bcc replace those lists, and body replaces the whole message (Orbit still adds the signature). Its files stay attached. To stop it sending, pass cancel true and nothing else: it's unscheduled as Unschedule does in Mail, and kept in Drafts. Refused once it has started sending or been sent.",
     parameters: {
       type: "object",
       properties: {
-        draftId: idParam("Scheduled email id from list_scheduled_emails."),
+        draftId: idParam("Scheduled email id from search_email with folder scheduled."),
+        cancel: { type: "boolean", description: "True to stop it sending and keep it in Drafts. Can't be combined with other changes." },
         sendAt: { type: "string", description: "New send time, YYYY-MM-DDTHH:mm London time. At least a minute from now and within a year." },
         subject: { type: "string" },
         body: { type: "string", description: "The whole new message in plain text, with greeting and sign-off." },
@@ -3469,10 +3457,20 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     details: scheduledDetails,
     describe: (args, name) => {
       const id = str(args.draftId);
+      const subjectNow = detail(name, `${id}:subject`) || undefined;
+      if (args.cancel === true) {
+        return {
+          title: titled("Cancel scheduled email", subjectNow),
+          lines: [
+            ...scheduledLines(id, name),
+            scheduledChanges(args) ? `This will be refused: ${CANCEL_ALONE}` : "It stays in Drafts, so you can send it or change it later.",
+          ],
+        };
+      }
       const list = (key: string, label: string) => (Array.isArray(args[key]) ? `New ${label}: ${strings(args[key]).join(", ") || "no one"}` : "");
       const subject = optionalStr(args.subject);
       return {
-        title: titled("Change scheduled email", detail(name, `${id}:subject`) || undefined),
+        title: titled("Change scheduled email", subjectNow),
         lines: [
           ...scheduledLines(id, name),
           str(args.sendAt) ? sendAtLine(args.sendAt).replace(/^Sends /, "Now sends: ") : "",
@@ -3488,6 +3486,11 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     },
     run: async (actor, args) => {
       const id = required(args.draftId, "A scheduled email id");
+      if (args.cancel === true) {
+        if (scheduledChanges(args)) return { error: CANCEL_ALONE };
+        const draft = await cancelScheduledDraft(actor, id);
+        return { cancelled: true, kept: "in Drafts", draftId: draft.id, subject: draft.subject, to: draft.to.map((item) => item.address), href: "/mail?view=drafts" };
+      }
       const sendAt = optionalStr(args.sendAt) ? parseDateTime(str(args.sendAt)) : null;
       if (optionalStr(args.sendAt) && !sendAt) return { error: "Give sendAt as YYYY-MM-DDTHH:mm London time." };
       if (sendAt && sendAt.getTime() <= Date.now()) return { error: "sendAt has to be in the future." };
@@ -3500,7 +3503,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         cc: recipients("cc"),
         bcc: recipients("bcc"),
       };
-      if (Object.values(changes).every((value) => value === undefined)) return { error: "Say what to change: sendAt, subject, body, to, cc or bcc." };
+      if (Object.values(changes).every((value) => value === undefined)) return { error: "Say what to change (sendAt, subject, body, to, cc or bcc), or pass cancel true to stop it sending." };
       const draft = await changeScheduledDraft(actor, id, changes, { origin: mailOrigin() });
       return { changed: true, ...scheduledSummary(draft) };
     },
