@@ -9,7 +9,7 @@ import { parseBlocks } from "@/components/assistant/markdown";
 import { createCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
 import { createOpportunity, listPipeline } from "@/lib/crm/opportunities";
-import { createTask, listTasks } from "@/lib/crm/tasks";
+import { createTask, getTask, listTasks } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { createUser, queryAsUser, resetDatabase } from "./helpers";
@@ -282,7 +282,7 @@ describe("assistant conversations", () => {
 
   it("records a declined action and declines leftovers when you move on", async () => {
     const fake = gateway([
-      { tool_calls: [{ id: "call_a", name: "complete_task", args: { taskId: "00000000-0000-0000-0000-000000000000" } }] },
+      { tool_calls: [{ id: "call_a", name: "update_task", args: { taskId: "00000000-0000-0000-0000-000000000000", completed: true } }] },
       { content: "Fine, I've left it." },
       { tool_calls: [{ id: "call_b", name: "create_company", args: { name: "Hooli" } }] },
       { content: "Okay." },
@@ -321,7 +321,7 @@ describe("assistant conversations", () => {
     const fake = gateway([
       {
         tool_calls: [
-          { id: "call_bulk", name: "update_companies", args: { companyIds: [alpha, beta], ownerId: owner.userId } },
+          { id: "call_bulk", name: "update_company", args: { companyIds: [alpha, beta], ownerId: owner.userId } },
           { id: "call_one", name: "update_company", args: { companyId, lifecycle: "customer", ownerId: owner.userId } },
           { id: "call_skip", name: "create_company", args: { name: "Skipped Ltd" } },
         ],
@@ -374,6 +374,49 @@ describe("assistant conversations", () => {
     assert.equal(skipped.length, 0);
     const toolMessages = (fake.requests.at(-1)!.messages as { tool_call_id?: string; content: string }[]).filter((message) => message.tool_call_id);
     assert.match(toolMessages.find((message) => message.tool_call_id === "call_bulk")!.content, /"updated":2/);
+  });
+
+  it("runs cards saved under a merged tool's old name through the tool that replaced it", async () => {
+    const chase = (await createTask(owner, { title: "Chase the invoice" })).body.task.id;
+    const stale = (await createTask(owner, { title: "Old reminder" })).body.task.id;
+    const fake = gateway([
+      {
+        tool_calls: [
+          { id: "call_done", name: "complete_task", args: { taskId: chase } },
+          { id: "call_archive", name: "archive_task", args: { taskId: stale } },
+        ],
+      },
+      { content: "Done." },
+    ]);
+    const first = collect();
+    await sendMessage(owner, { message: "Tidy my tasks", model: "claude-sonnet-5-5", reasoning: "medium", webSearch: false }, first.emit, {
+      deadline: deadline(),
+      fetchImpl: fake.fetchImpl,
+    });
+    const offered = (fake.requests[0].tools as { function: { name: string } }[]).map((tool) => tool.function.name);
+    assert.ok(!offered.includes("complete_task") && !offered.includes("archive_task"));
+    const pending = (first.events.find((event) => event.type === "actions") as Extract<AssistantEvent, { type: "actions" }>).actions;
+    assert.deepEqual(
+      pending.map((action) => [action.name, action.title, action.lines, action.status]),
+      [
+        ["complete_task", "Complete task: Chase the invoice", [], "pending"],
+        ["archive_task", "Archive 1 record", ["Tasks: Old reminder", "Nothing is deleted.", "ClickUp isn't changed."], "pending"],
+      ],
+    );
+    assert.equal((await getTask(owner, chase)).completedAt, null);
+
+    const conversationId = (first.events[0] as Extract<AssistantEvent, { type: "conversation" }>).conversation.id;
+    const second = collect();
+    await decideActions(
+      owner,
+      { conversationId, decisions: [{ id: "call_done", approve: true }, { id: "call_archive", approve: true }] },
+      second.emit,
+      { deadline: deadline(), fetchImpl: fake.fetchImpl },
+    );
+    const final = (second.events.filter((event) => event.type === "actions").at(-1) as Extract<AssistantEvent, { type: "actions" }>).actions;
+    assert.deepEqual(final.map((action) => action.status), ["done", "done"]);
+    assert.ok((await getTask(owner, chase)).completedAt);
+    assert.ok((await getTask(owner, stale)).archivedAt);
   });
 
   it("falls back to supported models and reasoning levels", () => {

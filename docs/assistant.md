@@ -52,7 +52,7 @@ Tool calls without a stored result are left out of the history.
 
 ### Claude account turns (Orbit Agent)
 
-`runRounds` hands a Claude account model to `runCompanionTurn`, which queues a job with the system prompt, the learned notes, the chat as a transcript (cut with the same budgets) and every tool with a `write` flag. Orbit Agent runs it with the Claude Agent SDK (`companion/src/turn.ts`): Orbit's tools as an in-process MCP server named `orbit`, no file, shell or other built-in tools, `WebSearch` only when Web is on, 40 turns at most, and tool results up to 60,000 output tokens.
+`runRounds` hands a Claude account model to `runCompanionTurn`, which queues a job with the system prompt, the learned notes, the chat as a transcript (cut with the same budgets) and every tool with a `write` flag. Orbit Agent runs it with the Claude Agent SDK (`companion/src/turn.ts`): Orbit's tools as an in-process MCP server named `orbit`, no file, shell or other built-in tools, `WebSearch` only when Web is on, 40 turns at most, and tool results up to 60,000 output tokens. Claude Code also moves any single tool result over about 50 KB into a file the model can't open, so Orbit sends a result over 36,000 bytes in pieces: the first piece ends with a note, and the model calls `continue_result` with the `resultId` and `offset` from it to read on. The full result is kept with the job and cleared when the job ends.
 
 - Read tools call back to `POST /api/companion/jobs/{id}/tool`, which runs `runTool` as the person. It refuses write tools.
 - Write tools never call Orbit. They return "Proposed … It has not happened yet" to Claude, and `applyCompanionResult` turns them into cards on the last message, exactly like gateway turns.
@@ -92,7 +92,7 @@ Web off only stops the model's own web search. `read_web_page`, `check_web` and 
 
 Two tools read in parts. The assistant reads every part before judging a whole document, and says which parts it read if it can't finish.
 
-- `reader_read` returns parts of up to 60,000 characters (`READER_PART_CHARS`), split near a paragraph, line or sentence break, with `part`, `parts`, `characters` and `nextPart`. Part 1 also has the document's note and every highlight. Keep calling with `part: nextPart` until `nextPart` is null.
+- `reader_read` returns parts of up to 35,000 characters (`READER_PART_CHARS`), split near a paragraph, line or sentence break, with `part`, `parts`, `characters` and `nextPart`. Part 1 also has the document's note and every highlight. Keep calling with `part: nextPart` until `nextPart` is null.
 - `read_knowledge` returns up to 100,000 characters from `offset` (`READ_WINDOW`; items hold up to 2,000,000) with `nextOffset`. Start at 0, or at the `offset` a `search_knowledge` passage gave, and keep going until `nextOffset` is null.
 
 ## Tools that spend money
@@ -102,6 +102,10 @@ Two tools read in parts. The assistant reads every part before judging a whole d
 ## Adding a tool
 
 Add it to `ASSISTANT_TOOLS` with a `name`, a `label` (shown while it runs, for example "Checking tasks"), a `description`, JSON Schema `parameters` and `run`. A tool that changes anything sets `write: true` and has a `describe` for its card. Add it to `EXTERNAL_TOOLS` if it returns text from outside Orbit, and add it to the reference below: `tests/agent-docs.test.ts` fails when a tool is missing from this page.
+
+Keep `ASSISTANT_TOOLS` at 126 tools or fewer. Some model APIs refuse a request with more than 128 tools, and 126 is the most proven to work on every model in `lib/assistant/models.ts`, so `tests/agent-docs.test.ts` fails above it. Before adding a tool, see whether an existing one can take the new case as a parameter (as `update_company` takes `companyIds` and `archive_records` takes `taskIds`).
+
+When a tool is merged into another, add its old name to `MERGED_TOOLS` in `tools.ts` with how its arguments translate. Old names are never offered to models, but `runTool`, `describeAction` and the turn loop resolve them, so a card still waiting in a stored chat (or an old name a model copies from the history) runs through the merged tool and still needs approval.
 
 ## Tool reference
 
@@ -120,11 +124,9 @@ Add it to `ASSISTANT_TOOLS` with a `name`, a `label` (shown while it runs, for e
 | --- | --- | --- | --- | --- |
 | `list_companies` | Lists companies with search, lifecycle, health, tag and owner filters and sorting, with relationship and ICP fit (0 to 4). | No | Yes | `limit` up to 100 (default 50), `offset` up to 10,000. |
 | `get_company` | Everything about one company: details, people, deals, open and done tasks, the activity timeline, call summaries, meetings, relationship and its Knowledge items. | No | Yes | Up to 500 Knowledge items listed. |
-| `list_lifecycles` | The lifecycles in use (built in and custom) with how many companies each has. | No | No | |
 | `list_quiet_relationships` | Every company with no interaction in the last N days. | No | No | Default 21 days; up to 100 companies. |
 | `create_company` | Adds a company. | Yes | No | |
-| `update_company` | Changes a company's details; only the fields passed change. Health is set by hand only when the user asks, with a reason. | Yes | No | |
-| `update_companies` | Makes the same change (owner, lifecycle, industry, size, source) to many companies. | Yes | No | Up to 100 a call. |
+| `update_company` | Changes one company's details by `companyId`; only the fields passed change. Health is set by hand only when the user asks, with a reason. With `companyIds` it makes the same change (owner, lifecycle, industry, size, source) to many companies. | Yes | No | `companyIds` up to 100 a call. |
 | `merge_companies` | Merges a duplicate company into the one to keep: everything moves, empty fields are filled, tags combine, the duplicate is archived. | Yes | No | Can't be undone. |
 | `set_relationship` | Sets a company's or person's relationship label by hand with a reason, or `auto` to hand it back to Orbit. | Yes | No | |
 
@@ -135,8 +137,7 @@ Add it to `ASSISTANT_TOOLS` with a `name`, a `label` (shown while it runs, for e
 | `list_contacts` | Lists people with search, company, tag and owner filters. | No | Yes | `limit` up to 100 (default 50). |
 | `get_contact` | Everything about one person: details, company, open and recently completed tasks, timeline with call summaries, meetings and the last email check. | No | Yes | The 100 most recent activities; completed tasks from the last 14 days, up to 50. |
 | `create_contact` | Adds a person, optionally at a company. | Yes | No | Needs an email or a name. |
-| `update_contact` | Changes a person's details; only the fields passed change. | Yes | No | |
-| `update_contacts` | Makes the same change (owner, company, job title, source) to many people. | Yes | No | Up to 100 a call. |
+| `update_contact` | Changes one person's details by `contactId`; only the fields passed change. With `contactIds` it makes the same change (owner, company, job title, source) to many people. | Yes | No | `contactIds` up to 100 a call. |
 | `merge_contacts` | Merges a duplicate person into the one to keep. The kept email stays; a different one goes into the notes. | Yes | No | Can't be undone. |
 | `find_contact_details` | Looks up missing work emails, LinkedIn profiles or phone numbers with the workspace's enrichment providers, in their set order, and saves what's found. | Yes | No | Up to 6 people; an hourly per-person limit; spends provider credits. |
 | `verify_email` | Checks whether an address can receive mail (Enrow, Icypeas, then Hunter) and can save the result on a contact. | Yes | No | Reuses a check from the last 30 days (a day for unknown); uses a checker credit. |
@@ -145,7 +146,7 @@ Add it to `ASSISTANT_TOOLS` with a `name`, a `label` (shown while it runs, for e
 
 | Tool | What it does | Approval | Outside | Notable limits |
 | --- | --- | --- | --- | --- |
-| `archive_records` | Archives companies, people or opportunities by id. Nothing is deleted. | Yes | No | Up to 100 of each a call. Board cards use `remove_from_board`. |
+| `archive_records` | Archives companies, people, opportunities or tasks by id. Nothing is deleted, archived tasks leave the lists, and ClickUp isn't changed. | Yes | No | Up to 100 of each a call. Board cards use `remove_from_board`. A member can archive only tasks they own or created. |
 | `tag_records` | Adds and removes tags on companies or people. | Yes | No | Tags are lowercased; up to 20 a record. |
 | `list_tags` | Every tag with how many companies and people use it. | No | No | |
 | `list_team_members` | Workspace members with ids, for `ownerId`, and who "you" are. | No | No | |
@@ -158,9 +159,7 @@ Add it to `ASSISTANT_TOOLS` with a `name`, a `label` (shown while it runs, for e
 | --- | --- | --- | --- | --- |
 | `list_tasks` | Lists tasks by view (`all`, `overdue`, `today`, `upcoming`, `completed`), with due date, reminder, links and ClickUp status. `mine` limits it to the user's own and unassigned ones. | No | Yes | Default 100, up to 100. A member sees only tasks they own or created. |
 | `create_task` | Creates a task, owned by the user unless `ownerId` is set, and sends it to the default ClickUp list unless `sendToClickUp` is false. | Yes | No | A reminder needs a due date. |
-| `update_task` | Changes a task's title, detail, due date, reminder, priority or assignee, and ClickUp. | Yes | No | |
-| `complete_task` | Marks a task done, and ClickUp. | Yes | No | |
-| `archive_task` | Archives a task so it leaves the lists. ClickUp isn't changed. | Yes | No | |
+| `update_task` | Changes a task's title, detail, due date, reminder, priority or assignee, marks it done (`completed: true`) or reopens it (`false`), and ClickUp. | Yes | No | |
 
 ### Activity and calls
 
@@ -204,7 +203,7 @@ Add it to `ASSISTANT_TOOLS` with a `name`, a `label` (shown while it runs, for e
 | --- | --- | --- | --- | --- |
 | `search_email` | Searches every email in the user's connected mailboxes by words, sender, account or folder, with open counts for emails sent from Orbit. | No | Yes | Default 20, up to 50. |
 | `get_email_thread` | The whole conversation an email belongs to, oldest first, with opens for emails the user sent. | No | Yes | |
-| `list_email_attachments` | The files on an email, with ids for `add_email_attachment_to_knowledge`. | No | Yes | |
+| `list_email_attachments` | The files on an email, with ids for `add_to_knowledge`. | No | Yes | |
 | `list_email_senders` | The addresses the user can send from; the first is the main one. | No | No | |
 | `get_mail_sync_status` | How far each mailbox has synced, per folder, with errors. | No | No | |
 | `get_capture` | The Capture page: recent mail filed to records, unfiled Teams and Granola conversations, and people met who aren't contacts. | No | Yes | Up to 50 unfiled conversations. |
@@ -212,8 +211,7 @@ Add it to `ASSISTANT_TOOLS` with a `name`, a `label` (shown while it runs, for e
 | `save_email_draft` | Saves a draft in Orbit Mail and Outlook Drafts without sending. The card also offers Confirm and send. | Yes | No | Up to 10 Knowledge files, 25 MB in total. |
 | `send_email` | Sends a new email or a reply from Orbit Mail once the card is approved, or schedules it with `sendAt`. Orbit adds the signature, saves it in Sent and logs it on the contacts. | Yes | No | Up to 10 files, 25 MB; `sendAt` at least a minute ahead and within a year; `remindAfterDays` up to 90. |
 | `list_email_templates` | Saved email templates with subject, body and tags. | No | Yes | |
-| `save_email_template` | Creates a team email template, or updates one by id. | Yes | No | |
-| `archive_email_template` | Archives an email template. | Yes | No | |
+| `save_email_template` | Creates a team email template, updates one by id, or archives one with `archived: true`. | Yes | No | Archiving takes only `id` and `archived`. |
 
 ### Calendar, meetings and settings
 
@@ -223,7 +221,7 @@ Add it to `ASSISTANT_TOOLS` with a `name`, a `label` (shown while it runs, for e
 | `create_meeting_invite` | Creates an Outlook meeting and sends invites, with the saved meeting link by default. | Yes | No | 15 to 480 minutes. |
 | `move_meeting` | Moves an Outlook meeting the user organises; Outlook sends guests the update. | Yes | No | Events with `canCancel` true; 5 to 480 minutes. |
 | `cancel_meeting` | Cancels a meeting the user organised; Outlook tells every guest and it's logged on their timelines. | Yes | No | Only meetings that haven't started, in the Capture mailbox's calendar. |
-| `get_settings` | The user's meeting link, email addresses, booking page, and the state of Microsoft mail and calendar, ClickUp and Granola. | No | No | |
+| `get_settings` | The user's meeting link, email addresses, booking page, the state of Microsoft mail and calendar, ClickUp and Granola, and the lifecycles in use (built in and custom) with how many companies each has. | No | No | |
 
 ### Proposals and NDAs
 
@@ -270,8 +268,7 @@ Add it to `ASSISTANT_TOOLS` with a `name`, a `label` (shown while it runs, for e
 | `read_knowledge` | Reads one item from an offset. | No | Yes | 100,000 characters a call; follow `nextOffset`. |
 | `list_knowledge` | Lists items for a company, Eclipse or everything, with a short summary of each. | No | Yes | Up to 500 items. |
 | `map_website` | Lists a site's pages from its sitemaps or links, to choose which to add. | No | Yes | Up to 5,000 pages listed, 400 crawled, 75 seconds. |
-| `add_to_knowledge` | Adds links (pages, files, YouTube, podcast episodes) to Knowledge for a company or Eclipse, read in the background. | Yes | No | Links already there are skipped. |
-| `add_email_attachment_to_knowledge` | Adds a file from one of the user's emails to Knowledge for a company or Eclipse. | Yes | No | |
+| `add_to_knowledge` | Adds links (pages, files, YouTube, podcast episodes) by `urls`, or a file from one of the user's emails by `emailId`, to Knowledge for a company or Eclipse, read in the background. | Yes | No | One source a call. Links and files already there are skipped. |
 | `remove_knowledge` | Archives Knowledge items so they're no longer searched or offered. | Yes | No | Up to 50 a call. |
 
 ### Web and research
@@ -310,7 +307,7 @@ Add it to `ASSISTANT_TOOLS` with a `name`, a `label` (shown while it runs, for e
 | Tool | What it does | Approval | Outside | Notable limits |
 | --- | --- | --- | --- | --- |
 | `reader_list` | Documents in the user's own Reader, by location, category, tags or date. Only when the user asks. | No | Yes | Default 20, up to 100; tags up to 5. |
-| `reader_read` | One Reader document in parts, with its note and highlights in part 1. Only when the user asks. | No | Yes | 60,000 characters a part; read to the last part. |
+| `reader_read` | One Reader document in parts, with its note and highlights in part 1. Only when the user asks. | No | Yes | 35,000 characters a part; read to the last part. |
 | `reader_highlights` | Recent highlights and notes, across documents or for one. Only when the user asks. | No | Yes | Default 50, up to 200. |
 
 ### Learning

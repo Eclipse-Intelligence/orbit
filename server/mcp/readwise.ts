@@ -57,7 +57,7 @@ export function registerReaderTools(server: McpServer, actor: UserActor, options
     "reader_read",
     {
       description:
-        "Read one document from this person's Readwise Reader, 60,000 characters a part. Part 1 also has its note and every highlight with its note. To read, review, summarise or check a document, read every part in order until nextPart is null before answering, and never judge the whole document from part 1 alone. If you can't finish, say which parts you read. Read-only.",
+        "Read one document from this person's Readwise Reader, 35,000 characters a part. Part 1 also has its note and every highlight with its note. To read, review, summarise or check a document, read every part in order until nextPart is null before answering, and never judge the whole document from part 1 alone. If you can't finish, say which parts you read. Read-only.",
       inputSchema: { id: z.string().min(1).max(200), part: z.number().int().min(1).max(10_000).optional() },
     },
     async (args) => run(() => readerRead(actor, args.id, args.part ?? 1, live())),

@@ -1,3 +1,4 @@
+import { contentDisposition, wantsDownload } from "@/lib/content-disposition";
 import { CrmError } from "@/lib/crm/errors";
 import { guardPublic, signedIn } from "@/lib/proposals/guard";
 import { publicKnowledgeFile } from "@/lib/proposals/public";
@@ -14,12 +15,11 @@ export async function GET(request: Request, { params }: { params: Promise<{ toke
   try {
     const file = await publicKnowledgeFile(token, itemId, { track: !(await signedIn()), ip: guard.ip, userAgent: guard.userAgent });
     if (file.kind === "link") return Response.redirect(file.url, 302);
-    const inline = INLINE.test(file.contentType);
-    const name = file.name.replace(/[\r\n"]/g, "_");
+    const inline = INLINE.test(file.contentType) && !wantsDownload(new URL(request.url).searchParams);
     return new Response(new Uint8Array(file.data), {
       headers: {
         "content-type": inline ? file.contentType : "application/octet-stream",
-        "content-disposition": `${inline ? "inline" : "attachment"}; filename="${name.replace(/[^\x20-\x7e]/g, "_")}"; filename*=UTF-8''${encodeURIComponent(name)}`,
+        "content-disposition": contentDisposition(inline ? "inline" : "attachment", file.name),
         "cache-control": "private, no-store",
         "x-content-type-options": "nosniff",
         "x-robots-tag": "noindex",
