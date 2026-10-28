@@ -5,13 +5,15 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { after } from "next/server";
 import { getUserActor } from "@/lib/auth/user";
-import { archiveActivity, logActivity, type LoggedActivityType } from "@/lib/crm/activities";
+import { archiveActivity, logActivity, updateActivity, type LoggedActivityType } from "@/lib/crm/activities";
+import type { ActivityEdit } from "@/lib/crm/activity-edit";
 import { actionError } from "@/lib/companies";
 import { pushClickUpTask } from "@/lib/crm/clickup";
 import { createCompany } from "@/lib/crm/companies";
 import { createContact, getContact, updateContact } from "@/lib/crm/contacts";
 import { mergeContacts } from "@/lib/crm/merge";
-import { createOpportunity, updateOpportunity } from "@/lib/crm/opportunities";
+import { isUuid } from "@/lib/crm/mutate";
+import { createOpportunity, listOpportunities, updateOpportunity } from "@/lib/crm/opportunities";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 
 import { completeTask, listDueReminders, type DueReminder } from "@/lib/crm/tasks";
@@ -329,6 +331,34 @@ export async function archiveActivityAction(id: string): Promise<RecordActionSta
     return { ok: true };
   } catch (error) {
     return actionError(error);
+  }
+}
+
+export async function updateActivityAction(id: string, edit: ActivityEdit): Promise<RecordActionState & { activity?: Activity }> {
+  const user = await requireUser();
+  try {
+    const result = await updateActivity(user, id, edit, { operation: "update_activity", source: "web" });
+    refresh();
+    revalidatePath("/activities");
+    return { ok: true, activity: result.activity };
+  } catch (error) {
+    return actionError(error);
+  }
+}
+
+export async function companyOpportunitiesAction(companyId: string): Promise<{ opportunities: { id: string; name: string }[]; error?: string }> {
+  const user = await requireUser();
+  if (!isUuid(companyId)) return { opportunities: [] };
+  try {
+    const listed = await listOpportunities(user, { companyId, limit: 100 });
+    return {
+      opportunities: listed.data.map((opportunity) => ({
+        id: opportunity.id,
+        name: opportunity.pipelineKind === "board" && opportunity.pipelineName ? `${opportunity.name} (${opportunity.pipelineName})` : opportunity.name,
+      })),
+    };
+  } catch (error) {
+    return { opportunities: [], error: actionError(error).error };
   }
 }
 

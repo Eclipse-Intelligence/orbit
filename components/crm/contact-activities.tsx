@@ -6,6 +6,7 @@ import Button, { buttonVariants } from "@/components/_ui/button";
 import HoldButton from "@/components/_ui/hold-button";
 import { Input } from "@/components/_ui/input";
 import { addActivityAction, archiveActivityAction, type RecordActionState } from "@/app/(crm)/records";
+import { EditActivityButton } from "@/components/crm/activity-editor";
 import CallInsightPanel from "@/components/crm/call-insight";
 import DetailSection from "@/components/companies/detail/detail-section";
 import { useShortcut } from "@/components/shortcuts/shortcuts-provider";
@@ -28,6 +29,7 @@ import {
   type TimelineFilter,
   type TimelineKind,
 } from "@/lib/crm/timeline";
+import { mayEditActivity } from "@/lib/crm/activity-edit";
 import { cn } from "@/lib/utils";
 import type { Recipient } from "@/lib/crm/personalise";
 import type { Activity, CallInsight } from "@/lib/crm/types";
@@ -353,7 +355,6 @@ export function ActivityTimeline({
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [removed, setRemoved] = useState<string[]>([]);
   const activities = removed.length ? given.filter((activity) => !removed.includes(activity.id)) : given;
-  const manager = viewerRole === "owner" || viewerRole === "admin";
   const counts = countKinds(activities);
   const active = counts[filter] > 0 ? filter : "all";
   const shown =
@@ -405,7 +406,7 @@ export function ActivityTimeline({
                       insight={insights?.[activity.id] ?? null}
                       showContact={showContact}
                       viewerId={viewerId}
-                      deletable={manager || (Boolean(viewerId) && activity.actorUserId === viewerId)}
+                      editable={mayEditActivity({ userId: viewerId, role: viewerRole }, activity)}
                       onDeleted={() => setRemoved((current) => [...current, activity.id])}
                       now={now}
                       open={open[activity.id] ?? false}
@@ -560,7 +561,7 @@ function ActivityRow({
   insight,
   showContact,
   viewerId,
-  deletable,
+  editable,
   onDeleted,
   now,
   open,
@@ -571,7 +572,7 @@ function ActivityRow({
   insight: CallInsight | null;
   showContact?: boolean;
   viewerId?: string | null;
-  deletable: boolean;
+  editable: boolean;
   onDeleted: () => void;
   now: number;
   open: boolean;
@@ -686,7 +687,12 @@ function ActivityRow({
         {emptyPanel && (
           <p className="caption-style text-subtle">No details recorded.</p>
         )}
-        {deletable && open && <DeleteActivity activityId={activity.id} onDeleted={onDeleted} />}
+        {editable && open && (
+          <div className="flex flex-wrap items-start gap-2">
+            <EditActivityButton activity={activity} hasTranscript={Boolean(insight)} />
+            <DeleteActivity activityId={activity.id} onDeleted={onDeleted} />
+          </div>
+        )}
       </div>
     </li>
   );
