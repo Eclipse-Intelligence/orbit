@@ -1,6 +1,8 @@
 import { formatDate, relativeWhen } from "@/lib/companies";
 
-export type RelationshipLabel = "strong" | "warm" | "cooling" | "one_sided" | "cold" | "new";
+export const RELATIONSHIP_LABELS = ["strong", "warm", "cooling", "one_sided", "cold", "new"] as const;
+
+export type RelationshipLabel = (typeof RELATIONSHIP_LABELS)[number];
 
 export const RELATIONSHIP_META: Record<RelationshipLabel, { label: string; color: string; meaning: string }> = {
   strong: { label: "Strong", color: "var(--success)", meaning: "Two-way and recent: they reply or meet, and the tone is good." },
@@ -26,7 +28,34 @@ export type RelationshipSignals = {
   tone: Tone | null;
 };
 
-export type Relationship = { label: RelationshipLabel; reason: string };
+export type RelationshipOverride = {
+  label: RelationshipLabel;
+  reason: string | null;
+  at: string | null;
+  byUserId: string | null;
+  byName: string | null;
+};
+
+export type Relationship = {
+  label: RelationshipLabel;
+  reason: string;
+  override?: RelationshipOverride;
+  automatic?: { label: RelationshipLabel; reason: string };
+};
+
+export function isRelationshipLabel(value: unknown): value is RelationshipLabel {
+  return typeof value === "string" && (RELATIONSHIP_LABELS as readonly string[]).includes(value);
+}
+
+export function withOverride(computed: Relationship, override: RelationshipOverride | null | undefined): Relationship {
+  if (!override) return computed;
+  return {
+    label: override.label,
+    reason: override.reason || "Set by hand.",
+    override,
+    automatic: { label: computed.label, reason: computed.reason },
+  };
+}
 
 const DAY = 86_400_000;
 

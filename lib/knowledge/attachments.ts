@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { CrmError } from "@/lib/crm/errors";
-import type { UserActor } from "@/lib/crm/types";
+import type { Provenance, UserActor } from "@/lib/crm/types";
 import { CONTENT_MAX } from "@/lib/knowledge/indexing";
 import { transcriptText } from "@/lib/knowledge/media";
 import { addKnowledgeText, type KnowledgeTarget } from "@/lib/knowledge/store";
@@ -25,7 +25,14 @@ async function readAll(body: ReadableStream<Uint8Array>, limit: number) {
   return new Uint8Array(Buffer.concat(chunks));
 }
 
-export async function addMailAttachmentToKnowledge(actor: UserActor, messageId: string, attachmentId: string, target: KnowledgeTarget, fetchImpl: typeof fetch = fetch) {
+export async function addMailAttachmentToKnowledge(
+  actor: UserActor,
+  messageId: string,
+  attachmentId: string,
+  target: KnowledgeTarget,
+  fetchImpl: typeof fetch = fetch,
+  provenance: Provenance = { operation: "add_knowledge_attachment" },
+) {
   const { item, body } = await openMailAttachment(actor, messageId, attachmentId, fetchImpl);
   const bytes = await readAll(body, KNOWLEDGE_MAX_BYTES);
   if (!bytes) throw new CrmError("invalid_input", `${item.name} is over 50 MB.`, 400);
@@ -46,6 +53,6 @@ export async function addMailAttachmentToKnowledge(actor: UserActor, messageId: 
       mimeType: item.contentType,
       sizeBytes: bytes.byteLength,
     },
-    { operation: "add_knowledge_attachment" },
+    provenance,
   );
 }

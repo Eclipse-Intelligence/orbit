@@ -32,6 +32,7 @@ export default function CompanyActivity({
   insights,
   mailboxConnected,
   viewerId,
+  viewerRole,
 }: {
   companyId: string;
   companyName: string;
@@ -40,6 +41,7 @@ export default function CompanyActivity({
   insights: Record<string, CallInsight>;
   mailboxConnected: boolean;
   viewerId?: string | null;
+  viewerRole?: string | null;
 }) {
   const [picked, setPicked] = useState<string | null>(null);
   const [filter, setFilter] = useState(ALL);
@@ -155,6 +157,7 @@ export default function CompanyActivity({
         insights={insights}
         showContact
         viewerId={viewerId}
+        viewerRole={viewerRole}
         empty="No activity yet."
         filters={
           people.length > 1 && (

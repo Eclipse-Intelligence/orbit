@@ -175,7 +175,7 @@ export function registerMailTools(server: McpServer, actor: UserActor, options: 
             subject: args.subject ?? "",
             body: args.body,
           }),
-          { origin: mailOrigin(), fetchImpl: options.fetchImpl },
+          { origin: mailOrigin(), fetchImpl: options.fetchImpl, storedFiles: "keep" },
         );
         return { draft: { id: draft.id, mode: draft.mode, to: draft.to, cc: draft.cc, subject: draft.subject, savedAt: draft.savedAt }, sent: false };
       }),

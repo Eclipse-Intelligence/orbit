@@ -256,6 +256,7 @@ export async function listCalendarItems(
        left join lateral (
          select a.id, a.contact_id, a.company_id from crm.activities a
          where a.workspace_id = e.workspace_id
+           and a.archived_at is null
            and a.type = 'meeting'
            and a.metadata->>'source' = 'granola'
            and a.occurred_at between e.starts_at - interval '2 hours' and e.starts_at + interval '2 hours'

@@ -109,7 +109,7 @@ export async function processDueMail(
   const origin = options.origin === undefined ? mailOrigin() : options.origin;
   for (const draft of await claimDueDrafts(actor)) {
     try {
-      await sendMailDraft(actor, dueDraftInput(draft), { origin, fetchImpl });
+      await sendMailDraft(actor, dueDraftInput(draft), { origin, fetchImpl, storedFiles: "keep" });
       report.sent += 1;
     } catch (error) {
       report.failed += 1;

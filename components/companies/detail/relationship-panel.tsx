@@ -7,6 +7,7 @@ import CompanyContacts from "@/components/companies/detail/company-contacts";
 import { ConnectionMark } from "@/components/beautifui/record-marks";
 import { ClickUpBadge } from "@/components/crm/clickup";
 import TaskPad from "@/components/crm/task-pad";
+import { RelationshipError, RelationshipSelect, RelationshipSource, useRelationshipPicker } from "@/components/crm/relationship-picker";
 import { formatMoney, formatWhen, relativeWhen } from "@/lib/companies";
 import type { ClickUpPicker } from "@/lib/crm/clickup";
 import type { CompanyContext } from "@/lib/crm/types";
@@ -16,21 +17,39 @@ export default function RelationshipPanel({
   context,
   clickup,
   findEmail = false,
+  viewerId,
 }: {
   context: CompanyContext;
   clickup: ClickUpPicker | null;
   findEmail?: boolean;
+  viewerId?: string | null;
 }) {
   const companyId = context.company.id;
+  const picker = useRelationshipPicker("company", companyId);
+  const relationship = context.relationship;
   const last = context.lastInteraction;
   const deals = context.opportunities.filter((opportunity) => opportunity.pipelineKind !== "board");
   const cards = context.opportunities.filter((opportunity) => opportunity.pipelineKind === "board");
 
   return (
     <>
-      <DetailSection title="Relationship">
-        <ConnectionMark relationship={context.relationship} className="text-foreground text-[14px]" />
-        <p className="caption-style text-soft leading-[1.45]">{context.relationship.reason}</p>
+      <DetailSection
+        title="Relationship"
+        action={
+          <RelationshipSelect
+            relationship={relationship}
+            pending={picker.pending}
+            disabled={Boolean(context.company.archivedAt)}
+            onChange={picker.change}
+          />
+        }
+      >
+        <ConnectionMark relationship={relationship} className="text-foreground text-[14px]" />
+        {(!relationship.override || relationship.override.reason) && (
+          <p className="caption-style text-soft leading-[1.45]">{relationship.reason}</p>
+        )}
+        <RelationshipSource relationship={relationship} viewerId={viewerId} />
+        <RelationshipError error={picker.error} />
         <p className="caption-style text-soft">
           {context.relationshipStatus === "quiet"
             ? "Quiet relationship"

@@ -28,7 +28,7 @@ export async function classifyEmailTones(actor: Actor, options: { deadline?: num
       `select a.id, a.title, a.body, a.workspace_id
        from crm.activities a
        left join crm.activity_tones t on t.activity_id = a.id
-       where a.workspace_id = $1 and a.type = 'email' and t.activity_id is null and a.contact_id is not null
+       where a.workspace_id = $1 and a.type = 'email' and t.activity_id is null and a.contact_id is not null and a.archived_at is null
          and (a.metadata->>'direction' = 'inbound' or (a.metadata->>'direction' is null and a.metadata ? 'from' and a.metadata->>'source' = 'microsoft'))
          and a.occurred_at > now() - make_interval(days => $2)
        order by a.occurred_at desc

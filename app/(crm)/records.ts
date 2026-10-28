@@ -5,11 +5,12 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { after } from "next/server";
 import { getUserActor } from "@/lib/auth/user";
-import { logActivity, type LoggedActivityType } from "@/lib/crm/activities";
+import { archiveActivity, logActivity, type LoggedActivityType } from "@/lib/crm/activities";
 import { actionError } from "@/lib/companies";
 import { pushClickUpTask } from "@/lib/crm/clickup";
 import { createCompany } from "@/lib/crm/companies";
 import { createContact, getContact, updateContact } from "@/lib/crm/contacts";
+import { mergeContacts } from "@/lib/crm/merge";
 import { createOpportunity, updateOpportunity } from "@/lib/crm/opportunities";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 
@@ -70,6 +71,17 @@ export async function patchContactAction(id: string, patch: ContactWrite): Promi
     const result = await updateContact(user, id, patch, { provenance: { operation: "update_contact", source: "web" } });
     refresh();
     return { contact: result.body.contact };
+  } catch (error) {
+    return { error: actionError(error).error };
+  }
+}
+
+export async function mergeContactAction(keepId: string, mergeId: string): Promise<{ error?: string; keptId?: string }> {
+  const user = await requireUser();
+  try {
+    const result = await mergeContacts(user, keepId, mergeId, { operation: "merge_contacts", source: "web" });
+    refresh();
+    return { keptId: result.kept.id };
   } catch (error) {
     return { error: actionError(error).error };
   }
@@ -303,6 +315,18 @@ export async function addActivityAction(
     });
     refresh();
     return { ok: true, activity };
+  } catch (error) {
+    return actionError(error);
+  }
+}
+
+export async function archiveActivityAction(id: string): Promise<RecordActionState> {
+  const user = await requireUser();
+  try {
+    await archiveActivity(user, id, { operation: "archive_activity", source: "web" });
+    refresh();
+    revalidatePath("/activities");
+    return { ok: true };
   } catch (error) {
     return actionError(error);
   }

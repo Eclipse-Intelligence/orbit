@@ -166,7 +166,7 @@ export async function recipientContext(db: Db, actor: UserActor, addresses: stri
     `select nullif(trim(concat_ws(' ', c.first_name, c.last_name)), '') as name, c.normalized_email as email, c.job_title,
        co.name as company, co.lifecycle, co.health,
        (select array_agg(a.title order by a.occurred_at desc) from (
-          select title, occurred_at from crm.activities where contact_id = c.id order by occurred_at desc limit 4
+          select title, occurred_at from crm.activities where contact_id = c.id and archived_at is null order by occurred_at desc limit 4
         ) a) as recent
      from crm.contacts c
      left join crm.companies co on co.id = c.company_id

@@ -3,8 +3,9 @@
 import { useId, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import Button, { buttonVariants } from "@/components/_ui/button";
+import HoldButton from "@/components/_ui/hold-button";
 import { Input } from "@/components/_ui/input";
-import { addActivityAction, type RecordActionState } from "@/app/(crm)/records";
+import { addActivityAction, archiveActivityAction, type RecordActionState } from "@/app/(crm)/records";
 import CallInsightPanel from "@/components/crm/call-insight";
 import DetailSection from "@/components/companies/detail/detail-section";
 import { useShortcut } from "@/components/shortcuts/shortcuts-provider";
@@ -330,10 +331,11 @@ export function ActivityComposer({
 }
 
 export function ActivityTimeline({
-  activities,
+  activities: given,
   insights,
   showContact,
   viewerId,
+  viewerRole,
   filters,
   empty,
 }: {
@@ -341,6 +343,7 @@ export function ActivityTimeline({
   insights?: Record<string, CallInsight>;
   showContact?: boolean;
   viewerId?: string | null;
+  viewerRole?: string | null;
   filters?: ReactNode;
   empty: string;
 }) {
@@ -348,6 +351,9 @@ export function ActivityTimeline({
   const [now] = useState(() => Date.now());
   const [filter, setFilter] = useState<TimelineFilter>("all");
   const [open, setOpen] = useState<Record<string, boolean>>({});
+  const [removed, setRemoved] = useState<string[]>([]);
+  const activities = removed.length ? given.filter((activity) => !removed.includes(activity.id)) : given;
+  const manager = viewerRole === "owner" || viewerRole === "admin";
   const counts = countKinds(activities);
   const active = counts[filter] > 0 ? filter : "all";
   const shown =
@@ -399,6 +405,8 @@ export function ActivityTimeline({
                       insight={insights?.[activity.id] ?? null}
                       showContact={showContact}
                       viewerId={viewerId}
+                      deletable={manager || (Boolean(viewerId) && activity.actorUserId === viewerId)}
+                      onDeleted={() => setRemoved((current) => [...current, activity.id])}
                       now={now}
                       open={open[activity.id] ?? false}
                       onToggle={() =>
@@ -425,6 +433,7 @@ export default function ContactActivities({
   recipient,
   mailboxConnected,
   viewerId,
+  viewerRole,
   activities,
   insights,
   className,
@@ -434,6 +443,7 @@ export default function ContactActivities({
   recipient: Recipient;
   mailboxConnected: boolean;
   viewerId?: string | null;
+  viewerRole?: string | null;
   activities: Activity[];
   insights?: Record<string, CallInsight>;
   className?: string;
@@ -461,6 +471,7 @@ export default function ContactActivities({
         activities={draft.withAdded(activities)}
         insights={insights}
         viewerId={viewerId}
+        viewerRole={viewerRole}
         empty="No activity yet."
       />
     </DetailSection>
@@ -511,12 +522,46 @@ function emailAttachments(activity: Activity) {
     .filter((name): name is string => Boolean(name));
 }
 
+function DeleteActivity({ activityId, onDeleted }: { activityId: string; onDeleted: () => void }) {
+  const router = useRouter();
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function remove() {
+    setPending(true);
+    setError(null);
+    const result = await archiveActivityAction(activityId);
+    setPending(false);
+    if (result.error) {
+      setError(result.error);
+      return;
+    }
+    onDeleted();
+    router.refresh();
+  }
+
+  return (
+    <div className="flex flex-col items-start gap-1.5">
+      <HoldButton disabled={pending} onConfirm={() => void remove()}>
+        {pending ? "Deleting…" : "Hold to delete"}
+      </HoldButton>
+      {error && (
+        <p role="alert" className="caption-style text-danger">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function ActivityRow({
   panelId,
   activity,
   insight,
   showContact,
   viewerId,
+  deletable,
+  onDeleted,
   now,
   open,
   onToggle,
@@ -526,6 +571,8 @@ function ActivityRow({
   insight: CallInsight | null;
   showContact?: boolean;
   viewerId?: string | null;
+  deletable: boolean;
+  onDeleted: () => void;
   now: number;
   open: boolean;
   onToggle: () => void;
@@ -639,6 +686,7 @@ function ActivityRow({
         {emptyPanel && (
           <p className="caption-style text-subtle">No details recorded.</p>
         )}
+        {deletable && open && <DeleteActivity activityId={activity.id} onDeleted={onDeleted} />}
       </div>
     </li>
   );

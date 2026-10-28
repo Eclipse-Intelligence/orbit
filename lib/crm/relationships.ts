@@ -93,6 +93,7 @@ export async function findStaleRelationships(
        left join crm.activities a
          on a.company_id = c.id
         and a.workspace_id = c.workspace_id
+        and a.archived_at is null
        where c.workspace_id = $1
          and c.archived_at is null
        group by c.id

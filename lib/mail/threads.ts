@@ -8,6 +8,7 @@ import { freshPrepared, preparedFor } from "@/lib/mail/prepare";
 import { cleanEmailHtml, richEmail } from "@/lib/mail/html";
 import type { MailAddress, MailRole } from "@/lib/mail/types";
 import { splitCase, splitJoin } from "@/lib/mail/split";
+import { opensSql, readsSql } from "@/lib/mail/tracking";
 import type { MailNav, MailSplit, MailView, ThreadCursor, ThreadDetail, ThreadPerson, ThreadSummary } from "@/lib/mail/view";
 
 const THREAD_KEY = "coalesce(m.thread_key, 'm:' || m.id::text)";
@@ -141,9 +142,7 @@ export async function listThreads(
        )
        select l.source_id, l.tk, src.email as account, l.id, l.subject, l.snippet, l.from_email, l.from_name, l.to_recipients,
          l.n::int as n, l.unread, l.flagged, l.attachments, l.is_draft, l.at, l.sort_at, l.reminder_kind, l.surfaced_at, l.snoozed_until, l.split,
-         case when l.tracking_id is not null then (
-           select json_build_object('count', count(*)::int, 'last', max(o.opened_at)) from crm.mail_opens o where o.tracking_id = l.tracking_id
-         ) end as reads,
+         ${readsSql("l")} as reads,
          exists (
            select 1 from crm.mail_prepared p
            where p.message_id = l.id and p.kind in ('reply', 'nudge') and p.state in ('ready', 'used')
@@ -287,10 +286,7 @@ async function readThread(actor: UserActor, key: string): Promise<ThreadDetail> 
       `select m.id, f.role, f.name as folder, src.email as account, m.subject, m.from_email, m.from_name, m.to_recipients, m.cc_recipients,
          coalesce(m.received_at, m.sent_at, m.created_at) as at, m.is_read, m.is_draft, m.is_flagged, m.has_attachments, m.snippet,
          m.body_html, m.body_text, m.web_link, m.provider_message_id,
-         case when m.tracking_id is not null then (
-           select coalesce(json_agg(json_build_object('at', o.opened_at, 'agent', o.agent) order by o.opened_at desc), '[]'::json)
-           from crm.mail_opens o where o.tracking_id = m.tracking_id
-         ) end as opens
+         ${opensSql("m")} as opens
        from crm.mail_messages m
        join crm.mail_folders f on f.id = m.folder_id
        join crm.mail_sources src on src.id = m.source_id

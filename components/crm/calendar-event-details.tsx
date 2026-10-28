@@ -7,12 +7,16 @@ import { NoticeContext } from "@/components/crm/invite-dialog";
 import {
   cancelInviteAction,
   createContactFromEventAction,
+  moveInviteAction,
 } from "@/app/(crm)/calendar/actions";
-import { appTimeZone } from "@/lib/time";
+import { DatePicker } from "@/components/_ui/date-picker";
+import Field from "@/components/_ui/field";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/_ui/select";
+import { appTimeZone, dateTimeInputValue, zoneLabel } from "@/lib/time";
 import { contactHref } from "@/lib/crm/hrefs";
 import type { CalendarProvider } from "@/lib/crm/calendar-accounts";
 import type { CalendarItem, EventPerson } from "@/lib/crm/calendars";
-import { INVITE_COMMENT_MAX } from "@/lib/invite-rules";
+import { INVITE_COMMENT_MAX, TIME_OPTIONS } from "@/lib/invite-rules";
 import { textareaClass } from "@/components/_ui/field-styles";
 import { cn } from "@/lib/utils";
 
@@ -208,7 +212,7 @@ function CancelMeeting({ item }: { item: CalendarItem }) {
     );
   }
   return (
-    <div className="border-line-strong flex flex-col gap-2 rounded-lg border p-3">
+    <div className="border-line-strong flex basis-full flex-col gap-2 rounded-lg border p-3">
       <p className="text-[14px] leading-5">Cancel this meeting for everyone?</p>
       <label className="caption-style text-subtle" htmlFor={fieldId}>
         Message to guests (optional)
@@ -243,6 +247,107 @@ function CancelMeeting({ item }: { item: CalendarItem }) {
           onClick={() => setConfirming(false)}
         >
           Keep meeting
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function MoveMeeting({ item }: { item: CalendarItem }) {
+  const router = useRouter();
+  const notify = useContext(NoticeContext);
+  const current = dateTimeInputValue(item.startsAt, appTimeZone());
+  const [open, setOpen] = useState(false);
+  const [date, setDate] = useState(current.slice(0, 10));
+  const [time, setTime] = useState(current.slice(11, 16));
+  const [message, setMessage] = useState("");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+  const ids = `move-${item.id}`;
+  const times = TIME_OPTIONS.includes(time) ? TIME_OPTIONS : [...TIME_OPTIONS, time].sort();
+
+  async function move() {
+    if (pending) return;
+    setPending(true);
+    setError(null);
+    const result = await moveInviteAction(item.id, { startLocal: `${date}T${time}`, message });
+    setPending(false);
+    if (result.gone && result.error) {
+      notify(result.error);
+      router.refresh();
+      return;
+    }
+    if (result.error || !result.startsAt || !result.endsAt) {
+      setError(result.error ?? "Could not move this meeting.");
+      return;
+    }
+    const moved = whenLine({ ...item, startsAt: result.startsAt, endsAt: result.endsAt });
+    const note = result.warning ?? `Moved ${eventTitle(item)} to ${moved}. Outlook let your guests know.`;
+    setDone(note);
+    setOpen(false);
+    notify(note);
+    router.refresh();
+  }
+
+  if (done && !open) {
+    return (
+      <p role="status" className="caption-style text-soft basis-full">
+        {done}
+      </p>
+    );
+  }
+  if (!open) {
+    return (
+      <Button variant="ghost" size="sm" className="self-start" onClick={() => setOpen(true)}>
+        Move
+      </Button>
+    );
+  }
+  return (
+    <div className="border-line-strong flex basis-full flex-col gap-3 rounded-lg border p-3">
+      <p className="text-[14px] leading-5">Move this meeting</p>
+      <div className="grid grid-cols-[1fr_7em] gap-2">
+        <Field label="Date" htmlFor={`${ids}-date`}>
+          <DatePicker id={`${ids}-date`} value={date} onChange={setDate} />
+        </Field>
+        <Field label="Start" htmlFor={`${ids}-time`}>
+          <Select value={time} onValueChange={setTime}>
+            <SelectTrigger id={`${ids}-time`}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent className="max-h-64">
+              {times.map((option) => (
+                <SelectItem key={option} value={option}>
+                  {option}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+      </div>
+      <p className="caption-style text-subtle -mt-1">{zoneLabel()} time. Keeps the same length.</p>
+      <label className="caption-style text-subtle" htmlFor={`${ids}-message`}>
+        Message to guests (optional)
+      </label>
+      <textarea
+        id={`${ids}-message`}
+        value={message}
+        maxLength={INVITE_COMMENT_MAX}
+        onChange={(event) => setMessage(event.target.value)}
+        className={cn(textareaClass, "min-h-16")}
+      />
+      {error && (
+        <p role="alert" className="caption-style text-danger">
+          {error}
+        </p>
+      )}
+      <div className="flex flex-wrap items-center gap-2">
+        <Button variant="secondary" size="sm" disabled={pending || !date || !time} onClick={move}>
+          {pending ? "Moving…" : "Move meeting"}
+        </Button>
+        <Button variant="ghost" size="sm" disabled={pending} onClick={() => setOpen(false)}>
+          Keep time
         </Button>
       </div>
     </div>
@@ -343,7 +448,12 @@ export default function CalendarEventDetails({
           )}
         </div>
       )}
-      {item.canCancel && <CancelMeeting item={item} />}
+      {item.canCancel && (
+        <div className="flex flex-wrap items-start gap-2">
+          {!item.isAllDay && <MoveMeeting item={item} />}
+          <CancelMeeting item={item} />
+        </div>
+      )}
       {item.organizer && (
         <div className="flex flex-col gap-2">
           <span className="caption-style text-subtle">Organiser</span>

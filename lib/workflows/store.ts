@@ -301,6 +301,7 @@ async function testEvent(actor: UserActor, definition: WorkflowDefinition, recor
     if (trigger.type === "call_summary_ready") {
       const found = await db.query<{ activity_id: string }>(
         `select i.activity_id from crm.call_insights i
+         join crm.activities a on a.id = i.activity_id and a.archived_at is null
          where i.workspace_id = $1 and i.${column} = $2 and i.status = 'ready'
          order by i.created_at desc limit 1`,
         [actor.workspaceId, record.id],
@@ -310,7 +311,7 @@ async function testEvent(actor: UserActor, definition: WorkflowDefinition, recor
     }
     if (trigger.type === "activity_logged") {
       const found = await db.query<{ id: string }>(
-        `select id from crm.activities where workspace_id = $1 and ${column} = $2 order by occurred_at desc limit 1`,
+        `select id from crm.activities where workspace_id = $1 and ${column} = $2 and archived_at is null order by occurred_at desc limit 1`,
         [actor.workspaceId, record.id],
       );
       if (!found.rows[0]) throw new CrmError("invalid_input", `There's no activity on this ${record.type} to test with.`, 400);

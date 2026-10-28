@@ -114,4 +114,16 @@ describe("account health", () => {
     assert.equal(company.healthActivityId, activity);
     assert.deepEqual(await backfillCallHealth({ limit: 5, fetchImpl: judge.fetchImpl }), { judged: 0, failed: 0 });
   });
+
+  it("doesn't judge a call that was deleted from the timeline", async () => {
+    const quiet = (await createCompany(owner, { name: "Deleted Call Co", domain: "deleted-call-health.test" })).body.company.id;
+    const activity = await call(0, { companyId: quiet });
+    await summariseCall(owner, activity, TRANSCRIPT, { fetchImpl: gateway([summary(null, null)]).fetchImpl, autoAccept: false });
+    await getAdminPool().query("update crm.call_insights set sentiment_checked_at = null where activity_id = $1", [activity]);
+    await getAdminPool().query("update crm.activities set archived_at = now() where id = $1", [activity]);
+
+    const judge = gateway([{ health: "at_risk", healthReason: "Should not be used." }]);
+    assert.deepEqual(await backfillCallHealth({ limit: 5, fetchImpl: judge.fetchImpl }), { judged: 0, failed: 0 });
+    assert.equal((await getCompany(owner, quiet)).health, null);
+  });
 });

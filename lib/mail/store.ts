@@ -2,6 +2,7 @@ import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
+import { opensSql, readsSql } from "@/lib/mail/tracking";
 import type { MailAddress, MailRole } from "@/lib/mail/types";
 
 type MailSummary = {
@@ -18,13 +19,15 @@ type MailSummary = {
   isRead: boolean;
   isFlagged: boolean;
   hasAttachments: boolean;
+  opens?: { count: number; lastAt: string | null } | null;
 };
 
-type MailMessage = MailSummary & {
+type MailMessage = Omit<MailSummary, "opens"> & {
   cc: MailAddress[];
   sentAt: string | null;
   bodyText: string | null;
   webLink: string | null;
+  opens: { at: string; device: string | null }[] | null;
 };
 
 export type MailSourceStatus = {
@@ -55,6 +58,8 @@ type Row = {
   has_attachments: boolean;
   body_text?: string | null;
   web_link?: string | null;
+  reads?: { count: number; last: string | null } | null;
+  opens?: { at: string; agent: string | null }[] | null;
 };
 
 const SUMMARY_COLUMNS = `
@@ -119,13 +124,13 @@ export async function searchMail(
     }
     values.push(limit);
     const result = await db.query<Row>(
-      `select ${SUMMARY_COLUMNS} ${FROM}
+      `select ${SUMMARY_COLUMNS}, ${readsSql("m")} as reads ${FROM}
        where ${where.join(" and ")}
        order by ${text ? `${rank} desc, ` : ""}m.received_at desc nulls last
        limit $${values.length}`,
       values,
     );
-    return result.rows.map(summary);
+    return result.rows.map((row) => ({ ...summary(row), opens: row.reads ? { count: row.reads.count, lastAt: iso(row.reads.last) } : null }));
   });
 }
 
@@ -139,7 +144,7 @@ export async function getMailThread(actor: UserActor, messageId: string): Promis
     const found = anchor.rows[0];
     if (!found) throw new CrmError("not_found", "Email not found.", 404);
     const result = await db.query<Row>(
-      `select ${SUMMARY_COLUMNS}, m.cc_recipients, m.sent_at, m.body_text, m.web_link ${FROM}
+      `select ${SUMMARY_COLUMNS}, m.cc_recipients, m.sent_at, m.body_text, m.web_link, ${opensSql("m")} as opens ${FROM}
        where m.user_id = $1 and ${found.thread_key ? "m.source_id = $2 and m.thread_key = $3" : "m.id = $2"}
        order by coalesce(m.received_at, m.sent_at) asc
        limit 100`,
@@ -151,6 +156,7 @@ export async function getMailThread(actor: UserActor, messageId: string): Promis
       sentAt: iso(row.sent_at),
       bodyText: row.body_text ?? null,
       webLink: row.web_link ?? null,
+      opens: row.opens ? row.opens.map((open) => ({ at: iso(open.at)!, device: open.agent })) : null,
     }));
   });
 }

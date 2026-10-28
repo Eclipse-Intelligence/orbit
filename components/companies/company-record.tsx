@@ -15,6 +15,7 @@ import RelationshipPanel from "@/components/companies/detail/relationship-panel"
 import { useListHref } from "@/components/crm/list-memory";
 import MeetingsCard from "@/components/crm/meetings-card";
 import { useQuickAddRecord } from "@/components/crm/quick-add";
+import MergeRecordMenu from "@/components/crm/merge-record";
 import RecordLayout from "@/components/crm/record-layout";
 import { Detail, DetailList } from "@/components/crm/record-form";
 import CompanyEnrichButton from "@/components/companies/detail/company-enrich-button";
@@ -152,6 +153,7 @@ export default function CompanyRecord({
         action={
           <div className="flex items-center gap-1">
             {!company.archivedAt && <RunWorkflowButton object="company" recordId={company.id} workflows={workflows} />}
+            {!company.archivedAt && <MergeRecordMenu kind="company" id={company.id} name={company.name} />}
             {company.archivedAt ? null : confirmArchive ? (
               <>
                 <Button
@@ -412,7 +414,7 @@ export default function CompanyRecord({
 
             {!company.archivedAt && <KnowledgePanel key={company.id} target={{ companyId: company.id }} initial={knowledge} />}
 
-            <RelationshipPanel context={context} clickup={clickup} findEmail={enrichment.email} />
+            <RelationshipPanel context={context} clickup={clickup} findEmail={enrichment.email} viewerId={viewer.id} />
           </>
         }
         activity={
@@ -424,6 +426,7 @@ export default function CompanyRecord({
             insights={context.insights}
             mailboxConnected={mailboxConnected}
             viewerId={viewer.id}
+            viewerRole={viewer.role}
           />
         }
       />

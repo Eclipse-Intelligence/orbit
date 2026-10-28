@@ -259,7 +259,7 @@ export async function listActivities(
   const page = pageWindow(query.limit, query.offset);
   return withActor(actor, async (db) => {
     const values: unknown[] = [actor.workspaceId];
-    const where = ["a.workspace_id = $1"];
+    const where = ["a.workspace_id = $1", "a.archived_at is null"];
     if (query.companyId) {
       values.push(query.companyId);
       where.push(`a.company_id = $${values.length}`);
@@ -358,7 +358,7 @@ export async function listActivitiesByContact(
          left join crm.contacts ct on ct.id = a.contact_id
          left join crm.opportunities op on op.id = a.opportunity_id
          ${ACTOR_JOIN_SQL}
-         where a.workspace_id = $1 and a.contact_id = any($2::uuid[])
+         where a.workspace_id = $1 and a.contact_id = any($2::uuid[]) and a.archived_at is null
        ) ranked
        where rn <= 40
        order by occurred_at desc, id desc`,
@@ -384,6 +384,7 @@ export async function listCompanyTimeline(
     const rows = await db.query<ActivityRow>(
       `${ACTIVITY_SQL}
        where a.workspace_id = $1
+         and a.archived_at is null
          and (
            a.company_id = $2
            or a.contact_id in (
@@ -467,7 +468,7 @@ export async function getActivity(actor: Actor, id: string) {
   if (!isUuid(id)) throw new CrmError("not_found", "Activity not found.", 404);
   return withActor(actor, async (db) => {
     const result = await db.query<ActivityRow>(
-      `${ACTIVITY_SQL} where a.id = $1`,
+      `${ACTIVITY_SQL} where a.id = $1 and a.archived_at is null`,
       [id],
     );
     const row = result.rows[0];
@@ -489,4 +490,159 @@ export async function createActivity(
       activity: await createActivityInDb(db, actor, input, provenance),
     })),
   );
+}
+
+type ArchiveRow = {
+  id: string;
+  type: ActivityType;
+  title: string | null;
+  occurred_at: Date | string;
+  company_id: string | null;
+  contact_id: string | null;
+  actor_user_id: string | null;
+  actor_agent_id: string | null;
+  archived_at: Date | string | null;
+};
+
+const ARCHIVE_DENIED =
+  "Only the person who logged this activity, or an owner or admin, can delete it.";
+
+function mayArchive(actor: Actor, row: ArchiveRow) {
+  if (actor.type === "agent") return row.actor_agent_id === actor.agentId;
+  return row.actor_user_id === actor.userId || actor.role === "owner" || actor.role === "admin";
+}
+
+async function readForArchive(db: Db, actor: Actor, id: string) {
+  const result = await db.query<ArchiveRow>(
+    `select id, type, title, occurred_at, company_id, contact_id, actor_user_id, actor_agent_id, archived_at
+     from crm.activities where id = $1 and workspace_id = $2`,
+    [id, actor.workspaceId],
+  );
+  const row = result.rows[0];
+  if (!row) throw new CrmError("not_found", "Activity not found.", 404);
+  return row;
+}
+
+function archiveSummary(row: ArchiveRow) {
+  return {
+    type: row.type,
+    title: row.title,
+    occurredAt: iso(row.occurred_at),
+    companyId: row.company_id,
+    contactId: row.contact_id,
+  };
+}
+
+async function setArchived(db: Db, actor: Actor, row: ArchiveRow, archived: boolean) {
+  if (!mayArchive(actor, row)) throw new CrmError("forbidden", ARCHIVE_DENIED, 403);
+  const updated = await db.query<{ archived_at: Date | string | null }>(
+    `update crm.activities set archived_at = ${archived ? "now()" : "null"}
+     where id = $1 and workspace_id = $2 returning archived_at`,
+    [row.id, actor.workspaceId],
+  );
+  if (updated.rowCount === 0) throw new CrmError("forbidden", ARCHIVE_DENIED, 403);
+  return iso(updated.rows[0].archived_at);
+}
+
+export type ClearedHealth = { companyId: string; health: string; healthReason: string | null; healthAt: string | null };
+
+async function clearHealthFrom(db: Db, actor: Actor, activityId: string, provenance: Provenance) {
+  const rows = await db.query<{ id: string; health: string | null; health_reason: string | null; health_at: Date | string | null }>(
+    `select id, health, health_reason, health_at from crm.companies
+     where workspace_id = $1 and health_activity_id = $2
+     for update`,
+    [actor.workspaceId, activityId],
+  );
+  const cleared: ClearedHealth[] = [];
+  for (const row of rows.rows) {
+    await db.query(
+      "update crm.companies set health = null, health_reason = null, health_at = null, health_activity_id = null where id = $1",
+      [row.id],
+    );
+    if (!row.health) continue;
+    cleared.push({ companyId: row.id, health: row.health, healthReason: row.health_reason, healthAt: iso(row.health_at) });
+    await recordAudit(db, actor, "company.updated", "company", row.id, provenance, {
+      fields: row.health_reason === null ? ["health"] : ["health", "healthReason"],
+      before: { health: row.health, healthReason: row.health_reason },
+      after: { health: null, healthReason: null },
+      activityId,
+    });
+  }
+  return cleared;
+}
+
+async function restoreHealthFrom(db: Db, actor: Actor, activityId: string, cleared: ClearedHealth[], provenance: Provenance) {
+  for (const item of cleared) {
+    if (!isUuid(item.companyId)) continue;
+    const restored = await db.query<{ id: string }>(
+      `update crm.companies
+       set health = $3, health_reason = $4, health_at = $5, health_activity_id = $6
+       where id = $1 and workspace_id = $2 and health is null and health_at is null and health_activity_id is null
+       returning id`,
+      [item.companyId, actor.workspaceId, item.health, item.healthReason, item.healthAt, activityId],
+    );
+    if (restored.rowCount === 0) continue;
+    await recordAudit(db, actor, "company.updated", "company", item.companyId, provenance, {
+      fields: item.healthReason === null ? ["health"] : ["health", "healthReason"],
+      before: { health: null, healthReason: null },
+      after: { health: item.health, healthReason: item.healthReason },
+      activityId,
+    });
+  }
+}
+
+export async function archiveActivityInDb(db: Db, actor: Actor, id: string, provenance: Provenance) {
+  const row = await readForArchive(db, actor, id);
+  if (row.archived_at) return { id, archivedAt: iso(row.archived_at), changed: false };
+  const archivedAt = await setArchived(db, actor, row, true);
+  const clearedHealth = await clearHealthFrom(db, actor, id, provenance);
+  await recordAudit(db, actor, "activity.archived", "activity", id, provenance, {
+    before: { archivedAt: null },
+    after: { archivedAt },
+    activity: archiveSummary(row),
+    ...(clearedHealth.length > 0 ? { clearedHealth } : {}),
+  });
+  return { id, archivedAt, changed: true };
+}
+
+export async function restoreActivityInDb(
+  db: Db,
+  actor: Actor,
+  id: string,
+  provenance: Provenance,
+  clearedHealth: ClearedHealth[] = [],
+) {
+  const row = await readForArchive(db, actor, id);
+  if (!row.archived_at) return { id, archivedAt: null, changed: false };
+  await setArchived(db, actor, row, false);
+  await recordAudit(db, actor, "activity.updated", "activity", id, provenance, {
+    fields: ["archivedAt"],
+    before: { archivedAt: iso(row.archived_at) },
+    after: { archivedAt: null },
+    activity: archiveSummary(row),
+  });
+  await restoreHealthFrom(db, actor, id, clearedHealth, provenance);
+  return { id, archivedAt: null, changed: true, activity: archiveSummary(row) };
+}
+
+export async function archiveActivity(actor: Actor, id: string, provenance: Provenance) {
+  assertScope(actor.scopes, "activities:write");
+  if (!isUuid(id)) throw new CrmError("not_found", "Activity not found.", 404);
+  return withActor(actor, (db) => archiveActivityInDb(db, actor, id, provenance));
+}
+
+export type ActivitySummary = { type: ActivityType; title: string | null; occurredAt: string | null; archivedAt: string | null };
+
+export async function activitySummaries(db: Db, workspaceId: string, ids: string[]) {
+  const wanted = [...new Set(ids.filter(isUuid))];
+  const found = new Map<string, ActivitySummary>();
+  if (wanted.length === 0) return found;
+  const result = await db.query<{ id: string; type: ActivityType; title: string | null; occurred_at: Date | string; archived_at: Date | string | null }>(
+    "select id, type, title, occurred_at, archived_at from crm.activities where workspace_id = $1 and id = any($2::uuid[])",
+    [workspaceId, wanted],
+  );
+  for (const row of result.rows) {
+    found.set(row.id, { type: row.type, title: row.title, occurredAt: iso(row.occurred_at), archivedAt: iso(row.archived_at) });
+  }
+  return found;
 }

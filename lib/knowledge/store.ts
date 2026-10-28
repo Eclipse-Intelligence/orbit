@@ -372,13 +372,13 @@ export async function renameKnowledge(actor: UserActor, id: string, title: unkno
   });
 }
 
-export async function archiveKnowledge(actor: UserActor, id: string, fetchImpl: typeof fetch = fetch) {
+export async function archiveKnowledge(actor: UserActor, id: string, fetchImpl: typeof fetch = fetch, provenance: Provenance = { operation: "remove_knowledge" }) {
   const row = await withActor(actor, async (db) => {
     const current = await readItem(db, actor.workspaceId, id);
     if (!current) throw new CrmError("not_found", "That item isn't in Knowledge.", 404);
     await db.query("update crm.knowledge_items set archived_at = now(), content = null, chunk_count = 0 where id = $1", [id]);
     await db.query("delete from crm.knowledge_chunks where item_id = $1", [id]);
-    await recordAudit(db, actor, "knowledge.removed", "knowledge", id, { operation: "remove_knowledge" }, {
+    await recordAudit(db, actor, "knowledge.removed", "knowledge", id, provenance, {
       before: { title: current.title, kind: current.kind, scope: current.scope, companyId: current.company_id },
     });
     return current;

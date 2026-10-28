@@ -4,7 +4,9 @@ import { revalidatePath } from "next/cache";
 import { getUserActor } from "@/lib/auth/user";
 import { CrmError } from "@/lib/crm/errors";
 import { createSuggestedCompany, suggestCompanyForEmail, type CompanySuggestion } from "@/lib/enrichment/companies";
+import { verifyContactEmail, type EmailCheck } from "@/lib/enrichment/email-check";
 import { enrichmentAllowed } from "@/lib/enrichment/limits";
+import { revalidateEnriched } from "@/lib/enrichment/revalidate";
 import { getEnrichmentSettings, saveEnrichmentSettings, type EnrichmentSettings } from "@/lib/enrichment/settings";
 import { backfillWebChecks, ensureDefaultSignals, icpProfile, markAllDue, listWebChecks, removeWebCheck, saveWebCheck, type CompanyCheck, type WebCheck } from "@/lib/enrichment/web-checks";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
@@ -50,6 +52,18 @@ export async function addSuggestedCompanyAction(name: string, domain: string): P
     if (error instanceof CrmError) return { error: error.message };
     console.error("Adding the suggested company failed", error);
     return { error: "Couldn't add that company." };
+  }
+}
+
+export async function checkContactEmailAction(contactId: string): Promise<{ check: EmailCheck } | { error: string }> {
+  const user = await getUserActor();
+  if (!user) return { error: "Sign in again." };
+  try {
+    const check = await verifyContactEmail(user, typeof contactId === "string" ? contactId : "", { refresh: true });
+    revalidateEnriched();
+    return { check };
+  } catch (error) {
+    return failure(error, "Couldn't check that address. Try again.");
   }
 }
 

@@ -693,24 +693,26 @@ export async function archiveContact(
   const provenance = options.provenance ?? { operation: "archive_contact" };
   const hash = requestHash("archive_contact", { id, provenance });
   return withActor(actor, (db) =>
-    replayOrRun(db, actor, options.idempotencyKey, hash, 200, async () => {
-      const current = await readContact(db, id, actor.workspaceId);
-      if (!current) throw new CrmError("not_found", "Contact not found.", 404);
-      if (current.archived_at) return { contact: mapContact(current) };
-      await db.query(
-        "update crm.contacts set archived_at = now() where id = $1 and workspace_id = $2",
-        [id, actor.workspaceId],
-      );
-      const saved = await readContact(db, id, actor.workspaceId);
-      if (!saved) throw new CrmError("not_found", "Contact not found.", 404);
-      const contact = mapContact(saved);
-      await recordAudit(db, actor, "contact.archived", "contact", contact.id, provenance, {
-        before: { archivedAt: null },
-        after: { archivedAt: contact.archivedAt },
-      });
-      return { contact };
-    }),
+    replayOrRun(db, actor, options.idempotencyKey, hash, 200, () => archiveContactInDb(db, actor, id, provenance)),
   );
+}
+
+export async function archiveContactInDb(db: Db, actor: Actor, id: string, provenance: Provenance) {
+  const current = await readContact(db, id, actor.workspaceId);
+  if (!current) throw new CrmError("not_found", "Contact not found.", 404);
+  if (current.archived_at) return { contact: mapContact(current) };
+  await db.query(
+    "update crm.contacts set archived_at = now() where id = $1 and workspace_id = $2",
+    [id, actor.workspaceId],
+  );
+  const saved = await readContact(db, id, actor.workspaceId);
+  if (!saved) throw new CrmError("not_found", "Contact not found.", 404);
+  const contact = mapContact(saved);
+  await recordAudit(db, actor, "contact.archived", "contact", contact.id, provenance, {
+    before: { archivedAt: null },
+    after: { archivedAt: contact.archivedAt },
+  });
+  return { contact };
 }
 
 export async function unarchiveContact(
@@ -723,34 +725,43 @@ export async function unarchiveContact(
   const provenance = options.provenance ?? { operation: "unarchive_contact" };
   const hash = requestHash("unarchive_contact", { id, provenance });
   return withActor(actor, (db) =>
-    replayOrRun(db, actor, options.idempotencyKey, hash, 200, async () => {
-      await lockNamespace(db, actor.workspaceId, "contacts");
-      const current = await readContact(db, id, actor.workspaceId);
-      if (!current) throw new CrmError("not_found", "Contact not found.", 404);
-      if (!current.archived_at) return { contact: mapContact(current) };
-      try {
-        await db.query(
-          "update crm.contacts set archived_at = null where id = $1 and workspace_id = $2",
-          [id, actor.workspaceId],
-        );
-      } catch (error) {
-        constraintError(
-          error,
-          "duplicate_contact",
-          "Another contact already uses this email or LinkedIn profile.",
-        );
-      }
-      const saved = await readContact(db, id, actor.workspaceId);
-      if (!saved) throw new CrmError("not_found", "Contact not found.", 404);
-      const contact = mapContact(saved);
-      await recordAudit(db, actor, "contact.updated", "contact", contact.id, provenance, {
-        fields: ["archivedAt"],
-        before: { archivedAt: iso(current.archived_at) },
-        after: { archivedAt: null },
-      });
-      return { contact };
-    }),
+    replayOrRun(db, actor, options.idempotencyKey, hash, 200, () => unarchiveContactInDb(db, actor, id, provenance)),
   );
+}
+
+export async function unarchiveContactInDb(db: Db, actor: Actor, id: string, provenance: Provenance) {
+  await lockNamespace(db, actor.workspaceId, "contacts");
+  const current = await readContact(db, id, actor.workspaceId);
+  if (!current) throw new CrmError("not_found", "Contact not found.", 404);
+  if (!current.archived_at) return { contact: mapContact(current) };
+  try {
+    await db.query(
+      "update crm.contacts set archived_at = null where id = $1 and workspace_id = $2",
+      [id, actor.workspaceId],
+    );
+  } catch (error) {
+    constraintError(
+      error,
+      "duplicate_contact",
+      "Another contact already uses this email or LinkedIn profile.",
+    );
+  }
+  const saved = await readContact(db, id, actor.workspaceId);
+  if (!saved) throw new CrmError("not_found", "Contact not found.", 404);
+  const contact = mapContact(saved);
+  await recordAudit(db, actor, "contact.updated", "contact", contact.id, provenance, {
+    fields: ["archivedAt"],
+    before: { archivedAt: iso(current.archived_at) },
+    after: { archivedAt: null },
+  });
+  return { contact };
+}
+
+export async function updateContactInDb(db: Db, actor: Actor, id: string, input: ContactWrite, provenance: Provenance) {
+  await lockNamespace(db, actor.workspaceId, "contacts");
+  const current = await readContact(db, id, actor.workspaceId);
+  if (!current) throw new CrmError("not_found", "Contact not found.", 404);
+  return applyContact(db, actor, current, prepareContact(input, "patch"), provenance);
 }
 
 export async function getContactsByIds(actor: Actor, ids: string[]) {
