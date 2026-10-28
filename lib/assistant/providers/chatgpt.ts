@@ -152,7 +152,7 @@ export async function completeChatGpt(input: ProviderInput & { token: string; ac
     throw new ProviderError("Couldn't reach ChatGPT.");
   }
   if (!response.ok || !response.body) throw await failure(response);
-  return readResponses(response.body, { label: "ChatGPT", modelId: input.modelId });
+  return readResponses(response.body, { label: "ChatGPT", modelId: input.modelId, onText: input.onText });
 }
 
 export async function readResponses(body: ReadableStream<Uint8Array>, options: { label: string; modelId: string; onText?: (text: string) => void }): Promise<Completion> {

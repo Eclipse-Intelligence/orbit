@@ -273,6 +273,33 @@ describe("ChatGPT adapter", () => {
     }
   });
 
+  it("streams ChatGPT plan replies as they are written", async () => {
+    const codex = recorder(() =>
+      sse([
+        { data: { type: "response.output_text.delta", delta: "Hel" } },
+        { data: { type: "response.output_text.delta", delta: "lo." } },
+        { data: { type: "response.output_item.done", item: { type: "message", role: "assistant", content: [{ type: "output_text", text: "Hello.", annotations: [] }] } } },
+        { data: { type: "response.completed", response: {} } },
+      ]),
+    );
+    const streamed: string[] = [];
+    const result = await completeChatGpt({
+      modelId: "chatgpt/gpt-6.1-sol",
+      apiModel: "gpt-6.1-sol",
+      reasoning: "low",
+      webSearch: false,
+      timeoutMs: 10_000,
+      tools: [],
+      messages: [{ role: "user", content: "Hi" }],
+      token: "tok",
+      accountId: null,
+      fetchImpl: codex.fetchImpl,
+      onText: (text) => streamed.push(text),
+    });
+    assert.deepEqual(streamed, ["Hel", "Hello."]);
+    assert.equal(result.content, "Hello.");
+  });
+
   it("explains ChatGPT errors", async () => {
     const limited = recorder(() => json({ detail: "You've hit your usage limit." }, 429));
     await assert.rejects(

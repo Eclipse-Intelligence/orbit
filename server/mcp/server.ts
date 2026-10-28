@@ -103,13 +103,15 @@ export function createCrmMcpServer(actor: Actor) {
     "search_companies",
     {
       description:
-        "Search companies in the authenticated workspace by name, domain, or industry, optionally limited to one tag.",
+        "Search companies in the authenticated workspace by name, domain, or industry, optionally limited to one tag. Each company has icpFit (ICP fit 0 to 4, or null); sort fit lists the best fit first.",
       inputSchema: {
         query: z.string().optional(),
         lifecycle: z.string().max(40).optional().describe("lead, prospect, customer, churned, or any custom lifecycle name"),
         owner_id: z.uuid().optional(),
         tag: z.string().optional(),
         limit: z.number().int().min(1).max(100).optional(),
+        offset: z.number().int().min(0).max(10000).optional(),
+        sort: z.enum(["updated", "name", "created", "interaction", "fit"]).optional(),
       },
     },
     async (args) => {
@@ -120,8 +122,9 @@ export function createCrmMcpServer(actor: Actor) {
           ownerId: args.owner_id,
           tag: args.tag,
           limit: args.limit,
-          sort: "updated",
-          order: "desc",
+          offset: args.offset,
+          sort: args.sort ?? "updated",
+          order: args.sort === "name" ? "asc" : "desc",
           relationships: true,
         });
         return toolResult(result);

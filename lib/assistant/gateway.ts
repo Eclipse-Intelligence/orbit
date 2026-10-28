@@ -239,6 +239,7 @@ export async function complete(input: CompleteInput): Promise<Completion> {
       timeoutMs: input.timeoutMs,
       tools: (input.tools ?? toolDefinitions()) as FunctionTool[],
       fetchImpl: input.fetchImpl,
+      onText: input.onText,
     };
     return completeChatGpt({ ...provider, token: access.token, accountId: access.accountId });
   };

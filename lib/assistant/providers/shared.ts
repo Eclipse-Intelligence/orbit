@@ -14,6 +14,7 @@ export type ProviderInput = {
   timeoutMs: number;
   tools: FunctionTool[];
   fetchImpl?: typeof fetch;
+  onText?: (text: string) => void;
 };
 
 export class ProviderError extends Error {

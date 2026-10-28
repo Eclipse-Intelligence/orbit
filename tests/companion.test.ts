@@ -13,6 +13,7 @@ import {
   failureReply,
   finishCompanionJob,
   nextCompanionJob,
+  saveCompanionDraft,
   runCompanionTool,
 } from "@/lib/companion/jobs";
 import {
@@ -228,6 +229,24 @@ describe("Orbit Agent turns", () => {
     assert.ok(message.endsWith("orbit-agent --install"));
   });
 
+
+  it("streams the reply text from the Mac while it is being written", async () => {
+    const events: AssistantEvent[] = [];
+    const run = sendMessage(owner, { message: "Stream please", model: "claude/claude-opus-5-5", reasoning: "low", webSearch: false }, (event) => events.push(event), {
+      deadline: deadline(),
+    });
+    await answer(auth, async (job) => {
+      await saveCompanionDraft(auth, job.id, "Here is the start");
+      await new Promise((resolve) => setTimeout(resolve, 1_200));
+      await saveCompanionDraft(auth, job.id, "Here is the start of it");
+      await new Promise((resolve) => setTimeout(resolve, 1_200));
+      return { steps: [{ text: "Here is the start of it.", calls: [] }], results: {}, sources: [], model: null, usage: null };
+    });
+    await run;
+    const drafts = events.filter((event) => event.type === "draft").map((event) => (event as { text: string }).text);
+    assert.deepEqual(drafts, ["Here is the start", "Here is the start of it"]);
+    assert.ok(events.some((event) => event.type === "message" && event.message.content === "Here is the start of it."));
+  });
 
   it("only gives a job to the Mac that claimed it", async () => {
     const other = await createUser("agent-other@orbit.test", "Someone Else");
@@ -480,6 +499,36 @@ describe("companion turn runner", () => {
     assert.deepEqual(result.results, { t1: { content: '{"companies":[{"name":"Acme"}]}', isError: false } });
     assert.deepEqual(result.sources, [{ url: "https://acme.test", title: "Acme" }]);
     assert.deepEqual(cleanEnv({ ANTHROPIC_API_KEY: "x", KEEP: "y" }), { KEEP: "y" });
+  });
+
+  it("passes Claude Code's text to onDraft as it streams, starting afresh for each message", async () => {
+    let options: Record<string, unknown> | undefined;
+    const sdk = {
+      tool: () => ({}),
+      createSdkMcpServer: () => ({}),
+      query: (input: { options: Record<string, unknown> }) => {
+        options = input.options;
+        return (async function* () {
+          const delta = (text: string, parent: string | null = null) =>
+            ({ type: "stream_event", parent_tool_use_id: parent, uuid: "e", session_id: "s", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } } }) as unknown as SDKMessage;
+          yield { type: "stream_event", parent_tool_use_id: null, uuid: "e", session_id: "s", event: { type: "message_start", message: {} } } as unknown as SDKMessage;
+          yield delta("Look");
+          yield delta("ing.");
+          yield delta("ignored", "sub");
+          yield { type: "stream_event", parent_tool_use_id: null, uuid: "e", session_id: "s", event: { type: "message_start", message: {} } } as unknown as SDKMessage;
+          yield delta("Done");
+          yield { type: "assistant", parent_tool_use_id: null, uuid: "u1", session_id: "s", message: { id: "m1", model: "claude-sonnet-5-5", content: [{ type: "text", text: "Done" }] } } as unknown as SDKMessage;
+          yield { type: "result", subtype: "success", is_error: false, result: "", usage: {}, uuid: "r", session_id: "s" } as unknown as SDKMessage;
+        })();
+      },
+    } as unknown as Sdk;
+    const drafts: string[] = [];
+    await runTurn(
+      { model: "claude-sonnet-5-5", effort: "low", webSearch: false, system: "", prompt: "Hi", tools: [] },
+      { sdk, cwd: "/tmp", env: {}, callTool: async () => ({ content: "", isError: false }), onDraft: (text) => drafts.push(text) },
+    );
+    assert.equal(options?.includePartialMessages, true);
+    assert.deepEqual(drafts, ["Look", "Looking.", "Done"]);
   });
 
   it("reports Claude Code errors such as usage limits", async () => {

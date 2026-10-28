@@ -26,7 +26,7 @@ const STOP_POLL_MS = 3_000;
 const HISTORY_BUDGET = 900_000;
 const OLD_RESULT_MAX = 100_000;
 const CURRENT_RESULT_MAX = 400_000;
-const COMPANION_POLL_MS = 1_000;
+const COMPANION_POLL_MS = 500;
 const COMPANION_CLAIM_MS = 20_000;
 const TITLE_MAX = 80;
 export const MESSAGE_MAX = 200_000;
@@ -542,6 +542,7 @@ async function runCompanionTurn(actor: UserActor, conversation: ConversationRow,
   };
   const started = Date.now();
   let seen = 0;
+  let draft: string | null = null;
   let queuedNotice = false;
   while (Date.now() < deadline - 5_000) {
     if (signal?.aborted) {
@@ -552,6 +553,10 @@ async function runCompanionTurn(actor: UserActor, conversation: ConversationRow,
     const job = await readCompanionJob(actor, jobId);
     for (const event of job.events.slice(seen)) emit(event);
     seen = job.events.length;
+    if (job.status === "running" && job.draft && job.draft !== draft) {
+      draft = job.draft;
+      emit({ type: "draft", text: job.draft });
+    }
     if (job.status === "done") {
       if (!job.result) continue;
       const ids = new Set(job.result.messageIds);
