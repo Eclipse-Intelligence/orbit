@@ -3888,29 +3888,11 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     },
   },
   {
-    name: "linear_comment",
-    label: "Commenting in Linear",
-    write: true,
-    description: "Add a comment to a Linear issue, only when the user asks.",
-    parameters: {
-      type: "object",
-      properties: {
-        issue: { type: "string", description: `Identifier like ${linearTeamKey()}-123.` },
-        body: { type: "string", description: "Markdown." },
-      },
-      required: ["issue", "body"],
-    },
-    describe: (args) => ({
-      title: `Comment on ${str(args.issue)}`,
-      lines: [str(args.body).replace(/\s+/g, " ").slice(0, 280)],
-    }),
-    run: async (_actor, args) => ({ comment: await commentOnLinearIssue(required(args.issue, "An issue"), required(args.body, "A comment")) }),
-  },
-  {
     name: "linear_update_issue",
     label: "Updating a Linear issue",
     write: true,
-    description: "Change a Linear issue's title, status or priority, only when the user asks.",
+    description:
+      "Change a Linear issue's title, status or priority, add a comment to it, or both, only when the user asks. To comment only, give issue and comment.",
     parameters: {
       type: "object",
       properties: {
@@ -3918,39 +3900,63 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         title: { type: "string" },
         status: { type: "string", description: "Workflow status name, for example In Progress or Done. An unknown name is refused with the list of valid ones." },
         priority: { type: "string", enum: [...LINEAR_PRIORITIES] },
+        comment: { type: "string", description: "A comment to add, in markdown." },
       },
       required: ["issue"],
     },
-    describe: (args) => ({
-      title: `Update ${str(args.issue)}`,
-      lines: fieldLines(args, { title: "Title", status: "Status", priority: "Priority" }),
-    }),
-    run: async (_actor, args) => ({
-      issue: await updateLinearIssue(required(args.issue, "An issue"), {
-        title: optionalStr(args.title),
-        status: optionalStr(args.status),
-        priority: optionalStr(args.priority),
-      }),
-    }),
+    describe: (args) => {
+      const changes = fieldLines(args, { title: "Title", status: "Status", priority: "Priority" });
+      const comment = str(args.comment).replace(/\s+/g, " ");
+      return {
+        title: changes.length || !comment ? `Update ${str(args.issue)}` : `Comment on ${str(args.issue)}`,
+        lines: [...changes, comment ? `Comment: ${comment.slice(0, 280)}${comment.length > 280 ? "…" : ""}` : ""],
+      };
+    },
+    run: async (_actor, args) => {
+      const issue = required(args.issue, "An issue");
+      const changes = { title: optionalStr(args.title), status: optionalStr(args.status), priority: optionalStr(args.priority) };
+      const comment = optionalStr(args.comment);
+      const changing = Object.values(changes).some(Boolean);
+      if (!changing && !comment) throw new CrmError("invalid_input", "Say what to change (title, status or priority) or give a comment.", 400);
+      const updated = changing ? await updateLinearIssue(issue, changes) : undefined;
+      const commented = comment ? await commentOnLinearIssue(issue, comment) : undefined;
+      return { ...(updated ? { issue: updated } : {}), ...(commented ? { comment: commented } : {}) };
+    },
   },
   {
     name: "reader_list",
     label: "Checking your Reader",
     description:
-      "Only when the user asks you to look in their Reader. List documents in the user's own Readwise Reader, with titles, authors, links, locations, tags, dates and ids. Filter by location (new is Inbox, later, shortlist, archive, feed), category, tag (up to 5, all must match) or updatedAfter. Read-only: Orbit never changes anything in Reader.",
+      "Only when the user asks you to look in their Reader. List documents in the user's own Readwise Reader, with titles, authors, links, locations, tags, dates and ids. Filter by location (new is Inbox, later, shortlist, archive, feed), category, tag (up to 5, all must match) or updatedAfter. With highlights: true, list recent highlights and their notes instead, across documents, in one document (documentId) or in documents with one tag, by updatedAfter. Read-only: Orbit never changes anything in Reader.",
     parameters: {
       type: "object",
       properties: {
+        highlights: { type: "boolean", description: "List highlights and their notes instead of documents." },
+        documentId: { type: "string", description: "With highlights: only highlights in this Reader document." },
         location: { type: "string", enum: [...READER_LOCATIONS] },
         category: { type: "string", enum: [...READER_CATEGORIES] },
-        tags: { type: "array", items: { type: "string" }, description: "Tag keys, for example orbit." },
-        updatedAfter: { type: "string", description: "Only documents updated after this date, YYYY-MM-DD or ISO." },
-        limit: { type: "integer", minimum: 1, maximum: 100, description: "Defaults to 20." },
-        pageCursor: { type: "string", description: "nextPageCursor from the previous call, for the next page." },
+        tags: { type: "array", items: { type: "string" }, description: "Tag keys, for example orbit. With highlights, one tag." },
+        updatedAfter: { type: "string", description: "Only documents or highlights updated after this date, YYYY-MM-DD or ISO." },
+        limit: { type: "integer", minimum: 1, maximum: 200, description: "Documents: default 20, up to 100. Highlights: default 50, up to 200." },
+        pageCursor: { type: "string", description: "nextPageCursor from the previous call, for the next page of documents." },
       },
     },
-    run: async (actor, args, context) =>
-      readerList(
+    run: async (actor, args, context) => {
+      if (args.highlights === true) {
+        const tags = strings(args.tags);
+        if (tags.length > 1) throw new CrmError("invalid_input", "Highlights can be filtered by one tag at a time.", 400, { field: "tags" });
+        return readerHighlights(
+          actor,
+          {
+            documentId: optionalStr(args.documentId),
+            tag: tags[0]?.trim() || undefined,
+            updatedAfter: optionalStr(args.updatedAfter),
+            limit: int(args.limit, 50, 1, 200),
+          },
+          { deadline: context.deadline },
+        );
+      }
+      return readerList(
         actor,
         {
           location: optionalStr(args.location),
@@ -3961,7 +3967,8 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
           pageCursor: optionalStr(args.pageCursor),
         },
         { deadline: context.deadline },
-      ),
+      );
+    },
   },
   {
     name: "reader_read",
@@ -3978,32 +3985,6 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     },
     run: async (actor, args, context) =>
       readerRead(actor, required(args.id, "A Reader document id"), int(args.part, 1, 1, 10_000), { deadline: context.deadline }),
-  },
-  {
-    name: "reader_highlights",
-    label: "Checking your Reader highlights",
-    description:
-      "Recent highlights and their notes from the user's Readwise Reader, across documents. Filter to one document (documentId) or to documents with a tag, and by updatedAfter.",
-    parameters: {
-      type: "object",
-      properties: {
-        documentId: { type: "string", description: "Only highlights in this Reader document." },
-        tag: { type: "string", description: "Only highlights in documents with this tag key." },
-        updatedAfter: { type: "string", description: "YYYY-MM-DD or ISO." },
-        limit: { type: "integer", minimum: 1, maximum: 200, description: "Defaults to 50." },
-      },
-    },
-    run: async (actor, args, context) =>
-      readerHighlights(
-        actor,
-        {
-          documentId: optionalStr(args.documentId),
-          tag: optionalStr(args.tag),
-          updatedAfter: optionalStr(args.updatedAfter),
-          limit: int(args.limit, 50, 1, 200),
-        },
-        { deadline: context.deadline },
-      ),
   },
   {
     name: "recall",
@@ -4196,6 +4177,11 @@ const MERGED_TOOLS: Record<string, { tool: string; args: (args: Args) => Args }>
   archive_email_template: { tool: "save_email_template", args: (args) => ({ id: args.templateId, archived: true }) },
   add_email_attachment_to_knowledge: { tool: "add_to_knowledge", args: ({ emailId, attachment, companyId, eclipse }) => ({ emailId, attachment, companyId, eclipse }) },
   list_lifecycles: { tool: "get_settings", args: () => ({}) },
+  reader_highlights: {
+    tool: "reader_list",
+    args: ({ documentId, tag, updatedAfter, limit }) => ({ highlights: true, documentId, tags: str(tag) ? [str(tag)] : undefined, updatedAfter, limit }),
+  },
+  linear_comment: { tool: "linear_update_issue", args: ({ issue, body }) => ({ issue, comment: body }) },
 };
 
 function resolveTool(name: string, args: Args = {}) {
@@ -4247,7 +4233,6 @@ const EXTERNAL_TOOLS = new Set([
   "linear_get_issue",
   "reader_list",
   "reader_read",
-  "reader_highlights",
   "recall",
   "get_daily_brief",
   "get_call_transcript",

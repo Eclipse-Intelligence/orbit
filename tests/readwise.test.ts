@@ -645,6 +645,9 @@ describe("readwise reader", () => {
       assert.equal(highlights.highlights.length, 50);
       assert.equal(highlights.highlights[0].id, "hl-4");
       assert.ok(highlights.highlights.every((item) => item.documentTitle === "Notes on AI visibility"));
+      assert.deepEqual(await runTool(owner, "reader_list", { highlights: true, tags: ["research"] }), highlights);
+      const tooMany = (await runTool(owner, "reader_list", { highlights: true, tags: ["research", "orbit"] })) as { error: string };
+      assert.equal(tooMany.error, "Highlights can be filtered by one tag at a time.");
       const recent = (await runTool(owner, "reader_highlights", { limit: 100 })) as { highlights: { id: string }[] };
       assert.ok(recent.highlights.length >= 4);
       assert.equal(((await runTool(owner, "reader_read", { id: "missing" })) as { error: string }).error, "That document isn't in your Reader.");
