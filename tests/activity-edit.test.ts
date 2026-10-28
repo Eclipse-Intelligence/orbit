@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
+import { describeAction, recordNames, runTool } from "@/lib/assistant/tools";
 import { archiveActivity, createActivity, getActivity, updateActivity } from "@/lib/crm/activities";
 import { activityOrigin, mayEditActivity } from "@/lib/crm/activity-edit";
 import { createCompany, getCompany } from "@/lib/crm/companies";
@@ -256,5 +257,29 @@ describe("editing activities", () => {
     assert.deepEqual([healthBack.health, healthBack.healthActivityId], ["at_risk", call.id]);
     const insightBack = await admin.query<{ contact_id: string; company_id: string }>("select contact_id, company_id from crm.call_insights where activity_id = $1", [call.id]);
     assert.deepEqual([insightBack.rows[0].contact_id, insightBack.rows[0].company_id], [jane, acme]);
+  });
+
+  it("edits from the assistant, with the activity and each change on the card", async () => {
+    const call = (await createActivity(owner, { type: "call", title: "Intro call", body: "Talked pricing.", contactId: jane, companyId: acme, occurredAt: "2026-10-20T13:30:00.000Z" })).body.activity;
+    const args = { activityId: call.id, title: "Intro call with Jane", body: "Talked pricing.", occurredAt: "2026-10-20T15:00", contactId: null };
+    const card = describeAction("update_activity", args, await recordNames(owner, [args], ["update_activity"]));
+    assert.equal(card.title, "Edit activity");
+    assert.match(card.lines[0], /^Activity: Call "Intro call" on .*14:30$/);
+    assert.equal(card.lines[1], "Title: from Intro call to Intro call with Jane");
+    assert.match(card.lines[2], /^When: from .*14:30 to .*15:00$/);
+    assert.equal(card.lines[3], "Person: from Jane Doe to none");
+    assert.equal(card.lines.length, 4);
+
+    const result = (await runTool(owner, "update_activity", args)) as { activity: { title: string; contactId: string | null; companyId: string }; changed: boolean };
+    assert.equal(result.changed, true);
+    assert.equal(result.activity.title, "Intro call with Jane");
+    assert.equal(result.activity.contactId, null);
+    assert.equal(result.activity.companyId, acme);
+    const audit = await auditFor(call.id);
+    assert.equal(audit[0].source, "assistant");
+    assert.equal(audit[0].operation, "assistant_update_activity");
+
+    const refused = (await runTool(colleague, "update_activity", { activityId: call.id, title: "Sam's title" })) as { error: string };
+    assert.match(refused.error, /Only the person who logged this activity/);
   });
 });

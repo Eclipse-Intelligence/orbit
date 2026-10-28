@@ -53,7 +53,8 @@ import {
 import { STARTER_TEMPLATES } from "@/lib/workflows/templates";
 import { BULK_LIMIT, runBulk } from "@/lib/crm/bulk";
 import { attachableFiles, discardAttachments } from "@/lib/crm/email-attachments";
-import { activitySummaries, archiveActivity, listActivities } from "@/lib/crm/activities";
+import { activitySummaries, archiveActivity, listActivities, readActivityState, updateActivity } from "@/lib/crm/activities";
+import { ACTIVITY_EDIT_FIELDS, ACTIVITY_FIELD_LABELS, EDITABLE_TYPES, type ActivityEdit, type ActivityEditField } from "@/lib/crm/activity-edit";
 import { getCalendarStatus, getMeetings, listPeopleMet, myAddresses, readPeople, readPerson } from "@/lib/crm/calendar";
 import { listCalendarItems } from "@/lib/crm/calendars";
 import { getInsightTranscript, getInsightsForActivities } from "@/lib/crm/call-insights";
@@ -239,6 +240,22 @@ function withActivity(activity: Activity) {
 }
 
 const ACTIVITY_LABELS: Record<string, string> = { email: "Email", meeting: "Meeting", call: "Call", note: "Note", research: "Research", linkedin: "LinkedIn", agent_update: "Agent update", other: "Other" };
+
+function clipText(text: string, max: number) {
+  return text.length > max ? `${text.slice(0, max - 3)}…` : text;
+}
+
+function activityEditShown(field: ActivityEditField, value: unknown, name: Names) {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (field === "companyId" || field === "contactId" || field === "opportunityId") return text ? name(text) : "none";
+  if (!text) return "empty";
+  if (field === "type") return ACTIVITY_LABELS[text] ?? text;
+  if (field === "occurredAt") {
+    const at = parseDateTime(text);
+    return at ? londonLabel(at) : `a time Orbit can't read (${text})`;
+  }
+  return clipText(text, 120);
+}
 
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 
@@ -1940,6 +1957,79 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         ...PROVENANCE,
       }),
     }),
+  },
+  {
+    name: "update_activity",
+    label: "Editing an activity",
+    write: true,
+    description:
+      "Edit a logged activity by its id from list_activities, get_company or get_contact: its type, title, text, when it happened, and the company, person and opportunity it is on. Pass only what changes. Emails filed from Mail only take a new company or opportunity. Calls and meetings from Teams, Granola or a transcript only take a new title, company, person or opportunity. Only the person who logged it, or an owner or admin, can edit it, and it can be undone with undo_change.",
+    parameters: {
+      type: "object",
+      properties: {
+        activityId: idParam("Activity id."),
+        type: { type: "string", enum: [...EDITABLE_TYPES] },
+        title: { type: "string", description: "Title, subject or call summary line. Pass null to remove it." },
+        body: { type: "string", description: "The text. Pass null to remove it." },
+        occurredAt: { type: "string", description: "When it happened: YYYY-MM-DDTHH:mm in London time, or ISO 8601." },
+        companyId: { type: "string", description: "Company id. Pass null to take it off the company." },
+        contactId: { type: "string", description: "Person id. Pass null to take it off the person." },
+        opportunityId: { type: "string", description: "Opportunity id. Pass null to take it off the opportunity." },
+      },
+      required: ["activityId"],
+    },
+    details: async (actor, args) => {
+      const id = str(args.activityId);
+      if (!isUuid(id)) return {};
+      const state = await withActor(actor, (db) => readActivityState(db, actor.workspaceId, id));
+      if (!state) return {};
+      const values = state.values;
+      const names = await recordNames(actor, [{ companyId: values.companyId, contactId: values.contactId, opportunityId: values.opportunityId }]);
+      const linkName = (value: string | null) => (value ? (names.get(value) ?? "a record that no longer exists") : "none");
+      const kind = ACTIVITY_LABELS[values.type] ?? values.type;
+      const when = values.occurredAt ? ` on ${formatDateTimeLabel(londonTime(values.occurredAt).slice(0, 16))}` : "";
+      return {
+        [`${id}:activity`]: `${kind}${values.title ? ` "${clipText(values.title, 80)}"` : ""}${when}`,
+        [`${id}:from:type`]: kind,
+        [`${id}:from:title`]: values.title ? clipText(values.title, 120) : "empty",
+        [`${id}:from:body`]: values.body ? clipText(values.body, 120) : "empty",
+        [`${id}:from:occurredAt`]: values.occurredAt ? formatDateTimeLabel(londonTime(values.occurredAt).slice(0, 16)) : "empty",
+        [`${id}:from:companyId`]: linkName(values.companyId),
+        [`${id}:from:contactId`]: linkName(values.contactId),
+        [`${id}:from:opportunityId`]: linkName(values.opportunityId),
+      };
+    },
+    describe: (args, name) => {
+      const id = str(args.activityId);
+      const activity = detail(name, `${id}:activity`);
+      const changes = ACTIVITY_EDIT_FIELDS.filter((field) => args[field] !== undefined).flatMap((field) => {
+        const value = args[field];
+        const to = activityEditShown(field, value, name);
+        const from = detail(name, `${id}:from:${field}`);
+        if (from && from === to) return [];
+        return [`${ACTIVITY_FIELD_LABELS[field]}: ${from ? `from ${from} ` : ""}to ${to}`];
+      });
+      return { title: "Edit activity", lines: [activity ? `Activity: ${activity}` : "", ...changes] };
+    },
+    run: async (actor, args) => {
+      const edit: ActivityEdit = {};
+      if (args.type !== undefined) {
+        const type = oneOf(args.type, EDITABLE_TYPES);
+        if (!type) throw new CrmError("invalid_input", `type is ${EDITABLE_TYPES.join(", ")}.`, 400, { field: "type" });
+        edit.type = type;
+      }
+      if (args.title !== undefined) edit.title = nullableStr(args.title) ?? null;
+      if (args.body !== undefined) edit.body = nullableStr(args.body) ?? null;
+      if (args.occurredAt !== undefined) edit.occurredAt = str(args.occurredAt);
+      if (args.companyId !== undefined) edit.companyId = nullableStr(args.companyId) ?? null;
+      if (args.contactId !== undefined) edit.contactId = nullableStr(args.contactId) ?? null;
+      if (args.opportunityId !== undefined) edit.opportunityId = nullableStr(args.opportunityId) ?? null;
+      const result = await updateActivity(actor, required(args.activityId, "An activity id"), edit, {
+        operation: "assistant_update_activity",
+        ...PROVENANCE,
+      });
+      return { activity: result.activity, changed: result.changed, fields: result.fields };
+    },
   },
   {
     name: "undo_change",
