@@ -56,6 +56,7 @@ export async function POST(request: Request) {
               model: body.model,
               reasoning: body.reasoning,
               webSearch: body.webSearch,
+              files: body.files,
             },
             emit,
             options,

@@ -610,7 +610,7 @@ export default function AssistantDock() {
         if (index < 0) {
           return [
             ...current,
-            { id: event.messageId, role: "assistant", content: "", tools: [], actions: event.actions, sources: [], createdAt: new Date().toISOString() },
+            { id: event.messageId, role: "assistant", content: "", tools: [], actions: event.actions, sources: [], files: [], createdAt: new Date().toISOString() },
           ];
         }
         const next = current.slice();
@@ -695,7 +695,7 @@ export default function AssistantDock() {
     setMentions([]);
     setMessages((current) => [
       ...current,
-      { id: `local-${Date.now()}`, role: "user", content: message, tools: [], actions: [], sources: [], createdAt: new Date().toISOString() },
+      { id: `local-${Date.now()}`, role: "user", content: message, tools: [], actions: [], sources: [], files: [], createdAt: new Date().toISOString() },
     ]);
     void run({ conversationId: conversation?.id ?? null, message, model: active.model, reasoning: active.reasoning, webSearch });
   }

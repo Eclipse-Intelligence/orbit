@@ -1,5 +1,6 @@
 import { AssistantError, StoppedError, complete, type ChatMessage, type ProviderState, type Source, type ToolCall } from "@/lib/assistant/gateway";
 import { assistantModel, settingsFor, type ModelSource, type ReasoningLevel } from "@/lib/assistant/models";
+import { chatFileNote, chatFilesFor, removeChatObjects, type ChatFile } from "@/lib/assistant/files";
 import { connectedProviders } from "@/lib/ai-accounts/store";
 import { systemPrompt } from "@/lib/assistant/prompt";
 import { ACTION_ALTERNATIVES, ASSISTANT_TOOLS, TOOL_BY_NAME, actionAlternative, describeAction, recordNames, runTool, toolDescription, toolJson } from "@/lib/assistant/tools";
@@ -61,6 +62,7 @@ export type DisplayMessage = {
   tools: { id: string; name: string; label: string }[];
   actions: AssistantAction[];
   sources: Source[];
+  files: ChatFile[];
   createdAt: string;
 };
 
@@ -88,6 +90,7 @@ type MessageRow = {
   actions: AssistantAction[] | null;
   sources: Source[] | null;
   provider_state: ProviderState | null;
+  files?: ChatFile[] | null;
   created_at: Date | string;
 };
 
@@ -122,6 +125,7 @@ function display(row: MessageRow): DisplayMessage {
       .map((call) => ({ id: call.id, name: call.function.name, label: TOOL_BY_NAME.get(call.function.name)?.label ?? call.function.name })),
     actions: row.actions ?? [],
     sources: row.sources ?? [],
+    files: row.files ?? [],
     createdAt: iso(row.created_at) ?? new Date().toISOString(),
   };
 }
@@ -135,7 +139,7 @@ function parseArgs(raw: string) {
   }
 }
 
-const MESSAGE_COLUMNS = "id, role, content, tool_calls, tool_call_id, tool_name, actions, sources, provider_state, created_at";
+const MESSAGE_COLUMNS = "id, role, content, tool_calls, tool_call_id, tool_name, actions, sources, provider_state, files, created_at";
 const CONVERSATION_COLUMNS = "id, title, model, reasoning, web_search, updated_at, stopped_at";
 
 async function readConversation(db: Db, actor: UserActor, id: string) {
@@ -170,13 +174,14 @@ async function insertMessage(
     model?: string | null;
     usage?: Record<string, unknown> | null;
     state?: ProviderState | null;
+    files?: ChatFile[];
   },
 ) {
   return withActor(actor, async (db) => {
     const result = await db.query<MessageRow>(
       `insert into crm.assistant_messages
-         (conversation_id, workspace_id, user_id, role, content, tool_calls, tool_call_id, tool_name, sources, model, usage, provider_state)
-       values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9::jsonb, $10, $11::jsonb, $12::jsonb)
+         (conversation_id, workspace_id, user_id, role, content, tool_calls, tool_call_id, tool_name, sources, model, usage, provider_state, files)
+       values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9::jsonb, $10, $11::jsonb, $12::jsonb, $13::jsonb)
        returning ${MESSAGE_COLUMNS}`,
       [
         conversationId,
@@ -191,8 +196,16 @@ async function insertMessage(
         message.model ?? null,
         message.usage ? JSON.stringify(message.usage) : null,
         message.state ? JSON.stringify(message.state) : null,
+        message.files && message.files.length > 0 ? JSON.stringify(message.files) : null,
       ],
     );
+    if (message.files && message.files.length > 0) {
+      const claimed = await db.query(
+        "update crm.chat_files set conversation_id = $1, message_id = $2 where id = any($3::uuid[]) and message_id is null",
+        [conversationId, result.rows[0].id, message.files.map((file) => file.id)],
+      );
+      if (claimed.rowCount !== message.files.length) throw new CrmError("not_found", "A file has expired. Attach it again.", 404, { field: "files" });
+    }
     await db.query("update crm.assistant_conversations set updated_at = now() where id = $1", [conversationId]);
     return result.rows[0];
   });
@@ -327,11 +340,14 @@ export async function getConversation(actor: UserActor, id: string) {
   });
 }
 
-export async function deleteConversation(actor: UserActor, id: string) {
-  await withActor(actor, async (db) => {
+export async function deleteConversation(actor: UserActor, id: string, fetchImpl: typeof fetch = fetch) {
+  const files = await withActor(actor, async (db) => {
     await readConversation(db, actor, id);
+    const removed = await db.query<{ id: string }>("delete from crm.chat_files where conversation_id = $1 returning id", [id]);
     await db.query("delete from crm.assistant_conversations where id = $1", [id]);
+    return removed.rows.map((row) => row.id);
   });
+  await removeChatObjects(files, fetchImpl);
 }
 
 async function openConversation(
@@ -368,12 +384,18 @@ function weight(message: ChatMessage) {
   return (typeof message.content === "string" ? message.content.length : 0) + calls;
 }
 
+function userContent(row: MessageRow) {
+  const note = chatFileNote(row.files ?? []);
+  const typed = expandMentions(row.content);
+  return note ? (typed.trim() ? `${typed}\n\n${note}` : note) : typed;
+}
+
 export function history(rows: MessageRow[], budget = HISTORY_BUDGET): ChatMessage[] {
   const answered = new Set(rows.filter((row) => row.role === "tool").map((row) => row.tool_call_id));
   const lastUser = rows.map((row) => row.role).lastIndexOf("user");
   const messages: ChatMessage[] = [];
   rows.forEach((row, index) => {
-    if (row.role === "user") messages.push({ role: "user", content: expandMentions(row.content) });
+    if (row.role === "user") messages.push({ role: "user", content: userContent(row) });
     else if (row.role === "tool" && row.tool_call_id) {
       messages.push({ role: "tool", tool_call_id: row.tool_call_id, content: clipResult(row.content, index > lastUser ? CURRENT_RESULT_MAX : OLD_RESULT_MAX) });
     } else if (row.role === "assistant") {
@@ -745,12 +767,13 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
 
 export async function sendMessage(
   actor: UserActor,
-  input: { conversationId?: string | null; message: string; model: unknown; reasoning: unknown; webSearch: unknown },
+  input: { conversationId?: string | null; message: string; model: unknown; reasoning: unknown; webSearch: unknown; files?: unknown },
   emit: Emit,
   options: TurnOptions,
 ) {
   const message = input.message.trim();
-  if (!message) throw new AssistantError("Type a message first.");
+  const files = await chatFilesFor(actor, input.files);
+  if (!message && files.length === 0) throw new AssistantError("Type a message first.");
   if (message.length > MESSAGE_MAX) {
     throw new AssistantError(
       `That message is ${message.length.toLocaleString("en-GB")} characters. The limit is ${MESSAGE_MAX.toLocaleString("en-GB")}. Cut ${(message.length - MESSAGE_MAX).toLocaleString("en-GB")} characters and send it again.`,
@@ -773,13 +796,13 @@ export async function sendMessage(
     model: settings.model,
     reasoning: settings.reasoning,
     webSearch: input.webSearch === true,
-    title: titleFrom(message),
+    title: titleFrom(message || files.map((file) => file.name).join(", ")),
   });
   emit({ type: "conversation", conversation: summary(conversation) });
   const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
   await settleStuckActions(actor, conversation.id, rows);
   await declinePending(actor, conversation.id, rows, "The user moved on without confirming this action.");
-  const user = await insertMessage(actor, conversation.id, { role: "user", content: message });
+  const user = await insertMessage(actor, conversation.id, { role: "user", content: message, files });
   emit({ type: "user", message: display(user) });
   await runLoop(actor, conversation, emit, options);
   emit({ type: "done" });
