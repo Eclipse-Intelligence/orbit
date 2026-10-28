@@ -69,6 +69,13 @@ describe("agent docs", () => {
     assert.deepEqual(stale, [], `docs/assistant.md lists tools that no longer exist: ${stale.join(", ")}`);
   });
 
+  it("keeps the assistant within the tool count every model accepts", () => {
+    assert.ok(
+      ASSISTANT_TOOLS.length <= 126,
+      `The assistant has ${ASSISTANT_TOOLS.length} tools. Some model APIs refuse requests with more than 128 tools (OpenAI documents 128, Gemini may allow fewer), and 126 is the most proven to work on every model in lib/assistant/models.ts. Merge overlapping tools (see "Adding a tool" in docs/assistant.md) to get back to 126 or fewer.`,
+    );
+  });
+
   it("documents every MCP tool each kind of token sees in docs/mcp.md, and only real ones", async () => {
     const doc = readDoc("mcp.md");
     const personal = await mcpTools(person);

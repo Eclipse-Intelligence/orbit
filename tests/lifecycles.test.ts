@@ -84,7 +84,9 @@ describe("lifecycles", () => {
 
     const result = (await runTool(owner, "update_company", { companyId: company.id, lifecycle: "Personal life" })) as { company: { lifecycle: string } };
     assert.equal(result.company.lifecycle, "Personal life");
-    const lifecycles = (await runTool(owner, "list_lifecycles", {})) as { lifecycles: { label: string }[] };
-    assert.ok(lifecycles.lifecycles.some((item) => item.label === "Personal life"));
+    const settings = (await runTool(owner, "get_settings", {})) as { lifecycles: { label: string }[] };
+    assert.ok(settings.lifecycles.some((item) => item.label === "Personal life"));
+    const oldName = (await runTool(owner, "list_lifecycles", {})) as { lifecycles: { label: string }[] };
+    assert.ok(oldName.lifecycles.some((item) => item.label === "Personal life"));
   });
 });

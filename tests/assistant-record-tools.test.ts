@@ -10,6 +10,7 @@ import { saveMailbox } from "@/lib/crm/inbox";
 import { storeGrantedScopes } from "@/lib/crm/calendar";
 import { createOpportunity, getOpportunity } from "@/lib/crm/opportunities";
 import { createTask, getTask } from "@/lib/crm/tasks";
+import { scopesForRole } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { createProduct, listProducts } from "@/lib/proposals/catalogue";
@@ -152,10 +153,76 @@ describe("assistant record tools", () => {
     assert.equal(updated.task.ownerId, samId);
 
     const task = (await createTask(owner, { title: "Old follow up" })).body.task.id;
-    assert.equal(describeAction("archive_task", { taskId: task }, await recordNames(owner, [{ taskId: task }])).title, "Archive task: Old follow up");
-    const archived = (await runTool(owner, "archive_task", { taskId: task })) as { task: { archivedAt: string | null } };
-    assert.ok(archived.task.archivedAt);
+    const archiveArgs = { taskIds: [task] };
+    assert.deepEqual(describeAction("archive_records", archiveArgs, await recordNames(owner, [archiveArgs])), {
+      title: "Archive 1 record",
+      lines: ["Tasks: Old follow up", "Nothing is deleted.", "ClickUp isn't changed."],
+    });
+    const sam: UserActor = { ...owner, userId: samId, email: "sam@records-tools.test", fullName: "Sam Taylor", role: "member", scopes: scopesForRole("member") };
+    const refused = (await runTool(sam, "archive_records", archiveArgs)) as { error: string };
+    assert.match(refused.error, /Task not found/);
+    assert.equal((await getTask(owner, task)).archivedAt, null);
+    const archived = (await runTool(owner, "archive_records", archiveArgs)) as { archived: number };
+    assert.equal(archived.archived, 1);
     assert.ok((await getTask(owner, task)).archivedAt);
+  });
+
+  it("completes and reopens a task with update_task, and still runs the old task tool names", async () => {
+    const task = (await createTask(owner, { title: "Send the deck" })).body.task.id;
+    const done = { taskId: task, completed: true };
+    assert.deepEqual(describeAction("update_task", done, await recordNames(owner, [done])), { title: "Complete task: Send the deck", lines: [] });
+    const completed = (await runTool(owner, "update_task", done)) as { task: { completedAt: string | null } };
+    assert.ok(completed.task.completedAt);
+    const reopen = { taskId: task, completed: false };
+    assert.equal(describeAction("update_task", reopen, await recordNames(owner, [reopen])).title, "Reopen task: Send the deck");
+    const reopened = (await runTool(owner, "update_task", reopen)) as { task: { completedAt: string | null } };
+    assert.equal(reopened.task.completedAt, null);
+
+    assert.equal(describeAction("complete_task", { taskId: task }, await recordNames(owner, [{ taskId: task }])).title, "Complete task: Send the deck");
+    await runTool(owner, "complete_task", { taskId: task });
+    assert.ok((await getTask(owner, task)).completedAt);
+    assert.equal(describeAction("archive_task", { taskId: task }, await recordNames(owner, [{ taskId: task }])).lines[0], "Tasks: Send the deck");
+    assert.deepEqual(await runTool(owner, "archive_task", { taskId: task }), { archived: 1, failed: [] });
+    assert.ok((await getTask(owner, task)).archivedAt);
+  });
+
+  it("updates one company or many with update_company, and one person or many with update_contact", async () => {
+    const alpha = (await createCompany(owner, { name: "Alpha Tools", domain: "alpha-tools.test" })).body.company.id;
+    const beta = (await createCompany(owner, { name: "Beta Tools", domain: "beta-tools.test" })).body.company.id;
+    const many = { companyIds: [alpha, beta], lifecycle: "prospect", source: "Referral" };
+    assert.deepEqual(describeAction("update_company", many, await recordNames(owner, [many])), {
+      title: "Update 2 companies",
+      lines: ["Lifecycle: prospect", "Source: Referral", "Companies: Alpha Tools, Beta Tools"],
+    });
+    assert.deepEqual(await runTool(owner, "update_company", many), { updated: 2, failed: [] });
+    assert.equal((await getCompany(owner, beta)).lifecycle, "prospect");
+    const renamed = (await runTool(owner, "update_company", { companyIds: [alpha, beta], name: "Renamed" })) as { error: string };
+    assert.match(renamed.error, /companyIds can only change .*\. Change name one company at a time with companyId\./);
+    const both = (await runTool(owner, "update_company", { companyId: alpha, companyIds: [beta], lifecycle: "lead" })) as { error: string };
+    assert.match(both.error, /not both/);
+    const neither = (await runTool(owner, "update_company", { lifecycle: "lead" })) as { error: string };
+    assert.match(neither.error, /companyId/);
+    const tooMany = (await runTool(owner, "update_company", { companyIds: Array.from({ length: 101 }, () => randomUUID()), lifecycle: "lead" })) as { error: string };
+    assert.match(tooMany.error, /100 or fewer/);
+    const one = { companyId: beta, sizeCategory: "11-50" };
+    assert.deepEqual(describeAction("update_company", one, await recordNames(owner, [one])), { title: "Update company: Beta Tools", lines: ["Size: 11-50"] });
+    assert.equal(describeAction("update_companies", many, await recordNames(owner, [many])).title, "Update 2 companies");
+    assert.deepEqual(await runTool(owner, "update_companies", { companyIds: [alpha], lifecycle: "customer" }), { updated: 1, failed: [] });
+    assert.equal((await getCompany(owner, alpha)).lifecycle, "customer");
+
+    const jo = (await createContact(owner, { firstName: "Jo", lastName: "Ray" })).body.contact.id;
+    const kim = (await createContact(owner, { firstName: "Kim", lastName: "Lee" })).body.contact.id;
+    const people = { contactIds: [jo, kim], companyId: alpha, jobTitle: "Founder" };
+    assert.deepEqual(describeAction("update_contact", people, await recordNames(owner, [people])), {
+      title: "Update 2 people",
+      lines: ["Company: Alpha Tools", "Job title: Founder", "People: Jo Ray, Kim Lee"],
+    });
+    assert.deepEqual(await runTool(owner, "update_contact", people), { updated: 2, failed: [] });
+    assert.equal((await getContact(owner, kim)).companyId, alpha);
+    const notes = (await runTool(owner, "update_contact", { contactIds: [jo], notes: "Met at the summit" })) as { error: string };
+    assert.match(notes.error, /Change notes one person at a time with contactId/);
+    assert.deepEqual(await runTool(owner, "update_contacts", { contactIds: [jo], source: "Event" }), { updated: 1, failed: [] });
+    assert.equal((await getContact(owner, jo)).source, "Event");
   });
 
   it("archives a product and brings it back", async () => {
