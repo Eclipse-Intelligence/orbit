@@ -136,7 +136,7 @@ Changes to a task linked to ClickUp reach ClickUp on the next sync.
 
 | Tool | What it does | Main parameters | Scope | Changes | Tokens |
 | --- | --- | --- | --- | --- | --- |
-| `create_webhook` | Registers an `https` endpoint for workspace events and returns its signing secret once. Takes named events only; use the REST API to subscribe to `*`. | `url`, `events` (from the list in `docs/api.md`), `description` | `admin` | Yes | Both |
+| `create_webhook` | Registers an `https` endpoint for workspace events and returns its signing secret once. Takes named events, or `*` for every event. | `url`, `events` (from the list in `docs/api.md`), `description` | `admin` | Yes | Both |
 | `list_webhook_deliveries` | Recent delivery attempts, failures included, with the last error. | `limit` (up to 100, default 50) | `crm:read` | No | Both |
 
 ### Proposals and NDAs

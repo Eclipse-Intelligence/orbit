@@ -42,7 +42,7 @@ export function registerOperationTools(server: McpServer, actor: Actor) {
   server.registerTool(
     "search_opportunities",
     {
-      description: "Search opportunities by name, company, or stage.",
+      description: "Search opportunities by name, company or stage. Results include board cards as well as deals; pipelineKind tells them apart.",
       inputSchema: {
         query: z.string().optional(),
         company_id: z.uuid().optional(),
@@ -265,10 +265,10 @@ export function registerOperationTools(server: McpServer, actor: Actor) {
     "create_webhook",
     {
       description:
-        "Register an https endpoint for workspace events. Requires the admin scope. The signing secret is returned once.",
+        "Register an https endpoint for workspace events, or * for every event. Requires the admin scope. The signing secret is returned once.",
       inputSchema: {
         url: z.string(),
-        events: z.array(z.enum(WEBHOOK_EVENTS)).min(1),
+        events: z.array(z.union([z.literal("*"), z.enum(WEBHOOK_EVENTS)])).min(1),
         description: z.string().nullable().optional(),
       },
     },

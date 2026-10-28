@@ -1913,7 +1913,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     label: "Deleting an activity",
     write: true,
     description:
-      "Delete a logged activity (a note, call, email or meeting on a timeline) that is wrong or a duplicate, by its id from list_activities, get_company or get_contact. It disappears from timelines, counts and relationship labels, and can be undone with undo_change. Only the person who logged it, or an owner or admin, can delete it.",
+      "Delete a logged activity (a note, call, email or meeting on a timeline) that is wrong or a duplicate, by its id from list_activities, get_company or get_contact. It is archived, not erased: it disappears from timelines, counts and relationship labels, and can be undone with undo_change. Only the person who logged it, or an owner or admin, can delete it.",
     parameters: { type: "object", properties: { activityId: idParam("Activity id.") }, required: ["activityId"] },
     details: async (actor, args) => {
       const id = str(args.activityId);
@@ -2481,7 +2481,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     name: "delete_board",
     label: "Deleting a board",
     write: true,
-    description: "Delete a board. Its cards are archived; the companies themselves stay.",
+    description: "Delete a board. Nothing is erased: the board and its cards are archived, and the companies stay.",
     parameters: { type: "object", properties: { boardId: idParam("Board id.") }, required: ["boardId"] },
     describe: (args, name) => ({ title: titled("Delete board", name(args.boardId)), lines: ["Its cards are archived"] }),
     run: async (actor, args) => archiveBoard(actor, required(args.boardId, "A board id")),
@@ -2623,7 +2623,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     name: "delete_workflow",
     label: "Deleting a workflow",
     write: true,
-    description: "Delete one of the user's workflows. It stops running straight away.",
+    description: "Delete one of the user's workflows. It stops running straight away and is archived, not erased.",
     parameters: { type: "object", properties: { workflowId: idParam("Workflow id.") }, required: ["workflowId"] },
     describe: (args, name) => ({ title: titled("Delete workflow", name(args.workflowId)), lines: [] }),
     run: async (actor, args) => {
