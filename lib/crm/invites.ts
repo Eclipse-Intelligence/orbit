@@ -44,7 +44,7 @@ import {
   sanitizeMicrosoftError,
   type MicrosoftToken,
 } from "@/lib/microsoft/oauth";
-import { appTimeZone, dateTimeInputValue, parseDateTime } from "@/lib/time";
+import { appTimeZone, dateTimeInputValue, parseDateTime, zoneLabel } from "@/lib/time";
 
 export const INVITE_NOT_CONNECTED = "Connect Microsoft in Capture to send invites.";
 export const INVITE_RECONNECT = CALENDAR_WRITE_RECONNECT;
@@ -92,10 +92,6 @@ type ContactMatch = { id: string; email: string; name: string; companyId: string
 
 function invalid(message: string, field: string) {
   return new CrmError("invalid_input", message, 400, { field });
-}
-
-function zoneLabel(timeZone: string) {
-  return timeZone === "Europe/London" ? "London" : timeZone;
 }
 
 export function cleanMeetingLink(value: unknown) {
@@ -191,13 +187,7 @@ export function cleanGuests(values: unknown, own: Set<string>): InviteGuest[] {
   return [...guests.values()];
 }
 
-export function inviteWindow(
-  startLocal: unknown,
-  durationMinutes: unknown,
-  options: { timeZone?: string; now?: number } = {},
-) {
-  const timeZone = options.timeZone ?? appTimeZone();
-  const now = options.now ?? Date.now();
+function futureStart(startLocal: unknown, timeZone: string, now: number) {
   if (typeof startLocal !== "string" || !LOCAL_START.test(startLocal)) {
     throw invalid("Pick a date and start time.", "startLocal");
   }
@@ -211,6 +201,16 @@ export function inviteWindow(
   }
   if (start.getTime() <= now) throw invalid("Pick a start time in the future.", "startLocal");
   if (start.getTime() > now + MAX_AHEAD_MS) throw invalid("Pick a date within the next two years.", "startLocal");
+  return start;
+}
+
+export function inviteWindow(
+  startLocal: unknown,
+  durationMinutes: unknown,
+  options: { timeZone?: string; now?: number } = {},
+) {
+  const timeZone = options.timeZone ?? appTimeZone();
+  const start = futureStart(startLocal, timeZone, options.now ?? Date.now());
   const duration = typeof durationMinutes === "string" ? Number(durationMinutes) : durationMinutes;
   if (
     typeof duration !== "number" ||
@@ -704,6 +704,8 @@ type OrganisedRow = {
   created_by_orbit: boolean;
 };
 
+export const MEETING_GONE = "This meeting no longer exists in Outlook, so Orbit has taken it off your calendar.";
+
 const ORGANISER_ONLY = {
   cancel: "Only the organiser can cancel this meeting. Decline it in Outlook instead.",
   move: "Only the organiser can move this meeting. Propose a new time in Outlook instead.",
@@ -713,7 +715,7 @@ async function organisedEvent(
   actor: UserActor,
   eventId: string,
   verb: "cancel" | "move",
-  options: { fetchImpl: typeof fetch; now: number },
+  now: number,
 ) {
   if (!isUuid(eventId)) throw new CrmError("not_found", "That meeting isn't in your calendar.", 404);
   const found = await withActor(actor, async (db) => {
@@ -743,7 +745,7 @@ async function organisedEvent(
   }
   if (verb === "move" && row.is_all_day) throw new CrmError("invalid_input", "Move all-day events in Outlook.", 400);
   const startsAt = new Date(row.starts_at);
-  if (startsAt.getTime() <= options.now) {
+  if (startsAt.getTime() <= now) {
     throw new CrmError("invalid_input", `This meeting has already started, so Orbit can't ${verb} it.`, 400);
   }
   const stored = found.stored;
@@ -755,7 +757,6 @@ async function organisedEvent(
       400,
     );
   }
-  const token = await writableToken(actor, stored, found.scopes, options.fetchImpl);
   const guests = [
     ...new Set(
       [organizer, ...readPeople(row.attendees)]
@@ -763,7 +764,13 @@ async function organisedEvent(
         .filter((email): email is string => Boolean(email) && !found.own.has(email!)),
     ),
   ];
-  return { row, token, guests, startsAt, endsAt: new Date(row.ends_at) };
+  return {
+    row,
+    guests,
+    startsAt,
+    endsAt: new Date(row.ends_at),
+    token: (fetchImpl: typeof fetch) => writableToken(actor, stored, found.scopes, fetchImpl),
+  };
 }
 
 export async function cancelInvite(
@@ -777,7 +784,8 @@ export async function cancelInvite(
   const now = options.now ?? Date.now();
   if (!isUuid(eventId)) throw new CrmError("not_found", "That meeting isn't in your calendar.", 404);
   const message = cleanNotes(comment, INVITE_COMMENT_MAX, "comment");
-  const { row, token, guests, startsAt, endsAt } = await organisedEvent(actor, eventId, "cancel", { fetchImpl, now });
+  const { row, guests, startsAt, endsAt, token: tokenFor } = await organisedEvent(actor, eventId, "cancel", now);
+  const token = await tokenFor(fetchImpl);
   let warning: string | null = null;
   try {
     await cancelGraphEvent(token.accessToken, row.provider_event_id, message, fetchImpl);
@@ -853,23 +861,28 @@ function localInstant(value: unknown, timeZone: string, field: string, missing: 
 
 export function moveWindow(
   input: Pick<RescheduleInput, "startLocal" | "endLocal" | "durationMinutes">,
-  currentMinutes: number,
+  currentLengthMs: number,
   options: { timeZone?: string; now?: number } = {},
 ) {
   const timeZone = options.timeZone ?? appTimeZone();
-  const hasEnd = input.endLocal !== undefined && input.endLocal !== null && input.endLocal !== "";
-  if (!hasEnd) {
-    const duration = input.durationMinutes === undefined || input.durationMinutes === null ? currentMinutes : input.durationMinutes;
-    return inviteWindow(input.startLocal, duration, { timeZone, now: options.now });
+  const now = options.now ?? Date.now();
+  const given = (value: unknown) => value !== undefined && value !== null && value !== "";
+  if (given(input.endLocal)) {
+    const start = futureStart(input.startLocal, timeZone, now);
+    const end = localInstant(input.endLocal, timeZone, "endLocal", "Pick an end time.");
+    if (end.getTime() <= start.getTime()) throw invalid("End the meeting after it starts.", "endLocal");
+    const minutes = (end.getTime() - start.getTime()) / 60_000;
+    if (minutes < MIN_DURATION || minutes > MAX_DURATION) {
+      throw invalid("Pick a duration between 5 minutes and 8 hours.", "endLocal");
+    }
+    return { start, end };
   }
-  const start = localInstant(input.startLocal, timeZone, "startLocal", "Pick a date and start time.");
-  const end = localInstant(input.endLocal, timeZone, "endLocal", "Pick an end time.");
-  if (end.getTime() <= start.getTime()) throw invalid("End the meeting after it starts.", "endLocal");
-  const minutes = (end.getTime() - start.getTime()) / 60_000;
-  if (minutes < MIN_DURATION || minutes > MAX_DURATION) {
-    throw invalid("Pick a duration between 5 minutes and 8 hours.", "endLocal");
+  if (given(input.durationMinutes)) {
+    const { start, end } = inviteWindow(input.startLocal, input.durationMinutes, { timeZone, now });
+    return { start, end };
   }
-  return inviteWindow(input.startLocal, minutes, { timeZone, now: options.now });
+  const start = futureStart(input.startLocal, timeZone, now);
+  return { start, end: new Date(start.getTime() + currentLengthMs) };
 }
 
 export async function rescheduleInvite(
@@ -884,23 +897,12 @@ export async function rescheduleInvite(
   if (!isUuid(eventId)) throw new CrmError("not_found", "That meeting isn't in your calendar.", 404);
   const message = cleanNotes(input.message, INVITE_COMMENT_MAX, "message");
   const timeZone = appTimeZone();
-  const current = await withActor(actor, async (db) => {
-    const result = await db.query<{ starts_at: Date | string; ends_at: Date | string }>(
-      "select starts_at, ends_at from crm.calendar_events where id = $1 and user_id = $2 and workspace_id = $3",
-      [eventId, actor.userId, actor.workspaceId],
-    );
-    return result.rows[0] ?? null;
-  });
-  if (!current) throw new CrmError("not_found", "That meeting isn't in your calendar.", 404);
-  const currentMinutes = Math.round((new Date(current.ends_at).getTime() - new Date(current.starts_at).getTime()) / 60_000);
-  const window = moveWindow(input, currentMinutes, { timeZone, now });
-  if (
-    window.start.getTime() === new Date(current.starts_at).getTime() &&
-    window.end.getTime() === new Date(current.ends_at).getTime()
-  ) {
+  const { row, guests, startsAt, endsAt, token: tokenFor } = await organisedEvent(actor, eventId, "move", now);
+  const window = moveWindow(input, endsAt.getTime() - startsAt.getTime(), { timeZone, now });
+  if (window.start.getTime() === startsAt.getTime() && window.end.getTime() === endsAt.getTime()) {
     throw invalid("That's when the meeting already is. Pick another time.", "startLocal");
   }
-  const { row, token, guests, startsAt, endsAt } = await organisedEvent(actor, eventId, "move", { fetchImpl, now });
+  const token = await tokenFor(fetchImpl);
   let updated: Awaited<ReturnType<typeof moveGraphEvent>>;
   try {
     updated = await moveGraphEvent(
@@ -910,6 +912,10 @@ export async function rescheduleInvite(
       fetchImpl,
     );
   } catch (error) {
+    if (error instanceof CalendarWriteError && error.status === 404) {
+      await withActor(actor, (db) => db.query("update crm.calendar_events set is_cancelled = true where id = $1", [row.id]));
+      throw new CrmError("gone", MEETING_GONE, 410);
+    }
     throw writeFailure(error);
   }
   const subject = row.subject ?? "Untitled event";

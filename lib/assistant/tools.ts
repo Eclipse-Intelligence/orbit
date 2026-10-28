@@ -2589,7 +2589,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     label: "Checking an email address",
     write: true,
     description:
-      "Check whether an email address can receive mail with the email checkers (Enrow, Icypeas, Hunter, in that order). Gives valid, invalid or unknown and the checker. A check from the last 30 days (a day for unknown), or an address Orbit found and confirmed, comes back without a new check. get_contact shows the last check as emailCheck.",
+      "Check whether an email address can receive mail with the email checkers (Enrow, Icypeas, Hunter, in that order). Gives valid, invalid or unknown and the checker. A check from the last 30 days (a day for unknown), or an address Orbit found and verified in that time, comes back without a new check. get_contact shows the last check as emailCheck, with stale true once it's past that age.",
     parameters: {
       type: "object",
       properties: {

@@ -5,6 +5,7 @@ import { after } from "next/server";
 import { getUserActor } from "@/lib/auth/user";
 import { actionError } from "@/lib/companies";
 import { syncCalendar } from "@/lib/crm/calendar";
+import { CrmError } from "@/lib/crm/errors";
 import { disconnectCalendarAccount } from "@/lib/crm/calendar-accounts";
 import { addCalendarFeed } from "@/lib/crm/calendar-feeds";
 import { createContactFromEvent, setCalendarForCrm, setCalendarVisible } from "@/lib/crm/calendars";
@@ -162,7 +163,7 @@ export async function cancelInviteAction(eventId: string, comment: string): Prom
 export async function moveInviteAction(
   eventId: string,
   input: { startLocal: string; message: string },
-): Promise<InviteActionState & { startsAt?: string; endsAt?: string }> {
+): Promise<InviteActionState & { startsAt?: string; endsAt?: string; gone?: boolean }> {
   const user = await getUserActor();
   if (!user) return { error: "Sign in to move meetings." };
   try {
@@ -174,6 +175,10 @@ export async function moveInviteAction(
     refreshInvites();
     return { ok: true, warning: moved.warning, startsAt: moved.startsAt, endsAt: moved.endsAt };
   } catch (error) {
+    if (error instanceof CrmError && error.code === "gone") {
+      refreshInvites();
+      return { error: error.message, gone: true };
+    }
     return actionError(error);
   }
 }

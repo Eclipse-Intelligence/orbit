@@ -12,7 +12,7 @@ import {
 import { DatePicker } from "@/components/_ui/date-picker";
 import Field from "@/components/_ui/field";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/_ui/select";
-import { appTimeZone, dateTimeInputValue } from "@/lib/time";
+import { appTimeZone, dateTimeInputValue, zoneLabel } from "@/lib/time";
 import { contactHref } from "@/lib/crm/hrefs";
 import type { CalendarProvider } from "@/lib/crm/calendar-accounts";
 import type { CalendarItem, EventPerson } from "@/lib/crm/calendars";
@@ -273,6 +273,11 @@ function MoveMeeting({ item }: { item: CalendarItem }) {
     setError(null);
     const result = await moveInviteAction(item.id, { startLocal: `${date}T${time}`, message });
     setPending(false);
+    if (result.gone && result.error) {
+      notify(result.error);
+      router.refresh();
+      return;
+    }
     if (result.error || !result.startsAt || !result.endsAt) {
       setError(result.error ?? "Could not move this meeting.");
       return;
@@ -321,7 +326,7 @@ function MoveMeeting({ item }: { item: CalendarItem }) {
           </Select>
         </Field>
       </div>
-      <p className="caption-style text-subtle -mt-1">London time. Keeps the same length.</p>
+      <p className="caption-style text-subtle -mt-1">{zoneLabel()} time. Keeps the same length.</p>
       <label className="caption-style text-subtle" htmlFor={`${ids}-message`}>
         Message to guests (optional)
       </label>

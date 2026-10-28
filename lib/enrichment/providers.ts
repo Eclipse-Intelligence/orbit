@@ -198,7 +198,7 @@ const hunter: Provider = {
       }
       const result = text(record(record(body).data).status);
       if (result === "valid") return "valid";
-      if (result === "invalid" || result === "disposable" || result === "webmail") return "invalid";
+      if (result === "invalid" || result === "disposable") return "invalid";
       return "unknown";
     }
     return "unknown";

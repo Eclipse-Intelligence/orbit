@@ -15,7 +15,6 @@ import {
   type Finding,
   type PersonQuery,
   type ProviderId,
-  type Verdict,
 } from "@/lib/enrichment/providers";
 import { PHONE_ORDER, getEnrichmentSettings } from "@/lib/enrichment/settings";
 import { normalizePhone } from "@/lib/phone";
@@ -27,7 +26,7 @@ const BULK_CONCURRENCY = 3;
 
 type AttemptOutcome = "found" | "not_found" | "rejected" | "failed";
 
-export type Attempt = { provider: ProviderId; outcome: AttemptOutcome; detail?: string };
+export type Attempt = { provider: ProviderId; outcome: AttemptOutcome; detail?: string; verifiedBy?: ProviderId };
 
 export type ContactEnrichment = {
   contactId: string;
@@ -73,9 +72,11 @@ function splitName(contact: Contact) {
   return { first, last };
 }
 
-async function verify(email: string, env: Record<string, string | undefined>, fetchImpl: typeof fetch, deadline: number, pollMs?: number): Promise<{ verdict: Verdict; by: ProviderId | null }> {
-  const { verdict, by } = await verifyWith(email, { env, fetchImpl, deadline, pollMs });
-  return { verdict, by };
+
+function unconfirmed(check: Awaited<ReturnType<typeof verifyWith>>) {
+  if (check.by) return `${PROVIDER_BY_ID.get(check.by)!.name} couldn't confirm the email.`;
+  if (check.attempts.length > 0) return "No email checker could confirm it.";
+  return "No email checker is set up to confirm it.";
 }
 
 async function recordLookup(actor: UserActor, contactId: string, field: ContactField, status: "found" | "not_found" | "failed", provider: ProviderId | null, value: string | null, attempts: Attempt[]) {
@@ -120,7 +121,7 @@ export async function enrichContact(actor: UserActor, contactId: string, field: 
   if (order.length === 0) return skipped(contactId, field, `No ${NOUNS[field]} finder is set up.`);
 
   const attempts: Attempt[] = [];
-  let email: { value: string; provider: ProviderId } | null = null;
+  let email: { value: string; provider: ProviderId; verifiedBy: ProviderId } | null = null;
   let linkedin: { value: string; provider: ProviderId } | null = null;
   let phone: { value: string; provider: ProviderId } | null = null;
 
@@ -150,12 +151,12 @@ export async function enrichContact(actor: UserActor, contactId: string, field: 
         if (!confident) emailNote = "Match score too low.";
         else if (!sameCompanyDomain(candidate, [domain, finding.companyDomain])) emailNote = "Email isn't on the company's domain.";
         else {
-          const check = await verify(candidate, env, fetchImpl, deadline, options.pollMs);
-          if (check.verdict === "valid") email = { value: candidate, provider: id };
-          else emailNote = check.by ? `${PROVIDER_BY_ID.get(check.by)!.name} couldn't confirm the email.` : "No email checker is set up to confirm it.";
+          const check = await verifyWith(candidate, { env, fetchImpl, deadline, pollMs: options.pollMs });
+          if (check.verdict === "valid" && check.by) email = { value: candidate, provider: id, verifiedBy: check.by };
+          else emailNote = unconfirmed(check);
         }
       } else if (finding.emailVerified) {
-        email = { value: candidate, provider: id };
+        email = { value: candidate, provider: id, verifiedBy: id };
       } else {
         emailNote = "Email wasn't verified.";
       }
@@ -166,7 +167,7 @@ export async function enrichContact(actor: UserActor, contactId: string, field: 
 
     const target = field === "email" ? email : field === "linkedin" ? linkedin : phone;
     if (target?.provider === id) {
-      attempts.push({ provider: id, outcome: "found" });
+      attempts.push({ provider: id, outcome: "found", ...(field === "email" && email ? { verifiedBy: email.verifiedBy } : {}) });
       break;
     }
     attempts.push({ provider: id, outcome: emailNote && field === "email" ? "rejected" : "not_found", ...(emailNote && field === "email" ? { detail: emailNote } : {}) });
@@ -198,7 +199,11 @@ export async function enrichContact(actor: UserActor, contactId: string, field: 
     }
   }
 
-  if (email && field !== "email") await recordLookup(actor, contactId, "email", "found", email.provider, email.value, []);
+  if (email && field !== "email") {
+    await recordLookup(actor, contactId, "email", "found", email.provider, email.value, [
+      { provider: email.provider, outcome: "found", verifiedBy: email.verifiedBy },
+    ]);
+  }
   if (linkedin && field !== "linkedin") await recordLookup(actor, contactId, "linkedin", "found", linkedin.provider, linkedin.value, []);
   const target = field === "email" ? email : field === "linkedin" ? linkedin : phone;
   const status = target ? "found" : allFailed ? "failed" : "not_found";

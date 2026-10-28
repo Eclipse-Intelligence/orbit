@@ -150,19 +150,72 @@ describe("checking an email address", () => {
     assert.equal(later.cached, false);
   });
 
-  it("treats an address Orbit found and confirmed as valid", async () => {
+  it("treats an address Orbit found and verified as valid, crediting the checker, and ignores unverified finds", async () => {
     await getAdminPool().query(
-      `insert into crm.enrichment_lookups (workspace_id, record_type, record_id, field, status, provider, value)
-       values ($1, 'contact', $2, 'email', 'found', 'hunter', $3)`,
+      `insert into crm.enrichment_lookups (workspace_id, record_type, record_id, field, status, provider, value, created_at)
+       values ($1, 'contact', $2, 'email', 'found', 'hunter', $3, now() - interval '1 hour')`,
       [owner.workspaceId, jane, ADDRESS],
+    );
+    assert.equal(await latestEmailCheck(owner, ADDRESS), null);
+
+    await getAdminPool().query(
+      `insert into crm.enrichment_lookups (workspace_id, record_type, record_id, field, status, provider, value, attempts)
+       values ($1, 'contact', $2, 'email', 'found', 'context', $3, $4::jsonb)`,
+      [owner.workspaceId, jane, ADDRESS, JSON.stringify([{ provider: "context", outcome: "found", verifiedBy: "enrow" }])],
     );
     const api = fake([enrow("invalid")]);
     const check = await verifyEmail(owner, ADDRESS, { env: ENV, fetchImpl: api.fetchImpl, ...FAST });
     assert.deepEqual(
-      { verdict: check.verdict, provider: check.provider, cached: check.cached },
-      { verdict: "valid", provider: "hunter", cached: true },
+      { verdict: check.verdict, source: check.source, provider: check.provider, providerName: check.providerName, cached: check.cached },
+      { verdict: "valid", source: "find", provider: "enrow", providerName: "Enrow", cached: true },
     );
     assert.equal(api.calls.length, 0);
+  });
+
+  it("checks an address whose only find wasn't verified", async () => {
+    await getAdminPool().query(
+      `insert into crm.enrichment_lookups (workspace_id, record_type, record_id, field, status, provider, value)
+       values ($1, 'contact', $2, 'email', 'found', 'context', $3)`,
+      [owner.workspaceId, jane, ADDRESS],
+    );
+    const api = fake([enrow("invalid")]);
+    const check = await verifyEmail(owner, ADDRESS, { env: ENV, fetchImpl: api.fetchImpl, ...FAST });
+    assert.deepEqual({ verdict: check.verdict, source: check.source, cached: check.cached }, { verdict: "invalid", source: "check", cached: false });
+    assert.ok(api.calls.length > 0);
+  });
+
+  it("marks an old check stale so it isn't read as confirmed", async () => {
+    await verifyEmail(owner, ADDRESS, { env: ENV, fetchImpl: fake([enrow("valid")]).fetchImpl, ...FAST });
+    const fresh = await latestEmailCheck(owner, ADDRESS);
+    assert.deepEqual({ verdict: fresh?.verdict, stale: fresh?.stale }, { verdict: "valid", stale: false });
+    await getAdminPool().query("update crm.enrichment_lookups set created_at = now() - interval '240 days'");
+    const old = await latestEmailCheck(owner, ADDRESS);
+    assert.deepEqual({ verdict: old?.verdict, stale: old?.stale }, { verdict: "valid", stale: true });
+    assert.equal((await latestEmailCheck(owner, ADDRESS, Date.now() - 239 * 86_400_000))?.stale, false);
+  });
+
+  it("reads Hunter's webmail and accept-all as unknown, and disposable as invalid", async () => {
+    const only = { HUNTER_API_KEY: "hun" };
+    for (const [status, verdict] of [
+      ["webmail", "unknown"],
+      ["accept_all", "unknown"],
+      ["disposable", "invalid"],
+      ["invalid", "invalid"],
+      ["valid", "valid"],
+    ]) {
+      const check = await verifyEmail(owner, "someone@gmail.com", { env: only, fetchImpl: fake([hunter(status)]).fetchImpl, refresh: true, ...FAST });
+      assert.equal(check.verdict, verdict, status);
+    }
+  });
+
+  it("refuses to check an address that isn't the contact's before spending a credit", async () => {
+    const api = fake([enrow("valid")]);
+    await rejects(() => verifyEmail(owner, "jane.doe@other-check.test", { contactId: jane, env: ENV, fetchImpl: api.fetchImpl, ...FAST }), {
+      code: "invalid_input",
+      message: `Jane Doe's email is ${ADDRESS}, not jane.doe@other-check.test.`,
+    });
+    assert.equal(api.calls.length, 0);
+    assert.equal((await checks()).length, 0);
   });
 
   it("checks an address that isn't a contact without saving it", async () => {

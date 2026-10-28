@@ -17,6 +17,7 @@ import {
   INVITE_NOT_CONNECTED,
   INVITE_RECONNECT,
   inviteWindow,
+  MEETING_GONE,
   rescheduleInvite,
   saveMeetingLink,
 } from "@/lib/crm/invites";
@@ -960,7 +961,7 @@ describe("moving invites", () => {
     assert.equal(calls.length, 0);
   });
 
-  it("explains when Outlook no longer has the meeting and leaves the calendar alone", async () => {
+  it("takes the meeting off the calendar and says so when Outlook no longer has it", async () => {
     const eventId = await invite();
     await rejects(
       () =>
@@ -968,10 +969,51 @@ describe("moving invites", () => {
           fetchImpl: graph([], { move: () => json({ error: { code: "ErrorItemNotFound", message: "Not found." } }, 404) }),
           now: NOW,
         }),
-      { code: "invalid_input", message: "Outlook no longer has this meeting." },
+      { code: "gone", message: MEETING_GONE },
     );
-    const row = await getAdminPool().query<{ starts_at: Date }>("select starts_at from crm.calendar_events where id = $1", [eventId]);
+    const row = await getAdminPool().query<{ starts_at: Date; is_cancelled: boolean }>(
+      "select starts_at, is_cancelled from crm.calendar_events where id = $1",
+      [eventId],
+    );
     assert.equal(row.rows[0].starts_at.toISOString(), "2026-10-20T13:00:00.000Z");
+    assert.equal(row.rows[0].is_cancelled, true);
+    assert.deepEqual(await listCalendarItems(owner, days, NOW), []);
+    await rejects(() => rescheduleInvite(owner, { eventId, startLocal: "2026-10-23T10:00" }, { fetchImpl: graph([]), now: NOW }), {
+      code: "conflict",
+    });
+  });
+
+  it("keeps a meeting longer than 8 hours at its length when only the start changes", async () => {
+    const eventId = await invite();
+    await getAdminPool().query("update crm.calendar_events set ends_at = starts_at + interval '9 hours' where id = $1", [eventId]);
+    const calls: Call[] = [];
+    const moved = await rescheduleInvite(owner, { eventId, startLocal: "2026-10-22T09:00" }, { fetchImpl: graph(calls), now: NOW });
+    assert.equal(moved.startsAt, "2026-10-22T08:00:00.000Z");
+    assert.equal(moved.endsAt, "2026-10-22T17:00:00.000Z");
+    assert.deepEqual(patches(calls)[0].body, {
+      start: { dateTime: "2026-10-22T09:00:00", timeZone: "GMT Standard Time" },
+      end: { dateTime: "2026-10-22T18:00:00", timeZone: "GMT Standard Time" },
+    });
+    await rejects(
+      () => rescheduleInvite(owner, { eventId, startLocal: "2026-10-23T09:00", durationMinutes: 540 }, { fetchImpl: graph([]), now: NOW }),
+      { field: "durationMinutes", message: /between 5 minutes and 8 hours/ },
+    );
+  });
+
+  it("points a real all-day event to Outlook rather than asking for a duration", async () => {
+    const eventId = await invite();
+    await getAdminPool().query(
+      `update crm.calendar_events
+       set is_all_day = true, starts_at = '2026-10-23T00:00:00Z', ends_at = '2026-10-24T00:00:00Z'
+       where id = $1`,
+      [eventId],
+    );
+    const calls: Call[] = [];
+    await rejects(() => rescheduleInvite(owner, { eventId, startLocal: "2026-10-22T10:00" }, { fetchImpl: graph(calls), now: NOW }), {
+      code: "invalid_input",
+      message: "Move all-day events in Outlook.",
+    });
+    assert.equal(calls.length, 0);
   });
 
   it("names the meeting, both times and the guests on the assistant's card", async () => {

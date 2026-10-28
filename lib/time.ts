@@ -37,6 +37,10 @@ export function appTimeZone() {
   return isTimeZone(configured) ? configured : DEFAULT_TIME_ZONE;
 }
 
+export function zoneLabel(timeZone = appTimeZone()) {
+  return timeZone === "Europe/London" ? "London" : timeZone;
+}
+
 type WallClock = {
   year: number;
   month: number;
