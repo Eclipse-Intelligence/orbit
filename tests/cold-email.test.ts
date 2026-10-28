@@ -45,6 +45,12 @@ describe("cold email rule checks", () => {
     assert.match(weak.find((check) => check.id === "gives_first")!.note, /Offers to send something general instead of including it/);
   });
 
+  it("doesn't need a link, since cold emails often deliver better without one", () => {
+    const noLink = { ...STRONG, body: STRONG.body.replace(`\n\n${ARTICLE}`, "") };
+    assert.ok(!/https?:\/\//.test(noLink.body));
+    assert.deepEqual(failed(lintColdEmail({ ...noLink, evidence: EVIDENCE })), []);
+  });
+
   it("flags an email that describes the prospect's own business back to them", () => {
     const check = lintColdEmail({ ...TYLER, evidence: [] }).find((item) => item.id === "not_about_them")!;
     assert.equal(check.pass, false);
