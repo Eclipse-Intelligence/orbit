@@ -147,7 +147,7 @@ export async function indexKnowledgeItem(actor: UserActor, id: string, options: 
     let text = row.content?.trim() ?? "";
     let title = row.title;
     let kind = row.kind;
-    if (!text || (row.kind !== "transcript" && row.kind !== "attachment" && options.force)) {
+    if (!text || (row.kind !== "transcript" && row.kind !== "attachment" && row.kind !== "reader" && options.force)) {
       const extract = options.extractors?.[row.kind] ?? EXTRACTORS[row.kind];
       if (!extract) throw new KnowledgeReadError("Orbit can't read this kind of item yet.");
       const extracted = await extract(row, options);

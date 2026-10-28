@@ -8,7 +8,7 @@ import { installLaunchAgent, LOG_FILE, uninstallLaunchAgent } from "./launch";
 import type { CompanionJob } from "./protocol";
 import { cleanEnv, runTurn, type Sdk } from "./turn";
 
-const VERSION = "1.4.0";
+const VERSION = "1.4.1";
 const DRAFT_EVERY_MS = 500;
 const DEFAULT_URL = "https://orbit.geteclipse.co";
 const ACCOUNT_TIMEOUT_MS = 45_000;

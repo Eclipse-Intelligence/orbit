@@ -17,15 +17,18 @@ import { getGranolaStatus } from "@/lib/crm/granola";
 import { getMailbox } from "@/lib/crm/inbox";
 import { linearStatus } from "@/lib/linear";
 import { microsoftConfigured } from "@/lib/microsoft/oauth";
+import { readwiseStatus } from "@/lib/readwise/keys";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 export default async function IntegrationSettingsPage() {
   const user = await getUserActor();
   if (!user) redirect("/login");
-  const [mailbox, granola, clickup, aiAccounts, companions, linear] = await Promise.all([
+  const [mailbox, granola, readwise, clickup, aiAccounts, companions, linear] = await Promise.all([
     getMailbox(user),
     getGranolaStatus(user),
+    readwiseStatus(user),
     getClickUpSettings(user),
     listAiAccounts(user),
     listCompanions(user),
@@ -50,6 +53,7 @@ export default async function IntegrationSettingsPage() {
         mailbox={mailbox}
         calls={calls}
         granola={granola}
+        readwise={readwise}
         linear={linear}
       />
       <ClickUpSettings view={clickup} canAdmin={canAdmin} />

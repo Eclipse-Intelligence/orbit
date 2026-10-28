@@ -154,6 +154,7 @@ const KIND_LABEL: Record<string, string> = {
   podcast: "Podcast",
   transcript: "Transcript",
   attachment: "Document",
+  reader: "Article",
 };
 
 export type SiteExtras = {
@@ -325,7 +326,7 @@ function Extra({ block, content, extras }: { block: Block; content: Content; ext
           <ul className="grid gap-3 sm:grid-cols-2">
             {block.items.map((item) => {
               const href = extras.fileHref?.(item.id) ?? (safeHref(item.sourceUrl) || null);
-              const Icon = item.kind === "link" || item.kind === "youtube" || item.kind === "podcast" ? LinkIcon : FileIcon;
+              const Icon = item.kind === "link" || item.kind === "youtube" || item.kind === "podcast" || item.kind === "reader" ? LinkIcon : FileIcon;
               const inner = (
                 <>
                   <span className="bg-secondary text-soft flex size-10 shrink-0 items-center justify-center rounded-xl">
