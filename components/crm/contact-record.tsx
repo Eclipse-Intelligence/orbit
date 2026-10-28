@@ -15,6 +15,7 @@ import ProposalsCard from "@/components/proposals/proposals-card";
 import type { DocumentSummary } from "@/lib/proposals/documents";
 import type { Relationship } from "@/lib/crm/relationship-score";
 import { useQuickAddRecord } from "@/components/crm/quick-add";
+import MergeRecordMenu from "@/components/crm/merge-record";
 import RecordLayout from "@/components/crm/record-layout";
 import { CallLink, DetailList } from "@/components/crm/record-form";
 import SectionHeader from "@/components/crm/section-header";
@@ -128,6 +129,7 @@ export default function ContactRecord({
         action={
           <div className="flex items-center gap-1">
             <RunWorkflowButton object="contact" recordId={shown.id} workflows={workflows} />
+            {!shown.archivedAt && <MergeRecordMenu kind="contact" id={shown.id} name={shown.name} />}
             <span
               title={
                 shown.email

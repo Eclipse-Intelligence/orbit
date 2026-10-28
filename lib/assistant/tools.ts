@@ -53,6 +53,7 @@ import { getInsightTranscript, getInsightsForActivities } from "@/lib/crm/call-i
 import { createTaskWithClickUp, getClickUpPicker, getClickUpState, pushClickUpTask } from "@/lib/crm/clickup";
 import { createCompany, getCompany, listCompanies, listMembers, updateCompany } from "@/lib/crm/companies";
 import { createContact, getContact, listContacts, updateContact } from "@/lib/crm/contacts";
+import { mergeCompanies, mergeContacts } from "@/lib/crm/merge";
 import { listUnfiledImports } from "@/lib/crm/conversations";
 import { listEmailTemplates } from "@/lib/crm/email-templates";
 import { CrmError } from "@/lib/crm/errors";
@@ -1662,6 +1663,36 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       ),
   },
   {
+    name: "merge_companies",
+    label: "Merging companies",
+    write: true,
+    description:
+      "Merge a duplicate company into the one to keep. Its people, deals, board cards, tasks, activity, emails, proposals and Knowledge move to the kept company, empty fields on the kept company are filled from the duplicate, tags are combined, and the duplicate is archived. Nothing is deleted.",
+    parameters: {
+      type: "object",
+      properties: {
+        keepId: idParam("Company to keep."),
+        mergeId: idParam("Duplicate company to merge in and archive."),
+      },
+      required: ["keepId", "mergeId"],
+    },
+    describe: (args, name) => ({
+      title: titled("Merge companies", `${name(args.mergeId)} into ${name(args.keepId)}`),
+      lines: [
+        `Keep: ${name(args.keepId)}`,
+        `People, deals, tasks, activity and emails move to ${name(args.keepId)}`,
+        `${name(args.mergeId)} is archived`,
+      ],
+    }),
+    run: async (actor, args) => {
+      const result = await mergeCompanies(actor, required(args.keepId, "The company to keep"), required(args.mergeId, "The company to merge"), {
+        operation: "merge_companies",
+        ...PROVENANCE,
+      });
+      return { company: withCompany(result.kept), archived: withCompany(result.merged), moved: result.moved, filled: result.filled };
+    },
+  },
+  {
     name: "create_contact",
     label: "Creating a contact",
     write: true,
@@ -1725,6 +1756,36 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       bulkUpdate(actor, "contacts:write", args.contactIds, (id) =>
         updateContact(actor, id, pick(args, BULK_CONTACT_KEYS), { provenance: { operation: "update_contacts", ...PROVENANCE } }),
       ),
+  },
+  {
+    name: "merge_contacts",
+    label: "Merging people",
+    write: true,
+    description:
+      "Merge a duplicate person into the one to keep. Their activity, tasks, deals, emails and proposals move to the kept person, empty fields are filled from the duplicate, tags are combined, and the duplicate is archived. The kept person's email stays; a different email from the duplicate is added to the notes.",
+    parameters: {
+      type: "object",
+      properties: {
+        keepId: idParam("Contact to keep."),
+        mergeId: idParam("Duplicate contact to merge in and archive."),
+      },
+      required: ["keepId", "mergeId"],
+    },
+    describe: (args, name) => ({
+      title: titled("Merge people", `${name(args.mergeId)} into ${name(args.keepId)}`),
+      lines: [
+        `Keep: ${name(args.keepId)}`,
+        `Activity, tasks, deals and emails move to ${name(args.keepId)}`,
+        `${name(args.mergeId)} is archived`,
+      ],
+    }),
+    run: async (actor, args) => {
+      const result = await mergeContacts(actor, required(args.keepId, "The contact to keep"), required(args.mergeId, "The contact to merge"), {
+        operation: "merge_contacts",
+        ...PROVENANCE,
+      });
+      return { contact: withContact(result.kept), archived: withContact(result.merged), moved: result.moved, filled: result.filled };
+    },
   },
   {
     name: "create_opportunity",

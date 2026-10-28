@@ -83,6 +83,8 @@ A token with only the `market:write` scope (the Grok Bot token from Settings ›
 
 `archive_company`, `archive_contact`, `archive_opportunity`, `archive_next_action`: soft archive.
 
+`merge_companies`, `merge_contacts`: `keep_id`, `merge_id`, plus `provenanceSource` and `provenanceUrl`. One transaction moves every reference from the duplicate to the kept record (people, deals and board cards, tasks, activity, emails, calls, proposals, knowledge, market notes, signals, calendar links), fills the kept record's empty fields without overwriting, combines tags and archives the duplicate. A contact keeps its own email; a different one from the duplicate goes into the notes. Returns `kept`, `merged`, `moved` (rows per table), `filled` and `tagsAdded`. Refuses a record merged with itself, one in another workspace, or an archived one. Records one `company.merged` or `contact.merged` audit event (also a webhook event) with the moved row ids, so the merge can be traced or reversed.
+
 `update_next_action`: partial update of a task. `completed: true` marks it done.
 
 `record_email`, `record_meeting`: file a conversation by participant email or company, and suggest a follow-up when none is open.

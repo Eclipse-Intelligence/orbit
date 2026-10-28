@@ -5,6 +5,7 @@ import { recordCommunication } from "@/lib/crm/communications";
 import { archiveContact } from "@/lib/crm/contacts";
 import { CrmError } from "@/lib/crm/errors";
 import { bulkIngestLeads } from "@/lib/crm/leads";
+import { mergeCompanies, mergeContacts } from "@/lib/crm/merge";
 import { archiveOpportunity, listOpportunities } from "@/lib/crm/opportunities";
 import { savePipelineStages } from "@/lib/crm/pipeline";
 import { archiveTask, updateTask } from "@/lib/crm/tasks";
@@ -82,6 +83,28 @@ export function registerOperationTools(server: McpServer, actor: Actor) {
       run(async () =>
         (await archiveContact(actor, args.id, { provenance: provenance(args, "archive_contact") })).body,
       ),
+  );
+
+  server.registerTool(
+    "merge_companies",
+    {
+      description:
+        "Merge a duplicate company into the one to keep. Its contacts, opportunities, tasks, activity, emails, proposals and knowledge move to keep_id, empty fields on the kept company are filled from the duplicate, tags are combined, and the duplicate is archived. Returns both companies and how many rows moved per table.",
+      inputSchema: { keep_id: z.uuid(), merge_id: z.uuid(), ...provenanceFields },
+    },
+    async (args) =>
+      run(() => mergeCompanies(actor, args.keep_id, args.merge_id, provenance(args, "merge_companies"))),
+  );
+
+  server.registerTool(
+    "merge_contacts",
+    {
+      description:
+        "Merge a duplicate contact into the one to keep. Their activity, tasks, opportunities, emails and proposals move to keep_id, empty fields are filled from the duplicate, tags are combined, and the duplicate is archived. The kept contact's email stays; a different email from the duplicate is added to the notes.",
+      inputSchema: { keep_id: z.uuid(), merge_id: z.uuid(), ...provenanceFields },
+    },
+    async (args) =>
+      run(() => mergeContacts(actor, args.keep_id, args.merge_id, provenance(args, "merge_contacts"))),
   );
 
   server.registerTool(

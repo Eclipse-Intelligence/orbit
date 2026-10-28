@@ -13,6 +13,7 @@ import {
   listCompanies,
   updateCompany,
 } from "@/lib/crm/companies";
+import { mergeCompanies } from "@/lib/crm/merge";
 import type { AccountHealth, Company, CompanyListQuery, CompanyWrite, LifecycleCount } from "@/lib/crm/types";
 import { deleteLifecycle, listLifecycles, renameLifecycle } from "@/lib/crm/lifecycles";
 import { revalidateRecordPages } from "@/lib/revalidate";
@@ -172,6 +173,21 @@ export async function archiveCompanyAction(id: string): Promise<CompanyActionSta
     return {};
   } catch (error) {
     return actionError(error);
+  }
+}
+
+export async function mergeCompanyAction(mergeId: string, keepId: string): Promise<{ error?: string; keptId?: string }> {
+  const user = await requireUser();
+  try {
+    const result = await mergeCompanies(user, keepId, mergeId, { operation: "merge_companies", source: "web" });
+    revalidatePath("/");
+    revalidateRecordPages();
+    revalidatePath("/contacts");
+    revalidatePath("/opportunities");
+    revalidatePath("/boards", "layout");
+    return { keptId: result.kept.id };
+  } catch (error) {
+    return { error: actionError(error).error };
   }
 }
 
