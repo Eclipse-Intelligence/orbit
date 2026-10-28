@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { after, afterEach, before, beforeEach, describe, it } from "node:test";
 import { describeAction, recordNames, runTool } from "@/lib/assistant/tools";
 import { createCompany } from "@/lib/crm/companies";
-import { prepareAttachment } from "@/lib/crm/email-attachments";
+import { prepareAttachment, sweepEmailAttachments } from "@/lib/crm/email-attachments";
 import { listEmailTemplates } from "@/lib/crm/email-templates";
 import { saveMailbox } from "@/lib/crm/inbox";
 import type { UserActor } from "@/lib/crm/types";
@@ -196,6 +196,9 @@ describe("assistant mail tools", () => {
       },
       { origin: null, fetchImpl: env.fetchImpl },
     );
+    await getAdminPool().query("update crm.email_attachments set created_at = now() - interval '2 days'");
+    assert.equal(await sweepEmailAttachments(env.fetchImpl), 0);
+    assert.ok(env.objects.has(`email-attachments/${prepared.id}`));
     const providerDraft = `draft-${draftCount}`;
     const args = { draftId: draft.id, to: ["jane@acme.test"], subject: "Terms", body: "Hi Jane, terms attached." };
     assert.ok(describeAction("send_email", args, await recordNames(owner, [args])).lines.includes("Attachments: Terms.pdf"));
