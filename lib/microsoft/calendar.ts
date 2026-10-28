@@ -15,6 +15,9 @@ const SCOPE_ERRORS = new Set([
 const UTC_NAMES = new Set(["utc", "etc/utc", "gmt", "coordinated universal time", "z"]);
 const CALENDAR_PAGE_LIMIT = 5;
 const SHOW_AS = new Set(["free", "tentative", "busy", "oof", "workingelsewhere", "unknown"]);
+const RESPONSE_STATUSES = new Map(
+  ["none", "organizer", "tentativelyAccepted", "accepted", "declined", "notResponded"].map((value) => [value.toLowerCase(), value]),
+);
 
 const CALENDAR_PALETTE = [
   "#4f9be8",
@@ -56,6 +59,7 @@ const EVENT_FIELDS = [
   "organizer",
   "attendees",
   "showAs",
+  "responseStatus",
 ].join(",");
 
 type GraphDateTime = { dateTime?: string | null; timeZone?: string | null };
@@ -76,6 +80,7 @@ export type GraphEvent = {
   organizer?: GraphAddress | null;
   attendees?: (GraphAddress & { type?: string | null; status?: { response?: string | null } | null })[] | null;
   showAs?: string | null;
+  responseStatus?: { response?: string | null } | null;
 };
 
 type GraphCalendar = {
@@ -117,6 +122,7 @@ export type CalendarEvent = {
   organizer: CalendarPerson | null;
   attendees: CalendarAttendee[];
   showAs: string | null;
+  responseStatus: string | null;
 };
 
 export type CalendarFetch = { events: CalendarEvent[]; complete: boolean; pages: number };
@@ -273,7 +279,12 @@ export function toCalendarEvent(event: GraphEvent): CalendarEvent | null {
     organizer: person(event.organizer),
     attendees,
     showAs: showAs(event.showAs),
+    responseStatus: responseStatus(event.responseStatus?.response),
   };
+}
+
+export function responseStatus(value: string | null | undefined) {
+  return RESPONSE_STATUSES.get(value?.trim().toLowerCase() ?? "") ?? null;
 }
 
 function showAs(value: string | null | undefined) {
@@ -368,6 +379,7 @@ const WINDOWS_ZONES: Record<string, string> = {
 const RETRY_STATUSES = new Set([502, 503, 504]);
 const WRITE_TIMEOUT_MS = 20_000;
 export const CALENDAR_WRITE_RECONNECT = "Reconnect Microsoft to send invites.";
+export const RESPOND_ORGANISER = "You organised this one, so there's no invite to answer.";
 
 export class CalendarWriteScopeError extends Error {
   constructor() {
@@ -496,7 +508,16 @@ function retryAfter(response: Response) {
   return Number.isFinite(seconds) && seconds > 0 ? Math.ceil(seconds) : null;
 }
 
-async function writeError(response: Response, action: "create" | "cancel" | "move") {
+type WriteAction = "create" | "cancel" | "move" | "respond";
+
+const WRITE_FALLBACK: Record<WriteAction, string> = {
+  create: "Microsoft could not create the meeting.",
+  cancel: "Microsoft could not cancel the meeting.",
+  move: "Microsoft could not move the meeting.",
+  respond: "Microsoft could not send your response.",
+};
+
+async function writeError(response: Response, action: WriteAction) {
   const body = (await response.json().catch(() => ({}))) as { error?: { message?: string; code?: string } };
   const code = body.error?.code ?? "";
   const message = body.error?.message ?? "";
@@ -529,16 +550,20 @@ async function writeError(response: Response, action: "create" | "cancel" | "mov
   if (action === "move" && response.status === 400 && /organi[sz]er/i.test(message)) {
     return new CalendarWriteError("Only the organiser can move this meeting.", 400, code);
   }
+  if (action === "respond" && response.status === 400 && /propos/i.test(`${code} ${message}`)) {
+    return new CalendarWriteError(
+      "The organiser isn't taking new time proposals for this meeting. Respond without a new time, or suggest one in your note.",
+      400,
+      code,
+    );
+  }
+  if (action === "respond" && response.status === 400 && /organi[sz]/i.test(message)) {
+    return new CalendarWriteError(RESPOND_ORGANISER, 400, code);
+  }
   if (response.status === 404 || code === "ErrorItemNotFound") {
     return new CalendarWriteError("Outlook no longer has this meeting.", 404, code);
   }
-  const fallback =
-    action === "create"
-      ? "Microsoft could not create the meeting."
-      : action === "move"
-        ? "Microsoft could not move the meeting."
-        : "Microsoft could not cancel the meeting.";
-  return new CalendarWriteError(sanitizeMicrosoftError(message || fallback), response.status, code);
+  return new CalendarWriteError(sanitizeMicrosoftError(message || WRITE_FALLBACK[action]), response.status, code);
 }
 
 async function graphWrite(
@@ -623,4 +648,37 @@ export async function moveGraphEvent(
   const response = await graphWrite(eventUrl(eventId), accessToken, patch, fetchImpl, true, "PATCH");
   if (!response.ok) throw await writeError(response, "move");
   return (await response.json().catch(() => ({}))) as GraphEvent;
+}
+
+export type InviteResponse = "accept" | "tentativelyAccept" | "decline";
+
+export const RESPONSE_STATUS_FOR: Record<InviteResponse, string> = {
+  accept: "accepted",
+  tentativelyAccept: "tentativelyAccepted",
+  decline: "declined",
+};
+
+export function respondGraphPayload(input: {
+  response: InviteResponse;
+  comment: string | null;
+  sendResponse: boolean;
+  proposedNewTime?: { start: Date; end: Date; timeZone: string } | null;
+}) {
+  const payload: Record<string, unknown> = { sendResponse: input.sendResponse };
+  if (input.comment) payload.comment = input.comment;
+  if (input.proposedNewTime && input.response !== "accept") {
+    payload.proposedNewTime = graphDateTimes(input.proposedNewTime.start, input.proposedNewTime.end, input.proposedNewTime.timeZone);
+  }
+  return payload;
+}
+
+export async function respondToGraphEvent(
+  accessToken: string,
+  eventId: string,
+  input: Parameters<typeof respondGraphPayload>[0],
+  fetchImpl: typeof fetch = fetch,
+) {
+  const url = `${eventUrl(eventId)}/${input.response}`;
+  const response = await graphWrite(url, accessToken, respondGraphPayload(input), fetchImpl, false);
+  if (!response.ok) throw await writeError(response, "respond");
 }
