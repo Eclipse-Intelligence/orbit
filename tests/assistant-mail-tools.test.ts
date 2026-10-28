@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, afterEach, before, beforeEach, describe, it } from "node:test";
+import { prepareChatFile } from "@/lib/assistant/files";
 import { describeAction, recordNames, runTool } from "@/lib/assistant/tools";
 import { createCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
@@ -283,6 +284,35 @@ describe("assistant mail tools", () => {
     assert.equal(blank.error, "Blank form is an empty file in Knowledge, so it can't be attached.");
   });
 
+  it("emails a file attached in the chat, names it on the cards and keeps the chat's own copy", async () => {
+    const env = world();
+    const prepared = await prepareChatFile(owner, { name: "Terms.pdf", size: DECK.byteLength, contentType: "application/pdf" }, env.fetchImpl);
+    env.objects.set(`email-attachments/chat/${prepared.id}`, DECK);
+    const args = { to: ["jane@acme.test"], subject: "Terms", body: "Hi Jane,\n\nThe terms are attached.\n\nMark", attachmentIds: [prepared.id] };
+    const names = await recordNames(owner, [args]);
+    assert.ok(describeAction("send_email", args, names).lines.includes("Attachments: Terms.pdf"));
+    assert.ok(describeAction("save_email_draft", args, names).lines.includes("Attachments: Terms.pdf"));
+    env.calls.length = 0;
+    const sent = (await withFetch(env.fetchImpl, () => runTool(owner, "send_email", args))) as { sent: boolean };
+    assert.equal(sent.sent, true);
+    const posted = postedFiles(env.calls);
+    assert.deepEqual(posted.map((file) => file.name), ["Terms.pdf"]);
+    assert.deepEqual(new Uint8Array(Buffer.from(posted[0].contentBytes, "base64")), DECK);
+    assert.ok(graphCalls(env.calls).some((call) => call.endsWith("/send")));
+    const admin = getAdminPool();
+    assert.equal((await admin.query("select 1 from crm.chat_files where id = $1", [prepared.id])).rowCount, 1);
+    assert.ok(env.objects.has(`email-attachments/chat/${prepared.id}`));
+    assert.equal((await admin.query("select 1 from crm.email_attachments where user_id = $1", [owner.userId])).rowCount, 0);
+
+    const draft = (await withFetch(env.fetchImpl, () => runTool(owner, "save_email_draft", args))) as { saved: boolean; draftId: string; attachments: string[] };
+    assert.equal(draft.saved, true);
+    assert.deepEqual(draft.attachments, ["Terms.pdf"]);
+    const stored = await draftFiles(draft.draftId);
+    assert.equal(stored?.length, 1);
+    assert.notEqual(stored![0], prepared.id);
+    assert.ok(env.objects.has(`email-attachments/${stored![0]}`));
+  });
+
   it("schedules an email with sendAt, shows the time and files on the card, and attaches them when it sends", async () => {
     const env = world();
     env.objects.set(`knowledge/${owner.workspaceId}/deck/Eclipse-deck.pdf`, DECK);
@@ -348,9 +378,9 @@ describe("assistant mail tools", () => {
       lines: ["File: Pilot notes.txt", "From the email: Pilot"],
     });
     const twoSources = (await runTool(owner, "add_to_knowledge", { ...args, urls: ["https://acme.test/about"] })) as { error: string };
-    assert.match(twoSources.error, /not both/);
+    assert.match(twoSources.error, /one at a time/);
     const noSource = (await runTool(owner, "add_to_knowledge", { companyId: company.id })) as { error: string };
-    assert.match(noSource.error, /Pass urls to add links, or emailId/);
+    assert.match(noSource.error, /Pass urls to add links, emailId to add a file from an email, or chatFileId/);
     const added = (await withFetch(env.fetchImpl, () => runTool(owner, "add_to_knowledge", args))) as { added: boolean; item: { id: string; title: string } };
     assert.equal(added.added, true);
     assert.equal(added.item.title, "Pilot notes");

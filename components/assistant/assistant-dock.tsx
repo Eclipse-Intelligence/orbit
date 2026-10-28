@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type DragEvent, type FormEvent } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Kbd } from "@/components/_ui/command";
@@ -8,9 +8,18 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popove
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/_ui/select";
 import Markdown from "@/components/assistant/markdown";
 import MentionInput from "@/components/assistant/mention-input";
+import { AttachButton, AttachmentList, fileSize, useEmailAttachments } from "@/components/crm/email-attachments";
 import { useScreenState } from "@/components/crm/quick-add";
 import { useShortcut, useShortcuts } from "@/components/shortcuts/shortcuts-provider";
-import { connectedSourcesAction, deleteConversationAction, getConversationAction, listConversationsAction, stopConversationAction } from "@/app/(crm)/assistant";
+import {
+  connectedSourcesAction,
+  deleteConversationAction,
+  discardChatFilesAction,
+  getConversationAction,
+  listConversationsAction,
+  prepareChatFileAction,
+  stopConversationAction,
+} from "@/app/(crm)/assistant";
 import type { ActionDecision, AssistantAction, AssistantEvent, ConversationSummary, DisplayMessage, Working } from "@/lib/assistant/chat";
 import {
   ASSISTANT_MODELS,
@@ -35,6 +44,7 @@ import GlobeIcon from "@/public/assets/images/assistant/globe.svg";
 import StopIcon from "@/public/assets/images/assistant/stop.svg";
 import TrashIcon from "@/public/assets/images/assistant/trash.svg";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
+import PaperclipIcon from "@/public/assets/images/_common/paperclip.svg";
 import PlusIcon from "@/public/assets/images/_common/plus.svg";
 import ClockIcon from "@/public/assets/images/companies/detail/clock.svg";
 
@@ -51,6 +61,8 @@ const STARTERS: { match: RegExp; prompts: string[] }[] = [
   { match: /^\/calendar/, prompts: ["Prepare me for my next meeting", "Who am I meeting this week, and what do I need to know?", "Find time for a call next week"] },
   { match: /.*/, prompts: ["What should I focus on today?", "Which relationships are cooling?", "Summarise this morning's brief"] },
 ];
+
+const CHAT_UPLOADS = { prepare: prepareChatFileAction, discard: discardChatFilesAction };
 
 const FOLLOW_MS = 30 * 60_000;
 const FOLLOW_EVERY_MS = 5_000;
@@ -380,12 +392,25 @@ function Message({
 }) {
   if (message.role === "user") {
     return (
-      <div className="flex justify-end">
-        <div className="text-foreground max-w-[85%] rounded-2xl rounded-br-md bg-white/[0.07] px-3.5 py-2 text-[14px] leading-6 whitespace-pre-wrap">
-          {splitMentions(message.content).map((piece, index) =>
-            "mention" in piece ? <MentionChip key={index} mention={piece.mention} /> : <span key={index}>{piece.text}</span>,
-          )}
-        </div>
+      <div className="flex flex-col items-end gap-1.5">
+        {message.files.length > 0 && (
+          <ul aria-label="Attached files" className="flex max-w-[85%] flex-wrap justify-end gap-1.5">
+            {message.files.map((file) => (
+              <li key={file.id} className="text-soft flex h-7 max-w-full min-w-0 items-center gap-1.5 rounded-full bg-white/[0.07] px-2.5 text-[13px] leading-5">
+                <PaperclipIcon aria-hidden className="size-3 shrink-0" />
+                <span className="min-w-0 truncate">{file.name}</span>
+                <span className="caption-style text-subtle shrink-0">{fileSize(file.size)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {message.content && (
+          <div className="text-foreground max-w-[85%] rounded-2xl rounded-br-md bg-white/[0.07] px-3.5 py-2 text-[14px] leading-6 whitespace-pre-wrap">
+            {splitMentions(message.content).map((piece, index) =>
+              "mention" in piece ? <MentionChip key={index} mention={piece.mention} /> : <span key={index}>{piece.text}</span>,
+            )}
+          </div>
+        )}
       </div>
     );
   }
@@ -474,6 +499,8 @@ export default function AssistantDock() {
   const recovering = useRef(0);
   const view = useRef(0);
   const [connected, setConnected] = useState<ModelSource[] | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const files = useEmailAttachments([], CHAT_UPLOADS);
 
   useEffect(() => {
     if (!open) return;
@@ -610,7 +637,7 @@ export default function AssistantDock() {
         if (index < 0) {
           return [
             ...current,
-            { id: event.messageId, role: "assistant", content: "", tools: [], actions: event.actions, sources: [], createdAt: new Date().toISOString() },
+            { id: event.messageId, role: "assistant", content: "", tools: [], actions: event.actions, sources: [], files: [], createdAt: new Date().toISOString() },
           ];
         }
         const next = current.slice();
@@ -688,16 +715,49 @@ export default function AssistantDock() {
 
   function send(text: string) {
     const typed = text.trim();
-    if (!typed || busy) return;
-    const message = encodeMentions(typed, liveMentions(typed, mentions));
+    const attached = files.files;
+    if ((!typed && attached.length === 0) || busy || files.uploading) return;
+    const message = typed ? encodeMentions(typed, liveMentions(typed, mentions)) : "";
     pinned.current = true;
     setDraft("");
     setMentions([]);
+    files.clear();
     setMessages((current) => [
       ...current,
-      { id: `local-${Date.now()}`, role: "user", content: message, tools: [], actions: [], sources: [], createdAt: new Date().toISOString() },
+      { id: `local-${Date.now()}`, role: "user", content: message, tools: [], actions: [], sources: [], files: attached, createdAt: new Date().toISOString() },
     ]);
-    void run({ conversationId: conversation?.id ?? null, message, model: active.model, reasoning: active.reasoning, webSearch });
+    void run({
+      conversationId: conversation?.id ?? null,
+      message,
+      model: active.model,
+      reasoning: active.reasoning,
+      webSearch,
+      files: attached.map((file) => file.id),
+    });
+  }
+
+  function carriesFiles(event: DragEvent) {
+    return Array.from(event.dataTransfer.types).includes("Files");
+  }
+
+  function dragOver(event: DragEvent) {
+    if (!carriesFiles(event)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    if (!dragging) setDragging(true);
+  }
+
+  function dragLeave(event: DragEvent) {
+    if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+    setDragging(false);
+  }
+
+  function drop(event: DragEvent) {
+    if (!carriesFiles(event)) return;
+    event.preventDefault();
+    setDragging(false);
+    const dropped = Array.from(event.dataTransfer.files);
+    if (dropped.length > 0) void files.add(dropped);
   }
 
   function decide(decisions: ActionDecision[]) {
@@ -808,8 +868,23 @@ export default function AssistantDock() {
     >
       <section
         aria-label="Orbit assistant"
-        className="animate-in fade-in-0 slide-in-from-bottom-3 zoom-in-[0.98] ease-power3-out flex h-full max-h-full flex-col overflow-hidden rounded-3xl bg-[#1c1c1c]/95 shadow-[0_24px_80px_rgba(0,0,0,0.6)] backdrop-blur-xl duration-200 md:h-auto md:max-h-[min(44rem,calc(100dvh-6rem))]"
+        onDragEnter={dragOver}
+        onDragOver={dragOver}
+        onDragLeave={dragLeave}
+        onDrop={drop}
+        className="animate-in fade-in-0 slide-in-from-bottom-3 zoom-in-[0.98] ease-power3-out relative flex h-full max-h-full flex-col overflow-hidden rounded-3xl bg-[#1c1c1c]/95 shadow-[0_24px_80px_rgba(0,0,0,0.6)] backdrop-blur-xl duration-200 md:h-auto md:max-h-[min(44rem,calc(100dvh-6rem))]"
       >
+        {dragging && (
+          <div
+            aria-hidden
+            className="bg-background/80 pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-3xl border-2 border-dashed border-white/20"
+          >
+            <span className="text-soft flex items-center gap-2 text-[14px]">
+              <PaperclipIcon aria-hidden className="size-3.5" />
+              Drop files to attach
+            </span>
+          </div>
+        )}
         <header className="flex h-11 shrink-0 items-center gap-1 pt-1 pr-2 pl-5">
           <span className="text-subtle min-w-0 flex-1 truncate text-[13px]">{conversation?.title ?? "New chat"}</span>
           <Popover open={historyOpen} onOpenChange={(next) => void openHistory(next)}>
@@ -923,6 +998,7 @@ export default function AssistantDock() {
 
         <form onSubmit={submit} className="shrink-0 px-5 pt-1 pb-3">
           <div className="flex flex-col gap-2">
+            <AttachmentList items={files.items} onRemove={files.remove} disabled={busy} />
             <label htmlFor="assistant-input" className="sr-only">
               Message Orbit
             </label>
@@ -998,6 +1074,7 @@ export default function AssistantDock() {
                 <GlobeIcon aria-hidden className="size-3.5" />
                 <span className="max-sm:sr-only">Web</span>
               </button>
+              <AttachButton compact id="assistant-files" onFiles={(picked) => void files.add(picked)} />
               <span className="flex-1" />
               {busy ? (
                 <Button variant="secondary" size="icon" type="button" aria-label="Stop" onClick={stopTurn}>
@@ -1009,8 +1086,8 @@ export default function AssistantDock() {
                   size="icon"
                   type="submit"
                   aria-label="Send"
-                  title={`Send (Enter). New line: ${mac ? "⇧" : "Shift"}+Enter`}
-                  disabled={!draft.trim()}
+                  title={files.uploading ? "Wait for the files to upload" : `Send (Enter). New line: ${mac ? "⇧" : "Shift"}+Enter`}
+                  disabled={(!draft.trim() && files.ids.length === 0) || files.uploading}
                 >
                   <ArrowUpIcon aria-hidden className="size-3.5" />
                 </Button>

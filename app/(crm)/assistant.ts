@@ -2,6 +2,7 @@
 
 import type { ModelSource } from "@/lib/assistant/models";
 import { connectedSources, deleteConversation, getConversation, listConversations, stopConversation } from "@/lib/assistant/chat";
+import { discardChatFiles, prepareChatFile, type PreparedChatFile } from "@/lib/assistant/files";
 import { getUserActor } from "@/lib/auth/user";
 import { CrmError } from "@/lib/crm/errors";
 
@@ -53,4 +54,22 @@ export async function connectedSourcesAction(): Promise<ModelSource[] | null> {
     console.error("Could not read AI accounts", error);
     return null;
   }
+}
+
+export async function prepareChatFileAction(file: { name: string; size: number; contentType: string }): Promise<{ attachment?: PreparedChatFile; error?: string }> {
+  const user = await getUserActor();
+  if (!user) return { error: "Sign in to attach files." };
+  try {
+    return { attachment: await prepareChatFile(user, file) };
+  } catch (error) {
+    if (error instanceof CrmError) return { error: error.message };
+    console.error("Could not prepare a chat file", error);
+    return { error: "Couldn't attach the file. Try again." };
+  }
+}
+
+export async function discardChatFilesAction(ids: string[]) {
+  const user = await getUserActor();
+  if (!user) return;
+  await discardChatFiles(user, ids).catch(() => undefined);
 }

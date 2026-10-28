@@ -4,7 +4,7 @@ import { isUuid, recordAudit } from "@/lib/crm/mutate";
 import type { Provenance, UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
 import { linkKind } from "@/lib/knowledge/media";
-import { KNOWLEDGE_MAX_BYTES, removeObjects, signedUploadUrl, storageConfigured, StorageError } from "@/lib/storage";
+import { KNOWLEDGE_MAX_BYTES, putObject, removeObjects, signedUploadUrl, storageConfigured, StorageError } from "@/lib/storage";
 
 export const KNOWLEDGE_KINDS = ["file", "link", "youtube", "podcast", "transcript", "attachment", "reader"] as const;
 export type KnowledgeKind = (typeof KNOWLEDGE_KINDS)[number];
@@ -244,6 +244,50 @@ export async function prepareKnowledgeUpload(
     await withActor(actor, (db) => db.query("update crm.knowledge_items set archived_at = now() where id = $1", [row.id])).catch(() => undefined);
     throw new CrmError("upstream_error", error instanceof StorageError ? error.message : "Couldn't store the file.", 502);
   }
+}
+
+export async function addKnowledgeFile(
+  actor: UserActor,
+  target: KnowledgeTarget,
+  input: { name: string; contentType: string | null; bytes: Uint8Array; sourceRef: string },
+  provenance: Provenance,
+  fetchImpl: typeof fetch = fetch,
+) {
+  if (!storageConfigured()) throw new CrmError("invalid_input", "Uploads need SUPABASE_SERVICE_ROLE_KEY set on the server.", 400);
+  const name = cleanFileName(input.name);
+  if (input.bytes.byteLength === 0) throw new CrmError("invalid_input", `${name} is empty.`, 400, { field: "file" });
+  if (input.bytes.byteLength > KNOWLEDGE_MAX_BYTES) throw new CrmError("invalid_input", `${name} is over ${megabytes(KNOWLEDGE_MAX_BYTES)}.`, 400, { field: "file" });
+  const contentType = cleanType(input.contentType);
+  const placed = await withActor(actor, async (db) => {
+    const outcome = await insertItem(
+      db,
+      actor,
+      {
+        target,
+        kind: "file",
+        title: cleanTitle(name.replace(/\.[a-z0-9]{1,5}$/i, ""), name),
+        status: "pending",
+        mimeType: contentType,
+        sizeBytes: input.bytes.byteLength,
+        sourceRef: input.sourceRef,
+      },
+      provenance,
+    );
+    if (!outcome.created) return { id: outcome.id, path: null };
+    const path = `${actor.workspaceId}/${outcome.id}/${storageKey(name)}`;
+    await db.query("update crm.knowledge_items set file_path = $2 where id = $1", [outcome.id, path]);
+    return { id: outcome.id, path };
+  });
+  if (placed.path) {
+    try {
+      await putObject(placed.path, input.bytes, contentType ?? "application/octet-stream", fetchImpl, "knowledge");
+    } catch (error) {
+      await withActor(actor, (db) => db.query("update crm.knowledge_items set archived_at = now() where id = $1", [placed.id])).catch(() => undefined);
+      throw new CrmError("upstream_error", error instanceof StorageError ? error.message : "Couldn't store the file.", 502);
+    }
+  }
+  const row = await getKnowledgeItem(actor, placed.id);
+  return { item: mapItem(row), created: placed.path !== null };
 }
 
 export const PAGES_ADD_MAX = 5_000;

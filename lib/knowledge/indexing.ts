@@ -4,7 +4,7 @@ import type { UserActor } from "@/lib/crm/types";
 import { chunkText } from "@/lib/knowledge/chunk";
 import { CONTENT_LIMIT, ITEM_COLUMNS, ITEM_FROM, placeholderTitles, type ItemRow, type KnowledgeKind } from "@/lib/knowledge/store";
 import { completeJson, embedTexts, LlmError } from "@/lib/llm";
-import { readAttachmentText } from "@/lib/mail/attachment-text";
+import { attachmentKind, readAttachmentText } from "@/lib/mail/attachment-text";
 import { looksLikeEpisode, MediaError, readPodcast, readYouTube, transcribeBytes, transcriptText } from "@/lib/knowledge/media";
 import { readObject, StorageError } from "@/lib/storage";
 import { readWebPage, WebPageError, type Lookup } from "@/lib/web-page";
@@ -43,18 +43,33 @@ async function readFile(row: ItemRow, options: IndexOptions): Promise<Extracted>
     if (!transcript.trim()) throw new KnowledgeReadError("The recording had no speech to transcribe.");
     return { text: `Transcript:\n${transcript}` };
   }
-  if (/\.(vtt|srt)$/i.test(name)) {
-    const cues = transcriptText(new TextDecoder("utf-8", { fatal: false }).decode(bytes), name.toLowerCase().endsWith(".vtt") ? "text/vtt" : "application/srt");
-    if (!cues) throw new KnowledgeReadError("That subtitle file has no text.");
-    return { text: `Transcript:\n${cues.slice(0, CONTENT_MAX)}` };
+  const text = await fileText(bytes, name, row.mime_type);
+  if (!text) {
+    throw new KnowledgeReadError(
+      isSubtitles(name) ? "That subtitle file has no text." : "Orbit can't read text from this file. PDF, Word, PowerPoint, Excel, text, HTML and audio files work.",
+    );
   }
-  const text = await readAttachmentText(bytes, name, row.mime_type, CONTENT_MAX).catch(() => null);
-  if (!text) throw new KnowledgeReadError("Orbit can't read text from this file. PDF, Word, PowerPoint, Excel, text, HTML and audio files work.");
   return { text };
 }
 
-function isAudio(name: string, type: string | null) {
+function isSubtitles(name: string) {
+  return /\.(vtt|srt)$/i.test(name);
+}
+
+export function isAudio(name: string, type: string | null) {
   return (type ?? "").startsWith("audio/") || /\.(mp3|m4a|aac|wav|ogg|oga|opus|flac|mpga)$/i.test(name);
+}
+
+export function hasReadableText(name: string, type: string | null) {
+  return isSubtitles(name) || attachmentKind(name, type) !== null;
+}
+
+export async function fileText(bytes: Uint8Array, name: string, type: string | null) {
+  if (isSubtitles(name)) {
+    const cues = transcriptText(new TextDecoder("utf-8", { fatal: false }).decode(bytes), name.toLowerCase().endsWith(".vtt") ? "text/vtt" : "application/srt");
+    return cues ? `Transcript:\n${cues.slice(0, CONTENT_MAX)}` : null;
+  }
+  return readAttachmentText(bytes, name, type, CONTENT_MAX).catch(() => null);
 }
 
 async function media<T>(run: () => Promise<T>) {

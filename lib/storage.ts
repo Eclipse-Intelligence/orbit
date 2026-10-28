@@ -11,6 +11,10 @@ const BUCKETS: Record<"attachments" | "knowledge" | "media", { id: string; limit
 
 export type Bucket = keyof typeof BUCKETS;
 
+export function chatFileKey(id: string) {
+  return `chat/${id}`;
+}
+
 export class StorageError extends Error {}
 
 function baseUrl() {

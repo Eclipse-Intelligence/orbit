@@ -4,29 +4,29 @@ import { isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
 import type { MailAttachment } from "@/lib/microsoft/oauth";
-import { ATTACHMENT_MAX_BYTES, putObject, readObject, removeObjects, signedUploadUrl, storageConfigured, StorageError } from "@/lib/storage";
+import { ATTACHMENT_MAX_BYTES, chatFileKey, putObject, readObject, removeObjects, signedUploadUrl, storageConfigured, StorageError } from "@/lib/storage";
 
 const ATTACHMENT_MAX_COUNT = 10;
 
 export type PreparedAttachment = { id: string; name: string; size: number; uploadUrl: string };
 type AttachmentSummary = { name: string; size: number };
 
-function cleanName(value: unknown) {
+export function cleanName(value: unknown) {
   const name = typeof value === "string" ? value.replace(/[\\/\u0000-\u001f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 200) : "";
   if (!name) throw new CrmError("invalid_input", "The file needs a name.", 400, { field: "attachments" });
   return name;
 }
 
-function cleanType(value: unknown) {
+export function cleanType(value: unknown) {
   const type = typeof value === "string" ? value.trim().toLowerCase() : "";
   return /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/.test(type) && type.length <= 200 ? type : "application/octet-stream";
 }
 
-function megabytes(bytes: number) {
+export function megabytes(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
 }
 
-function storageFailure(error: unknown) {
+export function storageFailure(error: unknown) {
   if (error instanceof CrmError) return error;
   return new CrmError("upstream_error", error instanceof StorageError ? error.message : "Couldn't store the attachment.", 502);
 }
@@ -118,17 +118,50 @@ function knowledgeFileName(title: string, path: string) {
   return cleanName(name);
 }
 
+async function copyIntoAttachment(actor: UserActor, file: { name: string; contentType: string; bytes: Uint8Array }, copied: string[], fetchImpl: typeof fetch) {
+  const row = await withActor(actor, async (db) => {
+    const inserted = await db.query<{ id: string }>(
+      `insert into crm.email_attachments (workspace_id, user_id, name, content_type, size)
+       values ($1, $2, $3, $4, $5) returning id`,
+      [actor.workspaceId, actor.userId, file.name, file.contentType, file.bytes.byteLength],
+    );
+    return inserted.rows[0];
+  });
+  copied.push(row.id);
+  try {
+    await putObject(row.id, file.bytes, file.contentType, fetchImpl);
+  } catch (error) {
+    throw storageFailure(error);
+  }
+  return row.id;
+}
+
+async function chatFileBytes(file: { id: string; name: string; size: number }, fetchImpl: typeof fetch) {
+  let bytes: Uint8Array;
+  try {
+    bytes = await readObject(chatFileKey(file.id), fetchImpl);
+  } catch (error) {
+    throw new CrmError("invalid_input", `${file.name} didn't finish uploading. Attach it to the chat again.`, 400, { field: "attachments", cause: storageFailure(error).message });
+  }
+  if (bytes.byteLength !== file.size) throw new CrmError("invalid_input", `${file.name} didn't finish uploading. Attach it to the chat again.`, 400, { field: "attachments" });
+  return bytes;
+}
+
 export async function attachableFiles(actor: UserActor, ids: unknown, fetchImpl: typeof fetch = fetch) {
   const wanted = attachmentIds(ids);
   if (wanted.length === 0) return { ids: [], copied: [] };
   const found = await withActor(actor, async (db) => {
     const own = await db.query<{ id: string }>("select id from crm.email_attachments where id = any($1::uuid[])", [wanted]);
+    const chat = await db.query<{ id: string; name: string; content_type: string; size: number }>(
+      "select id, name, content_type, size from crm.chat_files where id = any($1::uuid[])",
+      [wanted],
+    );
     const knowledge = await db.query<{ id: string; title: string; file_path: string | null; mime_type: string | null; size_bytes: number | null }>(
       `select id, title, file_path, mime_type, size_bytes from crm.knowledge_items
        where workspace_id = $1 and id = any($2::uuid[]) and archived_at is null`,
       [actor.workspaceId, wanted],
     );
-    return { own: new Set(own.rows.map((row) => row.id)), knowledge: knowledge.rows };
+    return { own: new Set(own.rows.map((row) => row.id)), chat: chat.rows, knowledge: knowledge.rows };
   });
   const copied: string[] = [];
   const out: string[] = [];
@@ -138,8 +171,15 @@ export async function attachableFiles(actor: UserActor, ids: unknown, fetchImpl:
         out.push(id);
         continue;
       }
+      const chatFile = found.chat.find((row) => row.id === id);
+      if (chatFile) {
+        if (!storageConfigured()) throw new CrmError("invalid_input", "Attachments need SUPABASE_SERVICE_ROLE_KEY set on the server.", 400);
+        const bytes = await chatFileBytes(chatFile, fetchImpl);
+        out.push(await copyIntoAttachment(actor, { name: chatFile.name, contentType: cleanType(chatFile.content_type), bytes }, copied, fetchImpl));
+        continue;
+      }
       const item = found.knowledge.find((row) => row.id === id);
-      if (!item) throw new CrmError("not_found", "One of the files isn't in Knowledge or on the draft.", 404, { field: "attachments" });
+      if (!item) throw new CrmError("not_found", "One of the files isn't in Knowledge, on the draft or in your chats.", 404, { field: "attachments" });
       if (!item.file_path) throw new CrmError("invalid_input", `${item.title} is a link or text in Knowledge, not a file, so it can't be attached.`, 400, { field: "attachments" });
       if ((item.size_bytes ?? 0) > ATTACHMENT_MAX_BYTES) {
         throw new CrmError("invalid_input", `${item.title} is ${megabytes(item.size_bytes ?? 0)}. Attachments can be up to ${megabytes(ATTACHMENT_MAX_BYTES)} in total.`, 400, { field: "attachments" });
@@ -155,23 +195,7 @@ export async function attachableFiles(actor: UserActor, ids: unknown, fetchImpl:
       if (bytes.byteLength > ATTACHMENT_MAX_BYTES) {
         throw new CrmError("invalid_input", `${item.title} is ${megabytes(bytes.byteLength)}. Attachments can be up to ${megabytes(ATTACHMENT_MAX_BYTES)} in total.`, 400, { field: "attachments" });
       }
-      const name = knowledgeFileName(item.title, item.file_path);
-      const contentType = cleanType(item.mime_type);
-      const row = await withActor(actor, async (db) => {
-        const inserted = await db.query<{ id: string }>(
-          `insert into crm.email_attachments (workspace_id, user_id, name, content_type, size)
-           values ($1, $2, $3, $4, $5) returning id`,
-          [actor.workspaceId, actor.userId, name, contentType, bytes.byteLength],
-        );
-        return inserted.rows[0];
-      });
-      copied.push(row.id);
-      try {
-        await putObject(row.id, bytes, contentType, fetchImpl);
-      } catch (error) {
-        throw storageFailure(error);
-      }
-      out.push(row.id);
+      out.push(await copyIntoAttachment(actor, { name: knowledgeFileName(item.title, item.file_path), contentType: cleanType(item.mime_type), bytes }, copied, fetchImpl));
     }
   } catch (error) {
     await discardAttachments(actor, copied, fetchImpl).catch(() => undefined);
