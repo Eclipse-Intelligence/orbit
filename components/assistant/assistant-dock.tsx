@@ -291,6 +291,48 @@ function ActionGroup({ actions, busy, onDecide }: { actions: AssistantAction[]; 
   );
 }
 
+function LiveSteps({ tools, thinking }: { tools: LiveTool[]; thinking: boolean }) {
+  const list = useRef<HTMLOListElement>(null);
+  const rows = tools.length + (thinking ? 1 : 0);
+
+  useEffect(() => {
+    const node = list.current;
+    if (!node) return;
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    node.scrollTo({ top: node.scrollHeight, behavior: reduce ? "auto" : "smooth" });
+  }, [rows, tools]);
+
+  return (
+    <div className="rounded-xl border border-dashed border-white/15 px-3 py-2" aria-live="polite">
+      <span className="text-subtle font-mono text-[10.5px] leading-4 tracking-[0.08em] uppercase">
+        Working{tools.length > 0 ? ` · ${tools.length}` : ""}
+      </span>
+      <ol
+        ref={list}
+        aria-label="Steps so far"
+        className={cn(
+          "mt-1.5 flex max-h-[62px] flex-col gap-1 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+          rows > 3 && "[mask-image:linear-gradient(to_bottom,transparent,black_14px)]",
+        )}
+      >
+        {tools.map((tool) => (
+          <li key={tool.id} className="text-subtle flex min-h-[18px] shrink-0 items-center gap-2 text-[12px] leading-[18px]">
+            <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", tool.status === "running" ? "bg-soft animate-pulse" : "bg-faint")} />
+            <span className="truncate">{tool.label}</span>
+            <span className="text-faint shrink-0">{tool.status === "done" ? "✓" : "…"}</span>
+          </li>
+        ))}
+        {thinking && (
+          <li className="text-subtle flex min-h-[18px] shrink-0 items-center gap-2 text-[12px] leading-[18px]">
+            <span aria-hidden className="bg-soft size-1.5 shrink-0 animate-pulse rounded-full" />
+            Thinking…
+          </li>
+        )}
+      </ol>
+    </div>
+  );
+}
+
 function CopyableReply({ text }: { text: string }) {
   const body = useRef<HTMLDivElement>(null);
   const [copied, setCopied] = useState(false);
@@ -840,26 +882,7 @@ export default function AssistantDock() {
                   <Markdown text={streamed} />
                 </div>
               )}
-              {busy && (
-                <div className="flex flex-col gap-1.5" aria-live="polite">
-                  {live.map((tool) => (
-                    <span key={tool.id} className="caption-style text-subtle flex items-center gap-2">
-                      <span
-                        aria-hidden
-                        className={cn("size-1.5 rounded-full", tool.status === "running" ? "bg-soft animate-pulse" : "bg-faint")}
-                      />
-                      {tool.label}
-                      {tool.status === "done" ? " ✓" : "…"}
-                    </span>
-                  ))}
-                  {live.every((tool) => tool.status === "done") && !streamed && (
-                    <span className="caption-style text-subtle flex items-center gap-2">
-                      <span aria-hidden className="bg-soft size-1.5 animate-pulse rounded-full" />
-                      Thinking…
-                    </span>
-                  )}
-                </div>
-              )}
+              {busy && (live.length > 0 || !streamed) && <LiveSteps tools={live} thinking={live.every((tool) => tool.status === "done") && !streamed} />}
             </div>
           ) : (
             <div className="flex flex-col gap-3 pt-1 pb-2">

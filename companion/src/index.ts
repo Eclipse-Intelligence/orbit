@@ -8,7 +8,8 @@ import { installLaunchAgent, LOG_FILE, uninstallLaunchAgent } from "./launch";
 import type { CompanionJob } from "./protocol";
 import { cleanEnv, runTurn, type Sdk } from "./turn";
 
-const VERSION = "1.3.0";
+const VERSION = "1.4.0";
+const DRAFT_EVERY_MS = 500;
 const DEFAULT_URL = "https://orbit.geteclipse.co";
 const ACCOUNT_TIMEOUT_MS = 45_000;
 const HEARTBEAT_MS = 15_000;
@@ -91,6 +92,32 @@ async function handle(api: Api, job: CompanionJob, cwd: string) {
     if (error instanceof ApiError && error.status === 409) cancel.abort();
   };
   const beat = setInterval(() => void api.heartbeat(job.id).catch(cancelled), HEARTBEAT_MS);
+  let pending: string | null = null;
+  let sending = false;
+  let waiting: ReturnType<typeof setTimeout> | null = null;
+  let lastSent = 0;
+  const flush = () => {
+    if (sending || waiting || pending === null || cancel.signal.aborted) return;
+    const wait = DRAFT_EVERY_MS - (Date.now() - lastSent);
+    if (wait > 0) {
+      waiting = setTimeout(() => {
+        waiting = null;
+        flush();
+      }, wait);
+      return;
+    }
+    const text = pending;
+    pending = null;
+    sending = true;
+    lastSent = Date.now();
+    void api
+      .draft(job.id, text)
+      .catch(cancelled)
+      .finally(() => {
+        sending = false;
+        if (pending !== null) flush();
+      });
+  };
   current = { api, jobId: job.id };
   log(`Answering on ${job.request.model}…`);
   try {
@@ -105,6 +132,10 @@ async function handle(api: Api, job: CompanionJob, cwd: string) {
           throw error;
         }),
       onTool: (name) => log(`  ${name}`),
+      onDraft: (text) => {
+        pending = text;
+        flush();
+      },
     });
     if (cancel.signal.aborted) throw new ApiError("That question was cancelled in Orbit.", 409);
     await api.complete(job.id, result);
@@ -119,6 +150,8 @@ async function handle(api: Api, job: CompanionJob, cwd: string) {
     await api.fail(job.id, message).catch(() => undefined);
   } finally {
     clearInterval(beat);
+    if (waiting) clearTimeout(waiting);
+    pending = null;
     current = null;
   }
 }

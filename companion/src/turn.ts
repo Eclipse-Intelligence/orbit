@@ -20,6 +20,7 @@ type TurnDeps = {
   env: Record<string, string | undefined>;
   signal?: AbortSignal;
   onTool?: (name: string) => void;
+  onDraft?: (text: string) => void;
 };
 
 const SERVER = "orbit";
@@ -62,6 +63,7 @@ function turnOptions(request: CompanionRequest, server: Options["mcpServers"], d
     cwd: deps.cwd,
     permissionMode: "dontAsk",
     persistSession: false,
+    includePartialMessages: true,
     maxTurns: MAX_TURNS,
     env: cleanEnv(deps.env),
     abortController: abort,
@@ -114,9 +116,18 @@ export async function runTurn(request: CompanionRequest, deps: TurnDeps): Promis
   let failure: string | null = null;
   let stopped = false;
 
+  let draft = "";
   const stream = deps.sdk.query({ prompt: request.prompt, options: turnOptions(request, { [SERVER]: server }, deps, abort) });
   for await (const message of stream as AsyncIterable<SDKMessage>) {
-    if (message.type === "assistant") {
+    if (message.type === "stream_event") {
+      if (message.parent_tool_use_id) continue;
+      const event = message.event as { type?: string; delta?: { type?: string; text?: string } };
+      if (event.type === "message_start") draft = "";
+      else if (event.type === "content_block_delta" && event.delta?.type === "text_delta" && event.delta.text) {
+        draft += event.delta.text;
+        deps.onDraft?.(draft);
+      }
+    } else if (message.type === "assistant") {
       if (message.parent_tool_use_id) continue;
       const id = message.message.id ?? message.uuid;
       const step = steps.get(id) ?? { text: "", calls: [] };

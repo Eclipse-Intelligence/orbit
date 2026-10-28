@@ -515,7 +515,8 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
   {
     name: "list_companies",
     label: "Looking at companies",
-    description: "List companies with optional search and filters. Returns total and a page of companies.",
+    description:
+      "List companies with optional search and filters. Returns total and a page of companies. Each company has icpFit, its ICP fit score from 0 (not a fit) to 4 (strong fit) when Web checks has scored it, otherwise null. To find the best-fitting companies, sort by fit (highest first) and page through with offset instead of reading every company.",
     parameters: {
       type: "object",
       properties: {
@@ -524,7 +525,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         health: { type: "string", enum: [...ACCOUNT_HEALTH, "none"], description: "Account health from calls; none means not set yet." },
         tag: { type: "string" },
         ownerId: { type: "string", description: "Member id, or 'unassigned'." },
-        sort: { type: "string", enum: ["name", "domain", "updated", "created"] },
+        sort: { type: "string", enum: ["name", "domain", "updated", "created", "interaction", "strength", "owner", "fit"], description: "fit sorts by ICP fit, best first; interaction by last contact." },
         order: { type: "string", enum: ["asc", "desc"] },
         limit: limitParam,
         offset: offsetParam,
@@ -537,7 +538,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         health: oneOf(args.health, [...ACCOUNT_HEALTH, "none"] as const),
         tag: optionalStr(args.tag),
         ownerId: optionalStr(args.ownerId),
-        sort: oneOf(args.sort, ["name", "domain", "updated", "created"] as const),
+        sort: oneOf(args.sort, ["name", "domain", "updated", "created", "interaction", "strength", "owner", "fit"] as const),
         order: oneOf(args.order, ["asc", "desc"] as const),
         limit: int(args.limit, 50, 1, 100),
         offset: int(args.offset, 0, 0, 10000),

@@ -30,6 +30,7 @@ type JobState = {
   events: ToolEvent[];
   result: { messageIds: string[] } | null;
   error: string | null;
+  draft: string | null;
 };
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -94,7 +95,7 @@ export async function enqueueCompanionJob(actor: UserActor, conversationId: stri
 export async function readCompanionJob(actor: UserActor, jobId: string): Promise<JobState> {
   return withActor(actor, async (db) => {
     const result = await db.query<JobState>(
-      "select status, events, result, error from crm.ai_companion_jobs where id = $1 and user_id = $2",
+      "select status, events, result, error, draft from crm.ai_companion_jobs where id = $1 and user_id = $2",
       [jobId, actor.userId],
     );
     if (!result.rows[0]) throw new CrmError("not_found", "That request is gone.", 404);
@@ -209,6 +210,16 @@ export async function runCompanionTool(auth: AuthenticatedCompanion, jobId: stri
   const output = (await runTool(auth.actor, tool.name, parseArgs(call.arguments))) as Record<string, unknown> | null;
   await addEvent(auth, jobId, { type: "tool", id, name: tool.name, label: tool.label, status: "done" });
   return { content: toolJson(output), isError: Boolean(output && typeof output === "object" && "error" in output) };
+}
+
+export const DRAFT_MAX = 200_000;
+
+export async function saveCompanionDraft(auth: AuthenticatedCompanion, jobId: string, text: unknown) {
+  await runningJob(auth, jobId);
+  const draft = typeof text === "string" ? text.slice(0, DRAFT_MAX) : "";
+  await withActor(auth.actor, (db) =>
+    db.query("update crm.ai_companion_jobs set draft = $2, updated_at = now() where id = $1 and status = 'running'", [jobId, draft || null]),
+  );
 }
 
 export async function checkCompanionJob(auth: AuthenticatedCompanion, jobId: string) {
