@@ -16,6 +16,7 @@ import { patchOpportunityAction, type OpportunityPatch } from "@/app/(crm)/recor
 import { formatMoney } from "@/lib/companies";
 import { companyHref } from "@/lib/crm/hrefs";
 import { formatDateLabel } from "@/lib/date-input";
+import type { StageStay } from "@/lib/crm/pipeline-history";
 import type { CompanyContext, Member, Opportunity, PipelineStage } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
 
@@ -27,6 +28,13 @@ const STATUS: Record<Opportunity["status"], { label: string; tone: "blue" | "gre
   lost: { label: "Lost", tone: "red" },
 };
 
+const LONDON_DAY = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit" });
+
+function stayDays(days: number) {
+  const whole = Math.floor(days);
+  return whole === 1 ? "1 day" : `${whole} days`;
+}
+
 function personName(contact: { firstName: string | null; lastName: string | null; email: string | null }) {
   return [contact.firstName, contact.lastName].filter(Boolean).join(" ") || contact.email || "Unnamed";
 }
@@ -35,6 +43,7 @@ export default function OpportunityRecord({
   viewer,
   opportunity: saved,
   stages,
+  stays,
   context,
   members,
   mailboxConnected,
@@ -42,6 +51,7 @@ export default function OpportunityRecord({
   viewer: Viewer;
   opportunity: Opportunity;
   stages: PipelineStage[];
+  stays: StageStay[];
   context: CompanyContext;
   members: Member[];
   mailboxConnected: boolean;
@@ -209,6 +219,19 @@ export default function OpportunityRecord({
                 />
                 <InlineField label="Source" value={opportunity.source ?? ""} onSave={(value) => patch({ source: value || null })} />
               </DetailList>
+            </DetailSection>
+            <DetailSection title="Stage history">
+              <ol className="flex flex-col gap-2">
+                {[...stays].reverse().map((stay) => (
+                  <li key={`${stay.stageId ?? "none"}-${stay.enteredAt}`} className="flex items-baseline justify-between gap-3 text-[14px] leading-5">
+                    <span className="min-w-0 truncate">{stay.stageName ?? "No stage"}</span>
+                    <span className="caption-style text-subtle shrink-0 tabular-nums">
+                      {formatDateLabel(LONDON_DAY.format(new Date(stay.enteredAt)))}
+                      {stay.leftAt === null && opportunity.status !== "open" ? "" : ` · ${stayDays(stay.daysInStage)}`}
+                    </span>
+                  </li>
+                ))}
+              </ol>
             </DetailSection>
             <DetailSection title={tasks.length ? `Open tasks · ${tasks.length}` : "Open tasks"}>
               {tasks.length === 0 ? (
