@@ -16,6 +16,7 @@ import {
   type Inline,
   type Step,
 } from "@/lib/proposals/model";
+import { AttachmentLink } from "@/components/_common/attachment-viewer";
 import { BookingPanel } from "@/components/booking/booking-screen";
 import type { PublicBookingPage } from "@/lib/booking/pages";
 import CheckIcon from "@/public/assets/images/booking/check.svg";
@@ -156,6 +157,8 @@ const KIND_LABEL: Record<string, string> = {
   attachment: "Document",
   reader: "Article",
 };
+
+const FILE_KINDS = new Set(["file", "attachment", "transcript"]);
 
 export type SiteExtras = {
   fileHref?: (itemId: string) => string | null;
@@ -325,8 +328,10 @@ function Extra({ block, content, extras }: { block: Block; content: Content; ext
         ) : (
           <ul className="grid gap-3 sm:grid-cols-2">
             {block.items.map((item) => {
-              const href = extras.fileHref?.(item.id) ?? (safeHref(item.sourceUrl) || null);
+              const fileHref = extras.fileHref?.(item.id) ?? null;
+              const href = fileHref ?? (safeHref(item.sourceUrl) || null);
               const Icon = item.kind === "link" || item.kind === "youtube" || item.kind === "podcast" || item.kind === "reader" ? LinkIcon : FileIcon;
+              const card = "bg-card flex items-center gap-3 rounded-2xl p-4 shadow-[0_0_0_1px_rgba(0,0,0,0.06)] transition-shadow duration-150 outline-none hover:shadow-[0_0_0_1px_rgba(0,0,0,0.14)] focus-visible:ring-2 focus-visible:ring-[var(--ring)]";
               const inner = (
                 <>
                   <span className="bg-secondary text-soft flex size-10 shrink-0 items-center justify-center rounded-xl">
@@ -341,13 +346,12 @@ function Extra({ block, content, extras }: { block: Block; content: Content; ext
               );
               return (
                 <li key={item.id}>
-                  {href ? (
-                    <a
-                      href={href}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="bg-card flex items-center gap-3 rounded-2xl p-4 shadow-[0_0_0_1px_rgba(0,0,0,0.06)] transition-shadow duration-150 outline-none hover:shadow-[0_0_0_1px_rgba(0,0,0,0.14)] focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
-                    >
+                  {fileHref && FILE_KINDS.has(item.kind) ? (
+                    <AttachmentLink file={{ name: item.title, contentType: null, url: fileHref, downloadUrl: `${fileHref}?download=1` }} className={card}>
+                      {inner}
+                    </AttachmentLink>
+                  ) : href ? (
+                    <a href={href} target="_blank" rel="noreferrer" className={card}>
                       {inner}
                     </a>
                   ) : (
