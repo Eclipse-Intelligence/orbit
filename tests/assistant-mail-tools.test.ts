@@ -1,14 +1,18 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { after, afterEach, before, beforeEach, describe, it } from "node:test";
 import { describeAction, recordNames, runTool } from "@/lib/assistant/tools";
 import { createCompany } from "@/lib/crm/companies";
+import { createContact } from "@/lib/crm/contacts";
 import { prepareAttachment, sweepEmailAttachments } from "@/lib/crm/email-attachments";
 import { listEmailTemplates } from "@/lib/crm/email-templates";
 import { saveMailbox } from "@/lib/crm/inbox";
 import type { UserActor } from "@/lib/crm/types";
+import { encryptSecret } from "@/lib/crypto/secret";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { listKnowledge } from "@/lib/knowledge/store";
-import { readDraftInput, scheduleMailDraft, sendForAgent } from "@/lib/mail/compose";
+import { listScheduledDrafts, readDraftInput, scheduleMailDraft, sendForAgent } from "@/lib/mail/compose";
+import { processDueMail } from "@/lib/mail/due";
 import { syncMail } from "@/lib/mail/sync";
 import { resetStorageBucketCache } from "@/lib/storage";
 import { createUser, resetDatabase } from "./helpers";
@@ -69,6 +73,7 @@ function graphRead(url: string) {
 function world() {
   const objects = new Map<string, Uint8Array>();
   const calls: Call[] = [];
+  const unsendable = new Set<string>();
   const fetchImpl: typeof fetch = async (input, init) => {
     const url = String(input);
     const method = init?.method ?? "GET";
@@ -105,13 +110,27 @@ function world() {
       return Response.json({ id: `draft-${draftCount}`, conversationId: `conv-${draftCount}`, subject: "" }, { status: 201 });
     }
     if (url.endsWith("/attachments") && method === "POST") return Response.json({ id: "att" }, { status: 201 });
-    if (url.endsWith("/send")) return new Response(null, { status: 202 });
+    if (url.endsWith("/send")) {
+      const id = decodeURIComponent(url.match(/\/me\/messages\/([^/]+)\/send$/)?.[1] ?? "");
+      if (unsendable.has(id)) return Response.json({ error: { code: "ErrorItemNotFound", message: "Not found." } }, { status: 404 });
+      return new Response(null, { status: 202 });
+    }
     if (method === "PATCH") return Response.json({ id: "x" });
     if (method === "DELETE") return new Response(null, { status: 204 });
     if (method === "GET" && url.startsWith(GRAPH)) return graphRead(url);
     throw new Error(`Unexpected ${method} ${url}`);
   };
-  return { fetchImpl, calls, objects };
+  return { fetchImpl, calls, objects, unsendable };
+}
+
+function postedFiles(calls: Call[], providerDraft?: string) {
+  return calls
+    .filter((call) => call.method === "POST" && call.url.endsWith("/attachments") && (!providerDraft || call.url.endsWith(`/${providerDraft}/attachments`)))
+    .map((call) => call.body as { name: string; contentBytes: string });
+}
+
+async function draftFiles(draftId: string) {
+  return (await getAdminPool().query<{ attachments: string[] }>("select attachments from crm.mail_drafts where id = $1", [draftId])).rows[0]?.attachments ?? null;
 }
 
 function graphCalls(calls: Call[]) {
@@ -215,29 +234,55 @@ describe("assistant mail tools", () => {
     assert.equal((await admin.query("select 1 from crm.mail_drafts where id = $1", [draft.id])).rowCount, 0);
   });
 
-  it("saves a draft with a Knowledge file attached in Outlook and returns its id", async () => {
+  it("keeps a saved draft's Knowledge file in Orbit, shows it and the recipients on the send card, and attaches it once when sent", async () => {
     const env = world();
     env.objects.set(`knowledge/${owner.workspaceId}/deck/Eclipse-deck.pdf`, DECK);
     const args = { to: ["jane@acme.test"], subject: "Our deck", body: "Hi Jane,\n\nThe deck is attached.\n\nMark", attachmentIds: [deckId] };
     const card = describeAction("save_email_draft", args, await recordNames(owner, [args]));
     assert.ok(card.lines.includes("Attachments: Eclipse deck"));
+    assert.ok(card.lines.includes("The files stay in Orbit and are attached when Orbit sends it."));
     const result = (await withFetch(env.fetchImpl, () => runTool(owner, "save_email_draft", args))) as { saved: boolean; draftId: string; attachments: string[] };
     assert.equal(result.saved, true);
     assert.deepEqual(result.attachments, ["Eclipse deck.pdf"]);
-    const posted = env.calls.find((call) => call.url.endsWith(`/draft-${draftCount}/attachments`))!.body as { name: string; contentBytes: string };
-    assert.equal(posted.name, "Eclipse deck.pdf");
-    assert.deepEqual(new Uint8Array(Buffer.from(posted.contentBytes, "base64")), DECK);
+    assert.deepEqual(postedFiles(env.calls), []);
     assert.ok(!graphCalls(env.calls).some((call) => call.endsWith("/send")));
+    const stored = await draftFiles(result.draftId);
+    assert.equal(stored?.length, 1);
     const admin = getAdminPool();
-    assert.equal((await admin.query("select 1 from crm.mail_drafts where id = $1 and user_id = $2", [result.draftId, owner.userId])).rowCount, 1);
-    assert.equal((await admin.query("select 1 from crm.email_attachments")).rowCount, 0);
+    assert.equal((await admin.query("select 1 from crm.email_attachments where id = $1", [stored![0]])).rowCount, 1);
+
+    const sendArgs = { draftId: result.draftId, body: args.body };
+    const sendCard = describeAction("send_email", sendArgs, await recordNames(owner, [sendArgs]));
+    assert.equal(sendCard.title, "Send email: Our deck");
+    assert.ok(sendCard.lines.includes("To: jane@acme.test"), sendCard.lines.join("\n"));
+    assert.ok(sendCard.lines.includes("Attachments: Eclipse deck.pdf"));
+    env.calls.length = 0;
+    const sent = (await withFetch(env.fetchImpl, () => runTool(owner, "send_email", sendArgs))) as { sent: boolean; to: string[] };
+    assert.equal(sent.sent, true);
+    assert.deepEqual(sent.to, ["jane@acme.test"]);
+    const posted = postedFiles(env.calls);
+    assert.equal(posted.length, 1);
+    assert.equal(posted[0].name, "Eclipse deck.pdf");
+    assert.deepEqual(new Uint8Array(Buffer.from(posted[0].contentBytes, "base64")), DECK);
+    assert.ok(graphCalls(env.calls).some((call) => call.endsWith("/send")));
+    assert.equal((await admin.query("select 1 from crm.email_attachments where id = $1", [stored![0]])).rowCount, 0);
 
     const link = (await admin.query<{ id: string }>("insert into crm.knowledge_items (workspace_id, scope, kind, title, source_url, status) values ($1, 'eclipse', 'link', 'Pricing page', 'https://eclipse.test/pricing', 'ready') returning id", [owner.workspaceId])).rows[0].id;
     const refused = (await withFetch(env.fetchImpl, () => runTool(owner, "save_email_draft", { ...args, attachmentIds: [link] }))) as { error: string };
     assert.match(refused.error, /Pricing page is a link or text in Knowledge, not a file/);
+    const empty = (
+      await admin.query<{ id: string }>(
+        `insert into crm.knowledge_items (workspace_id, scope, kind, title, file_path, mime_type, size_bytes, status, created_by_user_id)
+         values ($1, 'eclipse', 'file', 'Blank form', $2, 'application/pdf', 10, 'ready', $3) returning id`,
+        [owner.workspaceId, `${owner.workspaceId}/blank/Blank.pdf`, owner.userId],
+      )
+    ).rows[0].id;
+    env.objects.set(`knowledge/${owner.workspaceId}/blank/Blank.pdf`, new Uint8Array());
+    const blank = (await withFetch(env.fetchImpl, () => runTool(owner, "save_email_draft", { ...args, attachmentIds: [empty] }))) as { error: string };
+    assert.equal(blank.error, "Blank form is an empty file in Knowledge, so it can't be attached.");
   });
 
-  it("schedules an email with sendAt and shows the time and files on the card", async () => {
+  it("schedules an email with sendAt, shows the time and files on the card, and attaches them when it sends", async () => {
     const env = world();
     env.objects.set(`knowledge/${owner.workspaceId}/deck/Eclipse-deck.pdf`, DECK);
     const at = new Date(Date.now() + 2 * 24 * 3_600_000);
@@ -252,9 +297,20 @@ describe("assistant mail tools", () => {
     assert.equal(result.sent, false);
     const graph = graphCalls(env.calls);
     assert.ok(!graph.some((call) => call.endsWith("/send")));
-    assert.ok(graph.includes(`POST /me/messages/draft-${draftCount}/attachments`));
-    const row = (await getAdminPool().query<{ send_at: Date }>("select send_at from crm.mail_drafts where id = $1", [result.draftId])).rows[0];
+    assert.deepEqual(postedFiles(env.calls), []);
+    const providerDraft = `draft-${draftCount}`;
+    const admin = getAdminPool();
+    const row = (await admin.query<{ send_at: Date }>("select send_at from crm.mail_drafts where id = $1", [result.draftId])).rows[0];
     assert.equal(Math.round(row.send_at.getTime() / 60_000), Math.floor(at.getTime() / 60_000));
+    assert.equal((await draftFiles(result.draftId))?.length, 1);
+
+    await admin.query("update crm.mail_drafts set send_at = now() - interval '1 minute' where id = $1", [result.draftId]);
+    env.calls.length = 0;
+    const report = await processDueMail(owner, { fetchImpl: env.fetchImpl, origin: null });
+    assert.equal(report.sent, 1);
+    assert.deepEqual(postedFiles(env.calls, providerDraft).map((file) => file.name), ["Eclipse deck.pdf"]);
+    assert.ok(graphCalls(env.calls).includes(`POST /me/messages/${providerDraft}/send`));
+    assert.equal(await draftFiles(result.draftId), null);
 
     const past = (await withFetch(env.fetchImpl, () => runTool(owner, "send_email", { ...args, sendAt: "2020-01-01T09:00" }))) as { error: string };
     assert.equal(past.error, "sendAt has to be in the future.");
@@ -264,6 +320,9 @@ describe("assistant mail tools", () => {
     const admin = getAdminPool();
     const tracking = (await admin.query<{ id: string }>("insert into crm.mail_tracking (workspace_id, user_id, sender_email, sent_at) values ($1, $2, 'mark@eclipse.test', now()) returning id", [owner.workspaceId, owner.userId])).rows[0].id;
     await admin.query("update crm.mail_messages set tracking_id = $2 where id = $1", [sentEmail, tracking]);
+    const unopened = (await runTool(owner, "get_email_thread", { emailId: firstEmail })) as { messages: { id: string; opens: unknown[] | null }[]; readTracking?: string };
+    assert.deepEqual(unopened.messages.find((message) => message.id === sentEmail)?.opens, []);
+    assert.equal(unopened.readTracking, undefined);
     await admin.query("insert into crm.mail_opens (tracking_id, workspace_id, user_id, opened_at, agent) values ($1, $2, $3, '2026-10-21T10:15:00Z', 'iPhone'), ($1, $2, $3, '2026-10-21T09:01:00Z', null)", [tracking, owner.workspaceId, owner.userId]);
     const thread = (await runTool(owner, "get_email_thread", { emailId: firstEmail })) as { messages: { id: string; opens: { at: string; device: string | null }[] | null }[]; readTracking: string };
     assert.equal(thread.messages.find((message) => message.id === firstEmail)?.opens, null);
@@ -300,6 +359,8 @@ describe("assistant mail tools", () => {
     const removed = (await runTool(owner, "remove_knowledge", removeArgs)) as { removed: number };
     assert.equal(removed.removed, 1);
     assert.ok(!(await listKnowledge(owner, { companyId: company.id })).some((item) => item.id === added.item.id));
+    const tooMany = { itemIds: Array.from({ length: 51 }, () => randomUUID()) };
+    assert.deepEqual(await runTool(owner, "remove_knowledge", tooMany), { error: "Remove up to 50 items at a time." });
   });
 
   it("creates, updates and archives email templates with an audit trail", async () => {
@@ -315,5 +376,92 @@ describe("assistant mail tools", () => {
     const events = await getAdminPool().query<{ event_type: string; source: string }>("select event_type, source from crm.audit_events where entity_id = $1 order by created_at, event_type", [id]);
     assert.deepEqual(events.rows.map((row) => row.event_type).sort(), ["email_template.archived", "email_template.created", "email_template.updated"]);
     assert.ok(events.rows.every((row) => row.source === "assistant"));
+  });
+
+  it("sends a draft by draftId to its saved recipients plus anyone added, and shows the merged list on the card", async () => {
+    const env = world();
+    const bob = (await createContact(owner, { firstName: "Bob", lastName: "Stone", email: "bob@acme.test" })).body.contact.id;
+    const saved = (await withFetch(env.fetchImpl, () =>
+      runTool(owner, "save_email_draft", { to: ["jane@acme.test"], cc: ["ola@acme.test"], subject: "Pricing", body: "Hi Jane,\n\nPricing below.\n\nMark" }),
+    )) as { draftId: string };
+    const args = { draftId: saved.draftId, contactId: bob, cc: ["carol@acme.test", "jane@acme.test"], body: "Hi Jane,\n\nPricing below.\n\nMark" };
+    const card = describeAction("send_email", args, await recordNames(owner, [args]));
+    assert.equal(card.title, "Send email: Pricing");
+    assert.ok(card.lines.includes("To: jane@acme.test, bob@acme.test"), card.lines.join("\n"));
+    assert.ok(card.lines.includes("Cc: ola@acme.test, carol@acme.test"), card.lines.join("\n"));
+    env.calls.length = 0;
+    const sent = (await withFetch(env.fetchImpl, () => runTool(owner, "send_email", args))) as { sent: boolean; to: string[]; cc: string[]; subject: string };
+    assert.equal(sent.sent, true);
+    assert.deepEqual(sent.to, ["jane@acme.test", "bob@acme.test"]);
+    assert.deepEqual(sent.cc, ["ola@acme.test", "carol@acme.test"]);
+    assert.equal(sent.subject, "Pricing");
+    const patched = env.calls.find((call) => call.method === "PATCH")!.body as { toRecipients: { emailAddress: { address: string } }[]; ccRecipients: { emailAddress: { address: string } }[] };
+    assert.deepEqual(patched.toRecipients.map((item) => item.emailAddress.address), ["jane@acme.test", "bob@acme.test"]);
+    assert.deepEqual(patched.ccRecipients.map((item) => item.emailAddress.address), ["ola@acme.test", "carol@acme.test"]);
+  });
+
+  it("keeps a scheduled draft in Scheduled with the error when sending it now fails", async () => {
+    const env = world();
+    const prepared = await prepareAttachment(owner, { name: "Quote.pdf", size: 4, contentType: "application/pdf" }, env.fetchImpl);
+    const draft = await scheduleMailDraft(
+      owner,
+      {
+        ...readDraftInput({ mode: "new", sourceId, to: ["jane@acme.test"], subject: "Quote", body: "Hi Jane, the quote is attached." }),
+        attachments: [prepared.id],
+        sendAt: new Date(Date.now() + 24 * 3_600_000).toISOString(),
+      },
+      { origin: null, fetchImpl: env.fetchImpl },
+    );
+    const failed = (await withFetch(env.fetchImpl, () => runTool(owner, "send_email", { draftId: draft.id, body: "Hi Jane, the quote is attached." }))) as { error: string };
+    assert.equal(failed.error, "Quote.pdf didn't finish uploading. Attach it again.");
+    const listed = (await listScheduledDrafts(owner)).find((item) => item.id === draft.id);
+    assert.equal(listed?.sendError, "Quote.pdf didn't finish uploading. Attach it again.");
+    assert.deepEqual(await draftFiles(draft.id), [prepared.id]);
+    await getAdminPool().query("delete from crm.mail_drafts where id = $1", [draft.id]);
+  });
+
+  it("reattaches a saved draft's files when Outlook has lost the draft", async () => {
+    const env = world();
+    env.objects.set(`knowledge/${owner.workspaceId}/deck/Eclipse-deck.pdf`, DECK);
+    const body = "Hi Jane,\n\nThe deck again.\n\nMark";
+    const saved = (await withFetch(env.fetchImpl, () => runTool(owner, "save_email_draft", { to: ["jane@acme.test"], subject: "Deck again", body, attachmentIds: [deckId] }))) as { draftId: string };
+    const lost = `draft-${draftCount}`;
+    env.unsendable.add(lost);
+    env.calls.length = 0;
+    const sent = (await withFetch(env.fetchImpl, () => runTool(owner, "send_email", { draftId: saved.draftId, body }))) as { sent: boolean };
+    assert.equal(sent.sent, true);
+    const fresh = `draft-${draftCount}`;
+    assert.notEqual(fresh, lost);
+    assert.deepEqual(postedFiles(env.calls, fresh).map((file) => file.name), ["Eclipse deck.pdf"]);
+    assert.ok(graphCalls(env.calls).includes(`POST /me/messages/${fresh}/send`));
+  });
+
+  it("keeps a saved draft's files when it's sent from a different account", async () => {
+    const env = world();
+    env.objects.set(`knowledge/${owner.workspaceId}/deck/Eclipse-deck.pdf`, DECK);
+    const admin = getAdminPool();
+    const account = (
+      await admin.query<{ id: string }>(
+        `insert into crm.calendar_accounts (workspace_id, user_id, provider, email, status, refresh_token, access_token, access_token_expires_at, can_send)
+         values ($1, $2, 'microsoft', 'mark@consulting.test', 'connected', $3, $4, now() + interval '1 hour', true) returning id`,
+        [owner.workspaceId, owner.userId, encryptSecret("acct-refresh"), encryptSecret("acct-access")],
+      )
+    ).rows[0].id;
+    await admin.query("insert into crm.mail_sources (workspace_id, user_id, account_id, email) values ($1, $2, $3, 'mark@consulting.test')", [owner.workspaceId, owner.userId, account]);
+    const body = "Hi Jane,\n\nThe deck from my consulting address.\n\nMark";
+    const saved = (await withFetch(env.fetchImpl, () => runTool(owner, "save_email_draft", { to: ["jane@acme.test"], subject: "Deck", body, attachmentIds: [deckId] }))) as { draftId: string };
+    const original = `draft-${draftCount}`;
+    const args = { draftId: saved.draftId, from: "mark@consulting.test", body };
+    const card = describeAction("send_email", args, await recordNames(owner, [args]));
+    assert.ok(card.lines.includes("From: mark@consulting.test"));
+    assert.ok(card.lines.includes("Attachments: Eclipse deck.pdf"));
+    env.calls.length = 0;
+    const sent = (await withFetch(env.fetchImpl, () => runTool(owner, "send_email", args))) as { sent: boolean };
+    assert.equal(sent.sent, true);
+    const moved = `draft-${draftCount}`;
+    assert.notEqual(moved, original);
+    assert.ok(graphCalls(env.calls).includes(`DELETE /me/messages/${original}`));
+    assert.deepEqual(postedFiles(env.calls, moved).map((file) => file.name), ["Eclipse deck.pdf"]);
+    assert.ok(graphCalls(env.calls).includes(`POST /me/messages/${moved}/send`));
   });
 });

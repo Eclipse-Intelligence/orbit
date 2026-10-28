@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { after, before, describe, it } from "node:test";
 import { describeAction, recordNames, runTool } from "@/lib/assistant/tools";
 import { createBoard } from "@/lib/crm/boards";
@@ -86,6 +87,19 @@ describe("assistant record tools", () => {
         else process.env[key] = saved[key];
       }
     }
+  });
+
+  it("checks the people to look up before spending the hourly lookup budget", async () => {
+    const spent = async () =>
+      (await getAdminPool().query<{ request_count: number }>("select request_count from private.rate_limit_buckets where bucket_key = $1", [`enrich:${owner.userId}`])).rows[0]
+        ?.request_count ?? 0;
+    const before = await spent();
+    assert.deepEqual(await runTool(owner, "find_contact_details", { contactIds: ["nope", "not-an-id"], field: "email" }), { error: "Say who, using contact ids." });
+    const seven = Array.from({ length: 7 }, () => randomUUID());
+    assert.deepEqual(await runTool(owner, "find_contact_details", { contactIds: seven, field: "email" }), { error: "Look up at most 6 people at a time." });
+    const card = describeAction("find_contact_details", { contactIds: [seven[0], seven[0], "nope"], field: "email" });
+    assert.equal(card.title, "Find work email: Unknown record");
+    assert.equal(await spent(), before);
   });
 
   it("archives companies, people and opportunities, naming them on the card", async () => {

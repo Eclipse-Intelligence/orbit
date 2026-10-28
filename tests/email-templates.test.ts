@@ -30,6 +30,8 @@ import {
 } from "@/lib/settings-nav";
 import { createUser, queryAsUser, resetDatabase } from "./helpers";
 
+const WEB = { operation: "email_template_test", source: "web" };
+
 let owner: UserActor;
 let outsider: UserActor;
 
@@ -167,7 +169,7 @@ describe("email templates", () => {
       subject: "  Great to meet you,\n{{first_name}} ",
       body: "\n\nHi {{first_name}},\r\n\r\n  Thanks for today.\n\nBest\n\n",
       tags: [" Sales ", "sales", "Follow Up", ""],
-    });
+    }, WEB);
     assert.equal(template.name, "Intro follow-up");
     assert.equal(template.subject, "Great to meet you, {{first_name}}");
     assert.equal(
@@ -182,29 +184,29 @@ describe("email templates", () => {
 
   it("explains invalid input", async () => {
     await assert.rejects(
-      createEmailTemplate(owner, { name: "  ", body: "x" }),
+      createEmailTemplate(owner, { name: "  ", body: "x" }, WEB),
       code("invalid_input", /name/),
     );
     await assert.rejects(
-      createEmailTemplate(owner, { name: "x".repeat(121), body: "x" }),
+      createEmailTemplate(owner, { name: "x".repeat(121), body: "x" }, WEB),
       code("invalid_input", /120 characters/),
     );
     await assert.rejects(
       createEmailTemplate(owner, {
         name: "Long subject",
         subject: "s".repeat(301),
-      }),
+      }, WEB),
       code("invalid_input", /300 characters/),
     );
     await assert.rejects(
       createEmailTemplate(owner, {
         name: "Long body",
         body: "b".repeat(20001),
-      }),
+      }, WEB),
       code("invalid_input", /20,000 characters/),
     );
     await assert.rejects(
-      createEmailTemplate(owner, { name: "Empty", subject: " ", body: "\n" }),
+      createEmailTemplate(owner, { name: "Empty", subject: " ", body: "\n" }, WEB),
       code("invalid_input", /subject or a message/),
     );
     await assert.rejects(
@@ -212,7 +214,7 @@ describe("email templates", () => {
         name: "Tagged",
         body: "x",
         tags: Array.from({ length: 21 }, (_, index) => `tag ${index}`),
-      }),
+      }, WEB),
       code("invalid_input", /template can have at most 20 tags/),
     );
     await assert.rejects(
@@ -220,11 +222,11 @@ describe("email templates", () => {
         name: "Tagged",
         body: "x",
         tags: ["t".repeat(41)],
-      }),
+      }, WEB),
       code("invalid_input", /40 characters/),
     );
     await assert.rejects(
-      createEmailTemplate(owner, { name: "Tagged", body: "x", tags: ["a;b"] }),
+      createEmailTemplate(owner, { name: "Tagged", body: "x", tags: ["a;b"] }, WEB),
       code("invalid_input", /semicolon/),
     );
     await assert.rejects(
@@ -232,7 +234,7 @@ describe("email templates", () => {
         name: "Tagged",
         body: "x",
         tags: "sales" as unknown as string[],
-      }),
+      }, WEB),
       code("invalid_input", /Tags must be text/),
     );
     const exact = await createEmailTemplate(owner, {
@@ -240,7 +242,7 @@ describe("email templates", () => {
       subject: "s".repeat(300),
       body: "b".repeat(20000),
       tags: Array.from({ length: 20 }, (_, index) => `tag ${index}`),
-    });
+    }, WEB);
     assert.equal(exact.body.length, 20000);
   });
 
@@ -249,29 +251,29 @@ describe("email templates", () => {
     const first = await createEmailTemplate(owner, {
       name: "Pricing",
       body: "One",
-    });
+    }, WEB);
     await assert.rejects(
-      createEmailTemplate(owner, { name: "  PRICING ", body: "Two" }),
+      createEmailTemplate(owner, { name: "  PRICING ", body: "Two" }, WEB),
       code("duplicate", /“PRICING” already exists/),
     );
     const other = await createEmailTemplate(owner, {
       name: "Pricing v2",
       body: "Two",
-    });
+    }, WEB);
     await assert.rejects(
-      updateEmailTemplate(owner, other.id, { name: "pricing" }),
+      updateEmailTemplate(owner, other.id, { name: "pricing" }, WEB),
       code("duplicate"),
     );
     const theirs = await createEmailTemplate(outsider, {
       name: "Pricing",
       body: "Theirs",
-    });
+    }, WEB);
     assert.equal(theirs.name, "Pricing");
-    await archiveEmailTemplate(owner, first.id);
+    await archiveEmailTemplate(owner, first.id, WEB);
     const reused = await createEmailTemplate(owner, {
       name: "pricing",
       body: "Again",
-    });
+    }, WEB);
     assert.equal(reused.name, "pricing");
   });
 
@@ -282,32 +284,32 @@ describe("email templates", () => {
       subject: "Checking in",
       body: "Hi {{first_name}}",
       tags: ["nurture"],
-    });
+    }, WEB);
     const renamed = await updateEmailTemplate(owner, template.id, {
       name: "Quarterly check in",
-    });
+    }, WEB);
     assert.equal(renamed.name, "Quarterly check in");
     assert.equal(renamed.subject, "Checking in");
     assert.deepEqual(renamed.tags, ["nurture"]);
     assert.ok(renamed.updatedAt >= template.updatedAt);
     const retagged = await updateEmailTemplate(owner, template.id, {
       tags: ["Nurture", "Q3"],
-    });
+    }, WEB);
     assert.deepEqual(retagged.tags, ["nurture", "q3"]);
     const cleared = await updateEmailTemplate(owner, template.id, {
       subject: "",
-    });
+    }, WEB);
     assert.equal(cleared.subject, "");
     await assert.rejects(
-      updateEmailTemplate(owner, template.id, { body: " " }),
+      updateEmailTemplate(owner, template.id, { body: " " }, WEB),
       code("invalid_input", /subject or a message/),
     );
     await assert.rejects(
-      updateEmailTemplate(owner, template.id, { name: "" }),
+      updateEmailTemplate(owner, template.id, { name: "" }, WEB),
       code("invalid_input"),
     );
     await assert.rejects(
-      updateEmailTemplate(owner, "not-a-uuid", { name: "x" }),
+      updateEmailTemplate(owner, "not-a-uuid", { name: "x" }, WEB),
       code("not_found"),
     );
   });
@@ -319,16 +321,16 @@ describe("email templates", () => {
       subject: "Hello {{first_name}}",
       body: "Body",
       tags: ["sales"],
-    });
-    const copy = await duplicateEmailTemplate(owner, template.id);
+    }, WEB);
+    const copy = await duplicateEmailTemplate(owner, template.id, WEB);
     assert.equal(copy.name, "Copy of Intro");
     assert.equal(copy.subject, template.subject);
     assert.equal(copy.body, template.body);
     assert.deepEqual(copy.tags, template.tags);
     assert.notEqual(copy.id, template.id);
-    const second = await duplicateEmailTemplate(owner, template.id);
+    const second = await duplicateEmailTemplate(owner, template.id, WEB);
     assert.equal(second.name, "Copy of Intro (2)");
-    const ofCopy = await duplicateEmailTemplate(owner, copy.id);
+    const ofCopy = await duplicateEmailTemplate(owner, copy.id, WEB);
     assert.equal(ofCopy.name, "Copy of Copy of Intro");
   });
 
@@ -339,19 +341,19 @@ describe("email templates", () => {
       subject: "Great to meet",
       body: "Let's talk pricing_100%",
       tags: ["sales"],
-    });
+    }, WEB);
     const renewal = await createEmailTemplate(owner, {
       name: "Renewal",
       subject: "Your renewal",
       body: "Hi",
       tags: ["sales", "customers"],
-    });
+    }, WEB);
     const support = await createEmailTemplate(owner, {
       name: "Support reply",
       subject: "Re: your question",
       body: "Thanks for asking",
       tags: ["support"],
-    });
+    }, WEB);
     const names = (rows: { name: string }[]) => rows.map((row) => row.name);
     assert.deepEqual(names(await listEmailTemplates(owner)), [
       "Support reply",
@@ -360,7 +362,7 @@ describe("email templates", () => {
     ]);
     await updateEmailTemplate(owner, intro.id, {
       subject: "Great to meet you",
-    });
+    }, WEB);
     assert.deepEqual(names(await listEmailTemplates(owner)), [
       "Intro",
       "Support reply",
@@ -402,7 +404,7 @@ describe("email templates", () => {
       { name: "sales", templates: 2 },
       { name: "support", templates: 1 },
     ]);
-    await archiveEmailTemplate(owner, renewal.id);
+    await archiveEmailTemplate(owner, renewal.id, WEB);
     assert.deepEqual(names(await listEmailTemplates(owner)), [
       "Intro",
       "Support reply",
@@ -418,35 +420,59 @@ describe("email templates", () => {
     const template = await createEmailTemplate(owner, {
       name: "Old",
       body: "x",
-    });
-    const archived = await archiveEmailTemplate(owner, template.id);
+    }, WEB);
+    const archived = await archiveEmailTemplate(owner, template.id, WEB);
     assert.ok(archived.archivedAt);
     await assert.rejects(
       getEmailTemplate(owner, template.id),
       code("not_found"),
     );
     await assert.rejects(
-      archiveEmailTemplate(owner, template.id),
+      archiveEmailTemplate(owner, template.id, WEB),
       code("not_found"),
     );
     await assert.rejects(
-      duplicateEmailTemplate(owner, template.id),
+      duplicateEmailTemplate(owner, template.id, WEB),
       code("not_found"),
     );
-    const live = await createEmailTemplate(owner, { name: "Live", body: "x" });
-    assert.deepEqual(await deleteEmailTemplate(owner, live.id), {
+    const live = await createEmailTemplate(owner, { name: "Live", body: "x" }, WEB);
+    assert.deepEqual(await deleteEmailTemplate(owner, live.id, WEB), {
       id: live.id,
     });
     await assert.rejects(
-      deleteEmailTemplate(owner, live.id),
+      deleteEmailTemplate(owner, live.id, WEB),
       code("not_found"),
     );
-    await assert.rejects(deleteEmailTemplate(owner, "nope"), code("not_found"));
+    await assert.rejects(deleteEmailTemplate(owner, "nope", WEB), code("not_found"));
     const rows = await getAdminPool().query(
       "select id from crm.email_templates where id = $1",
       [live.id],
     );
     assert.equal(rows.rowCount, 0);
+  });
+
+  it("audits every change made from Settings", async () => {
+    await clear();
+    const template = await createEmailTemplate(owner, { name: "Audited", body: "x" }, WEB);
+    await updateEmailTemplate(owner, template.id, { subject: "Hello" }, WEB);
+    const copy = await duplicateEmailTemplate(owner, template.id, WEB);
+    await archiveEmailTemplate(owner, template.id, WEB);
+    await deleteEmailTemplate(owner, copy.id, WEB);
+    const events = await getAdminPool().query<{ event_type: string; entity_id: string; source: string }>(
+      "select event_type, entity_id, source from crm.audit_events where entity_id = any($1::uuid[]) order by created_at, event_type",
+      [[template.id, copy.id]],
+    );
+    assert.deepEqual(
+      events.rows.map((row) => `${row.event_type} ${row.entity_id === copy.id ? "copy" : "original"}`).sort(),
+      [
+        "email_template.archived original",
+        "email_template.created copy",
+        "email_template.created original",
+        "email_template.deleted copy",
+        "email_template.updated original",
+      ],
+    );
+    assert.ok(events.rows.every((row) => row.source === "web"));
   });
 
   it("keeps templates inside the workspace", async () => {
@@ -455,7 +481,7 @@ describe("email templates", () => {
       name: "Mine",
       body: "secret",
       tags: ["private"],
-    });
+    }, WEB);
     assert.deepEqual(await listEmailTemplates(outsider), []);
     assert.deepEqual(await listTemplateTags(outsider), []);
     await assert.rejects(
@@ -463,19 +489,19 @@ describe("email templates", () => {
       code("not_found"),
     );
     await assert.rejects(
-      updateEmailTemplate(outsider, mine.id, { name: "Stolen" }),
+      updateEmailTemplate(outsider, mine.id, { name: "Stolen" }, WEB),
       code("not_found"),
     );
     await assert.rejects(
-      duplicateEmailTemplate(outsider, mine.id),
+      duplicateEmailTemplate(outsider, mine.id, WEB),
       code("not_found"),
     );
     await assert.rejects(
-      archiveEmailTemplate(outsider, mine.id),
+      archiveEmailTemplate(outsider, mine.id, WEB),
       code("not_found"),
     );
     await assert.rejects(
-      deleteEmailTemplate(outsider, mine.id),
+      deleteEmailTemplate(outsider, mine.id, WEB),
       code("not_found"),
     );
     assert.equal((await getEmailTemplate(owner, mine.id)).name, "Mine");
@@ -534,7 +560,7 @@ describe("email templates", () => {
     const shared = await createEmailTemplate(owner, {
       name: "Shared",
       body: "x",
-    });
+    }, WEB);
     const rows = await queryAsUser<{ name: string }>(
       teammate.userId,
       "select name from crm.email_templates where workspace_id = $1",
@@ -555,7 +581,7 @@ describe("email templates", () => {
 
   it("gives agents and anonymous visitors no access", async () => {
     await clear();
-    await createEmailTemplate(owner, { name: "Agentless", body: "x" });
+    await createEmailTemplate(owner, { name: "Agentless", body: "x" }, WEB);
     for (const role of ["crm_agent", "anon"]) {
       const client = await getAdminPool().connect();
       try {

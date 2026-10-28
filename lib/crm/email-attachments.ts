@@ -68,13 +68,7 @@ function attachmentIds(ids: unknown) {
   return [...new Set(list as string[])];
 }
 
-export async function loadAttachments(
-  actor: UserActor,
-  ids: unknown,
-  fetchImpl: typeof fetch = fetch,
-): Promise<{ files: MailAttachment[]; summary: AttachmentSummary[] }> {
-  const wanted = attachmentIds(ids);
-  if (wanted.length === 0) return { files: [], summary: [] };
+async function attachmentRows(actor: UserActor, wanted: string[]) {
   const rows = await withActor(actor, async (db) => {
     const result = await db.query<{ id: string; name: string; content_type: string; size: number }>(
       "select id, name, content_type, size from crm.email_attachments where id = any($1::uuid[])",
@@ -87,7 +81,23 @@ export async function loadAttachments(
   if (total > ATTACHMENT_MAX_BYTES) {
     throw new CrmError("invalid_input", `Attachments add up to ${megabytes(total)}. The limit is ${megabytes(ATTACHMENT_MAX_BYTES)}.`, 400, { field: "attachments" });
   }
-  const ordered = wanted.map((id) => rows.find((row) => row.id === id)!);
+  return wanted.map((id) => rows.find((row) => row.id === id)!);
+}
+
+export async function attachmentSummary(actor: UserActor, ids: unknown): Promise<AttachmentSummary[]> {
+  const wanted = attachmentIds(ids);
+  if (wanted.length === 0) return [];
+  return (await attachmentRows(actor, wanted)).map((row) => ({ name: row.name, size: row.size }));
+}
+
+export async function loadAttachments(
+  actor: UserActor,
+  ids: unknown,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ files: MailAttachment[]; summary: AttachmentSummary[] }> {
+  const wanted = attachmentIds(ids);
+  if (wanted.length === 0) return { files: [], summary: [] };
+  const ordered = await attachmentRows(actor, wanted);
   const files: MailAttachment[] = [];
   for (const row of ordered) {
     let bytes: Uint8Array;
@@ -140,6 +150,10 @@ export async function attachableFiles(actor: UserActor, ids: unknown, fetchImpl:
         bytes = await readObject(item.file_path, fetchImpl, "knowledge");
       } catch (error) {
         throw new CrmError("upstream_error", `Couldn't read ${item.title} from Knowledge.`, 502, { cause: storageFailure(error).message });
+      }
+      if (bytes.byteLength === 0) throw new CrmError("invalid_input", `${item.title} is an empty file in Knowledge, so it can't be attached.`, 400, { field: "attachments" });
+      if (bytes.byteLength > ATTACHMENT_MAX_BYTES) {
+        throw new CrmError("invalid_input", `${item.title} is ${megabytes(bytes.byteLength)}. Attachments can be up to ${megabytes(ATTACHMENT_MAX_BYTES)} in total.`, 400, { field: "attachments" });
       }
       const name = knowledgeFileName(item.title, item.file_path);
       const contentType = cleanType(item.mime_type);

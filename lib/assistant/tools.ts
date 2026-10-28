@@ -32,6 +32,7 @@ import { STARTER_TEMPLATES as PROPOSAL_STARTERS } from "@/lib/proposals/starters
 import { addStep, removeStep, updateStep } from "@/lib/proposals/steps";
 import { blockLinks, BLOCKS_GUIDE, onlyFields, proposalForAgent, templateForAgent, templateSettings } from "@/lib/proposals/agent";
 import { mailOrigin } from "@/lib/mail/origin";
+import type { MailAddress } from "@/lib/mail/types";
 import { archiveBoard, createBoard, getBoard, listBoards, updateBoard } from "@/lib/crm/boards";
 import { savePipelineStages } from "@/lib/crm/pipeline";
 import { definitionFromInput, STEP_TYPES, TRIGGER_TYPES } from "@/lib/workflows/definition";
@@ -317,6 +318,35 @@ function attachmentLine(args: Args, name: Names) {
   const files = strings(args.attachmentIds).map((id) => (name(id) === "Unknown record" ? "A file Orbit can't find" : name(id)));
   const all = [...new Set([...(onDraft ? onDraft.split(", ") : []), ...files])];
   return all.length ? `Attachments: ${all.join(", ")}` : "";
+}
+
+function draftRecipients(args: Args, name: Names, draftId: string) {
+  const stored = (key: string) => detail(name, `${draftId}:${key}`).split(", ").filter(Boolean);
+  const [to, cc, bcc] = [stored("to"), stored("cc"), stored("bcc")];
+  if (to.length + cc.length + bcc.length === 0) return null;
+  const contactId = str(args.contactId);
+  const contact = contactId ? detail(name, `${contactId}:email`) || name(contactId) : "";
+  const taken = new Set<string>();
+  const pick = (list: string[]) =>
+    list.filter((item) => {
+      const key = item.trim().toLowerCase();
+      if (!key || taken.has(key)) return false;
+      taken.add(key);
+      return true;
+    });
+  const lines: [string, string[]][] = [
+    ["To", pick([...to, contact, ...strings(args.to)])],
+    ["Cc", pick([...cc, ...strings(args.cc)])],
+    ["Bcc", pick(bcc)],
+  ];
+  return lines.filter(([, list]) => list.length).map(([label, list]) => `${label}: ${list.join(", ")}`);
+}
+
+const KNOWLEDGE_REMOVE_MAX = 50;
+const LOOKUP_MAX = 6;
+
+function lookupIds(value: unknown) {
+  return [...new Set(strings(value).filter(isUuid))];
 }
 
 const READ_NOTE =
@@ -1028,7 +1058,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     parameters: { type: "object", properties: { emailId: idParam("Email id from search_email.") }, required: ["emailId"] },
     run: async (actor, args) => {
       const thread = await getMailThread(actor, required(args.emailId, "An email id"));
-      return { messages: thread, ...(thread.some((message) => message.opens) ? { readTracking: READ_NOTE } : {}) };
+      return { messages: thread, ...(thread.some((message) => message.opens?.length) ? { readTracking: READ_NOTE } : {}) };
     },
   },
   {
@@ -1391,7 +1421,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     description: "Remove items from Knowledge by id (from list_knowledge or search_knowledge). They're archived, so they're no longer searched or offered for proposals.",
     parameters: {
       type: "object",
-      properties: { itemIds: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 50, description: "Knowledge item ids." } },
+      properties: { itemIds: { type: "array", items: { type: "string" }, minItems: 1, maxItems: KNOWLEDGE_REMOVE_MAX, description: "Knowledge item ids." } },
       required: ["itemIds"],
     },
     describe: (args, name) => {
@@ -1402,8 +1432,9 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       };
     },
     run: async (actor, args) => {
-      const ids = [...new Set(strings(args.itemIds))].slice(0, 50);
+      const ids = [...new Set(strings(args.itemIds))];
       if (ids.length === 0) return { error: "Say which items, using ids from list_knowledge." };
+      if (ids.length > KNOWLEDGE_REMOVE_MAX) return { error: `Remove up to ${KNOWLEDGE_REMOVE_MAX} items at a time.` };
       const failed: { itemId: string; error: string }[] = [];
       let removed = 0;
       for (const id of ids) {
@@ -1928,13 +1959,13 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     parameters: {
       type: "object",
       properties: {
-        contactIds: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 6, description: "Contact ids." },
+        contactIds: { type: "array", items: { type: "string" }, minItems: 1, maxItems: LOOKUP_MAX, description: "Contact ids." },
         field: { type: "string", enum: ["email", "linkedin", "phone"] },
       },
       required: ["contactIds", "field"],
     },
     describe: (args, name) => {
-      const ids = [...new Set(strings(args.contactIds))];
+      const ids = lookupIds(args.contactIds);
       const noun = FIELD_NOUNS[oneOf(args.field, ["email", "linkedin", "phone"] as const) ?? "email"];
       return {
         title: ids.length === 1 ? `Find ${noun}: ${name(ids[0])}` : `Find ${noun} for ${ids.length} people`,
@@ -1944,8 +1975,9 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     run: async (actor, args) => {
       const field = oneOf(args.field, ["email", "linkedin", "phone"] as const);
       if (!field) return { error: "Choose email, linkedin or phone." };
-      const ids = [...new Set(strings(args.contactIds))];
+      const ids = lookupIds(args.contactIds);
       if (ids.length === 0) return { error: "Say who, using contact ids." };
+      if (ids.length > LOOKUP_MAX) return { error: `Look up at most ${LOOKUP_MAX} people at a time.` };
       if (!(await enrichmentAllowed(actor.userId, ids.length))) return { error: "That's a lot of lookups this hour. Try again later." };
       const results = await enrichContacts(actor, ids, field);
       const providerName = (id: string) => PROVIDER_BY_ID.get(id as never)?.name ?? id;
@@ -2756,7 +2788,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     label: "Saving a draft",
     write: true,
     description:
-      "Save an email as a draft in Orbit Mail (it also appears in the mailbox's Drafts folder in Outlook) without sending it. Use this only when the user asks for a draft, wants to edit it themselves first, or says not to send; otherwise use send_email, which waits for their approval. For a reply, pass replyToEmailId (an email id from search_email or get_email_thread) so it lands in that conversation; otherwise give to and a subject. to can hold email addresses, and contactId adds that contact.",
+      "Save an email as a draft in Orbit Mail without sending it. It also appears in the mailbox's Drafts folder in Outlook; attachments stay in Orbit and are added when Orbit sends it. Use this only when the user asks for a draft, wants to edit it themselves first, or says not to send; otherwise use send_email, which waits for their approval. For a reply, pass replyToEmailId (an email id from search_email or get_email_thread) so it lands in that conversation; otherwise give to and a subject. to can hold email addresses, and contactId adds that contact.",
     parameters: {
       type: "object",
       properties: {
@@ -2782,6 +2814,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
             : "",
         str(args.from) ? `From: ${str(args.from)}` : "",
         attachmentLine(args, name),
+        strings(args.attachmentIds).length ? DRAFT_FILES_NOTE : "",
         DRAFT_NOTE,
         str(args.body),
       ].filter(Boolean),
@@ -2839,16 +2872,21 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       required: ["body"],
     },
     describe: (args, name) => {
+      const draftId = str(args.draftId);
+      const draftSubject = draftId ? detail(name, `${draftId}:subject`) : "";
+      const onDraft = draftId ? draftRecipients(args, name, draftId) : null;
       const people = [args.contactId ? name(args.contactId) : "", ...strings(args.to)].filter(Boolean);
       const replying = Boolean(str(args.replyToEmailId));
       const senderKey = `${str(args.replyToEmailId)}:from`;
       const sender = name(senderKey) !== senderKey ? name(senderKey) : "the sender";
       const later = Boolean(str(args.sendAt));
       return {
-        title: `${later ? (replying ? "Schedule reply" : "Schedule email") : replying ? "Send reply" : "Send email"}: ${str(args.subject) || "in the conversation"}`,
+        title: `${later ? (replying ? "Schedule reply" : "Schedule email") : replying ? "Send reply" : "Send email"}: ${str(args.subject) || draftSubject || "in the conversation"}`,
         lines: [
-          replying ? `To: ${args.replyAll ? `everyone on the email from ${sender}` : sender}${people.length ? `, plus ${people.join(", ")}` : ""}` : people.length ? `To: ${people.join(", ")}` : "",
-          strings(args.cc).length ? `Cc: ${strings(args.cc).join(", ")}` : "",
+          ...(onDraft ?? [
+            replying ? `To: ${args.replyAll ? `everyone on the email from ${sender}` : sender}${people.length ? `, plus ${people.join(", ")}` : ""}` : people.length ? `To: ${people.join(", ")}` : "",
+            strings(args.cc).length ? `Cc: ${strings(args.cc).join(", ")}` : "",
+          ]),
           str(args.from) ? `From: ${str(args.from)}` : "",
           sendAtLine(args.sendAt),
           attachmentLine(args, name),
@@ -3200,6 +3238,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
 ];
 
 export const DRAFT_NOTE = "Saved to Drafts.";
+const DRAFT_FILES_NOTE = "The files stay in Orbit and are attached when Orbit sends it.";
 
 export type ActionAlternative = { key: "send"; label: string; tool: string; title: (title: string) => string; lines: (lines: string[]) => string[] };
 
@@ -3209,7 +3248,7 @@ export const ACTION_ALTERNATIVES: Record<string, ActionAlternative> = {
     label: "Confirm and send",
     tool: "send_email",
     title: (title) => title.replace(/^Save draft: /, "Sent: "),
-    lines: (lines) => lines.map((line) => (line === DRAFT_NOTE ? "Sent." : line)),
+    lines: (lines) => lines.filter((line) => line !== DRAFT_FILES_NOTE).map((line) => (line === DRAFT_NOTE ? "Sent." : line)),
   },
 };
 
@@ -3380,6 +3419,21 @@ export async function recordNames(actor: UserActor, args: Args[]) {
       [list, actor.userId],
     );
     for (const row of details.rows) names.set(row.id, row.name);
+    const drafts = await db.query<{ id: string; subject: string | null; to_recipients: MailAddress[]; cc_recipients: MailAddress[]; bcc_recipients: MailAddress[] }>(
+      "select id, subject, to_recipients, cc_recipients, bcc_recipients from crm.mail_drafts where id = any($1::uuid[]) and user_id = $2",
+      [list, actor.userId],
+    );
+    for (const row of drafts.rows) {
+      if (row.subject?.trim()) names.set(`${row.id}:subject`, row.subject.trim());
+      for (const [key, people] of [["to", row.to_recipients], ["cc", row.cc_recipients], ["bcc", row.bcc_recipients]] as const) {
+        if (people?.length) names.set(`${row.id}:${key}`, people.map((person) => person.address).join(", "));
+      }
+    }
+    const emails = await db.query<{ id: string; email: string }>(
+      "select id, email from crm.contacts where id = any($1::uuid[]) and workspace_id = $2 and nullif(trim(email), '') is not null",
+      [list, actor.workspaceId],
+    );
+    for (const row of emails.rows) names.set(`${row.id}:email`, row.email);
     const meetings = await db.query<{ id: string; starts_at: Date; attendees: unknown }>(
       "select id, starts_at, attendees from crm.calendar_events where id = any($1::uuid[]) and user_id = $2",
       [list, actor.userId],
