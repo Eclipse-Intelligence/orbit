@@ -422,6 +422,66 @@ describe("assistant mail tools", () => {
     await getAdminPool().query("delete from crm.mail_drafts where id = $1", [draft.id]);
   });
 
+  it("lists, changes and cancels a scheduled email, keeps its files, and refuses once it is sending or sent", async () => {
+    const env = world();
+    env.objects.set(`knowledge/${owner.workspaceId}/deck/Eclipse-deck.pdf`, DECK);
+    const first = new Date(Date.now() + 2 * 24 * 3_600_000);
+    const later = new Date(Date.now() + 3 * 24 * 3_600_000);
+    const scheduled = (await withFetch(env.fetchImpl, () =>
+      runTool(owner, "send_email", { to: ["jane@acme.test"], subject: "Renewal", body: "Hi Jane,\n\nThe renewal.\n\nMark", sendAt: londonInput(first), attachmentIds: [deckId] }),
+    )) as { draftId: string };
+    const draftId = scheduled.draftId;
+    const listed = (await runTool(owner, "list_scheduled_emails", {})) as { scheduled: { id: string; to: string[]; subject: string; sendAt: string; attachments: string[]; didNotSend: string | null }[] };
+    const entry = listed.scheduled.find((item) => item.id === draftId)!;
+    assert.deepEqual([entry.to, entry.subject, entry.attachments, entry.didNotSend], [["jane@acme.test"], "Renewal", ["Eclipse deck.pdf"], null]);
+
+    const change = { draftId, sendAt: londonInput(later), subject: "Renewal terms", cc: ["ola@acme.test"], body: "Hi Jane,\n\nThe renewal terms.\n\nMark" };
+    const card = describeAction("change_scheduled_email", change, await recordNames(owner, [change], ["change_scheduled_email"]));
+    assert.equal(card.title, "Change scheduled email: Renewal");
+    assert.equal(card.lines[0], "To: jane@acme.test");
+    assert.match(card.lines[1], /^Due: \w{3} \d{1,2} \w{3}, \d{2}:\d{2} \(London time\)$/);
+    assert.match(card.lines[2], /^Now sends: \w{3} \d{1,2} \w{3}, \d{2}:\d{2} \(London time\)$/);
+    assert.deepEqual(card.lines.slice(3), ["New subject: Renewal terms", "New Cc: ola@acme.test", "Files stay attached: Eclipse deck.pdf", "New message:", change.body]);
+    env.calls.length = 0;
+    const changed = (await withFetch(env.fetchImpl, () => runTool(owner, "change_scheduled_email", change))) as { changed: boolean; id: string; subject: string; cc: string[]; attachments: string[]; sendAt: string };
+    assert.equal(changed.changed, true);
+    assert.deepEqual([changed.id, changed.subject, changed.cc, changed.attachments], [draftId, "Renewal terms", ["ola@acme.test"], ["Eclipse deck.pdf"]]);
+    const patched = env.calls.find((call) => call.method === "PATCH")!.body as { subject: string };
+    assert.equal(patched.subject, "Renewal terms");
+    assert.ok(!graphCalls(env.calls).some((call) => call.endsWith("/send")));
+    const admin = getAdminPool();
+    const row = (await admin.query<{ send_at: Date; body: string }>("select send_at, body from crm.mail_drafts where id = $1", [draftId])).rows[0];
+    assert.equal(Math.round(row.send_at.getTime() / 60_000), Math.floor(later.getTime() / 60_000));
+    assert.equal(row.body, change.body);
+    assert.equal((await draftFiles(draftId))?.length, 1);
+    assert.equal(((await runTool(owner, "change_scheduled_email", { draftId })) as { error: string }).error, "Say what to change: sendAt, subject, body, to, cc or bcc.");
+
+    await admin.query("update crm.mail_drafts set send_at = null where id = $1", [draftId]);
+    const sending = "That email isn't waiting to send any more. Either it's sending now (check Sent in Mail) or it was unscheduled and is in Drafts.";
+    assert.equal(((await withFetch(env.fetchImpl, () => runTool(owner, "change_scheduled_email", change))) as { error: string }).error, sending);
+    assert.equal(((await runTool(owner, "cancel_scheduled_email", { draftId })) as { error: string }).error, sending);
+    const refusedCard = describeAction("cancel_scheduled_email", { draftId }, await recordNames(owner, [{ draftId }], ["cancel_scheduled_email"]));
+    assert.equal(refusedCard.lines[0], "This email isn't scheduled any more, so this will be refused.");
+
+    await admin.query("update crm.mail_drafts set send_at = $2 where id = $1", [draftId, later]);
+    const cancelCard = describeAction("cancel_scheduled_email", { draftId }, await recordNames(owner, [{ draftId }], ["cancel_scheduled_email"]));
+    assert.equal(cancelCard.title, "Cancel scheduled email: Renewal terms");
+    assert.equal(cancelCard.lines[0], "To: jane@acme.test");
+    assert.match(cancelCard.lines[1], /^Due: /);
+    assert.equal(cancelCard.lines[2], "It stays in Drafts, so you can send it or change it later.");
+    const cancelled = (await runTool(owner, "cancel_scheduled_email", { draftId })) as { cancelled: boolean; kept: string; draftId: string };
+    assert.deepEqual([cancelled.cancelled, cancelled.kept, cancelled.draftId], [true, "in Drafts", draftId]);
+    const kept = (await admin.query<{ send_at: Date | null }>("select send_at from crm.mail_drafts where id = $1", [draftId])).rows[0];
+    assert.equal(kept.send_at, null);
+    assert.ok(!(await listScheduledDrafts(owner)).some((item) => item.id === draftId));
+    assert.equal((await draftFiles(draftId))?.length, 1);
+
+    await admin.query("delete from crm.mail_drafts where id = $1", [draftId]);
+    const gone = "That scheduled email isn't in Orbit Mail any more. It has probably been sent or discarded, so check Sent in Mail.";
+    assert.equal(((await runTool(owner, "cancel_scheduled_email", { draftId })) as { error: string }).error, gone);
+    assert.equal(((await withFetch(env.fetchImpl, () => runTool(owner, "change_scheduled_email", change))) as { error: string }).error, gone);
+  });
+
   it("reattaches a saved draft's files when Outlook has lost the draft", async () => {
     const env = world();
     env.objects.set(`knowledge/${owner.workspaceId}/deck/Eclipse-deck.pdf`, DECK);

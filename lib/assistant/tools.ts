@@ -25,7 +25,7 @@ import { socialLookup } from "@/lib/social-lookup";
 import { getBookingPage } from "@/lib/booking/pages";
 import { listLifecycles } from "@/lib/crm/lifecycles";
 import { getMailThread, mailSyncStatus, searchMail } from "@/lib/mail/store";
-import { composeAccounts, saveDraftForAgent, sendForAgent } from "@/lib/mail/compose";
+import { cancelScheduledDraft, changeScheduledDraft, composeAccounts, getScheduledDraft, listScheduledDrafts, saveDraftForAgent, sendForAgent } from "@/lib/mail/compose";
 import { createProduct, createTemplate, getTemplate, listProducts, listTemplates, updateProduct, updateTemplate } from "@/lib/proposals/catalogue";
 import { createDocument, getDocument, listDocuments, reviseDocument, sendDocument, updateDocument } from "@/lib/proposals/documents";
 import { copyProposalImage } from "@/lib/proposals/media";
@@ -34,6 +34,7 @@ import { addStep, removeStep, updateStep } from "@/lib/proposals/steps";
 import { blockLinks, BLOCKS_GUIDE, onlyFields, proposalForAgent, templateForAgent, templateSettings } from "@/lib/proposals/agent";
 import { mailOrigin } from "@/lib/mail/origin";
 import type { MailAddress } from "@/lib/mail/types";
+import type { MailDraft } from "@/lib/mail/view";
 import { archiveBoard, createBoard, getBoard, listBoards, updateBoard } from "@/lib/crm/boards";
 import { savePipelineStages } from "@/lib/crm/pipeline";
 import { definitionFromInput, STEP_TYPES, TRIGGER_TYPES } from "@/lib/workflows/definition";
@@ -386,6 +387,39 @@ function draftRecipients(args: Args, name: Names, draftId: string) {
     ["Bcc", pick(bcc)],
   ];
   return lines.filter(([, list]) => list.length).map(([label, list]) => `${label}: ${list.join(", ")}`);
+}
+
+function scheduledSummary(draft: MailDraft) {
+  return {
+    id: draft.id,
+    to: draft.to.map((item) => item.address),
+    cc: draft.cc.map((item) => item.address),
+    bcc: draft.bcc.map((item) => item.address),
+    subject: draft.subject || "(no subject)",
+    reply: draft.mode !== "new",
+    sendAt: draft.sendAt,
+    didNotSend: draft.sendError,
+    body: draft.body,
+    attachments: (draft.attachments ?? []).map((file) => file.name),
+    href: "/mail?view=scheduled",
+  };
+}
+
+async function scheduledDetails(actor: UserActor, args: Args): Promise<Record<string, string>> {
+  const id = str(args.draftId);
+  const draft = await getScheduledDraft(actor, id);
+  if (!draft) return { [`${id}:gone`]: "This email isn't scheduled any more, so this will be refused." };
+  return {
+    [`${id}:subject`]: draft.subject || "(no subject)",
+    [`${id}:to`]: draft.to.map((item) => item.address).join(", "),
+    [`${id}:due`]: draft.sendError ? `Didn't send: ${draft.sendError}` : draft.sendAt ? `Due: ${londonLabel(new Date(draft.sendAt))} (London time)` : "",
+    [`${id}:files`]: (draft.attachments ?? []).map((file) => file.name).join(", "),
+  };
+}
+
+function scheduledLines(id: string, name: Names) {
+  const to = detail(name, `${id}:to`);
+  return [detail(name, `${id}:gone`), to ? `To: ${to}` : "", detail(name, `${id}:due`)];
 }
 
 const KNOWLEDGE_REMOVE_MAX = 50;
@@ -3319,6 +3353,95 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         warning: sent.warning,
         timeline: sent.warning ? null : "Filed on the contacts' timelines automatically. Don't log it again.",
       };
+    },
+  },
+  {
+    name: "list_scheduled_emails",
+    label: "Checking scheduled email",
+    description:
+      "The user's emails scheduled to send later (Mail's Scheduled view), soonest first: recipients, subject, message, files, when each sends, and any that didn't send with the reason. Use the ids with change_scheduled_email or cancel_scheduled_email.",
+    parameters: { type: "object", properties: {} },
+    run: async (actor) => ({
+      scheduled: (await listScheduledDrafts(actor)).map(scheduledSummary),
+      href: "/mail?view=scheduled",
+    }),
+  },
+  {
+    name: "cancel_scheduled_email",
+    label: "Cancelling a scheduled email",
+    write: true,
+    description:
+      "Stop a scheduled email from sending, by its id from list_scheduled_emails, as Unschedule does in Mail. The email is kept in Drafts, so the user can still send or change it. Refused once it has started sending or been sent.",
+    parameters: { type: "object", properties: { draftId: idParam("Scheduled email id from list_scheduled_emails.") }, required: ["draftId"] },
+    details: scheduledDetails,
+    describe: (args, name) => {
+      const id = str(args.draftId);
+      return {
+        title: titled("Cancel scheduled email", detail(name, `${id}:subject`) || undefined),
+        lines: [...scheduledLines(id, name), "It stays in Drafts, so you can send it or change it later."],
+      };
+    },
+    run: async (actor, args) => {
+      const draft = await cancelScheduledDraft(actor, required(args.draftId, "A scheduled email id"));
+      return { cancelled: true, kept: "in Drafts", draftId: draft.id, subject: draft.subject, to: draft.to.map((item) => item.address), href: "/mail?view=drafts" };
+    },
+  },
+  {
+    name: "change_scheduled_email",
+    label: "Changing a scheduled email",
+    write: true,
+    description:
+      "Change a scheduled email by its id from list_scheduled_emails: its send time, subject, message or recipients. Only pass what changes; to, cc and bcc replace those lists, and body replaces the whole message (Orbit still adds the signature). Its files stay attached. Refused once it has started sending or been sent.",
+    parameters: {
+      type: "object",
+      properties: {
+        draftId: idParam("Scheduled email id from list_scheduled_emails."),
+        sendAt: { type: "string", description: "New send time, YYYY-MM-DDTHH:mm London time. At least a minute from now and within a year." },
+        subject: { type: "string" },
+        body: { type: "string", description: "The whole new message in plain text, with greeting and sign-off." },
+        to: { type: "array", items: { type: "string" }, description: "Email addresses. Replaces the To list." },
+        cc: { type: "array", items: { type: "string" }, description: "Replaces the Cc list; an empty list removes everyone." },
+        bcc: { type: "array", items: { type: "string" }, description: "Replaces the Bcc list; an empty list removes everyone." },
+      },
+      required: ["draftId"],
+    },
+    details: scheduledDetails,
+    describe: (args, name) => {
+      const id = str(args.draftId);
+      const list = (key: string, label: string) => (Array.isArray(args[key]) ? `New ${label}: ${strings(args[key]).join(", ") || "no one"}` : "");
+      const subject = optionalStr(args.subject);
+      return {
+        title: titled("Change scheduled email", detail(name, `${id}:subject`) || undefined),
+        lines: [
+          ...scheduledLines(id, name),
+          str(args.sendAt) ? sendAtLine(args.sendAt).replace(/^Sends /, "Now sends: ") : "",
+          subject ? `New subject: ${subject}` : "",
+          list("to", "To"),
+          list("cc", "Cc"),
+          list("bcc", "Bcc"),
+          detail(name, `${id}:files`) ? `Files stay attached: ${detail(name, `${id}:files`)}` : "",
+          optionalStr(args.body) ? "New message:" : "",
+          str(args.body),
+        ],
+      };
+    },
+    run: async (actor, args) => {
+      const id = required(args.draftId, "A scheduled email id");
+      const sendAt = optionalStr(args.sendAt) ? parseDateTime(str(args.sendAt)) : null;
+      if (optionalStr(args.sendAt) && !sendAt) return { error: "Give sendAt as YYYY-MM-DDTHH:mm London time." };
+      if (sendAt && sendAt.getTime() <= Date.now()) return { error: "sendAt has to be in the future." };
+      const recipients = (key: string) => (Array.isArray(args[key]) ? strings(args[key]) : undefined);
+      const changes = {
+        sendAt: sendAt?.toISOString(),
+        subject: optionalStr(args.subject),
+        body: optionalStr(args.body) === undefined ? undefined : String(args.body),
+        to: recipients("to"),
+        cc: recipients("cc"),
+        bcc: recipients("bcc"),
+      };
+      if (Object.values(changes).every((value) => value === undefined)) return { error: "Say what to change: sendAt, subject, body, to, cc or bcc." };
+      const draft = await changeScheduledDraft(actor, id, changes, { origin: mailOrigin() });
+      return { changed: true, ...scheduledSummary(draft) };
     },
   },
   {
