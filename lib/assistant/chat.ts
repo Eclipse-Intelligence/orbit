@@ -2,9 +2,17 @@ import { AssistantError, StoppedError, complete, type ChatMessage, type Provider
 import { assistantModel, settingsFor, type ModelSource, type ReasoningLevel } from "@/lib/assistant/models";
 import { connectedProviders } from "@/lib/ai-accounts/store";
 import { systemPrompt } from "@/lib/assistant/prompt";
-import { ACTION_ALTERNATIVES, ASSISTANT_TOOLS, TOOL_BY_NAME, actionAlternative, describeAction, recordNames, runTool, toolDescription, toolJson } from "@/lib/assistant/tools";
+import { ACTION_ALTERNATIVES, ASSISTANT_TOOLS, actionAlternative, describeAction, findTool, recordNames, runTool, toolDescription, toolJson } from "@/lib/assistant/tools";
 import type { CompanionResult, Effort } from "@/companion/src/protocol";
-import { cancelCompanionJob, companionBusy, companionWorking, enqueueCompanionJob, failureReply, readCompanionJob } from "@/lib/companion/jobs";
+import {
+  CONTINUE_RESULT_TOOL,
+  cancelCompanionJob,
+  companionBusy,
+  companionWorking,
+  enqueueCompanionJob,
+  failureReply,
+  readCompanionJob,
+} from "@/lib/companion/jobs";
 import { companionOfflineMessage, companionOnline, listCompanions } from "@/lib/companion/pairing";
 import { userLinks } from "@/lib/assistant/links";
 import { aboutYouSection, getColleagues, getPersonalContext } from "@/lib/crm/personal-context";
@@ -118,8 +126,8 @@ function display(row: MessageRow): DisplayMessage {
     role: row.role === "user" ? "user" : "assistant",
     content: row.content,
     tools: (row.tool_calls ?? [])
-      .filter((call) => !TOOL_BY_NAME.get(call.function.name)?.write)
-      .map((call) => ({ id: call.id, name: call.function.name, label: TOOL_BY_NAME.get(call.function.name)?.label ?? call.function.name })),
+      .filter((call) => !findTool(call.function.name)?.write)
+      .map((call) => ({ id: call.id, name: call.function.name, label: findTool(call.function.name)?.label ?? call.function.name })),
     actions: row.actions ?? [],
     sources: row.sources ?? [],
     createdAt: iso(row.created_at) ?? new Date().toISOString(),
@@ -421,12 +429,15 @@ async function declinePending(actor: UserActor, conversationId: string, rows: Me
 }
 
 function companionTools() {
-  return ASSISTANT_TOOLS.map((tool) => ({
-    name: tool.name,
-    description: toolDescription(tool),
-    parameters: tool.parameters,
-    write: Boolean(tool.write),
-  }));
+  return [
+    ...ASSISTANT_TOOLS.map((tool) => ({
+      name: tool.name,
+      description: toolDescription(tool),
+      parameters: tool.parameters,
+      write: Boolean(tool.write),
+    })),
+    CONTINUE_RESULT_TOOL,
+  ];
 }
 
 function toToolCall(call: { id: string; name: string; arguments: string }): ToolCall {
@@ -440,7 +451,7 @@ export async function applyCompanionResult(actor: UserActor, conversationId: str
   for (const step of result.steps) {
     const reads: ToolCall[] = [];
     for (const call of step.calls) {
-      const tool = TOOL_BY_NAME.get(call.name);
+      const tool = findTool(call.name);
       if (!tool) continue;
       (tool.write ? writes : reads).push(toToolCall(call));
     }
@@ -701,11 +712,11 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
       return;
     }
     emit({ type: "message", message: display(saved) });
-    const reads = result.toolCalls.filter((call) => !TOOL_BY_NAME.get(call.function.name)?.write);
-    const writes = result.toolCalls.filter((call) => TOOL_BY_NAME.get(call.function.name)?.write);
+    const reads = result.toolCalls.filter((call) => !findTool(call.function.name)?.write);
+    const writes = result.toolCalls.filter((call) => findTool(call.function.name)?.write);
     await Promise.all(
       reads.map(async (call) => {
-        const label = TOOL_BY_NAME.get(call.function.name)?.label ?? call.function.name;
+        const label = findTool(call.function.name)?.label ?? call.function.name;
         emit({ type: "tool", id: call.id, name: call.function.name, label, status: "running" });
         const output = await runTool(actor, call.function.name, parseArgs(call.function.arguments), { deadline: deadline - 20_000 });
         await insertMessage(actor, conversation.id, {

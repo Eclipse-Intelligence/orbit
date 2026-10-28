@@ -343,15 +343,21 @@ describe("assistant mail tools", () => {
     const listed = (await withFetch(env.fetchImpl, () => runTool(owner, "list_email_attachments", { emailId: firstEmail }))) as { attachments: { name: string }[] };
     assert.deepEqual(listed.attachments.map((item) => item.name), ["Pilot notes.txt"]);
     const args = { emailId: firstEmail, attachment: "Pilot notes.txt", companyId: company.id };
-    assert.deepEqual(describeAction("add_email_attachment_to_knowledge", args, await recordNames(owner, [args])), {
-      title: "Add to Knowledge for Acme",
+    assert.deepEqual(describeAction("add_to_knowledge", args, await recordNames(owner, [args])), {
+      title: "Add an email attachment to Knowledge for Acme",
       lines: ["File: Pilot notes.txt", "From the email: Pilot"],
     });
-    const added = (await withFetch(env.fetchImpl, () => runTool(owner, "add_email_attachment_to_knowledge", args))) as { added: boolean; item: { id: string; title: string } };
+    const twoSources = (await runTool(owner, "add_to_knowledge", { ...args, urls: ["https://acme.test/about"] })) as { error: string };
+    assert.match(twoSources.error, /not both/);
+    const noSource = (await runTool(owner, "add_to_knowledge", { companyId: company.id })) as { error: string };
+    assert.match(noSource.error, /Pass urls to add links, or emailId/);
+    const added = (await withFetch(env.fetchImpl, () => runTool(owner, "add_to_knowledge", args))) as { added: boolean; item: { id: string; title: string } };
     assert.equal(added.added, true);
     assert.equal(added.item.title, "Pilot notes");
-    const again = (await withFetch(env.fetchImpl, () => runTool(owner, "add_email_attachment_to_knowledge", { emailId: firstEmail, companyId: company.id }))) as { added: boolean };
+    const again = (await withFetch(env.fetchImpl, () => runTool(owner, "add_to_knowledge", { emailId: firstEmail, companyId: company.id }))) as { added: boolean };
     assert.equal(again.added, false);
+    const oldName = (await withFetch(env.fetchImpl, () => runTool(owner, "add_email_attachment_to_knowledge", { emailId: firstEmail, companyId: company.id }))) as { alreadyThere: boolean };
+    assert.equal(oldName.alreadyThere, true);
     const audit = await getAdminPool().query<{ source: string }>("select source from crm.audit_events where event_type = 'knowledge.added' and entity_id = $1", [added.item.id]);
     assert.equal(audit.rows[0].source, "assistant");
 
@@ -371,8 +377,17 @@ describe("assistant mail tools", () => {
     const updated = (await runTool(owner, "save_email_template", { id, subject: "Pilot check in" })) as { template: { subject: string; body: string } };
     assert.equal(updated.template.subject, "Pilot check in");
     assert.match(updated.template.body, /How is the pilot going/);
-    assert.equal(describeAction("archive_email_template", { templateId: id }, await recordNames(owner, [{ templateId: id }])).title, "Archive template: Pilot follow up");
-    await runTool(owner, "archive_email_template", { templateId: id });
+    const archive = { id, archived: true };
+    assert.deepEqual(describeAction("save_email_template", archive, await recordNames(owner, [archive])), { title: "Archive template: Pilot follow up", lines: [] });
+    const withChanges = (await runTool(owner, "save_email_template", { ...archive, subject: "Changed" })) as { error: string };
+    assert.match(withChanges.error, /Archive a template on its own/);
+    const noId = (await runTool(owner, "save_email_template", { archived: true })) as { error: string };
+    assert.match(noId.error, /Pass the template id/);
+    await runTool(owner, "save_email_template", archive);
+    assert.equal((await listEmailTemplates(owner)).length, 0);
+    const spare = (await runTool(owner, "save_email_template", { name: "Spare", subject: "Spare", body: "Hi" })) as { template: { id: string } };
+    assert.equal(describeAction("archive_email_template", { templateId: spare.template.id }, await recordNames(owner, [{ templateId: spare.template.id }])).title, "Archive template: Spare");
+    await runTool(owner, "archive_email_template", { templateId: spare.template.id });
     assert.equal((await listEmailTemplates(owner)).length, 0);
     const events = await getAdminPool().query<{ event_type: string; source: string }>("select event_type, source from crm.audit_events where entity_id = $1 order by created_at, event_type", [id]);
     assert.deepEqual(events.rows.map((row) => row.event_type).sort(), ["email_template.archived", "email_template.created", "email_template.updated"]);

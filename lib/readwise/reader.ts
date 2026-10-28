@@ -20,7 +20,7 @@ import { requireReadwiseToken } from "@/lib/readwise/keys";
 const LIVE_REQUESTS = 15;
 const HIGHLIGHT_PAGES = 14;
 const OVERLAP_MS = 5 * 60 * 1000;
-export const READER_PART_CHARS = 60_000;
+export const READER_PART_CHARS = 35_000;
 const BREAK_WINDOW = 0.2;
 
 export type ReaderLiveOptions = { fetchImpl?: typeof fetch; deadline?: number; sleep?: (ms: number) => Promise<void> };

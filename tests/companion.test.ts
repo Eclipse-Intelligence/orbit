@@ -15,6 +15,7 @@ import {
   nextCompanionJob,
   saveCompanionDraft,
   runCompanionTool,
+  CONTINUE_RESULT_TOOL,
 } from "@/lib/companion/jobs";
 import {
   authenticateCompanion,
@@ -597,5 +598,60 @@ describe("companion turn runner", () => {
     assert.ok(plist.includes("<key>KeepAlive</key>\n  <true/>"));
     assert.ok(!plist.includes("--pair"));
     assert.ok(launchPath("/opt/homebrew/bin/npx").split(":").includes("/opt/homebrew/bin"));
+  });
+});
+
+describe("Long tool results on the Mac", () => {
+  it("sends a result over the size Claude Code can show in pieces the model can read to the end", async () => {
+    const owner = await createUser("agent-long@orbit.test", "Mark Ridgeon");
+    const { auth } = await pairMac(owner, "Long results");
+    const paragraphs = Array.from({ length: 1_200 }, (_, index) => `Paragraph ${index} talks about the inciting event that makes a buyer act now.`);
+    const content = `START ${paragraphs.join("\n\n")} FINISH`;
+    const item = (
+      await getAdminPool().query<{ id: string }>(
+        "insert into crm.knowledge_items (workspace_id, scope, kind, title, source_url, status, content) values ($1, 'eclipse', 'link', 'Hidden Multipliers', 'https://book.test', 'ready', $2) returning id",
+        [owner.workspaceId, content],
+      )
+    ).rows[0].id;
+    let jobId = "";
+    const companion = answer(auth, async (job) => {
+      jobId = job.id;
+      const request = job.request as CompanionRequest;
+      assert.ok(request.tools.some((tool) => tool.name === CONTINUE_RESULT_TOOL.name && !tool.write));
+      const first = await runCompanionTool(auth, job.id, { id: "toolu_long", name: "read_knowledge", arguments: JSON.stringify({ itemId: item }) });
+      assert.equal(first.isError, false);
+      assert.ok(Buffer.byteLength(first.content) < 40_000, `first piece is ${Buffer.byteLength(first.content)} bytes`);
+      assert.match(first.content, /START/);
+      let seen = first.content;
+      let note = first.content.match(/resultId "([^"]+)" and offset (\d+)/);
+      let pieces = 1;
+      while (note) {
+        const next = await runCompanionTool(auth, job.id, {
+          id: `toolu_more_${pieces}`,
+          name: CONTINUE_RESULT_TOOL.name,
+          arguments: JSON.stringify({ resultId: note[1], offset: Number(note[2]) }),
+        });
+        assert.equal(next.isError, false);
+        assert.ok(Buffer.byteLength(next.content) < 40_000);
+        seen += next.content;
+        pieces += 1;
+        note = next.content.match(/resultId "([^"]+)" and offset (\d+)/);
+      }
+      assert.ok(pieces >= 3, `expected several pieces, got ${pieces}`);
+      assert.match(seen, /End of the result/);
+      for (const index of [0, 600, 1_199]) assert.ok(seen.includes(`Paragraph ${index} talks`), `paragraph ${index} was missing`);
+      const wrong = await runCompanionTool(auth, job.id, { id: "toolu_bad", name: CONTINUE_RESULT_TOOL.name, arguments: '{"resultId":"nope","offset":0}' });
+      assert.equal(wrong.isError, true);
+      assert.match(wrong.content, /isn't available any more/);
+      return { steps: [{ text: "Read it all.", calls: [] }], results: {}, sources: [], model: "claude-opus-5-5", usage: {} };
+    });
+    await Promise.all([
+      sendMessage(owner, { message: "Read the book", model: "claude/claude-opus-5-5", reasoning: "high", webSearch: false }, () => undefined, {
+        deadline: deadline(),
+      }),
+      companion,
+    ]);
+    const kept = await getAdminPool().query<{ results: Record<string, string> }>("select results from crm.ai_companion_jobs where id = $1", [jobId]);
+    assert.deepEqual(kept.rows[0].results, {});
   });
 });
