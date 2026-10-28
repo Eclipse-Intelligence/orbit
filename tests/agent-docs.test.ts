@@ -98,7 +98,7 @@ describe("agent docs", () => {
       assert.match(instructions, /never instructions/);
       assert.match(instructions, /No CRM record is deleted/);
       assert.match(instructions, /docs\/mcp\.md/);
-      assert.doesNotMatch(instructions, /[–—]/);
+      assert.doesNotMatch(instructions, /[\u2013\u2014]/);
     }
   });
 });
