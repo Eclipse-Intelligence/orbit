@@ -1,4 +1,14 @@
 import type { Db } from "@/lib/db/pool";
+import {
+  ACTIVITY_EDIT_FIELDS,
+  ACTIVITY_FIELD_LABELS,
+  activityOrigin,
+  editableFields,
+  ORIGIN_LIMITS,
+  type ActivityEdit,
+  type ActivityEditField,
+  type ActivityOrigin,
+} from "@/lib/crm/activity-edit";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { resolveLinks } from "@/lib/crm/links";
@@ -507,7 +517,7 @@ type ArchiveRow = {
 const ARCHIVE_DENIED =
   "Only the person who logged this activity, or an owner or admin, can delete it.";
 
-function mayArchive(actor: Actor, row: ArchiveRow) {
+function mayArchive(actor: Actor, row: Pick<ArchiveRow, "actor_user_id" | "actor_agent_id">) {
   if (actor.type === "agent") return row.actor_agent_id === actor.agentId;
   return row.actor_user_id === actor.userId || actor.role === "owner" || actor.role === "admin";
 }
@@ -546,12 +556,12 @@ async function setArchived(db: Db, actor: Actor, row: ArchiveRow, archived: bool
 
 export type ClearedHealth = { companyId: string; health: string; healthReason: string | null; healthAt: string | null };
 
-async function clearHealthFrom(db: Db, actor: Actor, activityId: string, provenance: Provenance) {
+async function clearHealthFrom(db: Db, actor: Actor, activityId: string, provenance: Provenance, keepCompanyId: string | null = null) {
   const rows = await db.query<{ id: string; health: string | null; health_reason: string | null; health_at: Date | string | null }>(
     `select id, health, health_reason, health_at from crm.companies
-     where workspace_id = $1 and health_activity_id = $2
+     where workspace_id = $1 and health_activity_id = $2 and id is distinct from $3::uuid
      for update`,
-    [actor.workspaceId, activityId],
+    [actor.workspaceId, activityId, keepCompanyId],
   );
   const cleared: ClearedHealth[] = [];
   for (const row of rows.rows) {
@@ -629,6 +639,222 @@ export async function archiveActivity(actor: Actor, id: string, provenance: Prov
   assertScope(actor.scopes, "activities:write");
   if (!isUuid(id)) throw new CrmError("not_found", "Activity not found.", 404);
   return withActor(actor, (db) => archiveActivityInDb(db, actor, id, provenance));
+}
+
+type EditRow = ArchiveRow & {
+  body: string | null;
+  opportunity_id: string | null;
+  metadata: Record<string, unknown> | null;
+};
+
+export type ActivityEditValues = {
+  type: ActivityType;
+  title: string | null;
+  body: string | null;
+  occurredAt: string | null;
+  companyId: string | null;
+  contactId: string | null;
+  opportunityId: string | null;
+};
+
+const EDIT_DENIED = "Only the person who logged this activity, or an owner or admin, can edit it.";
+
+const EDIT_COLUMNS: Record<ActivityEditField, string> = {
+  type: "type",
+  title: "title",
+  body: "body",
+  occurredAt: "occurred_at",
+  companyId: "company_id",
+  contactId: "contact_id",
+  opportunityId: "opportunity_id",
+};
+
+const LINK_FIELDS: ActivityEditField[] = ["companyId", "contactId", "opportunityId"];
+
+const EDIT_ROW_SQL = `select id, type, title, body, occurred_at, company_id, contact_id, opportunity_id,
+    actor_user_id, actor_agent_id, metadata, archived_at
+  from crm.activities where id = $1 and workspace_id = $2`;
+
+function editValues(row: EditRow): ActivityEditValues {
+  return {
+    type: row.type,
+    title: row.title,
+    body: row.body,
+    occurredAt: iso(row.occurred_at),
+    companyId: row.company_id,
+    contactId: row.contact_id,
+    opportunityId: row.opportunity_id,
+  };
+}
+
+export async function readActivityState(db: Db, workspaceId: string, id: string) {
+  if (!isUuid(id)) return null;
+  const result = await db.query<EditRow>(EDIT_ROW_SQL, [id, workspaceId]);
+  const row = result.rows[0];
+  if (!row) return null;
+  return { values: editValues(row), archivedAt: iso(row.archived_at) };
+}
+
+function linkId(value: unknown, field: ActivityEditField) {
+  if (value === null || value === "") return null;
+  if (typeof value !== "string" || !isUuid(value)) {
+    const noun = field === "companyId" ? "Company" : field === "contactId" ? "Contact" : "Opportunity";
+    throw new CrmError("not_found", `${noun} not found.`, 404, { field });
+  }
+  return value;
+}
+
+function editedValue(field: ActivityEditField, value: unknown): unknown {
+  if (field === "type") {
+    if (typeof value !== "string" || !(ACTIVITY_TYPES as readonly string[]).includes(value)) {
+      throw new CrmError("invalid_input", "Activity type is not recognised.", 400, { field: "type" });
+    }
+    return value;
+  }
+  if (field === "title" || field === "body") {
+    if (value !== null && typeof value !== "string") {
+      throw new CrmError("invalid_input", `Enter the ${field === "title" ? "title" : "text"} as text.`, 400, { field });
+    }
+    return cleanText(value, field === "title" ? 200 : 10000, field);
+  }
+  if (field === "occurredAt") {
+    const date = typeof value === "string" ? parseDateTime(value) : null;
+    if (!date) throw new CrmError("invalid_input", "Enter a valid date and time.", 400, { field: "occurredAt" });
+    return date.toISOString();
+  }
+  return linkId(value, field);
+}
+
+async function linkedCompany(db: Db, workspaceId: string, values: ActivityEditValues) {
+  if (values.companyId) return values.companyId;
+  if (!values.contactId) return null;
+  const result = await db.query<{ company_id: string | null }>(
+    "select company_id from crm.contacts where id = $1 and workspace_id = $2",
+    [values.contactId, workspaceId],
+  );
+  return result.rows[0]?.company_id ?? null;
+}
+
+function editSummary(values: ActivityEditValues) {
+  return {
+    type: values.type,
+    title: values.title,
+    occurredAt: values.occurredAt,
+    companyId: values.companyId,
+    contactId: values.contactId,
+  };
+}
+
+function lockedField(field: ActivityEditField, origin: ActivityOrigin) {
+  const limit = origin === "logged" ? "" : ` ${ORIGIN_LIMITS[origin]}`;
+  return new CrmError("invalid_input", `${ACTIVITY_FIELD_LABELS[field]} can't be changed.${limit}`, 400, { field });
+}
+
+async function readForEdit(db: Db, actor: Actor, id: string) {
+  const result = await db.query<EditRow>(EDIT_ROW_SQL, [id, actor.workspaceId]);
+  const row = result.rows[0];
+  if (!row) throw new CrmError("not_found", "Activity not found.", 404);
+  if (!mayArchive(actor, row)) throw new CrmError("forbidden", EDIT_DENIED, 403);
+  const locked = await db.query<EditRow>(`${EDIT_ROW_SQL} for update`, [id, actor.workspaceId]);
+  if (!locked.rows[0]) throw new CrmError("forbidden", EDIT_DENIED, 403);
+  return locked.rows[0];
+}
+
+export async function updateActivityInDb(db: Db, actor: Actor, id: string, input: ActivityEdit, provenance: Provenance) {
+  if (!isUuid(id)) throw new CrmError("not_found", "Activity not found.", 404);
+  const row = await readForEdit(db, actor, id);
+  if (row.archived_at) {
+    throw new CrmError("conflict", "This activity has been deleted. Undo the delete before editing it.", 409);
+  }
+  const before = editValues(row);
+  const transcript = await db.query("select 1 from crm.call_insights where activity_id = $1 and workspace_id = $2", [id, actor.workspaceId]);
+  const origin = activityOrigin({ type: row.type, metadata: row.metadata ?? {} }, (transcript.rowCount ?? 0) > 0);
+  const allowed = editableFields(origin);
+  const next: ActivityEditValues = { ...before };
+  const asked: Partial<Record<ActivityEditField, unknown>> = {};
+  for (const field of ACTIVITY_EDIT_FIELDS) {
+    if (input[field] === undefined) continue;
+    asked[field] = editedValue(field, input[field]);
+  }
+  for (const field of ACTIVITY_EDIT_FIELDS) {
+    if (field in asked && asked[field] !== before[field] && !allowed.includes(field)) throw lockedField(field, origin);
+  }
+  for (const [field, value] of Object.entries(asked)) {
+    if (!LINK_FIELDS.includes(field as ActivityEditField)) Object.assign(next, { [field]: value });
+  }
+  if (!next.title && !next.body) {
+    throw new CrmError("invalid_input", "Enter a title or a note.", 400, { field: "body" });
+  }
+  if (LINK_FIELDS.some((field) => field in asked && asked[field] !== before[field])) {
+    const links = await resolveLinks(
+      db,
+      actor.workspaceId,
+      Object.fromEntries(LINK_FIELDS.filter((field) => field in asked).map((field) => [field, asked[field] as string | null])),
+      { companyId: before.companyId, contactId: before.contactId, opportunityId: before.opportunityId },
+    );
+    if (!links.companyId && !links.contactId && !links.opportunityId) {
+      throw new CrmError("invalid_input", "Keep the activity on a company, person or opportunity.", 400, { field: "companyId" });
+    }
+    Object.assign(next, links);
+    for (const field of LINK_FIELDS) {
+      if (next[field] !== before[field] && !allowed.includes(field)) throw lockedField(field, origin);
+    }
+  }
+  const fields = ACTIVITY_EDIT_FIELDS.filter((field) => next[field] !== before[field]);
+  if (fields.length === 0) {
+    const current = await db.query<ActivityRow>(`${ACTIVITY_SQL} where a.id = $1`, [id]);
+    return { activity: mapActivity(current.rows[0]), changed: false, fields: [] as ActivityEditField[] };
+  }
+  const values: unknown[] = [id, actor.workspaceId];
+  const sets = fields.map((field) => {
+    values.push(next[field]);
+    return `${EDIT_COLUMNS[field]} = $${values.length}`;
+  });
+  const updated = await db.query(
+    `update crm.activities set ${sets.join(", ")} where id = $1 and workspace_id = $2 returning id`,
+    values,
+  );
+  if (updated.rowCount === 0) throw new CrmError("forbidden", EDIT_DENIED, 403);
+  const linksChanged = fields.some((field) => LINK_FIELDS.includes(field));
+  let clearedHealth: ClearedHealth[] = [];
+  if (linksChanged) {
+    if ((transcript.rowCount ?? 0) > 0) {
+      await db.query(
+        "update crm.call_insights set contact_id = $3, company_id = $4 where activity_id = $1 and workspace_id = $2",
+        [id, actor.workspaceId, next.contactId, next.companyId],
+      );
+    }
+    clearedHealth = await clearHealthFrom(db, actor, id, provenance, await linkedCompany(db, actor.workspaceId, next));
+  }
+  const saved = await db.query<ActivityRow>(`${ACTIVITY_SQL} where a.id = $1`, [id]);
+  const activity = mapActivity(saved.rows[0]);
+  await recordAudit(db, actor, "activity.updated", "activity", id, provenance, {
+    fields,
+    before: Object.fromEntries(fields.map((field) => [field, before[field]])),
+    after: Object.fromEntries(fields.map((field) => [field, next[field]])),
+    activity: editSummary(next),
+    ...(clearedHealth.length > 0 ? { clearedHealth } : {}),
+  });
+  return { activity, changed: true, fields };
+}
+
+export async function undoActivityEditInDb(
+  db: Db,
+  actor: Actor,
+  id: string,
+  before: ActivityEdit,
+  clearedHealth: ClearedHealth[],
+  provenance: Provenance,
+) {
+  const result = await updateActivityInDb(db, actor, id, before, provenance);
+  await restoreHealthFrom(db, actor, id, clearedHealth, provenance);
+  return result;
+}
+
+export async function updateActivity(actor: Actor, id: string, input: ActivityEdit, provenance: Provenance) {
+  assertScope(actor.scopes, "activities:write");
+  if (!isUuid(id)) throw new CrmError("not_found", "Activity not found.", 404);
+  return withActor(actor, (db) => updateActivityInDb(db, actor, id, input, provenance));
 }
 
 export type ActivitySummary = { type: ActivityType; title: string | null; occurredAt: string | null; archivedAt: string | null };

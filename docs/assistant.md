@@ -110,7 +110,7 @@ Three tools read in parts. The assistant reads every part before judging a whole
 
 ## Tools that spend money
 
-`social_lookup` (Mindcase, per record, with a monthly workspace cap), `check_web` (Parallel, $0.001 a call), `cold_email_check` (model calls), `test_workflow` (its AI steps run for real), `read_web_page` when a page needs a real browser (Browserbase), `find_contact_details` (enrichment credits) and `verify_email` (an email checker credit). The last two need approval. `eclipse_action` can spend Eclipse credits and needs approval.
+`social_lookup` (Mindcase, per record, with a monthly workspace cap), `check_web` (Parallel, $0.001 a call), `cold_email_check` (model calls), `test_workflow` (its AI steps run for real), `read_web_page` when a page needs a real browser (Browserbase), `find_contact_details` (enrichment credits) and `verify_email` (an email checker credit). The last two need approval. `eclipse_action` can spend Eclipse credits and needs approval. `run_learning` spends model calls and needs approval.
 
 ## Adding a tool
 
@@ -181,6 +181,7 @@ When a tool is merged into another, add its old name to `MERGED_TOOLS` in `tools
 | `list_activities` | Logged activity, newest first, with search and filters, plus call summaries for calls and meetings. | No | Yes | `limit` up to 100 (default 50). |
 | `log_activity` | Logs a note, call or email (only one that happened outside Orbit) on a company or person. | Yes | No | Refuses an email already filed from the mailbox in the last six hours. |
 | `archive_activity` | Removes a wrong or duplicate activity from timelines, counts and relationship labels. It is archived and can be undone. | Yes | No | Only the person who logged it, or an owner or admin. |
+| `update_activity` | Edits a logged activity: type, title, text, when it happened, and its company, person and opportunity. The card shows the activity and each change from and to. It can be undone. | Yes | No | Only the person who logged it, or an owner or admin. Emails filed from Mail take only a new company or opportunity; calls and meetings from Teams, Granola or a transcript take only a new title, company, person or opportunity. Refuses a deleted activity. |
 | `get_call_transcript` | The full transcript behind a call summary. | No | Yes | |
 
 ### Pipeline and deals
@@ -213,15 +214,17 @@ When a tool is merged into another, add its old name to `MERGED_TOOLS` in `tools
 
 | Tool | What it does | Approval | Outside | Notable limits |
 | --- | --- | --- | --- | --- |
-| `search_email` | Searches every email in the user's connected mailboxes by words, sender, account or folder, with open counts for emails sent from Orbit. | No | Yes | Default 20, up to 50. |
+| `search_email` | Searches every email in the user's connected mailboxes by words, sender, account or folder, with open counts for emails sent from Orbit. `folder` `scheduled` lists the emails waiting to send later instead, with recipients, subject, message, files, send time and any send error. | No | Yes | Default 20, up to 50. `scheduled` lists them all (up to 200) and ignores the other options. |
 | `get_email_thread` | The whole conversation an email belongs to, oldest first, with opens for emails the user sent. | No | Yes | |
 | `list_email_attachments` | The files on an email, with ids for `add_to_knowledge`. | No | Yes | |
 | `list_email_senders` | The addresses the user can send from; the first is the main one. | No | No | |
 | `get_mail_sync_status` | How far each mailbox has synced, per folder, with errors. | No | No | |
 | `get_capture` | The Capture page: recent mail filed to records, unfiled Teams and Granola conversations, and people met who aren't contacts. | No | Yes | Up to 50 unfiled conversations. |
+| `file_conversation` | Files an unfiled Teams or Granola conversation on a contact, or adds one of its people as a contact (with a company from their email domain) and files it on them, as Capture does. The transcript is summarised in the background. | Yes | No | Only conversations still waiting to be filed; the email must be one of its outside people. |
 | `mail_action` | Archives, trashes, moves back to the inbox, marks read or unread, flags, snoozes or sets a no-reply reminder on whole conversations. | Yes | No | Up to 50 emails a call; each stands for its conversation. |
 | `save_email_draft` | Saves a draft in Orbit Mail and Outlook Drafts without sending. The card also offers Confirm and send. | Yes | No | Up to 10 Knowledge or chat files, 25 MB in total. |
 | `send_email` | Sends a new email or a reply from Orbit Mail once the card is approved, or schedules it with `sendAt`. Orbit adds the signature, saves it in Sent and logs it on the contacts. | Yes | No | Up to 10 Knowledge or chat files, 25 MB; `sendAt` at least a minute ahead and within a year; `remindAfterDays` up to 90. |
+| `change_scheduled_email` | Changes a scheduled email's send time, subject, message or recipients, keeping its files, or with `cancel` true unschedules it as Unschedule does in Mail and keeps it in Drafts. | Yes | No | The same time limits as `sendAt`; `cancel` can't be combined with other changes; refused once it has started sending or been sent. |
 | `list_email_templates` | Saved email templates with subject, body and tags. | No | Yes | |
 | `save_email_template` | Creates a team email template, updates one by id, or archives one with `archived: true`. | Yes | No | Archiving takes only `id` and `archived`. |
 
@@ -229,10 +232,11 @@ When a tool is merged into another, add its old name to `MERGED_TOOLS` in `tools
 
 | Tool | What it does | Approval | Outside | Notable limits |
 | --- | --- | --- | --- | --- |
-| `list_calendar_events` | Events across the user's connected calendars between two dates (London). | No | Yes | Default today plus 7 days; at most 62 days. |
+| `list_calendar_events` | Events across the user's connected calendars between two dates (London), with `organisedByMe`, `myResponse`, `canCancel` and `canRespond`. | No | Yes | Default today plus 7 days; at most 62 days. |
 | `create_meeting_invite` | Creates an Outlook meeting and sends invites, with the saved meeting link by default. | Yes | No | 15 to 480 minutes. |
 | `move_meeting` | Moves an Outlook meeting the user organises; Outlook sends guests the update. | Yes | No | Events with `canCancel` true; 5 to 480 minutes. |
 | `cancel_meeting` | Cancels a meeting the user organised; Outlook tells every guest and it's logged on their timelines. | Yes | No | Only meetings that haven't started, in the Capture mailbox's calendar. |
+| `respond_to_meeting` | Accepts, says maybe to or declines a meeting someone else organised, with an optional note; maybe and decline can suggest a new time. Outlook tells the organiser unless `tellOrganiser` is false, and a told organiser who is a contact gets it on their timeline. | Yes | No | Events with `canRespond` true; not once it has started; a new time needs the organiser to allow proposals. |
 | `get_settings` | The user's meeting link, email addresses, booking page, the state of Microsoft mail and calendar, ClickUp and Granola, and the lifecycles in use (built in and custom) with how many companies each has. | No | No | |
 
 ### Proposals and NDAs
@@ -249,6 +253,7 @@ When a tool is merged into another, add its old name to `MERGED_TOOLS` in `tools
 | `update_proposal_steps` | Adds, ticks, unticks or removes a step on the live Next steps plan, in any status. | Yes | No | The client sees it straight away. |
 | `send_proposal` | Locks the version, makes the client's private link and emails it from the user's mailbox; on a sent one, emails the link again. | Yes | No | Nobody can sign through the assistant. |
 | `revise_proposal` | Makes a sent, declined or withdrawn proposal a draft again so it can be edited. | Yes | No | Not once the client has signed. |
+| `withdraw_proposal` | Withdraws a sent proposal or NDA, as on its page: the client's link stops working and it can't be signed. | Yes | No | Not a draft that was never sent, one signed by both sides, a declined one or one already withdrawn. |
 | `create_proposal_template` | Creates a template from a starter, a copy or blocks. It starts as a draft. | Yes | No | |
 | `update_proposal_template` | Changes a template's name, status, accent, days valid or blocks. | Yes | No | Applies to proposals created afterwards. |
 | `add_proposal_image` | Copies an image from a public link into Orbit and returns its new url for a block. | Yes | No | JPEG, PNG, WebP or GIF, up to 10 MB. |
@@ -329,6 +334,7 @@ When a tool is merged into another, add its old name to `MERGED_TOOLS` in `tools
 | --- | --- | --- | --- | --- |
 | `recall` | Searches what Orbit has learned about the user, the business and the market, and the market notes received. | No | Yes | |
 | `get_daily_brief` | The user's latest morning brief. | No | Yes | |
+| `run_learning` | Runs Orbit's learning now, as Learn now does in Settings, Learning, or with kind `brief` rebuilds today's morning brief from everything since yesterday's. It runs after the reply with `after()` and the result says so. | Yes | No | Business and market for owners and admins only; refused while a run is already going; stops starting new parts after about 4.5 minutes. |
 | `remember` | Saves a lasting note: private to the user, or shared with the team for business facts. | Yes | No | Title up to 12 words, body up to 70. |
 | `forget` | Forgets a learned note by id. | Yes | No | |
 | `list_watchlist` | What the nightly market research (Grok Bot) watches. | No | No | |

@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
+import { after } from "next/server";
 import { applyMailAction, threadForEmail } from "@/lib/mail/actions";
 import { addFollowUp } from "@/lib/mail/prepare";
 import { forgetMemory, recall, rememberNote } from "@/lib/learning/memories";
 import { addWatchItems, listWatchlist, removeWatchItems, WATCH_KINDS } from "@/lib/learning/market";
-import { latestBrief } from "@/lib/learning/nightly";
+import { latestBrief, learningKinds, learnNow, LEARNING_KINDS, type LearningKind } from "@/lib/learning/nightly";
 import { bookingUrl } from "@/lib/assistant/links";
 import { ARTICLES_URL, DOCS_URL, eclipseDocsIndex, listEclipseArticles, readEclipsePage } from "@/lib/eclipse-sources";
 import { readWebPage, WebPageError } from "@/lib/web-page";
@@ -25,15 +26,17 @@ import { socialLookup } from "@/lib/social-lookup";
 import { getBookingPage } from "@/lib/booking/pages";
 import { listLifecycles } from "@/lib/crm/lifecycles";
 import { getMailThread, mailSyncStatus, searchMail } from "@/lib/mail/store";
-import { composeAccounts, saveDraftForAgent, sendForAgent } from "@/lib/mail/compose";
+import { cancelScheduledDraft, changeScheduledDraft, composeAccounts, getScheduledDraft, listScheduledDrafts, saveDraftForAgent, sendForAgent } from "@/lib/mail/compose";
 import { createProduct, createTemplate, getTemplate, listProducts, listTemplates, updateProduct, updateTemplate } from "@/lib/proposals/catalogue";
-import { createDocument, getDocument, listDocuments, reviseDocument, sendDocument, updateDocument } from "@/lib/proposals/documents";
+import { createDocument, getDocument, listDocuments, reviseDocument, sendDocument, updateDocument, withdrawDocument, type DocumentDetail } from "@/lib/proposals/documents";
+import { STATUS_LABELS } from "@/lib/proposals/model";
 import { copyProposalImage } from "@/lib/proposals/media";
 import { STARTER_TEMPLATES as PROPOSAL_STARTERS } from "@/lib/proposals/starters";
 import { addStep, removeStep, updateStep } from "@/lib/proposals/steps";
 import { blockLinks, BLOCKS_GUIDE, onlyFields, proposalForAgent, templateForAgent, templateSettings } from "@/lib/proposals/agent";
 import { mailOrigin } from "@/lib/mail/origin";
 import type { MailAddress } from "@/lib/mail/types";
+import type { MailDraft } from "@/lib/mail/view";
 import { archiveBoard, createBoard, getBoard, listBoards, updateBoard } from "@/lib/crm/boards";
 import { savePipelineStages } from "@/lib/crm/pipeline";
 import { definitionFromInput, STEP_TYPES, TRIGGER_TYPES } from "@/lib/workflows/definition";
@@ -54,21 +57,22 @@ import {
 import { STARTER_TEMPLATES } from "@/lib/workflows/templates";
 import { BULK_LIMIT, runBulk } from "@/lib/crm/bulk";
 import { attachableFiles, discardAttachments } from "@/lib/crm/email-attachments";
-import { activitySummaries, archiveActivity, listActivities } from "@/lib/crm/activities";
-import { getCalendarStatus, getMeetings, listPeopleMet, myAddresses, readPeople, readPerson } from "@/lib/crm/calendar";
+import { activitySummaries, archiveActivity, listActivities, readActivityState, updateActivity } from "@/lib/crm/activities";
+import { ACTIVITY_EDIT_FIELDS, ACTIVITY_FIELD_LABELS, EDITABLE_TYPES, type ActivityEdit, type ActivityEditField } from "@/lib/crm/activity-edit";
+import { getCalendarStatus, getMeetings, listPeopleMet, myAddresses, readPeople, readPerson, relinkCalendar } from "@/lib/crm/calendar";
 import { listCalendarItems } from "@/lib/crm/calendars";
 import { getInsightTranscript, getInsightsForActivities } from "@/lib/crm/call-insights";
 import { createTaskWithClickUp, getClickUpPicker, getClickUpState, pushClickUpTask } from "@/lib/crm/clickup";
 import { archiveCompany, createCompany, getCompany, listCompanies, listMembers, updateCompany } from "@/lib/crm/companies";
 import { archiveContact, createContact, getContact, listContacts, updateContact } from "@/lib/crm/contacts";
 import { mergeCompanies, mergeContacts } from "@/lib/crm/merge";
-import { listUnfiledImports } from "@/lib/crm/conversations";
+import { createContactAndFile, fileImport, getConversationImport, listUnfiledImports, summariseImport, type ConversationImport } from "@/lib/crm/conversations";
 import { archiveEmailTemplate, createEmailTemplate, listEmailTemplates, updateEmailTemplate } from "@/lib/crm/email-templates";
 import { CrmError } from "@/lib/crm/errors";
 import { getGranolaStatus } from "@/lib/crm/granola";
 import { companyHref, contactHref, opportunityHref } from "@/lib/crm/hrefs";
 import { getMailbox, listInbox } from "@/lib/crm/inbox";
-import { cancelInvite, createInvite, getMeetingLink, rescheduleInvite } from "@/lib/crm/invites";
+import { cancelInvite, createInvite, getMeetingLink, MEETING_RESPONSES, rescheduleInvite, respondToInvite } from "@/lib/crm/invites";
 import { latestEmailCheck, verifyEmail } from "@/lib/enrichment/email-check";
 import { archiveOpportunity, createOpportunity, getOpportunity, listOpportunities, listPipeline, updateOpportunity } from "@/lib/crm/opportunities";
 import { pipelineReport, stageHistory, stalledDeals, STALLED_DAYS } from "@/lib/crm/pipeline-history";
@@ -129,7 +133,17 @@ type AssistantTool = {
 
 type Names = (id: unknown) => string;
 
-type ToolContext = { callId?: string; deadline?: number };
+type Defer = (work: () => Promise<unknown>) => void;
+
+type ToolContext = { callId?: string; deadline?: number; defer?: Defer };
+
+function afterResponse(work: () => Promise<unknown>) {
+  try {
+    after(work);
+  } catch {
+    void work();
+  }
+}
 
 const PROVENANCE = { source: "assistant" } as const;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -239,7 +253,34 @@ function withActivity(activity: Activity) {
   };
 }
 
+const CONVERSATION_SOURCES: Record<ConversationImport["source"], string> = { granola: "Granola", teams: "Teams" };
+
+function conversationTitle(conversation: ConversationImport) {
+  return conversation.title?.trim() || (conversation.kind === "call" ? "Teams call" : "Meeting");
+}
+
+function conversationLine(conversation: ConversationImport) {
+  const when = conversation.occurredAt ? formatDateTimeLabel(londonTime(conversation.occurredAt).slice(0, 16)) : "No date";
+  return `${CONVERSATION_SOURCES[conversation.source]} ${conversation.kind}, ${when}`;
+}
+
 const ACTIVITY_LABELS: Record<string, string> = { email: "Email", meeting: "Meeting", call: "Call", note: "Note", research: "Research", linkedin: "LinkedIn", agent_update: "Agent update", other: "Other" };
+
+function clipText(text: string, max: number) {
+  return text.length > max ? `${text.slice(0, max - 3)}…` : text;
+}
+
+function activityEditShown(field: ActivityEditField, value: unknown, name: Names) {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (field === "companyId" || field === "contactId" || field === "opportunityId") return text ? name(text) : "none";
+  if (!text) return "empty";
+  if (field === "type") return ACTIVITY_LABELS[text] ?? text;
+  if (field === "occurredAt") {
+    const at = parseDateTime(text);
+    return at ? londonLabel(at) : `a time Orbit can't read (${text})`;
+  }
+  return clipText(text, 120);
+}
 
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 
@@ -365,6 +406,62 @@ function draftRecipients(args: Args, name: Names, draftId: string) {
     ["Bcc", pick(bcc)],
   ];
   return lines.filter(([, list]) => list.length).map(([label, list]) => `${label}: ${list.join(", ")}`);
+}
+
+function scheduledSummary(draft: MailDraft) {
+  return {
+    id: draft.id,
+    to: draft.to.map((item) => item.address),
+    cc: draft.cc.map((item) => item.address),
+    bcc: draft.bcc.map((item) => item.address),
+    subject: draft.subject || "(no subject)",
+    reply: draft.mode !== "new",
+    sendAt: draft.sendAt,
+    didNotSend: draft.sendError,
+    body: draft.body,
+    attachments: (draft.attachments ?? []).map((file) => file.name),
+    href: "/mail?view=scheduled",
+  };
+}
+
+async function scheduledDetails(actor: UserActor, args: Args): Promise<Record<string, string>> {
+  const id = str(args.draftId);
+  const draft = await getScheduledDraft(actor, id);
+  if (!draft) return { [`${id}:gone`]: "This email isn't scheduled any more, so this will be refused." };
+  return {
+    [`${id}:subject`]: draft.subject || "(no subject)",
+    [`${id}:to`]: draft.to.map((item) => item.address).join(", "),
+    [`${id}:due`]: draft.sendError ? `Didn't send: ${draft.sendError}` : draft.sendAt ? `Due: ${londonLabel(new Date(draft.sendAt))} (London time)` : "",
+    [`${id}:files`]: (draft.attachments ?? []).map((file) => file.name).join(", "),
+  };
+}
+
+const CANCEL_ALONE = "Cancel on its own: leave out sendAt, subject, body, to, cc and bcc to cancel, or leave out cancel to change it instead.";
+
+function scheduledChanges(args: Args) {
+  return ["sendAt", "subject", "body"].some((key) => optionalStr(args[key]) !== undefined) || ["to", "cc", "bcc"].some((key) => Array.isArray(args[key]));
+}
+
+function scheduledLines(id: string, name: Names) {
+  const to = detail(name, `${id}:to`);
+  return [detail(name, `${id}:gone`), to ? `To: ${to}` : "", detail(name, `${id}:due`)];
+}
+
+function withdrawRefusal(proposal: DocumentDetail) {
+  const noun = proposal.kind === "nda" ? "NDA" : "proposal";
+  if (proposal.status === "draft" && !proposal.version) return `This ${noun} hasn't been sent, so there's nothing to withdraw. Archive the draft instead.`;
+  if (proposal.status === "completed") return `This ${noun} has been signed by both sides, so it can't be withdrawn.`;
+  if (proposal.status === "declined") return `The client declined this ${noun}, so it's already closed.`;
+  if (proposal.status === "withdrawn") return `This ${noun} is already withdrawn.`;
+  return null;
+}
+
+const LEARNING_LABELS: Record<LearningKind, string> = { business: "Business", market: "Market", personal: "About you", brief: "Morning brief" };
+const LEARN_NOW_MS = 270_000;
+const LEARN_MIN_MS = 30_000;
+
+function learningChoice(value: unknown): LearningKind | "all" {
+  return oneOf(value, LEARNING_KINDS) ?? "all";
 }
 
 const KNOWLEDGE_REMOVE_MAX = 50;
@@ -1097,7 +1194,8 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
   {
     name: "list_calendar_events",
     label: "Checking the calendar",
-    description: "Calendar events across the connected calendars between two dates (London), up to 62 days apart.",
+    description:
+      "Calendar events across the connected calendars between two dates (London), up to 62 days apart. Each has organisedByMe, myResponse (Outlook's: accepted, tentativelyAccepted, declined, notResponded, none or organizer), canCancel (move_meeting and cancel_meeting work) and canRespond (respond_to_meeting works).",
     parameters: {
       type: "object",
       properties: {
@@ -1130,21 +1228,115 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     },
   },
   {
+    name: "file_conversation",
+    label: "Filing a conversation",
+    write: true,
+    description:
+      "File an unfiled Teams or Granola conversation from get_capture on a person's timeline (and their company's), as the Capture page does. Pass contactId for someone already in Orbit, or email for one of the conversation's people who isn't a contact yet (its newPeople): Orbit adds them as a contact, with a company from their email domain, then files it. If there's a transcript, Orbit summarises it afterwards.",
+    parameters: {
+      type: "object",
+      properties: {
+        conversationId: idParam("Unfiled conversation id from get_capture."),
+        contactId: idParam("Contact to file it on."),
+        email: { type: "string", description: "Email address of a person in the conversation who isn't a contact yet, to add them and file it on them." },
+      },
+      required: ["conversationId"],
+    },
+    details: async (actor, args) => {
+      const id = str(args.conversationId);
+      const conversation = await getConversationImport(actor, id);
+      if (!conversation) return {};
+      const contactId = str(args.contactId);
+      const email = str(args.email).toLowerCase();
+      const contact = isUuid(contactId) ? await getContact(actor, contactId).catch(() => null) : null;
+      const newPerson = email ? conversation.newPeople.find((person) => person.email === email) : undefined;
+      return {
+        [`${id}:title`]: conversationTitle(conversation),
+        [`${id}:what`]: conversationLine(conversation),
+        [`${id}:people`]: conversation.participants.map((person) => person.name || person.email).filter(Boolean).join(", "),
+        [`${id}:filed`]: conversation.status === "unfiled" ? "" : conversation.status === "filed" ? "This conversation is already filed." : "This conversation is no longer waiting to be filed.",
+        [`${id}:summary`]: conversation.transcriptLength > 0 ? "Orbit summarises the transcript afterwards." : "",
+        ...(contact ? { [`${contactId}:company`]: contact.companyName ?? "" } : {}),
+        ...(email ? { [`${id}:person`]: newPerson ? (newPerson.name ? `${newPerson.name} (${newPerson.email})` : newPerson.email) : "", [`${id}:known`]: newPerson ? "" : "yes" } : {}),
+      };
+    },
+    describe: (args, name) => {
+      const id = str(args.conversationId);
+      const contactId = str(args.contactId);
+      const email = str(args.email).toLowerCase();
+      const company = contactId ? detail(name, `${contactId}:company`) : "";
+      const person = detail(name, `${id}:person`);
+      const domain = email.split("@")[1] ?? "";
+      const target = contactId
+        ? `File on: ${name(contactId)}${company ? ` (${company})` : ""}`
+        : person
+          ? `Adds ${person} as a contact${domain ? `, with a company from ${domain}` : ""}, then files it on them`
+          : email
+            ? detail(name, `${id}:known`)
+              ? `File on: the contact with ${email}`
+              : `File on: ${email}, if they were in the conversation`
+            : "";
+      const people = detail(name, `${id}:people`);
+      return {
+        title: titled("File conversation", detail(name, `${id}:title`) || undefined),
+        lines: [detail(name, `${id}:what`), people ? `People: ${people}` : "", target, detail(name, `${id}:filed`), detail(name, `${id}:summary`)],
+      };
+    },
+    run: async (actor, args, context) => {
+      const conversationId = required(args.conversationId, "A conversation id");
+      const contactId = optionalStr(args.contactId);
+      const email = optionalStr(args.email);
+      if (Boolean(contactId) === Boolean(email)) {
+        throw new CrmError("invalid_input", "Pass contactId for someone already in Orbit, or email for a person in the conversation who isn't a contact yet, but not both.", 400, { field: "contactId" });
+      }
+      const provenance = { operation: "assistant_file_conversation", ...PROVENANCE };
+      const filed = contactId
+        ? { ...(await fileImport(actor, conversationId, contactId, { summarise: false, provenance })), contactId, created: false }
+        : await createContactAndFile(actor, conversationId, email!, { summarise: false, provenance });
+      (context.defer ?? afterResponse)(async () => {
+        try {
+          await summariseImport(actor, conversationId);
+        } catch (error) {
+          console.error("Conversation summary failed", error);
+        }
+      });
+      if (email) await relinkCalendar(actor).catch((error) => console.error("Could not relink calendar events", error));
+      return {
+        filed: true,
+        activityId: filed.activityId,
+        contact: { id: filed.contactId, name: filed.contactName, href: contactHref(filed.contactId), created: filed.created },
+        summary: "If there's a transcript, Orbit summarises it in the background. It appears on the timeline in a minute or two.",
+      };
+    },
+  },
+  {
     name: "search_email",
     label: "Searching email",
     description:
-      "Search every email in the user's connected mailboxes (all accounts, all folders, full history as far as it has synced). Matches words in the subject, sender and body; filter by sender, account or folder. Returns newest or best matches with ids for get_email_thread. Emails the user sent from Orbit show how many times they were opened.",
+      "Search every email in the user's connected mailboxes (all accounts, all folders, full history as far as it has synced). Matches words in the subject, sender and body; filter by sender, account or folder. Returns newest or best matches with ids for get_email_thread. Emails the user sent from Orbit show how many times they were opened. folder scheduled instead lists the emails waiting to send later.",
     parameters: {
       type: "object",
       properties: {
         query: { type: "string", description: "Words to find, for example pricing renewal. Quotes match a phrase, a leading minus excludes a word." },
         from: { type: "string", description: "Part of the sender's name or address." },
         account: { type: "string", description: "One of the user's own addresses, to search only that mailbox." },
-        folder: { type: "string", enum: ["inbox", "sent", "drafts", "archive", "trash", "other"] },
+        folder: {
+          type: "string",
+          enum: ["inbox", "sent", "drafts", "archive", "trash", "other", "scheduled"],
+          description: "scheduled lists every email waiting to send later (Mail's Scheduled view), soonest first, with recipients, subject, message, files, send time and any send error, and ids for change_scheduled_email. The other options don't apply to it.",
+        },
         limit: { type: "integer", minimum: 1, maximum: 50 },
       },
     },
     run: async (actor, args) => {
+      if (args.folder === "scheduled") {
+        const ignored = ["query", "from", "account", "limit"].filter((key) => args[key] !== undefined && args[key] !== "");
+        return {
+          scheduled: (await listScheduledDrafts(actor)).map(scheduledSummary),
+          href: "/mail?view=scheduled",
+          ...(ignored.length ? { note: `folder scheduled always lists every scheduled email, so ${ignored.length > 1 ? `${ignored.slice(0, -1).join(", ")} and ${ignored.at(-1)}` : ignored[0]} ${ignored.length === 1 ? "was" : "were"} ignored.` } : {}),
+        };
+      }
       const emails = await searchMail(actor, {
         query: optionalStr(args.query),
         from: optionalStr(args.from),
@@ -1951,6 +2143,79 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         ...PROVENANCE,
       }),
     }),
+  },
+  {
+    name: "update_activity",
+    label: "Editing an activity",
+    write: true,
+    description:
+      "Edit a logged activity by its id from list_activities, get_company or get_contact: its type, title, text, when it happened, and the company, person and opportunity it is on. Pass only what changes. Emails filed from Mail only take a new company or opportunity. Calls and meetings from Teams, Granola or a transcript only take a new title, company, person or opportunity. Only the person who logged it, or an owner or admin, can edit it, and it can be undone with undo_change.",
+    parameters: {
+      type: "object",
+      properties: {
+        activityId: idParam("Activity id."),
+        type: { type: "string", enum: [...EDITABLE_TYPES] },
+        title: { type: "string", description: "Title, subject or call summary line. Pass null to remove it." },
+        body: { type: "string", description: "The text. Pass null to remove it." },
+        occurredAt: { type: "string", description: "When it happened: YYYY-MM-DDTHH:mm in London time, or ISO 8601." },
+        companyId: { type: "string", description: "Company id. Pass null to take it off the company." },
+        contactId: { type: "string", description: "Person id. Pass null to take it off the person." },
+        opportunityId: { type: "string", description: "Opportunity id. Pass null to take it off the opportunity." },
+      },
+      required: ["activityId"],
+    },
+    details: async (actor, args) => {
+      const id = str(args.activityId);
+      if (!isUuid(id)) return {};
+      const state = await withActor(actor, (db) => readActivityState(db, actor.workspaceId, id));
+      if (!state) return {};
+      const values = state.values;
+      const names = await recordNames(actor, [{ companyId: values.companyId, contactId: values.contactId, opportunityId: values.opportunityId }]);
+      const linkName = (value: string | null) => (value ? (names.get(value) ?? "a record that no longer exists") : "none");
+      const kind = ACTIVITY_LABELS[values.type] ?? values.type;
+      const when = values.occurredAt ? ` on ${formatDateTimeLabel(londonTime(values.occurredAt).slice(0, 16))}` : "";
+      return {
+        [`${id}:activity`]: `${kind}${values.title ? ` "${clipText(values.title, 80)}"` : ""}${when}`,
+        [`${id}:from:type`]: kind,
+        [`${id}:from:title`]: values.title ? clipText(values.title, 120) : "empty",
+        [`${id}:from:body`]: values.body ? clipText(values.body, 120) : "empty",
+        [`${id}:from:occurredAt`]: values.occurredAt ? formatDateTimeLabel(londonTime(values.occurredAt).slice(0, 16)) : "empty",
+        [`${id}:from:companyId`]: linkName(values.companyId),
+        [`${id}:from:contactId`]: linkName(values.contactId),
+        [`${id}:from:opportunityId`]: linkName(values.opportunityId),
+      };
+    },
+    describe: (args, name) => {
+      const id = str(args.activityId);
+      const activity = detail(name, `${id}:activity`);
+      const changes = ACTIVITY_EDIT_FIELDS.filter((field) => args[field] !== undefined).flatMap((field) => {
+        const value = args[field];
+        const to = activityEditShown(field, value, name);
+        const from = detail(name, `${id}:from:${field}`);
+        if (from && from === to) return [];
+        return [`${ACTIVITY_FIELD_LABELS[field]}: ${from ? `from ${from} ` : ""}to ${to}`];
+      });
+      return { title: "Edit activity", lines: [activity ? `Activity: ${activity}` : "", ...changes] };
+    },
+    run: async (actor, args) => {
+      const edit: ActivityEdit = {};
+      if (args.type !== undefined) {
+        const type = oneOf(args.type, EDITABLE_TYPES);
+        if (!type) throw new CrmError("invalid_input", `type is ${EDITABLE_TYPES.join(", ")}.`, 400, { field: "type" });
+        edit.type = type;
+      }
+      if (args.title !== undefined) edit.title = nullableStr(args.title) ?? null;
+      if (args.body !== undefined) edit.body = nullableStr(args.body) ?? null;
+      if (args.occurredAt !== undefined) edit.occurredAt = str(args.occurredAt);
+      if (args.companyId !== undefined) edit.companyId = nullableStr(args.companyId) ?? null;
+      if (args.contactId !== undefined) edit.contactId = nullableStr(args.contactId) ?? null;
+      if (args.opportunityId !== undefined) edit.opportunityId = nullableStr(args.opportunityId) ?? null;
+      const result = await updateActivity(actor, required(args.activityId, "An activity id"), edit, {
+        operation: "assistant_update_activity",
+        ...PROVENANCE,
+      });
+      return { activity: result.activity, changed: result.changed, fields: result.fields };
+    },
   },
   {
     name: "undo_change",
@@ -2939,6 +3204,49 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     },
   },
   {
+    name: "withdraw_proposal",
+    label: "Withdrawing a proposal",
+    write: true,
+    description:
+      "Withdraw a sent proposal or NDA, as Withdraw does on its page: the client's link stops working and it can no longer be signed. Works while it's sent, viewed, being changed or signed by the client but not yet countersigned. It stays in Orbit, and revise_proposal can reopen it to send again.",
+    parameters: { type: "object", properties: { id: idParam("Proposal id from list_proposals.") }, required: ["id"] },
+    details: async (actor, args) => {
+      const id = str(args.id);
+      if (!isUuid(id)) return {};
+      const proposal = await getDocument(actor, id).catch(() => null);
+      if (!proposal) return {};
+      const refusal = withdrawRefusal(proposal);
+      return {
+        [`${id}:kind`]: proposal.kind === "nda" ? "NDA" : "proposal",
+        [`${id}:title`]: proposal.title,
+        [`${id}:client`]: `${proposal.contactName} at ${proposal.companyName}`,
+        [`${id}:status`]: `${STATUS_LABELS[proposal.status]}${proposal.sentAt ? `, sent ${formatDateLabel(londonTime(proposal.sentAt).slice(0, 10))}` : ""}${proposal.viewCount ? `, opened ${counted(proposal.viewCount, "time", "times")}` : ""}`,
+        [`${id}:value`]: proposal.kind === "proposal" && proposal.totalLabel ? proposal.totalLabel : "",
+        [`${id}:effect`]: refusal
+          ? `This will be refused: ${refusal}`
+          : proposal.status === "client_signed"
+            ? "The client has signed it. Withdrawing means you can't countersign it, and their link stops working."
+            : "The client's link stops working and it can't be signed.",
+      };
+    },
+    describe: (args, name) => {
+      const id = str(args.id);
+      const line = (key: string, label: string) => (detail(name, `${id}:${key}`) ? `${label}: ${detail(name, `${id}:${key}`)}` : "");
+      return {
+        title: `Withdraw ${detail(name, `${id}:kind`) || "proposal"}: ${detail(name, `${id}:title`) || name(id)}`,
+        lines: [line("client", "Client"), line("status", "Status"), line("value", "Value"), detail(name, `${id}:effect`)],
+      };
+    },
+    run: async (actor, args) => {
+      const id = required(args.id, "A proposal id");
+      const refusal = withdrawRefusal(await getDocument(actor, id));
+      if (refusal) throw new CrmError("conflict", refusal, 409, { field: "status" });
+      await withdrawDocument(actor, id, { operation: "withdraw_proposal", ...PROVENANCE });
+      const detailNow = await getDocument(actor, id);
+      return { withdrawn: true, id, title: detailNow.title, status: detailNow.status, href: detailNow.href };
+    },
+  },
+  {
     name: "get_proposal_template",
     label: "Reading a proposal template",
     description: "One proposal or NDA template: name, kind, status, settings (accent colour, days valid) and every block, including the default Next steps that new proposals start with.",
@@ -3233,6 +3541,80 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     },
   },
   {
+    name: "change_scheduled_email",
+    label: "Changing a scheduled email",
+    write: true,
+    description:
+      "Change or cancel a scheduled email by its id from search_email with folder scheduled. To change it, pass only what changes: its send time, subject, message or recipients; to, cc and bcc replace those lists, and body replaces the whole message (Orbit still adds the signature). Its files stay attached. To stop it sending, pass cancel true and nothing else: it's unscheduled as Unschedule does in Mail, and kept in Drafts. Refused once it has started sending or been sent.",
+    parameters: {
+      type: "object",
+      properties: {
+        draftId: idParam("Scheduled email id from search_email with folder scheduled."),
+        cancel: { type: "boolean", description: "True to stop it sending and keep it in Drafts. Can't be combined with other changes." },
+        sendAt: { type: "string", description: "New send time, YYYY-MM-DDTHH:mm London time. At least a minute from now and within a year." },
+        subject: { type: "string" },
+        body: { type: "string", description: "The whole new message in plain text, with greeting and sign-off." },
+        to: { type: "array", items: { type: "string" }, description: "Email addresses. Replaces the To list." },
+        cc: { type: "array", items: { type: "string" }, description: "Replaces the Cc list; an empty list removes everyone." },
+        bcc: { type: "array", items: { type: "string" }, description: "Replaces the Bcc list; an empty list removes everyone." },
+      },
+      required: ["draftId"],
+    },
+    details: scheduledDetails,
+    describe: (args, name) => {
+      const id = str(args.draftId);
+      const subjectNow = detail(name, `${id}:subject`) || undefined;
+      if (args.cancel === true) {
+        return {
+          title: titled("Cancel scheduled email", subjectNow),
+          lines: [
+            ...scheduledLines(id, name),
+            scheduledChanges(args) ? `This will be refused: ${CANCEL_ALONE}` : "It stays in Drafts, so you can send it or change it later.",
+          ],
+        };
+      }
+      const list = (key: string, label: string) => (Array.isArray(args[key]) ? `New ${label}: ${strings(args[key]).join(", ") || "no one"}` : "");
+      const subject = optionalStr(args.subject);
+      return {
+        title: titled("Change scheduled email", subjectNow),
+        lines: [
+          ...scheduledLines(id, name),
+          str(args.sendAt) ? sendAtLine(args.sendAt).replace(/^Sends /, "Now sends: ") : "",
+          subject ? `New subject: ${subject}` : "",
+          list("to", "To"),
+          list("cc", "Cc"),
+          list("bcc", "Bcc"),
+          detail(name, `${id}:files`) ? `Files stay attached: ${detail(name, `${id}:files`)}` : "",
+          optionalStr(args.body) ? "New message:" : "",
+          str(args.body),
+        ],
+      };
+    },
+    run: async (actor, args) => {
+      const id = required(args.draftId, "A scheduled email id");
+      if (args.cancel === true) {
+        if (scheduledChanges(args)) return { error: CANCEL_ALONE };
+        const draft = await cancelScheduledDraft(actor, id);
+        return { cancelled: true, kept: "in Drafts", draftId: draft.id, subject: draft.subject, to: draft.to.map((item) => item.address), href: "/mail?view=drafts" };
+      }
+      const sendAt = optionalStr(args.sendAt) ? parseDateTime(str(args.sendAt)) : null;
+      if (optionalStr(args.sendAt) && !sendAt) return { error: "Give sendAt as YYYY-MM-DDTHH:mm London time." };
+      if (sendAt && sendAt.getTime() <= Date.now()) return { error: "sendAt has to be in the future." };
+      const recipients = (key: string) => (Array.isArray(args[key]) ? strings(args[key]) : undefined);
+      const changes = {
+        sendAt: sendAt?.toISOString(),
+        subject: optionalStr(args.subject),
+        body: optionalStr(args.body) === undefined ? undefined : String(args.body),
+        to: recipients("to"),
+        cc: recipients("cc"),
+        bcc: recipients("bcc"),
+      };
+      if (Object.values(changes).every((value) => value === undefined)) return { error: "Say what to change (sendAt, subject, body, to, cc or bcc), or pass cancel true to stop it sending." };
+      const draft = await changeScheduledDraft(actor, id, changes, { origin: mailOrigin() });
+      return { changed: true, ...scheduledSummary(draft) };
+    },
+  },
+  {
     name: "verify_email",
     label: "Checking an email address",
     write: true,
@@ -3377,6 +3759,55 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     run: async (actor, args) => {
       const cancelled = await cancelInvite(actor, required(args.eventId, "A meeting id"), str(args.message));
       return { cancelled: true, warning: cancelled.warning, loggedOn: cancelled.loggedOn };
+    },
+  },
+  {
+    name: "respond_to_meeting",
+    label: "Answering an invite",
+    write: true,
+    description:
+      "Accept, say maybe to (tentative) or decline a meeting someone else organised, by its id from list_calendar_events with canRespond true. Outlook sends the response to the organiser, with note if given, unless tellOrganiser is false. Tentative and decline can suggest a new time in London time, if the organiser allows new time proposals. Only meetings that haven't started, in the calendar of the mailbox connected in Capture.",
+    parameters: {
+      type: "object",
+      properties: {
+        eventId: idParam("Meeting id from list_calendar_events."),
+        response: { type: "string", enum: [...MEETING_RESPONSES] },
+        note: { type: "string", description: "Optional note to the organiser." },
+        tellOrganiser: { type: "boolean", description: "Defaults to true. False updates the calendar without telling the organiser, and can't carry a note or a new time." },
+        proposedStartLocal: { type: "string", description: "Optional new start to suggest with tentative or decline, YYYY-MM-DDTHH:mm London time." },
+        proposedDurationMinutes: { type: "integer", minimum: 5, maximum: 480, description: "Length of the suggested time. Defaults to the meeting's length." },
+      },
+      required: ["eventId", "response"],
+    },
+    describe: (args, name) => {
+      const id = str(args.eventId);
+      const organiser = detail(name, `${id}:organizer`);
+      const when = detail(name, `${id}:when`);
+      const minutes = Number(args.proposedDurationMinutes) || Number(detail(name, `${id}:minutes`)) || null;
+      const told = args.tellOrganiser !== false;
+      const answer = { accept: "Accept", tentative: "Maybe (tentative)", decline: "Decline" }[str(args.response)] ?? str(args.response);
+      return {
+        title: `Answer invite: ${name(id) === "Unknown record" ? "a meeting Orbit can't find" : name(id)}`,
+        lines: [
+          when ? `When: ${formatDateTimeLabel(when)}` : "",
+          `Organiser: ${organiser || "not listed"}`,
+          `Response: ${answer}`,
+          str(args.proposedStartLocal) ? `Suggested time: ${formatDateTimeLabel(str(args.proposedStartLocal))}${minutes ? ` for ${minutes} minutes` : ""}` : "",
+          str(args.note) ? `Note to the organiser: ${str(args.note)}` : "",
+          told ? "Outlook tells the organiser when you approve." : "The organiser isn't told.",
+        ],
+      };
+    },
+    run: async (actor, args) => {
+      const answered = await respondToInvite(actor, {
+        eventId: str(args.eventId),
+        response: str(args.response),
+        note: optionalStr(args.note) ?? null,
+        sendResponse: args.tellOrganiser === undefined ? undefined : args.tellOrganiser === true,
+        proposedStartLocal: optionalStr(args.proposedStartLocal),
+        proposedDurationMinutes: args.proposedDurationMinutes === undefined ? undefined : Number(args.proposedDurationMinutes),
+      });
+      return { answered };
     },
   },
   {
@@ -3588,6 +4019,61 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     description: "The user's latest morning brief: what changed in the market, accounts to act on and what Orbit learned overnight.",
     parameters: { type: "object", properties: {} },
     run: async (actor) => ({ brief: await latestBrief(actor) }),
+  },
+  {
+    name: "run_learning",
+    label: "Starting learning",
+    write: true,
+    description:
+      "Run Orbit's learning now instead of waiting for tonight, as Learn now does in Settings, Learning. kind all (the default) runs everything the user may run: the business and the market (owners and admins only), what Orbit knows about the user, then their morning brief. kind brief only rebuilds today's morning brief, from everything since yesterday's. It runs in the background for up to a few minutes, so tell the user it has started and that get_daily_brief or recall will show the results once it finishes.",
+    parameters: {
+      type: "object",
+      properties: { kind: { type: "string", enum: ["all", ...LEARNING_KINDS], description: "all, business, market, personal (about the user) or brief (rebuild the morning brief). Defaults to all." } },
+    },
+    details: async (actor, args): Promise<Record<string, string>> => {
+      const choice = learningChoice(args.kind);
+      try {
+        return { [`learning:${choice}:kinds`]: (await learningKinds(actor, choice)).join(",") };
+      } catch (error) {
+        return { [`learning:${choice}:refused`]: error instanceof CrmError ? `This will be refused: ${error.message}` : "" };
+      }
+    },
+    describe: (args, name) => {
+      const choice = learningChoice(args.kind);
+      const refused = detail(name, `learning:${choice}:refused`);
+      const kinds = (detail(name, `learning:${choice}:kinds`) || (choice === "all" ? "" : choice)).split(",").filter((kind): kind is LearningKind => kind in LEARNING_LABELS);
+      const onlyBrief = choice === "brief";
+      if (refused) return { title: onlyBrief ? "Rebuild the morning brief" : "Run learning now", lines: [refused] };
+      return {
+        title: onlyBrief ? "Rebuild the morning brief" : "Run learning now",
+        lines: [
+          kinds.length ? `Runs: ${kinds.map((kind) => LEARNING_LABELS[kind]).join(", ")}` : "",
+          kinds.length ? `Takes up to about ${counted(kinds.length, "minute", "minutes")} in the background. You can keep chatting.` : "",
+          onlyBrief
+            ? "Uses a model call and replaces today's brief with one covering everything since yesterday's."
+            : "Uses model calls and updates what Orbit has learned, which the assistant uses from then on.",
+        ],
+      };
+    },
+    run: async (actor, args, context) => {
+      const kinds = await learningKinds(actor, learningChoice(args.kind));
+      const deadline = Math.min(context.deadline ?? Infinity, Date.now() + LEARN_NOW_MS);
+      if (deadline - Date.now() < LEARN_MIN_MS) return { error: "There isn't enough time left in this turn to run learning. Ask again in a new message." };
+      (context.defer ?? afterResponse)(async () => {
+        try {
+          await learnNow(actor, { deadline, kinds, rebuildBrief: true });
+        } catch (error) {
+          console.error("Learning from the assistant failed", error);
+        }
+      });
+      return {
+        started: true,
+        inBackground: true,
+        runs: kinds.map((kind) => LEARNING_LABELS[kind]),
+        note: `Learning has started in the background and takes up to about ${counted(kinds.length, "minute", "minutes")}. ${kinds.includes("brief") ? "Read the new brief with get_daily_brief once it's done. " : ""}Settings, Learning shows how each part went.`,
+        href: "/settings/learning",
+      };
+    },
   },
   {
     name: "remember",
@@ -3945,6 +4431,8 @@ export async function recordNames(actor: UserActor, args: Args[], tools: string[
       names.set(row.id, row.subject?.trim() || "Untitled event");
       names.set(`${row.id}:when`, dateTimeInputValue(row.starts_at.toISOString(), appTimeZone()));
       names.set(`${row.id}:minutes`, String(Math.round((row.ends_at.getTime() - row.starts_at.getTime()) / 60_000)));
+      const organizer = readPerson(row.organizer);
+      if (organizer) names.set(`${row.id}:organizer`, organizer.name ? `${organizer.name} (${organizer.email})` : organizer.email);
       if (guests.length) names.set(`${row.id}:guests`, guests.join(", "));
     }
   });
@@ -3963,7 +4451,7 @@ export function describeAction(name: string, args: Args, names: Map<string, stri
   return { title: described.title, lines: described.lines.filter(Boolean) };
 }
 
-export async function runTool(actor: UserActor, name: string, args: Args, options: { deadline?: number; callId?: string } = {}) {
+export async function runTool(actor: UserActor, name: string, args: Args, options: { deadline?: number; callId?: string; defer?: Defer } = {}) {
   const resolved = resolveTool(name, args);
   if (!resolved) return { error: `There is no tool called ${name}.` };
   const { tool } = resolved;
@@ -3978,7 +4466,7 @@ export async function runTool(actor: UserActor, name: string, args: Args, option
     );
   });
   try {
-    const output = await Promise.race([tool.run(actor, cleaned, { callId: options.callId, deadline: tool.write ? options.deadline : Date.now() + limit }), late]);
+    const output = await Promise.race([tool.run(actor, cleaned, { callId: options.callId, deadline: tool.write ? options.deadline : Date.now() + limit, defer: options.defer }), late]);
     return marked(tool.name, output);
   } catch (error) {
     if (error instanceof CrmError) return { error: error.message, field: error.details?.field ?? null };

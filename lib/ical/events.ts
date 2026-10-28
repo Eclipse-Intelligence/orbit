@@ -162,6 +162,7 @@ function toEvent(
     organizer: organizerOf(component),
     attendees: attendeesOf(component),
     showAs: transparent ? "free" : status === "TENTATIVE" ? "tentative" : "busy",
+    responseStatus: null,
   };
 }
 
