@@ -54,3 +54,38 @@ create index if not exists audit_events_actor_idx
 create index if not exists audit_events_undoes_idx
   on crm.audit_events ((changes->>'undoes'))
   where event_type like '%.undone';
+
+create or replace function private.claim_unjudged_calls(p_limit integer)
+returns table (activity_id uuid, workspace_id uuid, user_id uuid)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  return query
+  with due as (
+    select i.id, i.activity_id, i.workspace_id,
+      coalesce(
+        (select m.user_id from crm.workspace_members m where m.workspace_id = i.workspace_id and m.user_id = a.actor_user_id),
+        (select m.user_id from crm.workspace_members m where m.workspace_id = i.workspace_id and m.role = 'owner' order by m.created_at limit 1)
+      ) as user_id
+    from crm.call_insights i
+    join crm.activities a on a.id = i.activity_id
+    where i.status = 'ready'
+      and i.sentiment is null
+      and i.sentiment_checked_at is null
+      and a.archived_at is null
+    order by a.occurred_at desc
+    limit greatest(1, least(p_limit, 20))
+    for update of i skip locked
+  )
+  update crm.call_insights i
+    set sentiment_checked_at = now()
+  from due
+  where i.id = due.id and due.user_id is not null
+  returning due.activity_id, due.workspace_id, due.user_id;
+end;
+$$;
+
+revoke all on function private.claim_unjudged_calls(integer) from public;
+grant execute on function private.claim_unjudged_calls(integer) to crm_app;
