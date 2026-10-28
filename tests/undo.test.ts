@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { describeAction, recordNames, runTool } from "@/lib/assistant/tools";
 import { createBoard } from "@/lib/crm/boards";
-import { archiveActivity, createActivity, listActivities } from "@/lib/crm/activities";
+import { archiveActivity, createActivity, listActivities, updateActivity } from "@/lib/crm/activities";
 import { archiveCompany, createCompany, getCompany, unarchiveCompany, updateCompany } from "@/lib/crm/companies";
 import { createContact, getContact, updateContact } from "@/lib/crm/contacts";
 import { CrmError } from "@/lib/crm/errors";
@@ -293,6 +293,64 @@ describe("undoing changes", () => {
     const logged = await latest(owner, note.id, "activity.created");
     await undoAuditEvent(owner, logged.id, UNDO);
     assert.equal((await listActivities(owner, { companyId: company.id })).total, 0);
+  });
+
+  it("undoes an activity edit, and refuses once it has changed again or been deleted", async () => {
+    const company = (await createCompany(owner, { name: "Edited", domain: "edited-undo.test" })).body.company;
+    const other = (await createCompany(owner, { name: "Elsewhere", domain: "elsewhere-undo.test" })).body.company;
+    const note = (await createActivity(owner, { type: "note", title: "Kick-off", body: "Agreed scope.", companyId: company.id, occurredAt: "2026-10-20T09:00:00.000Z" })).body.activity;
+    await updateActivity(owner, note.id, { title: "Kick-off notes", body: "Agreed scope and dates.", companyId: other.id }, { operation: "update_activity", source: "web" });
+
+    const change = await latest(owner, note.id, "activity.updated");
+    assert.equal(change.canUndo, true);
+    assert.match(change.summary, /^Edited Note "Kick-off notes" on .*: Title from Kick-off to Kick-off notes; Text from Agreed scope\. to Agreed scope and dates\.; Company from Edited to Elsewhere$/);
+    assert.equal(change.restores, "Puts back Title: Kick-off; Text: Agreed scope.; Company: Edited.");
+    const described = await describeUndo(owner, change.id);
+    assert.equal(described.canUndo, true);
+
+    await undoAuditEvent(owner, change.id, UNDO);
+    const restored = (await listActivities(owner, { companyId: company.id })).data.find((item) => item.id === note.id);
+    assert.deepEqual([restored?.title, restored?.body, restored?.companyId], ["Kick-off", "Agreed scope.", company.id]);
+    const undone = await getAdminPool().query<{ changes: { undoes: string; undoneEventType: string } }>(
+      "select changes from crm.audit_events where entity_id = $1 and event_type = 'activity.undone'",
+      [note.id],
+    );
+    assert.deepEqual([undone.rows[0].changes.undoes, undone.rows[0].changes.undoneEventType], [change.id, "activity.updated"]);
+    await assert.rejects(undoAuditEvent(owner, change.id, UNDO), refused(/already been undone/));
+
+    await updateActivity(owner, note.id, { title: "First rename" }, { operation: "update_activity", source: "web" });
+    const first = await latest(owner, note.id, "activity.updated");
+    await updateActivity(owner, note.id, { title: "Second rename" }, { operation: "update_activity", source: "web" });
+    await assert.rejects(undoAuditEvent(owner, first.id, UNDO), refused(/changed again since: Title is now Second rename/));
+
+    const timed = await latest(owner, note.id, "activity.updated");
+    await archiveActivity(owner, note.id, { operation: "archive_activity", source: "web" });
+    await assert.rejects(undoAuditEvent(owner, timed.id, UNDO), refused(/can't be undone while Note "Second rename" on .* is deleted/));
+  });
+
+  it("waits for an activity edit in progress and refuses rather than overwrite it", async () => {
+    const company = (await createCompany(owner, { name: "Racing note", domain: "racing-note-undo.test" })).body.company;
+    const note = (await createActivity(owner, { type: "note", title: "Draft", body: "Notes", companyId: company.id })).body.activity;
+    await updateActivity(owner, note.id, { title: "Draft two" }, { operation: "update_activity", source: "web" });
+    const change = await latest(owner, note.id, "activity.updated");
+
+    const editor = await getAdminPool().connect();
+    try {
+      await editor.query("begin");
+      await editor.query("select 1 from crm.activities where id = $1 for update", [note.id]);
+      const undo = undoAuditEvent(owner, change.id, UNDO).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      await lockWaiter();
+      await editor.query("update crm.activities set title = 'Draft three' where id = $1", [note.id]);
+      await editor.query("commit");
+      const error = await undo;
+      assert.ok(refused(/changed again since: Title is now Draft three/)(error), `expected a refusal, got ${String(error)}`);
+    } finally {
+      editor.release();
+    }
+    assert.equal((await listActivities(owner, { companyId: company.id })).data[0].title, "Draft three");
   });
 
   it("refuses changes it can't safely reverse, and other people's changes", async () => {

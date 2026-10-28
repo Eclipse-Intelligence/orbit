@@ -167,7 +167,7 @@ Opportunity fields: `companyId`, `pipelineId`, `name`, `stageId`, `status`, `val
 
 Every activity includes `actorUserId`, `actorAgentId`, and `actorName`: the full name (or email) of the workspace member who logged it, or the name of the agent that created it. `actorName` is `null` when neither can be resolved, for example after the member leaves the workspace.
 
-`POST /api/v1/activities` appends an interaction. Types are `email`, `meeting`, `call`, `note`, `research`, `linkedin`, `agent_update`, and `other`. Fields: `type`, `title`, `body`, `occurredAt`, `companyId`, `contactId`, `opportunityId`, `metadata` (an object). A title or body is required, and the row must point at a company, contact, or opportunity. There is no update or delete in the API. People can delete (archive) an activity in the app or through the assistant, which fires `activity.archived`.
+`POST /api/v1/activities` appends an interaction. Types are `email`, `meeting`, `call`, `note`, `research`, `linkedin`, `agent_update`, and `other`. Fields: `type`, `title`, `body`, `occurredAt`, `companyId`, `contactId`, `opportunityId`, `metadata` (an object). A title or body is required, and the row must point at a company, contact, or opportunity. There is no update or delete in the API. People can edit an activity in the app or through the assistant, which fires `activity.updated` with the changed `fields` and their `before` and `after` values, and delete (archive) one, which fires `activity.archived`.
 
 ## Tasks
 

@@ -127,11 +127,11 @@ describe("archiving activities", () => {
     await assert.rejects(archiveActivity(stranger, mine.id, WEB), code("not_found"));
   });
 
-  it("enforces the same rule in the database, and keeps every other column read-only", async () => {
+  it("enforces the same rule in the database, and keeps metadata read-only", async () => {
     const note = (await createActivity(owner, { type: "note", body: "Database check", companyId: acme })).body.activity;
     const blocked = await queryAsUser(colleague.userId, "update crm.activities set archived_at = now() where id = $1 returning id", [note.id]);
     assert.equal(blocked.length, 0);
-    await assert.rejects(queryAsUser(owner.userId, "update crm.activities set title = 'Changed' where id = $1", [note.id]), /permission denied/);
+    await assert.rejects(queryAsUser(owner.userId, "update crm.activities set metadata = '{}'::jsonb where id = $1", [note.id]), /permission denied/);
     const allowed = await queryAsUser(owner.userId, "update crm.activities set archived_at = now() where id = $1 returning id", [note.id]);
     assert.equal(allowed.length, 1);
   });

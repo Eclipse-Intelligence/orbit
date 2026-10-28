@@ -1,6 +1,14 @@
 import type { Db } from "@/lib/db/pool";
 import { formatDate, HEALTH_LABELS, lifecycleLabel } from "@/lib/companies";
-import { activitySummaries, archiveActivityInDb, restoreActivityInDb, type ActivitySummary, type ClearedHealth } from "@/lib/crm/activities";
+import {
+  archiveActivityInDb,
+  readActivityState,
+  restoreActivityInDb,
+  undoActivityEditInDb,
+  type ActivitySummary,
+  type ClearedHealth,
+} from "@/lib/crm/activities";
+import { ACTIVITY_FIELD_LABELS, type ActivityEdit } from "@/lib/crm/activity-edit";
 import { archiveCompanyInDb, readCompanyInDb, unarchiveCompanyInDb, updateCompanyInDb } from "@/lib/crm/companies";
 import { archiveContactInDb, readContactInDb, unarchiveContactInDb, updateContactInDb } from "@/lib/crm/contacts";
 import { withActor } from "@/lib/crm/context";
@@ -13,6 +21,8 @@ import { isRelationshipLabel, RELATIONSHIP_META } from "@/lib/crm/relationship-s
 import { REMINDER_OPTIONS } from "@/lib/crm/reminder-options";
 import { hasScope, type Scope } from "@/lib/crm/scopes";
 import { archiveTaskInDb, readTaskInDb, restoreTaskInDb, unarchiveTaskInDb } from "@/lib/crm/tasks";
+import { formatDateTimeLabel } from "@/lib/date-input";
+import { dateTimeInputValue } from "@/lib/time";
 import type { AccountHealth, Actor, CompanyWrite, ContactWrite, OpportunityWrite, Provenance, TaskWrite } from "@/lib/crm/types";
 
 type EntityType = "company" | "contact" | "opportunity" | "task" | "activity";
@@ -46,7 +56,8 @@ const SCOPES: Record<EntityType, Scope> = {
   activity: "activities:write",
 };
 
-const FIELDS: Record<RecordType, Record<string, string>> = {
+const FIELDS: Record<EntityType, Record<string, string>> = {
+  activity: ACTIVITY_FIELD_LABELS,
   company: {
     name: "Name",
     domain: "Domain",
@@ -122,6 +133,7 @@ const UPDATE_EVENTS: Record<string, EntityType> = {
 const RELATIONSHIP_FIELDS = new Set(["relationshipOverride", "relationshipOverrideReason"]);
 const ID_FIELDS = new Set(["ownerId", "companyId", "contactId", "primaryContactId", "opportunityId"]);
 const DATE_FIELDS = new Set(["dueAt", "completedAt", "archivedAt", "expectedCloseDate"]);
+const DATE_TIME_FIELDS = new Set(["occurredAt"]);
 const AUTOMATIC_SOURCES = ["microsoft", "microsoft_teams", "granola", "communication"];
 const ACTIVITY_LABELS: Record<string, string> = { email: "Email", meeting: "Meeting", call: "Call", note: "Note", research: "Research", linkedin: "LinkedIn", agent_update: "Agent update", other: "Activity" };
 
@@ -205,6 +217,8 @@ function shownValue(field: string, value: unknown, names: Map<string, string>) {
   if (field === "remindMinutes") return REMINDER_OPTIONS.find((option) => option.minutes === value)?.label ?? String(value);
   if (ID_FIELDS.has(field) && typeof value === "string") return names.get(value) ?? "a record that no longer exists";
   if (DATE_FIELDS.has(field) && typeof value === "string") return formatDate(value);
+  if (DATE_TIME_FIELDS.has(field) && typeof value === "string") return formatDateTimeLabel(dateTimeInputValue(value));
+  if (field === "type" && typeof value === "string") return ACTIVITY_LABELS[value] ?? value;
   return clip(String(value));
 }
 
@@ -268,9 +282,14 @@ async function snapshot(db: Db, actor: Actor, entity: EntityType, id: string): P
     if (!task || task.workspaceId !== workspaceId) return null;
     return { name: task.title, values: { ...task }, archivedAt: task.archivedAt };
   }
-  const activity = (await activitySummaries(db, workspaceId, [id])).get(id);
+  const activity = await readActivityState(db, workspaceId, id);
   if (!activity) return null;
-  return { name: activityName(activity), values: { archivedAt: activity.archivedAt }, archivedAt: activity.archivedAt };
+  const { type, title, occurredAt } = activity.values;
+  return {
+    name: activityName({ type, title, occurredAt, archivedAt: activity.archivedAt }),
+    values: { ...activity.values, archivedAt: activity.archivedAt },
+    archivedAt: activity.archivedAt,
+  };
 }
 
 function ownedBy(actor: Actor, event: AuditRow) {
@@ -334,6 +353,19 @@ function restoreFields(db: Db, actor: Actor, entity: RecordType, id: string, bef
       );
     }
   };
+}
+
+function restoreActivityFields(
+  db: Db,
+  actor: Actor,
+  id: string,
+  before: Record<string, unknown>,
+  fields: string[],
+  changes: Record<string, unknown> | null,
+  provenance: Provenance,
+) {
+  const write = Object.fromEntries(fields.map((field) => [field, before[field] ?? null])) as ActivityEdit;
+  return () => undoActivityEditInDb(db, actor, id, write, clearedHealthIn(changes), provenance);
 }
 
 function archiveRun(db: Db, actor: Actor, entity: EntityType, id: string, provenance: Provenance) {
@@ -412,6 +444,19 @@ async function describeEvent(
     restores = entity === "activity" ? `Deletes ${entityName} again.` : `Archives ${entityName} again.`;
     if (current && current.archivedAt) check = `This can't be undone because ${entityName} is ${entity === "activity" ? "deleted" : "archived"} again.`;
     run = archiveRun(db, actor, entity, event.entity_id, provenance);
+  } else if (updateEntity === "activity" && fields && fields.fields.every((field) => field in FIELDS.activity)) {
+    const labels = FIELDS.activity;
+    const parts = fields.fields.map(
+      (field) => `${labels[field]} from ${shownValue(field, fields.before[field], names)} to ${shownValue(field, fields.after[field], names)}`,
+    );
+    summary = `Edited ${entityName}: ${parts.join("; ")}`;
+    restores = `Puts back ${fields.fields.map((field) => `${labels[field]}: ${shownValue(field, fields.before[field], names)}`).join("; ")}.`;
+    if (current) {
+      const moved = fields.fields.find((field) => !same(current.values[field], fields.after[field]));
+      if (moved) check = changedSince(labels[moved], current.values[moved], moved, names);
+      else if (current.archivedAt) check = `This can't be undone while ${entityName} is deleted.`;
+    }
+    run = restoreActivityFields(db, actor, event.entity_id, fields.before, fields.fields, changes, provenance);
   } else if (updateEntity && updateEntity !== "activity" && fields && fields.fields.every((field) => field in FIELDS[updateEntity])) {
     const labels = FIELDS[updateEntity];
     const onlyCompletion = updateEntity === "task" && fields.fields.length === 1 && fields.fields[0] === "completedAt";
