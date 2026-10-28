@@ -54,20 +54,23 @@ import { STARTER_TEMPLATES } from "@/lib/workflows/templates";
 import { BULK_LIMIT, runBulk } from "@/lib/crm/bulk";
 import { attachableFiles, discardAttachments } from "@/lib/crm/email-attachments";
 import { listActivities } from "@/lib/crm/activities";
-import { getCalendarStatus, getMeetings, listPeopleMet, readPeople } from "@/lib/crm/calendar";
+import { getCalendarStatus, getMeetings, listPeopleMet, myAddresses, readPeople, readPerson } from "@/lib/crm/calendar";
 import { listCalendarItems } from "@/lib/crm/calendars";
 import { getInsightTranscript, getInsightsForActivities } from "@/lib/crm/call-insights";
 import { createTaskWithClickUp, getClickUpPicker, getClickUpState, pushClickUpTask } from "@/lib/crm/clickup";
 import { archiveCompany, createCompany, getCompany, listCompanies, listMembers, updateCompany } from "@/lib/crm/companies";
 import { archiveContact, createContact, getContact, listContacts, updateContact } from "@/lib/crm/contacts";
+import { mergeCompanies, mergeContacts } from "@/lib/crm/merge";
 import { listUnfiledImports } from "@/lib/crm/conversations";
 import { archiveEmailTemplate, createEmailTemplate, listEmailTemplates, updateEmailTemplate } from "@/lib/crm/email-templates";
 import { CrmError } from "@/lib/crm/errors";
 import { getGranolaStatus } from "@/lib/crm/granola";
 import { companyHref, contactHref, opportunityHref } from "@/lib/crm/hrefs";
 import { getMailbox, listInbox } from "@/lib/crm/inbox";
-import { cancelInvite, createInvite, getMeetingLink } from "@/lib/crm/invites";
+import { cancelInvite, createInvite, getMeetingLink, rescheduleInvite } from "@/lib/crm/invites";
+import { latestEmailCheck, verifyEmail } from "@/lib/enrichment/email-check";
 import { archiveOpportunity, createOpportunity, getOpportunity, listOpportunities, listPipeline, updateOpportunity } from "@/lib/crm/opportunities";
+import { pipelineReport, stageHistory, stalledDeals, STALLED_DAYS } from "@/lib/crm/pipeline-history";
 import { getMyEmails } from "@/lib/crm/profile";
 import { REMINDER_OPTIONS } from "@/lib/crm/reminder-options";
 import { findStaleRelationships, getCompanyContext, listAttention } from "@/lib/crm/relationships";
@@ -90,7 +93,7 @@ import { withActor } from "@/lib/crm/context";
 import { isUuid } from "@/lib/crm/mutate";
 import type { Scope } from "@/lib/crm/scopes";
 import { formatDateLabel, formatDateTimeLabel } from "@/lib/date-input";
-import { appTimeZone, parseDateTime, zonedParts } from "@/lib/time";
+import { appTimeZone, dateTimeInputValue, parseDateTime, zonedParts } from "@/lib/time";
 import {
   LINEAR_PRIORITIES,
   LinearError,
@@ -296,6 +299,18 @@ function nameList(ids: string[], name: Names, noun: string) {
 function titled(verb: string, label: string | undefined) {
   return label ? `${verb}: ${label}` : verb;
 }
+
+function mergeLine(label: string, id: unknown, name: Names) {
+  const key = `${str(id)}:merge`;
+  const detail = name(key);
+  return `${label}: ${name(id)}${detail !== key ? ` (${detail})` : ""}`;
+}
+
+function counted(count: number, one: string, many: string) {
+  return `${count} ${count === 1 ? one : many}`;
+}
+
+const MERGE_ID_KEYS = ["keepId", "mergeId"];
 
 function detail(name: Names, key: string) {
   const value = name(key);
@@ -693,6 +708,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       );
       return {
         contact: withContact(contact),
+        emailCheck: await latestEmailCheck(actor, contact.email),
         openTasks: tasks.data.map(withTask),
         completedTasks: completed.data.map(withTask),
         timeline: activities.data.map(withActivity),
@@ -782,6 +798,61 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         },
       };
     },
+  },
+  {
+    name: "get_deal_history",
+    label: "Reading the deal's history",
+    description:
+      "Every stage a deal or board card has been in, oldest first: stage, the stage it came from, when it entered and left, days in it and who moved it. Creating the deal counts as entering its first stage.",
+    parameters: {
+      type: "object",
+      properties: { opportunityId: idParam("Opportunity id.") },
+      required: ["opportunityId"],
+    },
+    run: async (actor, args) => stageHistory(actor, required(args.opportunityId, "opportunityId")),
+  },
+  {
+    name: "pipeline_report",
+    label: "Reporting on the pipeline",
+    description:
+      "Conversion and time in stage for the sales pipeline (or a board) since a date (default 90 days ago). Per stage: deals in it now, how many entered, median and average days in stage (current and past stays), how many moved forward, were won, lost, moved back or are stalled now, and the share of deals entering it that were won. Forward and back use the current stage order, and a move into a stage that has since been deleted counts as forward. Stalled uses only tasks that you can see, as stalled_deals does. Also the overall win rate of deals closed in the period. Use this for conversion, win rate and time in stage instead of reading deals one at a time.",
+    parameters: {
+      type: "object",
+      properties: {
+        boardId: idParam("A board id from list_boards. Omit for the sales pipeline."),
+        since: { type: "string", description: "Start of the period, YYYY-MM-DD. Defaults to 90 days ago." },
+        stalledDays: { type: "integer", minimum: 1, maximum: 365, description: `Days without activity that count as stalled. Defaults to ${STALLED_DAYS}.` },
+      },
+    },
+    run: async (actor, args) =>
+      pipelineReport(actor, {
+        pipelineId: optionalStr(args.boardId),
+        since: optionalStr(args.since),
+        stalledDays: int(args.stalledDays, STALLED_DAYS, 1, 365),
+      }),
+  },
+  {
+    name: "stalled_deals",
+    label: "Finding deals gone quiet",
+    description:
+      `Open deals where nothing has happened for N days (default ${STALLED_DAYS}) since they entered their current stage: no activity or email on the deal, its company or its contact, and no open task that you can see due in that time or later (a long-overdue task doesn't count). Returns each deal with its stage, days in stage, last activity date and why it's stalled, quietest first. Sales pipelines by default; pass boardId for a board. Use this for "which deals have gone quiet".`,
+    parameters: {
+      type: "object",
+      properties: {
+        days: { type: "integer", minimum: 1, maximum: 365, description: `Days without activity. Defaults to ${STALLED_DAYS}.` },
+        stageIds: { type: "array", items: { type: "string" }, description: "Only these stages (ids from get_pipeline or get_board)." },
+        boardId: idParam("A board id from list_boards. Omit for the sales pipeline."),
+        limit: limitParam,
+      },
+    },
+    run: async (actor, args) => ({
+      deals: await stalledDeals(actor, {
+        days: int(args.days, STALLED_DAYS, 1, 365),
+        stageIds: strings(args.stageIds),
+        pipelineId: optionalStr(args.boardId),
+        limit: int(args.limit, 50, 1, 100),
+      }),
+    }),
   },
   {
     name: "list_boards",
@@ -1886,6 +1957,36 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       ),
   },
   {
+    name: "merge_companies",
+    label: "Merging companies",
+    write: true,
+    description:
+      "Merge a duplicate company into the one to keep. Its people, deals, board cards, tasks, activity, emails, proposals and Knowledge move to the kept company, empty fields on the kept company are filled from the duplicate, tags are combined, and the duplicate is archived. Nothing is deleted.",
+    parameters: {
+      type: "object",
+      properties: {
+        keepId: idParam("Company to keep."),
+        mergeId: idParam("Duplicate company to merge in and archive."),
+      },
+      required: ["keepId", "mergeId"],
+    },
+    describe: (args, name) => ({
+      title: titled("Merge companies", `${name(args.mergeId)} into ${name(args.keepId)}`),
+      lines: [
+        mergeLine("Keep", args.keepId, name),
+        mergeLine("Merge and archive", args.mergeId, name),
+        "People, deals, tasks, activity and emails move to the kept company",
+      ],
+    }),
+    run: async (actor, args) => {
+      const result = await mergeCompanies(actor, required(args.keepId, "The company to keep"), required(args.mergeId, "The company to merge"), {
+        operation: "merge_companies",
+        ...PROVENANCE,
+      });
+      return { company: withCompany(result.kept), archived: withCompany(result.merged), moved: result.moved, filled: result.filled };
+    },
+  },
+  {
     name: "create_contact",
     label: "Creating a contact",
     write: true,
@@ -1949,6 +2050,36 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       bulkUpdate(actor, "contacts:write", args.contactIds, (id) =>
         updateContact(actor, id, pick(args, BULK_CONTACT_KEYS), { provenance: { operation: "update_contacts", ...PROVENANCE } }),
       ),
+  },
+  {
+    name: "merge_contacts",
+    label: "Merging people",
+    write: true,
+    description:
+      "Merge a duplicate person into the one to keep. Their activity, tasks, deals, emails and proposals move to the kept person, empty fields are filled from the duplicate, tags are combined, and the duplicate is archived. The kept person's email stays; a different email from the duplicate is added to the notes.",
+    parameters: {
+      type: "object",
+      properties: {
+        keepId: idParam("Contact to keep."),
+        mergeId: idParam("Duplicate contact to merge in and archive."),
+      },
+      required: ["keepId", "mergeId"],
+    },
+    describe: (args, name) => ({
+      title: titled("Merge people", `${name(args.mergeId)} into ${name(args.keepId)}`),
+      lines: [
+        mergeLine("Keep", args.keepId, name),
+        mergeLine("Merge and archive", args.mergeId, name),
+        "Activity, tasks, deals and emails move to the kept person",
+      ],
+    }),
+    run: async (actor, args) => {
+      const result = await mergeContacts(actor, required(args.keepId, "The contact to keep"), required(args.mergeId, "The contact to merge"), {
+        operation: "merge_contacts",
+        ...PROVENANCE,
+      });
+      return { contact: withContact(result.kept), archived: withContact(result.merged), moved: result.moved, filled: result.filled };
+    },
   },
   {
     name: "find_contact_details",
@@ -2943,6 +3074,31 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     },
   },
   {
+    name: "verify_email",
+    label: "Checking an email address",
+    write: true,
+    description:
+      "Check whether an email address can receive mail with the email checkers (Enrow, Icypeas, Hunter, in that order). Gives valid, invalid or unknown and the checker. A check from the last 30 days (a day for unknown), or an address Orbit found and verified in that time, comes back without a new check. get_contact shows the last check as emailCheck, with stale true once it's past that age.",
+    parameters: {
+      type: "object",
+      properties: {
+        email: { type: "string", description: "The address to check." },
+        contactId: { type: "string", description: "The Orbit contact with this address, to save the result on them." },
+      },
+      required: ["email"],
+    },
+    describe: (args, name) => ({
+      title: `Check address: ${str(args.email)}`,
+      lines: [optionalStr(args.contactId) ? `Contact: ${name(args.contactId)}` : "", "Uses an email checker credit."],
+    }),
+    run: async (actor, args, context) => ({
+      check: await verifyEmail(actor, required(args.email, "An email address"), {
+        contactId: optionalStr(args.contactId) ?? null,
+        deadline: context.deadline,
+      }),
+    }),
+  },
+  {
     name: "create_meeting_invite",
     label: "Sending an invite",
     write: true,
@@ -2992,6 +3148,47 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     },
   },
   {
+    name: "move_meeting",
+    label: "Moving a meeting",
+    write: true,
+    description:
+      "Move an Outlook meeting the user organises to a new time. Outlook sends the guests an updated invite and the meeting link stays. Times are London time. Use an event id from list_calendar_events with canCancel true.",
+    parameters: {
+      type: "object",
+      properties: {
+        eventId: { type: "string", description: "The event id from list_calendar_events." },
+        startLocal: { type: "string", description: "New start, YYYY-MM-DDTHH:mm London time." },
+        durationMinutes: { type: "integer", minimum: 5, maximum: 480, description: "Defaults to the current length." },
+        message: { type: "string", description: "A note for the guests, added to the invite." },
+      },
+      required: ["eventId", "startLocal"],
+    },
+    describe: (args, name) => {
+      const id = str(args.eventId);
+      const known = (key: string) => (name(`${id}:${key}`) === `${id}:${key}` ? "" : name(`${id}:${key}`));
+      const minutes = typeof args.durationMinutes === "number" ? args.durationMinutes : Number(known("minutes")) || null;
+      const from = known("when");
+      return {
+        title: `Move meeting: ${name(id)}`,
+        lines: [
+          from ? `From: ${formatDateTimeLabel(from)}${known("minutes") ? ` for ${known("minutes")} minutes` : ""}` : "",
+          `To: ${formatDateTimeLabel(str(args.startLocal))}${minutes ? ` for ${minutes} minutes` : ""}`,
+          known("guests") ? `Guests: ${known("guests")}` : "",
+          ...fieldLines(args, { message: "Message to guests" }),
+        ],
+      };
+    },
+    run: async (actor, args) => {
+      const moved = await rescheduleInvite(actor, {
+        eventId: str(args.eventId),
+        startLocal: str(args.startLocal),
+        durationMinutes: args.durationMinutes === undefined ? undefined : Number(args.durationMinutes),
+        message: optionalStr(args.message) ?? null,
+      });
+      return { moved };
+    },
+  },
+  {
     name: "cancel_meeting",
     label: "Cancelling a meeting",
     write: true,
@@ -3011,7 +3208,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       return {
         title: `Cancel meeting: ${name(id) === "Unknown record" ? "a meeting Orbit can't find" : name(id)}`,
         lines: [
-          detail(name, `${id}:when`) ? `When: ${detail(name, `${id}:when`)}` : "",
+          detail(name, `${id}:when`) ? `When: ${formatDateTimeLabel(detail(name, `${id}:when`))}` : "",
           `Guests: ${guests || "none listed"}`,
           str(args.message) ? `Message: ${str(args.message)}` : "",
           "Outlook tells every guest when you approve.",
@@ -3419,6 +3616,35 @@ export async function recordNames(actor: UserActor, args: Args[]) {
       [list, actor.userId],
     );
     for (const row of details.rows) names.set(row.id, row.name);
+    const merging = [...new Set(args.flatMap((entry) => MERGE_ID_KEYS.map((key) => str(entry[key])).filter(isUuid)))];
+    const merges = await db.query<{ id: string; label: string | null; created: string; activities: number; deals: number; tasks: number }>(
+      `select c.id::text, c.domain as label, to_char(c.created_at at time zone 'Europe/London', 'FMDD Mon YYYY') as created,
+         (select count(*)::int from crm.activities a where a.company_id = c.id) as activities,
+         (select count(*)::int from crm.opportunities o where o.company_id = c.id and o.archived_at is null) as deals,
+         (select count(*)::int from crm.tasks t where t.company_id = c.id and t.archived_at is null) as tasks
+       from crm.companies c where c.id = any($1::uuid[]) and c.workspace_id = $2
+       union all
+       select p.id::text, p.email, to_char(p.created_at at time zone 'Europe/London', 'FMDD Mon YYYY'),
+         (select count(*)::int from crm.activities a where a.contact_id = p.id),
+         (select count(*)::int from crm.opportunities o where o.primary_contact_id = p.id and o.archived_at is null),
+         (select count(*)::int from crm.tasks t where t.contact_id = p.id and t.archived_at is null)
+       from crm.contacts p where p.id = any($1::uuid[]) and p.workspace_id = $2`,
+      [merging, actor.workspaceId],
+    );
+    for (const row of merges.rows) {
+      names.set(
+        `${row.id}:merge`,
+        [
+          row.label?.trim() || null,
+          `added ${row.created}`,
+          counted(row.activities, "activity", "activities"),
+          counted(row.deals, "deal", "deals"),
+          counted(row.tasks, "task", "tasks"),
+        ]
+          .filter(Boolean)
+          .join(", "),
+      );
+    }
     const drafts = await db.query<{ id: string; subject: string | null; to_recipients: MailAddress[]; cc_recipients: MailAddress[]; bcc_recipients: MailAddress[] }>(
       "select id, subject, to_recipients, cc_recipients, bcc_recipients from crm.mail_drafts where id = any($1::uuid[]) and user_id = $2",
       [list, actor.userId],
@@ -3434,15 +3660,20 @@ export async function recordNames(actor: UserActor, args: Args[]) {
       [list, actor.workspaceId],
     );
     for (const row of emails.rows) names.set(`${row.id}:email`, row.email);
-    const meetings = await db.query<{ id: string; starts_at: Date; attendees: unknown }>(
-      "select id, starts_at, attendees from crm.calendar_events where id = any($1::uuid[]) and user_id = $2",
-      [list, actor.userId],
+    const events = await db.query<{ id: string; subject: string | null; starts_at: Date; ends_at: Date; organizer: unknown; attendees: unknown }>(
+      `select id, subject, starts_at, ends_at, organizer, attendees from crm.calendar_events
+       where id = any($1::uuid[]) and user_id = $2 and workspace_id = $3`,
+      [list, actor.userId, actor.workspaceId],
     );
-    for (const row of meetings.rows) {
-      names.set(`${row.id}:when`, londonLabel(new Date(row.starts_at)));
-      const guests = readPeople(row.attendees)
-        .filter((person) => person.email !== actor.email.toLowerCase())
-        .map((person) => person.name ?? person.email);
+    if (events.rows.length === 0) return;
+    const own = await myAddresses(db, actor);
+    for (const row of events.rows) {
+      const guests = [...new Map([readPerson(row.organizer), ...readPeople(row.attendees)]
+        .filter((person): person is NonNullable<typeof person> => Boolean(person) && !own.has(person!.email))
+        .map((person) => [person.email, person.name ?? person.email])).values()];
+      names.set(row.id, row.subject?.trim() || "Untitled event");
+      names.set(`${row.id}:when`, dateTimeInputValue(row.starts_at.toISOString(), appTimeZone()));
+      names.set(`${row.id}:minutes`, String(Math.round((row.ends_at.getTime() - row.starts_at.getTime()) / 60_000)));
       if (guests.length) names.set(`${row.id}:guests`, guests.join(", "));
     }
   });

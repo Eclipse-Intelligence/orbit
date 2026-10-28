@@ -6,6 +6,7 @@ import type { UserActor } from "@/lib/crm/types";
 import { getPool } from "@/lib/db/pool";
 import { brandToCompany, enrichCompany, sizeFromEmployees } from "@/lib/enrichment/companies";
 import { contactLookups, enrichContact, enrichContacts } from "@/lib/enrichment/contacts";
+import { latestEmailCheck } from "@/lib/enrichment/email-check";
 import { linkedinProfileIn } from "@/lib/enrichment/providers";
 import { enrichmentAvailability, getEnrichmentSettings, saveEnrichmentSettings } from "@/lib/enrichment/settings";
 import { createUser, resetDatabase } from "./helpers";
@@ -193,7 +194,7 @@ describe("contact email and LinkedIn waterfall", () => {
     assert.equal(result.provider, "context");
     assert.equal(result.email, "hank@globex.test");
     assert.equal(result.linkedinUrl, "https://www.linkedin.com/in/hank-scorpio");
-    assert.deepEqual(result.attempts, [{ provider: "context", outcome: "found" }]);
+    assert.deepEqual(result.attempts, [{ provider: "context", outcome: "found", verifiedBy: "enrow" }]);
     assert.equal(net.hits("api.hunter.io"), 0);
     const contextCall = net.calls.find((call) => call.url.endsWith("/v1/people/enrich"))!;
     assert.deepEqual(contextCall.body?.name, { first: "Hank", last: "Scorpio" });
@@ -205,6 +206,11 @@ describe("contact email and LinkedIn waterfall", () => {
     const states = await contactLookups(owner, [contact.id]);
     assert.equal(states[contact.id].email?.status, "found");
     assert.equal(states[contact.id].linkedin?.status, "found");
+    const check = await latestEmailCheck(owner, "hank@globex.test");
+    assert.deepEqual(
+      { verdict: check?.verdict, source: check?.source, provider: check?.provider, stale: check?.stale },
+      { verdict: "valid", source: "find", provider: "enrow", stale: false },
+    );
     assert.equal((await enrichContact(owner, contact.id, "email", { env: ENV })).status, "skipped");
   });
 
@@ -233,8 +239,28 @@ describe("contact email and LinkedIn waterfall", () => {
     assert.deepEqual(next.attempts, [
       { provider: "context", outcome: "rejected", detail: "Enrow couldn't confirm the email." },
       { provider: "hunter", outcome: "not_found" },
-      { provider: "enrow", outcome: "found" },
+      { provider: "enrow", outcome: "found", verifiedBy: "enrow" },
     ]);
+  });
+
+  it("doesn't take a context.dev email Hunter can only call webmail, and says no checker could confirm it", async () => {
+    const contact = await person("Lisa", "Simpson");
+    const net = fake([
+      contextPerson({ email: "lisa@globex.test" }),
+      (call) => (call.url.includes("api.hunter.io/v2/email-verifier") ? { body: { data: { status: "webmail" } } } : null),
+      hunterFinds(null),
+    ]);
+    const result = await enrichContact(owner, contact.id, "email", {
+      env: { CONTEXT_DEV_API_KEY: "ctx", HUNTER_API_KEY: "hun" },
+      fetchImpl: net.fetchImpl,
+      ...FAST,
+    });
+    assert.equal(result.status, "not_found");
+    assert.deepEqual(result.attempts, [
+      { provider: "context", outcome: "rejected", detail: "No email checker could confirm it." },
+      { provider: "hunter", outcome: "not_found" },
+    ]);
+    assert.equal((await getContact(owner, contact.id)).email, null);
   });
 
   it("keeps going when a provider is out of credits, polls Icypeas, and remembers what wasn't found", async () => {

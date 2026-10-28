@@ -81,6 +81,7 @@ export default function RecordPicker({
   placeholder,
   invalid,
   companyId,
+  excludeId,
 }: {
   id: string;
   kind: "contact" | "company";
@@ -89,12 +90,14 @@ export default function RecordPicker({
   placeholder: string;
   invalid?: boolean;
   companyId?: string | null;
+  excludeId?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Results | null>(null);
   const trimmed = query.trim();
-  const current = results?.query === trimmed ? results : null;
+  const found = results?.query === trimmed ? results : null;
+  const current = found && excludeId ? { ...found, options: found.options.filter((option) => option.id !== excludeId) } : found;
   const noun = kind === "contact" ? "contacts" : "companies";
 
   useEffect(() => {
