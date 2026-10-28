@@ -3521,7 +3521,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     name: "reader_read",
     label: "Reading from your Reader",
     description:
-      "Read one document from the user's Readwise Reader, 60,000 characters a part. Part 1 also has its note and every highlight with its note. Use an id from reader_list. To read, review, summarise or check a document, read every part in order until nextPart is null before answering, and never judge the whole document from part 1 alone. If you can't finish, say which parts you read.",
+      "Read one document from the user's Readwise Reader, 35,000 characters a part. Part 1 also has its note and every highlight with its note. Use an id from reader_list. To read, review, summarise or check a document, read every part in order until nextPart is null before answering, and never judge the whole document from part 1 alone. If you can't finish, say which parts you read.",
     parameters: {
       type: "object",
       properties: {
