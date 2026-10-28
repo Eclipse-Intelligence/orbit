@@ -61,7 +61,7 @@ What is shared and what is private:
 - Private to each person: their inbox, calendars and calendar page, OAuth tokens and API keys, email signatures and unsent attachments, assistant conversations and the files attached in them, workflow runs and approvals, notifications.
 - Tasks belong to their owner and creator. A member sees only tasks assigned to them or that they created, everywhere in Orbit (lists, record pages, search, the assistant). The owner and admins see everyone's, with a Mine or Everyone switch on Tasks once the workspace has more than one person. New tasks are owned by whoever creates them. Reminders, the side menu count and the notifications bell only cover your own tasks and unowned ones. A member can hand back a task they created, but not one someone else gave them.
 
-Removing someone moves their companies, contacts, deals and tasks to whoever removed them, disconnects their Microsoft and calendar accounts, AI account, Orbit Agent, Granola key and Readwise token, and keeps everything they logged.
+Removing someone moves their companies, contacts, deals and tasks to whoever removed them, disconnects their Microsoft and calendar accounts, AI account, Orbit Agent, Granola key, Readwise token and Recall key, and keeps everything they logged.
 
 ## Settings
 
@@ -75,7 +75,7 @@ Removing someone moves their companies, contacts, deals and tasks to whoever rem
 | Templates and signatures | `/settings/email-templates` | Reusable emails (below) and a signature per sending address |
 | Calendars | `/settings/calendars` | Calendar accounts and links, Show and Use for CRM, Add mail for extra Microsoft accounts |
 | Booking page | `/settings/booking-page` | Your public booking page at `/book/<link>` (below) |
-| Integrations | `/settings/integrations` | Microsoft 365 and Teams calls (managed from Capture), your Granola key, your Readwise Reader token, Linear, ClickUp, AI accounts and Orbit Agent, enrichment providers |
+| Integrations | `/settings/integrations` | Microsoft 365 and Teams calls (managed from Capture), your Granola key, your Readwise Reader token, your Recall key, Linear, ClickUp, AI accounts and Orbit Agent, enrichment providers |
 | Pipeline | `/settings/pipeline` | Opportunity stages (each board has its own stages, set on the board) |
 | Tags and lifecycles | `/settings/tags` | Rename, merge, and delete tags and custom lifecycles |
 | API and webhooks | `/settings/api` | Your mail in Claude (personal MCP tokens), REST and MCP addresses, how to issue agent tokens, webhooks and recent deliveries |
@@ -300,6 +300,12 @@ Each person can connect their own Readwise Reader in Settings › Integrations w
 Only documents tagged `orbit` in Reader are stored in Orbit. Each one becomes a Knowledge item (kind Reader) with its title, author, source link, full text, and its highlights with their notes. It is filed under the company whose name or domain matches one of the document's other tags (ignoring case, spaces, hyphens and underscores), otherwise under Eclipse. Orbit syncs every 10 minutes with the scheduled sync, and Sync now on the card syncs straight away and checks every tagged document. Changed text or highlights update the item and index it again. Highlights are found by listing highlights and matching their parent document. Each sync makes at most 15 requests, so a large library takes several syncs: Orbit saves its place in the document list and in the highlight list and carries on from there. A full check of every tagged document and highlight starts once a day and finishes over as many syncs as it needs. Only once a full check has listed every tagged document does Orbit remove the items for documents that lost the `orbit` tag or were deleted in Reader, and a reply from Readwise that Orbit can't read stops the sync without removing anything. An item you archive in Knowledge stays out until the document changes in Reader or is tagged `orbit` again. Disconnecting stops the sync, and items already in Knowledge stay. Orbit stays under Reader's limit of 20 requests a minute and waits once when Readwise asks it to slow down.
 
 The assistant can read the rest of your Reader live when you ask, with `reader_list` (and its `highlights` mode) and `reader_read`, and so can Claude or ChatGPT over MCP with your personal token (where highlights are `reader_highlights`). `reader_read` returns a document in parts of up to 35,000 characters, and the assistant reads every part before answering about the whole document. These use only your own token, and nothing they read is stored. Orbit never saves, updates, tags, moves or deletes anything in Reader.
+
+### Recall
+
+Each person can connect their own Recall (recall.it) in Settings › Integrations with an API key from Recall's Settings › API & MCP. Orbit checks it with a narrow read-only request before saving, stores it encrypted, and only that person can see it or use it. No environment variable is needed.
+
+Nothing from Recall is copied into Orbit. When you ask, the assistant searches and reads your Recall live with `recall_search` and `recall_read`, using GET requests only. Recall returns the most relevant passages of a card rather than its full text, so the assistant says when it is working from excerpts. To read an article or YouTube video end to end, `recall_read` opens the card's source link live and reads it in windows of 100,000 characters. Recall's API filters by tag id, not name. Orbit checks once a day for a tag list it can use to accept names, and the Settings card says which applies. Recall's own MCP server is separate: Claude or ChatGPT can connect to it directly, and Orbit's MCP server has no Recall tools.
 
 ### Teams transcripts
 
