@@ -2760,7 +2760,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     name: "reader_list",
     label: "Checking your Reader",
     description:
-      "List documents in the user's own Readwise Reader, with titles, authors, links, locations, tags, dates and ids. Filter by location (new is Inbox, later, shortlist, archive, feed), category, tag (up to 5, all must match) or updatedAfter. Read-only: Orbit never changes anything in Reader.",
+      "Only when the user asks you to look in their Reader. List documents in the user's own Readwise Reader, with titles, authors, links, locations, tags, dates and ids. Filter by location (new is Inbox, later, shortlist, archive, feed), category, tag (up to 5, all must match) or updatedAfter. Read-only: Orbit never changes anything in Reader.",
     parameters: {
       type: "object",
       properties: {
