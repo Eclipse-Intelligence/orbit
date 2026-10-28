@@ -74,6 +74,9 @@ export type CalendarItem = {
   granolaHref: string | null;
   createdByOrbit: boolean;
   canCancel: boolean;
+  organisedByMe: boolean;
+  myResponse: string | null;
+  canRespond: boolean;
   icalUid: string | null;
   alsoIn: string[];
 };
@@ -225,6 +228,7 @@ type ItemRow = {
   granola_company_id: string | null;
   connection_id: string | null;
   created_by_orbit: boolean;
+  response_status: string | null;
 };
 
 function readResponse(value: unknown, email: string) {
@@ -249,7 +253,7 @@ export async function listCalendarItems(
     const result = await db.query<ItemRow>(
       `select e.id, e.calendar_id, e.subject, e.starts_at, e.ends_at, e.is_all_day, e.show_as,
               e.location, e.web_link, e.online_meeting_url, e.organizer, e.attendees,
-              e.connection_id, e.created_by_orbit, e.ical_uid,
+              e.connection_id, e.created_by_orbit, e.response_status, e.ical_uid,
               g.id as granola_id, g.contact_id as granola_contact_id, g.company_id as granola_company_id
        from crm.calendar_events e
        join crm.calendars c on c.id = e.calendar_id and c.is_visible
@@ -293,7 +297,17 @@ export async function listCalendarItems(
     const internal = await internalAddresses(db, actor.workspaceId, await ownAddresses(db, actor));
     const stored = await readStored(db, actor);
     const writable = stored?.status === "connected" && stored.refreshTokenCipher ? stored.id : null;
-    const own = writable ? await myAddresses(db, actor) : new Set<string>();
+    const own = await myAddresses(db, actor);
+    const organised = (row: ItemRow) => {
+      const organizer = readPerson(row.organizer);
+      return row.created_by_orbit || row.response_status === "organizer" || Boolean(organizer && own.has(organizer.email));
+    };
+    const answerable = (row: ItemRow) =>
+      Boolean(writable) &&
+      row.connection_id === writable &&
+      new Date(row.starts_at).getTime() > now &&
+      readPerson(row.organizer) !== null &&
+      !organised(row);
     const cancellable = (row: ItemRow) => {
       if (!writable || row.connection_id !== writable || new Date(row.starts_at).getTime() <= now) return false;
       const organizer = readPerson(row.organizer);
@@ -336,6 +350,9 @@ export async function listCalendarItems(
         granolaHref,
         createdByOrbit: row.created_by_orbit,
         canCancel: cancellable(row),
+        organisedByMe: organised(row),
+        myResponse: row.response_status,
+        canRespond: answerable(row),
         icalUid: row.ical_uid,
         alsoIn: [],
       };

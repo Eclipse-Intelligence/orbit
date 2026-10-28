@@ -33,9 +33,13 @@ import {
   createGraphEvent,
   inviteDraft,
   moveGraphEvent,
+  RESPOND_ORGANISER,
+  RESPONSE_STATUS_FOR,
+  respondToGraphEvent,
   toCalendarEvent,
   type CalendarEvent,
   type InviteGuest,
+  type InviteResponse,
 } from "@/lib/microsoft/calendar";
 import {
   grantsCalendarWrite,
@@ -389,6 +393,7 @@ function fallbackEvent(
     organizer: values.organizer,
     attendees: values.guests.map((guest) => ({ ...guest, response: "none" })),
     showAs: "busy",
+    responseStatus: "organizer",
   };
 }
 
@@ -403,8 +408,8 @@ async function saveCreatedEvent(
     `insert into crm.calendar_events (
        workspace_id, calendar_id, connection_id, user_id, provider_event_id, ical_uid,
        subject, starts_at, ends_at, is_all_day, is_cancelled, location, web_link,
-       online_meeting_url, organizer, attendees, show_as, created_by_orbit
-     ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16::jsonb, $17, true)
+       online_meeting_url, organizer, attendees, show_as, response_status, created_by_orbit
+     ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16::jsonb, $17, $18, true)
      on conflict (calendar_id, provider_event_id) do update set
        ical_uid = excluded.ical_uid,
        subject = excluded.subject,
@@ -416,6 +421,7 @@ async function saveCreatedEvent(
        organizer = excluded.organizer,
        attendees = excluded.attendees,
        show_as = excluded.show_as,
+       response_status = excluded.response_status,
        created_by_orbit = true
      returning id`,
     [
@@ -436,6 +442,7 @@ async function saveCreatedEvent(
       JSON.stringify(event.organizer),
       JSON.stringify(event.attendees),
       event.showAs,
+      event.responseStatus ?? "organizer",
     ],
   );
   return result.rows[0].id;
@@ -702,6 +709,8 @@ type OrganisedRow = {
   contact_ids: string[];
   is_cancelled: boolean;
   created_by_orbit: boolean;
+  response_status: string | null;
+  show_as: string | null;
 };
 
 export const MEETING_GONE = "This meeting no longer exists in Outlook, so Orbit has taken it off your calendar.";
@@ -711,18 +720,13 @@ const ORGANISER_ONLY = {
   move: "Only the organiser can move this meeting. Propose a new time in Outlook instead.",
 };
 
-async function organisedEvent(
-  actor: UserActor,
-  eventId: string,
-  verb: "cancel" | "move",
-  now: number,
-) {
+async function readOwnEvent(actor: UserActor, eventId: string) {
   if (!isUuid(eventId)) throw new CrmError("not_found", "That meeting isn't in your calendar.", 404);
-  const found = await withActor(actor, async (db) => {
+  return withActor(actor, async (db) => {
     const stored = await readStored(db, actor);
     const event = await db.query<OrganisedRow>(
       `select id, provider_event_id, connection_id, subject, starts_at, ends_at, is_all_day, organizer, attendees,
-              contact_ids, is_cancelled, created_by_orbit
+              contact_ids, is_cancelled, created_by_orbit, response_status, show_as
        from crm.calendar_events
        where id = $1 and user_id = $2 and workspace_id = $3`,
       [eventId, actor.userId, actor.workspaceId],
@@ -734,6 +738,20 @@ async function organisedEvent(
       scopes: stored ? await readGrantedScopes(db, stored.id) : null,
     };
   });
+}
+
+function organisedByUser(row: Pick<OrganisedRow, "created_by_orbit" | "response_status" | "organizer">, own: Set<string>) {
+  const organizer = readPerson(row.organizer);
+  return row.created_by_orbit || row.response_status === "organizer" || Boolean(organizer && own.has(organizer.email));
+}
+
+async function organisedEvent(
+  actor: UserActor,
+  eventId: string,
+  verb: "cancel" | "move",
+  now: number,
+) {
+  const found = await readOwnEvent(actor, eventId);
   const row = found.event;
   if (!row) throw new CrmError("not_found", "That meeting isn't in your calendar.", 404);
   if (row.is_cancelled) {
@@ -971,6 +989,243 @@ export async function rescheduleInvite(
     return {
       ...result,
       warning: "The meeting was moved in Outlook, but Orbit couldn't update it yet. It moves after the next sync.",
+    };
+  }
+}
+
+export const RESPOND_NOT_CONNECTED = "Connect Microsoft in Capture to answer invites.";
+
+export const MEETING_RESPONSES = ["accept", "tentative", "decline"] as const;
+
+export type MeetingResponse = (typeof MEETING_RESPONSES)[number];
+
+const GRAPH_RESPONSE: Record<MeetingResponse, InviteResponse> = {
+  accept: "accept",
+  tentative: "tentativelyAccept",
+  decline: "decline",
+};
+
+const RESPONSE_TITLE: Record<MeetingResponse, string> = {
+  accept: "Accepted",
+  tentative: "Tentatively accepted",
+  decline: "Declined",
+};
+
+export type RespondInput = {
+  eventId?: unknown;
+  response?: unknown;
+  note?: unknown;
+  sendResponse?: unknown;
+  proposedStartLocal?: unknown;
+  proposedDurationMinutes?: unknown;
+};
+
+export type RespondResult = {
+  eventId: string;
+  subject: string;
+  response: MeetingResponse;
+  responseStatus: string;
+  organizer: { name: string | null; email: string } | null;
+  organizerTold: boolean;
+  proposedStartsAt: string | null;
+  proposedEndsAt: string | null;
+  loggedOn: number;
+  warning: string | null;
+};
+
+const PROPOSAL_FIELDS: Record<string, string> = {
+  startLocal: "proposedStartLocal",
+  endLocal: "proposedStartLocal",
+  durationMinutes: "proposedDurationMinutes",
+};
+
+function cleanResponse(value: unknown): MeetingResponse {
+  const response = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if ((MEETING_RESPONSES as readonly string[]).includes(response)) return response as MeetingResponse;
+  throw invalid("Choose Accept, Maybe or Decline.", "response");
+}
+
+function proposalWindow(
+  input: RespondInput,
+  currentLengthMs: number,
+  options: { timeZone: string; now: number },
+) {
+  try {
+    return moveWindow(
+      { startLocal: input.proposedStartLocal, durationMinutes: input.proposedDurationMinutes },
+      currentLengthMs,
+      options,
+    );
+  } catch (error) {
+    if (!(error instanceof CrmError)) throw error;
+    const field = typeof error.details?.field === "string" ? error.details.field : "";
+    throw invalid(error.message, PROPOSAL_FIELDS[field] ?? "proposedStartLocal");
+  }
+}
+
+async function invitedEvent(actor: UserActor, eventId: string, now: number) {
+  const found = await readOwnEvent(actor, eventId);
+  const row = found.event;
+  if (!row) throw new CrmError("not_found", "That meeting isn't in your calendar.", 404);
+  if (row.is_cancelled) throw new CrmError("conflict", "This meeting is cancelled, so there's nothing to answer.", 409);
+  if (organisedByUser(row, found.own)) throw new CrmError("forbidden", RESPOND_ORGANISER, 403);
+  const startsAt = new Date(row.starts_at);
+  if (startsAt.getTime() <= now) {
+    throw new CrmError("invalid_input", "This meeting has already started, so Orbit can't answer it. Reply in Outlook if you need to.", 400);
+  }
+  const stored = found.stored;
+  if (!microsoftConfigured() || !isConnected(stored)) throw new CrmError("not_connected", RESPOND_NOT_CONNECTED, 400);
+  if (row.connection_id !== stored.id) {
+    throw new CrmError(
+      "invalid_input",
+      "Orbit can only answer invites in the calendar of the mailbox connected in Capture.",
+      400,
+    );
+  }
+  return {
+    row,
+    own: found.own,
+    startsAt,
+    endsAt: new Date(row.ends_at),
+    token: (fetchImpl: typeof fetch) => writableToken(actor, stored, found.scopes, fetchImpl),
+  };
+}
+
+function withOwnResponse(attendees: unknown, own: Set<string>, status: string) {
+  if (!Array.isArray(attendees)) return null;
+  let changed = false;
+  const next = attendees.map((entry) => {
+    const person = readPerson(entry);
+    if (!person || !own.has(person.email)) return entry;
+    changed = true;
+    return { ...(entry as Record<string, unknown>), response: status };
+  });
+  return changed ? next : null;
+}
+
+function nextShowAs(response: MeetingResponse, current: string | null) {
+  if (response === "tentative") return "tentative";
+  if (response === "accept" && (current === "tentative" || current === null)) return "busy";
+  return current;
+}
+
+export async function respondToInvite(
+  actor: UserActor,
+  input: RespondInput,
+  options: InviteOptions = {},
+): Promise<RespondResult> {
+  assertScope(actor.scopes, "activities:write");
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const now = options.now ?? Date.now();
+  const eventId = typeof input.eventId === "string" ? input.eventId : "";
+  if (!isUuid(eventId)) throw new CrmError("not_found", "That meeting isn't in your calendar.", 404);
+  const response = cleanResponse(input.response);
+  const note = cleanNotes(input.note, INVITE_COMMENT_MAX, "note");
+  if (input.sendResponse !== undefined && input.sendResponse !== null && typeof input.sendResponse !== "boolean") {
+    throw invalid("Choose whether to tell the organiser.", "sendResponse");
+  }
+  const sendResponse = input.sendResponse !== false;
+  const proposing =
+    input.proposedStartLocal !== undefined && input.proposedStartLocal !== null && input.proposedStartLocal !== "";
+  if (proposing && response === "accept") {
+    throw invalid("Only Maybe or Decline can suggest a new time.", "proposedStartLocal");
+  }
+  if (!sendResponse && (note || proposing)) {
+    throw invalid(
+      "Only the organiser sees a note or a new time, so tell them or leave those out.",
+      note ? "note" : "proposedStartLocal",
+    );
+  }
+  const timeZone = appTimeZone();
+  const { row, own, startsAt, endsAt, token: tokenFor } = await invitedEvent(actor, eventId, now);
+  const proposal = proposing ? proposalWindow(input, endsAt.getTime() - startsAt.getTime(), { timeZone, now }) : null;
+  if (proposal && proposal.start.getTime() === startsAt.getTime() && proposal.end.getTime() === endsAt.getTime()) {
+    throw invalid("That's when the meeting already is. Pick another time.", "proposedStartLocal");
+  }
+  const token = await tokenFor(fetchImpl);
+  try {
+    await respondToGraphEvent(
+      token.accessToken,
+      row.provider_event_id,
+      {
+        response: GRAPH_RESPONSE[response],
+        comment: note,
+        sendResponse,
+        proposedNewTime: proposal ? { start: proposal.start, end: proposal.end, timeZone } : null,
+      },
+      fetchImpl,
+    );
+  } catch (error) {
+    if (error instanceof CalendarWriteError && error.status === 404) {
+      await withActor(actor, (db) => db.query("update crm.calendar_events set is_cancelled = true where id = $1", [row.id]));
+      throw new CrmError("gone", MEETING_GONE, 410);
+    }
+    throw writeFailure(error);
+  }
+  const status = RESPONSE_STATUS_FOR[GRAPH_RESPONSE[response]];
+  const subject = row.subject ?? "Untitled event";
+  const organizer = readPerson(row.organizer);
+  const result: RespondResult = {
+    eventId: row.id,
+    subject,
+    response,
+    responseStatus: status,
+    organizer,
+    organizerTold: sendResponse,
+    proposedStartsAt: proposal?.start.toISOString() ?? null,
+    proposedEndsAt: proposal?.end.toISOString() ?? null,
+    loggedOn: 0,
+    warning: null,
+  };
+  const when = formatWhen(startsAt, endsAt, timeZone);
+  const proposed = proposal ? formatWhen(proposal.start, proposal.end, timeZone) : null;
+  const attendees = withOwnResponse(row.attendees, own, status);
+  try {
+    const loggedOn = await withActor(actor, async (db) => {
+      await db.query(
+        `update crm.calendar_events
+         set response_status = $2, show_as = $3, attendees = coalesce($4::jsonb, attendees)
+         where id = $1`,
+        [row.id, status, nextShowAs(response, row.show_as), attendees ? JSON.stringify(attendees) : null],
+      );
+      if (!sendResponse || !organizer) return 0;
+      const contacts = await matchContacts(db, actor, [organizer.email], row.contact_ids ?? []);
+      for (const contact of contacts) {
+        await createActivityInDb(
+          db,
+          actor,
+          {
+            type: "meeting",
+            title: clip(`${RESPONSE_TITLE[response]} ${subject}`, 200),
+            body: [
+              when,
+              proposed ? `Suggested instead: ${proposed}` : null,
+              note ? `\nNote to the organiser: ${note}` : null,
+            ]
+              .filter(Boolean)
+              .join("\n"),
+            contactId: contact.id,
+            companyId: contact.companyId,
+            metadata: {
+              source: "orbit",
+              kind: "response",
+              response: status,
+              eventId: row.id,
+              startsAt: startsAt.toISOString(),
+              ...(proposal ? { proposedStartsAt: result.proposedStartsAt } : {}),
+            },
+          },
+          { operation: "respond_to_invite", source: "microsoft" },
+        );
+      }
+      return contacts.length;
+    });
+    return { ...result, loggedOn };
+  } catch (error) {
+    console.error("Invite answered but not saved", error);
+    return {
+      ...result,
+      warning: "Your response reached Outlook, but Orbit couldn't update the meeting yet. It catches up after the next sync.",
     };
   }
 }

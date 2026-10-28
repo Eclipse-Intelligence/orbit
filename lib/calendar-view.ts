@@ -164,8 +164,13 @@ type MergeableEvent = {
   icalUid: string | null;
   alsoIn: string[];
   canCancel: boolean;
+  canRespond?: boolean;
   granolaHref: string | null;
 };
+
+function writeRank(item: MergeableEvent) {
+  return item.canCancel ? 2 : item.canRespond ? 1 : 0;
+}
 
 export function mergeDuplicateEvents<T extends MergeableEvent>(items: T[]): T[] {
   const merged = new Map<string, T>();
@@ -178,7 +183,7 @@ export function mergeDuplicateEvents<T extends MergeableEvent>(items: T[]): T[] 
       merged.set(key, { ...item, alsoIn: [] });
       continue;
     }
-    const keep = item.canCancel && !existing.canCancel ? { ...item, alsoIn: [] as string[] } : existing;
+    const keep = writeRank(item) > writeRank(existing) ? { ...item, alsoIn: [] as string[] } : existing;
     const other = keep === existing ? item : existing;
     keep.alsoIn = [...new Set([...keep.alsoIn, other.calendarId, ...other.alsoIn])].filter(
       (id) => id !== keep.calendarId,

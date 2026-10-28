@@ -225,20 +225,22 @@ async function saveEvents(
       organizer: event.organizer,
       attendees: event.attendees,
       show_as: event.showAs,
+      response_status: event.responseStatus,
     }));
     const result = await db.query(
       `insert into crm.calendar_events (
          workspace_id, calendar_id, connection_id, account_id, user_id, provider_event_id, ical_uid,
          subject, starts_at, ends_at, is_all_day, is_cancelled, location, web_link,
-         online_meeting_url, organizer, attendees, show_as
+         online_meeting_url, organizer, attendees, show_as, response_status
        )
        select $1, $2, $3::uuid, $4::uuid, $5, e.provider_event_id, e.ical_uid,
               e.subject, e.starts_at, e.ends_at, e.is_all_day, e.is_cancelled, e.location, e.web_link,
-              e.online_meeting_url, e.organizer, coalesce(e.attendees, '[]'::jsonb), e.show_as
+              e.online_meeting_url, e.organizer, coalesce(e.attendees, '[]'::jsonb), e.show_as, e.response_status
        from jsonb_to_recordset($6::jsonb) as e(
          provider_event_id text, ical_uid text, subject text, starts_at timestamptz,
          ends_at timestamptz, is_all_day boolean, is_cancelled boolean, location text,
-         web_link text, online_meeting_url text, organizer jsonb, attendees jsonb, show_as text
+         web_link text, online_meeting_url text, organizer jsonb, attendees jsonb, show_as text,
+         response_status text
        )
        on conflict (calendar_id, provider_event_id) do update set
          ical_uid = excluded.ical_uid,
@@ -252,7 +254,8 @@ async function saveEvents(
          online_meeting_url = excluded.online_meeting_url,
          organizer = excluded.organizer,
          attendees = excluded.attendees,
-         show_as = excluded.show_as`,
+         show_as = excluded.show_as,
+         response_status = excluded.response_status`,
       [
         actor.workspaceId,
         calendarId,

@@ -219,10 +219,11 @@ When a tool is merged into another, add its old name to `MERGED_TOOLS` in `tools
 
 | Tool | What it does | Approval | Outside | Notable limits |
 | --- | --- | --- | --- | --- |
-| `list_calendar_events` | Events across the user's connected calendars between two dates (London). | No | Yes | Default today plus 7 days; at most 62 days. |
+| `list_calendar_events` | Events across the user's connected calendars between two dates (London), with `organisedByMe`, `myResponse`, `canCancel` and `canRespond`. | No | Yes | Default today plus 7 days; at most 62 days. |
 | `create_meeting_invite` | Creates an Outlook meeting and sends invites, with the saved meeting link by default. | Yes | No | 15 to 480 minutes. |
 | `move_meeting` | Moves an Outlook meeting the user organises; Outlook sends guests the update. | Yes | No | Events with `canCancel` true; 5 to 480 minutes. |
 | `cancel_meeting` | Cancels a meeting the user organised; Outlook tells every guest and it's logged on their timelines. | Yes | No | Only meetings that haven't started, in the Capture mailbox's calendar. |
+| `respond_to_meeting` | Accepts, says maybe to or declines a meeting someone else organised, with an optional note; maybe and decline can suggest a new time. Outlook tells the organiser unless `tellOrganiser` is false, and a told organiser who is a contact gets it on their timeline. | Yes | No | Events with `canRespond` true; not once it has started; a new time needs the organiser to allow proposals. |
 | `get_settings` | The user's meeting link, email addresses, booking page, the state of Microsoft mail and calendar, ClickUp and Granola, and the lifecycles in use (built in and custom) with how many companies each has. | No | No | |
 
 ### Proposals and NDAs
