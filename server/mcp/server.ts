@@ -78,7 +78,7 @@ function writeFromArgs(args: {
 }
 
 export function createCrmMcpServer(actor: Actor) {
-  if (actor.type === "agent" && actor.scopes.every((scope) => scope === "market:write")) {
+  if (actor.type === "agent" && actor.scopes.length > 0 && actor.scopes.every((scope) => scope === "market:write")) {
     const market = new McpServer(
       { name: "crm", version: "1.0.0" },
       {

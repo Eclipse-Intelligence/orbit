@@ -475,7 +475,7 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
     "list_pipeline_stages",
     {
       description: "List the stages of the default pipeline, including which stages are won or lost.",
-      inputSchema: { unused: z.string().optional() },
+      inputSchema: {},
     },
     async () => run(() => listPipeline(actor)),
   );
