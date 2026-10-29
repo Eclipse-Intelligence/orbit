@@ -10,6 +10,7 @@ export type ShortcutGroup =
   | "Calendar"
   | "Capture"
   | "Mail"
+  | "Docs"
   | "Settings";
 
 export type Combo = {
@@ -86,6 +87,7 @@ export const SHORTCUTS: ShortcutDef[] = [
     palette: true,
     keywords,
   })),
+  { id: "go-docs", label: "Docs", group: "Go to", href: "/docs", palette: true, keywords: "notes pages writing folders tags" },
   ...SETTINGS_SECTIONS.map(([label, href, keywords]) => ({
     id: `settings-${href.split("/").pop()}`,
     label: `Settings: ${label}`,
@@ -102,6 +104,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: "create-email", label: "Send an email", group: "Create", sequence: ["c", "m"], palette: true, keywords: "new mail write compose message" },
   { id: "create-event", label: "Create meeting invite", group: "Create", sequence: ["c", "e"], palette: true, keywords: "new event invite calendar" },
   { id: "create-activity", label: "Create activity", group: "Create", sequence: ["c", "a"], palette: true, keywords: "new note log" },
+  { id: "create-note", label: "Create note", group: "Create", sequence: ["c", "n"], palette: true, keywords: "new doc docs page write" },
 
   { id: "list-down", label: "Next row (or ↓)", group: "Lists", combos: [{ key: "j" }] },
   { id: "list-up", label: "Previous row (or ↑)", group: "Lists", combos: [{ key: "k" }] },
@@ -175,6 +178,11 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: "mail-flag", label: "Flag or unflag", group: "Mail", combos: [{ key: "s" }] },
   { id: "mail-undo", label: "Undo the last move", group: "Mail", combos: [{ key: "z" }] },
   { id: "mail-refresh", label: "Check for new mail", group: "Mail", combos: [{ key: "r", shift: true }], palette: true, keywords: "sync refresh email" },
+
+  { id: "docs-search", label: "Search docs", group: "Docs", combos: [{ key: "f", mod: true, shift: true }], whileTyping: true, palette: true, keywords: "find notes text" },
+  { id: "docs-daily", label: "Today's daily note", group: "Docs", sequence: ["g", "d"], palette: true, keywords: "journal today docs" },
+  { id: "docs-focus", label: "Focus mode", group: "Docs", combos: [{ key: "Enter", mod: true, shift: true }], whileTyping: true, keywords: "full screen write" },
+  { id: "docs-panel", label: "Show or hide backlinks", group: "Docs", combos: [{ key: "\\", mod: true }], whileTyping: true, keywords: "panel links details" },
 
   { id: "inbox-sync", label: "Sync Capture", group: "Capture", combos: [{ key: "s" }], target: "sync", palette: true },
   { id: "inbox-file", label: "File the conversation to…", group: "Capture", combos: [{ key: "f" }], rowKey: "f" },
