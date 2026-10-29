@@ -3,7 +3,22 @@ import type { Provenance, UserActor } from "@/lib/crm/types";
 import type { CreateInput, Folder, Page, PageFilter, PageSort, ShareTarget, Visibility } from "@/lib/docs/client-types";
 import { isDailyDate } from "@/lib/docs/daily";
 import { createFolder, listFolders, moveFolder, renameFolder, shareFolder } from "@/lib/docs/folders";
-import { archiveDoc, createDoc, moveDoc, pagingNumber, renameDoc, restoreDoc, restoreVersion, saveDoc, setAssistantCanEdit, shareDoc } from "@/lib/docs/store";
+import { liveTransport } from "@/lib/docs/live/broadcast";
+import { decodeBytes, encodeBytes } from "@/lib/docs/live/ydoc";
+import {
+  archiveDoc,
+  createDoc,
+  moveDoc,
+  openLiveDoc,
+  pagingNumber,
+  renameDoc,
+  restoreDoc,
+  restoreVersion,
+  saveDoc,
+  setAssistantCanEdit,
+  shareDoc,
+  syncLiveDoc,
+} from "@/lib/docs/store";
 import {
   docsActivity,
   docsBacklinks,
@@ -24,6 +39,7 @@ import {
   docsVersions,
   toFolder,
   toPage,
+  toSummary,
 } from "@/lib/docs/view";
 import { MENTION_KINDS, type MentionKind } from "@/lib/mentions";
 
@@ -102,6 +118,10 @@ export const docsReads = {
   daily: ({ actor }: DocsCall) => docsDailyList(actor),
   meetings: ({ actor, request }: DocsCall) => docsMeetings(actor, dateParam(search(request).get("date"))),
   activity: ({ actor }: DocsCall) => docsActivity(actor),
+  async live({ actor, params }: DocsCall) {
+    const opened = await openLiveDoc(actor, params.id);
+    return { state: encodeBytes(opened.state), revision: opened.doc.revision, title: opened.doc.title, transport: liveTransport() };
+  },
 };
 
 export const docsWrites = {
@@ -133,6 +153,25 @@ export const docsWrites = {
     }
   },
   openDaily: ({ actor, params }: DocsCall) => docsDailyNote(actor, dateParam(params.date)),
+  async liveSync({ actor, request, params }: DocsCall) {
+    const input = await body(request);
+    const result = await syncLiveDoc(
+      actor,
+      params.id,
+      {
+        update: decodeBytes(input.update),
+        vector: decodeBytes(input.vector),
+        title: typeof input.title === "string" ? input.title : undefined,
+      },
+      PROVENANCE,
+    );
+    return {
+      vector: encodeBytes(result.vector),
+      missing: encodeBytes(result.missing),
+      revision: result.doc.revision,
+      summary: toSummary(actor, result.doc),
+    };
+  },
 };
 
 export async function docsRespond(actor: UserActor | null, run: (actor: UserActor) => Promise<unknown>): Promise<Response> {

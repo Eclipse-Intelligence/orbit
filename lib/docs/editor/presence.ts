@@ -59,6 +59,10 @@ function decorate(list: Presence[], doc: Text): DecorationSet {
     if (entry.insertFrom !== undefined && entry.insertFrom >= 0 && entry.insertFrom < entry.cursor) {
       ranges.push(Decoration.mark({ class: entry.participant.kind === "person" ? "note-remote-selection" : "note-agent-wash" }).range(entry.insertFrom, entry.cursor));
     }
+    const selection = entry.selection;
+    if (selection && selection.from >= 0 && selection.from < selection.to && selection.to <= length) {
+      ranges.push(Decoration.mark({ class: "note-remote-selection", attributes: { style: `--cursor-color: ${entry.participant.color}` } }).range(selection.from, selection.to));
+    }
     ranges.push(Decoration.widget({ widget: new CursorWidget(entry.participant, Boolean(entry.writing)), side: 1 }).range(entry.cursor));
   }
   return Decoration.set(ranges, true);
@@ -74,6 +78,7 @@ export const presenceField = StateField.define<{ list: Presence[]; decorations: 
         ...entry,
         cursor: entry.cursor === null ? null : transaction.changes.mapPos(entry.cursor, 1),
         insertFrom: entry.insertFrom === undefined ? undefined : transaction.changes.mapPos(entry.insertFrom, -1),
+        selection: entry.selection ? { from: transaction.changes.mapPos(entry.selection.from, 1), to: transaction.changes.mapPos(entry.selection.to, -1) } : undefined,
       }));
       changed = true;
     }

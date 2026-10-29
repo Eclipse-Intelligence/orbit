@@ -976,7 +976,8 @@ html[data-sidebar-resizing] * {
 }
 
 .note-surface .note-editor .note-remote-selection {
-  background: rgb(255 255 255 / 0.06);
+  background: color-mix(in srgb, var(--cursor-color, #fff) 18%, transparent);
+  border-radius: 2px;
 }
 
 .note-surface .note-editor .note-cursor {

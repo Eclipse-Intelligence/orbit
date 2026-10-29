@@ -83,6 +83,7 @@ export default function DocsProvider({ seed, nav, children }: { seed: DocsSeed; 
     connectDocs({
       recordSearch: async (query) =>
         (await searchMentionsAction(query)).map((option) => ({ kind: option.kind, id: option.id, name: option.name, detail: option.detail ?? null })),
+      live: seed.live ? { kind: seed.live, workspaceId: seed.workspaceId, userId: seed.viewer.id } : null,
     });
     if (!onDocs) return;
     const store = useDocsStore.getState();

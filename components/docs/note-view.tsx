@@ -13,7 +13,7 @@ import { ParticipantAvatar, PresenceStack } from "@/components/docs/presence";
 import { PageShare } from "@/components/docs/share-control";
 import { TITLE_FORBIDDEN, TITLE_RULE, useTitleRename } from "@/components/docs/title-rename";
 import { navigateWithinDocs, useDocsNav, useDocsNavigate, useDocsNow, useMedia, useToday } from "@/components/docs/use-docs";
-import type { Meeting, Page, PageFilter, PageSummary, Presence } from "@/lib/docs/client-types";
+import type { Meeting, Page, PageFilter, PageSummary, Participant, Presence } from "@/lib/docs/client-types";
 import { docsData } from "@/lib/docs/connection";
 import { localTime, shiftDate } from "@/lib/docs/daily";
 import { clockTime, createdLabel, editedLabel, longDay, shortDay } from "@/lib/docs/format";
@@ -64,6 +64,16 @@ function contextFor(page: { kind: string; folderId: string | null; dailyDate: st
 function TitleField({ page, inputRef, replaced }: { page: Page; inputRef: RefObject<HTMLTextAreaElement | null>; replaced: boolean }) {
   const [value, setValue] = useState(() => (replaced ? page.title : (noteTitle(page.id) ?? page.title)));
   const fresh = useDocsStore((state) => state.fresh === page.id);
+  const remote = useDocsStore((state) => state.remoteTitles[page.id]);
+  const [seenRemote, setSeenRemote] = useState(remote);
+  const [editing, setEditing] = useState(false);
+  if (remote !== seenRemote) {
+    setSeenRemote(remote);
+    if (remote && remote.title !== value && !editing) setValue(remote.title);
+  }
+  useEffect(() => {
+    if (remote && !editing && noteTitle(page.id) !== remote.title) setNoteTitle(page.id, remote.title);
+  }, [remote, page.id, editing]);
   const clearFresh = useDocsStore((state) => state.clearFresh);
   const rename = useTitleRename(page.id, page.title, page.kind === "note");
   const [blocked, setBlocked] = useState(false);
@@ -103,7 +113,11 @@ function TitleField({ page, inputRef, replaced }: { page: Page; inputRef: RefObj
           scheduleNoteSave(page.id, page);
           rename.typed(next);
         }}
-        onBlur={rename.settle}
+        onFocus={() => setEditing(true)}
+        onBlur={() => {
+          setEditing(false);
+          rename.settle();
+        }}
         onKeyDown={(event) => {
           const field = event.currentTarget;
           if (event.key === "Enter" && !event.nativeEvent.isComposing) {
@@ -151,6 +165,22 @@ function ConflictNotice({ id }: { id: string }) {
 
 function SaveState({ id }: { id: string }) {
   const save = useDocsStore((state) => state.saves[id]);
+  const live = useDocsStore((state) => state.live[id]);
+  if (live === "live" && save?.status !== "error") {
+    return (
+      <span role="status" className="text-subtle flex items-center gap-1.5">
+        <span aria-hidden className="size-1.5 rounded-full bg-(--tag-green-text)/80" />
+        Live
+      </span>
+    );
+  }
+  if (live === "offline" && save?.status !== "error") {
+    return (
+      <span role="status" className="text-(--tag-amber-text)/80">
+        Offline, changes will sync
+      </span>
+    );
+  }
   if (!save) return null;
   if (save.status === "conflict") {
     return <span className="text-(--tag-amber-text)">Not saved</span>;
@@ -354,7 +384,8 @@ export default function NoteView({
 
   const live = useMemo(() => (presence.id === pageId ? presence.list : []), [presence, pageId]);
   const stack = useMemo(() => {
-    const people = live.map((entry) => entry.participant);
+    const people: Participant[] = [];
+    for (const entry of live) if (!people.some((person) => person.id === entry.participant.id)) people.push(entry.participant);
     return viewer && !people.some((person) => person.id === viewer.id) ? [...people, viewer] : people;
   }, [live, viewer]);
 

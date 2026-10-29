@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { after, before, beforeEach, describe, it } from "node:test";
+import { Text } from "@codemirror/state";
 import * as Y from "yjs";
 import { runDocAction } from "@/lib/assistant/docs";
 import { scopesForRole } from "@/lib/crm/scopes";
@@ -8,6 +9,7 @@ import type { AgentActor, UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { openDailyNote } from "@/lib/docs/daily-notes";
 import { publishLiveChange, setLiveTesting, supabaseSink, typingDuration, type LiveChange } from "@/lib/docs/live/broadcast";
+import { rebase } from "@/lib/docs/live/rebase";
 import { applyEdits, textEdits } from "@/lib/docs/live/text-diff";
 import { createLiveDoc, liveText, setLiveText, stateFromMarkdown, textOfState, typeLiveText } from "@/lib/docs/live/ydoc";
 import { createDoc, editDoc, getDoc, listVersions, openLiveDoc, saveDoc, shareDoc, syncLiveDoc } from "@/lib/docs/store";
@@ -139,6 +141,35 @@ describe("text diff", () => {
     const before = Array.from({ length: 3_000 }, (_, index) => `old line ${index}`).join("\n");
     const after = Array.from({ length: 3_000 }, (_, index) => `new line ${index * 7}`).join("\n");
     assert.equal(applyEdits(before, textEdits(before, after)), after);
+  });
+});
+
+describe("joining a live note after typing", () => {
+  function settleBoth(base: string, shown: string, shared: string) {
+    const { toShared, toShown } = rebase(base, shown, shared);
+    return { shared: toShared.apply(Text.of(shared.split("\n"))).toString(), shown: toShown.apply(Text.of(shown.split("\n"))).toString(), toShared, toShown };
+  }
+
+  it("keeps typing done before the live copy arrived, without duplicating anyone's text", () => {
+    const base = "Plan\n\nRisks";
+    const mine = settleBoth(base, "Plan for Q4\n\nRisks", base);
+    assert.equal(mine.shared, "Plan for Q4\n\nRisks");
+    assert.ok(mine.toShown.empty);
+    const theirs = settleBoth(base, base, "Plan\n\nRisks: legal");
+    assert.equal(theirs.shown, "Plan\n\nRisks: legal");
+    assert.ok(theirs.toShared.empty);
+    const both = settleBoth(base, "Plan for Q4\n\nRisks", "Plan\n\nRisks: legal");
+    assert.equal(both.shown, "Plan for Q4\n\nRisks: legal");
+    assert.equal(both.shared, both.shown);
+  });
+
+  it("always lands both sides on the same text", () => {
+    const random = seeded(11);
+    for (let round = 0; round < 200; round += 1) {
+      const base = randomText(random, Math.floor(random() * 40));
+      const result = settleBoth(base, mutate(random, base), mutate(random, base));
+      assert.equal(result.shown, result.shared);
+    }
   });
 });
 

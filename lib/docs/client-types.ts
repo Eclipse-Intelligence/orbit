@@ -1,3 +1,4 @@
+import type { LiveTransportKind } from "@/lib/docs/live/protocol";
 import type { TagTreeNode } from "@/lib/docs/markdown";
 import type { MentionKind } from "@/lib/mentions";
 
@@ -58,6 +59,7 @@ export type Presence = {
   participant: Participant;
   cursor: number | null;
   insertFrom?: number;
+  selection?: { from: number; to: number };
   writing?: boolean;
 };
 
@@ -183,7 +185,7 @@ export type DocsNav = {
   todayNote: DailySummary | null;
 };
 
-export type DocsSeed = { now: string; workspaceId: string; viewer: { id: string; name: string } };
+export type DocsSeed = { now: string; workspaceId: string; viewer: { id: string; name: string }; live?: LiveTransportKind | null };
 
 export type DocsSnapshot = DocsNav & {
   now: string;

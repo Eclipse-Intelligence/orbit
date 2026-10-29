@@ -18,6 +18,8 @@ import {
 import { docsData, refreshDocsActivity, resetDocsConnection } from "@/lib/docs/connection";
 import { clearDraft, readDraft, setDraftScope, writeDraft } from "@/lib/docs/drafts";
 import { entryCount, excerptFrom, parseTags, rewriteLinkTitle, wordCount } from "@/lib/docs/markdown";
+import type { LiveTransportKind } from "@/lib/docs/live/protocol";
+import type { LiveStatus } from "@/lib/docs/live/session";
 import { listKey } from "@/lib/docs/routes";
 import { viewerParticipant } from "@/lib/docs/participants";
 
@@ -55,6 +57,9 @@ type DocsState = {
   notice: Notice | null;
   conflicts: Record<string, Page>;
   visibilityPrompt: VisibilityPrompt | null;
+  liveKind: LiveTransportKind | null;
+  live: Record<string, LiveStatus>;
+  remoteTitles: Record<string, { title: string; at: number }>;
   init: (seed: DocsSeed, nav: DocsNav) => void;
   seed: (initial: { list: PageFilter; summaries: PageSummary[]; page: Page | null }) => void;
   loadList: (list: PageFilter, force?: boolean) => Promise<string[]>;
@@ -63,7 +68,10 @@ type DocsState = {
   refreshNav: () => Promise<void>;
   refreshAfterAgent: () => void;
   refreshTitles: () => Promise<void>;
-  editLocal: (id: string, title: string, body: string) => void;
+  editLocal: (id: string, title: string, body: string, by?: Participant | null) => void;
+  setLive: (id: string, status: LiveStatus | null) => void;
+  liveSaved: (id: string, summary: PageSummary, revision: number) => void;
+  remoteTitle: (id: string, title: string) => void;
   replaceBody: (page: Page) => void;
   setSave: (id: string, status: SaveStatus, message?: string) => void;
   visit: (id: string) => void;
@@ -114,6 +122,9 @@ const overwrites = new Set<string>();
 const acked = new Map<string, Acknowledged>();
 const uncertain = new Map<string, NoteText>();
 const resetHandlers = new Set<() => void>();
+const liveNotes = new Map<string, LiveHooks>();
+
+type LiveHooks = { flush: (keepalive: boolean) => Promise<void> };
 
 export function docsScope(seed: Pick<DocsSeed, "workspaceId" | "viewer">) {
   return `${seed.workspaceId}:${seed.viewer.id}`;
@@ -189,6 +200,9 @@ function blank() {
     notice: null,
     conflicts: {},
     visibilityPrompt: null,
+    liveKind: null,
+    live: {},
+    remoteTitles: {},
   };
 }
 
@@ -199,7 +213,7 @@ export const useDocsStore = create<DocsState>((set, get) => ({
     prepareDocs(seed);
     if (get().ready) return;
     const current = session;
-    set({ ready: true, now: seed.now, viewer: viewerParticipant(seed.viewer), nav, recent: readRecent() });
+    set({ ready: true, now: seed.now, viewer: viewerParticipant(seed.viewer), nav, recent: readRecent(), liveKind: seed.live ?? null });
     const start = () => {
       if (current !== session) return;
       void get().refreshTitles();
@@ -329,21 +343,21 @@ export const useDocsStore = create<DocsState>((set, get) => ({
     set({ titles });
   },
 
-  editLocal(id, title, body) {
+  editLocal(id, title, body, by) {
     set((state) => {
       const page = state.pages[id];
       const summary = state.summaries[id] ?? (page ? summaryFrom(page) : null);
       if (!summary) return {};
-      const updatedAt = new Date().toISOString();
+      const updatedAt = by === null ? summary.updatedAt : new Date().toISOString();
       const nextSummary: PageSummary = {
         ...summary,
-        title,
+        title: summary.kind === "daily" ? summary.title : title,
         snippet: excerptFrom(body),
         tags: parseTags(body),
         wordCount: wordCount(body),
         entryCount: entryCount(body),
         updatedAt,
-        updatedBy: state.viewer ?? summary.updatedBy,
+        updatedBy: by === null ? summary.updatedBy : (by ?? state.viewer ?? summary.updatedBy),
       };
       return {
         summaries: { ...state.summaries, [id]: nextSummary },
@@ -361,6 +375,42 @@ export const useDocsStore = create<DocsState>((set, get) => ({
       summaries: { ...state.summaries, [page.id]: summaryFrom(page) },
       epochs: { ...state.epochs, [page.id]: (state.epochs[page.id] ?? 0) + 1 },
     }));
+  },
+
+  setLive(id, status) {
+    set((state) => {
+      if (status === null) {
+        if (!(id in state.live)) return {};
+        const live = { ...state.live };
+        delete live[id];
+        return { live };
+      }
+      return state.live[id] === status ? {} : { live: { ...state.live, [id]: status } };
+    });
+  },
+
+  liveSaved(id, summary, revision) {
+    set((state) => {
+      const page = state.pages[id];
+      const known = state.summaries[id];
+      return {
+        pages: page ? { ...state.pages, [id]: { ...page, revision: Math.max(page.revision, revision), updatedAt: summary.updatedAt, updatedBy: summary.updatedBy, tags: summary.tags } } : state.pages,
+        summaries: { ...state.summaries, [id]: known ? { ...known, updatedAt: summary.updatedAt, updatedBy: summary.updatedBy, tags: summary.tags, title: summary.title } : summary },
+      };
+    });
+  },
+
+  remoteTitle(id, title) {
+    set((state) => {
+      const page = state.pages[id];
+      const summary = state.summaries[id];
+      return {
+        remoteTitles: { ...state.remoteTitles, [id]: { title, at: Date.now() } },
+        pages: page && page.kind !== "daily" ? { ...state.pages, [id]: { ...page, title } } : state.pages,
+        summaries: summary && summary.kind !== "daily" ? { ...state.summaries, [id]: { ...summary, title } } : state.summaries,
+      };
+    });
+    void get().refreshTitles();
   },
 
   setSave(id, status, text) {
@@ -627,7 +677,7 @@ function clearTimer(map: Map<string, ReturnType<typeof setTimeout>>, id: string)
 function idle(id: string) {
   const state = useDocsStore.getState();
   const status = state.saves[id]?.status;
-  return !readers.has(id) && !queued.has(id) && !inflight.has(id) && !state.conflicts[id] && (!status || status === "saved");
+  return !liveNotes.has(id) && !readers.has(id) && !queued.has(id) && !inflight.has(id) && !state.conflicts[id] && (!status || status === "saved");
 }
 
 function unsaved(id: string) {
@@ -674,6 +724,7 @@ function resetSession() {
   for (const map of [timers, retryTimers, readers, queued, running, retries, acked, uncertain, listRequests, pageRequests]) map.clear();
   inflight.clear();
   overwrites.clear();
+  liveNotes.clear();
   for (const handler of resetHandlers) handler();
   resetDocsConnection();
   useDocsStore.setState(blank());
@@ -710,7 +761,29 @@ export function scheduleSave(id: string, read: Reader, delay = SAVE_DELAY_MS) {
   );
 }
 
+export function registerLiveNote(id: string, hooks: LiveHooks) {
+  liveNotes.set(id, hooks);
+  clearTimer(timers, id);
+  readers.delete(id);
+  return () => {
+    if (liveNotes.get(id) === hooks) liveNotes.delete(id);
+  };
+}
+
+export function isLiveNote(id: string) {
+  return liveNotes.has(id);
+}
+
+export async function settleForLive(id: string): Promise<{ base: string } | null> {
+  await settleSaves(id);
+  if (useDocsStore.getState().conflicts[id] || unsaved(id)) return null;
+  const base = baseFor(id);
+  return base ? { base: base.body } : null;
+}
+
 export function commitNow(id: string, keepalive = false): Promise<void> {
+  const live = liveNotes.get(id);
+  if (live) return live.flush(keepalive);
   clearTimer(timers, id);
   const read = readers.get(id);
   if (!read) return inflight.has(id) ? (running.get(id) ?? Promise.resolve()) : Promise.resolve();
@@ -745,6 +818,7 @@ export function commitNow(id: string, keepalive = false): Promise<void> {
 
 export function commitAll(keepalive = false) {
   for (const id of [...readers.keys()]) void commitNow(id, keepalive);
+  for (const hooks of liveNotes.values()) void hooks.flush(keepalive).catch(() => {});
 }
 
 export async function settleSaves(id: string) {
