@@ -20,6 +20,7 @@ import MergeRecordMenu from "@/components/crm/merge-record";
 import RecordLayout from "@/components/crm/record-layout";
 import { CallLink, DetailList } from "@/components/crm/record-form";
 import SectionHeader from "@/components/crm/section-header";
+import RecordNotes from "@/components/docs/record-notes";
 import RunWorkflowButton from "@/components/workflows/run-workflow-button";
 import RecordSequence from "@/components/shortcuts/record-sequence";
 import InlineField from "@/components/crm/inline-field";
@@ -373,6 +374,7 @@ export default function ContactRecord({
               company={shown.companyId ? { id: shown.companyId, name: shown.companyName ?? "Company" } : null}
               contactId={shown.id}
             />
+            <RecordNotes record={{ kind: "contact", id: shown.id, name: shown.name }} />
           </>
         }
         activity={

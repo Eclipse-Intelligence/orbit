@@ -34,9 +34,12 @@ import {
   type ReasoningLevel,
 } from "@/lib/assistant/models";
 import { relativeWhen } from "@/lib/companies";
+import { pageHref } from "@/lib/docs/routes";
+import type { DocDiffLine } from "@/lib/docs/types";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import { encodeMentions, liveMentions, splitMentions, type Mention } from "@/lib/mentions";
 import { cn } from "@/lib/utils";
+import { useDocsStore } from "@/stores/docs-store";
 import ArrowUpIcon from "@/public/assets/images/assistant/arrow-up.svg";
 import CheckIcon from "@/public/assets/images/assistant/check.svg";
 import CopyIcon from "@/public/assets/images/assistant/copy.svg";
@@ -149,9 +152,47 @@ function statusLabel(action: AssistantAction) {
   return action.status === "done" && action.chose === "send" ? "Sent" : ACTION_STATUS[action.status];
 }
 
+function DiffBlock({ lines }: { lines: DocDiffLine[] }) {
+  const added = lines.filter((line) => line.kind === "add").length;
+  const removed = lines.filter((line) => line.kind === "remove").length;
+  const summary = [added && `${added} ${added === 1 ? "line" : "lines"} added`, removed && `${removed} removed`].filter(Boolean).join(", ") || "No text changes";
+  return (
+    <div className="flex flex-col">
+      <ol
+        aria-label={`Changes to the doc: ${summary}`}
+        tabIndex={0}
+        className="focus-visible:ring-ring/60 max-h-64 overflow-y-auto rounded-xl bg-black/25 py-1.5 text-[13px] leading-[1.55] outline-none focus-visible:ring-2"
+      >
+        {lines.map((line, index) => (
+          <li
+            key={index}
+            className={cn(
+              "grid grid-cols-[1.5rem_1fr] pr-3",
+              line.kind === "add" && "bg-(--tag-green-bg)/70 text-(--tag-green-text)",
+              line.kind === "remove" && "bg-(--tag-red-bg)/70 text-(--tag-red-text)",
+              line.kind === "same" && "text-subtle",
+              line.kind === "gap" && "text-faint",
+            )}
+          >
+            <span aria-hidden className="text-center select-none">
+              {line.kind === "add" ? "+" : line.kind === "remove" ? "−" : ""}
+            </span>
+            <span className="min-w-0 break-words whitespace-pre-wrap">
+              {line.kind === "add" && <span className="sr-only">Added: </span>}
+              {line.kind === "remove" && <span className="sr-only">Removed: </span>}
+              {line.kind === "gap" ? line.text || "…" : line.text || " "}
+            </span>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
 function ActionLines({ action }: { action: AssistantAction }) {
   return (
     <>
+      {action.diff && action.diff.length > 0 && <DiffBlock lines={action.diff} />}
       {action.lines.length > 0 && (
         <ul className="text-soft flex flex-col gap-0.5 text-[13px] leading-5">
           {action.lines.map((line, index) => (
@@ -171,7 +212,10 @@ function ActionCard({ action, busy, onDecide }: { action: AssistantAction; busy:
     <div className="flex flex-col gap-2 rounded-2xl bg-white/[0.04] p-3.5">
       <div className="flex items-start justify-between gap-3">
         <span className="text-foreground min-w-0 text-[13.5px] leading-5 font-medium">{action.title}</span>
-        <span className={cn("caption-style shrink-0", statusTone(action.status))}>{statusLabel(action)}</span>
+        <span className="flex shrink-0 items-center gap-2">
+          {action.unattended && <UnattendedMark />}
+          <span className={cn("caption-style", statusTone(action.status))}>{statusLabel(action)}</span>
+        </span>
       </div>
       <ActionLines action={action} />
       {action.status === "pending" && (
@@ -184,12 +228,33 @@ function ActionCard({ action, busy, onDecide }: { action: AssistantAction; busy:
               {action.alternative.label}
             </Button>
           )}
+          {action.docId && (
+            <Button variant="secondary" size="sm" href={pageHref(action.docId)}>
+              Open in Docs
+            </Button>
+          )}
           <Button variant="ghost" size="sm" disabled={busy} onClick={() => onDecide([{ id: action.id, approve: false }])}>
             Cancel
+          </Button>
+          {action.diff && <span className="caption-style text-subtle ml-auto">Saved as a version, so you can undo it</span>}
+        </div>
+      )}
+      {action.status === "done" && action.docId && (
+        <div className="flex pt-1">
+          <Button variant="secondary" size="sm" href={pageHref(action.docId)}>
+            Open in Docs
           </Button>
         </div>
       )}
     </div>
+  );
+}
+
+function UnattendedMark() {
+  return (
+    <span title="This doc lets the assistant edit it without asking" className="caption-style rounded-md bg-white/[0.06] px-1.5 py-0.5 text-[#c9c2ff]">
+      Edited without asking
+    </span>
   );
 }
 
@@ -260,7 +325,10 @@ function ActionGroup({ actions, busy, onDecide }: { actions: AssistantAction[]; 
               <div className={cn("flex min-w-0 flex-1 flex-col gap-0.5", waiting && !included && "opacity-50")}>
                 <div className="flex items-start justify-between gap-3">
                   <span className="text-foreground min-w-0 text-[13px] leading-5">{action.title}</span>
-                  {!waiting && <span className={cn("caption-style shrink-0", statusTone(action.status))}>{statusLabel(action)}</span>}
+                  <span className="flex shrink-0 items-center gap-2">
+                    {action.unattended && <UnattendedMark />}
+                    {!waiting && <span className={cn("caption-style", statusTone(action.status))}>{statusLabel(action)}</span>}
+                  </span>
                 </div>
                 <ActionLines action={action} />
                 {waiting && included && action.alternative && (
@@ -683,6 +751,7 @@ export default function AssistantDock() {
     if (event.type === "actions") {
       setLive([]);
       if (event.actions.some((action) => action.status === "done")) changed.current = true;
+      if (event.actions.some((action) => action.status === "done" && action.name === "save_doc")) useDocsStore.getState().refreshAfterAgent();
       setMessages((current) => {
         const index = current.findIndex((message) => message.id === event.messageId);
         if (index < 0) {

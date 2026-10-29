@@ -3,7 +3,10 @@ import { assistantModel, settingsFor, type ModelSource, type ReasoningLevel } fr
 import { chatFileNote, chatFilesFor, removeChatObjects, type ChatFile } from "@/lib/assistant/files";
 import { connectedProviders } from "@/lib/ai-accounts/store";
 import { systemPrompt } from "@/lib/assistant/prompt";
+import { docLinkOf } from "@/lib/assistant/doc-link";
 import { ACTION_ALTERNATIVES, ASSISTANT_TOOLS, actionAlternative, describeAction, findTool, recordNames, runTool, toolDescription, toolJson } from "@/lib/assistant/tools";
+import { editsWithoutApproval } from "@/lib/assistant/docs";
+import type { DocDiffLine } from "@/lib/docs/types";
 import type { CompanionResult, Effort } from "@/companion/src/protocol";
 import {
   CONTINUE_RESULT_TOOL,
@@ -52,7 +55,13 @@ export type AssistantAction = {
   alternative?: { key: "send"; label: string };
   chose?: "send";
   startedAt?: string;
+  diff?: DocDiffLine[];
+  docId?: string;
+  unattended?: boolean;
+  baseRevision?: number;
 };
+
+export const UNATTENDED_NOTE = "Made without asking, because this doc lets the assistant edit it.";
 
 export type ConversationSummary = {
   id: string;
@@ -514,6 +523,7 @@ export async function applyCompanionResult(actor: UserActor, conversationId: str
       id: call.id,
       name: call.function.name,
       ...describeAction(call.function.name, parseArgs(call.function.arguments), names),
+      ...docLinkOf(call.function.name, parseArgs(call.function.arguments)),
       ...(actionAlternative(call.function.name) ? { alternative: actionAlternative(call.function.name) } : {}),
       status: "pending",
     }));
@@ -752,21 +762,47 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
     );
     if (signal?.aborted) return;
     if (writes.length > 0) {
+      const unattended = new Set<string>();
+      for (const call of writes) {
+        if (await editsWithoutApproval(actor, call.function.name, parseArgs(call.function.arguments)).catch(() => false)) unattended.add(call.id);
+      }
       const names = await recordNames(
         actor,
         writes.map((call) => parseArgs(call.function.arguments)),
         writes.map((call) => call.function.name),
       ).catch(() => new Map<string, string>());
-      const actions: AssistantAction[] = writes.map((call) => ({
-        id: call.id,
-        name: call.function.name,
-        ...describeAction(call.function.name, parseArgs(call.function.arguments), names),
-        ...(actionAlternative(call.function.name) ? { alternative: actionAlternative(call.function.name) } : {}),
-        status: "pending",
-      }));
+      let actions: AssistantAction[] = writes.map((call) => {
+        const described = describeAction(call.function.name, parseArgs(call.function.arguments), names);
+        const automatic = unattended.has(call.id);
+        return {
+          id: call.id,
+          name: call.function.name,
+          ...described,
+          ...docLinkOf(call.function.name, parseArgs(call.function.arguments)),
+          ...(automatic ? { lines: [...described.lines, UNATTENDED_NOTE], unattended: true } : {}),
+          ...(actionAlternative(call.function.name) ? { alternative: actionAlternative(call.function.name) } : {}),
+          status: automatic ? "running" : "pending",
+          ...(automatic ? { startedAt: new Date().toISOString() } : {}),
+        };
+      });
       await saveActions(actor, saved.id, actions);
       emit({ type: "actions", messageId: saved.id, actions });
-      return;
+      for (const call of writes.filter((entry) => unattended.has(entry.id))) {
+        const label = findTool(call.function.name)?.label ?? call.function.name;
+        emit({ type: "tool", id: call.id, name: call.function.name, label, status: "running" });
+        const output = (await runTool(actor, call.function.name, parseArgs(call.function.arguments), {
+          deadline: deadline - 20_000,
+          callId: call.id,
+          unattended: true,
+        })) as Record<string, unknown> | null;
+        const failed = Boolean(output && typeof output === "object" && "error" in output);
+        await insertMessage(actor, conversation.id, { role: "tool", content: toolJson(output), toolCallId: call.id, toolName: call.function.name });
+        actions = await patchAction(actor, saved.id, call.id, { status: failed ? "failed" : "done", result: failed ? String((output as { error: unknown }).error) : null });
+        emit({ type: "tool", id: call.id, name: call.function.name, label, status: "done" });
+        emit({ type: "actions", messageId: saved.id, actions });
+      }
+      if (actions.some((action) => action.status === "pending")) return;
+      continue;
     }
   }
   const stopped = await insertMessage(actor, conversation.id, {
@@ -867,6 +903,7 @@ export async function decideActions(
     const output = (await runTool(actor, chosenAlternative?.tool ?? call.function.name, parseArgs(call.function.arguments), {
       deadline: options.deadline - 20_000,
       callId: call.id,
+      baseRevision: action.baseRevision,
     })) as Record<string, unknown> | null;
     const failed = Boolean(output && typeof output === "object" && "error" in output);
     await insertMessage(actor, conversation.id, {

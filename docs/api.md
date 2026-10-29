@@ -4,7 +4,7 @@ Base path: `/api/v1`
 
 Authentication is `Authorization: Bearer <agent token>` (from `npm run agent:create`). Browser cookies and personal tokens (`orbit_…`, which only work with the MCP server) are not accepted. Each credential is limited to 120 requests per minute. A 429 response includes `Retry-After: 60`.
 
-Every request runs as the agent inside its workspace, under row-level security. Agent tokens see every task in the workspace, but never anyone's Mail, calendars, assistant chats, workflows or Knowledge. Every change to companies, contacts, opportunities, activities and tasks is audited with the agent as the actor and the `provenance` you send, and audit events can start workflows and are delivered to webhooks (see [Webhooks](#webhooks)). Nothing is deleted: `DELETE` archives.
+Every request runs as the agent inside its workspace, under row-level security. Agent tokens see every task in the workspace, but never anyone's Mail, calendars, assistant chats, workflows, Knowledge, private docs or daily notes (only docs shared with the workspace). Every change to companies, contacts, opportunities, activities and tasks is audited with the agent as the actor and the `provenance` you send, and audit events can start workflows and are delivered to webhooks (see [Webhooks](#webhooks)). Nothing is deleted: `DELETE` archives.
 
 Send `Content-Type: application/json`. Unknown fields are rejected. Omitted fields on `PATCH` and upsert are left unchanged. `null` clears an optional field.
 
@@ -27,6 +27,8 @@ Optional `Idempotency-Key` header (printable ASCII, up to 200 characters). Reuse
 | CSV import | `companies:write` or `contacts:write` |
 | Webhook list and deliveries | `crm:read` |
 | Webhook create and archive | `admin` |
+| Docs list, search, read, folders | `docs:read` |
+| Docs create, change, archive | `docs:write` |
 
 `admin` satisfies any of these.
 
@@ -55,6 +57,12 @@ Optional `Idempotency-Key` header (printable ASCII, up to 200 characters). Reuse
 | `DELETE` | `/opportunities/:id` | Archive | `opportunities:write` |
 | `GET` | `/pipeline` | The default pipeline and its stages | `crm:read` |
 | `PUT` | `/pipeline` | Replace the default pipeline's stages | `opportunities:write` |
+| `GET` | `/docs` | List shared docs (`folderId`, `folderId=none`, `tag` with nested tags, `sort` of `edited`, `created` or `title`, `archived=true`, `limit` up to 200, `offset`), or search them with `q` (title prefix, fuzzy title and full text, `limit` up to 50) | `docs:read` |
+| `POST` | `/docs` | Create a doc: `title`, `content` (Markdown), `folderId`, `shared`, `provenance`. Always shared with the workspace. 201 | `docs:write` |
+| `GET` | `/docs/folders` | Shared folders, with parent and position | `docs:read` |
+| `GET` | `/docs/:id` | One doc with its links, mentions and folder path, and its text from `offset` (100,000 characters, with `nextOffset`) | `docs:read` |
+| `PATCH` | `/docs/:id` | Any of `title` (rename, rewriting links to it), `content` (replace), `append`, `find` with `replace` (and `all`), `folderId` (null for no folder; with `allowVisibilityChange` when the move changes who sees it), `shared`, `baseRevision` (409 if the doc changed before any of the changes), applied in that order in one transaction, so a refused change leaves the doc as it was | `docs:write` |
+| `DELETE` | `/docs/:id` | Archive | `docs:write` |
 | `GET` | `/activities` | List activity | `crm:read` |
 | `POST` | `/activities` | Append an activity | `activities:write` |
 | `POST` | `/communications` | File an email or meeting and suggest a follow-up | `activities:write` |
@@ -213,7 +221,7 @@ Agent tokens see every task in the workspace; people in the app only see tasks t
 
 `POST /api/v1/webhooks` requires `admin`. Body: `{ "url", "events": ["lead.created"], "description" }`. `201` returns `{ "endpoint", "secret" }`. The secret is shown once. URLs must be `https`, except `http://127.0.0.1` and `http://localhost` for development.
 
-`events` (1 to 30) takes any of `company.created`, `company.updated`, `company.archived`, `company.merged`, `company.undone`, `contact.created`, `contact.updated`, `contact.archived`, `contact.merged`, `contact.undone`, `lead.created`, `opportunity.created`, `opportunity.updated`, `opportunity.stage_changed`, `opportunity.archived`, `opportunity.undone`, `activity.created`, `activity.updated`, `activity.archived`, `activity.undone`, `task.created`, `task.completed`, `task.reopened`, `task.updated`, `task.archived` and `task.undone`, or `*` for every event. Restoring a record from the archive fires `*.updated` with `fields: ["archivedAt"]`. When someone undoes a change through the assistant, the change it puts back fires its normal event first, then `*.undone` fires with `data` of `{ "undoes", "undoneEventType", "restored" }`: the id of the audit event that was undone, its type, and a sentence saying what was put back.
+`events` (1 to 30) takes any of `company.created`, `company.updated`, `company.archived`, `company.merged`, `company.undone`, `contact.created`, `contact.updated`, `contact.archived`, `contact.merged`, `contact.undone`, `lead.created`, `opportunity.created`, `opportunity.updated`, `opportunity.stage_changed`, `opportunity.archived`, `opportunity.undone`, `activity.created`, `activity.updated`, `activity.archived`, `activity.undone`, `task.created`, `task.completed`, `task.reopened`, `task.updated`, `task.archived`, `task.undone`, the Docs events `page.created`, `page.updated`, `page.moved`, `page.shared`, `page.archived`, `page.restored`, `page_folder.created`, `page_folder.updated`, `page_folder.moved`, `page_folder.shared`, `page_folder.archived` and `page_folder.restored`, or `*` for every event. Docs events fire only for docs and folders shared with the workspace (or that were shared until that change), carry the title or name and never the text, and `page.updated` fires when a version is saved (at most every 10 minutes while a person types, on every rename and on every agent edit). Restoring a record from the archive fires `*.updated` with `fields: ["archivedAt"]`. When someone undoes a change through the assistant, the change it puts back fires its normal event first, then `*.undone` fires with `data` of `{ "undoes", "undoneEventType", "restored" }`: the id of the audit event that was undone, its type, and a sentence saying what was put back.
 
 `company.merged` and `contact.merged` carry how many rows moved from each table and which fields were filled; the archived duplicate also fires `company.archived` or `contact.archived` with `mergedInto`.
 

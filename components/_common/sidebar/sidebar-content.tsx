@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { ScrollArea } from "@/components/_ui/scroll-area";
 import SidebarBoards from "./sidebar-boards";
+import SidebarDocs from "./sidebar-docs";
 import SidebarNavItem from "./sidebar-nav-item";
 import SidebarSection from "./sidebar-section";
 import SidebarShortcuts from "./sidebar-shortcuts";
@@ -160,6 +161,7 @@ export default function SidebarContent({
               active={current("/quiet")}
             />
           </SidebarSection>
+          <SidebarDocs />
         </nav>
       </ScrollArea>
 

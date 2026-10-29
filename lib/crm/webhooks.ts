@@ -42,6 +42,18 @@ export const WEBHOOK_EVENTS = [
   "task.updated",
   "task.archived",
   "task.undone",
+  "page.created",
+  "page.updated",
+  "page.moved",
+  "page.shared",
+  "page.archived",
+  "page.restored",
+  "page_folder.created",
+  "page_folder.updated",
+  "page_folder.moved",
+  "page_folder.shared",
+  "page_folder.archived",
+  "page_folder.restored",
 ] as const;
 
 const BACKOFF_SECONDS = [60, 300, 1800, 7200];
