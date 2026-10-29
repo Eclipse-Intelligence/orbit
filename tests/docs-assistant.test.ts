@@ -6,7 +6,7 @@ import { scopesForRole } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { createFolder } from "@/lib/docs/folders";
-import { CHANGED_SINCE_APPROVAL } from "@/lib/assistant/docs";
+import { EDIT_MOVED_SINCE_APPROVAL, mergeRewrite, REWRITE_CLASHED_SINCE_APPROVAL } from "@/lib/assistant/docs";
 import { EXTERNAL_NOTICE } from "@/lib/assistant/tools";
 import { createDoc, getDoc, listVersions, saveDoc, setAssistantCanEdit } from "@/lib/docs/store";
 import { createUser, resetDatabase } from "./helpers";
@@ -284,15 +284,92 @@ describe("approved doc edits", () => {
     const first = collect();
     await sendMessage(mark, { message: "Rewrite it", model: "claude-sonnet-5-5", reasoning: "medium", webSearch: false }, first.emit, { deadline: deadline(), fetchImpl: fake.fetchImpl });
     const pending = lastActions(first.events);
-    assert.equal(pending[0].baseRevision, doc.revision);
+    assert.equal(pending[0].baseRevision, undefined);
+    assert.match(String(pending[0].approval?.base), /^[0-9a-f]{64}$/);
     await saveDoc(priya, doc.id, { content: "Line one, and Priya's line" });
     const conversationId = (first.events[0] as Extract<AssistantEvent, { type: "conversation" }>).conversation.id;
     const second = collect();
     await decideActions(mark, { conversationId, decisions: [{ id: "call_stale", approve: true }] }, second.emit, { deadline: deadline(), fetchImpl: fake.fetchImpl });
     const decided = lastActions(second.events)[0];
     assert.equal(decided.status, "failed");
-    assert.equal(decided.result, CHANGED_SINCE_APPROVAL);
+    assert.equal(decided.result, REWRITE_CLASHED_SINCE_APPROVAL);
     assert.equal((await getDoc(mark, doc.id)).content, "Line one, and Priya's line");
+  });
+
+  async function propose(args: Record<string, unknown>, id: string) {
+    const fake = gateway([{ tool_calls: [{ id, name: "save_doc", args }] }, { content: "Done." }]);
+    const first = collect();
+    await sendMessage(mark, { message: "Change it", model: "claude-sonnet-5-5", reasoning: "medium", webSearch: false }, first.emit, { deadline: deadline(), fetchImpl: fake.fetchImpl });
+    assert.equal(lastActions(first.events)[0].status, "pending");
+    const conversationId = (first.events[0] as Extract<AssistantEvent, { type: "conversation" }>).conversation.id;
+    return async () => {
+      const second = collect();
+      await decideActions(mark, { conversationId, decisions: [{ id, approve: true }] }, second.emit, { deadline: deadline(), fetchImpl: fake.fetchImpl });
+      return lastActions(second.events)[0];
+    };
+  }
+
+  const MINUTES = ["# Minutes", "", "Attendees: Mark, Priya", "", "Decision: ship in January", "", "Notes", "", "- one", "- two", "- three", "", "Actions", "", "- Mark sends the deck"].join("\n");
+
+  it("applies an approved edit while someone else typed elsewhere in the doc", async () => {
+    const doc = await createDoc(mark, { title: "Live minutes", content: MINUTES, shared: true });
+    const approve = await propose({ action: "edit", docId: doc.id, find: "ship in January", replace: "ship in February" }, "call_edit_elsewhere");
+    await saveDoc(priya, doc.id, { content: `${MINUTES}\n- Priya books the room` });
+    const decided = await approve();
+    assert.equal(decided.status, "done");
+    assert.equal((await getDoc(mark, doc.id)).content, `${MINUTES.replace("ship in January", "ship in February")}\n- Priya books the room`);
+  });
+
+  it("refuses an approved edit when the text it was changing changed", async () => {
+    const doc = await createDoc(mark, { title: "Moved minutes", content: MINUTES, shared: true });
+    const approve = await propose({ action: "edit", docId: doc.id, find: "ship in January", replace: "ship in February" }, "call_edit_moved");
+    const changed = MINUTES.replace("Decision: ship in January", "Decision: ship in January, unless legal objects");
+    await saveDoc(priya, doc.id, { content: changed });
+    const decided = await approve();
+    assert.equal(decided.status, "failed");
+    assert.equal(decided.result, EDIT_MOVED_SINCE_APPROVAL);
+    assert.equal((await getDoc(mark, doc.id)).content, changed);
+  });
+
+  it("refuses an approved edit when the text it found now appears more often", async () => {
+    const doc = await createDoc(mark, { title: "Repeated minutes", content: MINUTES, shared: true });
+    const approve = await propose({ action: "edit", docId: doc.id, find: "- one", replace: "- first", all: true }, "call_edit_more");
+    await saveDoc(priya, doc.id, { content: `${MINUTES}\n- one more` });
+    const decided = await approve();
+    assert.equal(decided.status, "failed");
+    assert.equal(decided.result, EDIT_MOVED_SINCE_APPROVAL);
+  });
+
+  it("merges an approved rewrite with typing elsewhere, and keeps both", async () => {
+    const doc = await createDoc(mark, { title: "Rewrite minutes", content: MINUTES, shared: true });
+    const rewritten = MINUTES.replace("# Minutes", "# Board minutes").replace("- two", "- two, agreed");
+    const approve = await propose({ action: "replace", docId: doc.id, content: rewritten }, "call_rewrite_merge");
+    await saveDoc(priya, doc.id, { content: `${MINUTES}\n- Priya books the room` });
+    const decided = await approve();
+    assert.equal(decided.status, "done");
+    assert.equal((await getDoc(mark, doc.id)).content, `${rewritten}\n- Priya books the room`);
+  });
+
+  it("applies an approved rewrite unchanged when nobody touched the doc", async () => {
+    const doc = await createDoc(mark, { title: "Untouched minutes", content: MINUTES, shared: true });
+    const approve = await propose({ action: "replace", docId: doc.id, content: "Short version" }, "call_rewrite_clean");
+    const decided = await approve();
+    assert.equal(decided.status, "done");
+    assert.equal((await getDoc(mark, doc.id)).content, "Short version");
+  });
+
+  it("always proceeds with an approved append or tag", async () => {
+    const doc = await createDoc(mark, { title: "Append minutes", content: MINUTES, shared: true });
+    const approve = await propose({ action: "append", docId: doc.id, content: "- Assistant adds this" }, "call_append_any");
+    await saveDoc(priya, doc.id, { content: "Priya replaced everything" });
+    const decided = await approve();
+    assert.equal(decided.status, "done");
+    assert.match((await getDoc(mark, doc.id)).content, /^Priya replaced everything\n+- Assistant adds this$/);
+  });
+
+  it("merges only when the two changes don't touch", () => {
+    assert.equal(mergeRewrite("a\nb\nc\nd", "A\nb\nc\nd", "a\nb\nc\nD"), "A\nb\nc\nD");
+    assert.equal(mergeRewrite("a\nb\nc\nd", "A\nb\nc\nd", "a2\nb\nc\nd"), null);
   });
 
   it("counts every changed line on a big card, not just the lines shown", async () => {
@@ -301,7 +378,7 @@ describe("approved doc edits", () => {
     const args = { action: "replace", docId: doc.id, content: Array.from({ length: 1000 }, (_, index) => `New line ${index}`).join("\n") };
     const card = describeAction("save_doc", args, await recordNames(mark, [args], ["save_doc"]));
     assert.ok(card.lines.includes("1000 lines added, 1000 lines removed."));
-    const result = (await runTool(mark, "save_doc", args)) as { changed: { added: number; removed: number } };
+    const result = (await runTool(mark, "save_doc", args, { approval: card.approval })) as { changed: { added: number; removed: number } };
     assert.deepEqual(result.changed, { added: 1000, removed: 1000 });
   });
 });
