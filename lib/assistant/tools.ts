@@ -1866,7 +1866,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     name: "cold_email_playbook",
     label: "Reading the cold email playbook",
     description:
-      "How to research a prospect and write a first email to someone who doesn't know the user: checks before research, research steps and tools, the three angles (approved client proof, a finding, or something made for them) and when not to send, the client proof rules, the rules (50 to 90 words, no link, one figure, one easy question, no meeting ask, no invented facts), the follow-up, replies, measuring, examples, and the Eclipse outreach brief of what may and may not be claimed, and the proof list of approved client results. Read it before writing any first email to a prospect.",
+      "How to research a prospect and write a first email to someone who doesn't know the user: checks before research, research steps and tools, the three angles (client proof from the proof list, a finding, or something made for them) and when not to send, how to use client proof, the rules (50 to 90 words, no link, one figure, one easy question, no meeting ask, no invented facts), the follow-up, replies, measuring, examples, and the Eclipse outreach brief of what may and may not be claimed, and the proof list of client results, which the user keeps and which can be used as it stands without checking it against anything. Read it before writing any first email to a prospect.",
     parameters: { type: "object", properties: {} },
     run: async (actor) => {
       const [page, proof] = await Promise.all([getBookingPage(actor).catch(() => null), listProof(actor)]);
@@ -1883,7 +1883,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     name: "cold_email_check",
     label: "Checking the email",
     description:
-      "Check a draft first email to a prospect against cold_email_playbook before proposing it: value as well as format, that every figure appears in your evidence, and that any client proof is quoted word for word from an entry on the proof list within its permission. Pass all your evidence (each fact with its source, including the exact figures you quote) and what their company already offers. For each proof entry, pass an evidence item with kind proof and its id from proofList as source; the check reads the client, permission and approved wording from the list. Fix every item in fixes and check again, at most twice. It spends a little on model calls.",
+      "Check a draft first email to a prospect against cold_email_playbook before proposing it: value as well as format, that every figure appears in your evidence, and that any client proof comes from the proof list, without naming a described only client. Pass all your evidence (each fact with its source, including the exact figures you quote) and what their company already offers. For each proof entry, pass an evidence item with kind proof and its id from proofList as source; the check reads the entry from the list. Fix every item in fixes and check again, at most twice. It spends a little on model calls.",
     parameters: {
       type: "object",
       properties: {

@@ -72,10 +72,10 @@ describe("proof list", () => {
     assert.deepEqual(events.rows.map((row) => row.event_type).sort(), ["proof_entry.archived", "proof_entry.created", "proof_entry.updated"]);
   });
 
-  it("asks for the client, the approved result, the permission and a description for described only proof", async () => {
+  it("asks for the client, the result, the naming and a description for described only proof", async () => {
     await assert.rejects(createProof(owner, { ...NORTHWIND, client: " " }, WEB), code("invalid_input", /client's name/));
-    await assert.rejects(createProof(owner, { ...NORTHWIND, result: "" }, WEB), code("invalid_input", /exact words the client approved/));
-    await assert.rejects(createProof(owner, { ...NORTHWIND, permission: "maybe" }, WEB), code("invalid_input", /what the client has allowed/));
+    await assert.rejects(createProof(owner, { ...NORTHWIND, result: "" }, WEB), code("invalid_input", /Add the result/));
+    await assert.rejects(createProof(owner, { ...NORTHWIND, permission: "maybe" }, WEB), code("invalid_input", /whether they can be named/));
     await assert.rejects(createProof(owner, { ...NORTHWIND, permission: "described", description: "" }, WEB), code("invalid_input", /doesn't identify them/));
     await assert.rejects(createProof(owner, { ...NORTHWIND, reviewOn: "next week" }, WEB), code("invalid_input", /review date/));
     await assert.rejects(createProof(owner, { ...NORTHWIND, reviewOn: "2026-02-31" }, WEB), code("invalid_input", /review date/));
@@ -116,12 +116,12 @@ describe("proof list", () => {
     assert.deepEqual(empty.proofList, []);
     assert.match(empty.proofNote ?? "", /proof list is empty/);
     const entry = await createProof(owner, NORTHWIND, WEB);
-    const playbook = (await runTool(owner, "cold_email_playbook", {})) as { proofList: { id: string; approvedWording: string }[]; proofNote?: string };
+    const playbook = (await runTool(owner, "cold_email_playbook", {})) as { proofList: { id: string; result: string }[]; proofNote?: string };
     assert.equal(playbook.proofNote, undefined);
-    assert.deepEqual(playbook.proofList.map((item) => [item.id, item.approvedWording]), [[entry.id, NORTHWIND.result]]);
+    assert.deepEqual(playbook.proofList.map((item) => [item.id, item.result]), [[entry.id, NORTHWIND.result]]);
 
     const quoted = (await runTool(owner, "cold_email_check", { ...EMAIL, evidence: [TRIGGER, { kind: "proof", fact: "Northwind proof", source: entry.id }] })) as Checked;
-    assert.equal(proofNote(quoted), "Quotes the proof entry for Northwind (named) word for word.");
+    assert.equal(proofNote(quoted), "Uses the proof list entry for Northwind.");
 
     const invented = (await runTool(owner, "cold_email_check", {
       ...EMAIL,

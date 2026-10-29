@@ -3,7 +3,6 @@
 import { useId, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
-import { DatePicker } from "@/components/_ui/date-picker";
 import HoldButton from "@/components/_ui/hold-button";
 import { Input } from "@/components/_ui/input";
 import { NativeSelect } from "@/components/_ui/native-select";
@@ -12,14 +11,12 @@ import Tag from "@/components/_ui/tag";
 import { Textarea } from "@/components/_ui/textarea";
 import { SettingsCard } from "@/components/crm/settings-ui";
 import { archiveProofAction, saveProofAction } from "@/app/(crm)/proof";
-import { formatDateLabel } from "@/lib/date-input";
 import {
   PERMISSION_LABEL,
   PRODUCT_LABEL,
   PROOF_LIMITS,
   PROOF_PERMISSIONS,
   PROOF_PRODUCTS,
-  reviewOverdue,
   type ProofEntry,
   type ProofPermission,
   type ProofProduct,
@@ -36,7 +33,7 @@ export default function ProofList({ entries }: { entries: ProofEntry[] }) {
     <SettingsCard
       id="proof"
       title="Proof list"
-      description="Client results the assistant may quote in cold emails, word for word and only as the client allowed."
+      description="Client results the assistant can use in cold emails, as written."
       action={
         <Button variant="secondary" size="sm" type="button" onClick={() => open(null)}>
           Add proof
@@ -56,15 +53,10 @@ export default function ProofList({ entries }: { entries: ProofEntry[] }) {
                     <Tag size="sm" className="text-[12px]">
                       {PERMISSION_LABEL[entry.permission]}
                     </Tag>
-                    {reviewOverdue(entry) && (
-                      <Tag size="sm" tone="amber" className="text-[12px]">
-                        Review due
-                      </Tag>
-                    )}
                   </span>
                   <span className="text-soft line-clamp-2 text-[14px] leading-5">“{entry.result}”</span>
                   <span className="caption-style text-subtle">
-                    {[PRODUCT_LABEL[entry.product], entry.description, entry.reviewOn ? `Review by ${formatDateLabel(entry.reviewOn)}` : ""].filter(Boolean).join(". ")}
+                    {[PRODUCT_LABEL[entry.product], entry.description].filter(Boolean).join(". ")}
                   </span>
                 </span>
               </Button>
@@ -76,7 +68,7 @@ export default function ProofList({ entries }: { entries: ProofEntry[] }) {
         <SheetContent side="right" className="sm:w-[480px] sm:max-w-[480px]">
           <SheetHeader>
             <SheetTitle>{editing?.entry ? "Edit proof" : "Add proof"}</SheetTitle>
-            <SheetDescription className="sr-only">A client result the assistant may quote in cold emails</SheetDescription>
+            <SheetDescription className="sr-only">A client result the assistant can use in cold emails</SheetDescription>
             <SheetCloseButton />
           </SheetHeader>
           {editing && <ProofForm entry={editing.entry} onClose={() => setEditing(null)} />}
@@ -96,8 +88,6 @@ function ProofForm({ entry, onClose }: { entry: ProofEntry | null; onClose: () =
   const [result, setResult] = useState(entry?.result ?? "");
   const [measured, setMeasured] = useState(entry?.measured ?? "");
   const [permission, setPermission] = useState<ProofPermission | "">(entry?.permission ?? "");
-  const [approvedBy, setApprovedBy] = useState(entry?.approvedBy ?? "");
-  const [reviewOn, setReviewOn] = useState(entry?.reviewOn ?? "");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<{ message: string; field?: string } | null>(null);
 
@@ -109,11 +99,11 @@ function ProofForm({ entry, onClose }: { entry: ProofEntry | null; onClose: () =
     event.preventDefault();
     if (pending) return;
     if (!client.trim()) return setError({ message: "Add the client's name.", field: "client" });
-    if (!result.trim()) return setError({ message: "Add the result, in the exact words the client approved.", field: "result" });
-    if (!permission) return setError({ message: "Choose what the client has allowed.", field: "permission" });
+    if (!result.trim()) return setError({ message: "Add the result.", field: "result" });
+    if (!permission) return setError({ message: "Choose whether they can be named.", field: "permission" });
     setPending(true);
     setError(null);
-    const saved = await saveProofAction(entry?.id ?? null, { client, description, product, usedFor, result, measured, permission, approvedBy, reviewOn: reviewOn || null }).catch(() => ({
+    const saved = await saveProofAction(entry?.id ?? null, { client, description, product, usedFor, result, measured, permission, approvedBy: entry?.approvedBy ?? "", reviewOn: entry?.reviewOn ?? null }).catch(() => ({
       error: "That proof didn't save. Try again.",
       field: undefined,
     }));
@@ -153,7 +143,7 @@ function ProofForm({ entry, onClose }: { entry: ProofEntry | null; onClose: () =
         </label>
         <div className="flex flex-col gap-2">
           <label className="caption-style text-subtle" htmlFor={`${id}-result`}>
-            Approved result
+            Result
           </label>
           <Textarea
             id={`${id}-result`}
@@ -166,11 +156,11 @@ function ProofForm({ entry, onClose }: { entry: ProofEntry | null; onClose: () =
             onChange={(event) => setResult(event.target.value)}
           />
           <span id={`${id}-result-hint`} className="caption-style text-subtle">
-            The exact words the client approved. The assistant quotes them word for word.
+            The assistant uses this as written.
           </span>
         </div>
         <label className="flex flex-col gap-2" htmlFor={`${id}-permission`}>
-          <span className="caption-style text-subtle">Permission</span>
+          <span className="caption-style text-subtle">Naming</span>
           <NativeSelect id={`${id}-permission`} value={permission} aria-invalid={invalid("permission")} onChange={(event) => setPermission(event.target.value as ProofPermission)}>
             <option value="" disabled>
               Choose
@@ -225,16 +215,6 @@ function ProofForm({ entry, onClose }: { entry: ProofEntry | null; onClose: () =
             onChange={(event) => setMeasured(event.target.value)}
           />
         </label>
-        <label className="flex flex-col gap-2" htmlFor={`${id}-approved-by`}>
-          <span className="caption-style text-subtle">Approved by</span>
-          <Input id={`${id}-approved-by`} value={approvedBy} maxLength={PROOF_LIMITS.approvedBy} autoComplete="off" onChange={(event) => setApprovedBy(event.target.value)} />
-        </label>
-        <div className="flex min-w-0 flex-col gap-2">
-          <label className="caption-style text-subtle" htmlFor={`${id}-review`}>
-            Review by
-          </label>
-          <DatePicker id={`${id}-review`} value={reviewOn} onChange={setReviewOn} placeholder="Pick a date" />
-        </div>
       </div>
       <SheetFooter>
         {entry && (

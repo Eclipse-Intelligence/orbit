@@ -131,10 +131,10 @@ describe("cold email rule checks", () => {
 });
 
 describe("cold email client proof", () => {
-  it("passes approved proof quoted word for word within its permission", () => {
+  it("passes proof from the proof list", () => {
     const checks = lintColdEmail({ ...PROOF, evidence: PROOF_EVIDENCE });
     assert.deepEqual(failed(checks), []);
-    assert.equal(noteOf(checks, "proof_approved"), "Quotes the proof entry for Northwind (named) word for word.");
+    assert.equal(noteOf(checks, "proof_approved"), "Uses the proof list entry for Northwind.");
     const described = { ...NORTHWIND, permission: "described" as const };
     const anonymous = PROOF.body.replace("Northwind, a 12-person B2B SEO agency, moved", "A 12-person B2B SEO agency moved");
     assert.deepEqual(failed(lintColdEmail({ ...PROOF, body: anonymous, evidence: [PROOF_EVIDENCE[0], described] })), []);
@@ -143,18 +143,16 @@ describe("cold email client proof", () => {
   it("fails proof with no proof entry behind it", () => {
     const checks = lintColdEmail({ ...PROOF, evidence: PROOF_EVIDENCE.slice(0, 1) });
     assert.deepEqual(failed(checks), ["proof_approved"]);
-    assert.match(noteOf(checks, "proof_approved"), /^States a client result or names a client with no proof entry behind it/);
+    assert.match(noteOf(checks, "proof_approved"), /^States a client result or names a client with no proof list entry behind it/);
     const pitch = lintColdEmail({ subject: "content results", body: "Hi Sam,\n\nWe helped a SaaS client publish more. We can do the same for Pulse. Have you got 15 minutes this week?\n\nMark", evidence: [] });
     for (const id of ["proof_approved", "no_promise", "no_meeting"]) assert.ok(failed(pitch).includes(id), id);
   });
 
-  it("fails proof whose wording doesn't match the approved wording", () => {
+  it("lets proof from the list be put in other words", () => {
     const reworded = PROOF.body.replace("They went from two articles a month per client to eight.", "They now publish eight articles a month for every client.");
-    const checks = lintColdEmail({ ...PROOF, body: reworded, evidence: PROOF_EVIDENCE });
-    assert.deepEqual(failed(checks), ["proof_approved"]);
-    assert.equal(noteOf(checks, "proof_approved"), "The result for Northwind doesn't match its approved wording word for word.");
+    assert.deepEqual(failed(lintColdEmail({ ...PROOF, body: reworded, evidence: PROOF_EVIDENCE })), []);
     const anonymous = reworded.replace("Northwind, a 12-person B2B SEO agency, moved", "A 12-person B2B SEO agency moved");
-    assert.match(noteOf(lintColdEmail({ ...PROOF, body: anonymous, evidence: PROOF_EVIDENCE }), "proof_approved"), /doesn't match the approved wording of any proof entry/);
+    assert.equal(lintColdEmail({ ...PROOF, body: anonymous, evidence: PROOF_EVIDENCE }).find((check) => check.id === "proof_approved")!.pass, true);
   });
 
   it("fails a described only entry that names the client", () => {
@@ -163,9 +161,7 @@ describe("cold email client proof", () => {
     assert.equal(noteOf(checks, "proof_approved"), "Names Northwind, whose entry is described only.");
   });
 
-  it("fails an incomplete proof entry, a finding next to proof, and a client name in the subject", () => {
-    const incomplete = lintColdEmail({ ...PROOF, evidence: [PROOF_EVIDENCE[0], { ...NORTHWIND, permission: undefined, source: undefined }] });
-    assert.equal(noteOf(incomplete, "proof_approved"), "The proof entry for Northwind is missing its proof list id and the permission.");
+  it("fails a finding next to proof, and a client name in the subject", () => {
     const mixed = lintColdEmail({
       ...PROOF,
       body: PROOF.body.replace("to eight.", "to eight. Our article shows a brand named in 6 out of 20 runs could be named in 3 next time."),
@@ -213,8 +209,8 @@ describe("cold email client proof", () => {
     assert.equal(noteOf(lintColdEmail({ ...PROOF, body: PROOF.body.replaceAll("Northwind", "Contoso"), evidence: invented }), "proof_approved"), "The proof for Contoso isn't on the proof list.");
     const unmentioned = withProofList(PROOF_EVIDENCE.slice(0, 1), [{ ...entry, permission: "described" }], PROOF);
     assert.equal(noteOf(lintColdEmail({ ...PROOF, evidence: unmentioned }), "proof_approved"), "Names Northwind, whose entry is described only.");
-    const overdue = withProofList([{ kind: "proof", fact: "", source: entry.id }], [{ ...entry, reviewOn: "2020-01-01" }], PROOF);
-    assert.equal(noteOf(lintColdEmail({ ...PROOF, evidence: overdue }), "proof_approved"), "The proof entry for Northwind was due for review on 2020-01-01.");
+    const pastReview = withProofList([{ kind: "proof", fact: "", source: entry.id }], [{ ...entry, reviewOn: "2020-01-01", approvedBy: "" }], PROOF);
+    assert.deepEqual(failed(lintColdEmail({ ...PROOF, evidence: pastReview })), []);
     const paraphrased = PROOF.body.replace("to eight.", "to eight. Another agency went from four days of review to one.");
     const extra = withProofList(
       [PROOF_EVIDENCE[0], { kind: "proof", fact: "", source: entry.id }, { kind: "proof", fact: "Fabrikam", source: "made-up", client: "Fabrikam", permission: "named", approvedWording: "cut review time from four days to one" }],
@@ -229,18 +225,15 @@ describe("cold email client proof", () => {
     const twice = withProofList([PROOF_EVIDENCE[0], { kind: "proof", fact: "", source: entry.id }, { kind: "proof", fact: "", source: entry.id }], [entry, second], PROOF);
     assert.equal(twice.length, 2);
     assert.deepEqual(failed(lintColdEmail({ ...PROOF, evidence: twice })), []);
-    assert.deepEqual(proofListFor([{ ...entry, reviewOn: "2020-01-01" }], "2026-10-29")[0], {
+    assert.deepEqual(proofListFor([{ ...entry, reviewOn: "2020-01-01" }])[0], {
       id: entry.id,
       client: "Northwind",
       description: entry.description,
       product: "eclipse",
       usedFor: entry.usedFor,
-      approvedWording: entry.result,
+      result: entry.result,
       measured: entry.measured,
       permission: "named",
-      approvedBy: entry.approvedBy,
-      reviewOn: "2020-01-01",
-      reviewOverdue: true,
     });
   });
 });
@@ -303,7 +296,9 @@ describe("cold email triggers, subjects and tailored offers", () => {
     assert.match(COLD_EMAIL_PLAYBOOK, /Triggers\. Look for a hire, funding, a launch/);
     assert.match(COLD_EMAIL_PLAYBOOK, /Check recall and the nightly market notes first/);
     assert.match(COLD_EMAIL_PLAYBOOK, /Want me to send the five questions where you don't come up\?/);
-    assert.match(COLD_EMAIL_PLAYBOOK, /Quote only from the list\. Copy figures word for word/);
+    assert.match(COLD_EMAIL_PLAYBOOK, /everything on it is cleared to use exactly as it stands/);
+    assert.match(COLD_EMAIL_PLAYBOOK, /Don't check it against Orbit, mail, the company record or anything else/);
+    assert.doesNotMatch(COLD_EMAIL_PLAYBOOK, /still shows them as a customer|review date|Who approved it|agency proof for agencies/);
     assert.match(COLD_EMAIL_PLAYBOOK, /50 to 90 words in 3 to 5 short sentences/);
     assert.match(COLD_EMAIL_PLAYBOOK, /No link and no attachment in a first email/);
     assert.match(COLD_EMAIL_PLAYBOOK, /https:\/\/orbit\.geteclipse\.co\/book\/mark/);
@@ -354,8 +349,8 @@ describe("cold email value grading", () => {
     };
     const result = await checkColdEmail({ ...WEAK, evidence: EVIDENCE, theirOffer: OFFER }, { fetchImpl });
     assert.equal(sent[0].state.prospect_company_already_offers, OFFER);
-    assert.match(sent[0].state.approved_product_claims, /Approved client proof may be quoted from the proof list in Knowledge/);
-    assert.match(sent[0].questions.claims_supported.instructions, /quoted word for word from the approved_wording of an approved client proof item/);
+    assert.match(sent[0].state.approved_product_claims, /Anything on the proof list in Knowledge can be used as it stands/);
+    assert.match(sent[0].questions.claims_supported.instructions, /Proof list items are cleared for use as they stand/);
     assert.match(sent[0].questions.one_angle.instructions, /A finding and client proof in the same email, stacked results or two or more figures count as no/);
     assert.deepEqual(Object.keys(sent[0].questions.cta_kind.criteria as Record<string, string>).slice(0, 3), ["question_about_their_work", "tailored_offer", "useful_offer"]);
     assert.equal(result.graded, "Rule checks and Jev grading.");
@@ -363,7 +358,7 @@ describe("cold email value grading", () => {
     assert.ok(result.fixes.some((fix) => fix.startsWith("Tells them something new: Give them one specific thing")));
   });
 
-  it("sends proof entries to Jev with their permission and approved wording", async () => {
+  it("sends proof entries to Jev with their permission and result", async () => {
     process.env.TYPESAFE_API_KEY = "ts-test";
     const sent: { state: { prospect_evidence: Record<string, string>[] } }[] = [];
     const fetchImpl: typeof fetch = async (_input, init) => {
@@ -373,10 +368,10 @@ describe("cold email value grading", () => {
     const result = await checkColdEmail({ ...PROOF, evidence: [PROOF_EVIDENCE[0], { ...NORTHWIND, permission: "described" }] }, { fetchImpl });
     assert.deepEqual(sent[0].state.prospect_evidence[1], {
       id: "E2",
-      kind: "approved client proof",
+      kind: "client proof from the proof list",
       client: "Northwind",
       permission: "described only, never named or identified",
-      approved_wording: "They went from two articles a month per client to eight.",
+      result: "They went from two articles a month per client to eight.",
       fact: NORTHWIND.fact,
       source: NORTHWIND.source,
     });
@@ -420,11 +415,11 @@ describe("cold email value grading", () => {
     assert.equal(result.graded, "Rule checks and an AI value review.");
     assert.match(prompts[0], /What their company already offers:\nOmniscient reports AI share of voice/);
     assert.match(prompts[0], /busy expert/);
-    assert.match(prompts[0], /Approved proof quoted exactly is allowed/);
+    assert.match(prompts[0], /Proof list items are cleared for use as they stand/);
     assert.match(prompts[0], /Touch: a first email, with no link/);
     claimsOk = false;
     const proof = await checkColdEmail({ ...PROOF, evidence: PROOF_EVIDENCE }, { fetchImpl });
-    assert.match(prompts[1], /E2\. Approved client proof for Northwind, may be named\. Approved wording "They went from two articles a month per client to eight\."/);
+    assert.match(prompts[1], /E2\. Client proof from the proof list for Northwind, may be named\. Result "They went from two articles a month per client to eight\."/);
     assert.deepEqual(failed(proof.checks), ["claims_supported"]);
   });
 
@@ -441,7 +436,7 @@ describe("assistant guidance", () => {
     const playbook = { playbook: COLD_EMAIL_PLAYBOOK, eclipseBrief: ECLIPSE_OUTREACH_BRIEF };
     assert.match(playbook.playbook, /Every email carries one thing they probably don't know\. There are three kinds/);
     assert.match(playbook.playbook, /Never write "we can do the same for you"/);
-    assert.match(playbook.eclipseBrief, /Approved client proof may be quoted from the proof list in Knowledge, exactly as approved and within its permission level/);
+    assert.match(playbook.eclipseBrief, /Anything on the proof list in Knowledge can be used as it stands, naming the client only when the entry says they can be named/);
     assert.match(playbook.eclipseBrief, /Figures from Eclipse's published articles may be quoted exactly/);
     const check = toolDefinitions().find((tool) => tool.function.name === "cold_email_check")!.function as unknown as {
       parameters: { properties: { evidence: { items: { properties: Record<string, { enum?: string[] }> } } } };
@@ -454,7 +449,7 @@ describe("assistant guidance", () => {
     assert.match(prompt, /worth a busy expert's time/);
     assert.match(prompt, /never tells them about themselves/);
     assert.match(prompt, /50 to 90 words with no link or attachment and at most one figure/);
-    assert.match(prompt, /approved client proof quoted word for word from the proof list in Knowledge/);
+    assert.match(prompt, /use any entry as it stands and never check it against Orbit or mail/);
     assert.match(playbook.playbook, /Agreeing with them, repeating their point, describing their own business/);
     assert.match(prompt, /Never put a colon in the middle of a sentence/);
   });
