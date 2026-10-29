@@ -16,7 +16,7 @@ import { bridge, external, noteExtensions, type ActiveTrigger } from "@/lib/docs
 import { createStateCache } from "@/lib/docs/editor/state-cache";
 import { headingsIn } from "@/lib/docs/markdown";
 import { listHref, pageHref, recordHref } from "@/lib/docs/routes";
-import { adoptDraft, commitNow, onDocsReset, scheduleSave, useDocsStore } from "@/stores/docs-store";
+import { adoptDraft, commitNow, holdClassicSaves, onDocsReset, scheduleSave, useDocsStore } from "@/stores/docs-store";
 
 type Cached = { state: EditorState; live: CachedLive | null };
 type LiveModule = typeof import("@/lib/docs/live/client");
@@ -29,9 +29,10 @@ let liveId: string | null = null;
 let pendingHeading: { pageId: string; heading: string } | null = null;
 let liveModule: LiveModule | null = null;
 let attachToken = 0;
-let attaching: { id: string; cached: CachedLive | null } | null = null;
+let attaching: { id: string; cached: CachedLive | null; release: (resume: boolean) => void } | null = null;
 
 onDocsReset(() => {
+  if (liveId) liveModule?.detachLive(liveId, { save: false });
   states.clear();
   titles.clear();
   liveId = null;
@@ -41,27 +42,51 @@ onDocsReset(() => {
 });
 
 function remember(id: string, state: EditorState, epoch: number, live: CachedLive | null) {
+  if (useDocsStore.getState().unavailable[id]) return;
   states.remember(id, { state, live }, epoch, liveId);
+}
+
+function classicReader(id: string, fallback: { title: string; body: string }) {
+  return () => ({ title: titles.get(id) ?? fallback.title, body: noteBody(id) ?? fallback.body });
 }
 
 function startLive(view: EditorView, page: Page, cached: CachedLive | null) {
   if (!useDocsStore.getState().liveKind) return;
   const token = ++attachToken;
   const id = page.id;
-  attaching = { id, cached };
+  const release = holdClassicSaves(id);
+  const entry = { id, cached, release };
+  attaching = entry;
   const isCurrent = () => token === attachToken && liveId === id && liveView === view;
-  const run = () => {
+  const finish = (attached: boolean) => {
+    if (attaching === entry) attaching = null;
+    release(!attached);
+  };
+  const onLost = () => {
     if (!isCurrent()) return;
+    scheduleSave(id, classicReader(id, page));
+    void commitNow(id);
+  };
+  const attach = (module: LiveModule) => {
+    liveModule = module;
+    if (!isCurrent()) return Promise.resolve(false);
+    return module.attachLive({ view, page, title: () => titles.get(id) ?? page.title, cached, isCurrent, onLost });
+  };
+  if (cached && liveModule) {
+    void attach(liveModule)
+      .then(finish)
+      .catch(() => finish(false));
+    return;
+  }
+  const run = () => {
+    if (!isCurrent()) {
+      finish(false);
+      return;
+    }
     void import("@/lib/docs/live/client")
-      .then((module) => {
-        liveModule = module;
-        if (!isCurrent()) return false;
-        return module.attachLive({ view, page, title: titles.get(id) ?? page.title, cached, isCurrent });
-      })
-      .then((attached) => {
-        if (attached && attaching?.id === id) attaching = null;
-      })
-      .catch(() => {});
+      .then(attach)
+      .then(finish)
+      .catch(() => finish(false));
   };
   requestAnimationFrame(() => setTimeout(run, 0));
 }
@@ -69,9 +94,10 @@ function startLive(view: EditorView, page: Page, cached: CachedLive | null) {
 function stopLive(id: string): CachedLive | null {
   attachToken += 1;
   const detached = liveModule?.detachLive(id) ?? null;
-  const pending = attaching?.id === id ? attaching.cached : null;
+  const pending = attaching?.id === id ? attaching : null;
   attaching = null;
-  return detached ?? pending;
+  pending?.release(true);
+  return detached ?? pending?.cached ?? null;
 }
 
 function currentEpoch(id: string) {
@@ -107,7 +133,7 @@ export function scheduleNoteSave(id: string, fallback: { title: string; body: st
     liveModule.liveTitle(id, titles.get(id) ?? fallback.title);
     return;
   }
-  scheduleSave(id, () => ({ title: titles.get(id) ?? fallback.title, body: noteBody(id) ?? fallback.body }));
+  scheduleSave(id, classicReader(id, fallback));
 }
 
 function stateFor(page: Page, placeholder: string) {

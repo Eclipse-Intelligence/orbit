@@ -37,14 +37,14 @@ import type { DocsActionResult } from "@/lib/docs/http";
 import type { LiveTransportKind } from "@/lib/docs/live/protocol";
 import { watchLivePresence } from "@/lib/docs/live/registry";
 
-export type LiveOptions = { kind: LiveTransportKind; workspaceId: string; userId: string };
+export type LiveOptions = { kind: LiveTransportKind; workspaceId: string; userId: string; publish?: boolean };
 
 type Options = { recordSearch?: (query: string) => Promise<RecordRef[]>; live?: LiveOptions | null };
 
 type ActivityState = { activity: Record<string, Participant[]>; revisions: Record<string, number> };
 
 const ACTIVITY_POLL_MS = 20_000;
-const ACTIVITY_POLL_LIVE_MS = 120_000;
+const ACTIVITY_POLL_LIVE_MS = 45_000;
 const WRITING_LINGER_MS = 3_000;
 const WRITING_MAX_MS = 60_000;
 const OFFLINE = "Docs couldn't reach Orbit. Check your connection and try again.";
@@ -125,7 +125,7 @@ function activityPoller(live: LiveOptions | null) {
 
   function arm() {
     if (timer) clearInterval(timer);
-    timer = setInterval(() => void poll(), joined ? ACTIVITY_POLL_LIVE_MS : ACTIVITY_POLL_MS);
+    timer = setInterval(() => void poll(), joined && live?.publish === true ? ACTIVITY_POLL_LIVE_MS : ACTIVITY_POLL_MS);
   }
 
   function expire(key: string, pageId: string, writerId: string, ms: number) {
@@ -159,8 +159,10 @@ function activityPoller(live: LiveOptions | null) {
     };
     void import("@/lib/docs/live/client")
       .then((module) =>
-        module.watchLiveActivity(live.kind, { workspaceId: live.workspaceId, userId: live.userId }, onWriting, (now) => {
-          if (now === joined) return;
+        module.watchLiveActivity(live.kind, { workspaceId: live.workspaceId, userId: live.userId }, (...args) => {
+          if (!cancelled) onWriting(...args);
+        }, (now) => {
+          if (cancelled || now === joined) return;
           joined = now;
           if (timer) arm();
           if (!now) void poll();

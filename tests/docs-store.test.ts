@@ -4,7 +4,7 @@ import { DocsError, type DocsData, type Page, type SaveInput, type SaveResult } 
 import { connectDocs } from "@/lib/docs/connection";
 import { draftToRestore, readDraft, writeDraft } from "@/lib/docs/drafts";
 import { createStateCache } from "@/lib/docs/editor/state-cache";
-import { adoptDraft, prepareDocs, retryOfflineSaves, scheduleSave, settleSaves, useDocsStore } from "@/stores/docs-store";
+import { adoptDraft, commitAll, holdClassicSaves, prepareDocs, retryOfflineSaves, scheduleSave, settleForLive, settleSaves, useDocsStore } from "@/stores/docs-store";
 import { createFakeDocs } from "./docs-fake";
 
 const NOW = "2026-10-29T16:00:00.000Z";
@@ -285,5 +285,42 @@ describe("docs store", () => {
     assert.equal(useDocsStore.getState().pages[page.id]?.revision, restored.revision);
     assert.equal(useDocsStore.getState().pages[page.id]?.body, restored.body);
     assert.equal(useDocsStore.getState().saves[page.id]?.status, "saved");
+  });
+
+  it("holds classic saves while a note goes live and resumes them only if that fails", async () => {
+    const harness = await open();
+    const page = await note(harness, "Plan", "one");
+    const release = holdClassicSaves(page.id);
+    edit(page.id, "Plan", "one, typed while attaching");
+    await settleSaves(page.id);
+    assert.equal(harness.sent.length, 0, "nothing goes through the classic save while attaching");
+    assert.equal(useDocsStore.getState().saves[page.id]?.status, "pending");
+    assert.deepEqual(await settleForLive(page.id), { base: "one", revision: page.revision });
+    commitAll(true);
+    assert.equal(readDraft(page.id)?.body, "one, typed while attaching", "held text is kept on the device when the tab hides");
+    release(false);
+    assert.equal(readDraft(page.id), null, "the live copy took the held text, so the device copy goes");
+    assert.equal(harness.sent.length, 0);
+
+    const again = holdClassicSaves(page.id);
+    edit(page.id, "Plan", "one, then live failed");
+    again(true);
+    await settleSaves(page.id);
+    assert.equal(harness.sent.length, 1);
+    assert.equal((await server(harness, page.id)).body, "one, then live failed");
+  });
+
+  it("lets only the newest hold on a note release it", async () => {
+    const harness = await open();
+    const page = await note(harness, "Plan", "one");
+    const stale = holdClassicSaves(page.id);
+    const fresh = holdClassicSaves(page.id);
+    stale(true);
+    edit(page.id, "Plan", "two");
+    await settleSaves(page.id);
+    assert.equal(harness.sent.length, 0, "the stale release didn't end the newer hold");
+    fresh(true);
+    await settleSaves(page.id);
+    assert.equal((await server(harness, page.id)).body, "two");
   });
 });

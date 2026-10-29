@@ -1,5 +1,5 @@
 import { StateEffect, StateField, type Range, type Text } from "@codemirror/state";
-import { Decoration, EditorView, WidgetType, type DecorationSet } from "@codemirror/view";
+import { Decoration, EditorView, ViewPlugin, WidgetType, type DecorationSet, type ViewUpdate } from "@codemirror/view";
 import type { Participant, Presence } from "@/lib/docs/client-types";
 
 export const setPresence = StateEffect.define<Presence[]>();
@@ -68,6 +68,34 @@ function decorate(list: Presence[], doc: Text): DecorationSet {
   return Decoration.set(ranges, true);
 }
 
+const LABEL_OFFSET = 5;
+const EDGE_GAP = 4;
+
+const edgeLabels = ViewPlugin.fromClass(
+  class {
+    constructor(readonly view: EditorView) {
+      this.schedule();
+    }
+    update(update: ViewUpdate) {
+      if (update.docChanged || update.geometryChanged || update.viewportChanged || update.transactions.some((transaction) => transaction.effects.some((effect) => effect.is(setPresence)))) this.schedule();
+    }
+    schedule() {
+      this.view.requestMeasure({
+        read: (view) => {
+          const limit = view.scrollDOM.getBoundingClientRect().right - EDGE_GAP;
+          return [...view.contentDOM.querySelectorAll<HTMLElement>(".note-cursor")].map((holder) => {
+            const label = holder.querySelector<HTMLElement>(".note-cursor-label");
+            return { holder, flip: label !== null && holder.getBoundingClientRect().left + LABEL_OFFSET + label.offsetWidth > limit };
+          });
+        },
+        write: (items) => {
+          for (const item of items) item.holder.classList.toggle("note-cursor-flip", item.flip);
+        },
+      });
+    }
+  },
+);
+
 export const presenceField = StateField.define<{ list: Presence[]; decorations: DecorationSet }>({
   create: () => ({ list: [], decorations: Decoration.none }),
   update(value, transaction) {
@@ -91,5 +119,5 @@ export const presenceField = StateField.define<{ list: Presence[]; decorations: 
     if (!changed) return value;
     return { list, decorations: decorate(list, transaction.state.doc) };
   },
-  provide: (field) => EditorView.decorations.from(field, (value) => value.decorations),
+  provide: (field) => [EditorView.decorations.from(field, (value) => value.decorations), edgeLabels],
 });

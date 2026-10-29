@@ -1,5 +1,5 @@
 import { EditorState, Transaction, type ChangeSet } from "@codemirror/state";
-import { ViewPlugin, type EditorView, type ViewUpdate } from "@codemirror/view";
+import { EditorView, ViewPlugin, type ViewUpdate } from "@codemirror/view";
 import type * as Y from "yjs";
 import { ySync, ySyncAnnotation, ySyncFacet, YSyncConfig } from "y-codemirror.next";
 import { liveSlot } from "@/lib/docs/editor/live-slot";
@@ -68,4 +68,8 @@ export function bind<S>(view: EditorView, session: LiveSession<S>, base: string)
 
 export function unbind(view: EditorView) {
   view.dispatch({ effects: [liveSlot.reconfigure([]), setPresence.of([])] });
+}
+
+export function lock(view: EditorView) {
+  view.dispatch({ effects: [liveSlot.reconfigure([EditorState.readOnly.of(true), EditorView.editable.of(false)]), setPresence.of([])] });
 }

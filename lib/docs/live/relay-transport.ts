@@ -2,6 +2,7 @@ import type { LiveEvent } from "@/lib/docs/live/protocol";
 import type { LiveTransport } from "@/lib/docs/live/transport";
 
 const ENDPOINT = "/api/docs/live/relay";
+const KEEPALIVE_BODY_MAX = 16_000;
 
 export function relayTransport(): LiveTransport {
   const client = crypto.randomUUID();
@@ -31,7 +32,8 @@ export function relayTransport(): LiveTransport {
         send(event, payload) {
           if (!joined) return false;
           const body = JSON.stringify({ topic, event, payload, client });
-          chain = chain.then(() => fetch(ENDPOINT, { method: "POST", headers: { "content-type": "application/json" }, body, credentials: "same-origin" }).catch(() => null));
+          const keepalive = body.length < KEEPALIVE_BODY_MAX;
+          chain = chain.then(() => fetch(ENDPOINT, { method: "POST", headers: { "content-type": "application/json" }, body, credentials: "same-origin", keepalive }).catch(() => null));
           return true;
         },
         close() {

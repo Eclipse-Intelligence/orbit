@@ -1109,6 +1109,19 @@ html[data-sidebar-resizing] * {
   user-select: none;
 }
 
+.note-surface .note-editor .note-cursor-flip .note-cursor-label {
+  right: 3px;
+  left: auto;
+  border-top-left-radius: 4px;
+  border-top-right-radius: 0;
+}
+
+.note-surface .note-editor .note-cursor-agent.note-cursor-flip .note-cursor-label {
+  right: -1px;
+  left: auto;
+  border-radius: 999px;
+}
+
 .note-surface .note-editor .note-cursor-agent .note-cursor-bar {
   background: var(--note-violet);
   box-shadow: 0 0 10px 2px rgb(139 123 255 / 0.55);
