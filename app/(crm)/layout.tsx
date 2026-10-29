@@ -3,6 +3,7 @@ import { headers } from "next/headers";
 import { after } from "next/server";
 import Sidebar from "@/components/_common/sidebar/sidebar";
 import CrmChrome from "@/components/crm/chrome";
+import DocsProvider from "@/components/docs/docs-provider";
 import { ShortcutsProvider } from "@/components/shortcuts/shortcuts-provider";
 import { getUserActor } from "@/lib/auth/user";
 import { syncCalendar } from "@/lib/crm/calendar";
@@ -22,6 +23,7 @@ import { mailUnreadCount } from "@/lib/mail/threads";
 import { noteViewerAddress } from "@/lib/mail/tracking";
 import { clickupToken } from "@/lib/clickup";
 import { microsoftConfigured } from "@/lib/microsoft/oauth";
+import { docsSeed, loadDocsNav } from "@/lib/docs/server";
 
 export const dynamic = "force-dynamic";
 
@@ -94,7 +96,7 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
       }
     });
   }
-  const [companyCount, openActionCount, attention, boards, notifications, approvals, mailUnread] = await Promise.all([
+  const [companyCount, openActionCount, attention, boards, notifications, approvals, mailUnread, docsNav] = await Promise.all([
     countCompanies(user),
     countOpenTasks(user, { mine: true }),
     listAttention(user),
@@ -102,34 +104,37 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
     listNotifications(user, 10),
     countApprovals(user),
     mailUnreadCount(user).catch(() => 0),
+    loadDocsNav(user),
   ]);
 
   return (
     <ShortcutsProvider>
-      <main className="relative flex h-dvh max-w-full overflow-hidden">
-        <Sidebar
-          boards={boards}
-          approvals={approvals}
-          companyCount={companyCount}
-          openActionCount={openActionCount}
-          mailUnread={mailUnread}
-          workspaceName={user.workspaceName}
-        />
-        <CrmChrome
-          viewer={{
-            id: user.userId,
-            name: user.fullName || user.email,
-            email: user.email,
-            role: user.role,
-            workspaceName: user.workspaceName,
-          }}
-          overdue={attention.overdue}
-          today={attention.today}
-          notifications={notifications}
-        >
-          {children}
-        </CrmChrome>
-      </main>
+      <DocsProvider seed={docsSeed(user)} nav={docsNav}>
+        <main className="relative flex h-dvh max-w-full overflow-hidden">
+          <Sidebar
+            boards={boards}
+            approvals={approvals}
+            companyCount={companyCount}
+            openActionCount={openActionCount}
+            mailUnread={mailUnread}
+            workspaceName={user.workspaceName}
+          />
+          <CrmChrome
+            viewer={{
+              id: user.userId,
+              name: user.fullName || user.email,
+              email: user.email,
+              role: user.role,
+              workspaceName: user.workspaceName,
+            }}
+            overdue={attention.overdue}
+            today={attention.today}
+            notifications={notifications}
+          >
+            {children}
+          </CrmChrome>
+        </main>
+      </DocsProvider>
     </ShortcutsProvider>
   );
 }

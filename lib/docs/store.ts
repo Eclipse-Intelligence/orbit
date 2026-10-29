@@ -495,8 +495,15 @@ export async function listDocs(actor: Actor, query: DocListQuery = {}): Promise<
   } else if (query.folderId) {
     if (!isUuid(query.folderId)) throw new CrmError("not_found", "That folder doesn't exist, or it's private to someone else.", 404);
     values.push(query.folderId);
-    where.push(`p.folder_id = $${values.length}`);
-  } else if (!query.tag) {
+    where.push(
+      query.deep
+        ? `p.folder_id in (with recursive tree as (select f.id from crm.page_folders f where f.id = $${values.length} union all select c.id from crm.page_folders c join tree t on c.parent_id = t.id) select id from tree)`
+        : `p.folder_id = $${values.length}`,
+    );
+  } else if (query.kind === "daily" || query.kind === "note") {
+    values.push(query.kind);
+    where.push(`p.kind = $${values.length}`);
+  } else if (!query.tag && query.kind !== "any") {
     where.push("p.kind = 'note'");
   }
   if (query.tag) {

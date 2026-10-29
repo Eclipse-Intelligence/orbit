@@ -1,7 +1,7 @@
 import { appTimeZone, zonedParts } from "@/lib/time";
 import type { DailyEntry } from "@/lib/docs/types";
 
-const ENTRY_LINE = /^(\d{2}:\d{2}) (.*)$/;
+const ENTRY_LINE = /^(\d{2}:\d{2})(?: (.*))?$/;
 const DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
 function pad(value: number) {
@@ -46,7 +46,7 @@ export function parseDailyEntries(content: string): DailyEntry[] {
   const entries: DailyEntry[] = [];
   for (const line of content.split("\n")) {
     const match = ENTRY_LINE.exec(line);
-    if (match) entries.push({ time: match[1], text: match[2] });
+    if (match) entries.push({ time: match[1], text: match[2] ?? "" });
     else if (entries.length > 0) entries[entries.length - 1].text += `\n${line}`;
   }
   return entries.map((entry) => ({ time: entry.time, text: entry.text.replace(/\s+$/, "") }));

@@ -16,6 +16,8 @@ const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 const WIKILINK = /\[\[([^[\]\n]{1,400}?)\]\]/g;
 const MENTION = /@\[([^\]\n]{1,200})\]\((contact|company|task|opportunity|proposal):([0-9a-f-]{36})\)/g;
 const TAG = /(^|\s)#([\p{L}\p{N}_\-/]+)/gu;
+export const TAG_BODY = /^#([\p{L}\p{N}_\-/]+)/u;
+export const ENTRY_TIME = /^([01]\d|2[0-3]):([0-5]\d)(?= |$)/;
 const LETTER = /\p{L}/u;
 
 function blank(text: string) {
@@ -88,7 +90,7 @@ export function cleanTitle(value: string) {
   return value.replace(/\s+/g, " ").trim().slice(0, DOC_TITLE_MAX);
 }
 
-function splitTarget(inner: string) {
+export function splitTarget(inner: string) {
   const bar = inner.indexOf("|");
   const target = cleanTitle(bar >= 0 ? inner.slice(0, bar) : inner);
   const label = bar >= 0 ? cleanTitle(inner.slice(bar + 1)) || null : null;
@@ -218,4 +220,107 @@ export function lineAround(content: string, index: number, max = 240) {
   const endAt = content.indexOf("\n", index);
   const line = plainText(content.slice(start, endAt < 0 ? content.length : endAt));
   return line.length > max ? `${line.slice(0, max - 1).trimEnd()}…` : line;
+}
+
+export function isTagBoundary(char: string) {
+  return char === "" || /\s/.test(char);
+}
+
+export function tagAt(text: string) {
+  const match = TAG_BODY.exec(text);
+  if (!match) return null;
+  const path = match[1].replace(/[-/]+$/, "");
+  const tag = normaliseTag(path);
+  return tag ? { tag, length: 1 + path.length } : null;
+}
+
+export function linkTitlesIn(content: string) {
+  return [...new Set(parseLinks(content).map((link) => link.title || link.target))];
+}
+
+export type TagCount = { path: string; count: number };
+
+export type TagTreeNode = { name: string; path: string; count: number; children: TagTreeNode[] };
+
+export function tagTree(counts: TagCount[]): TagTreeNode[] {
+  const root: TagTreeNode[] = [];
+  const byPath = new Map<string, TagTreeNode>();
+  for (const { path, count } of [...counts].sort((left, right) => left.path.localeCompare(right.path))) {
+    const parts = path.split("/");
+    const node: TagTreeNode = { name: parts[parts.length - 1], path, count, children: [] };
+    byPath.set(path, node);
+    const parent = parts.length > 1 ? byPath.get(parts.slice(0, -1).join("/")) : null;
+    (parent ? parent.children : root).push(node);
+  }
+  return root;
+}
+
+export function tagPrefixCounts(pages: string[][]): TagCount[] {
+  const counts = new Map<string, number>();
+  for (const tags of pages) {
+    const prefixes = new Set<string>();
+    for (const tag of tags) {
+      const parts = tag.split("/").filter(Boolean);
+      for (let index = 1; index <= parts.length; index += 1) prefixes.add(parts.slice(0, index).join("/"));
+    }
+    for (const prefix of prefixes) counts.set(prefix, (counts.get(prefix) ?? 0) + 1);
+  }
+  return [...counts].map(([path, count]) => ({ path, count }));
+}
+
+export type Trigger =
+  | { kind: "link"; from: number; query: string }
+  | { kind: "tag"; from: number; query: string }
+  | { kind: "mention"; from: number; query: string };
+
+export function triggerBefore(before: string): Trigger | null {
+  const link = before.lastIndexOf("[[");
+  if (link >= 0) {
+    const query = before.slice(link + 2);
+    if (!/[[\]\n]/.test(query) && query.length <= 120) return { kind: "link", from: link, query };
+  }
+  const tag = /(^|\s)#([\p{L}\p{N}_/-]+)$/u.exec(before);
+  if (tag && /^\p{L}/u.test(tag[2])) return { kind: "tag", from: before.length - tag[2].length - 1, query: tag[2] };
+  const at = before.lastIndexOf("@");
+  if (at >= 0) {
+    const query = before.slice(at + 1);
+    const boundary = at === 0 || /[\s(]/.test(before[at - 1]);
+    if (boundary && !/\s{2,}|\n|[[\]()@]/.test(query) && query.length <= 40 && query.split(" ").length <= 3) {
+      return { kind: "mention", from: at, query };
+    }
+  }
+  return null;
+}
+
+export function isTagChar(char: string) {
+  return /^[\p{L}\p{N}_/-]$/u.test(char);
+}
+
+export type Heading = { level: number; text: string; line: number };
+
+export function headingsIn(content: string): Heading[] {
+  const found: Heading[] = [];
+  maskFences(content)
+    .split("\n")
+    .forEach((line, index) => {
+      const match = /^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
+      if (match) found.push({ level: match[1].length, text: plainText(match[2]), line: index });
+    });
+  return found;
+}
+
+export function entryCount(content: string) {
+  return content.split("\n").filter((line) => ENTRY_TIME.test(line)).length;
+}
+
+export function toggleTaskMarker(line: string) {
+  const match = /^(\s*(?:[-*+]|\d+[.)])\s+\[)([ xX])(\])/.exec(line);
+  if (!match) return null;
+  const next = match[2] === " " ? "x" : " ";
+  return `${match[1]}${next}${match[3]}${line.slice(match[0].length)}`;
+}
+
+export function highlightIn(snippet: string, wanted: string) {
+  const index = wanted ? snippet.toLowerCase().indexOf(wanted.toLowerCase()) : -1;
+  return index < 0 ? { matchFrom: 0, matchTo: 0 } : { matchFrom: index, matchTo: index + wanted.length };
 }

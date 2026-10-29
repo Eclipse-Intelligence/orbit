@@ -27,6 +27,7 @@ import KnowledgePanel from "@/components/knowledge/knowledge-panel";
 import type { KnowledgeItem } from "@/lib/knowledge/store";
 import type { DocumentSummary } from "@/lib/proposals/documents";
 import SectionHeader from "@/components/crm/section-header";
+import RecordNotes from "@/components/docs/record-notes";
 import RecordSequence from "@/components/shortcuts/record-sequence";
 import RecordTags from "@/components/crm/tags";
 import type { Viewer } from "@/components/crm/viewer";
@@ -411,6 +412,8 @@ export default function CompanyRecord({
             <MeetingsCard meetings={meetings} />
 
             {!company.archivedAt && <ProposalsCard documents={proposals} company={{ id: company.id, name: company.name }} />}
+
+            <RecordNotes record={{ kind: "company", id: company.id, name: company.name }} />
 
             {!company.archivedAt && <KnowledgePanel key={company.id} target={{ companyId: company.id }} initial={knowledge} />}
 

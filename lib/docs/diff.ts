@@ -81,3 +81,68 @@ export function diffCounts(lines: DocDiffLine[]) {
     removed: lines.filter((line) => line.kind === "remove").length,
   };
 }
+
+export type DiffPart = { type: "same" | "add" | "del"; text: string };
+
+const WORD = /\s+|[\p{L}\p{N}'’]+|[^\s\p{L}\p{N}]/gu;
+
+function merge(parts: DiffPart[]) {
+  const merged: DiffPart[] = [];
+  for (const part of parts) {
+    if (!part.text) continue;
+    const previous = merged[merged.length - 1];
+    if (previous && previous.type === part.type) previous.text += part.text;
+    else merged.push({ ...part });
+  }
+  return merged;
+}
+
+function absorbSpaces(parts: DiffPart[]) {
+  const out: DiffPart[] = [];
+  parts.forEach((part, index) => {
+    const before = out[out.length - 1];
+    const after = parts[index + 1];
+    if (part.type === "same" && /^[ \t]+$/.test(part.text) && before && after && before.type !== "same" && after.type !== "same") {
+      out.push({ type: "del", text: part.text }, { type: "add", text: part.text });
+    } else out.push(part);
+  });
+  const result: DiffPart[] = [];
+  let dels: DiffPart[] = [];
+  let adds: DiffPart[] = [];
+  const flush = () => {
+    if (dels.length) result.push({ type: "del", text: dels.map((part) => part.text).join("") });
+    if (adds.length) result.push({ type: "add", text: adds.map((part) => part.text).join("") });
+    dels = [];
+    adds = [];
+  };
+  for (const part of out) {
+    if (part.type === "same") {
+      flush();
+      result.push(part);
+    } else if (part.type === "del") dels.push(part);
+    else adds.push(part);
+  }
+  flush();
+  return merge(result);
+}
+
+export function wordDiff(before: string, after: string): DiffPart[] {
+  if (before === after) return before ? [{ type: "same", text: before }] : [];
+  let start = 0;
+  while (start < before.length && start < after.length && before[start] === after[start]) start += 1;
+  while (start > 0 && /[\p{L}\p{N}]/u.test(before[start - 1])) start -= 1;
+  let endBefore = before.length;
+  let endAfter = after.length;
+  while (endBefore > start && endAfter > start && before[endBefore - 1] === after[endAfter - 1]) {
+    endBefore -= 1;
+    endAfter -= 1;
+  }
+  while (endBefore < before.length && /[\p{L}\p{N}]/u.test(before[endBefore])) {
+    endBefore += 1;
+    endAfter += 1;
+  }
+  const left = before.slice(start, endBefore).match(WORD) ?? [];
+  const right = after.slice(start, endAfter).match(WORD) ?? [];
+  const middle = middleOps(left, right).map((op): DiffPart => ({ type: op.kind === "remove" ? "del" : op.kind === "add" ? "add" : "same", text: op.text }));
+  return absorbSpaces(merge([{ type: "same", text: before.slice(0, start) }, ...middle, { type: "same", text: before.slice(endBefore) }]));
+}

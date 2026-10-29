@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   Command,
   CommandDialog,
@@ -17,6 +17,10 @@ import { searchWorkspaceAction } from "@/app/(crm)/search";
 import { companyHref, contactHref, opportunityHref } from "@/lib/crm/hrefs";
 import type { Company, Contact, Opportunity } from "@/lib/crm/types";
 import { SHORTCUTS, paletteMatches, shortcutKeys, type ShortcutDef, type ShortcutGroup } from "@/lib/shortcuts";
+import DocsPaletteGroups, { type PaletteRecord } from "@/components/docs/docs-palette";
+import { useDocsNavigate } from "@/components/docs/use-docs";
+import { isDocsPath, pageHref } from "@/lib/docs/routes";
+import { useDocsStore } from "@/stores/docs-store";
 
 type Results = {
   query: string;
@@ -26,7 +30,7 @@ type Results = {
   failed?: boolean;
 };
 
-const PAGE_GROUPS = new Set<ShortcutGroup>(["Lists", "Selection", "Tasks", "Opportunities", "Records", "Calendar", "Capture", "Mail"]);
+const PAGE_GROUPS = new Set<ShortcutGroup>(["Lists", "Selection", "Tasks", "Opportunities", "Records", "Calendar", "Capture", "Mail", "Docs"]);
 const GENERAL_IDS = new Set(["assistant", "help", "settings", "notifications", "account"]);
 
 function Keys({ def, mac }: { def: ShortcutDef; mac: boolean }) {
@@ -45,6 +49,9 @@ function Keys({ def, mac }: { def: ShortcutDef; mac: boolean }) {
 
 export default function CommandMenu() {
   const router = useRouter();
+  const pathname = usePathname();
+  const navigateDocs = useDocsNavigate();
+  const createNote = useDocsStore((state) => state.createNote);
   const { paletteOpen: open, setPaletteOpen: setOpen, paletteMode, listSearch, run, available, mac } = useShortcuts();
   const [query, setQuery] = useState("");
   const [remote, setRemote] = useState<Results | null>(null);
@@ -115,8 +122,20 @@ export default function CommandMenu() {
   const goCommands = commands.filter((def) => def.group === "Go to" && paletteMatches(def, query));
   const settingsCommands = trimmed ? commands.filter((def) => def.group === "Settings" && paletteMatches(def, query)) : [];
 
+  const docs = isDocsPath(pathname) && !listMode;
+  const topRecord: PaletteRecord | null = results
+    ? results.companies[0]
+      ? { kind: "company", id: results.companies[0].id, name: results.companies[0].name }
+      : results.contacts[0]
+        ? { kind: "contact", id: results.contacts[0].id, name: results.contacts[0].name }
+        : results.opportunities[0]
+          ? { kind: "opportunity", id: results.opportunities[0].id, name: results.opportunities[0].name }
+          : null
+    : null;
+
   const recordCount = results ? results.companies.length + results.contacts.length + results.opportunities.length : 0;
   const nothing =
+    !docs &&
     trimmed &&
     !searching &&
     !listMode &&
@@ -137,14 +156,34 @@ export default function CommandMenu() {
         setRemote(null);
       }}
     >
-      <Command shouldFilter={false} loop>
+      <Command
+        shouldFilter={false}
+        loop
+        onKeyDown={(event) => {
+          if (!docs || event.key !== "Enter" || !(event.metaKey || event.ctrlKey) || !trimmed) return;
+          event.preventDefault();
+          void createNote({ title: trimmed }).then((page) => {
+            if (page) go(() => navigateDocs(pageHref(page.id)));
+          });
+        }}
+      >
         <CommandInput
           value={query}
           onValueChange={setQuery}
-          placeholder={listMode ? `Search ${listSearch?.noun}…` : "Type a command or search…"}
-          trailing={<Kbd>Esc</Kbd>}
+          placeholder={listMode ? `Search ${listSearch?.noun}…` : docs ? "Open a note, or type to create one" : "Type a command or search…"}
+          trailing={
+            docs ? (
+              <span aria-hidden className="caption-style text-faint flex items-center gap-1.5">
+                Docs
+                <Kbd>⌘K</Kbd>
+              </span>
+            ) : (
+              <Kbd>Esc</Kbd>
+            )
+          }
         />
         <CommandList>
+          {docs && <DocsPaletteGroups query={query} record={topRecord} open={open} go={(href) => go(() => navigateDocs(href))} />}
           {listMode && listSearch && (
             <CommandGroup heading={`Search ${listSearch.noun}`}>
               <CommandItem value="list-search" onSelect={() => go(() => router.push(listSearch.hrefFor(query)))}>
@@ -282,8 +321,15 @@ export default function CommandMenu() {
           </span>
           <span className="flex items-center gap-1.5">
             <Kbd>Enter</Kbd>
-            Run
+            {docs ? "Open" : "Run"}
           </span>
+          {docs && (
+            <span className="flex items-center gap-1.5">
+              <Kbd>⌘</Kbd>
+              <Kbd>Enter</Kbd>
+              Create
+            </span>
+          )}
           <span className="ml-auto flex items-center gap-1.5">
             <Kbd>Esc</Kbd>
             Close

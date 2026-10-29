@@ -132,7 +132,7 @@ export async function listDailyNotes(actor: Actor, options: { from?: string; to?
   return withActor(owner, async (db) => {
     const result = await db.query<{ id: string; date: string; entries: number; head: string; edited_at: Date }>(
       `select p.id, p.daily_date::text as date, p.edited_at, left(p.content, 600) as head,
-         (select count(*)::int from regexp_matches(p.content, '^\\d{2}:\\d{2} ', 'gm')) as entries
+         (select count(*)::int from regexp_matches(p.content, '^\\d{2}:\\d{2}( |$)', 'gm')) as entries
        from crm.pages p
        where p.workspace_id = $1 and p.user_id = $2 and p.kind = 'daily' and p.archived_at is null and p.content <> ''
          and ($3::date is null or p.daily_date >= $3::date) and ($4::date is null or p.daily_date <= $4::date)
@@ -143,7 +143,7 @@ export async function listDailyNotes(actor: Actor, options: { from?: string; to?
       id: row.id,
       date: row.date,
       entryCount: row.entries,
-      excerpt: excerptFrom(row.head.replace(/^\d{2}:\d{2} /gm, ""), 160),
+      excerpt: excerptFrom(row.head.replace(/^\d{2}:\d{2}( |$)/gm, ""), 160),
       editedAt: iso(row.edited_at)!,
     }));
   });

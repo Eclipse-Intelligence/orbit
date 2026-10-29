@@ -187,6 +187,8 @@ export type DocCreateInput = {
 
 export type DocListQuery = {
   folderId?: string | null;
+  deep?: boolean;
+  kind?: DocKind | "any";
   tag?: string;
   sort?: DocSort;
   archived?: boolean;
