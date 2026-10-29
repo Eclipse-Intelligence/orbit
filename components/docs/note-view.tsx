@@ -6,8 +6,9 @@ import Button from "@/components/_ui/button";
 import { Sheet, SheetCloseButton, SheetContent, SheetDescription, SheetTitle } from "@/components/_ui/sheet";
 import { useShortcut } from "@/components/shortcuts/shortcuts-provider";
 import { HistoryRail, VersionBanner, VersionPreview, useVersions, type Selected } from "@/components/docs/history";
+import JotLine from "@/components/docs/jot-line";
 import MoreMenu from "@/components/docs/more-menu";
-import NoteEditor, { editorView, focusNoteText, noteTitle, scheduleNoteSave, setNoteTitle } from "@/components/docs/note-editor";
+import NoteEditor, { focusNoteText, noteTitle, scheduleNoteSave, setNoteTitle } from "@/components/docs/note-editor";
 import NoteRail from "@/components/docs/note-rail";
 import { ParticipantAvatar, PresenceStack } from "@/components/docs/presence";
 import { PageShare } from "@/components/docs/share-control";
@@ -15,7 +16,7 @@ import { TITLE_FORBIDDEN, TITLE_RULE, useTitleRename } from "@/components/docs/t
 import { navigateWithinDocs, useDocsNav, useDocsNavigate, useDocsNow, useMedia, useToday } from "@/components/docs/use-docs";
 import type { Meeting, Page, PageFilter, PageSummary, Presence } from "@/lib/docs/client-types";
 import { docsData } from "@/lib/docs/connection";
-import { localTime, shiftDate } from "@/lib/docs/daily";
+import { shiftDate } from "@/lib/docs/daily";
 import { clockTime, createdLabel, editedLabel, longDay, shortDay } from "@/lib/docs/format";
 import { dailyHref, listHref } from "@/lib/docs/routes";
 import { useDocsStore } from "@/stores/docs-store";
@@ -238,53 +239,6 @@ function DailyHeading({ page }: { page: Page }) {
         <SaveState id={page.id} />
       </div>
     </>
-  );
-}
-
-function JotLine() {
-  const [text, setText] = useState("");
-  const [time, setTime] = useState(() => localTime(new Date()));
-  useEffect(() => {
-    const timer = window.setInterval(() => setTime(localTime(new Date())), 15_000);
-    return () => window.clearInterval(timer);
-  }, []);
-
-  function add() {
-    const view = editorView();
-    const clean = text.trim();
-    if (!view || !clean) return;
-    const stamp = localTime(new Date());
-    const block = /^([-*+]|\d+[.)])\s/.test(clean) ? `${stamp}\n${clean}` : `${stamp} ${clean}`;
-    const current = view.state.doc.toString();
-    const end = current.replace(/\s+$/, "").length;
-    const insert = `${end ? "\n\n" : ""}${block}`;
-    view.dispatch({ changes: { from: end, to: view.state.doc.length, insert }, userEvent: "input.type", scrollIntoView: true });
-    setText("");
-    setTime(stamp);
-  }
-
-  return (
-    <div className="flex flex-col">
-      <label className="grid grid-cols-[4.75rem_1fr] items-baseline">
-        <span aria-hidden className="text-subtle pt-[0.32em] text-[13px] leading-[1.6] tabular-nums">
-          {time}
-        </span>
-        <span className="sr-only">New entry at {time}</span>
-        <input
-          value={text}
-          onChange={(event) => setText(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.nativeEvent.isComposing) {
-              event.preventDefault();
-              add();
-            }
-          }}
-          placeholder="Jot something down"
-          className="placeholder:text-subtle text-foreground col-start-2 w-full bg-transparent text-[16px] leading-[1.7] outline-none"
-        />
-      </label>
-      <p className="caption-style text-subtle mt-6 pl-[4.75rem]">Enter adds a new entry with the time. Daily notes are always private.</p>
-    </div>
   );
 }
 
@@ -589,7 +543,7 @@ export default function NoteView({
                     }}
                   />
                 </div>
-                {daily && !selected && <JotLine />}
+                {daily && !selected && <JotLine page={page} />}
               </>
             ) : missing ? (
               <div role="alert" className="flex flex-col items-start gap-3 pt-1">
