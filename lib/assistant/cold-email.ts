@@ -300,17 +300,27 @@ function fromEntry(entry: ProofEntry, fact?: string): Evidence {
   };
 }
 
-export function withProofList(evidence: Evidence[], entries: ProofEntry[], body: string) {
-  const resolved = evidence.map((item) => {
-    if (item.kind !== "proof") return item;
+function unlistedProof(item: Evidence): Evidence {
+  return { fact: item.fact, kind: "proof", ...(item.source ? { source: item.source } : {}), ...(item.client ? { client: item.client } : {}), listed: false };
+}
+
+export function withProofList(evidence: Evidence[], entries: ProofEntry[], email: { subject?: string; body: string }) {
+  const cited = new Set<string>();
+  const resolved = evidence.flatMap((item): Evidence[] => {
+    if (item.kind !== "proof") return [item];
     const entry =
       entries.find((candidate) => item.source && item.source.includes(candidate.id)) ??
       (item.client ? entries.find((candidate) => sameClient(candidate.client, item.client!)) : undefined);
-    return entry ? fromEntry(entry, item.fact) : { ...item, listed: false };
+    if (!entry) return [unlistedProof(item)];
+    if (cited.has(entry.id)) return [];
+    cited.add(entry.id);
+    return [fromEntry(entry, item.fact)];
   });
-  const cited = new Set(resolved.flatMap((item) => (item.listed && item.source ? [item.source] : [])));
-  const core = bodyCore(body);
-  const mentioned = entries.filter((entry) => !cited.has(entry.id) && mentions(core, entry.client)).map((entry) => fromEntry(entry));
+  const citedClients = entries.filter((entry) => cited.has(entry.id)).map((entry) => entry.client);
+  const text = `${email.subject ?? ""}\n${bodyCore(email.body)}`;
+  const mentioned = entries
+    .filter((entry) => !cited.has(entry.id) && !citedClients.some((client) => sameClient(client, entry.client)) && mentions(text, entry.client))
+    .map((entry) => fromEntry(entry));
   return [...resolved, ...mentioned];
 }
 
@@ -461,7 +471,7 @@ function proofCheck(proof: ReturnType<typeof proofUse>): Omit<ColdEmailCheck, "s
     };
   }
   const unlisted = entries.filter((entry) => entry.listed === false);
-  if (unlisted.length && (used.length === 0 || used.some((entry) => entry.listed === false))) {
+  if (unlisted.length) {
     return {
       id: "proof_approved",
       label,
@@ -756,6 +766,7 @@ const PERMISSION_RULE: Record<ProofPermission, string> = {
 function evidenceLine(item: Evidence, index: number) {
   const source = item.source ? ` (${item.source})` : "";
   if (item.kind !== "proof") return `E${index + 1}. ${item.fact}${source}`;
+  if (item.listed === false) return `E${index + 1}. Claimed client proof for ${item.client ?? "a client not given"} that is NOT on the approved proof list, so it may not be used. ${item.fact}${source}`;
   const permission = item.permission ? PERMISSION_RULE[item.permission] : "permission not given";
   return `E${index + 1}. Approved client proof for ${item.client ?? "a client not given"}, ${permission}. Approved wording "${item.approvedWording ?? "not given"}". ${item.fact}${source}`;
 }
@@ -775,7 +786,9 @@ export async function judgeColdEmail(
       goal: "earn a useful reply",
     },
     prospect_evidence: input.evidence.slice(0, 10).map((item, index) =>
-      item.kind === "proof"
+      item.kind === "proof" && item.listed === false
+        ? { id: `E${index + 1}`, kind: "claimed client proof that is not on the approved proof list and may not be used", client: (item.client ?? "").slice(0, 200), fact: item.fact.slice(0, 400), source: (item.source ?? "").slice(0, 200) }
+        : item.kind === "proof"
         ? {
             id: `E${index + 1}`,
             kind: "approved client proof",

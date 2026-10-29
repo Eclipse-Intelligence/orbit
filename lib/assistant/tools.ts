@@ -1911,7 +1911,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       return checkColdEmail({
         subject: str(args.subject),
         body,
-        evidence: withProofList(evidenceFrom(args.evidence), await listProof(actor), body),
+        evidence: withProofList(evidenceFrom(args.evidence), await listProof(actor), { subject: str(args.subject), body }),
         firstTouch: args.firstTouch !== false,
         theirOffer: optionalStr(args.theirOffer),
       }, { deadline: context.deadline });

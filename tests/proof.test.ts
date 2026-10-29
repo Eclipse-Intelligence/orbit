@@ -5,7 +5,7 @@ import { getAdminPool, getPool } from "@/lib/db/pool";
 import { CrmError } from "@/lib/crm/errors";
 import { archiveProof, createProof, listProof, updateProof } from "@/lib/crm/proof";
 import type { UserActor } from "@/lib/crm/types";
-import { createUser, resetDatabase } from "./helpers";
+import { createUser, queryAsUser, resetDatabase } from "./helpers";
 
 const WEB = { operation: "proof_test", source: "web" };
 
@@ -78,6 +78,36 @@ describe("proof list", () => {
     await assert.rejects(createProof(owner, { ...NORTHWIND, permission: "maybe" }, WEB), code("invalid_input", /what the client has allowed/));
     await assert.rejects(createProof(owner, { ...NORTHWIND, permission: "described", description: "" }, WEB), code("invalid_input", /doesn't identify them/));
     await assert.rejects(createProof(owner, { ...NORTHWIND, reviewOn: "next week" }, WEB), code("invalid_input", /review date/));
+    await assert.rejects(createProof(owner, { ...NORTHWIND, reviewOn: "2026-02-31" }, WEB), code("invalid_input", /review date/));
+  });
+
+  it("keeps proof inside the workspace at the database", async () => {
+    const entry = await createProof(owner, { ...NORTHWIND, client: "Contoso" }, WEB);
+    const seen = await queryAsUser<{ total: number }>(outsider.userId, "select count(*)::int as total from crm.proof_entries");
+    assert.equal(seen[0].total, 0);
+    assert.equal((await queryAsUser(outsider.userId, "update crm.proof_entries set client = 'Stolen' returning id")).length, 0);
+    await assert.rejects(queryAsUser(outsider.userId, "delete from crm.proof_entries"), /permission denied/);
+    await assert.rejects(
+      queryAsUser(outsider.userId, "insert into crm.proof_entries (workspace_id, created_by, client, result, permission) values ($1, $2, 'Sneaky', 'x', 'named')", [owner.workspaceId, outsider.userId]),
+      /row-level security/,
+    );
+    await assert.rejects(
+      queryAsUser(owner.userId, "insert into crm.proof_entries (workspace_id, created_by, client, result, permission) values ($1, $2, 'Forged', 'x', 'named')", [owner.workspaceId, outsider.userId]),
+      /row-level security/,
+    );
+    await assert.rejects(queryAsUser(owner.userId, "update crm.proof_entries set workspace_id = $1 where id = $2", [outsider.workspaceId, entry.id]), /permission denied/);
+    for (const role of ["crm_agent", "anon"]) {
+      const client = await getAdminPool().connect();
+      try {
+        await client.query("begin");
+        await client.query(`set local role ${role}`);
+        await assert.rejects(client.query("select id from crm.proof_entries"), /permission denied/);
+      } finally {
+        await client.query("rollback");
+        client.release();
+      }
+    }
+    await archiveProof(owner, entry.id, WEB);
   });
 
   it("gives the assistant the proof list with the playbook and checks proof against it", async () => {

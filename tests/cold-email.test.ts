@@ -206,15 +206,29 @@ describe("cold email client proof", () => {
       createdAt: "2026-10-01T00:00:00.000Z",
       updatedAt: "2026-10-01T00:00:00.000Z",
     };
-    const byId = withProofList([PROOF_EVIDENCE[0], { kind: "proof", fact: "", source: entry.id }], [entry], PROOF.body);
+    const byId = withProofList([PROOF_EVIDENCE[0], { kind: "proof", fact: "", source: entry.id }], [entry], PROOF);
     assert.deepEqual(byId[1], { fact: "A 12-person B2B SEO agency, client content", kind: "proof", source: entry.id, client: "Northwind", permission: "named", approvedWording: entry.result, listed: true });
     assert.deepEqual(failed(lintColdEmail({ ...PROOF, evidence: byId })), []);
-    const invented = withProofList([PROOF_EVIDENCE[0], { ...NORTHWIND, client: "Contoso" }], [entry], PROOF.body.replaceAll("Northwind", "Contoso"));
+    const invented = withProofList([PROOF_EVIDENCE[0], { ...NORTHWIND, client: "Contoso" }], [entry], { body: PROOF.body.replaceAll("Northwind", "Contoso") });
     assert.equal(noteOf(lintColdEmail({ ...PROOF, body: PROOF.body.replaceAll("Northwind", "Contoso"), evidence: invented }), "proof_approved"), "The proof for Contoso isn't on the proof list.");
-    const unmentioned = withProofList(PROOF_EVIDENCE.slice(0, 1), [{ ...entry, permission: "described" }], PROOF.body);
+    const unmentioned = withProofList(PROOF_EVIDENCE.slice(0, 1), [{ ...entry, permission: "described" }], PROOF);
     assert.equal(noteOf(lintColdEmail({ ...PROOF, evidence: unmentioned }), "proof_approved"), "Names Northwind, whose entry is described only.");
-    const overdue = withProofList([{ kind: "proof", fact: "", source: entry.id }], [{ ...entry, reviewOn: "2020-01-01" }], PROOF.body);
+    const overdue = withProofList([{ kind: "proof", fact: "", source: entry.id }], [{ ...entry, reviewOn: "2020-01-01" }], PROOF);
     assert.equal(noteOf(lintColdEmail({ ...PROOF, evidence: overdue }), "proof_approved"), "The proof entry for Northwind was due for review on 2020-01-01.");
+    const paraphrased = PROOF.body.replace("to eight.", "to eight. Another agency went from four days of review to one.");
+    const extra = withProofList(
+      [PROOF_EVIDENCE[0], { kind: "proof", fact: "", source: entry.id }, { kind: "proof", fact: "Fabrikam", source: "made-up", client: "Fabrikam", permission: "named", approvedWording: "cut review time from four days to one" }],
+      [entry],
+      { ...PROOF, body: paraphrased },
+    );
+    assert.deepEqual(extra[2], { fact: "Fabrikam", kind: "proof", source: "made-up", client: "Fabrikam", listed: false });
+    assert.equal(noteOf(lintColdEmail({ ...PROOF, body: paraphrased, evidence: extra }), "proof_approved"), "The proof for Fabrikam isn't on the proof list.");
+    const subjectOnly = withProofList([], [{ ...entry, permission: "described" }], { subject: "northwind and ai search", body: FINDING.body });
+    assert.match(noteOf(lintColdEmail({ subject: "northwind and ai search", body: FINDING.body, evidence: [...EVIDENCE, ...subjectOnly] }), "subject"), /a client's name/);
+    const second = { ...entry, id: "0b6a3a7e-9d0c-4f55-8f0e-2a4c1b9d7e21", permission: "described" as const };
+    const twice = withProofList([PROOF_EVIDENCE[0], { kind: "proof", fact: "", source: entry.id }, { kind: "proof", fact: "", source: entry.id }], [entry, second], PROOF);
+    assert.equal(twice.length, 2);
+    assert.deepEqual(failed(lintColdEmail({ ...PROOF, evidence: twice })), []);
     assert.deepEqual(proofListFor([{ ...entry, reviewOn: "2020-01-01" }], "2026-10-29")[0], {
       id: entry.id,
       client: "Northwind",
