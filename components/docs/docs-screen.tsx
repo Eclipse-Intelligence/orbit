@@ -320,6 +320,8 @@ export default function DocsScreen({ viewer, initial }: { viewer: Viewer; initia
     [navigate],
   );
 
+  const prefetchOne = useCallback((id: string) => prefetch([id]), [prefetch]);
+
   const onMove = useCallback((id: string) => navigate(pageHref(id, route.list), { replace: true }), [navigate, route.list]);
 
   async function newNote() {
@@ -438,13 +440,14 @@ export default function DocsScreen({ viewer, initial }: { viewer: Viewer; initia
                         key={summary.id}
                         summary={summary}
                         href={href}
-                        active={active && level !== "list"}
+                        active={active}
+                        wideOnly={!route.pageId}
                         tabbable={shownId ? active : index === 0}
                         writers={activity[summary.id] ?? EMPTY_PEOPLE}
                         now={now}
                         folderShared={folderShared}
                         onOpen={onOpen}
-                        onPrefetch={(id) => prefetch([id])}
+                        onPrefetch={prefetchOne}
                       />
                     );
                   })}

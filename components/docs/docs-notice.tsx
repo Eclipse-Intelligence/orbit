@@ -16,7 +16,7 @@ export default function DocsNotice() {
   }, [notice, dismiss]);
 
   return (
-    <div aria-live="polite" className="pointer-events-none fixed inset-x-0 bottom-24 z-40 flex justify-center px-4 md:bottom-6">
+    <div aria-live="polite" className="pointer-events-none fixed inset-x-0 bottom-24 z-50 flex justify-center px-4">
       {notice && (
         <div
           key={notice.id}

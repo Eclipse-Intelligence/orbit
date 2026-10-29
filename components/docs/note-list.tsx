@@ -67,6 +67,7 @@ export const NoteRow = memo(function NoteRow({
   summary,
   href,
   active,
+  wideOnly,
   tabbable,
   writers,
   now,
@@ -77,6 +78,7 @@ export const NoteRow = memo(function NoteRow({
   summary: PageSummary;
   href: string;
   active: boolean;
+  wideOnly?: boolean;
   tabbable: boolean;
   writers: Participant[];
   now: string;
@@ -94,7 +96,7 @@ export const NoteRow = memo(function NoteRow({
         href={href}
         data-docs-row={summary.id}
         tabIndex={tabbable ? 0 : -1}
-        aria-current={active ? "page" : undefined}
+        aria-current={active && !wideOnly ? "page" : undefined}
         onClick={(event) => onOpen(summary.id, href, event)}
         onPointerEnter={() => onPrefetch(summary.id)}
         draggable={summary.kind === "note"}
@@ -106,7 +108,7 @@ export const NoteRow = memo(function NoteRow({
         className={cn(
           "ease-power3-out focus-visible:ring-ring/60 flex w-full flex-col gap-1 rounded-xl text-left transition-colors duration-150 outline-none focus-visible:ring-2",
           "px-3 py-2.5 max-md:px-4 max-md:py-3",
-          active ? "bg-white/[0.07]" : "hover:bg-white/[0.035]",
+          active ? (wideOnly ? "hover:bg-white/[0.035] md:bg-white/[0.07]" : "bg-white/[0.07]") : "hover:bg-white/[0.035]",
         )}
       >
         <span className="flex min-w-0 items-center gap-2">

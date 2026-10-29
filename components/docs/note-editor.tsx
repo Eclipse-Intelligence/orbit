@@ -131,10 +131,13 @@ export default function NoteEditor({
     };
     bridge.openTag = (path, newTab) => navigate(listHref({ kind: "tag", path }), { newTab });
     bridge.openRecord = (kind, id, newTab) => navigate(recordHref(kind, id), { newTab });
-    bridge.trigger = (value) => {
+    bridge.trigger = (value, typed) => {
       if (!value) dismissed.current = null;
       const next = value && dismissed.current === value.at ? null : value ? { ...value, pageId: liveId } : null;
-      setTrigger((current) => (current?.at === next?.at && current?.query === next?.query && current?.kind === next?.kind && current?.pageId === next?.pageId ? current : next));
+      setTrigger((current) => {
+        if (next && !typed && (!current || current.at !== next.at)) return null;
+        return current?.at === next?.at && current?.query === next?.query && current?.kind === next?.kind && current?.pageId === next?.pageId ? current : next;
+      });
     };
     bridge.pickerKey = (key) => picker.current?.key(key) ?? false;
     bridge.changed = () => {

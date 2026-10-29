@@ -1,18 +1,21 @@
 import type { DocsData, DocsSeed, RecordRef } from "@/lib/docs/client-types";
 import { createFakeDocs } from "@/lib/docs/fake-adapter";
 
-let instance: DocsData | null = null;
+type Options = { recordSearch?: (query: string) => Promise<RecordRef[]> };
 
-export function connectDocs(seed: DocsSeed, options: { recordSearch?: (query: string) => Promise<RecordRef[]> } = {}) {
-  if (!instance) instance = createFakeDocs({ ...seed, recordSearch: options.recordSearch });
-  return instance;
+let instance: DocsData | null = null;
+let pending: { seed: DocsSeed; options: Options } | null = null;
+
+export function connectDocs(seed: DocsSeed, options: Options = {}) {
+  if (!instance && !pending) pending = { seed, options };
 }
 
 export function docsData() {
+  if (!instance && pending) instance = createFakeDocs({ ...pending.seed, recordSearch: pending.options.recordSearch });
   if (!instance) throw new Error("Docs is still loading. Try again in a moment.");
   return instance;
 }
 
 export function docsConnected() {
-  return instance !== null;
+  return instance !== null || pending !== null;
 }

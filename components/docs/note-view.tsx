@@ -72,8 +72,14 @@ function TitleField({ page, inputRef }: { page: Page; inputRef: RefObject<HTMLTe
   useLayoutEffect(() => {
     const field = inputRef.current;
     if (!field) return;
-    field.style.height = "auto";
-    field.style.height = `${field.scrollHeight}px`;
+    const measure = () => {
+      field.style.height = "auto";
+      if (field.scrollHeight) field.style.height = `${field.scrollHeight}px`;
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(field);
+    return () => observer.disconnect();
   }, [value, inputRef]);
   return (
     <textarea

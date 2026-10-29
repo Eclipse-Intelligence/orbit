@@ -136,8 +136,13 @@ export const useDocsStore = create<DocsState>((set, get) => ({
   init(seed, nav) {
     if (get().ready) return;
     set({ ready: true, now: seed.now, viewer: viewerParticipant(seed.viewer), nav, recent: readRecent() });
-    void get().refreshTitles();
-    docsData().watchActivity((activity) => set({ activity }));
+    const start = () => {
+      void get().refreshTitles();
+      docsData().watchActivity((activity) => set({ activity }));
+    };
+    if (window.location.pathname.startsWith("/docs")) start();
+    else if (typeof window.requestIdleCallback === "function") window.requestIdleCallback(start, { timeout: 3000 });
+    else setTimeout(start, 1500);
     window.setInterval(() => set({ now: new Date().toISOString() }), 30_000);
   },
 
@@ -199,11 +204,14 @@ export const useDocsStore = create<DocsState>((set, get) => ({
 
   async refreshNav() {
     const nav = await docsData().nav();
-    set({ nav });
+    if (JSON.stringify(nav) !== JSON.stringify(get().nav)) set({ nav });
   },
 
   async refreshTitles() {
     const titles = await docsData().resolveTitles();
+    const current = get().titles;
+    const keys = Object.keys(titles);
+    if (keys.length === Object.keys(current).length && keys.every((key) => current[key] === titles[key])) return;
     set({ titles });
   },
 

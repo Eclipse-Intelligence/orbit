@@ -94,7 +94,7 @@ export function FolderShare({ folder, compact = true, summaries }: { folder: Fol
       <PopoverTrigger asChild>
         <ShareButton shared={folder.shared} compact={compact} />
       </PopoverTrigger>
-      <PopoverContent align="start" side="bottom" sideOffset={8} className="w-[min(22.5rem,calc(100vw-2rem))] p-0">
+      <PopoverContent align="start" side="right" sideOffset={10} className="w-[min(22.5rem,calc(100vw-2rem))] p-0">
         <div className="flex items-center gap-2.5 px-4 pt-4 pb-3">
           <FolderIcon aria-hidden className="text-subtle size-3.5" />
           <h3 className="min-w-0 flex-1 truncate leading-5">Share {folder.name}</h3>

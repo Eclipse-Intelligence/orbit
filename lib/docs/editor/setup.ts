@@ -21,7 +21,7 @@ export type EditorBridge = {
   openLink: (target: string, heading: string | null, newTab: boolean) => void;
   openTag: (path: string, newTab: boolean) => void;
   openRecord: (kind: MentionKind, id: string, newTab: boolean) => void;
-  trigger: (value: ActiveTrigger | null) => void;
+  trigger: (value: ActiveTrigger | null, typed: boolean) => void;
   pickerKey: (key: PickerKey) => boolean;
   changed: (view: EditorView) => void;
   escape: () => boolean;
@@ -231,7 +231,10 @@ export function noteExtensions(options: NoteExtensionOptions = {}): Extension[] 
     editable
       ? EditorView.updateListener.of((update) => {
           if (update.docChanged && !update.transactions.every((transaction) => transaction.annotation(external))) bridge.changed(update.view);
-          if (update.docChanged || update.selectionSet || update.focusChanged) bridge.trigger(detectTrigger(update.state, update.view.hasFocus));
+          if (update.docChanged || update.selectionSet || update.focusChanged) {
+            const typed = update.transactions.some((transaction) => transaction.isUserEvent("input.type") || transaction.isUserEvent("delete") || transaction.isUserEvent("input.paste"));
+            bridge.trigger(detectTrigger(update.state, update.view.hasFocus), typed);
+          }
         })
       : [],
     options.placeholder ? placeholder(options.placeholder) : [],
