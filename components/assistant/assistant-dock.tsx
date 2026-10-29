@@ -625,7 +625,7 @@ export default function AssistantDock() {
   useEffect(() => {
     const node = scroller.current;
     if (node && pinned.current) node.scrollTop = node.scrollHeight;
-  }, [messages, live, busy, error]);
+  }, [messages, live, busy, error, streamed]);
 
   useEffect(() => {
     const node = scroller.current;
