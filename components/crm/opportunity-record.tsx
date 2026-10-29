@@ -7,6 +7,7 @@ import Button from "@/components/_ui/button";
 import Tag from "@/components/_ui/tag";
 import CompanyActivity from "@/components/companies/detail/company-activity";
 import DetailSection from "@/components/companies/detail/detail-section";
+import RecordNotes from "@/components/docs/record-notes";
 import InlineField from "@/components/crm/inline-field";
 import RecordLayout from "@/components/crm/record-layout";
 import { DetailList } from "@/components/crm/record-form";
@@ -247,6 +248,7 @@ export default function OpportunityRecord({
                 </ul>
               )}
             </DetailSection>
+            <RecordNotes record={{ kind: "opportunity", id: opportunity.id, name: opportunity.name }} />
           </>
         }
         activity={
