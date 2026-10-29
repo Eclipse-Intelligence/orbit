@@ -20,7 +20,7 @@ function within(event: MouseEvent<HTMLElement>, href: string) {
   if (navigateWithinDocs(href)) event.preventDefault();
 }
 
-export function useDailyNotes() {
+function useDailyNotes() {
   const [days, setDays] = useState<DailySummary[] | null>(null);
   const revision = useDocsStore((state) => state.nav?.dailyCount ?? 0);
   const todayEntries = useDocsStore((state) => state.nav?.todayNote?.entries ?? 0);

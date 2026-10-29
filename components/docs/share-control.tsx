@@ -51,7 +51,7 @@ function ShareOption({
   );
 }
 
-export function ShareButton({ shared, compact, className, ...props }: { shared: boolean; compact?: boolean; className?: string } & ComponentProps<"button">) {
+function ShareButton({ shared, compact, className, ...props }: { shared: boolean; compact?: boolean; className?: string } & ComponentProps<"button">) {
   const Icon = shared ? UsersIcon : LockIcon;
   return (
     <Button

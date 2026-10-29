@@ -275,6 +275,7 @@ export const useDocsStore = create<DocsState>((set, get) => ({
         return { pages: { ...state.pages, [page.id]: page }, summaries: { ...state.summaries, [page.id]: summaryFrom(page) }, lists, fresh: input.title ? state.fresh : page.id };
       });
       void get().refreshNav();
+      void get().refreshTitles();
       return page;
     } catch (error) {
       get().notify(message(error, "Could not create the note."), { tone: "alert" });

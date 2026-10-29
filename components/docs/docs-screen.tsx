@@ -244,7 +244,7 @@ export default function DocsScreen({ viewer, initial }: { viewer: Viewer; initia
     useDocsStore.getState().seed(initial);
   }, [ready, initial]);
 
-  const fallbackIds = sameList(initial.list, route.list) && sort === "edited" ? initial.summaries.map((summary) => summary.id) : null;
+  const fallbackIds = !ready && sameList(initial.list, route.list) && sort === "edited" ? initial.summaries.map((summary) => summary.id) : null;
   const rawIds = storedIds ?? fallbackIds ?? EMPTY;
   const summaryOf = useCallback((id: string): PageSummary | undefined => summaries[id] ?? initialMap.get(id), [summaries, initialMap]);
 
@@ -254,9 +254,10 @@ export default function DocsScreen({ viewer, initial }: { viewer: Viewer; initia
     return [...present].sort((left, right) => (summaryOf(right)?.updatedAt ?? "").localeCompare(summaryOf(left)?.updatedAt ?? ""));
   }, [rawIds, summaryOf, sort, route.list.kind]);
 
+  const listLoaded = Boolean(storedIds);
   useEffect(() => {
-    if (ready) void loadList(route.list);
-  }, [ready, key, loadList, route.list]);
+    if (ready) void loadList(route.list, listLoaded);
+  }, [ready, key, listLoaded, loadList, route.list]);
 
   const today = nav?.today ?? "";
   const dailyDate = route.list.kind === "daily" && !route.pageId ? (route.date ?? today) : null;
@@ -275,8 +276,16 @@ export default function DocsScreen({ viewer, initial }: { viewer: Viewer; initia
   const page: Page | null = shownId ? (pages[shownId] ?? (initial.page?.id === shownId ? initial.page : null)) : null;
   const shownSummary = shownId ? (summaryOf(shownId) ?? (page ?? undefined)) : undefined;
 
+  const [missing, setMissing] = useState<string | null>(null);
   useEffect(() => {
-    if (ready && shownId && !pages[shownId]) void loadPage(shownId);
+    if (!ready || !shownId || pages[shownId]) return;
+    let live = true;
+    void loadPage(shownId).then((found) => {
+      if (live && !found) setMissing(shownId);
+    });
+    return () => {
+      live = false;
+    };
   }, [ready, shownId, pages, loadPage]);
 
   useEffect(() => {
@@ -462,6 +471,8 @@ export default function DocsScreen({ viewer, initial }: { viewer: Viewer; initia
           list={list}
           backHref={backHref}
           backLabel={backLabel}
+          missing={Boolean(shownId) && missing === shownId && !page}
+          empty={!shownId && !dailyDate}
           hiddenOnPhone={level !== "note"}
         />
       </div>

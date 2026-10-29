@@ -85,7 +85,7 @@ export type FakeOptions = {
 };
 
 const VERSION_GAP_MS = 10 * 60_000;
-export const LONG_NOTE_ID = "3f9c6a2e-1d4b-4e8a-9b51-6a7c2d1e0e01";
+const LONG_NOTE_ID = "3f9c6a2e-1d4b-4e8a-9b51-6a7c2d1e0e01";
 
 function words(query: string) {
   return query.toLowerCase().split(/\s+/).filter(Boolean);

@@ -90,7 +90,7 @@ export function applyMention(view: EditorView, trigger: ActiveTrigger, record: {
   });
 }
 
-export function toggleTaskAt(view: EditorView, pos: number) {
+function toggleTaskAt(view: EditorView, pos: number) {
   const line = view.state.doc.lineAt(pos);
   const next = toggleTaskMarker(line.text);
   if (next === null) return false;

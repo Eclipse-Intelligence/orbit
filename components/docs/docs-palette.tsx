@@ -189,7 +189,7 @@ export default function DocsPaletteGroups({
           </CommandGroup>
         )}
         <CommandSeparator />
-        <CommandGroup heading="Notes">
+        <CommandGroup heading="Actions">
           <CommandItem value="docs-new" onSelect={() => void create()}>
             <PlusIcon aria-hidden className="text-subtle size-3.5 shrink-0" />
             <span className="truncate">New note</span>

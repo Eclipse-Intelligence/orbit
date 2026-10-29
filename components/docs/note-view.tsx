@@ -51,7 +51,7 @@ function within(event: MouseEvent<HTMLElement>, href: string) {
   if (navigateWithinDocs(href)) event.preventDefault();
 }
 
-export function contextFor(page: { kind: string; folderId: string | null; dailyDate: string | null }, list: PageFilter, folders: { id: string; name: string }[]) {
+function contextFor(page: { kind: string; folderId: string | null; dailyDate: string | null }, list: PageFilter, folders: { id: string; name: string }[]) {
   if (page.kind === "daily") return { label: "Daily notes", href: listHref({ kind: "daily" }), icon: SunIcon };
   if (list.kind === "tag") return { label: `#${list.path}`, href: listHref(list), icon: HashIcon };
   if (list.kind === "search") return { label: "Search", href: listHref(list), icon: DocIcon };
@@ -187,10 +187,10 @@ function DailyHeading({ page }: { page: Page }) {
             </span>
             {list.map((meeting, index) => (
               <span key={meeting.id} className="flex items-center gap-2">
-                {index > 0 && <Dot />}
                 <Link href={meeting.href} className="text-soft hover:text-foreground underline decoration-white/15 underline-offset-[3px] transition-colors duration-150">
                   {meeting.title}, {clockTime(meeting.start)}
                 </Link>
+                {index < list.length - 1 && <Dot />}
               </span>
             ))}
           </>
@@ -254,6 +254,8 @@ export default function NoteView({
   list,
   backHref,
   backLabel,
+  missing,
+  empty,
   hiddenOnPhone,
 }: {
   page: Page | null;
@@ -261,6 +263,8 @@ export default function NoteView({
   list: PageFilter;
   backHref: string;
   backLabel: string;
+  missing: boolean;
+  empty: boolean;
   hiddenOnPhone: boolean;
 }) {
   const nav = useDocsNav();
@@ -371,6 +375,14 @@ export default function NoteView({
   ) : null;
 
   const railVisible = !focus && !phone && (railChosen ? Boolean(rail) : true);
+
+  if (empty) {
+    return (
+      <section aria-label="No note open" className={cn("flex min-h-0 min-w-0 flex-1 items-center justify-center md:my-2 md:mr-2 md:rounded-2xl md:bg-white/[0.02]", hiddenOnPhone && "max-md:hidden")}>
+        <p className="text-subtle px-6 text-center">Choose a note, or press C then N to start one.</p>
+      </section>
+    );
+  }
 
   return (
     <section
@@ -522,6 +534,14 @@ export default function NoteView({
                 </div>
                 {daily && !selected && <JotLine />}
               </>
+            ) : missing ? (
+              <div role="alert" className="flex flex-col items-start gap-3 pt-1">
+                <h1 className="note-title">This note isn&apos;t available</h1>
+                <p className="text-subtle">It may have been archived, or it isn&apos;t shared with you.</p>
+                <Button variant="secondary" size="sm" href={backHref} onClick={(event) => within(event, backHref)}>
+                  Back to {backLabel}
+                </Button>
+              </div>
             ) : (
               <div role="status" aria-label="Loading the note" className="flex flex-col gap-4 pt-1">
                 <span className="h-8 w-2/3 rounded-lg bg-white/[0.04]" />

@@ -57,7 +57,7 @@ function markDecoration(item: Extract<PlanItem, { type: "mark" }>) {
   return decoration;
 }
 
-export function planToDecorations(items: PlanItem[]): Preview {
+function planToDecorations(items: PlanItem[]): Preview {
   const ranges: Range<Decoration>[] = [];
   const atomic: Range<Decoration>[] = [];
   for (const item of items) {
@@ -73,7 +73,7 @@ export function planToDecorations(items: PlanItem[]): Preview {
   return { decorations: Decoration.set(ranges, true), atomic: Decoration.set(atomic, true) };
 }
 
-export function buildPreview(state: EditorState, from: number, to: number, options: PreviewOptions): Preview {
+function buildPreview(state: EditorState, from: number, to: number, options: PreviewOptions): Preview {
   return planToDecorations(
     previewPlan({ doc: state.doc, tree: syntaxTree(state), from, to, active: activeLines(state, options.focused), daily: options.daily, resolve: options.resolve }),
   );

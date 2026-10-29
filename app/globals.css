@@ -1066,4 +1066,13 @@ html[data-sidebar-resizing] * {
   .note-title {
     font-size: 26px;
   }
+
+  .note-surface .note-editor .note-hang {
+    right: 0.3rem;
+    font-size: 11px;
+  }
+
+  .note-surface .note-editor .note-task-box .note-hang-anchor {
+    display: none;
+  }
 }

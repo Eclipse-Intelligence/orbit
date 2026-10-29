@@ -43,7 +43,7 @@ function mention(cx: InlineContext, next: number, pos: number) {
   return cx.addElement(cx.elt("Mention", pos, pos + match[0].length));
 }
 
-export const docsSyntax: MarkdownConfig = {
+const docsSyntax: MarkdownConfig = {
   defineNodes: ["WikiLink", "WikiLinkMark", "WikiLinkText", "Hashtag", "HashtagMark", "Mention"],
   parseInline: [
     { name: "Mention", parse: mention, before: "Link" },

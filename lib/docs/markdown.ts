@@ -37,7 +37,7 @@ export function findWikiLinks(text: string): WikiLinkMatch[] {
   return found;
 }
 
-export function wikiLabel(link: WikiTarget) {
+function wikiLabel(link: WikiTarget) {
   if (link.label) return link.label;
   return link.heading ? `${link.target} › ${link.heading}` : link.target;
 }
@@ -52,7 +52,7 @@ export function findTags(text: string): TagMatch[] {
   return found;
 }
 
-export function normaliseTag(path: string) {
+function normaliseTag(path: string) {
   return path
     .trim()
     .replace(/^#+/, "")

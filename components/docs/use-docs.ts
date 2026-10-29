@@ -12,10 +12,6 @@ export type DocsContextValue = { seed: DocsSeed; nav: DocsNav };
 
 export const DocsContext = createContext<DocsContextValue | null>(null);
 
-export function useDocsSeed() {
-  return useContext(DocsContext);
-}
-
 export function useDocsNav() {
   const context = useContext(DocsContext);
   const live = useDocsStore((state) => state.nav);

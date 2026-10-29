@@ -21,7 +21,7 @@ import DocIcon from "@/public/assets/images/docs/doc.svg";
 import LockIcon from "@/public/assets/images/docs/lock.svg";
 import SunIcon from "@/public/assets/images/docs/sun.svg";
 
-export function RailSection({ title, count, children }: { title: string; count?: number; children: ReactNode }) {
+function RailSection({ title, count, children }: { title: string; count?: number; children: ReactNode }) {
   return (
     <section className="flex flex-col gap-2.5 px-4 pt-4">
       <div className="flex h-5 items-center gap-2">

@@ -54,7 +54,7 @@ export function SharedGlyph({ label = "Shared with workspace" }: { label?: strin
   );
 }
 
-export function PrivateGlyph({ label = "Private" }: { label?: string }) {
+function PrivateGlyph({ label = "Private" }: { label?: string }) {
   return (
     <span title={label} className="flex shrink-0 items-center">
       <LockIcon aria-hidden className="text-faint size-3" />
