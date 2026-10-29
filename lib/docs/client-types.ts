@@ -143,6 +143,7 @@ export type SaveInput = {
   title: string;
   body: string;
   baseRevision: number;
+  overwrite?: boolean;
 };
 
 export type SaveResult = { ok: true; page: Page } | { ok: false; error: string; conflict?: Page };

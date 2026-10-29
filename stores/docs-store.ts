@@ -13,7 +13,7 @@ import {
   type ShareTarget,
   type Visibility,
 } from "@/lib/docs/client-types";
-import { docsData } from "@/lib/docs/connection";
+import { docsData, refreshDocsActivity } from "@/lib/docs/connection";
 import { clearDraft, writeDraft } from "@/lib/docs/drafts";
 import { entryCount, excerptFrom, parseTags, wordCount } from "@/lib/docs/markdown";
 import { listKey } from "@/lib/docs/routes";
@@ -59,6 +59,7 @@ type DocsState = {
   loadPage: (id: string, force?: boolean) => Promise<Page | null>;
   prefetch: (ids: string[]) => void;
   refreshNav: () => Promise<void>;
+  refreshAfterAgent: () => void;
   refreshTitles: () => Promise<void>;
   editLocal: (id: string, title: string, body: string) => void;
   replaceBody: (page: Page) => void;
@@ -233,6 +234,14 @@ export const useDocsStore = create<DocsState>((set, get) => ({
   async refreshNav() {
     const nav = await docsData().nav();
     if (JSON.stringify(nav) !== JSON.stringify(get().nav)) set({ nav });
+  },
+
+  refreshAfterAgent() {
+    if (!get().ready) return;
+    set({ lists: {} });
+    refreshDocsActivity();
+    void get().refreshNav();
+    void get().refreshTitles();
   },
 
   async refreshTitles() {
@@ -477,6 +486,7 @@ export const useDocsStore = create<DocsState>((set, get) => ({
       return;
     }
     set((state) => ({ pages: state.pages[id] ? { ...state.pages, [id]: { ...state.pages[id], revision: latest.revision } } : state.pages }));
+    overwrites.add(id);
     void flush(id, false);
   },
 
@@ -529,6 +539,7 @@ const timers = new Map<string, ReturnType<typeof setTimeout>>();
 const queued = new Map<string, { title: string; body: string; baseRevision: number; renamedFrom: string | null }>();
 const inflight = new Set<string>();
 const retries = new Map<string, number>();
+const overwrites = new Set<string>();
 
 export function scheduleSave(id: string, read: Reader, delay = SAVE_DELAY_MS) {
   readers.set(id, read);
@@ -578,7 +589,11 @@ async function flush(id: string, keepalive: boolean) {
   const daily = store.pages[id]?.kind === "daily";
   let result;
   try {
-    result = await docsData().savePage(id, { title: next.title, body: next.body, baseRevision, ...(daily ? { title: store.pages[id].title } : {}) }, { keepalive });
+    result = await docsData().savePage(
+      id,
+      { title: next.title, body: next.body, baseRevision, ...(daily ? { title: store.pages[id].title } : {}), ...(overwrites.has(id) ? { overwrite: true } : {}) },
+      { keepalive },
+    );
   } catch {
     inflight.delete(id);
     if (!queued.has(id)) queued.set(id, next);
@@ -590,6 +605,7 @@ async function flush(id: string, keepalive: boolean) {
   }
   inflight.delete(id);
   retries.delete(id);
+  overwrites.delete(id);
   if (!result.ok) {
     if (result.conflict) {
       if (!queued.has(id)) queued.set(id, next);

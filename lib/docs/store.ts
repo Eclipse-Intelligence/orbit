@@ -322,6 +322,7 @@ export type CommitOptions = {
   summary?: string | null;
   ydoc?: Uint8Array | null;
   baseRevision?: number;
+  overwrite?: boolean;
   now?: Date;
 };
 
@@ -340,7 +341,7 @@ export async function commitPage(db: Db, actor: Actor, page: FullPageRow, next: 
   const titleChanged = next.title !== page.title;
   if (!titleChanged && content === page.content && options.ydoc === undefined) return { changed: false, versioned: false };
   const now = options.now ?? new Date();
-  const thorough = options.stamp.editor !== "person" || options.reason === "restored" || options.reason === "link_renamed";
+  const thorough = options.stamp.editor !== "person" || options.reason === "restored" || options.reason === "link_renamed" || options.overwrite === true;
   if (thorough) {
     const latest = await db.query<{ title: string; content: string }>(
       "select title, content from crm.page_versions where page_id = $1 order by created_at desc limit 1",
@@ -348,7 +349,14 @@ export async function commitPage(db: Db, actor: Actor, page: FullPageRow, next: 
     );
     const last = latest.rows[0];
     if (!last || last.content !== page.content || last.title !== page.title) {
-      await snapshot(db, page, page, "before_agent", { editor: page.edited_by, userId: page.edited_by_user_id, agentId: page.edited_by_agent_id }, null);
+      await snapshot(
+        db,
+        page,
+        page,
+        options.overwrite && options.stamp.editor === "person" ? "edited" : "before_agent",
+        { editor: page.edited_by, userId: page.edited_by_user_id, agentId: page.edited_by_agent_id },
+        options.overwrite ? "Before it was replaced after an editing conflict" : null,
+      );
     }
   }
   const takeVersion =
@@ -592,12 +600,13 @@ export async function saveDoc(actor: Actor, id: string, input: DocSaveInput, pro
     }
     const title = input.title === undefined ? page.title : checkTitle(input.title);
     const content = input.content === undefined ? page.content : checkContent(input.content);
+    const overwrite = input.overwrite ? { overwrite: true, summary: "Kept this copy after an editing conflict" } : {};
     if (title !== page.title) {
       await renameInside(db, actor, page, title, stampFor(actor, provenance), provenance);
       const renamed = await loadPage(db, actor, id, { lock: true });
-      await commitPage(db, actor, renamed, { title, content }, { stamp: stampFor(actor, provenance), provenance, ydoc: input.ydoc });
+      await commitPage(db, actor, renamed, { title, content }, { stamp: stampFor(actor, provenance), provenance, ydoc: input.ydoc, ...overwrite });
     } else {
-      await commitPage(db, actor, page, { title, content }, { stamp: stampFor(actor, provenance), provenance, ydoc: input.ydoc });
+      await commitPage(db, actor, page, { title, content }, { stamp: stampFor(actor, provenance), provenance, ydoc: input.ydoc, ...overwrite });
     }
     return docDetail(db, actor, id);
   });

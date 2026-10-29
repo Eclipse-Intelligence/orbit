@@ -108,7 +108,12 @@ export const docsWrites = {
       const doc = await saveDoc(
         actor,
         params.id,
-        { title: typeof input.title === "string" ? input.title : undefined, content: typeof input.body === "string" ? input.body : undefined, baseRevision },
+        {
+          title: typeof input.title === "string" ? input.title : undefined,
+          content: typeof input.body === "string" ? input.body : undefined,
+          baseRevision,
+          overwrite: input.overwrite === true,
+        },
         PROVENANCE,
       );
       return { page: toPage(actor, doc) };
