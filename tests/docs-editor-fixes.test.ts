@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { EditorSelection, EditorState, Text } from "@codemirror/state";
+import { docLinkOf } from "@/lib/assistant/doc-link";
 import { safeHref } from "@/lib/docs/editor/links";
 import { previewPlan, type PlanItem } from "@/lib/docs/editor/plan";
 import { planToDecorations } from "@/lib/docs/editor/preview";
@@ -109,5 +110,15 @@ describe("editor safety", () => {
       const sorted = [...ranges].sort((left, right) => left[0] - right[0]);
       for (let index = 1; index < sorted.length; index += 1) assert.ok(sorted[index][0] >= sorted[index - 1][1], `overlap ${JSON.stringify(sorted)}`);
     }
+  });
+});
+
+describe("approval card link", () => {
+  it("opens edits to an existing doc in Docs", () => {
+    const id = "5a8f2c10-6b1e-4c39-9d0a-0c1a2b3c4d01";
+    assert.deepEqual(docLinkOf("save_doc", { action: "edit", docId: id }), { docId: id });
+    assert.deepEqual(docLinkOf("save_doc", { action: "create", title: "New" }), {});
+    assert.deepEqual(docLinkOf("save_doc", { action: "edit", docId: "nope" }), {});
+    assert.deepEqual(docLinkOf("send_email", { docId: id }), {});
   });
 });
