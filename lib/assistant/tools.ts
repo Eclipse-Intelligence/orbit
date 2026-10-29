@@ -23,7 +23,7 @@ import { scheduleIndexing } from "@/lib/knowledge/background";
 import { mapSite } from "@/lib/knowledge/site";
 import { MindcaseError } from "@/lib/mindcase";
 import { callEclipseTool, EclipseMcpError, eclipseGuide, findEclipseTools } from "@/lib/eclipse-mcp";
-import { checkColdEmail, COLD_EMAIL_PLAYBOOK, ECLIPSE_OUTREACH_BRIEF } from "@/lib/assistant/cold-email";
+import { checkColdEmail, ECLIPSE_OUTREACH_BRIEF, evidenceFrom, playbookFor, PROOF_PERMISSIONS, senderFirstName } from "@/lib/assistant/cold-email";
 import { socialLookup } from "@/lib/social-lookup";
 import { getBookingPage } from "@/lib/booking/pages";
 import { listLifecycles } from "@/lib/crm/lifecycles";
@@ -1865,15 +1865,19 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     name: "cold_email_playbook",
     label: "Reading the cold email playbook",
     description:
-      "How to research a prospect and write a first email to someone who doesn't know the user: research steps and tools, when not to send, the rules (length, one signal, one useful question, no meeting ask, no invented facts), a template, and the Eclipse outreach brief of what may and may not be claimed. Read it before writing any first email to a prospect.",
+      "How to research a prospect and write a first email to someone who doesn't know the user: checks before research, research steps and tools, the three angles (approved client proof, a finding, or something made for them) and when not to send, the client proof rules, the rules (50 to 90 words, no link, one figure, one easy question, no meeting ask, no invented facts), the follow-up, replies, measuring, examples, and the Eclipse outreach brief of what may and may not be claimed. Read it before writing any first email to a prospect.",
     parameters: { type: "object", properties: {} },
-    run: async () => ({ playbook: COLD_EMAIL_PLAYBOOK, eclipseBrief: ECLIPSE_OUTREACH_BRIEF }),
+    run: async (actor) => {
+      const page = await getBookingPage(actor).catch(() => null);
+      const bookingUrl = page?.exists && page.enabled ? `${siteOrigin() ?? "https://orbit.geteclipse.co"}/book/${page.slug}` : null;
+      return { playbook: playbookFor({ firstName: senderFirstName(actor.fullName, actor.email), bookingUrl }), eclipseBrief: ECLIPSE_OUTREACH_BRIEF };
+    },
   },
   {
     name: "cold_email_check",
     label: "Checking the email",
     description:
-      "Check a draft first email to a prospect against cold_email_playbook before proposing it: value as well as format, and that every figure appears in your evidence. Pass all your evidence (each fact with its source, including the exact figures you quote) and what their company already offers. Fix every item in fixes and check again, at most twice. It spends a little on model calls.",
+      "Check a draft first email to a prospect against cold_email_playbook before proposing it: value as well as format, that every figure appears in your evidence, and that any client proof is quoted word for word from an approved proof entry within its permission. Pass all your evidence (each fact with its source, including the exact figures you quote) and what their company already offers. For each proof entry from the proof list in Knowledge, pass an evidence item with kind proof, its Knowledge link or id as source, the client, the permission and the approved wording. Fix every item in fixes and check again, at most twice. It spends a little on model calls.",
     parameters: {
       type: "object",
       properties: {
@@ -1881,9 +1885,24 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         body: { type: "string", description: "The whole email body, including greeting and sign-off." },
         evidence: {
           type: "array",
-          items: { type: "object", properties: { fact: { type: "string" }, source: { type: "string", description: "Link and date." } }, required: ["fact"] },
+          items: {
+            type: "object",
+            properties: {
+              fact: { type: "string", description: "The fact. For a proof entry, the client's segment, size and what they used it for." },
+              source: { type: "string", description: "Link and date. For a proof entry, its Knowledge link or item id." },
+              kind: { type: "string", enum: ["fact", "proof"], description: "proof for an entry from the proof list in Knowledge. Defaults to fact." },
+              client: { type: "string", description: "Proof only. The client's name as the proof list has it, even when the entry is described only, so the check can make sure the email doesn't name them." },
+              permission: {
+                type: "string",
+                enum: [...PROOF_PERMISSIONS],
+                description: "Proof only. named (may be named), described (described only, never named) or reference (may be named and will take a reference call after a meeting).",
+              },
+              approvedWording: { type: "string", description: "Proof only. The result exactly as the client approved it, word for word." },
+            },
+            required: ["fact"],
+          },
         },
-        firstTouch: { type: "boolean", description: "False for a follow-up to someone who has engaged before. Defaults to true." },
+        firstTouch: { type: "boolean", description: "False for the one follow-up in the same thread (30 to 60 words; link, meeting and pitch checks are skipped). Defaults to true." },
         theirOffer: { type: "string", description: "What the prospect's company already sells, reports or does, from their website, so the email doesn't pitch it back." },
       },
       required: ["subject", "body"],
@@ -1892,9 +1911,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       checkColdEmail({
         subject: str(args.subject),
         body: required(args.body, "The email"),
-        evidence: Array.isArray(args.evidence)
-          ? args.evidence.filter((item): item is { fact: string; source?: string } => Boolean(item && typeof item === "object" && typeof (item as { fact?: unknown }).fact === "string"))
-          : [],
+        evidence: evidenceFrom(args.evidence),
         firstTouch: args.firstTouch !== false,
         theirOffer: optionalStr(args.theirOffer),
       }, { deadline: context.deadline }),
