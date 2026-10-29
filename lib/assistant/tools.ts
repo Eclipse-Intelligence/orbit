@@ -13,7 +13,7 @@ import { searchKnowledge } from "@/lib/knowledge/search";
 import { addKnowledgePages, archiveKnowledge, CONTENT_LIMIT, listKnowledge, readKnowledge, targetFrom, type KnowledgeItem } from "@/lib/knowledge/store";
 import { addMailAttachmentToKnowledge } from "@/lib/knowledge/attachments";
 import { addChatFileToKnowledge, readChatFile } from "@/lib/assistant/files";
-import { docCardDetails, describeDocAction, readDocForAssistant, runDocAction, SAVE_DOC_ACTIONS, searchDocsForAssistant } from "@/lib/assistant/docs";
+import { docCardDetails, describeDocAction, readDocForAssistant, runDocAction, SAVE_DOC_ACTIONS, searchDocsForAssistant, type DocApproval } from "@/lib/assistant/docs";
 import type { DocDiffLine } from "@/lib/docs/types";
 import { listMailAttachments } from "@/lib/mail/attachments";
 import { enrichContacts } from "@/lib/enrichment/contacts";
@@ -130,7 +130,7 @@ type AssistantTool = {
   write?: boolean;
   label: string;
   run: (actor: UserActor, args: Args, context: ToolContext) => Promise<unknown>;
-  describe?: (args: Args, name: Names) => { title: string; lines: string[]; diff?: DocDiffLine[]; baseRevision?: number };
+  describe?: (args: Args, name: Names) => { title: string; lines: string[]; diff?: DocDiffLine[]; approval?: DocApproval };
   details?: (actor: UserActor, args: Args) => Promise<Record<string, string>>;
 };
 
@@ -138,7 +138,7 @@ type Names = (id: unknown) => string;
 
 type Defer = (work: () => Promise<unknown>) => void;
 
-type ToolContext = { callId?: string; deadline?: number; defer?: Defer; unattended?: boolean; baseRevision?: number };
+type ToolContext = { callId?: string; deadline?: number; defer?: Defer; unattended?: boolean; approval?: DocApproval };
 
 function afterResponse(work: () => Promise<unknown>) {
   try {
@@ -4201,7 +4201,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     },
     details: (actor, args) => docCardDetails(actor, args),
     describe: (args, name) => describeDocAction(args, name),
-    run: (actor, args, context) => runDocAction(actor, args, { unattended: context.unattended === true, baseRevision: context.baseRevision }),
+    run: (actor, args, context) => runDocAction(actor, args, { unattended: context.unattended === true, approval: context.approval }),
   },
   {
     name: "list_watchlist",
@@ -4560,7 +4560,7 @@ export function describeAction(name: string, args: Args, names: Map<string, stri
     title: described.title,
     lines: described.lines.filter(Boolean),
     ...(described.diff ? { diff: described.diff } : {}),
-    ...(described.baseRevision !== undefined ? { baseRevision: described.baseRevision } : {}),
+    ...(described.approval ? { approval: described.approval } : {}),
   };
 }
 
@@ -4568,7 +4568,7 @@ export async function runTool(
   actor: UserActor,
   name: string,
   args: Args,
-  options: { deadline?: number; callId?: string; defer?: Defer; unattended?: boolean; baseRevision?: number } = {},
+  options: { deadline?: number; callId?: string; defer?: Defer; unattended?: boolean; approval?: DocApproval } = {},
 ) {
   if (options.unattended && name !== "save_doc") return { error: "Only doc edits can run without approval. Propose this for approval instead." };
   const resolved = resolveTool(name, args);
@@ -4591,7 +4591,7 @@ export async function runTool(
         deadline: tool.write ? options.deadline : Date.now() + limit,
         defer: options.defer,
         unattended: options.unattended === true,
-        baseRevision: options.baseRevision,
+        approval: options.approval,
       }),
       late,
     ]);

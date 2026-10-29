@@ -25,6 +25,7 @@ import {
   type Page,
   type PageSummary,
   type Participant,
+  type Presence,
   type RecordRef,
   type SaveResult,
   type SearchHit,
@@ -33,12 +34,19 @@ import {
   type VersionBody,
 } from "@/lib/docs/client-types";
 import type { DocsActionResult } from "@/lib/docs/http";
+import type { LiveTransportKind } from "@/lib/docs/live/protocol";
+import { watchLivePresence } from "@/lib/docs/live/registry";
 
-type Options = { recordSearch?: (query: string) => Promise<RecordRef[]> };
+export type LiveOptions = { kind: LiveTransportKind; workspaceId: string; userId: string; publish?: boolean };
+
+type Options = { recordSearch?: (query: string) => Promise<RecordRef[]>; live?: LiveOptions | null };
 
 type ActivityState = { activity: Record<string, Participant[]>; revisions: Record<string, number> };
 
 const ACTIVITY_POLL_MS = 20_000;
+const ACTIVITY_POLL_LIVE_MS = 45_000;
+const WRITING_LINGER_MS = 3_000;
+const WRITING_MAX_MS = 60_000;
 const OFFLINE = "Docs couldn't reach Orbit. Check your connection and try again.";
 
 async function failure(response: Response) {
@@ -76,22 +84,95 @@ function query(values: Record<string, string | number | null | undefined>) {
   return text ? `?${text}` : "";
 }
 
-function activityPoller() {
+function activityPoller(live: LiveOptions | null) {
   const listeners = new Set<(state: ActivityState) => void>();
-  let latest: ActivityState = { activity: {}, revisions: {} };
+  let polled: ActivityState = { activity: {}, revisions: {} };
+  const writing: Record<string, Participant[]> = {};
+  const expiries = new Map<string, ReturnType<typeof setTimeout>>();
+  const liveRevisions: Record<string, number> = {};
   let timer: ReturnType<typeof setInterval> | null = null;
   let running = false;
+  let joined = false;
+  let stopLive: (() => void) | null = null;
+
+  function merged(): ActivityState {
+    const activity: Record<string, Participant[]> = { ...polled.activity };
+    for (const [pageId, writers] of Object.entries(writing)) {
+      const known = activity[pageId] ?? [];
+      activity[pageId] = [...known, ...writers.filter((writer) => !known.some((item) => item.id === writer.id))];
+    }
+    const revisions = { ...polled.revisions };
+    for (const [pageId, revision] of Object.entries(liveRevisions)) revisions[pageId] = Math.max(revisions[pageId] ?? 0, revision);
+    return { activity, revisions };
+  }
+
+  function emit() {
+    const state = merged();
+    for (const listener of listeners) listener(state);
+  }
 
   async function poll() {
     if (running || document.visibilityState !== "visible" || !window.location.pathname.startsWith("/docs")) return;
     running = true;
     try {
-      latest = await getJson<ActivityState>("/api/docs/activity");
-      for (const listener of listeners) listener(latest);
+      polled = await getJson<ActivityState>("/api/docs/activity");
+      emit();
     } catch {
     } finally {
       running = false;
     }
+  }
+
+  function arm() {
+    if (timer) clearInterval(timer);
+    timer = setInterval(() => void poll(), joined && live?.publish === true ? ACTIVITY_POLL_LIVE_MS : ACTIVITY_POLL_MS);
+  }
+
+  function expire(key: string, pageId: string, writerId: string, ms: number) {
+    const previous = expiries.get(key);
+    if (previous) clearTimeout(previous);
+    expiries.set(
+      key,
+      setTimeout(() => {
+        expiries.delete(key);
+        const left = (writing[pageId] ?? []).filter((item) => item.id !== writerId);
+        if (left.length) writing[pageId] = left;
+        else delete writing[pageId];
+        emit();
+      }, ms),
+    );
+  }
+
+  function onWriting(pageId: string, writer: Participant, active: boolean, revision?: number) {
+    const key = `${pageId}:${writer.id}`;
+    if (!(writing[pageId] ?? []).some((item) => item.id === writer.id)) writing[pageId] = [...(writing[pageId] ?? []), writer];
+    if (typeof revision === "number") liveRevisions[pageId] = Math.max(liveRevisions[pageId] ?? 0, revision);
+    expire(key, pageId, writer.id, active ? WRITING_MAX_MS : WRITING_LINGER_MS);
+    emit();
+  }
+
+  function startLive() {
+    if (!live || stopLive) return;
+    let cancelled = false;
+    stopLive = () => {
+      cancelled = true;
+    };
+    void import("@/lib/docs/live/client")
+      .then((module) =>
+        module.watchLiveActivity(live.kind, { workspaceId: live.workspaceId, userId: live.userId }, (...args) => {
+          if (!cancelled) onWriting(...args);
+        }, (now) => {
+          if (cancelled || now === joined) return;
+          joined = now;
+          if (timer) arm();
+          if (!now) void poll();
+        }),
+      )
+      .then((stop) => {
+        if (cancelled) stop();
+        else stopLive = stop;
+      })
+      .catch(() => {});
   }
 
   function onVisible() {
@@ -101,11 +182,12 @@ function activityPoller() {
   return {
     subscribe(listener: (state: ActivityState) => void) {
       listeners.add(listener);
-      listener(latest);
+      listener(merged());
       if (!timer) {
-        timer = setInterval(() => void poll(), ACTIVITY_POLL_MS);
+        arm();
         document.addEventListener("visibilitychange", onVisible);
         void poll();
+        startLive();
       }
       return () => {
         listeners.delete(listener);
@@ -113,6 +195,9 @@ function activityPoller() {
           clearInterval(timer);
           timer = null;
           document.removeEventListener("visibilitychange", onVisible);
+          stopLive?.();
+          stopLive = null;
+          joined = false;
         }
       };
     },
@@ -121,7 +206,7 @@ function activityPoller() {
 }
 
 export function createLiveDocs(options: Options = {}): DocsData & { refreshActivity: () => Promise<void> } {
-  const activity = activityPoller();
+  const activity = activityPoller(options.live ?? null);
 
   return {
     nav: () => getJson<DocsNav>("/api/docs/nav"),
@@ -201,10 +286,29 @@ export function createLiveDocs(options: Options = {}): DocsData & { refreshActiv
       });
     },
     watchPresence(pageId, listener) {
-      return activity.subscribe((state) => {
+      let polled: Presence[] = [];
+      let live: Presence[] | null = null;
+      const emit = () => {
+        if (!live) {
+          listener(polled);
+          return;
+        }
+        const extra = polled.filter((entry) => !live!.some((item) => item.participant.id === entry.participant.id));
+        listener(extra.length ? [...live, ...extra] : live);
+      };
+      const stopPoll = activity.subscribe((state) => {
         const writers = state.activity[pageId] ?? [];
-        listener(writers.map((participant) => ({ participant, cursor: null, writing: true })));
+        polled = writers.map((participant) => ({ participant, cursor: null, writing: true }));
+        emit();
       });
+      const stopLive = watchLivePresence(pageId, (list) => {
+        live = list;
+        emit();
+      });
+      return () => {
+        stopPoll();
+        stopLive();
+      };
     },
     watchActivity(listener: ActivityListener) {
       return activity.subscribe((state) => listener(state.activity, state.revisions));

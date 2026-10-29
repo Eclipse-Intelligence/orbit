@@ -1,5 +1,5 @@
 import { StateEffect, StateField, type Range, type Text } from "@codemirror/state";
-import { Decoration, EditorView, WidgetType, type DecorationSet } from "@codemirror/view";
+import { Decoration, EditorView, ViewPlugin, WidgetType, type DecorationSet, type ViewUpdate } from "@codemirror/view";
 import type { Participant, Presence } from "@/lib/docs/client-types";
 
 export const setPresence = StateEffect.define<Presence[]>();
@@ -59,10 +59,42 @@ function decorate(list: Presence[], doc: Text): DecorationSet {
     if (entry.insertFrom !== undefined && entry.insertFrom >= 0 && entry.insertFrom < entry.cursor) {
       ranges.push(Decoration.mark({ class: entry.participant.kind === "person" ? "note-remote-selection" : "note-agent-wash" }).range(entry.insertFrom, entry.cursor));
     }
+    const selection = entry.selection;
+    if (selection && selection.from >= 0 && selection.from < selection.to && selection.to <= length) {
+      ranges.push(Decoration.mark({ class: "note-remote-selection", attributes: { style: `--cursor-color: ${entry.participant.color}` } }).range(selection.from, selection.to));
+    }
     ranges.push(Decoration.widget({ widget: new CursorWidget(entry.participant, Boolean(entry.writing)), side: 1 }).range(entry.cursor));
   }
   return Decoration.set(ranges, true);
 }
+
+const LABEL_OFFSET = 5;
+const EDGE_GAP = 4;
+
+const edgeLabels = ViewPlugin.fromClass(
+  class {
+    constructor(readonly view: EditorView) {
+      this.schedule();
+    }
+    update(update: ViewUpdate) {
+      if (update.docChanged || update.geometryChanged || update.viewportChanged || update.transactions.some((transaction) => transaction.effects.some((effect) => effect.is(setPresence)))) this.schedule();
+    }
+    schedule() {
+      this.view.requestMeasure({
+        read: (view) => {
+          const limit = view.scrollDOM.getBoundingClientRect().right - EDGE_GAP;
+          return [...view.contentDOM.querySelectorAll<HTMLElement>(".note-cursor")].map((holder) => {
+            const label = holder.querySelector<HTMLElement>(".note-cursor-label");
+            return { holder, flip: label !== null && holder.getBoundingClientRect().left + LABEL_OFFSET + label.offsetWidth > limit };
+          });
+        },
+        write: (items) => {
+          for (const item of items) item.holder.classList.toggle("note-cursor-flip", item.flip);
+        },
+      });
+    }
+  },
+);
 
 export const presenceField = StateField.define<{ list: Presence[]; decorations: DecorationSet }>({
   create: () => ({ list: [], decorations: Decoration.none }),
@@ -74,6 +106,7 @@ export const presenceField = StateField.define<{ list: Presence[]; decorations: 
         ...entry,
         cursor: entry.cursor === null ? null : transaction.changes.mapPos(entry.cursor, 1),
         insertFrom: entry.insertFrom === undefined ? undefined : transaction.changes.mapPos(entry.insertFrom, -1),
+        selection: entry.selection ? { from: transaction.changes.mapPos(entry.selection.from, 1), to: transaction.changes.mapPos(entry.selection.to, -1) } : undefined,
       }));
       changed = true;
     }
@@ -86,5 +119,5 @@ export const presenceField = StateField.define<{ list: Presence[]; decorations: 
     if (!changed) return value;
     return { list, decorations: decorate(list, transaction.state.doc) };
   },
-  provide: (field) => EditorView.decorations.from(field, (value) => value.decorations),
+  provide: (field) => [EditorView.decorations.from(field, (value) => value.decorations), edgeLabels],
 });

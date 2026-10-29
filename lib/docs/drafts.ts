@@ -68,3 +68,41 @@ export function draftToRestore(draft: LocalDraft | null, server: { title: string
   if (draft.body === server.body && (server.kind === "daily" || draft.title === server.title)) return null;
   return draft;
 }
+
+const LIVE_PREFIX = "orbit-docs-live:";
+
+function liveKeyFor(id: string) {
+  return scope ? `${LIVE_PREFIX}${scope}:${id}` : null;
+}
+
+export function readLiveDraft(id: string): string | null {
+  const store = storage();
+  const key = liveKeyFor(id);
+  if (!store || !key) return null;
+  try {
+    return store.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+export function writeLiveDraft(id: string, delta: string) {
+  const store = storage();
+  const key = liveKeyFor(id);
+  if (!store || !key) return false;
+  try {
+    store.setItem(key, delta);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function clearLiveDraft(id: string) {
+  const store = storage();
+  const key = liveKeyFor(id);
+  if (!store || !key) return;
+  try {
+    store.removeItem(key);
+  } catch {}
+}

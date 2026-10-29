@@ -48,3 +48,9 @@ export const ASSISTANT_PARTICIPANT: Participant = {
 export function agentParticipant(id: string, name: string): Participant {
   return { id: `agent:${id}`, name, short: name, initials: participantInitials(name), color: "oklch(0.7 0 0)", kind: "mcp" };
 }
+
+export function liveParticipant(user: { id: string; name: string; kind: string }, viewerId: string | null): Participant {
+  if (user.kind === "assistant") return ASSISTANT_PARTICIPANT;
+  if (user.kind === "mcp") return agentParticipant(user.id.replace(/^agent:/, ""), user.name || "Agent");
+  return personParticipant({ id: user.id, name: user.name || "Someone" }, viewerId);
+}

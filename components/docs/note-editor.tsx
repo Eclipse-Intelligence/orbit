@@ -9,30 +9,95 @@ import StaticNote from "@/components/docs/static-note";
 import { useDocsNavigate, useMedia } from "@/components/docs/use-docs";
 import type { Page, PageFilter, Presence } from "@/lib/docs/client-types";
 import { clearDraft, draftToRestore, readDraft } from "@/lib/docs/drafts";
+import type { CachedLive } from "@/lib/docs/live/client";
 import { refreshPreview } from "@/lib/docs/editor/preview";
 import { setPresence } from "@/lib/docs/editor/presence";
 import { bridge, external, noteExtensions, type ActiveTrigger } from "@/lib/docs/editor/setup";
 import { createStateCache } from "@/lib/docs/editor/state-cache";
 import { headingsIn } from "@/lib/docs/markdown";
 import { listHref, pageHref, recordHref } from "@/lib/docs/routes";
-import { adoptDraft, commitNow, onDocsReset, scheduleSave, useDocsStore } from "@/stores/docs-store";
+import { adoptDraft, commitNow, holdClassicSaves, onDocsReset, scheduleSave, useDocsStore } from "@/stores/docs-store";
+
+type Cached = { state: EditorState; live: CachedLive | null };
+type LiveModule = typeof import("@/lib/docs/live/client");
 
 const MAX_CACHED = 24;
-const states = createStateCache<EditorState>(MAX_CACHED);
+const states = createStateCache<Cached>(MAX_CACHED);
 const titles = new Map<string, string>();
 let liveView: EditorView | null = null;
 let liveId: string | null = null;
 let pendingHeading: { pageId: string; heading: string } | null = null;
+let liveModule: LiveModule | null = null;
+let attachToken = 0;
+let attaching: { id: string; cached: CachedLive | null; release: (resume: boolean) => void } | null = null;
 
 onDocsReset(() => {
+  if (liveId) liveModule?.detachLive(liveId, { save: false });
   states.clear();
   titles.clear();
   liveId = null;
   pendingHeading = null;
+  attachToken += 1;
+  attaching = null;
 });
 
-function remember(id: string, state: EditorState, epoch: number) {
-  states.remember(id, state, epoch, liveId);
+function remember(id: string, state: EditorState, epoch: number, live: CachedLive | null) {
+  if (useDocsStore.getState().unavailable[id]) return;
+  states.remember(id, { state, live }, epoch, liveId);
+}
+
+function classicReader(id: string, fallback: { title: string; body: string }) {
+  return () => ({ title: titles.get(id) ?? fallback.title, body: noteBody(id) ?? fallback.body });
+}
+
+function startLive(view: EditorView, page: Page, cached: CachedLive | null) {
+  if (!useDocsStore.getState().liveKind) return;
+  const token = ++attachToken;
+  const id = page.id;
+  const release = holdClassicSaves(id);
+  const entry = { id, cached, release };
+  attaching = entry;
+  const isCurrent = () => token === attachToken && liveId === id && liveView === view;
+  const finish = (attached: boolean) => {
+    if (attaching === entry) attaching = null;
+    release(!attached);
+  };
+  const onLost = () => {
+    if (!isCurrent()) return;
+    scheduleSave(id, classicReader(id, page));
+    void commitNow(id);
+  };
+  const attach = (module: LiveModule) => {
+    liveModule = module;
+    if (!isCurrent()) return Promise.resolve(false);
+    return module.attachLive({ view, page, title: () => titles.get(id) ?? page.title, cached, isCurrent, onLost });
+  };
+  if (cached && liveModule) {
+    void attach(liveModule)
+      .then(finish)
+      .catch(() => finish(false));
+    return;
+  }
+  const run = () => {
+    if (!isCurrent()) {
+      finish(false);
+      return;
+    }
+    void import("@/lib/docs/live/client")
+      .then(attach)
+      .then(finish)
+      .catch(() => finish(false));
+  };
+  requestAnimationFrame(() => setTimeout(run, 0));
+}
+
+function stopLive(id: string): CachedLive | null {
+  attachToken += 1;
+  const detached = liveModule?.detachLive(id) ?? null;
+  const pending = attaching?.id === id ? attaching : null;
+  attaching = null;
+  pending?.release(true);
+  return detached ?? pending?.cached ?? null;
 }
 
 function currentEpoch(id: string) {
@@ -49,7 +114,7 @@ export function setNoteTitle(id: string, title: string) {
 
 function noteBody(id: string) {
   if (liveView && liveId === id) return liveView.state.doc.toString();
-  return states.peek(id)?.doc.toString() ?? null;
+  return states.peek(id)?.state.doc.toString() ?? null;
 }
 
 export function editorView() {
@@ -64,7 +129,11 @@ export function focusNoteText(at: "start" | "end" = "start") {
 }
 
 export function scheduleNoteSave(id: string, fallback: { title: string; body: string }) {
-  scheduleSave(id, () => ({ title: titles.get(id) ?? fallback.title, body: noteBody(id) ?? fallback.body }));
+  if (liveModule?.isLive(id)) {
+    liveModule.liveTitle(id, titles.get(id) ?? fallback.title);
+    return;
+  }
+  scheduleSave(id, classicReader(id, fallback));
 }
 
 function stateFor(page: Page, placeholder: string) {
@@ -157,11 +226,12 @@ export default function NoteEditor({
     const id = latest.current.page.id;
     const epochNow = currentEpoch(id);
     const cached = states.take(id, epochNow);
-    const { state, restored } = cached ? { state: cached, restored: false } : stateFor(latest.current.page, placeholder);
+    const { state, restored } = cached ? { state: cached.state, restored: false } : stateFor(latest.current.page, placeholder);
     const view = new EditorView({ state, parent });
     liveView = view;
     liveId = id;
     seenEpoch.current = epochNow;
+    startLive(view, latest.current.page, cached?.live ?? null);
     const focusWatcher = () => setFocused(view.hasFocus);
     view.contentDOM.addEventListener("focus", focusWatcher);
     view.contentDOM.addEventListener("blur", focusWatcher);
@@ -174,8 +244,9 @@ export default function NoteEditor({
       view.contentDOM.removeEventListener("focus", focusWatcher);
       view.contentDOM.removeEventListener("blur", focusWatcher);
       if (liveId) {
-        remember(liveId, view.state, seenEpoch.current);
-        void commitNow(liveId);
+        const live = stopLive(liveId);
+        remember(liveId, view.state, seenEpoch.current, live);
+        if (!live) void commitNow(liveId);
       }
       view.destroy();
       if (liveView === view) {
@@ -189,11 +260,13 @@ export default function NoteEditor({
     const view = liveView;
     if (!view || liveId === page.id) return;
     if (liveId) {
-      remember(liveId, view.state, seenEpoch.current);
-      void commitNow(liveId);
+      const live = stopLive(liveId);
+      remember(liveId, view.state, seenEpoch.current, live);
+      if (!live) void commitNow(liveId);
     }
     const epochNow = currentEpoch(page.id);
-    let state = states.take(page.id, epochNow);
+    const cached = states.take(page.id, epochNow);
+    let state = cached?.state ?? null;
     let restored = false;
     if (!state) {
       const created = stateFor(page, placeholder);
@@ -204,6 +277,7 @@ export default function NoteEditor({
     liveId = page.id;
     seenEpoch.current = epochNow;
     if (restored) scheduleNoteSave(page.id, page);
+    startLive(view, page, cached?.live ?? null);
     const heading = pendingHeading?.pageId === page.id ? pendingHeading.heading : null;
     pendingHeading = null;
     if (heading) {
@@ -219,6 +293,11 @@ export default function NoteEditor({
     const view = liveView;
     if (!view || liveId !== page.id || epoch === seenEpoch.current) return;
     seenEpoch.current = epoch;
+    if (liveModule?.isLive(page.id)) {
+      liveModule.pullLive(page.id);
+      titles.set(page.id, page.title);
+      return;
+    }
     if (view.state.doc.toString() === page.body) return;
     view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: page.body }, annotations: external.of(true) });
     titles.set(page.id, page.title);

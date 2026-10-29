@@ -1,6 +1,7 @@
 import { after } from "next/server";
 import type { Db } from "@/lib/db/pool";
 import { getPool } from "@/lib/db/pool";
+import { takeAfterCommit } from "@/lib/crm/after-commit";
 import { takeWebhooksQueued } from "@/lib/crm/webhook-queue";
 import { deliverDueWebhooks } from "@/lib/crm/webhooks";
 import type { Actor } from "@/lib/crm/types";
@@ -13,6 +14,24 @@ function scheduleWebhooks() {
     after(run);
   } catch {
     run();
+  }
+}
+
+function runAfterCommit(tasks: (() => Promise<void> | void)[]) {
+  if (tasks.length === 0) return;
+  const run = async () => {
+    for (const task of tasks) {
+      try {
+        await task();
+      } catch (error) {
+        console.error("After-commit task failed", error);
+      }
+    }
+  };
+  try {
+    after(run);
+  } catch {
+    void run();
   }
 }
 
@@ -43,9 +62,11 @@ async function inActorTransaction<T>(
     const result = await fn(client);
     await client.query("commit");
     if (takeWebhooksQueued(client)) scheduleWebhooks();
+    runAfterCommit(takeAfterCommit(client));
     return result;
   } catch (error) {
     takeWebhooksQueued(client);
+    takeAfterCommit(client);
     try {
       await client.query("rollback");
     } catch {}

@@ -5,7 +5,7 @@ import { connectedProviders } from "@/lib/ai-accounts/store";
 import { systemPrompt } from "@/lib/assistant/prompt";
 import { docLinkOf } from "@/lib/assistant/doc-link";
 import { ACTION_ALTERNATIVES, ASSISTANT_TOOLS, actionAlternative, describeAction, findTool, recordNames, runTool, toolDescription, toolJson } from "@/lib/assistant/tools";
-import { editsWithoutApproval } from "@/lib/assistant/docs";
+import { approvalFor, editsWithoutApproval, type DocApproval } from "@/lib/assistant/docs";
 import type { DocDiffLine } from "@/lib/docs/types";
 import type { CompanionResult, Effort } from "@/companion/src/protocol";
 import {
@@ -58,6 +58,7 @@ export type AssistantAction = {
   diff?: DocDiffLine[];
   docId?: string;
   unattended?: boolean;
+  approval?: DocApproval;
   baseRevision?: number;
 };
 
@@ -903,7 +904,7 @@ export async function decideActions(
     const output = (await runTool(actor, chosenAlternative?.tool ?? call.function.name, parseArgs(call.function.arguments), {
       deadline: options.deadline - 20_000,
       callId: call.id,
-      baseRevision: action.baseRevision,
+      approval: action.name === "save_doc" ? approvalFor(action) : undefined,
     })) as Record<string, unknown> | null;
     const failed = Boolean(output && typeof output === "object" && "error" in output);
     await insertMessage(actor, conversation.id, {

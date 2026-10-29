@@ -8,6 +8,7 @@ import type { DiffPart } from "@/lib/docs/diff";
 import { safeHref } from "@/lib/docs/editor/links";
 import { docsLanguage } from "@/lib/docs/editor/syntax";
 import { activeLines, livePreview } from "@/lib/docs/editor/preview";
+import { liveSlot } from "@/lib/docs/editor/live-slot";
 import { presenceField } from "@/lib/docs/editor/presence";
 import { noteTables } from "@/lib/docs/editor/tables";
 import { DeletedText } from "@/lib/docs/editor/widgets";
@@ -237,13 +238,13 @@ export type NoteExtensionOptions = {
   readOnly?: boolean;
   placeholder?: string;
   label?: string;
-  collaboration?: Extension;
 };
 
 export function noteExtensions(options: NoteExtensionOptions = {}): Extension[] {
   const editable = !options.readOnly;
   return [
-    options.collaboration ?? history(),
+    history(),
+    editable ? liveSlot.of([]) : [],
     docsLanguage(),
     livePreview({ daily: Boolean(options.daily), resolve: (target) => bridge.resolve(target) }),
     noteTables({ resolve: (target) => bridge.resolve(target) }),

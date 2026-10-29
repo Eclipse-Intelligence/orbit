@@ -83,6 +83,7 @@ export default function DocsProvider({ seed, nav, children }: { seed: DocsSeed; 
     connectDocs({
       recordSearch: async (query) =>
         (await searchMentionsAction(query)).map((option) => ({ kind: option.kind, id: option.id, name: option.name, detail: option.detail ?? null })),
+      live: seed.live ? { kind: seed.live, workspaceId: seed.workspaceId, userId: seed.viewer.id, publish: seed.livePublish === true } : null,
     });
     if (!onDocs) return;
     const store = useDocsStore.getState();
@@ -108,7 +109,7 @@ export default function DocsProvider({ seed, nav, children }: { seed: DocsSeed; 
   }, [focus]);
 
   useEffect(() => {
-    const flush = () => commitAll(true);
+    const flush = () => commitAll(true, true);
     const hidden = () => {
       if (document.visibilityState === "hidden") commitAll(true);
     };

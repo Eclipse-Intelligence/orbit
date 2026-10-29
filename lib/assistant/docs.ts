@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { Text } from "@codemirror/state";
 import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import type { Provenance, UserActor } from "@/lib/crm/types";
@@ -7,6 +8,8 @@ import { appendToDailyNote, getDailyNote } from "@/lib/docs/daily-notes";
 import { changeCounts, lineDiff } from "@/lib/docs/diff";
 import { applyDocEdit } from "@/lib/docs/edits";
 import { getFolder } from "@/lib/docs/folders";
+import { rebase } from "@/lib/docs/live/rebase";
+import { applyEdits, textEdits, type TextEdit } from "@/lib/docs/live/text-diff";
 import { searchDocs } from "@/lib/docs/search";
 import { archiveDoc, assistantMayEdit, createDoc, editDoc, getDoc, listBacklinks, moveDoc, readDoc, renameDoc, shareDoc } from "@/lib/docs/store";
 import { dailyHref, docHref, type DocDetail, type DocDiffLine, type DocEdit, type DocSummary } from "@/lib/docs/types";
@@ -54,6 +57,20 @@ export function editFrom(args: Args): DocEdit | null {
 
 const CARD_DIFF_LINES = 200;
 const CARD_LINE_CHARS = 2_000;
+const UNDO_MAX = 200_000;
+
+export type DocApproval = { matches?: number; base?: string; undo?: TextEdit[]; diff?: DocDiffLine[]; revision?: number };
+
+function fingerprint(text: string) {
+  return createHash("sha256").update(text).digest("hex");
+}
+
+function countOf(content: string, find: string) {
+  if (!find) return 0;
+  let count = 0;
+  for (let index = content.indexOf(find); index >= 0; index = content.indexOf(find, index + find.length)) count += 1;
+  return count;
+}
 
 function cardDiff(before: string, after: string) {
   return JSON.stringify(
@@ -91,6 +108,12 @@ export async function docCardDetails(actor: UserActor, args: Args): Promise<Reco
           const after = applyDocEdit(doc.content, edit);
           out[key] = cardDiff(doc.content, after);
           out[`${key}:counts`] = JSON.stringify(changeCounts(doc.content, after));
+          if (edit.action === "edit") out[`${key}:matches`] = String(countOf(doc.content, edit.find));
+          if (edit.action === "replace") {
+            out[`${key}:base`] = fingerprint(doc.content);
+            const undo = JSON.stringify(textEdits(after, doc.content));
+            if (undo.length <= UNDO_MAX) out[`${key}:undo`] = undo;
+          }
         } catch (error) {
           if (error instanceof CrmError) out[`${key}:problem`] = error.message;
         }
@@ -142,7 +165,32 @@ function storedCounts(value: string | null) {
   }
 }
 
-export function describeDocAction(args: Args, name: Names): { title: string; lines: string[]; diff?: DocDiffLine[]; baseRevision?: number } {
+function storedUndo(value: string | null) {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? (parsed as TextEdit[]) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function approvalOf(args: Args, name: Names, key: string): DocApproval | undefined {
+  const action = actionOf(args);
+  if (action === "edit") {
+    const matches = Number(known(name, `${key}:matches`));
+    return Number.isInteger(matches) && matches > 0 ? { matches } : undefined;
+  }
+  if (action === "replace") {
+    const base = known(name, `${key}:base`);
+    if (!base) return undefined;
+    const undo = storedUndo(known(name, `${key}:undo`));
+    return undo ? { base, undo } : { base };
+  }
+  return undefined;
+}
+
+export function describeDocAction(args: Args, name: Names): { title: string; lines: string[]; diff?: DocDiffLine[]; approval?: DocApproval } {
   const action = actionOf(args);
   const docId = docIdOf(args);
   const key = diffKey(args);
@@ -157,7 +205,7 @@ export function describeDocAction(args: Args, name: Names): { title: string; lin
   }
   const problem = known(name, `${key}:problem`);
   const change = storedCounts(known(name, `${key}:counts`));
-  const revision = docId && editFrom(args) ? Number(known(name, `${docId}:revision`)) : NaN;
+  const approval = approvalOf(args, name, key);
   const changeLine = change && (change.added || change.removed) ? `${counted(change.added, "line", "lines")} added, ${counted(change.removed, "line", "lines")} removed.` : "";
   const folderId = str(args.folderId);
   const folder = isUuid(folderId) ? known(name, folderId) : null;
@@ -166,7 +214,7 @@ export function describeDocAction(args: Args, name: Names): { title: string; lin
     title,
     lines: lines.filter(Boolean),
     ...(diff ? { diff } : {}),
-    ...(Number.isInteger(revision) && revision > 0 ? { baseRevision: revision } : {}),
+    ...(approval ? { approval } : {}),
   });
   switch (action) {
     case "create":
@@ -249,7 +297,80 @@ export async function editsWithoutApproval(actor: UserActor, name: string, args:
 
 export const CHANGED_SINCE_APPROVAL = "This doc changed after you saw this change, so it wasn't applied. Read the doc again and propose the change again.";
 
-export async function runDocAction(actor: UserActor, args: Args, context: { unattended?: boolean; baseRevision?: number } = {}) {
+export const EDIT_MOVED_SINCE_APPROVAL =
+  "Someone changed the text this edit was going to change after you saw it, so it wasn't applied. Read the doc again and propose the change again.";
+
+export const REWRITE_CLASHED_SINCE_APPROVAL =
+  "Someone changed the same part of the doc after you saw this rewrite, so it wasn't applied. Read the doc again and propose the change again.";
+
+const APPROVAL_REFUSALS = [CHANGED_SINCE_APPROVAL, EDIT_MOVED_SINCE_APPROVAL, REWRITE_CLASHED_SINCE_APPROVAL];
+
+function refuse(message: string) {
+  return new CrmError("conflict", message, 409);
+}
+
+export function approvalFor(action: { approval?: DocApproval; diff?: DocDiffLine[]; baseRevision?: number }): DocApproval | undefined {
+  if (!action.approval && action.baseRevision === undefined && !action.diff) return undefined;
+  return {
+    ...(action.approval ?? {}),
+    ...(action.diff ? { diff: action.diff } : {}),
+    ...(action.baseRevision !== undefined ? { revision: action.baseRevision } : {}),
+  };
+}
+
+function lineSpans(text: string, edits: TextEdit[]) {
+  return edits.map((edit) => {
+    const end = text.indexOf("\n", edit.at + edit.remove);
+    return { from: edit.at === 0 ? 0 : text.lastIndexOf("\n", edit.at - 1) + 1, to: end < 0 ? text.length : end };
+  });
+}
+
+function overlapping(base: string, left: TextEdit[], right: TextEdit[]) {
+  const theirs = lineSpans(base, right);
+  return lineSpans(base, left).some((one) => theirs.some((other) => one.from <= other.to && other.from <= one.to));
+}
+
+export function mergeRewrite(base: string, proposed: string, current: string) {
+  if (overlapping(base, textEdits(base, proposed), textEdits(base, current))) return null;
+  return rebase(base, proposed, current).toShared.apply(Text.of(current.split("\n"))).toString();
+}
+
+function approvedEdit(edit: Extract<DocEdit, { action: "edit" }>, approval: DocApproval) {
+  return (current: string) => {
+    if (approval.matches !== undefined && countOf(current, edit.find) !== approval.matches) throw refuse(EDIT_MOVED_SINCE_APPROVAL);
+    let after: string;
+    try {
+      after = applyDocEdit(current, edit);
+    } catch {
+      throw refuse(EDIT_MOVED_SINCE_APPROVAL);
+    }
+    if (approval.diff && cardDiff(current, after) !== JSON.stringify(approval.diff)) throw refuse(EDIT_MOVED_SINCE_APPROVAL);
+    return after;
+  };
+}
+
+function approvedRewrite(proposed: string, approval: DocApproval & { base: string }) {
+  return (current: string) => {
+    if (fingerprint(current) === approval.base) return proposed;
+    const base = approval.undo ? applyEdits(proposed, approval.undo) : null;
+    if (base === null || fingerprint(base) !== approval.base) throw refuse(CHANGED_SINCE_APPROVAL);
+    const merged = mergeRewrite(base, proposed, current);
+    if (merged === null) throw refuse(REWRITE_CLASHED_SINCE_APPROVAL);
+    return merged;
+  };
+}
+
+function approvedPlan(edit: DocEdit, approval: DocApproval | undefined) {
+  if (!approval) return {};
+  if (edit.action === "edit") return { plan: approvedEdit(edit, approval) };
+  if (edit.action === "replace") {
+    if (approval.base) return { plan: approvedRewrite(edit.content, { ...approval, base: approval.base }) };
+    return approval.revision !== undefined ? { baseRevision: approval.revision } : {};
+  }
+  return {};
+}
+
+export async function runDocAction(actor: UserActor, args: Args, context: { unattended?: boolean; approval?: DocApproval } = {}) {
   const action = actionOf(args);
   if (!action) throw new CrmError("invalid_input", `Choose an action: ${SAVE_DOC_ACTIONS.join(", ")}.`, 400, { field: "action" });
   if (context.unattended && !UNATTENDED_DOC_ACTIONS.includes(action)) {
@@ -263,11 +384,11 @@ export async function runDocAction(actor: UserActor, args: Args, context: { unat
     try {
       const { doc, changed } = await editDoc(actor, requireDoc(args), edit, PROVENANCE, {
         assistantCanEdit: context.unattended === true,
-        baseRevision: context.unattended ? undefined : context.baseRevision,
+        ...(context.unattended ? {} : approvedPlan(edit, context.approval)),
       });
       return { saved: true, doc: summaryOf(doc), changed };
     } catch (error) {
-      if (error instanceof CrmError && error.code === "conflict") throw new CrmError("conflict", CHANGED_SINCE_APPROVAL, 409);
+      if (error instanceof CrmError && error.code === "conflict" && !APPROVAL_REFUSALS.includes(error.message)) throw refuse(CHANGED_SINCE_APPROVAL);
       throw error;
     }
   }

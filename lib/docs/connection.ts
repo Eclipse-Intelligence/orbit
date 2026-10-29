@@ -1,7 +1,7 @@
 import type { DocsData, RecordRef } from "@/lib/docs/client-types";
-import { createLiveDocs } from "@/lib/docs/live-adapter";
+import { createLiveDocs, type LiveOptions } from "@/lib/docs/live-adapter";
 
-type Options = { recordSearch?: (query: string) => Promise<RecordRef[]> };
+type Options = { recordSearch?: (query: string) => Promise<RecordRef[]>; live?: LiveOptions | null };
 type Connection = DocsData & { refreshActivity?: () => Promise<void> };
 
 let instance: Connection | null = null;

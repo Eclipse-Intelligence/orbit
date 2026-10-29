@@ -3,7 +3,23 @@ import type { Provenance, UserActor } from "@/lib/crm/types";
 import type { CreateInput, Folder, Page, PageFilter, PageSort, ShareTarget, Visibility } from "@/lib/docs/client-types";
 import { isDailyDate } from "@/lib/docs/daily";
 import { createFolder, listFolders, moveFolder, renameFolder, shareFolder } from "@/lib/docs/folders";
-import { archiveDoc, createDoc, moveDoc, pagingNumber, renameDoc, restoreDoc, restoreVersion, saveDoc, setAssistantCanEdit, shareDoc } from "@/lib/docs/store";
+import { liveTransport } from "@/lib/docs/live/broadcast";
+import { LIVE_BODY_MAX, LIVE_UPDATE_MAX, LIVE_VECTOR_MAX } from "@/lib/docs/live/persist";
+import { decodeBytes, encodeBytes } from "@/lib/docs/live/ydoc";
+import {
+  archiveDoc,
+  createDoc,
+  moveDoc,
+  openLiveDoc,
+  pagingNumber,
+  renameDoc,
+  restoreDoc,
+  restoreVersion,
+  saveDoc,
+  setAssistantCanEdit,
+  shareDoc,
+  syncLiveDoc,
+} from "@/lib/docs/store";
 import {
   docsActivity,
   docsBacklinks,
@@ -24,12 +40,15 @@ import {
   docsVersions,
   toFolder,
   toPage,
+  toSummary,
 } from "@/lib/docs/view";
 import { MENTION_KINDS, type MentionKind } from "@/lib/mentions";
 
 const PROVENANCE: Provenance = { operation: "docs.app" };
 const SORTS: PageSort[] = ["edited", "created", "title"];
 const NOT_FOUND = "That note doesn't exist any more, or it's private to someone else.";
+const BODY_MAX = 8_000_000;
+const LIVE_TOO_LARGE = "This change is too big to send live. Orbit will save the note the usual way instead.";
 
 export type DocsActionResult<T> = { data: T; error?: undefined } | { error: string; code?: string; details?: Record<string, unknown> | null };
 
@@ -48,8 +67,37 @@ function filterFrom(params: URLSearchParams): PageFilter {
   return { kind: "all" };
 }
 
-async function body(request: Request): Promise<Record<string, unknown>> {
-  const text = await request.text();
+async function limitedText(request: Request, limit: number, tooLarge: () => CrmError) {
+  const declared = Number(request.headers.get("content-length") ?? "");
+  if (Number.isFinite(declared) && declared > limit) throw tooLarge();
+  if (!request.body) return "";
+  const reader = request.body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  let received = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    received += value.byteLength;
+    if (received > limit) {
+      await reader.cancel().catch(() => {});
+      throw tooLarge();
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  return text + decoder.decode();
+}
+
+function tooLargeBody() {
+  return new CrmError("too_large", "That request was too big for Docs. Split the note into smaller notes and try again.", 413);
+}
+
+function tooLargeLive() {
+  return new CrmError("live_too_large", LIVE_TOO_LARGE, 413);
+}
+
+async function body(request: Request, limit = BODY_MAX, tooLarge = tooLargeBody): Promise<Record<string, unknown>> {
+  const text = await limitedText(request, limit, tooLarge);
   if (!text) return {};
   try {
     const parsed = JSON.parse(text) as unknown;
@@ -57,6 +105,16 @@ async function body(request: Request): Promise<Record<string, unknown>> {
   } catch {
     throw new CrmError("invalid_input", "The request wasn't valid JSON. Reload the page and try again.", 400);
   }
+}
+
+function liveBytes(value: unknown, limit: number) {
+  if (typeof value === "string" && value.length > 4 * Math.ceil(limit / 3)) throw tooLargeLive();
+  const bytes = decodeBytes(value);
+  if (bytes && bytes.length > limit) throw tooLargeLive();
+  if (value !== undefined && value !== null && value !== "" && !bytes) {
+    throw new CrmError("live_invalid", "That change couldn't be read, so it wasn't saved. Reload the note and try again.", 400);
+  }
+  return bytes;
 }
 
 function dateParam(value: string | undefined | null) {
@@ -102,6 +160,10 @@ export const docsReads = {
   daily: ({ actor }: DocsCall) => docsDailyList(actor),
   meetings: ({ actor, request }: DocsCall) => docsMeetings(actor, dateParam(search(request).get("date"))),
   activity: ({ actor }: DocsCall) => docsActivity(actor),
+  async live({ actor, params }: DocsCall) {
+    const opened = await openLiveDoc(actor, params.id);
+    return { state: encodeBytes(opened.state), generation: opened.generation, revision: opened.doc.revision, title: opened.doc.title, transport: liveTransport() };
+  },
 };
 
 export const docsWrites = {
@@ -133,6 +195,28 @@ export const docsWrites = {
     }
   },
   openDaily: ({ actor, params }: DocsCall) => docsDailyNote(actor, dateParam(params.date)),
+  async liveSync({ actor, request, params }: DocsCall) {
+    const input = await body(request, LIVE_BODY_MAX, tooLargeLive);
+    const result = await syncLiveDoc(
+      actor,
+      params.id,
+      {
+        update: liveBytes(input.update, LIVE_UPDATE_MAX),
+        vector: liveBytes(input.vector, LIVE_VECTOR_MAX),
+        title: typeof input.title === "string" ? input.title : undefined,
+        generation: typeof input.generation === "number" && Number.isInteger(input.generation) ? input.generation : undefined,
+      },
+      PROVENANCE,
+    );
+    return {
+      vector: encodeBytes(result.vector),
+      missing: encodeBytes(result.missing),
+      generation: result.generation,
+      rebuilt: result.rebuilt,
+      revision: result.doc.revision,
+      summary: toSummary(actor, result.doc),
+    };
+  },
 };
 
 export async function docsRespond(actor: UserActor | null, run: (actor: UserActor) => Promise<unknown>): Promise<Response> {
