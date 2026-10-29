@@ -12,25 +12,31 @@ import { clearDraft, draftToRestore, readDraft } from "@/lib/docs/drafts";
 import { refreshPreview } from "@/lib/docs/editor/preview";
 import { setPresence } from "@/lib/docs/editor/presence";
 import { bridge, external, noteExtensions, type ActiveTrigger } from "@/lib/docs/editor/setup";
+import { createStateCache } from "@/lib/docs/editor/state-cache";
 import { headingsIn } from "@/lib/docs/markdown";
 import { listHref, pageHref, recordHref } from "@/lib/docs/routes";
-import { commitNow, scheduleSave, useDocsStore } from "@/stores/docs-store";
+import { adoptDraft, commitNow, onDocsReset, scheduleSave, useDocsStore } from "@/stores/docs-store";
 
 const MAX_CACHED = 24;
-const states = new Map<string, EditorState>();
+const states = createStateCache<EditorState>(MAX_CACHED);
 const titles = new Map<string, string>();
 let liveView: EditorView | null = null;
 let liveId: string | null = null;
 let pendingHeading: { pageId: string; heading: string } | null = null;
 
-function remember(id: string, state: EditorState) {
-  states.delete(id);
-  states.set(id, state);
-  while (states.size > MAX_CACHED) {
-    const oldest = states.keys().next().value;
-    if (oldest === undefined || oldest === liveId) break;
-    states.delete(oldest);
-  }
+onDocsReset(() => {
+  states.clear();
+  titles.clear();
+  liveId = null;
+  pendingHeading = null;
+});
+
+function remember(id: string, state: EditorState, epoch: number) {
+  states.remember(id, state, epoch, liveId);
+}
+
+function currentEpoch(id: string) {
+  return useDocsStore.getState().epochs[id] ?? 0;
 }
 
 export function noteTitle(id: string) {
@@ -43,7 +49,7 @@ export function setNoteTitle(id: string, title: string) {
 
 function noteBody(id: string) {
   if (liveView && liveId === id) return liveView.state.doc.toString();
-  return states.get(id)?.doc.toString() ?? null;
+  return states.peek(id)?.doc.toString() ?? null;
 }
 
 export function editorView() {
@@ -63,8 +69,8 @@ export function scheduleNoteSave(id: string, fallback: { title: string; body: st
 
 function stateFor(page: Page, placeholder: string) {
   const draft = draftToRestore(readDraft(page.id), page);
-  if (draft) titles.set(page.id, draft.title);
-  else if (!titles.has(page.id)) titles.set(page.id, page.title);
+  if (draft) adoptDraft(page, draft);
+  titles.set(page.id, draft?.title ?? page.title);
   const state = EditorState.create({
     doc: draft?.body ?? page.body,
     extensions: noteExtensions({ daily: page.kind === "daily", placeholder, label: page.kind === "daily" ? "Daily note" : "Note text" }),
@@ -96,13 +102,11 @@ export default function NoteEditor({
   const navigate = useDocsNavigate();
   const pageTitles = useDocsStore((state) => state.titles);
   const epoch = useDocsStore((state) => state.epochs[page.id] ?? 0);
-  const staleEpoch = useDocsStore((state) => state.staleEpoch);
   const createNote = useDocsStore((state) => state.createNote);
   const notify = useDocsStore((state) => state.notify);
   const phone = useMedia("(max-width: 767px)");
   const latest = useRef({ page, list, pageTitles, onEscape, onTitleFocus });
   const seenEpoch = useRef(epoch);
-  const seenStale = useRef(staleEpoch);
   const dismissed = useRef<number | null>(null);
   const closePicker = () => {
     dismissed.current = trigger?.at ?? null;
@@ -150,11 +154,14 @@ export default function NoteEditor({
   useLayoutEffect(() => {
     const parent = host.current;
     if (!parent) return;
-    const cached = states.get(latest.current.page.id);
+    const id = latest.current.page.id;
+    const epochNow = currentEpoch(id);
+    const cached = states.take(id, epochNow);
     const { state, restored } = cached ? { state: cached, restored: false } : stateFor(latest.current.page, placeholder);
     const view = new EditorView({ state, parent });
     liveView = view;
-    liveId = latest.current.page.id;
+    liveId = id;
+    seenEpoch.current = epochNow;
     const focusWatcher = () => setFocused(view.hasFocus);
     view.contentDOM.addEventListener("focus", focusWatcher);
     view.contentDOM.addEventListener("blur", focusWatcher);
@@ -167,8 +174,8 @@ export default function NoteEditor({
       view.contentDOM.removeEventListener("focus", focusWatcher);
       view.contentDOM.removeEventListener("blur", focusWatcher);
       if (liveId) {
-        remember(liveId, view.state);
-        commitNow(liveId);
+        remember(liveId, view.state, seenEpoch.current);
+        void commitNow(liveId);
       }
       view.destroy();
       if (liveView === view) {
@@ -182,10 +189,11 @@ export default function NoteEditor({
     const view = liveView;
     if (!view || liveId === page.id) return;
     if (liveId) {
-      remember(liveId, view.state);
-      commitNow(liveId);
+      remember(liveId, view.state, seenEpoch.current);
+      void commitNow(liveId);
     }
-    let state = states.get(page.id);
+    const epochNow = currentEpoch(page.id);
+    let state = states.take(page.id, epochNow);
     let restored = false;
     if (!state) {
       const created = stateFor(page, placeholder);
@@ -194,7 +202,7 @@ export default function NoteEditor({
     }
     view.setState(state);
     liveId = page.id;
-    seenEpoch.current = useDocsStore.getState().epochs[page.id] ?? 0;
+    seenEpoch.current = epochNow;
     if (restored) scheduleNoteSave(page.id, page);
     const heading = pendingHeading?.pageId === page.id ? pendingHeading.heading : null;
     pendingHeading = null;
@@ -216,12 +224,6 @@ export default function NoteEditor({
     titles.set(page.id, page.title);
     clearDraft(page.id);
   }, [epoch, page]);
-
-  useEffect(() => {
-    if (staleEpoch === seenStale.current) return;
-    seenStale.current = staleEpoch;
-    for (const id of [...states.keys()]) if (id !== liveId) states.delete(id);
-  }, [staleEpoch]);
 
   useEffect(() => {
     liveView?.dispatch({ effects: refreshPreview.of(null) });

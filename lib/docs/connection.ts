@@ -2,12 +2,23 @@ import type { DocsData, RecordRef } from "@/lib/docs/client-types";
 import { createLiveDocs } from "@/lib/docs/live-adapter";
 
 type Options = { recordSearch?: (query: string) => Promise<RecordRef[]> };
+type Connection = DocsData & { refreshActivity?: () => Promise<void> };
 
-let instance: (DocsData & { refreshActivity?: () => Promise<void> }) | null = null;
+let instance: Connection | null = null;
 let pending: Options | null = null;
+let supplied = false;
 
-export function connectDocs(options: Options = {}) {
+export function connectDocs(options: Options = {}, data?: Connection) {
+  if (data) {
+    instance = data;
+    supplied = true;
+    return;
+  }
   if (!instance && !pending) pending = options;
+}
+
+export function resetDocsConnection() {
+  if (!supplied) instance = null;
 }
 
 export function docsData() {

@@ -181,7 +181,7 @@ export type DocsNav = {
   todayNote: DailySummary | null;
 };
 
-export type DocsSeed = { now: string; viewer: { id: string; name: string } };
+export type DocsSeed = { now: string; workspaceId: string; viewer: { id: string; name: string } };
 
 export type DocsSnapshot = DocsNav & {
   now: string;

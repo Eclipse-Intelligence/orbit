@@ -9,7 +9,7 @@ import { DocsContext, useDocsNavigate } from "@/components/docs/use-docs";
 import type { DocsNav, DocsSeed } from "@/lib/docs/client-types";
 import { connectDocs } from "@/lib/docs/connection";
 import { dailyHref, isDocsPath, pageHref } from "@/lib/docs/routes";
-import { commitAll, retryOfflineSaves, useDocsStore, type VisibilityPrompt } from "@/stores/docs-store";
+import { commitAll, prepareDocs, retryOfflineSaves, useDocsStore, type VisibilityPrompt } from "@/stores/docs-store";
 
 function visibilityText(prompt: VisibilityPrompt) {
   const what = prompt.kind === "folder" ? `${prompt.name} and every note in it` : prompt.name;
@@ -74,6 +74,7 @@ function DocsShortcuts() {
 }
 
 export default function DocsProvider({ seed, nav, children }: { seed: DocsSeed; nav: DocsNav; children: ReactNode }) {
+  prepareDocs(seed);
   const value = useMemo(() => ({ seed, nav }), [seed, nav]);
   const focus = useDocsStore((state) => state.focus);
   const onDocs = isDocsPath(usePathname() ?? "");
