@@ -4,7 +4,7 @@ import { isUuid } from "@/lib/crm/mutate";
 import type { Provenance, UserActor } from "@/lib/crm/types";
 import { appendDailyEntry, localTime } from "@/lib/docs/daily";
 import { appendToDailyNote, getDailyNote } from "@/lib/docs/daily-notes";
-import { diffCounts, lineDiff } from "@/lib/docs/diff";
+import { changeCounts, lineDiff } from "@/lib/docs/diff";
 import { applyDocEdit } from "@/lib/docs/edits";
 import { getFolder } from "@/lib/docs/folders";
 import { searchDocs } from "@/lib/docs/search";
@@ -84,11 +84,13 @@ export async function docCardDetails(actor: UserActor, args: Args): Promise<Reco
     if (doc) {
       out[docId] = doc.title || "Untitled doc";
       out[`${docId}:where`] = whereLine(doc);
-      out[`${docId}:assistant`] = doc.assistantCanEdit ? "yes" : "no";
+      out[`${docId}:revision`] = String(doc.revision);
       const edit = editFrom(args);
       if (edit) {
         try {
-          out[key] = cardDiff(doc.content, applyDocEdit(doc.content, edit));
+          const after = applyDocEdit(doc.content, edit);
+          out[key] = cardDiff(doc.content, after);
+          out[`${key}:counts`] = JSON.stringify(changeCounts(doc.content, after));
         } catch (error) {
           if (error instanceof CrmError) out[`${key}:problem`] = error.message;
         }
@@ -104,12 +106,19 @@ export async function docCardDetails(actor: UserActor, args: Args): Promise<Reco
       out[`${folderId}:shared`] = folder.effectiveShared ? "yes" : "no";
     }
   }
-  if (action === "create" && raw(args.content)) out[key] = cardDiff("", raw(args.content));
+  if (action === "create" && raw(args.content)) {
+    out[key] = cardDiff("", raw(args.content));
+    out[`${key}:counts`] = JSON.stringify(changeCounts("", raw(args.content)));
+  }
   if (action === "append_daily") {
     const note = await getDailyNote(actor, str(args.date) || undefined).catch(() => null);
     const before = note?.page.content ?? "";
     const text = str(args.content);
-    if (text) out[key] = cardDiff(before, appendDailyEntry(before, localTime(), text));
+    if (text) {
+      const after = appendDailyEntry(before, localTime(), text);
+      out[key] = cardDiff(before, after);
+      out[`${key}:counts`] = JSON.stringify(changeCounts(before, after));
+    }
   }
   return out;
 }
@@ -123,7 +132,17 @@ function counted(count: number, one: string, many: string) {
   return `${count} ${count === 1 ? one : many}`;
 }
 
-export function describeDocAction(args: Args, name: Names): { title: string; lines: string[]; diff?: DocDiffLine[] } {
+function storedCounts(value: string | null) {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as { added?: unknown; removed?: unknown };
+    return typeof parsed.added === "number" && typeof parsed.removed === "number" ? { added: parsed.added, removed: parsed.removed } : null;
+  } catch {
+    return null;
+  }
+}
+
+export function describeDocAction(args: Args, name: Names): { title: string; lines: string[]; diff?: DocDiffLine[]; baseRevision?: number } {
   const action = actionOf(args);
   const docId = docIdOf(args);
   const key = diffKey(args);
@@ -137,12 +156,18 @@ export function describeDocAction(args: Args, name: Names): { title: string; lin
     } catch {}
   }
   const problem = known(name, `${key}:problem`);
-  const change = diff ? diffCounts(diff) : null;
+  const change = storedCounts(known(name, `${key}:counts`));
+  const revision = docId && editFrom(args) ? Number(known(name, `${docId}:revision`)) : NaN;
   const changeLine = change && (change.added || change.removed) ? `${counted(change.added, "line", "lines")} added, ${counted(change.removed, "line", "lines")} removed.` : "";
   const folderId = str(args.folderId);
   const folder = isUuid(folderId) ? known(name, folderId) : null;
   const folderShared = isUuid(folderId) ? known(name, `${folderId}:shared`) === "yes" : false;
-  const result = (title: string, lines: string[]) => ({ title, lines: lines.filter(Boolean), ...(diff ? { diff } : {}) });
+  const result = (title: string, lines: string[]) => ({
+    title,
+    lines: lines.filter(Boolean),
+    ...(diff ? { diff } : {}),
+    ...(Number.isInteger(revision) && revision > 0 ? { baseRevision: revision } : {}),
+  });
   switch (action) {
     case "create":
       return result(`New doc: ${str(args.title) || "Untitled"}`, [
@@ -203,7 +228,6 @@ function summaryOf(doc: DocSummary) {
     folderId: doc.folderId,
     tags: doc.tags,
     revision: doc.revision,
-    assistantCanEdit: doc.assistantCanEdit,
     href: doc.kind === "daily" && doc.dailyDate ? dailyHref(doc.dailyDate) : docHref(doc.id),
   };
 }
@@ -223,7 +247,9 @@ export async function editsWithoutApproval(actor: UserActor, name: string, args:
   return assistantMayEdit(actor, docId);
 }
 
-export async function runDocAction(actor: UserActor, args: Args, context: { unattended?: boolean } = {}) {
+export const CHANGED_SINCE_APPROVAL = "This doc changed after you saw this change, so it wasn't applied. Read the doc again and propose the change again.";
+
+export async function runDocAction(actor: UserActor, args: Args, context: { unattended?: boolean; baseRevision?: number } = {}) {
   const action = actionOf(args);
   if (!action) throw new CrmError("invalid_input", `Choose an action: ${SAVE_DOC_ACTIONS.join(", ")}.`, 400, { field: "action" });
   if (context.unattended && !UNATTENDED_DOC_ACTIONS.includes(action)) {
@@ -234,8 +260,16 @@ export async function runDocAction(actor: UserActor, args: Args, context: { unat
     if (edit.action === "append" && !edit.content.trim()) {
       throw new CrmError("invalid_input", "Say what to add to the doc.", 400, { field: "content" });
     }
-    const { doc, diff } = await editDoc(actor, requireDoc(args), edit, PROVENANCE, { assistantCanEdit: context.unattended === true });
-    return { saved: true, doc: summaryOf(doc), changed: diffCounts(diff) };
+    try {
+      const { doc, changed } = await editDoc(actor, requireDoc(args), edit, PROVENANCE, {
+        assistantCanEdit: context.unattended === true,
+        baseRevision: context.unattended ? undefined : context.baseRevision,
+      });
+      return { saved: true, doc: summaryOf(doc), changed };
+    } catch (error) {
+      if (error instanceof CrmError && error.code === "conflict") throw new CrmError("conflict", CHANGED_SINCE_APPROVAL, 409);
+      throw error;
+    }
   }
   if (action === "create") {
     const doc = await createDoc(actor, { title: str(args.title), content: raw(args.content), folderId: str(args.folderId) || null, shared: args.shared === true }, PROVENANCE);

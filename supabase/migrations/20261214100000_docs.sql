@@ -183,6 +183,16 @@ security definer
 set search_path = ''
 as $$
 begin
+  if old.effective_shared and not new.effective_shared then
+    with recursive own as (
+      select f.id from crm.page_folders f where f.id = new.id
+      union all
+      select c.id from crm.page_folders c join own o on c.parent_id = o.id where c.user_id is not distinct from new.user_id
+    )
+    update crm.page_folders c set parent_id = null
+    from own o
+    where c.parent_id = o.id and c.user_id is distinct from new.user_id;
+  end if;
   if new.effective_shared is distinct from old.effective_shared then
     with recursive tree as (
       select new.id as id, new.effective_shared as eff
@@ -266,8 +276,42 @@ $$;
 
 drop trigger if exists pages_resolve_links on crm.pages;
 create trigger pages_resolve_links
-  after insert or update of title, shared, folder_id, effective_shared, archived_at, user_id on crm.pages
+  after insert on crm.pages
   for each row execute function private.pages_resolve_links();
+
+drop trigger if exists pages_resolve_links_update on crm.pages;
+create trigger pages_resolve_links_update
+  after update of title, shared, folder_id, effective_shared, archived_at, user_id on crm.pages
+  for each row
+  when (
+    old.title is distinct from new.title
+    or old.effective_shared is distinct from new.effective_shared
+    or old.archived_at is distinct from new.archived_at
+    or old.user_id is distinct from new.user_id
+  )
+  execute function private.pages_resolve_links();
+
+create or replace function private.pages_guard()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if new.user_id is distinct from old.user_id then
+    new.assistant_can_edit := false;
+  elsif new.assistant_can_edit and not old.assistant_can_edit
+    and (new.user_id is null or new.user_id is distinct from (select private.session_user_id())) then
+    raise exception 'Only the doc''s owner can let the assistant edit it without asking.' using errcode = '42501';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists pages_guard on crm.pages;
+create trigger pages_guard
+  before update of assistant_can_edit, user_id on crm.pages
+  for each row execute function private.pages_guard();
 
 alter table crm.page_folders enable row level security;
 alter table crm.page_folders force row level security;
@@ -282,25 +326,65 @@ alter table crm.page_versions force row level security;
 
 drop policy if exists page_folders_member on crm.page_folders;
 create policy page_folders_member on crm.page_folders
-  for all to authenticated
+  for select to authenticated
+  using (workspace_id in (select private.user_workspace_ids()) and (effective_shared or user_id = (select private.session_user_id())));
+
+drop policy if exists page_folders_member_insert on crm.page_folders;
+create policy page_folders_member_insert on crm.page_folders
+  for insert to authenticated
+  with check (workspace_id in (select private.user_workspace_ids()) and user_id = (select private.session_user_id()));
+
+drop policy if exists page_folders_member_update on crm.page_folders;
+create policy page_folders_member_update on crm.page_folders
+  for update to authenticated
   using (workspace_id in (select private.user_workspace_ids()) and (effective_shared or user_id = (select private.session_user_id())))
   with check (workspace_id in (select private.user_workspace_ids()) and (effective_shared or user_id = (select private.session_user_id())));
 
 drop policy if exists page_folders_agent on crm.page_folders;
 create policy page_folders_agent on crm.page_folders
-  for all to crm_agent
+  for select to crm_agent
+  using (workspace_id = (select private.request_workspace_id()) and effective_shared);
+
+drop policy if exists page_folders_agent_insert on crm.page_folders;
+create policy page_folders_agent_insert on crm.page_folders
+  for insert to crm_agent
+  with check (workspace_id = (select private.request_workspace_id()) and effective_shared and user_id is null);
+
+drop policy if exists page_folders_agent_update on crm.page_folders;
+create policy page_folders_agent_update on crm.page_folders
+  for update to crm_agent
   using (workspace_id = (select private.request_workspace_id()) and effective_shared)
   with check (workspace_id = (select private.request_workspace_id()) and effective_shared);
 
 drop policy if exists pages_member on crm.pages;
 create policy pages_member on crm.pages
-  for all to authenticated
+  for select to authenticated
+  using (workspace_id in (select private.user_workspace_ids()) and (effective_shared or user_id = (select private.session_user_id())));
+
+drop policy if exists pages_member_insert on crm.pages;
+create policy pages_member_insert on crm.pages
+  for insert to authenticated
+  with check (workspace_id in (select private.user_workspace_ids()) and user_id = (select private.session_user_id()));
+
+drop policy if exists pages_member_update on crm.pages;
+create policy pages_member_update on crm.pages
+  for update to authenticated
   using (workspace_id in (select private.user_workspace_ids()) and (effective_shared or user_id = (select private.session_user_id())))
   with check (workspace_id in (select private.user_workspace_ids()) and (effective_shared or user_id = (select private.session_user_id())));
 
 drop policy if exists pages_agent on crm.pages;
 create policy pages_agent on crm.pages
-  for all to crm_agent
+  for select to crm_agent
+  using (workspace_id = (select private.request_workspace_id()) and effective_shared and kind = 'note');
+
+drop policy if exists pages_agent_insert on crm.pages;
+create policy pages_agent_insert on crm.pages
+  for insert to crm_agent
+  with check (workspace_id = (select private.request_workspace_id()) and effective_shared and kind = 'note' and user_id is null);
+
+drop policy if exists pages_agent_update on crm.pages;
+create policy pages_agent_update on crm.pages
+  for update to crm_agent
   using (workspace_id = (select private.request_workspace_id()) and effective_shared and kind = 'note')
   with check (workspace_id = (select private.request_workspace_id()) and effective_shared and kind = 'note');
 

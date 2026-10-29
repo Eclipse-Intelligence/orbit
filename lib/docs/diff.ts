@@ -75,6 +75,10 @@ export function lineDiff(before: string, after: string, options: { context?: num
   return [...shown.slice(0, maxLines), { kind: "gap", text: `${shown.length - maxLines} more lines` }];
 }
 
+export function changeCounts(before: string, after: string) {
+  return diffCounts(fullDiff(before, after));
+}
+
 export function diffCounts(lines: DocDiffLine[]) {
   return {
     added: lines.filter((line) => line.kind === "add").length,

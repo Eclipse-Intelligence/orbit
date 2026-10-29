@@ -61,7 +61,7 @@ Optional `Idempotency-Key` header (printable ASCII, up to 200 characters). Reuse
 | `POST` | `/docs` | Create a doc: `title`, `content` (Markdown), `folderId`, `shared`, `provenance`. Always shared with the workspace. 201 | `docs:write` |
 | `GET` | `/docs/folders` | Shared folders, with parent and position | `docs:read` |
 | `GET` | `/docs/:id` | One doc with its links, mentions and folder path, and its text from `offset` (100,000 characters, with `nextOffset`) | `docs:read` |
-| `PATCH` | `/docs/:id` | Any of `title` (rename, rewriting links to it), `content` (replace), `append`, `find` with `replace` (and `all`), `folderId` (null for no folder; with `allowVisibilityChange` when the move changes who sees it), `shared`, `baseRevision` (409 if the doc changed), applied in that order | `docs:write` |
+| `PATCH` | `/docs/:id` | Any of `title` (rename, rewriting links to it), `content` (replace), `append`, `find` with `replace` (and `all`), `folderId` (null for no folder; with `allowVisibilityChange` when the move changes who sees it), `shared`, `baseRevision` (409 if the doc changed before any of the changes), applied in that order in one transaction, so a refused change leaves the doc as it was | `docs:write` |
 | `DELETE` | `/docs/:id` | Archive | `docs:write` |
 | `GET` | `/activities` | List activity | `crm:read` |
 | `POST` | `/activities` | Append an activity | `activities:write` |

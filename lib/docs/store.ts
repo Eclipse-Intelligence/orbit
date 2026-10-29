@@ -4,7 +4,7 @@ import { iso, isUuid, recordAudit } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
 import type { Actor, Provenance } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
-import { lineDiff } from "@/lib/docs/diff";
+import { changeCounts, lineDiff } from "@/lib/docs/diff";
 import { appendText, applyDocEdit, editSummary } from "@/lib/docs/edits";
 import { cleanTitle, excerptFrom, lineAround, linkKey, parseDoc, parseLinks, rewriteLinkTitle, wordCount } from "@/lib/docs/markdown";
 import {
@@ -63,6 +63,8 @@ export type PageRow = {
   agent_name: string | null;
   versioned_at: Date | null;
   archived_at: Date | null;
+  created_by_agent_id: string | null;
+  creator_agent_name: string | null;
   tags: string[];
 };
 
@@ -75,13 +77,14 @@ const PAGE_FIELDS = `p.id, p.workspace_id, p.kind, p.title, p.daily_date::text a
   coalesce(nullif(owner.full_name, ''), owner.email) as owner_name, p.shared, p.effective_shared, p.assistant_can_edit,
   left(p.content, 800) as head, p.word_count, p.revision, p.created_at, p.updated_at, p.edited_at, p.edited_by,
   p.edited_by_user_id, coalesce(nullif(editor.full_name, ''), editor.email) as editor_name, p.edited_by_agent_id,
-  agent.name as agent_name, p.versioned_at, p.archived_at,
+  agent.name as agent_name, p.versioned_at, p.archived_at, p.created_by_agent_id, creator.name as creator_agent_name,
   coalesce((select array_agg(t.tag order by t.tag) from crm.page_tags t where t.page_id = p.id), '{}') as tags`;
 
 const PAGE_JOINS = `crm.pages p
   left join crm.profiles owner on owner.id = p.user_id
   left join crm.profiles editor on editor.id = p.edited_by_user_id
-  left join crm.agents agent on agent.id = p.edited_by_agent_id`;
+  left join crm.agents agent on agent.id = p.edited_by_agent_id
+  left join crm.agents creator on creator.id = p.created_by_agent_id`;
 
 export function pageSelect(withContent: boolean) {
   return `select ${PAGE_FIELDS}${withContent ? ", p.content" : ""} from ${PAGE_JOINS}`;
@@ -125,6 +128,7 @@ export function mapPage(actor: Actor, row: PageRow): DocSummary {
     dailyDate: row.daily_date,
     folderId: row.folder_id,
     owner: row.user_id ? { id: row.user_id, name: row.owner_name ?? "Former member" } : null,
+    createdByAgent: row.created_by_agent_id ? { id: row.created_by_agent_id, name: row.creator_agent_name ?? "Agent" } : null,
     ownedByMe: ownedBy(actor, row.user_id),
     shared: row.shared,
     effectiveShared: row.effective_shared,
@@ -158,8 +162,8 @@ export function checkTitle(value: unknown, fallback = "") {
   if (typeof value === "string" && value.replace(/\s+/g, " ").trim().length > 300) {
     throw new CrmError("invalid_input", "A title can be up to 300 characters. Shorten it and try again.", 400, { field: "title" });
   }
-  if (/[[\]|]/.test(title)) {
-    throw new CrmError("invalid_input", "A title can't contain [, ] or |, because links use them. Take them out and try again.", 400, { field: "title" });
+  if (/[[\]|#]/.test(title)) {
+    throw new CrmError("invalid_input", "A title can't contain #, [, ] or |, because links use them. Take them out and try again.", 400, { field: "title" });
   }
   return title;
 }
@@ -201,15 +205,16 @@ async function planLinks(db: Db, page: { id: string; workspace_id: string; user_
     for (const row of result.rows) found.set(row.raw, row);
   }
   const sticky = new Map<string, { id: string; title: string }>();
-  const unresolved = parsed.links.some((link) => !found.get(link.target)?.id && !(link.heading !== null && found.get(link.title)?.id));
-  if (unresolved) {
-    const previous = await db.query<{ key: string; id: string; title: string }>(
-      `select l.target_key as key, t.id, t.title from crm.page_links l
-       join crm.pages t on t.id = l.target_page_id
-       where l.page_id = $1 and l.target_kind = 'page' and (t.effective_shared or t.user_id is not distinct from $2)`,
-      [page.id, page.user_id],
-    );
-    for (const row of previous.rows) sticky.set(row.key, { id: row.id, title: row.title });
+  const hidden = new Map<string, string>();
+  const previous = await db.query<{ key: string; target_id: string; id: string | null; title: string | null }>(
+    `select l.target_key as key, l.target_page_id as target_id, t.id, t.title from crm.page_links l
+     left join crm.pages t on t.id = l.target_page_id
+     where l.page_id = $1 and l.target_kind = 'page' and l.target_page_id is not null`,
+    [page.id],
+  );
+  for (const row of previous.rows) {
+    if (row.id === null) hidden.set(row.key, row.target_id);
+    else if (row.title !== null) sticky.set(row.key, { id: row.id, title: row.title });
   }
   let rewritten = content;
   const renames: { from: string; to: string }[] = [];
@@ -217,6 +222,13 @@ async function planLinks(db: Db, page: { id: string; workspace_id: string; user_
   for (const link of parsed.links) {
     const whole = found.get(link.target);
     const byTitle = link.heading !== null ? found.get(link.title) : undefined;
+    const keptWhole = hidden.get(linkKey(link.target));
+    const keptTitle = link.heading !== null ? hidden.get(linkKey(link.title)) : undefined;
+    if (keptWhole || keptTitle) {
+      const key = keptWhole ? linkKey(link.target) : linkKey(link.title);
+      if (!rows.has(key)) rows.set(key, { key, pageId: keptWhole ?? keptTitle ?? null, label: link.target, heading: link.heading });
+      continue;
+    }
     if (whole?.id) {
       if (!rows.has(whole.key)) rows.set(whole.key, { key: whole.key, pageId: whole.id, label: link.target, heading: link.heading });
       continue;
@@ -323,6 +335,7 @@ export type CommitOptions = {
   ydoc?: Uint8Array | null;
   baseRevision?: number;
   overwrite?: boolean;
+  coalesceTitle?: boolean;
   now?: Date;
 };
 
@@ -359,8 +372,9 @@ export async function commitPage(db: Db, actor: Actor, page: FullPageRow, next: 
       );
     }
   }
+  const titleForcesVersion = titleChanged && !(options.coalesceTitle && options.stamp.editor === "person");
   const takeVersion =
-    (thorough || titleChanged || !page.versioned_at || now.getTime() - new Date(page.versioned_at).getTime() >= PERSON_VERSION_EVERY_MS) &&
+    (thorough || titleForcesVersion || !page.versioned_at || now.getTime() - new Date(page.versioned_at).getTime() >= PERSON_VERSION_EVERY_MS) &&
     (titleChanged || content !== page.content);
   await db.query(
     `update crm.pages set title = $2, content = $3, word_count = $4, revision = revision + 1, edited_by = $5, edited_by_user_id = $6,
@@ -396,13 +410,14 @@ export async function commitPage(db: Db, actor: Actor, page: FullPageRow, next: 
   return { changed: true, versioned: takeVersion };
 }
 
-async function linkingPages(db: Db, pageId: string) {
-  const result = await db.query<{ id: string }>(
-    `select distinct p.id from crm.page_links l join crm.pages p on p.id = l.page_id
-     where l.target_page_id = $1 and p.id <> $1 and p.archived_at is null`,
-    [pageId],
+async function staleLinks(db: Db, pageId: string, title: string) {
+  const result = await db.query<{ id: string; keys: string[] }>(
+    `select p.id, array_agg(distinct l.target_key) as keys from crm.page_links l join crm.pages p on p.id = l.page_id
+     where l.target_page_id = $1 and p.id <> $1 and p.archived_at is null and l.target_kind = 'page' and l.target_key <> $2
+     group by p.id`,
+    [pageId, linkKey(title)],
   );
-  return result.rows.map((row) => row.id);
+  return result.rows;
 }
 
 async function detail(db: Db, actor: Actor, row: FullPageRow): Promise<DocDetail> {
@@ -462,7 +477,7 @@ async function detail(db: Db, actor: Actor, row: FullPageRow): Promise<DocDetail
     links: pageLinks,
     mentions,
     canChangeSharing: row.kind === "note" && (row.shared ? owner : true),
-    canChangeAssistantEdit: actor.type === "user",
+    canChangeAssistantEdit: owner,
   };
 }
 
@@ -475,27 +490,35 @@ export async function getDoc(actor: Actor, id: string): Promise<DocDetail> {
   return withActor(actor, (db) => docDetail(db, actor, id));
 }
 
-export async function readDoc(actor: Actor, id: string, offset = 0) {
+export function pagingNumber(value: unknown, fallback: number, min: number, max: number) {
+  const number = typeof value === "number" ? value : typeof value === "string" && value.trim() !== "" ? Number(value) : NaN;
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(max, Math.max(min, Math.trunc(number)));
+}
+
+export async function readDoc(actor: Actor, id: string, offset: unknown = 0) {
   assertDocsRead(actor);
-  const start = Math.max(0, Math.floor(offset));
+  const start = pagingNumber(offset, 0, 0, DOC_CONTENT_MAX);
   return withActor(actor, async (db) => {
     if (!isUuid(id)) throw new CrmError("not_found", NOT_FOUND, 404);
-    const result = await db.query<FullPageRow & { characters: number }>(
-      `select ${PAGE_FIELDS}, substr(p.content, $3 + 1, $4) as content, char_length(p.content) as characters
-       from ${PAGE_JOINS} where p.id = $1 and p.workspace_id = $2`,
+    const result = await db.query<FullPageRow & { characters: number; window_characters: number }>(
+      `select x.*, char_length(x.content) as window_characters from (
+         select ${PAGE_FIELDS}, substr(p.content, $3 + 1, $4) as content, char_length(p.content) as characters
+         from ${PAGE_JOINS} where p.id = $1 and p.workspace_id = $2
+       ) x`,
       [id, actor.workspaceId, start, DOC_READ_WINDOW],
     );
     const row = result.rows[0];
     if (!row) throw new CrmError("not_found", NOT_FOUND, 404);
-    const end = start + row.content.length;
+    const end = Math.min(row.characters, start) + row.window_characters;
     return { doc: mapPage(actor, row), offset: start, text: row.content, characters: row.characters, nextOffset: end < row.characters ? end : null };
   });
 }
 
 export async function listDocs(actor: Actor, query: DocListQuery = {}): Promise<{ data: DocSummary[]; hasMore: boolean }> {
   assertDocsRead(actor);
-  const limit = Math.min(200, Math.max(1, Math.trunc(query.limit ?? 50)));
-  const offset = Math.min(10_000, Math.max(0, Math.trunc(query.offset ?? 0)));
+  const limit = pagingNumber(query.limit, 50, 1, 200);
+  const offset = pagingNumber(query.offset, 0, 0, 10_000);
   const values: unknown[] = [actor.workspaceId];
   const where = ["p.workspace_id = $1", query.archived ? "p.archived_at is not null" : "p.archived_at is null"];
   if (query.folderId === null) {
@@ -565,11 +588,8 @@ export async function createDoc(actor: Actor, input: DocCreateInput, provenance?
   const content = checkContent(input.content);
   return withActor(actor, async (db) => {
     const folder = input.folderId ? await placeableFolder(db, actor, input.folderId, actor.type === "user" ? actor.userId : null) : null;
-    const owner = actor.type === "user" ? actor.userId : folder?.user_id ?? null;
+    const owner = actor.type === "user" ? actor.userId : null;
     const shared = owner === null ? true : input.shared === true;
-    if (actor.type === "agent" && !shared && !folder?.effective_shared) {
-      throw new CrmError("forbidden", "Agent tokens can only create shared docs. Put it in a shared folder or share it.", 403);
-    }
     const stamp = stampFor(actor, provenance);
     const inserted = await db.query<{ id: string }>(
       `insert into crm.pages (workspace_id, user_id, folder_id, kind, title, content, word_count, shared, created_by_agent_id, edited_by, edited_by_user_id, edited_by_agent_id, versioned_at)
@@ -593,35 +613,32 @@ export async function saveDoc(actor: Actor, id: string, input: DocSaveInput, pro
   return withActor(actor, async (db) => {
     const page = await loadPage(db, actor, id, { lock: true });
     if (page.archived_at) throw new CrmError("invalid_input", "This doc is archived. Restore it before editing.", 400);
-    if (input.baseRevision !== undefined && input.baseRevision !== page.revision) {
-      throw new CrmError("conflict", "This doc changed since you opened it. Reload it to see the latest, then make your change again.", 409, {
-        revision: page.revision,
-      });
-    }
+    checkRevision(page, input.baseRevision);
     const title = input.title === undefined ? page.title : checkTitle(input.title);
     const content = input.content === undefined ? page.content : checkContent(input.content);
     const overwrite = input.overwrite ? { overwrite: true, summary: "Kept this copy after an editing conflict" } : {};
-    if (title !== page.title) {
-      await renameInside(db, actor, page, title, stampFor(actor, provenance), provenance);
-      const renamed = await loadPage(db, actor, id, { lock: true });
-      await commitPage(db, actor, renamed, { title, content }, { stamp: stampFor(actor, provenance), provenance, ydoc: input.ydoc, ...overwrite });
-    } else {
-      await commitPage(db, actor, page, { title, content }, { stamp: stampFor(actor, provenance), provenance, ydoc: input.ydoc, ...overwrite });
-    }
+    await commitPage(db, actor, page, { title, content }, { stamp: stampFor(actor, provenance), provenance, ydoc: input.ydoc, coalesceTitle: true, ...overwrite });
     return docDetail(db, actor, id);
   });
 }
 
-async function renameInside(db: Db, actor: Actor, page: FullPageRow, title: string, stamp: Stamp, provenance?: Provenance) {
-  const before = page.title;
-  await commitPage(db, actor, page, { title, content: page.content }, { stamp, provenance, reason: "renamed" });
-  if (!before.trim() || linkKey(before) === linkKey(title)) return 0;
+function checkRevision(page: FullPageRow, baseRevision: number | undefined) {
+  if (baseRevision !== undefined && baseRevision !== page.revision) {
+    throw new CrmError("conflict", "This doc changed since you opened it. Reload it to see the latest, then make your change again.", 409, {
+      revision: page.revision,
+    });
+  }
+}
+
+async function rewriteLinksTo(db: Db, actor: Actor, pageId: string, title: string, stamp: Stamp, provenance?: Provenance) {
+  if (!title.trim()) return 0;
   let updated = 0;
-  for (const linkingId of await linkingPages(db, page.id)) {
-    const linking = await loadPage(db, actor, linkingId, { lock: true });
-    const rewritten = rewriteLinkTitle(linking.content, before, title);
-    if (rewritten.count === 0) continue;
-    await commitPage(db, actor, linking, { title: linking.title, content: rewritten.content }, {
+  for (const stale of await staleLinks(db, pageId, title)) {
+    const linking = await loadPage(db, actor, stale.id, { lock: true });
+    let content = linking.content;
+    for (const key of stale.keys) content = rewriteLinkTitle(content, key, title).content;
+    if (content === linking.content) continue;
+    await commitPage(db, actor, linking, { title: linking.title, content }, {
       stamp,
       provenance,
       reason: "link_renamed",
@@ -632,14 +649,25 @@ async function renameInside(db: Db, actor: Actor, page: FullPageRow, title: stri
   return updated;
 }
 
+async function renameInside(db: Db, actor: Actor, page: FullPageRow, title: string, stamp: Stamp, provenance?: Provenance) {
+  if (page.title !== title) await commitPage(db, actor, page, { title, content: page.content }, { stamp, provenance, reason: "renamed" });
+  return rewriteLinksTo(db, actor, page.id, title, stamp, provenance);
+}
+
+async function renameIn(db: Db, actor: Actor, page: FullPageRow, title: string, provenance?: Provenance) {
+  if (page.archived_at) throw new CrmError("invalid_input", "This doc is archived. Restore it before renaming.", 400);
+  if (page.kind === "daily") {
+    if (title === page.title) return 0;
+    throw new CrmError("invalid_input", "A daily note is named after its date, so it can't be renamed.", 400, { field: "title" });
+  }
+  return renameInside(db, actor, page, title, stampFor(actor, provenance), provenance);
+}
+
 export async function renameDoc(actor: Actor, id: string, title: unknown, provenance?: Provenance) {
   assertDocsWrite(actor);
   const next = checkTitle(title);
   return withActor(actor, async (db) => {
-    const page = await loadPage(db, actor, id, { lock: true });
-    if (page.archived_at) throw new CrmError("invalid_input", "This doc is archived. Restore it before renaming.", 400);
-    if (page.kind === "daily") throw new CrmError("invalid_input", "A daily note is named after its date, so it can't be renamed.", 400, { field: "title" });
-    const linksUpdated = next === page.title ? 0 : await renameInside(db, actor, page, next, stampFor(actor, provenance), provenance);
+    const linksUpdated = await renameIn(db, actor, await loadPage(db, actor, id, { lock: true }), next, provenance);
     return { doc: await docDetail(db, actor, id), linksUpdated };
   });
 }
@@ -669,20 +697,58 @@ export async function appendToDoc(actor: Actor, id: string, text: string, proven
   });
 }
 
+async function editIn(db: Db, actor: Actor, page: FullPageRow, edit: DocEdit, provenance?: Provenance) {
+  const before = page.content;
+  const after = applyDocEdit(page.content, edit);
+  await changeDocContent(db, actor, page, after, { provenance, summary: editSummary(edit) });
+  return before;
+}
+
+export type DocEditResult = { doc: DocDetail; diff: DocDiffLine[]; changed: { added: number; removed: number } };
+
 export async function editDoc(
   actor: Actor,
   id: string,
   edit: DocEdit,
   provenance?: Provenance,
   options: { assistantCanEdit?: boolean; baseRevision?: number } = {},
-): Promise<{ doc: DocDetail; diff: DocDiffLine[] }> {
+): Promise<DocEditResult> {
   assertDocsWrite(actor);
   return withActor(actor, async (db) => {
     const page = options.assistantCanEdit ? await lockForAssistant(db, actor, id) : await loadPage(db, actor, id, { lock: true });
-    const before = page.content;
-    await changeDocContent(db, actor, page, applyDocEdit(page.content, edit), { provenance, summary: editSummary(edit), baseRevision: options.baseRevision });
+    if (page.archived_at) throw new CrmError("invalid_input", "This doc is archived. Restore it before editing.", 400);
+    checkRevision(page, options.baseRevision);
+    const before = await editIn(db, actor, page, edit, provenance);
     const doc = await docDetail(db, actor, id);
-    return { doc, diff: lineDiff(before, doc.content) };
+    return { doc, diff: lineDiff(before, doc.content), changed: changeCounts(before, doc.content) };
+  });
+}
+
+export type DocUpdateInput = {
+  title?: string;
+  edits?: DocEdit[];
+  folderId?: string | null;
+  allowVisibilityChange?: boolean;
+  shared?: boolean;
+  baseRevision?: number;
+};
+
+export async function updateDoc(actor: Actor, id: string, input: DocUpdateInput, provenance?: Provenance) {
+  assertDocsWrite(actor);
+  const title = input.title === undefined ? undefined : checkTitle(input.title);
+  return withActor(actor, async (db) => {
+    const first = await loadPage(db, actor, id, { lock: true });
+    if (first.archived_at) throw new CrmError("invalid_input", "This doc is archived. Restore it before changing it.", 400);
+    checkRevision(first, input.baseRevision);
+    let linksUpdated = 0;
+    let visibility: VisibilityChange | null = null;
+    if (title !== undefined) linksUpdated = await renameIn(db, actor, first, title, provenance);
+    for (const edit of input.edits ?? []) await editIn(db, actor, await loadPage(db, actor, id, { lock: true }), edit, provenance);
+    if (input.folderId !== undefined) {
+      visibility = (await moveIn(db, actor, await loadPage(db, actor, id, { lock: true }), { folderId: input.folderId, allowVisibilityChange: input.allowVisibilityChange }, provenance)).visibility;
+    }
+    if (input.shared !== undefined) visibility = (await shareIn(db, actor, await loadPage(db, actor, id, { lock: true }), input.shared, provenance)).visibility;
+    return { doc: await docDetail(db, actor, id), visibility, linksUpdated };
   });
 }
 
@@ -701,6 +767,25 @@ export function visibilityError(after: DocVisibility, where: string) {
   );
 }
 
+async function moveIn(db: Db, actor: Actor, page: FullPageRow, input: { folderId: string | null; allowVisibilityChange?: boolean }, provenance?: Provenance) {
+  if (page.kind === "daily") throw new CrmError("invalid_input", "Daily notes stay in Daily notes and can't go in folders.", 400, { field: "folderId" });
+  if (page.archived_at) throw new CrmError("invalid_input", "This doc is archived. Restore it before moving it.", 400);
+  const folder = input.folderId ? await placeableFolder(db, actor, input.folderId, page.user_id) : null;
+  const before = visibilityOf(page.shared, page.effective_shared);
+  const afterShared = page.shared || Boolean(folder?.effective_shared);
+  const after = visibilityOf(page.shared, afterShared);
+  const change = visibilityChange(before, after);
+  if (!afterShared && !ownedBy(actor, page.user_id)) {
+    throw new CrmError("forbidden", `That would make it private to ${page.owner_name ?? "its owner"}, so only they can move it there.`, 403, { field: "folderId" });
+  }
+  if (change.changed && !input.allowVisibilityChange) throw visibilityError(after, folder ? folder.name : "no folder");
+  if ((page.folder_id ?? null) !== (folder?.id ?? null)) {
+    await db.query("update crm.pages set folder_id = $2 where id = $1", [page.id, folder?.id ?? null]);
+    await auditDoc(db, actor, "page.moved", { ...page, effective_shared: afterShared }, provenance, { folderId: folder?.id ?? null, previousFolderId: page.folder_id, visibility: after }, page.effective_shared);
+  }
+  return { visibility: change };
+}
+
 export async function moveDoc(
   actor: Actor,
   id: string,
@@ -709,47 +794,33 @@ export async function moveDoc(
 ): Promise<DocMoveResult> {
   assertDocsWrite(actor);
   return withActor(actor, async (db) => {
-    const page = await loadPage(db, actor, id, { lock: true });
-    if (page.kind === "daily") throw new CrmError("invalid_input", "Daily notes stay in Daily notes and can't go in folders.", 400, { field: "folderId" });
-    if (page.archived_at) throw new CrmError("invalid_input", "This doc is archived. Restore it before moving it.", 400);
-    const folder = input.folderId ? await placeableFolder(db, actor, input.folderId, page.user_id) : null;
-    const before = visibilityOf(page.shared, page.effective_shared);
-    const afterShared = page.shared || Boolean(folder?.effective_shared);
-    const after = visibilityOf(page.shared, afterShared);
-    const change = visibilityChange(before, after);
-    if (!afterShared && !ownedBy(actor, page.user_id)) {
-      throw new CrmError("forbidden", `That would make it private to ${page.owner_name ?? "its owner"}, so only they can move it there.`, 403, { field: "folderId" });
-    }
-    if (change.changed && !input.allowVisibilityChange) throw visibilityError(after, folder ? folder.name : "no folder");
-    if ((page.folder_id ?? null) !== (folder?.id ?? null)) {
-      await db.query("update crm.pages set folder_id = $2 where id = $1", [page.id, folder?.id ?? null]);
-      await auditDoc(db, actor, "page.moved", { ...page, effective_shared: afterShared }, provenance, { folderId: folder?.id ?? null, previousFolderId: page.folder_id, visibility: after }, page.effective_shared);
-    }
-    const moved = await loadPage(db, actor, id);
-    return { page: mapPage(actor, moved), visibility: change };
+    const { visibility } = await moveIn(db, actor, await loadPage(db, actor, id, { lock: true }), input, provenance);
+    return { page: mapPage(actor, await loadPage(db, actor, id)), visibility };
   });
+}
+
+async function shareIn(db: Db, actor: Actor, page: FullPageRow, shared: boolean, provenance?: Provenance) {
+  if (page.kind === "daily") throw new CrmError("forbidden", "Daily notes are always private, so they can't be shared.", 403);
+  const before = visibilityOf(page.shared, page.effective_shared);
+  if (page.shared === shared) return { after: page, visibility: visibilityChange(before, before) };
+  if (!shared && !ownedBy(actor, page.user_id)) {
+    throw new CrmError(
+      "forbidden",
+      page.user_id ? `Only ${page.owner_name ?? "its owner"} can make this doc private.` : "This doc has no owner, so it can't be made private. A member can copy it into a private doc instead.",
+      403,
+    );
+  }
+  await db.query("update crm.pages set shared = $2 where id = $1", [page.id, shared]);
+  const after = await loadPage(db, actor, page.id);
+  await auditDoc(db, actor, "page.shared", after, provenance, { shared, visibility: visibilityOf(after.shared, after.effective_shared) }, page.effective_shared);
+  return { after, visibility: visibilityChange(before, visibilityOf(after.shared, after.effective_shared)) };
 }
 
 export async function shareDoc(actor: Actor, id: string, shared: boolean, provenance?: Provenance) {
   assertDocsWrite(actor);
   return withActor(actor, async (db) => {
-    const page = await loadPage(db, actor, id, { lock: true });
-    if (page.kind === "daily") throw new CrmError("forbidden", "Daily notes are always private, so they can't be shared.", 403);
-    if (page.shared === shared) return { doc: await docDetail(db, actor, id), visibility: visibilityChange(visibilityOf(page.shared, page.effective_shared), visibilityOf(page.shared, page.effective_shared)) };
-    if (!shared && !ownedBy(actor, page.user_id)) {
-      throw new CrmError(
-        "forbidden",
-        page.user_id ? `Only ${page.owner_name ?? "its owner"} can make this doc private.` : "This doc has no owner, so it can't be made private. A member can copy it into a private doc instead.",
-        403,
-      );
-    }
-    await db.query("update crm.pages set shared = $2 where id = $1", [page.id, shared]);
-    const after = await loadPage(db, actor, id);
-    await auditDoc(db, actor, "page.shared", after, provenance, { shared, visibility: visibilityOf(after.shared, after.effective_shared) }, page.effective_shared);
-    return {
-      doc: await detail(db, actor, after),
-      visibility: visibilityChange(visibilityOf(page.shared, page.effective_shared), visibilityOf(after.shared, after.effective_shared)),
-    };
+    const { after, visibility } = await shareIn(db, actor, await loadPage(db, actor, id, { lock: true }), shared, provenance);
+    return { doc: await detail(db, actor, after), visibility };
   });
 }
 
@@ -759,6 +830,15 @@ export async function setAssistantCanEdit(actor: Actor, id: string, allowed: boo
   return withActor(actor, async (db) => {
     const page = await loadPage(db, actor, id, { lock: true });
     if (page.archived_at) throw new CrmError("invalid_input", "This doc is archived. Restore it first.", 400);
+    if (!ownedBy(actor, page.user_id)) {
+      throw new CrmError(
+        "forbidden",
+        page.user_id
+          ? `Only ${page.owner_name ?? "its owner"} can let the assistant edit this doc without asking.`
+          : "This doc has no owner, so the assistant always asks before editing it.",
+        403,
+      );
+    }
     await db.query("update crm.pages set assistant_can_edit = $2 where id = $1", [page.id, allowed]);
     return docDetail(db, actor, id);
   });
@@ -768,8 +848,8 @@ export async function assistantMayEdit(actor: Actor, id: string) {
   if (actor.type !== "user" || !isUuid(id)) return false;
   return withActor(actor, async (db) => {
     const result = await db.query<{ ok: boolean }>(
-      "select assistant_can_edit and archived_at is null as ok from crm.pages where id = $1 and workspace_id = $2",
-      [id, actor.workspaceId],
+      "select assistant_can_edit and archived_at is null and user_id = $3 as ok from crm.pages where id = $1 and workspace_id = $2",
+      [id, actor.workspaceId, actor.userId],
     );
     return result.rows[0]?.ok === true;
   });
@@ -777,7 +857,7 @@ export async function assistantMayEdit(actor: Actor, id: string) {
 
 export async function lockForAssistant(db: Db, actor: Actor, id: string) {
   const page = await loadPage(db, actor, id, { lock: true });
-  if (!page.assistant_can_edit || page.archived_at) {
+  if (!page.assistant_can_edit || page.archived_at || !ownedBy(actor, page.user_id)) {
     throw new CrmError("forbidden", "The assistant isn't allowed to edit this doc without asking any more. Propose the change for approval instead.", 403);
   }
   return page;
@@ -787,6 +867,7 @@ export async function archiveDoc(actor: Actor, id: string, provenance?: Provenan
   assertDocsWrite(actor);
   return withActor(actor, async (db) => {
     const page = await loadPage(db, actor, id, { lock: true });
+    if (page.kind === "daily") throw new CrmError("invalid_input", "Daily notes can't be archived. Clear its text instead, and it drops out of Daily notes.", 400);
     if (!page.archived_at) {
       await db.query("update crm.pages set archived_at = now() where id = $1", [page.id]);
       await auditDoc(db, actor, "page.archived", page, provenance, {});
@@ -937,7 +1018,7 @@ export async function listVersions(actor: Actor, pageId: string, limit = 100): P
     const page = await loadPage(db, actor, pageId);
     const result = await db.query<VersionRow>(
       `select ${VERSION_FIELDS} from ${VERSION_JOINS} where v.page_id = $1 order by v.created_at desc limit $2`,
-      [page.id, Math.min(500, Math.max(1, Math.trunc(limit)))],
+      [page.id, pagingNumber(limit, 100, 1, 500)],
     );
     return result.rows.map(mapVersion);
   });

@@ -43,6 +43,7 @@ export type DocFolder = {
   name: string;
   position: number;
   owner: DocPerson | null;
+  createdByAgent: DocPerson | null;
   ownedByMe: boolean;
   shared: boolean;
   effectiveShared: boolean;
@@ -60,6 +61,7 @@ export type DocSummary = {
   dailyDate: string | null;
   folderId: string | null;
   owner: DocPerson | null;
+  createdByAgent: DocPerson | null;
   ownedByMe: boolean;
   shared: boolean;
   effectiveShared: boolean;

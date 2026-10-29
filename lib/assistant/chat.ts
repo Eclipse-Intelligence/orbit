@@ -56,6 +56,7 @@ export type AssistantAction = {
   startedAt?: string;
   diff?: DocDiffLine[];
   unattended?: boolean;
+  baseRevision?: number;
 };
 
 export const UNATTENDED_NOTE = "Made without asking, because this doc lets the assistant edit it.";
@@ -898,6 +899,7 @@ export async function decideActions(
     const output = (await runTool(actor, chosenAlternative?.tool ?? call.function.name, parseArgs(call.function.arguments), {
       deadline: options.deadline - 20_000,
       callId: call.id,
+      baseRevision: action.baseRevision,
     })) as Record<string, unknown> | null;
     const failed = Boolean(output && typeof output === "object" && "error" in output);
     await insertMessage(actor, conversation.id, {

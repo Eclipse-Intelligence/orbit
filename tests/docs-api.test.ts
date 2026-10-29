@@ -39,7 +39,7 @@ describe("Docs REST API", () => {
   it("lists, searches, creates, reads, changes and archives shared docs only", async () => {
     await createDoc(mark, { title: "Mark private" });
     const folder = await createFolder(mark, { name: "Team", shared: true });
-    await createDoc(mark, { title: "Team plan", content: "Plan #q4", folderId: folder.id });
+    const plan = await createDoc(mark, { title: "Team plan", content: "Plan #q4", folderId: folder.id });
 
     const listed = (await (await listRoute(request("/docs"))).json()) as { data: { title: string }[] };
     assert.deepEqual(listed.data.map((doc) => doc.title), ["Team plan"]);
@@ -50,17 +50,20 @@ describe("Docs REST API", () => {
 
     const created = await createRoute(request("/docs", "POST", { title: "From the API", content: "One", folderId: folder.id, provenance: { sourceUrl: "https://example.test" } }));
     assert.equal(created.status, 201);
-    const doc = ((await created.json()) as { doc: { id: string; visibility: string; owner: { name: string } } }).doc;
-    assert.equal(doc.visibility, "shared_by_folder");
-    assert.equal(doc.owner.name, "Mark Ridgeon");
+    const doc = ((await created.json()) as { doc: { id: string; visibility: string; owner: { name: string } | null; createdByAgent: { name: string } | null } }).doc;
+    assert.equal(doc.visibility, "shared");
+    assert.equal(doc.owner, null);
+    assert.equal(doc.createdByAgent?.name, "API agent");
 
     const patched = await patchRoute(request(`/docs/${doc.id}`, "PATCH", { title: "From the API, renamed", append: "Two", find: "One", replace: "Uno" }), params(doc.id));
     assert.equal(patched.status, 200);
     assert.equal((await getDoc(mark, doc.id)).content, "Uno\n\nTwo");
     assert.equal((await getDoc(mark, doc.id)).title, "From the API, renamed");
 
-    const refused = await patchRoute(request(`/docs/${doc.id}`, "PATCH", { folderId: null }), params(doc.id));
+    const refused = await patchRoute(request(`/docs/${plan.id}`, "PATCH", { folderId: null }), params(plan.id));
     assert.equal(refused.status, 403);
+    const movedOut = await patchRoute(request(`/docs/${doc.id}`, "PATCH", { folderId: null }), params(doc.id));
+    assert.equal(movedOut.status, 200);
     const unknown = await patchRoute(request(`/docs/${doc.id}`, "PATCH", { colour: "red" }), params(doc.id));
     assert.equal(unknown.status, 400);
 

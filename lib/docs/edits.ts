@@ -57,6 +57,45 @@ function cleanTags(values: string[] | undefined) {
   return tags;
 }
 
+function lineStartAt(text: string, index: number) {
+  return index <= 0 ? 0 : text.lastIndexOf("\n", index - 1) + 1;
+}
+
+function lineEndAt(text: string, index: number) {
+  const end = text.indexOf("\n", index);
+  return end < 0 ? text.length : end;
+}
+
+function isBlankLine(text: string, start: number, end: number) {
+  return text.slice(start, end).trim() === "";
+}
+
+function dropEmptiedLine(text: string, at: number) {
+  const start = lineStartAt(text, at);
+  const end = lineEndAt(text, at);
+  if (!isBlankLine(text, start, end)) return text;
+  let runStart = start;
+  let runEnd = end;
+  let lines = 1;
+  while (runStart > 0) {
+    const previousStart = lineStartAt(text, runStart - 1);
+    if (!isBlankLine(text, previousStart, runStart - 1)) break;
+    runStart = previousStart;
+    lines += 1;
+  }
+  while (runEnd < text.length) {
+    const nextEnd = lineEndAt(text, runEnd + 1);
+    if (!isBlankLine(text, runEnd + 1, nextEnd)) break;
+    runEnd = nextEnd;
+    lines += 1;
+  }
+  if (runStart === 0 && runEnd === text.length) return "";
+  if (runStart === 0) return text.slice(runEnd + 1);
+  if (runEnd === text.length) return text.slice(0, runStart - 1);
+  if (lines === 1) return text.slice(0, runStart) + text.slice(runEnd + 1);
+  return text.slice(0, runStart) + text.slice(runEnd);
+}
+
 export function retag(content: string, add: string[] | undefined, remove: string[] | undefined) {
   const adding = cleanTags(add);
   const removing = new Set(cleanTags(remove));
@@ -71,9 +110,9 @@ export function retag(content: string, add: string[] | undefined, remove: string
       } else {
         while (from > 0 && (output[from - 1] === " " || output[from - 1] === "\t")) from -= 1;
       }
-      output = output.slice(0, from) + output.slice(to);
+      output = dropEmptiedLine(output.slice(0, from) + output.slice(to), from);
     }
-    output = output.replace(/\n[ \t]*\n[ \t]*\n+/g, "\n\n").replace(/\s+$/, "");
+    if (matches.length > 0 && content.endsWith("\n") && output !== "" && !output.endsWith("\n")) output += "\n";
   }
   const present = new Set(findTags(output).map((match) => match.tag));
   const missing = adding.filter((tag) => !present.has(tag));

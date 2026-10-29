@@ -3,8 +3,8 @@ import { CrmError } from "@/lib/crm/errors";
 import type { Actor, Provenance } from "@/lib/crm/types";
 import { parseInput } from "@/lib/crm/validation";
 import { searchDocs } from "@/lib/docs/search";
-import { archiveDoc, createDoc, editDoc, getDoc, listDocs, moveDoc, readDoc, renameDoc, shareDoc } from "@/lib/docs/store";
-import { DOC_SORTS, type DocSort } from "@/lib/docs/types";
+import { archiveDoc, createDoc, getDoc, listDocs, readDoc, updateDoc } from "@/lib/docs/store";
+import { DOC_SORTS, type DocEdit, type DocSort } from "@/lib/docs/types";
 
 const provenanceSchema = z.object({ source: z.string().max(200).nullable().optional(), sourceUrl: z.string().max(1000).nullable().optional() }).strict();
 
@@ -75,14 +75,25 @@ export async function patchDocFromBody(actor: Actor, id: string, body: unknown) 
     throw new CrmError("invalid_input", "Send content on its own, or append and find with replace, not both.", 400, { field: "content" });
   }
   const provenance = provenanceOf("update_doc", input.provenance);
-  let visibility = null;
-  if (input.title !== undefined) await renameDoc(actor, id, input.title, provenance);
-  if (input.content !== undefined) await editDoc(actor, id, { action: "replace", content: input.content }, provenance, { baseRevision: input.baseRevision });
-  if (input.find !== undefined && input.replace !== undefined) await editDoc(actor, id, { action: "edit", find: input.find, replace: input.replace, all: input.all }, provenance, { baseRevision: input.baseRevision });
-  if (input.append !== undefined) await editDoc(actor, id, { action: "append", content: input.append }, provenance);
-  if (input.folderId !== undefined) visibility = (await moveDoc(actor, id, { folderId: input.folderId, allowVisibilityChange: input.allowVisibilityChange }, provenance)).visibility;
-  if (input.shared !== undefined) visibility = (await shareDoc(actor, id, input.shared, provenance)).visibility;
-  return { doc: await getDoc(actor, id), ...(visibility ? { visibility } : {}) };
+  const edits: DocEdit[] = [
+    ...(input.content !== undefined ? [{ action: "replace" as const, content: input.content }] : []),
+    ...(input.find !== undefined && input.replace !== undefined ? [{ action: "edit" as const, find: input.find, replace: input.replace, all: input.all }] : []),
+    ...(input.append !== undefined ? [{ action: "append" as const, content: input.append }] : []),
+  ];
+  const result = await updateDoc(
+    actor,
+    id,
+    {
+      title: input.title,
+      edits,
+      folderId: input.folderId,
+      allowVisibilityChange: input.allowVisibilityChange,
+      shared: input.shared,
+      baseRevision: input.baseRevision,
+    },
+    provenance,
+  );
+  return { doc: result.doc, ...(result.visibility ? { visibility: result.visibility } : {}) };
 }
 
 export async function archiveDocById(actor: Actor, id: string) {

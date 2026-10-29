@@ -3,7 +3,7 @@ import { iso } from "@/lib/crm/mutate";
 import type { Actor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
 import { excerptFrom } from "@/lib/docs/markdown";
-import { assertDocsRead, visibilityOf } from "@/lib/docs/store";
+import { assertDocsRead, pagingNumber, visibilityOf } from "@/lib/docs/store";
 import type { DocKind, DocSearchHit } from "@/lib/docs/types";
 
 const SEARCH_LIMIT_MAX = 50;
@@ -53,7 +53,7 @@ export async function searchDocs(
 ): Promise<DocSearchHit[]> {
   assertDocsRead(actor);
   const text = query.replace(/\s+/g, " ").trim().slice(0, 200);
-  const limit = Math.min(SEARCH_LIMIT_MAX, Math.max(1, Math.trunc(options.limit ?? 20)));
+  const limit = pagingNumber(options.limit, 20, 1, SEARCH_LIMIT_MAX);
   const kinds = options.daily === false ? ["note"] : ["note", "daily"];
   return withActor(actor, async (db) => {
     if (!text) {
@@ -85,7 +85,7 @@ export async function searchDocs(
          where p.workspace_id = $1 and p.archived_at is null and p.kind = any($5::text[])
            and ($6::uuid is null or p.folder_id = $6)
            and (
-             lower(p.title) like '%' || q.pattern || '%' escape '\\'
+             p.title ilike '%' || q.pattern || '%' escape '\\'
              or p.title operator(${schema}.%) q.raw
              or q.raw operator(${schema}.<%) p.title
              or (q.ts is not null and p.search @@ q.ts)

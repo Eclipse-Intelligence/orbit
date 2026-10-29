@@ -1,7 +1,7 @@
 import { appTimeZone, zonedParts } from "@/lib/time";
 import type { DailyEntry } from "@/lib/docs/types";
 
-const ENTRY_LINE = /^(\d{2}:\d{2})(?: (.*))?$/;
+const ENTRY_LINE = /^((?:[01]\d|2[0-3]):[0-5]\d)(?: (.*))?$/;
 const DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
 function pad(value: number) {

@@ -3,14 +3,14 @@ import type { Provenance, UserActor } from "@/lib/crm/types";
 import type { CreateInput, Folder, Page, PageFilter, PageSort, ShareTarget, Visibility } from "@/lib/docs/client-types";
 import { isDailyDate } from "@/lib/docs/daily";
 import { createFolder, listFolders, moveFolder, renameFolder, shareFolder } from "@/lib/docs/folders";
-import { archiveDoc, createDoc, moveDoc, renameDoc, restoreDoc, restoreVersion, saveDoc, setAssistantCanEdit, shareDoc } from "@/lib/docs/store";
+import { archiveDoc, createDoc, moveDoc, pagingNumber, renameDoc, restoreDoc, restoreVersion, saveDoc, setAssistantCanEdit, shareDoc } from "@/lib/docs/store";
 import {
   docsActivity,
   docsBacklinks,
   docsDailyList,
   docsDailyNote,
   docsLinkTargets,
-  docsList,
+  docsListPage,
   docsMeetings,
   docsMentions,
   docsNav,
@@ -83,9 +83,11 @@ export const docsReads = {
   list: ({ actor, request }: DocsCall) => {
     const params = search(request);
     const sort = params.get("sort") as PageSort | null;
-    return docsList(actor, filterFrom(params), sort && SORTS.includes(sort) ? sort : "edited");
+    const offset = pagingNumber(params.get("offset"), 0, 0, 10_000);
+    const result = docsListPage(actor, filterFrom(params), sort && SORTS.includes(sort) ? sort : "edited", offset);
+    return params.get("paged") === "1" ? result : result.then((page) => page.pages);
   },
-  recent: ({ actor, request }: DocsCall) => docsRecent(actor, Number(search(request).get("limit") ?? 8) || 8),
+  recent: ({ actor, request }: DocsCall) => docsRecent(actor, pagingNumber(search(request).get("limit"), 8, 1, 50)),
   search: ({ actor, request }: DocsCall) => docsSearch(actor, search(request).get("q") ?? ""),
   page: ({ actor, params }: DocsCall) => requirePage(actor, params.id),
   versions: ({ actor, params }: DocsCall) => docsVersions(actor, params.id),

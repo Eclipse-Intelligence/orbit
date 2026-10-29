@@ -3,7 +3,6 @@ import { z } from "zod";
 import { CrmError } from "@/lib/crm/errors";
 import type { Actor, Provenance } from "@/lib/crm/types";
 import { appendToDailyNote, listDailyNotes, openDailyNote } from "@/lib/docs/daily-notes";
-import { diffCounts } from "@/lib/docs/diff";
 import { createFolder, listFolders } from "@/lib/docs/folders";
 import { searchDocs } from "@/lib/docs/search";
 import {
@@ -21,7 +20,7 @@ import {
   restoreVersion,
   shareDoc,
 } from "@/lib/docs/store";
-import { DOC_SORTS, type DocDetail, type DocSummary } from "@/lib/docs/types";
+import { DOC_CONTENT_MAX, DOC_SORTS, type DocDetail, type DocSummary } from "@/lib/docs/types";
 
 function toolResult(value: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
@@ -149,7 +148,7 @@ export function registerDocsTools(server: McpServer, actor: Actor) {
     {
       description:
         "Reads one doc as Markdown, 100,000 characters at a time from offset, with nextOffset until it is null. The first window also has its folder path, links, @ mentions and the docs that link to it. Docs link with [[Title]], tag with #tag and mention records as @[Name](company:id).",
-      inputSchema: { id: z.uuid(), offset: z.number().int().min(0).optional() },
+      inputSchema: { id: z.uuid(), offset: z.number().int().min(0).max(DOC_CONTENT_MAX).optional() },
     },
     async (args) =>
       run(async () => {
@@ -171,7 +170,7 @@ export function registerDocsTools(server: McpServer, actor: Actor) {
     "create_doc",
     {
       description:
-        "Creates a doc. It is private to a personal token's owner unless shared or put in a shared folder. Agent tokens can only create shared docs, which have no owner unless they go in a member's shared folder.",
+        "Creates a doc. It is private to a personal token's owner unless shared or put in a shared folder. Agent tokens always create shared docs with no owner, so they stay shared even if their folder is made private.",
       inputSchema: {
         title: z.string().max(300),
         content: z.string().max(1_000_000).optional(),
@@ -207,8 +206,11 @@ export function registerDocsTools(server: McpServer, actor: Actor) {
             ? { action: "edit" as const, find: args.find ?? "", replace: args.replace ?? "", all: args.all }
             : { action: args.mode, content: args.content ?? "" };
         if (edit.action === "append" && !edit.content.trim()) throw new CrmError("invalid_input", "Give the content to add.", 400, { field: "content" });
+        if (edit.action === "replace" && args.content === undefined) {
+          throw new CrmError("invalid_input", "Give content, the whole new text of the doc. To empty it on purpose, send content as an empty string.", 400, { field: "content" });
+        }
         const result = await editDoc(actor, args.id, edit, provenance("update_doc", args.provenanceUrl), { baseRevision: args.base_revision });
-        return { doc: summary(result.doc), changed: diffCounts(result.diff) };
+        return { doc: summary(result.doc), changed: result.changed };
       }),
   );
 

@@ -23,7 +23,7 @@ import { mailUnreadCount } from "@/lib/mail/threads";
 import { noteViewerAddress } from "@/lib/mail/tracking";
 import { clickupToken } from "@/lib/clickup";
 import { microsoftConfigured } from "@/lib/microsoft/oauth";
-import { docsSeed, loadDocsNav } from "@/lib/docs/server";
+import { docsSeed, emptyDocsNav } from "@/lib/docs/server";
 
 export const dynamic = "force-dynamic";
 
@@ -96,7 +96,7 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
       }
     });
   }
-  const [companyCount, openActionCount, attention, boards, notifications, approvals, mailUnread, docsNav] = await Promise.all([
+  const [companyCount, openActionCount, attention, boards, notifications, approvals, mailUnread] = await Promise.all([
     countCompanies(user),
     countOpenTasks(user, { mine: true }),
     listAttention(user),
@@ -104,12 +104,11 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
     listNotifications(user, 10),
     countApprovals(user),
     mailUnreadCount(user).catch(() => 0),
-    loadDocsNav(user),
   ]);
 
   return (
     <ShortcutsProvider>
-      <DocsProvider seed={docsSeed(user)} nav={docsNav}>
+      <DocsProvider seed={docsSeed(user)} nav={emptyDocsNav(user)}>
         <main className="relative flex h-dvh max-w-full overflow-hidden">
           <Sidebar
             boards={boards}

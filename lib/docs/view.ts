@@ -26,7 +26,7 @@ import { shortDay } from "@/lib/docs/format";
 import { dailyMeetings, listDailyNotes, openDailyNote } from "@/lib/docs/daily-notes";
 import { listFolders } from "@/lib/docs/folders";
 import { entryCount, excerptFrom, highlightIn, linkKey, tagTree } from "@/lib/docs/markdown";
-import { searchDocs } from "@/lib/docs/search";
+import { prefixQuery, searchDocs } from "@/lib/docs/search";
 import {
   assertDocsRead,
   docsMentioning,
@@ -51,6 +51,11 @@ function person(actor: UserActor, value: DocPerson | null): Participant {
   return personParticipant(value, actor.userId);
 }
 
+function ownerOf(actor: UserActor, owner: DocPerson | null, agent: DocPerson | null): Participant {
+  if (!owner && agent) return agentParticipant(agent.id, agent.name);
+  return person(actor, owner);
+}
+
 export function editorParticipant(actor: UserActor, ref: DocEditorRef | null, owner: DocPerson | null): Participant {
   if (!ref) return person(actor, owner);
   if (ref.editor === "assistant") return ASSISTANT_PARTICIPANT;
@@ -66,7 +71,7 @@ export function toFolder(actor: UserActor, folder: DocFolder): Folder {
     position: folder.position,
     visibility: folder.shared ? "shared" : "private",
     shared: folder.effectiveShared,
-    owner: person(actor, folder.owner),
+    owner: ownerOf(actor, folder.owner, folder.createdByAgent),
     noteCount: folder.pageCount,
   };
 }
@@ -85,7 +90,7 @@ export function toSummary(actor: UserActor, doc: DocSummary, entries = 0): PageS
     dailyDate: doc.dailyDate,
     visibility: doc.shared ? "shared" : "private",
     shared: doc.effectiveShared,
-    owner: person(actor, doc.owner),
+    owner: ownerOf(actor, doc.owner, doc.createdByAgent),
     tags: doc.tags,
     createdAt: doc.createdAt,
     updatedAt: doc.editedAt,
@@ -102,7 +107,7 @@ export function toPage(actor: UserActor, doc: DocDetail): Page {
     body: doc.content,
     revision: doc.revision,
     assistantCanEdit: doc.assistantCanEdit,
-    createdBy: person(actor, doc.owner),
+    createdBy: ownerOf(actor, doc.owner, doc.createdByAgent),
   };
 }
 
@@ -238,27 +243,36 @@ function searchHit(summary: PageSummary, hit: DocSearchHit, query: string): Sear
   return { page: summary, snippet, ...(highlightIn(snippet, query).matchTo > 0 ? highlightIn(snippet, query) : (first ?? { matchFrom: 0, matchTo: 0 })) };
 }
 
-export async function docsList(actor: UserActor, filter: PageFilter, sort: PageSort = "edited"): Promise<PageSummary[]> {
+export type PageListResult = { pages: PageSummary[]; hasMore: boolean };
+
+export async function docsListPage(actor: UserActor, filter: PageFilter, sort: PageSort = "edited", offset = 0): Promise<PageListResult> {
   if (filter.kind === "search") {
     const results = await docsSearch(actor, filter.query);
-    return [...results.titles, ...results.text.map((hit) => hit.page)];
+    const pages = [...results.titles, ...results.text.map((hit) => hit.page)];
+    return { pages, hasMore: false };
   }
   if (filter.kind === "daily") {
-    const [pages, days] = await Promise.all([listDocs(actor, { kind: "daily", sort, limit: LIST_LIMIT }), listDailyNotes(actor, { limit: LIST_LIMIT })]);
+    const [pages, days] = await Promise.all([listDocs(actor, { kind: "daily", sort, limit: LIST_LIMIT, offset }), listDailyNotes(actor, { limit: 400 })]);
     const entries = new Map(days.map((day) => [day.id, day.entryCount]));
-    return pages.data
-      .map((doc) => toSummary(actor, doc, entries.get(doc.id) ?? 0))
-      .sort((left, right) => (right.dailyDate ?? "").localeCompare(left.dailyDate ?? ""));
+    return {
+      pages: pages.data
+        .map((doc) => toSummary(actor, doc, entries.get(doc.id) ?? 0))
+        .sort((left, right) => (right.dailyDate ?? "").localeCompare(left.dailyDate ?? "")),
+      hasMore: pages.hasMore,
+    };
   }
-  const query =
-    filter.kind === "folder" ? { folderId: filter.folderId, deep: true } : filter.kind === "tag" ? { tag: filter.path, kind: "note" as const } : {};
+  const query = filter.kind === "folder" ? { folderId: filter.folderId, deep: true } : filter.kind === "tag" ? { tag: filter.path } : {};
   try {
-    const pages = await listDocs(actor, { ...query, sort, limit: LIST_LIMIT });
-    return pages.data.map((doc) => toSummary(actor, doc));
+    const pages = await listDocs(actor, { ...query, sort, limit: LIST_LIMIT, offset });
+    return { pages: pages.data.map((doc) => toSummary(actor, doc)), hasMore: pages.hasMore };
   } catch (error) {
-    if (notFound(error)) return [];
+    if (notFound(error)) return { pages: [], hasMore: false };
     throw error;
   }
+}
+
+export async function docsList(actor: UserActor, filter: PageFilter, sort: PageSort = "edited"): Promise<PageSummary[]> {
+  return (await docsListPage(actor, filter, sort)).pages;
 }
 
 export async function docsRecent(actor: UserActor, limit = 8): Promise<PageSummary[]> {
@@ -318,18 +332,24 @@ export async function docsLinkTargets(actor: UserActor, query: string, fromPageI
   const noteIds = hits.filter((hit) => hit.kind === "note" && hit.id !== from && hit.titleMatch && hit.title).slice(0, 5);
   const daily = hits.find((hit) => hit.kind === "daily" && hit.id !== from && hit.snippet);
   const pattern = text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const words = prefixQuery(text);
   const [summaries, folders, headings] = await Promise.all([
     noteIds.length ? listSummaries(actor, noteIds.map((hit) => hit.id)) : Promise.resolve([] as DocSummary[]),
     noteIds.length ? listFolders(actor) : Promise.resolve([] as DocFolder[]),
-    text.length >= 3
+    text.length >= 3 && words
       ? withActor(actor, async (db) => {
           const result = await db.query<HeadingRow>(
-            `select p.id, p.title, m.parts[1] as heading from crm.pages p
-             cross join lateral regexp_matches(left(p.content, 200000), '^\\s{0,3}#{1,6}\\s+([^\\n]*' || $2 || '[^\\n]*?)\\s*$', 'gin') as m(parts)
-             where p.workspace_id = $1 and p.archived_at is null and p.kind = 'note' and p.title <> '' and p.id is distinct from $3::uuid
-               and strpos(lower(p.content), lower($4)) > 0
-             order by p.edited_at desc limit 2`,
-            [actor.workspaceId, pattern, from, text],
+            `select c.id, c.title, m.parts[1] as heading from (
+               select p.id, p.title, p.edited_at, left(p.content, 200000) as content from crm.pages p
+               where p.workspace_id = $1 and p.archived_at is null and p.kind = 'note' and p.title <> '' and p.id is distinct from $3::uuid
+                 and p.search @@ to_tsquery('english', $4)
+                 and strpos(lower(left(p.content, 200000)), lower($5)) > 0
+               order by p.edited_at desc
+               limit 50
+             ) c
+             cross join lateral regexp_matches(c.content, '^\\s{0,3}#{1,6}\\s+([^\\n]*' || $2 || '[^\\n]*?)\\s*$', 'gin') as m(parts)
+             order by c.edited_at desc limit 2`,
+            [actor.workspaceId, pattern, from, words, text],
           );
           return result.rows;
         })

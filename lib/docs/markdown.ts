@@ -14,14 +14,19 @@ export type ParsedDoc = { links: ParsedLink[]; tags: string[]; mentions: Mention
 
 const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 const WIKILINK = /\[\[([^[\]\n]{1,400}?)\]\]/g;
-const MENTION = /@\[([^\]\n]{1,200})\]\((contact|company|task|opportunity|proposal):([0-9a-f-]{36})\)/g;
-const TAG = /(^|\s)#([\p{L}\p{N}_\-/]+)/gu;
+const MENTION = /@\[([^[\]\n]{1,200})\]\((contact|company|task|opportunity|proposal):([0-9a-f-]{36})\)/g;
+const TAG = /#([\p{L}\p{N}_\-/]+)/gu;
+const PARAGRAPH_BREAK = /\n[ \t]*\n/g;
+const LIST_ITEM = /^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)/;
+const ATX_HEADING = /^ {0,3}#{1,6}(?:[ \t]|$)/;
+const PLAIN_TEXT_MAX = 1_000_000;
+const INLINE_MARKUP = /[[<]/;
 export const TAG_BODY = /^#([\p{L}\p{N}_\-/]+)/u;
 export const ENTRY_TIME = /^([01]\d|2[0-3]):([0-5]\d)(?= |$)/;
 const LETTER = /\p{L}/u;
 
 function blank(text: string) {
-  return text.replace(/[^\n]/g, " ");
+  return text.includes("\n") ? text.replace(/[^\n]/g, " ") : " ".repeat(text.length);
 }
 
 function maskFences(content: string) {
@@ -29,7 +34,7 @@ function maskFences(content: string) {
   let open: { char: string; size: number } | null = null;
   return lines
     .map((line) => {
-      const fence = FENCE.exec(line);
+      const fence = line.includes("```") || line.includes("~~~") ? FENCE.exec(line) : null;
       if (open) {
         if (fence && fence[1][0] === open.char && fence[1].length >= open.size && line.trim().replace(/[`~]/g, "") === "") open = null;
         return blank(line);
@@ -43,47 +48,110 @@ function maskFences(content: string) {
     .join("\n");
 }
 
-function maskInlineCode(content: string) {
-  let output = "";
+export function inlineCodeRanges(content: string): [number, number][] {
+  const runs: { start: number; size: number }[] = [];
+  for (let index = content.indexOf("`"); index >= 0; index = content.indexOf("`", index)) {
+    let size = 0;
+    while (content[index + size] === "`") size += 1;
+    runs.push({ start: index, size });
+    index += size;
+  }
+  if (runs.length < 2) return [];
+  const nextSame = new Array<number>(runs.length).fill(-1);
+  const latest = new Map<number, number>();
+  for (let index = runs.length - 1; index >= 0; index -= 1) {
+    nextSame[index] = latest.get(runs[index].size) ?? -1;
+    latest.set(runs[index].size, index);
+  }
+  const breaks: number[] = [];
+  for (const match of content.matchAll(PARAGRAPH_BREAK)) breaks.push(match.index ?? 0);
+  const ranges: [number, number][] = [];
+  let breakAt = 0;
   let index = 0;
-  while (index < content.length) {
-    if (content[index] !== "`") {
-      output += content[index];
+  while (index < runs.length) {
+    const open = runs[index];
+    const close = nextSame[index];
+    const after = open.start + open.size;
+    while (breakAt < breaks.length && breaks[breakAt] < after) breakAt += 1;
+    if (close < 0 || (breakAt < breaks.length && breaks[breakAt] < runs[close].start)) {
       index += 1;
       continue;
     }
-    let size = 0;
-    while (content[index + size] === "`") size += 1;
-    const ticks = "`".repeat(size);
-    let search = index + size;
-    let close = -1;
-    while (search < content.length) {
-      const found = content.indexOf(ticks, search);
-      if (found < 0) break;
-      const paragraphBreak = content.slice(index + size, found).search(/\n[ \t]*\n/);
-      if (paragraphBreak >= 0) break;
-      let after = found + size;
-      if (content[after] === "`") {
-        while (content[after] === "`") after += 1;
-        search = after;
-        continue;
-      }
-      close = found;
-      break;
-    }
-    if (close < 0) {
-      output += ticks;
-      index += size;
+    ranges.push([open.start, runs[close].start + runs[close].size]);
+    index = close + 1;
+  }
+  return ranges;
+}
+
+function blankRanges(content: string, ranges: [number, number][]) {
+  if (ranges.length === 0) return content;
+  let output = "";
+  let last = 0;
+  for (const [from, to] of ranges) {
+    output += content.slice(last, from) + blank(content.slice(from, to));
+    last = to;
+  }
+  return output + content.slice(last);
+}
+
+function maskInlineCode(content: string) {
+  return blankRanges(content, inlineCodeRanges(content));
+}
+
+function indentWidth(line: string) {
+  let width = 0;
+  for (const char of line) {
+    if (char === " ") width += 1;
+    else if (char === "\t") width += 4 - (width % 4);
+    else break;
+  }
+  return width;
+}
+
+function maskIndentedCode(content: string) {
+  const lines = content.split("\n");
+  let previousBlank = true;
+  let previousCode = false;
+  let previousHeading = false;
+  let inList = false;
+  let changed = false;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (line.trim() === "") {
+      previousBlank = true;
       continue;
     }
-    output += blank(content.slice(index, close + size));
-    index = close + size;
+    const indent = indentWidth(line);
+    if (indent >= 4 && !inList && (previousBlank || previousCode || previousHeading)) {
+      lines[index] = blank(line);
+      changed = true;
+      previousCode = true;
+      previousHeading = false;
+      previousBlank = false;
+      continue;
+    }
+    if (indent < 4) inList = LIST_ITEM.test(line) || (inList && !previousBlank);
+    previousHeading = indent < 4 && ATX_HEADING.test(line);
+    previousCode = false;
+    previousBlank = false;
   }
-  return output;
+  return changed ? lines.join("\n") : content;
+}
+
+function maskComments(content: string) {
+  const ranges: [number, number][] = [];
+  let from = content.indexOf("<!--");
+  while (from >= 0) {
+    const close = content.indexOf("-->", from + 4);
+    if (close < 0) break;
+    ranges.push([from, close + 3]);
+    from = content.indexOf("<!--", close + 3);
+  }
+  return blankRanges(content, ranges);
 }
 
 export function maskCode(content: string) {
-  return maskInlineCode(maskFences(content));
+  return maskComments(maskInlineCode(maskIndentedCode(maskFences(content))));
 }
 
 export function cleanTitle(value: string) {
@@ -129,7 +197,7 @@ export function normaliseTag(value: string) {
     .replace(/^#+/, "")
     .toLowerCase()
     .replace(/\/{2,}/g, "/")
-    .replace(/^\/+|\/+$/g, "");
+    .replace(/^\/+|[-/]+$/g, "");
   if (!tag || tag.length > DOC_TAG_MAX) return null;
   if (!/^[\p{L}\p{N}_\-/]+$/u.test(tag)) return null;
   if (!LETTER.test(tag)) return null;
@@ -146,10 +214,12 @@ export function findTags(content: string, masked = maskCode(content)): TagMatch[
   const text = maskForTags(masked);
   const found: TagMatch[] = [];
   for (const match of text.matchAll(TAG)) {
-    const start = (match.index ?? 0) + match[1].length;
-    const tag = normaliseTag(match[2]);
+    const start = match.index ?? 0;
+    if (!isTagBoundary(start === 0 ? "" : content[start - 1])) continue;
+    const body = match[1].replace(/[-/]+$/, "");
+    const tag = body ? normaliseTag(body) : null;
     if (!tag) continue;
-    found.push({ start, end: start + 1 + match[2].length, tag });
+    found.push({ start, end: start + 1 + body.length, tag });
   }
   return found;
 }
@@ -186,19 +256,33 @@ export function rewriteLinkTitle(content: string, from: string, to: string) {
   return { content: count ? output + content.slice(last) : content, count };
 }
 
-export function plainText(content: string) {
-  return maskFences(content)
+function inlineText(segment: string) {
+  if (!INLINE_MARKUP.test(segment)) return segment;
+  return segment
     .replace(MENTION, (_whole, name: string) => name)
     .replace(WIKILINK, (_whole, inner: string) => {
       const parts = splitTarget(inner);
       return parts.label ?? parts.target;
     })
-    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/<[^>\n]+>/g, " ")
-    .replace(/^ {0,3}#{1,6}\s+/gm, "")
-    .replace(/^\s*>\s?/gm, "")
-    .replace(/^\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?/gm, "")
+    .replace(/!\[([^[\]\n]*)\]\([^()\n]*\)/g, "$1")
+    .replace(/\[([^[\]\n]*)\]\([^()\n]*\)/g, "$1")
+    .replace(/<[^<>\n]+>/g, " ");
+}
+
+export function plainText(content: string) {
+  const source = content.length > PLAIN_TEXT_MAX ? content.slice(0, PLAIN_TEXT_MAX) : content;
+  const lines = maskFences(source)
+    .replace(/^ {0,3}#{1,6}[ \t]+/gm, "")
+    .replace(/^[ \t]*>[ \t]?/gm, "")
+    .replace(/^[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?/gm, "");
+  let text = "";
+  let last = 0;
+  for (const [from, to] of inlineCodeRanges(lines)) {
+    text += inlineText(lines.slice(last, from)) + lines.slice(from, to);
+    last = to;
+  }
+  text += inlineText(lines.slice(last));
+  return text
     .replace(/[*_~`]+/g, "")
     .replace(/\s+/g, " ")
     .trim();

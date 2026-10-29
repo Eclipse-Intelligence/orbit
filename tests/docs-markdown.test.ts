@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { appendDailyEntry, isDailyDate, localDate, parseDailyEntries, shiftDate } from "@/lib/docs/daily";
-import { diffCounts, lineDiff } from "@/lib/docs/diff";
+import { changeCounts, diffCounts, lineDiff } from "@/lib/docs/diff";
 import { appendText, applyDocEdit, findAndReplace, retag } from "@/lib/docs/edits";
-import { excerptFrom, maskCode, normaliseTag, parseDoc, parseLinks, parseMentions, parseTags, rewriteLinkTitle, wordCount } from "@/lib/docs/markdown";
+import { excerptFrom, maskCode, normaliseTag, parseDoc, parseLinks, parseMentions, parseTags, plainText, rewriteLinkTitle, wordCount } from "@/lib/docs/markdown";
 
 const ACME = "11111111-1111-4111-8111-111111111111";
 const LENA = "22222222-2222-4222-8222-222222222222";
@@ -71,11 +71,11 @@ describe("doc tags", () => {
       "```",
       "#fenced",
       "```",
-      "    #indented-still-counts",
+      "    #indented-code",
       "[[Note #inside]] and @[Name #x](company:" + ACME + ")",
       "## Plan #q4",
     ].join("\n");
-    assert.deepEqual(parseTags(content), ["real", "indented-still-counts", "q4"]);
+    assert.deepEqual(parseTags(content), ["real", "q4"]);
   });
 
   it("trims slashes and rejects bad tags", () => {
@@ -160,4 +160,69 @@ describe("daily notes format", () => {
     assert.equal(wordCount(`## Plan\n- [ ] Ship it with @[Acme](company:${ACME}) and [[Q4 plan|the plan]]`), 8);
     assert.equal(excerptFrom("# Title\n**Bold** and _it_"), "Title Bold and it");
   });
+});
+
+describe("server and editor agree on what is a tag or link", () => {
+  it("needs a real boundary before a tag, drops trailing dashes and slashes, and skips indented code and comments", () => {
+    assert.deepEqual(parseTags("[[A]]#glued and `x`#glued2 and #trail- and #slash/ and #todo-- end"), ["trail", "slash", "todo"]);
+    assert.deepEqual(parseTags("\n    #indented [[Code link]]\n\npara\n    #lazy-continuation"), ["lazy-continuation"]);
+    assert.deepEqual(parseLinks("\n    [[In code]]\n\n[[Outside]]").map((link) => link.target), ["Outside"]);
+    assert.deepEqual(parseTags("- item\n\n    #in-list"), ["in-list"]);
+    assert.deepEqual(parseTags("# Heading\n    #after-heading"), []);
+    assert.deepEqual(parseTags("<!-- #comment [[Hidden]] -->\n#real and <!-- #inline --> #after"), ["real", "after"]);
+    assert.deepEqual(parseLinks("<!--\n[[Hidden]]\n-->\n[[Shown]]").map((link) => link.target), ["Shown"]);
+    assert.equal(normaliseTag("follow-up-"), "follow-up");
+  });
+});
+
+describe("retagging leaves the rest of the doc alone", () => {
+  it("collapses blank lines only where a tag line was removed", () => {
+    const code = "Intro\n\n```\na\n\n\n\nb\n```\n\n\n\nOutro\n";
+    assert.equal(retag(code, [], ["missing"]), code);
+    assert.equal(retag(`Intro\n\n#gone\n\n\nKept\n\n\n\nEnd`, [], ["gone"]), "Intro\n\nKept\n\n\n\nEnd");
+    assert.equal(retag("Line one\n#gone\nLine two", [], ["gone"]), "Line one\nLine two");
+    assert.equal(retag("Body\n\n#gone\n", [], ["gone"]), "Body\n");
+    assert.equal(retag("#gone\n\nBody", [], ["gone"]), "Body");
+    assert.equal(retag(`${code}\n#gone`, [], ["gone"]), code.replace(/\n+$/, ""));
+  });
+});
+
+describe("full change counts", () => {
+  it("counts the whole change even when the shown diff is cut short", () => {
+    const before = Array.from({ length: 1000 }, (_, index) => `a${index}`).join("\n");
+    const after = Array.from({ length: 1000 }, (_, index) => `b${index}`).join("\n");
+    assert.deepEqual(changeCounts(before, after), { added: 1000, removed: 1000 });
+    assert.notDeepEqual(diffCounts(lineDiff(before, after, { maxLines: 200 })), { added: 1000, removed: 1000 });
+  });
+});
+
+describe("parsing stays fast on hostile text", () => {
+  const size = 1_000_000;
+  const inputs: Record<string, string> = {
+    brackets: "[".repeat(size),
+    "unclosed links": "[a](".repeat(size / 4),
+    "unclosed images": "![".repeat(size / 2),
+    mentions: "@[".repeat(size / 2),
+    "wiki links": "[[a".repeat(size / 3),
+    "angle brackets": "<".repeat(size),
+    "blank lines": "\n".repeat(size),
+    "spaced lines": " \n".repeat(size / 2),
+    "backtick pairs": "``a".repeat(size / 3),
+    "growing backtick runs": Array.from({ length: 1000 }, (_, index) => `${"`".repeat(index + 1)}x`).join(" ").repeat(2),
+    fences: "```\n".repeat(size / 4),
+    comments: "<!--".repeat(size / 4),
+    "indented lines": "    a\n".repeat(size / 6),
+    "list markers": "- ".repeat(size / 2),
+    mixed: "[x](y [[z @[w `q <p #t ".repeat(size / 24),
+  };
+  for (const [name, text] of Object.entries(inputs)) {
+    it(`counts words and parses 1MB of ${name} in well under a second`, () => {
+      for (const run of [wordCount, parseDoc, plainText] as ((value: string) => unknown)[]) {
+        const started = performance.now();
+        run(text);
+        const took = performance.now() - started;
+        assert.ok(took < 500, `${run.name} took ${Math.round(took)}ms`);
+      }
+    });
+  }
 });

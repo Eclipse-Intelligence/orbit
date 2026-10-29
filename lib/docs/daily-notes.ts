@@ -32,11 +32,16 @@ async function ensureDaily(db: Db, actor: UserActor, date: string) {
      on conflict (workspace_id, user_id, daily_date) where kind = 'daily' do nothing`,
     [actor.workspaceId, actor.userId, date],
   );
-  const result = await db.query<{ id: string }>(
+  await db.query(
+    `update crm.pages set archived_at = null
+     where workspace_id = $1 and user_id = $2 and kind = 'daily' and daily_date = $3::date and archived_at is not null`,
+    [actor.workspaceId, actor.userId, date],
+  );
+  const found = await db.query<{ id: string }>(
     "select id from crm.pages where workspace_id = $1 and user_id = $2 and kind = 'daily' and daily_date = $3::date",
     [actor.workspaceId, actor.userId, date],
   );
-  return result.rows[0].id;
+  return found.rows[0].id;
 }
 
 export async function dailyMeetings(actor: UserActor, date: string): Promise<DailyMeeting[]> {
@@ -114,9 +119,7 @@ export async function appendToDailyNote(
   if (!entry) throw new CrmError("invalid_input", "Say what to write in the daily note.", 400, { field: "text" });
   const page = await withActor(owner, async (db) => {
     const id = await ensureDaily(db, owner, day);
-    const current = await loadPage(db, owner, id, { lock: true });
-    if (current.archived_at) await db.query("update crm.pages set archived_at = null where id = $1", [id]);
-    const fresh = current.archived_at ? await loadPage(db, owner, id, { lock: true }) : current;
+    const fresh = await loadPage(db, owner, id, { lock: true });
     await changeDocContent(db, owner, fresh, appendDailyEntry(fresh.content, localTime(now), entry), { provenance, summary: "Added an entry" });
     return docDetail(db, owner, id);
   });

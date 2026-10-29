@@ -1,5 +1,6 @@
 import type { PageFilter } from "@/lib/docs/client-types";
 import { companyHref, contactHref, dealHref } from "@/lib/crm/hrefs";
+import { isDailyDate } from "@/lib/docs/daily";
 import type { MentionKind } from "@/lib/mentions";
 
 export type DocsRoute = {
@@ -8,8 +9,6 @@ export type DocsRoute = {
   date: string | null;
   level: "home" | "list" | "note";
 };
-
-const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 function decode(segment: string) {
   try {
@@ -44,7 +43,7 @@ export function parseDocsRoute(pathname: string, search: URLSearchParams | strin
   if (head === "folder" && rest[0]) return { list: { kind: "folder", folderId: rest[0] }, pageId: null, date: null, level: "list" };
   if (head === "tag" && rest.length) return { list: { kind: "tag", path: rest.join("/") }, pageId: null, date: null, level: "list" };
   if (head === "daily") {
-    const date = rest[0] && DATE.test(rest[0]) ? rest[0] : null;
+    const date = isDailyDate(rest[0]) ? rest[0] : null;
     return { list: { kind: "daily" }, pageId: null, date, level: date ? "note" : "list" };
   }
   return { list: contextList(), pageId: head, date: null, level: "note" };

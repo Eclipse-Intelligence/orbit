@@ -65,6 +65,9 @@ describe("Docs over MCP", () => {
       assert.deepEqual(updated.changed, { added: 1, removed: 1 });
       const stale = await mcp.call("update_doc", { id: created.id, mode: "append", content: "x", base_revision: 1 });
       assert.match(stale.error ?? "", /^conflict: This doc changed/);
+      assert.match((await mcp.call("update_doc", { id: created.id, mode: "replace" })).error ?? "", /^invalid_input: Give content, the whole new text/);
+      assert.equal((await getDoc(mark, created.id)).content, "Hi [[Other]] #clients/acme");
+      assert.match((await mcp.call("read_doc", { id: created.id, offset: 1e12 })).error ?? "", /offset|too_big|Too big|less than/i);
       const versions = (await mcp.call("list_doc_versions", { id: created.id })).value!.versions as { id: string; reason: string; by: { editor: string; name: string; personName: string } }[];
       assert.deepEqual(versions.map((version) => version.reason), ["edited", "created"]);
       assert.equal(versions[0].by.name, "MCP");

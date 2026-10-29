@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useMemo, type ReactNode } from "react";
+import { usePathname } from "next/navigation";
 import { searchMentionsAction } from "@/app/(crm)/search";
 import ConfirmDialog from "@/components/_ui/confirm-dialog";
 import { useShortcut } from "@/components/shortcuts/shortcuts-provider";
 import { DocsContext, useDocsNavigate } from "@/components/docs/use-docs";
 import type { DocsNav, DocsSeed } from "@/lib/docs/client-types";
 import { connectDocs } from "@/lib/docs/connection";
-import { dailyHref, pageHref } from "@/lib/docs/routes";
+import { dailyHref, isDocsPath, pageHref } from "@/lib/docs/routes";
 import { commitAll, retryOfflineSaves, useDocsStore, type VisibilityPrompt } from "@/stores/docs-store";
 
 function visibilityText(prompt: VisibilityPrompt) {
@@ -75,14 +76,30 @@ function DocsShortcuts() {
 export default function DocsProvider({ seed, nav, children }: { seed: DocsSeed; nav: DocsNav; children: ReactNode }) {
   const value = useMemo(() => ({ seed, nav }), [seed, nav]);
   const focus = useDocsStore((state) => state.focus);
+  const onDocs = isDocsPath(usePathname() ?? "");
 
   useLayoutEffect(() => {
     connectDocs({
       recordSearch: async (query) =>
         (await searchMentionsAction(query)).map((option) => ({ kind: option.kind, id: option.id, name: option.name, detail: option.detail ?? null })),
     });
-    useDocsStore.getState().init(seed, nav);
-  }, [seed, nav]);
+    if (!onDocs) return;
+    const store = useDocsStore.getState();
+    if (store.ready) return;
+    store.init(seed, store.nav ?? nav);
+    void store.refreshNav();
+  }, [seed, nav, onDocs]);
+
+  useEffect(() => {
+    if (onDocs || useDocsStore.getState().nav) return;
+    const load = () => void useDocsStore.getState().refreshNav();
+    if (typeof window.requestIdleCallback === "function") {
+      const handle = window.requestIdleCallback(load, { timeout: 3000 });
+      return () => window.cancelIdleCallback(handle);
+    }
+    const timer = window.setTimeout(load, 1500);
+    return () => window.clearTimeout(timer);
+  }, [onDocs]);
 
   useEffect(() => {
     if (focus) document.documentElement.dataset.docsFocus = "";

@@ -1,5 +1,5 @@
 import { withActor } from "@/lib/crm/context";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, isPgError } from "@/lib/crm/errors";
 import { iso, isUuid, recordAudit } from "@/lib/crm/mutate";
 import type { Actor, Provenance } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
@@ -20,12 +20,17 @@ type FolderRow = {
   updated_at: Date;
   archived_at: Date | null;
   page_count: number;
+  parent_visible: boolean;
+  created_by_agent_id: string | null;
+  creator_agent_name: string | null;
 };
 
 const FOLDER_SELECT = `select f.id, f.workspace_id, f.parent_id, f.name, f.position, f.user_id, coalesce(nullif(o.full_name, ''), o.email) as owner_name,
   f.shared, f.effective_shared, f.created_at, f.updated_at, f.archived_at,
-  (select count(*)::int from crm.pages p where p.folder_id = f.id and p.archived_at is null) as page_count
-  from crm.page_folders f left join crm.profiles o on o.id = f.user_id`;
+  (select count(*)::int from crm.pages p where p.folder_id = f.id and p.archived_at is null) as page_count,
+  (f.parent_id is null or exists (select 1 from crm.page_folders up where up.id = f.parent_id)) as parent_visible,
+  f.created_by_agent_id, creator.name as creator_agent_name
+  from crm.page_folders f left join crm.profiles o on o.id = f.user_id left join crm.agents creator on creator.id = f.created_by_agent_id`;
 
 const NOT_FOUND = "That folder doesn't exist, or it's private to someone else.";
 const DEFAULT_PROVENANCE: Provenance = { operation: "docs" };
@@ -33,10 +38,11 @@ const DEFAULT_PROVENANCE: Provenance = { operation: "docs" };
 function mapFolder(actor: Actor, row: FolderRow): DocFolder {
   return {
     id: row.id,
-    parentId: row.parent_id,
+    parentId: row.parent_visible ? row.parent_id : null,
     name: row.name,
     position: row.position,
     owner: row.user_id ? { id: row.user_id, name: row.owner_name ?? "Former member" } : null,
+    createdByAgent: row.created_by_agent_id ? { id: row.created_by_agent_id, name: row.creator_agent_name ?? "Agent" } : null,
     ownedByMe: actor.type === "user" && row.user_id === actor.userId,
     shared: row.shared,
     effectiveShared: row.effective_shared,
@@ -98,11 +104,8 @@ export async function createFolder(actor: Actor, input: { name: unknown; parentI
   const name = checkName(input.name);
   return withActor(actor, async (db) => {
     const parent = input.parentId ? await placeableFolder(db, actor, input.parentId, actor.type === "user" ? actor.userId : null) : null;
-    const owner = actor.type === "user" ? actor.userId : parent?.user_id ?? null;
+    const owner = actor.type === "user" ? actor.userId : null;
     const shared = owner === null ? true : input.shared === true;
-    if (actor.type === "agent" && !shared && !parent?.effective_shared) {
-      throw new CrmError("forbidden", "Agent tokens can only create shared folders.", 403);
-    }
     const inserted = await db.query<{ id: string }>(
       `insert into crm.page_folders (workspace_id, user_id, parent_id, name, position, shared, created_by_agent_id)
        values ($1, $2, $3, $4, $5, $6, $7) returning id`,
@@ -169,7 +172,7 @@ export async function moveFolder(
         await db.query("update crm.page_folders set parent_id = $2 where id = $1", [folder.id, parent?.id ?? null]);
       } catch (error) {
         if ((error as { code?: string }).code === "23514") throw new CrmError("invalid_input", "A folder can't go inside one of its own folders.", 400, { field: "parentId" });
-        throw error;
+        throw busyError(error);
       }
     }
     await placeAmongSiblings(db, actor, folder.id, parent?.id ?? null, input.index);
@@ -177,6 +180,13 @@ export async function moveFolder(
     if (moving) await auditFolder(db, actor, "page_folder.moved", moved, provenance, { parentId: moved.parent_id, previousParentId: folder.parent_id, visibility: after }, folder.effective_shared);
     return { folder: mapFolder(actor, moved), visibility: change };
   });
+}
+
+function busyError(error: unknown) {
+  if (isPgError(error) && error.code === "40P01") {
+    return new CrmError("conflict", "Someone else was changing these folders at the same moment. Try again.", 409);
+  }
+  return error;
 }
 
 async function sharing(db: Db, folder: FolderRow): Promise<FolderSharing> {
@@ -190,7 +200,8 @@ async function sharing(db: Db, folder: FolderRow): Promise<FolderSharing> {
        (select count(*)::int from crm.pages p where p.folder_id in (select id from tree) and p.archived_at is null) as docs,
        (select count(*)::int - 1 from tree) as folders,
        (select count(*)::int from crm.pages p where p.folder_id in (select id from tree) and p.archived_at is null and p.shared) as shared_on_their_own,
-       (select count(*)::int from crm.pages p where p.folder_id in (select id from tree) and p.archived_at is null and p.user_id is distinct from $2) as owned_by_others`,
+       (select count(*)::int from crm.pages p where p.folder_id in (select id from tree) and p.archived_at is null and p.user_id is distinct from $2)
+         + (select count(*)::int from crm.page_folders f where f.id in (select id from tree) and f.id <> $1 and f.archived_at is null and f.user_id is distinct from $2) as owned_by_others`,
     [folder.id, folder.user_id],
   );
   const row = result.rows[0];
@@ -223,7 +234,11 @@ export async function shareFolder(actor: Actor, id: string, shared: boolean, pro
         );
       }
       const before = await sharing(db, folder);
-      await db.query("update crm.page_folders set shared = $2 where id = $1", [folder.id, shared]);
+      try {
+        await db.query("update crm.page_folders set shared = $2 where id = $1", [folder.id, shared]);
+      } catch (error) {
+        throw busyError(error);
+      }
       const after = await loadFolder(db, actor, id);
       await auditFolder(db, actor, "page_folder.shared", after, provenance, { shared, docs: before.docs, folders: before.folders }, folder.effective_shared);
       return { folder: mapFolder(actor, after), sharing: { ...before, shared: after.shared, effectiveShared: after.effective_shared } };

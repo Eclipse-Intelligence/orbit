@@ -3,7 +3,7 @@ import type { DocsNav, DocsSeed, Page, PageFilter, PageSummary } from "@/lib/doc
 import { localDate } from "@/lib/docs/daily";
 import { personParticipant } from "@/lib/docs/participants";
 import type { DocsRoute } from "@/lib/docs/routes";
-import { docsDailyNote, docsList, docsNav, docsPage } from "@/lib/docs/view";
+import { docsDailyNote, docsList, docsPage } from "@/lib/docs/view";
 
 export type DocsInitial = {
   list: PageFilter;
@@ -24,15 +24,6 @@ export function emptyDocsNav(user: UserActor): DocsNav {
     today: localDate(),
     todayNote: null,
   };
-}
-
-export async function loadDocsNav(user: UserActor): Promise<DocsNav> {
-  try {
-    return await docsNav(user);
-  } catch (error) {
-    console.error("Docs nav didn't load", error);
-    return emptyDocsNav(user);
-  }
 }
 
 export async function loadDocsInitial(user: UserActor, route: DocsRoute): Promise<DocsInitial> {
