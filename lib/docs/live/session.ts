@@ -501,6 +501,8 @@ export class LiveSession<Summary = unknown> {
     this.channelToken = null;
     this.joined = false;
     channel?.close();
+    const others = [...this.awareness.getStates().keys()].filter((clientId) => clientId !== this.clientId);
+    if (others.length > 0) removeAwarenessStates(this.awareness, others, LEAVE);
   }
 
   private ownBeyond(vector: Uint8Array) {

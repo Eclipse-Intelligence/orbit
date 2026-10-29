@@ -194,7 +194,7 @@ describe("live sessions", () => {
     await until(() => markLive.status === "live" && priyaLive.status === "live", "both live");
     hub.mute(markTransport.id);
     type(markLive, "end", " typed while the network dropped it");
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await new Promise((resolve) => setTimeout(resolve, 12));
     hub.unmute(markTransport.id);
     await until(() => liveText(priyaLive.doc).toString() === "Base typed while the network dropped it", "priya pulls the missed change");
   });
