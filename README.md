@@ -505,9 +505,25 @@ Each record is handled on its own; when some fail, the notice says how many and 
 
 The Quiet page (`/quiet`, `G` then `Q`) lists up to 100 companies with no interaction in the last 21 days, or none at all, with when you were last in touch and how many open tasks each has.
 
+## Docs
+
+Docs (`/docs`) holds Markdown notes, written in a live preview editor where the Markdown symbols show only on the line you are on. Every note and folder is private to the person who made it until they share it with the workspace from the Private or Shared button (shared means everyone can read and edit). The sidebar lists Daily notes, your folders, folders teammates shared (with their avatar) and your tags.
+
+- **Links.** `[[` links another note, with a picker of notes, headings and daily notes, and Create when nothing matches. Renaming a note rewrites the links to it. The right panel (`⌘ \`) shows backlinks, unlinked mentions, the records in the note and its tags.
+- **Tags.** `#tag` anywhere in the text, nested with `/` (`#clients/acme`). Tags never change who can see a note.
+- **Records.** `@` mentions a company, person, opportunity, task or proposal. Company, contact and opportunity pages have a Notes section listing the notes that mention them, and its New note starts a note with the mention.
+- **Daily notes.** One private note per day (`/docs/daily/<date>`, `G` then `D` for today), with a calendar, the day's meetings, and a line that adds a timed entry.
+- **Moves.** Moving a note or folder into a shared folder, or out of one, asks first, because it changes who can see it.
+- **History.** Orbit saves a version every 10 minutes while you write, on every rename and before every assistant or agent edit. Version history shows who made each one and the changes, and Restore brings one back as a new version.
+- **Saving.** Notes save as you type and keep unsaved text on the device if the connection drops. If someone else saved the note while you were editing, Orbit keeps your text and offers Keep mine (saved as a new version, with theirs in the history) or Use theirs.
+- **The assistant.** It reads your docs and shared ones through Knowledge and changes them with an approval card that shows the lines it adds and removes. A note's More menu has "Let the assistant edit without asking"; edits made that way are marked on the card and the note shows "Orbit assistant is writing" for a minute.
+- **Focus.** `⌘ ⇧ ↵` hides everything but the note; `⌘ ⇧ F` searches Docs; `C` then `N` creates a note; `⌘ K` lists notes first while you are in Docs.
+
+Routes: `/docs` (all notes), `/docs/<id>`, `/docs/folder/<id>`, `/docs/tag/<tag>`, `/docs/daily` and `/docs/daily/<YYYY-MM-DD>`, and `/docs?q=<search>`. Live co-editing (several people and agents in one note with cursors) is not built yet.
+
 ## Keyboard shortcuts and the command palette
 
-`⌘ K` (or `⌘ /`) opens the command palette: search companies, people and opportunities, go to a page or a Settings section, create a record, or run a command for the current page. `?` lists every shortcut. `G` then a letter goes to a page (`M` Mail, `O` Companies, `C` Contacts, `P` Opportunities, `T` Tasks, `I` Capture, `L` Calendar, `A` Activities, `Q` Quiet, `S` Settings), and `C` then a letter creates something (`T` task, `C` contact, `O` company, `P` opportunity, `M` email, `E` meeting invite, `A` activity).
+`⌘ K` (or `⌘ /`) opens the command palette: search companies, people and opportunities, go to a page or a Settings section, create a record, or run a command for the current page. `?` lists every shortcut. `G` then a letter goes to a page (`M` Mail, `O` Companies, `C` Contacts, `P` Opportunities, `T` Tasks, `I` Capture, `L` Calendar, `A` Activities, `Q` Quiet, `D` today's daily note, `S` Settings), and `C` then a letter creates something (`T` task, `C` contact, `O` company, `P` opportunity, `M` email, `E` meeting invite, `A` activity, `N` note).
 
 ## Assistant
 
