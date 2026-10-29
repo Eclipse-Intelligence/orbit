@@ -65,6 +65,18 @@ export function failureOf(error: unknown): LiveFailure | null {
   return { status, code, message, final: status === 403 || status === 404, fallback: code === LIVE_TOO_LARGE || code === LIVE_INVALID };
 }
 
+export function integratedUpdate(doc: Y.Doc, vector: Uint8Array) {
+  const { pendingStructs, pendingDs } = doc.store;
+  doc.store.pendingStructs = null;
+  doc.store.pendingDs = null;
+  try {
+    return Y.encodeStateAsUpdate(doc, vector);
+  } finally {
+    doc.store.pendingStructs = pendingStructs;
+    doc.store.pendingDs = pendingDs;
+  }
+}
+
 export async function openSettled<Opened extends { revision: number }>(
   settle: () => Promise<{ base: string; revision: number } | null>,
   open: () => Promise<Opened>,
@@ -364,7 +376,7 @@ export class LiveSession<Summary = unknown> {
     this.flushBroadcast();
     if (!this.needsSave()) return false;
     if (this.keptAlive === this.ownSeq && !this.titleDirty) return true;
-    const update = Y.encodeStateAsUpdate(this.doc, this.serverVector);
+    const update = integratedUpdate(this.doc, this.serverVector);
     const vector = Y.encodeStateVector(this.doc);
     const title = this.titleDirty ? this.title : undefined;
     if (encodeBytes(update).length + encodeBytes(vector).length + (title?.length ?? 0) > KEEPALIVE_MAX) return false;
@@ -870,7 +882,7 @@ export class LiveSession<Summary = unknown> {
     }
     for (const timer of [this.saveTimer, this.retryTimer, this.resumeTimer]) if (timer) clearTimeout(timer);
     this.saveTimer = this.retryTimer = this.resumeTimer = null;
-    const update = Y.encodeStateAsUpdate(this.doc, this.serverVector);
+    const update = integratedUpdate(this.doc, this.serverVector);
     const vector = Y.encodeStateVector(this.doc);
     const title = this.titleDirty ? this.title : undefined;
     const context: SyncContext = { seqAtStart: this.ownSeq, remoteAtStart: this.remoteSeq, title, sent: !isEmptyUpdate(update) };
