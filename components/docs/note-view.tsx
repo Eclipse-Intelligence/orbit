@@ -60,8 +60,8 @@ function contextFor(page: { kind: string; folderId: string | null; dailyDate: st
   return { label: "All notes", href: "/docs", icon: DocIcon };
 }
 
-function TitleField({ page, inputRef }: { page: Page; inputRef: RefObject<HTMLTextAreaElement | null> }) {
-  const [value, setValue] = useState(() => noteTitle(page.id) ?? page.title);
+function TitleField({ page, inputRef, replaced }: { page: Page; inputRef: RefObject<HTMLTextAreaElement | null>; replaced: boolean }) {
+  const [value, setValue] = useState(() => (replaced ? page.title : (noteTitle(page.id) ?? page.title)));
   const fresh = useDocsStore((state) => state.fresh === page.id);
   const clearFresh = useDocsStore((state) => state.clearFresh);
   useEffect(() => {
@@ -275,6 +275,7 @@ export default function NoteView({
   const focus = useDocsStore((state) => state.focus);
   const setFocus = useDocsStore((state) => state.setFocus);
   const restoreVersion = useDocsStore((state) => state.restoreVersion);
+  const epoch = useDocsStore((state) => state.epochs[page?.id ?? ""] ?? 0);
   const navigate = useDocsNavigate();
   const wide = useMedia("(min-width: 1280px)");
   const phone = useMedia("(max-width: 767px)");
@@ -507,7 +508,7 @@ export default function NoteView({
                   <DailyHeading page={page} />
                 ) : (
                   <>
-                    <TitleField key={page.id} page={page} inputRef={titleRef} />
+                    <TitleField key={`${page.id}:${epoch}`} page={page} inputRef={titleRef} replaced={epoch > 0} />
                     {summary && <NoteMeta page={page} summary={summary} />}
                   </>
                 )}

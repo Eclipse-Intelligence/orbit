@@ -354,8 +354,9 @@ export default function DocsScreen({ viewer, initial }: { viewer: Viewer; initia
     [initial.summaries],
   );
 
-  const backHref = list.kind === "daily" ? listHref({ kind: "daily" }) : list.kind === "all" ? "/docs?in=all" : listHref(list);
-  const backLabel = list.kind === "all" ? "All notes" : list.kind === "daily" ? "Daily notes" : title;
+  const dailyShown = list.kind === "daily" || shownSummary?.kind === "daily";
+  const backHref = dailyShown ? listHref({ kind: "daily" }) : list.kind === "all" ? "/docs?in=all" : listHref(list);
+  const backLabel = dailyShown ? "Daily notes" : list.kind === "all" ? "All notes" : title;
 
   const control =
     list.kind === "daily" ? (

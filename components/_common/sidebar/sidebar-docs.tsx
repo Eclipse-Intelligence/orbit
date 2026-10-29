@@ -169,6 +169,7 @@ export default function SidebarDocs() {
   const onDocs = pathname === "/docs" || pathname.startsWith("/docs/");
   const route = onDocs ? parseDocsRoute(pathname, params) : null;
   const pageFolder = useDocsStore((state) => (route?.pageId ? (state.summaries[route.pageId]?.folderId ?? null) : null));
+  const pageDaily = useDocsStore((state) => (route?.pageId ? state.summaries[route.pageId]?.kind === "daily" : false));
 
   useEffect(() => {
     const timer = window.setTimeout(() => setOpen(readOpen()), 0);
@@ -178,7 +179,7 @@ export default function SidebarDocs() {
   if (!nav) return null;
   const activeFolder = route?.list.kind === "folder" ? route.list.folderId : route?.pageId && route.list.kind === "all" ? pageFolder : null;
   const activeTag = route?.list.kind === "tag" ? route.list.path : null;
-  const dailyActive = route?.list.kind === "daily" || Boolean(route?.pageId?.startsWith("daily-"));
+  const dailyActive = route?.list.kind === "daily" || pageDaily;
   const allActive = Boolean(route && route.list.kind === "all" && !route.pageId && !dailyActive);
   const viewerId = nav.viewer.id;
   const isOpen = (key: string, fallback: boolean) => open[key] ?? fallback;

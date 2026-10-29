@@ -150,7 +150,8 @@ export default function NoteEditor({
   useLayoutEffect(() => {
     const parent = host.current;
     if (!parent) return;
-    const { state, restored } = stateFor(latest.current.page, placeholder);
+    const cached = states.get(latest.current.page.id);
+    const { state, restored } = cached ? { state: cached, restored: false } : stateFor(latest.current.page, placeholder);
     const view = new EditorView({ state, parent });
     liveView = view;
     liveId = latest.current.page.id;
