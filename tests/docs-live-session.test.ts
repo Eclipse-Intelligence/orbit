@@ -162,6 +162,20 @@ describe("live sessions", () => {
     await until(async () => (await getDoc(mark, doc.id)).content === "Offline edit. Line online edit.", "saved");
   });
 
+  it("fetches a change whose broadcast was lost as soon as its author saves", async () => {
+    const doc = await sharedDoc("Lost broadcast", "Base");
+    const hub = memoryHub();
+    const markTransport = hub.transport();
+    const markLive = await session(mark, doc.id, markTransport);
+    const priyaLive = await session(priya, doc.id, hub.transport());
+    await until(() => markLive.status === "live" && priyaLive.status === "live", "both live");
+    hub.mute(markTransport.id);
+    type(markLive, "end", " typed while the network dropped it");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    hub.unmute(markTransport.id);
+    await until(() => liveText(priyaLive.doc).toString() === "Base typed while the network dropped it", "priya pulls the missed change");
+  });
+
   it("shows offline when the server can't be reached and syncs once it can", async () => {
     const doc = await sharedDoc("Server down", "Text");
     const hub = memoryHub();

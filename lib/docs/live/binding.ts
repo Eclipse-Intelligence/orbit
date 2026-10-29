@@ -44,7 +44,7 @@ function cursorPublisher<S>(session: LiveSession<S>) {
   );
 }
 
-export function reconcile<S>(view: EditorView, session: LiveSession<S>, base: string) {
+function reconcile<S>(view: EditorView, session: LiveSession<S>, base: string) {
   const text = session.text;
   const shared = text.toString();
   const shown = view.state.doc.toString();

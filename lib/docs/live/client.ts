@@ -7,7 +7,7 @@ import { bind, unbind } from "@/lib/docs/live/binding";
 import { personTopic, workspaceTopic, type LiveTransportKind, type LiveUser, type WritingMessage } from "@/lib/docs/live/protocol";
 import { publishPresence } from "@/lib/docs/live/registry";
 import { relayTransport } from "@/lib/docs/live/relay-transport";
-import { LiveSession, RECONCILE, type LiveServer, type SyncReply } from "@/lib/docs/live/session";
+import { LiveSession, RECONCILE, REMOTE, SERVER, type LiveServer, type SyncReply } from "@/lib/docs/live/session";
 import { supabaseTransport } from "@/lib/docs/live/supabase-transport";
 import type { LiveTransport } from "@/lib/docs/live/transport";
 import { absoluteFrom, createLiveDoc, decodeBytes, encodeBytes } from "@/lib/docs/live/ydoc";
@@ -187,7 +187,7 @@ function watch(pageId: string, view: EditorView, session: LiveSession<PageSummar
   });
   const offTitle = session.onTitle((title) => store().remoteTitle(pageId, title));
   const offText = session.onText((origin) => {
-    const local = origin !== "remote" && origin !== "server-sync";
+    const local = origin !== REMOTE && origin !== SERVER;
     if (local) store().setSave(pageId, "pending");
     if (!summaryTimer) {
       summaryTimer = setTimeout(() => {

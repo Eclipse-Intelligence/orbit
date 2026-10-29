@@ -2,7 +2,7 @@ import { fromBase64, toBase64 } from "lib0/buffer";
 import * as Y from "yjs";
 import { textEdits, type TextEdit } from "@/lib/docs/live/text-diff";
 
-export const LIVE_TEXT = "body";
+const LIVE_TEXT = "body";
 
 export type TypingStep = { update: Uint8Array; from: number; to: number };
 
@@ -31,7 +31,7 @@ export function textOfState(state: Uint8Array) {
   return text;
 }
 
-export function captureUpdate(doc: Y.Doc, change: () => void): Uint8Array | null {
+function captureUpdate(doc: Y.Doc, change: () => void): Uint8Array | null {
   const updates: Uint8Array[] = [];
   const listen = (update: Uint8Array) => updates.push(update);
   doc.on("update", listen);
@@ -44,7 +44,7 @@ export function captureUpdate(doc: Y.Doc, change: () => void): Uint8Array | null
   return updates.length === 1 ? updates[0] : Y.mergeUpdates(updates);
 }
 
-export function applyTextEdits(doc: Y.Doc, edits: TextEdit[], origin: unknown = null) {
+function applyTextEdits(doc: Y.Doc, edits: TextEdit[], origin: unknown = null) {
   if (edits.length === 0) return;
   const text = liveText(doc);
   doc.transact(() => {
@@ -122,22 +122,6 @@ export function typeLiveText(doc: Y.Doc, next: string, options: { origin?: unkno
 
 export function isEmptyUpdate(update: Uint8Array) {
   return update.length <= 2;
-}
-
-export function stateVector(doc: Y.Doc) {
-  return Y.encodeStateVector(doc);
-}
-
-export function missingFrom(doc: Y.Doc, vector: Uint8Array | null) {
-  return vector && vector.length > 0 ? Y.encodeStateAsUpdate(doc, vector) : Y.encodeStateAsUpdate(doc);
-}
-
-export function covers(server: Map<number, number>, local: Map<number, number>, clientId: number) {
-  return (server.get(clientId) ?? 0) >= (local.get(clientId) ?? 0);
-}
-
-export function decodeVector(vector: Uint8Array) {
-  return Y.decodeStateVector(vector);
 }
 
 export function encodeBytes(bytes: Uint8Array) {

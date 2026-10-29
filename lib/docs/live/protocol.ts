@@ -6,7 +6,7 @@ export type LiveEvent = "hello" | "state" | "update" | "awareness" | "saved" | "
 
 export type LiveUser = { id: string; name: string; kind: ParticipantKind };
 
-export type LiveCursor = { anchor: unknown; head: unknown };
+type LiveCursor = { anchor: unknown; head: unknown };
 
 export type LiveAwareness = {
   user: LiveUser;

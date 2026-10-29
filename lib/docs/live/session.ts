@@ -22,7 +22,7 @@ export const RECONCILE = "reconcile";
 
 export type LiveStatus = "connecting" | "live" | "offline";
 
-export type SyncInput = { update: Uint8Array | null; vector: Uint8Array; title?: string; keepalive?: boolean };
+type SyncInput = { update: Uint8Array | null; vector: Uint8Array; title?: string; keepalive?: boolean };
 export type SyncReply<Summary = unknown> = { vector: Uint8Array; missing: Uint8Array; revision: number; summary?: Summary };
 export type LiveServer<Summary = unknown> = { sync: (input: SyncInput) => Promise<SyncReply<Summary>> };
 
@@ -39,7 +39,7 @@ export type SessionTiming = {
   connectMs: number;
 };
 
-export const DEFAULT_TIMING: SessionTiming = {
+const DEFAULT_TIMING: SessionTiming = {
   batchMs: 80,
   awarenessMs: 120,
   saveMs: 1_200,

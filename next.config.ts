@@ -2,6 +2,7 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   allowedDevOrigins: ["127.0.0.1", "localhost"],
+  serverExternalPackages: ["yjs", "y-protocols", "lib0"],
   outputFileTracingIncludes: {
     "/**": ["./lib/proposals/fonts/*.ttf"],
   },

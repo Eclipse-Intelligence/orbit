@@ -1,8 +1,8 @@
 import type { LiveEvent } from "@/lib/docs/live/protocol";
 
-export type ChannelStatus = "joining" | "joined" | "closed";
+type ChannelStatus = "joining" | "joined" | "closed";
 
-export type ChannelHandlers = {
+type ChannelHandlers = {
   message: (event: LiveEvent, payload: unknown) => void;
   status: (status: ChannelStatus) => void;
 };
@@ -22,6 +22,7 @@ export function memoryHub(options: { manual?: boolean } = {}) {
   const topics = new Map<string, Set<Member>>();
   const queue: (() => void)[] = [];
   const blocked = new Set<number>();
+  const muted = new Set<number>();
   let nextId = 1;
   let draining = false;
 
@@ -61,6 +62,7 @@ export function memoryHub(options: { manual?: boolean } = {}) {
         return {
           send(event, payload) {
             if (!member.joined || blocked.has(id)) return false;
+            if (muted.has(id)) return true;
             const copy = JSON.parse(JSON.stringify(payload)) as unknown;
             for (const other of members) {
               if (other === member) continue;
@@ -116,5 +118,14 @@ export function memoryHub(options: { manual?: boolean } = {}) {
     }
   }
 
-  return { transport, publish, flush, disconnect, reconnect, pending: () => queue.length };
+  return {
+    transport,
+    publish,
+    flush,
+    disconnect,
+    reconnect,
+    mute: (id: number) => muted.add(id),
+    unmute: (id: number) => muted.delete(id),
+    pending: () => queue.length,
+  };
 }
