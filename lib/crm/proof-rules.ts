@@ -41,11 +41,3 @@ export type ProofWrite = {
   approvedBy?: string;
   reviewOn?: string | null;
 };
-
-export function todayIso(now = new Date()) {
-  return now.toISOString().slice(0, 10);
-}
-
-export function reviewOverdue(entry: Pick<ProofEntry, "reviewOn">, today = todayIso()) {
-  return Boolean(entry.reviewOn && entry.reviewOn < today);
-}

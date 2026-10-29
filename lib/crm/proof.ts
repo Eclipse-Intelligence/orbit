@@ -32,7 +32,7 @@ const FIELD_NAMES: Record<keyof typeof LIMITS, string> = {
   client: "The client",
   description: "The description",
   usedFor: "What they used it for",
-  result: "The approved result",
+  result: "The result",
   measured: "How it was measured",
   approvedBy: "Who approved it",
 };
@@ -67,7 +67,7 @@ function text(source: Record<string, unknown>, field: keyof typeof LIMITS, requi
   const value = source[field];
   if (value != null && typeof value !== "string") invalid(`${FIELD_NAMES[field]} must be text.`, field);
   const cleaned = (value ?? "").toString().replace(/\s+/g, " ").trim();
-  if (required && !cleaned) invalid(field === "client" ? "Add the client's name." : "Add the result, in the exact words the client approved.", field);
+  if (required && !cleaned) invalid(field === "client" ? "Add the client's name." : "Add the result.", field);
   if (cleaned.length > LIMITS[field]) invalid(`${FIELD_NAMES[field]} must be ${LIMITS[field]} characters or fewer.`, field);
   return cleaned;
 }
@@ -86,7 +86,7 @@ function cleanWrite(input: unknown) {
   const source = input as Record<string, unknown>;
   const product = source.product ?? "eclipse";
   if (!PROOF_PRODUCTS.includes(product as ProofProduct)) invalid("Choose Eclipse or Cntent.", "product");
-  if (!PROOF_PERMISSIONS.includes(source.permission as ProofPermission)) invalid("Choose what the client has allowed.", "permission");
+  if (!PROOF_PERMISSIONS.includes(source.permission as ProofPermission)) invalid("Choose whether they can be named.", "permission");
   const values = {
     client: text(source, "client", true),
     description: text(source, "description"),
