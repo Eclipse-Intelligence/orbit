@@ -448,6 +448,7 @@ export class LiveSession<Summary = unknown> {
         const mine = saved.seqs?.[String(this.clientId)];
         if (typeof mine === "number") this.confirmedSeq = Math.max(this.confirmedSeq, mine);
         if (!this.isSaver()) this.dirtySince = null;
+        if (vector && this.behind(vector)) void this.sync();
         this.emit();
         return;
       }
@@ -464,6 +465,14 @@ export class LiveSession<Summary = unknown> {
       default:
         return;
     }
+  }
+
+  private behind(vector: Uint8Array) {
+    try {
+      const local = Y.decodeStateVector(Y.encodeStateVector(this.doc));
+      for (const [clientId, clock] of Y.decodeStateVector(vector)) if ((local.get(clientId) ?? 0) < clock) return true;
+    } catch {}
+    return false;
   }
 
   private applyRemote(update: Uint8Array | null, origin: string) {
