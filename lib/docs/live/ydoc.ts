@@ -4,6 +4,8 @@ import { textEdits, type TextEdit } from "@/lib/docs/live/text-diff";
 
 const LIVE_TEXT = "body";
 
+export const TYPING_STEPS_MAX = 24;
+
 export type TypingStep = { update: Uint8Array; from: number; to: number };
 
 export function liveText(doc: Y.Doc) {
@@ -22,6 +24,20 @@ export function stateFromMarkdown(markdown: string) {
   const state = Y.encodeStateAsUpdate(doc);
   doc.destroy();
   return state;
+}
+
+export function plainLiveDoc(doc: Y.Doc) {
+  for (const name of doc.share.keys()) if (name !== LIVE_TEXT) return false;
+  const text = liveText(doc);
+  if (text._map.size > 0) return false;
+  for (let item = text._start; item; item = item.right) {
+    if (!item.deleted && !(item.content instanceof Y.ContentString)) return false;
+  }
+  return text.length === text.toString().length;
+}
+
+export function pendingLiveDoc(doc: Y.Doc) {
+  return doc.store.pendingStructs !== null || doc.store.pendingDs !== null;
 }
 
 export function textOfState(state: Uint8Array) {
@@ -92,11 +108,26 @@ function pieces(text: string, size: number) {
   return grouped;
 }
 
+function coalesce(steps: TypingStep[], maxSteps: number): TypingStep[] {
+  if (steps.length <= maxSteps) return steps;
+  const size = Math.ceil(steps.length / maxSteps);
+  const grouped: TypingStep[] = [];
+  for (let index = 0; index < steps.length; index += size) {
+    const group = steps.slice(index, index + size);
+    grouped.push({
+      update: group.length === 1 ? group[0].update : Y.mergeUpdates(group.map((step) => step.update)),
+      from: group[0].from,
+      to: group[group.length - 1].to,
+    });
+  }
+  return grouped;
+}
+
 export function typeLiveText(doc: Y.Doc, next: string, options: { origin?: unknown; maxSteps?: number } = {}): TypingStep[] {
   const text = liveText(doc);
   const edits = textEdits(text.toString(), next);
   if (edits.length === 0) return [];
-  const maxSteps = Math.max(1, options.maxSteps ?? 24);
+  const maxSteps = Math.max(1, options.maxSteps ?? TYPING_STEPS_MAX);
   const inserted = edits.reduce((total, edit) => total + edit.insert.length, 0);
   const size = Math.max(1, Math.ceil(inserted / maxSteps));
   const steps: TypingStep[] = [];
@@ -117,7 +148,7 @@ export function typeLiveText(doc: Y.Doc, next: string, options: { origin?: unkno
     });
     offset += edit.insert.length - edit.remove;
   }
-  return steps;
+  return coalesce(steps, maxSteps);
 }
 
 export function isEmptyUpdate(update: Uint8Array) {

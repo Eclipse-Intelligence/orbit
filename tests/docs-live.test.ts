@@ -8,11 +8,26 @@ import { scopesForRole } from "@/lib/crm/scopes";
 import type { AgentActor, UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { openDailyNote } from "@/lib/docs/daily-notes";
-import { publishLiveChange, setLiveTesting, supabaseSink, typingDuration, type LiveChange } from "@/lib/docs/live/broadcast";
+import { docsRespond, docsWrites } from "@/lib/docs/http";
+import { publishLiveChange, resetBroadcastFallback, setLiveTesting, supabaseSink, typingDuration, type LiveChange } from "@/lib/docs/live/broadcast";
+import { LIVE_STATE_MAX, LIVE_UPDATE_MAX } from "@/lib/docs/live/persist";
 import { rebase } from "@/lib/docs/live/rebase";
 import { applyEdits, textEdits } from "@/lib/docs/live/text-diff";
-import { createLiveDoc, liveText, setLiveText, stateFromMarkdown, textOfState, typeLiveText } from "@/lib/docs/live/ydoc";
-import { createDoc, editDoc, getDoc, listVersions, openLiveDoc, saveDoc, shareDoc, syncLiveDoc } from "@/lib/docs/store";
+import { createLiveDoc, liveText, plainLiveDoc, setLiveText, stateFromMarkdown, textOfState, typeLiveText } from "@/lib/docs/live/ydoc";
+import {
+  archiveDoc,
+  createDoc,
+  editDoc,
+  getDoc,
+  listVersions,
+  openLiveDoc,
+  renameDoc,
+  restoreDoc,
+  restoreVersion,
+  saveDoc,
+  shareDoc,
+  syncLiveDoc,
+} from "@/lib/docs/store";
 import { createAgent, createUser, resetDatabase } from "./helpers";
 
 let mark: UserActor;
@@ -163,12 +178,23 @@ describe("joining a live note after typing", () => {
     assert.equal(both.shared, both.shown);
   });
 
-  it("always lands both sides on the same text", () => {
+  it("always lands both sides on the same text, keeping what each side typed", () => {
     const random = seeded(11);
+    const insertMarks = (text: string, mark: string) => {
+      const points = Array.from(text);
+      const count = 1 + Math.floor(random() * 3);
+      for (let index = 0; index < count; index += 1) points.splice(Math.floor(random() * (points.length + 1)), 0, mark);
+      return { text: points.join(""), count };
+    };
+    const tally = (text: string, mark: string) => text.split(mark).length - 1;
     for (let round = 0; round < 200; round += 1) {
       const base = randomText(random, Math.floor(random() * 40));
-      const result = settleBoth(base, mutate(random, base), mutate(random, base));
+      const mine = insertMarks(mutate(random, base), "\u2460");
+      const theirs = insertMarks(mutate(random, base), "\u2461");
+      const result = settleBoth(base, mine.text, theirs.text);
       assert.equal(result.shown, result.shared);
+      assert.equal(tally(result.shared, "\u2460"), mine.count, "my typing survives");
+      assert.equal(tally(result.shared, "\u2461"), theirs.count, "their typing survives");
     }
   });
 });
@@ -285,8 +311,15 @@ describe("live saves", () => {
     const saved = await getDoc(mark, doc.id);
     assert.equal(saved.title, "Final");
     assert.equal(saved.content, "Body more");
+    const afterFirst = await listVersions(mark, doc.id);
+    for (const word of [" and", " more", " again"]) {
+      const vectorNow = Y.encodeStateVector(local);
+      liveText(local).insert(liveText(local).length, word);
+      await syncLiveDoc(mark, doc.id, { update: Y.encodeStateAsUpdate(local, vectorNow), vector: Y.encodeStateVector(local) });
+    }
+    assert.equal((await getDoc(mark, doc.id)).content, "Body more and more again");
     const versions = await listVersions(mark, doc.id);
-    assert.ok(versions.length >= 1);
+    assert.equal(versions.length, afterFirst.length, "quick typing doesn't add a version per save");
   });
 
   it("refuses live saves to a doc the person can't see", async () => {
@@ -341,7 +374,7 @@ describe("agent edits arrive live", () => {
     const doc = await createDoc(mark, { title: "Assistant target", content: "Start." });
     await openLiveDoc(mark, doc.id);
     events = [];
-    await runDocAction(mark, { action: "append", docId: doc.id, content: "Acme's renewal lands in January." }, { baseRevision: (await getDoc(mark, doc.id)).revision });
+    await runDocAction(mark, { action: "append", docId: doc.id, content: "Acme's renewal lands in January." });
     await settle();
     const updates = events.filter((entry) => entry.event === "update");
     assert.ok(updates.length >= 2);
@@ -377,6 +410,14 @@ describe("agent edits arrive live", () => {
     await editDoc(agent, doc.id, { action: "append", content: "C" });
     await settle();
     assert.ok(events.filter((entry) => entry.topic === `doc:${doc.id}`).length > 0);
+    const watched = async () => (await getPool().query<{ watched: boolean }>("select private.page_watched($1, 90) as watched", [doc.id])).rows[0].watched;
+    assert.equal(await watched(), true);
+    await getAdminPool().query("update crm.page_watchers set seen_at = now() - interval '91 seconds' where page_id = $1", [doc.id]);
+    assert.equal(await watched(), false, "a watcher who went quiet no longer counts");
+    events = [];
+    await editDoc(agent, doc.id, { action: "append", content: "D" });
+    await settle();
+    assert.equal(events.filter((entry) => entry.topic.startsWith("doc:")).length, 0, "no stream once the watcher went quiet");
   });
 });
 
@@ -396,23 +437,30 @@ describe("fallback saves", () => {
     assert.equal((await getDoc(mark, doc.id)).content, saved.content);
   });
 
-  it("merges a ydoc passed to saveDoc instead of overwriting the stored one", async () => {
-    const doc = await createDoc(mark, { title: "Merge via saveDoc", content: "Base" });
-    const first = clientFrom((await openLiveDoc(mark, doc.id)).state);
-    const second = clientFrom(Y.encodeStateAsUpdate(first));
-    liveText(first).insert(4, " from first");
-    liveText(second).insert(0, "Second: ");
-    await saveDoc(mark, doc.id, { ydoc: Y.encodeStateAsUpdate(first) });
-    await saveDoc(mark, doc.id, { ydoc: Y.encodeStateAsUpdate(second) });
-    assert.equal((await getDoc(mark, doc.id)).content, "Second: Base from first");
+  it("keeps the live copy in step when a version is restored", async () => {
+    const doc = await createDoc(mark, { title: "Restorable", content: "First draft" });
+    const local = clientFrom((await openLiveDoc(mark, doc.id)).state);
+    const vector = Y.encodeStateVector(local);
+    liveText(local).insert(liveText(local).length, ", then changed live");
+    await syncLiveDoc(mark, doc.id, { update: Y.encodeStateAsUpdate(local, vector), vector: Y.encodeStateVector(local) });
+    const created = (await listVersions(mark, doc.id)).find((version) => version.reason === "created")!;
+    events = [];
+    await restoreVersion(mark, doc.id, created.id);
+    await settle();
+    const update = events.find((entry) => entry.event === "update" && entry.topic === `doc:${doc.id}`);
+    assert.ok(update);
+    Y.applyUpdate(local, Buffer.from(update.payload.u as string, "base64"));
+    assert.equal(liveText(local).toString(), "First draft");
+    assert.equal(textOfState((await openLiveDoc(mark, doc.id)).state), "First draft");
   });
 });
 
 describe("realtime broadcast", () => {
-  it("sends to the private channel with the service key on the server only", async () => {
+  it("sends to the private channel with the service key on the server only, with a timeout", async () => {
     const calls: { url: string; init: RequestInit }[] = [];
     process.env.NEXT_PUBLIC_SUPABASE_URL = "https://example.supabase.co";
     process.env.SUPABASE_SERVICE_ROLE_KEY = "sb_secret_test";
+    resetBroadcastFallback();
     try {
       const sink = supabaseSink(async (url, init) => {
         calls.push({ url: String(url), init: init ?? {} });
@@ -426,6 +474,36 @@ describe("realtime broadcast", () => {
     assert.equal(calls[0].url, "https://example.supabase.co/realtime/v1/api/broadcast/doc%3A00000000-0000-4000-8000-000000000001/events/update?private=true");
     assert.equal((calls[0].init.headers as Record<string, string>).apikey, "sb_secret_test");
     assert.equal(JSON.parse(String(calls[0].init.body)).u, "AA==");
+    assert.equal(calls.length, 1);
+    assert.ok(calls[0].init.signal instanceof AbortSignal);
+  });
+
+  it("falls back to the batch endpoint with private messages on an older Realtime, and stays there", async () => {
+    const calls: { url: string; init: RequestInit }[] = [];
+    process.env.NEXT_PUBLIC_SUPABASE_URL = "https://example.supabase.co";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "sb_secret_test";
+    resetBroadcastFallback();
+    try {
+      const sink = supabaseSink(async (url, init) => {
+        calls.push({ url: String(url), init: init ?? {} });
+        return new Response("{}", { status: String(url).endsWith("/api/broadcast") ? 202 : 404 });
+      });
+      await sink!("doc:00000000-0000-4000-8000-000000000001", "update", { u: "AA==" });
+      await sink!("doc:00000000-0000-4000-8000-000000000001", "pull", { r: 2 });
+    } finally {
+      delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+      delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+      resetBroadcastFallback();
+    }
+    assert.deepEqual(calls.map((entry) => entry.url.replace("https://example.supabase.co", "")), [
+      "/realtime/v1/api/broadcast/doc%3A00000000-0000-4000-8000-000000000001/events/update?private=true",
+      "/realtime/v1/api/broadcast",
+      "/realtime/v1/api/broadcast",
+    ]);
+    assert.deepEqual(JSON.parse(String(calls[2].init.body)), {
+      messages: [{ topic: "doc:00000000-0000-4000-8000-000000000001", event: "pull", payload: { r: 2 }, private: true }],
+    });
+    assert.ok(calls.every((entry) => entry.init.signal instanceof AbortSignal));
   });
 
   it("sends a pull instead of an oversized update", async () => {
@@ -435,6 +513,7 @@ describe("realtime broadcast", () => {
       ownerId: mark.userId,
       shared: false,
       revision: 4,
+      generation: 0,
       agent: null,
       steps: [{ u: "A".repeat(200_000), from: null, head: null }],
       typedCharacters: 0,
@@ -507,5 +586,308 @@ describe("realtime authorization", () => {
     assert.deepEqual(await access(mark.userId, `doc:not-a-uuid`), { read: false, write: false });
     assert.deepEqual(await access(mark.userId, "doc:"), { read: false, write: false });
     assert.deepEqual(await access("", `doc:${doc.id}`), { read: false, write: false });
+  });
+});
+
+type LiveClient = { doc: Y.Doc; server: Uint8Array; generation: number; shared: string };
+
+async function join(actor: UserActor, id: string): Promise<LiveClient> {
+  const opened = await openLiveDoc(actor, id);
+  const doc = createLiveDoc(opened.state);
+  return { doc, server: Y.encodeStateVector(doc), generation: opened.generation, shared: liveText(doc).toString() };
+}
+
+function recover(client: LiveClient, state: Uint8Array) {
+  const shown = liveText(client.doc).toString();
+  const fresh = createLiveDoc(state);
+  const shared = liveText(fresh).toString();
+  const { toShared } = rebase(client.shared, shown, shared);
+  setLiveText(fresh, toShared.apply(Text.of(shared.split("\n"))).toString());
+  client.doc.destroy();
+  client.doc = fresh;
+  client.server = Y.encodeStateVector(createLiveDoc(state));
+}
+
+async function push(actor: UserActor, id: string, client: LiveClient, extra: { title?: string } = {}) {
+  const update = Y.encodeStateAsUpdate(client.doc, client.server);
+  const reply = await syncLiveDoc(actor, id, { update: update.length > 2 ? update : null, vector: Y.encodeStateVector(client.doc), generation: client.generation, ...extra });
+  client.generation = reply.generation;
+  if (reply.rebuilt) {
+    recover(client, reply.missing);
+  } else {
+    Y.applyUpdate(client.doc, reply.missing);
+    client.server = reply.vector;
+  }
+  client.shared = textOfState(Y.encodeStateAsUpdate(client.doc));
+  return reply;
+}
+
+async function storedBytes(id: string) {
+  return (await getAdminPool().query<{ bytes: number; generation: number }>("select octet_length(ydoc) as bytes, ydoc_generation as generation from crm.pages where id = $1", [id])).rows[0];
+}
+
+async function liveCall(actor: UserActor, id: string, body: string) {
+  const request = new Request(`http://crm.test/api/docs/pages/${id}/live`, { method: "POST", headers: { "content-type": "application/json" }, body });
+  const response = await docsRespond(actor, (signedIn) => docsWrites.liveSync({ actor: signedIn, request, params: { id } }));
+  return { status: response.status, body: (await response.json()) as Record<string, unknown> };
+}
+
+describe("live copies only hold plain text", () => {
+  it("tells plain text apart from embeds, nested types and other root types", () => {
+    const plain = createLiveDoc(stateFromMarkdown("hello"));
+    assert.equal(plainLiveDoc(plain), true);
+    const embed = createLiveDoc(stateFromMarkdown("hello"));
+    liveText(embed).insertEmbed(5, { image: "x" });
+    assert.equal(plainLiveDoc(embed), false);
+    const nested = createLiveDoc(stateFromMarkdown("hello"));
+    liveText(nested).insertEmbed(0, new Y.Map());
+    assert.equal(plainLiveDoc(nested), false);
+    const foreign = createLiveDoc(stateFromMarkdown("hello"));
+    foreign.getMap("junk").set("a", 1);
+    assert.equal(plainLiveDoc(foreign), false);
+    const formatted = createLiveDoc(stateFromMarkdown("hello"));
+    liveText(formatted).format(0, 2, { bold: true });
+    assert.equal(plainLiveDoc(formatted), false);
+  });
+
+  it("refuses a live change carrying embeds or other types, and leaves the stored copy alone", async () => {
+    const doc = await createDoc(mark, { title: "Plain only", content: "hello" });
+    const before = await storedBytes(doc.id);
+    for (const craft of [
+      (client: LiveClient) => liveText(client.doc).insertEmbed(5, { image: "x" }),
+      (client: LiveClient) => liveText(client.doc).insertEmbed(0, new Y.Text("nested")),
+      (client: LiveClient) => {
+        for (let index = 0; index < 2_000; index += 1) client.doc.getMap(`junk-${index}`).set("k", index);
+      },
+    ]) {
+      const client = await join(mark, doc.id);
+      craft(client);
+      await assert.rejects(push(mark, doc.id, client), (error: unknown) => (error as { code?: string }).code === "live_invalid");
+    }
+    const after = await storedBytes(doc.id);
+    assert.ok(after.bytes <= Math.max(before.bytes ?? 0, 64), `the stored copy stayed small, ${after.bytes} bytes`);
+    assert.equal((await getDoc(mark, doc.id)).content, "hello");
+  });
+
+  it("rebuilds a stored copy that already holds an embed, so server edits land in the right place", async () => {
+    const doc = await createDoc(mark, { title: "Embedded", content: "hello", shared: true });
+    const broken = createLiveDoc(stateFromMarkdown("hello"));
+    liveText(broken).insertEmbed(5, { image: "x" });
+    await getAdminPool().query("update crm.pages set ydoc = $2 where id = $1", [doc.id, Buffer.from(Y.encodeStateAsUpdate(broken))]);
+    await editDoc(agent, doc.id, { action: "edit", find: "hello", replace: "hello world" });
+    assert.equal((await getDoc(mark, doc.id)).content, "hello world");
+    const opened = await openLiveDoc(mark, doc.id);
+    assert.equal(textOfState(opened.state), "hello world");
+    assert.ok(plainLiveDoc(createLiveDoc(opened.state)));
+    assert.equal(opened.generation, 1, "clients holding the broken copy are told to rebuild");
+  });
+});
+
+describe("live size limits", () => {
+  it("refuses an oversized live change or request with a code the client can act on", async () => {
+    const doc = await createDoc(mark, { title: "Size caps", content: "Small" });
+    const huge = Buffer.alloc(LIVE_UPDATE_MAX + 10, 1).toString("base64");
+    const tooBig = await liveCall(mark, doc.id, JSON.stringify({ update: huge, vector: "AA==" }));
+    assert.equal(tooBig.status, 413);
+    assert.equal(tooBig.body.code, "live_too_large");
+    const vector = await liveCall(mark, doc.id, JSON.stringify({ vector: Buffer.alloc(70_000, 1).toString("base64") }));
+    assert.equal(vector.status, 413);
+    assert.equal((await getDoc(mark, doc.id)).content, "Small");
+    assert.ok(LIVE_STATE_MAX >= 4_000_000);
+  });
+
+  it("refuses text over the limit with its own code, and saves line endings normalised", async () => {
+    const doc = await createDoc(mark, { title: "Limits", content: "Start" });
+    const client = await join(mark, doc.id);
+    liveText(client.doc).insert(5, "\r\nnext line\r\n");
+    await push(mark, doc.id, client);
+    assert.equal((await getDoc(mark, doc.id)).content, "Start\nnext line\n");
+    assert.equal(liveText(client.doc).toString(), "Start\nnext line\n");
+    const long = await join(mark, doc.id);
+    liveText(long.doc).insert(0, "x".repeat(1_000_001));
+    await assert.rejects(push(mark, doc.id, long), (error: unknown) => (error as { code?: string; status?: number }).code === "too_long" && (error as { status?: number }).status === 413);
+    assert.equal((await getDoc(mark, doc.id)).content, "Start\nnext line\n");
+  });
+});
+
+describe("live compaction", () => {
+  async function inflate(id: string) {
+    const client = await join(mark, id);
+    const kept = liveText(client.doc).length;
+    const ids = [client.doc.clientID, client.doc.clientID + 1];
+    for (let round = 0; round < 6; round += 1) {
+      const text = liveText(client.doc);
+      for (let index = 0; index < 4_000; index += 1) {
+        client.doc.clientID = ids[index % 2];
+        text.insert(text.length, "z");
+      }
+      client.doc.clientID = ids[0];
+      text.delete(kept, text.length - kept);
+      await push(mark, id, client);
+    }
+    return client;
+  }
+
+  it("rebuilds a long history from the Markdown when nobody is watching, and a client on the old copy recovers", async () => {
+    const doc = await createDoc(mark, { title: "Long history", content: "Keep this text." });
+    const old = await inflate(doc.id);
+    const grown = await storedBytes(doc.id);
+    assert.ok(grown.bytes > 64_000, `history grew to ${grown.bytes} bytes`);
+    setLiveTesting({ sink: async (topic, event, payload) => void events.push({ topic, event, payload: payload as Record<string, unknown> }), wait: async () => {}, watched: async () => false });
+    events = [];
+    const opened = await openLiveDoc(mark, doc.id);
+    await settle();
+    const compacted = await storedBytes(doc.id);
+    assert.equal(opened.generation, grown.generation + 1);
+    assert.equal(textOfState(opened.state), "Keep this text.");
+    assert.ok(compacted.bytes < 200, `compacted to ${compacted.bytes} bytes`);
+    assert.ok(events.some((entry) => entry.event === "pull" && entry.payload.g === opened.generation));
+    liveText(old.doc).insert(0, "Typed on the old copy. ");
+    const reply = await push(mark, doc.id, old);
+    assert.equal(reply.rebuilt, true);
+    assert.equal((await getDoc(mark, doc.id)).content, "Keep this text.", "the old copy's update isn't applied");
+    assert.equal(liveText(old.doc).toString(), "Typed on the old copy. Keep this text.");
+    const again = await push(mark, doc.id, old);
+    assert.equal(again.rebuilt, false);
+    assert.equal((await getDoc(mark, doc.id)).content, "Typed on the old copy. Keep this text.");
+    const fresh = await join(mark, doc.id);
+    assert.equal(liveText(fresh.doc).toString(), "Typed on the old copy. Keep this text.");
+  });
+
+  it("leaves the history alone while someone is watching", async () => {
+    const doc = await createDoc(mark, { title: "Watched history", content: "Keep this text." });
+    await inflate(doc.id);
+    const grown = await storedBytes(doc.id);
+    const opened = await openLiveDoc(mark, doc.id);
+    assert.equal(opened.generation, grown.generation);
+    assert.equal((await storedBytes(doc.id)).bytes, grown.bytes);
+  });
+});
+
+describe("live access", () => {
+  it("stops streaming to people who lost access when a note is made private or archived", async () => {
+    setLiveTesting({ sink: async (topic, event, payload) => void events.push({ topic, event, payload: payload as Record<string, unknown> }), wait: async () => {} });
+    const doc = await createDoc(mark, { title: "Revoked", content: "Shared plan", shared: true });
+    await openLiveDoc(priya, doc.id);
+    await openLiveDoc(mark, doc.id);
+    const watchers = async () =>
+      (await getAdminPool().query<{ user_id: string }>("select user_id from crm.page_watchers where page_id = $1 order by user_id", [doc.id])).rows.map((row) => row.user_id);
+    assert.deepEqual(await watchers(), [mark.userId, priya.userId].sort());
+    await shareDoc(mark, doc.id, false);
+    assert.deepEqual(await watchers(), [mark.userId]);
+    await getAdminPool().query("update crm.page_watchers set seen_at = now() - interval '5 minutes' where page_id = $1", [doc.id]);
+    events = [];
+    await editDoc(mark, doc.id, { action: "append", content: "MCP note" }, { operation: "update_doc", source: "mcp" });
+    await settle();
+    assert.equal(events.filter((entry) => entry.topic === `doc:${doc.id}`).length, 0, "nobody who can still see it is watching");
+    await shareDoc(mark, doc.id, true);
+    await openLiveDoc(priya, doc.id);
+    await openLiveDoc(mark, doc.id);
+    await archiveDoc(mark, doc.id);
+    assert.deepEqual(await watchers(), []);
+    await restoreDoc(mark, doc.id);
+  });
+
+  it("refuses a live change from someone who can only read, but lets them keep watching", async () => {
+    const doc = await createDoc(mark, { title: "Read only", content: "Look, don't touch", shared: true });
+    const reader: UserActor = { ...priya, scopes: ["crm:read", "docs:read"] };
+    const client = await join(reader, doc.id);
+    liveText(client.doc).insert(0, "Touched. ");
+    await assert.rejects(push(reader, doc.id, client), /Missing scope docs:write/);
+    await assert.rejects(push(reader, doc.id, client, { title: "Renamed" }), /Missing scope docs:write/);
+    const watching = await syncLiveDoc(reader, doc.id, { vector: client.server, generation: client.generation });
+    assert.equal(watching.saved, false);
+    assert.equal((await getDoc(mark, doc.id)).content, "Look, don't touch");
+  });
+});
+
+describe("live links and renames", () => {
+  it("rewrites links in open notes as plain updates, without anyone typing", async () => {
+    const target = await createDoc(mark, { title: "Acme plan", content: "Target", shared: true });
+    const linking = await createDoc(mark, { title: "Linking", content: "See [[Acme plan]] for details.", shared: true });
+    const client = await join(mark, linking.id);
+    events = [];
+    const result = await renameDoc(agent, target.id, "Acme renewal");
+    await settle();
+    assert.equal(result.linksUpdated, 1);
+    const updates = events.filter((entry) => entry.topic === `doc:${linking.id}` && entry.event === "update");
+    assert.equal(updates.length, 1);
+    assert.equal(updates[0].payload.a, undefined);
+    assert.equal(events.filter((entry) => entry.event === "writing" && (entry.payload as { pageId?: string }).pageId === linking.id).length, 0);
+    Y.applyUpdate(client.doc, Buffer.from(updates[0].payload.u as string, "base64"));
+    assert.equal(liveText(client.doc).toString(), "See [[Acme renewal]] for details.");
+    assert.equal(textOfState((await openLiveDoc(mark, linking.id)).state), (await getDoc(mark, linking.id)).content);
+  });
+
+  it("doesn't deadlock when a rename and a live save of a linking note race", async () => {
+    const target = await createDoc(mark, { title: "Race target", content: "Target", shared: true });
+    const linking = await createDoc(mark, { title: "Race linking", content: "See [[Race target]].", shared: true });
+    for (let round = 0; round < 6; round += 1) {
+      const client = await join(priya, linking.id);
+      liveText(client.doc).insert(liveText(client.doc).length, ` Also [[${round % 2 ? "Race target" : "Race goal"}]].`);
+      await Promise.all([renameDoc(mark, target.id, round % 2 ? "Race target" : "Race goal"), push(priya, linking.id, client)]);
+    }
+    const saved = await getDoc(mark, linking.id);
+    assert.equal(textOfState((await openLiveDoc(mark, linking.id)).state), saved.content);
+  });
+});
+
+describe("agent typing", () => {
+  it("streams a change to hundreds of lines in at most 24 steps that still land on the right text", async () => {
+    const lines = Array.from({ length: 250 }, (_, index) => `- [ ] Task ${index}`);
+    const doc = await createDoc(mark, { title: "Checklist", content: lines.join("\n"), shared: true });
+    const client = await join(mark, doc.id);
+    events = [];
+    await editDoc(agent, doc.id, { action: "replace", content: lines.map((line) => line.replace("[ ]", "[x]")).join("\n") });
+    await settle();
+    const updates = events.filter((entry) => entry.topic === `doc:${doc.id}` && entry.event === "update");
+    assert.ok(updates.length > 1 && updates.length <= 24, `${updates.length} steps`);
+    for (const entry of updates) Y.applyUpdate(client.doc, Buffer.from(entry.payload.u as string, "base64"));
+    assert.equal(liveText(client.doc).toString(), (await getDoc(mark, doc.id)).content);
+  });
+});
+
+describe("many people at once", () => {
+  it("converges for three people whatever order their messages arrive in, even twice", async () => {
+    const doc = await createDoc(mark, { title: "Three people", content: "Alpha\n\nBeta\n\nGamma", shared: true });
+    const people = [mark, priya, await member("sam@live.test", "Sam Lee")];
+    const clients = await Promise.all(people.map((person) => join(person, doc.id)));
+    const sent: Uint8Array[][] = clients.map(() => []);
+    clients.forEach((client, index) => client.doc.on("update", (update: Uint8Array, origin: unknown) => origin !== "peer" && sent[index].push(update)));
+    liveText(clients[0].doc).insert(0, "Mark: ");
+    liveText(clients[1].doc).insert(liveText(clients[1].doc).toString().indexOf("Beta") + 4, " (Priya)");
+    liveText(clients[2].doc).insert(liveText(clients[2].doc).length, "\n\nSam's line");
+    for (const [index, client] of clients.entries()) {
+      const others = sent.flatMap((updates, from) => (from === index ? [] : updates)).reverse();
+      for (const update of [...others, ...others]) Y.applyUpdate(client.doc, update, "peer");
+    }
+    const expected = "Mark: Alpha\n\nBeta (Priya)\n\nGamma\n\nSam's line";
+    for (const client of clients) assert.equal(liveText(client.doc).toString(), expected);
+    await Promise.all([push(people[2], doc.id, clients[2]), push(people[0], doc.id, clients[0])]);
+    await push(people[1], doc.id, clients[1]);
+    await push(people[1], doc.id, clients[1]);
+    assert.equal((await getDoc(mark, doc.id)).content, expected);
+    for (const [index, client] of clients.entries()) {
+      await push(people[index], doc.id, client);
+      assert.equal(liveText(client.doc).toString(), expected);
+    }
+  });
+
+  it("never keeps a change that arrives before the one it builds on", async () => {
+    const doc = await createDoc(mark, { title: "Out of order", content: "One" });
+    const client = await join(mark, doc.id);
+    const start = Y.encodeStateVector(client.doc);
+    liveText(client.doc).insert(3, " two");
+    const middle = Y.encodeStateVector(client.doc);
+    liveText(client.doc).insert(liveText(client.doc).length, " three");
+    const before = await storedBytes(doc.id);
+    const early = await syncLiveDoc(mark, doc.id, { update: Y.encodeStateAsUpdate(client.doc, middle), vector: Y.encodeStateVector(client.doc), generation: client.generation });
+    assert.equal(early.rebuilt, true);
+    assert.equal(early.saved, false);
+    assert.deepEqual(await storedBytes(doc.id), before);
+    assert.equal((await getDoc(mark, doc.id)).content, "One");
+    const whole = await syncLiveDoc(mark, doc.id, { update: Y.encodeStateAsUpdate(client.doc, start), vector: Y.encodeStateVector(client.doc), generation: client.generation });
+    assert.equal(whole.rebuilt, false);
+    assert.equal((await getDoc(mark, doc.id)).content, "One two three");
   });
 });

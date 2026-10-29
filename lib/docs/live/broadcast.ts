@@ -14,9 +14,11 @@ export type LiveChange = {
   ownerId: string | null;
   shared: boolean;
   revision: number;
+  generation: number;
   agent: LiveUser | null;
   steps: LiveStep[];
   typedCharacters: number;
+  rebuilt?: boolean;
 };
 
 export type LiveSink = (topic: string, event: LiveEvent, payload: unknown) => Promise<void>;
@@ -28,6 +30,9 @@ const TYPING_MIN_MS = 1_000;
 const TYPING_MAX_MS = 3_000;
 const TYPING_MS_PER_CHARACTER = 15;
 const LINGER_MS = 1_500;
+const SEND_TIMEOUT_MS = 5_000;
+const BATCH_CONCURRENCY = 4;
+const BATCH_BUDGET_MS = 8_000;
 
 let testing: Options | null = null;
 
@@ -45,28 +50,44 @@ export function liveTransport(): LiveTransportKind | null {
   return null;
 }
 
+let batchOnly = false;
+
 export function supabaseSink(fetchImpl: typeof fetch = fetch): LiveSink | null {
   const base = baseUrl();
   const key = secretKey();
   if (!base || !key) return null;
   const headers = { apikey: key, "content-type": "application/json", ...(key.startsWith("eyJ") ? { authorization: `Bearer ${key}` } : {}) };
+  const sendBatch = async (topic: string, event: LiveEvent, payload: unknown) => {
+    const response = await fetchImpl(`${base}/realtime/v1/api/broadcast`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ messages: [{ topic, event, payload, private: true }] }),
+      signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
+    });
+    if (!response.ok) throw new Error(`Realtime broadcast failed with ${response.status}`);
+  };
   return async (topic, event, payload) => {
+    if (batchOnly) return sendBatch(topic, event, payload);
     const response = await fetchImpl(`${base}/realtime/v1/api/broadcast/${encodeURIComponent(topic)}/events/${encodeURIComponent(event)}?private=true`, {
       method: "POST",
       headers,
       body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
     });
     if (response.status === 404) {
-      const batch = await fetchImpl(`${base}/realtime/v1/api/broadcast`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ messages: [{ topic, event, payload, private: true }] }),
-      });
-      if (!batch.ok) throw new Error(`Realtime broadcast failed with ${batch.status}`);
-      return;
+      batchOnly = true;
+      return sendBatch(topic, event, payload);
     }
     if (!response.ok) throw new Error(`Realtime broadcast failed with ${response.status}`);
   };
+}
+
+export function livePublishing() {
+  return supabaseSink() !== null || relaySink() !== null;
+}
+
+export function resetBroadcastFallback() {
+  batchOnly = false;
 }
 
 function relaySink(): LiveSink | null {
@@ -90,7 +111,7 @@ function pause(ms: number) {
   return ms > 0 ? new Promise<void>((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
 }
 
-async function isWatched(pageId: string) {
+export async function pageWatched(pageId: string) {
   if (testing?.watched) return testing.watched(pageId);
   const result = await query<{ watched: boolean }>("select private.page_watched($1, $2) as watched", [pageId, WATCH_WINDOW_SECONDS]);
   return result.rows[0]?.watched === true;
@@ -128,7 +149,7 @@ async function stream(sink: LiveSink, topic: string, change: LiveChange, agent: 
     for (const [index, step] of change.steps.entries()) {
       last = step;
       const a = encode({ user: agent, cursor: { anchor: step.head, head: step.head }, from: step.from, writing: true });
-      await sink(topic, "update", { u: step.u, a, server: true });
+      await sink(topic, "update", { u: step.u, a, server: true, g: change.generation });
       if (index < change.steps.length - 1) await pause(started + (index + 1) * interval - Date.now());
     }
     if (last) await sink(topic, "awareness", { a: encode({ user: agent, cursor: { anchor: last.head, head: last.head }, from: last.from, writing: false }) });
@@ -142,16 +163,21 @@ async function stream(sink: LiveSink, topic: string, change: LiveChange, agent: 
 
 export async function publishLiveChange(change: LiveChange) {
   const sink = currentSink();
-  if (!sink || change.steps.length === 0) return;
+  if (!sink) return;
+  if (change.rebuilt) {
+    await sink(docTopic(change.pageId), "pull", { r: change.revision, g: change.generation });
+    return;
+  }
+  if (change.steps.length === 0) return;
   const activity = change.agent ? activityTopic(change) : null;
   if (activity && change.agent) await sink(activity, "writing", { pageId: change.pageId, user: change.agent, writing: true }).catch(() => {});
   try {
-    const watched = await isWatched(change.pageId).catch(() => true);
+    const watched = await pageWatched(change.pageId).catch(() => true);
     if (!watched) return;
     const topic = docTopic(change.pageId);
     const tooLarge = change.steps.some((step) => step.u.length > LIVE_MESSAGE_MAX);
     if (tooLarge) {
-      await sink(topic, "pull", { r: change.revision });
+      await sink(topic, "pull", { r: change.revision, g: change.generation });
       return;
     }
     if (change.agent) {
@@ -160,9 +186,21 @@ export async function publishLiveChange(change: LiveChange) {
     }
     const merged = mergedSteps(change.steps);
     if (!merged) return;
-    if (merged.length > LIVE_MESSAGE_MAX) await sink(topic, "pull", { r: change.revision });
-    else await sink(topic, "update", { u: merged, server: true });
+    if (merged.length > LIVE_MESSAGE_MAX) await sink(topic, "pull", { r: change.revision, g: change.generation });
+    else await sink(topic, "update", { u: merged, server: true, g: change.generation });
   } finally {
     if (activity && change.agent) await sink(activity, "writing", { pageId: change.pageId, user: change.agent, writing: false, revision: change.revision }).catch(() => {});
   }
+}
+
+export async function publishLiveChanges(changes: LiveChange[], budgetMs = BATCH_BUDGET_MS) {
+  const stopAt = Date.now() + budgetMs;
+  const queue = [...changes];
+  const worker = async () => {
+    for (let next = queue.shift(); next; next = queue.shift()) {
+      if (Date.now() > stopAt) return;
+      await publishLiveChange(next).catch((error) => console.error("Live publish failed", error));
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(BATCH_CONCURRENCY, queue.length) }, worker));
 }

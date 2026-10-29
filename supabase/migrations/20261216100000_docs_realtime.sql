@@ -41,6 +41,48 @@ $$;
 revoke all on function private.page_watched(uuid, integer) from public;
 grant execute on function private.page_watched(uuid, integer) to crm_app;
 
+alter table crm.pages add column if not exists ydoc_generation integer not null default 0;
+
+grant update (ydoc_generation) on crm.pages to authenticated, crm_agent;
+
+create or replace function private.pages_revoke_watchers()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if new.archived_at is not null then
+    delete from crm.page_watchers w where w.page_id = new.id;
+  elsif not new.effective_shared then
+    delete from crm.page_watchers w where w.page_id = new.id and w.user_id is distinct from new.user_id;
+  end if;
+  return null;
+end;
+$$;
+
+revoke all on function private.pages_revoke_watchers() from public;
+
+drop trigger if exists pages_revoke_watchers on crm.pages;
+create trigger pages_revoke_watchers
+  after update on crm.pages
+  for each row
+  when (
+    (new.archived_at is not null and old.archived_at is null)
+    or (old.effective_shared and not new.effective_shared)
+    or (not new.effective_shared and old.user_id is distinct from new.user_id)
+  )
+  execute function private.pages_revoke_watchers();
+
+do $$
+begin
+  execute 'drop policy if exists page_watchers_definer on crm.page_watchers';
+  if not exists (select 1 from pg_roles r where r.rolname = current_user and (r.rolsuper or r.rolbypassrls)) then
+    execute format('create policy page_watchers_definer on crm.page_watchers for all to %I using (true) with check (true)', current_user);
+  end if;
+end;
+$$;
+
 do $$
 begin
   if to_regclass('realtime.messages') is null then

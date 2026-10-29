@@ -185,7 +185,7 @@ export type DocsNav = {
   todayNote: DailySummary | null;
 };
 
-export type DocsSeed = { now: string; workspaceId: string; viewer: { id: string; name: string }; live?: LiveTransportKind | null };
+export type DocsSeed = { now: string; workspaceId: string; viewer: { id: string; name: string }; live?: LiveTransportKind | null; livePublish?: boolean };
 
 export type DocsSnapshot = DocsNav & {
   now: string;

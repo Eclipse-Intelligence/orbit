@@ -1,7 +1,7 @@
 import type { UserActor } from "@/lib/crm/types";
 import type { DocsNav, DocsSeed, Page, PageFilter, PageSummary } from "@/lib/docs/client-types";
 import { localDate } from "@/lib/docs/daily";
-import { liveTransport } from "@/lib/docs/live/broadcast";
+import { livePublishing, liveTransport } from "@/lib/docs/live/broadcast";
 import { personParticipant } from "@/lib/docs/participants";
 import type { DocsRoute } from "@/lib/docs/routes";
 import { docsDailyNote, docsList, docsPage } from "@/lib/docs/view";
@@ -13,7 +13,7 @@ export type DocsInitial = {
 };
 
 export function docsSeed(user: UserActor): DocsSeed {
-  return { now: new Date().toISOString(), workspaceId: user.workspaceId, viewer: { id: user.userId, name: user.fullName || user.email }, live: liveTransport() };
+  return { now: new Date().toISOString(), workspaceId: user.workspaceId, viewer: { id: user.userId, name: user.fullName || user.email }, live: liveTransport(), livePublish: livePublishing() };
 }
 
 export function emptyDocsNav(user: UserActor): DocsNav {
