@@ -24,7 +24,7 @@ function useKeyboardInset() {
   return inset;
 }
 
-export default function PhoneToolbar({ view, children }: { view: EditorView; children?: ReactNode }) {
+export default function PhoneToolbar({ view, children, entry = false }: { view: EditorView; children?: ReactNode; entry?: boolean }) {
   const inset = useKeyboardInset();
   const keep = (event: { preventDefault: () => void }) => event.preventDefault();
   const items = [
@@ -48,9 +48,11 @@ export default function PhoneToolbar({ view, children }: { view: EditorView; chi
         <Button variant="ghost" size="icon" aria-label="Checkbox" className="size-10" onPointerDown={keep} onClick={() => toggleChecklist(view)}>
           <CheckSquareIcon aria-hidden className="size-4" />
         </Button>
-        <Button variant="ghost" size="icon" aria-label="Heading" className="size-10" onPointerDown={keep} onClick={() => toggleHeading(view)}>
-          <HeadingIcon aria-hidden className="size-4" />
-        </Button>
+        {!entry && (
+          <Button variant="ghost" size="icon" aria-label="Heading" className="size-10" onPointerDown={keep} onClick={() => toggleHeading(view)}>
+            <HeadingIcon aria-hidden className="size-4" />
+          </Button>
+        )}
         <span className="flex-1" />
         <Button variant="secondary" size="sm" className="h-8 px-3" onClick={() => view.contentDOM.blur()}>
           Done

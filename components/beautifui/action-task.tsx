@@ -6,6 +6,7 @@ import Button from "@/components/_ui/button";
 import Tag from "@/components/_ui/tag";
 import { EntityChip } from "@/components/beautifui/record-marks";
 import { ClickUpBadge } from "@/components/crm/clickup";
+import RecordNotes from "@/components/docs/record-notes";
 import { relativeWhen } from "@/lib/companies";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import { reminderLabel } from "@/lib/crm/reminder-options";
@@ -28,6 +29,7 @@ export default function ActionTask({
   onComplete?: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [opened, setOpened] = useState(false);
   const overdue =
     Boolean(task.dueAt) && !task.completedAt && new Date(task.dueAt ?? 0).getTime() < now;
   const due = dueBadge ? taskDueState(task.dueAt, now) : null;
@@ -93,7 +95,10 @@ export default function ActionTask({
             data-row-open=""
             data-row-key="space"
             aria-expanded={open}
-            onClick={() => setOpen((current) => !current)}
+            onClick={() => {
+              setOpen((current) => !current);
+              setOpened(true);
+            }}
             className="flex min-w-0 flex-1 cursor-pointer items-start gap-2 text-left sm:items-center"
           >
             <span className="min-w-0 flex-1 text-[14px] leading-5 break-words sm:truncate">{task.title}</span>
@@ -149,7 +154,7 @@ export default function ActionTask({
           transitionTimingFunction: "cubic-bezier(0.23, 1, 0.32, 1)",
         }}
       >
-        <div className="overflow-hidden">
+        <div className="overflow-hidden" inert={!open}>
           <div className="text-subtle flex flex-col gap-1 px-11 pt-0.5 pb-3 text-[13px]">
             {task.description && <p>{task.description}</p>}
             {task.contactName && (
@@ -171,6 +176,7 @@ export default function ActionTask({
             {task.clickupError && <p className="text-danger">ClickUp: {task.clickupError}</p>}
             {!hasDetail && <p>No extra detail.</p>}
             {task.priority !== "normal" && <p>Priority {task.priority}</p>}
+            {opened && <RecordNotes compact record={{ kind: "task", id: task.id, name: task.title }} className="mt-2" />}
           </div>
         </div>
       </div>
