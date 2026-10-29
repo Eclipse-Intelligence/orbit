@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { bodyCore, checkColdEmail, COLD_EMAIL_PLAYBOOK, ECLIPSE_OUTREACH_BRIEF, evidenceFrom, figuresIn, lintColdEmail, playbookFor, senderFirstName, type Evidence } from "@/lib/assistant/cold-email";
+import { bodyCore, checkColdEmail, COLD_EMAIL_PLAYBOOK, ECLIPSE_OUTREACH_BRIEF, evidenceFrom, figuresIn, lintColdEmail, playbookFor, proofListFor, senderFirstName, withProofList, type Evidence } from "@/lib/assistant/cold-email";
+import type { ProofEntry } from "@/lib/crm/proof-rules";
 import { systemPrompt } from "@/lib/assistant/prompt";
-import { runTool, toolDefinitions } from "@/lib/assistant/tools";
+import { toolDefinitions } from "@/lib/assistant/tools";
 import type { UserActor } from "@/lib/crm/types";
 
 const ARTICLE = "https://geteclipse.co/articles/why-your-ai-visibility-platform-needs-repeated-prompt-tests/";
@@ -164,7 +165,7 @@ describe("cold email client proof", () => {
 
   it("fails an incomplete proof entry, a finding next to proof, and a client name in the subject", () => {
     const incomplete = lintColdEmail({ ...PROOF, evidence: [PROOF_EVIDENCE[0], { ...NORTHWIND, permission: undefined, source: undefined }] });
-    assert.equal(noteOf(incomplete, "proof_approved"), "The proof entry for Northwind is missing its Knowledge link and the permission.");
+    assert.equal(noteOf(incomplete, "proof_approved"), "The proof entry for Northwind is missing its proof list id and the permission.");
     const mixed = lintColdEmail({
       ...PROOF,
       body: PROOF.body.replace("to eight.", "to eight. Our article shows a brand named in 6 out of 20 runs could be named in 3 next time."),
@@ -187,12 +188,60 @@ describe("cold email client proof", () => {
         { fact: "A post.", source: "linkedin" },
       ],
     );
-    const result = (await runTool(actor, "cold_email_check", {
-      ...PROOF,
-      evidence: [PROOF_EVIDENCE[0], { ...NORTHWIND, permission: "described_only" }],
-    })) as { checks: { id: string; pass: boolean; note: string }[]; fixes: string[] };
-    assert.equal(noteOf(result.checks, "proof_approved"), "Names Northwind, whose entry is described only.");
-    assert.ok(result.fixes.some((fix) => fix.startsWith("Client proof is approved: Replace the name with a short description")));
+  });
+
+  it("fills proof in from the proof list and fails proof that isn't on it", () => {
+    const entry: ProofEntry = {
+      id: "6f1d8a52-3c1e-4c4b-9a55-0d6c2b1f7e10",
+      client: "Northwind",
+      description: "A 12-person B2B SEO agency",
+      product: "eclipse",
+      usedFor: "client content",
+      result: "They went from two articles a month per client to eight.",
+      measured: "March to June 2026, articles published",
+      permission: "named",
+      approvedBy: "Jo at Northwind",
+      reviewOn: null,
+      createdBy: null,
+      createdAt: "2026-10-01T00:00:00.000Z",
+      updatedAt: "2026-10-01T00:00:00.000Z",
+    };
+    const byId = withProofList([PROOF_EVIDENCE[0], { kind: "proof", fact: "", source: entry.id }], [entry], PROOF);
+    assert.deepEqual(byId[1], { fact: "A 12-person B2B SEO agency, client content", kind: "proof", source: entry.id, client: "Northwind", permission: "named", approvedWording: entry.result, listed: true });
+    assert.deepEqual(failed(lintColdEmail({ ...PROOF, evidence: byId })), []);
+    const invented = withProofList([PROOF_EVIDENCE[0], { ...NORTHWIND, client: "Contoso" }], [entry], { body: PROOF.body.replaceAll("Northwind", "Contoso") });
+    assert.equal(noteOf(lintColdEmail({ ...PROOF, body: PROOF.body.replaceAll("Northwind", "Contoso"), evidence: invented }), "proof_approved"), "The proof for Contoso isn't on the proof list.");
+    const unmentioned = withProofList(PROOF_EVIDENCE.slice(0, 1), [{ ...entry, permission: "described" }], PROOF);
+    assert.equal(noteOf(lintColdEmail({ ...PROOF, evidence: unmentioned }), "proof_approved"), "Names Northwind, whose entry is described only.");
+    const overdue = withProofList([{ kind: "proof", fact: "", source: entry.id }], [{ ...entry, reviewOn: "2020-01-01" }], PROOF);
+    assert.equal(noteOf(lintColdEmail({ ...PROOF, evidence: overdue }), "proof_approved"), "The proof entry for Northwind was due for review on 2020-01-01.");
+    const paraphrased = PROOF.body.replace("to eight.", "to eight. Another agency went from four days of review to one.");
+    const extra = withProofList(
+      [PROOF_EVIDENCE[0], { kind: "proof", fact: "", source: entry.id }, { kind: "proof", fact: "Fabrikam", source: "made-up", client: "Fabrikam", permission: "named", approvedWording: "cut review time from four days to one" }],
+      [entry],
+      { ...PROOF, body: paraphrased },
+    );
+    assert.deepEqual(extra[2], { fact: "Fabrikam", kind: "proof", source: "made-up", client: "Fabrikam", listed: false });
+    assert.equal(noteOf(lintColdEmail({ ...PROOF, body: paraphrased, evidence: extra }), "proof_approved"), "The proof for Fabrikam isn't on the proof list.");
+    const subjectOnly = withProofList([], [{ ...entry, permission: "described" }], { subject: "northwind and ai search", body: FINDING.body });
+    assert.match(noteOf(lintColdEmail({ subject: "northwind and ai search", body: FINDING.body, evidence: [...EVIDENCE, ...subjectOnly] }), "subject"), /a client's name/);
+    const second = { ...entry, id: "0b6a3a7e-9d0c-4f55-8f0e-2a4c1b9d7e21", permission: "described" as const };
+    const twice = withProofList([PROOF_EVIDENCE[0], { kind: "proof", fact: "", source: entry.id }, { kind: "proof", fact: "", source: entry.id }], [entry, second], PROOF);
+    assert.equal(twice.length, 2);
+    assert.deepEqual(failed(lintColdEmail({ ...PROOF, evidence: twice })), []);
+    assert.deepEqual(proofListFor([{ ...entry, reviewOn: "2020-01-01" }], "2026-10-29")[0], {
+      id: entry.id,
+      client: "Northwind",
+      description: entry.description,
+      product: "eclipse",
+      usedFor: entry.usedFor,
+      approvedWording: entry.result,
+      measured: entry.measured,
+      permission: "named",
+      approvedBy: entry.approvedBy,
+      reviewOn: "2020-01-01",
+      reviewOverdue: true,
+    });
   });
 });
 
@@ -389,7 +438,7 @@ describe("assistant guidance", () => {
   it("gives the assistant the playbook and the check, and tells it to aim for value", async () => {
     const names = toolDefinitions().map((tool) => tool.function.name);
     assert.ok(names.includes("cold_email_playbook") && names.includes("cold_email_check"));
-    const playbook = (await runTool(actor, "cold_email_playbook", {})) as { playbook: string; eclipseBrief: string };
+    const playbook = { playbook: COLD_EMAIL_PLAYBOOK, eclipseBrief: ECLIPSE_OUTREACH_BRIEF };
     assert.match(playbook.playbook, /Every email carries one thing they probably don't know\. There are three kinds/);
     assert.match(playbook.playbook, /Never write "we can do the same for you"/);
     assert.match(playbook.eclipseBrief, /Approved client proof may be quoted from the proof list in Knowledge, exactly as approved and within its permission level/);
@@ -398,8 +447,8 @@ describe("assistant guidance", () => {
       parameters: { properties: { evidence: { items: { properties: Record<string, { enum?: string[] }> } } } };
     };
     const evidence = check.parameters.properties.evidence.items.properties;
-    assert.deepEqual(Object.keys(evidence), ["fact", "source", "kind", "client", "permission", "approvedWording"]);
-    assert.deepEqual(evidence.permission.enum, ["named", "described", "reference"]);
+    assert.deepEqual(Object.keys(evidence), ["fact", "source", "kind"]);
+    assert.match(playbook.playbook, /cold_email_playbook returns it as proofList/);
     const prompt = systemPrompt(actor, { webSearch: false });
     assert.match(prompt, /Always read cold_email_playbook first/);
     assert.match(prompt, /worth a busy expert's time/);

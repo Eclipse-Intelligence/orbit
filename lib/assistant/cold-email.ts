@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { completeJson } from "@/lib/llm";
 import { midSentenceColons, piecesOf } from "@/lib/writing-style";
+import { PROOF_PERMISSIONS, reviewOverdue, todayIso, type ProofEntry, type ProofPermission } from "@/lib/crm/proof-rules";
 
 export const COLD_EMAIL_PLAYBOOK = `# Writing a first email to a prospect (v2)
 
@@ -17,7 +18,7 @@ Goal. Write an email a busy, expert person finds worth replying to. They owe Mar
 - What they think. Use social_lookup to confirm their current role and read their recent posts. Note the exact point they made and the date.
 - Triggers. Look for a hire, funding, a launch, a leadership change or a new market, less than about two months old. Check recall and the nightly market notes first, then the news if web search is on. Note the date and link.
 - Eclipse material. Find an article with eclipse_articles and read it in full. Copy the exact sentences and figures you might use. Check every product claim on docs.geteclipse.co.
-- Proof. Search the proof list in Knowledge (search_knowledge, then read_knowledge) for an entry that matches their segment, their size and the problem their trigger points to.
+- Proof. Look through the proof list that comes with this playbook for an entry that matches their segment, their size and the problem their trigger points to.
 - Evidence list. Record every fact with its source and date, what they already offer, and the exact wording of any proof or figure.
 
 ## 3. Pick one angle, or don't send
@@ -44,7 +45,7 @@ Tell Mark what's missing.
 ## 4. Client proof rules
 Proof is the strongest thing an email can carry and the easiest to get wrong.
 
-The proof list. Client proof lives in one Eclipse Knowledge doc. Each entry has:
+The proof list. Client proof lives in the proof list in Knowledge (Settings, Knowledge), and cold_email_playbook returns it as proofList. Each entry has:
 - The client, their segment, their size and what they sell.
 - What they used it for, and whether that was Cntent or Eclipse.
 - The result, in the exact words the client approved.
@@ -105,7 +106,7 @@ Every email, follow-ups included, goes to Mark for approval.
 - Use em dashes, en dashes or a colon mid-sentence, or call an article a "piece".
 
 ## 9. Check, judge, propose
-- Run cold_email_check with the subject, the body, what their company already offers, and your evidence. For each proof entry, the evidence includes its Knowledge link and permission level. Pass it with kind proof, its Knowledge link or id as source, the client's name as the list has it (even when it's described only), the permission (named, described or reference) and the approved wording, word for word. Fix every failed check, in at most two rounds.
+- Run cold_email_check with the subject, the body, what their company already offers, and your evidence. For each proof entry, pass it with kind proof and its id from proofList as source. The check fills in the client, the permission and the approved wording from the list, so the email has to quote that wording word for word. Fix every failed check, in at most two rounds.
 - Judge honestly whether this person, who gets a lot of these, would find it worth replying to. If not, improve it or call it a NO-SEND.
 - When you propose send_email, tell Mark:
   - the angle
@@ -242,11 +243,9 @@ Don't claim:
 - Client results beyond the approved wording.
 - Anything from a client's workspace.`;
 
-export const PROOF_PERMISSIONS = ["named", "described", "reference"] as const;
+export { PROOF_PERMISSIONS, type ProofPermission };
 
-export type ProofPermission = (typeof PROOF_PERMISSIONS)[number];
-
-export type Evidence = { fact: string; source?: string; kind?: "fact" | "proof"; client?: string; permission?: ProofPermission; approvedWording?: string };
+export type Evidence = { fact: string; source?: string; kind?: "fact" | "proof"; client?: string; permission?: ProofPermission; approvedWording?: string; listed?: boolean; reviewOn?: string };
 
 function trimmed(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
@@ -269,11 +268,11 @@ export function evidenceFrom(value: unknown): Evidence[] {
     const proof = raw.kind === "proof";
     const approvedWording = trimmed(raw.approvedWording);
     const fact = trimmed(raw.fact) ?? (proof ? approvedWording : undefined);
-    if (!fact) return [];
-    if (!proof) return [{ fact, ...(trimmed(raw.source) ? { source: trimmed(raw.source) } : {}) }];
+    if (!proof) return fact ? [{ fact, ...(trimmed(raw.source) ? { source: trimmed(raw.source) } : {}) }] : [];
+    if (!fact && !trimmed(raw.source)) return [];
     return [
       {
-        fact,
+        fact: fact ?? "",
         kind: "proof",
         ...(trimmed(raw.source) ? { source: trimmed(raw.source) } : {}),
         ...(trimmed(raw.client) ? { client: trimmed(raw.client) } : {}),
@@ -282,6 +281,63 @@ export function evidenceFrom(value: unknown): Evidence[] {
       },
     ];
   });
+}
+
+function sameClient(a: string, b: string) {
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+
+function fromEntry(entry: ProofEntry, fact?: string): Evidence {
+  return {
+    fact: fact || [entry.description, entry.usedFor].filter(Boolean).join(", ") || entry.result,
+    kind: "proof",
+    source: entry.id,
+    client: entry.client,
+    permission: entry.permission,
+    approvedWording: entry.result,
+    listed: true,
+    ...(entry.reviewOn ? { reviewOn: entry.reviewOn } : {}),
+  };
+}
+
+function unlistedProof(item: Evidence): Evidence {
+  return { fact: item.fact, kind: "proof", ...(item.source ? { source: item.source } : {}), ...(item.client ? { client: item.client } : {}), listed: false };
+}
+
+export function withProofList(evidence: Evidence[], entries: ProofEntry[], email: { subject?: string; body: string }) {
+  const cited = new Set<string>();
+  const resolved = evidence.flatMap((item): Evidence[] => {
+    if (item.kind !== "proof") return [item];
+    const entry =
+      entries.find((candidate) => item.source && item.source.includes(candidate.id)) ??
+      (item.client ? entries.find((candidate) => sameClient(candidate.client, item.client!)) : undefined);
+    if (!entry) return [unlistedProof(item)];
+    if (cited.has(entry.id)) return [];
+    cited.add(entry.id);
+    return [fromEntry(entry, item.fact)];
+  });
+  const citedClients = entries.filter((entry) => cited.has(entry.id)).map((entry) => entry.client);
+  const text = `${email.subject ?? ""}\n${bodyCore(email.body)}`;
+  const mentioned = entries
+    .filter((entry) => !cited.has(entry.id) && !citedClients.some((client) => sameClient(client, entry.client)) && mentions(text, entry.client))
+    .map((entry) => fromEntry(entry));
+  return [...resolved, ...mentioned];
+}
+
+export function proofListFor(entries: ProofEntry[], today = todayIso()) {
+  return entries.map((entry) => ({
+    id: entry.id,
+    client: entry.client,
+    description: entry.description,
+    product: entry.product,
+    usedFor: entry.usedFor,
+    approvedWording: entry.result,
+    measured: entry.measured,
+    permission: entry.permission,
+    approvedBy: entry.approvedBy,
+    reviewOn: entry.reviewOn,
+    ...(reviewOverdue(entry, today) ? { reviewOverdue: true } : {}),
+  }));
 }
 
 export type ColdEmailCheck = { id: string; label: string; pass: boolean; note: string; fix?: string; source: "rules" | "jev" | "review" };
@@ -384,7 +440,7 @@ function greetingName(body: string) {
 const PERMISSION_LABEL: Record<ProofPermission, string> = { named: "named", described: "described only", reference: "named, takes reference calls" };
 
 function missingFrom(entry: Evidence) {
-  return [!entry.source ? "its Knowledge link" : "", !entry.client ? "the client" : "", !entry.permission ? "the permission" : "", !entry.approvedWording ? "the approved wording" : ""].filter(Boolean);
+  return [!entry.source ? "its proof list id" : "", !entry.client ? "the client" : "", !entry.permission ? "the permission" : "", !entry.approvedWording ? "the approved wording" : ""].filter(Boolean);
 }
 
 function listed(items: string[]) {
@@ -411,7 +467,17 @@ function proofCheck(proof: ReturnType<typeof proofUse>): Omit<ColdEmailCheck, "s
       label,
       pass: false,
       note: `States a client result or names a client with no proof entry behind it: "${claims[0]?.slice(0, 90) ?? ""}".`,
-      fix: "Quote an entry from the proof list in Knowledge and pass it in evidence with kind proof, its Knowledge link as source, the client, the permission and the approved wording. If no entry is a close match, use a finding instead.",
+      fix: "Quote an entry from proofList and pass it in evidence with kind proof and its id as source. If no entry is a close match, use a finding instead.",
+    };
+  }
+  const unlisted = entries.filter((entry) => entry.listed === false);
+  if (unlisted.length) {
+    return {
+      id: "proof_approved",
+      label,
+      pass: false,
+      note: `${unlisted[0].client ? `The proof for ${unlisted[0].client}` : "That proof"} isn't on the proof list.`,
+      fix: "Use an entry from proofList, passing its id as source, or use a finding instead. Proof can be added in Settings, Knowledge.",
     };
   }
   if (used.length === 0) {
@@ -423,6 +489,16 @@ function proofCheck(proof: ReturnType<typeof proofUse>): Omit<ColdEmailCheck, "s
       fix: "Copy the result word for word from the proof entry's approved wording, or leave it out.",
     };
   }
+  const overdue = used.filter((entry) => entry.reviewOn && entry.reviewOn < todayIso());
+  if (overdue.length) {
+    return {
+      id: "proof_approved",
+      label,
+      pass: false,
+      note: `The proof entry for ${overdue[0].client} was due for review on ${overdue[0].reviewOn}.`,
+      fix: "Use a different entry or a finding, and tell the user the entry needs reviewing in Settings, Knowledge.",
+    };
+  }
   const incomplete = used.filter((entry) => missingFrom(entry).length > 0);
   if (incomplete.length) {
     const entry = incomplete[0];
@@ -431,7 +507,7 @@ function proofCheck(proof: ReturnType<typeof proofUse>): Omit<ColdEmailCheck, "s
       label,
       pass: false,
       note: `The proof entry${entry.client ? ` for ${entry.client}` : ""} is missing ${listed(missingFrom(entry))}.`,
-      fix: "Copy the entry from the proof list in Knowledge: its Knowledge link or id as source, the client, the permission (named, described or reference) and the approved wording, word for word. If it isn't on the list, it isn't proof.",
+      fix: "Pass the entry from proofList with kind proof and its id as source. If it isn't on the list, it isn't proof.",
     };
   }
   const describedNamed = named.filter((entry) => entry.permission === "described");
@@ -690,6 +766,7 @@ const PERMISSION_RULE: Record<ProofPermission, string> = {
 function evidenceLine(item: Evidence, index: number) {
   const source = item.source ? ` (${item.source})` : "";
   if (item.kind !== "proof") return `E${index + 1}. ${item.fact}${source}`;
+  if (item.listed === false) return `E${index + 1}. Claimed client proof for ${item.client ?? "a client not given"} that is NOT on the approved proof list, so it may not be used. ${item.fact}${source}`;
   const permission = item.permission ? PERMISSION_RULE[item.permission] : "permission not given";
   return `E${index + 1}. Approved client proof for ${item.client ?? "a client not given"}, ${permission}. Approved wording "${item.approvedWording ?? "not given"}". ${item.fact}${source}`;
 }
@@ -709,7 +786,9 @@ export async function judgeColdEmail(
       goal: "earn a useful reply",
     },
     prospect_evidence: input.evidence.slice(0, 10).map((item, index) =>
-      item.kind === "proof"
+      item.kind === "proof" && item.listed === false
+        ? { id: `E${index + 1}`, kind: "claimed client proof that is not on the approved proof list and may not be used", client: (item.client ?? "").slice(0, 200), fact: item.fact.slice(0, 400), source: (item.source ?? "").slice(0, 200) }
+        : item.kind === "proof"
         ? {
             id: `E${index + 1}`,
             kind: "approved client proof",

@@ -225,7 +225,7 @@ Agent tokens see every task in the workspace; people in the app only see tasks t
 
 `company.merged` and `contact.merged` carry how many rows moved from each table and which fields were filled; the archived duplicate also fires `company.archived` or `contact.archived` with `mergedInto`.
 
-An endpoint subscribed to `*` also receives every other audited event, which can't be chosen by name: for example `knowledge.added`, `knowledge.updated` and `knowledge.removed` (Knowledge isn't in the agent API; these carry the item's title, kind, scope and company), `board.*`, `document.*` for proposals and NDAs, `template.*`, `product.*`, `email_template.*` and `call_summary.ready`. Changes to a person's own mailbox are not audited and never fire webhooks.
+An endpoint subscribed to `*` also receives every other audited event, which can't be chosen by name: for example `knowledge.added`, `knowledge.updated` and `knowledge.removed` (Knowledge isn't in the agent API; these carry the item's title, kind, scope and company), `board.*`, `document.*` for proposals and NDAs, `template.*`, `product.*`, `email_template.*`, `proof_entry.created`, `proof_entry.updated` and `proof_entry.archived` (the proof list for cold emails; they carry the client, the approved result, the permission and the review date) and `call_summary.ready`. Changes to a person's own mailbox are not audited and never fire webhooks.
 
 `GET /api/v1/webhooks` lists endpoints without the secret. `DELETE /api/v1/webhooks/:id` archives one. `GET /api/v1/webhooks/deliveries` lists recent attempts.
 
