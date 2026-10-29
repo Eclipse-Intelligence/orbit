@@ -450,11 +450,9 @@ function LiveSteps({ tools, thinking }: { tools: LiveTool[]; thinking: boolean }
       <ol
         ref={list}
         aria-label="Steps so far"
-        className={cn(
-          "mt-1.5 flex max-h-[62px] flex-col gap-1 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
-          rows > 3 && "[mask-image:linear-gradient(to_bottom,transparent,black_14px)]",
-        )}
+        className="mt-1.5 flex max-h-[62px] flex-col gap-1 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
+        {rows > 3 && <li aria-hidden className="pointer-events-none sticky top-0 z-10 -mb-[18px] h-3.5 shrink-0 bg-gradient-to-b from-[#1c1c1c] to-transparent" />}
         {tools.map((tool) => (
           <li key={tool.id} className="text-subtle flex min-h-[18px] shrink-0 items-center gap-2 text-[12px] leading-[18px]">
             <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", tool.status === "running" ? "bg-soft animate-pulse" : "bg-faint")} />
@@ -1063,10 +1061,11 @@ export default function AssistantDock() {
             pinned.current = node.scrollHeight - node.scrollTop - node.clientHeight < 80;
           }}
           className={cn(
-            "min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 [mask-image:linear-gradient(to_bottom,transparent,black_1rem,black_calc(100%-1.5rem),transparent)]",
+            "min-h-0 flex-1 overflow-y-auto overscroll-contain px-5",
             messages.length > 0 || busy ? "py-3 md:min-h-[12rem]" : "pt-3 md:flex-none",
           )}
         >
+          <div aria-hidden className="pointer-events-none sticky top-0 z-10 -mx-5 -mt-3 -mb-1 h-4 bg-gradient-to-b from-[#1c1c1c] to-transparent" />
           {messages.length > 0 || busy ? (
             <div className="flex flex-col gap-5">
               {shownItems(messages, busy).map((item) =>
@@ -1076,12 +1075,12 @@ export default function AssistantDock() {
                   <ToolTrail key={item.key} tools={item.tools} />
                 ),
               )}
+              {busy && (live.length > 0 || !streamed) && <LiveSteps tools={live} thinking={live.every((tool) => tool.status === "done") && !streamed} />}
               {busy && streamed && (
                 <div aria-busy="true">
                   <Markdown text={streamed} />
                 </div>
               )}
-              {busy && (live.length > 0 || !streamed) && <LiveSteps tools={live} thinking={live.every((tool) => tool.status === "done") && !streamed} />}
             </div>
           ) : (
             <div className="flex flex-col gap-3 pt-1 pb-2">
@@ -1118,6 +1117,7 @@ export default function AssistantDock() {
               </p>
             )
           )}
+          <div aria-hidden className="pointer-events-none sticky bottom-0 z-10 -mx-5 -mt-6 h-6 bg-gradient-to-t from-[#1c1c1c] to-transparent" />
         </div>
 
         <form onSubmit={submit} className="shrink-0 px-5 pt-1 pb-3">
