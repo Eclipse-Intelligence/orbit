@@ -37,9 +37,9 @@ Three kinds of token reach the server. They see different tools.
 
 | Token | How it's made | Runs as | Sees |
 | --- | --- | --- | --- |
-| Workspace agent token | `npm run agent:create -- --name "Research" --scopes crm:read,companies:write` (printed once) | The agent (`crm_agent` role), with the scopes it was issued. Sees every task in the workspace. | Every tool except the mail and Reader tools |
+| Workspace agent token | `npm run agent:create -- --name "Research" --scopes crm:read,companies:write` (printed once) | The agent (`crm_agent` role), with the scopes it was issued. Sees every task in the workspace, and only shared docs. | Every tool except the mail, Reader and daily note tools |
 | Market-only agent token | Settings › Learning, Grok Bot (scopes exactly `market:write`) | The agent | Only `get_watchlist` and `add_market_notes`, with their own short instructions |
-| Personal token (`orbit_…`) | Settings › API and webhooks › Your mail in Claude | That person (`authenticated` role), with their role's scopes: everything for owners and admins, everything but `admin` for members. Sees only tasks they own or created unless they are an owner or admin. | Every tool, including the mail and Reader tools |
+| Personal token (`orbit_…`) | Settings › API and webhooks › Your mail in Claude | That person (`authenticated` role), with their role's scopes: everything for owners and admins, everything but `admin` for members. Sees only tasks they own or created unless they are an owner or admin, and their own private docs plus shared docs. | Every tool, including the mail, Reader and daily note tools |
 
 Every tool is listed for every non-market token whatever its scopes. A call without the scope it needs returns `forbidden: Missing scope <scope>.` with `isError: true`. Other failures return `<code>: <message>` the same way.
 
@@ -59,6 +59,7 @@ claude mcp add --transport http orbit https://orbit.geteclipse.co/api/mcp --head
 
 - **Shared with every member:** companies, contacts, opportunities and board cards, tasks (subject to the task rule above), activities, tags, proposals, templates and products.
 - **Private to each person:** their Mail mirror, calendars, assistant chats, workflow runs and notifications. Only the mail tools reach mail, and only for the person who owns the token.
+- **Docs:** private to their owner unless the doc, or a folder above it, is shared with the workspace; then every member can read and edit it. Personal tokens see the person's own docs and daily notes plus shared docs. Workspace agent tokens see and edit shared docs only, never private docs or daily notes, and need `docs:read` and `docs:write` (or `admin`).
 - **Not reachable over MCP:** Knowledge (documents and transcripts), workflows, boards as such (cards show up in `search_opportunities` and `get_company_context`), calendars and the assistant.
 - **Matching:** companies match by domain, then by the same normalised name when neither has a domain. Contacts match by email, then LinkedIn, then the same name at the same company. Calling `upsert_company` twice with the same domain gives one company, and `add_lead` twice with the same email gives one contact. The rules are in `docs/architecture.md`.
 - **Audit and webhooks:** every change to shared records writes an audit event with the token as the actor and the `provenanceSource` and `provenanceUrl` you pass. Audit events can start workflows and are delivered to webhooks subscribed to them (the event list is in `docs/api.md`). Mail drafts are not audited.
@@ -164,6 +165,29 @@ No tool sends or signs. A person sends from the proposal in Orbit (or approves t
 | --- | --- | --- | --- | --- | --- |
 | `get_watchlist` | The topics, competitors, people, target accounts and sources Eclipse wants researched. | none | `crm:read` or `market:write` for agents; none for personal tokens | No | All |
 | `add_market_notes` | Sends findings to Orbit's market inbox. A link Orbit already has is skipped. Orbit learns from them overnight and puts the important ones in each member's morning brief. Returns `{added, duplicates, rejected}`. | `notes` (1 to 50, each `kind` of `news`, `post`, `launch`, `hire`, `funding`, `signal`, `research` or `other`, `headline`, `summary`, `url`, `about`, `publishedAt`) | `market:write` (or `admin`) for agents; none for personal tokens | Yes | All |
+
+### Docs
+
+Docs are Markdown notes in nested folders (see `docs/architecture.md`, Docs). Reads need `docs:read` and changes `docs:write`; personal tokens have both through their role. Agent tokens only ever see docs shared with the workspace. Every change goes through the same save path as the app: links (`[[Title]]`), tags (`#tag`) and record mentions are re-indexed, a version is saved before and after every agent edit, and changes to shared docs are audited as `page.*` and `page_folder.*` events with the token as the actor.
+
+| Tool | What it does | Main parameters | Scope | Changes | Tokens |
+| --- | --- | --- | --- | --- | --- |
+| `list_doc_folders` | Folders with parent, position, owner and visibility (`private`, `shared`, `shared_by_folder`). | `archived` | `docs:read` | No | Both |
+| `create_doc_folder` | Creates a folder, at the top level or in another. Agent tokens can only create shared ones. | `name`, `parent_id`, `shared`, `provenanceUrl` | `docs:write` | Yes | Both |
+| `list_docs` | Docs with excerpts and tags, newest edit first. Filter by folder, by no folder, or by a tag (nested tags included). | `folder_id`, `no_folder`, `tag`, `sort` (`edited`, `created`, `title`), `archived`, `limit` (up to 200), `offset` | `docs:read` | No | Both |
+| `search_docs` | Title prefix, fuzzy title and full-text search. An empty query lists recent docs. Personal tokens also search their daily notes. | `query`, `limit` (up to 50) | `docs:read` | No | Both |
+| `read_doc` | A doc as Markdown, 100,000 characters from `offset` with `nextOffset`. The first window adds its folder path, links, mentions and backlinks. | `id`, `offset` | `docs:read` | No | Both |
+| `create_doc` | Creates a doc. A personal token's doc is private unless shared or put in a shared folder; an agent token's is always shared. | `title`, `content`, `folder_id`, `shared`, `provenanceUrl` | `docs:write` | Yes | Both |
+| `update_doc` | Changes the text: `replace`, `append`, or `edit` (exact `find` and `replace`, `all` for every match). `base_revision` refuses the change if the doc changed since it was read. | `id`, `mode`, `content`, `find`, `replace`, `all`, `base_revision`, `provenanceUrl` | `docs:write` | Yes | Both |
+| `rename_doc` | Renames a doc and rewrites `[[Old title]]` links to it in every doc the token can see, with a version of each. | `id`, `title`, `provenanceUrl` | `docs:write` | Yes | Both |
+| `move_doc` | Moves a doc into a folder, or out with `folder_id` null. Refused with `visibility_change` when it would share the doc or make it private, unless `allow_visibility_change` is true. Only the owner can move a doc somewhere private. | `id`, `folder_id`, `allow_visibility_change`, `provenanceUrl` | `docs:write` | Yes | Both |
+| `tag_doc` | Adds inline tags on a tag line at the end, or removes them from the text. | `id`, `add`, `remove` (up to 20 each), `provenanceUrl` | `docs:write` | Yes | Both |
+| `share_doc` | Shares a doc with the workspace, or with `shared` false makes it private. Only the owner can make it private; daily notes can't be shared. | `id`, `shared`, `provenanceUrl` | `docs:write` | Yes | Both |
+| `archive_doc` | Archives a doc, or with `restore` true brings it back. | `id`, `restore`, `provenanceUrl` | `docs:write` | Yes | Both |
+| `list_doc_versions` | Saved versions, newest first, with who made each (a person, the Orbit assistant or an agent), why and a summary. | `id`, `limit` (up to 500) | `docs:read` | No | Both |
+| `restore_doc_version` | Restores a version as a new version, keeping the current text as a version first. | `id`, `version_id`, `provenanceUrl` | `docs:write` | Yes | Both |
+| `get_daily_note` | The person's daily note for a day (today by default), created on first open, with the day's meetings when `meetings` is true. With `list` true, the days that have notes and how many entries each has. | `date` (YYYY-MM-DD, `today`, `yesterday`), `meetings`, `list`, `from`, `to` | `docs:read` | Creates an empty note | Personal |
+| `append_daily_note` | Adds an entry starting with the London time, like `09:15 Call with Priya`, optionally with a line of the day's meetings. | `text`, `date`, `meetings` | `docs:write` | Yes (private; not audited) | Personal |
 
 ### Mail (personal tokens only)
 

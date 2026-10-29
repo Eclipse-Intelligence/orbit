@@ -27,6 +27,7 @@ Optional `Idempotency-Key` header (printable ASCII, up to 200 characters). Reuse
 | CSV import | `companies:write` or `contacts:write` |
 | Webhook list and deliveries | `crm:read` |
 | Webhook create and archive | `admin` |
+| Docs (MCP only for now) | `docs:read` to read, `docs:write` to change |
 
 `admin` satisfies any of these.
 
