@@ -184,12 +184,12 @@ describe("docs routes and dates", () => {
     assert.equal(grid[grid.length - 1], "2026-10-31");
   });
 
-  it("restores a local draft only when it is newer and different", () => {
+  it("restores a local draft whenever it differs from the server", () => {
     const server = { title: "T", body: "saved", updatedAt: "2026-10-29T10:00:00Z" };
     const at = Date.parse("2026-10-29T10:00:10Z");
     assert.equal(draftToRestore(null, server), null);
     assert.equal(draftToRestore({ title: "T", body: "saved", baseRevision: 1, at }, server), null);
-    assert.equal(draftToRestore({ title: "T", body: "old", baseRevision: 1, at: Date.parse("2026-10-28T10:00:00Z") }, server), null);
+    assert.equal(draftToRestore({ title: "T", body: "old", baseRevision: 1, at: Date.parse("2026-10-28T10:00:00Z") }, server)?.body, "old");
     assert.equal(draftToRestore({ title: "T", body: "typed", baseRevision: 1, at }, server)?.body, "typed");
   });
 });

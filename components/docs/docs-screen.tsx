@@ -14,7 +14,7 @@ import NoteView from "@/components/docs/note-view";
 import { ParticipantAvatar } from "@/components/docs/presence";
 import { FolderShare } from "@/components/docs/share-control";
 import { navigateWithinDocs, useDocsNav, useDocsNavigate, useDocsNow } from "@/components/docs/use-docs";
-import type { DailySummary, Folder, Page, PageFilter, PageSummary, TagNode } from "@/lib/docs/client-types";
+import { DocsError, type DailySummary, type Folder, type Page, type PageFilter, type PageSummary, type TagNode } from "@/lib/docs/client-types";
 import { entryCount } from "@/lib/docs/markdown";
 import { longDay } from "@/lib/docs/format";
 import { dailyHref, listHref, listKey, pageHref, parseDocsRoute, sameList } from "@/lib/docs/routes";
@@ -32,6 +32,32 @@ import SunIcon from "@/public/assets/images/docs/sun.svg";
 import FolderIcon from "@/public/assets/images/mail/folder.svg";
 
 const EMPTY: string[] = [];
+
+type LoadError = { id: string; message: string; signIn: boolean };
+
+function loadErrorOf(id: string, error: unknown): LoadError {
+  const signIn = error instanceof DocsError && (error.code === "401" || error.code === "unauthorized");
+  const text = error instanceof Error && error.message ? error.message : "Docs didn't respond. Try again in a moment.";
+  return { id, message: text, signIn };
+}
+
+function LoadFailure({ failure, what, onRetry }: { failure: LoadError; what: string; onRetry: () => void }) {
+  return (
+    <div role="alert" className="flex flex-col items-start gap-3 pt-1">
+      <h2>{what}</h2>
+      <p className="text-subtle">{failure.message}</p>
+      {failure.signIn ? (
+        <Button variant="primary" size="sm" href="/login">
+          Sign in again
+        </Button>
+      ) : (
+        <Button variant="secondary" size="sm" onClick={onRetry}>
+          Try again
+        </Button>
+      )}
+    </div>
+  );
+}
 
 function within(event: MouseEvent<HTMLElement>, href: string) {
   if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
@@ -255,9 +281,34 @@ export default function DocsScreen({ viewer, initial }: { viewer: Viewer; initia
   }, [rawIds, summaryOf, sort, route.list.kind]);
 
   const listLoaded = Boolean(storedIds);
+  const routeList = useRef(route.list);
+  useLayoutEffect(() => {
+    routeList.current = route.list;
+  });
+  const revalidated = useRef<string | null>(null);
+  const [listError, setListError] = useState<LoadError | null>(null);
+  const [listAttempt, setListAttempt] = useState(0);
   useEffect(() => {
-    if (ready) void loadList(route.list, listLoaded).catch(() => {});
-  }, [ready, key, listLoaded, loadList, route.list]);
+    if (!ready) return;
+    if (listLoaded && revalidated.current === key) return;
+    revalidated.current = key;
+    let live = true;
+    void loadList(routeList.current, listLoaded)
+      .then(() => {
+        if (live) setListError(null);
+      })
+      .catch((error: unknown) => {
+        if (live) setListError(loadErrorOf(key, error));
+      });
+    return () => {
+      live = false;
+    };
+  }, [ready, key, listLoaded, loadList, listAttempt]);
+  const retryList = useCallback(() => {
+    setListError(null);
+    revalidated.current = null;
+    setListAttempt((value) => value + 1);
+  }, []);
 
   const today = nav?.today ?? "";
   const dailyDate = route.list.kind === "daily" && !route.pageId ? (route.date ?? today) : null;
@@ -277,18 +328,28 @@ export default function DocsScreen({ viewer, initial }: { viewer: Viewer; initia
   const shownSummary = shownId ? (summaryOf(shownId) ?? (page ?? undefined)) : undefined;
 
   const [missing, setMissing] = useState<string | null>(null);
+  const [pageError, setPageError] = useState<LoadError | null>(null);
+  const [errorFor, setErrorFor] = useState(shownId);
+  if (errorFor !== shownId) {
+    setErrorFor(shownId);
+    if (pageError) setPageError(null);
+  }
+  const pageFailed = Boolean(shownId) && pageError?.id === shownId;
+  const shownLoaded = Boolean(shownId && pages[shownId]);
   useEffect(() => {
-    if (!ready || !shownId || pages[shownId]) return;
+    if (!ready || !shownId || shownLoaded || pageFailed) return;
     let live = true;
     void loadPage(shownId)
       .then((found) => {
         if (live && !found) setMissing(shownId);
       })
-      .catch(() => {});
+      .catch((error: unknown) => {
+        if (live) setPageError(loadErrorOf(shownId, error));
+      });
     return () => {
       live = false;
     };
-  }, [ready, shownId, pages, loadPage]);
+  }, [ready, shownId, shownLoaded, pageFailed, loadPage]);
 
   useEffect(() => {
     if (ready && route.pageId) visit(route.pageId);
@@ -432,7 +493,11 @@ export default function DocsScreen({ viewer, initial }: { viewer: Viewer; initia
                   {folder.shared ? "Shared with workspace" : "Private"} <span aria-hidden>·</span> {ids.length} {ids.length === 1 ? "note" : "notes"}
                 </p>
               )}
-              {ids.length === 0 ? (
+              {ids.length === 0 && listError?.id === key ? (
+                <div className="px-3 py-4">
+                  <LoadFailure failure={listError} what="This list didn't load" onRetry={retryList} />
+                </div>
+              ) : ids.length === 0 ? (
                 <div className="flex flex-col items-start gap-3 px-3 py-4">
                   <p className="text-subtle">{list.kind === "search" ? `Nothing matches “${list.query}”.` : "No notes here yet."}</p>
                   {list.kind !== "search" && (
@@ -468,18 +533,32 @@ export default function DocsScreen({ viewer, initial }: { viewer: Viewer; initia
             </>
           )}
         </ListPane>
-        <NoteView
-          page={page}
-          summary={shownSummary ?? null}
-          list={list}
-          backHref={backHref}
-          backLabel={backLabel}
-          missing={Boolean(shownId) && missing === shownId && !page}
-          empty={!shownId && !dailyDate}
-          firstRun={list.kind === "all" && ids.length === 0 && (listLoaded || fallbackIds !== null)}
-          onNewNote={() => void newNote()}
-          hiddenOnPhone={level !== "note"}
-        />
+        {pageFailed && pageError && !page ? (
+          <section
+            aria-label="Note didn't load"
+            className={cn("flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto px-5 pt-5 md:my-2 md:mr-2 md:rounded-2xl md:bg-white/[0.02] md:px-12 md:pt-7", level !== "note" && "max-md:hidden")}
+          >
+            <div className="note-measure mx-auto flex w-full flex-col items-start gap-5">
+              <Button variant="secondary" size="sm" href={backHref} onClick={(event) => within(event, backHref)} className="md:hidden">
+                Back to {backLabel}
+              </Button>
+              <LoadFailure failure={pageError} what="This note didn't load" onRetry={() => setPageError(null)} />
+            </div>
+          </section>
+        ) : (
+          <NoteView
+            page={page}
+            summary={shownSummary ?? null}
+            list={list}
+            backHref={backHref}
+            backLabel={backLabel}
+            missing={Boolean(shownId) && missing === shownId && !page}
+            empty={!shownId && !dailyDate}
+            firstRun={list.kind === "all" && ids.length === 0 && (listLoaded || fallbackIds !== null)}
+            onNewNote={() => void newNote()}
+            hiddenOnPhone={level !== "note"}
+          />
+        )}
       </div>
       <DocsNotice />
     </section>

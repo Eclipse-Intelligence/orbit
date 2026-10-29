@@ -10,12 +10,13 @@ import {
   type PageSort,
   type PageSummary,
   type Participant,
+  type SaveResult,
   type ShareTarget,
   type Visibility,
 } from "@/lib/docs/client-types";
-import { docsData, refreshDocsActivity } from "@/lib/docs/connection";
-import { clearDraft, writeDraft } from "@/lib/docs/drafts";
-import { entryCount, excerptFrom, parseTags, wordCount } from "@/lib/docs/markdown";
+import { docsData, refreshDocsActivity, resetDocsConnection } from "@/lib/docs/connection";
+import { clearDraft, readDraft, setDraftScope, writeDraft } from "@/lib/docs/drafts";
+import { entryCount, excerptFrom, parseTags, rewriteLinkTitle, wordCount } from "@/lib/docs/markdown";
 import { listKey } from "@/lib/docs/routes";
 import { viewerParticipant } from "@/lib/docs/participants";
 
@@ -45,7 +46,6 @@ type DocsState = {
   titles: Record<string, string>;
   saves: Record<string, { status: SaveStatus; message?: string }>;
   epochs: Record<string, number>;
-  staleEpoch: number;
   fresh: string | null;
   rail: Rail | null;
   railChosen: boolean;
@@ -63,7 +63,6 @@ type DocsState = {
   refreshTitles: () => Promise<void>;
   editLocal: (id: string, title: string, body: string) => void;
   replaceBody: (page: Page) => void;
-  invalidateOthers: (keepId: string) => void;
   setSave: (id: string, status: SaveStatus, message?: string) => void;
   visit: (id: string) => void;
   createNote: (input?: CreateInput) => Promise<Page | null>;
@@ -86,12 +85,47 @@ type DocsState = {
   clearFresh: () => void;
 };
 
+type NoteText = { title: string; body: string };
+type Acknowledged = NoteText & { revision: number; daily: boolean };
+type Queued = NoteText & { renamedFrom: string | null };
+type Reader = () => NoteText;
+
 const RECENT_KEY = "orbit-docs-recent";
 const SAVE_DELAY_MS = 500;
+const UNSAVED = "Your latest changes haven't saved yet, so nothing was restored. Try again once they have.";
+
+let noticeId = 0;
+let session = 0;
+let scope: string | null = null;
+let stopActivity: (() => void) | null = null;
+let clock: ReturnType<typeof setInterval> | null = null;
+const listRequests = new Map<string, Promise<string[]>>();
+const pageRequests = new Map<string, Promise<Page | null>>();
+const readers = new Map<string, Reader>();
+const timers = new Map<string, ReturnType<typeof setTimeout>>();
+const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const queued = new Map<string, Queued>();
+const inflight = new Set<string>();
+const running = new Map<string, Promise<void>>();
+const retries = new Map<string, number>();
+const overwrites = new Set<string>();
+const acked = new Map<string, Acknowledged>();
+const uncertain = new Map<string, NoteText>();
+const resetHandlers = new Set<() => void>();
+
+export function docsScope(seed: Pick<DocsSeed, "workspaceId" | "viewer">) {
+  return `${seed.workspaceId}:${seed.viewer.id}`;
+}
+
+function recentKey() {
+  return scope ? `${RECENT_KEY}:${scope}` : null;
+}
 
 function readRecent() {
+  const key = recentKey();
+  if (!key) return [];
   try {
-    const parsed = JSON.parse(localStorage.getItem(RECENT_KEY) ?? "[]");
+    const parsed = JSON.parse(localStorage.getItem(key) ?? "[]");
     return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string").slice(0, 20) : [];
   } catch {
     return [];
@@ -122,49 +156,61 @@ function message(error: unknown, fallback: string) {
   return error instanceof Error && error.message ? error.message : fallback;
 }
 
-let noticeId = 0;
-const listRequests = new Map<string, Promise<string[]>>();
-const pageRequests = new Map<string, Promise<Page | null>>();
+function sameText(left: NoteText, right: NoteText, daily: boolean) {
+  return left.body === right.body && (daily || left.title === right.title);
+}
+
+function acknowledgedFrom(page: Page): Acknowledged {
+  return { revision: page.revision, title: page.title, body: page.body, daily: page.kind === "daily" };
+}
+
+function blank() {
+  return {
+    ready: false,
+    now: new Date(0).toISOString(),
+    viewer: null,
+    nav: null,
+    summaries: {},
+    pages: {},
+    lists: {},
+    sort: "edited" as PageSort,
+    recent: [],
+    activity: {},
+    titles: {},
+    saves: {},
+    epochs: {},
+    fresh: null,
+    rail: null,
+    railChosen: false,
+    focus: false,
+    notice: null,
+    conflicts: {},
+    visibilityPrompt: null,
+  };
+}
 
 export const useDocsStore = create<DocsState>((set, get) => ({
-  ready: false,
-  now: new Date(0).toISOString(),
-  viewer: null,
-  nav: null,
-  summaries: {},
-  pages: {},
-  lists: {},
-  sort: "edited",
-  recent: [],
-  activity: {},
-  titles: {},
-  saves: {},
-  epochs: {},
-  staleEpoch: 0,
-  fresh: null,
-  rail: null,
-  railChosen: false,
-  focus: false,
-  notice: null,
-  conflicts: {},
-  visibilityPrompt: null,
+  ...blank(),
 
   init(seed, nav) {
+    prepareDocs(seed);
     if (get().ready) return;
+    const current = session;
     set({ ready: true, now: seed.now, viewer: viewerParticipant(seed.viewer), nav, recent: readRecent() });
     const start = () => {
+      if (current !== session) return;
       void get().refreshTitles();
-      docsData().watchActivity((activity, revisions = {}) => {
+      stopActivity = docsData().watchActivity((activity, revisions = {}) => {
+        if (current !== session) return;
         set({ activity });
         const state = get();
         for (const [id, revision] of Object.entries(revisions)) {
           const page = state.pages[id];
-          const status = state.saves[id]?.status;
-          if (!page || page.revision >= revision || readers.has(id) || queued.has(id) || inflight.has(id) || (status && status !== "saved")) continue;
+          if (!page || page.revision >= revision || !idle(id)) continue;
           void docsData()
             .getPage(id)
             .then((fresh) => {
-              if (fresh && !readers.has(id) && !queued.has(id) && !inflight.has(id)) get().replaceBody(fresh);
+              if (current === session && fresh && idle(id)) get().replaceBody(fresh);
             })
             .catch(() => {});
         }
@@ -173,7 +219,8 @@ export const useDocsStore = create<DocsState>((set, get) => ({
     if (window.location.pathname.startsWith("/docs")) start();
     else if (typeof window.requestIdleCallback === "function") window.requestIdleCallback(start, { timeout: 3000 });
     else setTimeout(start, 1500);
-    window.setInterval(() => set({ now: new Date().toISOString() }), 30_000);
+    if (clock) clearInterval(clock);
+    clock = setInterval(() => set({ now: new Date().toISOString() }), 30_000);
   },
 
   seed({ list, summaries, page }) {
@@ -196,10 +243,12 @@ export const useDocsStore = create<DocsState>((set, get) => ({
     if (cached && !force) return cached;
     const running = listRequests.get(key);
     if (running && !force) return running;
+    const current = session;
     const request = docsData()
       .listPages(list, get().sort)
       .then((rows) => {
         const ids = rows.map((row) => row.id);
+        if (current !== session) return ids;
         set((state) => {
           const summaries = { ...state.summaries };
           for (const row of rows) summaries[row.id] = row;
@@ -207,7 +256,9 @@ export const useDocsStore = create<DocsState>((set, get) => ({
         });
         return ids;
       })
-      .finally(() => listRequests.delete(key));
+      .finally(() => {
+        if (listRequests.get(key) === request) listRequests.delete(key);
+      });
     listRequests.set(key, request);
     return request;
   },
@@ -217,13 +268,20 @@ export const useDocsStore = create<DocsState>((set, get) => ({
     if (cached && !force) return cached;
     const running = pageRequests.get(id);
     if (running && !force) return running;
+    const current = session;
     const request = docsData()
       .getPage(id)
       .then((page) => {
-        if (page) set((state) => ({ pages: { ...state.pages, [id]: page }, summaries: { ...state.summaries, [id]: summaryFrom(page) } }));
+        if (current !== session) return page;
+        if (page) {
+          if (idle(id)) acked.delete(id);
+          set((state) => ({ pages: { ...state.pages, [id]: page }, summaries: { ...state.summaries, [id]: summaryFrom(page) } }));
+        }
         return page;
       })
-      .finally(() => pageRequests.delete(id));
+      .finally(() => {
+        if (pageRequests.get(id) === request) pageRequests.delete(id);
+      });
     pageRequests.set(id, request);
     return request;
   },
@@ -233,10 +291,11 @@ export const useDocsStore = create<DocsState>((set, get) => ({
   },
 
   async refreshNav() {
+    const current = session;
     const nav = await docsData()
       .nav()
       .catch(() => null);
-    if (!nav) return;
+    if (!nav || current !== session) return;
     if (JSON.stringify(nav) !== JSON.stringify(get().nav)) set({ nav });
   },
 
@@ -249,13 +308,14 @@ export const useDocsStore = create<DocsState>((set, get) => ({
   },
 
   async refreshTitles() {
+    const current = session;
     const titles = await docsData()
       .resolveTitles()
       .catch(() => null);
-    if (!titles) return;
-    const current = get().titles;
+    if (!titles || current !== session) return;
+    const known = get().titles;
     const keys = Object.keys(titles);
-    if (keys.length === Object.keys(current).length && keys.every((key) => current[key] === titles[key])) return;
+    if (keys.length === Object.keys(known).length && keys.every((key) => known[key] === titles[key])) return;
     set({ titles });
   },
 
@@ -284,15 +344,13 @@ export const useDocsStore = create<DocsState>((set, get) => ({
   },
 
   replaceBody(page) {
+    acked.set(page.id, acknowledgedFrom(page));
+    uncertain.delete(page.id);
     set((state) => ({
       pages: { ...state.pages, [page.id]: page },
       summaries: { ...state.summaries, [page.id]: summaryFrom(page) },
       epochs: { ...state.epochs, [page.id]: (state.epochs[page.id] ?? 0) + 1 },
     }));
-  },
-
-  invalidateOthers(keepId) {
-    set((state) => ({ pages: state.pages[keepId] ? { [keepId]: state.pages[keepId] } : {}, staleEpoch: state.staleEpoch + 1 }));
   },
 
   setSave(id, status, text) {
@@ -302,14 +360,18 @@ export const useDocsStore = create<DocsState>((set, get) => ({
   visit(id) {
     const recent = [id, ...get().recent.filter((item) => item !== id)].slice(0, 20);
     set({ recent });
+    const key = recentKey();
+    if (!key) return;
     try {
-      localStorage.setItem(RECENT_KEY, JSON.stringify(recent));
+      localStorage.setItem(key, JSON.stringify(recent));
     } catch {}
   },
 
   async createNote(input = {}) {
+    const current = session;
     try {
       const page = await docsData().createPage(input);
+      if (current !== session) return null;
       set((state) => {
         const lists = { ...state.lists };
         for (const key of Object.keys(lists)) {
@@ -328,8 +390,10 @@ export const useDocsStore = create<DocsState>((set, get) => ({
   },
 
   async openDaily(date) {
+    const current = session;
     try {
       const page = await docsData().dailyNote(date);
+      if (current !== session) return null;
       set((state) => ({ pages: state.pages[page.id] ? state.pages : { ...state.pages, [page.id]: page }, summaries: { ...state.summaries, [page.id]: state.summaries[page.id] ?? summaryFrom(page) } }));
       return get().pages[page.id] ?? page;
     } catch (error) {
@@ -365,17 +429,19 @@ export const useDocsStore = create<DocsState>((set, get) => ({
   },
 
   async share(target, visibility) {
+    const current = session;
     try {
       await docsData().share(target, visibility);
-      const ids = Object.keys(get().pages);
-      const fresh = await Promise.all(ids.map((id) => docsData().getPage(id)));
+      const ids = affectedBy(target);
+      const fresh = await Promise.all(ids.map((id) => docsData().getPage(id).catch(() => null)));
+      if (current !== session) return null;
       set((state) => {
         const pages = { ...state.pages };
         const summaries = { ...state.summaries };
         for (const page of fresh) {
           if (!page) continue;
-          pages[page.id] = { ...page, body: state.pages[page.id]?.body ?? page.body, title: state.pages[page.id]?.title ?? page.title };
-          summaries[page.id] = { ...summaryFrom(page), title: summaries[page.id]?.title ?? page.title, snippet: summaries[page.id]?.snippet ?? page.snippet, updatedAt: summaries[page.id]?.updatedAt ?? page.updatedAt };
+          if (pages[page.id]) pages[page.id] = { ...pages[page.id], visibility: page.visibility, shared: page.shared };
+          summaries[page.id] = { ...(summaries[page.id] ?? summaryFrom(page)), visibility: page.visibility, shared: page.shared };
         }
         return { pages, summaries, lists: {} };
       });
@@ -388,7 +454,7 @@ export const useDocsStore = create<DocsState>((set, get) => ({
 
   async archive(id) {
     const title = get().summaries[id]?.title || "Untitled";
-    commitNow(id);
+    await settleSaves(id);
     try {
       await docsData().archivePage(id);
       set((state) => {
@@ -405,6 +471,7 @@ export const useDocsStore = create<DocsState>((set, get) => ({
           void docsData()
             .restorePage(id)
             .then((page) => {
+              if (idle(id)) acked.delete(id);
               set((state) => ({ summaries: { ...state.summaries, [id]: summaryFrom(page) }, pages: { ...state.pages, [id]: page }, lists: {} }));
               void get().refreshNav();
               void get().refreshTitles();
@@ -485,17 +552,17 @@ export const useDocsStore = create<DocsState>((set, get) => ({
     if (keep === "theirs") {
       queued.delete(id);
       readers.delete(id);
-      const timer = timers.get(id);
-      if (timer) clearTimeout(timer);
-      timers.delete(id);
+      overwrites.delete(id);
+      clearTimer(timers, id);
+      clearTimer(retryTimers, id);
       clearDraft(id);
       get().replaceBody(latest);
       get().setSave(id, "saved");
       return;
     }
-    set((state) => ({ pages: state.pages[id] ? { ...state.pages, [id]: { ...state.pages[id], revision: latest.revision } } : state.pages }));
+    acked.set(id, acknowledgedFrom(latest));
     overwrites.add(id);
-    void flush(id, false);
+    void flush(id);
   },
 
   closeVisibilityPrompt() {
@@ -503,7 +570,8 @@ export const useDocsStore = create<DocsState>((set, get) => ({
   },
 
   async restoreVersion(pageId, versionId) {
-    commitNow(pageId);
+    await settleSaves(pageId);
+    if (unsaved(pageId)) return UNSAVED;
     try {
       const page = await docsData().restoreVersion(pageId, versionId);
       get().replaceBody(page);
@@ -540,108 +608,252 @@ export const useDocsStore = create<DocsState>((set, get) => ({
   },
 }));
 
-type Reader = () => { title: string; body: string };
+function clearTimer(map: Map<string, ReturnType<typeof setTimeout>>, id: string) {
+  const timer = map.get(id);
+  if (timer) clearTimeout(timer);
+  map.delete(id);
+}
 
-const readers = new Map<string, Reader>();
-const timers = new Map<string, ReturnType<typeof setTimeout>>();
-const queued = new Map<string, { title: string; body: string; baseRevision: number; renamedFrom: string | null }>();
-const inflight = new Set<string>();
-const retries = new Map<string, number>();
-const overwrites = new Set<string>();
+function idle(id: string) {
+  const state = useDocsStore.getState();
+  const status = state.saves[id]?.status;
+  return !readers.has(id) && !queued.has(id) && !inflight.has(id) && !state.conflicts[id] && (!status || status === "saved");
+}
+
+function unsaved(id: string) {
+  return readers.has(id) || queued.has(id) || inflight.has(id) || Boolean(useDocsStore.getState().conflicts[id]);
+}
+
+function affectedBy(target: ShareTarget) {
+  const state = useDocsStore.getState();
+  if (target.kind === "page") return [target.id];
+  const folders = state.nav?.folders ?? [];
+  const inside = new Set([target.id]);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const folder of folders) {
+      if (folder.parentId && inside.has(folder.parentId) && !inside.has(folder.id)) {
+        inside.add(folder.id);
+        grew = true;
+      }
+    }
+  }
+  return Object.values(state.pages)
+    .filter((page) => page.folderId && inside.has(page.folderId))
+    .map((page) => page.id);
+}
+
+function baseFor(id: string) {
+  const known = acked.get(id);
+  if (known) return known;
+  const page = useDocsStore.getState().pages[id];
+  if (!page) return null;
+  const base = acknowledgedFrom(page);
+  acked.set(id, base);
+  return base;
+}
+
+function resetSession() {
+  session += 1;
+  stopActivity?.();
+  stopActivity = null;
+  if (clock) clearInterval(clock);
+  clock = null;
+  for (const timer of [...timers.values(), ...retryTimers.values()]) clearTimeout(timer);
+  for (const map of [timers, retryTimers, readers, queued, running, retries, acked, uncertain, listRequests, pageRequests]) map.clear();
+  inflight.clear();
+  overwrites.clear();
+  for (const handler of resetHandlers) handler();
+  resetDocsConnection();
+  useDocsStore.setState(blank());
+}
+
+export function prepareDocs(seed: Pick<DocsSeed, "workspaceId" | "viewer">) {
+  if (typeof window === "undefined") return;
+  const next = docsScope(seed);
+  if (scope === next) return;
+  if (scope !== null) resetSession();
+  scope = next;
+  setDraftScope(next);
+}
+
+export function onDocsReset(handler: () => void) {
+  resetHandlers.add(handler);
+  return () => {
+    resetHandlers.delete(handler);
+  };
+}
+
+export function adoptDraft(page: Page, draft: { baseRevision: number }) {
+  acked.set(page.id, { ...acknowledgedFrom(page), revision: draft.baseRevision });
+}
 
 export function scheduleSave(id: string, read: Reader, delay = SAVE_DELAY_MS) {
   readers.set(id, read);
   const store = useDocsStore.getState();
   if (store.saves[id]?.status !== "pending") store.setSave(id, "pending");
-  const timer = timers.get(id);
-  if (timer) clearTimeout(timer);
-  timers.set(id, setTimeout(() => commitNow(id), delay));
+  clearTimer(timers, id);
+  timers.set(
+    id,
+    setTimeout(() => void commitNow(id), delay),
+  );
 }
 
-export function commitNow(id: string, keepalive = false) {
-  const timer = timers.get(id);
-  if (timer) clearTimeout(timer);
-  timers.delete(id);
+export function commitNow(id: string, keepalive = false): Promise<void> {
+  clearTimer(timers, id);
   const read = readers.get(id);
-  if (!read) return;
+  if (!read) return inflight.has(id) ? (running.get(id) ?? Promise.resolve()) : Promise.resolve();
+  const store = useDocsStore.getState();
+  const base = baseFor(id);
+  if (!base) {
+    const current = session;
+    void store
+      .loadPage(id)
+      .then(() => {
+        if (current === session && readers.get(id) === read) void commitNow(id, keepalive);
+      })
+      .catch(() => store.setSave(id, "offline", "Offline. Your changes are kept on this device."));
+    return Promise.resolve();
+  }
   readers.delete(id);
   const { title, body } = read();
-  const store = useDocsStore.getState();
-  const page = store.pages[id];
-  if (page && page.title === title && page.body === body && !queued.has(id) && !inflight.has(id)) {
-    store.setSave(id, "saved");
-    return;
+  if (sameText(base, { title, body }, base.daily) && !queued.has(id) && !inflight.has(id)) {
+    if (!store.conflicts[id]) {
+      clearDraft(id);
+      store.setSave(id, "saved");
+    }
+    return Promise.resolve();
   }
-  const baseRevision = page?.revision ?? 0;
   const earlier = queued.get(id)?.renamedFrom ?? null;
-  const renamedFrom = earlier ?? (page && page.kind === "note" && page.title.trim() && page.title !== title ? page.title : null);
-  writeDraft(id, { title, body, baseRevision, at: Date.now() });
+  const renamedFrom = earlier ?? (!base.daily && base.title.trim() && base.title !== title ? base.title : null);
+  writeDraft(id, { title, body, baseRevision: base.revision, at: Date.now() });
   store.editLocal(id, title, body);
-  queued.set(id, { title, body, baseRevision, renamedFrom });
-  void flush(id, keepalive);
+  queued.set(id, { title, body, renamedFrom });
+  return flush(id, keepalive);
 }
 
 export function commitAll(keepalive = false) {
-  for (const id of [...readers.keys()]) commitNow(id, keepalive);
+  for (const id of [...readers.keys()]) void commitNow(id, keepalive);
 }
 
-async function flush(id: string, keepalive: boolean) {
-  if (inflight.has(id) || useDocsStore.getState().conflicts[id]) return;
+export async function settleSaves(id: string) {
+  await commitNow(id);
+  while (inflight.has(id)) {
+    const task = running.get(id);
+    if (!task) break;
+    await task;
+  }
+}
+
+function flush(id: string, keepalive = false): Promise<void> {
+  if (inflight.has(id)) return running.get(id) ?? Promise.resolve();
+  if (useDocsStore.getState().conflicts[id]) return Promise.resolve();
   const next = queued.get(id);
-  if (!next) return;
+  if (!next) return Promise.resolve();
+  const base = baseFor(id);
+  if (!base) return Promise.resolve();
+  clearTimer(retryTimers, id);
   queued.delete(id);
   inflight.add(id);
-  const store = useDocsStore.getState();
-  store.setSave(id, "saving");
-  const baseRevision = store.pages[id]?.revision ?? next.baseRevision;
-  const daily = store.pages[id]?.kind === "daily";
-  let result;
+  const task = send(id, next, base, keepalive);
+  running.set(id, task);
+  return task;
+}
+
+function settled(id: string) {
+  inflight.delete(id);
+  running.delete(id);
+}
+
+async function send(id: string, next: Queued, base: Acknowledged, keepalive: boolean): Promise<void> {
+  const current = session;
+  useDocsStore.getState().setSave(id, "saving");
+  let result: SaveResult;
   try {
     result = await docsData().savePage(
       id,
-      { ...(daily ? {} : { title: next.title }), body: next.body, baseRevision, ...(overwrites.has(id) ? { overwrite: true } : {}) },
+      { ...(base.daily ? {} : { title: next.title }), body: next.body, baseRevision: base.revision, ...(overwrites.has(id) ? { overwrite: true } : {}) },
       { keepalive },
     );
   } catch {
-    inflight.delete(id);
+    if (current !== session) return;
+    settled(id);
     if (!queued.has(id)) queued.set(id, next);
+    uncertain.set(id, next);
     const attempt = (retries.get(id) ?? 0) + 1;
     retries.set(id, attempt);
     useDocsStore.getState().setSave(id, "offline", "Offline. Your changes are kept on this device.");
-    setTimeout(() => void flush(id, false), Math.min(30_000, 1_000 * 2 ** attempt));
+    retryTimers.set(
+      id,
+      setTimeout(() => void flush(id), Math.min(30_000, 1_000 * 2 ** attempt)),
+    );
     return;
   }
-  inflight.delete(id);
+  if (current !== session) return;
+  settled(id);
   retries.delete(id);
-  overwrites.delete(id);
-  if (!result.ok) {
-    if (result.conflict) {
+  if (result.ok) return acknowledge(id, next, base, result.page);
+  const latest = result.conflict;
+  if (latest) {
+    const attempt = uncertain.get(id);
+    uncertain.delete(id);
+    if (sameText(next, latest, base.daily)) return acknowledge(id, next, base, latest);
+    if (attempt && sameText(attempt, latest, base.daily)) {
+      acked.set(id, { ...acknowledgedFrom(latest), daily: base.daily });
       if (!queued.has(id)) queued.set(id, next);
-      const latest = result.conflict;
-      useDocsStore.setState((state) => ({ conflicts: { ...state.conflicts, [id]: latest } }));
-      useDocsStore.getState().setSave(id, "conflict", result.error);
-      return;
+      return flush(id);
     }
-    useDocsStore.getState().setSave(id, "error", result.error);
+    if (!queued.has(id)) queued.set(id, next);
+    overwrites.delete(id);
+    useDocsStore.setState((state) => ({ conflicts: { ...state.conflicts, [id]: latest } }));
+    useDocsStore.getState().setSave(id, "conflict", result.error);
     return;
   }
-  clearDraft(id, next);
-  const before = useDocsStore.getState().summaries[id];
-  const navChanged = !before || before.tags.join(" ") !== result.page.tags.join(" ");
-  const renamed = Boolean(next.renamedFrom && next.renamedFrom !== result.page.title);
+  uncertain.delete(id);
+  const newer = queued.has(id);
+  if (!newer) queued.set(id, next);
+  useDocsStore.getState().setSave(id, "error", result.error);
+  if (newer) return flush(id);
+}
+
+function acknowledge(id: string, sent: Queued, previous: Acknowledged, saved: Page): Promise<void> {
+  overwrites.delete(id);
+  uncertain.delete(id);
+  acked.set(id, { revision: saved.revision, title: sent.title, body: sent.body, daily: previous.daily });
+  const draft = readDraft(id);
+  if (draft && (draft.body !== sent.body || draft.title !== sent.title)) writeDraft(id, { ...draft, baseRevision: saved.revision });
+  else clearDraft(id);
+  const navChanged = parseTags(previous.body).join(" ") !== saved.tags.join(" ");
+  const titleChanged = previous.title !== saved.title;
+  const renamedFrom = sent.renamedFrom && sent.renamedFrom !== saved.title ? sent.renamedFrom : null;
   useDocsStore.setState((state) => {
     const current = state.pages[id];
-    const page = current ? { ...current, revision: result.page.revision, updatedAt: result.page.updatedAt, shared: result.page.shared } : result.page;
-    return { pages: { ...state.pages, [id]: page }, summaries: { ...state.summaries, [id]: { ...summaryFrom(page), snippet: result.page.snippet, tags: result.page.tags, title: result.page.title } } };
+    const page = current ? { ...current, revision: saved.revision, updatedAt: saved.updatedAt, shared: saved.shared } : saved;
+    return { pages: { ...state.pages, [id]: page }, summaries: { ...state.summaries, [id]: { ...summaryFrom(page), snippet: saved.snippet, tags: saved.tags, title: saved.title } } };
   });
-  const latest = useDocsStore.getState();
-  if (queued.has(id)) void flush(id, false);
-  else if (!readers.has(id)) latest.setSave(id, "saved");
-  void latest.refreshTitles();
-  if (renamed) latest.invalidateOthers(id);
-  if (navChanged || result.page.kind === "daily") void latest.refreshNav();
+  const store = useDocsStore.getState();
+  if (titleChanged) void store.refreshTitles();
+  if (renamedFrom) refreshLinked(id, renamedFrom, saved.title);
+  if (navChanged || saved.kind === "daily") void store.refreshNav();
+  if (queued.has(id)) return flush(id);
+  if (!readers.has(id)) store.setSave(id, "saved");
+  return Promise.resolve();
+}
+
+function refreshLinked(renamedId: string, from: string, to: string) {
+  const current = session;
+  for (const page of Object.values(useDocsStore.getState().pages)) {
+    if (page.id === renamedId || !idle(page.id) || rewriteLinkTitle(page.body, from, to).count === 0) continue;
+    void docsData()
+      .getPage(page.id)
+      .then((fresh) => {
+        if (current === session && fresh && idle(page.id)) useDocsStore.getState().replaceBody(fresh);
+      })
+      .catch(() => {});
+  }
 }
 
 export function retryOfflineSaves() {
-  for (const id of [...queued.keys()]) void flush(id, false);
+  for (const id of [...queued.keys()]) void flush(id);
 }

@@ -489,6 +489,7 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
       const row = rows.get(id);
       const input = { ...saveInput, title: saveInput.title ?? row?.title ?? "" };
       if (!row || row.archived) return { ok: false, error: "That note was archived. Restore it to keep editing." };
+      if (saveInput.baseRevision !== row.revision && !saveInput.overwrite) return { ok: false, error: "Someone else changed this note while you were editing.", conflict: page(row) };
       if (row.body === input.body && row.title === input.title) return { ok: true, page: page(row) };
       const renamed = row.kind === "note" && row.title.trim() && row.title !== input.title ? row.title : null;
       if (!versions.get(row.id)?.length) {
@@ -548,7 +549,6 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
         throw new DocsError(after ? "Moving it there shares it with the workspace." : "Moving it there makes it private.", "visibility_change", { after: after ? "shared" : "private" });
       }
       row.folderId = folderId;
-      row.revision += 1;
       return page(row);
     },
     async archivePage(id) {
@@ -607,7 +607,6 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
       const row = require(target.id);
       if (row.kind === "daily") throw new Error("Daily notes are always private.");
       row.visibility = visibility;
-      row.revision += 1;
     },
     async listVersions(pageId) {
       const list = versions.get(pageId);
