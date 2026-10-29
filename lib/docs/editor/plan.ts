@@ -1,5 +1,6 @@
 import type { Text } from "@codemirror/state";
 import type { SyntaxNode, Tree } from "@lezer/common";
+import { safeHref } from "@/lib/docs/editor/links";
 import { ENTRY_TIME, splitTarget } from "@/lib/docs/markdown";
 import type { MentionKind } from "@/lib/mentions";
 
@@ -27,7 +28,7 @@ export type PlanInput = {
   resolve: (target: string) => boolean;
 };
 
-const MENTION = /^@\[([^\]\n]{1,200})\]\((contact|company|task|opportunity|proposal):([0-9a-f-]{36})\)$/;
+const MENTION = /^@\[([^[\]\n]{1,200})\]\((contact|company|task|opportunity|proposal):([0-9a-f-]{36})\)$/;
 const LIST_MARK = /^([-*+]|\d+[.)])(\s+|$)(\[[ xX]\](?:\s+|$))?/;
 
 type ListLine = { depth: number; first: boolean; task: boolean; done: boolean };
@@ -56,6 +57,13 @@ export function previewPlan({ doc, tree, from, to, active, daily, resolve }: Pla
   const syntax = (start: number, end: number, lineActive: boolean) => (lineActive ? mark(start, end, "note-syntax") : hide(start, end));
   const widget = (start: number, end: number, spec: WidgetSpec) => items.push({ type: "widget", from: start, to: end, widget: spec });
   const spaceAfter = (pos: number, limit: number) => Math.min(limit, pos + (doc.sliceString(pos, pos + 1) === " " ? 1 : 0));
+  const quoteMark = (from: number, to: number) => {
+    const current = doc.lineAt(from);
+    const end = spaceAfter(to, current.to);
+    const start = Math.max(from, prefixEnds.get(current.number) ?? current.from);
+    widget(start, end, { kind: "hang", text: active.has(current.number) ? ">" : "" });
+    prefixEnds.set(current.number, end);
+  };
 
   tree.iterate({
     from,
@@ -69,15 +77,25 @@ export function previewPlan({ doc, tree, from, to, active, daily, resolve }: Pla
         const lineActive = active.has(current.number);
         line(current.from, `note-h note-h${Math.min(level, 3)}`);
         const marks = node.getChildren("HeaderMark");
+        const prefix = prefixEnds.get(current.number);
         marks.forEach((child, index) => {
-          if (index === 0) widget(current.from, spaceAfter(child.to, current.to), { kind: "hang", text: lineActive ? "#".repeat(level) : "" });
-          else syntax(child.from, child.to, lineActive);
+          if (index > 0) syntax(child.from, child.to, lineActive);
+          else if (prefix !== undefined) syntax(child.from, spaceAfter(child.to, current.to), lineActive);
+          else widget(current.from, spaceAfter(child.to, current.to), { kind: "hang", text: lineActive ? "#".repeat(level) : "" });
         });
         return;
       }
       if (name === "SetextHeading1" || name === "SetextHeading2") {
         line(doc.lineAt(ref.from).from, `note-h ${name === "SetextHeading1" ? "note-h1" : "note-h2"}`);
-        return;
+        const underline = node.getChild("HeaderMark");
+        if (underline) {
+          const rule = doc.lineAt(underline.from);
+          if (!active.has(rule.number)) {
+            line(rule.from, "note-setext-rule");
+            hide(underline.from, underline.to);
+          } else mark(underline.from, underline.to, "note-syntax");
+        }
+        return false;
       }
       if (name === "StrongEmphasis") return void mark(ref.from, ref.to, "note-strong");
       if (name === "Emphasis") return void mark(ref.from, ref.to, "note-em");
@@ -90,7 +108,7 @@ export function previewPlan({ doc, tree, from, to, active, daily, resolve }: Pla
         const last = doc.lineAt(ref.to);
         let blockActive = false;
         for (let number = first.number; number <= last.number; number += 1) if (active.has(number)) blockActive = true;
-        const closed = last.number > first.number && /^\s*(`{3,}|~{3,})\s*$/.test(last.text);
+        const closed = last.number > first.number && /^[\s>]*(`{3,}|~{3,})\s*$/.test(last.text);
         for (let number = first.number; number <= last.number; number += 1) {
           codeLines.add(number);
           const classes = ["note-codeblock"];
@@ -99,9 +117,12 @@ export function previewPlan({ doc, tree, from, to, active, daily, resolve }: Pla
           if (!blockActive && (number === first.number || (closed && number === last.number))) classes.push("note-fence");
           line(doc.line(number).from, classes.join(" "));
         }
+        for (const quote of node.getChildren("QuoteMark")) quoteMark(quote.from, quote.to);
         if (!blockActive) {
-          if (first.length) widget(first.from, first.to, { kind: "fence", language: first.text.replace(/^\s*(`{3,}|~{3,})/, "").trim() });
-          if (closed && last.length) hide(last.from, last.to);
+          const info = node.getChild("CodeInfo");
+          const opening = prefixEnds.get(first.number) ?? first.from;
+          if (first.to > opening) widget(opening, first.to, { kind: "fence", language: info ? doc.sliceString(info.from, info.to).trim() : "" });
+          if (closed) hide(prefixEnds.get(last.number) ?? last.from, last.to);
         }
         return false;
       }
@@ -112,11 +133,7 @@ export function previewPlan({ doc, tree, from, to, active, daily, resolve }: Pla
         return;
       }
       if (name === "QuoteMark") {
-        const current = doc.lineAt(ref.from);
-        const end = spaceAfter(ref.to, current.to);
-        const start = Math.max(ref.from, prefixEnds.get(current.number) ?? current.from);
-        widget(start, end, { kind: "hang", text: active.has(current.number) ? ">" : "" });
-        prefixEnds.set(current.number, end);
+        quoteMark(ref.from, ref.to);
         return;
       }
       if (name === "ListItem") {
@@ -157,13 +174,18 @@ export function previewPlan({ doc, tree, from, to, active, daily, resolve }: Pla
         const marks = node.getChildren("LinkMark");
         const url = node.getChild("URL");
         if (marks.length < 2) return;
-        const lineActive = isActive(ref.from);
-        mark(marks[0].to, marks[1].from, "note-link", { "data-href": url ? doc.sliceString(url.from, url.to) : "" });
-        syntax(marks[0].from, marks[0].to, lineActive);
-        syntax(marks[1].from, ref.to, lineActive);
+        const href = url ? safeHref(doc.sliceString(url.from, url.to)) : null;
+        const tail = doc.lineAt(marks[1].from);
+        if (href) mark(marks[0].to, marks[1].from, "note-link", { "data-href": href });
+        syntax(marks[0].from, marks[0].to, isActive(ref.from));
+        syntax(marks[1].from, Math.min(ref.to, tail.to), active.has(tail.number));
         return false;
       }
-      if (name === "URL" && node.parent?.name !== "Link") return void mark(ref.from, ref.to, "note-link", { "data-href": doc.sliceString(ref.from, ref.to) });
+      if (name === "URL" && node.parent?.name !== "Link") {
+        const href = safeHref(doc.sliceString(ref.from, ref.to));
+        if (href) mark(ref.from, ref.to, "note-link", { "data-href": href });
+        return;
+      }
       if (name === "WikiLink") {
         const inner = doc.sliceString(ref.from + 2, ref.to - 2);
         const parsed = splitTarget(inner);

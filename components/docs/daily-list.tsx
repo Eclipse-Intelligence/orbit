@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState, type MouseEvent } from "react";
 import Link from "next/link";
 import Button from "@/components/_ui/button";
-import { navigateWithinDocs, useDocsNav } from "@/components/docs/use-docs";
+import { navigateWithinDocs, useToday } from "@/components/docs/use-docs";
 import type { DailySummary } from "@/lib/docs/client-types";
 import { docsData } from "@/lib/docs/connection";
 import { addMonths, dayDetail, dayName, longDay, monthGrid, monthLabel } from "@/lib/docs/format";
@@ -40,8 +40,7 @@ function useDailyNotes() {
 }
 
 export default function DailyList({ selected, initial }: { selected: string | null; initial: DailySummary[] }) {
-  const nav = useDocsNav();
-  const today = nav?.today ?? selected ?? "";
+  const today = useToday() || selected || "";
   const fetched = useDailyNotes();
   const days = fetched ?? initial;
   const [month, setMonth] = useState(() => (selected ?? today).slice(0, 7));
@@ -57,7 +56,7 @@ export default function DailyList({ selected, initial }: { selected: string | nu
     <>
       <div className="px-2.5 pt-1 pb-3">
         <div className="flex items-center gap-1 pb-2 pl-1.5">
-          <h3 aria-live="polite" className="text-foreground flex-1 text-[13px] leading-none font-medium">
+          <h3 aria-live="polite" className="flex-1">
             {monthLabel(month)}
           </h3>
           <Button variant="ghost" size="icon-sm" aria-label="Previous month" onClick={() => setMonth(addMonths(month, -1))}>
@@ -69,7 +68,7 @@ export default function DailyList({ selected, initial }: { selected: string | nu
         </div>
         <div className="grid grid-cols-7 gap-y-0.5 text-center">
           {WEEKDAYS.map((day, index) => (
-            <span key={index} aria-hidden className="caption-style text-faint pb-1 text-[11px]">
+            <span key={index} aria-hidden className="caption-style text-subtle pb-1 text-[11px]">
               {day}
             </span>
           ))}
@@ -123,7 +122,7 @@ export default function DailyList({ selected, initial }: { selected: string | nu
                 <span className="flex items-baseline gap-2">
                   <span className={cn("text-[14px] leading-5 font-medium", current ? "text-foreground" : "text-[#e3e5ea]")}>{dayName(day.date, today)}</span>
                   <span className="caption-style text-subtle">{dayDetail(day.date, today)}</span>
-                  <span className="caption-style text-faint ml-auto tabular-nums">
+                  <span className="caption-style text-subtle ml-auto tabular-nums">
                     {day.entries} {day.entries === 1 ? "entry" : "entries"}
                   </span>
                 </span>

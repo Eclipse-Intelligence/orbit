@@ -7,9 +7,12 @@ import Button from "@/components/_ui/button";
 import { Kbd } from "@/components/_ui/command";
 import SectionHeader from "@/components/crm/section-header";
 import type { Viewer } from "@/components/crm/viewer";
+import ArchivedSheet from "@/components/docs/archived-sheet";
 import DailyList from "@/components/docs/daily-list";
+import { ARCHIVED_HREF } from "@/components/docs/docs-manage";
+import { PhoneFolderMenu } from "@/components/docs/folder-menu";
 import DocsNotice from "@/components/docs/docs-notice";
-import { ListPane, NoteRow, RowList, SortMenu, SharedGlyph } from "@/components/docs/note-list";
+import { ListPane, LoadMore, NoteRow, RowList, SortMenu, SharedGlyph } from "@/components/docs/note-list";
 import NoteView from "@/components/docs/note-view";
 import { ParticipantAvatar } from "@/components/docs/presence";
 import { FolderShare } from "@/components/docs/share-control";
@@ -29,6 +32,7 @@ import DocIcon from "@/public/assets/images/docs/doc.svg";
 import HashIcon from "@/public/assets/images/docs/hash.svg";
 import LockIcon from "@/public/assets/images/docs/lock.svg";
 import SunIcon from "@/public/assets/images/docs/sun.svg";
+import ArchiveIcon from "@/public/assets/images/mail/archive.svg";
 import FolderIcon from "@/public/assets/images/mail/folder.svg";
 
 const EMPTY: string[] = [];
@@ -127,27 +131,32 @@ function HomeTag({ tag, depth }: { tag: TagNode; depth: number }) {
   );
 }
 
-function DocsHome({ search, onSearch }: { search: string; onSearch: (value: string) => void }) {
+function homeFolders(folders: Folder[]) {
+  const known = new Set(folders.map((folder) => folder.id));
+  const ordered: { folder: Folder; depth: number }[] = [];
+  const visit = (parentId: string | null, depth: number) => {
+    for (const folder of folders
+      .filter((item) => (parentId === null ? !item.parentId || !known.has(item.parentId) : item.parentId === parentId))
+      .sort((left, right) => left.position - right.position)) {
+      ordered.push({ folder, depth });
+      if (depth < 8) visit(folder.id, depth + 1);
+    }
+  };
+  visit(null, 0);
+  return ordered;
+}
+
+function DocsHome() {
   const nav = useDocsNav();
   const viewerId = nav?.viewer.id;
   const today = nav?.todayNote;
-  const depthOf = (folder: Folder) => {
-    let depth = 0;
-    let parent = folder.parentId;
-    while (parent && depth < 6) {
-      depth += 1;
-      parent = nav?.folders.find((item) => item.id === parent)?.parentId ?? null;
-    }
-    return depth;
-  };
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-3 pt-3 pb-28 md:hidden">
-      <DocsSearch value={search} onChange={onSearch} big />
       {nav && (
         <Link
           href={dailyHref(nav.today)}
           onClick={(event) => within(event, dailyHref(nav.today))}
-          className="focus-visible:ring-ring/60 mt-3 flex flex-col gap-2 rounded-2xl bg-white/[0.035] p-4 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.04)] outline-none focus-visible:ring-2"
+          className="focus-visible:ring-ring/60 flex flex-col gap-2 rounded-2xl bg-white/[0.035] p-4 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.04)] outline-none focus-visible:ring-2"
         >
           <span className="flex items-center gap-2">
             <SunIcon aria-hidden className="size-4 text-(--tag-amber-text)" />
@@ -166,13 +175,13 @@ function DocsHome({ search, onSearch }: { search: string; onSearch: (value: stri
           <h2 className="eyebrow-style text-subtle px-3 pb-1 text-[11px] font-medium">Folders</h2>
           <ul className="flex flex-col">
             <HomeRow icon={<DocIcon aria-hidden className="text-subtle size-4 shrink-0" />} label="All notes" href={listHref({ kind: "all" }) + "?in=all"} />
-            {(nav?.folders ?? []).map((folder) => (
+            {homeFolders(nav?.folders ?? []).map(({ folder, depth }) => (
               <HomeRow
                 key={folder.id}
                 icon={<FolderIcon aria-hidden className="text-subtle size-4 shrink-0" />}
                 label={folder.name}
                 href={listHref({ kind: "folder", folderId: folder.id })}
-                depth={depthOf(folder)}
+                depth={depth}
                 trailing={
                   <span className="flex items-center gap-2">
                     {folderMark(folder, viewerId)}
@@ -181,6 +190,7 @@ function DocsHome({ search, onSearch }: { search: string; onSearch: (value: stri
                 }
               />
             ))}
+            <HomeRow icon={<ArchiveIcon aria-hidden className="text-subtle size-4 shrink-0" />} label="Archived" href={ARCHIVED_HREF} />
           </ul>
         </section>
         {(nav?.tags.length ?? 0) > 0 && (
@@ -347,6 +357,7 @@ export default function DocsScreen({ viewer, initial }: { viewer: Viewer; initia
   const title = listTitle(list, folders);
   const Icon = listIcon(list);
   const level = route.level === "home" && list.kind === "all" && params.get("in") === "all" ? "list" : route.level;
+  const phoneSearch = level === "home" || (level === "list" && list.kind === "search");
   const listSummaries = ids.map((id) => summaryOf(id)).filter((summary): summary is PageSummary => Boolean(summary));
   const dailyInitial: DailySummary[] = useMemo(
     () =>
@@ -369,7 +380,7 @@ export default function DocsScreen({ viewer, initial }: { viewer: Viewer; initia
     ) : (
       <>
         {list.kind !== "search" && <SortMenu />}
-        {folder && <FolderShare folder={folder} summaries={listSummaries} />}
+        {folder && <FolderShare folder={folder} />}
       </>
     );
 
@@ -398,14 +409,27 @@ export default function DocsScreen({ viewer, initial }: { viewer: Viewer; initia
         />
       </div>
 
-      {level === "list" && (
+      {phoneSearch && (
+        <div className={cn("flex shrink-0 items-center gap-2 px-3 md:hidden", level === "list" ? "border-border border-b py-2.5" : "pt-3")}>
+          {level === "list" && (
+            <Button variant="secondary" size="icon" href="/docs" onClick={(event) => within(event, "/docs")} aria-label="Back to Docs">
+              <ChevronLeftIcon aria-hidden className="size-3.5" />
+            </Button>
+          )}
+          {level === "list" && <h1 className="sr-only">{title}</h1>}
+          <DocsSearch value={search} onChange={onSearch} big />
+        </div>
+      )}
+
+      {level === "list" && !phoneSearch && (
         <header className="border-border shrink-0 border-b md:hidden">
           <div className="flex items-center gap-2 px-3 py-2.5">
             <Button variant="secondary" size="icon" href="/docs" onClick={(event) => within(event, "/docs")} aria-label="Back to Docs">
               <ChevronLeftIcon aria-hidden className="size-3.5" />
             </Button>
             <h1 className="min-w-0 flex-1 truncate">{title}</h1>
-            {folder && <FolderShare folder={folder} summaries={listSummaries} />}
+            {folder && <FolderShare folder={folder} />}
+            {folder && <PhoneFolderMenu folder={folder} folders={folders} viewerId={nav?.viewer.id} onNewNote={() => void newNote()} />}
             {list.kind === "daily" ? (
               <Button variant="primary" size="icon" aria-label="Today's daily note" onClick={() => navigate(dailyHref(today))}>
                 <SunIcon aria-hidden className="size-3.5" />
@@ -420,7 +444,7 @@ export default function DocsScreen({ viewer, initial }: { viewer: Viewer; initia
       )}
 
       <div className="flex min-h-0 flex-1">
-        {level === "home" && <DocsHome search={search} onSearch={onSearch} />}
+        {level === "home" && <DocsHome />}
         <ListPane icon={Icon} title={title} count={list.kind === "daily" ? undefined : ids.length} control={control} hiddenOnPhone={level !== "list"}>
           {list.kind === "daily" ? (
             <DailyList selected={dailyDate ?? (page?.kind === "daily" ? page.dailyDate : null)} initial={dailyInitial} />
@@ -465,6 +489,7 @@ export default function DocsScreen({ viewer, initial }: { viewer: Viewer; initia
                   })}
                 </RowList>
               )}
+              {ids.length > 0 && <LoadMore list={list} sort={sort} loaded={rawIds.length} />}
             </>
           )}
         </ListPane>
@@ -482,6 +507,7 @@ export default function DocsScreen({ viewer, initial }: { viewer: Viewer; initia
         />
       </div>
       <DocsNotice />
+      <ArchivedSheet />
     </section>
   );
 }

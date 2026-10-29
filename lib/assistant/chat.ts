@@ -55,6 +55,7 @@ export type AssistantAction = {
   chose?: "send";
   startedAt?: string;
   diff?: DocDiffLine[];
+  docId?: string;
   unattended?: boolean;
 };
 

@@ -11,7 +11,8 @@ import NoteEditor, { editorView, focusNoteText, noteTitle, scheduleNoteSave, set
 import NoteRail from "@/components/docs/note-rail";
 import { ParticipantAvatar, PresenceStack } from "@/components/docs/presence";
 import { PageShare } from "@/components/docs/share-control";
-import { navigateWithinDocs, useDocsNav, useDocsNavigate, useDocsNow, useMedia } from "@/components/docs/use-docs";
+import { TITLE_FORBIDDEN, TITLE_RULE, useTitleRename } from "@/components/docs/title-rename";
+import { navigateWithinDocs, useDocsNav, useDocsNavigate, useDocsNow, useMedia, useToday } from "@/components/docs/use-docs";
 import type { Meeting, Page, PageFilter, PageSummary, Presence } from "@/lib/docs/client-types";
 import { docsData } from "@/lib/docs/connection";
 import { localTime, shiftDate } from "@/lib/docs/daily";
@@ -21,12 +22,12 @@ import { useDocsStore } from "@/stores/docs-store";
 import { cn } from "@/lib/utils";
 import ChevronLeftIcon from "@/public/assets/images/_common/chevron-left.svg";
 import ChevronRightIcon from "@/public/assets/images/_common/chevron-right.svg";
+import SidebarPanelIcon from "@/public/assets/images/_common/sidebar-panel.svg";
 import CollapseIcon from "@/public/assets/images/docs/collapse.svg";
 import DocIcon from "@/public/assets/images/docs/doc.svg";
 import ExpandIcon from "@/public/assets/images/docs/expand.svg";
 import HashIcon from "@/public/assets/images/docs/hash.svg";
 import HistoryIcon from "@/public/assets/images/docs/history.svg";
-import PanelRightIcon from "@/public/assets/images/docs/panel-right.svg";
 import SunIcon from "@/public/assets/images/docs/sun.svg";
 import FolderIcon from "@/public/assets/images/mail/folder.svg";
 
@@ -64,6 +65,8 @@ function TitleField({ page, inputRef, replaced }: { page: Page; inputRef: RefObj
   const [value, setValue] = useState(() => (replaced ? page.title : (noteTitle(page.id) ?? page.title)));
   const fresh = useDocsStore((state) => state.fresh === page.id);
   const clearFresh = useDocsStore((state) => state.clearFresh);
+  const rename = useTitleRename(page.id, page.title, page.kind === "note");
+  const [blocked, setBlocked] = useState(false);
   useEffect(() => {
     if (!fresh) return;
     inputRef.current?.focus();
@@ -82,32 +85,45 @@ function TitleField({ page, inputRef, replaced }: { page: Page; inputRef: RefObj
     return () => observer.disconnect();
   }, [value, inputRef]);
   return (
-    <textarea
-      ref={inputRef}
-      rows={1}
-      value={value}
-      aria-label="Title"
-      placeholder="Untitled"
-      spellCheck
-      onChange={(event) => {
-        const next = event.target.value.replace(/\n/g, " ");
-        setValue(next);
-        setNoteTitle(page.id, next);
-        scheduleNoteSave(page.id, page);
-      }}
-      onKeyDown={(event) => {
-        const field = event.currentTarget;
-        if (event.key === "Enter" && !event.nativeEvent.isComposing) {
-          event.preventDefault();
-          focusNoteText("start");
-        }
-        if (event.key === "ArrowDown" && field.selectionStart === field.value.length) {
-          event.preventDefault();
-          focusNoteText("start");
-        }
-      }}
-      className="note-title placeholder:text-faint block w-full resize-none overflow-hidden bg-transparent outline-none"
-    />
+    <>
+      <textarea
+        ref={inputRef}
+        rows={1}
+        value={value}
+        aria-label="Title"
+        aria-describedby={blocked ? `${page.id}-title-rule` : undefined}
+        placeholder="Untitled"
+        spellCheck
+        onChange={(event) => {
+          const typed = event.target.value.replace(/\n/g, " ");
+          const next = typed.replace(TITLE_FORBIDDEN, "");
+          setBlocked(next !== typed);
+          setValue(next);
+          setNoteTitle(page.id, next);
+          scheduleNoteSave(page.id, page);
+          rename.typed(next);
+        }}
+        onBlur={rename.settle}
+        onKeyDown={(event) => {
+          const field = event.currentTarget;
+          if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+            event.preventDefault();
+            rename.settle();
+            focusNoteText("start");
+          }
+          if (event.key === "ArrowDown" && field.selectionStart === field.value.length) {
+            event.preventDefault();
+            focusNoteText("start");
+          }
+        }}
+        className="note-title placeholder:text-subtle block w-full resize-none overflow-hidden bg-transparent outline-none"
+      />
+      {blocked && (
+        <p id={`${page.id}-title-rule`} role="alert" className="caption-style mt-1 text-(--tag-amber-text)">
+          {TITLE_RULE}
+        </p>
+      )}
+    </>
   );
 }
 
@@ -147,7 +163,7 @@ function SaveState({ id }: { id: string }) {
     );
   }
   return (
-    <span role="status" className={cn(save.status === "offline" ? "text-(--tag-amber-text)/80" : "text-faint")}>
+    <span role="status" className={cn(save.status === "offline" ? "text-(--tag-amber-text)/80" : "text-subtle")}>
       {save.status === "offline" ? (save.message ?? "Offline. Kept on this device.") : save.status === "saved" ? "Saved" : "Saving"}
     </span>
   );
@@ -184,7 +200,6 @@ function NoteMeta({ page, summary }: { page: Page; summary: PageSummary }) {
 
 function DailyHeading({ page }: { page: Page }) {
   const date = page.dailyDate ?? "";
-  const nav = useDocsNav();
   const [meetings, setMeetings] = useState<{ date: string; list: Meeting[] } | null>(null);
   useEffect(() => {
     let live = true;
@@ -198,7 +213,7 @@ function DailyHeading({ page }: { page: Page }) {
     };
   }, [date]);
   const list = meetings?.date === date ? meetings.list : [];
-  const today = nav?.today === date;
+  const today = useToday() === date;
   return (
     <>
       <p className="eyebrow-style text-subtle mb-3 text-[11px]">Daily note</p>
@@ -251,7 +266,7 @@ function JotLine() {
   return (
     <div className="flex flex-col">
       <label className="grid grid-cols-[4.75rem_1fr] items-baseline">
-        <span aria-hidden className="text-faint pt-[0.32em] text-[13px] leading-[1.6] tabular-nums">
+        <span aria-hidden className="text-subtle pt-[0.32em] text-[13px] leading-[1.6] tabular-nums">
           {time}
         </span>
         <span className="sr-only">New entry at {time}</span>
@@ -265,10 +280,10 @@ function JotLine() {
             }
           }}
           placeholder="Jot something down"
-          className="placeholder:text-faint text-foreground col-start-2 w-full bg-transparent text-[16px] leading-[1.7] outline-none"
+          className="placeholder:text-subtle text-foreground col-start-2 w-full bg-transparent text-[16px] leading-[1.7] outline-none"
         />
       </label>
-      <p className="caption-style text-faint mt-6 pl-[4.75rem]">Enter adds a new entry with the time. Daily notes are always private.</p>
+      <p className="caption-style text-subtle mt-6 pl-[4.75rem]">Enter adds a new entry with the time. Daily notes are always private.</p>
     </div>
   );
 }
@@ -306,7 +321,7 @@ export default function NoteView({
   const restoreVersion = useDocsStore((state) => state.restoreVersion);
   const epoch = useDocsStore((state) => state.epochs[page?.id ?? ""] ?? 0);
   const navigate = useDocsNavigate();
-  const wide = useMedia("(min-width: 1280px)");
+  const wide = useMedia("(min-width: 1536px)");
   const phone = useMedia("(max-width: 767px)");
   const [presence, setPresence] = useState<{ id: string; list: Presence[] }>({ id: "", list: [] });
   const [selected, setSelected] = useState<Selected | null>(null);
@@ -389,12 +404,13 @@ export default function NoteView({
   const context = contextFor(page ?? summary ?? { kind: "note", folderId: null, dailyDate: null }, list, nav?.folders ?? []);
   const title = daily ? shortDay((page ?? summary)?.dailyDate ?? "") : (page?.title ?? summary?.title ?? "") || "Untitled";
   const date = (page ?? summary)?.dailyDate ?? null;
-  const today = nav?.today ?? "";
+  const today = useToday();
 
   const railContent = historyOpen ? (
     <HistoryRail
       versions={versions}
       selected={selected?.version.id ?? null}
+      live={summary ? { editor: summary.updatedBy, updatedAt: summary.updatedAt } : null}
       onSelect={(value) => {
         setSelected(value);
         if (phone && value) setRail(null);
@@ -505,7 +521,7 @@ export default function NoteView({
                 <HistoryIcon aria-hidden className="size-3.5" />
               </ToolButton>
               <ToolButton label="Backlinks and details" pressed={detailsPressed && !historyOpen} onClick={toggleDetails} shortcut="⌘\">
-                <PanelRightIcon aria-hidden className="size-3.5" />
+                <SidebarPanelIcon aria-hidden className="size-3.5 -scale-x-100" />
               </ToolButton>
             </>
           )}
@@ -598,8 +614,8 @@ export default function NoteView({
             aria-label={historyOpen ? "Version history" : "Backlinks and details"}
             className={cn(
               "flex min-h-0 w-[16.5rem] shrink-0 flex-col overflow-y-auto border-l border-white/[0.05]",
-              !railChosen && "hidden xl:flex",
-              railChosen && "max-xl:bg-background max-xl:absolute max-xl:inset-y-0 max-xl:right-0 max-xl:z-10 max-xl:shadow-[-24px_0_48px_rgba(0,0,0,0.45)]",
+              !railChosen && "hidden 2xl:flex",
+              railChosen && "max-[90rem]:bg-background max-[90rem]:absolute max-[90rem]:inset-y-0 max-[90rem]:right-0 max-[90rem]:z-10 max-[90rem]:shadow-[-24px_0_48px_rgba(0,0,0,0.45)]",
             )}
           >
             {railContent}

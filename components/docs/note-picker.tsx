@@ -22,6 +22,9 @@ import HeadingIcon from "@/public/assets/images/docs/heading.svg";
 import LockIcon from "@/public/assets/images/docs/lock.svg";
 import SunIcon from "@/public/assets/images/docs/sun.svg";
 
+const SEARCH_DELAY_MS = 160;
+const PICKER_CHROME_PX = 96;
+
 export type PickerHandle = { key: (key: PickerKey) => boolean };
 
 type Option =
@@ -64,7 +67,7 @@ const NotePicker = forwardRef<PickerHandle, { view: EditorView; trigger: ActiveT
   const now = useDocsNow();
   const createNote = useDocsStore((state) => state.createNote);
   const viewerId = useDocsStore((state) => state.viewer?.id);
-  const [found, setFound] = useState<{ key: string; options: Option[] }>({ key: "", options: [] });
+  const [found, setFound] = useState<{ key: string; options: Option[]; failed?: boolean }>({ key: "", options: [] });
   const [highlightState, setHighlightState] = useState({ key: "", index: 0 });
   const [place, setPlace] = useState<{ left: number; top?: number; bottom?: number } | null>(null);
   const listId = useId();
@@ -101,10 +104,10 @@ const NotePicker = forwardRef<PickerHandle, { view: EditorView; trigger: ActiveT
             if (live) setFound({ key, options });
           })
           .catch(() => {
-            if (live) setFound({ key, options: [] });
+            if (live) setFound({ key, options: [], failed: true });
           });
       },
-      trigger.kind === "link" ? 0 : 120,
+      SEARCH_DELAY_MS,
     );
     return () => {
       live = false;
@@ -112,6 +115,8 @@ const NotePicker = forwardRef<PickerHandle, { view: EditorView; trigger: ActiveT
     };
   }, [trigger.kind, trigger.query, page.id, key]);
 
+  const settled = trigger.kind === "tag" || found.key === key;
+  const failed = trigger.kind !== "tag" && found.key === key && Boolean(found.failed);
   const options = trigger.kind === "tag" ? tagOptions : found.key === key ? found.options : [];
   const exact =
     trigger.kind === "link"
@@ -119,7 +124,7 @@ const NotePicker = forwardRef<PickerHandle, { view: EditorView; trigger: ActiveT
       : trigger.kind === "tag"
         ? options.some((option) => option.type === "tag" && option.path === query.toLowerCase())
         : true;
-  const canCreate = Boolean(query) && !exact && trigger.kind !== "mention";
+  const canCreate = Boolean(query) && !exact && trigger.kind !== "mention" && !failed;
   const total = options.length + (canCreate ? 1 : 0);
   const active = total ? Math.min(highlight, total - 1) : 0;
   const folderName = page.kind === "note" && page.folderId ? (nav?.folders.find((folder) => folder.id === page.folderId)?.name ?? null) : null;
@@ -132,8 +137,10 @@ const NotePicker = forwardRef<PickerHandle, { view: EditorView; trigger: ActiveT
       if (!coords) return setPlace(null);
       const width = Math.min(400, window.innerWidth - 16);
       const left = Math.round(Math.max(8, Math.min(coords.left - 56, window.innerWidth - width - 8)));
-      const below = window.innerHeight - coords.bottom;
-      setPlace(below > 340 || below > coords.top ? { left, top: Math.round(coords.bottom + 10) } : { left, bottom: Math.round(window.innerHeight - coords.top + 10) });
+      const below = window.innerHeight - coords.bottom - 10;
+      const above = coords.top - 10;
+      const needed = Math.min(320, window.innerHeight * 0.45) + PICKER_CHROME_PX;
+      setPlace(below >= needed || below >= above ? { left, top: Math.round(coords.bottom + 10) } : { left, bottom: Math.round(window.innerHeight - coords.top + 10) });
     };
     const schedule = () => {
       cancelAnimationFrame(frame);
@@ -207,7 +214,7 @@ const NotePicker = forwardRef<PickerHandle, { view: EditorView; trigger: ActiveT
   }));
 
   const heading = trigger.kind === "link" ? "Link to a note" : trigger.kind === "tag" ? "Tags" : "Mention a record";
-  const empty = trigger.kind === "mention" ? (found.key === key ? "Nothing matches" : "Searching…") : "Nothing matches";
+  const empty = settled ? "Nothing matches" : "Searching…";
 
   const rows: ReactNode[] = options.map((option, index) => {
     let icon: ReactNode;
@@ -317,13 +324,19 @@ const NotePicker = forwardRef<PickerHandle, { view: EditorView; trigger: ActiveT
     <>
       <div className={cn("flex items-center justify-between", sheet ? "px-4 pt-3 pb-1" : "px-3.5 pt-3 pb-1.5")}>
         <span className="eyebrow-style text-subtle text-[11px] font-medium">{heading}</span>
-        <span role="status" className="caption-style text-faint">
+        <span role="status" className="caption-style text-subtle">
           {options.length ? `${options.length} ${options.length === 1 ? "match" : "matches"}` : ""}
         </span>
       </div>
       <ul id={listId} role="listbox" aria-label={heading} className={cn("flex max-h-[min(20rem,45dvh)] flex-col overflow-y-auto overscroll-contain", sheet ? "px-1.5" : "p-1 pt-0")}>
         {rows}
-        {!rows.length && !canCreate && <li className="caption-style text-subtle px-3 py-2">{trigger.query ? empty : trigger.kind === "mention" ? "Type a name" : "Start typing"}</li>}
+        {failed ? (
+          <li role="alert" className="caption-style text-danger px-3 py-2">
+            {trigger.kind === "link" ? "Notes didn't load. Keep typing to try again." : "Records didn't load. Keep typing to try again."}
+          </li>
+        ) : (
+          !rows.length && !canCreate && <li className="caption-style text-subtle px-3 py-2">{trigger.query ? empty : trigger.kind === "mention" ? "Type a name" : "Start typing"}</li>
+        )}
         {createRow}
       </ul>
     </>

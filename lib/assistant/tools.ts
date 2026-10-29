@@ -130,7 +130,7 @@ type AssistantTool = {
   write?: boolean;
   label: string;
   run: (actor: UserActor, args: Args, context: ToolContext) => Promise<unknown>;
-  describe?: (args: Args, name: Names) => { title: string; lines: string[]; diff?: DocDiffLine[] };
+  describe?: (args: Args, name: Names) => { title: string; lines: string[]; diff?: DocDiffLine[]; docId?: string };
   details?: (actor: UserActor, args: Args) => Promise<Record<string, string>>;
 };
 
@@ -4556,7 +4556,7 @@ export function describeAction(name: string, args: Args, names: Map<string, stri
     return names.get(key) ?? (isUuid(key) ? "Unknown record" : key);
   };
   const described = tool.describe(resolved.args, lookup);
-  return { title: described.title, lines: described.lines.filter(Boolean), ...(described.diff ? { diff: described.diff } : {}) };
+  return { title: described.title, lines: described.lines.filter(Boolean), ...(described.diff ? { diff: described.diff } : {}), ...(described.docId ? { docId: described.docId } : {}) };
 }
 
 export async function runTool(

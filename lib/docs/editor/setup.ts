@@ -5,6 +5,7 @@ import { Annotation, EditorSelection, EditorState, Prec, type Extension, type Te
 import { Decoration, EditorView, keymap, placeholder, type DecorationSet, type KeyBinding } from "@codemirror/view";
 import type { Range } from "@codemirror/state";
 import type { DiffPart } from "@/lib/docs/diff";
+import { safeHref } from "@/lib/docs/editor/links";
 import { docsLanguage } from "@/lib/docs/editor/syntax";
 import { activeLines, livePreview } from "@/lib/docs/editor/preview";
 import { presenceField } from "@/lib/docs/editor/presence";
@@ -56,11 +57,16 @@ export function detectTrigger(state: EditorState, focused: boolean): ActiveTrigg
   return { ...found, at: line.from + found.from, head: range.head };
 }
 
+export function linkEnd(doc: Text, head: number) {
+  const line = doc.lineAt(head);
+  const rest = /^[^[\]\n]*\]\]/.exec(doc.sliceString(head, line.to));
+  return rest ? head + rest[0].length : head;
+}
+
 export function applyLink(view: EditorView, trigger: ActiveTrigger, text: string) {
-  const after = view.state.doc.sliceString(trigger.head, trigger.head + 2) === "]]" ? 2 : 0;
   const insert = `[[${text}]]`;
   view.dispatch({
-    changes: { from: trigger.at, to: trigger.head + after, insert },
+    changes: { from: trigger.at, to: linkEnd(view.state.doc, trigger.head), insert },
     selection: EditorSelection.cursor(trigger.at + insert.length),
     userEvent: "input.complete",
   });
@@ -163,7 +169,20 @@ const pickerKeymap: KeyBinding[] = [
   { key: "Escape", run: () => bridge.pickerKey("escape") || bridge.escape() },
 ];
 
+function toggleTaskAtCursor(view: EditorView) {
+  return toggleTaskAt(view, view.state.selection.main.head);
+}
+
+function checkboxKey(event: KeyboardEvent, view: EditorView) {
+  if (event.key !== " " && event.key !== "Enter") return false;
+  const box = event.target instanceof HTMLElement ? event.target.closest("[data-checkbox]") : null;
+  if (!box || view.state.readOnly) return false;
+  event.preventDefault();
+  return toggleTaskAt(view, view.posAtDOM(box));
+}
+
 const editingKeymap: KeyBinding[] = [
+  { key: "Mod-Enter", run: toggleTaskAtCursor },
   { key: "Mod-b", run: wrapWith("**") },
   { key: "Mod-i", run: wrapWith("*") },
   { key: "Mod-e", run: wrapWith("`") },
@@ -205,7 +224,10 @@ function clickHandler(event: MouseEvent, view: EditorView) {
   event.preventDefault();
   if (link.classList.contains("note-wikilink")) bridge.openLink(link.dataset.target ?? "", link.dataset.heading ?? null, newTab);
   else if (link.classList.contains("note-tag")) bridge.openTag(link.dataset.tag ?? "", newTab);
-  else if (link.dataset.href) window.open(link.dataset.href, "_blank", "noopener,noreferrer");
+  else {
+    const href = safeHref(link.dataset.href ?? "");
+    if (href) window.open(href, "_blank", "noopener,noreferrer");
+  }
   return true;
 }
 
@@ -227,7 +249,7 @@ export function noteExtensions(options: NoteExtensionOptions = {}): Extension[] 
     EditorView.lineWrapping,
     editable ? Prec.highest(keymap.of(pickerKeymap)) : [],
     keymap.of([...(editable ? [...markdownKeymap, ...editingKeymap] : []), ...historyKeymap, ...defaultKeymap]),
-    EditorView.domEventHandlers({ mousedown: clickHandler }),
+    EditorView.domEventHandlers({ mousedown: clickHandler, keydown: checkboxKey }),
     editable
       ? EditorView.updateListener.of((update) => {
           if (update.docChanged && !update.transactions.every((transaction) => transaction.annotation(external))) bridge.changed(update.view);

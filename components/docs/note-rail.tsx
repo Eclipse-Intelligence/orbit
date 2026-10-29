@@ -26,7 +26,7 @@ function RailSection({ title, count, children }: { title: string; count?: number
     <section className="flex flex-col gap-2.5 px-4 pt-4">
       <div className="flex h-5 items-center gap-2">
         <h3 className="eyebrow-style text-subtle text-[11px] font-medium">{title}</h3>
-        {count !== undefined && <span className="caption-style text-faint tabular-nums">{count}</span>}
+        {count !== undefined && <span className="caption-style text-subtle tabular-nums">{count}</span>}
       </div>
       {children}
     </section>
@@ -66,7 +66,7 @@ function BacklinkCard({ context, linked, now }: { context: LinkContext; linked: 
           <span className="text-foreground min-w-0 truncate text-[13px] leading-4 font-medium">{context.title || "Untitled"}</span>
         </span>
         <Snippet context={context} linked={linked} />
-        <span className="caption-style text-faint flex items-center gap-1.5">
+        <span className="caption-style text-subtle flex items-center gap-1.5">
           {context.kind === "daily" ? (
             <>
               <LockIcon aria-hidden className="size-3" /> Daily note, only you see this
@@ -171,7 +171,7 @@ export default function NoteRail({ page }: { page: Page }) {
     <div className="flex flex-col gap-2 pb-28">
       <RailSection title="Backlinks" count={links?.linked.length}>
         {links === null ? (
-          <p role="status" className="caption-style text-faint">
+          <p role="status" className="caption-style text-subtle">
             Loading
           </p>
         ) : links.linked.length === 0 ? (

@@ -285,7 +285,7 @@ export function triggerBefore(before: string): Trigger | null {
   if (at >= 0) {
     const query = before.slice(at + 1);
     const boundary = at === 0 || /[\s(]/.test(before[at - 1]);
-    if (boundary && !/\s{2,}|\n|[[\]()@]/.test(query) && query.length <= 40 && query.split(" ").length <= 3) {
+    if (boundary && !/^\s|\s{2,}|\n|[[\]()@]/.test(query) && query.length <= 40 && query.split(" ").length <= 3) {
       return { kind: "mention", from: at, query };
     }
   }

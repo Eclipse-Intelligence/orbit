@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { CommandGroup, CommandItem, CommandSeparator, Kbd } from "@/components/_ui/command";
 import { ParticipantAvatar } from "@/components/docs/presence";
 import { useDocsNav, useDocsNow } from "@/components/docs/use-docs";
@@ -87,7 +87,7 @@ function NoteItem({ summary, query, onSelect, snippet }: { summary: PageSummary;
         {snippet && <span className="caption-style text-subtle truncate">{snippet}</span>}
       </span>
       <Where summary={summary} />
-      {!snippet && <span className="caption-style text-faint w-16 shrink-0 text-right tabular-nums">{when}</span>}
+      {!snippet && <span className="caption-style text-subtle w-16 shrink-0 text-right tabular-nums">{when}</span>}
     </CommandItem>
   );
 }
@@ -119,6 +119,8 @@ export default function DocsPaletteGroups({
   const nav = useDocsNav();
   const [fallback, setFallback] = useState<PageSummary[]>([]);
   const [results, setResults] = useState<SearchResults | null>(null);
+  const [failedQuery, setFailedQuery] = useState<string | null>(null);
+  const creating = useRef(false);
   const [mentions, setMentions] = useState<{ key: string; hits: SearchHit[] } | null>(null);
   const trimmed = query.trim();
   const recordKey = record ? `${record.kind}:${record.id}` : "";
@@ -144,9 +146,13 @@ export default function DocsPaletteGroups({
       void docsData()
         .search(trimmed)
         .then((value) => {
-          if (live) setResults(value);
+          if (!live) return;
+          setResults(value);
+          setFailedQuery(null);
         })
-        .catch(() => {});
+        .catch(() => {
+          if (live) setFailedQuery(trimmed);
+        });
     }, 60);
     return () => {
       live = false;
@@ -169,7 +175,10 @@ export default function DocsPaletteGroups({
   }, [record, recordKey]);
 
   async function create(title?: string) {
+    if (creating.current) return;
+    creating.current = true;
     const page = await createNote(title ? { title } : {});
+    creating.current = false;
     if (page) go(pageHref(page.id));
   }
 
@@ -226,6 +235,11 @@ export default function DocsPaletteGroups({
 
   return (
     <>
+      {failedQuery === trimmed && !current && (
+        <p role="alert" className="caption-style text-danger px-4 py-3">
+          Docs search didn&apos;t work. Try again in a moment.
+        </p>
+      )}
       {(titleRows.length > 0 || textRows.length > 0) && (
         <CommandGroup heading="Notes">
           {titleRows.map((summary) => (

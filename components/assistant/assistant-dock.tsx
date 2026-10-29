@@ -34,6 +34,7 @@ import {
   type ReasoningLevel,
 } from "@/lib/assistant/models";
 import { relativeWhen } from "@/lib/companies";
+import { pageHref } from "@/lib/docs/routes";
 import type { DocDiffLine } from "@/lib/docs/types";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import { encodeMentions, liveMentions, splitMentions, type Mention } from "@/lib/mentions";
@@ -227,10 +228,22 @@ function ActionCard({ action, busy, onDecide }: { action: AssistantAction; busy:
               {action.alternative.label}
             </Button>
           )}
+          {action.docId && (
+            <Button variant="secondary" size="sm" href={pageHref(action.docId)}>
+              Open in Docs
+            </Button>
+          )}
           <Button variant="ghost" size="sm" disabled={busy} onClick={() => onDecide([{ id: action.id, approve: false }])}>
             Cancel
           </Button>
           {action.diff && <span className="caption-style text-subtle ml-auto">Saved as a version, so you can undo it</span>}
+        </div>
+      )}
+      {action.status === "done" && action.docId && (
+        <div className="flex pt-1">
+          <Button variant="secondary" size="sm" href={pageHref(action.docId)}>
+            Open in Docs
+          </Button>
         </div>
       )}
     </div>

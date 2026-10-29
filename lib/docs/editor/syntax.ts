@@ -1,20 +1,21 @@
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import type { InlineContext, MarkdownConfig } from "@lezer/markdown";
-import { isTagBoundary, tagAt } from "@/lib/docs/markdown";
+import { isTagBoundary, splitTarget, tagAt } from "@/lib/docs/markdown";
 
 const OPEN_BRACKET = 91;
 const CLOSE_BRACKET = 93;
 const HASH = 35;
 const AT = 64;
-const MENTION = /^@\[([^\]\n]{1,200})\]\((contact|company|task|opportunity|proposal):([0-9a-f-]{36})\)/;
+const WIKILINK_MAX = 400;
+const MENTION = /^@\[([^[\]\n]{1,200})\]\((contact|company|task|opportunity|proposal):([0-9a-f-]{36})\)/;
 
 function wikiLink(cx: InlineContext, next: number, pos: number) {
   if (next !== OPEN_BRACKET || cx.char(pos + 1) !== OPEN_BRACKET) return -1;
-  for (let at = pos + 2; at < cx.end && at < pos + 205; at += 1) {
+  for (let at = pos + 2; at < cx.end && at <= pos + 2 + WIKILINK_MAX; at += 1) {
     const char = cx.char(at);
     if (char === 10 || char === OPEN_BRACKET) return -1;
     if (char === CLOSE_BRACKET) {
-      if (cx.char(at + 1) !== CLOSE_BRACKET || at === pos + 2) return -1;
+      if (cx.char(at + 1) !== CLOSE_BRACKET || !splitTarget(cx.slice(pos + 2, at)).target) return -1;
       return cx.addElement(
         cx.elt("WikiLink", pos, at + 2, [cx.elt("WikiLinkMark", pos, pos + 2), cx.elt("WikiLinkText", pos + 2, at), cx.elt("WikiLinkMark", at, at + 2)]),
       );

@@ -72,6 +72,8 @@ export class CheckboxWidget extends WidgetType {
     box.setAttribute("aria-checked", String(this.checked));
     box.setAttribute("aria-label", this.checked ? "Done. Mark as not done" : "Not done. Mark as done");
     box.setAttribute("data-checkbox", "");
+    box.setAttribute("tabindex", "0");
+    box.setAttribute("contenteditable", "false");
     holder.append(box);
     return holder;
   }
@@ -97,7 +99,7 @@ export class MentionWidget extends WidgetType {
     const chip = span(`note-mention note-mention-${this.kind}`);
     chip.setAttribute("data-mention-kind", this.kind);
     chip.setAttribute("data-mention-id", this.id);
-    chip.setAttribute("title", KIND_LABELS[this.kind]);
+    chip.setAttribute("title", `${this.name}, ${KIND_LABELS[this.kind].toLowerCase()}`);
     if (this.kind === "contact") {
       const letters = this.name
         .split(/\s+/)
@@ -113,7 +115,7 @@ export class MentionWidget extends WidgetType {
       icon.setAttribute("aria-hidden", "true");
       chip.append(icon);
     }
-    chip.append(document.createTextNode(this.name));
+    chip.append(span("note-mention-name", this.name));
     return chip;
   }
   ignoreEvent() {

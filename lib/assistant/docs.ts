@@ -123,7 +123,9 @@ function counted(count: number, one: string, many: string) {
   return `${count} ${count === 1 ? one : many}`;
 }
 
-export function describeDocAction(args: Args, name: Names): { title: string; lines: string[]; diff?: DocDiffLine[] } {
+const OPENS_IN_DOCS: SaveDocAction[] = ["replace", "append", "edit", "tag", "rename"];
+
+export function describeDocAction(args: Args, name: Names): { title: string; lines: string[]; diff?: DocDiffLine[]; docId?: string } {
   const action = actionOf(args);
   const docId = docIdOf(args);
   const key = diffKey(args);
@@ -142,7 +144,8 @@ export function describeDocAction(args: Args, name: Names): { title: string; lin
   const folderId = str(args.folderId);
   const folder = isUuid(folderId) ? known(name, folderId) : null;
   const folderShared = isUuid(folderId) ? known(name, `${folderId}:shared`) === "yes" : false;
-  const result = (title: string, lines: string[]) => ({ title, lines: lines.filter(Boolean), ...(diff ? { diff } : {}) });
+  const opens = docId && action && OPENS_IN_DOCS.includes(action) ? { docId } : {};
+  const result = (title: string, lines: string[]) => ({ title, lines: lines.filter(Boolean), ...(diff ? { diff } : {}), ...opens });
   switch (action) {
     case "create":
       return result(`New doc: ${str(args.title) || "Untitled"}`, [
