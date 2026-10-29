@@ -4,7 +4,8 @@ import { iso, isUuid, recordAudit } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
 import type { Actor, Provenance } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
-import { appendText } from "@/lib/docs/edits";
+import { lineDiff } from "@/lib/docs/diff";
+import { appendText, applyDocEdit, editSummary } from "@/lib/docs/edits";
 import { cleanTitle, excerptFrom, lineAround, linkKey, parseDoc, parseLinks, rewriteLinkTitle, wordCount } from "@/lib/docs/markdown";
 import {
   DOC_CONTENT_MAX,
@@ -14,6 +15,8 @@ import {
   VERSIONS_KEPT,
   type DocCreateInput,
   type DocDetail,
+  type DocDiffLine,
+  type DocEdit,
   type DocEditor,
   type DocEditorRef,
   type DocKind,
@@ -647,6 +650,23 @@ export async function appendToDoc(actor: Actor, id: string, text: string, proven
     const page = await loadPage(db, actor, id, { lock: true });
     await changeDocContent(db, actor, page, appendText(page.content, text), { provenance, summary: "Added to the end" });
     return docDetail(db, actor, id);
+  });
+}
+
+export async function editDoc(
+  actor: Actor,
+  id: string,
+  edit: DocEdit,
+  provenance?: Provenance,
+  options: { assistantCanEdit?: boolean; baseRevision?: number } = {},
+): Promise<{ doc: DocDetail; diff: DocDiffLine[] }> {
+  assertDocsWrite(actor);
+  return withActor(actor, async (db) => {
+    const page = options.assistantCanEdit ? await lockForAssistant(db, actor, id) : await loadPage(db, actor, id, { lock: true });
+    const before = page.content;
+    await changeDocContent(db, actor, page, applyDocEdit(page.content, edit), { provenance, summary: editSummary(edit), baseRevision: options.baseRevision });
+    const doc = await docDetail(db, actor, id);
+    return { doc, diff: lineDiff(before, doc.content) };
   });
 }
 
