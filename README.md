@@ -515,11 +515,14 @@ Docs (`/docs`) holds Markdown notes, written in a live preview editor where the 
 - **Daily notes.** One private note per day (`/docs/daily/<date>`, `G` then `D` for today), with a calendar, the day's meetings, and a line that adds a timed entry.
 - **Moves.** Moving a note or folder into a shared folder, or out of one, asks first, because it changes who can see it.
 - **History.** Orbit saves a version every 10 minutes while you write, on every rename and before every assistant or agent edit. Version history shows who made each one and the changes, and Restore brings one back as a new version.
-- **Saving.** Notes save as you type and keep unsaved text on the device if the connection drops. If someone else saved the note while you were editing, Orbit keeps your text and offers Keep mine (saved as a new version, with theirs in the history) or Use theirs.
-- **The assistant.** It reads your docs and shared ones through Knowledge and changes them with an approval card that shows the lines it adds and removes. A note's More menu has "Let the assistant edit without asking"; edits made that way are marked on the card and the note shows "Orbit assistant is writing" for a minute.
+- **Live.** Everyone who has a note open edits the same text at once: their avatars sit in the note's header (people as circles, the assistant and agents as rounded squares), their cursors and selections show in the text with their names, and changes arrive as they type. When the assistant or an agent edits an open note, its cursor appears and the change types itself in over a second or two. The note says Live while connected, or "Offline, changes will sync" when it isn't; edits made offline merge in when the connection returns, and anything not yet saved is kept on the device. Daily notes stay private to their owner, who can still have one open on two devices.
+- **Saving.** Notes save as you type. Without a live connection (local development without Supabase, or before the live copy loads), a note saves the old way: if someone else saved it while you were editing, Orbit keeps your text and offers Keep mine (saved as a new version, with theirs in the history) or Use theirs.
+- **The assistant.** It reads your docs and shared ones through Knowledge and changes them with an approval card that shows the lines it adds and removes. A note's More menu has "Let the assistant edit without asking"; edits made that way are marked on the card. While the assistant or an agent writes, the note list shows "Orbit assistant is writing" (or the agent's name).
 - **Focus.** `⌘ ⇧ ↵` hides everything but the note; `⌘ ⇧ F` searches Docs; `C` then `N` creates a note; `⌘ K` lists notes first while you are in Docs.
 
-Routes: `/docs` (all notes), `/docs/<id>`, `/docs/folder/<id>`, `/docs/tag/<tag>`, `/docs/daily` and `/docs/daily/<YYYY-MM-DD>`, and `/docs?q=<search>`. Live co-editing (several people and agents in one note with cursors) is not built yet.
+Routes: `/docs` (all notes), `/docs/<id>`, `/docs/folder/<id>`, `/docs/tag/<tag>`, `/docs/daily` and `/docs/daily/<YYYY-MM-DD>`, and `/docs?q=<search>`.
+
+Live editing runs over Supabase Realtime whenever `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` are set, and needs migration `20261216100000_docs_realtime.sql` and, in the Supabase dashboard, Realtime › Settings › "Allow public access" turned off. Agent and assistant edits reach open notes live only with `SUPABASE_SERVICE_ROLE_KEY` set; without it they arrive within 30 seconds. Locally, `DOCS_LIVE_RELAY=1` (without Supabase) runs a small relay inside `next start` or `next dev` so two browsers can edit together; leave it unset on Vercel.
 
 ## Keyboard shortcuts and the command palette
 
@@ -790,7 +793,8 @@ Every variable Orbit reads. `.env.example` lists them with comments (aliases suc
 | `APP_SECRET` | Everything | At least 16 characters. Signs local sessions and encrypts stored tokens, keys and calendar links. |
 | `DEV_USER_EMAIL`, `DEV_USER_PASSWORD`, `CRM_AGENT_TOKEN` | Local development | Written by `db:setup`. |
 | `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Hosted sign-in, email attachments (Storage) | Unset means local password sessions and no attachments. |
-| `SUPABASE_SERVICE_ROLE_KEY` (or `SUPABASE_SECRET_KEY`) | Invites, email attachments | Server only. Creates confirmed logins for invitees, and signs uploads to and reads from the private `email-attachments` Storage bucket. |
+| `SUPABASE_SERVICE_ROLE_KEY` (or `SUPABASE_SECRET_KEY`) | Invites, email attachments, live Docs | Server only. Creates confirmed logins for invitees, signs uploads to and reads from the private `email-attachments` Storage bucket, and broadcasts assistant and agent edits to open notes through Realtime. |
+| `DOCS_LIVE_RELAY` | Live Docs in local development | `1` runs an in-process relay for live editing when Supabase isn't configured. Only for a single local server; leave it unset in production. |
 | `SITE_URL` (or `NEXT_PUBLIC_SITE_URL`) | Links in emails, ClickUp, Linear and invites; webhooks and Teams subscriptions | The https origin, with or without `https://`. |
 | `CRON_SECRET` | `/api/cron/sync`, `/api/cron/workflows`, `/api/cron/mail`, `/api/cron/mail-due`, `/api/assistant/probe` | Bearer secret. |
 | `MAIL_STORAGE_LIMIT_MB` | Mail mirror | Optional. The database size at which the mail backfill pauses (default 400). Raise it on a Pro Supabase project. |
