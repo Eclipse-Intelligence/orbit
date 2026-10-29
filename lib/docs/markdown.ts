@@ -20,6 +20,9 @@ const PARAGRAPH_BREAK = /\n[ \t]*\n/g;
 const LIST_ITEM = /^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)/;
 const ATX_HEADING = /^ {0,3}#{1,6}(?:[ \t]|$)/;
 const PLAIN_TEXT_MAX = 1_000_000;
+const TABLE_RULE = /^[ \t]*\|?(?:[ \t]*:?-+:?[ \t]*\|)+(?:[ \t]*:?-+:?[ \t]*)?$/gm;
+const TABLE_ROW = /^[ \t]*\|.*$/gm;
+const TABLE_PIPE = /\[\[[^\]\n]*\]\]|\\\||\|/g;
 const INLINE_MARKUP = /[[<]/;
 export const TAG_BODY = /^#([\p{L}\p{N}_\-/]+)/u;
 export const ENTRY_TIME = /^([01]\d|2[0-3]):([0-5]\d)(?= |$)/;
@@ -274,6 +277,8 @@ export function plainText(content: string) {
   const lines = maskFences(source)
     .replace(/^ {0,3}#{1,6}[ \t]+/gm, "")
     .replace(/^[ \t]*>[ \t]?/gm, "")
+    .replace(TABLE_RULE, "")
+    .replace(TABLE_ROW, (row) => row.replace(TABLE_PIPE, (piece) => (piece === "|" ? " " : piece === "\\|" ? "|" : piece)))
     .replace(/^[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?/gm, "");
   let text = "";
   let last = 0;

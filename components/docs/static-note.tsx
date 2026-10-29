@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { staticLines, type StaticSegment } from "@/lib/docs/editor/static";
 import type { WidgetSpec } from "@/lib/docs/editor/plan";
+import { alignClass, type TableCell, type TableView } from "@/lib/docs/editor/tables";
 
 function Widget({ spec }: { spec: WidgetSpec }) {
   if (spec.kind === "hang") return <span aria-hidden className="note-hang-anchor" />;
@@ -63,17 +64,64 @@ function Segment({ segment }: { segment: StaticSegment }) {
   );
 }
 
+function Cell({ cell }: { cell: TableCell }) {
+  return (
+    <span className="note-table-cell">
+      {cell.segments.map((segment, part) => (
+        <Segment key={part} segment={segment} />
+      ))}
+    </span>
+  );
+}
+
+function StaticTable({ table }: { table: TableView }) {
+  return (
+    <div className="note-table-widget">
+      <div className="note-table-scroll">
+        <table className="note-table">
+          <thead>
+            <tr>
+              {table.header.map((cell, column) => (
+                <th key={column} scope="col" className={alignClass(table.align[column]) || undefined}>
+                  <Cell cell={cell} />
+                </th>
+              ))}
+            </tr>
+          </thead>
+          {table.rows.length > 0 && (
+            <tbody>
+              {table.rows.map((row, index) => (
+                <tr key={index}>
+                  {row.map((cell, column) => (
+                    <td key={column} className={alignClass(table.align[column]) || undefined}>
+                      <Cell cell={cell} />
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          )}
+        </table>
+      </div>
+    </div>
+  );
+}
+
 export default function StaticNote({ body, daily = false }: { body: string; daily?: boolean }) {
   const lines = useMemo(() => staticLines(body, { daily }), [body, daily]);
   return (
     <div aria-hidden className={daily ? "cm-editor note-editor note-editor-daily" : "cm-editor note-editor"}>
       <div className="cm-scroller">
         <div className="cm-content cm-lineWrapping">
-          {lines.map((line, index) => (
-            <div key={index} className={line.className}>
-              {line.segments.length ? line.segments.map((segment, part) => <Segment key={part} segment={segment} />) : <br />}
-            </div>
-          ))}
+          {lines.map((line, index) =>
+            line.table ? (
+              <StaticTable key={index} table={line.table} />
+            ) : (
+              <div key={index} className={line.className}>
+                {line.segments.length ? line.segments.map((segment, part) => <Segment key={part} segment={segment} />) : <br />}
+              </div>
+            ),
+          )}
         </div>
       </div>
     </div>
