@@ -91,6 +91,8 @@ export type LinkTarget =
   | { kind: "heading"; pageId: string; title: string; heading: string }
   | { kind: "daily"; pageId: string; title: string; dailyDate: string; snippet: string };
 
+export type NoteTitle = { id: string; title: string; shared: boolean; folderName: string | null };
+
 export type Version = {
   id: string;
   pageId: string;
@@ -218,6 +220,7 @@ export interface DocsData {
   backlinks(pageId: string): Promise<Backlinks>;
   linkTargets(query: string, fromPageId: string | null): Promise<LinkTarget[]>;
   resolveTitles(): Promise<Record<string, string>>;
+  noteTitles(): Promise<NoteTitle[]>;
   recordMentions(record: { kind: MentionKind; id: string; name?: string }): Promise<SearchHit[]>;
   searchRecords(query: string): Promise<RecordRef[]>;
   recordDetails(refs: { kind: MentionKind; id: string; name: string }[]): Promise<RecordRef[]>;

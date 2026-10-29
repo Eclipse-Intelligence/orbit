@@ -4,7 +4,7 @@ import { createCompany } from "@/lib/crm/companies";
 import { scopesForRole } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
-import type { Backlinks, DocsNav, Folder, Page, PageSummary, SearchHit, SearchResults } from "@/lib/docs/client-types";
+import type { Backlinks, DocsNav, Folder, NoteTitle, Page, PageSummary, SearchHit, SearchResults } from "@/lib/docs/client-types";
 import { localDate } from "@/lib/docs/daily";
 import { docsAction, docsChanges, docsReads, docsRespond, docsWrites, type DocsCall } from "@/lib/docs/http";
 import { loadDocsInitial } from "@/lib/docs/server";
@@ -92,6 +92,33 @@ describe("Docs route handlers", () => {
     assert.deepEqual(backlinks.linked, []);
     const markLinks = (await call(mark, docsReads.backlinks, { params: { id: shared.id } })).body as unknown as Backlinks;
     assert.deepEqual(markLinks.linked.map((link) => link.title), ["Salary thoughts"]);
+  });
+
+  it("lists note titles for link matching without another person's private notes", async () => {
+    const hidden = await docsChanges.create(mark, { title: "Pricing worries", body: "Only for me" });
+    const team = await docsChanges.createFolder(mark, "Pricing team", null);
+    await docsChanges.share(mark, { kind: "folder", id: team.id }, "shared");
+    const open = await docsChanges.create(mark, { title: "Pricing 2027 draft", body: "For everyone", folderId: team.id });
+    const own = await docsChanges.create(priya, { title: "Pricing questions", body: "Priya's own" });
+    const archived = await docsChanges.create(priya, { title: "Pricing old", body: "Gone" });
+    await docsChanges.archive(priya, archived.id);
+    await call(priya, docsWrites.openDaily, { method: "POST", params: { date: "2026-10-21" } });
+
+    const response = await call(priya, docsReads.noteTitles);
+    assert.equal(response.status, 200);
+    const titles = response.body as unknown as NoteTitle[];
+    const ids = titles.map((note) => note.id);
+    assert.ok(!ids.includes(hidden.id));
+    assert.ok(!ids.includes(archived.id));
+    assert.deepEqual(ids.slice(0, 2), [own.id, open.id]);
+    assert.deepEqual(titles.find((note) => note.id === open.id), { id: open.id, title: "Pricing 2027 draft", shared: true, folderName: "Pricing team" });
+    assert.deepEqual(titles.find((note) => note.id === own.id), { id: own.id, title: "Pricing questions", shared: false, folderName: null });
+    assert.ok(titles.every((note) => note.title !== ""));
+
+    const marks = (await call(mark, docsReads.noteTitles)).body as unknown as NoteTitle[];
+    assert.ok(marks.some((note) => note.id === hidden.id));
+    assert.ok(!marks.some((note) => note.id === own.id));
+    assert.equal((await call(null, docsReads.noteTitles)).status, 401);
   });
 
   it("returns a conflict with the latest note when the base revision is stale", async () => {

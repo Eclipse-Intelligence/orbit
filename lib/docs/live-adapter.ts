@@ -21,6 +21,7 @@ import {
   type Folder,
   type LinkTarget,
   type Meeting,
+  type NoteTitle,
   type Page,
   type PageSummary,
   type Participant,
@@ -187,6 +188,7 @@ export function createLiveDocs(options: Options = {}): DocsData & { refreshActiv
     backlinks: (pageId) => getJson<Backlinks>(`/api/docs/pages/${encodeURIComponent(pageId)}/backlinks`),
     linkTargets: (text, fromPageId) => getJson<LinkTarget[]>(`/api/docs/link-targets${query({ q: text, from: fromPageId })}`),
     resolveTitles: () => getJson<Record<string, string>>("/api/docs/titles"),
+    noteTitles: () => getJson<NoteTitle[]>("/api/docs/note-titles"),
     recordMentions: (record) => getJson<SearchHit[]>(`/api/docs/mentioning${query({ kind: record.kind, id: record.id })}`),
     searchRecords: async (text) => (options.recordSearch ? options.recordSearch(text).catch(() => []) : []),
     async recordDetails(refs) {

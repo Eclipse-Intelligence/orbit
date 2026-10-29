@@ -10,6 +10,7 @@ import type {
   LinkContext,
   LinkTarget,
   Meeting,
+  NoteTitle,
   Page,
   PageFilter,
   PageSort,
@@ -311,6 +312,20 @@ export async function docsTitles(actor: UserActor): Promise<Record<string, strin
       else map[linkKey(row.title)] = row.id;
     }
     return map;
+  });
+}
+
+export async function docsNoteTitles(actor: UserActor): Promise<NoteTitle[]> {
+  assertDocsRead(actor);
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ id: string; title: string; shared: boolean; folder_name: string | null }>(
+      `select p.id, p.title, p.effective_shared as shared, f.name as folder_name from crm.pages p
+       left join crm.page_folders f on f.id = p.folder_id
+       where p.workspace_id = $1 and p.archived_at is null and p.kind = 'note' and p.title <> ''
+       order by p.edited_at desc`,
+      [actor.workspaceId],
+    );
+    return result.rows.map((row) => ({ id: row.id, title: row.title, shared: row.shared, folderName: row.folder_name }));
   });
 }
 

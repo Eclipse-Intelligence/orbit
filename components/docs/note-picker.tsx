@@ -1,11 +1,12 @@
 "use client";
 
-import { forwardRef, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
+import { forwardRef, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { EditorView } from "@codemirror/view";
 import { Kbd } from "@/components/_ui/command";
 import { useDocsNav, useDocsNow } from "@/components/docs/use-docs";
-import type { LinkTarget, Page, RecordRef, TagNode } from "@/lib/docs/client-types";
+import type { LinkTarget, NoteTitle, Page, RecordRef, TagNode } from "@/lib/docs/client-types";
 import { docsData } from "@/lib/docs/connection";
+import { linkMatches } from "@/lib/docs/editor/link-matches";
 import { applyLink, applyMention, applyTag, type ActiveTrigger, type PickerKey } from "@/lib/docs/editor/setup";
 import { agoLabel } from "@/lib/docs/format";
 import { useDocsStore } from "@/stores/docs-store";
@@ -29,6 +30,7 @@ export type PickerHandle = { key: (key: PickerKey) => boolean };
 
 type Option =
   | { type: "target"; target: LinkTarget }
+  | { type: "title"; note: NoteTitle }
   | { type: "tag"; path: string; count: number }
   | { type: "record"; record: RecordRef };
 
@@ -67,6 +69,7 @@ const NotePicker = forwardRef<PickerHandle, { view: EditorView; trigger: ActiveT
   const now = useDocsNow();
   const createNote = useDocsStore((state) => state.createNote);
   const viewerId = useDocsStore((state) => state.viewer?.id);
+  const noteTitles = useDocsStore((state) => state.noteTitles);
   const [found, setFound] = useState<{ key: string; options: Option[]; failed?: boolean }>({ key: "", options: [] });
   const [highlightState, setHighlightState] = useState({ key: "", index: 0 });
   const [place, setPlace] = useState<{ left: number; top?: number; bottom?: number } | null>(null);
@@ -85,6 +88,11 @@ const NotePicker = forwardRef<PickerHandle, { view: EditorView; trigger: ActiveT
       .slice(0, 6)
       .map((tag) => ({ type: "tag", path: tag.path, count: tag.count }));
   }, [trigger.kind, trigger.query, nav]);
+
+  const titleOptions = useMemo<Option[]>(() => {
+    if (trigger.kind !== "link") return [];
+    return linkMatches(noteTitles, trigger.query, page.id).map((note) => ({ type: "title", note }));
+  }, [trigger.kind, trigger.query, noteTitles, page.id]);
 
   useEffect(() => {
     if (trigger.kind === "tag") return;
@@ -117,10 +125,13 @@ const NotePicker = forwardRef<PickerHandle, { view: EditorView; trigger: ActiveT
 
   const settled = trigger.kind === "tag" || found.key === key;
   const failed = trigger.kind !== "tag" && found.key === key && Boolean(found.failed);
-  const options = trigger.kind === "tag" ? tagOptions : found.key === key ? found.options : [];
+  const options = trigger.kind === "tag" ? tagOptions : settled && !failed ? found.options : trigger.kind === "link" ? titleOptions : [];
   const exact =
     trigger.kind === "link"
-      ? options.some((option) => option.type === "target" && option.target.kind === "note" && option.target.title.toLowerCase() === query.toLowerCase())
+      ? options.some(
+          (option) =>
+            (option.type === "title" ? option.note.title : option.type === "target" && option.target.kind === "note" ? option.target.title : null)?.toLowerCase() === query.toLowerCase(),
+        )
       : trigger.kind === "tag"
         ? options.some((option) => option.type === "tag" && option.path === query.toLowerCase())
         : true;
@@ -183,6 +194,7 @@ const NotePicker = forwardRef<PickerHandle, { view: EditorView; trigger: ActiveT
     const option = options[index];
     if (option.type === "tag") applyTag(view, trigger, option.path);
     else if (option.type === "record") applyMention(view, trigger, option.record);
+    else if (option.type === "title") applyLink(view, trigger, option.note.title);
     else {
       const target = option.target;
       if (target.kind === "note") applyLink(view, trigger, target.title);
@@ -192,10 +204,28 @@ const NotePicker = forwardRef<PickerHandle, { view: EditorView; trigger: ActiveT
     view.focus();
   }
 
+  const heldPick = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (heldPick.current === null) return;
+    if (heldPick.current !== key) {
+      heldPick.current = null;
+      return;
+    }
+    if (!settled) return;
+    heldPick.current = null;
+    if (total) pick(active);
+  });
+
   useImperativeHandle(ref, () => ({
     key(pressed) {
       if (pressed === "escape") {
+        heldPick.current = null;
         onClose();
+        return true;
+      }
+      if ((pressed === "enter" || pressed === "tab") && !settled && !options.length && (trigger.kind === "link" || Boolean(query))) {
+        heldPick.current = key;
         return true;
       }
       if (pressed === "shift-enter" || pressed === "mod-enter") {
@@ -216,6 +246,29 @@ const NotePicker = forwardRef<PickerHandle, { view: EditorView; trigger: ActiveT
   const heading = trigger.kind === "link" ? "Link to a note" : trigger.kind === "tag" ? "Tags" : "Mention a record";
   const empty = settled ? "Nothing matches" : "Searching…";
 
+  function noteDetail(target: { shared: boolean; folderName: string | null }, edited: string | null): { warn: boolean; detail: ReactNode } {
+    if (page.shared && !target.shared) {
+      return {
+        warn: true,
+        detail: (
+          <>
+            <LockIcon aria-hidden className="size-3 shrink-0" />
+            {target.folderName ? `${target.folderName}, private.` : "Private."} Teammates will see the title only
+          </>
+        ),
+      };
+    }
+    return {
+      warn: false,
+      detail: (
+        <>
+          {target.shared && <UsersIcon aria-hidden className="size-3 shrink-0 text-(--tag-blue-text)/80" />}
+          {[target.folderName ?? "No folder", edited].filter(Boolean).join(" · ")}
+        </>
+      ),
+    };
+  }
+
   const rows: ReactNode[] = options.map((option, index) => {
     let icon: ReactNode;
     let title: ReactNode;
@@ -229,23 +282,15 @@ const NotePicker = forwardRef<PickerHandle, { view: EditorView; trigger: ActiveT
       icon = <RecordIcon kind={option.record.kind} />;
       title = <Highlight text={option.record.name} query={trigger.query} />;
       detail = [RECORD_LABELS[option.record.kind], option.record.detail].filter(Boolean).join(" · ");
+    } else if (option.type === "title") {
+      icon = <DocIcon aria-hidden className="size-3.5" />;
+      title = <Highlight text={option.note.title} query={trigger.query} />;
+      ({ warn, detail } = noteDetail(option.note, null));
     } else if (option.target.kind === "note") {
       const target = option.target;
       icon = <DocIcon aria-hidden className="size-3.5" />;
       title = <Highlight text={target.title} query={trigger.query} />;
-      warn = page.shared && !target.shared;
-      const who = target.updatedBy.id === viewerId ? "You" : target.updatedBy.short;
-      detail = warn ? (
-        <>
-          <LockIcon aria-hidden className="size-3 shrink-0" />
-          {target.folderName ? `${target.folderName}, private.` : "Private."} Teammates will see the title only
-        </>
-      ) : (
-        <>
-          {target.shared && <UsersIcon aria-hidden className="size-3 shrink-0 text-(--tag-blue-text)/80" />}
-          {[target.folderName ?? "No folder", `${who}, ${agoLabel(target.updatedAt, now)}`].join(" · ")}
-        </>
-      );
+      ({ warn, detail } = noteDetail(target, `${target.updatedBy.id === viewerId ? "You" : target.updatedBy.short}, ${agoLabel(target.updatedAt, now)}`));
     } else if (option.target.kind === "heading") {
       const target = option.target;
       icon = <HeadingIcon aria-hidden className="size-3.5" />;

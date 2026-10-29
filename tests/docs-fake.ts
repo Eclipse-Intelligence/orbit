@@ -10,6 +10,7 @@ import type {
   LinkContext,
   LinkTarget,
   Meeting,
+  NoteTitle,
   Page,
   PageFilter,
   PageSort,
@@ -744,6 +745,11 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
         else if (row.title) map[row.title.toLowerCase()] = row.id;
       }
       return map;
+    },
+    async noteTitles() {
+      return sortRows(notes().filter((row) => row.title), "edited").map(
+        (row): NoteTitle => ({ id: row.id, title: row.title, shared: summary(row).shared, folderName: row.folderId ? (folders.get(row.folderId)?.name ?? null) : null }),
+      );
     },
     async recordMentions(record) {
       const name = record.name?.trim().toLowerCase() ?? "";

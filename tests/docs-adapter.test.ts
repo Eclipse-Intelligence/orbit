@@ -77,6 +77,17 @@ describe("fake docs adapter", () => {
     assert.ok(targets.some((target) => target.kind === "daily"));
   });
 
+  it("lists note titles for local link matching, newest first and without daily notes", async () => {
+    const data = docs();
+    const titles = await data.noteTitles();
+    const summaries = await data.listPages({ kind: "all" }, "edited");
+    assert.deepEqual(titles.map((note) => note.id), summaries.filter((page) => page.kind === "note" && page.title).map((page) => page.id));
+    assert.ok(titles.every((note) => !note.id.startsWith("daily-")));
+    const prep = titles.find((note) => note.title === "Acme renewal call prep");
+    assert.equal(prep?.shared, false);
+    assert.ok(titles.some((note) => note.shared && note.folderName === "Partnerships"));
+  });
+
   it("shares folders and notes, and keeps daily notes private", async () => {
     const data = docs();
     await data.share({ kind: "folder", id: "f-clients" }, "shared");

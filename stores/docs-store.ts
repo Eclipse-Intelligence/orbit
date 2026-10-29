@@ -5,6 +5,7 @@ import {
   type DocsNav,
   type DocsSeed,
   type Folder,
+  type NoteTitle,
   type Page,
   type PageFilter,
   type PageSort,
@@ -44,6 +45,7 @@ type DocsState = {
   recent: string[];
   activity: Record<string, Participant[]>;
   titles: Record<string, string>;
+  noteTitles: NoteTitle[];
   saves: Record<string, { status: SaveStatus; message?: string }>;
   epochs: Record<string, number>;
   fresh: string | null;
@@ -177,6 +179,7 @@ function blank() {
     recent: [],
     activity: {},
     titles: {},
+    noteTitles: [],
     saves: {},
     epochs: {},
     fresh: null,
@@ -309,10 +312,17 @@ export const useDocsStore = create<DocsState>((set, get) => ({
 
   async refreshTitles() {
     const current = session;
-    const titles = await docsData()
-      .resolveTitles()
-      .catch(() => null);
-    if (!titles || current !== session) return;
+    const [titles, noteTitles] = await Promise.all([
+      docsData()
+        .resolveTitles()
+        .catch(() => null),
+      docsData()
+        .noteTitles()
+        .catch(() => null),
+    ]);
+    if (current !== session) return;
+    if (noteTitles && JSON.stringify(noteTitles) !== JSON.stringify(get().noteTitles)) set({ noteTitles });
+    if (!titles) return;
     const known = get().titles;
     const keys = Object.keys(titles);
     if (keys.length === Object.keys(known).length && keys.every((key) => known[key] === titles[key])) return;
