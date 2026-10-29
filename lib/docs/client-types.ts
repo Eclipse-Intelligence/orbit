@@ -140,7 +140,7 @@ export type PageFilter =
 export type PageSort = "edited" | "created" | "title";
 
 export type SaveInput = {
-  title: string;
+  title?: string;
   body: string;
   baseRevision: number;
   overwrite?: boolean;

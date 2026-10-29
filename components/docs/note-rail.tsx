@@ -141,6 +141,9 @@ export default function NoteRail({ page }: { page: Page }) {
       .backlinks(page.id)
       .then((value) => {
         if (live) setBacklinks({ id: page.id, value });
+      })
+      .catch(() => {
+        if (live) setBacklinks({ id: page.id, value: { linked: [], unlinked: [] } });
       });
     return () => {
       live = false;
@@ -154,7 +157,8 @@ export default function NoteRail({ page }: { page: Page }) {
       .recordDetails(mentions)
       .then((value) => {
         if (live) setRecords({ key: mentionKey, value });
-      });
+      })
+      .catch(() => {});
     return () => {
       live = false;
     };

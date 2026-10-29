@@ -256,7 +256,7 @@ export default function DocsScreen({ viewer, initial }: { viewer: Viewer; initia
 
   const listLoaded = Boolean(storedIds);
   useEffect(() => {
-    if (ready) void loadList(route.list, listLoaded);
+    if (ready) void loadList(route.list, listLoaded).catch(() => {});
   }, [ready, key, listLoaded, loadList, route.list]);
 
   const today = nav?.today ?? "";
@@ -280,9 +280,11 @@ export default function DocsScreen({ viewer, initial }: { viewer: Viewer; initia
   useEffect(() => {
     if (!ready || !shownId || pages[shownId]) return;
     let live = true;
-    void loadPage(shownId).then((found) => {
-      if (live && !found) setMissing(shownId);
-    });
+    void loadPage(shownId)
+      .then((found) => {
+        if (live && !found) setMissing(shownId);
+      })
+      .catch(() => {});
     return () => {
       live = false;
     };

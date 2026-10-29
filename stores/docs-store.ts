@@ -165,7 +165,8 @@ export const useDocsStore = create<DocsState>((set, get) => ({
             .getPage(id)
             .then((fresh) => {
               if (fresh && !readers.has(id) && !queued.has(id) && !inflight.has(id)) get().replaceBody(fresh);
-            });
+            })
+            .catch(() => {});
         }
       });
     };
@@ -228,11 +229,14 @@ export const useDocsStore = create<DocsState>((set, get) => ({
   },
 
   prefetch(ids) {
-    for (const id of ids) if (!get().pages[id] && !pageRequests.has(id)) void get().loadPage(id);
+    for (const id of ids) if (!get().pages[id] && !pageRequests.has(id)) void get().loadPage(id).catch(() => {});
   },
 
   async refreshNav() {
-    const nav = await docsData().nav();
+    const nav = await docsData()
+      .nav()
+      .catch(() => null);
+    if (!nav) return;
     if (JSON.stringify(nav) !== JSON.stringify(get().nav)) set({ nav });
   },
 
@@ -245,7 +249,10 @@ export const useDocsStore = create<DocsState>((set, get) => ({
   },
 
   async refreshTitles() {
-    const titles = await docsData().resolveTitles();
+    const titles = await docsData()
+      .resolveTitles()
+      .catch(() => null);
+    if (!titles) return;
     const current = get().titles;
     const keys = Object.keys(titles);
     if (keys.length === Object.keys(current).length && keys.every((key) => current[key] === titles[key])) return;
@@ -402,7 +409,8 @@ export const useDocsStore = create<DocsState>((set, get) => ({
               void get().refreshNav();
               void get().refreshTitles();
               get().notify(`Restored ${title}.`);
-            });
+            })
+            .catch((error: unknown) => get().notify(message(error, `Could not restore ${title}.`), { tone: "alert" }));
         },
       });
     } catch (error) {
@@ -591,7 +599,7 @@ async function flush(id: string, keepalive: boolean) {
   try {
     result = await docsData().savePage(
       id,
-      { title: next.title, body: next.body, baseRevision, ...(daily ? { title: store.pages[id].title } : {}), ...(overwrites.has(id) ? { overwrite: true } : {}) },
+      { ...(daily ? {} : { title: next.title }), body: next.body, baseRevision, ...(overwrites.has(id) ? { overwrite: true } : {}) },
       { keepalive },
     );
   } catch {

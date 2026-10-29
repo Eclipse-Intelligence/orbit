@@ -30,7 +30,8 @@ function useDailyNotes() {
       .listDailyNotes()
       .then((list) => {
         if (live) setDays(list);
-      });
+      })
+      .catch(() => {});
     return () => {
       live = false;
     };

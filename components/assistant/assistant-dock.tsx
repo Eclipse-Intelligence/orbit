@@ -156,7 +156,7 @@ function DiffBlock({ lines }: { lines: DocDiffLine[] }) {
   const removed = lines.filter((line) => line.kind === "remove").length;
   const summary = [added && `${added} ${added === 1 ? "line" : "lines"} added`, removed && `${removed} removed`].filter(Boolean).join(", ") || "No text changes";
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex flex-col">
       <ol
         aria-label={`Changes to the doc: ${summary}`}
         tabIndex={0}
@@ -184,7 +184,6 @@ function DiffBlock({ lines }: { lines: DocDiffLine[] }) {
           </li>
         ))}
       </ol>
-      <p className="caption-style text-subtle">{summary}</p>
     </div>
   );
 }

@@ -22,7 +22,8 @@ import type {
   VersionBody,
 } from "@/lib/docs/client-types";
 import { localDate } from "@/lib/docs/daily";
-import { dailyMeetings, getDailyNote, listDailyNotes, openDailyNote } from "@/lib/docs/daily-notes";
+import { shortDay } from "@/lib/docs/format";
+import { dailyMeetings, listDailyNotes, openDailyNote } from "@/lib/docs/daily-notes";
 import { listFolders } from "@/lib/docs/folders";
 import { entryCount, excerptFrom, highlightIn, linkKey, tagTree } from "@/lib/docs/markdown";
 import { searchDocs } from "@/lib/docs/search";
@@ -70,11 +71,15 @@ export function toFolder(actor: UserActor, folder: DocFolder): Folder {
   };
 }
 
+function displayTitle(doc: { kind: string; title: string; dailyDate: string | null }) {
+  return doc.kind === "daily" && doc.dailyDate ? shortDay(doc.dailyDate) : doc.title;
+}
+
 export function toSummary(actor: UserActor, doc: DocSummary, entries = 0): PageSummary {
   return {
     id: doc.id,
     kind: doc.kind,
-    title: doc.title,
+    title: displayTitle(doc),
     snippet: doc.excerpt,
     folderId: doc.folderId,
     dailyDate: doc.dailyDate,
@@ -105,7 +110,7 @@ const REASON_SUMMARIES: Record<DocVersion["reason"], string> = {
   created: "Created",
   edited: "Edited",
   renamed: "Renamed",
-  before_agent: "Before an agent edit",
+  before_agent: "Saved before a change",
   restored: "Restored an earlier version",
   link_renamed: "Updated links",
 };
@@ -131,7 +136,7 @@ export function toVersion(actor: UserActor, version: DocVersion): Version {
 function toContext(reference: DocReference, wanted: string): LinkContext {
   return {
     pageId: reference.id,
-    title: reference.title,
+    title: displayTitle(reference),
     kind: reference.kind,
     dailyDate: reference.dailyDate,
     folderName: reference.folderName,
@@ -156,9 +161,9 @@ async function summariesByIds(actor: UserActor, ids: string[]) {
   return new Map(rows.map((row) => [row.id, toSummary(actor, mapPage(actor, row))]));
 }
 
-async function tagCounts(actor: UserActor) {
+async function navCounts(actor: UserActor, today: string) {
   return withActor(actor, async (db) => {
-    const result = await db.query<{ path: string; count: number }>(
+    const tags = await db.query<{ path: string; count: number }>(
       `select x.path, count(distinct t.page_id)::int as count
        from crm.page_tags t
        join crm.pages p on p.id = t.page_id
@@ -170,41 +175,40 @@ async function tagCounts(actor: UserActor) {
        group by x.path`,
       [actor.workspaceId],
     );
-    return result.rows;
-  });
-}
-
-async function dailyCount(actor: UserActor) {
-  return withActor(actor, async (db) => {
-    const result = await db.query<{ count: number }>(
-      "select count(*)::int as count from crm.pages where workspace_id = $1 and user_id = $2 and kind = 'daily' and archived_at is null and content <> ''",
-      [actor.workspaceId, actor.userId],
+    const daily = await db.query<{ count: number; today_id: string | null; today_head: string | null }>(
+      `select count(*) filter (where p.content <> '')::int as count,
+         (array_agg(p.id) filter (where p.daily_date = $3::date))[1] as today_id,
+         (array_agg(left(p.content, 4000)) filter (where p.daily_date = $3::date))[1] as today_head
+       from crm.pages p
+       where p.workspace_id = $1 and p.user_id = $2 and p.kind = 'daily' and p.archived_at is null`,
+      [actor.workspaceId, actor.userId, today],
     );
-    return result.rows[0]?.count ?? 0;
+    return { tags: tags.rows, daily: daily.rows[0] };
   });
 }
 
 export async function docsNav(actor: UserActor): Promise<DocsNav> {
   assertDocsRead(actor);
   const today = localDate();
-  const [folders, tags, count, todayNote] = await Promise.all([listFolders(actor), tagCounts(actor), dailyCount(actor), getDailyNote(actor, today)]);
-  const todayEntries = todayNote ? entryCount(todayNote.page.content) : 0;
+  const [folders, counts] = await Promise.all([listFolders(actor), navCounts(actor, today)]);
+  const head = counts.daily?.today_head ?? "";
   return {
     viewer: personParticipant({ id: actor.userId, name: actor.fullName || actor.email }, actor.userId),
     folders: folders.map((folder) => toFolder(actor, folder)),
-    tags: tagTree(tags),
-    dailyCount: count,
+    tags: tagTree(counts.tags),
+    dailyCount: counts.daily?.count ?? 0,
     today,
     todayNote:
-      todayNote && todayNote.page.content.trim()
-        ? { date: today, pageId: todayNote.page.id, entries: todayEntries, preview: excerptFrom(todayNote.page.content.replace(/^\d{2}:\d{2}( |$)/gm, ""), 120) }
+      counts.daily?.today_id && head.trim()
+        ? { date: today, pageId: counts.daily.today_id, entries: entryCount(head), preview: excerptFrom(head.replace(/^\d{2}:\d{2}( |$)/gm, ""), 120) }
         : null,
   };
 }
 
 export async function docsPage(actor: UserActor, id: string): Promise<Page | null> {
   try {
-    return toPage(actor, await getDoc(actor, id));
+    const doc = await getDoc(actor, id);
+    return doc.archivedAt ? null : toPage(actor, doc);
   } catch (error) {
     if (notFound(error)) return null;
     throw error;
@@ -337,7 +341,7 @@ export async function docsLinkTargets(actor: UserActor, query: string, fromPageI
   return [
     ...notes,
     ...headings.map((row): LinkTarget => ({ kind: "heading", pageId: row.id, title: row.title, heading: row.heading.replace(/[*_`]/g, "").trim() })),
-    ...(daily && daily.dailyDate ? [{ kind: "daily" as const, pageId: daily.id, title: daily.dailyDate, dailyDate: daily.dailyDate, snippet: (daily.snippet ?? "").replace(/^\d{2}:\d{2}\s+/, "") }] : []),
+    ...(daily && daily.dailyDate ? [{ kind: "daily" as const, pageId: daily.id, title: shortDay(daily.dailyDate), dailyDate: daily.dailyDate, snippet: (daily.snippet ?? "").replace(/(^|\s)\d{2}:\d{2}(?=\s)/g, "").replace(/\s+/g, " ").trim() }] : []),
   ];
 }
 

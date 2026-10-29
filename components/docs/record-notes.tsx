@@ -31,6 +31,9 @@ export default function RecordNotes({ record, className }: { record: { kind: Men
       .recordMentions({ kind, id, name })
       .then((list) => {
         if (live) setHits({ key: `${kind}:${id}`, list });
+      })
+      .catch(() => {
+        if (live) setHits({ key: `${kind}:${id}`, list: [] });
       });
     return () => {
       live = false;

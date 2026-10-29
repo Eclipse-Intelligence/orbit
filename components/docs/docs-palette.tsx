@@ -130,7 +130,8 @@ export default function DocsPaletteGroups({
       .recent(8)
       .then((list) => {
         if (live) setFallback(list);
-      });
+      })
+      .catch(() => {});
     return () => {
       live = false;
     };
@@ -144,7 +145,8 @@ export default function DocsPaletteGroups({
         .search(trimmed)
         .then((value) => {
           if (live) setResults(value);
-        });
+        })
+        .catch(() => {});
     }, 60);
     return () => {
       live = false;
@@ -159,7 +161,8 @@ export default function DocsPaletteGroups({
       .recordMentions(record)
       .then((hits) => {
         if (live) setMentions({ key: `${record.kind}:${record.id}`, hits });
-      });
+      })
+      .catch(() => {});
     return () => {
       live = false;
     };

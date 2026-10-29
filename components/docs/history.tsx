@@ -22,16 +22,20 @@ export function useVersions(pageId: string, revision: number) {
   const [state, setState] = useState<{ key: string; versions: Version[] } | null>(null);
   const key = `${pageId}:${revision}`;
   useEffect(() => {
+    if (!pageId || revision < 0) return;
     let live = true;
     void docsData()
       .listVersions(pageId)
       .then((versions) => {
         if (live) setState({ key, versions });
+      })
+      .catch(() => {
+        if (live) setState({ key, versions: [] });
       });
     return () => {
       live = false;
     };
-  }, [pageId, key]);
+  }, [pageId, key, revision]);
   return state && state.key.startsWith(`${pageId}:`) ? state.versions : null;
 }
 

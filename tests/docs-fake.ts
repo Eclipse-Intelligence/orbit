@@ -485,8 +485,9 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
       const row = rows.get(id);
       return row && !row.archived ? page(row) : null;
     },
-    async savePage(id, input: SaveInput): Promise<SaveResult> {
+    async savePage(id, saveInput: SaveInput): Promise<SaveResult> {
       const row = rows.get(id);
+      const input = { ...saveInput, title: saveInput.title ?? row?.title ?? "" };
       if (!row || row.archived) return { ok: false, error: "That note was archived. Restore it to keep editing." };
       if (row.body === input.body && row.title === input.title) return { ok: true, page: page(row) };
       const renamed = row.kind === "note" && row.title.trim() && row.title !== input.title ? row.title : null;

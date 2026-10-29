@@ -96,9 +96,13 @@ const NotePicker = forwardRef<PickerHandle, { view: EditorView; trigger: ActiveT
             : docsData()
                 .searchRecords(trigger.query)
                 .then((records) => records.map((record): Option => ({ type: "record", record })));
-        void request.then((options) => {
-          if (live) setFound({ key, options });
-        });
+        void request
+          .then((options) => {
+            if (live) setFound({ key, options });
+          })
+          .catch(() => {
+            if (live) setFound({ key, options: [] });
+          });
       },
       trigger.kind === "link" ? 0 : 120,
     );
