@@ -1,3 +1,5 @@
+import * as Y from "yjs";
+import { afterCommit } from "@/lib/crm/after-commit";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { iso, isUuid, recordAudit } from "@/lib/crm/mutate";
@@ -6,6 +8,9 @@ import type { Actor, Provenance } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
 import { changeCounts, lineDiff } from "@/lib/docs/diff";
 import { appendText, applyDocEdit, editSummary } from "@/lib/docs/edits";
+import { publishLiveChange } from "@/lib/docs/live/broadcast";
+import { encodeState, liveChange, liveUserFor, loadLiveDoc, markWatching, SERVER_ORIGIN, writeLiveText } from "@/lib/docs/live/persist";
+import { createLiveDoc, liveText, setLiveText, stateFromMarkdown } from "@/lib/docs/live/ydoc";
 import { cleanTitle, excerptFrom, lineAround, linkKey, parseDoc, parseLinks, rewriteLinkTitle, wordCount } from "@/lib/docs/markdown";
 import {
   DOC_CONTENT_MAX,
@@ -332,7 +337,7 @@ export type CommitOptions = {
   provenance?: Provenance;
   reason?: VersionReason;
   summary?: string | null;
-  ydoc?: Uint8Array | null;
+  live?: Y.Doc;
   baseRevision?: number;
   overwrite?: boolean;
   coalesceTitle?: boolean;
@@ -352,7 +357,7 @@ export async function commitPage(db: Db, actor: Actor, page: FullPageRow, next: 
   const plan = contentChanged ? await planLinks(db, page, next.content) : null;
   const content = plan?.content ?? next.content;
   const titleChanged = next.title !== page.title;
-  if (!titleChanged && content === page.content && options.ydoc === undefined) return { changed: false, versioned: false };
+  if (!titleChanged && content === page.content && options.live === undefined) return { changed: false, versioned: false };
   const now = options.now ?? new Date();
   const thorough = options.stamp.editor !== "person" || options.reason === "restored" || options.reason === "link_renamed" || options.overwrite === true;
   if (thorough) {
@@ -376,6 +381,9 @@ export async function commitPage(db: Db, actor: Actor, page: FullPageRow, next: 
   const takeVersion =
     (thorough || titleForcesVersion || !page.versioned_at || now.getTime() - new Date(page.versioned_at).getTime() >= PERSON_VERSION_EVERY_MS) &&
     (titleChanged || content !== page.content);
+  const liveDoc = options.live ?? (content !== page.content ? await loadLiveDoc(db, page.id) : null);
+  const agent = liveUserFor(actor, options.stamp.editor);
+  const written = liveDoc ? writeLiveText(liveDoc, content, agent) : null;
   await db.query(
     `update crm.pages set title = $2, content = $3, word_count = $4, revision = revision + 1, edited_by = $5, edited_by_user_id = $6,
        edited_by_agent_id = $7, edited_at = $8, versioned_at = case when $9 then $8 else versioned_at end,
@@ -391,10 +399,14 @@ export async function commitPage(db: Db, actor: Actor, page: FullPageRow, next: 
       options.stamp.agentId,
       now,
       takeVersion,
-      options.ydoc !== undefined,
-      options.ydoc ? Buffer.from(options.ydoc) : null,
+      liveDoc !== null,
+      liveDoc ? encodeState(liveDoc) : null,
     ],
   );
+  if (written && written.steps.length > 0) {
+    const change = liveChange(page, page.revision + 1, agent, written);
+    afterCommit(db, () => publishLiveChange(change));
+  }
   if (plan) await writeIndex(db, page, plan);
   if (takeVersion) {
     const reason = options.reason ?? (titleChanged ? "renamed" : "edited");
@@ -613,12 +625,91 @@ export async function saveDoc(actor: Actor, id: string, input: DocSaveInput, pro
   return withActor(actor, async (db) => {
     const page = await loadPage(db, actor, id, { lock: true });
     if (page.archived_at) throw new CrmError("invalid_input", "This doc is archived. Restore it before editing.", 400);
+    if (input.ydoc) {
+      await mergeLive(db, actor, page, { update: input.ydoc, title: input.title }, provenance);
+      return docDetail(db, actor, id);
+    }
     checkRevision(page, input.baseRevision);
     const title = input.title === undefined ? page.title : checkTitle(input.title);
     const content = input.content === undefined ? page.content : checkContent(input.content);
     const overwrite = input.overwrite ? { overwrite: true, summary: "Kept this copy after an editing conflict" } : {};
-    await commitPage(db, actor, page, { title, content }, { stamp: stampFor(actor, provenance), provenance, ydoc: input.ydoc, coalesceTitle: true, ...overwrite });
+    await commitPage(db, actor, page, { title, content }, { stamp: stampFor(actor, provenance), provenance, coalesceTitle: true, ...overwrite });
     return docDetail(db, actor, id);
+  });
+}
+
+export type LiveSync = { update?: Uint8Array | null; vector?: Uint8Array | null; title?: string };
+
+export type LiveSyncResult = { doc: DocSummary; vector: Uint8Array; missing: Uint8Array; saved: boolean };
+
+async function liveDocFor(db: Db, page: FullPageRow) {
+  const stored = await loadLiveDoc(db, page.id);
+  if (!stored) return { doc: createLiveDoc(stateFromMarkdown(page.content)), stored: false };
+  const repaired = setLiveText(stored, page.content, SERVER_ORIGIN) !== null;
+  return { doc: stored, stored: !repaired };
+}
+
+async function mergeLive(db: Db, actor: Actor, page: FullPageRow, input: LiveSync, provenance?: Provenance) {
+  const { doc, stored } = await liveDocFor(db, page);
+  const before = Y.encodeStateVector(doc);
+  if (input.update && input.update.length > 0) {
+    try {
+      Y.applyUpdate(doc, input.update, "client");
+    } catch {
+      throw new CrmError("invalid_input", "That change couldn't be read. Reload the note and try again.", 400);
+    }
+  }
+  const text = liveText(doc).toString();
+  const title = input.title === undefined || page.kind === "daily" ? page.title : checkTitle(input.title);
+  let saved = false;
+  if (text !== page.content || title !== page.title) {
+    if (page.archived_at) throw new CrmError("invalid_input", "This doc is archived. Restore it before editing.", 400);
+    checkContent(text);
+    await commitPage(db, actor, page, { title, content: text }, { stamp: stampFor(actor, provenance), provenance, live: doc, coalesceTitle: true });
+    saved = true;
+  } else if (!stored || !sameBytes(before, Y.encodeStateVector(doc))) {
+    await db.query("update crm.pages set ydoc = $2 where id = $1", [page.id, encodeState(doc)]);
+    saved = true;
+  }
+  return { doc, saved };
+}
+
+function sameBytes(left: Uint8Array, right: Uint8Array) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+export async function openLiveDoc(actor: Actor, id: string) {
+  assertDocsRead(actor);
+  return withActor(actor, async (db) => {
+    const first = await loadPage(db, actor, id);
+    const current = await loadLiveDoc(db, first.id);
+    if (current && liveText(current).toString() === first.content) {
+      await markWatching(db, actor, first);
+      return { state: Y.encodeStateAsUpdate(current), doc: mapPage(actor, first) };
+    }
+    const page = await loadPage(db, actor, id, { lock: true });
+    const { doc } = await liveDocFor(db, page);
+    await db.query("update crm.pages set ydoc = $2 where id = $1", [page.id, encodeState(doc)]);
+    await markWatching(db, actor, page);
+    return { state: Y.encodeStateAsUpdate(doc), doc: mapPage(actor, page) };
+  });
+}
+
+export async function syncLiveDoc(actor: Actor, id: string, input: LiveSync, provenance?: Provenance): Promise<LiveSyncResult> {
+  const writing = Boolean(input.update && input.update.length > 2) || input.title !== undefined;
+  if (writing) assertDocsWrite(actor);
+  else assertDocsRead(actor);
+  return withActor(actor, async (db) => {
+    const page = await loadPage(db, actor, id, { lock: true });
+    const { doc, saved } = await mergeLive(db, actor, page, input, provenance);
+    await markWatching(db, actor, page);
+    const row = saved ? await loadPage(db, actor, id) : page;
+    return {
+      doc: mapPage(actor, row),
+      vector: Y.encodeStateVector(doc),
+      missing: input.vector && input.vector.length > 0 ? Y.encodeStateAsUpdate(doc, input.vector) : Y.encodeStateAsUpdate(doc),
+      saved,
+    };
   });
 }
 

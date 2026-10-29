@@ -178,7 +178,7 @@ export type DocSaveInput = {
   content?: string;
   baseRevision?: number;
   overwrite?: boolean;
-  ydoc?: Uint8Array | null;
+  ydoc?: Uint8Array;
 };
 
 export type DocCreateInput = {
