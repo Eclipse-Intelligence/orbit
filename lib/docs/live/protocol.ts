@@ -16,11 +16,11 @@ export type LiveAwareness = {
   saver?: boolean;
 };
 
-export type HelloMessage = { c: number; sv: string };
-export type StateMessage = { to: number; u: string };
-export type UpdateMessage = { u?: string; a?: string; c?: number; s?: number; server?: boolean };
+export type HelloMessage = { c: number; sv: string; g?: number };
+export type StateMessage = { to: number; u: string; g?: number };
+export type UpdateMessage = { u?: string; a?: string; c?: number; s?: number; g?: number; server?: boolean };
 export type AwarenessMessage = { a: string };
-export type SavedMessage = { sv: string; r: number; seqs?: Record<string, number> };
+export type SavedMessage = { sv: string; r: number; g?: number };
 export type TitleMessage = { t: string };
 export type WritingMessage = { pageId: string; user: LiveUser; writing: boolean; revision?: number };
 
@@ -29,15 +29,15 @@ export const LIVE_MESSAGE_MAX = 180_000;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function docTopic(pageId: string) {
-  return `doc:${pageId}`;
+  return `doc:${pageId.toLowerCase()}`;
 }
 
 export function workspaceTopic(workspaceId: string) {
-  return `docs-workspace:${workspaceId}`;
+  return `docs-workspace:${workspaceId.toLowerCase()}`;
 }
 
 export function personTopic(userId: string) {
-  return `docs-person:${userId}`;
+  return `docs-person:${userId.toLowerCase()}`;
 }
 
 export type TopicTarget = { kind: "doc" | "workspace" | "person"; id: string };
@@ -49,4 +49,11 @@ export function parseTopic(topic: string): TopicTarget | null {
   if (prefix === "docs-workspace") return { kind: "workspace", id: id.toLowerCase() };
   if (prefix === "docs-person") return { kind: "person", id: id.toLowerCase() };
   return null;
+}
+
+export function canonicalTopic(topic: string) {
+  const target = parseTopic(topic);
+  if (!target) return null;
+  if (target.kind === "doc") return docTopic(target.id);
+  return target.kind === "workspace" ? workspaceTopic(target.id) : personTopic(target.id);
 }

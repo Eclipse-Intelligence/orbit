@@ -66,6 +66,7 @@ function TitleField({ page, inputRef, replaced }: { page: Page; inputRef: RefObj
   const [value, setValue] = useState(() => (replaced ? page.title : (noteTitle(page.id) ?? page.title)));
   const fresh = useDocsStore((state) => state.fresh === page.id);
   const remote = useDocsStore((state) => state.remoteTitles[page.id]);
+  const unavailable = useDocsStore((state) => Boolean(state.unavailable[page.id]));
   const [seenRemote, setSeenRemote] = useState(remote);
   const [editing, setEditing] = useState(false);
   if (remote !== seenRemote) {
@@ -102,6 +103,7 @@ function TitleField({ page, inputRef, replaced }: { page: Page; inputRef: RefObj
         rows={1}
         value={value}
         aria-label="Title"
+        readOnly={unavailable}
         aria-describedby={blocked ? `${page.id}-title-rule` : undefined}
         placeholder="Untitled"
         spellCheck
@@ -167,6 +169,13 @@ function ConflictNotice({ id }: { id: string }) {
 function SaveState({ id }: { id: string }) {
   const save = useDocsStore((state) => state.saves[id]);
   const live = useDocsStore((state) => state.live[id]);
+  if (save?.status === "warning") {
+    return (
+      <span role="alert" className="text-(--tag-amber-text)">
+        {save.message ?? "Not kept on this device."}
+      </span>
+    );
+  }
   if (live === "live" && save?.status !== "error") {
     return (
       <span role="status" className="text-subtle flex items-center gap-1.5">
@@ -442,7 +451,7 @@ export default function NoteView({
           </Button>
         )}
         <span className="flex-1" />
-        {!focus && <PresenceStack participants={stack} />}
+        {!focus && <PresenceStack participants={stack} max={3} />}
         {!focus && summary && <PageShare summary={summary} compact />}
         {focus ? (
           <Button variant="secondary" size="icon" aria-label="Leave focus mode" onClick={() => setFocus(false)}>
@@ -483,7 +492,7 @@ export default function NoteView({
         <div className="flex shrink-0 items-center gap-1">
           {stack.length > 0 && !focus && (
             <span className="mr-1.5">
-              <PresenceStack participants={stack} />
+              <PresenceStack participants={stack} max={4} />
             </span>
           )}
           {daily && date && (

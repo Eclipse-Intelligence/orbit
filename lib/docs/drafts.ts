@@ -89,10 +89,13 @@ export function readLiveDraft(id: string): string | null {
 export function writeLiveDraft(id: string, delta: string) {
   const store = storage();
   const key = liveKeyFor(id);
-  if (!store || !key) return;
+  if (!store || !key) return false;
   try {
     store.setItem(key, delta);
-  } catch {}
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function clearLiveDraft(id: string) {

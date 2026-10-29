@@ -23,7 +23,7 @@ import type { LiveStatus } from "@/lib/docs/live/session";
 import { listKey } from "@/lib/docs/routes";
 import { viewerParticipant } from "@/lib/docs/participants";
 
-export type SaveStatus = "saved" | "pending" | "saving" | "offline" | "error" | "conflict";
+export type SaveStatus = "saved" | "pending" | "saving" | "offline" | "warning" | "error" | "conflict";
 export type Rail = "details" | "history";
 export type Notice = { id: number; message: string; tone: "status" | "alert"; undo?: () => void };
 export type VisibilityPrompt = {
@@ -60,6 +60,7 @@ type DocsState = {
   liveKind: LiveTransportKind | null;
   live: Record<string, LiveStatus>;
   remoteTitles: Record<string, { title: string; at: number }>;
+  unavailable: Record<string, true>;
   init: (seed: DocsSeed, nav: DocsNav) => void;
   seed: (initial: { list: PageFilter; summaries: PageSummary[]; page: Page | null }) => void;
   loadList: (list: PageFilter, force?: boolean) => Promise<string[]>;
@@ -72,6 +73,7 @@ type DocsState = {
   setLive: (id: string, status: LiveStatus | null) => void;
   liveSaved: (id: string, summary: PageSummary, revision: number) => void;
   remoteTitle: (id: string, title: string) => void;
+  setUnavailable: (id: string, value: boolean) => void;
   replaceBody: (page: Page) => void;
   setSave: (id: string, status: SaveStatus, message?: string) => void;
   visit: (id: string) => void;
@@ -123,8 +125,10 @@ const acked = new Map<string, Acknowledged>();
 const uncertain = new Map<string, NoteText>();
 const resetHandlers = new Set<() => void>();
 const liveNotes = new Map<string, LiveHooks>();
+const holds = new Map<string, Hold>();
 
-type LiveHooks = { flush: (keepalive: boolean) => Promise<void> };
+type Hold = { owed: Reader | null; drafted: boolean };
+type LiveHooks = { flush: (keepalive: boolean) => Promise<void>; leave: () => void };
 
 export function docsScope(seed: Pick<DocsSeed, "workspaceId" | "viewer">) {
   return `${seed.workspaceId}:${seed.viewer.id}`;
@@ -203,6 +207,7 @@ function blank() {
     liveKind: null,
     live: {},
     remoteTitles: {},
+    unavailable: {},
   };
 }
 
@@ -411,6 +416,16 @@ export const useDocsStore = create<DocsState>((set, get) => ({
       };
     });
     void get().refreshTitles();
+  },
+
+  setUnavailable(id, value) {
+    set((state) => {
+      if (Boolean(state.unavailable[id]) === value) return {};
+      const unavailable = { ...state.unavailable };
+      if (value) unavailable[id] = true;
+      else delete unavailable[id];
+      return { unavailable };
+    });
   },
 
   setSave(id, status, text) {
@@ -724,8 +739,9 @@ function resetSession() {
   for (const map of [timers, retryTimers, readers, queued, running, retries, acked, uncertain, listRequests, pageRequests]) map.clear();
   inflight.clear();
   overwrites.clear();
-  liveNotes.clear();
   for (const handler of resetHandlers) handler();
+  liveNotes.clear();
+  holds.clear();
   resetDocsConnection();
   useDocsStore.setState(blank());
 }
@@ -746,19 +762,51 @@ export function onDocsReset(handler: () => void) {
   };
 }
 
+export function adoptLiveBase(id: string, base: { revision: number; title: string; body: string }) {
+  const page = useDocsStore.getState().pages[id];
+  acked.set(id, { revision: base.revision, title: base.title, body: base.body, daily: page?.kind === "daily" });
+  uncertain.delete(id);
+}
+
 export function adoptDraft(page: Page, draft: { baseRevision: number }) {
   acked.set(page.id, { ...acknowledgedFrom(page), revision: draft.baseRevision });
 }
 
 export function scheduleSave(id: string, read: Reader, delay = SAVE_DELAY_MS) {
-  readers.set(id, read);
   const store = useDocsStore.getState();
+  const hold = holds.get(id);
+  if (hold) {
+    hold.owed = read;
+    if (store.saves[id]?.status !== "pending") store.setSave(id, "pending");
+    return;
+  }
+  readers.set(id, read);
   if (store.saves[id]?.status !== "pending") store.setSave(id, "pending");
   clearTimer(timers, id);
   timers.set(
     id,
     setTimeout(() => void commitNow(id), delay),
   );
+}
+
+export function holdClassicSaves(id: string) {
+  const hold: Hold = { owed: null, drafted: false };
+  holds.set(id, hold);
+  return (resume: boolean) => {
+    if (holds.get(id) !== hold) return;
+    holds.delete(id);
+    if (resume && hold.owed) scheduleSave(id, hold.owed);
+    else if (hold.drafted) clearDraft(id);
+  };
+}
+
+function draftHeld(id: string, hold: Hold) {
+  if (!hold.owed) return;
+  const base = baseFor(id);
+  if (!base) return;
+  const { title, body } = hold.owed();
+  if (sameText(base, { title, body }, base.daily)) return;
+  hold.drafted = writeDraft(id, { title, body, baseRevision: base.revision, at: Date.now() }) || hold.drafted;
 }
 
 export function registerLiveNote(id: string, hooks: LiveHooks) {
@@ -774,11 +822,11 @@ export function isLiveNote(id: string) {
   return liveNotes.has(id);
 }
 
-export async function settleForLive(id: string): Promise<{ base: string } | null> {
+export async function settleForLive(id: string): Promise<{ base: string; revision: number } | null> {
   await settleSaves(id);
   if (useDocsStore.getState().conflicts[id] || unsaved(id)) return null;
   const base = baseFor(id);
-  return base ? { base: base.body } : null;
+  return base ? { base: base.body, revision: base.revision } : null;
 }
 
 export function commitNow(id: string, keepalive = false): Promise<void> {
@@ -816,9 +864,13 @@ export function commitNow(id: string, keepalive = false): Promise<void> {
   return flush(id, keepalive);
 }
 
-export function commitAll(keepalive = false) {
+export function commitAll(keepalive = false, leaving = false) {
+  for (const [id, hold] of holds) draftHeld(id, hold);
+  for (const hooks of liveNotes.values()) {
+    if (leaving) hooks.leave();
+    else void hooks.flush(keepalive).catch(() => {});
+  }
   for (const id of [...readers.keys()]) void commitNow(id, keepalive);
-  for (const hooks of liveNotes.values()) void hooks.flush(keepalive).catch(() => {});
 }
 
 export async function settleSaves(id: string) {

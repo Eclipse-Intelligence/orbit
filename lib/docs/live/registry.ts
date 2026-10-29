@@ -30,3 +30,36 @@ export function watchLivePresence(pageId: string, listener: Listener) {
     if (found.listeners.size === 0 && found.list === null) presence.delete(pageId);
   };
 }
+
+const WRITING_TRUST_MS = 60_000;
+const DONE_TRUST_MS = 5_000;
+
+const trusted = new Map<string, number>();
+const trustListeners = new Set<(pageId: string) => void>();
+
+function trustKey(pageId: string, userId: string) {
+  return `${pageId.toLowerCase()}|${userId}`;
+}
+
+export function trustWriter(pageId: string, userId: string, writing: boolean, now = Date.now()) {
+  for (const [key, until] of trusted) if (until <= now) trusted.delete(key);
+  trusted.set(trustKey(pageId, userId), now + (writing ? WRITING_TRUST_MS : DONE_TRUST_MS));
+  for (const listener of trustListeners) listener(pageId);
+}
+
+export function onTrustChange(listener: (pageId: string) => void) {
+  trustListeners.add(listener);
+  return () => {
+    trustListeners.delete(listener);
+  };
+}
+
+export function trustedUser<User extends { id: string; kind: string }>(pageId: string, user: User, now = Date.now()): User {
+  if (user.kind === "person") return user;
+  const until = trusted.get(trustKey(pageId, user.id));
+  return until !== undefined && until > now ? user : { ...user, kind: "person" };
+}
+
+export function clearTrust() {
+  trusted.clear();
+}
