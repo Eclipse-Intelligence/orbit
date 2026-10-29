@@ -23,7 +23,7 @@ import { scheduleIndexing } from "@/lib/knowledge/background";
 import { mapSite } from "@/lib/knowledge/site";
 import { MindcaseError } from "@/lib/mindcase";
 import { callEclipseTool, EclipseMcpError, eclipseGuide, findEclipseTools } from "@/lib/eclipse-mcp";
-import { checkColdEmail, COLD_EMAIL_PLAYBOOK, ECLIPSE_OUTREACH_BRIEF, evidenceFrom, PROOF_PERMISSIONS } from "@/lib/assistant/cold-email";
+import { checkColdEmail, ECLIPSE_OUTREACH_BRIEF, evidenceFrom, playbookFor, PROOF_PERMISSIONS, senderFirstName } from "@/lib/assistant/cold-email";
 import { socialLookup } from "@/lib/social-lookup";
 import { getBookingPage } from "@/lib/booking/pages";
 import { listLifecycles } from "@/lib/crm/lifecycles";
@@ -1867,7 +1867,11 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     description:
       "How to research a prospect and write a first email to someone who doesn't know the user: checks before research, research steps and tools, the three angles (approved client proof, a finding, or something made for them) and when not to send, the client proof rules, the rules (50 to 90 words, no link, one figure, one easy question, no meeting ask, no invented facts), the follow-up, replies, measuring, examples, and the Eclipse outreach brief of what may and may not be claimed. Read it before writing any first email to a prospect.",
     parameters: { type: "object", properties: {} },
-    run: async () => ({ playbook: COLD_EMAIL_PLAYBOOK, eclipseBrief: ECLIPSE_OUTREACH_BRIEF }),
+    run: async (actor) => {
+      const page = await getBookingPage(actor).catch(() => null);
+      const bookingUrl = page?.exists && page.enabled ? `${siteOrigin() ?? "https://orbit.geteclipse.co"}/book/${page.slug}` : null;
+      return { playbook: playbookFor({ firstName: senderFirstName(actor.fullName, actor.email), bookingUrl }), eclipseBrief: ECLIPSE_OUTREACH_BRIEF };
+    },
   },
   {
     name: "cold_email_check",

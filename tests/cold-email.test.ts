@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { bodyCore, checkColdEmail, COLD_EMAIL_PLAYBOOK, ECLIPSE_OUTREACH_BRIEF, evidenceFrom, figuresIn, lintColdEmail, type Evidence } from "@/lib/assistant/cold-email";
+import { bodyCore, checkColdEmail, COLD_EMAIL_PLAYBOOK, ECLIPSE_OUTREACH_BRIEF, evidenceFrom, figuresIn, lintColdEmail, playbookFor, senderFirstName, type Evidence } from "@/lib/assistant/cold-email";
 import { systemPrompt } from "@/lib/assistant/prompt";
 import { runTool, toolDefinitions } from "@/lib/assistant/tools";
 import type { UserActor } from "@/lib/crm/types";
@@ -232,6 +232,22 @@ describe("cold email triggers, subjects and tailored offers", () => {
     };
     assert.deepEqual(failed(lintColdEmail({ ...followUp, firstTouch: false })), []);
     assert.ok(failed(lintColdEmail(followUp)).includes("one_cta"));
+  });
+
+  it("writes the playbook for whoever is sending", () => {
+    const mark = playbookFor({ firstName: "Mark", bookingUrl: "https://orbit.geteclipse.co/book/mark" });
+    assert.equal(mark, COLD_EMAIL_PLAYBOOK);
+    const priya = playbookFor({ firstName: "Priya", bookingUrl: "https://orbit.geteclipse.co/book/priya" });
+    assert.doesNotMatch(priya, /\bMark\b/);
+    assert.match(priya, /Sign-off\. Just "Priya"/);
+    assert.match(priya, /goes to Priya for approval/);
+    assert.match(priya, /https:\/\/orbit\.geteclipse\.co\/book\/priya/);
+    assert.match(priya, /Marketing|marketing|market notes/);
+    const unbooked = playbookFor({ firstName: "Sam", bookingUrl: null });
+    assert.doesNotMatch(unbooked, /\/book\//);
+    assert.match(unbooked, /suggest two times, since there's no booking page set up yet/);
+    assert.equal(senderFirstName("Priya Shah", "priya@eclipse.test"), "Priya");
+    assert.equal(senderFirstName(null, "sam.jones@eclipse.test"), "Sam");
   });
 
   it("tells the assistant about the three angles, proof and triggers", () => {

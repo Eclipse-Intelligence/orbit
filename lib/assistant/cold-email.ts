@@ -193,6 +193,25 @@ We helped [client] get [result one], [result two] and [result three] in [time]. 
 
 Why it misses. It stacks three results, promises the same outcome, asks for a meeting and gives no reason it's going to them now. It reads like every sales email they delete.`;
 
+const PLAYBOOK_SENDER = "Mark";
+const PLAYBOOK_BOOKING = "https://orbit.geteclipse.co/book/mark";
+
+export type PlaybookSender = { firstName: string; bookingUrl: string | null };
+
+export function senderFirstName(fullName: string | null, email: string) {
+  const first = fullName?.trim().split(/\s+/)[0];
+  if (first) return first;
+  const local = email.split("@")[0]?.split(/[._-]/)[0] ?? "";
+  return local ? local[0].toUpperCase() + local.slice(1) : "the sender";
+}
+
+export function playbookFor(sender: PlaybookSender) {
+  const booked = sender.bookingUrl
+    ? COLD_EMAIL_PLAYBOOK.replace(PLAYBOOK_BOOKING, sender.bookingUrl)
+    : COLD_EMAIL_PLAYBOOK.replace(`offer the booking page exactly as written, ${PLAYBOOK_BOOKING}`, "suggest two times, since there's no booking page set up yet");
+  return booked.replace(new RegExp(`\\b${PLAYBOOK_SENDER}\\b`, "g"), sender.firstName);
+}
+
 export const ECLIPSE_OUTREACH_BRIEF = `# Eclipse outreach brief (what you may say)
 
 Who it's for. First, founder-led UK B2B content and SEO agencies of 5 to 30 staff serving B2B SaaS, IT, fintech or cyber clients, who are adding AI visibility work. Second, UK B2B firms of 50 to 500 staff with a named content owner and a budget.
