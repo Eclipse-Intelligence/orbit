@@ -9,6 +9,7 @@ import { safeHref } from "@/lib/docs/editor/links";
 import { docsLanguage } from "@/lib/docs/editor/syntax";
 import { activeLines, livePreview } from "@/lib/docs/editor/preview";
 import { presenceField } from "@/lib/docs/editor/presence";
+import { noteTables } from "@/lib/docs/editor/tables";
 import { DeletedText } from "@/lib/docs/editor/widgets";
 import { isTagChar, toggleTaskMarker, triggerBefore, type Trigger } from "@/lib/docs/markdown";
 import type { MentionKind } from "@/lib/mentions";
@@ -245,6 +246,7 @@ export function noteExtensions(options: NoteExtensionOptions = {}): Extension[] 
     options.collaboration ?? history(),
     docsLanguage(),
     livePreview({ daily: Boolean(options.daily), resolve: (target) => bridge.resolve(target) }),
+    noteTables({ resolve: (target) => bridge.resolve(target) }),
     presenceField,
     EditorView.lineWrapping,
     editable ? Prec.highest(keymap.of(pickerKeymap)) : [],
