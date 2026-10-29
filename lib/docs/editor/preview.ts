@@ -1,5 +1,5 @@
 import { syntaxTree } from "@codemirror/language";
-import { StateEffect, type EditorState, type Range } from "@codemirror/state";
+import { StateEffect, type EditorState, type Range, type Text } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin, WidgetType, type DecorationSet, type ViewUpdate } from "@codemirror/view";
 import { previewPlan, type PlanItem, type WidgetSpec } from "@/lib/docs/editor/plan";
 import { BulletWidget, CheckboxWidget, EntryTime, FenceLabel, HangingMark, MentionWidget } from "@/lib/docs/editor/widgets";
@@ -57,17 +57,24 @@ function markDecoration(item: Extract<PlanItem, { type: "mark" }>) {
   return decoration;
 }
 
-function planToDecorations(items: PlanItem[]): Preview {
+function withinLine(doc: Text, from: number, to: number) {
+  return Math.min(to, doc.lineAt(from).to);
+}
+
+export function planToDecorations(doc: Text, items: PlanItem[]): Preview {
   const ranges: Range<Decoration>[] = [];
   const atomic: Range<Decoration>[] = [];
   for (const item of items) {
     if (item.type === "line") ranges.push(lineDecoration(item.className).range(item.from));
     else if (item.type === "mark") ranges.push(markDecoration(item).range(item.from, item.to));
-    else if (item.type === "hide") ranges.push(hidden.range(item.from, item.to));
-    else {
+    else if (item.type === "hide") {
+      const end = withinLine(doc, item.from, item.to);
+      if (end > item.from) ranges.push(hidden.range(item.from, end));
+    } else {
+      const end = withinLine(doc, item.from, item.to);
       const decoration = Decoration.replace({ widget: widgetFor(item.widget) });
-      ranges.push(decoration.range(item.from, item.to));
-      atomic.push(decoration.range(item.from, item.to));
+      ranges.push(decoration.range(item.from, end));
+      atomic.push(decoration.range(item.from, end));
     }
   }
   return { decorations: Decoration.set(ranges, true), atomic: Decoration.set(atomic, true) };
@@ -75,6 +82,7 @@ function planToDecorations(items: PlanItem[]): Preview {
 
 function buildPreview(state: EditorState, from: number, to: number, options: PreviewOptions): Preview {
   return planToDecorations(
+    state.doc,
     previewPlan({ doc: state.doc, tree: syntaxTree(state), from, to, active: activeLines(state, options.focused), daily: options.daily, resolve: options.resolve }),
   );
 }

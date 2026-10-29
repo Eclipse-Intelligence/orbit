@@ -3,6 +3,7 @@ import { assistantModel, settingsFor, type ModelSource, type ReasoningLevel } fr
 import { chatFileNote, chatFilesFor, removeChatObjects, type ChatFile } from "@/lib/assistant/files";
 import { connectedProviders } from "@/lib/ai-accounts/store";
 import { systemPrompt } from "@/lib/assistant/prompt";
+import { docLinkOf } from "@/lib/assistant/doc-link";
 import { ACTION_ALTERNATIVES, ASSISTANT_TOOLS, actionAlternative, describeAction, findTool, recordNames, runTool, toolDescription, toolJson } from "@/lib/assistant/tools";
 import { editsWithoutApproval } from "@/lib/assistant/docs";
 import type { DocDiffLine } from "@/lib/docs/types";
@@ -55,6 +56,7 @@ export type AssistantAction = {
   chose?: "send";
   startedAt?: string;
   diff?: DocDiffLine[];
+  docId?: string;
   unattended?: boolean;
   baseRevision?: number;
 };
@@ -521,6 +523,7 @@ export async function applyCompanionResult(actor: UserActor, conversationId: str
       id: call.id,
       name: call.function.name,
       ...describeAction(call.function.name, parseArgs(call.function.arguments), names),
+      ...docLinkOf(call.function.name, parseArgs(call.function.arguments)),
       ...(actionAlternative(call.function.name) ? { alternative: actionAlternative(call.function.name) } : {}),
       status: "pending",
     }));
@@ -775,6 +778,7 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
           id: call.id,
           name: call.function.name,
           ...described,
+          ...docLinkOf(call.function.name, parseArgs(call.function.arguments)),
           ...(automatic ? { lines: [...described.lines, UNATTENDED_NOTE], unattended: true } : {}),
           ...(actionAlternative(call.function.name) ? { alternative: actionAlternative(call.function.name) } : {}),
           status: automatic ? "running" : "pending",

@@ -4,6 +4,8 @@ import { useEffect, useId, useRef, useState, type ComponentType, type DragEvent,
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import Button from "@/components/_ui/button";
+import { ARCHIVED_HREF } from "@/components/docs/docs-manage";
+import FolderMenu from "@/components/docs/folder-menu";
 import { ParticipantAvatar } from "@/components/docs/presence";
 import { NOTE_TYPE, navigateWithinDocs, useDocsNav, useDocsNavigate } from "@/components/docs/use-docs";
 import type { Folder, TagNode } from "@/lib/docs/client-types";
@@ -17,6 +19,7 @@ import UsersIcon from "@/public/assets/images/companies/sidebar/users.svg";
 import DocIcon from "@/public/assets/images/docs/doc.svg";
 import HashIcon from "@/public/assets/images/docs/hash.svg";
 import SunIcon from "@/public/assets/images/docs/sun.svg";
+import ArchiveIcon from "@/public/assets/images/mail/archive.svg";
 import FolderIcon from "@/public/assets/images/mail/folder.svg";
 
 const OPEN_KEY = "orbit-docs-tree";
@@ -50,6 +53,8 @@ function TreeItem({
   drag,
   onKeyDown,
   onDoubleClick,
+  onContextMenu,
+  className,
 }: {
   icon: ComponentType<SVGProps<SVGSVGElement>>;
   label: ReactNode;
@@ -63,6 +68,8 @@ function TreeItem({
   drag?: { draggable: boolean; onDragStart: (event: DragEvent<HTMLAnchorElement>) => void; onDragOver: (event: DragEvent<HTMLAnchorElement>) => void; onDragLeave: () => void; onDrop: (event: DragEvent<HTMLAnchorElement>) => void; indicator: "before" | "inside" | "after" | null };
   onKeyDown?: (event: KeyboardEvent<HTMLAnchorElement>) => void;
   onDoubleClick?: () => void;
+  onContextMenu?: (event: MouseEvent<HTMLAnchorElement>) => void;
+  className?: string;
 }) {
   const setSidebarOpen = useCompaniesStore((state) => state.setSidebarOpen);
   return (
@@ -82,6 +89,7 @@ function TreeItem({
       onDragLeave={drag?.onDragLeave}
       onDrop={drag?.onDrop}
       onDoubleClick={onDoubleClick}
+      onContextMenu={onContextMenu}
       onKeyDown={(event) => {
         onKeyDown?.(event);
         if (event.defaultPrevented) return;
@@ -104,6 +112,7 @@ function TreeItem({
         "group text-sidebar-foreground hover:text-foreground focus-visible:ring-ring/60 relative flex h-7 w-full items-center gap-1.5 rounded-lg pr-2 text-[13.5px] leading-none outline-none focus-visible:ring-2",
         "data-[active=true]:bg-sidebar-primary data-[active=true]:text-foreground data-[active=true]:shadow-[0px_0px_0px_1px_rgba(0,0,0,0.4),inset_0px_1px_0px_0px_rgba(255,255,255,0.1),inset_0px_0px_0px_1px_rgba(255,255,255,0.06)]",
         drag?.indicator === "inside" && "bg-white/[0.06] shadow-[inset_0_0_0_1px_var(--primary)]",
+        className,
       )}
       style={{ paddingLeft: `${0.5 + (level - 1) * 0.875}rem` }}
     >
@@ -147,6 +156,51 @@ function FolderMark({ folder, viewerId }: { folder: Folder; viewerId: string | u
   );
 }
 
+function ancestorKeys(folders: Folder[], id: string | null) {
+  const keys: string[] = [];
+  const byId = new Map(folders.map((folder) => [folder.id, folder]));
+  let parent = id ? (byId.get(id)?.parentId ?? null) : null;
+  while (parent && byId.has(parent) && keys.length < 32) {
+    keys.push(`folder:${parent}`);
+    parent = byId.get(parent)?.parentId ?? null;
+  }
+  return keys;
+}
+
+function tagAncestorKeys(path: string | null) {
+  if (!path) return [];
+  const parts = path.split("/");
+  return parts.slice(0, -1).map((_, index) => `tag:${parts.slice(0, index + 1).join("/")}`);
+}
+
+function hasTag(tags: TagNode[], path: string): boolean {
+  return tags.some((tag) => tag.path === path || hasTag(tag.children, path));
+}
+
+function NameInput({ label, defaultValue, placeholder, onDone, level }: { label: string; defaultValue?: string; placeholder?: string; onDone: (value: string | null) => void; level: number }) {
+  const cancelled = useRef(false);
+  return (
+    <input
+      autoFocus
+      defaultValue={defaultValue}
+      aria-label={label}
+      placeholder={placeholder}
+      maxLength={120}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") event.currentTarget.blur();
+        if (event.key === "Escape") {
+          event.stopPropagation();
+          cancelled.current = true;
+          event.currentTarget.blur();
+        }
+      }}
+      onBlur={(event) => onDone(cancelled.current ? null : event.currentTarget.value)}
+      style={{ marginLeft: `${(level - 1) * 0.875}rem`, width: `calc(100% - ${(level - 1) * 0.875}rem)` }}
+      className="bg-sidebar-primary text-foreground placeholder:text-subtle focus-visible:ring-ring/60 h-7 rounded-lg px-2 text-[13.5px] outline-none focus-visible:ring-2"
+    />
+  );
+}
+
 export default function SidebarDocs() {
   const nav = useDocsNav();
   const pathname = usePathname();
@@ -158,13 +212,14 @@ export default function SidebarDocs() {
   const renameFolder = useDocsStore((state) => state.renameFolder);
   const moveFolder = useDocsStore((state) => state.moveFolder);
   const move = useDocsStore((state) => state.move);
-  const [open, setOpen] = useState<Record<string, boolean>>({});
-  const [naming, setNaming] = useState(false);
+  const [open, setOpen] = useState<Record<string, boolean> | null>(null);
+  const [naming, setNaming] = useState<{ parentId: string | null } | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
+  const [menuFor, setMenuFor] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [drop, setDrop] = useState<Drop>(null);
-  const cancelled = useRef(false);
   const tagsLabel = useId();
+  const loading = useDocsStore((state) => state.nav === null);
 
   const onDocs = pathname === "/docs" || pathname.startsWith("/docs/");
   const route = onDocs ? parseDocsRoute(pathname, params) : null;
@@ -176,25 +231,38 @@ export default function SidebarDocs() {
     return () => window.clearTimeout(timer);
   }, []);
 
-  if (!nav) return null;
+  const folders = nav?.folders ?? EMPTY_FOLDERS;
   const activeFolder = route?.list.kind === "folder" ? route.list.folderId : route?.pageId && route.list.kind === "all" ? pageFolder : null;
   const activeTag = route?.list.kind === "tag" ? route.list.path : null;
+  const reveal = [...ancestorKeys(folders, activeFolder), ...tagAncestorKeys(activeTag)];
+  const revealKey = reveal.join("|");
+  const [revealed, setRevealed] = useState("");
+  if (open && revealKey && revealed !== revealKey) {
+    setRevealed(revealKey);
+    if (reveal.some((key) => open[key] === false)) setOpen({ ...open, ...Object.fromEntries(reveal.map((key) => [key, true])) });
+  }
+
+  if (!nav) return null;
   const dailyActive = route?.list.kind === "daily" || pageDaily;
   const allActive = Boolean(route && route.list.kind === "all" && !route.pageId && !dailyActive);
   const viewerId = nav.viewer.id;
-  const isOpen = (key: string, fallback: boolean) => open[key] ?? fallback;
+  const known = new Set(folders.map((folder) => folder.id));
+  const isOpen = (key: string, fallback: boolean) => open?.[key] ?? fallback;
   const toggle = (key: string, fallback: boolean) =>
     setOpen((current) => {
-      const next = { ...current, [key]: !(current[key] ?? fallback) };
+      const next = { ...current, [key]: !(current?.[key] ?? fallback) };
       try {
         localStorage.setItem(OPEN_KEY, JSON.stringify(next));
       } catch {}
       return next;
     });
 
-  const children = (parentId: string | null) => nav.folders.filter((folder) => folder.parentId === parentId).sort((left, right) => left.position - right.position);
-  const tabbableHref = activeFolder ? listHref({ kind: "folder", folderId: activeFolder }) : "/docs/daily";
-  const tabbableTag = activeTag ? listHref({ kind: "tag", path: activeTag }) : nav.tags[0] ? listHref({ kind: "tag", path: nav.tags[0].path }) : null;
+  const children = (parentId: string | null) =>
+    folders
+      .filter((folder) => (parentId === null ? !folder.parentId || !known.has(folder.parentId) : folder.parentId === parentId))
+      .sort((left, right) => left.position - right.position);
+  const tabbableHref = activeFolder && known.has(activeFolder) ? listHref({ kind: "folder", folderId: activeFolder }) : "/docs/daily";
+  const tabbableTag = activeTag && hasTag(nav.tags, activeTag) ? listHref({ kind: "tag", path: activeTag }) : nav.tags[0] ? listHref({ kind: "tag", path: nav.tags[0].path }) : null;
 
   function onTreeKey(event: KeyboardEvent<HTMLUListElement>) {
     const items = visibleItems(event.currentTarget);
@@ -249,109 +317,143 @@ export default function SidebarDocs() {
         setOpen((current) => ({ ...current, [`folder:${folder.id}`]: true }));
         return;
       }
-      const siblings = children(folder.parentId).filter((item) => item.id !== dragged);
+      const parentId = folder.parentId && known.has(folder.parentId) ? folder.parentId : null;
+      const siblings = children(parentId).filter((item) => item.id !== dragged);
       const index = siblings.findIndex((item) => item.id === folder.id);
-      void moveFolder(dragged, folder.parentId, place === "before" ? index : index + 1);
+      void moveFolder(dragged, parentId, place === "before" ? index : index + 1);
     };
   }
 
-  function reorderKey(folder: Folder) {
+  function folderKey(folder: Folder) {
     return (event: KeyboardEvent<HTMLAnchorElement>) => {
       if (event.key === "F2") {
         event.preventDefault();
         setRenaming(folder.id);
         return;
       }
+      if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+        event.preventDefault();
+        setMenuFor(folder.id);
+        return;
+      }
       if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return;
       event.preventDefault();
       event.stopPropagation();
-      const siblings = children(folder.parentId);
+      const parentId = folder.parentId && known.has(folder.parentId) ? folder.parentId : null;
+      const siblings = children(parentId);
       const index = siblings.findIndex((item) => item.id === folder.id);
       const target = index + (event.key === "ArrowUp" ? -1 : 1);
       if (target < 0 || target >= siblings.length) return;
-      void moveFolder(folder.id, folder.parentId, target);
+      void moveFolder(folder.id, parentId, target);
     };
   }
 
-  async function finishRename(folder: Folder, value: string) {
+  async function finishRename(folder: Folder, value: string | null) {
     setRenaming(null);
-    if (cancelled.current) {
-      cancelled.current = false;
-      return;
-    }
-    const name = value.trim();
+    const name = value?.trim();
     if (!name || name === folder.name) return;
     const problem = await renameFolder(folder.id, name);
     if (problem) setError(problem);
   }
 
-  async function finishCreate(value: string) {
-    const name = value.trim();
-    setNaming(false);
-    if (cancelled.current || !name) {
-      cancelled.current = false;
-      return;
-    }
-    const folder = await createFolder(name, null);
+  async function finishCreate(parentId: string | null, value: string | null) {
+    setNaming(null);
+    const name = value?.trim();
+    if (!name) return;
+    const folder = await createFolder(name, parentId);
     if (folder) {
       setSidebarOpen(false);
       navigate(listHref({ kind: "folder", folderId: folder.id }));
     }
   }
 
+  function startFolder(parentId: string | null) {
+    setError(null);
+    if (parentId) setOpen((current) => ({ ...current, [`folder:${parentId}`]: true }));
+    setNaming({ parentId });
+  }
+
+  async function noteIn(folder: Folder) {
+    const page = await createNote({ folderId: folder.id });
+    if (!page) return;
+    setSidebarOpen(false);
+    navigate(pageHref(page.id, { kind: "folder", folderId: folder.id }));
+  }
+
   function renderFolders(parentId: string | null, level: number): ReactNode {
     return children(parentId).map((folder) => {
       const nested = children(folder.id).length > 0;
       const key = `folder:${folder.id}`;
-      const expanded = nested ? isOpen(key, true) : undefined;
+      const namingHere = naming?.parentId === folder.id;
+      const expanded = nested || namingHere ? isOpen(key, true) || namingHere : undefined;
       const href = listHref({ kind: "folder", folderId: folder.id });
+      const menuOpen = menuFor === folder.id;
       return (
         <li key={folder.id} role="none">
           {renaming === folder.id ? (
-            <input
-              autoFocus
-              defaultValue={folder.name}
-              aria-label="Folder name"
-              maxLength={120}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") event.currentTarget.blur();
-                if (event.key === "Escape") {
-                  cancelled.current = true;
-                  event.currentTarget.blur();
-                }
-              }}
-              onBlur={(event) => void finishRename(folder, event.currentTarget.value)}
-              className="bg-sidebar-primary text-foreground focus-visible:ring-ring/60 h-7 w-full rounded-lg px-2 text-[13.5px] outline-none focus-visible:ring-2"
-            />
+            <NameInput label="Folder name" defaultValue={folder.name} level={level} onDone={(value) => void finishRename(folder, value)} />
           ) : (
-            <TreeItem
-              icon={FolderIcon}
-              label={folder.name}
-              href={href}
-              level={level}
-              active={activeFolder === folder.id}
-              open={expanded}
-              onToggle={nested ? () => toggle(key, true) : undefined}
-              tabbable={tabbableHref === href}
-              trailing={<FolderMark folder={folder} viewerId={viewerId} />}
-              onKeyDown={reorderKey(folder)}
-              onDoubleClick={() => setRenaming(folder.id)}
-              drag={{
-                draggable: folder.owner.id === viewerId,
-                onDragStart: (event) => {
-                  event.dataTransfer.setData(FOLDER_TYPE, folder.id);
-                  event.dataTransfer.effectAllowed = "move";
-                },
-                onDragOver: dragOver(folder),
-                onDragLeave: () => setDrop((current) => (current?.id === folder.id ? null : current)),
-                onDrop: dropOn(folder),
-                indicator: drop?.id === folder.id ? drop.place : null,
-              }}
-            />
+            <div className="group/folder relative">
+              <TreeItem
+                icon={FolderIcon}
+                label={folder.name}
+                href={href}
+                level={level}
+                active={activeFolder === folder.id}
+                open={expanded}
+                onToggle={nested ? () => toggle(key, true) : undefined}
+                tabbable={tabbableHref === href}
+                trailing={<FolderMark folder={folder} viewerId={viewerId} />}
+                onKeyDown={folderKey(folder)}
+                onDoubleClick={() => setRenaming(folder.id)}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  setMenuFor(folder.id);
+                }}
+                className={cn("max-md:pr-8 md:group-focus-within/folder:pr-7 md:group-hover/folder:pr-7", menuOpen && "md:pr-7")}
+                drag={{
+                  draggable: folder.owner.id === viewerId,
+                  onDragStart: (event) => {
+                    event.dataTransfer.setData(FOLDER_TYPE, folder.id);
+                    event.dataTransfer.effectAllowed = "move";
+                  },
+                  onDragOver: dragOver(folder),
+                  onDragLeave: () => setDrop((current) => (current?.id === folder.id ? null : current)),
+                  onDrop: dropOn(folder),
+                  indicator: drop?.id === folder.id ? drop.place : null,
+                }}
+              />
+              <span
+                className={cn(
+                  "absolute inset-y-0 right-1 flex items-center md:opacity-0 md:group-focus-within/folder:opacity-100 md:group-hover/folder:opacity-100",
+                  menuOpen && "md:opacity-100",
+                )}
+              >
+                <FolderMenu
+                  folder={folder}
+                  folders={folders}
+                  viewerId={viewerId}
+                  open={menuOpen}
+                  onOpenChange={(next) => setMenuFor(next ? folder.id : null)}
+                  onNewNote={() => void noteIn(folder)}
+                  onNewFolder={() => startFolder(folder.id)}
+                  onRename={() => setRenaming(folder.id)}
+                  onArchived={() => {
+                    if (activeFolder === folder.id) navigate("/docs");
+                  }}
+                  className="data-[state=open]:bg-white/[0.07]"
+                />
+              </span>
+            </div>
           )}
-          {nested && expanded && (
+          {expanded && (
             <ul role="group" className="flex flex-col">
               {renderFolders(folder.id, level + 1)}
+              {namingHere && (
+                <li role="none">
+                  <NameInput label={`New folder in ${folder.name}`} placeholder="Folder name" level={level + 1} onDone={(value) => void finishCreate(folder.id, value)} />
+                </li>
+              )}
             </ul>
           )}
         </li>
@@ -432,7 +534,7 @@ export default function SidebarDocs() {
           </span>
         </li>
       </ul>
-      <ul role="tree" aria-label="Docs folders" onKeyDown={onTreeKey} className="border-sidebar-border ml-[15px] flex flex-col border-l pl-1.5">
+      <ul role="tree" aria-label="Docs folders" aria-busy={loading || undefined} onKeyDown={onTreeKey} className="border-sidebar-border ml-[15px] flex flex-col border-l pl-1.5">
         <li role="none">
           <TreeItem
             icon={SunIcon}
@@ -448,7 +550,7 @@ export default function SidebarDocs() {
       </ul>
       {nav.tags.length > 0 && (
         <div className="border-sidebar-border ml-[15px] flex flex-col border-l pt-1.5 pl-1.5">
-          <span id={tagsLabel} className="eyebrow-style text-faint flex h-6 items-center px-2 text-[11px]">
+          <span id={tagsLabel} className="eyebrow-style text-subtle flex h-6 items-center px-2 text-[11px]">
             Tags
           </span>
           <ul role="tree" aria-labelledby={tagsLabel} onKeyDown={onTreeKey} className="flex flex-col">
@@ -456,36 +558,28 @@ export default function SidebarDocs() {
           </ul>
         </div>
       )}
-      <div className="ml-[15px] border-l border-transparent pl-1.5">
-        {naming ? (
-          <input
-            autoFocus
-            aria-label="New folder name"
-            placeholder="Folder name"
-            maxLength={120}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") event.currentTarget.blur();
-              if (event.key === "Escape") {
-                cancelled.current = true;
-                event.currentTarget.blur();
-              }
-            }}
-            onBlur={(event) => void finishCreate(event.currentTarget.value)}
-            className="bg-sidebar-primary text-foreground placeholder:text-subtle focus-visible:ring-ring/60 h-7 w-full rounded-lg px-2 text-[13.5px] outline-none focus-visible:ring-2"
-          />
+      <div className="ml-[15px] flex flex-col border-l border-transparent pl-1.5">
+        {naming?.parentId === null ? (
+          <NameInput label="New folder name" placeholder="Folder name" level={1} onDone={(value) => void finishCreate(null, value)} />
         ) : (
-          <button
-            type="button"
-            onClick={() => {
-              setError(null);
-              setNaming(true);
-            }}
-            className="text-faint hover:text-foreground focus-visible:ring-ring/60 flex h-7 w-full cursor-pointer items-center gap-1.5 rounded-lg px-2 text-[13px] transition-colors duration-150 outline-none focus-visible:ring-2"
-          >
-            <PlusIcon aria-hidden className="size-3 shrink-0" />
+          <Button variant="nav" size="none" onClick={() => startFolder(null)} className="h-7 gap-1.5 px-2 text-[13px]">
+            <PlusIcon aria-hidden className="text-subtle size-3 shrink-0" />
             New folder
-          </button>
+          </Button>
         )}
+        <Button
+          variant="nav"
+          size="none"
+          href={ARCHIVED_HREF}
+          onClick={(event) => {
+            setSidebarOpen(false);
+            if (navigateWithinDocs(ARCHIVED_HREF)) event.preventDefault();
+          }}
+          className="h-7 gap-1.5 px-2 text-[13px]"
+        >
+          <ArchiveIcon aria-hidden className="text-subtle size-3 shrink-0" />
+          Archived
+        </Button>
         {error && (
           <p role="alert" className="caption-style text-danger px-2 pt-1">
             {error}
@@ -495,3 +589,5 @@ export default function SidebarDocs() {
     </div>
   );
 }
+
+const EMPTY_FOLDERS: Folder[] = [];

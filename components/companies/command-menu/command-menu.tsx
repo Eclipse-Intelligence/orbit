@@ -32,6 +32,7 @@ type Results = {
 
 const PAGE_GROUPS = new Set<ShortcutGroup>(["Lists", "Selection", "Tasks", "Opportunities", "Records", "Calendar", "Capture", "Mail", "Docs"]);
 const GENERAL_IDS = new Set(["assistant", "help", "settings", "notifications", "account"]);
+const DOCS_PALETTE_IDS = new Set(["create-note", "docs-daily", "docs-search"]);
 
 function Keys({ def, mac }: { def: ShortcutDef; mac: boolean }) {
   const keys = shortcutKeys(def, mac);
@@ -58,6 +59,7 @@ export default function CommandMenu() {
   const [pageIds, setPageIds] = useState<string[]>([]);
   const [labels, setLabels] = useState<Record<string, string>>({});
   const actionRan = useRef(false);
+  const creating = useRef(false);
   const listMode = paletteMode === "list" && listSearch !== null;
 
   const [seen, setSeen] = useState({ open, listMode });
@@ -111,18 +113,19 @@ export default function CommandMenu() {
     window.setTimeout(action, 60);
   }
 
+  const docs = isDocsPath(pathname) && !listMode;
+  const shownByDocs = (def: ShortcutDef) => !docs || !DOCS_PALETTE_IDS.has(def.id);
   const commands = SHORTCUTS.filter((def) => def.palette);
   const pageCommands = commands.filter(
-    (def) => pageIds.includes(def.id) && !GENERAL_IDS.has(def.id) && paletteMatches(def, query),
+    (def) => pageIds.includes(def.id) && !GENERAL_IDS.has(def.id) && paletteMatches(def, query) && shownByDocs(def),
   );
   const generalCommands = commands.filter(
     (def) => pageIds.includes(def.id) && GENERAL_IDS.has(def.id) && paletteMatches(def, query),
   );
-  const createCommands = commands.filter((def) => def.group === "Create" && paletteMatches(def, query));
+  const createCommands = commands.filter((def) => def.group === "Create" && paletteMatches(def, query) && shownByDocs(def));
   const goCommands = commands.filter((def) => def.group === "Go to" && paletteMatches(def, query));
   const settingsCommands = trimmed ? commands.filter((def) => def.group === "Settings" && paletteMatches(def, query)) : [];
 
-  const docs = isDocsPath(pathname) && !listMode;
   const topRecord: PaletteRecord | null = results
     ? results.companies[0]
       ? { kind: "company", id: results.companies[0].id, name: results.companies[0].name }
@@ -162,7 +165,10 @@ export default function CommandMenu() {
         onKeyDown={(event) => {
           if (!docs || event.key !== "Enter" || !(event.metaKey || event.ctrlKey) || !trimmed) return;
           event.preventDefault();
+          if (creating.current) return;
+          creating.current = true;
           void createNote({ title: trimmed }).then((page) => {
+            creating.current = false;
             if (page) go(() => navigateDocs(pageHref(page.id)));
           });
         }}

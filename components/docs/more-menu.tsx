@@ -5,6 +5,8 @@ import Button from "@/components/_ui/button";
 import HoldButton from "@/components/_ui/hold-button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popover";
 import Switch from "@/components/_ui/switch";
+import CopyButton from "@/components/_ui/copy-button";
+import { canPlaceAtTop, placeableFolders } from "@/components/docs/docs-manage";
 import { useDocsNav } from "@/components/docs/use-docs";
 import type { Page } from "@/lib/docs/client-types";
 import { pageHref } from "@/lib/docs/routes";
@@ -57,22 +59,18 @@ export default function MoreMenu({
   const setAssistantCanEdit = useDocsStore((state) => state.setAssistantCanEdit);
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<"menu" | "move">("menu");
-  const [copied, setCopied] = useState<"idle" | "copied" | "failed">("idle");
+  const viewerId = useDocsStore((state) => state.viewer?.id ?? nav?.viewer.id);
   const note = page.kind === "note";
+  const owned = page.owner.id === viewerId;
+  const placement = { ownerId: page.owner.id, ownShared: page.visibility === "shared", viewerId };
+  const destinations = [
+    ...(canPlaceAtTop(placement) || page.folderId === null ? [{ id: null as string | null, name: "No folder" }] : []),
+    ...placeableFolders(nav?.folders ?? [], placement).map((folder) => ({ id: folder.id as string | null, name: folder.name })),
+  ];
 
   function close(then?: () => void) {
     setOpen(false);
     if (then) window.setTimeout(then, 60);
-  }
-
-  async function copyLink() {
-    try {
-      await navigator.clipboard.writeText(`${window.location.origin}${pageHref(page.id)}`);
-      setCopied("copied");
-    } catch {
-      setCopied("failed");
-    }
-    window.setTimeout(() => setCopied("idle"), 1600);
   }
 
   return (
@@ -98,7 +96,7 @@ export default function MoreMenu({
               <h3 className="ui-style text-subtle">Move to</h3>
             </div>
             <ul aria-label="Folders" className="flex max-h-72 flex-col overflow-y-auto">
-              {[{ id: null as string | null, name: "No folder" }, ...(nav?.folders ?? []).map((folder) => ({ id: folder.id as string | null, name: folder.name }))].map((folder) => (
+              {destinations.map((folder) => (
                 <Row
                   key={folder.id ?? "none"}
                   onClick={() => close(() => void move(page.id, folder.id))}
@@ -124,27 +122,35 @@ export default function MoreMenu({
                 </Row>
               )}
               {note && <Row onClick={() => close(onRename)}>Rename</Row>}
-              <Row onClick={() => void copyLink()} trailing={copied === "copied" ? <span className="caption-style text-subtle">Copied</span> : copied === "failed" ? <span className="caption-style text-danger">Couldn&apos;t copy</span> : null}>
-                Copy link
-              </Row>
+              <li>
+                <CopyButton variant="ghost" label="Copy link" copiedLabel="Link copied" text={() => `${window.location.origin}${pageHref(page.id)}`} className="ui-style text-soft h-9 w-full justify-start gap-2.5 rounded-lg px-2.5 font-normal" />
+              </li>
               {phone && <Row onClick={() => close(onToggleRail)}>Backlinks and details</Row>}
               {phone && <Row onClick={() => close(onHistory)}>Version history</Row>}
               {phone && <Row onClick={() => close(onFocus)}>Focus mode</Row>}
             </ul>
-            <div className="bg-line-strong mx-1 my-1.5 h-px" />
-            <label className="flex cursor-pointer items-start gap-3 rounded-lg px-2.5 py-2">
-              <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <span className="ui-style text-soft">Let the assistant edit without asking</span>
-                <span className="caption-style text-faint">Its edits are saved as versions, so you can undo them.</span>
-              </span>
-              <Switch checked={page.assistantCanEdit} onChange={(value) => void setAssistantCanEdit(page.id, value)} label="Let the assistant edit without asking" />
-            </label>
-            <div className="bg-line-strong mx-1 my-1.5 h-px" />
-            <div className="p-1">
-              <HoldButton size="sm" className="w-full" holding="Keep holding to archive" onConfirm={() => close(() => void archive(page.id).then(onArchived))}>
-                Hold to archive
-              </HoldButton>
-            </div>
+            {owned && (
+              <>
+                <div className="bg-line-strong mx-1 my-1.5 h-px" />
+                <label className="flex cursor-pointer items-start gap-3 rounded-lg px-2.5 py-2">
+                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                    <span className="ui-style text-soft">Let the assistant edit without asking</span>
+                    <span className="caption-style text-subtle">Its edits are saved as versions, so you can undo them.</span>
+                  </span>
+                  <Switch checked={page.assistantCanEdit} onChange={(value) => void setAssistantCanEdit(page.id, value)} label="Let the assistant edit without asking" />
+                </label>
+              </>
+            )}
+            {note && (
+              <>
+                <div className="bg-line-strong mx-1 my-1.5 h-px" />
+                <div className="p-1">
+                  <HoldButton size="sm" className="w-full" holding="Keep holding to archive" onConfirm={() => close(() => void archive(page.id).then(onArchived))}>
+                    Hold to archive
+                  </HoldButton>
+                </div>
+              </>
+            )}
           </div>
         )}
       </PopoverContent>

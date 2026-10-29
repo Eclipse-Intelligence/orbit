@@ -499,6 +499,7 @@ html[data-sidebar-resizing] * {
 }
 
 .note-surface .note-editor .cm-content {
+  min-width: 0;
   padding: 0 0 2rem;
   caret-color: var(--foreground);
   white-space: pre-wrap;
@@ -512,7 +513,7 @@ html[data-sidebar-resizing] * {
 }
 
 .note-surface .note-editor .cm-placeholder {
-  color: var(--faint);
+  color: var(--subtle);
 }
 
 .note-surface .note-editor ::selection {
@@ -555,7 +556,7 @@ html[data-sidebar-resizing] * {
   position: absolute;
   top: 0;
   right: 0.5rem;
-  color: var(--faint);
+  color: var(--subtle);
   font-weight: 400;
   white-space: pre;
   font-variant-numeric: tabular-nums;
@@ -563,7 +564,7 @@ html[data-sidebar-resizing] * {
 }
 
 .note-surface .note-editor .note-syntax {
-  color: var(--faint);
+  color: var(--subtle);
   font-weight: 400;
 }
 
@@ -590,10 +591,6 @@ html[data-sidebar-resizing] * {
   font-size: 14px;
 }
 
-.note-surface .note-editor .note-code .note-syntax {
-  display: none;
-}
-
 .note-surface .note-editor .cm-line.note-codeblock {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 13.5px;
@@ -610,7 +607,8 @@ html[data-sidebar-resizing] * {
   border-top-left-radius: 12px;
   border-top-right-radius: 12px;
   padding-top: 0.6rem;
-  margin-top: 0.4rem;
+  border-top: 0.4rem solid transparent;
+  background-clip: padding-box;
   box-shadow:
     inset 1px 0 0 rgb(255 255 255 / 0.05),
     inset -1px 0 0 rgb(255 255 255 / 0.05),
@@ -621,7 +619,8 @@ html[data-sidebar-resizing] * {
   border-bottom-left-radius: 12px;
   border-bottom-right-radius: 12px;
   padding-bottom: 0.6rem;
-  margin-bottom: 0.4rem;
+  border-bottom: 0.4rem solid transparent;
+  background-clip: padding-box;
   box-shadow:
     inset 1px 0 0 rgb(255 255 255 / 0.05),
     inset -1px 0 0 rgb(255 255 255 / 0.05),
@@ -640,7 +639,7 @@ html[data-sidebar-resizing] * {
   z-index: 1;
   font-size: 12px;
   line-height: 1.35;
-  color: var(--faint);
+  color: var(--subtle);
 }
 
 .note-surface .note-editor .cm-line.note-quote {
@@ -705,7 +704,7 @@ html[data-sidebar-resizing] * {
 
 .note-surface .note-editor .note-bullet-raw,
 .note-surface .note-editor .note-bullet-number {
-  color: var(--faint);
+  color: var(--subtle);
   font-variant-numeric: tabular-nums;
 }
 
@@ -730,7 +729,7 @@ html[data-sidebar-resizing] * {
   height: 15px;
   flex-shrink: 0;
   border-radius: 5px;
-  box-shadow: inset 0 0 0 1.5px #4a4a4a;
+  box-shadow: inset 0 0 0 1.5px #7a7a7a;
   cursor: pointer;
   transition:
     background-color 150ms var(--ease-power3-out),
@@ -738,7 +737,12 @@ html[data-sidebar-resizing] * {
 }
 
 .note-surface .note-editor .note-checkbox:hover {
-  box-shadow: inset 0 0 0 1.5px #6a6a6a;
+  box-shadow: inset 0 0 0 1.5px #a0a0a0;
+}
+
+.note-surface .note-editor .note-checkbox:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ring) 60%, transparent);
+  outline-offset: 2px;
 }
 
 .note-surface .note-editor .note-checkbox.is-checked {
@@ -791,7 +795,7 @@ html[data-sidebar-resizing] * {
 
 .note-surface .note-editor .note-wikilink.is-unresolved {
   text-decoration-style: dashed;
-  text-decoration-color: rgb(255 255 255 / 0.3);
+  text-decoration-color: var(--subtle);
 }
 
 .note-surface .note-editor .note-tag {
@@ -800,7 +804,9 @@ html[data-sidebar-resizing] * {
   border-radius: 5px;
   padding: 1px 5px;
   font-size: 15px;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
   cursor: pointer;
   transition: color 150ms var(--ease-power3-out);
 }
@@ -819,6 +825,7 @@ html[data-sidebar-resizing] * {
   padding: 0 5px;
   font-size: 15px;
   line-height: 1.45;
+  max-width: 100%;
   white-space: nowrap;
   text-indent: 0;
   color: var(--tag-purple-text);
@@ -826,6 +833,12 @@ html[data-sidebar-resizing] * {
   box-shadow: inset 0 0 0 1px var(--tag-purple-border);
   cursor: pointer;
   transition: background-color 150ms var(--ease-power3-out);
+}
+
+.note-surface .note-editor .note-mention-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .note-surface .note-editor .note-mention:hover {
@@ -893,7 +906,7 @@ html[data-sidebar-resizing] * {
   top: 0.32em;
   font-size: 13px;
   line-height: 1.6;
-  color: var(--faint);
+  color: var(--subtle);
   font-variant-numeric: tabular-nums;
 }
 
@@ -914,6 +927,10 @@ html[data-sidebar-resizing] * {
 
 .note-surface .note-editor .cm-line.note-agent-line {
   padding-bottom: 1.9rem;
+}
+
+.note-surface .note-editor .cm-line.note-setext-rule {
+  line-height: 0.4;
 }
 
 .note-surface .note-editor .cm-line.note-blank {
@@ -940,7 +957,7 @@ html[data-sidebar-resizing] * {
 }
 
 .note-surface .note-editor .note-del {
-  color: color-mix(in srgb, var(--danger) 85%, transparent);
+  color: var(--tag-red-text);
   background: color-mix(in srgb, var(--danger) 13%, transparent);
   text-decoration-color: color-mix(in srgb, var(--danger) 60%, transparent);
   border-radius: 3px;
@@ -1067,9 +1084,17 @@ html[data-sidebar-resizing] * {
     font-size: 26px;
   }
 
+  .note-surface .note-editor .note-hang-anchor {
+    width: auto;
+  }
+
   .note-surface .note-editor .note-hang {
-    right: 0.3rem;
-    font-size: 11px;
+    position: static;
+    margin-right: 0.3em;
+  }
+
+  .note-surface .note-editor .note-hang:empty {
+    margin-right: 0;
   }
 
   .note-surface .note-editor .note-task-box .note-hang-anchor {

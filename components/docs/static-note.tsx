@@ -34,7 +34,7 @@ function Widget({ spec }: { spec: WidgetSpec }) {
         ) : (
           <span aria-hidden className="note-mention-icon" />
         )}
-        {spec.name}
+        <span className="note-mention-name">{spec.name}</span>
       </span>
     );
   }

@@ -7,7 +7,7 @@ import Button from "@/components/_ui/button";
 import Switch from "@/components/_ui/switch";
 import { ParticipantAvatar } from "@/components/docs/presence";
 import { useDocsNow } from "@/components/docs/use-docs";
-import type { Page, Version } from "@/lib/docs/client-types";
+import type { Page, Participant, Version } from "@/lib/docs/client-types";
 import { docsData } from "@/lib/docs/connection";
 import { wordDiff } from "@/lib/docs/diff";
 import { diffDecorations, noteExtensions } from "@/lib/docs/editor/setup";
@@ -39,7 +39,17 @@ export function useVersions(pageId: string, revision: number) {
   return state && state.key.startsWith(`${pageId}:`) ? state.versions : null;
 }
 
-export function HistoryRail({ versions, selected, onSelect }: { versions: Version[] | null; selected: string | null; onSelect: (value: Selected | null) => void }) {
+export function HistoryRail({
+  versions,
+  selected,
+  onSelect,
+  live,
+}: {
+  versions: Version[] | null;
+  selected: string | null;
+  onSelect: (value: Selected | null) => void;
+  live: { editor: Participant; updatedAt: string } | null;
+}) {
   const now = useDocsNow();
   const groups = useMemo(() => {
     const result: { day: string; items: { version: Version; index: number }[] }[] = [];
@@ -63,24 +73,48 @@ export function HistoryRail({ versions, selected, onSelect }: { versions: Versio
         )}
       </div>
       {versions === null && (
-        <p role="status" className="caption-style text-faint px-4">
+        <p role="status" className="caption-style text-subtle px-4">
           Loading
         </p>
+      )}
+      {live && (
+        <div className="px-2 pb-2">
+          <button
+            type="button"
+            aria-current={selected === null ? "true" : undefined}
+            onClick={() => onSelect(null)}
+            className={cn(
+              "ease-power3-out focus-visible:ring-ring/60 flex w-full cursor-pointer items-start gap-2.5 rounded-xl px-2 py-2 text-left transition-colors duration-150 outline-none focus-visible:ring-2",
+              selected === null ? "bg-white/[0.07]" : "hover:bg-white/[0.035]",
+            )}
+          >
+            <ParticipantAvatar participant={live.editor} size="md" />
+            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <span className="flex items-center gap-1.5">
+                <span className="text-foreground truncate text-[13px] leading-4 font-medium">{live.editor.name}</span>
+                <span className="caption-style text-subtle ml-auto shrink-0 tabular-nums">{whenLabel(live.updatedAt, now)}</span>
+              </span>
+              <span className="caption-style flex items-center gap-1.5 text-(--tag-green-text)">
+                <span aria-hidden className="bg-success size-1.5 rounded-full" />
+                Live
+              </span>
+            </span>
+          </button>
+        </div>
       )}
       {versions?.length === 0 && <p className="caption-style text-subtle px-4">No versions yet. Orbit saves one as you write.</p>}
       {groups.map((group) => (
         <section key={group.day} className="flex flex-col px-2 pb-2">
-          <h4 className="eyebrow-style text-faint px-2 pt-2 pb-1.5 text-[11px]">{group.day}</h4>
+          <h4 className="eyebrow-style text-subtle px-2 pt-2 pb-1.5 text-[11px]">{group.day}</h4>
           <ol className="flex flex-col gap-0.5">
             {group.items.map(({ version, index }) => {
-              const current = index === 0;
               const active = selected === version.id;
               return (
                 <li key={version.id}>
                   <button
                     type="button"
                     aria-current={active ? "true" : undefined}
-                    onClick={() => onSelect(current || active ? null : { version, previous: versions?.[index + 1] ?? null })}
+                    onClick={() => onSelect(active ? null : { version, previous: versions?.[index + 1] ?? null })}
                     className={cn(
                       "ease-power3-out focus-visible:ring-ring/60 flex w-full cursor-pointer items-start gap-2.5 rounded-xl px-2 py-2 text-left transition-colors duration-150 outline-none focus-visible:ring-2",
                       active ? "bg-white/[0.07]" : "hover:bg-white/[0.035]",
@@ -90,16 +124,10 @@ export function HistoryRail({ versions, selected, onSelect }: { versions: Versio
                     <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                       <span className="flex items-center gap-1.5">
                         <span className={cn("truncate text-[13px] leading-4 font-medium", version.author.kind === "assistant" ? "text-[#c9c2ff]" : "text-foreground")}>{version.author.name}</span>
-                        <span className="caption-style text-subtle ml-auto shrink-0 tabular-nums">{current ? whenLabel(version.createdAt, now) : clockTime(version.createdAt)}</span>
+                        <span className="caption-style text-subtle ml-auto shrink-0 tabular-nums">{clockTime(version.createdAt)}</span>
                       </span>
                       <span className="caption-style text-soft">{version.summary}</span>
-                      {version.askedBy && <span className="caption-style text-faint">{version.askedBy}</span>}
-                      {current && (
-                        <span className="caption-style flex items-center gap-1.5 text-(--tag-green-text)">
-                          <span aria-hidden className="bg-success size-1.5 rounded-full" />
-                          Live
-                        </span>
-                      )}
+                      {version.askedBy && <span className="caption-style text-subtle">{version.askedBy}</span>}
                     </span>
                   </button>
                 </li>
@@ -108,7 +136,7 @@ export function HistoryRail({ versions, selected, onSelect }: { versions: Versio
           </ol>
         </section>
       ))}
-      <p className="caption-style text-faint px-4 pt-2">Orbit saves a version every 10 minutes while you write, and before every agent edit.</p>
+      <p className="caption-style text-subtle px-4 pt-2">Orbit saves a version every 10 minutes while you write, and before every agent edit.</p>
     </div>
   );
 }
@@ -217,7 +245,7 @@ export function VersionPreview({ page, selected, showChanges }: { page: Page; se
   return (
     <>
       {!loaded && (
-        <p role="status" className="caption-style text-faint">
+        <p role="status" className="caption-style text-subtle">
           Loading the version
         </p>
       )}

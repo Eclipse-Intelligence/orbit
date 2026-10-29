@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, type ComponentProps, type ReactNode } from "react";
+import { useEffect, useId, useState, type ComponentProps, type ReactNode } from "react";
+import { folderSharingAction } from "@/app/(crm)/docs/manage-actions";
 import Button from "@/components/_ui/button";
 import CopyButton from "@/components/_ui/copy-button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popover";
@@ -68,19 +69,47 @@ function ShareButton({ shared, compact, className, ...props }: { shared: boolean
   );
 }
 
+export function othersMoveText(count: number) {
+  return `${count === 1 ? "1 note or folder in here belongs" : `${count} notes or folders in here belong`} to other people. Making it private moves them to the top level of their owners' Docs.`;
+}
+
 function origin() {
   return typeof window === "undefined" ? "" : window.location.origin;
 }
 
-export function FolderShare({ folder, compact = true, summaries }: { folder: Folder; compact?: boolean; summaries: PageSummary[] }) {
+type FolderSharingCounts = { sharedOnTheirOwn: number; ownedByOthers: number };
+
+export function useFolderSharing(folderId: string, open: boolean, version: string) {
+  const [state, setState] = useState<{ key: string; counts: FolderSharingCounts } | null>(null);
+  const key = `${folderId}:${version}`;
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    void folderSharingAction(folderId)
+      .then((result) => {
+        if (live && result.error === undefined) setState({ key, counts: result.data });
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [folderId, open, key]);
+  return state?.key === key ? state.counts : null;
+}
+
+export function FolderShare({ folder, compact = true }: { folder: Folder; compact?: boolean }) {
   const nav = useDocsNav();
   const viewerId = useDocsStore((state) => state.viewer?.id ?? nav?.viewer.id);
   const share = useDocsStore((state) => state.share);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [open, setOpen] = useState(false);
   const owned = folder.owner.id === viewerId;
   const inherited = folder.visibility === "private" && folder.shared;
-  const sharedOnOwn = summaries.filter((summary) => summary.folderId === folder.id && summary.visibility === "shared");
+  const counts = useFolderSharing(folder.id, open && owned, `${folder.visibility}:${folder.noteCount}`);
+  const sharedOnOwn = counts?.sharedOnTheirOwn ?? null;
+  const othersInside = folder.visibility === "shared" ? (counts?.ownedByOthers ?? 0) : 0;
+  const groupLabel = useId();
 
   async function choose(visibility: Visibility) {
     if (visibility === folder.visibility || pending) return;
@@ -90,7 +119,7 @@ export function FolderShare({ folder, compact = true, summaries }: { folder: Fol
   }
 
   return (
-    <Popover>
+    <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <ShareButton shared={folder.shared} compact={compact} />
       </PopoverTrigger>
@@ -103,9 +132,12 @@ export function FolderShare({ folder, compact = true, summaries }: { folder: Fol
           </span>
         </div>
         {owned ? (
-          <div className="flex flex-col gap-1 px-2">
+          <div role="radiogroup" aria-labelledby={groupLabel} className="flex flex-col gap-1 px-2">
+            <span id={groupLabel} className="sr-only">
+              Who can see {folder.name}
+            </span>
             <ShareOption name={`share-${folder.id}`} checked={!folder.shared} disabled={inherited || pending} onSelect={() => void choose("private")} icon={<LockIcon aria-hidden className="text-soft size-3.5" />} title="Private">
-              {inherited ? "It's inside a shared folder, so it's shared too." : "Only you can see these notes."}
+              {inherited ? "It's inside a shared folder, so it's shared too." : "Only you can see them, apart from notes shared on their own."}
             </ShareOption>
             <ShareOption name={`share-${folder.id}`} checked={folder.shared} disabled={pending} onSelect={() => void choose("shared")} icon={<UsersIcon aria-hidden className="size-3.5 text-(--tag-blue-text)" />} title="Shared with workspace">
               Everyone in the workspace can find, read and edit them, including notes you add later.
@@ -119,12 +151,16 @@ export function FolderShare({ folder, compact = true, summaries }: { folder: Fol
             </p>
           </div>
         )}
-        {owned && sharedOnOwn.length > 0 && !folder.shared && (
+        {owned && othersInside > 0 && (
+          <div className="mx-4 mt-3 flex items-start gap-2.5 rounded-lg bg-(--tag-amber-bg) px-3 py-2.5">
+            <p className="caption-style text-soft">{othersMoveText(othersInside)}</p>
+          </div>
+        )}
+        {owned && sharedOnOwn !== null && sharedOnOwn > 0 && (
           <div className="mx-4 mt-3 flex items-start gap-2.5 rounded-lg bg-white/[0.03] px-3 py-2.5">
             <UsersIcon aria-hidden className="mt-px size-3.5 shrink-0 text-(--tag-blue-text)/80" />
             <p className="caption-style text-soft">
-              <span className="text-foreground">{sharedOnOwn[0].title || "Untitled"}</span>
-              {sharedOnOwn.length > 1 ? ` and ${sharedOnOwn.length - 1} more are` : " is"} already shared on {sharedOnOwn.length > 1 ? "their" : "its"} own. {sharedOnOwn.length > 1 ? "They stay" : "It stays"} shared either way.
+              {sharedOnOwn === 1 ? "1 note in here is" : `${sharedOnOwn} notes in here are`} shared on {sharedOnOwn === 1 ? "its" : "their"} own, so {sharedOnOwn === 1 ? "it stays" : "they stay"} shared either way.
             </p>
           </div>
         )}
@@ -147,8 +183,12 @@ export function PageShare({ summary, compact = false }: { summary: PageSummary; 
   const share = useDocsStore((state) => state.share);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const viewerId = useDocsStore((state) => state.viewer?.id ?? nav?.viewer.id);
+  const groupLabel = useId();
   const folder = summary.folderId ? nav?.folders.find((item) => item.id === summary.folderId) : undefined;
   const fromFolder = Boolean(folder?.shared);
+  const owned = summary.owner.id === viewerId;
+  const lockedShared = summary.visibility === "shared" && !owned;
 
   async function choose(visibility: Visibility) {
     if (visibility === summary.visibility || pending) return;
@@ -176,14 +216,23 @@ export function PageShare({ summary, compact = false }: { summary: PageSummary; 
           <DocIcon aria-hidden className="text-subtle size-3.5" />
           <h3 className="min-w-0 flex-1 truncate leading-5">Share {summary.title || "Untitled"}</h3>
         </div>
-        <div className="flex flex-col gap-1 px-2">
-          <ShareOption name={`share-${summary.id}`} checked={!summary.shared} disabled={fromFolder || pending} onSelect={() => void choose("private")} icon={<LockIcon aria-hidden className="text-soft size-3.5" />} title="Private">
-            Only you can see this note.
+        <div role="radiogroup" aria-labelledby={groupLabel} className="flex flex-col gap-1 px-2">
+          <span id={groupLabel} className="sr-only">
+            Who can see {summary.title || "Untitled"}
+          </span>
+          <ShareOption name={`share-${summary.id}`} checked={!summary.shared} disabled={fromFolder || lockedShared || pending} onSelect={() => void choose("private")} icon={<LockIcon aria-hidden className="text-soft size-3.5" />} title="Private">
+            {owned ? "Only you can see this note." : `Only ${summary.owner.short} would see this note.`}
           </ShareOption>
           <ShareOption name={`share-${summary.id}`} checked={summary.shared} disabled={fromFolder || pending} onSelect={() => void choose("shared")} icon={<UsersIcon aria-hidden className="size-3.5 text-(--tag-blue-text)" />} title="Shared with workspace">
             Everyone in the workspace can find, read and edit it.
           </ShareOption>
         </div>
+        {lockedShared && !fromFolder && (
+          <div className="mx-4 mt-3 flex items-start gap-2.5 rounded-lg bg-white/[0.03] px-3 py-2.5">
+            <ParticipantAvatar participant={summary.owner} size="xs" className="mt-px" />
+            <p className="caption-style text-soft">{summary.owner.kind === "person" ? `Only ${summary.owner.short} can make it private.` : `${summary.owner.name} made it, so it stays shared.`}</p>
+          </div>
+        )}
         {fromFolder && folder && (
           <div className="mx-4 mt-3 flex items-start gap-2.5 rounded-lg bg-white/[0.03] px-3 py-2.5">
             <UsersIcon aria-hidden className="mt-px size-3.5 shrink-0 text-(--tag-blue-text)/80" />

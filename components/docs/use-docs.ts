@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import type { DocsNav, DocsSeed } from "@/lib/docs/client-types";
+import { localDate } from "@/lib/docs/daily";
 import { isDocsPath } from "@/lib/docs/routes";
 import { useDocsStore } from "@/stores/docs-store";
 
@@ -61,5 +62,26 @@ export function useMedia(query: string, serverValue = false) {
     subscribe,
     () => window.matchMedia(query).matches,
     () => serverValue,
+  );
+}
+
+function subscribeToday(listener: () => void) {
+  const timer = window.setInterval(listener, 30_000);
+  document.addEventListener("visibilitychange", listener);
+  window.addEventListener("focus", listener);
+  return () => {
+    window.clearInterval(timer);
+    document.removeEventListener("visibilitychange", listener);
+    window.removeEventListener("focus", listener);
+  };
+}
+
+export function useToday() {
+  const nav = useDocsNav();
+  const fallback = nav?.today ?? "";
+  return useSyncExternalStore(
+    subscribeToday,
+    () => localDate(),
+    () => fallback,
   );
 }

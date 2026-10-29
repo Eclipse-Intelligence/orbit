@@ -1,12 +1,13 @@
 "use client";
 
-import { memo, useRef, type ComponentType, type KeyboardEvent, type MouseEvent, type ReactNode, type SVGProps } from "react";
+import { memo, useRef, useState, type ComponentType, type KeyboardEvent, type MouseEvent, type ReactNode, type SVGProps } from "react";
 import Link from "next/link";
 import Button from "@/components/_ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from "@/components/_ui/dropdown-menu";
 import { PresenceStack } from "@/components/docs/presence";
 import { NOTE_TYPE } from "@/components/docs/use-docs";
-import type { PageSort, PageSummary, Participant } from "@/lib/docs/client-types";
+import type { PageFilter, PageSort, PageSummary, Participant } from "@/lib/docs/client-types";
+import { listKey } from "@/lib/docs/routes";
 import { whenLabel } from "@/lib/docs/format";
 import { useDocsStore } from "@/stores/docs-store";
 import { cn } from "@/lib/utils";
@@ -129,7 +130,7 @@ export const NoteRow = memo(function NoteRow({
           </span>
         ) : (
           summary.tags.length > 0 && (
-            <span className="caption-style text-faint flex min-w-0 items-center gap-2 overflow-hidden pt-0.5">
+            <span className="caption-style text-subtle flex min-w-0 items-center gap-2 overflow-hidden pt-0.5">
               {summary.tags.slice(0, 3).map((tag) => (
                 <span key={tag} className="truncate">
                   #{tag}
@@ -196,5 +197,54 @@ export function RowList({ children, label, onMove }: { children: ReactNode; labe
     <ul ref={ref} aria-label={label} onKeyDown={onKeyDown} className="flex flex-col gap-0.5">
       {children}
     </ul>
+  );
+}
+
+export const LIST_PAGE_SIZE = 200;
+
+function listParams(list: PageFilter): Record<string, string> {
+  if (list.kind === "folder") return { list: "folder", folder: list.folderId };
+  if (list.kind === "tag") return { list: "tag", tag: list.path };
+  return { list: list.kind };
+}
+
+export function LoadMore({ list, sort, loaded }: { list: PageFilter; sort: PageSort; loaded: number }) {
+  const [state, setState] = useState<{ key: string; status: "idle" | "loading" | "done" | "failed" }>({ key: "", status: "idle" });
+  const key = `${listKey(list)}|${sort}|${Math.floor(loaded / LIST_PAGE_SIZE)}`;
+  const status = state.key === key ? state.status : "idle";
+  if (list.kind === "search" || loaded < LIST_PAGE_SIZE || status === "done") return null;
+
+  async function more() {
+    setState({ key, status: "loading" });
+    try {
+      const params = new URLSearchParams({ ...listParams(list), sort, paged: "1", offset: String(loaded) });
+      const response = await fetch(`/api/docs/pages?${params}`, { cache: "no-store", credentials: "same-origin" });
+      if (!response.ok) throw new Error();
+      const result = (await response.json()) as { pages: PageSummary[]; hasMore: boolean };
+      const storeKey = `${listKey(list)}|${sort}`;
+      useDocsStore.setState((current) => {
+        const ids = current.lists[storeKey] ?? [];
+        const seen = new Set(ids);
+        const summaries = { ...current.summaries };
+        for (const page of result.pages) summaries[page.id] = summaries[page.id] ?? page;
+        return { summaries, lists: { ...current.lists, [storeKey]: [...ids, ...result.pages.map((page) => page.id).filter((id) => !seen.has(id))] } };
+      });
+      setState({ key: `${listKey(list)}|${sort}|${Math.floor((loaded + result.pages.length) / LIST_PAGE_SIZE)}`, status: result.hasMore && result.pages.length > 0 ? "idle" : "done" });
+    } catch {
+      setState({ key, status: "failed" });
+    }
+  }
+
+  return (
+    <div className="flex flex-col items-start gap-2 px-3 py-3">
+      <Button variant="secondary" size="sm" disabled={status === "loading"} onClick={() => void more()}>
+        {status === "loading" ? "Loading" : "Load more"}
+      </Button>
+      {status === "failed" && (
+        <p role="alert" className="caption-style text-danger">
+          More notes didn&apos;t load. Try again.
+        </p>
+      )}
+    </div>
   );
 }
