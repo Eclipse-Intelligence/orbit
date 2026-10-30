@@ -2,7 +2,7 @@
 
 Base path: `/api/v1`
 
-Authentication is `Authorization: Bearer <agent token>` (from `npm run agent:create`). Browser cookies and personal tokens (`orbit_…`, which only work with the MCP server) are not accepted. Each credential is limited to 120 requests per minute. A 429 response includes `Retry-After: 60`.
+Authentication is `Authorization: Bearer <agent token>` (from `npm run agent:create`). Browser cookies and personal tokens (`orbit_…`, which only work with the MCP server and quick capture below) are not accepted. Each credential is limited to 120 requests per minute. A 429 response includes `Retry-After: 60`.
 
 Every request runs as the agent inside its workspace, under row-level security. Agent tokens see every task in the workspace, but never anyone's Mail, calendars, assistant chats, workflows, Knowledge, private docs or daily notes (only docs shared with the workspace). Every change to companies, contacts, opportunities, activities and tasks is audited with the agent as the actor and the `provenance` you send, and audit events can start workflows and are delivered to webhooks (see [Webhooks](#webhooks)). Nothing is deleted: `DELETE` archives.
 
@@ -216,6 +216,15 @@ Agent tokens see every task in the workspace; people in the app only see tasks t
 ## Pipeline
 
 `PUT /api/v1/pipeline` replaces the default pipeline stages. Send every stage to keep, with exactly one `isWon` and one `isLost`. Include `id` to update an existing stage. A stage that still has opportunities cannot be removed. Requires `opportunities:write`.
+
+## Quick capture
+
+`POST /api/quick` adds to the token owner's daily note or makes them a task. It's built for an iPhone Shortcut (setup steps are in Settings, API and webhooks). Authentication is `Authorization: Bearer <personal token>` (`orbit_…`); agent tokens are refused, because daily notes are private. The body is JSON `{ "text", "to" }`, form fields with the same names, or plain text. `to` is `daily` (the default; also `note`, `journal` or `jot`) or `task` (also `todo`). Text is up to 4,000 characters.
+
+- `daily` appends a timed entry to today's daily note (London time), creating the note if needed, and live editors see it straight away.
+- `task` makes a task owned by the token's owner. The first line is the title (up to 200 characters) and the rest is the description.
+
+The reply is plain text for the Shortcut to show, for example `Added to today's note at 08:20.` or `Added a task: Send the proposal`. Errors are plain text with status `400` (nothing to add, or an unknown `to`), `401` (missing or revoked token) or `429` (more than 120 requests a minute).
 
 ## Webhooks
 

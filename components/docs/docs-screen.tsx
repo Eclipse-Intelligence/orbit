@@ -508,7 +508,7 @@ export default function DocsScreen({ viewer, initial }: { viewer: Viewer; initia
         {level === "home" && <DocsHome />}
         <ListPane icon={Icon} title={title} count={list.kind === "daily" ? undefined : ids.length} control={control} hiddenOnPhone={level !== "list"}>
           {list.kind === "daily" ? (
-            <DailyList selected={dailyDate ?? (page?.kind === "daily" ? page.dailyDate : null)} initial={dailyInitial} />
+            <DailyList selected={dailyDate ?? (page?.kind === "daily" ? page.dailyDate : null)} chosen={Boolean(route.date || route.pageId)} initial={dailyInitial} />
           ) : (
             <>
               {folder && (
