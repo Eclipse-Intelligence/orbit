@@ -20,10 +20,22 @@ function within(event: MouseEvent<HTMLElement>, href: string) {
   if (navigateWithinDocs(href)) event.preventDefault();
 }
 
-function useDailyNotes() {
+function useDailyNotes(view: string, today: string) {
   const [days, setDays] = useState<DailySummary[] | null>(null);
+  const [woke, setWoke] = useState(0);
   const revision = useDocsStore((state) => state.nav?.dailyCount ?? 0);
   const todayEntries = useDocsStore((state) => state.nav?.todayNote?.entries ?? 0);
+  const todaySaved = useDocsStore((state) => {
+    for (const summary of Object.values(state.summaries)) if (summary.kind === "daily" && summary.dailyDate === today) return `${summary.updatedAt}:${summary.entryCount}`;
+    return "";
+  });
+  useEffect(() => {
+    const wake = () => {
+      if (document.visibilityState === "visible") setWoke((value) => value + 1);
+    };
+    document.addEventListener("visibilitychange", wake);
+    return () => document.removeEventListener("visibilitychange", wake);
+  }, []);
   useEffect(() => {
     let live = true;
     void docsData()
@@ -35,13 +47,13 @@ function useDailyNotes() {
     return () => {
       live = false;
     };
-  }, [revision, todayEntries]);
+  }, [revision, todayEntries, todaySaved, view, woke]);
   return days;
 }
 
-export default function DailyList({ selected, initial }: { selected: string | null; initial: DailySummary[] }) {
+export default function DailyList({ selected, chosen, initial }: { selected: string | null; chosen: boolean; initial: DailySummary[] }) {
   const today = useToday() || selected || "";
-  const fetched = useDailyNotes();
+  const fetched = useDailyNotes(`${chosen ? "day" : "overview"}:${selected ?? ""}`, today);
   const days = fetched ?? initial;
   const [month, setMonth] = useState(() => (selected ?? today).slice(0, 7));
   const [seen, setSeen] = useState(selected);
@@ -49,7 +61,12 @@ export default function DailyList({ selected, initial }: { selected: string | nu
     setSeen(selected);
     if (selected) setMonth(selected.slice(0, 7));
   }
-  const withEntries = useMemo(() => new Set(days.map((day) => day.date)), [days]);
+  const withEntries = useMemo(() => new Set(days.filter((day) => day.entries > 0).map((day) => day.date)), [days]);
+  const listed = useMemo(() => {
+    const recent = days.filter((day) => day.entries > 0).slice(0, 60);
+    if (!today || recent.some((day) => day.date === today)) return recent;
+    return [{ date: today, pageId: "", entries: 0, preview: "" }, ...recent];
+  }, [days, today]);
   const cells = monthGrid(month);
 
   return (
@@ -75,7 +92,8 @@ export default function DailyList({ selected, initial }: { selected: string | nu
           {cells.map((day, index) => {
             if (!day) return <span key={index} />;
             const href = dailyHref(day);
-            const current = day === selected;
+            const current = chosen && day === selected;
+            const ringed = !chosen && day === today;
             const future = day > today;
             const has = withEntries.has(day);
             const label = `${longDay(day)}${has ? ", has entries" : ""}${day === today ? ", today" : ""}`;
@@ -92,22 +110,27 @@ export default function DailyList({ selected, initial }: { selected: string | nu
                 onClick={(event) => within(event, href)}
                 className={cn(
                   "ease-power3-out focus-visible:ring-ring/60 relative mx-auto flex size-8 flex-col items-center justify-center rounded-full text-[12.5px] tabular-nums transition-colors duration-150 outline-none focus-visible:ring-2",
-                  current ? "bg-primary text-white" : day === today ? "text-foreground bg-white/[0.06]" : "text-soft hover:bg-white/[0.05]",
+                  current
+                    ? "bg-primary text-white"
+                    : ringed
+                      ? "text-foreground ring-primary ring-[1.5px] ring-inset"
+                      : day === today
+                        ? "text-foreground bg-white/[0.06]"
+                        : "text-soft hover:bg-white/[0.05]",
                 )}
               >
                 {Number(day.slice(8))}
-                {has && !current && <span aria-hidden className="bg-subtle absolute bottom-[5px] size-[3px] rounded-full" />}
+                {has && <span aria-hidden className={cn("absolute bottom-[5px] size-[3px] rounded-full", current ? "bg-white/85" : "bg-subtle")} />}
               </Link>
             );
           })}
         </div>
       </div>
       <div className="mx-2.5 mb-2 h-px bg-white/[0.05]" />
-      {days.length === 0 && <p className="caption-style text-subtle px-3 py-2">No daily notes yet. Today&apos;s note is open, ready for your first entry.</p>}
       <ul aria-label="Days" className="flex flex-col gap-0.5">
-        {days.slice(0, 60).map((day) => {
+        {listed.map((day) => {
           const href = dailyHref(day.date);
-          const current = day.date === selected;
+          const current = chosen && day.date === selected;
           return (
             <li key={day.date}>
               <Link
@@ -123,10 +146,14 @@ export default function DailyList({ selected, initial }: { selected: string | nu
                   <span className={cn("text-[14px] leading-5 font-medium", current ? "text-foreground" : "text-[#e3e5ea]")}>{dayName(day.date, today)}</span>
                   <span className="caption-style text-subtle">{dayDetail(day.date, today)}</span>
                   <span className="caption-style text-subtle ml-auto tabular-nums">
-                    {day.entries} {day.entries === 1 ? "entry" : "entries"}
+                    {day.entries === 0 ? "No entries yet" : `${day.entries} ${day.entries === 1 ? "entry" : "entries"}`}
                   </span>
                 </span>
-                {day.preview && <span className="text-subtle truncate text-[13px] leading-[1.45]">{day.preview}</span>}
+                {day.entries === 0 ? (
+                  <span className="text-subtle truncate text-[13px] leading-[1.45]">Tap to write</span>
+                ) : (
+                  day.preview && <span className="text-subtle truncate text-[13px] leading-[1.45]">{day.preview}</span>
+                )}
               </Link>
             </li>
           );

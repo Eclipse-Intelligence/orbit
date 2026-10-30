@@ -2,6 +2,7 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import ApiSettings from "@/components/crm/api-settings";
 import PersonalTokenSettings from "@/components/crm/personal-token-settings";
+import IphoneShortcutSettings from "@/components/crm/iphone-shortcut-settings";
 import { listPersonalTokens } from "@/lib/auth/personal";
 import { SettingsPage } from "@/components/crm/settings-ui";
 import WebhooksSettings from "@/components/crm/webhooks-settings";
@@ -32,6 +33,7 @@ export default async function ApiSettingsPage() {
       description="Connect agents and scripts to Orbit, and send CRM events to your own services."
     >
       <PersonalTokenSettings origin={origin} initial={tokens} />
+      <IphoneShortcutSettings origin={origin} />
       <ApiSettings origin={origin} scopes={[...SCOPES]} />
       <WebhooksSettings
         endpoints={endpoints}
