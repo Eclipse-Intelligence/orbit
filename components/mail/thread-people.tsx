@@ -1,12 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import Link from "next/link";
 import Button from "@/components/_ui/button";
 import { addContactInlineAction } from "@/app/(crm)/records";
 import { companyHref, contactHref, dealHref } from "@/lib/crm/hrefs";
 import type { ThreadPerson } from "@/lib/mail/view";
 import { cn } from "@/lib/utils";
+import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
 import PlusIcon from "@/public/assets/images/_common/plus.svg";
 
 function fallbackName(person: ThreadPerson) {
@@ -17,6 +18,8 @@ export default function ThreadPeople({ people }: { people: ThreadPerson[] }) {
   const [added, setAdded] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+  const listId = useId();
   if (people.length === 0) return null;
 
   async function add(person: ThreadPerson) {
@@ -32,8 +35,19 @@ export default function ThreadPeople({ people }: { people: ThreadPerson[] }) {
   }
 
   return (
-    <section aria-label="People on this conversation" className="flex flex-col gap-1.5 px-4">
-      <ul className="flex flex-wrap gap-2">
+    <section aria-label="People on this conversation" className="flex flex-col items-start gap-2 px-4">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={listId}
+        onClick={() => setOpen((value) => !value)}
+        className="text-subtle hover:text-foreground focus-visible:ring-ring/60 -ml-1.5 flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[13px] leading-5 transition-colors duration-150 outline-none focus-visible:ring-2"
+      >
+        Contacts
+        <span className="tabular-nums">{people.length}</span>
+        <ChevronDownIcon aria-hidden className={cn("ease-power3-out size-3 transition-transform duration-200", open && "rotate-180")} />
+      </button>
+      <ul id={listId} hidden={!open} className="flex flex-wrap gap-2">
         {people.map((person) => {
           const contactId = person.contactId ?? added[person.email] ?? null;
           const role = [person.title, person.companyName].filter(Boolean).join(" at ");
