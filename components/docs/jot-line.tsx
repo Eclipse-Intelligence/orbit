@@ -45,8 +45,13 @@ export default function JotLine({ page }: { page: Page }) {
       const jot = viewRef.current;
       const main = editorView();
       const stamp = localTime(new Date());
-      const block = jot ? entryBlock(jot.state.doc.toString(), stamp) : null;
-      if (!jot || !main || !block) return true;
+      if (!jot) return true;
+      const block = entryBlock(jot.state.doc.toString(), stamp);
+      if (!block) {
+        if (jot.state.doc.length) clearJot(jot);
+        return true;
+      }
+      if (!main) return true;
       const current = main.state.doc.toString();
       const end = current.replace(/\s+$/, "").length;
       main.dispatch({ changes: { from: end, to: main.state.doc.length, insert: `${end ? "\n\n" : ""}${block}` }, userEvent: "input.type", scrollIntoView: true });

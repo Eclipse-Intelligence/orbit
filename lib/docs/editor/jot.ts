@@ -1,5 +1,5 @@
-import { defaultKeymap, history, historyKeymap, insertNewline } from "@codemirror/commands";
-import { Compartment, Prec, type Extension } from "@codemirror/state";
+import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { Annotation, Compartment, Prec, type Extension, type Transaction } from "@codemirror/state";
 import { EditorView, keymap, placeholder, type KeyBinding } from "@codemirror/view";
 import { livePreview } from "@/lib/docs/editor/preview";
 import { detectTrigger, type ActiveTrigger, type PickerKey } from "@/lib/docs/editor/setup";
@@ -14,6 +14,22 @@ export type JotHandlers = {
 
 export const jotLabel = new Compartment();
 
+const lineBreak = Annotation.define<boolean>();
+
+function insertLineBreak(view: EditorView) {
+  view.dispatch(view.state.replaceSelection("\n"), { annotations: lineBreak.of(true), userEvent: "input", scrollIntoView: true });
+  return true;
+}
+
+export function typedReturn(transaction: Transaction) {
+  if (!transaction.docChanged || transaction.annotation(lineBreak) || transaction.isUserEvent("input.paste") || !transaction.isUserEvent("input")) return false;
+  let found = false;
+  transaction.changes.iterChanges((_fromA, _toA, _fromB, _toB, inserted) => {
+    if (inserted.toString().includes("\n")) found = true;
+  });
+  return found;
+}
+
 export function jotLabelAttributes(label: string) {
   return EditorView.contentAttributes.of({ "aria-label": label });
 }
@@ -26,6 +42,12 @@ export function entryBlock(text: string, stamp: string) {
 
 export function clearJot(view: EditorView) {
   view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: "" }, selection: { anchor: 0 }, userEvent: "delete" });
+}
+
+function returnTyped(view: EditorView, handlers: JotHandlers) {
+  const at = view.state.selection.main.head;
+  if (at > 0 && view.state.sliceDoc(at - 1, at) === "\n") view.dispatch({ changes: { from: at - 1, to: at }, userEvent: "delete" });
+  if (!handlers.pickerKey("enter")) handlers.submit();
 }
 
 export function jotExtensions(options: { label: string; placeholder: string; handlers: JotHandlers }): Extension[] {
@@ -47,11 +69,12 @@ export function jotExtensions(options: { label: string; placeholder: string; han
     Prec.highest(keymap.of(pickerKeys)),
     keymap.of([
       { key: "Enter", run: () => handlers.submit() },
-      { key: "Shift-Enter", run: insertNewline },
+      { key: "Shift-Enter", run: insertLineBreak },
       ...historyKeymap,
       ...defaultKeymap,
     ]),
     EditorView.updateListener.of((update) => {
+      if (update.transactions.some(typedReturn)) setTimeout(() => returnTyped(update.view, handlers), 0);
       if (!update.docChanged && !update.selectionSet && !update.focusChanged) return;
       const typed = update.transactions.some((transaction) => transaction.isUserEvent("input.type") || transaction.isUserEvent("delete") || transaction.isUserEvent("input.paste"));
       handlers.trigger(detectTrigger(update.state, update.view.hasFocus), typed);
