@@ -30,6 +30,14 @@ let pendingHeading: { pageId: string; heading: string } | null = null;
 let liveModule: LiveModule | null = null;
 let attachToken = 0;
 let attaching: { id: string; cached: CachedLive | null; release: (resume: boolean) => void } | null = null;
+let pendingEntry: (() => void) | null = null;
+
+export function holdPendingEntry(keep: () => void) {
+  pendingEntry = keep;
+  return () => {
+    if (pendingEntry === keep) pendingEntry = null;
+  };
+}
 
 onDocsReset(() => {
   if (liveId) liveModule?.detachLive(liveId, { save: false });
@@ -243,6 +251,7 @@ export default function NoteEditor({
     return () => {
       view.contentDOM.removeEventListener("focus", focusWatcher);
       view.contentDOM.removeEventListener("blur", focusWatcher);
+      pendingEntry?.();
       if (liveId) {
         const live = stopLive(liveId);
         remember(liveId, view.state, seenEpoch.current, live);
