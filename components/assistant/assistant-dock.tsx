@@ -1062,7 +1062,7 @@ export default function AssistantDock() {
           }}
           className={cn(
             "min-h-0 flex-1 overflow-y-auto overscroll-contain px-5",
-            messages.length > 0 || busy ? "py-3 md:min-h-[12rem]" : "pt-3 md:flex-none",
+            messages.length > 0 || busy ? "pt-3 md:min-h-[12rem]" : "pt-3 md:flex-none",
           )}
         >
           <div aria-hidden className="pointer-events-none sticky top-0 z-10 -mx-5 -mt-3 -mb-1 h-4 bg-gradient-to-b from-[#1c1c1c] to-transparent" />
@@ -1117,7 +1117,7 @@ export default function AssistantDock() {
               </p>
             )
           )}
-          <div aria-hidden className="pointer-events-none sticky bottom-0 z-10 -mx-5 -mt-6 h-6 bg-gradient-to-t from-[#1c1c1c] to-transparent" />
+          <div aria-hidden className="pointer-events-none sticky bottom-0 z-10 -mx-5 h-5 shrink-0 bg-gradient-to-t from-[#1c1c1c] to-transparent" />
         </div>
 
         <form onSubmit={submit} className="shrink-0 px-5 pt-1 pb-3">
