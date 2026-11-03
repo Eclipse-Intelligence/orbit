@@ -132,4 +132,57 @@ describe("relationship signals", () => {
     assert.equal(after[companyId].label, "strong");
     assert.match(after[companyId].reason, /Tone is positive\.$/);
   });
+
+  it("gives a cut-off tone check one call, then waits before trying those emails again", async () => {
+    const created = await createActivity(owner, {
+      type: "email",
+      title: "Re: Pricing",
+      body: "Thanks, that works for us.",
+      contactId,
+      occurredAt: new Date(Date.now() - 3_600_000).toISOString(),
+      metadata: { source: "microsoft", direction: "inbound", from: "paul@pmx.test" },
+    });
+    const id = created.body.activity.id;
+    let calls = 0;
+    const cutOff: typeof fetch = async () => {
+      calls += 1;
+      return Response.json({ model: "test-model", choices: [{ message: { role: "assistant", content: '{"emails": [{"index": 0, "tone": "pos' }, finish_reason: "length" }] });
+    };
+    await assert.rejects(classifyEmailTones(owner, { fetchImpl: cutOff }), /cut off/);
+    assert.equal(calls, 1);
+    assert.deepEqual((await classifyEmailTones(owner, { fetchImpl: cutOff })).classified, 0);
+    assert.equal(calls, 1);
+    const failure = await getAdminPool().query<{ failures: number; last_error: string }>("select failures, last_error from crm.activity_tone_failures where activity_id = $1", [id]);
+    assert.equal(failure.rows[0].failures, 1);
+    assert.match(failure.rows[0].last_error, /cut off/);
+
+    await getAdminPool().query("update crm.activity_tone_failures set last_failed_at = now() - interval '7 hours' where activity_id = $1", [id]);
+    let sent = "";
+    const answers: typeof fetch = async (_input, init) => {
+      sent = String(init?.body ?? "");
+      return Response.json({ model: "test-model", choices: [{ message: { role: "assistant", content: JSON.stringify({ emails: [] }) }, finish_reason: "stop" }] });
+    };
+    assert.equal((await classifyEmailTones(owner, { fetchImpl: answers })).classified, 0);
+    assert.equal(JSON.parse(sent).max_tokens, 3000);
+    assert.equal((await getAdminPool().query<{ failures: number }>("select failures from crm.activity_tone_failures where activity_id = $1", [id])).rows[0].failures, 2);
+
+    await getAdminPool().query("update crm.activity_tone_failures set last_failed_at = now() - interval '7 hours' where activity_id = $1", [id]);
+    const classifies: typeof fetch = async () =>
+      Response.json({ model: "test-model", choices: [{ message: { role: "assistant", content: JSON.stringify({ emails: [{ index: 0, tone: "positive", automatic: false, reason: "Agrees" }] }) }, finish_reason: "stop" }] });
+    assert.equal((await classifyEmailTones(owner, { fetchImpl: classifies })).classified, 1);
+    assert.equal((await getAdminPool().query("select 1 from crm.activity_tone_failures where activity_id = $1", [id])).rowCount, 0);
+
+    const given = await createActivity(owner, {
+      type: "email",
+      title: "Re: Contract",
+      body: "Not for us, sorry.",
+      contactId,
+      occurredAt: new Date(Date.now() - 1_800_000).toISOString(),
+      metadata: { source: "microsoft", direction: "inbound", from: "paul@pmx.test" },
+    });
+    await getAdminPool().query("insert into crm.activity_tone_failures (activity_id, workspace_id, failures, last_failed_at) values ($1, $2, 3, now() - interval '30 days')", [given.body.activity.id, owner.workspaceId]);
+    let asked = 0;
+    assert.equal((await classifyEmailTones(owner, { fetchImpl: async () => { asked += 1; return classifies("", {}); } })).classified, 0);
+    assert.equal(asked, 0);
+  });
 });
