@@ -6,6 +6,7 @@ import { CrmError } from "@/lib/crm/errors";
 import { canonicalDomain, canonicalEmail } from "@/lib/crm/normalize";
 import { assertScope, hasScope } from "@/lib/crm/scopes";
 import { createTaskInDb } from "@/lib/crm/tasks";
+import { scheduleTaskDue, withDueNote } from "@/lib/crm/task-due";
 import type { Activity, Actor, Company, Contact, Task } from "@/lib/crm/types";
 
 const RECENT_MS = 48 * 60 * 60 * 1000;
@@ -145,15 +146,15 @@ export async function recordCommunication(
         [company.id],
       );
       if ((open.rows[0]?.total ?? 0) === 0) {
-        const due = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString();
+        const due = await scheduleTaskDue(actor, { days: 2 });
         const who = contacts.find((contact) => contact.id === contactId)?.name || company.name;
         task = await createTaskInDb(
           db,
           actor,
           {
             title: `Follow up with ${who}`,
-            description: `Suggested after a ${input.kind}.`,
-            dueAt: due,
+            description: withDueNote(`Suggested after a ${input.kind}.`, due),
+            dueAt: due?.dueAt ?? null,
             companyId: company.id,
             contactId,
             priority: "normal",

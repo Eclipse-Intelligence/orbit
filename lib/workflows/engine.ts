@@ -28,6 +28,7 @@ import { completeJson, LlmError } from "@/lib/llm";
 import { decide, parallelKey, ParallelError, type Decision, type DecisionAnswer, type DecisionQuestion } from "@/lib/parallel";
 import { siteOrigin } from "@/lib/site-url";
 import { appTimeZone } from "@/lib/time";
+import { dueDayFrom, scheduleTaskDue, withDueNote } from "@/lib/crm/task-due";
 import {
   nextNode,
   nextScheduleRun,
@@ -842,17 +843,18 @@ async function runStepAction(ctx: Ctx, step: Step): Promise<StepResult> {
       const companyId = linkTo !== "none" ? ((ctx.vars.company as { id?: string } | undefined)?.id ?? null) : null;
       const contactId = linkTo === "contact" ? ((ctx.vars.contact as { id?: string } | undefined)?.id ?? null) : null;
       const days = config.dueInDays === "" || config.dueInDays === undefined || config.dueInDays === null ? null : Number(config.dueInDays);
-      const dueAt = days !== null && Number.isFinite(days) ? new Date(Date.now() + days * 86_400_000).toISOString() : null;
+      const ownerId = await assigneeFor(ctx, config.assignee);
+      const due = await scheduleTaskDue(ctx.actor, { days, on: dueDayFrom(render(config.dueDate, ctx.vars)), ownerId });
       const picker = config.clickup ? await getClickUpPicker(ctx.actor).catch(() => null) : null;
       const created = await createTaskWithClickUp(
         ctx.actor,
         {
           title,
-          description: render(config.notes, ctx.vars).trim() || null,
-          dueAt,
+          description: withDueNote(render(config.notes, ctx.vars).trim() || null, due),
+          dueAt: due?.dueAt ?? null,
           companyId: contactId ? undefined : companyId,
           contactId,
-          ownerId: await assigneeFor(ctx, config.assignee),
+          ownerId,
           priority: "normal",
         },
         picker?.listId ?? null,

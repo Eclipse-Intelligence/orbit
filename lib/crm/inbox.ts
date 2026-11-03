@@ -13,6 +13,7 @@ import { isUuid } from "@/lib/crm/mutate";
 import { canonicalDomain, canonicalEmail } from "@/lib/crm/normalize";
 import { hasScope } from "@/lib/crm/scopes";
 import { createTaskInDb } from "@/lib/crm/tasks";
+import { scheduleTaskDue, withDueNote } from "@/lib/crm/task-due";
 import type { UserActor } from "@/lib/crm/types";
 import {
   fetchInboxMessages,
@@ -836,13 +837,14 @@ async function fileMessages(
         (await openTasks(db, match.companyId)) === 0
       ) {
         const who = match.contactName || match.companyName || "them";
+        const due = await scheduleTaskDue(actor, { days: 2 });
         const followUp = await createTaskInDb(
           db,
           actor,
           {
             title: `Follow up with ${who}`.slice(0, 200),
-            description: "Suggested after an email arrived.",
-            dueAt: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString(),
+            description: withDueNote("Suggested after an email arrived.", due),
+            dueAt: due?.dueAt ?? null,
             companyId: match.companyId,
             contactId: match.contactId,
             priority: "normal",

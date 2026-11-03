@@ -435,6 +435,10 @@ export default function StepConfig({
               <option value="none">Nothing</option>
             </Select>
           </div>
+          {field("dueDate", "Due on (optional)", {
+            placeholder: "{{steps.ai_1.followUpOn}}",
+            hint: "A date (YYYY-MM-DD), often from an AI step, used instead of Due in. Weekends, bank holidays, Christmas and full calendar days are always skipped.",
+          })}
           <label className="caption-style text-subtle flex items-center gap-2">
             <Checkbox checked={c.clickup === true} onCheckedChange={(value) => update({ ...c, clickup: value === true })} />
             Also create it in ClickUp
