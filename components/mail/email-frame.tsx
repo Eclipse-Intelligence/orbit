@@ -21,6 +21,7 @@ const QUOTE_SELECTORS = [
 
 const HIDE_QUOTES = "orbit-hide-quotes";
 const WRAP_ID = "orbit-mail";
+const PAN_ID = "orbit-pan";
 const MAX_ZOOM = 4;
 
 type FrameMessage =
@@ -44,7 +45,7 @@ function policy(nonce: string) {
 }
 
 function frameScript(hideQuotes: boolean) {
-  const config = JSON.stringify({ hideQuotes, selectors: QUOTE_SELECTORS, hideClass: HIDE_QUOTES, wrapId: WRAP_ID, maxZoom: MAX_ZOOM });
+  const config = JSON.stringify({ hideQuotes, selectors: QUOTE_SELECTORS, hideClass: HIDE_QUOTES, wrapId: WRAP_ID, panId: PAN_ID, maxZoom: MAX_ZOOM });
   return `(function () {
   var cfg = ${config.replace(/</g, "\\u003c")};
   var layout = { available: 0, width: 0, height: 0 };
@@ -59,37 +60,34 @@ function frameScript(hideQuotes: boolean) {
   function wrap() { return document.getElementById(cfg.wrapId); }
   function maxPan() { return Math.max(0, layout.available * zoom - layout.available); }
   function place() {
-    var box = wrap();
-    if (!box) return;
-    var scale = (layout.available / layout.width) * zoom;
+    var holder = document.getElementById(cfg.panId);
+    if (!holder) return;
+    var ratio = window.devicePixelRatio || 1;
     panX = Math.min(maxPan(), Math.max(0, panX));
-    box.style.transform = (panX ? "translateX(" + (-panX) + "px) " : "") + "scale(" + scale + ")";
+    var shift = Math.round(panX * ratio) / ratio;
+    holder.style.transform = shift ? "translate3d(" + (-shift) + "px,0,0)" : "";
   }
   function apply() {
     var box = wrap();
     if (!box || layout.available <= 0) return;
     var scale = (layout.available / layout.width) * zoom;
-    var zoomed = zoom > 1.001;
-    if (Math.abs(scale - 1) < 0.001 && !panX) {
-      box.style.transform = ""; box.style.width = ""; box.style.marginRight = ""; box.style.marginBottom = "";
+    if (Math.abs(scale - 1) < 0.001) {
+      box.style.zoom = ""; box.style.width = "";
     } else {
       box.style.width = layout.width + "px";
-      box.style.marginRight = (layout.available - layout.width) + "px";
-      box.style.marginBottom = (layout.height * scale - layout.height) + "px";
-      place();
+      box.style.zoom = String(scale);
     }
-    post({ type: "zoom", zoomed: zoomed });
+    place();
+    post({ type: "zoom", zoomed: zoom > 1.001 });
     height();
   }
   function fit() {
     var box = wrap();
     if (!box) return;
-    box.style.transform = ""; box.style.width = ""; box.style.marginRight = ""; box.style.marginBottom = "";
+    box.style.zoom = ""; box.style.width = "";
     var available = box.clientWidth;
     var width = Math.max(box.scrollWidth, available);
-    box.style.width = width + "px";
-    layout = { available: available, width: width, height: box.offsetHeight };
-    box.style.width = "";
+    layout = { available: available, width: width, height: 0 };
     apply();
   }
   function zoomTo(next, anchorX, anchorY) {
@@ -104,7 +102,7 @@ function frameScript(hideQuotes: boolean) {
   }
   function list(touches) {
     var out = [];
-    for (var i = 0; i < touches.length; i++) out.push({ identifier: touches[i].identifier, clientX: touches[i].clientX, clientY: touches[i].clientY });
+    for (var i = 0; i < touches.length; i++) out.push({ identifier: touches[i].identifier, clientX: touches[i].screenX, clientY: touches[i].screenY });
     return out;
   }
   function start() {
@@ -118,6 +116,15 @@ function frameScript(hideQuotes: boolean) {
     var pinch = null;
     var swipe = null;
     var pan = null;
+    var frameRequest = 0;
+    var pendingZoom = null;
+    var pendingDy = 0;
+    function flush() {
+      frameRequest = 0;
+      if (pendingZoom) { var next = pendingZoom; pendingZoom = null; zoomTo(next.zoom, next.x, next.y); }
+      if (pendingDy) { post({ type: "pan", dy: pendingDy }); pendingDy = 0; }
+    }
+    function schedule() { if (!frameRequest) frameRequest = requestAnimationFrame(flush); }
     function spread(touches) { return Math.hypot(touches[0].clientX - touches[1].clientX, touches[0].clientY - touches[1].clientY) || 1; }
     function forward(event) {
       if (zoom > 1.001 && event.type !== "touchend" && event.type !== "touchcancel") return;
@@ -126,33 +133,34 @@ function frameScript(hideQuotes: boolean) {
     document.addEventListener("touchstart", function (event) {
       if (event.touches.length === 2) { pinch = { spread: spread(event.touches), zoom: zoom }; swipe = null; pan = null; }
       else if (event.touches.length === 1) {
-        swipe = { x: event.touches[0].clientX, y: event.touches[0].clientY, lock: null };
-        pan = zoom > 1.001 ? { x: event.touches[0].clientX, y: event.touches[0].clientY, samples: [{ y: event.touches[0].clientY, at: event.timeStamp }] } : null;
+        swipe = { x: event.touches[0].screenX, y: event.touches[0].screenY, lock: null };
+        pan = zoom > 1.001 ? { x: event.touches[0].screenX, y: event.touches[0].screenY, samples: [{ y: event.touches[0].screenY, at: event.timeStamp }] } : null;
       }
       forward(event);
     }, { passive: true });
     document.addEventListener("touchmove", function (event) {
       if (pinch && event.touches.length === 2) {
         if (event.cancelable) event.preventDefault();
-        zoomTo(pinch.zoom * spread(event.touches) / pinch.spread, (event.touches[0].clientX + event.touches[1].clientX) / 2, (event.touches[0].clientY + event.touches[1].clientY) / 2);
+        pendingZoom = { zoom: pinch.zoom * spread(event.touches) / pinch.spread, x: (event.touches[0].clientX + event.touches[1].clientX) / 2, y: (event.touches[0].clientY + event.touches[1].clientY) / 2 };
+        schedule();
         return;
       }
       if (pan && event.touches.length === 1) {
         var touch = event.touches[0];
         if (event.cancelable) event.preventDefault();
-        panX -= touch.clientX - pan.x;
+        panX -= touch.screenX - pan.x;
         place();
-        var dy = touch.clientY - pan.y;
-        if (dy) post({ type: "pan", dy: dy });
-        pan.x = touch.clientX;
-        pan.y = touch.clientY;
-        pan.samples.push({ y: touch.clientY, at: event.timeStamp });
+        pendingDy += touch.screenY - pan.y;
+        schedule();
+        pan.x = touch.screenX;
+        pan.y = touch.screenY;
+        pan.samples.push({ y: touch.screenY, at: event.timeStamp });
         if (pan.samples.length > 5) pan.samples.shift();
         return;
       }
       if (swipe && event.touches.length === 1 && zoom <= 1.001) {
-        var dx = event.touches[0].clientX - swipe.x;
-        var dy = event.touches[0].clientY - swipe.y;
+        var dx = event.touches[0].screenX - swipe.x;
+        var dy = event.touches[0].screenY - swipe.y;
         if (!swipe.lock && (Math.abs(dx) > 8 || Math.abs(dy) > 8)) swipe.lock = Math.abs(dx) > Math.abs(dy) ? "x" : "y";
         if (swipe.lock === "x" && event.cancelable) event.preventDefault();
       }
@@ -160,6 +168,7 @@ function frameScript(hideQuotes: boolean) {
     }, { passive: false });
     function finish(event) {
       if (pan && event.touches.length === 0) {
+        flush();
         var first = pan.samples[0];
         var last = pan.samples[pan.samples.length - 1];
         var elapsed = last.at - first.at;
@@ -210,7 +219,7 @@ pre{white-space:pre-wrap;}
 blockquote{margin:0 0 0 .6em;padding-left:.8em;border-left:2px solid ${rich ? "#ddd" : "#3a3a3a"};}
 ${QUOTE_SELECTORS.map((selector) => `html.${HIDE_QUOTES} ${selector}`).join(",")}{display:none !important;}
 ${theme}
-</style><script nonce="${nonce}">${frameScript(hideQuotes)}</script></head><body><div id="${WRAP_ID}">${html}</div></body></html>`;
+</style><script nonce="${nonce}">${frameScript(hideQuotes)}</script></head><body><div id="${PAN_ID}"><div id="${WRAP_ID}">${html}</div></div></body></html>`;
 }
 
 function touchEvent(message: Extract<FrameMessage, { type: "touch" }>) {
