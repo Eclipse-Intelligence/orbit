@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { glide, watchSwipe, type SwipeHandlers } from "@/components/mail/swipe";
+import { watchSwipe, type SwipeHandlers } from "@/components/mail/swipe";
 import Button from "@/components/_ui/button";
 import { cn } from "@/lib/utils";
 
@@ -29,7 +29,6 @@ type FrameMessage =
   | { type: "quotes"; found: boolean }
   | { type: "zoom"; zoomed: boolean }
   | { type: "pan"; dy: number }
-  | { type: "panEnd"; velocity: number }
   | { type: "touch"; phase: "touchstart" | "touchmove" | "touchend" | "touchcancel"; touches: FrameTouch[]; changed: FrameTouch[] };
 
 type FrameTouch = { identifier: number; clientX: number; clientY: number };
@@ -118,11 +117,9 @@ function frameScript(hideQuotes: boolean) {
     var pan = null;
     var frameRequest = 0;
     var pendingZoom = null;
-    var pendingDy = 0;
     function flush() {
       frameRequest = 0;
       if (pendingZoom) { var next = pendingZoom; pendingZoom = null; zoomTo(next.zoom, next.x, next.y); }
-      if (pendingDy) { post({ type: "pan", dy: pendingDy }); pendingDy = 0; }
     }
     function schedule() { if (!frameRequest) frameRequest = requestAnimationFrame(flush); }
     function spread(touches) { return Math.hypot(touches[0].clientX - touches[1].clientX, touches[0].clientY - touches[1].clientY) || 1; }
@@ -134,7 +131,7 @@ function frameScript(hideQuotes: boolean) {
       if (event.touches.length === 2) { pinch = { spread: spread(event.touches), zoom: zoom }; swipe = null; pan = null; }
       else if (event.touches.length === 1) {
         swipe = { x: event.touches[0].screenX, y: event.touches[0].screenY, lock: null };
-        pan = zoom > 1.001 ? { x: event.touches[0].screenX, y: event.touches[0].screenY, samples: [{ y: event.touches[0].screenY, at: event.timeStamp }] } : null;
+        pan = zoom > 1.001 ? { x: event.touches[0].screenX, y: event.touches[0].screenY, lock: null } : null;
       }
       forward(event);
     }, { passive: true });
@@ -147,15 +144,14 @@ function frameScript(hideQuotes: boolean) {
       }
       if (pan && event.touches.length === 1) {
         var touch = event.touches[0];
+        var moveX = touch.screenX - pan.x;
+        if (!pan.lock) pan.lock = Math.abs(moveX) > Math.abs(touch.screenY - pan.y) ? "x" : "y";
+        if (pan.lock === "y") return;
         if (event.cancelable) event.preventDefault();
-        panX -= touch.screenX - pan.x;
+        panX -= moveX;
         place();
-        pendingDy += touch.screenY - pan.y;
-        schedule();
         pan.x = touch.screenX;
         pan.y = touch.screenY;
-        pan.samples.push({ y: touch.screenY, at: event.timeStamp });
-        if (pan.samples.length > 5) pan.samples.shift();
         return;
       }
       if (swipe && event.touches.length === 1 && zoom <= 1.001) {
@@ -167,14 +163,7 @@ function frameScript(hideQuotes: boolean) {
       forward(event);
     }, { passive: false });
     function finish(event) {
-      if (pan && event.touches.length === 0) {
-        flush();
-        var first = pan.samples[0];
-        var last = pan.samples[pan.samples.length - 1];
-        var elapsed = last.at - first.at;
-        if (elapsed > 0 && event.timeStamp - last.at < 80) post({ type: "panEnd", velocity: (last.y - first.y) / elapsed });
-        pan = null;
-      }
+      if (event.touches.length === 0) pan = null;
       if (event.touches.length < 2 && pinch) { pinch = null; if (zoom < 1.05 && zoom !== 1) zoomTo(1, 0); }
       if (event.touches.length === 0) swipe = null;
       forward(event);
@@ -264,9 +253,6 @@ export default function EmailFrame({
       } else if (message.type === "pan" && Number.isFinite(message.dy)) {
         const scroller = swipe?.().scroller?.();
         if (scroller) scroller.scrollTop -= message.dy;
-      } else if (message.type === "panEnd" && Number.isFinite(message.velocity)) {
-        const scroller = swipe?.().scroller?.();
-        if (scroller) glide(scroller, message.velocity);
       } else if (message.type === "touch" && Array.isArray(message.touches) && Array.isArray(message.changed)) {
         proxy.dispatchEvent(touchEvent(message));
       }
