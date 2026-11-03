@@ -59,7 +59,19 @@ export function snippetCore(snippet: string | null) {
   return (cut > 0 ? snippet.slice(0, cut) : snippet).trim();
 }
 
+const INVISIBLE = /[\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\u206A-\u206F\u3164\uFEFF\uFFA0]/g;
+
+export function visibleText(text: string) {
+  return text
+    .replace(INVISIBLE, "")
+    .replace(/[ \t\u00A0]{2,}/g, " ")
+    .replace(/[ \t\u00A0]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 export function stripQuoted(text: string) {
-  const cut = text.search(/^(On .{3,200}wrote:|From: .+|-{3,}\s*Original Message\s*-{3,}|_{20,})\s*$/m);
-  return (cut > 0 ? text.slice(0, cut) : text).replace(/\n{3,}/g, "\n\n").trim();
+  const clean = visibleText(text);
+  const cut = clean.search(/^(On .{3,200}wrote:|From: .+|-{3,}\s*Original Message\s*-{3,}|_{20,})\s*$/m);
+  return (cut > 0 ? clean.slice(0, cut) : clean).replace(/\n{3,}/g, "\n\n").trim();
 }

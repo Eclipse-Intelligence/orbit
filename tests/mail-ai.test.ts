@@ -113,6 +113,19 @@ describe("mail AI", () => {
     assert.equal(stripQuoted("Sounds good.\n\nOn Tue, 1 Oct 2026, Jane wrote:\n> earlier"), "Sounds good.");
     assert.equal(stripQuoted("Yes\n\nFrom: Jane Doe <jane@acme.test>\nSent: Monday"), "Yes");
     assert.equal(stripQuoted("No quotes here"), "No quotes here");
+    assert.equal(stripQuoted(`How a physio built 230k followers.${" \u200c\u00a0\u034f".repeat(150)}\nNovember 03, 2026`), "How a physio built 230k followers.\nNovember 03, 2026");
+  });
+
+  it("gives every model call room to answer, at least 4,000 tokens", async () => {
+    const { completeJson } = await import("@/lib/llm");
+    const { z } = await import("zod");
+    const budgets: number[] = [];
+    const fetchImpl: typeof fetch = async (_input, init) => {
+      budgets.push(JSON.parse(String(init?.body)).max_tokens);
+      return Response.json({ model: "m", choices: [{ message: { content: '{"ok": true}' }, finish_reason: "stop" }] });
+    };
+    for (const maxTokens of [200, undefined, 6000]) await completeJson({ system: "s", user: "u", schema: z.object({ ok: z.boolean() }), maxTokens, fetchImpl });
+    assert.deepEqual(budgets, [4000, 4000, 6000]);
   });
 
   it("summarises a conversation once and reuses it until new mail arrives", async () => {

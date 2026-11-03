@@ -163,7 +163,7 @@ describe("relationship signals", () => {
       return Response.json({ model: "test-model", choices: [{ message: { role: "assistant", content: JSON.stringify({ emails: [] }) }, finish_reason: "stop" }] });
     };
     assert.equal((await classifyEmailTones(owner, { fetchImpl: answers })).classified, 0);
-    assert.equal(JSON.parse(sent).max_tokens, 3000);
+    assert.equal(JSON.parse(sent).max_tokens, 4000);
     assert.equal((await getAdminPool().query<{ failures: number }>("select failures from crm.activity_tone_failures where activity_id = $1", [id])).rows[0].failures, 2);
 
     await getAdminPool().query("update crm.activity_tone_failures set last_failed_at = now() - interval '7 hours' where activity_id = $1", [id]);
