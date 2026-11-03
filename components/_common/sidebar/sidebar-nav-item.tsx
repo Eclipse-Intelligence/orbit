@@ -11,6 +11,10 @@ type SidebarNavItemProps = {
   label: string;
   href?: string;
   count?: number;
+  countLabel?: string;
+  accent?: boolean;
+  dot?: boolean;
+  dotLabel?: string;
   active?: boolean;
   disabled?: boolean;
   tone?: "default" | "quiet";
@@ -23,6 +27,10 @@ export default function SidebarNavItem({
   label,
   href,
   count,
+  countLabel,
+  accent = false,
+  dot = false,
+  dotLabel,
   active = false,
   disabled = false,
   tone = "default",
@@ -56,7 +64,17 @@ export default function SidebarNavItem({
           )}
         />
         <span className="min-w-0 flex-1 truncate text-left">{label}</span>
-        {count !== undefined && <CountBadge>{count}</CountBadge>}
+        {dot && (
+          <span className="bg-primary size-1.5 shrink-0 rounded-full">
+            {dotLabel && <span className="sr-only">{dotLabel}</span>}
+          </span>
+        )}
+        {count !== undefined && (
+          <CountBadge className={cn(accent && "bg-primary text-primary-foreground border-transparent shadow-none")}>
+            {count}
+            {countLabel && <span className="sr-only"> {countLabel}</span>}
+          </CountBadge>
+        )}
         {disabled && <span className="sr-only">Not available yet</span>}
         {accessory && <span aria-hidden className="w-5 shrink-0" />}
       </Button>

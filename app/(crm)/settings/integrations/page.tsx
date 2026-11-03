@@ -1,3 +1,4 @@
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import AiAccountsSettings from "@/components/crm/ai-accounts-settings";
 import ClickUpSettings from "@/components/crm/clickup-settings";
@@ -11,21 +12,32 @@ import { listCompanions } from "@/lib/companion/pairing";
 import { unenrichedCompanyCount } from "@/lib/enrichment/companies";
 import { enrichmentAvailability, getEnrichmentSettings, providerStatuses } from "@/lib/enrichment/settings";
 import { learnedIcp, listWebChecks, uncheckedCompanyCount, webChecksConfigured } from "@/lib/enrichment/web-checks";
+import { getCalendarStatus } from "@/lib/crm/calendar";
 import { getCallSync } from "@/lib/crm/calls";
 import { getClickUpSettings } from "@/lib/crm/clickup";
 import { getGranolaStatus } from "@/lib/crm/granola";
 import { getMailbox } from "@/lib/crm/inbox";
+import { getTeamsTranscriptStatus } from "@/lib/crm/teams-transcripts";
 import { linearStatus } from "@/lib/linear";
-import { microsoftConfigured } from "@/lib/microsoft/oauth";
+import { mailSyncStatus } from "@/lib/mail/store";
+import { microsoftConfigured, microsoftRedirectUri } from "@/lib/microsoft/oauth";
 import { readwiseStatus } from "@/lib/readwise/keys";
 import { recallStatus } from "@/lib/recall/keys";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-export default async function IntegrationSettingsPage() {
+export default async function IntegrationSettingsPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const user = await getUserActor();
   if (!user) redirect("/login");
+  const resolved = await searchParams;
+  const notice = typeof resolved.error === "string" ? resolved.error : null;
+  const info = typeof resolved.info === "string" ? resolved.info : null;
+  const connected = resolved.connected === "1";
   const [mailbox, granola, readwise, recall, clickup, aiAccounts, companions, linear] = await Promise.all([
     getMailbox(user),
     getGranolaStatus(user),
@@ -43,7 +55,16 @@ export default async function IntegrationSettingsPage() {
     uncheckedCompanyCount(user),
     learnedIcp(user),
   ]);
-  const calls = mailbox ? await getCallSync(user) : null;
+  const live = mailbox?.status === "connected";
+  const [calls, transcripts, calendar, mirror] = await Promise.all([
+    mailbox ? getCallSync(user) : Promise.resolve(null),
+    live ? getTeamsTranscriptStatus(user) : Promise.resolve(null),
+    live ? getCalendarStatus(user) : Promise.resolve(null),
+    mailSyncStatus(user),
+  ]);
+  const headerStore = await headers();
+  const host = headerStore.get("x-forwarded-host") ?? headerStore.get("host") ?? "localhost:4173";
+  const proto = headerStore.get("x-forwarded-proto") ?? "http";
   const canAdmin = user.role === "owner" || user.role === "admin";
   return (
     <SettingsPage
@@ -52,8 +73,16 @@ export default async function IntegrationSettingsPage() {
     >
       <IntegrationsSettings
         configured={microsoftConfigured()}
+        redirectUri={microsoftRedirectUri(`${proto}://${host}`)}
         mailbox={mailbox}
         calls={calls}
+        transcripts={transcripts}
+        calendar={calendar}
+        mirror={mirror}
+        canAdmin={canAdmin}
+        notice={notice}
+        info={info}
+        connected={connected}
         granola={granola}
         readwise={readwise}
         recall={recall}

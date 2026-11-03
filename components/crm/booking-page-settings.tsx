@@ -383,8 +383,8 @@ export default function BookingPageSettings({
     warnings.push(
       <>
         Microsoft isn&apos;t connected, so bookings can&apos;t create meetings.{" "}
-        <a href="/capture" className="underline underline-offset-2">
-          Connect Microsoft in Capture
+        <a href="/settings/integrations" className="underline underline-offset-2">
+          Connect Microsoft in Settings › Integrations
         </a>
         .
       </>,
@@ -393,8 +393,8 @@ export default function BookingPageSettings({
     warnings.push(
       <>
         Orbit can read your calendar but can&apos;t create meetings yet.{" "}
-        <a href="/capture" className="underline underline-offset-2">
-          Reconnect Microsoft in Capture
+        <a href="/settings/integrations" className="underline underline-offset-2">
+          Reconnect Microsoft in Settings › Integrations
         </a>{" "}
         to allow it.
       </>,

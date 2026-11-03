@@ -1319,7 +1319,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     name: "get_capture",
     label: "Checking Capture",
     description:
-      "The Capture page, not the mailbox: recent mail filed to records, unfiled conversations from Teams and Granola waiting to be filed, and people met in meetings who aren't contacts yet. For the user's email itself use search_email.",
+      "What's waiting in Capture, not the mailbox: unfiled conversations from Teams and Granola waiting to be filed and people met in meetings who aren't contacts yet, plus recent mail filed to records. For the user's email itself use search_email.",
     parameters: { type: "object", properties: {} },
     run: async (actor) => {
       const [mailbox, messages, unfiled, people] = await Promise.all([
@@ -3914,7 +3914,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     label: "Cancelling a meeting",
     write: true,
     description:
-      "Cancel a meeting the user organised, by its id from list_calendar_events. Outlook sends the cancellation to every guest, with message if given, and it's logged on the guests' timelines. Only meetings that haven't started, in the calendar of the mailbox connected in Capture.",
+      "Cancel a meeting the user organised, by its id from list_calendar_events. Outlook sends the cancellation to every guest, with message if given, and it's logged on the guests' timelines. Only meetings that haven't started, in the calendar of the mailbox connected in Settings › Integrations.",
     parameters: {
       type: "object",
       properties: {
@@ -3946,7 +3946,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     label: "Answering an invite",
     write: true,
     description:
-      "Accept, say maybe to (tentative) or decline a meeting someone else organised, by its id from list_calendar_events with canRespond true. Outlook sends the response to the organiser, with note if given, unless tellOrganiser is false. Tentative and decline can suggest a new time in London time, if the organiser allows new time proposals. Only meetings that haven't started, in the calendar of the mailbox connected in Capture.",
+      "Accept, say maybe to (tentative) or decline a meeting someone else organised, by its id from list_calendar_events with canRespond true. Outlook sends the response to the organiser, with note if given, unless tellOrganiser is false. Tentative and decline can suggest a new time in London time, if the organiser allows new time proposals. Only meetings that haven't started, in the calendar of the mailbox connected in Settings › Integrations.",
     parameters: {
       type: "object",
       properties: {

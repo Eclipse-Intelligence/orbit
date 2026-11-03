@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { SETTINGS_PATHS } from "@/lib/settings-nav";
 import { getUserActor } from "@/lib/auth/user";
 import { actionError } from "@/lib/companies";
 import {
@@ -22,7 +23,7 @@ export async function logPadActivityAction(
   if (!user) return { error: "Sign in again." };
   try {
     const result = await logPadActivity(user, input);
-    revalidatePath("/activities");
+    revalidatePath(SETTINGS_PATHS.activity);
     revalidateRecordPages();
     if (input.followUp) revalidatePath(TASKS_PATH);
     return result;

@@ -30,6 +30,14 @@ export const HEALTH_OPTIONS = [
   { value: "none", label: "Not set" },
 ];
 
+export const ANY_ACTIVITY = "any";
+export const QUIET_ACTIVITY = "quiet";
+
+export const ACTIVITY_OPTIONS = [
+  { value: ANY_ACTIVITY, label: "Any activity" },
+  { value: QUIET_ACTIVITY, label: "Gone quiet" },
+];
+
 export const SIZE_OPTIONS = ["1-10", "11-50", "51-200", "201-1000", "1000+"];
 
 export const SORT_OPTIONS: { value: string; label: string; sort: CompanySort; order: "asc" | "desc" }[] = [
@@ -54,7 +62,7 @@ export function activeFilterCount(filters: CompanyListQuery) {
   const sort = filters.sort ?? DEFAULT_COMPANY_SORT;
   const defaultSort = sort === DEFAULT_COMPANY_SORT && (filters.order ?? defaultCompanyOrder(sort)) === defaultCompanyOrder(sort);
   return (
-    [Boolean(filters.query), Boolean(filters.lifecycle), Boolean(filters.health), Boolean(filters.ownerId), Boolean(filters.tag), !defaultSort].filter(Boolean).length +
+    [Boolean(filters.query), Boolean(filters.lifecycle), Boolean(filters.health), Boolean(filters.ownerId), Boolean(filters.tag), Boolean(filters.quiet), !defaultSort].filter(Boolean).length +
     (filters.has?.length ?? 0) +
     (filters.missing?.length ?? 0)
   );

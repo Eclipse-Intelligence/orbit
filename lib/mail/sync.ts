@@ -194,7 +194,7 @@ async function loadSource(actor: UserActor, sourceId: string): Promise<Source | 
 
 export async function mailSourceToken(actor: UserActor, sourceId: string, fetchImpl: typeof fetch = fetch) {
   const source = await loadSource(actor, sourceId);
-  if (!source) throw new CrmError("not_found", "That mail account is no longer connected. Connect it again in Capture.", 404);
+  if (!source) throw new CrmError("not_found", "That mail account is no longer connected. Connect it again in Settings › Integrations.", 404);
   const token = await currentToken(source.tokens, fetchImpl);
   if (token.expiresAt !== source.tokens.accessTokenExpiresAt) await withActor(actor, (db) => saveToken(db, source, token));
   return token.accessToken;

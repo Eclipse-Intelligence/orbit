@@ -7,14 +7,17 @@ import FilterMenu from "@/components/_common/filter-menu";
 import MobileFilters from "./mobile-filters";
 import { exportCompaniesAction } from "@/app/(crm)/actions";
 import {
+  ACTIVITY_OPTIONS,
   ALL_OWNERS,
+  ANY_ACTIVITY,
   ANY_HEALTH,
   ANY_LIFECYCLE,
   HEALTH_OPTIONS,
+  QUIET_ACTIVITY,
   UNASSIGNED_OWNER,
 } from "@/lib/companies";
 import { SelectToggle } from "@/components/crm/bulk-bar";
-import { PresenceFilter, type PresenceField } from "@/components/crm/list-controls";
+import { PresenceFilter, type FilterChoice, type PresenceField } from "@/components/crm/list-controls";
 import { ANY_TAG, tagFilterOptions } from "@/components/crm/tags";
 import RecordTransfer from "@/components/crm/record-transfer";
 import ListSearch from "@/components/shortcuts/list-search";
@@ -75,6 +78,15 @@ export default function CompaniesToolbar({
     }
   }
 
+  const activity: FilterChoice = {
+    key: "activity",
+    label: "Activity",
+    options: ACTIVITY_OPTIONS,
+    value: filters.quiet ? QUIET_ACTIVITY : ANY_ACTIVITY,
+    empty: ANY_ACTIVITY,
+    onChange: (value) => replaceParams({ quiet: value === QUIET_ACTIVITY ? "true" : null }),
+  };
+  const clearPresence = () => replaceParams({ has: null, missing: null, quiet: null });
   const tagOptions = tagFilterOptions(tags, "company", filters.tag);
   const lifecycleOptions = [
     { value: ANY_LIFECYCLE, label: "Any lifecycle" },
@@ -95,6 +107,8 @@ export default function CompaniesToolbar({
           has={filters.has ?? []}
           missing={filters.missing ?? []}
           onChange={(has, missing) => replaceParams({ has: has.join(",") || null, missing: missing.join(",") || null })}
+          choices={[activity]}
+          onClear={clearPresence}
         />
       </div>
 
@@ -136,6 +150,8 @@ export default function CompaniesToolbar({
           has={filters.has ?? []}
           missing={filters.missing ?? []}
           onChange={(has, missing) => replaceParams({ has: has.join(",") || null, missing: missing.join(",") || null })}
+          choices={[activity]}
+          onClear={clearPresence}
         />
       </div>
 

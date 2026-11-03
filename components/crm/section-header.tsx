@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { signOutAction } from "@/app/(crm)/actions";
 import {
   DropdownMenu,
@@ -19,10 +19,10 @@ import { useListHref } from "@/components/crm/list-memory";
 import type { Viewer } from "@/components/crm/viewer";
 import { displayInitials } from "@/lib/companies";
 import { RECORD_LISTS, type RecordListKey } from "@/lib/crm/hrefs";
-import { useCompaniesStore } from "@/stores/companies-store";
+import { captureHasNew, useCompaniesStore } from "@/stores/companies-store";
 import { cn } from "@/lib/utils";
 import { useShortcuts } from "@/components/shortcuts/shortcuts-provider";
-import { ExpandSidebarButton } from "@/components/_common/sidebar/sidebar-toggle";
+import { ExpandSidebarButton, NewDot } from "@/components/_common/sidebar/sidebar-toggle";
 import ChevronLeftIcon from "@/public/assets/images/_common/chevron-left.svg";
 import ChevronRightIcon from "@/public/assets/images/_common/chevron-right.svg";
 import MenuIcon from "@/public/assets/images/_common/menu.svg";
@@ -45,6 +45,10 @@ export default function SectionHeader({
   const { setPaletteOpen, setHelpOpen } = useShortcuts();
   const router = useRouter();
   const openProfile = useCompaniesStore((state) => state.openProfile);
+  const pathname = usePathname();
+  const capture = useCompaniesStore((state) => state.capture);
+  const captureSeen = useCompaniesStore((state) => state.captureSeen);
+  const captureNew = pathname !== "/capture" && captureHasNew(capture, captureSeen);
 
   return (
     <header className="border-border shrink-0 border-b">
@@ -53,13 +57,14 @@ export default function SectionHeader({
           <Button
             variant="secondary"
             size="icon"
-            className="lg:hidden"
-            aria-label="Open navigation"
+            className="relative lg:hidden"
+            aria-label={captureNew ? "Open navigation, new in Capture" : "Open navigation"}
             onClick={() => setSidebarOpen(true)}
           >
             <MenuIcon aria-hidden className="size-3.5" />
+            {captureNew && <NewDot />}
           </Button>
-          <ExpandSidebarButton />
+          <ExpandSidebarButton dot={captureNew} />
           {list ? (
             <RecordBreadcrumb list={list} title={title} />
           ) : (

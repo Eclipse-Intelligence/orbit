@@ -892,8 +892,8 @@ export default function MailScreen({
         <SectionHeader title="Mail" viewer={viewer} />
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
           <h2>Bring your mail into Orbit</h2>
-          <p className="text-subtle max-w-[28em]">Connect Microsoft in Capture. Orbit copies every folder and keeps it in step with Outlook.</p>
-          <Button variant="primary" href="/capture">
+          <p className="text-subtle max-w-[28em]">Connect Microsoft in Settings › Integrations. Orbit copies every folder and keeps it in step with Outlook.</p>
+          <Button variant="primary" href="/settings/integrations">
             Connect Microsoft
           </Button>
         </div>
@@ -985,7 +985,7 @@ export default function MailScreen({
                     .join(", ")}{" "}
                   disconnected
                 </span>
-                <Button variant="secondary" size="sm" href="/capture" className="shrink-0">
+                <Button variant="secondary" size="sm" href="/settings/integrations" className="shrink-0">
                   Reconnect
                 </Button>
               </div>

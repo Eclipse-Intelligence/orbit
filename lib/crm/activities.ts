@@ -286,6 +286,19 @@ export async function listActivities(
       values.push(query.type);
       where.push(`a.type = $${values.length}`);
     }
+    if (query.actorUserId) {
+      if (!isUuid(query.actorUserId)) throw new CrmError("invalid_input", "Choose a member of this workspace.", 400, { field: "actor_user_id" });
+      values.push(query.actorUserId);
+      where.push(`a.actor_user_id = $${values.length}`);
+    }
+    if (query.from) {
+      values.push(query.from);
+      where.push(`a.occurred_at >= $${values.length}::timestamptz`);
+    }
+    if (query.to) {
+      values.push(query.to);
+      where.push(`a.occurred_at < $${values.length}::timestamptz`);
+    }
     const text = query.query?.trim();
     if (text) {
       values.push(likePattern(text.slice(0, 200)));

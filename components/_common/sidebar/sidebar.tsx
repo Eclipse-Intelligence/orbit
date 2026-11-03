@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import {
   Sheet,
   SheetCloseButton,
@@ -9,6 +10,7 @@ import {
 } from "@/components/_ui/sheet";
 import SidebarContent from "./sidebar-content";
 import SidebarResizer from "./sidebar-resizer";
+import type { CaptureStatus } from "@/lib/crm/capture";
 import type { BoardSummary } from "@/lib/crm/types";
 import { useCompaniesStore } from "@/stores/companies-store";
 
@@ -18,12 +20,21 @@ type SidebarProps = {
   companyCount: number;
   openActionCount: number;
   mailUnread: number;
+  capture: CaptureStatus | null;
   workspaceName: string;
 };
 
-export default function Sidebar({ boards, approvals, companyCount, openActionCount, mailUnread, workspaceName }: SidebarProps) {
+export default function Sidebar({ boards, approvals, companyCount, openActionCount, mailUnread, capture, workspaceName }: SidebarProps) {
   const sidebarOpen = useCompaniesStore((state) => state.sidebarOpen);
   const setSidebarOpen = useCompaniesStore((state) => state.setSidebarOpen);
+  const setCapture = useCompaniesStore((state) => state.setCapture);
+  const waiting = capture?.waiting ?? 0;
+  const fresh = capture?.fresh ?? 0;
+  const newestAt = capture?.newestAt ?? null;
+
+  useEffect(() => {
+    setCapture({ waiting, fresh, newestAt });
+  }, [setCapture, waiting, fresh, newestAt]);
 
   return (
     <>
@@ -34,6 +45,7 @@ export default function Sidebar({ boards, approvals, companyCount, openActionCou
           companyCount={companyCount}
           openActionCount={openActionCount}
           mailUnread={mailUnread}
+          capture={capture}
           workspaceName={workspaceName}
         />
         <SidebarResizer />
@@ -54,7 +66,8 @@ export default function Sidebar({ boards, approvals, companyCount, openActionCou
             approvals={approvals}
             companyCount={companyCount}
             openActionCount={openActionCount}
-          mailUnread={mailUnread}
+            mailUnread={mailUnread}
+            capture={capture}
             workspaceName={workspaceName}
           />
         </SheetContent>

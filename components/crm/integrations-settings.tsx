@@ -1,8 +1,22 @@
+import type { ReactNode } from "react";
 import Button from "@/components/_ui/button";
+import {
+  disconnectInboxAction,
+  enableGranolaWebhookAction,
+  syncCalendarAction,
+  syncCallsAction,
+  syncGranolaAction,
+  syncInboxAction,
+  syncTranscriptsAction,
+} from "@/app/(crm)/capture/actions";
+import MailMirrorStatus from "@/components/crm/mail-mirror-status";
 import { SettingsCard, SettingsDisclosure } from "@/components/crm/settings-ui";
 import { formatWhen } from "@/lib/companies";
+import type { CalendarStatus } from "@/lib/crm/calendar";
 import type { CallSyncSummary } from "@/lib/crm/calls";
 import type { GranolaStatus } from "@/lib/crm/granola";
+import type { TeamsTranscriptStatus } from "@/lib/crm/teams-transcripts";
+import type { MailSourceStatus } from "@/lib/mail/store";
 import type { LinearStatus } from "@/lib/linear";
 import GranolaKey from "@/components/crm/granola-key";
 import type { MailboxSummary } from "@/lib/crm/inbox";
@@ -23,6 +37,38 @@ function syncedLine(lastSyncedAt: string | null) {
   return lastSyncedAt
     ? `Last synced ${formatWhen(lastSyncedAt)}`
     : "Not synced yet";
+}
+
+function subscriptionLine(status: TeamsTranscriptStatus) {
+  if (!status.instant) return "Instant updates need SITE_URL on https";
+  if (status.subscriptionId && status.subscriptionExpiresAt) {
+    return `Instant updates on until ${formatWhen(status.subscriptionExpiresAt)}`;
+  }
+  return "Instant updates not set up yet";
+}
+
+function SyncButton({
+  action,
+  label,
+  variant = "secondary",
+  shortcut,
+}: {
+  action: () => Promise<void>;
+  label: string;
+  variant?: "secondary" | "ghost";
+  shortcut?: string;
+}) {
+  return (
+    <form action={action}>
+      <Button variant={variant} size="sm" type="submit" data-shortcut={shortcut} title={shortcut ? `${label} (S)` : undefined}>
+        {label}
+      </Button>
+    </form>
+  );
+}
+
+function Actions({ children }: { children: ReactNode }) {
+  return <div className="flex flex-wrap items-center gap-2">{children}</div>;
 }
 
 function Status({
@@ -52,16 +98,32 @@ function Status({
 
 export default function IntegrationsSettings({
   configured,
+  redirectUri,
   mailbox,
   calls,
+  transcripts,
+  calendar,
+  mirror,
+  canAdmin,
+  notice,
+  info,
+  connected,
   granola,
   readwise,
   recall,
   linear,
 }: {
   configured: boolean;
+  redirectUri: string;
   mailbox: MailboxSummary | null;
   calls: CallSyncSummary | null;
+  transcripts: TeamsTranscriptStatus | null;
+  calendar: CalendarStatus | null;
+  mirror: MailSourceStatus[];
+  canAdmin: boolean;
+  notice: string | null;
+  info: string | null;
+  connected: boolean;
   granola: GranolaStatus;
   readwise: ReadwiseStatus;
   recall: RecallStatus;
@@ -72,14 +134,34 @@ export default function IntegrationsSettings({
 
   return (
     <>
+      {(connected || notice || info) && (
+        <div className="flex flex-col gap-2">
+          {connected && (
+            <p role="status" className="caption-style text-soft rounded-xl bg-white/[0.04] px-3 py-2.5 leading-[1.4]">
+              Microsoft is connected. New mail is filed onto the matching contact, and you can send from a contact.
+            </p>
+          )}
+          {notice && (
+            <p role="alert" className="caption-style text-danger rounded-xl bg-white/[0.04] px-3 py-2.5 leading-[1.4]">
+              {notice}
+            </p>
+          )}
+          {info && (
+            <p role="status" className="caption-style text-soft rounded-xl bg-white/[0.04] px-3 py-2.5 leading-[1.4]">
+              {info}
+            </p>
+          )}
+        </div>
+      )}
+
       <SettingsCard
         id="microsoft"
         title="Microsoft 365"
         description="Outlook mail is filed onto the matching contact, and you can send from a contact. The main calendar and Teams calls come from the same account."
         action={
-          configured ? (
-            <Button variant={live ? "secondary" : "primary"} size="sm" href="/api/microsoft/connect">
-              {live ? "Reconnect" : mailbox ? "Reconnect Microsoft" : "Connect Microsoft"}
+          configured && !live ? (
+            <Button variant="primary" size="sm" href="/api/microsoft/connect">
+              {mailbox ? "Reconnect Microsoft" : "Connect Microsoft"}
             </Button>
           ) : undefined
         }
@@ -104,11 +186,64 @@ export default function IntegrationsSettings({
             </span>
           )}
           {mailboxError && (
-            <span className="caption-style text-danger leading-[1.4]">
+            <span role="alert" className="caption-style text-danger leading-[1.4]">
               {mailboxError}
             </span>
           )}
         </div>
+        {live && configured && (
+          <Actions>
+            <SyncButton action={syncInboxAction} label="Sync now" shortcut="sync" />
+            <Button variant="ghost" size="sm" href="/api/microsoft/connect">
+              Reconnect
+            </Button>
+            <form action={disconnectInboxAction}>
+              <Button variant="ghost" size="sm" type="submit">
+                Disconnect
+              </Button>
+            </form>
+          </Actions>
+        )}
+        {mirror.length > 0 && <MailMirrorStatus sources={mirror} />}
+        {live && configured && calendar && (
+          <div className="border-border flex flex-col gap-2 border-t pt-3">
+            <h4 className="text-[14px] leading-5">Outlook calendar</h4>
+            {calendar.scopeMissing ? (
+              <Status tone="error">Reconnect Microsoft to include your calendar. Mail keeps working in the meantime.</Status>
+            ) : (
+              <>
+                <Status tone={calendar.lastError ? "error" : "on"}>{syncedLine(calendar.lastSyncedAt)}</Status>
+                <span className="caption-style text-subtle">Meetings from the last 30 days and the next 60</span>
+                {calendar.lastError && (
+                  <span role="alert" className="caption-style text-danger leading-[1.4]">
+                    {calendar.lastError}
+                  </span>
+                )}
+              </>
+            )}
+            <Actions>
+              {calendar.scopeMissing ? (
+                <Button variant="primary" size="sm" href="/api/microsoft/connect">
+                  Reconnect Microsoft
+                </Button>
+              ) : (
+                <SyncButton action={syncCalendarAction} label="Sync calendar" />
+              )}
+            </Actions>
+          </div>
+        )}
+        {!configured && (
+          <SettingsDisclosure
+            title="How to set it up"
+            summary="An admin needs to register Orbit in Microsoft Entra before anyone can connect mail, calendar and Teams."
+          >
+            <p className="caption-style text-subtle leading-[1.4]">
+              Register an app with delegated Mail.ReadWrite, Mail.Send, User.Read, Calendars.ReadWrite and offline_access. To log Teams calls and their transcripts, also add the
+              CallRecords.Read.All and CallTranscripts.Read.All application permissions with admin consent. Put the client id and secret in the server environment, then restart Orbit.
+            </p>
+            <p className="caption-style text-subtle leading-[1.4] break-all">Redirect URI: {redirectUri}</p>
+          </SettingsDisclosure>
+        )}
         <p className="caption-style text-subtle leading-[1.4]">
           Extra Microsoft accounts and calendar links are in{" "}
           <Button
@@ -141,15 +276,35 @@ export default function IntegrationsSettings({
               {syncedLine(calls?.lastSyncedAt ?? null)}
             </span>
             {calls?.lastError && (
-              <span className="caption-style text-danger leading-[1.4]">
+              <span role="alert" className="caption-style text-danger leading-[1.4]">
                 {calls.lastError}
               </span>
             )}
+            <Actions>
+              <SyncButton action={syncCallsAction} label="Sync calls" />
+            </Actions>
           </div>
         ) : (
           <Status tone="off">
-            Connect Microsoft in Capture to log Teams calls
+            Connect Microsoft above to log Teams calls
           </Status>
+        )}
+        {live && configured && transcripts && (
+          <div className="border-border flex flex-col gap-1.5 border-t pt-3">
+            <h4 className="text-[14px] leading-5">Teams transcripts</h4>
+            <Status tone={transcripts.lastError ? "error" : "on"}>
+              {`${syncedLine(transcripts.lastSyncedAt)}${transcripts.pending ? ` · ${transcripts.pending} waiting for the call log` : ""}`}
+            </Status>
+            <span className="caption-style text-subtle">{subscriptionLine(transcripts)}</span>
+            {transcripts.lastError && (
+              <span role="alert" className="caption-style text-danger leading-[1.4]">
+                {transcripts.lastError}
+              </span>
+            )}
+            <Actions>
+              <SyncButton action={syncTranscriptsAction} label="Sync transcripts" />
+            </Actions>
+          </div>
         )}
         <SettingsDisclosure
           title="Permissions for calls and transcripts"
@@ -159,7 +314,6 @@ export default function IntegrationsSettings({
             To log Teams calls and their transcripts, add the
             CallRecords.Read.All and CallTranscripts.Read.All application
             permissions to Orbit&apos;s Microsoft Entra app, with admin consent.
-            Sync calls and transcripts from Capture.
           </p>
         </SettingsDisclosure>
       </SettingsCard>
@@ -168,13 +322,6 @@ export default function IntegrationsSettings({
         id="granola"
         title="Granola"
         description="Granola meeting notes and transcripts are filed onto the people who were in the meeting."
-        action={
-          granola.configured ? (
-            <Button variant="secondary" size="sm" href="/capture">
-              Sync in Capture
-            </Button>
-          ) : undefined
-        }
       >
         {granola.configured && (
           <div className="flex flex-col gap-1.5">
@@ -182,10 +329,14 @@ export default function IntegrationsSettings({
               {`${syncedLine(granola.lastSyncedAt)}${granola.webhookEnabled ? " · Instant sync on" : " · Checked every 10 minutes"}`}
             </Status>
             {granola.lastError && (
-              <span className="caption-style text-danger leading-[1.4]">
+              <span role="alert" className="caption-style text-danger leading-[1.4]">
                 {granola.lastError}
               </span>
             )}
+            <Actions>
+              <SyncButton action={syncGranolaAction} label="Sync now" />
+              {!granola.webhookEnabled && canAdmin && <SyncButton action={enableGranolaWebhookAction} label="Turn on instant sync" variant="ghost" />}
+            </Actions>
           </div>
         )}
         <GranolaKey connected={granola.personal.connected} hint={granola.personal.hint} />

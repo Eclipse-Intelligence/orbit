@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { SETTINGS_PATHS } from "@/lib/settings-nav";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { SESSION_COOKIE, supabaseConfigured } from "@/lib/auth/config";
@@ -179,7 +180,6 @@ export async function setRelationshipAction(
     await setRelationshipOverride(user, target, id, { label }, { operation: "set_relationship", source: "web" });
     revalidatePath("/");
     revalidatePath("/contacts");
-    revalidatePath("/quiet");
     revalidateRecordPages();
     return {};
   } catch (error) {
@@ -210,7 +210,7 @@ export async function mergeCompanyAction(keepId: string, mergeId: string): Promi
     revalidatePath("/contacts");
     revalidatePath("/opportunities");
     revalidatePath("/boards", "layout");
-    revalidatePath("/activities");
+    revalidatePath(SETTINGS_PATHS.activity);
     revalidatePath(TASKS_PATH);
     return { keptId: result.kept.id };
   } catch (error) {

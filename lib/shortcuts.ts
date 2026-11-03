@@ -48,8 +48,6 @@ const NAV: [string, string, string, string?][] = [
   ["t", "Tasks", "/tasks", "to do"],
   ["i", "Capture", "/capture", "inbox filing mailbox connect calls"],
   ["l", "Calendar", "/calendar", "meetings events"],
-  ["a", "Activities", "/activities", "timeline notes"],
-  ["q", "Quiet", "/quiet", "stale relationships"],
   ["s", "Settings", "/settings", "preferences"],
 ];
 
@@ -59,6 +57,7 @@ const SETTINGS_SECTIONS: [string, string, string][] = [
   ["Calendars", "/settings/calendars", "outlook ics gmail accounts allow sending"],
   ["Booking page", "/settings/booking-page", "booking scheduling"],
   ["Integrations", "/settings/integrations", "clickup granola microsoft"],
+  ["Activity log", "/settings/activity", "activities audit timeline notes calls who did what"],
   ["Pipeline", "/settings/pipeline", "stages"],
   ["Tags and lifecycles", "/settings/tags", "labels lifecycles"],
   ["API and webhooks", "/settings/api", "tokens webhooks"],
@@ -186,7 +185,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: "docs-focus", label: "Focus mode", group: "Docs", combos: [{ key: "Enter", mod: true, shift: true }], whileTyping: true, keywords: "full screen write" },
   { id: "docs-panel", label: "Show or hide backlinks", group: "Docs", combos: [{ key: "\\", mod: true }], whileTyping: true, keywords: "panel links details" },
 
-  { id: "inbox-sync", label: "Sync Capture", group: "Capture", combos: [{ key: "s" }], target: "sync", palette: true },
+  { id: "inbox-sync", label: "Sync Microsoft mail", group: "Capture", combos: [{ key: "s" }], target: "sync", palette: true },
   { id: "inbox-file", label: "File the conversation to…", group: "Capture", combos: [{ key: "f" }], rowKey: "f" },
   { id: "inbox-add", label: "Add as a contact", group: "Capture", combos: [{ key: "a" }], rowKey: "a" },
   { id: "inbox-ignore", label: "Ignore the conversation", group: "Capture", combos: [{ key: "i" }], rowKey: "i" },

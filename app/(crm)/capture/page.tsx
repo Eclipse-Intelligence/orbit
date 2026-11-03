@@ -1,63 +1,49 @@
-import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import InboxScreen from "@/components/crm/inbox-screen";
+import { after } from "next/server";
+import CaptureScreen from "@/components/crm/inbox-screen";
 import { getUserActor } from "@/lib/auth/user";
-import { getCalendarStatus, listPeopleMet } from "@/lib/crm/calendar";
+import { getCalendarStatus } from "@/lib/crm/calendar";
 import { getCallSync } from "@/lib/crm/calls";
-import { listUnfiledImports } from "@/lib/crm/conversations";
+import { connectionAlert, listToFile, markCaptureSeen, newestArrival } from "@/lib/crm/capture";
 import { getGranolaStatus } from "@/lib/crm/granola";
-import { getMailbox, listInbox, shouldSyncMailbox, syncMailbox } from "@/lib/crm/inbox";
+import { getMailbox, shouldSyncMailbox, syncMailbox } from "@/lib/crm/inbox";
 import { getTeamsTranscriptStatus } from "@/lib/crm/teams-transcripts";
-import { mailSyncStatus } from "@/lib/mail/store";
-import { latestBrief } from "@/lib/learning/nightly";
-import { microsoftConfigured, microsoftRedirectUri } from "@/lib/microsoft/oauth";
+import { microsoftConfigured } from "@/lib/microsoft/oauth";
 
 export const dynamic = "force-dynamic";
 
 function requestTime() {
-  return Date.now();
+  return new Date();
 }
 
-export default async function CapturePage({
-  searchParams,
-}: {
-  searchParams: Promise<Record<string, string | string[] | undefined>>;
-}) {
+export default async function CapturePage() {
   const user = await getUserActor();
   if (!user) redirect("/login");
-  const resolved = await searchParams;
-  const notice = typeof resolved.error === "string" ? resolved.error : null;
-  const info = typeof resolved.info === "string" ? resolved.info : null;
-  const connected = resolved.connected === "1";
+  const openedAt = requestTime();
 
   let mailbox = await getMailbox(user);
-  if (
-    microsoftConfigured() &&
-    mailbox?.status === "connected" &&
-    shouldSyncMailbox(mailbox.lastAttemptAt) &&
-    !notice
-  ) {
+  if (microsoftConfigured() && mailbox?.status === "connected" && shouldSyncMailbox(mailbox.lastAttemptAt)) {
     await syncMailbox(user);
     mailbox = await getMailbox(user);
   }
   const live = mailbox?.status === "connected";
-  const [messages, calls, unfiled, granola, transcripts, calendar, people, mirror, brief] = await Promise.all([
-    mailbox ? listInbox(user) : Promise.resolve([]),
+  const [items, calls, granola, transcripts, calendar] = await Promise.all([
+    listToFile(user, openedAt.getTime()),
     mailbox ? getCallSync(user) : Promise.resolve(null),
-    listUnfiledImports(user),
     getGranolaStatus(user),
     live ? getTeamsTranscriptStatus(user) : Promise.resolve(null),
     live ? getCalendarStatus(user) : Promise.resolve(null),
-    mailbox ? listPeopleMet(user) : Promise.resolve([]),
-    mailSyncStatus(user),
-    latestBrief(user).catch(() => null),
   ]);
-  const headerStore = await headers();
-  const host = headerStore.get("x-forwarded-host") ?? headerStore.get("host") ?? "localhost:4173";
-  const proto = headerStore.get("x-forwarded-proto") ?? "http";
+  after(async () => {
+    try {
+      await markCaptureSeen(user, openedAt);
+    } catch (error) {
+      console.error("Could not mark Capture as seen", error);
+    }
+  });
 
   return (
-    <InboxScreen
+    <CaptureScreen
       viewer={{
         id: user.userId,
         name: user.fullName || user.email,
@@ -65,22 +51,10 @@ export default async function CapturePage({
         role: user.role,
         workspaceName: user.workspaceName,
       }}
-      configured={microsoftConfigured()}
-      redirectUri={microsoftRedirectUri(`${proto}://${host}`)}
-      mailbox={mailbox}
-      messages={messages}
-      calls={calls}
-      unfiled={unfiled}
-      granola={granola}
-      transcripts={transcripts}
-      calendar={calendar}
-      people={people}
-      mirror={mirror}
-      brief={brief}
-      notice={notice}
-      info={info}
-      connected={connected}
-      now={requestTime()}
+      unfiled={items.unfiled}
+      people={items.people}
+      newestAt={newestArrival(items)}
+      alert={connectionAlert({ mailbox, calendar, calls, granola, transcripts })}
     />
   );
 }

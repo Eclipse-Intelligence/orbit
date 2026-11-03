@@ -137,6 +137,7 @@ export type CompanyListQuery = {
   order?: "asc" | "desc";
   has?: CompanyPresence[];
   missing?: CompanyPresence[];
+  quiet?: boolean;
   limit?: number;
   offset?: number;
   relationships?: boolean;
@@ -354,6 +355,9 @@ export type ActivityListQuery = {
   contactId?: string;
   opportunityId?: string;
   type?: ActivityType;
+  actorUserId?: string;
+  from?: string;
+  to?: string;
   limit?: number;
   offset?: number;
 };
@@ -433,6 +437,8 @@ export type LeadResult = {
 };
 
 export type RelationshipStatus = "new" | "active" | "quiet" | "needs_action";
+
+export const QUIET_DAYS = 21;
 
 export const CALL_INSIGHT_SOURCES = ["teams", "manual", "granola"] as const;
 export type CallInsightSource = (typeof CALL_INSIGHT_SOURCES)[number];

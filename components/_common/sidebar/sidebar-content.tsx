@@ -10,7 +10,8 @@ import SidebarNavItem from "./sidebar-nav-item";
 import SidebarSection from "./sidebar-section";
 import SidebarShortcuts from "./sidebar-shortcuts";
 import { CollapseSidebarButton } from "./sidebar-toggle";
-import { useCompaniesStore } from "@/stores/companies-store";
+import { captureHasNew, useCompaniesStore } from "@/stores/companies-store";
+import type { CaptureStatus } from "@/lib/crm/capture";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import type { BoardSummary } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
@@ -19,13 +20,11 @@ import Logo from "@/public/assets/images/_common/logo.svg";
 import BuildingIcon from "@/public/assets/images/companies/sidebar/building.svg";
 import ClipboardIcon from "@/public/assets/images/companies/sidebar/clipboard.svg";
 import FileSignatureIcon from "@/public/assets/images/companies/sidebar/file-signature.svg";
-import ListIcon from "@/public/assets/images/companies/sidebar/list.svg";
 import BookClosedIcon from "@/public/assets/images/companies/sidebar/book-closed.svg";
 import MailIcon from "@/public/assets/images/companies/sidebar/mail.svg";
 import InboxIcon from "@/public/assets/images/mail/inbox.svg";
 import CalendarIcon from "@/public/assets/images/companies/sidebar/calendar.svg";
 import TargetIcon from "@/public/assets/images/companies/sidebar/target-05.svg";
-import AlertIcon from "@/public/assets/images/companies/sidebar/alert-triangle.svg";
 import ZapIcon from "@/public/assets/images/companies/sidebar/zap.svg";
 import MessageIcon from "@/public/assets/images/companies/sidebar/message-question.svg";
 
@@ -35,6 +34,7 @@ type SidebarContentProps = {
   companyCount: number;
   openActionCount: number;
   mailUnread: number;
+  capture: CaptureStatus | null;
   workspaceName: string;
 };
 
@@ -44,12 +44,16 @@ export default function SidebarContent({
   companyCount,
   openActionCount,
   mailUnread,
+  capture,
   workspaceName,
 }: SidebarContentProps) {
   const pathname = usePathname();
   const openProfile = useCompaniesStore((state) => state.openProfile);
   const liveMailUnread = useCompaniesStore((state) => state.mailUnread);
   const unreadMail = liveMailUnread ?? mailUnread;
+  const liveCapture = useCompaniesStore((state) => state.capture);
+  const captureSeen = useCompaniesStore((state) => state.captureSeen);
+  const toFile = liveCapture ?? capture;
   const [boardsOpen, setBoardsOpen] = useState(true);
   const current = (href: string) =>
     href === "/"
@@ -98,6 +102,11 @@ export default function SidebarContent({
               href="/capture"
               icon={MailIcon}
               label="Capture"
+              count={toFile && toFile.waiting > 0 ? toFile.waiting : undefined}
+              countLabel="waiting to file"
+              accent
+              dot={!current("/capture") && captureHasNew(toFile, captureSeen)}
+              dotLabel="New since you last looked"
               active={current("/capture")}
             />
             <SidebarNavItem
@@ -135,12 +144,6 @@ export default function SidebarContent({
               active={current("/proposals")}
             />
             <SidebarNavItem
-              href="/activities"
-              icon={ListIcon}
-              label="Activities"
-              active={current("/activities")}
-            />
-            <SidebarNavItem
               href={TASKS_PATH}
               icon={TargetIcon}
               label="Tasks"
@@ -153,12 +156,6 @@ export default function SidebarContent({
               label="Workflows"
               count={approvals > 0 ? approvals : undefined}
               active={current("/workflows")}
-            />
-            <SidebarNavItem
-              href="/quiet"
-              icon={AlertIcon}
-              label="Quiet"
-              active={current("/quiet")}
             />
           </SidebarSection>
           <SidebarDocs />

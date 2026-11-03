@@ -12,7 +12,7 @@ import { createContactFromEvent, setCalendarForCrm, setCalendarVisible } from "@
 import { cancelInvite, createInvite, rescheduleInvite, respondToInvite, type InviteInput } from "@/lib/crm/invites";
 import type { UserActor } from "@/lib/crm/types";
 import { revalidateRecordPages } from "@/lib/revalidate";
-import { SETTINGS_ROOT } from "@/lib/settings-nav";
+import { SETTINGS_PATHS, SETTINGS_ROOT } from "@/lib/settings-nav";
 
 type CalendarActionState = { error?: string; ok?: boolean; message?: string };
 
@@ -132,7 +132,7 @@ type InviteActionState = CalendarActionState & {
 function refreshInvites() {
   refreshCalendar();
   revalidatePath("/");
-  revalidatePath("/activities");
+  revalidatePath(SETTINGS_PATHS.activity);
   revalidateRecordPages();
 }
 

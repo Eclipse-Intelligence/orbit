@@ -7,7 +7,7 @@ import { CrmError } from "@/lib/crm/errors";
 import { issueMarketAgentToken } from "@/lib/learning/grok";
 import { addWatchItems, deleteMarketNote, removeWatchItems } from "@/lib/learning/market";
 import { forgetMemory, rememberNote, updateMemory } from "@/lib/learning/memories";
-import { dismissBrief, learnNow } from "@/lib/learning/nightly";
+import { learnNow } from "@/lib/learning/nightly";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
 
 async function requireUser() {
@@ -61,15 +61,4 @@ export async function connectGrokAction() {
 
 export async function learnNowAction() {
   return act("Learning didn't finish. It will run again tonight.", (user) => learnNow(user, { deadline: Date.now() + 270_000 }));
-}
-
-export async function dismissBriefAction(id: string): Promise<{ error?: string }> {
-  const user = await requireUser();
-  try {
-    await dismissBrief(user, id);
-    revalidatePath("/capture");
-    return {};
-  } catch (error) {
-    return failure(error, "Could not dismiss the brief.");
-  }
 }

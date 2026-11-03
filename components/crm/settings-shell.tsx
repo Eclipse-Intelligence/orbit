@@ -20,6 +20,7 @@ import CodeIcon from "@/public/assets/images/settings/code.svg";
 import FileTextIcon from "@/public/assets/images/settings/file-text.svg";
 import LightbulbIcon from "@/public/assets/images/settings/lightbulb.svg";
 import LinkIcon from "@/public/assets/images/settings/link.svg";
+import ListIcon from "@/public/assets/images/companies/sidebar/list.svg";
 import PlugIcon from "@/public/assets/images/settings/plug.svg";
 import SlidersIcon from "@/public/assets/images/settings/sliders.svg";
 import TagIcon from "@/public/assets/images/settings/tag.svg";
@@ -51,6 +52,7 @@ const GROUPS: { label: string; items: NavItem[] }[] = [
     label: "Workspace",
     items: [
       { href: SETTINGS_PATHS.team, label: "Team", icon: UsersIcon },
+      { href: SETTINGS_PATHS.activity, label: "Activity log", icon: ListIcon },
       { href: SETTINGS_PATHS.pipeline, label: "Pipeline", icon: BarChartIcon },
       { href: SETTINGS_PATHS.tags, label: "Tags and lifecycles", icon: TagIcon },
       { href: SETTINGS_PATHS.emailTemplates, label: "Templates and signatures", icon: FileTextIcon },

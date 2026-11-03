@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { SETTINGS_PATHS } from "@/lib/settings-nav";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { after } from "next/server";
@@ -40,46 +41,39 @@ async function requireUser() {
 
 function refreshRecords() {
   revalidatePath("/capture");
+  revalidatePath(SETTINGS_PATHS.integrations);
   revalidatePath("/");
   revalidateRecordPages();
-  revalidatePath("/activities");
+  revalidatePath(SETTINGS_PATHS.activity);
   revalidatePath("/contacts");
 }
 
-function inboxWith(key: "error" | "info", message: string): never {
-  redirect(`/capture?${key}=${encodeURIComponent(message)}`);
+function integrationsWith(key: "error" | "info", message: string): never {
+  redirect(`${SETTINGS_PATHS.integrations}?${key}=${encodeURIComponent(message)}`);
 }
 
 export async function syncInboxAction() {
   const user = await requireUser();
   const result = await syncMailbox(user);
-  revalidatePath("/capture");
-  revalidatePath("/");
-  revalidateRecordPages();
-  if (result.error)
-    redirect(`/capture?error=${encodeURIComponent(result.error)}`);
-  redirect("/capture");
+  refreshRecords();
+  if (result.error) integrationsWith("error", result.error);
+  redirect(SETTINGS_PATHS.integrations);
 }
 
 export async function syncCallsAction() {
   const user = await requireUser();
   const result = await syncCalls(user, { force: true });
-  revalidatePath("/capture");
-  revalidatePath("/");
-  revalidateRecordPages();
-  revalidatePath("/activities");
-  revalidatePath("/contacts");
-  if (result.error)
-    redirect(`/capture?error=${encodeURIComponent(result.error)}`);
-  redirect("/capture");
+  refreshRecords();
+  if (result.error) integrationsWith("error", result.error);
+  redirect(SETTINGS_PATHS.integrations);
 }
 
 export async function syncCalendarAction() {
   const user = await requireUser();
   const result = await syncCalendar(user, { force: true });
   refreshRecords();
-  if (result.error) inboxWith("error", result.error);
-  redirect("/capture");
+  if (result.error) integrationsWith("error", result.error);
+  redirect(SETTINGS_PATHS.integrations);
 }
 
 export async function syncGranolaAction() {
@@ -91,8 +85,8 @@ export async function syncGranolaAction() {
     error = actionError(failure).error;
   }
   refreshRecords();
-  if (error) inboxWith("error", error);
-  redirect("/capture");
+  if (error) integrationsWith("error", error);
+  redirect(SETTINGS_PATHS.integrations);
 }
 
 export async function enableGranolaWebhookAction() {
@@ -104,10 +98,10 @@ export async function enableGranolaWebhookAction() {
   try {
     message = (await enableGranolaWebhook(user, `${proto}://${host}`)).message;
   } catch (failure) {
-    inboxWith("error", actionError(failure).error);
+    integrationsWith("error", actionError(failure).error);
   }
-  revalidatePath("/capture");
-  inboxWith("info", message);
+  revalidatePath(SETTINGS_PATHS.integrations);
+  integrationsWith("info", message);
 }
 
 export async function syncTranscriptsAction() {
@@ -116,8 +110,8 @@ export async function syncTranscriptsAction() {
   const subscription = await ensureTranscriptSubscription(user);
   refreshRecords();
   const error = result.error ?? subscription.error;
-  if (error) inboxWith("error", error);
-  redirect("/capture");
+  if (error) integrationsWith("error", error);
+  redirect(SETTINGS_PATHS.integrations);
 }
 
 type ConversationActionState = { error?: string; ok?: boolean };
@@ -273,7 +267,7 @@ export async function sendContactEmailAction(
   revalidatePath("/");
   revalidateRecordPages();
   revalidatePath("/capture");
-  revalidatePath("/activities");
+  revalidatePath(SETTINGS_PATHS.activity);
   return { ok: true as const, warning };
 }
 
@@ -281,5 +275,6 @@ export async function disconnectInboxAction() {
   const user = await requireUser();
   await disconnectMailbox(user);
   revalidatePath("/capture");
-  redirect("/capture");
+  revalidatePath(SETTINGS_PATHS.integrations);
+  redirect(SETTINGS_PATHS.integrations);
 }

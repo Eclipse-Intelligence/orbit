@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { SETTINGS_PATHS } from "@/lib/settings-nav";
 import { redirect } from "next/navigation";
 import { getUserActor } from "@/lib/auth/user";
 import { actionError } from "@/lib/companies";
@@ -31,7 +32,7 @@ function refresh() {
   revalidatePath("/");
   revalidateRecordPages();
   revalidatePath("/contacts");
-  revalidatePath("/activities");
+  revalidatePath(SETTINGS_PATHS.activity);
   revalidatePath(TASKS_PATH);
 }
 

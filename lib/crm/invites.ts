@@ -50,7 +50,7 @@ import {
 } from "@/lib/microsoft/oauth";
 import { appTimeZone, dateTimeInputValue, parseDateTime, zoneLabel } from "@/lib/time";
 
-export const INVITE_NOT_CONNECTED = "Connect Microsoft in Capture to send invites.";
+export const INVITE_NOT_CONNECTED = "Connect Microsoft in Settings › Integrations to send invites.";
 export const INVITE_RECONNECT = CALENDAR_WRITE_RECONNECT;
 const LOCAL_START = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
 const MIN_DURATION = 5;
@@ -771,7 +771,7 @@ async function organisedEvent(
   if (row.connection_id !== stored.id) {
     throw new CrmError(
       "invalid_input",
-      `Orbit can only ${verb} meetings in the calendar of the mailbox connected in Capture.`,
+      `Orbit can only ${verb} meetings in the calendar of the mailbox connected in Settings › Integrations.`,
       400,
     );
   }
@@ -993,7 +993,7 @@ export async function rescheduleInvite(
   }
 }
 
-export const RESPOND_NOT_CONNECTED = "Connect Microsoft in Capture to answer invites.";
+export const RESPOND_NOT_CONNECTED = "Connect Microsoft in Settings › Integrations to answer invites.";
 
 export const MEETING_RESPONSES = ["accept", "tentative", "decline"] as const;
 
@@ -1078,7 +1078,7 @@ async function invitedEvent(actor: UserActor, eventId: string, now: number) {
   if (row.connection_id !== stored.id) {
     throw new CrmError(
       "invalid_input",
-      "Orbit can only answer invites in the calendar of the mailbox connected in Capture.",
+      "Orbit can only answer invites in the calendar of the mailbox connected in Settings › Integrations.",
       400,
     );
   }

@@ -144,7 +144,7 @@ async function recordMoves(db: Db, sourceId: string, moved: { id: string; folder
 
 function failureMessage(error: unknown) {
   if (error instanceof GraphMailError) {
-    if (error.status === 401 || error.status === 403) return "Microsoft didn't allow that change. Connect the account again in Capture.";
+    if (error.status === 401 || error.status === 403) return "Microsoft didn't allow that change. Connect the account again in Settings › Integrations.";
     if (error.status === 404) return "Outlook no longer has that email. It will disappear after the next sync.";
     return error.message;
   }

@@ -355,7 +355,12 @@ async function writeBrief(actor: UserActor, since: Date, options: Options & { da
   await withActor(actor, (db) =>
     db.query(
       `insert into crm.daily_briefs (workspace_id, user_id, day, body) values ($1, $2, $3, $4)
-       on conflict (user_id, day) do update set body = excluded.body, dismissed_at = null, created_at = now()`,
+       on conflict (user_id, day) do update set
+         body = excluded.body,
+         dismissed_at = null,
+         created_at = now(),
+         read_at = case when crm.daily_briefs.body = excluded.body then crm.daily_briefs.read_at else null end,
+         conversation_id = case when crm.daily_briefs.body = excluded.body then crm.daily_briefs.conversation_id else null end`,
       [actor.workspaceId, actor.userId, options.day, body],
     ),
   );
@@ -613,17 +618,26 @@ export async function latestBrief(actor: UserActor, now = new Date()): Promise<B
   return withActor(actor, async (db) => {
     const result = await db.query<{ id: string; day: string; body: string; created_at: Date }>(
       `select id, day::text, body, created_at from crm.daily_briefs where user_id = $1 and dismissed_at is null and created_at > $2 order by day desc limit 1`,
-      [actor.userId, new Date(now.getTime() - 36 * 3_600_000)],
+      [actor.userId, new Date(now.getTime() - BRIEF_FRESH_MS)],
     );
     const row = result.rows[0];
     return row ? { id: row.id, day: row.day, body: row.body, createdAt: row.created_at.toISOString() } : null;
   });
 }
 
-export async function dismissBrief(actor: UserActor, id: string) {
+export type UnreadBrief = { id: string; day: string };
+
+export const BRIEF_FRESH_MS = 36 * 3_600_000;
+
+export async function unreadBrief(actor: UserActor, now = new Date()): Promise<UnreadBrief | null> {
   return withActor(actor, async (db) => {
-    const result = await db.query("update crm.daily_briefs set dismissed_at = now() where id = $1 and user_id = $2", [id, actor.userId]);
-    if (!result.rowCount) throw new CrmError("not_found", "That brief doesn't exist.", 404);
+    const result = await db.query<{ id: string; day: string }>(
+      `select id, day::text from crm.daily_briefs
+       where user_id = $1 and workspace_id = $2 and dismissed_at is null and read_at is null and created_at > $3
+       order by day desc limit 1`,
+      [actor.userId, actor.workspaceId, new Date(now.getTime() - BRIEF_FRESH_MS)],
+    );
+    return result.rows[0] ?? null;
   });
 }
 
