@@ -137,7 +137,8 @@ describe("mail home", () => {
 
   it("reads views and cursors from the URL", () => {
     assert.deepEqual(readMailView("sent"), { role: "sent" });
-    assert.deepEqual(readMailView("junk"), { role: "inbox" });
+    assert.deepEqual(readMailView("junk"), { role: "junk" });
+    assert.deepEqual(readMailView("spam"), { role: "inbox" });
     assert.deepEqual(readMailView("folder:abc"), { folderId: "abc" });
     assert.deepEqual(readThreadCursor("2026-10-01T00:00:00.000Z~a|b"), { at: "2026-10-01T00:00:00.000Z", key: "a|b" });
     assert.equal(readThreadCursor("nonsense"), null);

@@ -14,8 +14,8 @@ export type MailAction = (typeof MAIL_ACTIONS)[number];
 
 const MOVES: Partial<Record<MailAction, { destination: string; role: MailRole; anywhere: MailRole[] }>> = {
   archive: { destination: "archive", role: "archive", anywhere: ["inbox", "other"] },
-  trash: { destination: "deleteditems", role: "trash", anywhere: ["inbox", "other", "sent", "archive", "drafts"] },
-  inbox: { destination: "inbox", role: "inbox", anywhere: ["archive", "trash", "snoozed"] },
+  trash: { destination: "deleteditems", role: "trash", anywhere: ["inbox", "other", "sent", "archive", "drafts", "junk"] },
+  inbox: { destination: "inbox", role: "inbox", anywhere: ["archive", "trash", "snoozed", "junk"] },
   snooze: { destination: "snoozed", role: "snoozed", anywhere: ["inbox", "other"] },
 };
 
@@ -169,7 +169,12 @@ export async function applyMailAction(
          coalesce(m.received_at, m.sent_at, m.created_at) as at
        from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
        where m.user_id = $1 and m.source_id = $2 and coalesce(m.thread_key, 'm:' || m.id::text) = $3
-         and f.role not in ('junk', 'outbox')
+         and f.role <> 'outbox'
+         and (f.role <> 'junk' or not exists (
+           select 1 from crm.mail_messages o join crm.mail_folders ofo on ofo.id = o.folder_id
+           where o.user_id = m.user_id and o.source_id = m.source_id and coalesce(o.thread_key, 'm:' || o.id::text) = $3
+             and ofo.role not in ('junk', 'outbox')
+         ))
        order by at asc, m.id asc
        limit $4`,
       [actor.userId, sourceId, key, MESSAGE_LIMIT],

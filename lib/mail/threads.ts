@@ -291,7 +291,12 @@ async function readThread(actor: UserActor, key: string): Promise<ThreadDetail> 
        from crm.mail_messages m
        join crm.mail_folders f on f.id = m.folder_id
        join crm.mail_sources src on src.id = m.source_id
-       where m.user_id = $1 and m.source_id = $2 and ${THREAD_KEY} = $3 and f.role not in ('junk', 'outbox')
+       where m.user_id = $1 and m.source_id = $2 and ${THREAD_KEY} = $3 and f.role <> 'outbox'
+         and (f.role <> 'junk' or not exists (
+           select 1 from crm.mail_messages o join crm.mail_folders ofo on ofo.id = o.folder_id
+           where o.user_id = m.user_id and o.source_id = m.source_id and coalesce(o.thread_key, 'm:' || o.id::text) = $3
+             and ofo.role not in ('junk', 'outbox')
+         ))
        order by at asc, m.id asc
        limit 200`,
       [actor.userId, sourceId, tk],

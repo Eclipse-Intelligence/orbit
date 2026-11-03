@@ -117,7 +117,7 @@ describe("mail mirror", () => {
     assert.deepEqual(report.errors, []);
     assert.equal(report.stored, 4);
     assert.ok(first.calls.some((url) => url.includes("$orderby=receivedDateTime%20desc")));
-    assert.ok(!first.calls.some((url) => url.includes("f-junk/messages")));
+    assert.ok(first.calls.some((url) => url.includes("f-junk/messages")));
 
     const status = await mailSyncStatus(owner);
     assert.equal(status.length, 1);
@@ -128,6 +128,7 @@ describe("mail mirror", () => {
         ["Acme", "other", "live", 0],
         ["Clients", "other", "live", 0],
         ["Inbox", "inbox", "live", 3],
+        ["Junk Email", "junk", "live", 0],
         ["Sent Items", "sent", "live", 1],
       ],
     );

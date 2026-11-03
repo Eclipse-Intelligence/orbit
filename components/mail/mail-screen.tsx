@@ -74,6 +74,7 @@ const MORE_VIEWS = [
   { id: "drafts", label: "Drafts" },
   { id: "archive", label: "Archive" },
   { id: "trash", label: "Trash" },
+  { id: "junk", label: "Junk" },
 ] as const;
 
 function inInbox(view: string) {
@@ -687,7 +688,7 @@ export default function MailScreen({
   }
 
   function primaryMove() {
-    if ((query.view === "archive" || query.view === "snoozed") && !query.query) return "inbox" as const;
+    if ((query.view === "archive" || query.view === "snoozed" || query.view === "junk") && !query.query) return "inbox" as const;
     return "archive" as const;
   }
 

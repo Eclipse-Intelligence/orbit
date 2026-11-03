@@ -733,7 +733,7 @@ export default function ThreadReader({
   const account = detail?.account ?? summary?.account ?? "";
   const unread = summary ? summary.unread : Boolean(detail?.messages.some((message) => !message.isRead));
   const flagged = summary ? summary.flagged : Boolean(detail?.messages.some((message) => message.isFlagged));
-  const restorable = view === "archive" || view === "trash" || view === "snoozed";
+  const restorable = view === "archive" || view === "trash" || view === "snoozed" || view === "junk";
   const ownSet = new Set(own.map((item) => item.toLowerCase()));
   const tracked = detail?.messages.filter((message) => message.opens !== null).at(-1) ?? null;
   const sender =
