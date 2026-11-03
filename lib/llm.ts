@@ -153,7 +153,7 @@ async function attempt<T>(
   const choice = body.choices?.[0];
   const text = messageText(choice?.message?.content);
   if (choice?.finish_reason === "length") {
-    throw new LlmError("The model reply was cut off before it finished.", true);
+    throw new LlmError("The model reply was cut off before it finished.", false);
   }
   if (!text.trim()) throw new LlmError("The model returned an empty reply.", true);
   const parsed = request.schema.safeParse(extractJson(text));
