@@ -28,8 +28,8 @@ import type { MicrosoftToken } from "@/lib/microsoft/oauth";
 
 const FOLDER_REFRESH_MS = 6 * 60 * 60 * 1000;
 const LOCK_SECONDS = 300;
-const SKIPPED_ROLES: MailRole[] = ["junk", "outbox"];
-const ROLE_ORDER: MailRole[] = ["inbox", "sent", "drafts", "snoozed", "archive", "other", "trash"];
+const SKIPPED_ROLES: MailRole[] = ["outbox"];
+const ROLE_ORDER: MailRole[] = ["inbox", "sent", "drafts", "snoozed", "archive", "other", "trash", "junk"];
 const DEFAULT_STORAGE_LIMIT_MB = 400;
 
 type SourceRow = {
