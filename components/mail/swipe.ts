@@ -54,7 +54,7 @@ export function lockAxis(dx: number, dy: number): "x" | "y" | null {
   return Math.abs(dx) >= Math.abs(dy) * LOCK_RATIO ? "x" : "y";
 }
 
-function glide(element: HTMLElement, speed: number) {
+export function glide(element: HTMLElement, speed: number) {
   let velocity = speed * 16;
   const step = () => {
     if (Math.abs(velocity) < 0.5) return;
