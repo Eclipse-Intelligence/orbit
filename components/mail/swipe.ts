@@ -78,7 +78,8 @@ export function watchSwipe(target: Document | HTMLElement, handlers: () => Swipe
   }
 
   function down(event: TouchEvent) {
-    if (event.touches.length !== 1 || (window.visualViewport?.scale ?? 1) > 1.01) {
+    const root = "documentElement" in target ? target.documentElement : target;
+    if (event.touches.length !== 1 || root.dataset.orbitZoomed === "true") {
       if (gesture?.lock === "x") release(null, 0);
       gesture = null;
       return;

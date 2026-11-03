@@ -902,7 +902,7 @@ export default function MailScreen({
   }
 
   return (
-    <section className="flex min-h-0 min-w-0 flex-1 touch-manipulation flex-col overscroll-x-none">
+    <section className="flex min-h-0 min-w-0 flex-1 touch-pan-y flex-col overscroll-x-none">
       <MailOverscroll />
       <SectionHeader
         title="Mail"
