@@ -744,7 +744,7 @@ export default function ThreadReader({
     <div
       ref={surface}
       className={cn(
-        "relative flex min-h-0 flex-1 touch-pan-y flex-col will-change-transform",
+        "relative flex min-h-0 flex-1 touch-manipulation flex-col will-change-transform",
         entered && "animate-in fade-in slide-in-from-right-12 ease-power3-out duration-200",
       )}
     >
@@ -819,7 +819,7 @@ export default function ThreadReader({
       </div>
       {previous && <ThreadPeek thread={previous} own={own} side="previous" />}
       {next && <ThreadPeek thread={next} own={own} side="next" />}
-      <div ref={scroller} className="min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-x-none">
+      <div ref={scroller} className="min-h-0 flex-1 touch-manipulation overflow-y-auto overscroll-x-none">
         <div className="mx-auto flex w-full max-w-[52em] flex-col gap-4 px-3 pt-3 pb-32 sm:px-6">
           <h2 className="px-4 text-pretty">{subject?.trim() || "(no subject)"}</h2>
           {detail?.subscription && <SenderNotice subscription={detail.subscription} onUnsubscribe={onUnsubscribe} onBlock={onBlock} />}
