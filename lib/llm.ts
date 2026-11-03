@@ -4,6 +4,7 @@ const DEFAULT_BASE_URL = "https://api.llmapi.ai/v1";
 const DEFAULT_MODEL = "claude-haiku-5-5";
 const TIMEOUT_MS = 25_000;
 const MAX_ATTEMPTS = 2;
+const MIN_REPLY_TOKENS = 4000;
 const DEADLINE_MARGIN_MS = 2_000;
 const MIN_ATTEMPT_MS = 5_000;
 
@@ -117,7 +118,7 @@ async function attempt<T>(
       },
       body: JSON.stringify({
         model,
-        max_tokens: request.maxTokens ?? 4000,
+        max_tokens: Math.max(request.maxTokens ?? MIN_REPLY_TOKENS, MIN_REPLY_TOKENS),
         messages: [
           { role: "system", content: request.system },
           { role: "user", content: request.user },

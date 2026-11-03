@@ -16,8 +16,8 @@ import type { DraftMode } from "@/lib/mail/view";
 import { appTimeZone, zonedParts } from "@/lib/time";
 
 const THREAD_KEY = "coalesce(m.thread_key, 'm:' || m.id::text)";
-const MESSAGE_CHARS = 3_000;
-const THREAD_CHARS = 16_000;
+const MESSAGE_CHARS = 20_000;
+const THREAD_CHARS = 100_000;
 const SHORT_THREAD = 280;
 
 type ThreadText = { id: string; from: MailAddress | null; to: MailAddress[]; cc: MailAddress[]; at: string | null; text: string };
@@ -193,7 +193,7 @@ export async function voiceSamples(db: Db, actor: UserActor) {
     [actor.userId],
   );
   return result.rows
-    .map((row) => stripQuoted(row.body_text ?? "").slice(0, 700))
+    .map((row) => stripQuoted(row.body_text ?? "").slice(0, 2_000))
     .filter((text) => text.length > 40)
     .slice(0, 4);
 }
@@ -387,7 +387,7 @@ export async function askMail(
   const numbered = found
     .map(
       (row, index) =>
-        `[${index + 1}] From: ${row.from_name || row.from_email || "Unknown"} <${row.from_email ?? ""}>\nWhen: ${mailFullWhen(row.at ? new Date(row.at).toISOString() : null)}\nSubject: ${row.subject ?? "(no subject)"}\n${(row.body_text?.startsWith('Attachment "') ? row.body_text : stripQuoted(row.body_text ?? row.snippet ?? "")).slice(0, 1_500)}`,
+        `[${index + 1}] From: ${row.from_name || row.from_email || "Unknown"} <${row.from_email ?? ""}>\nWhen: ${mailFullWhen(row.at ? new Date(row.at).toISOString() : null)}\nSubject: ${row.subject ?? "(no subject)"}\n${(row.body_text?.startsWith('Attachment "') ? row.body_text : stripQuoted(row.body_text ?? row.snippet ?? "")).slice(0, 6_000)}`,
     )
     .join("\n\n---\n\n");
   const name = actor.fullName || actor.email;

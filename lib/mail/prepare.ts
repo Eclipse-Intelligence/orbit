@@ -125,7 +125,7 @@ async function callNotes(db: Db, actor: UserActor, addresses: string[]) {
     [actor.workspaceId, addresses],
   );
   return result.rows.map(
-    (row) => `${new Date(row.occurred_at).toISOString().slice(0, 10)} ${row.title ?? "Call"}: ${(row.body ?? "").slice(0, 1_200)}`,
+    (row) => `${new Date(row.occurred_at).toISOString().slice(0, 10)} ${row.title ?? "Call"}: ${(row.body ?? "").slice(0, 4_000)}`,
   );
 }
 
@@ -494,7 +494,7 @@ async function checkSentMail(actor: UserActor, days: number, deadline: number, f
       (item, index) =>
         `[${index + 1}] To: ${item.to_recipients.map((person) => person.name || person.address).join(", ")}\nSubject: ${item.subject ?? "(no subject)"}\n${
           item.replying ? "This is a reply in an existing conversation.\n" : ""
-        }${stripQuoted(item.body_text ?? item.snippet ?? "").slice(0, 1_200)}`,
+        }${stripQuoted(item.body_text ?? item.snippet ?? "").slice(0, 6_000)}`,
     )
     .join("\n\n---\n\n");
   const result = await completeJson({
