@@ -95,7 +95,7 @@ const publicOnlyLookup: LookupFunction = (hostname, options, callback) => {
 
 const publicOnly = new Agent({ connect: { lookup: publicOnlyLookup } });
 
-const publicFetch = ((input: string, init?: RequestInit) =>
+export const publicFetch = ((input: string, init?: RequestInit) =>
   agentFetch(input, { ...(init as object), dispatcher: publicOnly })) as unknown as typeof fetch;
 
 function privateCause(error: unknown): WebPageError | null {

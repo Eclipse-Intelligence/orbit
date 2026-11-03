@@ -26,7 +26,7 @@ export default async function EmailTemplateSettingsPage() {
     readStatusesOn(user),
     listIdentities(user).catch(() => []),
     composeAccounts(user).catch(() => []),
-    mailHelpSettings(user).catch(() => ({ prepareReplies: true, autoRemindDays: 3 })),
+    mailHelpSettings(user).catch(() => ({ prepareReplies: true, autoRemindDays: 3, coldPitches: "off" as const })),
   ]);
   const sources = accounts.filter((account) => !account.identityId).map((account) => ({ id: account.id, email: account.email }));
   const allSenders = [

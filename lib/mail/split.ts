@@ -4,12 +4,12 @@ import { canonicalEmail } from "@/lib/crm/normalize";
 import type { UserActor } from "@/lib/crm/types";
 import { MAIL_SPLITS, type MailSplit } from "@/lib/mail/view";
 
-const CALENDAR_SUBJECT =
+export const CALENDAR_SUBJECT =
   "^(accepted|declined|tentative|tentatively accepted|invitation|updated invitation|canceled|cancelled|new time proposed|meeting forward notification|invitation updated)\\M";
-const CALENDAR_SENDER = "^(calendar-notification|calendar|noreply-calendar|invites?)@";
-const AUTOMATED_SENDER =
+export const CALENDAR_SENDER = "^(calendar-notification|calendar|noreply-calendar|invites?)@";
+export const AUTOMATED_SENDER =
   "^(no-?reply|do-?not-?reply|donotreply|notifications?|notify|newsletters?|news|updates?|marketing|mailer|mailer-daemon|digest|alerts?|bounces?|automated|robot|billing|receipts?|invoices?|info|hello|team)([._+-][^@]*)?@";
-const AUTOMATED_DOMAIN = "@(e|em|email|mail|mailer|mg|news|newsletter|marketing|notifications?|alerts?|updates?|bounce|post)\\.";
+export const AUTOMATED_DOMAIN = "@(e|em|email|mail|mailer|mg|news|newsletter|marketing|notifications?|alerts?|updates?|bounce|post)\\.";
 
 export function splitJoin(alias: string, userParam: string) {
   return `left join lateral (
@@ -40,7 +40,7 @@ export function splitCase(alias: string, workspaceParam: string) {
   end`;
 }
 
-function senderKey(value: string) {
+export function senderKey(value: string) {
   const text = value.trim().toLowerCase();
   if (text.startsWith("@")) {
     const domain = text.slice(1);

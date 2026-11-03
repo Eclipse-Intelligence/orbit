@@ -66,6 +66,75 @@ export type ThreadPerson = {
   dealStage: string | null;
 };
 
+export type SubscriptionStatus = "subscribed" | "kept" | "unsubscribed" | "ignored" | "research" | "blocked";
+
+export const SUBSCRIPTION_LABELS: Record<SubscriptionStatus, string> = {
+  subscribed: "Subscribed",
+  kept: "Subscribed",
+  unsubscribed: "Unsubscribed",
+  ignored: "Ignored your unsubscribe",
+  research: "Research",
+  blocked: "Blocked",
+};
+
+export type ExistingMailChoice = "archive" | "trash" | "leave";
+
+export type UnsubscribeMethod = "one_click" | "mailto" | "page" | "none";
+
+export type UnsubscribeOutcome = "unsubscribed" | "requested" | "needs_you" | "failed" | "none";
+
+export const OUTCOME_LABELS: Record<UnsubscribeOutcome, string> = {
+  unsubscribed: "Unsubscribed",
+  requested: "Requested",
+  needs_you: "Needs you",
+  failed: "Didn't work",
+  none: "No unsubscribe link",
+};
+
+export type SenderProtection = { kind: "contact" | "company"; id: string; name: string; href: string; reason: string };
+
+export type ThreadSubscription = { sender: string; status: SubscriptionStatus; ignoredAt: string | null; unsubscribedAt: string | null; coldPitch: boolean };
+
+export type SubscriptionSender = {
+  sender: string;
+  name: string | null;
+  emails: number;
+  opened: number;
+  lastAt: string | null;
+  status: SubscriptionStatus;
+  unsubscribedAt: string | null;
+  method: UnsubscribeMethod | null;
+  ignoredAt: string | null;
+  coldPitch: boolean;
+  protection: SenderProtection | null;
+  suggest: boolean;
+};
+
+export type UnsubscribePreview = {
+  sender: string;
+  name: string | null;
+  method: UnsubscribeMethod;
+  target: string | null;
+  pageUrl: string | null;
+  mailto: string | null;
+  account: string;
+  protection: SenderProtection | null;
+  status: SubscriptionStatus;
+  existing: { inbox: number; total: number };
+};
+
+export type UnsubscribeResult = {
+  sender: string;
+  method: UnsubscribeMethod;
+  outcome: UnsubscribeOutcome;
+  url: string | null;
+  detail: string | null;
+  moveError: string | null;
+  moved: number;
+  remaining: number;
+  status: SubscriptionStatus;
+};
+
 export type ThreadDetail = {
   key: string;
   account: string;
@@ -75,6 +144,7 @@ export type ThreadDetail = {
   drafts: MailDraft[];
   prepared: PreparedReply | null;
   followUp: FollowUpReminder | null;
+  subscription?: ThreadSubscription | null;
 };
 
 export type ComposeAccount = { id: string; email: string; signature: string | null; sourceId?: string; identityId?: string };

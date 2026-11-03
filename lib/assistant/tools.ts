@@ -38,8 +38,19 @@ import { STARTER_TEMPLATES as PROPOSAL_STARTERS } from "@/lib/proposals/starters
 import { addStep, removeStep, updateStep } from "@/lib/proposals/steps";
 import { blockLinks, BLOCKS_GUIDE, onlyFields, proposalForAgent, templateForAgent, templateSettings } from "@/lib/proposals/agent";
 import { mailOrigin } from "@/lib/mail/origin";
+import { senderKey } from "@/lib/mail/split";
 import type { MailAddress } from "@/lib/mail/types";
-import type { MailDraft } from "@/lib/mail/view";
+import { OUTCOME_LABELS, SUBSCRIPTION_LABELS, type ExistingMailChoice, type MailDraft, type UnsubscribeResult } from "@/lib/mail/view";
+import {
+  EXISTING_CHOICES,
+  listSubscriptions,
+  researchMail,
+  REVIEW_DAYS,
+  senderProtection,
+  setSubscription,
+  unopenedSenders,
+  unsubscribeMany,
+} from "@/lib/mail/subscriptions";
 import { archiveBoard, createBoard, getBoard, listBoards, updateBoard } from "@/lib/crm/boards";
 import { savePipelineStages } from "@/lib/crm/pipeline";
 import { definitionFromInput, STEP_TYPES, TRIGGER_TYPES } from "@/lib/workflows/definition";
@@ -363,6 +374,95 @@ function mergeLine(label: string, id: unknown, name: Names) {
 
 function counted(count: number, one: string, many: string) {
   return `${count} ${count === 1 ? one : many}`;
+}
+
+const CONVERSATION_ACTIONS = ["archive", "trash", "inbox", "read", "unread", "flag", "unflag", "snooze", "remind_if_no_reply"] as const;
+const SENDER_TOOL_ACTIONS = ["unsubscribe", "keep", "research", "block"] as const;
+const PROTECTION_UNCHECKED = "protect-unchecked";
+const EXISTING_LINES: Record<ExistingMailChoice, string> = {
+  archive: "Mail already received from them is archived.",
+  trash: "Mail already received from them moves to Trash.",
+  leave: "Mail already received from them stays where it is.",
+};
+
+function senderKeys(args: Args) {
+  const raw = strings(args.senders).slice(0, 50);
+  const keys = [...new Set(raw.map((sender) => senderKey(sender)).filter((key): key is string => Boolean(key)))];
+  const invalid = [...new Set(raw.filter((sender) => !senderKey(sender)))];
+  return { keys, invalid };
+}
+
+function describeSenderAction(args: Args, name: Names) {
+  const { keys, invalid } = senderKeys(args);
+  const action = str(args.action) as (typeof SENDER_TOOL_ACTIONS)[number];
+  const count = counted(keys.length, "sender", "senders");
+  const titles: Record<(typeof SENDER_TOOL_ACTIONS)[number], string> = {
+    unsubscribe: `Unsubscribe from ${count}`,
+    keep: `Keep ${count}`,
+    research: `Keep ${count} for research`,
+    block: `Block ${count}`,
+  };
+  const unchecked = detail(name, PROTECTION_UNCHECKED) !== "";
+  const protectedOnes = keys.filter((key) => detail(name, `protect:${key}`)).map((key) => `${key}. ${detail(name, `protect:${key}`)}`);
+  const others = keys.filter((key) => !detail(name, `protect:${key}`));
+  const shown = others.slice(0, 20);
+  const existing = oneOf(args.existingMail, EXISTING_CHOICES) ?? "archive";
+  return {
+    title: titles[action] ?? "Update senders",
+    lines: [
+      unchecked ? "Orbit couldn't check whether these senders are CRM contacts or companies. Check them before you confirm." : "",
+      ...protectedOnes,
+      ...shown,
+      others.length > shown.length ? `and ${others.length - shown.length} more` : "",
+      invalid.length ? `Not an address or @domain, so left out: ${invalid.join(", ")}` : "",
+      action === "unsubscribe" || action === "block" ? EXISTING_LINES[existing] : "",
+      action === "research" ? (existing === "leave" ? "Their new mail goes to a Research folder; mail already here stays put." : "Their mail moves out of the inbox to a Research folder and stays readable.") : "",
+      action === "block" ? "New mail from them is archived as it arrives." : "",
+      str(args.summary) ? `Why: ${str(args.summary)}` : "",
+    ],
+  };
+}
+
+async function runSenderAction(actor: UserActor, action: (typeof SENDER_TOOL_ACTIONS)[number], args: Args, context: ToolContext) {
+  const { keys: senders } = senderKeys(args);
+  if (senders.length === 0) return { error: "Say which senders, using addresses or @domains from search_email folder subscriptions." };
+  const existing = oneOf(args.existingMail, EXISTING_CHOICES) ?? "archive";
+  const options = { deadline: context.deadline, defer: context.defer ?? afterResponse };
+  const checked = await senderProtection(actor, senders).then(
+    () => true,
+    () => false,
+  );
+  if (action === "unsubscribe") {
+    const results = await unsubscribeMany(actor, senders, { existing, confirmed: checked }, options);
+    const done = results.filter((result): result is UnsubscribeResult => !("error" in result));
+    const failed = results.filter((result): result is { sender: string; error: string } => "error" in result);
+    if (done.length === 0) return { error: failed[0]?.error ?? "Nothing was changed.", failed };
+    return {
+      results: done.map((result) => ({
+        sender: result.sender,
+        outcome: OUTCOME_LABELS[result.outcome],
+        ...(result.url ? { openPage: result.url } : {}),
+        ...(result.detail ? { detail: result.detail } : {}),
+        ...(result.moveError ? { moveError: result.moveError } : {}),
+        moved: result.moved,
+        ...(result.remaining ? { stillMoving: result.remaining } : {}),
+      })),
+      failed,
+      note: "Needs you means the sender only has an unsubscribe page: give the user the openPage link to finish. No unsubscribe link means they can be blocked instead.",
+    };
+  }
+  const changed: { sender: string; status: string; moved: number }[] = [];
+  const failed: { sender: string; error: string }[] = [];
+  for (const sender of senders) {
+    try {
+      const result = await setSubscription(actor, { sender, action, existing, confirmed: checked }, options);
+      changed.push({ sender: result.sender, status: SUBSCRIPTION_LABELS[result.status], moved: result.moved });
+    } catch (error) {
+      failed.push({ sender, error: error instanceof Error ? error.message : "That didn't work." });
+    }
+  }
+  if (changed.length === 0) return { error: failed[0]?.error ?? "Nothing was changed.", failed };
+  return { changed, failed };
 }
 
 const MERGE_ID_KEYS = ["keepId", "mergeId"];
@@ -1317,7 +1417,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     name: "search_email",
     label: "Searching email",
     description:
-      "Search every email in the user's connected mailboxes (all accounts, all folders, full history as far as it has synced). Matches words in the subject, sender and body; filter by sender, account or folder. Returns newest or best matches with ids for get_email_thread. Emails the user sent from Orbit show how many times they were opened. folder scheduled instead lists the emails waiting to send later.",
+      "Search every email in the user's connected mailboxes (all accounts, all folders, full history as far as it has synced). Matches words in the subject, sender and body; filter by sender, account or folder. Returns newest or best matches with ids for get_email_thread. Emails the user sent from Orbit show how many times they were opened. folder scheduled instead lists the emails waiting to send later. folder subscriptions lists every newsletter and bulk sender across all mailboxes with how many emails came and how many the user opened in the last days (default 90), the last date, status (subscribed, kept, unsubscribed, ignored meaning they kept sending more than 7 days after an unsubscribe, research, blocked), whether the sender is protected by a CRM contact or client, prospect or partner company, and unopened: the senders Orbit suggests unsubscribing from (never protected ones). folder research returns the full text of mail from senders the user keeps for research, from the last days (default 1).",
     parameters: {
       type: "object",
       properties: {
@@ -1326,13 +1426,38 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         account: { type: "string", description: "One of the user's own addresses, to search only that mailbox." },
         folder: {
           type: "string",
-          enum: ["inbox", "sent", "drafts", "archive", "trash", "other", "scheduled"],
-          description: "scheduled lists every email waiting to send later (Mail's Scheduled view), soonest first, with recipients, subject, message, files, send time and any send error, and ids for change_scheduled_email. The other options don't apply to it.",
+          enum: ["inbox", "sent", "drafts", "archive", "trash", "other", "scheduled", "subscriptions", "research"],
+          description: "scheduled lists every email waiting to send later (Mail's Scheduled view), soonest first, with recipients, subject, message, files, send time and any send error, and ids for change_scheduled_email. subscriptions lists newsletter and bulk senders with open counts, for mail_action unsubscribe, keep, research or block. research returns research mail with its text. The other options don't apply to these three.",
         },
+        days: { type: "integer", minimum: 1, maximum: 365, description: "For subscriptions, the window for counts and suggestions (default 90; 3 months is 90). For research, how many days back (default 1)." },
         limit: { type: "integer", minimum: 1, maximum: 50 },
       },
     },
     run: async (actor, args) => {
+      if (args.folder === "subscriptions") {
+        const listed = await listSubscriptions(actor, { days: int(args.days, REVIEW_DAYS, 7, 365) });
+        return {
+          days: listed.days,
+          subscriptions: listed.senders.map((sender) => ({
+            sender: sender.sender,
+            name: sender.name,
+            emails: sender.emails,
+            opened: sender.opened,
+            lastAt: sender.lastAt,
+            status: sender.status,
+            ...(sender.unsubscribedAt ? { unsubscribedAt: sender.unsubscribedAt } : {}),
+            ...(sender.ignoredAt ? { ignoredAt: sender.ignoredAt } : {}),
+            ...(sender.coldPitch ? { coldPitch: true } : {}),
+            ...(sender.protection ? { protected: sender.protection.reason } : {}),
+          })),
+          unopened: unopenedSenders(listed.senders).map((sender) => sender.sender),
+          href: "/mail/subscriptions",
+        };
+      }
+      if (args.folder === "research") {
+        const days = int(args.days, 1, 1, 30);
+        return { days, emails: await researchMail(actor, { hours: days * 24, limit: int(args.limit, 50, 1, 50) }) };
+      }
       if (args.folder === "scheduled") {
         const ignored = ["query", "from", "account", "limit"].filter((key) => args[key] !== undefined && args[key] !== "");
         return {
@@ -1381,18 +1506,31 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     label: "Updating email",
     write: true,
     description:
-      "Act on whole conversations in the user's Mail: archive, trash, move back to the inbox, mark read or unread, flag or unflag, snooze until a time (it comes back to the inbox then), or remind_if_no_reply by a time (Mail raises a No reply reminder if nobody has answered). emailIds come from search_email; each one stands for its whole conversation.",
+      "Act on whole conversations in the user's Mail: archive, trash, move back to the inbox, mark read or unread, flag or unflag, snooze until a time (it comes back to the inbox then), or remind_if_no_reply by a time (Mail raises a No reply reminder if nobody has answered). emailIds come from search_email; each one stands for its whole conversation. Or act on senders from search_email folder subscriptions with senders: unsubscribe (one-click where the sender supports it, else an unsubscribe email from the same mailbox, else their unsubscribe page for the user to open), keep (stop suggesting them), research (their mail moves out of the inbox to a Research folder and stays readable) or block (their mail is archived as it arrives). For unsubscribe and block, existingMail says what happens to mail already received: archive (the default), trash or leave. Senders protected by a CRM contact or company are named on the card; only include them when the user asked for them.",
     parameters: {
       type: "object",
       properties: {
-        emailIds: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 50, description: "Email ids from search_email." },
-        action: { type: "string", enum: ["archive", "trash", "inbox", "read", "unread", "flag", "unflag", "snooze", "remind_if_no_reply"] },
+        emailIds: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 50, description: "Email ids from search_email, for the conversation actions." },
+        senders: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 50, description: "For unsubscribe, keep, research and block: addresses or @domains from search_email folder subscriptions." },
+        action: { type: "string", enum: [...CONVERSATION_ACTIONS, ...SENDER_TOOL_ACTIONS] },
+        existingMail: { type: "string", enum: ["archive", "trash", "leave"], description: "For unsubscribe and block: what to do with mail already received from them. Default archive." },
         until: { type: "string", description: "For snooze and remind_if_no_reply: YYYY-MM-DDTHH:mm London time." },
-        summary: { type: "string", description: "Which emails these are, in a few words, for the approval card (for example 3 newsletters from Substack)." },
+        summary: { type: "string", description: "Which emails or senders these are, in a few words, for the approval card (for example 3 newsletters from Substack)." },
       },
-      required: ["emailIds", "action", "summary"],
+      required: ["action", "summary"],
+    },
+    details: async (actor, args) => {
+      const { keys } = senderKeys(args);
+      if (!keys.length) return {};
+      try {
+        const protections = await senderProtection(actor, keys);
+        return Object.fromEntries([...protections].map(([sender, protection]) => [`protect:${sender}`, protection.reason]));
+      } catch {
+        return { [PROTECTION_UNCHECKED]: "yes" };
+      }
     },
     describe: (args, name) => {
+      if ((SENDER_TOOL_ACTIONS as readonly string[]).includes(str(args.action))) return describeSenderAction(args, name);
       const ids = [...new Set(strings(args.emailIds))];
       const count = ids.length;
       const subjects = [...new Set(ids.map((id) => (isUuid(id) && name(id) !== "Unknown record" ? name(id) : "An email Orbit can't find")))];
@@ -1414,9 +1552,11 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         lines: [str(args.until) ? `Until ${formatDateTimeLabel(str(args.until))}` : "", ...shown, ...more, str(args.summary) ? `Why: ${str(args.summary)}` : ""],
       };
     },
-    run: async (actor, args) => {
-      const action = oneOf(args.action, ["archive", "trash", "inbox", "read", "unread", "flag", "unflag", "snooze", "remind_if_no_reply"] as const);
-      if (!action) return { error: "Choose archive, trash, inbox, read, unread, flag, unflag, snooze or remind_if_no_reply." };
+    run: async (actor, args, context) => {
+      const senderAction = oneOf(args.action, SENDER_TOOL_ACTIONS);
+      if (senderAction) return runSenderAction(actor, senderAction, args, context);
+      const action = oneOf(args.action, CONVERSATION_ACTIONS);
+      if (!action) return { error: "Choose archive, trash, inbox, read, unread, flag, unflag, snooze, remind_if_no_reply, unsubscribe, keep, research or block." };
       const ids = [...new Set(strings(args.emailIds))].slice(0, 50);
       if (ids.length === 0) return { error: "Say which emails, using ids from search_email." };
       const until = action === "snooze" || action === "remind_if_no_reply" ? parseDateTime(str(args.until)) : null;

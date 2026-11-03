@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { NativeSelect } from "@/components/_ui/native-select";
 import Switch from "@/components/_ui/switch";
 import { setMailHelpAction } from "@/app/(crm)/mail/actions";
 import { SettingsCard } from "@/components/crm/settings-ui";
@@ -15,12 +16,18 @@ const REMIND_CHOICES = [
   { value: "10", label: "After 2 weeks" },
 ];
 
+const PITCH_CHOICES: { value: Settings["coldPitches"]; label: string }[] = [
+  { value: "off", label: "Leave in the inbox" },
+  { value: "other", label: "Move to Other" },
+  { value: "archive", label: "Archive" },
+];
+
 export default function MailHelpSettings({ initial }: { initial: Settings }) {
   const [settings, setSettings] = useState(initial);
   const [error, setError] = useState<string | null>(null);
   const [, startTransition] = useTransition();
 
-  function save(next: Settings, input: { prepareReplies?: boolean; autoRemindDays?: number | null }) {
+  function save(next: Settings, input: { prepareReplies?: boolean; autoRemindDays?: number | null; coldPitches?: Settings["coldPitches"] }) {
     const previous = settings;
     setSettings(next);
     setError(null);
@@ -76,6 +83,27 @@ export default function MailHelpSettings({ initial }: { initial: Settings }) {
               </option>
             ))}
           </select>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <label htmlFor="cold-pitches" className="flex flex-col">
+            <span className="text-[14px] leading-5">Cold pitches</span>
+            <span className="caption-style text-subtle">Sales emails from people who aren&apos;t in Orbit and have never written to you.</span>
+          </label>
+          <NativeSelect
+            id="cold-pitches"
+            value={settings.coldPitches}
+            onChange={(event) => {
+              const mode = PITCH_CHOICES.find((choice) => choice.value === event.target.value)?.value ?? "off";
+              save({ ...settings, coldPitches: mode }, { coldPitches: mode });
+            }}
+            className="w-auto"
+          >
+            {PITCH_CHOICES.map((choice) => (
+              <option key={choice.value} value={choice.value}>
+                {choice.label}
+              </option>
+            ))}
+          </NativeSelect>
         </div>
       </div>
       {error && (

@@ -1,4 +1,15 @@
-import type { MailDraft, MailNav, ThreadCursor, ThreadDetail, ThreadSummary } from "@/lib/mail/view";
+import type {
+  ExistingMailChoice,
+  MailDraft,
+  MailNav,
+  SubscriptionSender,
+  SubscriptionStatus,
+  ThreadCursor,
+  ThreadDetail,
+  ThreadSummary,
+  UnsubscribePreview,
+  UnsubscribeResult,
+} from "@/lib/mail/view";
 
 export type ThreadPage = { threads: ThreadSummary[]; next: ThreadCursor | null };
 export type ListQuery = { view: string; account: string | null; query: string };
@@ -136,5 +147,46 @@ export function postSenderSplit(sender: string, split: string | null) {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ sender, split }),
+  });
+}
+
+export type UnsubscribeTarget = { thread?: string; sender?: string };
+export type SenderAction = "keep" | "research" | "block" | "subscribe";
+export type SenderChange = { sender: string; status: SubscriptionStatus; moved: number; remaining: number; error: string | null };
+export type BulkResult = UnsubscribeResult | { sender: string; error: string };
+
+export function fetchUnsubscribePreview(target: UnsubscribeTarget, mode?: string) {
+  const params = new URLSearchParams();
+  if (mode) params.set("mode", mode);
+  if (target.thread) params.set("thread", target.thread);
+  if (target.sender) params.set("sender", target.sender);
+  return getJson<UnsubscribePreview>(`/api/mail/unsubscribe?${params}`);
+}
+
+export function postUnsubscribe(target: UnsubscribeTarget & { existing: ExistingMailChoice; block?: boolean; confirmed?: boolean }) {
+  return getJson<UnsubscribeResult>("/api/mail/unsubscribe", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(target),
+  });
+}
+
+export function postSenderAction(input: { sender: string; action: SenderAction; existing?: ExistingMailChoice; confirmed?: boolean }) {
+  return getJson<SenderChange>("/api/mail/subscriptions", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export function fetchSubscriptions() {
+  return getJson<{ days: number; senders: SubscriptionSender[] }>("/api/mail/subscriptions");
+}
+
+export function postBulkUnsubscribe(senders: string[], existing: ExistingMailChoice) {
+  return getJson<{ results: BulkResult[] }>("/api/mail/subscriptions/bulk", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ senders, existing }),
   });
 }

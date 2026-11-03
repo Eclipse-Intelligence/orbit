@@ -26,6 +26,7 @@ import {
   type PreparedReply,
   type ThreadDetail,
   type ThreadMessage,
+  type ThreadSubscription,
   type ThreadSummary,
 } from "@/lib/mail/view";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/_ui/dropdown-menu";
@@ -43,6 +44,8 @@ import ForwardIcon from "@/public/assets/images/mail/forward.svg";
 import ReplyAllIcon from "@/public/assets/images/mail/reply-all.svg";
 import ReplyIcon from "@/public/assets/images/mail/reply.svg";
 import TrashIcon from "@/public/assets/images/mail/trash.svg";
+import UnsubscribeIcon from "@/public/assets/images/mail/unsubscribe.svg";
+import type { UnsubscribeMode } from "@/components/mail/unsubscribe-dialog";
 
 export type ReaderAction = "archive" | "trash" | "inbox" | "read" | "unread" | "flag" | "unflag" | "snooze";
 
@@ -394,6 +397,56 @@ function ThreadPeek({ thread, own, side }: { thread: ThreadSummary; own: string[
   );
 }
 
+function shortDay(value: string | null) {
+  return value ? new Date(value).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "";
+}
+
+function SenderNotice({
+  subscription,
+  onUnsubscribe,
+  onBlock,
+}: {
+  subscription: ThreadSubscription;
+  onUnsubscribe: (mode: UnsubscribeMode) => void;
+  onBlock: (sender: string) => void;
+}) {
+  const line =
+    subscription.status === "ignored"
+      ? `Ignored your unsubscribe on ${shortDay(subscription.unsubscribedAt)}. Orbit archives their mail as it arrives.`
+      : subscription.status === "blocked"
+        ? `You blocked ${subscription.sender}. Their mail is archived as it arrives.`
+        : subscription.status === "research"
+          ? "Kept for research. Their mail goes to the Research folder."
+          : subscription.status === "unsubscribed"
+            ? `You unsubscribed on ${shortDay(subscription.unsubscribedAt)}.`
+            : subscription.coldPitch
+              ? "Cold pitch from someone who isn't in Orbit."
+              : "";
+  if (!line) return null;
+  const tone = subscription.status === "ignored" || (subscription.coldPitch && subscription.status === "subscribed");
+  return (
+    <div
+      role="status"
+      className={cn(
+        "flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl px-4 py-2.5 text-[13px] leading-5",
+        tone ? "border border-[var(--tag-amber-border)] bg-[var(--tag-amber-bg)] text-[var(--tag-amber-text)]" : "text-subtle bg-white/[0.025]",
+      )}
+    >
+      <span className="min-w-0 flex-1">{line}</span>
+      {subscription.status === "ignored" && (
+        <Button variant="secondary" size="sm" onClick={() => onBlock(subscription.sender)}>
+          Block
+        </Button>
+      )}
+      {subscription.coldPitch && subscription.status === "subscribed" && (
+        <Button variant="secondary" size="sm" onClick={() => onUnsubscribe("both")}>
+          Unsubscribe and block
+        </Button>
+      )}
+    </div>
+  );
+}
+
 export default function ThreadReader({
   summary,
   detail,
@@ -410,7 +463,11 @@ export default function ThreadReader({
   next,
   entered,
   onSplit,
+  onUnsubscribe,
+  onBlock,
 }: {
+  onUnsubscribe: (mode: UnsubscribeMode) => void;
+  onBlock: (sender: string) => void;
   previous: ThreadSummary | null;
   next: ThreadSummary | null;
   onPrevious: (swiped: boolean) => void;
@@ -661,6 +718,7 @@ export default function ThreadReader({
   const readHint = useShortcutHint("mail-read");
   const flagHint = useShortcutHint("mail-flag");
   const snoozeHint = useShortcutHint("mail-snooze");
+  const unsubscribeHint = useShortcutHint("mail-unsubscribe");
 
   if (!summary && !detail) {
     return (
@@ -719,6 +777,11 @@ export default function ThreadReader({
         <ToolButton label={flagged ? "Remove flag" : "Flag"} hint={flagHint} active={flagged} onClick={() => onAction(flagged ? "unflag" : "flag")}>
           <FlagIcon aria-hidden className="size-3.5" />
         </ToolButton>
+        {sender && (
+          <ToolButton label="Unsubscribe" hint={unsubscribeHint} onClick={() => onUnsubscribe("unsubscribe")}>
+            <UnsubscribeIcon aria-hidden className="size-3.5" />
+          </ToolButton>
+        )}
         {detail && (
           <ToolButton label={inviteBusy ? "Reading the meeting from this email" : "Send an invite from this email"} onClick={() => void makeInvite()}>
             <CalendarIcon aria-hidden className={cn("size-3.5", inviteBusy && "animate-pulse")} />
@@ -751,7 +814,7 @@ export default function ThreadReader({
             </DropdownMenu>
           )}
           <span aria-hidden className="size-1.5 shrink-0 rounded-full" style={{ background: tagBase(account) }} />
-          <span className="caption-style text-subtle truncate">{account}</span>
+          <span className="caption-style text-subtle truncate max-sm:sr-only">{account}</span>
         </span>
       </div>
       {previous && <ThreadPeek thread={previous} own={own} side="previous" />}
@@ -759,6 +822,7 @@ export default function ThreadReader({
       <div ref={scroller} className="min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-x-none">
         <div className="mx-auto flex w-full max-w-[52em] flex-col gap-4 px-3 pt-3 pb-32 sm:px-6">
           <h2 className="px-4 text-pretty">{subject?.trim() || "(no subject)"}</h2>
+          {detail?.subscription && <SenderNotice subscription={detail.subscription} onUnsubscribe={onUnsubscribe} onBlock={onBlock} />}
           {detail && <ThreadPeople key={detail.key} people={detail.people ?? []} />}
           {detail && target && <SummaryLine threadKey={detail.key} latestId={target.id} messages={detail.messages.length} />}
           {detail ? (

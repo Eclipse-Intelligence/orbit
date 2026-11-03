@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import Button from "@/components/_ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/_ui/dialog";
 import { cn } from "@/lib/utils";
@@ -12,6 +13,7 @@ export default function ConfirmDialog({
   confirmLabel,
   tone = "danger",
   onConfirm,
+  children,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -20,6 +22,7 @@ export default function ConfirmDialog({
   confirmLabel: string;
   tone?: "danger" | "neutral";
   onConfirm: () => void;
+  children?: ReactNode;
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -28,6 +31,7 @@ export default function ConfirmDialog({
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
+        {children}
         <DialogFooter>
           <DialogClose asChild>
             <Button variant="ghost" size="md">

@@ -9,6 +9,7 @@ import { cleanEmailHtml, richEmail } from "@/lib/mail/html";
 import type { MailAddress, MailRole } from "@/lib/mail/types";
 import { splitCase, splitJoin } from "@/lib/mail/split";
 import { opensSql, readsSql } from "@/lib/mail/tracking";
+import { threadSubscription } from "@/lib/mail/subscriptions";
 import type { MailNav, MailSplit, MailView, ThreadCursor, ThreadDetail, ThreadPerson, ThreadSummary } from "@/lib/mail/view";
 
 const THREAD_KEY = "coalesce(m.thread_key, 'm:' || m.id::text)";
@@ -309,7 +310,20 @@ async function readThread(actor: UserActor, key: string): Promise<ThreadDetail> 
     );
     const followUp = reminder.rows[0];
     const people = await threadPeople(db, actor, rows.length ? rows : result.rows);
+    const own = new Set(
+      (
+        await db.query<{ email: string }>(
+          "select lower(email) as email from crm.mail_sources where user_id = $1 union select lower(email) from crm.send_identities where user_id = $1",
+          [actor.userId],
+        )
+      ).rows
+        .map((row) => row.email)
+        .concat(actor.email.toLowerCase()),
+    );
+    const sender = rows.filter((row) => row.from_email && !own.has(row.from_email.toLowerCase())).at(-1)?.from_email ?? null;
+    const subscription = await threadSubscription(db, actor, sender);
     return {
+      subscription,
       key,
       account: latest.account,
       subject: latest.subject,

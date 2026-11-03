@@ -175,6 +175,8 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: "mail-snooze", label: "Remind me (snooze)", group: "Mail", combos: [{ key: "h" }] },
   { id: "mail-trash", label: "Move to Trash", group: "Mail", combos: [{ key: "#" }, { key: "#", shift: true }, { key: "#", alt: true }, { key: "Backspace" }, { key: "Delete" }] },
   { id: "mail-read", label: "Mark read or unread", group: "Mail", combos: [{ key: "u" }] },
+  { id: "mail-unsubscribe", label: "Unsubscribe", group: "Mail", combos: [{ key: "u", mod: true }] },
+  { id: "mail-subscriptions", label: "Subscriptions", group: "Mail", href: "/mail/subscriptions", palette: true, keywords: "unsubscribe newsletters senders block research" },
   { id: "mail-flag", label: "Flag or unflag", group: "Mail", combos: [{ key: "s" }] },
   { id: "mail-undo", label: "Undo the last move", group: "Mail", combos: [{ key: "z" }] },
   { id: "mail-refresh", label: "Check for new mail", group: "Mail", combos: [{ key: "r", shift: true }], palette: true, keywords: "sync refresh email" },

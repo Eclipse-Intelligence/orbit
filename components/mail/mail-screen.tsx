@@ -6,11 +6,14 @@ import { Kbd } from "@/components/_ui/command";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/_ui/dropdown-menu";
+import Link from "next/link";
 import { tagBase } from "@/components/beautifui/record-marks";
 import SectionHeader from "@/components/crm/section-header";
 import type { Viewer } from "@/components/crm/viewer";
@@ -40,6 +43,7 @@ import PushPrompt from "@/components/push/push-prompt";
 import { OPEN_THREAD_EVENT } from "@/components/push/push-registrar";
 import ThreadList from "@/components/mail/thread-list";
 import ThreadReader, { type ReaderAction } from "@/components/mail/thread-reader";
+import UnsubscribeDialog, { unsubscribeToast, type UnsubscribeDone, type UnsubscribeRequest } from "@/components/mail/unsubscribe-dialog";
 import { useComposer } from "@/components/mail/compose-dock";
 import { useShortcut } from "@/components/shortcuts/shortcuts-provider";
 import { laterOptions } from "@/lib/mail/later";
@@ -57,6 +61,7 @@ import ClockIcon from "@/public/assets/images/mail/clock.svg";
 import InboxIcon from "@/public/assets/images/mail/inbox.svg";
 import MailOpenIcon from "@/public/assets/images/mail/mail-open.svg";
 import TrashIcon from "@/public/assets/images/mail/trash.svg";
+import UnsubscribeIcon from "@/public/assets/images/mail/unsubscribe.svg";
 import { usePullToRefresh } from "@/components/mail/pull-refresh";
 
 const HOME_VIEW = "inbox";
@@ -178,6 +183,7 @@ export default function MailScreen({
   const [now, setNow] = useState(initialNow);
   const [syncing, setSyncing] = useState(false);
   const [entered, setEntered] = useState<string | null>(null);
+  const [unsubscribing, setUnsubscribing] = useState<UnsubscribeRequest | null>(null);
   const request = useRef(0);
   const removing = useRef(new Set<string>());
   const keptUnread = useRef(new Set<string>());
@@ -395,6 +401,41 @@ export default function MailScreen({
         if (thread && leaves) restore(thread, target.view);
         showToast({ message: error.message, tone: "alert" });
       });
+  }
+
+  function dropThread(key: string) {
+    const { page: currentPage, query: target } = latest.current;
+    const thread = currentPage?.threads.find((item) => item.key === key);
+    forgetThread(key);
+    forgetOtherLists(target);
+    if (!thread || !(inInbox(target.view) && !target.query)) return;
+    const list = currentPage!.threads;
+    const index = list.findIndex((item) => item.key === key);
+    const remaining = list.filter((item) => item.key !== key);
+    setPage({ ...currentPage!, threads: remaining });
+    if (thread.unread) setNav((existing) => shiftUnread(existing, thread.sourceId, -1));
+    if (latest.current.cursor === key) {
+      select(remaining[index]?.key ?? remaining[index - 1]?.key ?? null);
+      setOpen(false);
+    }
+  }
+
+  function finishUnsubscribe(done: UnsubscribeDone) {
+    setUnsubscribing(null);
+    const toast = unsubscribeToast(done);
+    const succeeded = done.blocked || done.mode === "research" || (done.result && ["unsubscribed", "requested", "needs_you"].includes(done.result.outcome));
+    const key = done.thread;
+    if (key) {
+      if (succeeded && done.existing !== "leave" && done.moved > 0) dropThread(key);
+      else forgetThread(key);
+      if (latest.current.cursor === key) fetchDetail(key, true);
+    }
+    showToast({
+      message: toast.message,
+      tone: toast.tone,
+      action: toast.url ? { label: "Open page", run: () => window.open(toast.url!, "_blank", "noopener,noreferrer") } : undefined,
+    });
+    window.setTimeout(() => refreshRef.current(false), 1500);
   }
 
   function toggleSelect(key: string) {
@@ -715,6 +756,12 @@ export default function MailScreen({
     if (!current) return false;
     act(current.key, current.flagged ? "unflag" : "flag");
   });
+  useShortcut("mail-unsubscribe", () => {
+    if (!cursor || unsubscribing) return false;
+    const ownSet = new Set(own.map((item) => item.toLowerCase()));
+    if (current?.from && ownSet.has(current.from.address.toLowerCase()) && !detail?.subscription) return false;
+    setUnsubscribing({ thread: cursor, mode: "unsubscribe" });
+  });
   useShortcut("mail-undo", () => {
     if (!undoLatest()) return false;
   });
@@ -1007,6 +1054,13 @@ export default function MailScreen({
                         </DropdownMenuRadioItem>
                       ))}
                     </DropdownMenuRadioGroup>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem asChild>
+                      <Link href="/mail/subscriptions">
+                        <UnsubscribeIcon aria-hidden className="text-subtle size-3.5" />
+                        <span className="flex-1">Subscriptions</span>
+                      </Link>
+                    </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
             </nav>
@@ -1129,10 +1183,17 @@ export default function MailScreen({
             next={currentIndex !== -1 && currentIndex < threads.length - 1 ? threads[currentIndex + 1] : null}
             entered={entered !== null && entered === cursor}
             onSplit={(sender, split) => cursor && moveSender(cursor, sender, split)}
+            onUnsubscribe={(mode) => cursor && setUnsubscribing({ thread: cursor, mode })}
+            onBlock={() => cursor && setUnsubscribing({ thread: cursor, mode: "block" })}
             onSent={() => cursor && sent(cursor)}
           />
         </div>
       </div>
+      <UnsubscribeDialog
+        request={unsubscribing}
+        onClose={() => setUnsubscribing(null)}
+        onDone={finishUnsubscribe}
+      />
     </section>
   );
 }

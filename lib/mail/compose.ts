@@ -433,7 +433,15 @@ async function inlineImages(actor: UserActor, body: string, ids: string[]) {
 export async function sendMailDraft(
   actor: UserActor,
   input: DraftInput & { attachments?: string[] },
-  options: { origin: string | null; fetchImpl?: typeof fetch; smtp?: SmtpSender; saveSent?: SentSaver; onDraftRow?: (id: string) => void; storedFiles: StoredFiles },
+  options: {
+    origin: string | null;
+    fetchImpl?: typeof fetch;
+    smtp?: SmtpSender;
+    saveSent?: SentSaver;
+    onDraftRow?: (id: string) => void;
+    storedFiles: StoredFiles;
+    logOnTimeline?: boolean;
+  },
 ): Promise<{ warning: string | null }> {
   checkSendable(input);
   const fetchImpl = options.fetchImpl ?? fetch;
@@ -509,10 +517,12 @@ export async function sendMailDraft(
   });
   const [, logged] = await Promise.all([
     attached.summary.length ? discardAttachments(actor, ids, fetchImpl).catch(() => undefined) : Promise.resolve(),
-    logReply(actor, input, row.subject ?? "", identity?.email ?? target.email, attached.summary).then(
-      () => true,
-      () => false,
-    ),
+    options.logOnTimeline === false
+      ? Promise.resolve(true)
+      : logReply(actor, input, row.subject ?? "", identity?.email ?? target.email, attached.summary).then(
+          () => true,
+          () => false,
+        ),
   ]);
   return { warning: logged ? null : "Sent, but Orbit couldn't add it to the contact's timeline." };
 }

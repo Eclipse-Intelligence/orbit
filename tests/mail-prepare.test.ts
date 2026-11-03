@@ -147,7 +147,7 @@ describe("prepared replies and automatic reminders", () => {
 
   it("sets a reminder when a sent email asks for something, and not for a thank you", async () => {
     await setMailHelp(owner, { prepareReplies: false, autoRemindDays: 3 });
-    assert.deepEqual(await mailHelpSettings(owner), { prepareReplies: false, autoRemindDays: 3 });
+    assert.deepEqual(await mailHelpSettings(owner), { prepareReplies: false, autoRemindDays: 3, coldPitches: "off" });
     const mine = { emailAddress: { name: "Mark Ridgeon", address: "mark@eclipse.test" } };
     const to = [{ emailAddress: { name: "Priya", address: "priya@beta.test" } }];
     await syncMail(owner, {
@@ -204,6 +204,6 @@ describe("prepared replies and automatic reminders", () => {
     const { fetchImpl, prompts } = model([]);
     const report = await prepareMail(owner, { deadline: soon(), fetchImpl });
     assert.equal(prompts.length, 0);
-    assert.deepEqual(report, { prepared: 0, skipped: 0, reminders: 0, checked: 0 });
+    assert.deepEqual(report, { prepared: 0, skipped: 0, reminders: 0, checked: 0, pitches: 0 });
   });
 });
