@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { NativeSelect } from "@/components/_ui/native-select";
 import Switch from "@/components/_ui/switch";
 import { setMailHelpAction } from "@/app/(crm)/mail/actions";
 import { SettingsCard } from "@/components/crm/settings-ui";
@@ -88,21 +89,21 @@ export default function MailHelpSettings({ initial }: { initial: Settings }) {
             <span className="text-[14px] leading-5">Cold pitches</span>
             <span className="caption-style text-subtle">Sales emails from people who aren&apos;t in Orbit and have never written to you.</span>
           </label>
-          <select
+          <NativeSelect
             id="cold-pitches"
             value={settings.coldPitches}
             onChange={(event) => {
               const mode = PITCH_CHOICES.find((choice) => choice.value === event.target.value)?.value ?? "off";
               save({ ...settings, coldPitches: mode }, { coldPitches: mode });
             }}
-            className="bg-secondary text-foreground select-chevron h-8 cursor-pointer rounded-full pl-3 text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+            className="w-auto"
           >
             {PITCH_CHOICES.map((choice) => (
               <option key={choice.value} value={choice.value}>
                 {choice.label}
               </option>
             ))}
-          </select>
+          </NativeSelect>
         </div>
       </div>
       {error && (

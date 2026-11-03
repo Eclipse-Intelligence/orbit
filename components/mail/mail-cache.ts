@@ -155,8 +155,9 @@ export type SenderAction = "keep" | "research" | "block" | "subscribe";
 export type SenderChange = { sender: string; status: SubscriptionStatus; moved: number; remaining: number; error: string | null };
 export type BulkResult = UnsubscribeResult | { sender: string; error: string };
 
-export function fetchUnsubscribePreview(target: UnsubscribeTarget) {
+export function fetchUnsubscribePreview(target: UnsubscribeTarget, mode?: string) {
   const params = new URLSearchParams();
+  if (mode) params.set("mode", mode);
   if (target.thread) params.set("thread", target.thread);
   if (target.sender) params.set("sender", target.sender);
   return getJson<UnsubscribePreview>(`/api/mail/unsubscribe?${params}`);

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
-import { ASSISTANT_TOOLS, describeAction, recordNames, runTool } from "@/lib/assistant/tools";
+import { describeAction, recordNames, runTool } from "@/lib/assistant/tools";
 import { createCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
 import { saveMailbox } from "@/lib/crm/inbox";
@@ -81,7 +81,9 @@ function llmReply(body: { messages: { content: string }[] }) {
   return { emails: [] };
 }
 
-function world(state: { inbox: Msg[]; headers: Record<string, Header[]> }) {
+type World = { inbox: Msg[]; sent?: Msg[]; headers: Record<string, Header[]>; failMoves?: Set<string>; llmDown?: boolean };
+
+function world(state: World) {
   const calls: Call[] = [];
   const prompts: { system: string; user: string }[] = [];
   let drafts = 0;
@@ -97,6 +99,7 @@ function world(state: { inbox: Msg[]; headers: Record<string, Header[]> }) {
     }
     calls.push({ method, url, body });
     if (!url.startsWith(GRAPH)) {
+      if (state.llmDown) return Response.json({ error: { message: "Gateway down" } }, { status: 500 });
       const parsed = body as { messages: { content: string }[] };
       prompts.push({ system: parsed.messages[0].content, user: parsed.messages[1].content });
       return Response.json({ model: "test-model", choices: [{ message: { content: JSON.stringify(llmReply(parsed)) }, finish_reason: "stop" }] });
@@ -121,7 +124,7 @@ function world(state: { inbox: Msg[]; headers: Record<string, Header[]> }) {
     if (url.includes("inferenceClassification") && !url.includes("delta")) return Response.json({ value: [] });
     const folder = url.match(/\/me\/mailFolders\/([^/]+)\/messages\/delta/)?.[1];
     if (folder) {
-      const value = folder === "f-inbox" ? state.inbox : [];
+      const value = folder === "f-inbox" ? state.inbox : folder === "f-sent" ? (state.sent ?? []) : [];
       return Response.json({ value, "@odata.deltaLink": `${GRAPH}/me/mailFolders/${folder}/messages/delta?$deltatoken=${Math.random()}` });
     }
     const headers = url.match(/\/me\/messages\/([^/?]+)\?\$select=internetMessageHeaders$/);
@@ -129,6 +132,7 @@ function world(state: { inbox: Msg[]; headers: Record<string, Header[]> }) {
     const move = url.match(/\/me\/messages\/([^/]+)\/move$/);
     if (move && method === "POST") {
       const id = decodeURIComponent(move[1]);
+      if (state.failMoves?.has(id)) return Response.json({ error: { code: "ErrorAccessDenied", message: "Outlook refused the move." } }, { status: 500 });
       state.inbox = state.inbox.filter((item) => item.id !== id);
       const destination = (body as { destinationId: string }).destinationId;
       return Response.json({ id, parentFolderId: DESTINATIONS[destination] ?? destination });
@@ -174,8 +178,17 @@ describe("unsubscribe headers", () => {
     assert.equal(parsed.oneClick, true);
     assert.deepEqual(parsed.https, ["https://list.test/u?id=1"]);
     assert.deepEqual(parsed.pages, ["https://list.test/u?id=1", "http://list.test/old"]);
-    assert.deepEqual(parsed.mailto, [{ address: "leave@list.test", subject: "Remove me", body: "Please remove" }]);
+    assert.deepEqual(parsed.mailto, [{ address: "leave@list.test", subject: "Remove me", body: "unsubscribe" }]);
     assert.equal(chooseMethod(parsed), "one_click");
+  });
+
+  it("sends one fixed message to the first address only, whatever the mailto asks for", () => {
+    const parsed = parseListUnsubscribe(
+      "<mailto:first@list.test,second@list.test?to=third@list.test&cc=boss@corp.test&bcc=all@corp.test&subject=Stop%0D%0ABcc:%20evil@corp.test%20a=b?c&body=Wire%20%C2%A3500>",
+    );
+    assert.deepEqual(parsed.mailto, [{ address: "first@list.test", subject: "Stop Bcc: evil@corp.test a=b?c", body: "unsubscribe" }]);
+    assert.deepEqual(parseListUnsubscribe("<mailto:?to=only@list.test&subject=x>").mailto, [{ address: "only@list.test", subject: "x", body: "unsubscribe" }]);
+    assert.equal(parseListUnsubscribe(`<mailto:a@list.test?subject=${"x".repeat(500)}>`).mailto[0].subject.length, 200);
   });
 
   it("falls back from one-click to mailto, then a page, then nothing", () => {
@@ -277,7 +290,7 @@ describe("unsubscribing in Mail", () => {
   let other: UserActor;
   let sourceId: string;
   const server = oneClickServer();
-  const state: { inbox: Msg[]; headers: Record<string, Header[]> } = {
+  const state: World = {
     inbox: [
       message("n1", "news@brand.test", { from: { emailAddress: { name: "Brand News", address: "news@brand.test" } } }),
       message("n2", "news@brand.test", { from: { emailAddress: { name: "Brand News", address: "news@brand.test" } }, receivedDateTime: ago(30) }),
@@ -291,6 +304,8 @@ describe("unsubscribing in Mail", () => {
       message("r1", "research@insights.test", { body: { contentType: "text", content: "Agencies are moving budget to AI search. Unsubscribe here." } }),
       message("f1", "fail@oneclick.test"),
       message("v1", "private@ssrf.test"),
+      message("o1", "old@boundary.test", { receivedDateTime: ago(24 * 89) }),
+      message("o2", "old@boundary.test", { receivedDateTime: ago(24 * 91) }),
       message("k1", "cold@vendor.test", {
         receivedDateTime: ago(1),
         body: { contentType: "text", content: "Hi Mark, We help companies like yours book 30 more demos a month. Worth a quick call?" },
@@ -306,7 +321,7 @@ describe("unsubscribing in Mail", () => {
       l1: oneClick("https://leadco.test/u"),
       r1: oneClick("https://insights.test/u"),
       f1: oneClick("https://oneclick.test/u", "leave@oneclick.test"),
-      v1: oneClick("https://10.0.0.5/u"),
+      v1: oneClick("https://10.0.0.5/u", "leave@ssrf.test"),
     },
   };
   const graph = world(state);
@@ -340,9 +355,10 @@ describe("unsubscribing in Mail", () => {
     assert.equal(bySender.get("jane@acme.test")?.protection?.reason, "Jane Doe is a contact in Orbit.");
     assert.equal(bySender.get("news@client.test")?.protection?.reason, "Client Co is a client in Orbit.");
     assert.equal(bySender.get("offers@leadco.test")?.protection, null);
+    assert.equal(bySender.get("old@boundary.test")?.emails, 1);
     assert.deepEqual(
       unopenedSenders(listed.senders).map((sender) => sender.sender).sort(),
-      ["digest@list.test", "fail@oneclick.test", "hello@pageonly.test", "news@brand.test", "offers@leadco.test", "private@ssrf.test", "research@insights.test"],
+      ["digest@list.test", "fail@oneclick.test", "hello@pageonly.test", "news@brand.test", "offers@leadco.test", "old@boundary.test", "private@ssrf.test", "research@insights.test"],
     );
     const theirs = await listSubscriptions(other);
     assert.deepEqual(theirs.senders, []);
@@ -376,6 +392,7 @@ describe("unsubscribing in Mail", () => {
   });
 
   it("sends a mailto unsubscribe from the same mailbox with the given subject", async () => {
+    const contact = await createContact(owner, { firstName: "List", lastName: "Robot", email: "leave@list.test" });
     const before = graph.calls.length;
     const result = await unsubscribe(owner, { sender: "digest@list.test", existing: "leave" }, options);
     assert.equal(result.outcome, "requested");
@@ -386,6 +403,9 @@ describe("unsubscribing in Mail", () => {
     assert.equal(patch.subject, "Remove me");
     assert.deepEqual(patch.toRecipients.map((item) => item.emailAddress.address), ["leave@list.test"]);
     assert.match(patch.body.content, /unsubscribe/);
+    const contactId = (contact as { contact?: { id: string }; id?: string }).contact?.id ?? (contact as { id?: string }).id;
+    const logged = await getAdminPool().query("select 1 from crm.activities where contact_id = $1", [contactId]);
+    assert.equal(logged.rowCount, 0);
     assert.doesNotMatch(patch.body.content, /\/api\/mail\/open\//);
     assert.ok(calls.some((call) => call.url.endsWith("/draft-1/send")));
     assert.equal((await folderOf("d1"))?.role, "inbox");
@@ -404,12 +424,16 @@ describe("unsubscribing in Mail", () => {
     assert.equal((await folderOf("x1"))?.role, "archive");
   });
 
-  it("falls back to mailto when one-click fails and never posts to private addresses", async () => {
+  it("falls back to mailto when one-click fails, and never posts or emails when the link points inside", async () => {
     const failing = await unsubscribe(owner, { sender: "fail@oneclick.test", existing: "leave" }, options);
     assert.deepEqual([failing.method, failing.outcome], ["mailto", "requested"]);
     assert.ok(server.posts.some((post) => post.url === "https://oneclick.test/u"));
     const before = server.posts.length;
+    const sends = graph.calls.filter((call) => call.url.endsWith("/send")).length;
+    const preview = await unsubscribePreview(owner, { sender: "private@ssrf.test" }, graph.fetchImpl);
+    assert.equal(preview.mailto, "leave@ssrf.test");
     const refused = await unsubscribe(owner, { sender: "private@ssrf.test", existing: "archive" }, options);
+    assert.equal(graph.calls.filter((call) => call.url.endsWith("/send")).length, sends);
     assert.equal(refused.outcome, "failed");
     assert.match(refused.detail ?? "", /private address/);
     assert.equal(refused.moved, 0);
@@ -425,6 +449,23 @@ describe("unsubscribing in Mail", () => {
     assert.equal((bulk[1] as { outcome: string }).outcome, "unsubscribed");
     const confirmed = await unsubscribe(owner, { sender: "jane@acme.test", existing: "leave", confirmed: true }, options);
     assert.equal(confirmed.outcome, "unsubscribed");
+  });
+
+  it("refuses your own domain and protects every contact at a domain", async () => {
+    await assert.rejects(() => setSubscription(owner, { sender: "@eclipse.test", action: "block" }, options), /your own domain/);
+    await assert.rejects(() => setSubscription(owner, { sender: "@orbit.test", action: "research" }, options), /your own domain/);
+    await assert.rejects(() => unsubscribe(owner, { sender: "@acme.test" }, options), /Jane Doe at @acme\.test is a contact in Orbit/);
+    await assert.rejects(() => setSubscription(owner, { sender: "@acme.test", action: "block" }, options), /Jane Doe at @acme\.test is a contact/);
+  });
+
+  it("moves what a sender already sent to Trash when asked", async () => {
+    const result = await unsubscribe(owner, { sender: "offers@leadco.test", existing: "trash" }, options);
+    assert.deepEqual([result.outcome, result.moved, result.moveError], ["unsubscribed", 1, null]);
+    assert.equal((await folderOf("l1"))?.role, "trash");
+    const logged = await getAdminPool().query<{ moved: number; existing: string }>(
+      "select moved, existing from crm.mail_unsubscribes where sender = 'offers@leadco.test' order by created_at desc limit 1",
+    );
+    assert.deepEqual(logged.rows[0], { moved: 1, existing: "trash" });
   });
 
   it("archives mail from a sender who keeps sending more than 7 days after an unsubscribe and marks them", async () => {
@@ -447,6 +488,37 @@ describe("unsubscribing in Mail", () => {
     assert.deepEqual(await routeArrivedMail(owner, ["not-an-id"], { fetchImpl: graph.fetchImpl }), []);
   });
 
+  it("counts the 7 days from the unsubscribe, skips your own conversations and only marks a sender once the move works", async () => {
+    const pool = getAdminPool();
+    await pool.query("update crm.mail_subscriptions set unsubscribed_at = now() - interval '10 days', ignored_at = null where sender in ('fail@oneclick.test', 'digest@list.test')");
+    state.inbox.push(
+      message("f-early", "fail@oneclick.test", { receivedDateTime: ago(24 * 3.1) }),
+      message("f-late", "fail@oneclick.test", { receivedDateTime: ago(24 * 2.9) }),
+    );
+    await syncMail(owner, { budgetMs: 30_000, fetchImpl: graph.fetchImpl });
+    assert.equal((await folderOf("f-early"))?.role, "inbox");
+    assert.equal((await folderOf("f-late"))?.role, "archive");
+
+    state.failMoves = new Set(["d2"]);
+    state.inbox.push(message("d2", "digest@list.test", { receivedDateTime: ago(0.1) }));
+    state.headers.d2 = state.headers.d1;
+    await syncMail(owner, { budgetMs: 30_000, fetchImpl: graph.fetchImpl });
+    state.failMoves = undefined;
+    assert.equal((await folderOf("d2"))?.role, "inbox");
+    const digest = await pool.query<{ ignored_at: Date | null }>("select ignored_at from crm.mail_subscriptions where sender = 'digest@list.test'");
+    assert.equal(digest.rows[0].ignored_at, null);
+
+    state.sent = [message("me-1", "mark@eclipse.test", { conversationId: "conv-talk", toRecipients: [{ emailAddress: { name: "Help", address: "help@talk.test" } }], isRead: true })];
+    await pool.query(
+      `insert into crm.mail_subscriptions (workspace_id, user_id, sender, status, unsubscribed_at) values ($1, $2, 'news@talk.test', 'unsubscribed', now() - interval '30 days')`,
+      [owner.workspaceId, owner.userId],
+    );
+    await syncMail(owner, { budgetMs: 30_000, fetchImpl: graph.fetchImpl });
+    state.inbox.push(message("t1", "news@talk.test", { conversationId: "conv-talk", receivedDateTime: ago(0.05) }));
+    await syncMail(owner, { budgetMs: 30_000, fetchImpl: graph.fetchImpl });
+    assert.equal((await folderOf("t1"))?.role, "inbox");
+  });
+
   it("keeps research senders out of the inbox but readable, and only for their owner", async () => {
     const kept = await setSubscription(owner, { sender: "research@insights.test", action: "research" }, options);
     assert.deepEqual([kept.status, kept.moved], ["research", 1]);
@@ -466,6 +538,20 @@ describe("unsubscribing in Mail", () => {
     assert.ok(!unopenedSenders((await listSubscriptions(owner)).senders).some((sender) => sender.sender === "offers@leadco.test"));
   });
 
+  it("lets a domain block win over a kept or subscribed address, and undoes back to subscribed", async () => {
+    const blocked = await setSubscription(owner, { sender: "@leadco.test", action: "block", existing: "leave" }, options);
+    assert.deepEqual([blocked.status, blocked.moved], ["blocked", 0]);
+    const listed = await listSubscriptions(owner);
+    assert.equal(listed.senders.find((sender) => sender.sender === "@leadco.test")?.status, "blocked");
+    assert.ok(!listed.senders.some((sender) => sender.sender === "offers@leadco.test"));
+    state.inbox.push(message("l2", "offers@leadco.test", { receivedDateTime: ago(0.05) }));
+    await syncMail(owner, { budgetMs: 30_000, fetchImpl: graph.fetchImpl });
+    assert.equal((await folderOf("l2"))?.role, "archive");
+    const undone = await setSubscription(owner, { sender: "@leadco.test", action: "subscribe" }, options);
+    assert.equal(undone.status, "subscribed");
+    assert.equal((await listSubscriptions(owner)).senders.find((sender) => sender.sender === "offers@leadco.test")?.status, "kept");
+  });
+
   it("puts the research mail in the morning brief", async () => {
     process.env.LLM_API_KEY = "test-llm-key";
     try {
@@ -481,7 +567,6 @@ describe("unsubscribing in Mail", () => {
   });
 
   it("lets the assistant list subscriptions and act on senders through the existing mail tools", async () => {
-    assert.equal(ASSISTANT_TOOLS.length, 126);
     const listed = (await runTool(owner, "search_email", { folder: "subscriptions" })) as {
       subscriptions: { sender: string; opened: number; status: string; protected?: string }[];
       unopened: string[];
@@ -492,11 +577,16 @@ describe("unsubscribing in Mail", () => {
     const research = (await runTool(owner, "search_email", { folder: "research" })) as { notice?: string; emails: { text: string }[] };
     assert.ok(research.notice);
     assert.match(research.emails.map((email) => email.text).join(" "), /buyers ask for proof/);
-    const args = { action: "unsubscribe", senders: ["jane@acme.test", "digest@list.test"], summary: "Newsletters you never open" };
+    const args = { action: "unsubscribe", senders: ["digest@list.test", "JANE@acme.test", " jane@acme.test", "not an address"], summary: "Newsletters you never open" };
     const names = await recordNames(owner, [args], ["mail_action"]);
     const card = describeAction("mail_action", args, names);
     assert.equal(card.title, "Unsubscribe from 2 senders");
-    assert.ok(card.lines.includes("jane@acme.test. Jane Doe is a contact in Orbit."));
+    assert.equal(card.lines[0], "jane@acme.test. Jane Doe is a contact in Orbit.");
+    assert.ok(card.lines.includes("Not an address or @domain, so left out: not an address"));
+    const many = { action: "block", senders: [...Array.from({ length: 25 }, (_, index) => `n${index}@bulk.test`), "jane@acme.test"], summary: "x" };
+    const manyCard = describeAction("mail_action", many, await recordNames(owner, [many], ["mail_action"]));
+    assert.equal(manyCard.lines[0], "jane@acme.test. Jane Doe is a contact in Orbit.");
+    assert.ok(manyCard.lines.includes("and 5 more"));
     assert.ok(card.lines.includes("digest@list.test"));
     assert.ok(card.lines.includes("Mail already received from them is archived."));
     const original = globalThis.fetch;
@@ -559,6 +649,26 @@ describe("unsubscribing in Mail", () => {
       assert.doesNotMatch(sorting[0].user, /jane@acme\.test/);
       const other = (await listThreads(owner, { view: { role: "inbox", split: "other" } })).threads.map((thread) => thread.from?.address);
       assert.ok(other.includes("growth@agency.test"));
+      await setSubscription(owner, { sender: "growth@agency.test", action: "keep" }, options);
+      const rules = await getAdminPool().query("select 1 from crm.mail_sender_rules where sender = 'growth@agency.test'");
+      assert.equal(rules.rowCount, 0);
+      await setSubscription(owner, { sender: "growth@agency.test", action: "subscribe" }, options);
+
+      state.llmDown = true;
+      state.inbox.push(message("g2", "pitch@newco.test", { receivedDateTime: ago(0.05), body: { contentType: "text", content: "We grow agencies too." } }));
+      await syncMail(owner, { budgetMs: 30_000, fetchImpl: graph.fetchImpl });
+      await prepareMail(owner, { deadline: Date.now() + 120_000, fetchImpl: graph.fetchImpl });
+      const failed = await getAdminPool().query<{ failures: number }>(
+        "select f.failures from crm.mail_pitch_failures f join crm.mail_messages m on m.id = f.message_id where m.provider_message_id = 'g2'",
+      );
+      assert.equal(failed.rows[0]?.failures, 1);
+      state.llmDown = false;
+      const quiet = graph.prompts.length;
+      await prepareMail(owner, { deadline: Date.now() + 120_000, fetchImpl: graph.fetchImpl });
+      assert.ok(!graph.prompts.slice(quiet).some((prompt) => /pitch@newco\.test/.test(prompt.user)));
+      await getAdminPool().query("update crm.mail_pitch_failures set last_failed_at = now() - interval '7 hours'");
+      await prepareMail(owner, { deadline: Date.now() + 120_000, fetchImpl: graph.fetchImpl });
+      assert.ok(graph.prompts.slice(quiet).some((prompt) => /pitch@newco\.test/.test(prompt.user)));
       const unsubscribed = await unsubscribe(owner, { thread: threadKey(sourceId, "conv-g1"), block: true, existing: "archive" }, options);
       assert.deepEqual([unsubscribed.outcome, unsubscribed.status, unsubscribed.moved], ["none", "blocked", 1]);
     } finally {

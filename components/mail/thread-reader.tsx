@@ -814,7 +814,7 @@ export default function ThreadReader({
             </DropdownMenu>
           )}
           <span aria-hidden className="size-1.5 shrink-0 rounded-full" style={{ background: tagBase(account) }} />
-          <span className="caption-style text-subtle truncate">{account}</span>
+          <span className="caption-style text-subtle truncate max-sm:sr-only">{account}</span>
         </span>
       </div>
       {previous && <ThreadPeek thread={previous} own={own} side="previous" />}

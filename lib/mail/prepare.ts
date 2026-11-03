@@ -38,6 +38,8 @@ type PrepareReport = { prepared: number; skipped: number; reminders: number; che
 const REPLY_SCHEMA = z.object({ needsReply: z.boolean(), meeting: z.boolean().optional(), pitch: z.boolean().optional(), body: z.string().nullable() });
 const PITCH_SCHEMA = z.object({ pitches: z.array(z.number()) });
 const PITCH_BODY = 1_200;
+const PITCH_MAX_FAILURES = 3;
+const PITCH_RETRY_HOURS = 6;
 const NUDGE_SCHEMA = z.object({ body: z.string() });
 const CHECK_SCHEMA = z.object({ expectReply: z.array(z.number()) });
 
@@ -219,7 +221,10 @@ async function replyCandidates(db: Db, actor: UserActor, limit: number, pitches:
          and coalesce(m.received_at, m.created_at) > now() - make_interval(hours => $3)
          and lower(coalesce(m.from_email, '')) <> all ${ownAddresses("$1", "$4")}
          and not exists (select 1 from crm.mail_prepared p where p.message_id = m.id and p.kind = case when $7 then 'pitch' else 'reply' end)
-         and not ($7 and exists (select 1 from crm.mail_prepared p where p.message_id = m.id and p.kind = 'reply'))
+         and not ($7 and exists (
+           select 1 from crm.mail_pitch_failures pf
+           where pf.message_id = m.id and (pf.failures >= ${PITCH_MAX_FAILURES} or pf.last_failed_at > now() - make_interval(hours => ${PITCH_RETRY_HOURS}))
+         ))
          and not exists (
            select 1 from crm.mail_messages later join crm.mail_folders lf on lf.id = later.folder_id
            where later.source_id = m.source_id and coalesce(later.thread_key, 'm:' || later.id::text) = coalesce(m.thread_key, 'm:' || m.id::text)
@@ -251,15 +256,36 @@ async function notePitch(actor: UserActor, candidate: ReplyCandidate, pitch: boo
   );
 }
 
+async function notePitchFailures(actor: UserActor, candidates: ReplyCandidate[], error: unknown) {
+  const message = (error instanceof Error ? error.message : "The cold pitch check failed.").slice(0, 300);
+  console.error("Cold pitch check failed", message);
+  await withActor(actor, async (db) => {
+    for (const candidate of candidates) {
+      await db.query(
+        `insert into crm.mail_pitch_failures (message_id, workspace_id, user_id, last_error) values ($1, $2, $3, $4)
+         on conflict (message_id) do update set failures = crm.mail_pitch_failures.failures + 1, last_failed_at = now(), last_error = excluded.last_error`,
+        [candidate.id, actor.workspaceId, actor.userId, message],
+      );
+    }
+  });
+}
+
 async function handlePitch(actor: UserActor, candidate: ReplyCandidate, mode: ColdPitchMode, fetchImpl?: typeof fetch) {
+  if (mode !== "off" && candidate.from_email) {
+    try {
+      await markColdPitch(
+        actor,
+        { id: candidate.id, sourceId: candidate.source_id, providerMessageId: candidate.provider_message_id, threadKey: candidate.tk, from: candidate.from_email },
+        mode,
+        fetchImpl,
+      );
+    } catch (error) {
+      await notePitchFailures(actor, [candidate], error);
+      return false;
+    }
+  }
   await notePitch(actor, candidate, true);
-  if (mode === "off" || !candidate.from_email) return;
-  await markColdPitch(
-    actor,
-    { id: candidate.id, sourceId: candidate.source_id, providerMessageId: candidate.provider_message_id, threadKey: candidate.tk, from: candidate.from_email },
-    mode,
-    fetchImpl,
-  ).catch((error) => console.error("Moving a cold pitch failed", error instanceof Error ? error.message : error));
+  return true;
 }
 
 async function checkPitches(actor: UserActor, mode: ColdPitchMode, deadline: number, fetchImpl?: typeof fetch) {
@@ -272,25 +298,30 @@ async function checkPitches(actor: UserActor, mode: ColdPitchMode, deadline: num
         `[${index + 1}] From: ${item.from_name ? `${item.from_name} <${item.from_email}>` : item.from_email}\nSubject: ${item.subject ?? "(no subject)"}\n${stripQuoted(item.body_text ?? item.snippet ?? "").slice(0, PITCH_BODY)}`,
     )
     .join("\n\n---\n\n");
-  const result = await completeJson({
-    system:
-      `You sort new email ${name} received from people who aren't in the CRM and have never written to ${name} before. Reply with JSON only: {"pitches": number[]}. ` +
-      "List the numbers of emails that are unsolicited sales, marketing, recruiting, link-building or partnership pitches (cold outreach). " +
-      `Leave out anything that could be a real enquiry, an introduction from someone ${name} knows, a reply, a request for help, an invoice, a notification or a newsletter. When unsure, leave it out. ` +
-      UNTRUSTED.replace("only write the reply", "only decide"),
-    user: listed,
-    schema: PITCH_SCHEMA,
-    maxTokens: 200,
-    timeoutMs: 15_000,
-    deadline,
-    fetchImpl,
-  });
+  let result;
+  try {
+    result = await completeJson({
+      system:
+        `You sort new email ${name} received from people who aren't in the CRM and have never written to ${name} before. Reply with JSON only: {"pitches": number[]}. ` +
+        "List the numbers of emails that are unsolicited sales, marketing, recruiting, link-building or partnership pitches (cold outreach). " +
+        `Leave out anything that could be a real enquiry, an introduction from someone ${name} knows, a reply, a request for help, an invoice, a notification or a newsletter. When unsure, leave it out. ` +
+        UNTRUSTED.replace("only write the reply", "only decide"),
+      user: listed,
+      schema: PITCH_SCHEMA,
+      maxTokens: 200,
+      timeoutMs: 15_000,
+      deadline,
+      fetchImpl,
+    });
+  } catch (error) {
+    await notePitchFailures(actor, candidates, error);
+    return 0;
+  }
   const pitched = new Set(result.data.pitches.filter((number) => Number.isInteger(number) && number >= 1 && number <= candidates.length));
   let count = 0;
   for (const [index, candidate] of candidates.entries()) {
     if (pitched.has(index + 1)) {
-      await handlePitch(actor, candidate, mode, fetchImpl);
-      count += 1;
+      if (await handlePitch(actor, candidate, mode, fetchImpl)) count += 1;
     } else {
       await notePitch(actor, candidate, false);
     }
@@ -331,9 +362,10 @@ async function prepareReply(actor: UserActor, candidate: ReplyCandidate, deadlin
     fetchImpl,
   });
   const pitched = askPitch && result.data.pitch === true;
+  let pitchFailed = false;
   if (askPitch) {
-    if (pitched) await handlePitch(actor, candidate, pitchMode, fetchImpl);
-    else await notePitch(actor, candidate, false);
+    if (!pitched) await notePitch(actor, candidate, false);
+    else if (!(await handlePitch(actor, candidate, pitchMode, fetchImpl))) pitchFailed = true;
   }
   const written = result.data.needsReply && result.data.body && !pitched ? clean(result.data.body).replace(/\r\n/g, "\n").slice(0, BODY_MAX) : "";
   const template = written.includes(TIMES_MARK) ? written : null;
@@ -362,7 +394,7 @@ async function prepareReply(actor: UserActor, candidate: ReplyCandidate, deadlin
       ],
     ),
   );
-  if (pitched) return "pitch" as const;
+  if (pitched) return pitchFailed ? ("skipped" as const) : ("pitch" as const);
   return body ? ("prepared" as const) : ("skipped" as const);
 }
 

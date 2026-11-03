@@ -9,6 +9,11 @@ export async function aiAllowed(userId: string, kind: string, limit: number) {
   return Boolean(result.rows[0]?.allowed);
 }
 
+export async function withinLimit(userId: string, kind: string, limit: number, seconds: number) {
+  const result = await query<{ allowed: boolean }>("select private.consume_rate_limit($1, $2, $3) as allowed", [`mail:${kind}:${userId}`, limit, seconds]);
+  return Boolean(result.rows[0]?.allowed);
+}
+
 export function aiConfigured() {
   return Boolean(process.env.LLM_API_KEY?.trim());
 }

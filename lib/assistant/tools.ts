@@ -38,6 +38,7 @@ import { STARTER_TEMPLATES as PROPOSAL_STARTERS } from "@/lib/proposals/starters
 import { addStep, removeStep, updateStep } from "@/lib/proposals/steps";
 import { blockLinks, BLOCKS_GUIDE, onlyFields, proposalForAgent, templateForAgent, templateSettings } from "@/lib/proposals/agent";
 import { mailOrigin } from "@/lib/mail/origin";
+import { senderKey } from "@/lib/mail/split";
 import type { MailAddress } from "@/lib/mail/types";
 import { OUTCOME_LABELS, SUBSCRIPTION_LABELS, type ExistingMailChoice, type MailDraft, type UnsubscribeResult } from "@/lib/mail/view";
 import {
@@ -377,34 +378,45 @@ function counted(count: number, one: string, many: string) {
 
 const CONVERSATION_ACTIONS = ["archive", "trash", "inbox", "read", "unread", "flag", "unflag", "snooze", "remind_if_no_reply"] as const;
 const SENDER_TOOL_ACTIONS = ["unsubscribe", "keep", "research", "block"] as const;
+const PROTECTION_UNCHECKED = "protect-unchecked";
 const EXISTING_LINES: Record<ExistingMailChoice, string> = {
   archive: "Mail already received from them is archived.",
   trash: "Mail already received from them moves to Trash.",
   leave: "Mail already received from them stays where it is.",
 };
 
+function senderKeys(args: Args) {
+  const raw = strings(args.senders).slice(0, 50);
+  const keys = [...new Set(raw.map((sender) => senderKey(sender)).filter((key): key is string => Boolean(key)))];
+  const invalid = [...new Set(raw.filter((sender) => !senderKey(sender)))];
+  return { keys, invalid };
+}
+
 function describeSenderAction(args: Args, name: Names) {
-  const senders = [...new Set(strings(args.senders))];
+  const { keys, invalid } = senderKeys(args);
   const action = str(args.action) as (typeof SENDER_TOOL_ACTIONS)[number];
-  const count = counted(senders.length, "sender", "senders");
+  const count = counted(keys.length, "sender", "senders");
   const titles: Record<(typeof SENDER_TOOL_ACTIONS)[number], string> = {
     unsubscribe: `Unsubscribe from ${count}`,
     keep: `Keep ${count}`,
     research: `Keep ${count} for research`,
     block: `Block ${count}`,
   };
-  const shown = senders.slice(0, 20).map((sender) => {
-    const protection = detail(name, `protect:${sender}`);
-    return protection ? `${sender}. ${protection}` : sender;
-  });
+  const unchecked = detail(name, PROTECTION_UNCHECKED) !== "";
+  const protectedOnes = keys.filter((key) => detail(name, `protect:${key}`)).map((key) => `${key}. ${detail(name, `protect:${key}`)}`);
+  const others = keys.filter((key) => !detail(name, `protect:${key}`));
+  const shown = others.slice(0, 20);
   const existing = oneOf(args.existingMail, EXISTING_CHOICES) ?? "archive";
   return {
     title: titles[action] ?? "Update senders",
     lines: [
+      unchecked ? "Orbit couldn't check whether these senders are CRM contacts or companies. Check them before you confirm." : "",
+      ...protectedOnes,
       ...shown,
-      senders.length > shown.length ? `and ${senders.length - shown.length} more` : "",
+      others.length > shown.length ? `and ${others.length - shown.length} more` : "",
+      invalid.length ? `Not an address or @domain, so left out: ${invalid.join(", ")}` : "",
       action === "unsubscribe" || action === "block" ? EXISTING_LINES[existing] : "",
-      action === "research" ? "Their mail moves out of the inbox to a Research folder and stays readable." : "",
+      action === "research" ? (existing === "leave" ? "Their new mail goes to a Research folder; mail already here stays put." : "Their mail moves out of the inbox to a Research folder and stays readable.") : "",
       action === "block" ? "New mail from them is archived as it arrives." : "",
       str(args.summary) ? `Why: ${str(args.summary)}` : "",
     ],
@@ -412,12 +424,16 @@ function describeSenderAction(args: Args, name: Names) {
 }
 
 async function runSenderAction(actor: UserActor, action: (typeof SENDER_TOOL_ACTIONS)[number], args: Args, context: ToolContext) {
-  const senders = [...new Set(strings(args.senders))].slice(0, 50);
+  const { keys: senders } = senderKeys(args);
   if (senders.length === 0) return { error: "Say which senders, using addresses or @domains from search_email folder subscriptions." };
   const existing = oneOf(args.existingMail, EXISTING_CHOICES) ?? "archive";
   const options = { deadline: context.deadline, defer: context.defer ?? afterResponse };
+  const checked = await senderProtection(actor, senders).then(
+    () => true,
+    () => false,
+  );
   if (action === "unsubscribe") {
-    const results = await unsubscribeMany(actor, senders, { existing, confirmed: true }, options);
+    const results = await unsubscribeMany(actor, senders, { existing, confirmed: checked }, options);
     const done = results.filter((result): result is UnsubscribeResult => !("error" in result));
     const failed = results.filter((result): result is { sender: string; error: string } => "error" in result);
     if (done.length === 0) return { error: failed[0]?.error ?? "Nothing was changed.", failed };
@@ -427,6 +443,7 @@ async function runSenderAction(actor: UserActor, action: (typeof SENDER_TOOL_ACT
         outcome: OUTCOME_LABELS[result.outcome],
         ...(result.url ? { openPage: result.url } : {}),
         ...(result.detail ? { detail: result.detail } : {}),
+        ...(result.moveError ? { moveError: result.moveError } : {}),
         moved: result.moved,
         ...(result.remaining ? { stillMoving: result.remaining } : {}),
       })),
@@ -438,7 +455,7 @@ async function runSenderAction(actor: UserActor, action: (typeof SENDER_TOOL_ACT
   const failed: { sender: string; error: string }[] = [];
   for (const sender of senders) {
     try {
-      const result = await setSubscription(actor, { sender, action, existing, confirmed: true }, options);
+      const result = await setSubscription(actor, { sender, action, existing, confirmed: checked }, options);
       changed.push({ sender: result.sender, status: SUBSCRIPTION_LABELS[result.status], moved: result.moved });
     } catch (error) {
       failed.push({ sender, error: error instanceof Error ? error.message : "That didn't work." });
@@ -1503,10 +1520,14 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       required: ["action", "summary"],
     },
     details: async (actor, args) => {
-      const senders = [...new Set(strings(args.senders))].slice(0, 50);
-      if (!senders.length) return {};
-      const protections = await senderProtection(actor, senders);
-      return Object.fromEntries([...protections].map(([sender, protection]) => [`protect:${sender}`, protection.reason]));
+      const { keys } = senderKeys(args);
+      if (!keys.length) return {};
+      try {
+        const protections = await senderProtection(actor, keys);
+        return Object.fromEntries([...protections].map(([sender, protection]) => [`protect:${sender}`, protection.reason]));
+      } catch {
+        return { [PROTECTION_UNCHECKED]: "yes" };
+      }
     },
     describe: (args, name) => {
       if ((SENDER_TOOL_ACTIONS as readonly string[]).includes(str(args.action))) return describeSenderAction(args, name);

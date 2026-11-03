@@ -529,7 +529,7 @@ export async function syncMail(
     }
   }
   const routed = report.arrived.length
-    ? await routeArrivedMail(actor, report.arrived, { fetchImpl }).catch((error) => {
+    ? await routeArrivedMail(actor, report.arrived, { fetchImpl, deadline }).catch((error) => {
         console.error("Routing new mail failed", error instanceof Error ? error.message : error);
         return [] as string[];
       })

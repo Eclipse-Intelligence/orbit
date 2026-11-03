@@ -9,7 +9,7 @@ import SectionHeader from "@/components/crm/section-header";
 import type { Viewer } from "@/components/crm/viewer";
 import { useComposer } from "@/components/mail/compose-dock";
 import { fetchSubscriptions, postBulkUnsubscribe, postSenderAction, type BulkResult, type SenderAction } from "@/components/mail/mail-cache";
-import UnsubscribeDialog, { movedLine, unsubscribeToast, type UnsubscribeRequest } from "@/components/mail/unsubscribe-dialog";
+import UnsubscribeDialog, { unsubscribeToast, type UnsubscribeRequest } from "@/components/mail/unsubscribe-dialog";
 import { OUTCOME_LABELS, SUBSCRIPTION_LABELS, type SubscriptionSender, type SubscriptionStatus, type UnsubscribeResult } from "@/lib/mail/view";
 import { cn } from "@/lib/utils";
 import ChevronLeftIcon from "@/public/assets/images/_common/chevron-left.svg";
@@ -35,10 +35,8 @@ const TONES: Record<SubscriptionStatus, "neutral" | "green" | "amber" | "red" | 
   research: "blue",
 };
 
-const DONE: Record<SenderAction, (name: string) => string> = {
+const DONE: Record<"keep" | "subscribe", (name: string) => string> = {
   keep: (name) => `Kept ${name}.`,
-  research: (name) => `Kept ${name} for research.`,
-  block: (name) => `Blocked ${name}.`,
   subscribe: (name) => `${name} is back to Subscribed.`,
 };
 
@@ -184,7 +182,6 @@ export default function SubscriptionsScreen({ viewer, initial, days }: { viewer:
   const [filter, setFilter] = useState<Filter>("all");
   const [busy, setBusy] = useState<Set<string>>(() => new Set());
   const [unsubscribing, setUnsubscribing] = useState<UnsubscribeRequest | null>(null);
-  const [blocking, setBlocking] = useState<SubscriptionSender | null>(null);
   const [confirmBulk, setConfirmBulk] = useState(false);
   const [bulkRunning, setBulkRunning] = useState(false);
   const [results, setResults] = useState<BulkResult[] | null>(null);
@@ -206,17 +203,16 @@ export default function SubscriptionsScreen({ viewer, initial, days }: { viewer:
     });
   }
 
-  function act(sender: SubscriptionSender, action: SenderAction, confirmed = false) {
-    if (action === "block" && sender.protection && !confirmed) {
-      setBlocking(sender);
+  function act(sender: SubscriptionSender, action: SenderAction) {
+    if (action === "block" || action === "research") {
+      setUnsubscribing({ sender: sender.sender, mode: action });
       return;
     }
     working(sender.sender, true);
-    postSenderAction({ sender: sender.sender, action, existing: "archive", confirmed })
+    postSenderAction({ sender: sender.sender, action, existing: "leave" })
       .then((change) => {
         setSenders((existing) => existing.map((item) => (item.sender === sender.sender ? { ...item, status: change.status, suggest: false } : item)));
-        const moved = action === "research" ? (change.moved ? ` Moved ${change.moved} to Research.` : "") : action === "block" ? movedLine("archive", change.moved) : "";
-        showToast({ message: `${DONE[action](sender.name?.trim() || sender.sender)}${moved}` });
+        showToast({ message: DONE[action === "keep" ? "keep" : "subscribe"](sender.name?.trim() || sender.sender) });
         reload();
       })
       .catch((error: Error) => showToast({ message: error.message, tone: "alert" }))
@@ -224,8 +220,7 @@ export default function SubscriptionsScreen({ viewer, initial, days }: { viewer:
   }
 
   function blockByAddress(address: string) {
-    const found = senders.find((item) => item.sender === address);
-    if (found) act(found, "block");
+    setUnsubscribing({ sender: address, mode: "block" });
   }
 
   function runBulk() {
@@ -281,19 +276,17 @@ export default function SubscriptionsScreen({ viewer, initial, days }: { viewer:
               if (item.id !== "all" && count === 0) return null;
               const active = filter === item.id;
               return (
-                <button
+                <Button
                   key={item.id}
-                  type="button"
+                  variant="ghost"
+                  size="sm"
                   aria-pressed={active}
                   onClick={() => setFilter(item.id)}
-                  className={cn(
-                    "ease-power3-out flex h-8 shrink-0 cursor-pointer items-center gap-1 rounded-full px-2.5 text-[13px] transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
-                    active ? "text-foreground bg-white/[0.07]" : "text-subtle hover:text-foreground hover:bg-white/[0.035]",
-                  )}
+                  className={cn("h-8 px-2.5 text-[13px] font-normal", active && "text-foreground bg-white/[0.07]")}
                 >
                   {item.label}
                   <span className="text-soft tabular-nums">{count}</span>
-                </button>
+                </Button>
               );
             })}
           </nav>
@@ -327,15 +320,6 @@ export default function SubscriptionsScreen({ viewer, initial, days }: { viewer:
           });
           reload();
         }}
-      />
-      <ConfirmDialog
-        open={Boolean(blocking)}
-        onOpenChange={(open) => !open && setBlocking(null)}
-        title={`Block ${blocking?.protection?.name ?? "this sender"}?`}
-        description={`${blocking?.protection?.reason ?? ""} Orbit doesn't suggest blocking people and companies you work with. Block ${blocking?.sender ?? ""} anyway?`}
-        confirmLabel="Block anyway"
-        tone="neutral"
-        onConfirm={() => blocking && act(blocking, "block", true)}
       />
       <ConfirmDialog
         open={confirmBulk}

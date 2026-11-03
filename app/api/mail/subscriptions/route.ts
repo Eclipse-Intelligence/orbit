@@ -2,7 +2,7 @@ import { inBackground, mailResponse } from "@/app/api/mail/respond";
 import { EXISTING_CHOICES, listSubscriptions, SENDER_ACTIONS, setSubscription } from "@/lib/mail/subscriptions";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 export async function GET(request: Request) {
   const days = Number(new URL(request.url).searchParams.get("days") ?? "");

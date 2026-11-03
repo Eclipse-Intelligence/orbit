@@ -116,6 +116,7 @@ export type UnsubscribePreview = {
   method: UnsubscribeMethod;
   target: string | null;
   pageUrl: string | null;
+  mailto: string | null;
   account: string;
   protection: SenderProtection | null;
   status: SubscriptionStatus;
@@ -128,6 +129,7 @@ export type UnsubscribeResult = {
   outcome: UnsubscribeOutcome;
   url: string | null;
   detail: string | null;
+  moveError: string | null;
   moved: number;
   remaining: number;
   status: SubscriptionStatus;

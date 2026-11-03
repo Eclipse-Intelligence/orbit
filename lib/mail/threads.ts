@@ -311,7 +311,12 @@ async function readThread(actor: UserActor, key: string): Promise<ThreadDetail> 
     const followUp = reminder.rows[0];
     const people = await threadPeople(db, actor, rows.length ? rows : result.rows);
     const own = new Set(
-      (await db.query<{ email: string }>("select lower(email) as email from crm.mail_sources where user_id = $1", [actor.userId])).rows
+      (
+        await db.query<{ email: string }>(
+          "select lower(email) as email from crm.mail_sources where user_id = $1 union select lower(email) from crm.send_identities where user_id = $1",
+          [actor.userId],
+        )
+      ).rows
         .map((row) => row.email)
         .concat(actor.email.toLowerCase()),
     );

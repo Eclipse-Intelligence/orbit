@@ -30,13 +30,15 @@ const RESEARCH_FOLDER = "Research";
 export const SENDER_ACTIONS = ["keep", "research", "block", "subscribe"] as const;
 type SenderAction = (typeof SENDER_ACTIONS)[number];
 export const EXISTING_CHOICES: ExistingMailChoice[] = ["archive", "trash", "leave"];
+export const BACKGROUND_MOVE_MS = 150_000;
 
 const PROTECTED_LIFECYCLES: Record<string, string> = { customer: "client", client: "client", prospect: "prospect", partner: "partner" };
 const UNSUBSCRIBE_TEXT = "(unsubscribe|opt[ -]?out|manage (your )?(email |subscription )?preferences|email preferences)";
 const MOVE_LIMIT = 2_000;
 const MOVE_CHUNK = 40;
 const INLINE_MOVE_MS = 25_000;
-const BACKGROUND_MOVE_MS = 240_000;
+const ROUTE_MIN_MS = 5_000;
+const ROUTE_MAX_MS = 60_000;
 const BULK_PARALLEL = 3;
 const BULK_RESERVE_MS = 20_000;
 const SCOPES: Record<"archive" | "trash" | "research", string[]> = {
@@ -50,6 +52,7 @@ const STATUS_FOR: Record<SenderAction, "kept" | "research" | "blocked" | "subscr
   block: "blocked",
   subscribe: "subscribed",
 };
+const STATUS_RANK: Record<Stored["status"], number> = { blocked: 5, research: 4, unsubscribed: 3, kept: 2, subscribed: 1 };
 
 type Stored = {
   sender: string;
@@ -60,6 +63,7 @@ type Stored = {
   ignored_at: Date | null;
   cold_pitch_at: Date | null;
   list_unsubscribe: string | null;
+  pitch_rule: boolean;
 };
 
 type Defer = (work: () => Promise<unknown>) => void;
@@ -72,7 +76,7 @@ type UnsubscribeOptions = {
   defer?: Defer;
 };
 
-const STORED_COLUMNS = "sender, status, unsubscribed_at, method, outcome, ignored_at, cold_pitch_at, list_unsubscribe";
+const STORED_COLUMNS = "sender, status, unsubscribed_at, method, outcome, ignored_at, cold_pitch_at, list_unsubscribe, pitch_rule";
 
 function iso(value: Date | string | null | undefined) {
   return value ? new Date(value).toISOString() : null;
@@ -86,18 +90,28 @@ function ownSql(userParam: string, emailParam: string) {
   )`;
 }
 
+function rankSql(alias: string) {
+  return `case ${alias}.status when 'blocked' then 5 when 'research' then 4 when 'unsubscribed' then 3 when 'kept' then 2 else 1 end`;
+}
+
 function recordFor(alias: string, userParam: string) {
   return `left join lateral (
     select ms.sender, ms.status, ms.unsubscribed_at, ms.cold_pitch_at from crm.mail_subscriptions ms
     where ms.user_id = ${userParam}
       and (ms.sender = lower(${alias}.from_email) or ms.sender = '@' || split_part(lower(${alias}.from_email), '@', 2))
-    order by ms.sender like '@%'
+    order by ${rankSql("ms")} desc, ms.sender like '@%'
     limit 1
   ) sub on true`;
 }
 
 function senderMatch(alias: string, param: string) {
   return `(case when ${param} like '@%' then split_part(lower(${alias}.from_email), '@', 2) = substr(${param}, 2) else lower(${alias}.from_email) = ${param} end)`;
+}
+
+function stricter(first: Stored | undefined, second: Stored | undefined) {
+  if (!first) return second;
+  if (!second) return first;
+  return STATUS_RANK[second.status] > STATUS_RANK[first.status] ? second : first;
 }
 
 function viewStatus(row: Pick<Stored, "status" | "ignored_at"> | null | undefined): SubscriptionStatus {
@@ -116,16 +130,28 @@ function domainOf(key: string) {
   return key.startsWith("@") ? key.slice(1) : (key.split("@")[1] ?? "");
 }
 
+async function assertNotOwn(db: Db, actor: UserActor, key: string) {
+  const own = await db.query<{ email: string }>(`select own.email from ${ownSql("$1", "$2")} as own(email) where own.email is not null`, [actor.userId, actor.email]);
+  const emails = own.rows.map((row) => row.email);
+  if (key.startsWith("@") && emails.some((email) => domainOf(email) === key.slice(1))) {
+    throw new CrmError("invalid_input", `${key} is your own domain, so Orbit won't unsubscribe from or block it. Choose a single sender instead.`, 400, { field: "sender" });
+  }
+  if (emails.includes(key)) throw new CrmError("invalid_input", `${key} is one of your own addresses.`, 400, { field: "sender" });
+}
+
 async function protectionFor(db: Db, actor: UserActor, keys: string[]): Promise<Map<string, SenderProtection>> {
   const found = new Map<string, SenderProtection>();
-  const addresses = [...new Set(keys.filter((key) => !key.startsWith("@")))];
-  const domains = [...new Set(keys.map(domainOf).filter(Boolean))];
   if (keys.length === 0) return found;
-  const contacts = addresses.length
+  const addresses = [...new Set(keys.filter((key) => !key.startsWith("@")))];
+  const domainKeys = [...new Set(keys.filter((key) => key.startsWith("@")).map(domainOf))];
+  const domains = [...new Set(keys.map(domainOf).filter(Boolean))];
+  const contacts = addresses.length || domainKeys.length
     ? await db.query<{ id: string; name: string | null; normalized_email: string }>(
         `select id, nullif(trim(concat_ws(' ', first_name, last_name)), '') as name, normalized_email from crm.contacts
-         where workspace_id = $1 and archived_at is null and normalized_email = any($2::text[])`,
-        [actor.workspaceId, addresses],
+         where workspace_id = $1 and archived_at is null
+           and (normalized_email = any($2::text[]) or split_part(normalized_email, '@', 2) = any($3::text[]))
+         order by updated_at desc`,
+        [actor.workspaceId, addresses, domainKeys],
       )
     : { rows: [] };
   const companies = domains.length
@@ -136,10 +162,13 @@ async function protectionFor(db: Db, actor: UserActor, keys: string[]): Promise<
       )
     : { rows: [] };
   for (const key of keys) {
-    const contact = key.startsWith("@") ? undefined : contacts.rows.find((row) => row.normalized_email === key);
+    const contact = key.startsWith("@")
+      ? contacts.rows.find((row) => domainOf(row.normalized_email) === domainOf(key))
+      : contacts.rows.find((row) => row.normalized_email === key);
     if (contact) {
-      const name = contact.name ?? key;
-      found.set(key, { kind: "contact", id: contact.id, name, href: contactHref(contact.id), reason: `${name} is a contact in Orbit.` });
+      const name = contact.name ?? contact.normalized_email;
+      const reason = key.startsWith("@") ? `${name} at ${key} is a contact in Orbit.` : `${name} is a contact in Orbit.`;
+      found.set(key, { kind: "contact", id: contact.id, name, href: contactHref(contact.id), reason });
       continue;
     }
     const company = companies.rows.find((row) => row.domain === domainOf(key));
@@ -163,9 +192,9 @@ async function storedRecords(db: Db, actor: UserActor) {
 
 async function effectiveRecord(db: Db, actor: UserActor, key: string) {
   const result = await db.query<Stored>(
-    `select ${STORED_COLUMNS} from crm.mail_subscriptions
+    `select ${STORED_COLUMNS} from crm.mail_subscriptions ms
      where user_id = $1 and (sender = $2 or sender = '@' || $3)
-     order by sender like '@%' limit 1`,
+     order by ${rankSql("ms")} desc, sender like '@%' limit 1`,
     [actor.userId, key, domainOf(key)],
   );
   return result.rows[0] ?? null;
@@ -203,10 +232,11 @@ export async function listSubscriptions(actor: UserActor, options: { days?: numb
     );
     const records = await storedRecords(db, actor);
     const byKey = new Map(records.map((row) => [row.sender, row]));
+    const resolve = (address: string) => stricter(byKey.get(address), byKey.get(`@${domainOf(address)}`));
     const groups = new Map<string, Group>();
     for (const row of stats.rows) {
       if (row.calendar) continue;
-      const record = byKey.get(row.sender) ?? byKey.get(`@${domainOf(row.sender)}`);
+      const record = resolve(row.sender);
       const key = record?.sender ?? row.sender;
       const group = groups.get(key) ?? { key, name: null, top: -1, emails: 0, opened: 0, lastAt: null, bulk: false };
       group.emails += row.emails;
@@ -216,11 +246,12 @@ export async function listSubscriptions(actor: UserActor, options: { days?: numb
         group.top = row.emails;
         group.name = row.name;
       }
-      group.bulk = group.bulk || row.bulk || Boolean(record?.list_unsubscribe);
+      group.bulk = group.bulk || row.bulk || Boolean(byKey.get(row.sender)?.list_unsubscribe || record?.list_unsubscribe);
       groups.set(key, group);
     }
     for (const record of records) {
       if (groups.has(record.sender)) continue;
+      if (!record.sender.startsWith("@") && resolve(record.sender) !== record) continue;
       if (record.status === "subscribed" && !record.cold_pitch_at && !record.list_unsubscribe) continue;
       groups.set(record.sender, { key: record.sender, name: null, top: 0, emails: 0, opened: 0, lastAt: null, bulk: true });
     }
@@ -233,7 +264,7 @@ export async function listSubscriptions(actor: UserActor, options: { days?: numb
       days,
       senders: listed
         .map((group): SubscriptionSender => {
-          const record = byKey.get(group.key);
+          const record = group.key.startsWith("@") ? byKey.get(group.key) : resolve(group.key);
           const status = viewStatus(record);
           const protection = protections.get(group.key) ?? null;
           return {
@@ -331,9 +362,10 @@ function hostOf(url: string) {
 
 export async function unsubscribePreview(actor: UserActor, input: { thread?: string; sender?: string }, fetchImpl: typeof fetch = fetch): Promise<UnsubscribePreview> {
   const message = await withActor(actor, (db) => latestMessage(db, actor, input));
+  const key = input.sender ? readKey(input.sender) : message.from_email;
+  await withActor(actor, (db) => assertNotOwn(db, actor, key));
   const { raw, parsed } = await readLink(actor, message, fetchImpl);
   const method = chooseMethod(parsed);
-  const key = input.sender ? readKey(input.sender) : message.from_email;
   return withActor(actor, async (db) => {
     await rememberLink(db, actor, message.from_email, raw, parsed.oneClick);
     const record = await effectiveRecord(db, actor, key);
@@ -344,8 +376,39 @@ export async function unsubscribePreview(actor: UserActor, input: { thread?: str
       method,
       target: method === "mailto" ? parsed.mailto[0].address : method === "one_click" ? hostOf(parsed.https[0]) : method === "page" ? hostOf(parsed.pages[0]) : null,
       pageUrl: method === "page" ? parsed.pages[0] : null,
+      mailto: method === "one_click" || method === "mailto" ? (parsed.mailto[0]?.address ?? null) : null,
       account: message.account,
       protection,
+      status: viewStatus(record),
+      existing: await countSenderMail(db, actor, key),
+    };
+  });
+}
+
+export async function senderSummary(actor: UserActor, input: { thread?: string; sender?: string }): Promise<UnsubscribePreview> {
+  return withActor(actor, async (db) => {
+    const message = input.thread ? await latestMessage(db, actor, input) : null;
+    const key = input.sender ? readKey(input.sender) : message!.from_email;
+    await assertNotOwn(db, actor, key);
+    const named = message
+      ? message.from_name
+      : (
+          await db.query<{ from_name: string | null }>(
+            `select m.from_name from crm.mail_messages m where m.user_id = $1 and ${senderMatch("m", "$2::text")} and nullif(btrim(m.from_name), '') is not null
+             order by coalesce(m.received_at, m.created_at) desc limit 1`,
+            [actor.userId, key],
+          )
+        ).rows[0]?.from_name ?? null;
+    const record = await effectiveRecord(db, actor, key);
+    return {
+      sender: key,
+      name: named,
+      method: "none",
+      target: null,
+      pageUrl: null,
+      mailto: null,
+      account: message?.account ?? "",
+      protection: (await protectionFor(db, actor, [key])).get(key) ?? null,
       status: viewStatus(record),
       existing: await countSenderMail(db, actor, key),
     };
@@ -379,11 +442,12 @@ async function researchFolder(actor: UserActor, sourceId: string, fetchImpl: typ
 }
 
 type MoveRow = { id: string; source_id: string; provider_message_id: string; tk: string };
+type MoveResult = { moved: number; movedIds: string[]; remaining: number; error: string | null };
 
-async function moveGrouped(actor: UserActor, rows: MoveRow[], choice: "archive" | "trash" | "research", deadline: number, fetchImpl: typeof fetch) {
+async function moveGrouped(actor: UserActor, rows: MoveRow[], choice: "archive" | "trash" | "research", deadline: number, fetchImpl: typeof fetch): Promise<MoveResult> {
   const bySource = new Map<string, MoveRow[]>();
   for (const row of rows) bySource.set(row.source_id, [...(bySource.get(row.source_id) ?? []), row]);
-  let moved = 0;
+  const movedIds: string[] = [];
   let attempted = 0;
   let error: string | null = null;
   for (const [sourceId, list] of bySource) {
@@ -392,10 +456,11 @@ async function moveGrouped(actor: UserActor, rows: MoveRow[], choice: "archive" 
       target = choice === "research" ? { providerFolderId: await researchFolder(actor, sourceId, fetchImpl), role: "other" } : choice;
     } catch (problem) {
       error = problem instanceof Error ? problem.message : "Outlook didn't make the Research folder.";
+      attempted += list.length;
       continue;
     }
     for (let index = 0; index < list.length; index += MOVE_CHUNK) {
-      if (Date.now() >= deadline) return { moved, remaining: rows.length - attempted, error };
+      if (Date.now() >= deadline) return { moved: movedIds.length, movedIds, remaining: rows.length - attempted, error };
       const chunk = list.slice(index, index + MOVE_CHUNK);
       attempted += chunk.length;
       try {
@@ -406,15 +471,16 @@ async function moveGrouped(actor: UserActor, rows: MoveRow[], choice: "archive" 
           target,
           fetchImpl,
         );
-        moved += result.moved.length;
+        movedIds.push(...result.moved);
         error = error ?? result.error;
       } catch (problem) {
         error = problem instanceof Error ? problem.message : "Outlook didn't move the emails.";
+        attempted += list.length - index - chunk.length;
         break;
       }
     }
   }
-  return { moved, remaining: 0, error };
+  return { moved: movedIds.length, movedIds, remaining: 0, error };
 }
 
 async function clearSenderMail(
@@ -422,28 +488,47 @@ async function clearSenderMail(
   sender: string,
   choice: "archive" | "trash" | "research",
   options: { fetchImpl?: typeof fetch; deadline?: number } = {},
-) {
+): Promise<MoveResult> {
   const key = readKey(sender);
-  const rows = await withActor(actor, async (db) => {
-    const result = await db.query<MoveRow>(
-      `select m.id, m.source_id, m.provider_message_id, coalesce(m.thread_key, 'm:' || m.id::text) as tk
-       from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
-       where m.user_id = $1 and f.role = any($3::text[]) and not m.is_draft and ${senderMatch("m", "$2::text")}
-       order by coalesce(m.received_at, m.created_at) desc limit $4`,
-      [actor.userId, key, SCOPES[choice], MOVE_LIMIT],
-    );
-    return result.rows;
-  });
-  return moveGrouped(actor, rows, choice, options.deadline ?? Date.now() + BACKGROUND_MOVE_MS, options.fetchImpl ?? fetch);
+  const deadline = options.deadline ?? Date.now() + BACKGROUND_MOVE_MS;
+  const total: MoveResult = { moved: 0, movedIds: [], remaining: 0, error: null };
+  for (;;) {
+    const rows = await withActor(actor, async (db) => {
+      const result = await db.query<MoveRow>(
+        `select m.id, m.source_id, m.provider_message_id, coalesce(m.thread_key, 'm:' || m.id::text) as tk
+         from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
+         where m.user_id = $1 and f.role = any($3::text[]) and not m.is_draft and ${senderMatch("m", "$2::text")}
+         order by coalesce(m.received_at, m.created_at) desc limit $4`,
+        [actor.userId, key, SCOPES[choice], MOVE_LIMIT + 1],
+      );
+      return result.rows;
+    });
+    const more = rows.length > MOVE_LIMIT;
+    const batch = rows.slice(0, MOVE_LIMIT);
+    const result = await moveGrouped(actor, batch, choice, deadline, options.fetchImpl ?? fetch);
+    total.moved += result.moved;
+    total.movedIds.push(...result.movedIds);
+    total.error = total.error ?? result.error;
+    if (result.remaining > 0 || (more && Date.now() >= deadline)) {
+      total.remaining = result.remaining + (more ? rows.length - MOVE_LIMIT : 0);
+      return total;
+    }
+    if (!more || result.moved === 0) return total;
+  }
 }
 
-async function clearWithin(actor: UserActor, key: string, choice: "archive" | "trash" | "research", options: UnsubscribeOptions) {
+async function clearWithin(actor: UserActor, key: string, choice: "archive" | "trash" | "research", options: UnsubscribeOptions, onMoved?: (count: number) => Promise<unknown>) {
   const deadline = Math.min(options.deadline ?? Infinity, Date.now() + INLINE_MOVE_MS);
   const cleared = await clearSenderMail(actor, key, choice, { fetchImpl: options.fetchImpl, deadline });
   if (cleared.remaining > 0 && options.defer) {
-    options.defer(() =>
-      clearSenderMail(actor, key, choice, { fetchImpl: options.fetchImpl }).catch((error) => console.error("Moving a sender's mail failed", error)),
-    );
+    options.defer(async () => {
+      try {
+        const later = await clearSenderMail(actor, key, choice, { fetchImpl: options.fetchImpl, deadline: Date.now() + BACKGROUND_MOVE_MS });
+        if (later.moved && onMoved) await onMoved(later.moved);
+      } catch (error) {
+        console.error("Moving a sender's mail failed", error);
+      }
+    });
   }
   return cleared;
 }
@@ -464,7 +549,7 @@ async function sendMailto(actor: UserActor, sourceId: string, mailto: Mailto, fe
       signature: false,
       remindHours: null,
     },
-    { origin: null, fetchImpl, storedFiles: "keep" },
+    { origin: null, fetchImpl, storedFiles: "keep", logOnTimeline: false },
   );
 }
 
@@ -481,7 +566,10 @@ export async function unsubscribe(
   const choice = readChoice(input.existing);
   const message = await withActor(actor, (db) => latestMessage(db, actor, input));
   const key = input.sender ? readKey(input.sender) : message.from_email;
-  const protection = (await withActor(actor, (db) => protectionFor(db, actor, [key]))).get(key);
+  const protection = await withActor(actor, async (db) => {
+    await assertNotOwn(db, actor, key);
+    return (await protectionFor(db, actor, [key])).get(key);
+  });
   if (protection && !input.confirmed) {
     throw new CrmError("protected", `${protection.reason} Confirm to ${input.block ? "unsubscribe and block" : "unsubscribe"} anyway.`, 409, { field: "confirmed" });
   }
@@ -503,7 +591,7 @@ export async function unsubscribe(
       detail = error instanceof Error ? error.message : "The unsubscribe link didn't answer.";
     }
   }
-  if (!outcome && parsed.mailto.length && (method === "one_click" || method === "mailto")) {
+  if (!outcome && !refused && parsed.mailto.length && (method === "one_click" || method === "mailto")) {
     method = "mailto";
     target = parsed.mailto[0].address;
     try {
@@ -522,11 +610,11 @@ export async function unsubscribe(
   const final: UnsubscribeOutcome = outcome ?? (method === "none" ? "none" : "failed");
   const succeeded = final === "unsubscribed" || final === "requested" || final === "needs_you";
   const status = input.block ? "blocked" : succeeded ? "unsubscribed" : null;
-  const moving = Boolean(succeeded || input.block);
-  const record = await withActor(actor, async (db) => {
-    await db.query(
+  const moving = Boolean(succeeded || input.block) && choice !== "leave";
+  const { record, attemptId } = await withActor(actor, async (db) => {
+    const attempt = await db.query<{ id: string }>(
       `insert into crm.mail_unsubscribes (workspace_id, user_id, sender, source_id, message_id, method, outcome, target, detail, existing)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning id`,
       [
         actor.workspaceId,
         actor.userId,
@@ -556,15 +644,19 @@ export async function unsubscribe(
        returning ${STORED_COLUMNS}`,
       [actor.workspaceId, actor.userId, key, status, succeeded, method, final, raw, parsed.oneClick],
     );
-    return saved.rows[0];
+    return { record: saved.rows[0], attemptId: attempt.rows[0].id };
   });
-  const cleared = moving && choice !== "leave" ? await clearWithin(actor, key, choice, options) : { moved: 0, remaining: 0, error: null };
+  const noteMoved = (count: number) =>
+    withActor(actor, (db) => db.query("update crm.mail_unsubscribes set moved = moved + $2 where id = $1", [attemptId, count]));
+  const cleared = choice !== "leave" && moving ? await clearWithin(actor, key, choice, options, noteMoved) : { moved: 0, remaining: 0, error: null };
+  if (cleared.moved) await noteMoved(cleared.moved);
   return {
     sender: key,
     method,
     outcome: final,
     url,
-    detail: detail ?? cleared.error,
+    detail,
+    moveError: cleared.error,
     moved: cleared.moved,
     remaining: cleared.remaining,
     status: viewStatus(record),
@@ -607,10 +699,11 @@ export async function setSubscription(
 ) {
   if (!SENDER_ACTIONS.includes(input.action)) throw new CrmError("invalid_input", "Choose keep, research, block or subscribe.", 400, { field: "action" });
   const key = readKey(input.sender);
-  if (input.action === "block" && !input.confirmed) {
-    const protection = (await withActor(actor, (db) => protectionFor(db, actor, [key]))).get(key);
-    if (protection) throw new CrmError("protected", `${protection.reason} Confirm to block them anyway.`, 409, { field: "confirmed" });
-  }
+  const protection = await withActor(actor, async (db) => {
+    await assertNotOwn(db, actor, key);
+    return input.action === "block" ? (await protectionFor(db, actor, [key])).get(key) : undefined;
+  });
+  if (protection && !input.confirmed) throw new CrmError("protected", `${protection.reason} Confirm to block them anyway.`, 409, { field: "confirmed" });
   const status = STATUS_FOR[input.action];
   const record = await withActor(actor, async (db) => {
     const result = await db.query<Stored>(
@@ -622,9 +715,15 @@ export async function setSubscription(
        returning ${STORED_COLUMNS}`,
       [actor.workspaceId, actor.userId, key, status],
     );
-    return result.rows[0];
+    const saved = result.rows[0];
+    if (saved.pitch_rule && (input.action === "keep" || input.action === "subscribe")) {
+      await db.query("delete from crm.mail_sender_rules where user_id = $1 and sender = $2 and split = 'other'", [actor.userId, key]);
+      await db.query("update crm.mail_subscriptions set pitch_rule = false where user_id = $1 and sender = $2", [actor.userId, key]);
+    }
+    return saved;
   });
-  const choice = input.action === "research" ? "research" : input.action === "block" ? readChoice(input.existing) : "leave";
+  const existing = readChoice(input.existing);
+  const choice = input.action === "research" ? (existing === "leave" ? "leave" : "research") : input.action === "block" ? existing : "leave";
   const cleared = choice !== "leave" ? await clearWithin(actor, key, choice, options) : { moved: 0, remaining: 0, error: null };
   return { sender: key, status: viewStatus(record), moved: cleared.moved, remaining: cleared.remaining, error: cleared.error };
 }
@@ -640,13 +739,15 @@ type Arrival = {
   unsubscribed_at: Date | null;
   cold_pitch_at: Date | null;
   replied: boolean;
+  thread_sent: boolean;
   cold_pitches: string;
 };
 
-export async function routeArrivedMail(actor: UserActor, ids: string[], options: { fetchImpl?: typeof fetch; now?: number } = {}) {
+export async function routeArrivedMail(actor: UserActor, ids: string[], options: { fetchImpl?: typeof fetch; now?: number; deadline?: number } = {}) {
   const wanted = ids.filter(isUuid);
   if (wanted.length === 0) return [];
   const now = options.now ?? Date.now();
+  const deadline = Math.min(Math.max(options.deadline ?? 0, Date.now() + ROUTE_MIN_MS), Date.now() + ROUTE_MAX_MS);
   const rows = await withActor(actor, async (db) => {
     const result = await db.query<Arrival>(
       `select m.id, m.source_id, m.provider_message_id, coalesce(m.thread_key, 'm:' || m.id::text) as tk,
@@ -655,12 +756,17 @@ export async function routeArrivedMail(actor: UserActor, ids: string[], options:
          exists (
            select 1 from crm.mail_messages s join crm.mail_folders sf on sf.id = s.folder_id
            where s.user_id = $1 and sf.role = 'sent' and s.to_recipients @> jsonb_build_array(jsonb_build_object('address', lower(m.from_email)))
-         ) as replied
+         ) as replied,
+         exists (
+           select 1 from crm.mail_messages s join crm.mail_folders sf on sf.id = s.folder_id
+           where s.user_id = $1 and s.source_id = m.source_id and coalesce(s.thread_key, 'm:' || s.id::text) = coalesce(m.thread_key, 'm:' || m.id::text)
+             and (sf.role = 'sent' or lower(coalesce(s.from_email, '')) in (select own.email from ${ownSql("$1", "$4")} as own(email) where own.email is not null))
+         ) as thread_sent
        from crm.mail_messages m
        join crm.mail_folders f on f.id = m.folder_id and f.role = 'inbox'
        ${recordFor("m", "$1")}
        where m.user_id = $1 and m.id = any($2::uuid[]) and sub.sender is not null`,
-      [actor.userId, wanted, actor.workspaceId],
+      [actor.userId, wanted, actor.workspaceId, actor.email],
     );
     return result.rows;
   });
@@ -668,15 +774,33 @@ export async function routeArrivedMail(actor: UserActor, ids: string[], options:
   for (const row of rows) {
     if (row.status === "blocked") plans.push({ row, choice: "archive", ignored: false });
     else if (row.status === "research") plans.push({ row, choice: "research", ignored: false });
-    else if (row.status === "unsubscribed" && row.unsubscribed_at && new Date(row.at).getTime() > new Date(row.unsubscribed_at).getTime() + IGNORE_AFTER_DAYS * 86_400_000) {
+    else if (
+      row.status === "unsubscribed" &&
+      row.unsubscribed_at &&
+      !row.thread_sent &&
+      !row.replied &&
+      new Date(row.at).getTime() > new Date(row.unsubscribed_at).getTime() + IGNORE_AFTER_DAYS * 86_400_000
+    ) {
       plans.push({ row, choice: "archive", ignored: true });
-    } else if (row.status === "subscribed" && row.cold_pitch_at && row.cold_pitches === "archive" && !row.replied) {
+    } else if (row.status === "subscribed" && row.cold_pitch_at && row.cold_pitches === "archive" && !row.replied && !row.thread_sent) {
       plans.push({ row, choice: "archive", ignored: false });
     }
   }
   if (plans.length === 0) return [];
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const routed: string[] = [];
+  for (const choice of ["archive", "research"] as const) {
+    const chosen = plans.filter((plan) => plan.choice === choice).map((plan) => ({ id: plan.row.id, source_id: plan.row.source_id, provider_message_id: plan.row.provider_message_id, tk: plan.row.tk }));
+    if (chosen.length === 0) continue;
+    const result = await moveGrouped(actor, chosen, choice, deadline, fetchImpl).catch((error) => {
+      console.error("Moving arrived mail failed", error instanceof Error ? error.message : error);
+      return null;
+    });
+    if (result?.error) console.error("Moving arrived mail failed", result.error);
+    routed.push(...(result?.movedIds ?? []));
+  }
   const ignored = new Map<string, number>();
-  for (const plan of plans) if (plan.ignored) ignored.set(plan.row.sender, (ignored.get(plan.row.sender) ?? 0) + 1);
+  for (const plan of plans) if (plan.ignored && routed.includes(plan.row.id)) ignored.set(plan.row.sender, (ignored.get(plan.row.sender) ?? 0) + 1);
   if (ignored.size) {
     await withActor(actor, async (db) => {
       for (const [sender, count] of ignored) {
@@ -687,26 +811,6 @@ export async function routeArrivedMail(actor: UserActor, ids: string[], options:
         );
       }
     });
-  }
-  const fetchImpl = options.fetchImpl ?? fetch;
-  const routed: string[] = [];
-  for (const choice of ["archive", "research"] as const) {
-    const chosen = plans.filter((plan) => plan.choice === choice).map((plan) => ({ id: plan.row.id, source_id: plan.row.source_id, provider_message_id: plan.row.provider_message_id, tk: plan.row.tk }));
-    if (chosen.length === 0) continue;
-    const before = new Set(chosen.map((row) => row.id));
-    const result = await moveGrouped(actor, chosen, choice, Date.now() + 60_000, fetchImpl).catch((error) => {
-      console.error("Moving arrived mail failed", error instanceof Error ? error.message : error);
-      return null;
-    });
-    if (result?.error) console.error("Moving arrived mail failed", result.error);
-    const still = await withActor(actor, async (db) => {
-      const left = await db.query<{ id: string }>(
-        "select m.id from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id where m.id = any($1::uuid[]) and f.role = 'inbox'",
-        [[...before]],
-      );
-      return new Set(left.rows.map((row) => row.id));
-    });
-    for (const id of before) if (!still.has(id)) routed.push(id);
   }
   return routed;
 }
@@ -763,21 +867,26 @@ export async function markColdPitch(
 ) {
   const key = senderKey(message.from);
   if (!key) return;
-  await withActor(actor, async (db) => {
-    await db.query(
-      `insert into crm.mail_subscriptions (workspace_id, user_id, sender, cold_pitch_at) values ($1, $2, $3, now())
-       on conflict (user_id, sender) do update set cold_pitch_at = coalesce(crm.mail_subscriptions.cold_pitch_at, now()), updated_at = now()`,
-      [actor.workspaceId, actor.userId, key],
-    );
-    if (mode === "other") {
-      await db.query(
-        `insert into crm.mail_sender_rules (workspace_id, user_id, sender, split) values ($1, $2, $3, 'other')
-         on conflict (user_id, sender) do nothing`,
-        [actor.workspaceId, actor.userId, key],
-      );
-    }
-  });
   if (mode === "archive") {
-    await moveMessages(actor, message.sourceId, [{ id: message.id, providerMessageId: message.providerMessageId, threadKey: message.threadKey }], "archive", fetchImpl);
+    const moved = await moveMessages(actor, message.sourceId, [{ id: message.id, providerMessageId: message.providerMessageId, threadKey: message.threadKey }], "archive", fetchImpl);
+    if (moved.moved.length === 0) throw new Error(moved.error ?? "Outlook didn't archive the cold pitch.");
   }
+  await withActor(actor, async (db) => {
+    const rule =
+      mode === "other"
+        ? await db.query(
+            `insert into crm.mail_sender_rules (workspace_id, user_id, sender, split) values ($1, $2, $3, 'other')
+             on conflict (user_id, sender) do nothing`,
+            [actor.workspaceId, actor.userId, key],
+          )
+        : null;
+    await db.query(
+      `insert into crm.mail_subscriptions (workspace_id, user_id, sender, cold_pitch_at, pitch_rule) values ($1, $2, $3, now(), $4)
+       on conflict (user_id, sender) do update set
+         cold_pitch_at = coalesce(crm.mail_subscriptions.cold_pitch_at, now()),
+         pitch_rule = crm.mail_subscriptions.pitch_rule or excluded.pitch_rule,
+         updated_at = now()`,
+      [actor.workspaceId, actor.userId, key, Boolean(rule?.rowCount)],
+    );
+  });
 }

@@ -12,6 +12,8 @@ const POST_TIMEOUT_MS = 10_000;
 const RESPONSE_MAX_BYTES = 64 * 1024;
 const REDIRECTS_MAX = 3;
 const URI_MAX = 2000;
+const SUBJECT_MAX = 200;
+const UNSUBSCRIBE_BODY = "unsubscribe";
 const BLOCKED_HOSTS = /^(localhost|.*\.localhost|.*\.local|.*\.internal|.*\.home\.arpa|metadata|metadata\.google\.internal|instance-data)$/i;
 
 export class UnsubscribeRefused extends Error {}
@@ -22,30 +24,31 @@ function headerValue(headers: { name: string; value: string }[], name: string) {
   return found.length ? found.join(", ") : null;
 }
 
-function readMailto(uri: string): Mailto | null {
-  const rest = uri.slice("mailto:".length);
-  const [path, query = ""] = rest.split("?", 2);
-  let first: string;
+function decoded(value: string) {
   try {
-    first = decodeURIComponent(path.split(",")[0] ?? "");
+    return decodeURIComponent(value);
   } catch {
     return null;
   }
+}
+
+function readMailto(uri: string): Mailto | null {
+  const rest = uri.slice("mailto:".length);
+  const mark = rest.indexOf("?");
+  const path = mark === -1 ? rest : rest.slice(0, mark);
+  const query = mark === -1 ? "" : rest.slice(mark + 1);
   const params = new Map<string, string>();
   for (const pair of query.split("&")) {
-    const [key, value = ""] = pair.split("=", 2);
-    if (!key) continue;
-    try {
-      params.set(decodeURIComponent(key).toLowerCase(), decodeURIComponent(value.replace(/\+/g, " ")));
-    } catch {
-      continue;
-    }
+    const equals = pair.indexOf("=");
+    const key = decoded(equals === -1 ? pair : pair.slice(0, equals))?.toLowerCase();
+    const value = decoded(equals === -1 ? "" : pair.slice(equals + 1));
+    if (key && value !== null && !params.has(key)) params.set(key, value);
   }
-  const address = canonicalEmail(first || params.get("to") || "");
+  const first = (decoded(path) ?? "").split(",")[0] || (params.get("to") ?? "").split(",")[0] || "";
+  const address = canonicalEmail(first);
   if (!address) return null;
-  const subject = (params.get("subject") ?? "").replace(/\s+/g, " ").trim().slice(0, 300) || "unsubscribe";
-  const body = (params.get("body") ?? "").replace(/\r\n/g, "\n").trim().slice(0, 2000) || "unsubscribe";
-  return { address, subject, body };
+  const subject = (params.get("subject") ?? "").replace(/[\p{Cc}\s]+/gu, " ").trim().slice(0, SUBJECT_MAX) || UNSUBSCRIBE_BODY;
+  return { address, subject, body: UNSUBSCRIBE_BODY };
 }
 
 export function parseListUnsubscribe(header: string | null | undefined, post?: string | null): ListUnsubscribe {

@@ -24,7 +24,6 @@ import {
   fetchNav,
   fetchScheduled,
   postSenderSplit,
-  postSenderAction,
   askAi,
   forgetOtherLists,
   forgetThread,
@@ -44,7 +43,7 @@ import PushPrompt from "@/components/push/push-prompt";
 import { OPEN_THREAD_EVENT } from "@/components/push/push-registrar";
 import ThreadList from "@/components/mail/thread-list";
 import ThreadReader, { type ReaderAction } from "@/components/mail/thread-reader";
-import UnsubscribeDialog, { movedLine, unsubscribeToast, type UnsubscribeDone, type UnsubscribeRequest } from "@/components/mail/unsubscribe-dialog";
+import UnsubscribeDialog, { unsubscribeToast, type UnsubscribeDone, type UnsubscribeRequest } from "@/components/mail/unsubscribe-dialog";
 import { useComposer } from "@/components/mail/compose-dock";
 import { useShortcut } from "@/components/shortcuts/shortcuts-provider";
 import { laterOptions } from "@/lib/mail/later";
@@ -421,29 +420,22 @@ export default function MailScreen({
     }
   }
 
-  function finishUnsubscribe(key: string, done: UnsubscribeDone) {
+  function finishUnsubscribe(done: UnsubscribeDone) {
     setUnsubscribing(null);
     const toast = unsubscribeToast(done);
-    const succeeded = done.blocked || (done.result && ["unsubscribed", "requested", "needs_you"].includes(done.result.outcome));
-    if (succeeded && done.existing !== "leave") dropThread(key);
-    else forgetThread(key);
-    if (latest.current.cursor === key) fetchDetail(key, true);
+    const succeeded = done.blocked || done.mode === "research" || (done.result && ["unsubscribed", "requested", "needs_you"].includes(done.result.outcome));
+    const key = done.thread;
+    if (key) {
+      if (succeeded && done.existing !== "leave" && done.moved > 0) dropThread(key);
+      else forgetThread(key);
+      if (latest.current.cursor === key) fetchDetail(key, true);
+    }
     showToast({
       message: toast.message,
       tone: toast.tone,
       action: toast.url ? { label: "Open page", run: () => window.open(toast.url!, "_blank", "noopener,noreferrer") } : undefined,
     });
     window.setTimeout(() => refreshRef.current(false), 1500);
-  }
-
-  function blockSender(key: string, sender: string) {
-    postSenderAction({ sender, action: "block", existing: "archive", confirmed: true })
-      .then((change) => {
-        dropThread(key);
-        showToast({ message: `Blocked ${change.sender}.${movedLine("archive", change.moved)}` });
-        fetchNav().then(setNav).catch(() => null);
-      })
-      .catch((error: Error) => showToast({ message: error.message, tone: "alert" }));
   }
 
   function toggleSelect(key: string) {
@@ -1192,7 +1184,7 @@ export default function MailScreen({
             entered={entered !== null && entered === cursor}
             onSplit={(sender, split) => cursor && moveSender(cursor, sender, split)}
             onUnsubscribe={(mode) => cursor && setUnsubscribing({ thread: cursor, mode })}
-            onBlock={(sender) => cursor && blockSender(cursor, sender)}
+            onBlock={() => cursor && setUnsubscribing({ thread: cursor, mode: "block" })}
             onSent={() => cursor && sent(cursor)}
           />
         </div>
@@ -1200,7 +1192,7 @@ export default function MailScreen({
       <UnsubscribeDialog
         request={unsubscribing}
         onClose={() => setUnsubscribing(null)}
-        onDone={(done) => unsubscribing?.thread && finishUnsubscribe(unsubscribing.thread, done)}
+        onDone={finishUnsubscribe}
       />
     </section>
   );
