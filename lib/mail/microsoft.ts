@@ -284,6 +284,17 @@ export async function moveMicrosoftMessage(token: string, messageId: string, des
   return { id: moved.id ?? messageId, folderId: moved.parentFolderId ?? null };
 }
 
+export async function fetchMicrosoftHeaders(token: string, messageId: string, fetchImpl: typeof fetch = fetch) {
+  const message = await graphJson<{ internetMessageHeaders?: { name?: string; value?: string }[] | null }>(
+    `${GRAPH}/me/messages/${encodeURIComponent(messageId)}?$select=internetMessageHeaders`,
+    token,
+    fetchImpl,
+  );
+  return (message.internetMessageHeaders ?? []).flatMap((header) =>
+    header.name && typeof header.value === "string" ? [{ name: header.name, value: header.value.slice(0, 4000) }] : [],
+  );
+}
+
 export type DraftMode = "new" | "reply" | "reply_all" | "forward";
 
 const DRAFT_ACTIONS: Record<Exclude<DraftMode, "new">, string> = { reply: "createReply", reply_all: "createReplyAll", forward: "createForward" };

@@ -123,6 +123,25 @@ async function settleReminders(db: Db, actor: UserActor, sourceId: string, key: 
   }
 }
 
+async function recordMoves(db: Db, sourceId: string, moved: { id: string; folder: string | null }[], role: MailRole, providerFolder?: string) {
+  const folders = await db.query<{ id: string; provider_folder_id: string; role: MailRole }>(
+    "select id, provider_folder_id, role from crm.mail_folders where source_id = $1",
+    [sourceId],
+  );
+  const fallback =
+    (providerFolder ? folders.rows.find((folder) => folder.provider_folder_id === providerFolder)?.id : null) ??
+    folders.rows.find((folder) => folder.role === role)?.id ??
+    null;
+  for (const item of moved) {
+    const local = folders.rows.find((folder) => folder.provider_folder_id === item.folder)?.id ?? fallback;
+    if (local) {
+      await db.query("update crm.mail_messages set folder_id = $2 where id = $1", [item.id, local]);
+    } else {
+      await db.query("delete from crm.mail_messages where id = $1", [item.id]);
+    }
+  }
+}
+
 function failureMessage(error: unknown) {
   if (error instanceof GraphMailError) {
     if (error.status === 401 || error.status === 403) return "Microsoft didn't allow that change. Connect the account again in Capture.";
@@ -188,19 +207,7 @@ export async function applyMailAction(
       } else if (input.action === "flag" || input.action === "unflag") {
         await db.query("update crm.mail_messages set is_flagged = $2 where id = any($1::uuid[])", [ids, input.action === "flag"]);
       } else if (move) {
-        const folders = await db.query<{ id: string; provider_folder_id: string; role: MailRole }>(
-          "select id, provider_folder_id, role from crm.mail_folders where source_id = $1",
-          [sourceId],
-        );
-        const byRole = folders.rows.find((folder) => folder.role === move.role)?.id ?? null;
-        for (const item of done) {
-          const local = folders.rows.find((folder) => folder.provider_folder_id === item.folder)?.id ?? byRole;
-          if (local) {
-            await db.query("update crm.mail_messages set folder_id = $2 where id = $1", [item.row.id, local]);
-          } else {
-            await db.query("delete from crm.mail_messages where id = $1", [item.row.id]);
-          }
-        }
+        await recordMoves(db, sourceId, done.map((item) => ({ id: item.row.id, folder: item.folder })), move.role);
       }
     });
   }
@@ -219,4 +226,33 @@ export async function threadForEmail(actor: UserActor, emailId: string) {
     if (!row) throw new CrmError("not_found", "That email isn't in Orbit Mail. Search for it again.", 404);
     return { thread: `${row.source_id}|${row.tk}`, subject: row.subject };
   });
+}
+
+export type MessageMove = "archive" | "trash" | { providerFolderId: string; role: MailRole };
+
+export async function moveMessages(
+  actor: UserActor,
+  sourceId: string,
+  messages: { id: string; providerMessageId: string; threadKey: string }[],
+  target: MessageMove,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ moved: string[]; error: string | null }> {
+  if (messages.length === 0) return { moved: [], error: null };
+  const token = await mailSourceToken(actor, sourceId, fetchImpl);
+  const destination = typeof target === "string" ? MOVES[target]!.destination : target.providerFolderId;
+  const role = typeof target === "string" ? MOVES[target]!.role : target.role;
+  const done: { id: string; folder: string | null; threadKey: string }[] = [];
+  const failures = await eachLimited(messages, async (message) => {
+    const moved = await moveMicrosoftMessage(token, message.providerMessageId, destination, fetchImpl);
+    done.push({ id: message.id, folder: moved.folderId, threadKey: message.threadKey });
+  });
+  if (done.length > 0) {
+    await withActor(actor, async (db) => {
+      await recordMoves(db, sourceId, done, role, typeof target === "string" ? undefined : target.providerFolderId);
+      if (typeof target === "string") {
+        for (const key of new Set(done.map((item) => item.threadKey))) await settleReminders(db, actor, sourceId, key, target, null, null);
+      }
+    });
+  }
+  return { moved: done.map((item) => item.id), error: failures.length ? failureMessage(failures[0]) : null };
 }

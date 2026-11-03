@@ -20,6 +20,7 @@ import { trackingIdIn } from "@/lib/mail/html";
 import { classifyEmailTones } from "@/lib/crm/email-tone";
 import { fileMailOnTimeline } from "@/lib/mail/timeline";
 import { notifyNewMail } from "@/lib/mail/notify";
+import { routeArrivedMail } from "@/lib/mail/subscriptions";
 import { queueMailWorkflowEvents } from "@/lib/workflows/mail-events";
 import type { PushSender } from "@/lib/push";
 import { MailSyncReset, type MailRole, type ProviderMessage } from "@/lib/mail/types";
@@ -61,6 +62,7 @@ export type MailSyncReport = {
   paused: boolean;
   errors: string[];
   arrived: string[];
+  routed: number;
   filed: number;
   workflowEvents: number;
 };
@@ -467,7 +469,7 @@ export async function syncMail(
 ): Promise<MailSyncReport> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const deadline = options.deadline ?? Date.now() + (options.budgetMs ?? 20_000);
-  const report: MailSyncReport = { sources: 0, stored: 0, removed: 0, backfilling: 0, paused: false, errors: [], arrived: [], workflowEvents: 0, filed: 0 };
+  const report: MailSyncReport = { sources: 0, stored: 0, removed: 0, backfilling: 0, paused: false, errors: [], arrived: [], routed: 0, workflowEvents: 0, filed: 0 };
   const sources = await loadSources(actor);
   const hardStop = await withActor(actor, async (db) => (await databaseBytes(db)) >= mailHardStopBytes());
   if (hardStop) {
@@ -526,6 +528,13 @@ export async function syncMail(
       );
     }
   }
+  const routed = report.arrived.length
+    ? await routeArrivedMail(actor, report.arrived, { fetchImpl }).catch((error) => {
+        console.error("Routing new mail failed", error instanceof Error ? error.message : error);
+        return [] as string[];
+      })
+    : [];
+  report.routed = routed.length;
   report.filed = await fileMailOnTimeline(actor)
     .then((result) => result.filed)
     .catch((error) => {
@@ -536,7 +545,8 @@ export async function syncMail(
     await classifyEmailTones(actor, { deadline, fetchImpl: options.fetchImpl }).catch((error) => console.error("Reading email tone failed", error));
   }
   if (report.arrived.length) {
-    await notifyNewMail(actor, report.arrived, { send: options.push }).catch((error) => console.error("Mail notification failed", error));
+    const fresh = report.arrived.filter((id) => !routed.includes(id));
+    if (fresh.length) await notifyNewMail(actor, fresh, { send: options.push }).catch((error) => console.error("Mail notification failed", error));
     report.workflowEvents = await queueMailWorkflowEvents(actor, report.arrived).catch((error) => {
       console.error("Queueing mail workflows failed", error);
       return 0;

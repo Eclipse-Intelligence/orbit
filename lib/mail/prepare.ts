@@ -13,6 +13,7 @@ import { stripQuoted } from "@/lib/mail/format";
 import { workingDaysLater } from "@/lib/mail/later";
 import { offerTimes, refreshTimes, TIMES_MARK } from "@/lib/mail/scheduling";
 import { splitCase, splitJoin } from "@/lib/mail/split";
+import { markColdPitch } from "@/lib/mail/subscriptions";
 import { parseThreadKey } from "@/lib/mail/threads";
 import type { MailAddress } from "@/lib/mail/types";
 
@@ -27,11 +28,16 @@ type PreparedKind = "reply" | "nudge";
 
 type PreparedDraft = { id: string; kind: PreparedKind; messageId: string; body: string; times: string[] | null };
 
-export type MailHelpSettings = { prepareReplies: boolean; autoRemindDays: number | null };
+export const COLD_PITCH_MODES = ["off", "other", "archive"] as const;
+export type ColdPitchMode = (typeof COLD_PITCH_MODES)[number];
 
-type PrepareReport = { prepared: number; skipped: number; reminders: number; checked: number };
+export type MailHelpSettings = { prepareReplies: boolean; autoRemindDays: number | null; coldPitches: ColdPitchMode };
 
-const REPLY_SCHEMA = z.object({ needsReply: z.boolean(), meeting: z.boolean().optional(), body: z.string().nullable() });
+type PrepareReport = { prepared: number; skipped: number; reminders: number; checked: number; pitches: number };
+
+const REPLY_SCHEMA = z.object({ needsReply: z.boolean(), meeting: z.boolean().optional(), pitch: z.boolean().optional(), body: z.string().nullable() });
+const PITCH_SCHEMA = z.object({ pitches: z.array(z.number()) });
+const PITCH_BODY = 1_200;
 const NUDGE_SCHEMA = z.object({ body: z.string() });
 const CHECK_SCHEMA = z.object({ expectReply: z.array(z.number()) });
 
@@ -48,29 +54,33 @@ function ownAddresses(userParam: string, emailParam: string) {
 
 export async function mailHelpSettings(actor: UserActor): Promise<MailHelpSettings> {
   return withActor(actor, async (db) => {
-    const result = await db.query<{ prepare_replies: boolean; auto_remind_days: number | null }>(
-      "select prepare_replies, auto_remind_days from crm.mail_preferences where workspace_id = $1 and user_id = $2",
+    const result = await db.query<{ prepare_replies: boolean; auto_remind_days: number | null; cold_pitches: ColdPitchMode }>(
+      "select prepare_replies, auto_remind_days, cold_pitches from crm.mail_preferences where workspace_id = $1 and user_id = $2",
       [actor.workspaceId, actor.userId],
     );
     const row = result.rows[0];
-    return { prepareReplies: row?.prepare_replies ?? true, autoRemindDays: row ? row.auto_remind_days : 3 };
+    return { prepareReplies: row?.prepare_replies ?? true, autoRemindDays: row ? row.auto_remind_days : 3, coldPitches: row?.cold_pitches ?? "off" };
   });
 }
 
-export async function setMailHelp(actor: UserActor, input: { prepareReplies?: boolean; autoRemindDays?: number | null }) {
+export async function setMailHelp(actor: UserActor, input: { prepareReplies?: boolean; autoRemindDays?: number | null; coldPitches?: ColdPitchMode }) {
   const days = input.autoRemindDays;
   if (days !== undefined && days !== null && (!Number.isInteger(days) || days < 1 || days > 30)) {
     throw new CrmError("invalid_input", "Choose between 1 and 30 working days.", 400, { field: "autoRemindDays" });
   }
+  if (input.coldPitches !== undefined && !COLD_PITCH_MODES.includes(input.coldPitches)) {
+    throw new CrmError("invalid_input", "Choose Off, Move to Other or Archive.", 400, { field: "coldPitches" });
+  }
   await withActor(actor, (db) =>
     db.query(
-      `insert into crm.mail_preferences (workspace_id, user_id, prepare_replies, auto_remind_days)
-       values ($1, $2, coalesce($3, true), case when $5 then $4 else 3 end)
+      `insert into crm.mail_preferences (workspace_id, user_id, prepare_replies, auto_remind_days, cold_pitches)
+       values ($1, $2, coalesce($3, true), case when $5 then $4 else 3 end, coalesce($6, 'off'))
        on conflict (workspace_id, user_id) do update set
          prepare_replies = coalesce($3, crm.mail_preferences.prepare_replies),
          auto_remind_days = case when $5 then $4 else crm.mail_preferences.auto_remind_days end,
+         cold_pitches = coalesce($6, crm.mail_preferences.cold_pitches),
          updated_at = now()`,
-      [actor.workspaceId, actor.userId, input.prepareReplies ?? null, days ?? null, days !== undefined],
+      [actor.workspaceId, actor.userId, input.prepareReplies ?? null, days ?? null, days !== undefined, input.coldPitches ?? null],
     ),
   );
   return mailHelpSettings(actor);
@@ -157,18 +167,59 @@ function contextBlocks(name: string, context: Awaited<ReturnType<typeof draftCon
   ].filter(Boolean);
 }
 
-type ReplyCandidate = { id: string; source_id: string; tk: string };
+type ReplyCandidate = {
+  id: string;
+  source_id: string;
+  tk: string;
+  provider_message_id: string;
+  from_email: string | null;
+  from_name: string | null;
+  subject: string | null;
+  body_text: string | null;
+  snippet: string | null;
+  pitch: boolean;
+};
 
-async function replyCandidates(db: Db, actor: UserActor, limit: number) {
+function pitchEligible(alias: string, userParam: string, workspaceParam: string) {
+  return `(nullif(${alias}.from_email, '') is not null
+    and not exists (select 1 from crm.contacts c where c.workspace_id = ${workspaceParam} and c.archived_at is null and c.normalized_email = lower(${alias}.from_email))
+    and not exists (
+      select 1 from crm.companies co
+      where co.workspace_id = ${workspaceParam} and co.archived_at is null and co.domain = split_part(lower(${alias}.from_email), '@', 2)
+    )
+    and not exists (
+      select 1 from crm.mail_subscriptions ms
+      where ms.user_id = ${userParam} and (ms.sender = lower(${alias}.from_email) or ms.sender = '@' || split_part(lower(${alias}.from_email), '@', 2))
+    )
+    and not exists (
+      select 1 from crm.mail_sender_rules sr
+      where sr.user_id = ${userParam} and (sr.sender = lower(${alias}.from_email) or sr.sender = '@' || split_part(lower(${alias}.from_email), '@', 2))
+    )
+    and not exists (
+      select 1 from crm.mail_messages o join crm.mail_folders ofo on ofo.id = o.folder_id
+      where o.user_id = ${userParam} and o.id <> ${alias}.id and ofo.role not in ('junk', 'outbox')
+        and (
+          (lower(o.from_email) = lower(${alias}.from_email) and coalesce(o.thread_key, 'm:' || o.id::text) <> ${alias}.tk)
+          or o.to_recipients @> jsonb_build_array(jsonb_build_object('address', lower(${alias}.from_email)))
+          or o.cc_recipients @> jsonb_build_array(jsonb_build_object('address', lower(${alias}.from_email)))
+        )
+    ))`;
+}
+
+async function replyCandidates(db: Db, actor: UserActor, limit: number, pitches: { check: boolean; only?: boolean } = { check: false }) {
   const result = await db.query<ReplyCandidate>(
-    `select n.id, n.source_id, n.tk from (
-       select m.id, m.source_id, coalesce(m.thread_key, 'm:' || m.id::text) as tk, m.subject, m.from_email, m.focused,
+    `select n.id, n.source_id, n.tk, n.provider_message_id, n.from_email, n.from_name, n.subject, n.body_text, n.snippet,
+       ($6 and ${pitchEligible("n", "$1", "$2")}) as pitch
+     from (
+       select m.id, m.source_id, coalesce(m.thread_key, 'm:' || m.id::text) as tk, m.subject, m.from_email, m.from_name, m.focused,
+         m.provider_message_id, m.body_text, m.snippet,
          coalesce(m.received_at, m.sent_at, m.created_at) as at
        from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
        where m.user_id = $1 and f.role = 'inbox' and not m.is_draft
          and coalesce(m.received_at, m.created_at) > now() - make_interval(hours => $3)
          and lower(coalesce(m.from_email, '')) <> all ${ownAddresses("$1", "$4")}
-         and not exists (select 1 from crm.mail_prepared p where p.message_id = m.id and p.kind = 'reply')
+         and not exists (select 1 from crm.mail_prepared p where p.message_id = m.id and p.kind = case when $7 then 'pitch' else 'reply' end)
+         and not ($7 and exists (select 1 from crm.mail_prepared p where p.message_id = m.id and p.kind = 'reply'))
          and not exists (
            select 1 from crm.mail_messages later join crm.mail_folders lf on lf.id = later.folder_id
            where later.source_id = m.source_id and coalesce(later.thread_key, 'm:' || later.id::text) = coalesce(m.thread_key, 'm:' || m.id::text)
@@ -181,15 +232,74 @@ async function replyCandidates(db: Db, actor: UserActor, limit: number) {
          )
      ) n
      ${splitJoin("n", "$1")}
-     where ${splitCase("n", "$2")} = 'important'
+     where ${splitCase("n", "$2")} = 'important' and (not $7 or ${pitchEligible("n", "$1", "$2")})
      order by n.at desc
      limit $5`,
-    [actor.userId, actor.workspaceId, LOOKBACK_HOURS, actor.email, limit],
+    [actor.userId, actor.workspaceId, LOOKBACK_HOURS, actor.email, limit, pitches.check, Boolean(pitches.only)],
   );
   return result.rows;
 }
 
-async function prepareReply(actor: UserActor, candidate: ReplyCandidate, deadline: number, fetchImpl?: typeof fetch) {
+async function notePitch(actor: UserActor, candidate: ReplyCandidate, pitch: boolean) {
+  await withActor(actor, (db) =>
+    db.query(
+      `insert into crm.mail_prepared (workspace_id, user_id, source_id, thread_key, message_id, kind, state)
+       values ($1, $2, $3, $4, $5, 'pitch', $6)
+       on conflict (message_id, kind) do nothing`,
+      [actor.workspaceId, actor.userId, candidate.source_id, candidate.tk, candidate.id, pitch ? "ready" : "skipped"],
+    ),
+  );
+}
+
+async function handlePitch(actor: UserActor, candidate: ReplyCandidate, mode: ColdPitchMode, fetchImpl?: typeof fetch) {
+  await notePitch(actor, candidate, true);
+  if (mode === "off" || !candidate.from_email) return;
+  await markColdPitch(
+    actor,
+    { id: candidate.id, sourceId: candidate.source_id, providerMessageId: candidate.provider_message_id, threadKey: candidate.tk, from: candidate.from_email },
+    mode,
+    fetchImpl,
+  ).catch((error) => console.error("Moving a cold pitch failed", error instanceof Error ? error.message : error));
+}
+
+async function checkPitches(actor: UserActor, mode: ColdPitchMode, deadline: number, fetchImpl?: typeof fetch) {
+  const candidates = await withActor(actor, (db) => replyCandidates(db, actor, CHECKS_PER_RUN, { check: true, only: true }));
+  if (candidates.length === 0) return 0;
+  const name = actor.fullName || actor.email;
+  const listed = candidates
+    .map(
+      (item, index) =>
+        `[${index + 1}] From: ${item.from_name ? `${item.from_name} <${item.from_email}>` : item.from_email}\nSubject: ${item.subject ?? "(no subject)"}\n${stripQuoted(item.body_text ?? item.snippet ?? "").slice(0, PITCH_BODY)}`,
+    )
+    .join("\n\n---\n\n");
+  const result = await completeJson({
+    system:
+      `You sort new email ${name} received from people who aren't in the CRM and have never written to ${name} before. Reply with JSON only: {"pitches": number[]}. ` +
+      "List the numbers of emails that are unsolicited sales, marketing, recruiting, link-building or partnership pitches (cold outreach). " +
+      `Leave out anything that could be a real enquiry, an introduction from someone ${name} knows, a reply, a request for help, an invoice, a notification or a newsletter. When unsure, leave it out. ` +
+      UNTRUSTED.replace("only write the reply", "only decide"),
+    user: listed,
+    schema: PITCH_SCHEMA,
+    maxTokens: 200,
+    timeoutMs: 15_000,
+    deadline,
+    fetchImpl,
+  });
+  const pitched = new Set(result.data.pitches.filter((number) => Number.isInteger(number) && number >= 1 && number <= candidates.length));
+  let count = 0;
+  for (const [index, candidate] of candidates.entries()) {
+    if (pitched.has(index + 1)) {
+      await handlePitch(actor, candidate, mode, fetchImpl);
+      count += 1;
+    } else {
+      await notePitch(actor, candidate, false);
+    }
+  }
+  return count;
+}
+
+async function prepareReply(actor: UserActor, candidate: ReplyCandidate, deadline: number, pitchMode: ColdPitchMode, fetchImpl?: typeof fetch) {
+  const askPitch = candidate.pitch && pitchMode !== "off";
   const context = await withActor(actor, (db) => draftContext(db, actor, candidate.source_id, candidate.tk));
   const latest = context.text.messages.at(-1);
   if (!latest || latest.id !== candidate.id) return "stale" as const;
@@ -202,7 +312,10 @@ async function prepareReply(actor: UserActor, candidate: ReplyCandidate, deadlin
   const first = name.split(/\s+/)[0];
   const result = await completeJson({
     system:
-      `You prepare email replies for ${name}, who reviews and sends them from their CRM. Reply with JSON only: {"needsReply": boolean, "meeting": boolean, "body": string or null}. ` +
+      `You prepare email replies for ${name}, who reviews and sends them from their CRM. Reply with JSON only: {"needsReply": boolean, "meeting": boolean, ${askPitch ? '"pitch": boolean, ' : ""}"body": string or null}. ` +
+      (askPitch
+        ? `The sender isn't in the CRM and has never written to ${name} before. pitch is true when the latest email is an unsolicited sales, marketing, recruiting, link-building or partnership pitch (cold outreach), and false for anything that could be a real enquiry, an introduction or a request for help. When unsure, pitch is false. When pitch is true, needsReply is false. `
+        : "") +
       `needsReply is true only if the latest email is from a real person and is waiting on ${name}: a question, a request, a proposal or something that would be rude to leave unanswered. ` +
       "It is false for newsletters, receipts, notifications, automated mail, a simple thank you or sign-off, and emails where someone else is clearly expected to answer. " +
       `When needsReply is true, body is the reply: a greeting, the content and a sign-off with "${first}". No subject and no signature block. ` +
@@ -217,7 +330,12 @@ async function prepareReply(actor: UserActor, candidate: ReplyCandidate, deadlin
     deadline,
     fetchImpl,
   });
-  const written = result.data.needsReply && result.data.body ? clean(result.data.body).replace(/\r\n/g, "\n").slice(0, BODY_MAX) : "";
+  const pitched = askPitch && result.data.pitch === true;
+  if (askPitch) {
+    if (pitched) await handlePitch(actor, candidate, pitchMode, fetchImpl);
+    else await notePitch(actor, candidate, false);
+  }
+  const written = result.data.needsReply && result.data.body && !pitched ? clean(result.data.body).replace(/\r\n/g, "\n").slice(0, BODY_MAX) : "";
   const template = written.includes(TIMES_MARK) ? written : null;
   const offered = template
     ? await offerTimes(actor, template).catch((error) => {
@@ -244,6 +362,7 @@ async function prepareReply(actor: UserActor, candidate: ReplyCandidate, deadlin
       ],
     ),
   );
+  if (pitched) return "pitch" as const;
   return body ? ("prepared" as const) : ("skipped" as const);
 }
 
@@ -386,7 +505,7 @@ export async function prepareMail(
   actor: UserActor,
   options: { deadline: number; fetchImpl?: typeof fetch },
 ): Promise<PrepareReport> {
-  const report: PrepareReport = { prepared: 0, skipped: 0, reminders: 0, checked: 0 };
+  const report: PrepareReport = { prepared: 0, skipped: 0, reminders: 0, checked: 0, pitches: 0 };
   if (!process.env.LLM_API_KEY?.trim()) return report;
   const settings = await mailHelpSettings(actor);
   if (settings.autoRemindDays && options.deadline - Date.now() > STEP_MS) {
@@ -398,20 +517,30 @@ export async function prepareMail(
       console.error("Follow-up check failed", error instanceof Error ? error.message : error);
     }
   }
-  if (!settings.prepareReplies) return report;
-  const candidates = await withActor(actor, async (db) => {
-    const room = DAILY_LIMIT - (await usedToday(db, actor));
-    return room > 0 ? replyCandidates(db, actor, Math.min(room, REPLIES_PER_RUN)) : [];
-  });
+  const pitchCheck = settings.coldPitches !== "off";
+  const candidates = settings.prepareReplies
+    ? await withActor(actor, async (db) => {
+        const room = DAILY_LIMIT - (await usedToday(db, actor));
+        return room > 0 ? replyCandidates(db, actor, Math.min(room, REPLIES_PER_RUN), { check: pitchCheck }) : [];
+      })
+    : [];
   for (const candidate of candidates) {
     if (options.deadline - Date.now() < STEP_MS) break;
     try {
-      const outcome = await prepareReply(actor, candidate, options.deadline, options.fetchImpl);
+      const outcome = await prepareReply(actor, candidate, options.deadline, settings.coldPitches, options.fetchImpl);
       if (outcome === "prepared") report.prepared += 1;
       if (outcome === "skipped") report.skipped += 1;
+      if (outcome === "pitch") report.pitches += 1;
     } catch (error) {
       console.error("Preparing a reply failed", error instanceof Error ? error.message : error);
       break;
+    }
+  }
+  if (pitchCheck && options.deadline - Date.now() > STEP_MS) {
+    try {
+      report.pitches += await checkPitches(actor, settings.coldPitches, options.deadline, options.fetchImpl);
+    } catch (error) {
+      console.error("Cold pitch check failed", error instanceof Error ? error.message : error);
     }
   }
   return report;
