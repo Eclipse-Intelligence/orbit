@@ -20,6 +20,7 @@ const QUOTE_SELECTORS = [
 ];
 
 const HIDE_QUOTES = "orbit-hide-quotes";
+const WRAP_ID = "orbit-mail";
 const EARLY_MS = 10_000;
 
 const POLICY =
@@ -30,16 +31,17 @@ function documentFor(html: string, rich: boolean) {
     ? "html,body{background:#fff;color:#111;}"
     : "html,body{background:transparent;color:#e6e8ec;} body *{color:inherit !important;background-color:transparent !important;border-color:#333 !important;} a,a *{color:#9db4ff !important;}";
   return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${POLICY}"><base target="_blank"><meta name="color-scheme" content="${rich ? "light" : "dark"}"><style>
-html,body{margin:0;padding:0;touch-action:pan-y;}
+html,body{margin:0;padding:0;touch-action:manipulation;}
+html,body{overflow-x:hidden !important;}
+#${WRAP_ID}{transform-origin:0 0;}
 html:root,html:root body{height:auto !important;min-height:0 !important;max-height:none !important;overflow:visible !important;}
-body{display:flow-root;font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Geist,Helvetica,Arial,sans-serif;overflow-wrap:anywhere;padding:${rich ? "20px" : "0"};}
+body{display:flow-root;font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Geist,Helvetica,Arial,sans-serif;overflow-wrap:break-word;padding:${rich ? "20px" : "0"};}
 img{max-width:100%;height:auto;}
-table{max-width:100%;}
 pre{white-space:pre-wrap;}
 blockquote{margin:0 0 0 .6em;padding-left:.8em;border-left:2px solid ${rich ? "#ddd" : "#3a3a3a"};}
 ${QUOTE_SELECTORS.map((selector) => `html.${HIDE_QUOTES} ${selector}`).join(",")}{display:none !important;}
 ${theme}
-</style></head><body>${html}</body></html>`;
+</style></head><body><div id="${WRAP_ID}">${html}</div></body></html>`;
 }
 
 export default function EmailFrame({
@@ -76,6 +78,24 @@ export default function EmailFrame({
       if (!body) return;
       setHeight(Math.max(24, Math.ceil(body.scrollHeight)));
     };
+    const fit = () => {
+      const wrap = element.contentDocument?.getElementById(WRAP_ID);
+      if (!wrap) return;
+      wrap.style.transform = "";
+      wrap.style.width = "";
+      wrap.style.marginRight = "";
+      wrap.style.marginBottom = "";
+      const available = wrap.clientWidth;
+      const natural = wrap.scrollWidth;
+      if (available > 0 && natural > available + 1) {
+        const scale = available / natural;
+        wrap.style.width = `${natural}px`;
+        wrap.style.transform = `scale(${scale})`;
+        wrap.style.marginRight = `${available - natural}px`;
+        wrap.style.marginBottom = `${-wrap.offsetHeight * (1 - scale)}px`;
+      }
+      measure();
+    };
     const attach = () => {
       const doc = element.contentDocument;
       if (!doc?.body || doc.URL !== "about:srcdoc" || doc === stale) return;
@@ -84,13 +104,15 @@ export default function EmailFrame({
         return;
       }
       attached = doc;
+      doc.addEventListener("load", fit, true);
+      doc.defaultView?.addEventListener("resize", fit);
       if (hideQuotes && doc?.body) {
         doc.documentElement.classList.add(HIDE_QUOTES);
         const found = Boolean(doc.querySelector(QUOTE_SELECTORS.join(","))) && Boolean(doc.body.innerText.trim());
         if (!found) doc.documentElement.classList.remove(HIDE_QUOTES);
         setQuoted(found);
       }
-      measure();
+      fit();
       unwatch?.();
       unwatch = swipe && element.contentDocument ? watchSwipe(element.contentDocument, swipe) : null;
       const body = element.contentDocument?.body;
