@@ -21,6 +21,8 @@ const QUOTE_SELECTORS = [
 
 const HIDE_QUOTES = "orbit-hide-quotes";
 const WRAP_ID = "orbit-mail";
+const ZOOMED = "orbitZoomed";
+const MAX_ZOOM = 4;
 const EARLY_MS = 10_000;
 
 const POLICY =
@@ -31,7 +33,7 @@ function documentFor(html: string, rich: boolean) {
     ? "html,body{background:#fff;color:#111;}"
     : "html,body{background:transparent;color:#e6e8ec;} body *{color:inherit !important;background-color:transparent !important;border-color:#333 !important;} a,a *{color:#9db4ff !important;}";
   return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${POLICY}"><base target="_blank"><meta name="color-scheme" content="${rich ? "light" : "dark"}"><style>
-html,body{margin:0;padding:0;touch-action:manipulation;}
+html,body{margin:0;padding:0;touch-action:pan-y;}
 html,body{overflow-x:hidden !important;}
 #${WRAP_ID}{transform-origin:0 0;}
 html:root,html:root body{height:auto !important;min-height:0 !important;max-height:none !important;overflow:visible !important;}
@@ -78,6 +80,31 @@ export default function EmailFrame({
       if (!body) return;
       setHeight(Math.max(24, Math.ceil(body.scrollHeight)));
     };
+    let layout = { available: 0, width: 0, height: 0 };
+    let zoom = 1;
+    const apply = () => {
+      const doc = element.contentDocument;
+      const wrap = doc?.getElementById(WRAP_ID);
+      if (!doc || !wrap || layout.available <= 0) return;
+      const scale = (layout.available / layout.width) * zoom;
+      const zoomed = zoom > 1.001;
+      if (Math.abs(scale - 1) < 0.001) {
+        wrap.style.transform = "";
+        wrap.style.width = "";
+        wrap.style.marginRight = "";
+        wrap.style.marginBottom = "";
+      } else {
+        wrap.style.width = `${layout.width}px`;
+        wrap.style.transform = `scale(${scale})`;
+        wrap.style.marginRight = `${layout.width * scale - layout.width}px`;
+        wrap.style.marginBottom = `${layout.height * scale - layout.height}px`;
+      }
+      doc.documentElement.style.setProperty("overflow-x", zoomed ? "auto" : "hidden", "important");
+      doc.documentElement.style.setProperty("touch-action", zoomed ? "pan-x pan-y" : "pan-y");
+      if (zoomed) doc.documentElement.dataset[ZOOMED] = "true";
+      else delete doc.documentElement.dataset[ZOOMED];
+      measure();
+    };
     const fit = () => {
       const wrap = element.contentDocument?.getElementById(WRAP_ID);
       if (!wrap) return;
@@ -86,15 +113,57 @@ export default function EmailFrame({
       wrap.style.marginRight = "";
       wrap.style.marginBottom = "";
       const available = wrap.clientWidth;
-      const natural = wrap.scrollWidth;
-      if (available > 0 && natural > available + 1) {
-        const scale = available / natural;
-        wrap.style.width = `${natural}px`;
-        wrap.style.transform = `scale(${scale})`;
-        wrap.style.marginRight = `${available - natural}px`;
-        wrap.style.marginBottom = `${-wrap.offsetHeight * (1 - scale)}px`;
-      }
-      measure();
+      const width = Math.max(wrap.scrollWidth, available);
+      wrap.style.width = `${width}px`;
+      layout = { available, width, height: wrap.offsetHeight };
+      wrap.style.width = "";
+      apply();
+    };
+    const zoomTo = (next: number, anchorX: number) => {
+      const doc = element.contentDocument;
+      const scroller = doc?.scrollingElement;
+      const target = Math.min(MAX_ZOOM, Math.max(1, next));
+      if (!scroller || Math.abs(target - zoom) < 0.005) return;
+      const before = layout.available * zoom;
+      const share = (anchorX + scroller.scrollLeft) / before;
+      zoom = target;
+      apply();
+      scroller.scrollLeft = Math.max(0, share * layout.available * zoom - anchorX);
+    };
+    const pinchWatch = (doc: Document) => {
+      let pinch: { spread: number; zoom: number } | null = null;
+      const spread = (touches: TouchList) => Math.hypot(touches[0].clientX - touches[1].clientX, touches[0].clientY - touches[1].clientY);
+      const middle = (touches: TouchList) => (touches[0].clientX + touches[1].clientX) / 2;
+      const start = (event: TouchEvent) => {
+        if (event.touches.length === 2) pinch = { spread: spread(event.touches) || 1, zoom };
+      };
+      const move = (event: TouchEvent) => {
+        if (!pinch || event.touches.length !== 2) return;
+        if (event.cancelable) event.preventDefault();
+        zoomTo((pinch.zoom * spread(event.touches)) / pinch.spread, middle(event.touches));
+      };
+      const end = (event: TouchEvent) => {
+        if (event.touches.length >= 2) return;
+        pinch = null;
+        if (zoom < 1.05 && zoom !== 1) zoomTo(1, 0);
+      };
+      const gesture = (event: Event) => event.preventDefault();
+      const wheel = (event: WheelEvent) => {
+        if (!event.ctrlKey) return;
+        event.preventDefault();
+        zoomTo(zoom * Math.exp(-event.deltaY / 200), event.clientX);
+      };
+      const reset = () => {
+        if (zoom > 1) zoomTo(1, 0);
+      };
+      doc.addEventListener("touchstart", start, { passive: true });
+      doc.addEventListener("touchmove", move, { passive: false });
+      doc.addEventListener("touchend", end, { passive: true });
+      doc.addEventListener("touchcancel", end, { passive: true });
+      doc.addEventListener("gesturestart", gesture);
+      doc.addEventListener("gesturechange", gesture);
+      doc.addEventListener("wheel", wheel, { passive: false });
+      doc.addEventListener("dblclick", reset);
     };
     const attach = () => {
       const doc = element.contentDocument;
@@ -106,6 +175,7 @@ export default function EmailFrame({
       attached = doc;
       doc.addEventListener("load", fit, true);
       doc.defaultView?.addEventListener("resize", fit);
+      pinchWatch(doc);
       if (hideQuotes && doc?.body) {
         doc.documentElement.classList.add(HIDE_QUOTES);
         const found = Boolean(doc.querySelector(QUOTE_SELECTORS.join(","))) && Boolean(doc.body.innerText.trim());
