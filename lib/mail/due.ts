@@ -9,12 +9,12 @@ import { threadKey } from "@/lib/mail/threads";
 import { sendAlert } from "@/lib/alerts";
 import { mailNotifyLevel } from "@/lib/mail/notify";
 import type { PushSender } from "@/lib/push";
-import { prepareNudge } from "@/lib/mail/prepare";
+import { prepareNudge, storeNudge, writeNudge } from "@/lib/mail/prepare";
 import { firstReply, sendDueFollowUp, type SendFollowUpRow } from "@/lib/mail/follow-up";
 
 type DueReport = { sent: number; failed: number; returned: number; followUps: number; followUpsSent: number };
 
-type ReminderRow = SendFollowUpRow & { kind: "snooze" | "follow_up"; action: "remind" | "send"; automatic: boolean };
+type ReminderRow = SendFollowUpRow & { kind: "snooze" | "follow_up"; action: "remind" | "send"; automatic: boolean; deferred_message_id: string | null };
 
 async function anythingDue(actor: UserActor) {
   return withActor(actor, async (db) => {
@@ -36,7 +36,7 @@ async function claimReminders(actor: UserActor, limit: number) {
          where user_id = $1 and workspace_id = $2 and state = 'waiting' and due_at <= now()
          order by due_at limit $3 for update skip locked
        )
-       returning id, source_id, thread_key, subject, kind, action, automatic, follow_up_body, recipients, identity_id`,
+       returning id, source_id, thread_key, subject, kind, action, automatic, follow_up_body, recipients, identity_id, deferred_message_id`,
       [actor.userId, actor.workspaceId, limit],
     );
     return result.rows;
@@ -56,25 +56,41 @@ async function returnSnooze(actor: UserActor, reminder: ReminderRow, fetchImpl: 
   );
 }
 
+async function checkInNudge(actor: UserActor, reminder: ReminderRow) {
+  const written = await writeNudge(actor, reminder.source_id, reminder.thread_key, { deadline: Date.now() + 15_000, limited: true });
+  if (!written) return null;
+  await storeNudge(actor, { sourceId: reminder.source_id, key: reminder.thread_key, messageId: written.messageId, body: written.body });
+  return written.body;
+}
+
 async function checkFollowUp(actor: UserActor, reminder: ReminderRow, options: { send?: PushSender }) {
   const replied = await withActor(actor, async (db) => Boolean(await firstReply(db, actor, reminder.id)));
   if (replied) {
     await withActor(actor, (db) => db.query("update crm.mail_reminders set state = 'done' where id = $1", [reminder.id]));
     return false;
   }
-  const nudge = await prepareNudge(actor, reminder.source_id, reminder.thread_key, { deadline: Date.now() + 15_000 }).catch((error) => {
+  const deferred = Boolean(reminder.deferred_message_id);
+  const nudge = await (deferred ? checkInNudge(actor, reminder) : prepareNudge(actor, reminder.source_id, reminder.thread_key, { deadline: Date.now() + 15_000 })).catch((error) => {
     console.error("Preparing a follow-up failed", error instanceof Error ? error.message : error);
     return null;
   });
-  const title = `No reply yet: ${reminder.subject?.trim() || "(no subject)"}`;
+  const subject = reminder.subject?.trim() || "(no subject)";
+  const title = deferred ? `Time to check in: ${subject}` : `No reply yet: ${subject}`;
   const href = mailHref(reminder.source_id, reminder.thread_key);
   const quiet = (await mailNotifyLevel(actor)) === "none";
+  const body = deferred
+    ? nudge
+      ? "They asked to pick this up now. Orbit has a check-in ready for you to send."
+      : "They asked to pick this up now. It's back at the top of your inbox."
+    : nudge
+      ? "Nobody has replied. Orbit has a follow-up ready for you to send."
+      : "Nobody has replied. It's back at the top of your inbox.";
   await sendAlert(
     actor,
     {
       key: `follow-up:${reminder.id}`,
       title,
-      body: nudge ? "Nobody has replied. Orbit has a follow-up ready for you to send." : "Nobody has replied. It's back at the top of your inbox.",
+      body,
       url: href,
       tag: `${reminder.source_id}|${reminder.thread_key}`,
       bell: { title, body: "Orbit has put the conversation back at the top of your inbox.", href },

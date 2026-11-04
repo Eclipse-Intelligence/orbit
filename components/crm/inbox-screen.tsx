@@ -1,5 +1,6 @@
 import Button from "@/components/_ui/button";
 import CaptureSeen from "@/components/crm/capture-seen";
+import FollowUpCalls from "@/components/crm/follow-up-calls";
 import PeopleMet from "@/components/crm/people-met";
 import SectionHeader from "@/components/crm/section-header";
 import UnfiledConversations from "@/components/crm/unfiled-conversations";
@@ -7,10 +8,12 @@ import type { Viewer } from "@/components/crm/viewer";
 import KeyboardList from "@/components/shortcuts/keyboard-list";
 import type { MetPerson } from "@/lib/crm/calendar";
 import type { UnfiledImport } from "@/lib/crm/conversations";
+import type { FollowUpSuggestion } from "@/lib/crm/follow-ups";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
 
 export default function CaptureScreen({
   viewer,
+  followUps,
   unfiled,
   people,
   total,
@@ -18,6 +21,7 @@ export default function CaptureScreen({
   alert,
 }: {
   viewer: Viewer;
+  followUps: FollowUpSuggestion[];
   unfiled: UnfiledImport[];
   people: MetPerson[];
   total: number;
@@ -41,6 +45,8 @@ export default function CaptureScreen({
               </Button>
             </p>
           )}
+
+          <FollowUpCalls suggestions={followUps} />
 
           <section aria-labelledby="to-file-heading" className="flex flex-col gap-3">
             <h2 id="to-file-heading" className="eyebrow-style text-subtle flex items-center gap-2 font-normal">

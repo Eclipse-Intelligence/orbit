@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { FollowUpBanner, FollowUpCancelledNote } from "@/components/mail/follow-up-banner";
+import DeferralNotice from "@/components/mail/deferral-notice";
 import MessageAttachments from "@/components/mail/message-attachments";
 import ReadStatus from "@/components/mail/read-status";
 import ThreadPeople from "@/components/mail/thread-people";
@@ -154,9 +155,11 @@ function Message({
   swipe,
   onEditDraft,
   onDeleteDraft,
+  footer,
 }: {
   onEditDraft: (message: ThreadMessage) => void;
   onDeleteDraft: (message: ThreadMessage) => void;
+  footer?: ReactNode;
   message: ThreadMessage;
   companies: { id: string; name: string }[];
   own: string[];
@@ -230,8 +233,10 @@ function Message({
         <div className="flex flex-col gap-3 px-4 pb-4 sm:pl-14">
           <MessageBody message={message} title={`Email from ${sender}`} swipe={swipe} hideQuotes={hideQuotes} />
           {message.hasAttachments && <MessageAttachments messageId={message.id} companies={companies} />}
+          {footer}
         </div>
       )}
+      {!expanded && footer && <div className="px-4 pb-3 sm:pl-14">{footer}</div>}
     </article>
   );
 }
@@ -341,6 +346,7 @@ function Thread({
             swipe={swipe}
             onEditDraft={onEditDraft}
             onDeleteDraft={onDeleteDraft}
+            footer={detail.deferral?.messageId === message.id ? <DeferralNotice key={detail.deferral.id} deferral={detail.deferral} /> : null}
             expanded={open.has(message.id)}
             collapsible={detail.messages.length > 1}
             hideQuotes={message.id !== detail.messages[0].id}

@@ -28,7 +28,7 @@ export function shiftDay(key: string, days: number) {
   return dayKey(date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate());
 }
 
-function weekday(key: string) {
+export function weekday(key: string) {
   const { year, month, day } = parts(key);
   return new Date(Date.UTC(year, month - 1, day)).getUTCDay();
 }
@@ -115,6 +115,24 @@ export function nextWorkingDay(key: string) {
   let next = key;
   for (let guard = 0; guard < 40 && nonWorkingReason(next); guard += 1) next = shiftDay(next, 1);
   return next;
+}
+
+export function addWorkingDays(key: string, days: number) {
+  let next = key;
+  for (let left = days, guard = 0; left > 0 && guard < 400; guard += 1) {
+    next = shiftDay(next, 1);
+    if (!nonWorkingReason(next)) left -= 1;
+  }
+  return next;
+}
+
+export function dayKeyAt(date: Date, timeZone = appTimeZone()) {
+  const wall = zonedParts(date, timeZone);
+  return dayKey(wall.year, wall.month, wall.day);
+}
+
+export function wallClockAt(key: string, hour: number, minute: number, timeZone = appTimeZone()) {
+  return at(key, hour, minute, timeZone);
 }
 
 function at(key: string, hour: number, minute: number, timeZone: string) {

@@ -87,6 +87,7 @@ import { CrmError } from "@/lib/crm/errors";
 import { getGranolaStatus } from "@/lib/crm/granola";
 import { companyHref, contactHref, opportunityHref } from "@/lib/crm/hrefs";
 import { getMailbox, listInbox } from "@/lib/crm/inbox";
+import { listFollowUps } from "@/lib/crm/follow-ups";
 import { cancelInvite, createInvite, getMeetingLink, MEETING_RESPONSES, rescheduleInvite, respondToInvite } from "@/lib/crm/invites";
 import { latestEmailCheck, verifyEmail } from "@/lib/enrichment/email-check";
 import { archiveOpportunity, createOpportunity, getOpportunity, listOpportunities, listPipeline, updateOpportunity } from "@/lib/crm/opportunities";
@@ -1349,16 +1350,17 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     name: "get_capture",
     label: "Checking Capture",
     description:
-      "What's waiting in Capture, not the mailbox: unfiled conversations from Teams and Granola waiting to be filed and people met in meetings who aren't contacts yet, plus recent mail filed to records. For the user's email itself use search_email.",
+      "What's waiting in Capture, not the mailbox: calls that ended with no next step (with the follow-up Orbit drafted), unfiled conversations from Teams and Granola waiting to be filed and people met in meetings who aren't contacts yet, plus recent mail filed to records. For the user's email itself use search_email.",
     parameters: { type: "object", properties: {} },
     run: async (actor) => {
-      const [mailbox, messages, unfiled, people] = await Promise.all([
+      const [mailbox, messages, unfiled, people, followUps] = await Promise.all([
         getMailbox(actor),
         listInbox(actor),
         listUnfiledImports(actor, 50),
         listPeopleMet(actor),
+        actor.type === "user" ? listFollowUps(actor) : Promise.resolve([]),
       ]);
-      return { mailbox, recentMail: messages, unfiledConversations: unfiled, peopleMet: people };
+      return { mailbox, followUps, recentMail: messages, unfiledConversations: unfiled, peopleMet: people };
     },
   },
   {

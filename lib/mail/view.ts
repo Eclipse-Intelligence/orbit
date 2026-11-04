@@ -1,3 +1,4 @@
+import type { LaterOption } from "@/lib/mail/later";
 import type { MailAddress, MailRole } from "@/lib/mail/types";
 
 const MAIL_ROLES = ["inbox", "snoozed", "sent", "drafts", "archive", "trash", "junk"] as const;
@@ -43,6 +44,8 @@ export type FollowUpReminder = {
 };
 
 export type FollowUpReplied = { name: string; messageId: string };
+
+export type DeferredFollowUp = { id: string; messageId: string; at: string; taskId: string | null; options: LaterOption[] };
 
 export type ThreadMessage = {
   id: string;
@@ -155,6 +158,7 @@ export type ThreadDetail = {
   prepared: PreparedReply | null;
   followUp: FollowUpReminder | null;
   followUpReplied?: FollowUpReplied | null;
+  deferral?: DeferredFollowUp | null;
   subscription?: ThreadSubscription | null;
 };
 

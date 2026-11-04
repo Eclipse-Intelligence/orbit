@@ -14,6 +14,7 @@ export type ToFile = { unfiled: UnfiledImport[]; people: MetPerson[] };
 
 export type CaptureStatus = {
   waiting: number;
+  followUps: number;
   fresh: number;
   newestAt: string | null;
   seenAt: string | null;
@@ -96,6 +97,14 @@ const PEOPLE_COUNTS = `
     max(first_at) filter (where first_at <= $5) as newest
   from outside`;
 
+const FOLLOW_UP_COUNTS = `
+  select
+    count(*)::int as waiting,
+    count(*) filter (where $3::timestamptz is null or s.created_at > $3)::int as fresh,
+    max(s.created_at) as newest
+  from crm.follow_up_suggestions s
+  where s.user_id = $1 and s.workspace_id = $2 and s.state = 'ready' and s.body is not null and s.person_email is not null`;
+
 export async function listToFile(actor: UserActor, now = Date.now()): Promise<ToFile> {
   assertScope(actor.scopes, "crm:read");
   const [unfiled, mailbox] = await Promise.all([
@@ -137,10 +146,14 @@ export async function captureStatus(actor: UserActor, now = Date.now()): Promise
         seenAt,
       ])
     ).rows[0];
+    const followUps = (
+      await db.query<{ waiting: number; fresh: number; newest: Date | null }>(FOLLOW_UP_COUNTS, [actor.userId, actor.workspaceId, seenAt])
+    ).rows[0];
     return {
-      waiting: unfiled.waiting + people.waiting,
-      fresh: unfiled.fresh + people.fresh,
-      newestAt: later(iso(unfiled.newest), iso(people.newest)),
+      waiting: unfiled.waiting + people.waiting + followUps.waiting,
+      followUps: followUps.waiting,
+      fresh: unfiled.fresh + people.fresh + followUps.fresh,
+      newestAt: later(later(iso(unfiled.newest), iso(people.newest)), iso(followUps.newest)),
       seenAt,
     };
   });
