@@ -18,6 +18,7 @@ import {
 } from "@/lib/agent-mail/jobs";
 import { UNREADABLE_SECRET, agentMailboxView, saveAgentSenders, setUpAgentMailbox } from "@/lib/agent-mail/mailbox";
 import { emailHtml, emailText } from "@/lib/agent-mail/email-format";
+import { eventTypeFor, pollAgentMailboxes } from "@/lib/agent-mail/poll";
 import { WEBHOOK_MAX_BYTES, receiveAgentMail } from "@/lib/agent-mail/receive";
 import { aligned, bareAddress, judgeMail, senderAuthenticated } from "@/lib/agent-mail/senders";
 import { AGENT_SENDS_PER_DAY } from "@/lib/agent-mail/store";
@@ -585,6 +586,57 @@ describe("receiving agent mail", () => {
     const sentRaw = JSON.stringify({ type: "event", event_id: "evt_sent_1", event_type: "message.sent", data: { message: { message_id: "msg_x", inbox_id: inbox } } });
     const sent = await receiveAgentMail(headersFor(secretFor(inbox), sentRaw, "evt_sent_1"), sentRaw);
     assert.deepEqual([sent.status, sent.body.ignored], [200, true]);
+  });
+
+  it("picks up mail the webhook missed, including quarantined mail, once", async () => {
+    const missed = JSON.parse(makeEvent(services, { inbox, subject: "Missed by the webhook" }).raw).message;
+    const quarantined = JSON.parse(makeEvent(services, { inbox, subject: "Quarantined one" }).raw).message;
+    const delivered = await receiveOnly(services, inbox, { subject: "Came by webhook" });
+    const messages = new Map<string, Record<string, unknown>>([
+      [missed.message_id, { ...missed, labels: ["INBOX", "UNREAD"] }],
+      [quarantined.message_id, { ...quarantined, labels: ["QUARANTINE"], trust_level: "quarantined" }],
+    ]);
+    const fetched: string[] = [];
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = new URL(String(input));
+      const parts = url.pathname.split("/").map(decodeURIComponent);
+      if (parts.at(-1) === "messages") {
+        if (parts.at(-2) !== inbox) return Response.json({ messages: [] });
+        assert.equal(url.searchParams.get("include_quarantine"), "true");
+        return Response.json({
+          messages: [
+            { message_id: missed.message_id, labels: ["INBOX", "UNREAD"], direction: "inbound" },
+            { message_id: quarantined.message_id, labels: ["QUARANTINE"], direction: "inbound" },
+            { message_id: delivered.messageId, labels: ["INBOX"], direction: "inbound" },
+            { message_id: "msg_sent_by_orbit", labels: ["SENT"], direction: "outbound" },
+          ],
+        });
+      }
+      const id = parts.at(-1) ?? "";
+      fetched.push(id);
+      return Response.json(messages.get(id) ?? {}, { status: messages.has(id) ? 200 : 404 });
+    };
+    const started: string[] = [];
+    const first = await pollAgentMailboxes({ fetchImpl, start: async (job) => void started.push(job.mailId) });
+    assert.deepEqual(fetched.sort(), [missed.message_id, quarantined.message_id].sort());
+    assert.equal(first.stored, 2);
+    assert.equal(started.length, 1);
+    const rows = (
+      await getAdminPool().query<{ message_id: string; status: string; status_reason: string | null; event_id: string }>(
+        "select message_id, status, status_reason, event_id from crm.agent_mail_messages where inbox_id = $1 and message_id = any($2::text[])",
+        [inbox, [missed.message_id, quarantined.message_id]],
+      )
+    ).rows;
+    const byId = new Map(rows.map((row) => [row.message_id, row]));
+    assert.equal(byId.get(missed.message_id)?.status, "received");
+    assert.equal(byId.get(missed.message_id)?.event_id, `poll:${missed.message_id}`);
+    assert.equal(byId.get(quarantined.message_id)?.status, "refused");
+    assert.equal(byId.get(quarantined.message_id)?.status_reason, "MachineMail quarantined it.");
+    fetched.length = 0;
+    const again = await pollAgentMailboxes({ fetchImpl, start: async (job) => void started.push(job.mailId) });
+    assert.deepEqual([fetched.length, again.stored, started.length], [0, 0, 1]);
+    assert.equal(eventTypeFor(["INBOX"]), "message.received");
+    assert.equal(eventTypeFor(["SPAM", "UNREAD"]), "message.received.spam");
   });
 
   it("stores each event once even when MachineMail delivers it twice", async () => {

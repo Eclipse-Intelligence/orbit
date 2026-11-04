@@ -17,7 +17,7 @@ export type IncomingAttachment = {
   risk: string | null;
 };
 
-type RawMessage = Record<string, unknown> & {
+export type RawMessage = Record<string, unknown> & {
   message_id?: unknown;
   inbox_id?: unknown;
   thread_id?: unknown;
@@ -122,6 +122,16 @@ export async function receiveAgentMail(headers: Headers, raw: string, options: {
   if (!eventType.startsWith("message.received")) return { status: 200, body: { ok: true, ignored: true } };
   const message = (record(record(envelope.data)?.message) ?? record(envelope.message)) as RawMessage | null;
   if (!message || typeof message.message_id !== "string" || !message.message_id) return { status: 200, body: { ok: true, ignored: true } };
+  return storeAgentMessage(target, eventId, eventType, message);
+}
+
+export async function storeAgentMessage(
+  target: { mailbox_id: string; workspace_id: string; address: string },
+  eventId: string,
+  eventType: string,
+  message: RawMessage,
+): Promise<ReceiveResult> {
+  if (typeof message.message_id !== "string" || !message.message_id) return { status: 200, body: { ok: true, ignored: true } };
   const inbox = typeof message.inbox_id === "string" ? message.inbox_id.trim().toLowerCase() : "";
   if (inbox !== target.address) return { status: 200, body: { ok: true, ignored: true } };
   const from = bareAddress(message.from);
