@@ -114,7 +114,7 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
   return (
     <ShortcutsProvider>
       <DocsProvider seed={docsSeed(user)} nav={emptyDocsNav(user)}>
-        <main className="relative flex h-dvh max-w-full overflow-hidden">
+        <main data-app-shell className="relative flex h-dvh max-w-full overflow-hidden">
           <KeepPageInPlace />
           <Sidebar
             boards={boards}
