@@ -520,6 +520,13 @@ export default function ThreadReader({
   const { openComposer } = useComposer();
   const sourceId = detail?.key.split("|")[0] ?? "";
   const newDraft = detail?.drafts.find((draft) => draft.mode === "new") ?? null;
+  const openedDrafts = useRef<Set<string>>(new Set());
+  const draftToOpen = !target && newDraft && !openedDrafts.current.has(newDraft.id) ? newDraft : null;
+  useEffect(() => {
+    if (!draftToOpen || openedDrafts.current.has(draftToOpen.id)) return;
+    openedDrafts.current.add(draftToOpen.id);
+    openComposer({ draft: draftToOpen });
+  }, [draftToOpen, openComposer]);
   const restored = !dismissed ? (detail?.drafts.find((draft) => draft.mode !== "new") ?? null) : null;
   const active: ComposerStart | null =
     composer ??
