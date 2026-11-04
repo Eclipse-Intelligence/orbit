@@ -1,3 +1,5 @@
+import { formatSpans, headingMarker, type FormatSpan } from "@/lib/mail/inline-format";
+
 const BLOCKED_BLOCKS = /<(script|iframe|object|frameset|applet|noscript)\b[\s\S]*?<\/\1\s*>/gi;
 const BLOCKED_TAGS = /<\/?(script|iframe|object|embed|form|frameset|frame|applet|base|link|noscript)\b[^>]*>/gi;
 const EVENT_ATTRIBUTES = /\s+on[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi;
@@ -52,28 +54,32 @@ function placeImages(escaped: string, inline: Record<string, string>) {
   });
 }
 
-const EMPHASIS = /\*\*([^*\n]+?)\*\*|(?<![\w*])\*(?![\s*])([^*\n]+?)(?<!\s)\*(?![\w*])|\[([^\]\n]+)\]\((https?:\/\/[^)\s]+|\/[^)\s]*)\)/g;
-const HEADING = /^#{1,6}\s+(.+)$/;
-
 function plainPart(text: string, inline: Record<string, string>) {
   return placeImages(linkify(escapeHtml(text)), inline);
 }
 
-function formatLine(line: string, inline: Record<string, string>): string {
-  const heading = HEADING.exec(line);
-  if (heading) return `<strong>${formatLine(heading[1], inline)}</strong>`;
+function spansToHtml(line: string, spans: FormatSpan[], from: number, to: number, inline: Record<string, string>): string {
   let out = "";
-  let last = 0;
-  for (const match of line.matchAll(EMPHASIS)) {
-    const start = match.index ?? 0;
-    out += plainPart(line.slice(last, start), inline);
-    if (match[1] !== undefined) out += `<strong>${formatLine(match[1], inline)}</strong>`;
-    else if (match[2] !== undefined) out += `<em>${formatLine(match[2], inline)}</em>`;
-    else if (/^https?:\/\//.test(match[4])) out += `<a href="${escapeHtml(match[4])}">${escapeHtml(match[3])}</a>`;
-    else out += escapeHtml(match[3]);
-    last = start + match[0].length;
+  let last = from;
+  for (const span of spans) {
+    out += plainPart(line.slice(last, span.from), inline);
+    const [innerFrom, innerTo] = span.inner;
+    if (span.kind === "link") {
+      const label = escapeHtml(line.slice(innerFrom, innerTo));
+      out += span.external ? `<a href="${escapeHtml(span.href)}">${label}</a>` : label;
+    } else {
+      const tag = span.kind === "bold" ? "strong" : "em";
+      out += `<${tag}>${spansToHtml(line, span.spans, innerFrom, innerTo, inline)}</${tag}>`;
+    }
+    last = span.to;
   }
-  return out + plainPart(line.slice(last), inline);
+  return out + plainPart(line.slice(last, to), inline);
+}
+
+function formatLine(line: string, inline: Record<string, string>) {
+  const marker = headingMarker(line);
+  const text = spansToHtml(line, formatSpans(line), marker, line.length, inline);
+  return marker ? `<strong>${text}</strong>` : text;
 }
 
 function textToHtml(text: string, inline: Record<string, string> = {}) {
