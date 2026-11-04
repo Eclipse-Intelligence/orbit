@@ -444,7 +444,7 @@ export default function MailComposer({
       )}
       {showSubject && (
         <div className={cn("flex items-center gap-2", card && "mt-1")}>
-          <label htmlFor={`${id}-subject`} className={cn("text-subtle w-8 shrink-0 text-[13px]", card && "sr-only")}>
+          <label htmlFor={`${id}-subject`} className={cn("text-subtle min-w-8 shrink-0 text-[13px]", card && "sr-only")}>
             Subject
           </label>
           <input
