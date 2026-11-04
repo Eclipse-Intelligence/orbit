@@ -83,16 +83,11 @@ export default function SettingsShell({
   const content = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const active = tabs.current?.querySelector<HTMLElement>(
-      "[aria-current='page']",
-    );
-    if (
-      !active ||
-      !tabs.current ||
-      tabs.current.scrollWidth <= tabs.current.clientWidth
-    )
-      return;
-    active.scrollIntoView({ block: "nearest", inline: "center" });
+    const list = tabs.current;
+    const active = list?.querySelector<HTMLElement>("[aria-current='page']");
+    if (!active || !list || list.scrollWidth <= list.clientWidth) return;
+    const offset = active.getBoundingClientRect().left - list.getBoundingClientRect().left + list.scrollLeft;
+    list.scrollLeft = offset - (list.clientWidth - active.offsetWidth) / 2;
   }, [pathname]);
 
   useEffect(() => {
