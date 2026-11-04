@@ -52,6 +52,7 @@ export default function BodyEditor({
       parent,
       state: EditorState.create({
         doc: initial.current.value,
+        selection: { anchor: initial.current.value.length },
         extensions: [
           bodyEditorExtensions({
             placeholder: initial.current.placeholder,

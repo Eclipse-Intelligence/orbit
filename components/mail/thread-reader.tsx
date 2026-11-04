@@ -6,7 +6,6 @@ import DeferralNotice from "@/components/mail/deferral-notice";
 import MessageAttachments from "@/components/mail/message-attachments";
 import ReadStatus from "@/components/mail/read-status";
 import ThreadPeople from "@/components/mail/thread-people";
-import { useComposer } from "@/components/mail/compose-dock";
 import { loadSummary, type ThreadSummaryText } from "@/components/mail/mail-cache";
 import { watchSwipe, type SwipeHandlers } from "@/components/mail/swipe";
 import MailComposer, { type ComposerStart } from "@/components/mail/mail-composer";
@@ -517,16 +516,8 @@ export default function ThreadReader({
   const forwardHint = useShortcutHint("mail-forward");
   const hints: Record<Exclude<DraftMode, "new">, string> = { reply: replyHint, reply_all: replyAllHint, forward: forwardHint };
   const target = detail?.messages.filter((message) => !(message.isDraft && message.folderRole === "drafts")).at(-1) ?? null;
-  const { openComposer } = useComposer();
   const sourceId = detail?.key.split("|")[0] ?? "";
   const newDraft = detail?.drafts.find((draft) => draft.mode === "new") ?? null;
-  const openedDrafts = useRef<Set<string>>(new Set());
-  const draftToOpen = !target && newDraft && !openedDrafts.current.has(newDraft.id) ? newDraft : null;
-  useEffect(() => {
-    if (!draftToOpen || openedDrafts.current.has(draftToOpen.id)) return;
-    openedDrafts.current.add(draftToOpen.id);
-    openComposer({ draft: draftToOpen });
-  }, [draftToOpen, openComposer]);
   const restored = !dismissed ? (detail?.drafts.find((draft) => draft.mode !== "new") ?? null) : null;
   const active: ComposerStart | null =
     composer ??
@@ -888,11 +879,24 @@ export default function ThreadReader({
                 />
                 </div>
               ) : !target && newDraft ? (
-                <div className="flex flex-col items-start gap-3 px-4">
-                  <p className="text-subtle">This is a new email you haven&apos;t sent yet.</p>
-                  <Button variant="primary" onClick={() => openComposer({ draft: newDraft })}>
-                    Continue writing
-                  </Button>
+                <div data-reader-composer="">
+                  <MailComposer
+                    key={newDraft.id}
+                    start={{
+                      mode: "new",
+                      messageId: null,
+                      sourceId: newDraft.sourceId,
+                      to: newDraft.to,
+                      cc: newDraft.cc,
+                      subject: newDraft.subject,
+                      draft: newDraft,
+                    }}
+                    variant="inline"
+                    accounts={accounts}
+                    onClose={onBack}
+                    onSent={() => onBack()}
+                    onDelivered={onSent}
+                  />
                 </div>
               ) : (
                 target && (
