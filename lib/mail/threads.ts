@@ -10,6 +10,7 @@ import type { MailAddress, MailRole } from "@/lib/mail/types";
 import { splitCase, splitJoin } from "@/lib/mail/split";
 import { opensSql, readsSql } from "@/lib/mail/tracking";
 import { threadSubscription } from "@/lib/mail/subscriptions";
+import { threadDeferral } from "@/lib/mail/deferrals";
 import type { MailNav, MailSplit, MailView, ThreadCursor, ThreadDetail, ThreadPerson, ThreadSummary } from "@/lib/mail/view";
 
 const THREAD_KEY = "coalesce(m.thread_key, 'm:' || m.id::text)";
@@ -309,11 +310,12 @@ async function readThread(actor: UserActor, key: string): Promise<ThreadDetail> 
     const prepared = target ? await preparedFor(db, actor, target.id) : null;
     const reminder = await db.query<{ id: string; due_at: Date | string; automatic: boolean }>(
       `select id, due_at, automatic from crm.mail_reminders
-       where user_id = $1 and source_id = $2 and thread_key = $3 and kind = 'follow_up' and state = 'waiting'
+       where user_id = $1 and source_id = $2 and thread_key = $3 and kind = 'follow_up' and state = 'waiting' and deferred_message_id is null
        order by due_at limit 1`,
       [actor.userId, sourceId, tk],
     );
     const followUp = reminder.rows[0];
+    const deferral = await threadDeferral(db, actor, sourceId, tk);
     const people = await threadPeople(db, actor, rows.length ? rows : result.rows);
     const own = new Set(
       (
@@ -336,6 +338,7 @@ async function readThread(actor: UserActor, key: string): Promise<ThreadDetail> 
       drafts,
       prepared,
       followUp: followUp ? { id: followUp.id, at: iso(followUp.due_at)!, automatic: followUp.automatic } : null,
+      deferral,
       messages: rows.map((row) => {
         const html = row.body_html ? cleanEmailHtml(row.body_html) : null;
         return {

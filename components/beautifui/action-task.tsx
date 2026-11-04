@@ -14,6 +14,23 @@ import { taskDueState } from "@/lib/crm/task-views";
 import type { Task } from "@/lib/crm/types";
 import { KEYBOARD_ROW_CLASS } from "@/lib/shortcuts";
 import { cn } from "@/lib/utils";
+import MailIcon from "@/public/assets/images/mail/mail-open.svg";
+
+const MAIL_LINK = /^\[([^\]\n]+)\]\((\/mail\?thread=[^)\s]+)\)$/;
+
+function splitDescription(description: string | null) {
+  const links: { label: string; href: string }[] = [];
+  const text = (description ?? "")
+    .split("\n")
+    .filter((line) => {
+      const match = MAIL_LINK.exec(line.trim());
+      if (match) links.push({ label: match[1], href: match[2] });
+      return !match;
+    })
+    .join("\n")
+    .trim();
+  return { text, links };
+}
 
 export default function ActionTask({
   task,
@@ -34,6 +51,7 @@ export default function ActionTask({
     Boolean(task.dueAt) && !task.completedAt && new Date(task.dueAt ?? 0).getTime() < now;
   const due = dueBadge ? taskDueState(task.dueAt, now) : null;
   const reminder = task.dueAt ? reminderLabel(task.remindMinutes) : null;
+  const description = splitDescription(task.description);
   const hasDetail = Boolean(
     task.description || task.contactName || task.opportunityName || task.clickupError || reminder,
   );
@@ -156,7 +174,7 @@ export default function ActionTask({
       >
         <div className="overflow-hidden" inert={!open}>
           <div className="text-subtle flex flex-col gap-1 px-11 pt-0.5 pb-3 text-[13px]">
-            {task.description && <p>{task.description}</p>}
+            {description.text && <p>{description.text}</p>}
             {task.contactName && (
               <p>
                 {task.contactId ? (
@@ -173,6 +191,14 @@ export default function ActionTask({
             )}
             {task.opportunityName && <p>{task.opportunityName}</p>}
             {reminder && <p>Reminder {reminder.toLowerCase()}</p>}
+            {description.links.map((link) => (
+              <p key={link.href}>
+                <Link href={link.href} className="text-soft hover:text-foreground inline-flex items-center gap-1.5 underline-offset-2 hover:underline">
+                  <MailIcon aria-hidden className="size-3 shrink-0" />
+                  {link.label}
+                </Link>
+              </p>
+            ))}
             {task.clickupError && <p className="text-danger">ClickUp: {task.clickupError}</p>}
             {!hasDetail && <p>No extra detail.</p>}
             {task.priority !== "normal" && <p>Priority {task.priority}</p>}

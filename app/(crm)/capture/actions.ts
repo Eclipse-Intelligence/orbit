@@ -20,6 +20,7 @@ import {
   ignoreImport,
   summariseImport,
 } from "@/lib/crm/conversations";
+import { closeFollowUp } from "@/lib/crm/follow-ups";
 import { enableGranolaWebhook, syncGranolaFor } from "@/lib/crm/granola";
 import {
   disconnectMailbox,
@@ -205,6 +206,18 @@ export async function ignoreConversationAction(
   if (!user) return { error: "Sign in to change conversations." };
   try {
     await ignoreImport(user, importId);
+  } catch (error) {
+    return actionError(error);
+  }
+  revalidatePath("/capture");
+  return { ok: true };
+}
+
+export async function closeFollowUpAction(id: string, state: "used" | "dismissed"): Promise<ConversationActionState> {
+  const user = await getUserActor();
+  if (!user) return { error: "Sign in to change follow-ups." };
+  try {
+    await closeFollowUp(user, id, state === "used" ? "used" : "dismissed");
   } catch (error) {
     return actionError(error);
   }

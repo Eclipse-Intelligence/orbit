@@ -5,6 +5,7 @@ import { getUserActor } from "@/lib/auth/user";
 import { getCalendarStatus } from "@/lib/crm/calendar";
 import { getCallSync } from "@/lib/crm/calls";
 import { captureStatus, connectionAlert, listToFile, markCaptureSeen, newestArrival } from "@/lib/crm/capture";
+import { listFollowUps } from "@/lib/crm/follow-ups";
 import { getGranolaStatus } from "@/lib/crm/granola";
 import { getMailbox, shouldSyncMailbox, syncMailbox } from "@/lib/crm/inbox";
 import { getTeamsTranscriptStatus } from "@/lib/crm/teams-transcripts";
@@ -33,13 +34,14 @@ export default async function CapturePage() {
     mailbox = await getMailbox(user);
   }
   const live = mailbox?.status === "connected";
-  const [items, status, calls, granola, transcripts, calendar] = await Promise.all([
+  const [items, status, calls, granola, transcripts, calendar, followUps] = await Promise.all([
     listToFile(user, openedAt.getTime()),
     captureStatus(user, openedAt.getTime()),
     mailbox ? getCallSync(user) : Promise.resolve(null),
     getGranolaStatus(user),
     live ? getTeamsTranscriptStatus(user) : Promise.resolve(null),
     live ? getCalendarStatus(user) : Promise.resolve(null),
+    listFollowUps(user).catch(() => []),
   ]);
   after(async () => {
     try {
@@ -58,9 +60,10 @@ export default async function CapturePage() {
         role: user.role,
         workspaceName: user.workspaceName,
       }}
+      followUps={followUps}
       unfiled={items.unfiled}
       people={items.people}
-      total={status.waiting}
+      total={status.waiting - status.followUps}
       newestAt={later(newestArrival(items, openedAt.getTime()), status.newestAt)}
       alert={connectionAlert({ mailbox, calendar, calls, granola, transcripts })}
     />

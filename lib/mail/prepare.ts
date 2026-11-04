@@ -9,6 +9,8 @@ import type { Db } from "@/lib/db/pool";
 import { completeJson } from "@/lib/llm";
 import { clean, formatThread, recipientContext, threadText, today, voiceSamples } from "@/lib/mail/ai";
 import { attachmentNotes } from "@/lib/mail/attachment-context";
+import { DEFER_SCHEMA, deferralHint } from "@/lib/mail/deferral-dates";
+import { applyDeferral, checkDeferrals, DEFERRAL_RULES, deferralEligible, deferralText } from "@/lib/mail/deferrals";
 import { stripQuoted } from "@/lib/mail/format";
 import { workingDaysLater } from "@/lib/mail/later";
 import { offerTimes, refreshTimes, TIMES_MARK } from "@/lib/mail/scheduling";
@@ -33,9 +35,9 @@ export type ColdPitchMode = (typeof COLD_PITCH_MODES)[number];
 
 export type MailHelpSettings = { prepareReplies: boolean; autoRemindDays: number | null; coldPitches: ColdPitchMode };
 
-type PrepareReport = { prepared: number; skipped: number; reminders: number; checked: number; pitches: number };
+type PrepareReport = { prepared: number; skipped: number; reminders: number; checked: number; pitches: number; deferrals: number };
 
-const REPLY_SCHEMA = z.object({ needsReply: z.boolean(), meeting: z.boolean().optional(), pitch: z.boolean().optional(), body: z.string().nullable() });
+const REPLY_SCHEMA = z.object({ needsReply: z.boolean(), meeting: z.boolean().optional(), pitch: z.boolean().optional(), body: z.string().nullable(), defer: DEFER_SCHEMA });
 const PITCH_SCHEMA = z.object({ pitches: z.array(z.number()) });
 const PITCH_BODY = 1_200;
 const PITCH_MAX_FAILURES = 3;
@@ -341,9 +343,13 @@ async function prepareReply(actor: UserActor, candidate: ReplyCandidate, deadlin
   );
   const name = actor.fullName || actor.email;
   const first = name.split(/\s+/)[0];
+  const askDefer =
+    deferralHint(`${candidate.subject ?? ""}\n${deferralText(candidate.body_text, candidate.snippet)}`) &&
+    (await deferralEligible(actor, candidate.id, candidate.from_email).catch(() => false));
   const result = await completeJson({
     system:
-      `You prepare email replies for ${name}, who reviews and sends them from their CRM. Reply with JSON only: {"needsReply": boolean, "meeting": boolean, ${askPitch ? '"pitch": boolean, ' : ""}"body": string or null}. ` +
+      `You prepare email replies for ${name}, who reviews and sends them from their CRM. Reply with JSON only: {"needsReply": boolean, "meeting": boolean, ${askPitch ? '"pitch": boolean, ' : ""}${askDefer ? '"defer": {"note": string, "precision": string, "date": string} or null, ' : ""}"body": string or null}. ` +
+      (askDefer ? `defer is set when the latest email is a deferral, otherwise null. ${DEFERRAL_RULES} ` : "") +
       (askPitch
         ? `The sender isn't in the CRM and has never written to ${name} before. pitch is true when the latest email is an unsolicited sales, marketing, recruiting, link-building or partnership pitch (cold outreach), and false for anything that could be a real enquiry, an introduction or a request for help. When unsure, pitch is false. When pitch is true, needsReply is false. `
         : "") +
@@ -362,6 +368,13 @@ async function prepareReply(actor: UserActor, candidate: ReplyCandidate, deadlin
     fetchImpl,
   });
   const pitched = askPitch && result.data.pitch === true;
+  if (askDefer && candidate.from_email && !pitched) {
+    await applyDeferral(
+      actor,
+      { id: candidate.id, sourceId: candidate.source_id, threadKey: candidate.tk, subject: candidate.subject, fromEmail: candidate.from_email, fromName: candidate.from_name },
+      result.data.defer,
+    ).catch((error) => console.error("Recording a deferral failed", error instanceof Error ? error.message : error));
+  }
   let pitchFailed = false;
   if (askPitch) {
     if (!pitched) await notePitch(actor, candidate, false);
@@ -407,16 +420,26 @@ export async function prepareNudge(
   if (!process.env.LLM_API_KEY?.trim() || !(await mailHelpSettings(actor)).prepareReplies) return null;
   const context = await withActor(actor, async (db) => {
     if ((await usedToday(db, actor)) >= DAILY_LIMIT) return null;
-    return draftContext(db, actor, sourceId, key);
+    const deferred = await db.query<{ defer_note: string | null }>(
+      `select defer_note from crm.mail_reminders
+       where user_id = $1 and source_id = $2 and thread_key = $3 and kind = 'follow_up' and deferred_message_id is not null and state in ('waiting', 'due')
+       order by coalesce(surfaced_at, created_at) desc limit 1`,
+      [actor.userId, sourceId, key],
+    );
+    return { ...(await draftContext(db, actor, sourceId, key)), deferral: deferred.rows[0]?.defer_note ?? null };
   });
   const latest = context?.text.messages.at(-1);
   if (!context || !latest) return null;
   const name = actor.fullName || actor.email;
   const first = name.split(/\s+/)[0];
+  const opening = context.deferral
+    ? `The other person in this conversation asked ${name} to pick it up later ("${context.deferral}"), and that time has come. Write a short, friendly check-in from ${name} to send in the same thread. Reply with JSON only: {"body": string}. ` +
+      `body is two or three sentences at most: a greeting, a light reminder of what was left for now with a simple question about next steps, and a sign-off with "${first}". No subject and no signature block. `
+    : `${name} sent the latest email in this conversation and nobody has replied. Write a short, friendly follow-up from ${name} to send in the same thread. Reply with JSON only: {"body": string}. ` +
+      `body is two or three sentences at most: a greeting, a light nudge that refers to what was asked, and a sign-off with "${first}". No subject and no signature block. `;
   const result = await completeJson({
     system:
-      `${name} sent the latest email in this conversation and nobody has replied. Write a short, friendly follow-up from ${name} to send in the same thread. Reply with JSON only: {"body": string}. ` +
-      `body is two or three sentences at most: a greeting, a light nudge that refers to what was asked, and a sign-off with "${first}". No subject and no signature block. ` +
+      opening +
       "Don't apologise for following up and don't add new facts. Write in UK English and match the tone of the examples. " +
       `${UNTRUSTED} ${WRITING_STYLE} Today is ${today()}.`,
     user: [...contextBlocks(first, context, []), aboutWriterNote(await getPersonalContext(actor).catch(() => null), first)].filter(Boolean).join("\n\n"),
@@ -537,7 +560,7 @@ export async function prepareMail(
   actor: UserActor,
   options: { deadline: number; fetchImpl?: typeof fetch },
 ): Promise<PrepareReport> {
-  const report: PrepareReport = { prepared: 0, skipped: 0, reminders: 0, checked: 0, pitches: 0 };
+  const report: PrepareReport = { prepared: 0, skipped: 0, reminders: 0, checked: 0, pitches: 0, deferrals: 0 };
   if (!process.env.LLM_API_KEY?.trim()) return report;
   const settings = await mailHelpSettings(actor);
   if (settings.autoRemindDays && options.deadline - Date.now() > STEP_MS) {
@@ -573,6 +596,13 @@ export async function prepareMail(
       report.pitches += await checkPitches(actor, settings.coldPitches, options.deadline, options.fetchImpl);
     } catch (error) {
       console.error("Cold pitch check failed", error instanceof Error ? error.message : error);
+    }
+  }
+  if (options.deadline - Date.now() > STEP_MS) {
+    try {
+      report.deferrals += await checkDeferrals(actor, { deadline: options.deadline, fetchImpl: options.fetchImpl });
+    } catch (error) {
+      console.error("Deferral check failed", error instanceof Error ? error.message : error);
     }
   }
   return report;
