@@ -302,7 +302,7 @@ export type AgentMailboxActionState = { error?: string; message?: string };
 export async function setUpAgentMailboxAction(address: string): Promise<AgentMailboxActionState> {
   const user = await requireUser();
   try {
-    const result = await setUpAgentMailbox(user, { address }, await requestOrigin());
+    const result = await setUpAgentMailbox(user, { address });
     revalidatePath(SETTINGS_PATHS.integrations);
     return { message: result.message };
   } catch (error) {

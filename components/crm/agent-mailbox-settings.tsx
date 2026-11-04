@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Input } from "@/components/_ui/input";
@@ -24,7 +24,11 @@ const STATUS_LABELS: Record<string, string> = {
 
 type SenderDraft = { key: number; address: string; userId: string };
 
-function Status({ on, children }: { on: boolean; children: string }) {
+function draftsFrom(view: AgentMailboxView): SenderDraft[] {
+  return view.senders.map((sender, index) => ({ key: index, address: sender.address, userId: sender.userId }));
+}
+
+function Status({ on, children }: { on: boolean; children: ReactNode }) {
   return (
     <span className="flex items-center gap-1.5">
       <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", on ? "bg-success" : "bg-faint")} />
@@ -36,8 +40,15 @@ function Status({ on, children }: { on: boolean; children: string }) {
 export default function AgentMailboxSettings({ view }: { view: AgentMailboxView }) {
   const router = useRouter();
   const [address, setAddress] = useState(view.address);
-  const [senders, setSenders] = useState<SenderDraft[]>(() => view.senders.map((sender, index) => ({ key: index, address: sender.address, userId: sender.userId })));
+  const [senders, setSenders] = useState<SenderDraft[]>(() => draftsFrom(view));
   const [nextKey, setNextKey] = useState(view.senders.length);
+  const [shown, setShown] = useState(view);
+  if (shown !== view) {
+    setShown(view);
+    setAddress(view.address);
+    setSenders(draftsFrom(view));
+    setNextKey(view.senders.length);
+  }
   const [pending, setPending] = useState<"setup" | "senders" | null>(null);
   const [outcome, setOutcome] = useState<AgentMailboxActionState>({});
 
@@ -62,19 +73,21 @@ export default function AgentMailboxSettings({ view }: { view: AgentMailboxView 
   const last = view.lastMessage;
   const description = (
     <span className="flex flex-col gap-1.5">
-      <span>Email Orbit to give it work. It runs on your Claude plan through Orbit Agent and replies in the thread.</span>
+      <span>Email Orbit to give it work. Replies come back in the thread.</span>
       <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
         {!view.configured ? (
           <Status on={false}>MACHINE_MAIL_API_KEY isn&apos;t set</Status>
         ) : view.setUp ? (
-          <Status on>{view.address}</Status>
+          <Status on>
+            <span className="min-w-0 wrap-anywhere">{view.address}</span>
+          </Status>
         ) : (
           <Status on={false}>Not set up</Status>
         )}
         {view.setUp && <span>{view.lastReceivedAt ? `Last email ${formatWhen(view.lastReceivedAt)}` : "No email yet"}</span>}
       </span>
       {last && (
-        <span>
+        <span className="wrap-anywhere">
           {`${last.from ?? "Unknown sender"}: ${last.subject?.trim() || "(no subject)"} · ${STATUS_LABELS[last.status] ?? last.status}`}
           {last.reason && (last.status === "ignored" || last.status === "refused") ? `. ${last.reason}` : ""}
         </span>
@@ -151,7 +164,7 @@ export default function AgentMailboxSettings({ view }: { view: AgentMailboxView 
           }}
         >
           <div className="flex flex-col gap-1">
-            <span className="text-foreground text-[14px] leading-5 font-medium">Who can give it work</span>
+            <h4 className="text-foreground leading-5">Who can give it work</h4>
             <p className="caption-style text-subtle">Mail from these addresses runs as the person beside it. Other mail is kept but never acted on.</p>
           </div>
           {senders.length === 0 && <p className="caption-style text-subtle">Nobody yet.</p>}
@@ -159,7 +172,8 @@ export default function AgentMailboxSettings({ view }: { view: AgentMailboxView 
             {senders.map((sender, index) => (
               <li key={sender.key} className="flex flex-col gap-2 sm:flex-row sm:items-center">
                 <Input
-                  type="email"
+                  type="text"
+                  inputMode="email"
                   autoComplete="off"
                   spellCheck={false}
                   aria-label={`Sender address ${index + 1}`}
@@ -204,7 +218,7 @@ export default function AgentMailboxSettings({ view }: { view: AgentMailboxView 
           </div>
         </form>
       ) : (
-        <p className="caption-style text-subtle">{`After set up, mail from ${view.defaults.join(" and ")} runs as you. Change it after.`}</p>
+        <p className="caption-style text-subtle">{`After setup, mail from ${view.defaults.join(" and ")} runs as you. Change it afterwards.`}</p>
       )}
     </SettingsCard>
   );

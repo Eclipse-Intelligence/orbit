@@ -54,6 +54,7 @@ create table if not exists crm.agent_mail_messages (
   subject text,
   received_at timestamptz not null default now(),
   text text,
+  text_cleaned boolean not null default true,
   trust_level text,
   authentication jsonb,
   attachments jsonb not null default '[]'::jsonb,
@@ -62,6 +63,8 @@ create table if not exists crm.agent_mail_messages (
   user_message_id uuid references crm.assistant_messages (id) on delete set null,
   status text not null default 'received',
   status_reason text,
+  confirm_message_id uuid references crm.assistant_messages (id) on delete set null,
+  confirm_action_ids text[],
   turn_started_at timestamptz,
   rounds integer not null default 0,
   notice_sent_at timestamptz,
@@ -92,7 +95,9 @@ create index if not exists agent_mail_messages_thread_idx on crm.agent_mail_mess
 create index if not exists agent_mail_messages_user_idx on crm.agent_mail_messages (user_id, received_at desc);
 create index if not exists agent_mail_messages_workspace_idx on crm.agent_mail_messages (workspace_id, received_at desc);
 create index if not exists agent_mail_messages_conversation_idx on crm.agent_mail_messages (conversation_id);
-create index if not exists agent_mail_messages_working_idx on crm.agent_mail_messages (updated_at) where status = 'working';
+drop index if exists crm.agent_mail_messages_working_idx;
+create index if not exists agent_mail_messages_open_idx on crm.agent_mail_messages (updated_at)
+  where status in ('working', 'received') and replied_at is null;
 create index if not exists agent_mail_messages_search_idx on crm.agent_mail_messages using gin (search);
 
 create table if not exists crm.agent_mail_threads (
@@ -102,6 +107,7 @@ create table if not exists crm.agent_mail_threads (
   thread_id text not null,
   user_id uuid not null references crm.profiles (id) on delete cascade,
   conversation_id uuid not null references crm.assistant_conversations (id) on delete cascade,
+  rounds integer not null default 0,
   created_at timestamptz not null default now(),
   constraint agent_mail_threads_unique unique (mailbox_id, thread_id, user_id)
 );
@@ -117,6 +123,11 @@ create table if not exists crm.agent_mail_events (
 );
 
 create index if not exists agent_mail_events_received_idx on crm.agent_mail_events (workspace_id, received_at);
+
+alter table crm.agent_mail_messages add column if not exists text_cleaned boolean not null default true;
+alter table crm.agent_mail_messages add column if not exists confirm_message_id uuid references crm.assistant_messages (id) on delete set null;
+alter table crm.agent_mail_messages add column if not exists confirm_action_ids text[];
+alter table crm.agent_mail_threads add column if not exists rounds integer not null default 0;
 
 alter table crm.ai_companion_jobs add column if not exists agent_mail_id uuid references crm.agent_mail_messages (id) on delete set null;
 create index if not exists ai_companion_jobs_agent_mail_idx on crm.ai_companion_jobs (agent_mail_id) where agent_mail_id is not null;
@@ -185,22 +196,6 @@ create policy agent_mail_messages_read on crm.agent_mail_messages
   );
 
 drop policy if exists agent_mail_messages_send on crm.agent_mail_messages;
-create policy agent_mail_messages_send on crm.agent_mail_messages
-  for insert to authenticated
-  with check (
-    workspace_id in (select private.user_workspace_ids())
-    and direction = 'outbound'
-    and status = 'sent'
-    and user_id = (select private.session_user_id())
-    and mailbox_id in (select b.id from crm.agent_mailboxes b where b.workspace_id = agent_mail_messages.workspace_id)
-    and (
-      private.is_workspace_admin(workspace_id)
-      or exists (
-        select 1 from crm.agent_mailbox_senders s
-        where s.workspace_id = agent_mail_messages.workspace_id and s.user_id = (select private.session_user_id())
-      )
-    )
-  );
 
 drop policy if exists agent_mail_messages_own_update on crm.agent_mail_messages;
 create policy agent_mail_messages_own_update on crm.agent_mail_messages
@@ -242,20 +237,17 @@ grant update (address, user_id) on crm.agent_mailbox_senders to authenticated;
 
 grant select (
   id, workspace_id, mailbox_id, inbox_id, message_id, thread_id, event_id, event_type, direction, from_address, from_name,
-  to_addresses, cc_addresses, subject, received_at, text, trust_level, authentication, attachments, user_id, conversation_id,
-  user_message_id, status, status_reason, turn_started_at, rounds, notice_sent_at, reply_claimed_at, reply_attempts, replied_at, reply_message_id,
-  advancing_until, error, search, created_at, updated_at
-) on crm.agent_mail_messages to authenticated;
-grant insert (
-  workspace_id, mailbox_id, inbox_id, message_id, thread_id, direction, from_address, from_name, to_addresses, cc_addresses,
-  subject, received_at, text, user_id, status
+  to_addresses, cc_addresses, subject, received_at, text, text_cleaned, trust_level, authentication, attachments, user_id, conversation_id,
+  user_message_id, status, status_reason, confirm_message_id, confirm_action_ids, turn_started_at, rounds, notice_sent_at, reply_claimed_at,
+  reply_attempts, replied_at, reply_message_id, advancing_until, error, search, created_at, updated_at
 ) on crm.agent_mail_messages to authenticated;
 grant update (
-  conversation_id, user_message_id, status, status_reason, turn_started_at, rounds, notice_sent_at, reply_claimed_at, reply_attempts, replied_at,
-  reply_message_id, advancing_until, error
+  conversation_id, user_message_id, status, status_reason, confirm_message_id, confirm_action_ids, turn_started_at, rounds, notice_sent_at,
+  reply_claimed_at, reply_attempts, replied_at, reply_message_id, advancing_until, error
 ) on crm.agent_mail_messages to authenticated;
 
 grant select, insert, delete on crm.agent_mail_threads to authenticated;
+grant update (rounds) on crm.agent_mail_threads to authenticated;
 
 create or replace function private.agent_mailbox_targets()
 returns table (mailbox_id uuid, workspace_id uuid, address text, webhook_secret text)
@@ -325,7 +317,7 @@ begin
 
   insert into crm.agent_mail_messages (
     workspace_id, mailbox_id, inbox_id, message_id, thread_id, event_id, event_type, direction, from_address, from_name,
-    to_addresses, cc_addresses, subject, received_at, text, trust_level, authentication, attachments, user_id, status, status_reason
+    to_addresses, cc_addresses, subject, received_at, text, text_cleaned, trust_level, authentication, attachments, user_id, status, status_reason
   )
   values (
     v_mailbox.workspace_id,
@@ -343,6 +335,7 @@ begin
     left(p_message->>'subject', 2000),
     coalesce((p_message->>'received_at')::timestamptz, now()),
     left(p_message->>'text', 1000000),
+    coalesce((p_message->>'text_cleaned')::boolean, false),
     left(p_message->>'trust_level', 40),
     p_message->'authentication',
     coalesce(p_message->'attachments', '[]'::jsonb),
@@ -402,11 +395,118 @@ begin
 end;
 $$;
 
+create or replace function private.agent_mail_record_sent(
+  p_mailbox uuid, p_user uuid, p_message_id text, p_thread_id text, p_to text[], p_cc text[], p_subject text, p_text text, p_sent_at timestamptz
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_mailbox crm.agent_mailboxes;
+begin
+  if current_user not in ('crm_app', 'postgres') then
+    raise exception 'forbidden' using errcode = '42501';
+  end if;
+  select * into v_mailbox from crm.agent_mailboxes b where b.id = p_mailbox;
+  if v_mailbox.id is null then
+    return;
+  end if;
+  if not exists (select 1 from crm.workspace_members m where m.workspace_id = v_mailbox.workspace_id and m.user_id = p_user) then
+    raise exception 'They are not in this workspace.' using errcode = '42501';
+  end if;
+  insert into crm.agent_mail_messages (
+    workspace_id, mailbox_id, inbox_id, message_id, thread_id, direction, from_address, from_name, to_addresses, cc_addresses,
+    subject, received_at, text, user_id, status
+  )
+  values (
+    v_mailbox.workspace_id, v_mailbox.id, v_mailbox.address, left(p_message_id, 200), left(p_thread_id, 200), 'outbound',
+    v_mailbox.address, v_mailbox.display_name, coalesce(p_to[1:100], '{}'), coalesce(p_cc[1:100], '{}'), left(p_subject, 2000),
+    coalesce(p_sent_at, now()), left(p_text, 1000000), p_user, 'sent'
+  )
+  on conflict (mailbox_id, message_id) do nothing;
+end;
+$$;
+
+create or replace function private.agent_mail_fail(p_id uuid, p_reason text)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if current_user not in ('crm_app', 'postgres') then
+    raise exception 'forbidden' using errcode = '42501';
+  end if;
+  update crm.agent_mail_messages
+  set status = 'failed', status_reason = left(p_reason, 1000), advancing_until = null
+  where id = p_id and status in ('received', 'working') and replied_at is null;
+end;
+$$;
+
+create or replace function private.team_remove(p_workspace uuid, p_actor uuid, p_user uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  actor_role text := private.team_role(p_workspace, p_actor);
+  target_role text := private.team_role(p_workspace, p_user);
+begin
+  if coalesce(actor_role, '') not in ('owner', 'admin') then
+    raise exception 'Only the owner or an admin can remove people.' using errcode = '42501';
+  end if;
+  if target_role is null then
+    raise exception 'They are not in this workspace.' using errcode = '22023';
+  end if;
+  if target_role = 'owner' then
+    raise exception 'The owner can''t be removed.' using errcode = '42501';
+  end if;
+  if p_user = p_actor then
+    raise exception 'You can''t remove yourself.' using errcode = '42501';
+  end if;
+  if target_role = 'admin' and actor_role <> 'owner' then
+    raise exception 'Only the owner can remove an admin.' using errcode = '42501';
+  end if;
+  update crm.companies set owner_id = p_actor where workspace_id = p_workspace and owner_id = p_user;
+  update crm.contacts set owner_id = p_actor where workspace_id = p_workspace and owner_id = p_user;
+  update crm.opportunities set owner_id = p_actor where workspace_id = p_workspace and owner_id = p_user;
+  update crm.tasks set owner_id = p_actor where workspace_id = p_workspace and owner_id = p_user;
+  update crm.documents set owner_id = p_actor where workspace_id = p_workspace and owner_id = p_user;
+  update crm.mailbox_connections
+    set status = 'disconnected', refresh_token = null, access_token = null, access_token_expires_at = null
+    where workspace_id = p_workspace and user_id = p_user;
+  update crm.calendar_accounts
+    set status = 'disconnected', refresh_token = null, access_token = null, access_token_expires_at = null
+    where workspace_id = p_workspace and user_id = p_user;
+  delete from crm.ai_accounts where workspace_id = p_workspace and user_id = p_user;
+  delete from crm.granola_keys where workspace_id = p_workspace and user_id = p_user;
+  delete from crm.readwise_keys where workspace_id = p_workspace and user_id = p_user;
+  delete from crm.recall_keys where workspace_id = p_workspace and user_id = p_user;
+  update crm.ai_companions set revoked_at = now()
+    where workspace_id = p_workspace and user_id = p_user and revoked_at is null;
+  update crm.agent_mail_messages
+    set status = 'failed', status_reason = 'They left the workspace.', advancing_until = null
+    where workspace_id = p_workspace and user_id = p_user and status in ('received', 'working') and replied_at is null;
+  delete from crm.agent_mail_threads where workspace_id = p_workspace and user_id = p_user;
+  delete from crm.workspace_members where workspace_id = p_workspace and user_id = p_user;
+end;
+$$;
+
+revoke all on function private.team_remove(uuid, uuid, uuid) from public;
+grant execute on function private.team_remove(uuid, uuid, uuid) to crm_app;
+
 revoke all on function private.agent_mailbox_targets() from public;
 revoke all on function private.agent_mail_receive(uuid, text, jsonb, boolean, text) from public;
 revoke all on function private.agent_mail_working(integer) from public;
 revoke all on function private.agent_mailbox_note_error(uuid, text) from public;
+revoke all on function private.agent_mail_record_sent(uuid, uuid, text, text, text[], text[], text, text, timestamptz) from public;
+revoke all on function private.agent_mail_fail(uuid, text) from public;
 grant execute on function private.agent_mailbox_targets() to crm_app;
 grant execute on function private.agent_mail_receive(uuid, text, jsonb, boolean, text) to crm_app;
 grant execute on function private.agent_mail_working(integer) to crm_app;
 grant execute on function private.agent_mailbox_note_error(uuid, text) to crm_app;
+grant execute on function private.agent_mail_record_sent(uuid, uuid, text, text, text[], text[], text, text, timestamptz) to crm_app;
+grant execute on function private.agent_mail_fail(uuid, text) to crm_app;

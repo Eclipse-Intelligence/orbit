@@ -20,6 +20,10 @@ export function machineMailKey() {
   return process.env.MACHINE_MAIL_API_KEY?.trim() || null;
 }
 
+export function retryableStatus(status: number) {
+  return status === 0 || status === 408 || status === 429 || status >= 500;
+}
+
 export function machineMailConfigured() {
   return Boolean(machineMailKey());
 }
@@ -140,6 +144,7 @@ export async function replyToMessage(inbox: string, messageId: string, mail: Out
     ...(mail.html ? { html: mail.html } : {}),
     ...(mail.to?.length ? { to: mail.to } : {}),
     ...(mail.cc?.length ? { cc: mail.cc } : {}),
+    reply_all: false,
   };
   return (await call<SentMail>(`/inboxes/${path(inbox)}/messages/${path(messageId)}/reply`, { body }, fetchImpl)).body;
 }
@@ -167,10 +172,32 @@ export async function downloadAttachment(inbox: string, messageId: string, attac
     throw new MachineMailError("Couldn't reach MachineMail.", 0);
   }
   if (!response.ok) throw new MachineMailError(await readError(response), response.status);
-  const declared = Number(response.headers.get("content-length") ?? 0);
-  if (declared > Math.min(maxBytes, ATTACHMENT_LIMIT_BYTES)) throw new MachineMailError("The file is too large.", 413);
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  if (bytes.byteLength > Math.min(maxBytes, ATTACHMENT_LIMIT_BYTES)) throw new MachineMailError("The file is too large.", 413);
+  const limit = Math.min(maxBytes, ATTACHMENT_LIMIT_BYTES);
+  const tooLarge = () => new MachineMailError("The file is too large.", 413);
+  if (Number(response.headers.get("content-length") ?? 0) > limit) {
+    await response.body?.cancel().catch(() => undefined);
+    throw tooLarge();
+  }
+  if (!response.body) return { bytes: new Uint8Array(), contentType: response.headers.get("content-type") };
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > limit) {
+      await reader.cancel().catch(() => undefined);
+      throw tooLarge();
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
   return { bytes, contentType: response.headers.get("content-type") };
 }
 
@@ -190,6 +217,7 @@ export function signPayload(secret: string, timestamp: number, rawBody: string) 
 }
 
 export function verifySignature(secret: string, header: string | null, rawBody: string, nowMs = Date.now()) {
+  if (!secret) return false;
   const parts = signatureParts(header);
   if (!parts) return false;
   if (Math.abs(nowMs / 1000 - parts.timestamp) > SIGNATURE_TOLERANCE_SECONDS) return false;

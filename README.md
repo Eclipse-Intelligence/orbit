@@ -381,7 +381,7 @@ Mail needs two more jobs, made the same way with their own name, schedule and pa
 | Job | Schedule | Path | What it does |
 | --- | --- | --- | --- |
 | `orbit-mail` | `*/5 * * * *` (every five minutes) | `/api/cron/mail` | Syncs every connected mailbox into the Mail mirror (backfill included, up to four minutes a run), then for each user sends due mail and prepares replies and reminders (`prepareMail`). |
-| `orbit-mail-due` | `* * * * *` (every minute) | `/api/cron/mail-due` | Sends scheduled emails, brings snoozed conversations back, raises No reply reminders and sends meeting reminders. |
+| `orbit-mail-due` | `* * * * *` (every minute) | `/api/cron/mail-due` | Sends scheduled emails, brings snoozed conversations back, raises No reply reminders, sends meeting reminders and picks up agent mailbox jobs left behind (`maxDuration` 300). |
 | `orbit-learn` | `*/10 1-5 * * *` (every ten minutes, 1am to 6am UTC) | `/api/cron/learn` | Nightly learning (see Learning). Each part runs once a day, so the extra runs only pick up what an earlier run didn't finish. |
 
 ## Contact enrichment
@@ -713,21 +713,21 @@ Email Orbit at its own address, `orbit@ai-mail.geteclipse.co` by default, to giv
 Setup, once, by an owner or admin:
 
 1. In MachineMail, verify `ai-mail.geteclipse.co` (done) and create an organisation API key with message read, send and reply, inbox and webhook permissions.
-2. In Vercel, add it as `MACHINE_MAIL_API_KEY` under Settings › Environment Variables, check `SITE_URL` is Orbit's https address, and redeploy.
+2. In Vercel, add it as `MACHINE_MAIL_API_KEY` under Settings › Environment Variables, set `SITE_URL` to Orbit's https address (Set up refuses without it), and redeploy.
 3. Apply the `agent_mailbox` migration to the hosted project before deploying (see Migrations in `CONVENTIONS.md`).
 4. In Settings › Integrations, Agent mailbox, check the address and choose Set up. Orbit creates the inbox (an address that already exists in your MachineMail organisation is fine) and a webhook to `<SITE_URL>/api/machinemail/webhook` for `message.received`. Check setup runs it again, for example after `SITE_URL` changes.
 5. Who can give it work starts as `mark@geteclipse.co` and `mark@ridgeon.me`, both as the person who set it up. Owners and admins can add addresses and map each one to a workspace member; that member's work runs as them, on their Mac.
 
 How it works:
 
-- Only mail from a listed address that passes email authentication is acted on: DMARC pass for the sender's domain, or a DKIM signature that passes and aligns with it. Mail MachineMail rated suspicious, and its quarantined, spam and unauthenticated events, are never acted on. Everything else is stored but never answered.
+- Only mail from a listed address that passes email authentication is acted on: DMARC pass for the sender's domain, or a passing DKIM signature for that domain or a subdomain of it, and never when MachineMail's trust report says it isn't aligned. The From must hold exactly one address, not the mailbox's own, and the message needs MachineMail's trust report with a level of verified, known or unknown. Its quarantined, spam and unauthenticated events are stored and refused. Everything else is stored but never answered.
 - Each new email starts a chat titled "Email: <subject>", marked Email in Past chats. The message is MachineMail's cleaned text (`trust.content.text`) with a note saying it came by email, from whom and when; forwarded text is marked as outside material. Attachments become chat files (up to 10 and 25 MB a message; high risk files and anything over the limit are left out with a note).
 - The chat runs on your chosen Claude model (your latest Claude chat's), or Fable 5.1. If Orbit Agent isn't running, Orbit replies "Got it. Orbit Agent isn't running on your Mac, so I'll start as soon as it is." and keeps the job queued for 24 hours.
-- Changes you asked for run straight away, audited with `source: "email"`, except anything that contacts someone other than you, deletes, archives, merges, undoes or spends credits. Those are listed in the reply with "Reply yes to go ahead, or tell me what to change." A short yes (yes, go ahead, approve, ok, do it) approves them all; anything else is your next message.
-- When the work is done Orbit sends one reply in the thread: the assistant's answer, what changed, anything waiting for your OK and a link that opens the chat in Orbit (`/?chat=<id>`), where you can carry on.
-- In any chat the assistant can read the agent mailbox (`search_email` with `mailbox: "agent"`, then `get_email_thread`) and send from it (`send_email` with `from: "agent"`, after you approve the card). Only owners, admins and members on the list can.
+- Changes you asked for run straight away, audited with `source: "email"` (they don't start workflows), except anything that contacts someone other than you, deletes, archives, merges, undoes, shares, reassigns or spends credits (the full list is in `docs/assistant.md`). Those, and anything proposed after the first of them, are listed in the reply with "Reply yes to go ahead, or tell me what to change." A short yes (yes, go ahead, approve, ok, do it, or a subject that says so) approves exactly the changes that reply listed; anything else is your next message, and the listed changes keep waiting. After 8 rounds of changes for one email, or 24 in one thread, Orbit stops and asks.
+- When the work is done Orbit sends one reply in the thread: the assistant's answer, what changed, anything waiting for your OK and a link that opens the chat in Orbit (`/?chat=<id>`), where you can carry on. Stop in Orbit cancels the email's job, and then no reply is sent. A chat you moved to an Orbit model can't carry on by email; Orbit replies saying so.
+- In any chat the assistant can read the agent mailbox (`search_email` with `mailbox: "agent"`, then `get_email_thread`) and send from it (`send_email` with `from: "agent"`, after you approve the card, at most 50 a day per person). Only owners, admins and members on the list can.
 
-Security: deliveries are checked against the webhook's signing secret (HMAC-SHA256 of the timestamp and raw body, compared in constant time, refused when more than five minutes off), each event id is handled once, the secret is stored encrypted with `APP_SECRET`, replies go only to the sender's own address, and nothing logs secrets or email text.
+Security: deliveries are checked against the webhook's signing secret (HMAC-SHA256 of the timestamp and raw body, compared in constant time, refused when more than five minutes off), each event id is handled once, the secret is stored encrypted with `APP_SECRET` (if it can't be read, Settings says to set up again), replies go only to the sender's own address with no Cc, attachments are streamed and cut off at the size limit, and nothing logs secrets or email text. Removing a member fails their open email jobs and forgets their threads. Errors shown in Settings never include sender addresses, and only owners and admins see them.
 
 ## Opportunities
 

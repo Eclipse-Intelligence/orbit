@@ -4,6 +4,7 @@ import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { iso, isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
+import { query } from "@/lib/db/pool";
 import { MachineMailError, replyToMessage, sendNewMessage, type SentMail } from "@/lib/machinemail";
 
 export const AGENT_MAILBOX = "agent";
@@ -137,27 +138,26 @@ export async function recordOutbound(
   sent: SentMail,
   mail: { to: string[]; cc?: string[]; subject: string | null; text: string },
 ) {
-  await withActor(actor, (db) =>
-    db.query(
-      `insert into crm.agent_mail_messages
-         (workspace_id, mailbox_id, inbox_id, message_id, thread_id, direction, from_address, from_name, to_addresses, cc_addresses, subject, received_at, text, user_id, status)
-       values ($1, $2, $3, $4, $5, 'outbound', $3, 'Orbit', $6, $7, $8, coalesce($9::timestamptz, now()), $10, $11, 'sent')
-       on conflict (mailbox_id, message_id) do nothing`,
-      [
-        actor.workspaceId,
-        mailbox.id,
-        mailbox.address,
-        sent.message_id.slice(0, 200),
-        sent.thread_id?.slice(0, 200) ?? null,
-        mail.to,
-        mail.cc ?? [],
-        mail.subject?.slice(0, 2000) ?? null,
-        sent.timestamp ?? null,
-        mail.text.slice(0, 1_000_000),
-        actor.userId,
-      ],
-    ),
-  );
+  await query("select private.agent_mail_record_sent($1, $2, $3, $4, $5::text[], $6::text[], $7, $8, $9::timestamptz)", [
+    mailbox.id,
+    actor.userId,
+    sent.message_id.slice(0, 200),
+    sent.thread_id?.slice(0, 200) ?? null,
+    mail.to,
+    mail.cc ?? [],
+    mail.subject?.slice(0, 2000) ?? null,
+    mail.text.slice(0, 1_000_000),
+    sent.timestamp ?? null,
+  ]);
+}
+
+export const AGENT_SENDS_PER_DAY = 50;
+
+async function allowSend(actor: UserActor) {
+  const result = await query<{ allowed: boolean }>("select private.consume_rate_limit($1, $2, $3) as allowed", [`agent-mail-send:${actor.userId}`, AGENT_SENDS_PER_DAY, 86_400]);
+  if (!result.rows[0]?.allowed) {
+    throw new CrmError("rate_limited", `You've sent ${AGENT_SENDS_PER_DAY} emails from the agent mailbox in the last day, the most Orbit allows. Try again tomorrow.`, 429);
+  }
 }
 
 function addresses(values: string[]) {
@@ -177,6 +177,7 @@ export async function sendFromAgentMailbox(
 ) {
   const mailbox = await requireAgentMailAccess(actor);
   const extra = addresses(input.to);
+  await allowSend(actor);
   const cc = addresses(input.cc);
   let sent: SentMail;
   let to: string[];

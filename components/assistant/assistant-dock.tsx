@@ -254,9 +254,11 @@ function ActionCard({ action, busy, onDecide }: { action: AssistantAction; busy:
   );
 }
 
+const MARK_CLASS = "caption-style rounded-md bg-white/[0.06] px-1.5 py-0.5 text-[#c9c2ff]";
+
 function UnattendedMark() {
   return (
-    <span title="This doc lets the assistant edit it without asking" className="caption-style rounded-md bg-white/[0.06] px-1.5 py-0.5 text-[#c9c2ff]">
+    <span title="This doc lets the assistant edit it without asking" className={MARK_CLASS}>
       Edited without asking
     </span>
   );
@@ -1089,7 +1091,7 @@ export default function AssistantDock({ brief = null }: { brief?: UnreadBrief | 
                         <span className="text-foreground w-full truncate text-[13.5px] leading-5">{item.title}</span>
                         <span className="caption-style text-subtle flex items-center gap-1.5">
                           {item.email && (
-                            <span className="rounded-[4px] bg-white/8 px-1 text-[11px] leading-4 text-soft">Email</span>
+                            <span className={MARK_CLASS}>Email</span>
                           )}
                           {relativeWhen(item.updatedAt)}
                         </span>

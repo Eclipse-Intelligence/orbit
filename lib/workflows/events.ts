@@ -12,7 +12,7 @@ export async function enqueueWorkflowEvent(
   provenance: Provenance | undefined,
   changes: Record<string, unknown>,
 ) {
-  if (provenance?.catchUp) return;
+  if (provenance?.catchUp || provenance?.source === "email") return;
   const triggers = eventTriggerTypes(eventType, entityType, changes);
   if (triggers.length === 0) return;
   await db.query(

@@ -736,6 +736,10 @@ export async function stopConversation(actor: UserActor, id: string) {
   await withActor(actor, async (db) => {
     await readConversation(db, actor, id);
     await db.query("update crm.assistant_conversations set stopped_at = now() where id = $1", [id]);
+    await db.query(
+      "update crm.ai_companion_jobs set status = 'cancelled', finished_at = now() where conversation_id = $1 and agent_mail_id is not null and status in ('queued', 'running')",
+      [id],
+    );
   });
 }
 
@@ -901,7 +905,7 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
 
 export async function sendMessage(
   actor: UserActor,
-  input: { conversationId?: string | null; message: string; model: unknown; reasoning: unknown; webSearch: unknown; files?: unknown; title?: string },
+  input: { conversationId?: string | null; message: string; model: unknown; reasoning: unknown; webSearch: unknown; files?: unknown; title?: string; keepPending?: boolean },
   emit: Emit,
   options: TurnOptions,
 ) {
@@ -935,7 +939,7 @@ export async function sendMessage(
   emit({ type: "conversation", conversation: summary(conversation) });
   const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
   await settleStuckActions(actor, conversation.id, rows);
-  await declinePending(actor, conversation.id, rows, "The user moved on without confirming this action.");
+  if (!input.keepPending) await declinePending(actor, conversation.id, rows, "The user moved on without confirming this action.");
   const user = await insertMessage(actor, conversation.id, { role: "user", content: message, files });
   emit({ type: "user", message: display(user) });
   await runLoop(actor, conversation, emit, options);

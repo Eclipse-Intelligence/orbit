@@ -476,6 +476,13 @@ function detail(name: Names, key: string) {
   return value === key ? "" : value;
 }
 
+function contactRecipient(contactId: unknown, name: Names) {
+  const id = str(contactId);
+  if (!id) return "";
+  const email = detail(name, `${id}:email`);
+  return email ? `${name(id)} <${email}>` : `${name(id)} (no email address in Orbit)`;
+}
+
 function londonLabel(date: Date) {
   return formatDateTimeLabel(londonTime(date.toISOString()).slice(0, 16));
 }
@@ -3373,10 +3380,19 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       properties: { id: idParam("Proposal id."), subject: { type: "string" }, message: { type: "string", description: "Plain text; the link is added below it." } },
       required: ["id"],
     },
-    describe: (args, name) => ({
-      title: `Send ${name(args.id)}`,
-      lines: [str(args.subject) ? `Subject: ${str(args.subject)}` : "", str(args.message)].filter(Boolean),
-    }),
+    details: async (actor, args) => {
+      const id = str(args.id);
+      if (!isUuid(id)) return {};
+      const links = blockLinks((await getDocument(actor, id)).blocks);
+      return { [`${id}:links`]: links.length ? links.slice(0, 20).join(", ") : "none" };
+    },
+    describe: (args, name) => {
+      const links = detail(name, `${str(args.id)}:links`);
+      return {
+        title: `Send ${name(args.id)}`,
+        lines: [str(args.subject) ? `Subject: ${str(args.subject)}` : "", links ? `Links in it: ${links}` : "", str(args.message)].filter(Boolean),
+      };
+    },
     run: async (actor, args) => {
       const id = required(args.id, "A proposal id");
       const sent = await sendDocument(actor, id, { subject: optionalStr(args.subject), message: optionalStr(args.message) }, { provenance: { operation: "send_proposal", ...provenanceSource() } });
@@ -3600,8 +3616,8 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     describe: (args, name) => ({
       title: `Save draft: ${str(args.subject) || "reply"}`,
       lines: [
-        [args.contactId ? name(args.contactId) : "", ...strings(args.to)].filter(Boolean).length
-          ? `To: ${[args.contactId ? name(args.contactId) : "", ...strings(args.to)].filter(Boolean).join(", ")}`
+        [contactRecipient(args.contactId, name), ...strings(args.to)].filter(Boolean).length
+          ? `To: ${[contactRecipient(args.contactId, name), ...strings(args.to)].filter(Boolean).join(", ")}`
           : str(args.replyToEmailId)
             ? `Reply${args.replyAll ? " all" : ""} in the conversation`
             : "",
@@ -3672,7 +3688,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       const draftId = str(args.draftId);
       const draftSubject = draftId ? detail(name, `${draftId}:subject`) : "";
       const onDraft = draftId ? draftRecipients(args, name, draftId) : null;
-      const people = [args.contactId ? name(args.contactId) : "", ...strings(args.to)].filter(Boolean);
+      const people = [contactRecipient(args.contactId, name), ...strings(args.to)].filter(Boolean);
       const replying = Boolean(str(args.replyToEmailId));
       const senderKey = `${str(args.replyToEmailId)}:from`;
       const sender = name(senderKey) !== senderKey ? name(senderKey) : "the sender";

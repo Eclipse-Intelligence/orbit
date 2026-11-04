@@ -29,7 +29,7 @@ type RawMessage = Record<string, unknown> & {
   extracted_text?: unknown;
   direction?: unknown;
   trust_level?: unknown;
-  trust?: { level?: unknown; content?: { text?: unknown }; attachments?: unknown };
+  trust?: { level?: unknown; content?: { text?: unknown }; attachments?: unknown; authentication?: { aligned?: unknown } };
   authentication_results?: unknown;
   attachments?: unknown;
 };
@@ -55,8 +55,8 @@ function list(value: unknown) {
 
 export function cleanedText(message: RawMessage) {
   const safe = message.trust?.content?.text;
-  if (typeof safe === "string" && safe.trim()) return safe.slice(0, TEXT_MAX);
-  return typeof message.extracted_text === "string" ? message.extracted_text.slice(0, TEXT_MAX) : "";
+  if (typeof safe === "string" && safe.trim()) return { text: safe.slice(0, TEXT_MAX), cleaned: true };
+  return { text: typeof message.extracted_text === "string" ? message.extracted_text.slice(0, TEXT_MAX) : "", cleaned: false };
 }
 
 export function attachmentsOf(message: RawMessage): IncomingAttachment[] {
@@ -126,8 +126,10 @@ export async function receiveAgentMail(headers: Headers, raw: string, options: {
   if (inbox !== target.address) return { status: 200, body: { ok: true, ignored: true } };
   const from = bareAddress(message.from);
   const authentication = authenticationOf(message.authentication_results);
-  const trustLevel = typeof message.trust?.level === "string" ? message.trust.level : typeof message.trust_level === "string" ? message.trust_level : null;
-  const verdict = judgeMail({ eventType, direction: message.direction, from, auth: authentication, trustLevel });
+  const trustLevel = typeof message.trust?.level === "string" ? message.trust.level : null;
+  const trustAligned = typeof message.trust?.authentication?.aligned === "boolean" ? message.trust.authentication.aligned : null;
+  const verdict = judgeMail({ eventType, direction: message.direction, from, inbox: target.address, auth: authentication, trustAligned, trustLevel });
+  const body = cleanedText(message);
   const row = {
     message_id: message.message_id.slice(0, 200),
     thread_id: text(message.thread_id, 200),
@@ -138,7 +140,8 @@ export async function receiveAgentMail(headers: Headers, raw: string, options: {
     cc: list(message.cc),
     subject: text(message.subject, 2000),
     received_at: receivedAt(message.timestamp),
-    text: cleanedText(message),
+    text: body.text,
+    text_cleaned: body.cleaned,
     trust_level: trustLevel?.slice(0, 40) ?? null,
     authentication,
     attachments: attachmentsOf(message),

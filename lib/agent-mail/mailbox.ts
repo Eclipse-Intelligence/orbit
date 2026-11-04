@@ -112,7 +112,7 @@ export async function agentMailboxView(actor: UserActor): Promise<AgentMailboxVi
     setUp: Boolean(mailbox?.set_up_at),
     setUpAt: iso(mailbox?.set_up_at ?? null),
     lastReceivedAt: iso(mailbox?.last_received_at ?? null),
-    lastError: mailbox?.last_error ?? null,
+    lastError: canAdmin ? mailbox?.last_error ?? null : null,
     lastMessage: last
       ? { from: last.from_address, subject: last.subject, receivedAt: iso(last.received_at) ?? new Date().toISOString(), status: last.status, reason: last.status_reason }
       : null,
@@ -130,8 +130,8 @@ function cleanMailboxAddress(value: unknown) {
   return address;
 }
 
-function webhookOrigin(origin: string | null) {
-  const site = siteOrigin() ?? origin;
+function webhookOrigin() {
+  const site = siteOrigin();
   if (!site || !/^https:\/\//.test(site)) {
     throw new CrmError("invalid_input", "Set SITE_URL to Orbit's https address first, so MachineMail can reach it.", 400);
   }
@@ -146,7 +146,7 @@ function upstream(error: unknown): never {
   throw error;
 }
 
-export async function setUpAgentMailbox(actor: UserActor, input: { address?: unknown }, origin: string | null, fetchImpl: typeof fetch = fetch) {
+export async function setUpAgentMailbox(actor: UserActor, input: { address?: unknown }, fetchImpl: typeof fetch = fetch) {
   requireAdmin(actor);
   if (!machineMailConfigured()) throw new CrmError("invalid_input", "Set MACHINE_MAIL_API_KEY on the server first.", 400);
   const existing = await agentMailbox(actor);
@@ -154,7 +154,7 @@ export async function setUpAgentMailbox(actor: UserActor, input: { address?: unk
   if (existing?.set_up_at && typeof input.address === "string" && input.address.trim() && cleanMailboxAddress(input.address) !== existing.address) {
     throw new CrmError("invalid_input", "The address can't change once the mailbox is set up.", 400, { field: "address" });
   }
-  const url = `${webhookOrigin(origin)}${WEBHOOK_PATH}`;
+  const url = `${webhookOrigin()}${WEBHOOK_PATH}`;
   let webhook: { id: string; secret: string };
   try {
     await ensureInbox(address, DISPLAY_NAME, fetchImpl);
@@ -210,6 +210,7 @@ export async function saveAgentSenders(actor: UserActor, rows: unknown) {
   }
   const mailbox = await agentMailbox(actor);
   if (!mailbox?.set_up_at) throw new CrmError("invalid_input", "Set up the agent mailbox first.", 400);
+  if (seen.has(mailbox.address)) throw new CrmError("invalid_input", "The agent mailbox can't give itself work.", 400, { field: "senders" });
   await withActor(actor, async (db) => {
     await db.query("delete from crm.agent_mailbox_senders where workspace_id = $1", [actor.workspaceId]);
     for (const [address, userId] of seen) {
@@ -226,14 +227,21 @@ export type MailboxTarget = { mailbox_id: string; workspace_id: string; address:
 
 export async function mailboxTargets(): Promise<MailboxTarget[]> {
   const result = await query<{ mailbox_id: string; workspace_id: string; address: string; webhook_secret: string }>("select * from private.agent_mailbox_targets()");
-  return result.rows.flatMap((row) => {
+  const targets: MailboxTarget[] = [];
+  for (const row of result.rows) {
+    let secret = "";
     try {
-      return [{ mailbox_id: row.mailbox_id, workspace_id: row.workspace_id, address: row.address, secret: decryptSecret(row.webhook_secret) }];
+      secret = decryptSecret(row.webhook_secret);
     } catch {
-      return [];
+      await noteMailboxError(row.mailbox_id, UNREADABLE_SECRET);
+      continue;
     }
-  });
+    if (secret) targets.push({ mailbox_id: row.mailbox_id, workspace_id: row.workspace_id, address: row.address, secret });
+  }
+  return targets;
 }
+
+export const UNREADABLE_SECRET = "Orbit can't read the webhook's signing secret. Set up again.";
 
 export async function noteMailboxError(mailboxId: string, message: string | null) {
   await query("select private.agent_mailbox_note_error($1, $2)", [mailboxId, message ?? ""]).catch(() => undefined);
