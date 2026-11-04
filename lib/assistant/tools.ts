@@ -3607,7 +3607,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         to: { type: "array", items: { type: "string" }, description: "Email addresses." },
         cc: { type: "array", items: { type: "string" } },
         subject: { type: "string", description: "Needed for a new email. Replies keep the conversation's subject." },
-        body: { type: "string", description: "Plain text with a greeting and sign-off. Orbit adds the signature." },
+        body: { type: "string", description: "Written the way a person writes an email, with a greeting and sign-off: no headings, tables or links to Orbit pages. **bold** and *italic* are sent as real formatting. Orbit adds the signature." },
         from: { type: "string", description: "Address to send from. Leave out for the main mailbox, or the account the conversation is in for a reply." },
         attachmentIds: ATTACHMENTS_PARAM,
       },
@@ -3672,7 +3672,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         to: { type: "array", items: { type: "string" }, description: "Email addresses." },
         cc: { type: "array", items: { type: "string" } },
         subject: { type: "string", description: "Needed for a new email. Replies keep the conversation's subject." },
-        body: { type: "string", description: "Plain text with a greeting and sign-off. Orbit adds the signature." },
+        body: { type: "string", description: "Written the way a person writes an email, with a greeting and sign-off: no headings, tables or links to Orbit pages. **bold** and *italic* are sent as real formatting. Orbit adds the signature." },
         from: {
           type: "string",
           description:
@@ -3774,7 +3774,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         cancel: { type: "boolean", description: "True to stop it sending and keep it in Drafts. Can't be combined with other changes." },
         sendAt: { type: "string", description: "New send time, YYYY-MM-DDTHH:mm London time. At least a minute from now and within a year." },
         subject: { type: "string" },
-        body: { type: "string", description: "The whole new message in plain text, with greeting and sign-off." },
+        body: { type: "string", description: "The whole new message, written the way a person writes an email, with greeting and sign-off. **bold** and *italic* are sent as real formatting." },
         to: { type: "array", items: { type: "string" }, description: "Email addresses. Replaces the To list." },
         cc: { type: "array", items: { type: "string" }, description: "Replaces the Cc list; an empty list removes everyone." },
         bcc: { type: "array", items: { type: "string" }, description: "Replaces the Bcc list; an empty list removes everyone." },
