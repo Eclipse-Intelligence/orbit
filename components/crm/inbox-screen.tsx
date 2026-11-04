@@ -13,16 +13,19 @@ export default function CaptureScreen({
   viewer,
   unfiled,
   people,
+  total,
   newestAt,
   alert,
 }: {
   viewer: Viewer;
   unfiled: UnfiledImport[];
   people: MetPerson[];
+  total: number;
   newestAt: string | null;
   alert: string | null;
 }) {
-  const toFile = unfiled.length + people.length;
+  const shown = unfiled.length + people.length;
+  const toFile = Math.max(total, shown);
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -44,7 +47,12 @@ export default function CaptureScreen({
               To file
               {toFile > 0 && <span className="text-soft tracking-normal tabular-nums">{toFile}</span>}
             </h2>
-            {toFile === 0 ? (
+            {toFile > shown && (
+              <p className="caption-style text-subtle leading-[1.4]">
+                Showing the latest {shown} of {toFile}.
+              </p>
+            )}
+            {shown === 0 ? (
               <p className="caption-style text-subtle leading-[1.4]">Nothing to file.</p>
             ) : (
               <KeyboardList className="flex flex-col gap-6">

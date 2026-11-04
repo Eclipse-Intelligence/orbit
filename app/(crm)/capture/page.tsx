@@ -4,7 +4,7 @@ import CaptureScreen from "@/components/crm/inbox-screen";
 import { getUserActor } from "@/lib/auth/user";
 import { getCalendarStatus } from "@/lib/crm/calendar";
 import { getCallSync } from "@/lib/crm/calls";
-import { connectionAlert, listToFile, markCaptureSeen, newestArrival } from "@/lib/crm/capture";
+import { captureStatus, connectionAlert, listToFile, markCaptureSeen, newestArrival } from "@/lib/crm/capture";
 import { getGranolaStatus } from "@/lib/crm/granola";
 import { getMailbox, shouldSyncMailbox, syncMailbox } from "@/lib/crm/inbox";
 import { getTeamsTranscriptStatus } from "@/lib/crm/teams-transcripts";
@@ -14,6 +14,12 @@ export const dynamic = "force-dynamic";
 
 function requestTime() {
   return new Date();
+}
+
+function later(left: string | null, right: string | null) {
+  if (!left) return right;
+  if (!right) return left;
+  return left > right ? left : right;
 }
 
 export default async function CapturePage() {
@@ -27,8 +33,9 @@ export default async function CapturePage() {
     mailbox = await getMailbox(user);
   }
   const live = mailbox?.status === "connected";
-  const [items, calls, granola, transcripts, calendar] = await Promise.all([
+  const [items, status, calls, granola, transcripts, calendar] = await Promise.all([
     listToFile(user, openedAt.getTime()),
+    captureStatus(user, openedAt.getTime()),
     mailbox ? getCallSync(user) : Promise.resolve(null),
     getGranolaStatus(user),
     live ? getTeamsTranscriptStatus(user) : Promise.resolve(null),
@@ -53,7 +60,8 @@ export default async function CapturePage() {
       }}
       unfiled={items.unfiled}
       people={items.people}
-      newestAt={newestArrival(items)}
+      total={status.waiting}
+      newestAt={later(newestArrival(items, openedAt.getTime()), status.newestAt)}
       alert={connectionAlert({ mailbox, calendar, calls, granola, transcripts })}
     />
   );

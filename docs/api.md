@@ -89,7 +89,7 @@ Optional `Idempotency-Key` header (printable ASCII, up to 200 characters). Reuse
 
 `GET /api/v1/companies`
 
-Query: `q`, `lifecycle` (`lead`, `prospect`, `customer`, `churned`, or a custom name; matching ignores case), `health` (`healthy`, `watch`, `at_risk`, or `none` for not set), `owner` (a user id or `unassigned`), `tag` (one tag; matching ignores case and extra spaces), `sort` (`name`, `domain`, `owner`, `interaction`, `strength`, `updated`, `created`, `fit`; default `name`), `order` (`asc` or `desc`; each sort has its own default), `has` and `missing` (comma-separated `domain`, `contacts`, `interactions`), `quiet=true` (gone quiet: no interaction in the last 21 days, or none at all), `limit` (1 to 100, default 50), `offset` (max 10000), `include_archived=true`. Each company in the list includes `relationship` (`label`: `strong`, `warm`, `cooling`, `one_sided`, `cold` or `new`, and a `reason`). `icpFit` is the company's ICP fit from 0 to 4 when Web checks has scored it, otherwise null.
+Query: `q`, `lifecycle` (`lead`, `prospect`, `customer`, `churned`, or a custom name; matching ignores case), `health` (`healthy`, `watch`, `at_risk`, or `none` for not set), `owner` (a user id or `unassigned`), `tag` (one tag; matching ignores case and extra spaces), `sort` (`name`, `domain`, `owner`, `interaction`, `strength`, `updated`, `created`, `fit`; default `name`), `order` (`asc` or `desc`; each sort has its own default), `has` and `missing` (comma-separated `domain`, `contacts`, `interactions`), `quiet=true` (gone quiet: no interaction in the last 21 days on the company or any of its people, or none at all), `limit` (1 to 100, default 50), `offset` (max 10000), `include_archived=true`. Each company in the list includes `relationship` (`label`: `strong`, `warm`, `cooling`, `one_sided`, `cold` or `new`, and a `reason`). `icpFit` is the company's ICP fit from 0 to 4 when Web checks has scored it, otherwise null.
 
 Response:
 
@@ -171,11 +171,11 @@ Opportunity fields: `companyId`, `pipelineId`, `name`, `stageId`, `status`, `val
 
 ## Activities
 
-`GET /api/v1/activities` with `q`, `company_id`, `contact_id`, `opportunity_id`, `type`, `actor_user_id` (the member who logged it), `from` and `to` (a date such as `2026-11-03`, read in London time, or an ISO date and time; a date-only `to` includes that whole day), `limit`, `offset`, newest first.
+`GET /api/v1/activities` with `q`, `company_id`, `contact_id`, `opportunity_id`, `type`, `actor_user_id` (the member who logged it), `actor_agent_id` (the agent that logged it), `from` and `to` (a date such as `2026-11-03`, read in London time, or an ISO date and time; a date-only `to` includes that whole day), `limit`, `offset`, newest first.
 
 Every activity includes `actorUserId`, `actorAgentId`, and `actorName`: the full name (or email) of the workspace member who logged it, or the name of the agent that created it. `actorName` is `null` when neither can be resolved, for example after the member leaves the workspace.
 
-`POST /api/v1/activities` appends an interaction. Types are `email`, `meeting`, `call`, `note`, `research`, `linkedin`, `agent_update`, and `other`. Fields: `type`, `title`, `body`, `occurredAt`, `companyId`, `contactId`, `opportunityId`, `metadata` (an object). A title or body is required, and the row must point at a company, contact, or opportunity. There is no update or delete in the API. People can edit an activity in the app or through the assistant, which fires `activity.updated` with the changed `fields` and their `before` and `after` values, and delete (archive) one, which fires `activity.archived`.
+`POST /api/v1/activities` appends an interaction. Types are `email`, `meeting`, `call`, `note`, `research`, `linkedin`, `agent_update`, and `other`. Fields: `type`, `title`, `body`, `occurredAt`, `companyId`, `contactId`, `opportunityId`, `metadata` (an object). A title or body is required, and the row must point at a company, contact, or opportunity. When `companyId` is missing or null, it is taken from the contact, or else the opportunity. There is no update or delete in the API. People can edit an activity in the app or through the assistant, which fires `activity.updated` with the changed `fields` and their `before` and `after` values, and delete (archive) one, which fires `activity.archived`.
 
 ## Tasks
 

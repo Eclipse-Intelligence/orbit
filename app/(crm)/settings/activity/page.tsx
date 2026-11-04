@@ -1,11 +1,11 @@
 import { redirect } from "next/navigation";
 import ActivityLog from "@/components/crm/activity-log";
-import { EVERYONE } from "@/lib/crm/activity-log";
+import { AGENT_PREFIX, EVERYONE } from "@/lib/crm/activity-log";
 import RecordTransfer from "@/components/crm/record-transfer";
 import { SettingsPage } from "@/components/crm/settings-ui";
 import { PAGE_SIZE, pageFromParams, pageOffset } from "@/components/crm/paging";
 import { getUserActor } from "@/lib/auth/user";
-import { listActivities } from "@/lib/crm/activities";
+import { listActivities, listActivityAgents } from "@/lib/crm/activities";
 import { listMembers } from "@/lib/crm/companies";
 import { activityQueryFromSearchParams } from "@/lib/crm/validation";
 
@@ -29,9 +29,13 @@ export default async function ActivityLogPage({
   for (const [key, value] of Object.entries(resolved)) {
     if (typeof value === "string") params.set(key, value);
   }
-  const members = await listMembers(user);
-  const wanted = params.get("person");
-  const person = wanted === EVERYONE || members.some((member) => member.id === wanted) ? wanted! : user.userId;
+  const [members, agents] = await Promise.all([listMembers(user), listActivityAgents(user)]);
+  const wanted = params.get("person") ?? "";
+  const agentId = wanted.startsWith(AGENT_PREFIX) ? wanted.slice(AGENT_PREFIX.length) : null;
+  const person =
+    wanted === EVERYONE || members.some((member) => member.id === wanted) || (agentId && agents.some((agent) => agent.id === agentId))
+      ? wanted
+      : user.userId;
   const from = day(params.get("from"));
   const to = day(params.get("to"));
   const query = new URLSearchParams();
@@ -39,7 +43,8 @@ export default async function ActivityLogPage({
     const value = params.get(key);
     if (value) query.set(key, value);
   }
-  if (person !== EVERYONE) query.set("actor_user_id", person);
+  if (person.startsWith(AGENT_PREFIX)) query.set("actor_agent_id", person.slice(AGENT_PREFIX.length));
+  else if (person !== EVERYONE) query.set("actor_user_id", person);
   if (from) query.set("from", from);
   if (to) query.set("to", to);
   const filters = activityQueryFromSearchParams(query);
@@ -58,6 +63,7 @@ export default async function ActivityLogPage({
       <ActivityLog
         viewerId={user.userId}
         members={members}
+        agents={agents}
         person={person}
         type={filters.type ?? ""}
         from={from}

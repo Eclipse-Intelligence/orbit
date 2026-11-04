@@ -124,7 +124,7 @@ export default function CommandMenu() {
   );
   const createCommands = commands.filter((def) => def.group === "Create" && paletteMatches(def, query) && shownByDocs(def));
   const goCommands = commands.filter((def) => def.group === "Go to" && paletteMatches(def, query));
-  const settingsCommands = trimmed ? commands.filter((def) => def.group === "Settings" && paletteMatches(def, query)) : [];
+  const settingsCommands = trimmed ? commands.filter((def) => def.group === "Settings" && def.href && paletteMatches(def, query)) : [];
 
   const topRecord: PaletteRecord | null = results
     ? results.companies[0]

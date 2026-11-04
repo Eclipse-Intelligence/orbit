@@ -21,7 +21,7 @@ import { companionOfflineMessage, companionOnline, listCompanions } from "@/lib/
 import { userLinks } from "@/lib/assistant/links";
 import { aboutYouSection, getColleagues, getPersonalContext } from "@/lib/crm/personal-context";
 import { memoryBriefing } from "@/lib/learning/memories";
-import { latestBrief } from "@/lib/learning/nightly";
+import { BRIEF_MESSAGE_MODEL, latestBrief } from "@/lib/learning/nightly";
 import { buildPrompt } from "@/lib/companion/transcript";
 import { expandMentions, plainMentions } from "@/lib/mentions";
 import { withActor } from "@/lib/crm/context";
@@ -483,9 +483,9 @@ export async function openBrief(
     );
     const conversation = created.rows[0].id;
     await db.query(
-      `insert into crm.assistant_messages (conversation_id, workspace_id, user_id, role, content)
-       values ($1, $2, $3, 'assistant', $4)`,
-      [conversation, actor.workspaceId, actor.userId, brief.body],
+      `insert into crm.assistant_messages (conversation_id, workspace_id, user_id, role, content, model)
+       values ($1, $2, $3, 'assistant', $4, $5)`,
+      [conversation, actor.workspaceId, actor.userId, brief.body, BRIEF_MESSAGE_MODEL],
     );
     await db.query("update crm.daily_briefs set read_at = now(), conversation_id = $2 where id = $1", [id, conversation]);
     return conversation;
@@ -586,12 +586,23 @@ export async function applyCompanionResult(actor: UserActor, conversationId: str
   return ids;
 }
 
+export async function isBriefConversation(actor: UserActor, conversationId: string) {
+  return withActor(actor, async (db) => {
+    const result = await db.query("select 1 from crm.assistant_messages where conversation_id = $1 and model = $2 limit 1", [
+      conversationId,
+      BRIEF_MESSAGE_MODEL,
+    ]);
+    return (result.rowCount ?? 0) > 0;
+  });
+}
+
 async function promptFor(actor: UserActor, conversation: ConversationRow) {
-  const [links, about, colleagues, brief, focus] = await Promise.all([
+  const [links, about, colleagues, brief, briefChat, focus] = await Promise.all([
     userLinks(actor).catch(() => null),
     getPersonalContext(actor).catch(() => null),
     getColleagues(actor).catch(() => []),
     latestBrief(actor).catch(() => null),
+    isBriefConversation(actor, conversation.id).catch(() => false),
     withActor(actor, async (db) =>
       (
         await db.query<{ content: string }>(
@@ -605,7 +616,7 @@ async function promptFor(actor: UserActor, conversation: ConversationRow) {
   ]);
   const learned = await memoryBriefing(actor, { focus }).catch(() => "");
   return {
-    system: systemPrompt(actor, { webSearch: conversation.web_search, links, about: aboutYouSection(about, colleagues), briefReady: Boolean(brief) }),
+    system: systemPrompt(actor, { webSearch: conversation.web_search, links, about: aboutYouSection(about, colleagues), briefReady: Boolean(brief) && !briefChat }),
     learned,
   };
 }

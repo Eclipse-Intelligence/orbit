@@ -1,6 +1,7 @@
 import { withActor } from "@/lib/crm/context";
 import { listPeopleMet, type CalendarStatus, type MetPerson } from "@/lib/crm/calendar";
 import type { CallSyncSummary } from "@/lib/crm/calls";
+import { FREE_MAIL_DOMAINS } from "@/lib/crm/communications";
 import { listUnfiledImports, type UnfiledImport } from "@/lib/crm/conversations";
 import type { GranolaStatus } from "@/lib/crm/granola";
 import type { MailboxSummary } from "@/lib/crm/inbox";
@@ -18,54 +19,131 @@ export type CaptureStatus = {
   seenAt: string | null;
 };
 
-async function hasMailbox(actor: UserActor) {
-  return withActor(actor, async (db) => {
-    const result = await db.query("select 1 from crm.mailbox_connections where user_id = $1 and workspace_id = $2 and provider = 'microsoft' limit 1", [
-      actor.userId,
-      actor.workspaceId,
-    ]);
-    return (result.rowCount ?? 0) > 0;
-  });
-}
+const HAS_MAILBOX = `exists (
+  select 1 from crm.mailbox_connections mc
+  where mc.user_id = $1 and mc.workspace_id = $2 and mc.provider = 'microsoft'
+)`;
+
+const UNFILED_COUNTS = `
+  with seen as (
+    select seen_at from crm.capture_seen where user_id = $1 and workspace_id = $2
+  ),
+  unfiled as (
+    select coalesce(i.unfiled_at, i.created_at) as arrived
+    from crm.conversation_imports i
+    where i.workspace_id = $2 and i.status = 'unfiled'
+  )
+  select
+    (select seen_at from seen) as seen_at,
+    count(*)::int as waiting,
+    count(*) filter (where (select seen_at from seen) is null or arrived > (select seen_at from seen))::int as fresh,
+    max(arrived) as newest
+  from unfiled`;
+
+const PEOPLE_COUNTS = `
+  with own as (
+    select lower(btrim(raw.email)) as email
+    from (
+      select p.email from crm.workspace_members m join crm.profiles p on p.id = m.user_id where m.workspace_id = $2
+      union all
+      select unnest(p.other_emails) from crm.workspace_members m join crm.profiles p on p.id = m.user_id where m.workspace_id = $2
+      union all
+      select $3::text
+      union all
+      select mc.email from crm.mailbox_connections mc where mc.user_id = $1 and mc.workspace_id = $2 and mc.provider = 'microsoft'
+      union all
+      select ca.email from crm.calendar_accounts ca where ca.user_id = $1 and ca.workspace_id = $2
+    ) raw
+    where raw.email is not null and btrim(raw.email) <> ''
+  ),
+  own_domains as (
+    select distinct split_part(email, '@', 2) as domain
+    from own
+    where email like '%@%' and split_part(email, '@', 2) <> all($4::text[])
+  ),
+  met as (
+    select lower(btrim(person->>'email')) as email, min(e.starts_at) as first_at
+    from crm.calendar_events e
+    join crm.calendars c on c.id = e.calendar_id and c.use_for_crm
+    cross join lateral jsonb_array_elements(
+      (case when jsonb_typeof(e.attendees) = 'array' then e.attendees else '[]'::jsonb end)
+      || (case when jsonb_typeof(e.organizer) = 'object' then jsonb_build_array(e.organizer) else '[]'::jsonb end)
+    ) as person
+    where e.user_id = $1 and e.workspace_id = $2 and not e.is_cancelled
+      and jsonb_typeof(person) = 'object' and jsonb_typeof(person->'email') = 'string'
+      and ${HAS_MAILBOX}
+    group by 1
+  ),
+  outside as (
+    select met.email, met.first_at
+    from met
+    where char_length(met.email) <= 200
+      and met.email ~ '^[^[:space:]@]+@[^[:space:]@]+[.][^[:space:]@]+$'
+      and met.email not in (select email from own)
+      and split_part(met.email, '@', 2) not in (select domain from own_domains)
+      and not exists (
+        select 1 from crm.contacts ct
+        where ct.workspace_id = $2 and ct.archived_at is null and ct.normalized_email = met.email
+      )
+      and not exists (
+        select 1 from crm.hidden_attendees h
+        where h.user_id = $1 and h.workspace_id = $2 and h.email = met.email
+      )
+  )
+  select
+    count(*)::int as waiting,
+    count(*) filter (where first_at <= $5 and ($6::timestamptz is null or first_at > $6))::int as fresh,
+    max(first_at) filter (where first_at <= $5) as newest
+  from outside`;
 
 export async function listToFile(actor: UserActor, now = Date.now()): Promise<ToFile> {
   assertScope(actor.scopes, "crm:read");
-  const [unfiled, mailbox] = await Promise.all([listUnfiledImports(actor), hasMailbox(actor)]);
+  const [unfiled, mailbox] = await Promise.all([
+    listUnfiledImports(actor),
+    withActor(actor, async (db) => (await db.query(`select ${HAS_MAILBOX} as connected`, [actor.userId, actor.workspaceId])).rows[0]?.connected === true),
+  ]);
   const people = mailbox ? await listPeopleMet(actor, now) : [];
   return { unfiled, people };
 }
 
-export function arrivals(items: ToFile) {
-  return [
+export function newestArrival(items: ToFile, now = Date.now()) {
+  const times = [
     ...items.unfiled.map((item) => item.unfiledAt ?? item.createdAt),
-    ...items.people.map((person) => person.firstSeenAt),
-  ].filter((value): value is string => Boolean(value));
+    ...items.people.map((person) => person.firstSeenAt).filter((value): value is string => Boolean(value) && new Date(value!).getTime() <= now),
+  ];
+  return times.reduce<string | null>((latest, value) => (!latest || value > latest ? value : latest), null);
 }
 
-export function newestArrival(items: ToFile) {
-  return arrivals(items).reduce<string | null>((latest, value) => (!latest || value > latest ? value : latest), null);
-}
-
-async function readSeen(actor: UserActor) {
-  return withActor(actor, async (db) => {
-    const result = await db.query<{ seen_at: Date | string }>(
-      "select seen_at from crm.capture_seen where user_id = $1 and workspace_id = $2",
-      [actor.userId, actor.workspaceId],
-    );
-    return result.rows[0] ? iso(result.rows[0].seen_at) : null;
-  });
-}
-
-export function summariseCapture(items: ToFile, seenAt: string | null): CaptureStatus {
-  const seen = seenAt ? new Date(seenAt).getTime() : null;
-  const times = arrivals(items);
-  const fresh = seen === null ? items.unfiled.length + items.people.length : times.filter((value) => new Date(value).getTime() > seen).length;
-  return { waiting: items.unfiled.length + items.people.length, fresh, newestAt: newestArrival(items), seenAt };
+function later(left: string | null, right: string | null) {
+  if (!left) return right;
+  if (!right) return left;
+  return left > right ? left : right;
 }
 
 export async function captureStatus(actor: UserActor, now = Date.now()): Promise<CaptureStatus> {
-  const [items, seenAt] = await Promise.all([listToFile(actor, now), readSeen(actor)]);
-  return summariseCapture(items, seenAt);
+  assertScope(actor.scopes, "crm:read");
+  return withActor(actor, async (db) => {
+    const unfiled = (
+      await db.query<{ seen_at: Date | null; waiting: number; fresh: number; newest: Date | null }>(UNFILED_COUNTS, [actor.userId, actor.workspaceId])
+    ).rows[0];
+    const seenAt = iso(unfiled.seen_at);
+    const people = (
+      await db.query<{ waiting: number; fresh: number; newest: Date | null }>(PEOPLE_COUNTS, [
+        actor.userId,
+        actor.workspaceId,
+        actor.email,
+        [...FREE_MAIL_DOMAINS],
+        new Date(now),
+        seenAt,
+      ])
+    ).rows[0];
+    return {
+      waiting: unfiled.waiting + people.waiting,
+      fresh: unfiled.fresh + people.fresh,
+      newestAt: later(iso(unfiled.newest), iso(people.newest)),
+      seenAt,
+    };
+  });
 }
 
 export async function markCaptureSeen(actor: UserActor, at: Date = new Date()) {

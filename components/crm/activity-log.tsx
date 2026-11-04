@@ -13,7 +13,7 @@ import { RecordRow } from "@/components/crm/record-form";
 import KeyboardList from "@/components/shortcuts/keyboard-list";
 import ListSearch from "@/components/shortcuts/list-search";
 import { formatWhen } from "@/lib/companies";
-import { ACTIVITY_TYPE_LABELS, EVERYONE } from "@/lib/crm/activity-log";
+import { ACTIVITY_TYPE_LABELS, AGENT_PREFIX, EVERYONE } from "@/lib/crm/activity-log";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import { ACTIVITY_TYPES, type Activity, type Member } from "@/lib/crm/types";
 
@@ -22,6 +22,7 @@ const FILTER_KEYS = ["person", "type", "from", "to"] as const;
 export default function ActivityLog({
   viewerId,
   members,
+  agents,
   person,
   type,
   from,
@@ -33,6 +34,7 @@ export default function ActivityLog({
 }: {
   viewerId: string;
   members: Member[];
+  agents: { id: string; name: string }[];
   person: string;
   type: string;
   from: string;
@@ -70,7 +72,13 @@ export default function ActivityLog({
     router.replace(next ? `${pathname}?${next}` : pathname, { scroll: false });
   }
 
-  const name = everyone ? null : person === viewerId ? "You" : (members.find((member) => member.id === person)?.name ?? "This person");
+  const name = everyone
+    ? null
+    : person === viewerId
+      ? "You"
+      : (members.find((member) => member.id === person)?.name ??
+        agents.find((agent) => `${AGENT_PREFIX}${agent.id}` === person)?.name ??
+        "This person");
 
   return (
     <div className="flex flex-col gap-5">
@@ -86,6 +94,15 @@ export default function ActivityLog({
                 {member.name}
               </option>
             ))}
+            {agents.length > 0 && (
+              <optgroup label="Agents">
+                {agents.map((agent) => (
+                  <option key={agent.id} value={`${AGENT_PREFIX}${agent.id}`}>
+                    {agent.name}
+                  </option>
+                ))}
+              </optgroup>
+            )}
             <option value={EVERYONE}>Everyone</option>
           </NativeSelect>
         </div>

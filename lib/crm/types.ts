@@ -356,6 +356,7 @@ export type ActivityListQuery = {
   opportunityId?: string;
   type?: ActivityType;
   actorUserId?: string;
+  actorAgentId?: string;
   from?: string;
   to?: string;
   limit?: number;

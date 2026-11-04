@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { briefTitle, getConversation, listConversations, openBrief, sendMessage } from "@/lib/assistant/chat";
-import { captureStatus, connectionAlert, markCaptureSeen } from "@/lib/crm/capture";
-import { archiveActivity, createActivity, listActivities } from "@/lib/crm/activities";
+import { briefKey, opensBriefOnExpand, pendingBrief } from "@/lib/assistant/brief-dock";
+import { captureStatus, connectionAlert, listToFile, markCaptureSeen } from "@/lib/crm/capture";
+import { archiveActivity, createActivity, listActivities, listActivityAgents } from "@/lib/crm/activities";
+import { createContact } from "@/lib/crm/contacts";
 import { createCompany, listCompanies } from "@/lib/crm/companies";
 import { CrmError } from "@/lib/crm/errors";
 import { saveMailbox } from "@/lib/crm/inbox";
@@ -13,7 +15,7 @@ import { getAdminPool, getPool } from "@/lib/db/pool";
 import { withActor } from "@/lib/crm/context";
 import { insertMemory } from "@/lib/learning/memories";
 import { runUnit, unreadBrief } from "@/lib/learning/nightly";
-import { createUser, queryAsUser, resetDatabase } from "./helpers";
+import { createAgent, createUser, queryAsUser, resetDatabase } from "./helpers";
 
 const DAY_MS = 86_400_000;
 
@@ -36,7 +38,7 @@ async function addImport(actor: UserActor, status: "unfiled" | "pending", title:
   return result.rows[0].id;
 }
 
-async function addMeeting(actor: UserActor, providerId: string, attendee: string) {
+async function addMeeting(actor: UserActor, providerId: string, attendee: string | string[], start = new Date(Date.now() - 2 * DAY_MS)) {
   const admin = getAdminPool();
   const connection = (await admin.query<{ id: string }>("select id from crm.mailbox_connections where user_id = $1", [actor.userId])).rows[0].id;
   const calendar =
@@ -48,7 +50,7 @@ async function addMeeting(actor: UserActor, providerId: string, attendee: string
         [actor.workspaceId, actor.userId, connection],
       )
     ).rows[0].id;
-  const start = new Date(Date.now() - 2 * DAY_MS);
+  const attendees = (Array.isArray(attendee) ? attendee : [attendee]).map((email) => ({ email, name: "Outside Person" }));
   await admin.query(
     `insert into crm.calendar_events (workspace_id, calendar_id, connection_id, user_id, provider_event_id, subject, starts_at, ends_at, organizer, attendees)
      values ($1, $2, $3, $4, $5, 'Intro', $6, $7, $8::jsonb, $9::jsonb)`,
@@ -61,7 +63,7 @@ async function addMeeting(actor: UserActor, providerId: string, attendee: string
       start,
       new Date(start.getTime() + 30 * 60_000),
       JSON.stringify({ email: actor.email, name: actor.fullName }),
-      JSON.stringify([{ email: attendee, name: "Outside Person" }]),
+      JSON.stringify(attendees),
     ],
   );
 }
@@ -160,20 +162,22 @@ describe("Capture seen and new count", () => {
     await markCaptureSeen(owner, new Date(Date.now() - 7 * DAY_MS));
     assert.equal((await captureStatus(owner)).seenAt, seenAt, "an older visit never moves the mark back");
 
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => setTimeout(resolve, 50));
     await addImport(owner, "unfiled", "New Granola call");
     const pending = await addImport(owner, "pending", "Teams call still matching");
-    await addMeeting(owner, "evt-second", "piers@outside-capture.test");
+    await addMeeting(owner, "evt-second", "piers@outside-capture.test", new Date(Date.now() - 5));
+    await addMeeting(owner, "evt-old-synced-late", "quinn@outside-capture.test", new Date(Date.now() - 20 * DAY_MS));
+    await addMeeting(owner, "evt-future", "rosa@outside-capture.test", new Date(Date.now() + 3 * DAY_MS));
     const later = await captureStatus(owner);
-    assert.equal(later.waiting, 4);
-    assert.equal(later.fresh, 2);
+    assert.equal(later.waiting, 6);
+    assert.equal(later.fresh, 2, "a meeting synced late or not held yet doesn't count as new");
     assert.ok(later.newestAt && later.newestAt > seenAt!);
 
     await markCaptureSeen(owner);
     await new Promise((resolve) => setTimeout(resolve, 20));
     await getAdminPool().query("update crm.conversation_imports set status = 'unfiled' where id = $1", [pending]);
     const moved = await captureStatus(owner);
-    assert.equal(moved.waiting, 5);
+    assert.equal(moved.waiting, 7);
     assert.equal(moved.fresh, 1, "an import that only now became unfiled counts as new");
 
     const other = await createUser("capture-other@orbit.test", "Other Person");
@@ -227,7 +231,10 @@ describe("Morning brief in the assistant", () => {
     ).rows[0].id;
 
     assert.equal(briefTitle("2026-11-03"), "Brief, Tue 3 Nov");
-    assert.deepEqual(await unreadBrief(owner), { id, day: "2026-11-03" });
+    const unread = await unreadBrief(owner);
+    assert.equal(unread?.id, id);
+    assert.equal(unread?.day, "2026-11-03");
+    assert.ok(unread?.createdAt);
     assert.equal(await unreadBrief(other), null);
     await assert.rejects(openBrief(other, id), CrmError);
 
@@ -264,6 +271,7 @@ describe("Morning brief in the assistant", () => {
       { deadline: Date.now() + 60_000, fetchImpl: gateway },
     );
     const sent = requests[0].messages;
+    assert.doesNotMatch(sent[0].content, /brief is ready/, "the brief chat doesn't send the model to get_daily_brief again");
     const briefAt = sent.findIndex((message) => message.role === "assistant" && message.content === body);
     assert.ok(briefAt > 0, "the brief is replayed to the model");
     assert.equal(sent[briefAt - 1].role, "user");
@@ -294,10 +302,116 @@ describe("Morning brief in the assistant", () => {
 
     text = "### What Orbit learned\n- You prefer short emails, and Acme replied.";
     await rebuild();
-    assert.deepEqual(await unreadBrief(owner), unread, "new text is unread again");
+    const again = await unreadBrief(owner);
+    assert.equal(again?.id, unread.id, "new text is unread again");
+    assert.notEqual(briefKey(again!), briefKey(unread), "a long-lived tab sees the rebuilt brief as new");
     const second = await openBrief(owner, unread.id);
     assert.notEqual(second.conversation.id, first.conversation.id);
     assert.equal(second.messages[0].content, text);
     assert.equal((await listConversations(owner)).length, 2, "the earlier brief stays in chat history");
+  });
+});
+
+describe("Review follow-ups", () => {
+  it("counts every unfiled conversation, not just the first 50", async () => {
+    const owner = await createUser("capture-many@orbit.test", "Mark Ridgeon");
+    for (let index = 0; index < 55; index += 1) await addImport(owner, "unfiled", `Call ${index}`);
+    const status = await captureStatus(owner);
+    assert.equal(status.waiting, 55);
+    assert.equal(status.fresh, 55);
+    assert.equal((await listToFile(owner)).unfiled.length, 50, "the page lists the latest 50");
+  });
+
+  it("counts people met in SQL the same way the Capture list does", async () => {
+    process.env.MICROSOFT_CLIENT_ID = "test-client";
+    process.env.MICROSOFT_CLIENT_SECRET = "test-secret";
+    const owner = await createUser("mark@people-count.test", "Mark Ridgeon");
+    await saveMailbox(owner, { email: "mark@people-count.test", refreshToken: "refresh", accessToken: "access", expiresAt: new Date(Date.now() + 3_600_000).toISOString() });
+    const known = (await createCompany(owner, { name: "Known Co", domain: "known-people.test" })).body.company.id;
+    await createContact(owner, { firstName: "Kim", email: "kim@known-people.test", companyId: known });
+    await getAdminPool().query("insert into crm.hidden_attendees (workspace_id, user_id, email) values ($1, $2, 'hidden@outside-people.test')", [
+      owner.workspaceId,
+      owner.userId,
+    ]);
+    await addMeeting(owner, "evt-mixed", [
+      "colleague@people-count.test",
+      "kim@known-people.test",
+      "hidden@outside-people.test",
+      "Ada@Outside-People.test",
+      "friend@gmail.com",
+      "not an email",
+    ]);
+    const earliest = new Date(Date.now() - 5 * DAY_MS);
+    await addMeeting(owner, "evt-ada-again", "ada@outside-people.test", earliest);
+    const listed = await listToFile(owner);
+    assert.deepEqual(listed.people.map((person) => person.email).sort(), ["ada@outside-people.test", "friend@gmail.com"]);
+    assert.equal(listed.people.find((person) => person.email === "ada@outside-people.test")?.firstSeenAt, earliest.toISOString());
+    const status = await captureStatus(owner);
+    assert.equal(status.waiting, listed.unfiled.length + listed.people.length);
+  });
+
+  it("treats a company as active when an activity was logged only on one of its people", async () => {
+    const owner = await createUser("quiet-contact@orbit.test", "Mark Ridgeon");
+    const company = (await createCompany(owner, { name: "Contact Only Co", domain: "contact-only.test" })).body.company.id;
+    const contact = (await createContact(owner, { firstName: "Cara", email: "cara@contact-only.test", companyId: company })).body.contact.id;
+    await getAdminPool().query(
+      "insert into crm.activities (workspace_id, type, title, occurred_at, contact_id, actor_user_id) values ($1, 'call', 'Rang Cara', now() - interval '2 days', $2, $3)",
+      [owner.workspaceId, contact, owner.userId],
+    );
+    const quiet = await listCompanies(owner, { quiet: true });
+    assert.equal(quiet.data.some((item) => item.id === company), false);
+
+    const logged = await createActivity(owner, { type: "note", body: "Spoke to Cara", contactId: contact, companyId: null });
+    assert.equal(logged.body.activity.companyId, company, "a new activity on a contact is also filed on their company");
+  });
+
+  it("only opens the brief by itself when the dock has no chat, and keys it by when it was written", () => {
+    assert.equal(opensBriefOnExpand({ pending: true, busy: false, working: false, messages: 0 }), true);
+    assert.equal(opensBriefOnExpand({ pending: true, busy: false, working: false, messages: 3 }), false, "an open chat isn't replaced");
+    assert.equal(opensBriefOnExpand({ pending: true, busy: true, working: false, messages: 0 }), false);
+    assert.equal(opensBriefOnExpand({ pending: false, busy: false, working: false, messages: 0 }), false);
+    const first = { id: "b1", createdAt: "2026-11-03T05:00:00.000Z" };
+    const rebuilt = { id: "b1", createdAt: "2026-11-03T09:00:00.000Z" };
+    assert.equal(pendingBrief(first, briefKey(first)), null);
+    assert.equal(pendingBrief(rebuilt, briefKey(first)), rebuilt);
+  });
+
+  it("filters the activity log by an agent", async () => {
+    const owner = await createUser("agent-log@orbit.test", "Mark Ridgeon");
+    const { actor: bot } = await createAgent(owner.workspaceId, ["crm:read", "activities:write"], "Grok Bot");
+    const company = (await createCompany(owner, { name: "Agent Log Co", domain: "agent-log.test" })).body.company.id;
+    await createActivity(bot, { type: "research", title: "Found a hiring post", companyId: company });
+    await createActivity(owner, { type: "note", body: "My note", companyId: company });
+    assert.deepEqual(await listActivityAgents(owner), [{ id: bot.agentId, name: "Grok Bot" }]);
+    const query = activityQueryFromSearchParams(new URLSearchParams({ actor_agent_id: bot.agentId }));
+    const byBot = await listActivities(owner, query);
+    assert.deepEqual(byBot.data.map((activity) => activity.title), ["Found a hiring post"]);
+    assert.equal(byBot.data[0].actorName, "Grok Bot");
+  });
+
+  it("doesn't learn from Orbit's own brief as if the user wrote it", async () => {
+    const owner = await createUser("brief-learn@orbit.test", "Mark Ridgeon");
+    const body = "### Accounts to act on\n- Zephyr Labs is hiring. Mention the pilot.";
+    const id = (
+      await getAdminPool().query<{ id: string }>(
+        "insert into crm.daily_briefs (workspace_id, user_id, day, body) values ($1, $2, '2026-11-04', $3) returning id",
+        [owner.workspaceId, owner.userId, body],
+      )
+    ).rows[0].id;
+    const opened = await openBrief(owner, id);
+    await getAdminPool().query(
+      "insert into crm.assistant_messages (conversation_id, workspace_id, user_id, role, content) values ($1, $2, $3, 'user', 'Always copy Priya on pilot emails')",
+      [opened.conversation.id, owner.workspaceId, owner.userId],
+    );
+    const seen: string[] = [];
+    const gateway: typeof fetch = async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as { messages: { content: string }[] };
+      seen.push(request.messages.map((message) => message.content).join("\n"));
+      return Response.json({ model: "test", choices: [{ message: { content: JSON.stringify({ add: [], update: [], archive: [] }) }, finish_reason: "stop" }] });
+    };
+    await runUnit(owner, "personal", { trigger: "manual", deadline: Date.now() + 60_000, fetchImpl: gateway });
+    assert.equal(seen.length, 1);
+    assert.match(seen[0], /Always copy Priya on pilot emails/);
+    assert.doesNotMatch(seen[0], /Zephyr Labs/);
   });
 });

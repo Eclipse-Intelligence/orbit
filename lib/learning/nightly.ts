@@ -140,14 +140,17 @@ async function applyOps(actor: UserActor, scope: MemoryScope, ops: Ops, existing
   });
 }
 
+export const BRIEF_MESSAGE_MODEL = "orbit-brief";
+
 async function learnPersonal(actor: UserActor, since: Date, options: Options): Promise<UnitResult> {
   const gathered = await withActor(actor, async (db) => {
     const chat = await db.query<{ conversation_id: string; title: string; role: string; content: string; created_at: Date }>(
       `select m.conversation_id, c.title, m.role, m.content, m.created_at from crm.assistant_messages m
        join crm.assistant_conversations c on c.id = m.conversation_id
        where m.user_id = $1 and m.created_at > $2 and m.role in ('user', 'assistant') and coalesce(m.content, '') <> ''
+         and m.model is distinct from $3
        order by m.created_at limit 120`,
-      [actor.userId, since],
+      [actor.userId, since, BRIEF_MESSAGE_MODEL],
     );
     const decisions = await db.query<{ title: string; status: string; created_at: Date }>(
       `select a->>'title' as title, a->>'status' as status, m.created_at from crm.assistant_messages m, jsonb_array_elements(case when jsonb_typeof(m.actions) = 'array' then m.actions else '[]'::jsonb end) a
@@ -625,19 +628,20 @@ export async function latestBrief(actor: UserActor, now = new Date()): Promise<B
   });
 }
 
-export type UnreadBrief = { id: string; day: string };
+export type UnreadBrief = { id: string; day: string; createdAt: string };
 
 export const BRIEF_FRESH_MS = 36 * 3_600_000;
 
 export async function unreadBrief(actor: UserActor, now = new Date()): Promise<UnreadBrief | null> {
   return withActor(actor, async (db) => {
-    const result = await db.query<{ id: string; day: string }>(
-      `select id, day::text from crm.daily_briefs
+    const result = await db.query<{ id: string; day: string; created_at: Date }>(
+      `select id, day::text, created_at from crm.daily_briefs
        where user_id = $1 and workspace_id = $2 and dismissed_at is null and read_at is null and created_at > $3
        order by day desc limit 1`,
       [actor.userId, actor.workspaceId, new Date(now.getTime() - BRIEF_FRESH_MS)],
     );
-    return result.rows[0] ?? null;
+    const row = result.rows[0];
+    return row ? { id: row.id, day: row.day, createdAt: row.created_at.toISOString() } : null;
   });
 }
 

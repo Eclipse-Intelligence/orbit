@@ -286,7 +286,7 @@ export default function IntegrationsSettings({
           </div>
         ) : (
           <Status tone="off">
-            Connect Microsoft above to log Teams calls
+            {configured ? "Connect Microsoft above to log Teams calls" : "Needs the Microsoft app set up on this server"}
           </Status>
         )}
         {live && configured && transcripts && (

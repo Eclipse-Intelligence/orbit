@@ -375,6 +375,8 @@ export function activityQueryFromSearchParams(params: URLSearchParams): Activity
   }
   const actorUserId = uuidParam(params, "actor_user_id");
   if (actorUserId) query.actorUserId = actorUserId;
+  const actorAgentId = uuidParam(params, "actor_agent_id");
+  if (actorAgentId) query.actorAgentId = actorAgentId;
   const from = dateBound(params, "from", false);
   if (from) query.from = from;
   const to = dateBound(params, "to", true);

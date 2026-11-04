@@ -38,6 +38,7 @@ import { relativeWhen } from "@/lib/companies";
 import { pageHref } from "@/lib/docs/routes";
 import type { DocDiffLine } from "@/lib/docs/types";
 import type { UnreadBrief } from "@/lib/learning/nightly";
+import { briefKey, opensBriefOnExpand, pendingBrief as unhandledBrief } from "@/lib/assistant/brief-dock";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import { encodeMentions, liveMentions, splitMentions, type Mention } from "@/lib/mentions";
 import { cn } from "@/lib/utils";
@@ -933,20 +934,20 @@ export default function AssistantDock({ brief = null }: { brief?: UnreadBrief | 
     setNotice(null);
   }
 
-  const pendingBrief = brief && brief.id !== handledBrief ? brief : null;
+  const pendingBrief = unhandledBrief(brief, handledBrief);
 
   function expand() {
     setOpen(true);
-    if (pendingBrief && !busy && !working) void showBrief(pendingBrief.id);
+    if (pendingBrief && opensBriefOnExpand({ pending: true, busy, working: Boolean(working), messages: messages.length })) void showBrief(pendingBrief);
     else window.requestAnimationFrame(() => input.current?.focus());
   }
 
-  async function showBrief(id: string) {
-    setHandledBrief(id);
+  async function showBrief(next: UnreadBrief) {
+    setHandledBrief(briefKey(next));
     setHistoryOpen(false);
     pinned.current = true;
     const mine = detach();
-    const result = await openBriefAction(id, { model: active.model, reasoning: active.reasoning, webSearch });
+    const result = await openBriefAction(next.id, { model: active.model, reasoning: active.reasoning, webSearch });
     if (view.current !== mine) return;
     if (!result.opened) {
       setHandledBrief(null);
@@ -1035,6 +1036,12 @@ export default function AssistantDock({ brief = null }: { brief?: UnreadBrief | 
         )}
         <header className="flex h-11 shrink-0 items-center gap-1 pt-1 pr-2 pl-5">
           <span className="text-subtle min-w-0 flex-1 truncate text-[13px]">{conversation?.title ?? "New chat"}</span>
+          {pendingBrief && (
+            <Button variant="secondary" size="sm" className="mr-1 shrink-0 gap-1.5" disabled={busy} onClick={() => void showBrief(pendingBrief)}>
+              <span aria-hidden className="bg-primary size-1.5 rounded-full" />
+              Read your brief
+            </Button>
+          )}
           <Popover open={historyOpen} onOpenChange={(next) => void openHistory(next)}>
             <PopoverTrigger asChild>
               <Button variant="ghost" size="icon-sm" aria-label="Past chats" title="Past chats">

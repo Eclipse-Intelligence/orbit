@@ -49,6 +49,8 @@ begin
 end;
 $$;
 
+revoke all on function private.stamp_unfiled_at() from public;
+
 drop trigger if exists conversation_imports_stamp_unfiled on crm.conversation_imports;
 create trigger conversation_imports_stamp_unfiled
   before insert or update of status on crm.conversation_imports

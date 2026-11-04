@@ -552,10 +552,16 @@ export async function listCompanies(actor: Actor, query: CompanyListQuery = {}) 
       values.push(QUIET_DAYS);
       where.push(`not exists (
         select 1 from crm.activities qa
-        where qa.company_id = c.id
-          and qa.workspace_id = c.workspace_id
+        where qa.workspace_id = c.workspace_id
           and qa.archived_at is null
           and qa.occurred_at >= now() - make_interval(days => $${values.length}::int)
+          and (
+            qa.company_id = c.id
+            or qa.contact_id in (
+              select qc.id from crm.contacts qc
+              where qc.company_id = c.id and qc.workspace_id = c.workspace_id and qc.archived_at is null
+            )
+          )
       )`);
     }
     const whereSql = where.join(" and ");

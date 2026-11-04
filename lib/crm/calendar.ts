@@ -997,9 +997,8 @@ export async function listPeopleMet(actor: UserActor, now = Date.now()): Promise
       starts_at: Date | string;
       organizer: unknown;
       attendees: unknown;
-      created_at: Date | string;
     }>(
-      `select e.ical_uid, e.subject, e.starts_at, e.organizer, e.attendees, e.created_at
+      `select e.ical_uid, e.subject, e.starts_at, e.organizer, e.attendees
        from crm.calendar_events e
        join crm.calendars c on c.id = e.calendar_id and c.use_for_crm
        where e.user_id = $1 and e.workspace_id = $2 and not e.is_cancelled
@@ -1019,7 +1018,6 @@ export async function listPeopleMet(actor: UserActor, now = Date.now()): Promise
       }
       const ref = { subject: row.subject, startsAt };
       const past = new Date(startsAt).getTime() <= now;
-      const synced = iso(row.created_at);
       const seen = new Set<string>();
       for (const person of [readPerson(row.organizer), ...readPeople(row.attendees)]) {
         if (!person || seen.has(person.email) || internal.isInternal(person.email)) continue;
@@ -1033,7 +1031,7 @@ export async function listPeopleMet(actor: UserActor, now = Date.now()): Promise
           firstSeenAt: null,
         };
         entry.name ??= person.name;
-        if (synced && (!entry.firstSeenAt || synced < entry.firstSeenAt)) entry.firstSeenAt = synced;
+        if (!entry.firstSeenAt || startsAt < entry.firstSeenAt) entry.firstSeenAt = startsAt;
         entry.meetings += 1;
         if (past && (!entry.lastMeeting || entry.lastMeeting.startsAt < startsAt)) entry.lastMeeting = ref;
         if (!past && (!entry.nextMeeting || entry.nextMeeting.startsAt > startsAt)) entry.nextMeeting = ref;
