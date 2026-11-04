@@ -1,5 +1,5 @@
 import { mailboxTargets } from "@/lib/agent-mail/mailbox";
-import { bareAddress, displayName, judgeMail, type AuthenticationResults } from "@/lib/agent-mail/senders";
+import { bareAddress, displayName, judgeMail, quarantinedForInstructionsOnly, type AuthenticationResults } from "@/lib/agent-mail/senders";
 import { query } from "@/lib/db/pool";
 import { verifySignature } from "@/lib/machinemail";
 
@@ -17,7 +17,7 @@ export type IncomingAttachment = {
   risk: string | null;
 };
 
-type RawMessage = Record<string, unknown> & {
+export type RawMessage = Record<string, unknown> & {
   message_id?: unknown;
   inbox_id?: unknown;
   thread_id?: unknown;
@@ -29,7 +29,7 @@ type RawMessage = Record<string, unknown> & {
   extracted_text?: unknown;
   direction?: unknown;
   trust_level?: unknown;
-  trust?: { level?: unknown; content?: { text?: unknown }; attachments?: unknown; authentication?: { aligned?: unknown } };
+  trust?: { level?: unknown; reasons?: unknown; content?: { text?: unknown }; attachments?: unknown; authentication?: { aligned?: unknown } };
   authentication_results?: unknown;
   attachments?: unknown;
 };
@@ -122,13 +122,32 @@ export async function receiveAgentMail(headers: Headers, raw: string, options: {
   if (!eventType.startsWith("message.received")) return { status: 200, body: { ok: true, ignored: true } };
   const message = (record(record(envelope.data)?.message) ?? record(envelope.message)) as RawMessage | null;
   if (!message || typeof message.message_id !== "string" || !message.message_id) return { status: 200, body: { ok: true, ignored: true } };
+  return storeAgentMessage(target, eventId, eventType, message);
+}
+
+export async function storeAgentMessage(
+  target: { mailbox_id: string; workspace_id: string; address: string },
+  eventId: string,
+  eventType: string,
+  message: RawMessage,
+): Promise<ReceiveResult> {
+  if (typeof message.message_id !== "string" || !message.message_id) return { status: 200, body: { ok: true, ignored: true } };
   const inbox = typeof message.inbox_id === "string" ? message.inbox_id.trim().toLowerCase() : "";
   if (inbox !== target.address) return { status: 200, body: { ok: true, ignored: true } };
   const from = bareAddress(message.from);
   const authentication = authenticationOf(message.authentication_results);
   const trustLevel = typeof message.trust?.level === "string" ? message.trust.level : null;
   const trustAligned = typeof message.trust?.authentication?.aligned === "boolean" ? message.trust.authentication.aligned : null;
-  const verdict = judgeMail({ eventType, direction: message.direction, from, inbox: target.address, auth: authentication, trustAligned, trustLevel });
+  const verdict = judgeMail({
+    eventType,
+    direction: message.direction,
+    from,
+    inbox: target.address,
+    auth: authentication,
+    trustAligned,
+    trustLevel,
+    instructionsOnly: quarantinedForInstructionsOnly(message.trust?.reasons),
+  });
   const body = cleanedText(message);
   const row = {
     message_id: message.message_id.slice(0, 200),

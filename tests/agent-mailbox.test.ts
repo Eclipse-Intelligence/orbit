@@ -18,8 +18,10 @@ import {
 } from "@/lib/agent-mail/jobs";
 import { UNREADABLE_SECRET, agentMailboxView, saveAgentSenders, setUpAgentMailbox } from "@/lib/agent-mail/mailbox";
 import { emailHtml, emailText } from "@/lib/agent-mail/email-format";
+import { eventTypeFor, pollAgentMailboxes } from "@/lib/agent-mail/poll";
 import { WEBHOOK_MAX_BYTES, receiveAgentMail } from "@/lib/agent-mail/receive";
-import { aligned, bareAddress, judgeMail, senderAuthenticated } from "@/lib/agent-mail/senders";
+import { aligned, bareAddress, judgeMail, quarantinedForInstructionsOnly, senderAuthenticated } from "@/lib/agent-mail/senders";
+import { heldAgentMail, runHeldAgentMail } from "@/lib/agent-mail/held";
 import { AGENT_SENDS_PER_DAY } from "@/lib/agent-mail/store";
 import { HEADLESS_MODEL_ERROR, applyCompanionResult, getConversation, listConversations, sendMessage, stopConversation } from "@/lib/assistant/chat";
 import { EMAIL_POLICY, needsEmailConfirm } from "@/lib/assistant/email-policy";
@@ -31,7 +33,7 @@ import { createCompany } from "@/lib/crm/companies";
 import { listTasks } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
-import { MACHINE_MAIL_API, signPayload, verifySignature } from "@/lib/machinemail";
+import { AGENT_EVENTS, MACHINE_MAIL_API, ensureWebhook, signPayload, verifySignature } from "@/lib/machinemail";
 import { resetStorageBucketCache } from "@/lib/storage";
 import type { CompanionResult } from "@/companion/src/protocol";
 import { createUser, queryAsUser, resetDatabase } from "./helpers";
@@ -139,6 +141,7 @@ type EventInput = {
   direction?: string | null;
   attachments?: Record<string, unknown>[];
   trustAttachments?: Record<string, unknown>[];
+  trustReasons?: string[];
 };
 
 function makeEvent(services: Services, input: EventInput) {
@@ -173,6 +176,7 @@ function makeEvent(services: Services, input: EventInput) {
             authentication: { spf: "pass", dkim: "pass", dmarc: "pass", aligned: input.aligned ?? true },
             content: { text: input.text ?? "Hello" },
             attachments: input.trustAttachments ?? [],
+            reasons: input.trustReasons ?? [],
           },
         }),
     authentication_results: input.auth === null ? undefined : (input.auth ?? { spf: "pass", spf_domain: domain, dkim: "pass", dkim_domain: domain, dmarc: "pass", dmarc_domain: domain }),
@@ -374,6 +378,32 @@ describe("formatting agent mail replies", () => {
   });
 });
 
+describe("the agent mailbox webhook", () => {
+  it("moves a webhook set up for plain received mail onto every kind of received event", async () => {
+    const previous = process.env.MACHINE_MAIL_API_KEY;
+    process.env.MACHINE_MAIL_API_KEY = "mm_test";
+    const calls: { method: string; body: Record<string, unknown> | null }[] = [];
+    const fetchImpl: typeof fetch = async (_input, init) => {
+      const method = init?.method ?? "GET";
+      const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
+      calls.push({ method, body });
+      const types = method === "PATCH" ? body?.event_types : ["message.received"];
+      return Response.json({ webhook_id: "whk_1", url: "https://orbit.test/api/machinemail/webhook", event_types: types, inbox_ids: ["orbit@mail.test"], secret: "whsec_1", enabled: true });
+    };
+    try {
+      await ensureWebhook("orbit@mail.test", "https://orbit.test/api/machinemail/webhook", fetchImpl);
+    } finally {
+      if (previous === undefined) delete process.env.MACHINE_MAIL_API_KEY;
+      else process.env.MACHINE_MAIL_API_KEY = previous;
+    }
+    assert.deepEqual(calls[0].body?.event_types, AGENT_EVENTS);
+    const patch = calls.find((call) => call.method === "PATCH");
+    assert.ok(patch, "it should update the existing webhook");
+    assert.deepEqual(patch.body?.event_types, AGENT_EVENTS);
+    assert.ok(AGENT_EVENTS.includes("message.received.quarantined") && AGENT_EVENTS.includes("message.received.spam"));
+  });
+});
+
 describe("who can give the agent work", () => {
   const inbox = "orbit@ai-mail.geteclipse.co";
   const auth = { dmarc: "pass", dmarc_domain: "geteclipse.co" };
@@ -463,7 +493,7 @@ describe("setting up the agent mailbox", () => {
     assert.deepEqual(create.body, { username: "orbit-setup", domain: "ai-mail.geteclipse.co", display_name: "Orbit", client_id: `orbit-agent-${address}` });
     assert.equal(lookup.url, `${MACHINE_MAIL_API}/inboxes/${encodeURIComponent(address)}`);
     assert.equal(webhook.body?.url, `${ORIGIN}/api/machinemail/webhook`);
-    assert.deepEqual(webhook.body?.event_types, ["message.received"]);
+    assert.deepEqual(webhook.body?.event_types, AGENT_EVENTS);
     assert.deepEqual(webhook.body?.inbox_ids, [address]);
     const stored = (await getAdminPool().query<{ webhook_secret: string }>("select webhook_secret from crm.agent_mailboxes where workspace_id = $1", [owner.workspaceId])).rows[0];
     assert.notEqual(stored.webhook_secret, secretFor(address));
@@ -559,6 +589,93 @@ describe("receiving agent mail", () => {
     const sentRaw = JSON.stringify({ type: "event", event_id: "evt_sent_1", event_type: "message.sent", data: { message: { message_id: "msg_x", inbox_id: inbox } } });
     const sent = await receiveAgentMail(headersFor(secretFor(inbox), sentRaw, "evt_sent_1"), sentRaw);
     assert.deepEqual([sent.status, sent.body.ignored], [200, true]);
+  });
+
+  it("picks up mail the webhook missed, including quarantined mail, once", async () => {
+    const missed = JSON.parse(makeEvent(services, { inbox, subject: "Missed by the webhook" }).raw).message;
+    const quarantined = JSON.parse(makeEvent(services, { inbox, subject: "Quarantined one" }).raw).message;
+    const delivered = await receiveOnly(services, inbox, { subject: "Came by webhook" });
+    const messages = new Map<string, Record<string, unknown>>([
+      [missed.message_id, { ...missed, labels: ["INBOX", "UNREAD"] }],
+      [quarantined.message_id, { ...quarantined, labels: ["QUARANTINE"], trust_level: "quarantined" }],
+    ]);
+    await getAdminPool().query("update crm.agent_mailboxes set set_up_at = now() + interval '1 hour' where address = $1", [inbox]);
+    const fetched: string[] = [];
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/messages")) assert.ok(Date.parse(url.searchParams.get("after") ?? "") < Date.now() - 47 * 60 * 60 * 1000);
+      const parts = url.pathname.split("/").map(decodeURIComponent);
+      if (parts.at(-1) === "messages") {
+        if (parts.at(-2) !== inbox) return Response.json({ messages: [] });
+        assert.equal(url.searchParams.get("include_quarantine"), "true");
+        return Response.json({
+          messages: [
+            { message_id: missed.message_id, labels: ["INBOX", "UNREAD"], direction: "inbound" },
+            { message_id: quarantined.message_id, labels: ["QUARANTINE"], direction: "inbound" },
+            { message_id: delivered.messageId, labels: ["INBOX"], direction: "inbound" },
+            { message_id: "msg_sent_by_orbit", labels: ["SENT"], direction: "outbound" },
+          ],
+        });
+      }
+      const id = parts.at(-1) ?? "";
+      fetched.push(id);
+      return Response.json(messages.get(id) ?? {}, { status: messages.has(id) ? 200 : 404 });
+    };
+    const started: string[] = [];
+    const first = await pollAgentMailboxes({ fetchImpl, start: async (job) => void started.push(job.mailId) });
+    assert.deepEqual(fetched.sort(), [missed.message_id, quarantined.message_id].sort());
+    assert.equal(first.stored, 2);
+    assert.equal(started.length, 1);
+    const rows = (
+      await getAdminPool().query<{ message_id: string; status: string; status_reason: string | null; event_id: string }>(
+        "select message_id, status, status_reason, event_id from crm.agent_mail_messages where inbox_id = $1 and message_id = any($2::text[])",
+        [inbox, [missed.message_id, quarantined.message_id]],
+      )
+    ).rows;
+    const byId = new Map(rows.map((row) => [row.message_id, row]));
+    assert.equal(byId.get(missed.message_id)?.status, "received");
+    assert.equal(byId.get(missed.message_id)?.event_id, `poll:${missed.message_id}`);
+    assert.equal(byId.get(quarantined.message_id)?.status, "refused");
+    assert.equal(byId.get(quarantined.message_id)?.status_reason, "MachineMail quarantined it.");
+    fetched.length = 0;
+    const again = await pollAgentMailboxes({ fetchImpl, start: async (job) => void started.push(job.mailId) });
+    assert.deepEqual([fetched.length, again.stored, started.length], [0, 0, 1]);
+    assert.equal(eventTypeFor(["INBOX"]), "message.received");
+    assert.equal(eventTypeFor(["SPAM", "UNREAD"]), "message.received.spam");
+  });
+
+  it("acts on mail quarantined only for giving the agent instructions, and holds the rest for Run it anyway", async () => {
+    const instructions = [
+      "Quarantined: instructions-to-agent probability 0.81 >= threshold 0.80",
+      "DKIM passed for geteclipse.co",
+      "Scan verdicts from SES: spam pass, virus pass",
+    ];
+    assert.equal(quarantinedForInstructionsOnly(instructions), true);
+    assert.equal(quarantinedForInstructionsOnly(["Quarantined: phishing probability 0.91 >= threshold 0.80"]), false);
+    assert.equal(quarantinedForInstructionsOnly([...instructions, "Quarantined: phishing probability 0.9 >= threshold 0.8"]), false);
+    assert.equal(quarantinedForInstructionsOnly([...instructions, "Scan verdicts from SES: virus fail"]), false);
+    assert.equal(quarantinedForInstructionsOnly(["DKIM passed"]), false);
+
+    const ours = await receive({ eventType: "message.received.quarantined", trustLevel: "quarantined", trustReasons: instructions, subject: "Deck for Andy" });
+    assert.ok(ours.result.job, "Mark's own instructions run");
+    const stranger = await receive({ from: "someone@else.test", eventType: "message.received.quarantined", trustLevel: "quarantined", trustReasons: instructions });
+    assert.equal(stranger.result.job, undefined);
+    const spoofed = await receive({ eventType: "message.received.quarantined", trustLevel: "quarantined", trustReasons: instructions, auth: { spf: "fail", dkim: "fail", dmarc: "fail", dmarc_domain: "geteclipse.co" } });
+    assert.equal(spoofed.result.job, undefined);
+
+    const phishy = await receive({ eventType: "message.received.quarantined", trustLevel: "quarantined", trustReasons: ["Quarantined: phishing probability 0.91 >= threshold 0.80"], subject: "Looks phishy" });
+    assert.equal(phishy.result.job, undefined);
+    const held = await heldAgentMail(owner);
+    const item = held.find((entry) => entry.subject === "Looks phishy");
+    assert.ok(item, "it's held for Run it anyway");
+    assert.ok(!held.some((entry) => entry.subject === "Deck for Andy"));
+    const job = await runHeldAgentMail(owner, item.id);
+    assert.equal(job.userId, owner.userId);
+    const row = (await getAdminPool().query<{ status: string; user_id: string }>("select status, user_id from crm.agent_mail_messages where id = $1", [item.id])).rows[0];
+    assert.deepEqual([row.status, row.user_id], ["received", owner.userId]);
+    await assert.rejects(runHeldAgentMail(owner, item.id), /can't be run from here/);
+    const strangerHeld = (await getAdminPool().query<{ id: string }>("select id from crm.agent_mail_messages where message_id = $1", [stranger.event.messageId])).rows[0];
+    await assert.rejects(runHeldAgentMail(owner, strangerHeld.id), /can't be run from here/);
   });
 
   it("stores each event once even when MachineMail delivers it twice", async () => {
@@ -1049,7 +1166,7 @@ describe("the email approval policy", () => {
       ["send_email", { replyToEmailId: "00000000-0000-4000-8000-000000000001", body: "Hi" }],
       ["send_email", { contactId: "00000000-0000-4000-8000-000000000001", body: "Hi" }],
       ["send_email", { to: [MARK], body: "Hi", sendAt: "2026-12-01T09:00" }],
-      ["save_email_draft", { to: ["client@acme.test"], body: "Hi" }],
+      ["save_email_draft", { to: ["client@acme.test"], body: "Hi", sendAt: "2026-11-10T09:00" }],
       ["change_scheduled_email", { id: "x" }],
       ["create_meeting_invite", {}],
       ["move_meeting", {}],
@@ -1119,6 +1236,8 @@ describe("the email approval policy", () => {
     const auto: [string, Record<string, unknown>][] = [
       ["send_email", { to: ["Mark <MARK@geteclipse.co>"], subject: "Notes", body: "Hi" }],
       ["save_email_draft", { to: ["mark@ridgeon.me"], body: "Hi" }],
+      ["save_email_draft", { to: ["client@acme.test"], body: "Hi" }],
+      ["save_email_draft", { draftId: "11111111-1111-4111-8111-111111111111", body: "Hi" }],
       ["mail_action", { action: "read", emailIds: ["x"], summary: "x" }],
       ["mail_action", { action: "snooze", emailIds: ["x"], until: "2026-12-01T09:00", summary: "x" }],
       ["update_proposal", { id: "x", title: "New title" }],
