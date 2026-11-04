@@ -366,7 +366,7 @@ export default function MailComposer({
     window.setTimeout(() => aiInput.current?.focus(), 0);
   }
 
-  const status = save.kind === "saving" ? "Saving to Outlook…" : save.kind === "saved" ? "Saved in Outlook" : save.kind === "error" ? save.message : "";
+  const status = save.kind === "error" ? save.message : "";
 
   return (
     <form
