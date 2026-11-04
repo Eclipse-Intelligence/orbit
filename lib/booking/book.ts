@@ -212,8 +212,8 @@ async function liveBusy(
 
 function unavailable(error: unknown) {
   if (error instanceof CrmError) {
-    if (error.code === "not_connected") return "Microsoft isn't connected, so the booking page can't create meetings. Connect Microsoft in Capture.";
-    if (error.code === "scope_missing") return "Microsoft hasn't allowed Orbit to create meetings. Reconnect Microsoft in Capture.";
+    if (error.code === "not_connected") return "Microsoft isn't connected, so the booking page can't create meetings. Connect Microsoft in Settings › Integrations.";
+    if (error.code === "scope_missing") return "Microsoft hasn't allowed Orbit to create meetings. Reconnect Microsoft in Settings › Integrations.";
     return `Microsoft couldn't create the meeting: ${error.message}`;
   }
   return "Orbit couldn't create the meeting.";

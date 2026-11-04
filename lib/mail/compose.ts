@@ -193,7 +193,7 @@ function graphProblem(error: unknown): never {
   if (error instanceof CrmError) throw error;
   if (error instanceof GraphMailError) {
     if (error.status === 401 || error.status === 403) {
-      throw new CrmError("upstream_error", "Microsoft didn't allow Orbit to write this email. Connect the account again in Capture.", 502);
+      throw new CrmError("upstream_error", "Microsoft didn't allow Orbit to write this email. Connect the account again in Settings › Integrations.", 502);
     }
     throw new CrmError("upstream_error", error.message, 502);
   }
@@ -782,7 +782,7 @@ export async function resolveSendAccount(actor: UserActor, from: string | null |
     : accounts.find((item) => !item.identityId);
   if (!account) {
     const choices = accounts.map((item) => item.email).join(", ");
-    throw new CrmError("invalid_input", wanted ? `You can't send from ${from}. You can send from: ${choices || "no connected accounts"}.` : "Connect a mailbox in Capture first.", 400, {
+    throw new CrmError("invalid_input", wanted ? `You can't send from ${from}. You can send from: ${choices || "no connected accounts"}.` : "Connect a mailbox in Settings › Integrations first.", 400, {
       field: "from",
     });
   }

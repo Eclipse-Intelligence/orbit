@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { SETTINGS_PATHS } from "@/lib/settings-nav";
 
 import { redirect } from "next/navigation";
 import { after } from "next/server";
@@ -63,7 +64,7 @@ function refresh() {
   revalidatePath("/contacts");
   revalidatePath("/opportunities");
   revalidatePath("/boards", "layout");
-  revalidatePath("/activities");
+  revalidatePath(SETTINGS_PATHS.activity);
   revalidatePath(TASKS_PATH);
 }
 
@@ -327,7 +328,7 @@ export async function archiveActivityAction(id: string): Promise<RecordActionSta
   try {
     await archiveActivity(user, id, { operation: "archive_activity", source: "web" });
     refresh();
-    revalidatePath("/activities");
+    revalidatePath(SETTINGS_PATHS.activity);
     return { ok: true };
   } catch (error) {
     return actionError(error);
@@ -339,7 +340,7 @@ export async function updateActivityAction(id: string, edit: ActivityEdit): Prom
   try {
     const result = await updateActivity(user, id, edit, { operation: "update_activity", source: "web" });
     refresh();
-    revalidatePath("/activities");
+    revalidatePath(SETTINGS_PATHS.activity);
     return { ok: true, activity: result.activity };
   } catch (error) {
     return actionError(error);

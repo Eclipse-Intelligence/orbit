@@ -1,7 +1,7 @@
 "use server";
 
 import type { ModelSource } from "@/lib/assistant/models";
-import { connectedSources, deleteConversation, getConversation, listConversations, stopConversation } from "@/lib/assistant/chat";
+import { connectedSources, deleteConversation, getConversation, listConversations, openBrief, stopConversation } from "@/lib/assistant/chat";
 import { discardChatFiles, prepareChatFile, type PreparedChatFile } from "@/lib/assistant/files";
 import { getUserActor } from "@/lib/auth/user";
 import { CrmError } from "@/lib/crm/errors";
@@ -20,6 +20,16 @@ export async function getConversationAction(id: string) {
   } catch (error) {
     if (error instanceof CrmError) return null;
     throw error;
+  }
+}
+
+export async function openBriefAction(id: string, settings: { model: string; reasoning: string; webSearch: boolean }) {
+  const user = await getUserActor();
+  if (!user) return { error: "Sign in again." };
+  try {
+    return { opened: await openBrief(user, id, settings) };
+  } catch (error) {
+    return { error: error instanceof CrmError ? error.message : "Couldn't open your brief. Try again." };
   }
 }
 

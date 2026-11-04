@@ -111,6 +111,7 @@ export type MetPerson = {
   meetings: number;
   lastMeeting: MeetingRef | null;
   nextMeeting: MeetingRef | null;
+  firstSeenAt: string | null;
 };
 
 type EventRow = {
@@ -1027,8 +1028,10 @@ export async function listPeopleMet(actor: UserActor, now = Date.now()): Promise
           meetings: 0,
           lastMeeting: null,
           nextMeeting: null,
+          firstSeenAt: null,
         };
         entry.name ??= person.name;
+        if (!entry.firstSeenAt || startsAt < entry.firstSeenAt) entry.firstSeenAt = startsAt;
         entry.meetings += 1;
         if (past && (!entry.lastMeeting || entry.lastMeeting.startsAt < startsAt)) entry.lastMeeting = ref;
         if (!past && (!entry.nextMeeting || entry.nextMeeting.startsAt > startsAt)) entry.nextMeeting = ref;

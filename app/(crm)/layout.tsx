@@ -16,6 +16,8 @@ import { runWorkflowTick } from "@/lib/workflows/engine";
 import { countApprovals, listNotifications } from "@/lib/workflows/store";
 import { listAttention } from "@/lib/crm/relationships";
 import { countOpenTasks } from "@/lib/crm/tasks";
+import { captureStatus } from "@/lib/crm/capture";
+import { unreadBrief } from "@/lib/learning/nightly";
 import { syncTeamsTranscripts } from "@/lib/crm/teams-transcripts";
 import { processDueMail } from "@/lib/mail/due";
 import { syncMail } from "@/lib/mail/sync";
@@ -96,7 +98,7 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
       }
     });
   }
-  const [companyCount, openActionCount, attention, boards, notifications, approvals, mailUnread] = await Promise.all([
+  const [companyCount, openActionCount, attention, boards, notifications, approvals, mailUnread, capture, brief] = await Promise.all([
     countCompanies(user),
     countOpenTasks(user, { mine: true }),
     listAttention(user),
@@ -104,6 +106,8 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
     listNotifications(user, 10),
     countApprovals(user),
     mailUnreadCount(user).catch(() => 0),
+    captureStatus(user).catch(() => null),
+    unreadBrief(user).catch(() => null),
   ]);
 
   return (
@@ -116,6 +120,7 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
             companyCount={companyCount}
             openActionCount={openActionCount}
             mailUnread={mailUnread}
+            capture={capture}
             workspaceName={user.workspaceName}
           />
           <CrmChrome
@@ -129,6 +134,7 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
             overdue={attention.overdue}
             today={attention.today}
             notifications={notifications}
+            brief={brief}
           >
             {children}
           </CrmChrome>

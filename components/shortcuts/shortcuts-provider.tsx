@@ -13,6 +13,7 @@ import {
 import { useRouter } from "next/navigation";
 import { isTypingTarget } from "@/lib/crm/quick-add";
 import { setSidebarCollapsed } from "@/lib/sidebar";
+import { SETTINGS_PATHS } from "@/lib/settings-nav";
 import {
   SEQUENCE_TIMEOUT_MS,
   SHORTCUT_BY_ID,
@@ -293,7 +294,7 @@ export function ShortcutsProvider({ children }: { children: ReactNode }) {
         }
         router.push("/calendar?new=1");
       }),
-      fallback("create-activity", () => router.push("/activities?add=1")),
+      fallback("create-activity", () => router.push(`${SETTINGS_PATHS.activity}?add=1`)),
       fallback("record-edit", () => {
         const button = shortcutTarget("edit");
         if (!button) return false;

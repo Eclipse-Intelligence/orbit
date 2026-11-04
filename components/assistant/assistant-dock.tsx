@@ -17,6 +17,7 @@ import {
   discardChatFilesAction,
   getConversationAction,
   listConversationsAction,
+  openBriefAction,
   prepareChatFileAction,
   stopConversationAction,
 } from "@/app/(crm)/assistant";
@@ -36,6 +37,8 @@ import {
 import { relativeWhen } from "@/lib/companies";
 import { pageHref } from "@/lib/docs/routes";
 import type { DocDiffLine } from "@/lib/docs/types";
+import type { UnreadBrief } from "@/lib/learning/nightly";
+import { briefKey, opensBriefOnExpand, pendingBrief as unhandledBrief } from "@/lib/assistant/brief-dock";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import { encodeMentions, liveMentions, splitMentions, type Mention } from "@/lib/mentions";
 import { cn } from "@/lib/utils";
@@ -585,7 +588,7 @@ function MentionChip({ mention }: { mention: Mention }) {
   );
 }
 
-export default function AssistantDock() {
+export default function AssistantDock({ brief = null }: { brief?: UnreadBrief | null }) {
   const router = useRouter();
   const pathname = usePathname();
   const { mac } = useShortcuts();
@@ -606,6 +609,7 @@ export default function AssistantDock() {
   const [working, setWorking] = useState<Working | null>(null);
   const [history, setHistory] = useState<ConversationSummary[] | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [handledBrief, setHandledBrief] = useState<string | null>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const abort = useRef<AbortController | null>(null);
@@ -707,12 +711,6 @@ export default function AssistantDock() {
     node.style.height = `${Math.min(node.scrollHeight, 200)}px`;
   }, [draft, open]);
 
-  const expand = useCallback(() => {
-    setOpen(true);
-    window.requestAnimationFrame(() => input.current?.focus());
-  }, []);
-
-  useShortcut("assistant", () => expand());
   useShortcut(
     "back",
     () => {
@@ -936,6 +934,37 @@ export default function AssistantDock() {
     setNotice(null);
   }
 
+  const pendingBrief = unhandledBrief(brief, handledBrief);
+
+  function expand() {
+    setOpen(true);
+    if (pendingBrief && opensBriefOnExpand({ pending: true, busy, working: Boolean(working), messages: messages.length })) void showBrief(pendingBrief);
+    else window.requestAnimationFrame(() => input.current?.focus());
+  }
+
+  async function showBrief(next: UnreadBrief) {
+    setHandledBrief(briefKey(next));
+    setHistoryOpen(false);
+    pinned.current = true;
+    const mine = detach();
+    const result = await openBriefAction(next.id, { model: active.model, reasoning: active.reasoning, webSearch });
+    if (view.current !== mine) return;
+    if (!result.opened) {
+      setHandledBrief(null);
+      setError(result.error ?? "Couldn't open your brief. Try again.");
+      return;
+    }
+    setConversation(result.opened.conversation);
+    setMessages(result.opened.messages);
+    setWorking(null);
+    recovering.current += 1;
+    setError(null);
+    setNotice(null);
+    window.requestAnimationFrame(() => input.current?.focus());
+  }
+
+  useShortcut("assistant", () => expand());
+
   async function remove(id: string) {
     const result = await deleteConversationAction(id);
     if (result.error) {
@@ -967,7 +996,9 @@ export default function AssistantDock() {
           aria-keyshortcuts="o"
           className="group text-subtle hover:text-foreground focus-visible:ring-ring/60 ease-power3-out flex h-11 w-full cursor-text items-center gap-2.5 rounded-full bg-[#1f1f1f]/90 pr-2 pl-5 text-left text-[14px] shadow-[0_12px_40px_rgba(0,0,0,0.5)] backdrop-blur-xl transition-[color,background-color] duration-150 outline-none hover:bg-[#232323]/95 focus-visible:ring-2 md:w-[24rem]"
         >
+          {pendingBrief && <span aria-hidden className="bg-primary -ml-1 size-2 shrink-0 rounded-full" />}
           <span className="min-w-0 flex-1 truncate">{messages.length > 0 ? conversation?.title ?? "Continue your chat" : "Ask Orbit anything"}</span>
+          {pendingBrief && <span className="sr-only">Your morning brief is ready</span>}
           <Kbd aria-hidden className="max-md:hidden">
             O
           </Kbd>
@@ -1005,6 +1036,12 @@ export default function AssistantDock() {
         )}
         <header className="flex h-11 shrink-0 items-center gap-1 pt-1 pr-2 pl-5">
           <span className="text-subtle min-w-0 flex-1 truncate text-[13px]">{conversation?.title ?? "New chat"}</span>
+          {pendingBrief && (
+            <Button variant="secondary" size="sm" className="mr-1 shrink-0 gap-1.5" disabled={busy} onClick={() => void showBrief(pendingBrief)}>
+              <span aria-hidden className="bg-primary size-1.5 rounded-full" />
+              Read your brief
+            </Button>
+          )}
           <Popover open={historyOpen} onOpenChange={(next) => void openHistory(next)}>
             <PopoverTrigger asChild>
               <Button variant="ghost" size="icon-sm" aria-label="Past chats" title="Past chats">

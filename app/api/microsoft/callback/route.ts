@@ -31,7 +31,7 @@ export async function GET(request: Request) {
   const returned = url.searchParams.get("state");
   const responseState = cookieStore.get(STATE_COOKIE)?.value;
   const forCalendar = state?.purpose === "calendar_account" || state?.purpose === "send_account";
-  const target = new URL(forCalendar ? SETTINGS_PATHS.calendars : "/capture", origin);
+  const target = new URL(forCalendar ? SETTINGS_PATHS.calendars : SETTINGS_PATHS.integrations, origin);
 
   function finish(error?: string, connected?: string) {
     if (forCalendar) {
@@ -48,7 +48,7 @@ export async function GET(request: Request) {
     return finish(
       forCalendar
         ? "The Microsoft connection expired. Start it again from Settings."
-        : "The Microsoft connection expired. Start it again from the inbox.",
+        : "The Microsoft connection expired. Start it again from Integrations.",
     );
   }
   const user = await getUserActor();

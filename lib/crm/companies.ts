@@ -24,7 +24,7 @@ import {
 } from "@/lib/crm/normalize";
 import { assertScope } from "@/lib/crm/scopes";
 import { defaultCompanyOrder } from "@/lib/sorting";
-import { LIFECYCLES } from "@/lib/crm/types";
+import { LIFECYCLES, QUIET_DAYS } from "@/lib/crm/types";
 import type {
   Actor,
   BulkItemResult,
@@ -548,6 +548,22 @@ export async function listCompanies(actor: Actor, query: CompanyListQuery = {}) 
     }
     for (const field of query.has ?? []) where.push(PRESENCE_SQL[field]);
     for (const field of query.missing ?? []) where.push(`not (${PRESENCE_SQL[field]})`);
+    if (query.quiet) {
+      values.push(QUIET_DAYS);
+      where.push(`not exists (
+        select 1 from crm.activities qa
+        where qa.workspace_id = c.workspace_id
+          and qa.archived_at is null
+          and qa.occurred_at >= now() - make_interval(days => $${values.length}::int)
+          and (
+            qa.company_id = c.id
+            or qa.contact_id in (
+              select qc.id from crm.contacts qc
+              where qc.company_id = c.id and qc.workspace_id = c.workspace_id and qc.archived_at is null
+            )
+          )
+      )`);
+    }
     const whereSql = where.join(" and ");
     const count = await db.query<{ total: number }>(
       `select count(*)::int as total from crm.companies c where ${whereSql}`,

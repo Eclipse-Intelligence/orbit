@@ -79,6 +79,7 @@ export default function MobileFilters({
       order: null,
       has: null,
       missing: null,
+      quiet: null,
     });
   }
 

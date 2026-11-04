@@ -200,7 +200,7 @@ export async function createActivityInDb(
   provenance?: Provenance,
 ) {
   const write = prepareActivity(input);
-  const links = await resolveLinks(db, actor.workspaceId, write);
+  const links = await resolveLinks(db, actor.workspaceId, { ...write, companyId: write.companyId ?? undefined });
   if (!links.companyId && !links.contactId && !links.opportunityId) {
     throw new CrmError(
       "invalid_input",
@@ -286,6 +286,24 @@ export async function listActivities(
       values.push(query.type);
       where.push(`a.type = $${values.length}`);
     }
+    if (query.actorUserId) {
+      if (!isUuid(query.actorUserId)) throw new CrmError("invalid_input", "Choose a member of this workspace.", 400, { field: "actor_user_id" });
+      values.push(query.actorUserId);
+      where.push(`a.actor_user_id = $${values.length}`);
+    }
+    if (query.actorAgentId) {
+      if (!isUuid(query.actorAgentId)) throw new CrmError("invalid_input", "Choose an agent in this workspace.", 400, { field: "actor_agent_id" });
+      values.push(query.actorAgentId);
+      where.push(`a.actor_agent_id = $${values.length}`);
+    }
+    if (query.from) {
+      values.push(query.from);
+      where.push(`a.occurred_at >= $${values.length}::timestamptz`);
+    }
+    if (query.to) {
+      values.push(query.to);
+      where.push(`a.occurred_at < $${values.length}::timestamptz`);
+    }
     const text = query.query?.trim();
     if (text) {
       values.push(likePattern(text.slice(0, 200)));
@@ -318,6 +336,17 @@ export async function listActivities(
       limit: page.limit,
       offset: page.offset,
     };
+  });
+}
+
+export async function listActivityAgents(actor: Actor): Promise<{ id: string; name: string }[]> {
+  assertScope(actor.scopes, "crm:read");
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ id: string; name: string }>(
+      "select id, name from crm.agents where workspace_id = $1 order by lower(name), id",
+      [actor.workspaceId],
+    );
+    return result.rows;
   });
 }
 

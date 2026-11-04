@@ -3,6 +3,7 @@ import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import { cleanLifecycle } from "@/lib/companies";
 import { normalizeTag } from "@/lib/crm/normalize";
+import { appTimeZone, parseDateTime, startOfDay } from "@/lib/time";
 import {
   ACTIVITY_TYPES,
   COMPANY_PRESENCE,
@@ -145,6 +146,7 @@ export function companyQueryFromSearchParams(
   if (owner) query.ownerId = owner;
   const tag = tagParam(params);
   if (tag) query.tag = tag;
+  if (params.get("quiet") === "true") query.quiet = true;
   if (params.get("include_archived") === "true") query.includeArchived = true;
   if (limit && Number.isFinite(Number(limit))) query.limit = Number(limit);
   if (offset && Number.isFinite(Number(offset))) query.offset = Number(offset);
@@ -371,7 +373,27 @@ export function activityQueryFromSearchParams(params: URLSearchParams): Activity
   if (type && (ACTIVITY_TYPES as readonly string[]).includes(type)) {
     query.type = type as ActivityListQuery["type"];
   }
+  const actorUserId = uuidParam(params, "actor_user_id");
+  if (actorUserId) query.actorUserId = actorUserId;
+  const actorAgentId = uuidParam(params, "actor_agent_id");
+  if (actorAgentId) query.actorAgentId = actorAgentId;
+  const from = dateBound(params, "from", false);
+  if (from) query.from = from;
+  const to = dateBound(params, "to", true);
+  if (to) query.to = to;
   return { ...query, ...paging(params) };
+}
+
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+
+function dateBound(params: URLSearchParams, name: string, end: boolean) {
+  const value = params.get(name)?.trim();
+  if (!value) return undefined;
+  const date = parseDateTime(value);
+  if (!date) {
+    throw new CrmError("invalid_input", `${name} must be a date, such as 2026-11-03, or a date and time.`, 400, { field: name });
+  }
+  return (end && DATE_ONLY.test(value) ? startOfDay(date, appTimeZone(), 1) : date).toISOString();
 }
 
 export function taskQueryFromSearchParams(params: URLSearchParams): TaskListQuery {

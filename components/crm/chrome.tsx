@@ -12,6 +12,7 @@ import PushRegistrar from "@/components/push/push-registrar";
 import ShortcutsHelp from "@/components/shortcuts/shortcuts-help";
 import type { Viewer } from "@/components/crm/viewer";
 import type { Task } from "@/lib/crm/types";
+import type { UnreadBrief } from "@/lib/learning/nightly";
 import type { Notification } from "@/lib/workflows/store";
 
 export default function CrmChrome({
@@ -19,12 +20,14 @@ export default function CrmChrome({
   overdue,
   today,
   notifications,
+  brief = null,
   children,
 }: {
   viewer: Viewer;
   overdue: Task[];
   today: Task[];
   notifications?: Notification[];
+  brief?: UnreadBrief | null;
   children: ReactNode;
 }) {
   return (
@@ -38,7 +41,7 @@ export default function CrmChrome({
           <QuickAdd viewerId={viewer.id} />
           <TaskReminders />
           <ShortcutsHelp />
-          <AssistantDock />
+          <AssistantDock brief={brief} />
           <PushRegistrar />
         </div>
         </ComposerProvider>

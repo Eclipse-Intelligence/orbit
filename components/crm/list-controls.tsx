@@ -63,11 +63,57 @@ export type PresenceField<T extends string> = { key: T; label: string; has: stri
 
 type PresenceState = "any" | "has" | "missing";
 
+export type FilterChoice = {
+  key: string;
+  label: string;
+  options: { value: string; label: string }[];
+  value: string;
+  empty: string;
+  onChange: (value: string) => void;
+};
+
+function ChoiceRow({
+  label,
+  options,
+  value,
+  onChange,
+}: {
+  label: string;
+  options: { value: string; label: string }[];
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <li className="flex items-center justify-between gap-3 rounded-md px-2 py-1.5">
+      <span className="caption-style text-soft">{label}</span>
+      <span role="radiogroup" aria-label={label} className="flex items-center rounded-full bg-white/[0.04] p-0.5">
+        {options.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            role="radio"
+            aria-checked={value === option.value}
+            onClick={() => onChange(option.value)}
+            className={cn(
+              "caption-style cursor-pointer rounded-full px-2.5 py-1 whitespace-nowrap transition-colors duration-150 ease-power3-out outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+              value === option.value ? "bg-muted text-foreground shadow-[inset_0px_0px_0px_1px_rgba(255,255,255,0.06)]" : "text-subtle hover:text-foreground",
+            )}
+          >
+            {option.label}
+          </button>
+        ))}
+      </span>
+    </li>
+  );
+}
+
 export function PresenceFilter<T extends string>({
   fields,
   has,
   missing,
   onChange,
+  choices = [],
+  onClear,
   shortcut,
   className,
 }: {
@@ -75,10 +121,12 @@ export function PresenceFilter<T extends string>({
   has: T[];
   missing: T[];
   onChange: (has: T[], missing: T[]) => void;
+  choices?: FilterChoice[];
+  onClear?: () => void;
   shortcut?: string;
   className?: string;
 }) {
-  const active = has.length + missing.length;
+  const active = has.length + missing.length + choices.filter((choice) => choice.value !== choice.empty).length;
 
   function set(field: T, state: PresenceState) {
     const nextHas = has.filter((item) => item !== field);
@@ -107,38 +155,27 @@ export function PresenceFilter<T extends string>({
         <ul className="flex flex-col gap-1">
           {fields.map((field) => {
             const state: PresenceState = has.includes(field.key) ? "has" : missing.includes(field.key) ? "missing" : "any";
-            const options: { value: PresenceState; label: string }[] = [
-              { value: "any", label: "Any" },
-              { value: "has", label: field.has },
-              { value: "missing", label: field.missing },
-            ];
             return (
-              <li key={field.key} className="flex items-center justify-between gap-3 rounded-md px-2 py-1.5">
-                <span className="caption-style text-soft">{field.label}</span>
-                <span role="radiogroup" aria-label={field.label} className="flex items-center rounded-full bg-white/[0.04] p-0.5">
-                  {options.map((option) => (
-                    <button
-                      key={option.value}
-                      type="button"
-                      role="radio"
-                      aria-checked={state === option.value}
-                      onClick={() => set(field.key, option.value)}
-                      className={cn(
-                        "caption-style cursor-pointer rounded-full px-2.5 py-1 whitespace-nowrap transition-colors duration-150 ease-power3-out outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
-                        state === option.value ? "bg-muted text-foreground shadow-[inset_0px_0px_0px_1px_rgba(255,255,255,0.06)]" : "text-subtle hover:text-foreground",
-                      )}
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-                </span>
-              </li>
+              <ChoiceRow
+                key={field.key}
+                label={field.label}
+                options={[
+                  { value: "any", label: "Any" },
+                  { value: "has", label: field.has },
+                  { value: "missing", label: field.missing },
+                ]}
+                value={state}
+                onChange={(value) => set(field.key, value as PresenceState)}
+              />
             );
           })}
+          {choices.map((choice) => (
+            <ChoiceRow key={choice.key} label={choice.label} options={choice.options} value={choice.value} onChange={choice.onChange} />
+          ))}
         </ul>
         {active > 0 && (
           <div className="border-border mt-1 flex justify-end border-t px-1 pt-2">
-            <Button variant="ghost" size="sm" onClick={() => onChange([], [])}>
+            <Button variant="ghost" size="sm" onClick={() => (onClear ? onClear() : onChange([], []))}>
               Clear filters
             </Button>
           </div>

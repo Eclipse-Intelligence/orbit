@@ -21,6 +21,7 @@ const GROUPS: ShortcutGroup[] = [
   "Mail",
   "Docs",
   "Capture",
+  "Settings",
 ];
 
 function keyable(def: ShortcutDef) {

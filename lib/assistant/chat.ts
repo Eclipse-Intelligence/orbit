@@ -21,7 +21,7 @@ import { companionOfflineMessage, companionOnline, listCompanions } from "@/lib/
 import { userLinks } from "@/lib/assistant/links";
 import { aboutYouSection, getColleagues, getPersonalContext } from "@/lib/crm/personal-context";
 import { memoryBriefing } from "@/lib/learning/memories";
-import { latestBrief } from "@/lib/learning/nightly";
+import { BRIEF_MESSAGE_MODEL, latestBrief } from "@/lib/learning/nightly";
 import { buildPrompt } from "@/lib/companion/transcript";
 import { expandMentions, plainMentions } from "@/lib/mentions";
 import { withActor } from "@/lib/crm/context";
@@ -427,6 +427,7 @@ export function history(rows: MessageRow[], budget = HISTORY_BUDGET): ChatMessag
       );
     }
   });
+  if (messages[0]?.role === "assistant") messages.unshift({ role: "user", content: BRIEF_PREFACE });
   const suffix = new Array<number>(messages.length + 1).fill(0);
   for (let index = messages.length - 1; index >= 0; index -= 1) suffix[index] = suffix[index + 1] + weight(messages[index]);
   if (suffix[0] <= budget) return messages;
@@ -438,6 +439,58 @@ export function history(rows: MessageRow[], budget = HISTORY_BUDGET): ChatMessag
     kept[0] = { role: "user", content: `(Earlier parts of this conversation were left out to save space. Ask the user if you need something from them.)\n\n${first.content}` };
   }
   return kept;
+}
+
+const BRIEF_PREFACE =
+  "(Orbit wrote the user's morning brief overnight and opened this conversation with it. The next message is that brief, not something the user wrote.)";
+
+export function briefTitle(day: string) {
+  const date = new Date(`${day}T12:00:00Z`);
+  if (Number.isNaN(date.getTime())) return "Brief";
+  const label = new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" }).format(date);
+  return `Brief, ${label.replace(/,/g, "")}`;
+}
+
+export async function openBrief(
+  actor: UserActor,
+  id: string,
+  input: { model?: unknown; reasoning?: unknown; webSearch?: unknown } = {},
+) {
+  if (!isUuid(id)) throw new CrmError("not_found", "That brief doesn't exist.", 404);
+  const settings = settingsFor(input.model, input.reasoning);
+  const conversationId = await withActor(actor, async (db) => {
+    const found = await db.query<{ day: string; body: string; conversation_id: string | null }>(
+      `select day::text, body, conversation_id from crm.daily_briefs
+       where id = $1 and user_id = $2 and workspace_id = $3 for update`,
+      [id, actor.userId, actor.workspaceId],
+    );
+    const brief = found.rows[0];
+    if (!brief) throw new CrmError("not_found", "That brief doesn't exist.", 404);
+    if (brief.conversation_id) {
+      const existing = await db.query(
+        "select 1 from crm.assistant_conversations where id = $1 and user_id = $2 and archived_at is null",
+        [brief.conversation_id, actor.userId],
+      );
+      if (existing.rowCount) {
+        await db.query("update crm.daily_briefs set read_at = coalesce(read_at, now()) where id = $1", [id]);
+        return brief.conversation_id;
+      }
+    }
+    const created = await db.query<{ id: string }>(
+      `insert into crm.assistant_conversations (workspace_id, user_id, title, model, reasoning, web_search)
+       values ($1, $2, $3, $4, $5, $6) returning id`,
+      [actor.workspaceId, actor.userId, briefTitle(brief.day), settings.model, settings.reasoning, input.webSearch === true],
+    );
+    const conversation = created.rows[0].id;
+    await db.query(
+      `insert into crm.assistant_messages (conversation_id, workspace_id, user_id, role, content, model)
+       values ($1, $2, $3, 'assistant', $4, $5)`,
+      [conversation, actor.workspaceId, actor.userId, brief.body, BRIEF_MESSAGE_MODEL],
+    );
+    await db.query("update crm.daily_briefs set read_at = now(), conversation_id = $2 where id = $1", [id, conversation]);
+    return conversation;
+  });
+  return getConversation(actor, conversationId);
 }
 
 function titleFrom(message: string) {
@@ -533,12 +586,23 @@ export async function applyCompanionResult(actor: UserActor, conversationId: str
   return ids;
 }
 
+export async function isBriefConversation(actor: UserActor, conversationId: string) {
+  return withActor(actor, async (db) => {
+    const result = await db.query("select 1 from crm.assistant_messages where conversation_id = $1 and model = $2 limit 1", [
+      conversationId,
+      BRIEF_MESSAGE_MODEL,
+    ]);
+    return (result.rowCount ?? 0) > 0;
+  });
+}
+
 async function promptFor(actor: UserActor, conversation: ConversationRow) {
-  const [links, about, colleagues, brief, focus] = await Promise.all([
+  const [links, about, colleagues, brief, briefChat, focus] = await Promise.all([
     userLinks(actor).catch(() => null),
     getPersonalContext(actor).catch(() => null),
     getColleagues(actor).catch(() => []),
     latestBrief(actor).catch(() => null),
+    isBriefConversation(actor, conversation.id).catch(() => false),
     withActor(actor, async (db) =>
       (
         await db.query<{ content: string }>(
@@ -552,7 +616,7 @@ async function promptFor(actor: UserActor, conversation: ConversationRow) {
   ]);
   const learned = await memoryBriefing(actor, { focus }).catch(() => "");
   return {
-    system: systemPrompt(actor, { webSearch: conversation.web_search, links, about: aboutYouSection(about, colleagues), briefReady: Boolean(brief) }),
+    system: systemPrompt(actor, { webSearch: conversation.web_search, links, about: aboutYouSection(about, colleagues), briefReady: Boolean(brief) && !briefChat }),
     learned,
   };
 }

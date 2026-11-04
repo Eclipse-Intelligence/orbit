@@ -50,6 +50,7 @@ export type ConversationImport = {
   companyId: string | null;
   activityId: string | null;
   transcriptLength: number;
+  unfiledAt: string | null;
   createdAt: string;
 };
 
@@ -108,6 +109,7 @@ type ImportRow = {
   company_id: string | null;
   activity_id: string | null;
   transcript_length: number;
+  unfiled_at: Date | string | null;
   created_at: Date | string;
 };
 
@@ -131,6 +133,7 @@ const IMPORT_COLUMNS = `
   i.company_id,
   i.activity_id,
   coalesce(char_length(i.transcript), 0)::int as transcript_length,
+  i.unfiled_at,
   i.created_at
 `;
 
@@ -200,6 +203,7 @@ function mapImport(row: ImportRow): ConversationImport {
     companyId: row.company_id,
     activityId: row.activity_id,
     transcriptLength: row.transcript_length,
+    unfiledAt: iso(row.unfiled_at),
     createdAt: iso(row.created_at) ?? new Date(0).toISOString(),
   };
 }

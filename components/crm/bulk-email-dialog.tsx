@@ -201,7 +201,7 @@ export default function BulkEmailDialog({
         <div className="flex flex-col gap-4 px-6 py-5">
           {!mailboxConnected && sender.senders.length === 0 && (
             <p role="alert" className="caption-style text-danger">
-              Connect Microsoft in Capture before sending.
+              Connect Microsoft in Settings › Integrations before sending.
             </p>
           )}
           {tooMany && (
