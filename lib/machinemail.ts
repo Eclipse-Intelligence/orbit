@@ -2,7 +2,13 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 export const MACHINE_MAIL_API = "https://api.machinemail.dev/v0";
 export const SIGNATURE_TOLERANCE_SECONDS = 300;
-export const AGENT_EVENT = "message.received";
+export const AGENT_EVENTS = [
+  "message.received",
+  "message.received.spam",
+  "message.received.quarantined",
+  "message.received.unauthenticated",
+  "message.received.blocked",
+];
 
 const ATTACHMENT_LIMIT_BYTES = 30 * 1024 * 1024;
 
@@ -109,17 +115,17 @@ export function webhookClientId(address: string, url: string) {
 export async function ensureWebhook(address: string, url: string, fetchImpl: typeof fetch = fetch) {
   const created = await call<MachineMailWebhook>(
     "/webhooks",
-    { body: { url, event_types: [AGENT_EVENT], inbox_ids: [address], client_id: webhookClientId(address, url) } },
+    { body: { url, event_types: AGENT_EVENTS, inbox_ids: [address], client_id: webhookClientId(address, url) } },
     fetchImpl,
   );
   let webhook = created.body;
-  const types = webhook.event_types ?? [AGENT_EVENT];
+  const types = new Set(webhook.event_types ?? AGENT_EVENTS);
   const inboxes = webhook.inbox_ids ?? [address];
-  if (webhook.url !== url || types.length !== 1 || types[0] !== AGENT_EVENT || !inboxes.includes(address) || webhook.enabled === false) {
+  if (webhook.url !== url || types.size !== AGENT_EVENTS.length || AGENT_EVENTS.some((type) => !types.has(type)) || !inboxes.includes(address) || webhook.enabled === false) {
     webhook = (
       await call<MachineMailWebhook>(
         `/webhooks/${path(webhook.webhook_id)}`,
-        { method: "PATCH", body: { url, event_types: [AGENT_EVENT], add_inbox_ids: [address], enabled: true } },
+        { method: "PATCH", body: { url, event_types: AGENT_EVENTS, add_inbox_ids: [address], enabled: true } },
         fetchImpl,
       )
     ).body;
