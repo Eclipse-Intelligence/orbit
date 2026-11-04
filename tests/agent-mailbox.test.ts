@@ -1166,7 +1166,7 @@ describe("the email approval policy", () => {
       ["send_email", { replyToEmailId: "00000000-0000-4000-8000-000000000001", body: "Hi" }],
       ["send_email", { contactId: "00000000-0000-4000-8000-000000000001", body: "Hi" }],
       ["send_email", { to: [MARK], body: "Hi", sendAt: "2026-12-01T09:00" }],
-      ["save_email_draft", { to: ["client@acme.test"], body: "Hi" }],
+      ["save_email_draft", { to: ["client@acme.test"], body: "Hi", sendAt: "2026-11-10T09:00" }],
       ["change_scheduled_email", { id: "x" }],
       ["create_meeting_invite", {}],
       ["move_meeting", {}],
@@ -1236,6 +1236,8 @@ describe("the email approval policy", () => {
     const auto: [string, Record<string, unknown>][] = [
       ["send_email", { to: ["Mark <MARK@geteclipse.co>"], subject: "Notes", body: "Hi" }],
       ["save_email_draft", { to: ["mark@ridgeon.me"], body: "Hi" }],
+      ["save_email_draft", { to: ["client@acme.test"], body: "Hi" }],
+      ["save_email_draft", { draftId: "11111111-1111-4111-8111-111111111111", body: "Hi" }],
       ["mail_action", { action: "read", emailIds: ["x"], summary: "x" }],
       ["mail_action", { action: "snooze", emailIds: ["x"], until: "2026-12-01T09:00", summary: "x" }],
       ["update_proposal", { id: "x", title: "New title" }],

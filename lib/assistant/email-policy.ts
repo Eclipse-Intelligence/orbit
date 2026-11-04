@@ -50,7 +50,7 @@ function docNeedsConfirm(args: Args, context: EmailPolicyContext) {
 
 export const EMAIL_POLICY: Record<string, EmailRule> = {
   send_email: (args, context) => !onlyToRequester(args, context),
-  save_email_draft: (args, context) => !onlyToRequester(args, context),
+  save_email_draft: (args) => text(args.sendAt).length > 0,
   change_scheduled_email: CONTACTS_SOMEONE,
   create_meeting_invite: CONTACTS_SOMEONE,
   move_meeting: CONTACTS_SOMEONE,
