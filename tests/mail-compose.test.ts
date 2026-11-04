@@ -160,6 +160,17 @@ describe("mail replies and read statuses", () => {
     assert.ok(html.endsWith("<div>quoted</div></body></html>"));
   });
 
+  it("turns markdown into real formatting so no symbols reach the recipient", () => {
+    const html = composeEmailHtml({
+      body: "## Next steps\n**Pricing** is *agreed*. See [the terms](https://example.com/terms) and [Acme](/companies/123).\nKeep 2 * 3 * 4, snake_case_name and a ** pair.",
+    });
+    assert.ok(html.includes("<strong>Next steps</strong><br>"));
+    assert.ok(html.includes("<strong>Pricing</strong> is <em>agreed</em>."));
+    assert.ok(html.includes('<a href="https://example.com/terms">the terms</a> and Acme.'));
+    assert.ok(html.includes("Keep 2 * 3 * 4, snake_case_name and a ** pair."));
+    assert.ok(!/\*\*Pricing|\]\(|##/.test(html));
+  });
+
   it("puts pasted or dropped images in the email where the marker is", async () => {
     const body = "Hi Jane,\n\nHere it is:\n[Image: CleanShot <1>.png]\n\n[Image: Missing.png]";
     assert.deepEqual(imageMarkers(body), ["CleanShot <1>.png", "Missing.png"]);

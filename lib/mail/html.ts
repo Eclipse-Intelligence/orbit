@@ -52,12 +52,42 @@ function placeImages(escaped: string, inline: Record<string, string>) {
   });
 }
 
+const EMPHASIS = /\*\*([^*\n]+?)\*\*|(?<![\w*])\*(?![\s*])([^*\n]+?)(?<!\s)\*(?![\w*])|\[([^\]\n]+)\]\((https?:\/\/[^)\s]+|\/[^)\s]*)\)/g;
+const HEADING = /^#{1,6}\s+(.+)$/;
+
+function plainPart(text: string, inline: Record<string, string>) {
+  return placeImages(linkify(escapeHtml(text)), inline);
+}
+
+function formatLine(line: string, inline: Record<string, string>): string {
+  const heading = HEADING.exec(line);
+  if (heading) return `<strong>${formatLine(heading[1], inline)}</strong>`;
+  let out = "";
+  let last = 0;
+  for (const match of line.matchAll(EMPHASIS)) {
+    const start = match.index ?? 0;
+    out += plainPart(line.slice(last, start), inline);
+    if (match[1] !== undefined) out += `<strong>${formatLine(match[1], inline)}</strong>`;
+    else if (match[2] !== undefined) out += `<em>${formatLine(match[2], inline)}</em>`;
+    else if (/^https?:\/\//.test(match[4])) out += `<a href="${escapeHtml(match[4])}">${escapeHtml(match[3])}</a>`;
+    else out += escapeHtml(match[3]);
+    last = start + match[0].length;
+  }
+  return out + plainPart(line.slice(last), inline);
+}
+
 function textToHtml(text: string, inline: Record<string, string> = {}) {
   return text
     .replace(/\r\n/g, "\n")
     .trim()
     .split(/\n{2,}/)
-    .map((paragraph) => `<p style="margin:0 0 1em 0">${placeImages(linkify(escapeHtml(paragraph)), inline).replace(/\n/g, "<br>")}</p>`)
+    .map(
+      (paragraph) =>
+        `<p style="margin:0 0 1em 0">${paragraph
+          .split("\n")
+          .map((line) => formatLine(line, inline))
+          .join("<br>")}</p>`,
+    )
     .join("");
 }
 
