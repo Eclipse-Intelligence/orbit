@@ -166,6 +166,21 @@ export async function sendNewMessage(inbox: string, mail: OutgoingMail, fetchImp
   return (await call<SentMail>(`/inboxes/${path(inbox)}/messages/send`, { body }, fetchImpl)).body;
 }
 
+export type MachineMailListedMessage = { message_id: string; labels?: string[]; direction?: string; timestamp?: string };
+
+const HIDDEN_KINDS = ["include_spam", "include_quarantine", "include_unauthenticated", "include_blocked"];
+
+export async function listRecentMessages(inbox: string, after: Date, fetchImpl: typeof fetch = fetch) {
+  const params = new URLSearchParams({ after: after.toISOString(), limit: "100" });
+  for (const kind of HIDDEN_KINDS) params.set(kind, "true");
+  const response = await call<{ messages?: MachineMailListedMessage[] }>(`/inboxes/${path(inbox)}/messages?${params.toString()}`, {}, fetchImpl);
+  return (response.body.messages ?? []).filter((message) => typeof message?.message_id === "string" && message.message_id);
+}
+
+export async function getMessage(inbox: string, messageId: string, fetchImpl: typeof fetch = fetch) {
+  return (await call<Record<string, unknown>>(`/inboxes/${path(inbox)}/messages/${path(messageId)}`, {}, fetchImpl)).body;
+}
+
 export async function downloadAttachment(inbox: string, messageId: string, attachmentId: string, maxBytes: number, fetchImpl: typeof fetch = fetch) {
   const key = requireKey();
   let response: Response;
