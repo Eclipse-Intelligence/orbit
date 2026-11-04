@@ -1,3 +1,4 @@
+import { heldAgentMail, type HeldAgentMail } from "@/lib/agent-mail/held";
 import { decryptSecret, encryptSecret } from "@/lib/crypto/secret";
 import { listMembers } from "@/lib/crm/companies";
 import { withActor } from "@/lib/crm/context";
@@ -24,6 +25,7 @@ export type AgentMailboxView = {
   lastReceivedAt: string | null;
   lastError: string | null;
   lastMessage: { from: string | null; subject: string | null; receivedAt: string; status: string; reason: string | null } | null;
+  held: HeldAgentMail[];
   senders: AgentSender[];
   members: AgentMailMember[];
   defaults: string[];
@@ -85,7 +87,7 @@ export async function requireAgentMailAccess(actor: UserActor) {
 export async function agentMailboxView(actor: UserActor): Promise<AgentMailboxView> {
   const canAdmin = isWorkspaceAdmin(actor);
   const mailbox = await agentMailbox(actor);
-  const [senders, members, last] = await Promise.all([
+  const [senders, members, last, held] = await Promise.all([
     withActor(actor, async (db) => {
       const result = await db.query<{ address: string; user_id: string; name: string | null }>(
         `select s.address, s.user_id, coalesce(nullif(p.full_name, ''), p.email) as name
@@ -104,6 +106,7 @@ export async function agentMailboxView(actor: UserActor): Promise<AgentMailboxVi
       );
       return result.rows[0] ?? null;
     }),
+    mailbox?.set_up_at ? heldAgentMail(actor) : Promise.resolve([]),
   ]);
   return {
     configured: machineMailConfigured(),
@@ -116,6 +119,7 @@ export async function agentMailboxView(actor: UserActor): Promise<AgentMailboxVi
     lastMessage: last
       ? { from: last.from_address, subject: last.subject, receivedAt: iso(last.received_at) ?? new Date().toISOString(), status: last.status, reason: last.status_reason }
       : null,
+    held,
     senders,
     members,
     defaults: DEFAULT_SENDERS,

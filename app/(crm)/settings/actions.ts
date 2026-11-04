@@ -1,9 +1,12 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { getUserActor } from "@/lib/auth/user";
+import { runHeldAgentMail } from "@/lib/agent-mail/held";
+import { startAgentMailJob } from "@/lib/agent-mail/jobs";
 import { saveAgentSenders, setUpAgentMailbox } from "@/lib/agent-mail/mailbox";
 import {
   checkSlugAvailable,
@@ -318,6 +321,23 @@ export async function saveAgentSendersAction(senders: { address: string; userId:
     return { message: result.message };
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Couldn't save who can give it work." };
+  }
+}
+
+export async function runHeldAgentMailAction(id: string): Promise<AgentMailboxActionState> {
+  const user = await requireUser();
+  try {
+    const job = await runHeldAgentMail(user, id);
+    const work = () => startAgentMailJob(job).catch((error) => console.error("Agent mail job failed", error instanceof Error ? error.name : "unknown"));
+    try {
+      after(work);
+    } catch {
+      void work();
+    }
+    revalidatePath(SETTINGS_PATHS.integrations);
+    return { message: "Orbit is working on it. The reply comes back in the same thread." };
+  } catch (error) {
+    return { error: error instanceof CrmError ? error.message : "Couldn't run that email." };
   }
 }
 
