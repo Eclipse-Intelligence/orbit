@@ -239,3 +239,14 @@ An endpoint subscribed to `*` also receives every other audited event, which can
 `GET /api/v1/webhooks` lists endpoints without the secret. `DELETE /api/v1/webhooks/:id` archives one. `GET /api/v1/webhooks/deliveries` lists recent attempts.
 
 A delivery is `POST` JSON of `{ "id", "type", "createdAt", "workspaceId", "entity": { "type", "id" }, "actor": { "type", "userId", "agentId" }, "source", "sourceUrl", "data" }`, where `data` is the audit event's changes, with headers `X-CRM-Event`, `X-CRM-Event-Id`, `X-CRM-Timestamp`, and `X-CRM-Signature: v1=<hex>`. The signature is HMAC SHA-256 of `{timestamp}.{body}` using the endpoint secret. Deliveries go out right after the change that queued them. A non-2xx response is retried after 1, 5, 30 and 120 minutes, and marked failed after the fifth attempt; retries run on the next delivery or the scheduled sync (every 10 minutes), whichever comes first.
+
+Deliveries from the assistant carry `source` `assistant`, or `email` for changes an agent mailbox job ran (see Agent mailbox in `docs/assistant.md`).
+
+## Agent mailbox webhook
+
+`POST /api/machinemail/webhook` receives MachineMail events for the agent mailbox. It isn't part of the agent API and takes no Orbit token: Settings › Integrations, Agent mailbox registers it with MachineMail for `message.received` on the mailbox's inbox, and MachineMail signs every delivery.
+
+- `X-MachineMail-Signature: t=<unix seconds>,v1=<hex>` must be HMAC SHA-256 of `{t}.{raw body}` with the webhook's secret, compared in constant time, and `t` within 300 seconds of Orbit's clock. Otherwise the answer is `401` and nothing is stored.
+- `X-MachineMail-Event-Id` must match the body's `event_id` (`400` if not). An event id already handled answers `200` with `{ "duplicate": true }`.
+- Bodies over 5 MB get `413`. `webhook.test`, events that aren't `message.received*` and messages for another inbox answer `200` and are ignored. `message.received.quarantined`, `.spam`, `.unauthenticated` and `.blocked` are stored and refused (`acted: false`) even from a listed sender, and so is mail without a trust report, without `direction: "inbound"`, from more than one address or from the mailbox itself.
+- Every message is stored. Only mail from an address on the list that passes DMARC, or DKIM for the sender's domain or a subdomain (and not marked unaligned by MachineMail), starts work, after the response (`after()`). The answer is `200` with `{ "ok": true, "stored": true, "acted": true | false }`, well within MachineMail's 10 seconds.

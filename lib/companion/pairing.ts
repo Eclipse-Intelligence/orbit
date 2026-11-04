@@ -84,7 +84,7 @@ export async function revokeCompanion(actor: UserActor, id: unknown) {
   });
 }
 
-async function actorFor(userId: string, workspaceId: string): Promise<UserActor | null> {
+export async function actorFor(userId: string, workspaceId: string): Promise<UserActor | null> {
   const membership = (await membershipsFor(userId)).find((item) => item.workspace_id === workspaceId);
   if (!membership) return null;
   return {

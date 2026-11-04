@@ -9,6 +9,7 @@ import type { Db } from "@/lib/db/pool";
 
 const POLL_MS = 1_500;
 const QUEUE_EXPIRY = "20 minutes";
+export const EMAIL_QUEUE_EXPIRY = "24 hours";
 const RUNNING_LIMIT = "20 minutes";
 const SILENT_LIMIT = "3 minutes";
 const WIND_DOWN = "45 seconds";
@@ -49,7 +50,8 @@ async function closeJobs(db: Db, actor: UserActor, conversationIds: string[], me
 async function expireStale(db: Db, actor: UserActor) {
   const expired = await db.query<{ conversation_id: string }>(
     `update crm.ai_companion_jobs set status = 'cancelled', finished_at = now()
-     where user_id = $1 and status = 'queued' and created_at < now() - interval '${QUEUE_EXPIRY}'
+     where user_id = $1 and status = 'queued'
+       and created_at < now() - (case when agent_mail_id is null then interval '${QUEUE_EXPIRY}' else interval '${EMAIL_QUEUE_EXPIRY}' end)
      returning conversation_id`,
     [actor.userId],
   );
@@ -74,7 +76,11 @@ async function pruneFinished(actor: UserActor) {
   ).catch(() => undefined);
 }
 
-export async function enqueueCompanionJob(actor: UserActor, conversationId: string, request: CompanionRequest) {
+export async function expireStaleJobs(actor: UserActor) {
+  await withActor(actor, (db) => expireStale(db, actor));
+}
+
+export async function enqueueCompanionJob(actor: UserActor, conversationId: string, request: CompanionRequest, options: { agentMailId?: string | null } = {}) {
   await pruneFinished(actor);
   return withActor(actor, async (db) => {
     await expireStale(db, actor);
@@ -84,9 +90,9 @@ export async function enqueueCompanionJob(actor: UserActor, conversationId: stri
       [conversationId],
     );
     const result = await db.query<{ id: string }>(
-      `insert into crm.ai_companion_jobs (workspace_id, user_id, conversation_id, request)
-       values ($1, $2, $3, $4::jsonb) returning id`,
-      [actor.workspaceId, actor.userId, conversationId, JSON.stringify(request)],
+      `insert into crm.ai_companion_jobs (workspace_id, user_id, conversation_id, request, agent_mail_id)
+       values ($1, $2, $3, $4::jsonb, $5) returning id`,
+      [actor.workspaceId, actor.userId, conversationId, JSON.stringify(request), options.agentMailId ?? null],
     );
     return result.rows[0].id;
   });
