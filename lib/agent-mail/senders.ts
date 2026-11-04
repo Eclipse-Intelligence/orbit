@@ -62,6 +62,13 @@ export type MailVerdict = { actionable: boolean; reason: string | null };
 
 const SAFE_LEVELS = new Set(["verified", "known", "unknown"]);
 
+const FILED_AS: Record<string, string> = {
+  "message.received.spam": "MachineMail filed it as spam.",
+  "message.received.quarantined": "MachineMail quarantined it.",
+  "message.received.unauthenticated": "It failed email authentication (DMARC, or both SPF and DKIM).",
+  "message.received.blocked": "The sender is on MachineMail's block list.",
+};
+
 export function judgeMail(input: {
   eventType: string;
   direction: unknown;
@@ -71,7 +78,9 @@ export function judgeMail(input: {
   trustAligned?: boolean | null;
   trustLevel: unknown;
 }): MailVerdict {
-  if (input.eventType !== "message.received") return { actionable: false, reason: `MachineMail sent it as ${input.eventType.slice(0, 60)}, so Orbit didn't act on it.` };
+  if (input.eventType !== "message.received") {
+    return { actionable: false, reason: FILED_AS[input.eventType] ?? `MachineMail sent it as ${input.eventType.slice(0, 60)}, so Orbit didn't act on it.` };
+  }
   if (input.direction !== "inbound") return { actionable: false, reason: "It wasn't marked as an incoming email." };
   if (!input.from) return { actionable: false, reason: "The sender's address couldn't be read, or there was more than one." };
   if (input.from === input.inbox) return { actionable: false, reason: "It came from the agent mailbox itself." };

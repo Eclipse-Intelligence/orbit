@@ -31,7 +31,7 @@ import { createCompany } from "@/lib/crm/companies";
 import { listTasks } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
-import { MACHINE_MAIL_API, signPayload, verifySignature } from "@/lib/machinemail";
+import { AGENT_EVENTS, MACHINE_MAIL_API, ensureWebhook, signPayload, verifySignature } from "@/lib/machinemail";
 import { resetStorageBucketCache } from "@/lib/storage";
 import type { CompanionResult } from "@/companion/src/protocol";
 import { createUser, queryAsUser, resetDatabase } from "./helpers";
@@ -374,6 +374,32 @@ describe("formatting agent mail replies", () => {
   });
 });
 
+describe("the agent mailbox webhook", () => {
+  it("moves a webhook set up for plain received mail onto every kind of received event", async () => {
+    const previous = process.env.MACHINE_MAIL_API_KEY;
+    process.env.MACHINE_MAIL_API_KEY = "mm_test";
+    const calls: { method: string; body: Record<string, unknown> | null }[] = [];
+    const fetchImpl: typeof fetch = async (_input, init) => {
+      const method = init?.method ?? "GET";
+      const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null;
+      calls.push({ method, body });
+      const types = method === "PATCH" ? body?.event_types : ["message.received"];
+      return Response.json({ webhook_id: "whk_1", url: "https://orbit.test/api/machinemail/webhook", event_types: types, inbox_ids: ["orbit@mail.test"], secret: "whsec_1", enabled: true });
+    };
+    try {
+      await ensureWebhook("orbit@mail.test", "https://orbit.test/api/machinemail/webhook", fetchImpl);
+    } finally {
+      if (previous === undefined) delete process.env.MACHINE_MAIL_API_KEY;
+      else process.env.MACHINE_MAIL_API_KEY = previous;
+    }
+    assert.deepEqual(calls[0].body?.event_types, AGENT_EVENTS);
+    const patch = calls.find((call) => call.method === "PATCH");
+    assert.ok(patch, "it should update the existing webhook");
+    assert.deepEqual(patch.body?.event_types, AGENT_EVENTS);
+    assert.ok(AGENT_EVENTS.includes("message.received.quarantined") && AGENT_EVENTS.includes("message.received.spam"));
+  });
+});
+
 describe("who can give the agent work", () => {
   const inbox = "orbit@ai-mail.geteclipse.co";
   const auth = { dmarc: "pass", dmarc_domain: "geteclipse.co" };
@@ -463,7 +489,7 @@ describe("setting up the agent mailbox", () => {
     assert.deepEqual(create.body, { username: "orbit-setup", domain: "ai-mail.geteclipse.co", display_name: "Orbit", client_id: `orbit-agent-${address}` });
     assert.equal(lookup.url, `${MACHINE_MAIL_API}/inboxes/${encodeURIComponent(address)}`);
     assert.equal(webhook.body?.url, `${ORIGIN}/api/machinemail/webhook`);
-    assert.deepEqual(webhook.body?.event_types, ["message.received"]);
+    assert.deepEqual(webhook.body?.event_types, AGENT_EVENTS);
     assert.deepEqual(webhook.body?.inbox_ids, [address]);
     const stored = (await getAdminPool().query<{ webhook_secret: string }>("select webhook_secret from crm.agent_mailboxes where workspace_id = $1", [owner.workspaceId])).rows[0];
     assert.notEqual(stored.webhook_secret, secretFor(address));
