@@ -596,9 +596,11 @@ describe("receiving agent mail", () => {
       [missed.message_id, { ...missed, labels: ["INBOX", "UNREAD"] }],
       [quarantined.message_id, { ...quarantined, labels: ["QUARANTINE"], trust_level: "quarantined" }],
     ]);
+    await getAdminPool().query("update crm.agent_mailboxes set set_up_at = now() + interval '1 hour' where address = $1", [inbox]);
     const fetched: string[] = [];
     const fetchImpl: typeof fetch = async (input) => {
       const url = new URL(String(input));
+      if (url.pathname.endsWith("/messages")) assert.ok(Date.parse(url.searchParams.get("after") ?? "") < Date.now() - 47 * 60 * 60 * 1000);
       const parts = url.pathname.split("/").map(decodeURIComponent);
       if (parts.at(-1) === "messages") {
         if (parts.at(-2) !== inbox) return Response.json({ messages: [] });
