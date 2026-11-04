@@ -62,6 +62,13 @@ export type MailVerdict = { actionable: boolean; reason: string | null };
 
 const SAFE_LEVELS = new Set(["verified", "known", "unknown"]);
 
+export function quarantinedForInstructionsOnly(reasons: unknown) {
+  const list = Array.isArray(reasons) ? reasons.filter((reason): reason is string => typeof reason === "string") : [];
+  const quarantine = list.filter((reason) => /^\s*quarantined:/i.test(reason));
+  if (quarantine.length === 0 || !quarantine.every((reason) => /instructions-to-agent/i.test(reason))) return false;
+  return !list.some((reason) => /malware|virus(?!\s+pass)/i.test(reason));
+}
+
 const FILED_AS: Record<string, string> = {
   "message.received.spam": "MachineMail filed it as spam.",
   "message.received.quarantined": "MachineMail quarantined it.",
@@ -77,15 +84,17 @@ export function judgeMail(input: {
   auth: AuthenticationResults | null | undefined;
   trustAligned?: boolean | null;
   trustLevel: unknown;
+  instructionsOnly?: boolean;
 }): MailVerdict {
-  if (input.eventType !== "message.received") {
+  const instructions = input.instructionsOnly === true && input.trustLevel === "quarantined";
+  if (input.eventType !== "message.received" && !(instructions && input.eventType === "message.received.quarantined")) {
     return { actionable: false, reason: FILED_AS[input.eventType] ?? `MachineMail sent it as ${input.eventType.slice(0, 60)}, so Orbit didn't act on it.` };
   }
   if (input.direction !== "inbound") return { actionable: false, reason: "It wasn't marked as an incoming email." };
   if (!input.from) return { actionable: false, reason: "The sender's address couldn't be read, or there was more than one." };
   if (input.from === input.inbox) return { actionable: false, reason: "It came from the agent mailbox itself." };
   if (typeof input.trustLevel !== "string" || !input.trustLevel) return { actionable: false, reason: "It had no trust report from MachineMail." };
-  if (!SAFE_LEVELS.has(input.trustLevel)) return { actionable: false, reason: `MachineMail rated it ${input.trustLevel.slice(0, 40)}.` };
+  if (!SAFE_LEVELS.has(input.trustLevel) && !instructions) return { actionable: false, reason: `MachineMail rated it ${input.trustLevel.slice(0, 40)}.` };
   if (!senderAuthenticated(input.from, input.auth, input.trustAligned)) {
     return { actionable: false, reason: "It didn't pass email authentication for the sender's domain (DMARC, or DKIM for that domain), so it could be spoofed." };
   }

@@ -6,7 +6,7 @@ import Button from "@/components/_ui/button";
 import { Input } from "@/components/_ui/input";
 import { NativeSelect } from "@/components/_ui/native-select";
 import { SettingsCard } from "@/components/crm/settings-ui";
-import { saveAgentSendersAction, setUpAgentMailboxAction, type AgentMailboxActionState } from "@/app/(crm)/settings/actions";
+import { runHeldAgentMailAction, saveAgentSendersAction, setUpAgentMailboxAction, type AgentMailboxActionState } from "@/app/(crm)/settings/actions";
 import type { AgentMailboxView } from "@/lib/agent-mail/mailbox";
 import { formatWhen } from "@/lib/companies";
 import { cn } from "@/lib/utils";
@@ -49,10 +49,10 @@ export default function AgentMailboxSettings({ view }: { view: AgentMailboxView 
     setSenders(draftsFrom(view));
     setNextKey(view.senders.length);
   }
-  const [pending, setPending] = useState<"setup" | "senders" | null>(null);
+  const [pending, setPending] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<AgentMailboxActionState>({});
 
-  async function run(kind: "setup" | "senders", action: () => Promise<AgentMailboxActionState>) {
+  async function run(kind: string, action: () => Promise<AgentMailboxActionState>) {
     setPending(kind);
     setOutcome({});
     const result = await action();
@@ -100,9 +100,50 @@ export default function AgentMailboxSettings({ view }: { view: AgentMailboxView 
     </span>
   );
 
+  const held =
+    view.held.length > 0 ? (
+      <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-1">
+          <h4 className="text-foreground leading-5">Held by MachineMail</h4>
+          <p className="caption-style text-subtle">Emails from your own addresses that MachineMail filtered. Run one only if you sent it.</p>
+        </div>
+        <ul className="flex flex-col gap-2">
+          {view.held.map((item) => (
+            <li key={item.id} className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <span className="caption-style text-soft min-w-0 wrap-anywhere">
+                {`${item.subject?.trim() || "(no subject)"} · ${formatWhen(item.receivedAt)}`}
+                {item.reason ? `. ${item.reason}` : ""}
+              </span>
+              <Button
+                variant="secondary"
+                size="sm"
+                type="button"
+                className="self-start sm:self-auto"
+                disabled={pending !== null}
+                onClick={() => void run(`held:${item.id}`, () => runHeldAgentMailAction(item.id))}
+              >
+                {pending === `held:${item.id}` ? "Starting…" : "Run it anyway"}
+              </Button>
+            </li>
+          ))}
+        </ul>
+      </div>
+    ) : null;
+
   if (!view.canAdmin) {
     return (
       <SettingsCard id="agent-mailbox" title="Agent mailbox" description={description}>
+        {outcome.error && (
+          <p role="alert" className="caption-style text-danger">
+            {outcome.error}
+          </p>
+        )}
+        {outcome.message && (
+          <p role="status" className="caption-style text-soft">
+            {outcome.message}
+          </p>
+        )}
+        {held}
         {view.senders.length > 0 ? (
           <p className="caption-style text-subtle">{`Your work comes from ${view.senders.map((sender) => sender.address).join(", ")}.`}</p>
         ) : (
@@ -141,6 +182,7 @@ export default function AgentMailboxSettings({ view }: { view: AgentMailboxView 
           {outcome.message}
         </p>
       )}
+      {held}
       {!view.setUp && (
         <label className="flex flex-col gap-2" htmlFor="agent-mailbox-address">
           <span className="caption-style text-subtle">Address</span>

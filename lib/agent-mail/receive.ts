@@ -1,5 +1,5 @@
 import { mailboxTargets } from "@/lib/agent-mail/mailbox";
-import { bareAddress, displayName, judgeMail, type AuthenticationResults } from "@/lib/agent-mail/senders";
+import { bareAddress, displayName, judgeMail, quarantinedForInstructionsOnly, type AuthenticationResults } from "@/lib/agent-mail/senders";
 import { query } from "@/lib/db/pool";
 import { verifySignature } from "@/lib/machinemail";
 
@@ -29,7 +29,7 @@ export type RawMessage = Record<string, unknown> & {
   extracted_text?: unknown;
   direction?: unknown;
   trust_level?: unknown;
-  trust?: { level?: unknown; content?: { text?: unknown }; attachments?: unknown; authentication?: { aligned?: unknown } };
+  trust?: { level?: unknown; reasons?: unknown; content?: { text?: unknown }; attachments?: unknown; authentication?: { aligned?: unknown } };
   authentication_results?: unknown;
   attachments?: unknown;
 };
@@ -138,7 +138,16 @@ export async function storeAgentMessage(
   const authentication = authenticationOf(message.authentication_results);
   const trustLevel = typeof message.trust?.level === "string" ? message.trust.level : null;
   const trustAligned = typeof message.trust?.authentication?.aligned === "boolean" ? message.trust.authentication.aligned : null;
-  const verdict = judgeMail({ eventType, direction: message.direction, from, inbox: target.address, auth: authentication, trustAligned, trustLevel });
+  const verdict = judgeMail({
+    eventType,
+    direction: message.direction,
+    from,
+    inbox: target.address,
+    auth: authentication,
+    trustAligned,
+    trustLevel,
+    instructionsOnly: quarantinedForInstructionsOnly(message.trust?.reasons),
+  });
   const body = cleanedText(message);
   const row = {
     message_id: message.message_id.slice(0, 200),

@@ -20,7 +20,8 @@ import { UNREADABLE_SECRET, agentMailboxView, saveAgentSenders, setUpAgentMailbo
 import { emailHtml, emailText } from "@/lib/agent-mail/email-format";
 import { eventTypeFor, pollAgentMailboxes } from "@/lib/agent-mail/poll";
 import { WEBHOOK_MAX_BYTES, receiveAgentMail } from "@/lib/agent-mail/receive";
-import { aligned, bareAddress, judgeMail, senderAuthenticated } from "@/lib/agent-mail/senders";
+import { aligned, bareAddress, judgeMail, quarantinedForInstructionsOnly, senderAuthenticated } from "@/lib/agent-mail/senders";
+import { heldAgentMail, runHeldAgentMail } from "@/lib/agent-mail/held";
 import { AGENT_SENDS_PER_DAY } from "@/lib/agent-mail/store";
 import { HEADLESS_MODEL_ERROR, applyCompanionResult, getConversation, listConversations, sendMessage, stopConversation } from "@/lib/assistant/chat";
 import { EMAIL_POLICY, needsEmailConfirm } from "@/lib/assistant/email-policy";
@@ -140,6 +141,7 @@ type EventInput = {
   direction?: string | null;
   attachments?: Record<string, unknown>[];
   trustAttachments?: Record<string, unknown>[];
+  trustReasons?: string[];
 };
 
 function makeEvent(services: Services, input: EventInput) {
@@ -174,6 +176,7 @@ function makeEvent(services: Services, input: EventInput) {
             authentication: { spf: "pass", dkim: "pass", dmarc: "pass", aligned: input.aligned ?? true },
             content: { text: input.text ?? "Hello" },
             attachments: input.trustAttachments ?? [],
+            reasons: input.trustReasons ?? [],
           },
         }),
     authentication_results: input.auth === null ? undefined : (input.auth ?? { spf: "pass", spf_domain: domain, dkim: "pass", dkim_domain: domain, dmarc: "pass", dmarc_domain: domain }),
@@ -639,6 +642,40 @@ describe("receiving agent mail", () => {
     assert.deepEqual([fetched.length, again.stored, started.length], [0, 0, 1]);
     assert.equal(eventTypeFor(["INBOX"]), "message.received");
     assert.equal(eventTypeFor(["SPAM", "UNREAD"]), "message.received.spam");
+  });
+
+  it("acts on mail quarantined only for giving the agent instructions, and holds the rest for Run it anyway", async () => {
+    const instructions = [
+      "Quarantined: instructions-to-agent probability 0.81 >= threshold 0.80",
+      "DKIM passed for geteclipse.co",
+      "Scan verdicts from SES: spam pass, virus pass",
+    ];
+    assert.equal(quarantinedForInstructionsOnly(instructions), true);
+    assert.equal(quarantinedForInstructionsOnly(["Quarantined: phishing probability 0.91 >= threshold 0.80"]), false);
+    assert.equal(quarantinedForInstructionsOnly([...instructions, "Quarantined: phishing probability 0.9 >= threshold 0.8"]), false);
+    assert.equal(quarantinedForInstructionsOnly([...instructions, "Scan verdicts from SES: virus fail"]), false);
+    assert.equal(quarantinedForInstructionsOnly(["DKIM passed"]), false);
+
+    const ours = await receive({ eventType: "message.received.quarantined", trustLevel: "quarantined", trustReasons: instructions, subject: "Deck for Andy" });
+    assert.ok(ours.result.job, "Mark's own instructions run");
+    const stranger = await receive({ from: "someone@else.test", eventType: "message.received.quarantined", trustLevel: "quarantined", trustReasons: instructions });
+    assert.equal(stranger.result.job, undefined);
+    const spoofed = await receive({ eventType: "message.received.quarantined", trustLevel: "quarantined", trustReasons: instructions, auth: { spf: "fail", dkim: "fail", dmarc: "fail", dmarc_domain: "geteclipse.co" } });
+    assert.equal(spoofed.result.job, undefined);
+
+    const phishy = await receive({ eventType: "message.received.quarantined", trustLevel: "quarantined", trustReasons: ["Quarantined: phishing probability 0.91 >= threshold 0.80"], subject: "Looks phishy" });
+    assert.equal(phishy.result.job, undefined);
+    const held = await heldAgentMail(owner);
+    const item = held.find((entry) => entry.subject === "Looks phishy");
+    assert.ok(item, "it's held for Run it anyway");
+    assert.ok(!held.some((entry) => entry.subject === "Deck for Andy"));
+    const job = await runHeldAgentMail(owner, item.id);
+    assert.equal(job.userId, owner.userId);
+    const row = (await getAdminPool().query<{ status: string; user_id: string }>("select status, user_id from crm.agent_mail_messages where id = $1", [item.id])).rows[0];
+    assert.deepEqual([row.status, row.user_id], ["received", owner.userId]);
+    await assert.rejects(runHeldAgentMail(owner, item.id), /can't be run from here/);
+    const strangerHeld = (await getAdminPool().query<{ id: string }>("select id from crm.agent_mail_messages where message_id = $1", [stranger.event.messageId])).rows[0];
+    await assert.rejects(runHeldAgentMail(owner, strangerHeld.id), /can't be run from here/);
   });
 
   it("stores each event once even when MachineMail delivers it twice", async () => {
