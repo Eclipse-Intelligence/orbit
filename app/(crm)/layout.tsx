@@ -1,3 +1,4 @@
+import KeepPageInPlace from "@/components/_common/keep-page-in-place";
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 import { after } from "next/server";
@@ -114,6 +115,7 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
     <ShortcutsProvider>
       <DocsProvider seed={docsSeed(user)} nav={emptyDocsNav(user)}>
         <main className="relative flex h-dvh max-w-full overflow-hidden">
+          <KeepPageInPlace />
           <Sidebar
             boards={boards}
             approvals={approvals}
