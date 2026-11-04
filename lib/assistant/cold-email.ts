@@ -68,9 +68,9 @@ How to use it:
 - Never in a first email. A meeting request, the booking link, a video or Loom offer, a feature list, pricing or the pilot.
 
 ## 6. Follow-up
-Every email, follow-ups included, goes to Mark for approval.
-- Day 0. The first email. Set remindAfterDays to 5 so the follow-up isn't missed.
-- 3 to 5 working days later. One follow-up in the same thread, 30 to 60 words, using the other angle (proof after a finding, or a finding after proof). End with an easy way out. Never "following up on my last email".
+Every email, follow-ups included, goes to Mark for approval. The follow-up is approved with the first email, on the same card.
+- Day 0. The first email. Set followUp on the same send_email, with afterDays 4 and the follow-up written now as its body, so Orbit sends it in the same thread only if nobody has replied. Run cold_email_check on the follow-up too, with firstTouch false, and fix what it flags. Don't set remindAfterDays as well.
+- 3 to 5 working days later. One follow-up in the same thread, 30 to 60 words, using the other angle (proof after a finding, or a finding after proof). End with an easy way out. Never "following up on my last email". This is the followUp body from day 0.
 - About a week after that. A LinkedIn connection request, with no note or one plain line. No pitch, and no mention of the emails.
 - Then stop. No third email. It costs more replies than it brings in.
 - 6 to 8 weeks later. A new first email, only if there's a new trigger or new proof, with a new subject in a new thread.
@@ -98,7 +98,7 @@ Every email, follow-ups included, goes to Mark for approval.
 - Run cold_email_check with the subject, the body, what their company already offers, and your evidence. For each proof entry, pass it with kind proof and its id from proofList as source. The check reads the entry from the list. Fix every failed check, in at most two rounds.
 - Judge honestly whether this person, who gets a lot of these, would find it worth replying to. If not, improve it or call it a NO-SEND.
 - When you propose send_email, tell Mark:
-  - the angle
+  - the angle, and the other angle the follow-up uses
   - the signal and its date
   - the new information and its source
   - the proof entry

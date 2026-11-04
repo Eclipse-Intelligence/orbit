@@ -13,7 +13,7 @@ const SLOT_MINUTES = 30;
 const LOOK_AHEAD_DAYS = 21;
 const LATEST_DAYS = 730;
 
-function dayKey(year: number, month: number, day: number) {
+export function dayKey(year: number, month: number, day: number) {
   return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 

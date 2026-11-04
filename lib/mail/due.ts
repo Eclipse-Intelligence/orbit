@@ -10,10 +10,11 @@ import { sendAlert } from "@/lib/alerts";
 import { mailNotifyLevel } from "@/lib/mail/notify";
 import type { PushSender } from "@/lib/push";
 import { prepareNudge } from "@/lib/mail/prepare";
+import { firstReply, sendDueFollowUp, type SendFollowUpRow } from "@/lib/mail/follow-up";
 
-type DueReport = { sent: number; failed: number; returned: number; followUps: number };
+type DueReport = { sent: number; failed: number; returned: number; followUps: number; followUpsSent: number };
 
-type ReminderRow = { id: string; source_id: string; thread_key: string; subject: string | null; kind: "snooze" | "follow_up" };
+type ReminderRow = SendFollowUpRow & { kind: "snooze" | "follow_up"; action: "remind" | "send"; automatic: boolean };
 
 async function anythingDue(actor: UserActor) {
   return withActor(actor, async (db) => {
@@ -35,7 +36,7 @@ async function claimReminders(actor: UserActor, limit: number) {
          where user_id = $1 and workspace_id = $2 and state = 'waiting' and due_at <= now()
          order by due_at limit $3 for update skip locked
        )
-       returning id, source_id, thread_key, subject, kind`,
+       returning id, source_id, thread_key, subject, kind, action, automatic, follow_up_body, recipients, identity_id`,
       [actor.userId, actor.workspaceId, limit],
     );
     return result.rows;
@@ -56,23 +57,7 @@ async function returnSnooze(actor: UserActor, reminder: ReminderRow, fetchImpl: 
 }
 
 async function checkFollowUp(actor: UserActor, reminder: ReminderRow, options: { send?: PushSender }) {
-  const replied = await withActor(actor, async (db) => {
-    const result = await db.query<{ replied: boolean }>(
-      `select exists (
-         select 1 from crm.mail_messages m
-         join crm.mail_reminders r on r.id = $1
-         where m.user_id = $2 and m.source_id = r.source_id
-           and coalesce(m.thread_key, 'm:' || m.id::text) = r.thread_key
-           and coalesce(m.received_at, m.sent_at, m.created_at) > r.created_at
-           and lower(coalesce(m.from_email, '')) <> all (
-             select lower(s.email) from crm.mail_sources s where s.user_id = $2
-             union select lower($3::text)
-           )
-       ) as replied`,
-      [reminder.id, actor.userId, actor.email],
-    );
-    return Boolean(result.rows[0]?.replied);
-  });
+  const replied = await withActor(actor, async (db) => Boolean(await firstReply(db, actor, reminder.id)));
   if (replied) {
     await withActor(actor, (db) => db.query("update crm.mail_reminders set state = 'done' where id = $1", [reminder.id]));
     return false;
@@ -103,7 +88,7 @@ export async function processDueMail(
   actor: UserActor,
   options: { fetchImpl?: typeof fetch; origin?: string | null; send?: PushSender } = {},
 ): Promise<DueReport> {
-  const report: DueReport = { sent: 0, failed: 0, returned: 0, followUps: 0 };
+  const report: DueReport = { sent: 0, failed: 0, returned: 0, followUps: 0, followUpsSent: 0 };
   if (!(await anythingDue(actor))) return report;
   const fetchImpl = options.fetchImpl ?? fetch;
   const origin = options.origin === undefined ? mailOrigin() : options.origin;
@@ -141,13 +126,20 @@ export async function processDueMail(
             { send: options.send },
           ).catch(() => undefined);
         }
+      } else if (reminder.action === "send" && !reminder.automatic) {
+        const outcome = await sendDueFollowUp(actor, reminder, { origin, fetchImpl, send: options.send });
+        if (outcome === "sent") report.followUpsSent += 1;
+        if (outcome === "reminded") report.followUps += 1;
       } else if (await checkFollowUp(actor, reminder, options)) {
         report.followUps += 1;
       }
     } catch (error) {
       console.error("mail reminder failed", error);
       await withActor(actor, (db) =>
-        db.query("update crm.mail_reminders set state = 'waiting', due_at = now() + interval '5 minutes' where id = $1", [reminder.id]),
+        db.query(
+          "update crm.mail_reminders set state = 'waiting', due_at = now() + interval '5 minutes' where id = $1 and state not in ('sending', 'sent')",
+          [reminder.id],
+        ),
       );
     }
   }

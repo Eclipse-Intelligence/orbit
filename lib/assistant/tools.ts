@@ -37,6 +37,7 @@ import { copyProposalImage } from "@/lib/proposals/media";
 import { STARTER_TEMPLATES as PROPOSAL_STARTERS } from "@/lib/proposals/starters";
 import { addStep, removeStep, updateStep } from "@/lib/proposals/steps";
 import { blockLinks, BLOCKS_GUIDE, onlyFields, proposalForAgent, templateForAgent, templateSettings } from "@/lib/proposals/agent";
+import { followUpDueAt } from "@/lib/mail/follow-up-rules";
 import { mailOrigin } from "@/lib/mail/origin";
 import { senderKey } from "@/lib/mail/split";
 import type { MailAddress } from "@/lib/mail/types";
@@ -492,6 +493,24 @@ function sendAtLine(value: unknown) {
   if (!text) return "";
   const at = parseDateTime(text);
   return at ? `Sends ${londonLabel(at)} (London time)` : `Send time not understood: ${text}`;
+}
+
+function followUpArg(value: unknown) {
+  if (!value || typeof value !== "object") return null;
+  const input = value as { afterDays?: unknown; body?: unknown };
+  if (input.afterDays === undefined || input.afterDays === null) return null;
+  const body = typeof input.body === "string" && input.body.trim() ? input.body.trim() : null;
+  return { afterDays: int(input.afterDays, 3, 1, 10), body };
+}
+
+function followUpLines(value: unknown) {
+  const followUp = followUpArg(value);
+  if (!followUp) return [];
+  const when = `${followUp.afterDays} working ${followUp.afterDays === 1 ? "day" : "days"}`;
+  return [
+    `Follow-up: sent in the same thread at 09:00 after ${when} if nobody replies${followUp.body ? ":" : ". Orbit writes it then, in your voice."}`,
+    followUp.body ?? "",
+  ].filter(Boolean);
 }
 
 function attachmentLine(args: Args, name: Names) {
@@ -3679,6 +3698,19 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
             "Address to send from (list_email_senders). Leave out for the main mailbox, or the account the conversation is in for a reply. agent sends from Orbit's agent mailbox instead, only when the user asks: a reply to an email from search_email with mailbox agent, or a new email with to and subject, plain text, no files, sendAt or draftId.",
         },
         remindAfterDays: { type: "integer", minimum: 1, maximum: 90, description: "Remind the user in Mail if nobody replies within this many days." },
+        followUp: {
+          type: "object",
+          description:
+            "Orbit sends one follow-up in the same thread, to the same people, at 09:00 on the working day afterDays working days after this email goes out, but only if nobody has replied by then. Set it only when the user asks for one or the cold email playbook says to. Replaces remindAfterDays.",
+          properties: {
+            afterDays: { type: "integer", minimum: 1, maximum: 10, description: "Working days to wait (weekends, UK bank holidays and 24 Dec to 1 Jan don't count)." },
+            body: {
+              type: "string",
+              description: "The follow-up, written like the email with greeting and sign-off. Leave out and Orbit writes it in the user's voice when it's due.",
+            },
+          },
+          required: ["afterDays"],
+        },
         sendAt: { type: "string", description: "Send later at this time, YYYY-MM-DDTHH:mm London time. At least a minute from now and within a year. Leave out to send on approval." },
         attachmentIds: ATTACHMENTS_PARAM,
       },
@@ -3705,6 +3737,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
           attachmentLine(args, name),
           str(args.from) === AGENT_MAILBOX ? "Sends from the agent mailbox when you approve." : later ? "Scheduled in Orbit Mail when you approve." : "Sends from Orbit Mail when you approve.",
           str(args.body),
+          ...(str(args.from) === AGENT_MAILBOX ? [] : followUpLines(args.followUp)),
         ].filter(Boolean),
       };
     },
@@ -3718,8 +3751,8 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       if (!replyTo && !draftId && to.length === 0) return { error: "Say who the email is to." };
       const body = required(args.body, "A message");
       if (str(args.from) === AGENT_MAILBOX) {
-        if (draftId || optionalStr(args.sendAt) || strings(args.attachmentIds).length || args.remindAfterDays !== undefined) {
-          return { error: "The agent mailbox sends plain emails now: leave out draftId, sendAt, attachmentIds and remindAfterDays." };
+        if (draftId || optionalStr(args.sendAt) || strings(args.attachmentIds).length || args.remindAfterDays !== undefined || followUpArg(args.followUp)) {
+          return { error: "The agent mailbox sends plain emails now: leave out draftId, sendAt, attachmentIds, remindAfterDays and followUp." };
         }
         return sendFromAgentMailbox(actor, { replyTo, to, cc: strings(args.cc), subject: optionalStr(args.subject) ?? null, body });
       }
@@ -3739,6 +3772,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
           subject: optionalStr(args.subject),
           body,
           remindHours: typeof args.remindAfterDays === "number" ? int(args.remindAfterDays, 3, 1, 90) * 24 : null,
+          followUp: followUpArg(args.followUp),
           attachments: files.ids,
           sendAt: sendAt?.toISOString() ?? null,
         },
@@ -3747,8 +3781,19 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         await discardAttachments(actor, files.copied).catch(() => undefined);
         throw error;
       });
+      const followUp = followUpArg(args.followUp);
       if (sent.scheduled) {
-        return { sent: false, scheduled: true, sendAt: sent.sendAt, draftId: sent.draftId, to: sent.to, cc: sent.cc, subject: sent.subject, href: sent.href };
+        return {
+          sent: false,
+          scheduled: true,
+          sendAt: sent.sendAt,
+          draftId: sent.draftId,
+          to: sent.to,
+          cc: sent.cc,
+          subject: sent.subject,
+          href: sent.href,
+          ...(followUp ? { followUp: `Follow-up set for ${followUp.afterDays} working days after it sends, at 09:00, if nobody replies.` } : {}),
+        };
       }
       return {
         sent: true,
@@ -3757,6 +3802,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         subject: sent.subject,
         href: sent.href,
         warning: sent.warning,
+        ...(followUp ? { followUpAt: followUpDueAt(Date.now(), followUp.afterDays).toISOString() } : {}),
         timeline: sent.warning ? null : "Filed on the contacts' timelines automatically. Don't log it again.",
       };
     },

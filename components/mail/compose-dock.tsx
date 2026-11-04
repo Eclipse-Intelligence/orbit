@@ -69,6 +69,9 @@ function payloadDraft(payload: SendPayload): MailDraft {
     sendError: null,
     identityId: payload.identityId ?? null,
     attachments: payload.files,
+    remindHours: payload.remindHours,
+    followUpDays: payload.followUpDays,
+    followUpBody: payload.followUpBody,
   };
 }
 

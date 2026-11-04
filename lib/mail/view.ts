@@ -28,11 +28,21 @@ export type ThreadSummary = {
   snoozedUntil: string | null;
   split: MailSplit | null;
   prepared: boolean;
+  followUpAt?: string | null;
 };
 
 export type PreparedReply = { id: string; kind: "reply" | "nudge"; messageId: string; body: string; times: string[] | null };
 
-export type FollowUpReminder = { id: string; at: string; automatic: boolean };
+export type FollowUpReminder = {
+  id: string;
+  at: string;
+  automatic: boolean;
+  action?: "remind" | "send";
+  body?: string | null;
+  to?: MailAddress[];
+};
+
+export type FollowUpReplied = { name: string; messageId: string };
 
 export type ThreadMessage = {
   id: string;
@@ -144,6 +154,7 @@ export type ThreadDetail = {
   drafts: MailDraft[];
   prepared: PreparedReply | null;
   followUp: FollowUpReminder | null;
+  followUpReplied?: FollowUpReplied | null;
   subscription?: ThreadSubscription | null;
 };
 
@@ -168,6 +179,9 @@ export type MailDraft = {
   sendError: string | null;
   identityId?: string | null;
   attachments?: DraftFile[];
+  remindHours?: number | null;
+  followUpDays?: number | null;
+  followUpBody?: string | null;
 };
 
 function mine(address: MailAddress | null | undefined, own: Set<string>) {

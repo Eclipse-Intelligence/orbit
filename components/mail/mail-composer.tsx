@@ -3,16 +3,9 @@
 import { useEffect, useId, useRef, useState, type DragEvent, type FormEvent } from "react";
 import Button from "@/components/_ui/button";
 import { AttachButton, AttachmentList, useEmailAttachments } from "@/components/crm/email-attachments";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger,
-} from "@/components/_ui/dropdown-menu";
 import BodyEditor, { type BodyEditorHandle } from "@/components/mail/body-editor";
 import { useComposer } from "@/components/mail/compose-dock";
+import { FollowUpBlock, NoReplyMenu, type NoReplyChoice, type NoReplyThen } from "@/components/mail/follow-up-composer";
 import { writeWithAi } from "@/components/mail/mail-cache";
 import RecipientField from "@/components/mail/recipient-field";
 import { laterDetail, laterOptions } from "@/lib/mail/later";
@@ -21,7 +14,6 @@ import type { MailAddress } from "@/lib/mail/types";
 import type { ComposeAccount, DraftFile, DraftMode, MailDraft } from "@/lib/mail/view";
 import { cn } from "@/lib/utils";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
-import BellIcon from "@/public/assets/images/mail/bell.svg";
 import BoldIcon from "@/public/assets/images/mail/bold.svg";
 import ItalicIcon from "@/public/assets/images/mail/italic.svg";
 import SparkleIcon from "@/public/assets/images/mail/sparkle.svg";
@@ -44,19 +36,13 @@ export type SendPayload = {
   body: string;
   signature: boolean;
   remindHours: number | null;
+  followUpDays: number | null;
+  followUpBody: string | null;
   attachments: string[];
   files: DraftFile[];
   replaces?: string | null;
   identityId?: string | null;
 };
-
-const REMINDERS: { hours: number | null; label: string }[] = [
-  { hours: null, label: "No reminder" },
-  { hours: 24, label: "1 day" },
-  { hours: 48, label: "2 days" },
-  { hours: 72, label: "3 days" },
-  { hours: 168, label: "1 week" },
-];
 
 export type ComposerStart = {
   mode: DraftMode;
@@ -104,7 +90,6 @@ export default function MailComposer({
   onUndone?: () => void;
 }) {
   const { queueSend, scheduleSend, pickLater } = useComposer();
-  const [remindHours, setRemindHours] = useState<number | null>(null);
   const [aiOpen, setAiOpen] = useState(false);
   const [aiText, setAiText] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
@@ -129,6 +114,9 @@ export default function MailComposer({
   const [showCopies, setShowCopies] = useState(Boolean(draft?.cc.length || draft?.bcc.length || start.cc.length));
   const [subject, setSubject] = useState(draft?.subject || start.subject);
   const [body, setBody] = useState(draft?.body ?? "");
+  const [noReply, setNoReply] = useState<NoReplyChoice>({ remindHours: draft?.remindHours ?? null, followUpDays: draft?.followUpDays ?? null });
+  const [noReplyThen, setNoReplyThen] = useState<NoReplyThen>(draft?.followUpDays ? "send" : "remind");
+  const [followUpBody, setFollowUpBody] = useState(draft?.followUpBody ?? "");
   const [withSignature, setWithSignature] = useState(true);
   const [save, setSave] = useState<SaveState>(draft?.savedAt ? { kind: "saved" } : { kind: "idle" });
   const [scheduledFor, setScheduledFor] = useState(draft?.sendAt ?? null);
@@ -154,6 +142,9 @@ export default function MailComposer({
     signature: withSignature,
     replaces: start.replaces ?? null,
     attachments: attachments.ids,
+    remindHours: noReply.remindHours,
+    followUpDays: noReply.followUpDays,
+    followUpBody: noReply.followUpDays ? followUpBody : null,
   });
   const account = fromAccount;
   const showSubject = start.mode === "new" || start.mode === "forward";
@@ -173,6 +164,9 @@ export default function MailComposer({
       signature: withSignature,
       replaces: start.replaces ?? null,
       attachments: attachments.ids,
+      remindHours: noReply.remindHours,
+      followUpDays: noReply.followUpDays,
+      followUpBody: noReply.followUpDays ? followUpBody : null,
     };
   });
 
@@ -221,7 +215,7 @@ export default function MailComposer({
     if (!dirty.current) return;
     const timer = window.setTimeout(() => void saveRef.current(), SAVE_DELAY_MS);
     return () => window.clearTimeout(timer);
-  }, [fromId, to, cc, bcc, subject, body, withSignature, fileKey]);
+  }, [fromId, to, cc, bcc, subject, body, withSignature, fileKey, noReply, followUpBody]);
 
   useEffect(
     () => () => {
@@ -301,7 +295,7 @@ export default function MailComposer({
   }
 
   function handOver(): Promise<SendPayload> {
-    const snapshot = { ...payload.current, remindHours, attachments: attachments.ids, files: attachments.files };
+    const snapshot = { ...payload.current, attachments: attachments.ids, files: attachments.files };
     dirty.current = false;
     const pending = chain.current.catch(() => null);
     return pending.then(() => ({ ...snapshot, id: draftId.current }));
@@ -543,6 +537,18 @@ export default function MailComposer({
         </div>
       )}
       <AttachmentList items={attachments.items} onRemove={attachments.remove} />
+      {noReply.followUpDays && (
+        <FollowUpBlock
+          days={noReply.followUpDays}
+          body={followUpBody}
+          onBody={change(setFollowUpBody)}
+          onRemove={() => {
+            dirty.current = true;
+            setNoReply({ remindHours: null, followUpDays: null });
+            setFollowUpBody("");
+          }}
+        />
+      )}
       {scheduledFor && (
         <p className="caption-style text-soft flex items-center gap-2">
           <ClockIcon aria-hidden className="text-primary size-3.5" />
@@ -568,30 +574,15 @@ export default function MailComposer({
         <Button variant="ghost" size="icon" aria-label="Send later" title="Send later" onClick={sendLater}>
           <ClockIcon aria-hidden className="size-3.5" />
         </Button>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              size={remindHours ? "sm" : "icon"}
-              aria-label={remindHours ? `Remind me if no reply in ${REMINDERS.find((item) => item.hours === remindHours)?.label}` : "Remind me if no reply"}
-              title="Remind me if no reply"
-              className={cn(remindHours && "text-primary-foreground bg-[color-mix(in_srgb,var(--primary)_28%,transparent)] hover:text-white")}
-            >
-              <BellIcon aria-hidden className="size-3.5" />
-              {remindHours ? REMINDERS.find((item) => item.hours === remindHours)?.label : null}
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start">
-            <DropdownMenuLabel>Remind me if no reply in</DropdownMenuLabel>
-            <DropdownMenuRadioGroup value={String(remindHours ?? "")} onValueChange={(value) => setRemindHours(value ? Number(value) : null)}>
-              {REMINDERS.map((item) => (
-                <DropdownMenuRadioItem key={item.label} value={String(item.hours ?? "")}>
-                  {item.label}
-                </DropdownMenuRadioItem>
-              ))}
-            </DropdownMenuRadioGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <NoReplyMenu
+          choice={noReply}
+          then={noReplyThen}
+          onChange={(choice, then) => {
+            dirty.current = true;
+            setNoReply(choice);
+            setNoReplyThen(then);
+          }}
+        />
         <AttachButton id={`${id}-attach`} onFiles={(files) => void attachments.add(files)} compact />
         <Button variant="ghost" size="icon" aria-label="Write with AI" title={`Write with AI (${aiHint})`} onClick={openAi}>
           <SparkleIcon aria-hidden className="size-3.5" />
