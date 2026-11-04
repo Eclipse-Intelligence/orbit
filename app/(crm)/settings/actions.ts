@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { getUserActor } from "@/lib/auth/user";
+import { saveAgentSenders, setUpAgentMailbox } from "@/lib/agent-mail/mailbox";
 import {
   checkSlugAvailable,
   saveBookingPage,
@@ -293,6 +294,30 @@ export async function syncReadwiseAction(): Promise<{ error?: string; message?: 
     return { message: `${parts.join(", ")}.` };
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Couldn't sync Readwise Reader." };
+  }
+}
+
+export type AgentMailboxActionState = { error?: string; message?: string };
+
+export async function setUpAgentMailboxAction(address: string): Promise<AgentMailboxActionState> {
+  const user = await requireUser();
+  try {
+    const result = await setUpAgentMailbox(user, { address }, await requestOrigin());
+    revalidatePath(SETTINGS_PATHS.integrations);
+    return { message: result.message };
+  } catch (error) {
+    return { error: error instanceof CrmError ? error.message : "Couldn't set up the agent mailbox." };
+  }
+}
+
+export async function saveAgentSendersAction(senders: { address: string; userId: string }[]): Promise<AgentMailboxActionState> {
+  const user = await requireUser();
+  try {
+    const result = await saveAgentSenders(user, senders);
+    revalidatePath(SETTINGS_PATHS.integrations);
+    return { message: result.message };
+  } catch (error) {
+    return { error: error instanceof CrmError ? error.message : "Couldn't save who can give it work." };
   }
 }
 

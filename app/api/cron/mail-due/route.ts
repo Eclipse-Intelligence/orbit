@@ -1,5 +1,6 @@
 import { cronAuthorization } from "@/lib/crm/scheduler";
 import { processAllCalendarAlerts } from "@/lib/calendar-alerts";
+import { sweepAgentMail } from "@/lib/agent-mail/jobs";
 import { processAllDueMail } from "@/lib/mail/due";
 
 export const dynamic = "force-dynamic";
@@ -15,7 +16,11 @@ async function handle(request: Request) {
     console.error("Calendar alerts failed", error);
     return { users: 0, sent: 0 };
   });
-  return Response.json({ users, calendar });
+  const agentMail = await sweepAgentMail({ budgetMs: Math.max(5_000, deadline - Date.now()), deadline: Date.now() + 50_000 }).catch((error) => {
+    console.error("Agent mail sweep failed", error instanceof Error ? error.name : "unknown");
+    return 0;
+  });
+  return Response.json({ users, calendar, agentMail });
 }
 
 export const GET = handle;

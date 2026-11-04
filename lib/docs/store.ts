@@ -5,6 +5,7 @@ import { CrmError } from "@/lib/crm/errors";
 import { iso, isUuid, recordAudit } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
 import type { Actor, Provenance } from "@/lib/crm/types";
+import { isAssistantSource } from "@/lib/assistant/source";
 import type { Db } from "@/lib/db/pool";
 import { changeCounts, lineDiff } from "@/lib/docs/diff";
 import { appendText, applyDocEdit, editSummary } from "@/lib/docs/edits";
@@ -120,7 +121,7 @@ export function assertDocsWrite(actor: Actor) {
 
 export function stampFor(actor: Actor, provenance?: Provenance): Stamp {
   if (actor.type === "agent") return { editor: "agent", userId: null, agentId: actor.agentId };
-  if (provenance?.source === "assistant") return { editor: "assistant", userId: actor.userId, agentId: null };
+  if (isAssistantSource(provenance?.source)) return { editor: "assistant", userId: actor.userId, agentId: null };
   if (provenance?.source === "mcp" || provenance?.source === "api") return { editor: "agent", userId: actor.userId, agentId: null };
   return { editor: "person", userId: actor.userId, agentId: null };
 }

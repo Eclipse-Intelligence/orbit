@@ -6,7 +6,7 @@ import type { Provenance, UserActor } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
 import { fileText, hasReadableText, isAudio } from "@/lib/knowledge/indexing";
 import { addKnowledgeFile, CONTENT_LIMIT, READ_WINDOW, type KnowledgeTarget } from "@/lib/knowledge/store";
-import { ATTACHMENT_MAX_BYTES, chatFileKey, readObject, removeObjects, signedUploadUrl, storageConfigured } from "@/lib/storage";
+import { ATTACHMENT_MAX_BYTES, chatFileKey, putObject, readObject, removeObjects, signedUploadUrl, storageConfigured } from "@/lib/storage";
 
 const CHAT_FILES_MAX = 10;
 
@@ -58,6 +58,36 @@ export async function prepareChatFile(
     await withActor(actor, (db) => db.query("delete from crm.chat_files where id = $1", [row.id])).catch(() => undefined);
     throw storageFailure(error);
   }
+}
+
+export async function importChatFile(
+  actor: UserActor,
+  input: { name: unknown; contentType?: unknown; bytes: Uint8Array },
+  fetchImpl: typeof fetch = fetch,
+): Promise<ChatFile> {
+  if (!storageConfigured()) throw noStorage();
+  const name = cleanName(input.name);
+  const size = input.bytes.byteLength;
+  if (size < 1) throw new CrmError("invalid_input", `${name} is empty.`, 400, { field: "files" });
+  if (size > ATTACHMENT_MAX_BYTES) {
+    throw new CrmError("invalid_input", `${name} is ${megabytes(size)}. Files can be up to ${megabytes(ATTACHMENT_MAX_BYTES)} in total.`, 400, { field: "files" });
+  }
+  const contentType = cleanType(input.contentType);
+  const row = await withActor(actor, async (db) => {
+    const inserted = await db.query<{ id: string }>(
+      `insert into crm.chat_files (workspace_id, user_id, name, content_type, size)
+       values ($1, $2, $3, $4, $5) returning id`,
+      [actor.workspaceId, actor.userId, name, contentType, size],
+    );
+    return inserted.rows[0];
+  });
+  try {
+    await putObject(chatFileKey(row.id), input.bytes, contentType, fetchImpl);
+  } catch (error) {
+    await withActor(actor, (db) => db.query("delete from crm.chat_files where id = $1", [row.id])).catch(() => undefined);
+    throw storageFailure(error);
+  }
+  return { id: row.id, name, contentType, size };
 }
 
 function fileIds(ids: unknown) {

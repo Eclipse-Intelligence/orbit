@@ -56,6 +56,7 @@ import ClockIcon from "@/public/assets/images/companies/detail/clock.svg";
 
 const SETTINGS_KEY = "orbit-assistant-settings";
 const CONVERSATION_KEY = "orbit-assistant-conversation";
+const CHAT_PARAM = "chat";
 
 type LiveTool = { id: string; label: string; status: "running" | "done" };
 
@@ -663,14 +664,34 @@ export default function AssistantDock({ brief = null }: { brief?: UnreadBrief | 
       setModel(saved.model);
       setReasoning(saved.reasoning);
       setWebSearch(saved.webSearch);
-      const last = sessionStorage.getItem(CONVERSATION_KEY);
+      const url = new URL(window.location.href);
+      const linked = url.searchParams.get(CHAT_PARAM);
+      if (linked) {
+        url.searchParams.delete(CHAT_PARAM);
+        window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+      }
+      const last = linked ?? sessionStorage.getItem(CONVERSATION_KEY);
       if (last) {
         const mine = view.current;
         void getConversationAction(last).then((result) => {
-          if (!result || view.current !== mine) return;
+          if (view.current !== mine) return;
+          if (!result) {
+            if (linked) {
+              setOpen(true);
+              setError("That chat couldn't be opened.");
+            }
+            return;
+          }
           setConversation(result.conversation);
           setMessages(result.messages);
           setWorking(result.working);
+          if (linked) {
+            const settings = settingsFor(result.conversation.model, result.conversation.reasoning);
+            setModel(settings.model);
+            setReasoning(settings.reasoning);
+            setWebSearch(result.conversation.webSearch);
+            setOpen(true);
+          }
           if (result.working) void follow(result.conversation.id);
         });
       }
@@ -1066,7 +1087,12 @@ export default function AssistantDock({ brief = null }: { brief?: UnreadBrief | 
                         )}
                       >
                         <span className="text-foreground w-full truncate text-[13.5px] leading-5">{item.title}</span>
-                        <span className="caption-style text-subtle">{relativeWhen(item.updatedAt)}</span>
+                        <span className="caption-style text-subtle flex items-center gap-1.5">
+                          {item.email && (
+                            <span className="rounded-[4px] bg-white/8 px-1 text-[11px] leading-4 text-soft">Email</span>
+                          )}
+                          {relativeWhen(item.updatedAt)}
+                        </span>
                       </button>
                       <Button
                         variant="ghost"

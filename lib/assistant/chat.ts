@@ -71,6 +71,7 @@ export type ConversationSummary = {
   reasoning: ReasoningLevel;
   webSearch: boolean;
   updatedAt: string;
+  email?: boolean;
 };
 
 export type DisplayMessage = {
@@ -120,6 +121,7 @@ type ConversationRow = {
   web_search: boolean;
   updated_at: Date | string;
   stopped_at: Date | string | null;
+  email?: boolean;
 };
 
 function summary(row: ConversationRow): ConversationSummary {
@@ -130,6 +132,7 @@ function summary(row: ConversationRow): ConversationSummary {
     reasoning: row.reasoning,
     webSearch: row.web_search,
     updatedAt: iso(row.updated_at) ?? new Date().toISOString(),
+    ...(row.email ? { email: true } : {}),
   };
 }
 
@@ -159,11 +162,12 @@ function parseArgs(raw: string) {
 
 const MESSAGE_COLUMNS = "id, role, content, tool_calls, tool_call_id, tool_name, actions, sources, provider_state, files, created_at";
 const CONVERSATION_COLUMNS = "id, title, model, reasoning, web_search, updated_at, stopped_at";
+const EMAIL_MARK = "exists (select 1 from crm.agent_mail_threads t where t.conversation_id = crm.assistant_conversations.id) as email";
 
 async function readConversation(db: Db, actor: UserActor, id: string) {
   if (!isUuid(id)) throw new CrmError("not_found", "Conversation not found.", 404);
   const result = await db.query<ConversationRow>(
-    `select ${CONVERSATION_COLUMNS} from crm.assistant_conversations
+    `select ${CONVERSATION_COLUMNS}, ${EMAIL_MARK} from crm.assistant_conversations
      where id = $1 and user_id = $2 and workspace_id = $3 and archived_at is null`,
     [id, actor.userId, actor.workspaceId],
   );
@@ -277,7 +281,7 @@ async function patchAction(actor: UserActor, messageId: string, id: string, patc
 export async function listConversations(actor: UserActor): Promise<ConversationSummary[]> {
   return withActor(actor, async (db) => {
     const result = await db.query<ConversationRow>(
-      `select ${CONVERSATION_COLUMNS} from crm.assistant_conversations
+      `select ${CONVERSATION_COLUMNS}, ${EMAIL_MARK} from crm.assistant_conversations
        where user_id = $1 and workspace_id = $2 and archived_at is null
        order by updated_at desc limit 100`,
       [actor.userId, actor.workspaceId],
@@ -631,8 +635,17 @@ function learnedMessages(learned: string): ChatMessage[] {
   ];
 }
 
-async function runCompanionTurn(actor: UserActor, conversation: ConversationRow, apiModel: string, emit: Emit, deadline: number, signal?: AbortSignal) {
-  if (!(await companionOnline(actor)) && !(await companionWorking(actor))) throw new AssistantError(await companionOfflineMessage(actor));
+async function runCompanionTurn(
+  actor: UserActor,
+  conversation: ConversationRow,
+  apiModel: string,
+  emit: Emit,
+  deadline: number,
+  signal?: AbortSignal,
+  headless?: HeadlessTurn,
+) {
+  const online = (await companionOnline(actor)) || (await companionWorking(actor));
+  if (!online && (!headless || (await listCompanions(actor)).length === 0)) throw new AssistantError(await companionOfflineMessage(actor));
   const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
   const earlier = new Set(rows.map((row) => row.id));
   const { system, learned } = await promptFor(actor, conversation);
@@ -644,7 +657,11 @@ async function runCompanionTurn(actor: UserActor, conversation: ConversationRow,
     system,
     prompt: learned ? `${learned}\n${LEARNED_NOTE}\n\n${transcript}` : transcript,
     tools: companionTools(),
-  });
+  }, { agentMailId: headless?.agentMailId ?? null });
+  if (headless) {
+    headless.queued?.({ jobId, online });
+    return;
+  }
   const show = (row: MessageRow) => {
     emit({ type: "message", message: display(row) });
     if ((row.actions ?? []).length > 0) emit({ type: "actions", messageId: row.id, actions: row.actions ?? [] });
@@ -691,7 +708,11 @@ async function runCompanionTurn(actor: UserActor, conversation: ConversationRow,
   emit({ type: "waiting", message: "Still working on your Mac." });
 }
 
-type TurnOptions = { deadline: number; fetchImpl?: typeof fetch; signal?: AbortSignal };
+export type HeadlessTurn = { agentMailId: string; queued?: (job: { jobId: string; online: boolean }) => void };
+
+type TurnOptions = { deadline: number; fetchImpl?: typeof fetch; signal?: AbortSignal; headless?: HeadlessTurn };
+
+export const HEADLESS_MODEL_ERROR = "Email jobs only run on Orbit Agent, so they need a Claude account model.";
 
 async function turnMarker(actor: UserActor, conversationId: string) {
   return withActor(actor, async (db) => {
@@ -763,7 +784,8 @@ function draftEmitter(emit: Emit) {
 async function runRounds(actor: UserActor, conversation: ConversationRow, emit: Emit, options: TurnOptions) {
   const { deadline, fetchImpl, signal } = options;
   const chosen = assistantModel(conversation.model);
-  if (chosen?.source === "claude") return runCompanionTurn(actor, conversation, chosen.apiModel, emit, deadline, signal);
+  if (chosen?.source === "claude") return runCompanionTurn(actor, conversation, chosen.apiModel, emit, deadline, signal, options.headless);
+  if (options.headless) throw new AssistantError(HEADLESS_MODEL_ERROR);
   const { system, learned } = await promptFor(actor, conversation);
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
     if (signal?.aborted) return;
@@ -879,7 +901,7 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
 
 export async function sendMessage(
   actor: UserActor,
-  input: { conversationId?: string | null; message: string; model: unknown; reasoning: unknown; webSearch: unknown; files?: unknown },
+  input: { conversationId?: string | null; message: string; model: unknown; reasoning: unknown; webSearch: unknown; files?: unknown; title?: string },
   emit: Emit,
   options: TurnOptions,
 ) {
@@ -908,7 +930,7 @@ export async function sendMessage(
     model: settings.model,
     reasoning: settings.reasoning,
     webSearch: input.webSearch === true,
-    title: titleFrom(message || files.map((file) => file.name).join(", ")),
+    title: input.title ? titleFrom(input.title) : titleFrom(message || files.map((file) => file.name).join(", ")),
   });
   emit({ type: "conversation", conversation: summary(conversation) });
   const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
@@ -969,6 +991,7 @@ export async function decideActions(
       deadline: options.deadline - 20_000,
       callId: call.id,
       approval: action.name === "save_doc" ? approvalFor(action) : undefined,
+      source: options.headless ? "email" : undefined,
     })) as Record<string, unknown> | null;
     const failed = Boolean(output && typeof output === "object" && "error" in output);
     await insertMessage(actor, conversation.id, {

@@ -131,6 +131,8 @@ import { READER_CATEGORIES, READER_LOCATIONS } from "@/lib/readwise";
 import { readerHighlights, readerList, readerRead } from "@/lib/readwise/reader";
 import { recallRead, recallSearch } from "@/lib/recall/live";
 import { siteOrigin } from "@/lib/site-url";
+import { toolSource, withToolSource, type AssistantSource } from "@/lib/assistant/source";
+import { AGENT_MAILBOX, agentMailThread, isAgentMail, searchAgentMail, sendFromAgentMailbox } from "@/lib/agent-mail/store";
 
 type Args = Record<string, unknown>;
 type JsonSchema = Record<string, unknown>;
@@ -160,7 +162,9 @@ function afterResponse(work: () => Promise<unknown>) {
   }
 }
 
-const PROVENANCE = { source: "assistant" } as const;
+function provenanceSource() {
+  return { source: toolSource() };
+}
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function str(value: unknown) {
@@ -1393,7 +1397,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       if (Boolean(contactId) === Boolean(email)) {
         throw new CrmError("invalid_input", "Pass contactId for someone already in Orbit, or email for a person in the conversation who isn't a contact yet, but not both.", 400, { field: "contactId" });
       }
-      const provenance = { operation: "assistant_file_conversation", ...PROVENANCE };
+      const provenance = { operation: "assistant_file_conversation", ...provenanceSource() };
       const filed = contactId
         ? { ...(await fileImport(actor, conversationId, contactId, { summarise: false, provenance })), contactId, created: false }
         : await createContactAndFile(actor, conversationId, email!, { summarise: false, provenance });
@@ -1431,9 +1435,18 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         },
         days: { type: "integer", minimum: 1, maximum: 365, description: "For subscriptions, the window for counts and suggestions (default 90; 3 months is 90). For research, how many days back (default 1)." },
         limit: { type: "integer", minimum: 1, maximum: 50 },
+        mailbox: {
+          type: "string",
+          enum: [AGENT_MAILBOX],
+          description:
+            "agent searches Orbit's own agent mailbox (the address people email to give Orbit work) instead of the user's mail, with query, from and limit. Only when the user asks about the agent mailbox.",
+        },
       },
     },
     run: async (actor, args) => {
+      if (args.mailbox === AGENT_MAILBOX) {
+        return searchAgentMail(actor, { query: optionalStr(args.query), from: optionalStr(args.from), limit: int(args.limit, 20, 1, 50) });
+      }
       if (args.folder === "subscriptions") {
         const listed = await listSubscriptions(actor, { days: int(args.days, REVIEW_DAYS, 7, 365) });
         return {
@@ -1480,10 +1493,12 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     name: "get_email_thread",
     label: "Reading an email thread",
     description:
-      "The whole conversation an email belongs to, oldest first, with each message's sender, recipients, time and text. Emails the user sent from Orbit list their opens (time and device).",
+      "The whole conversation an email belongs to, oldest first, with each message's sender, recipients, time and text. Emails the user sent from Orbit list their opens (time and device). Ids from search_email with mailbox agent read the agent mailbox's thread, with what Orbit did with each email.",
     parameters: { type: "object", properties: { emailId: idParam("Email id from search_email.") }, required: ["emailId"] },
     run: async (actor, args) => {
-      const thread = await getMailThread(actor, required(args.emailId, "An email id"));
+      const emailId = required(args.emailId, "An email id");
+      if (await isAgentMail(actor, emailId)) return agentMailThread(actor, emailId);
+      const thread = await getMailThread(actor, emailId);
       return { messages: thread, ...(thread.some((message) => message.opens?.length) ? { readTracking: READ_NOTE } : {}) };
     },
   },
@@ -1647,11 +1662,11 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         if (Object.keys(input).length > 0) {
           throw new CrmError("invalid_input", "Archive a template on its own: pass only id and archived, then make any other change separately.", 400, { field: "archived" });
         }
-        return { template: await archiveEmailTemplate(actor, id, { operation: "archive_email_template", ...PROVENANCE }) };
+        return { template: await archiveEmailTemplate(actor, id, { operation: "archive_email_template", ...provenanceSource() }) };
       }
       const template = id
-        ? await updateEmailTemplate(actor, id, input, { operation: "update_email_template", ...PROVENANCE })
-        : await createEmailTemplate(actor, input, { operation: "create_email_template", ...PROVENANCE });
+        ? await updateEmailTemplate(actor, id, input, { operation: "update_email_template", ...provenanceSource() })
+        : await createEmailTemplate(actor, input, { operation: "create_email_template", ...provenanceSource() });
       return { template };
     },
   },
@@ -1854,7 +1869,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       const target = targetFrom({ companyId: args.companyId, eclipse: args.eclipse });
       const href = "companyId" in target ? companyHref(target.companyId) : "/settings/knowledge";
       if (chatFileId) {
-        const { item, created } = await addChatFileToKnowledge(actor, chatFileId, target, { operation: "add_knowledge_chat_file", ...PROVENANCE });
+        const { item, created } = await addChatFileToKnowledge(actor, chatFileId, target, { operation: "add_knowledge_chat_file", ...provenanceSource() });
         if (created) scheduleIndexing(actor, [item.id]);
         return { added: created, alreadyThere: !created, item: withKnowledge(item), href };
       }
@@ -1876,7 +1891,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       }
       const { item, created } = await addMailAttachmentToKnowledge(actor, emailId, picked.id, target, fetch, {
         operation: "add_knowledge_attachment",
-        ...PROVENANCE,
+        ...provenanceSource(),
       });
       if (created) scheduleIndexing(actor, [item.id]);
       return { added: created, alreadyThere: !created, item: withKnowledge(item), href };
@@ -1919,7 +1934,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       let removed = 0;
       for (const id of ids) {
         try {
-          await archiveKnowledge(actor, id, fetch, { operation: "remove_knowledge", ...PROVENANCE });
+          await archiveKnowledge(actor, id, fetch, { operation: "remove_knowledge", ...provenanceSource() });
           removed += 1;
         } catch (error) {
           if (!(error instanceof CrmError)) throw error;
@@ -2202,7 +2217,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
           ...(optionalStr(args.ownerId) ? { ownerId: str(args.ownerId) } : {}),
         },
         picker?.listId ?? null,
-        { provenance: { operation: "create_task", ...PROVENANCE } },
+        { provenance: { operation: "create_task", ...provenanceSource() } },
       );
       return { task: withTask(created.task), clickupError: created.clickupError };
     },
@@ -2243,7 +2258,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
           ...(optionalStr(args.ownerId) ? { ownerId: str(args.ownerId) } : {}),
           ...(typeof args.completed === "boolean" ? { completed: args.completed } : {}),
         },
-        { provenance: { operation: completing ? "complete_task" : "update_task", ...PROVENANCE } },
+        { provenance: { operation: completing ? "complete_task" : "update_task", ...provenanceSource() } },
       );
       await pushIfLinked(actor, updated.body.task);
       return { task: withTask(updated.body.task) };
@@ -2286,7 +2301,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         type,
         str(args.title),
         str(args.body),
-        { provenance: { operation: "assistant_log_activity", ...PROVENANCE } },
+        { provenance: { operation: "assistant_log_activity", ...provenanceSource() } },
       );
       return { activity };
     },
@@ -2320,7 +2335,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     run: async (actor, args) => ({
       activity: await archiveActivity(actor, required(args.activityId, "An activity id"), {
         operation: "assistant_archive_activity",
-        ...PROVENANCE,
+        ...provenanceSource(),
       }),
     }),
   },
@@ -2392,7 +2407,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       if (args.opportunityId !== undefined) edit.opportunityId = nullableStr(args.opportunityId) ?? null;
       const result = await updateActivity(actor, required(args.activityId, "An activity id"), edit, {
         operation: "assistant_update_activity",
-        ...PROVENANCE,
+        ...provenanceSource(),
       });
       return { activity: result.activity, changed: result.changed, fields: result.fields };
     },
@@ -2422,7 +2437,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       };
     },
     run: async (actor, args) =>
-      undoAuditEvent(actor, required(args.changeId, "A change id"), { operation: "undo_change", ...PROVENANCE }),
+      undoAuditEvent(actor, required(args.changeId, "A change id"), { operation: "undo_change", ...provenanceSource() }),
   },
   {
     name: "create_company",
@@ -2442,7 +2457,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       const created = await createCompany(
         actor,
         { ...pick(args, Object.keys(COMPANY_FIELDS)), name: required(args.name, "A name"), tags: strings(args.tags) },
-        { provenance: { operation: "create_company", ...PROVENANCE } },
+        { provenance: { operation: "create_company", ...provenanceSource() } },
       );
       return { company: withCompany(created.body.company) };
     },
@@ -2484,12 +2499,12 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       if (isMany(args.companyIds)) {
         bulkOnly(args, "companyId", "companyIds", BULK_COMPANY_KEYS, "company", "companies");
         return bulkUpdate(actor, "companies:write", args.companyIds, (id) =>
-          updateCompany(actor, id, pick(args, BULK_COMPANY_KEYS), { provenance: { operation: "update_company", ...PROVENANCE } }),
+          updateCompany(actor, id, pick(args, BULK_COMPANY_KEYS), { provenance: { operation: "update_company", ...provenanceSource() } }),
         );
       }
       const health = args.health === "none" ? { health: null } : pick(args, ["health", "healthReason"]);
       const updated = await updateCompany(actor, required(args.companyId, "A companyId, or companyIds for many companies,"), { ...pick(args, Object.keys(COMPANY_FIELDS)), ...health }, {
-        provenance: { operation: "update_company", ...PROVENANCE },
+        provenance: { operation: "update_company", ...provenanceSource() },
       });
       return { company: withCompany(updated.body.company) };
     },
@@ -2519,7 +2534,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     run: async (actor, args) => {
       const result = await mergeCompanies(actor, required(args.keepId, "The company to keep"), required(args.mergeId, "The company to merge"), {
         operation: "merge_companies",
-        ...PROVENANCE,
+        ...provenanceSource(),
       });
       return { company: withCompany(result.kept), archived: withCompany(result.merged), moved: result.moved, filled: result.filled };
     },
@@ -2541,7 +2556,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       const created = await createContact(
         actor,
         { ...pick(args, Object.keys(CONTACT_FIELDS)), tags: strings(args.tags) },
-        { provenance: { operation: "create_contact", ...PROVENANCE } },
+        { provenance: { operation: "create_contact", ...provenanceSource() } },
       );
       return { contact: withContact(created.body.contact) };
     },
@@ -2580,11 +2595,11 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       if (isMany(args.contactIds)) {
         bulkOnly(args, "contactId", "contactIds", BULK_CONTACT_KEYS, "person", "people");
         return bulkUpdate(actor, "contacts:write", args.contactIds, (id) =>
-          updateContact(actor, id, pick(args, BULK_CONTACT_KEYS), { provenance: { operation: "update_contact", ...PROVENANCE } }),
+          updateContact(actor, id, pick(args, BULK_CONTACT_KEYS), { provenance: { operation: "update_contact", ...provenanceSource() } }),
         );
       }
       const updated = await updateContact(actor, required(args.contactId, "A contactId, or contactIds for many people,"), pick(args, Object.keys(CONTACT_FIELDS)), {
-        provenance: { operation: "update_contact", ...PROVENANCE },
+        provenance: { operation: "update_contact", ...provenanceSource() },
       });
       return { contact: withContact(updated.body.contact) };
     },
@@ -2643,7 +2658,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         target,
         id,
         { label: isRelationshipLabel(args.relationship) ? args.relationship : null, reason: optionalStr(args.reason) ?? null },
-        { operation: "set_relationship", ...PROVENANCE },
+        { operation: "set_relationship", ...provenanceSource() },
       );
       return { relationship: (await relationshipsFor(actor, target, [id]))[id], href: target === "company" ? companyHref(id) : contactHref(id) };
     },
@@ -2673,7 +2688,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     run: async (actor, args) => {
       const result = await mergeContacts(actor, required(args.keepId, "The contact to keep"), required(args.mergeId, "The contact to merge"), {
         operation: "merge_contacts",
-        ...PROVENANCE,
+        ...provenanceSource(),
       });
       return { contact: withContact(result.kept), archived: withContact(result.merged), moved: result.moved, filled: result.filled };
     },
@@ -2758,7 +2773,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       };
     },
     run: async (actor, args) => {
-      const options = { provenance: { operation: "archive_records", ...PROVENANCE } };
+      const options = { provenance: { operation: "archive_records", ...provenanceSource() } };
       const groups = [
         { ids: strings(args.companyIds), scope: "companies:write" as const, archive: (id: string) => archiveCompany(actor, id, options) },
         { ids: strings(args.contactIds), scope: "contacts:write" as const, archive: (id: string) => archiveContact(actor, id, options) },
@@ -2796,7 +2811,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       const created = await createOpportunity(
         actor,
         { ...pick(args, Object.keys(OPPORTUNITY_FIELDS)), companyId: required(args.companyId, "A company id"), name: required(args.name, "A name") },
-        { provenance: { operation: "create_opportunity", ...PROVENANCE } },
+        { provenance: { operation: "create_opportunity", ...provenanceSource() } },
       );
       return { opportunity: withOpportunity(created.body.opportunity) };
     },
@@ -2831,7 +2846,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
           pipelineId: required(args.boardId, "A board id"),
           companyId: required(args.companyId, "A company id"),
         },
-        { provenance: { operation: "add_to_board", ...PROVENANCE } },
+        { provenance: { operation: "add_to_board", ...provenanceSource() } },
       );
       return { card: withOpportunity(created.body.opportunity) };
     },
@@ -2969,7 +2984,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     run: async (actor, args) => {
       const id = required(args.cardId, "A card id");
       const updated = await updateOpportunity(actor, id, pick(args, ["stageId", "expectedCloseDate", "primaryContactId", "ownerId"]), {
-        provenance: { operation: "move_card", ...PROVENANCE },
+        provenance: { operation: "move_card", ...provenanceSource() },
       });
       return { card: withOpportunity(updated.body.opportunity) };
     },
@@ -2985,7 +3000,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       const id = required(args.cardId, "A card id");
       const card = await getOpportunity(actor, id);
       if (card.pipelineKind !== "board") return { error: "That's a sales opportunity, not a board card, so it wasn't removed. Use archive_records if the user wants it archived." };
-      const removed = await archiveOpportunity(actor, id, { provenance: { operation: "remove_from_board", ...PROVENANCE } });
+      const removed = await archiveOpportunity(actor, id, { provenance: { operation: "remove_from_board", ...provenanceSource() } });
       return { card: withOpportunity(removed.body.opportunity) };
     },
   },
@@ -3150,7 +3165,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       const id = required(args.opportunityId, "An opportunity id");
       await getOpportunity(actor, id);
       const updated = await updateOpportunity(actor, id, pick(args, Object.keys(OPPORTUNITY_FIELDS)), {
-        provenance: { operation: "update_opportunity", ...PROVENANCE },
+        provenance: { operation: "update_opportunity", ...provenanceSource() },
       });
       return { opportunity: withOpportunity(updated.body.opportunity) };
     },
@@ -3266,7 +3281,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       ].filter(Boolean),
     }),
     run: async (actor, args) => {
-      const id = await createDocument(actor, onlyFields(args, ["templateId", "companyId", "contactId", "currency", "items", "title"]), { operation: "create_proposal", source: "assistant" });
+      const id = await createDocument(actor, onlyFields(args, ["templateId", "companyId", "contactId", "currency", "items", "title"]), { operation: "create_proposal", ...provenanceSource() });
       const detail = await getDocument(actor, id);
       return { id, href: detail.href, title: detail.title, total: detail.totalLabel, missing: detail.missing, placeholders: detail.placeholders };
     },
@@ -3304,7 +3319,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     }),
     run: async (actor, args) => {
       const id = required(args.id, "A proposal id");
-      await updateDocument(actor, id, onlyFields(args, ["title", "currency", "validUntil", "items", "blocks"]), { operation: "update_proposal", source: "assistant" });
+      await updateDocument(actor, id, onlyFields(args, ["title", "currency", "validUntil", "items", "blocks"]), { operation: "update_proposal", ...provenanceSource() });
       const detail = await getDocument(actor, id);
       return { id, href: detail.href, total: detail.totalLabel, missing: detail.missing, placeholders: detail.placeholders };
     },
@@ -3340,7 +3355,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       const id = required(args.id, "A proposal id");
       const action = oneOf(args.action, ["add", "done", "undone", "remove"] as const);
       if (!action) throw new CrmError("invalid_input", "Choose add, done, undone or remove.", 400, { field: "action" });
-      const provenance = { operation: "update_proposal_steps", source: "assistant" };
+      const provenance = { operation: "update_proposal_steps", ...provenanceSource() };
       if (action === "add") return { steps: await addStep(actor, id, { title: args.title, side: args.side, dueDate: args.dueDate }, provenance) };
       const stepId = required(args.stepId, "A step id");
       if (action === "remove") return { steps: await removeStep(actor, stepId, provenance) };
@@ -3364,7 +3379,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     }),
     run: async (actor, args) => {
       const id = required(args.id, "A proposal id");
-      const sent = await sendDocument(actor, id, { subject: optionalStr(args.subject), message: optionalStr(args.message) }, { provenance: { operation: "send_proposal", source: "assistant" } });
+      const sent = await sendDocument(actor, id, { subject: optionalStr(args.subject), message: optionalStr(args.message) }, { provenance: { operation: "send_proposal", ...provenanceSource() } });
       return { sent: true, link: sent.url, warning: sent.warning, href: `/proposals/${id}` };
     },
   },
@@ -3378,7 +3393,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     describe: (args, name) => ({ title: `Make changes to ${name(args.id)}`, lines: ["The client can't sign it until it's sent again."] }),
     run: async (actor, args) => {
       const id = required(args.id, "A proposal id");
-      await reviseDocument(actor, id, { operation: "revise_proposal", source: "assistant" });
+      await reviseDocument(actor, id, { operation: "revise_proposal", ...provenanceSource() });
       const detail = await getDocument(actor, id);
       return { id, status: detail.status, href: detail.href };
     },
@@ -3421,7 +3436,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       const id = required(args.id, "A proposal id");
       const refusal = withdrawRefusal(await getDocument(actor, id));
       if (refusal) throw new CrmError("conflict", refusal, 409, { field: "status" });
-      await withdrawDocument(actor, id, { operation: "withdraw_proposal", ...PROVENANCE });
+      await withdrawDocument(actor, id, { operation: "withdraw_proposal", ...provenanceSource() });
       const detailNow = await getDocument(actor, id);
       return { withdrawn: true, id, title: detailNow.title, status: detailNow.status, href: detailNow.href };
     },
@@ -3466,7 +3481,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       ].filter(Boolean),
     }),
     run: async (actor, args) => {
-      const provenance = { operation: "create_proposal_template", source: "assistant" };
+      const provenance = { operation: "create_proposal_template", ...provenanceSource() };
       let template = await createTemplate(actor, onlyFields(args, ["name", "kind", "starter", "copyOf"]), provenance);
       const settings = templateSettings(template, args);
       if (args.blocks !== undefined || args.status !== undefined || settings) {
@@ -3511,7 +3526,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         actor,
         id,
         { name: args.name, status: args.status, blocks: args.blocks, settings: templateSettings(current, args) },
-        { operation: "update_proposal_template", source: "assistant" },
+        { operation: "update_proposal_template", ...provenanceSource() },
       );
       return { template: templateForAgent(template), href: `/proposals/templates/${template.id}` };
     },
@@ -3557,7 +3572,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     }),
     run: async (actor, args) => {
       const id = optionalStr(args.id);
-      const product = id ? await updateProduct(actor, id, args, { operation: "update_product", source: "assistant" }) : await createProduct(actor, args, { operation: "create_product", source: "assistant" });
+      const product = id ? await updateProduct(actor, id, args, { operation: "update_product", ...provenanceSource() }) : await createProduct(actor, args, { operation: "create_product", ...provenanceSource() });
       return { product };
     },
   },
@@ -3642,7 +3657,11 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         cc: { type: "array", items: { type: "string" } },
         subject: { type: "string", description: "Needed for a new email. Replies keep the conversation's subject." },
         body: { type: "string", description: "Plain text with a greeting and sign-off. Orbit adds the signature." },
-        from: { type: "string", description: "Address to send from (list_email_senders). Leave out for the main mailbox, or the account the conversation is in for a reply." },
+        from: {
+          type: "string",
+          description:
+            "Address to send from (list_email_senders). Leave out for the main mailbox, or the account the conversation is in for a reply. agent sends from Orbit's agent mailbox instead, only when the user asks: a reply to an email from search_email with mailbox agent, or a new email with to and subject, plain text, no files, sendAt or draftId.",
+        },
         remindAfterDays: { type: "integer", minimum: 1, maximum: 90, description: "Remind the user in Mail if nobody replies within this many days." },
         sendAt: { type: "string", description: "Send later at this time, YYYY-MM-DDTHH:mm London time. At least a minute from now and within a year. Leave out to send on approval." },
         attachmentIds: ATTACHMENTS_PARAM,
@@ -3665,10 +3684,10 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
             replying ? `To: ${args.replyAll ? `everyone on the email from ${sender}` : sender}${people.length ? `, plus ${people.join(", ")}` : ""}` : people.length ? `To: ${people.join(", ")}` : "",
             strings(args.cc).length ? `Cc: ${strings(args.cc).join(", ")}` : "",
           ]),
-          str(args.from) ? `From: ${str(args.from)}` : "",
+          str(args.from) === AGENT_MAILBOX ? "From: the agent mailbox" : str(args.from) ? `From: ${str(args.from)}` : "",
           sendAtLine(args.sendAt),
           attachmentLine(args, name),
-          later ? "Scheduled in Orbit Mail when you approve." : "Sends from Orbit Mail when you approve.",
+          str(args.from) === AGENT_MAILBOX ? "Sends from the agent mailbox when you approve." : later ? "Scheduled in Orbit Mail when you approve." : "Sends from Orbit Mail when you approve.",
           str(args.body),
         ].filter(Boolean),
       };
@@ -3682,6 +3701,12 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       const draftId = optionalStr(args.draftId) ?? null;
       if (!replyTo && !draftId && to.length === 0) return { error: "Say who the email is to." };
       const body = required(args.body, "A message");
+      if (str(args.from) === AGENT_MAILBOX) {
+        if (draftId || optionalStr(args.sendAt) || strings(args.attachmentIds).length || args.remindAfterDays !== undefined) {
+          return { error: "The agent mailbox sends plain emails now: leave out draftId, sendAt, attachmentIds and remindAfterDays." };
+        }
+        return sendFromAgentMailbox(actor, { replyTo, to, cc: strings(args.cc), subject: optionalStr(args.subject) ?? null, body });
+      }
       const sendAt = optionalStr(args.sendAt) ? parseDateTime(str(args.sendAt)) : null;
       if (optionalStr(args.sendAt) && !sendAt) return { error: "Give sendAt as YYYY-MM-DDTHH:mm London time." };
       if (sendAt && sendAt.getTime() <= Date.now()) return { error: "sendAt has to be in the future." };
@@ -4471,6 +4496,11 @@ export function findTool(name: string) {
   return resolveTool(name)?.tool;
 }
 
+export function resolveToolCall(name: string, args: Args) {
+  const resolved = resolveTool(name, args);
+  return resolved ? { name: resolved.tool.name, args: resolved.args, write: Boolean(resolved.tool.write) } : null;
+}
+
 export const APPROVAL_NOTE = "Needs the user's approval: proposing it shows them a card, and it only runs if they confirm.";
 
 export function toolDescription(tool: Pick<AssistantTool, "description" | "write">) {
@@ -4606,6 +4636,8 @@ export async function recordNames(actor: UserActor, args: Args[], tools: string[
        union all
        select id, coalesce(nullif(trim(subject), ''), '(no subject)') from crm.mail_messages where id = any($1::uuid[])
        union all
+       select id, coalesce(nullif(trim(subject), ''), '(no subject)') from crm.agent_mail_messages where id = any($1::uuid[]) and workspace_id = $2
+       union all
        select id, title from crm.knowledge_items where id = any($1::uuid[]) and workspace_id = $2
        union all
        select id, coalesce(nullif(title, ''), 'Untitled doc') from crm.pages where id = any($1::uuid[]) and workspace_id = $2
@@ -4631,6 +4663,8 @@ export async function recordNames(actor: UserActor, args: Args[], tools: string[
          from crm.pipeline_stages where id = any($1::uuid[]) and (is_won or is_lost)
        union all
        select id::text || ':from', from_email from crm.mail_messages where id = any($1::uuid[]) and nullif(trim(from_email), '') is not null
+       union all
+       select id::text || ':from', from_address from crm.agent_mail_messages where id = any($1::uuid[]) and nullif(trim(from_address), '') is not null
        union all
        select d.id::text || ':attachments', string_agg(a.name, ', ' order by a.name) from crm.mail_drafts d
          join crm.email_attachments a on a.id = any(d.attachments)
@@ -4726,7 +4760,7 @@ export async function runTool(
   actor: UserActor,
   name: string,
   args: Args,
-  options: { deadline?: number; callId?: string; defer?: Defer; unattended?: boolean; approval?: DocApproval } = {},
+  options: { deadline?: number; callId?: string; defer?: Defer; unattended?: boolean; approval?: DocApproval; source?: AssistantSource } = {},
 ) {
   if (options.unattended && name !== "save_doc") return { error: "Only doc edits can run without approval. Propose this for approval instead." };
   const resolved = resolveTool(name, args);
@@ -4744,13 +4778,15 @@ export async function runTool(
   });
   try {
     const output = await Promise.race([
-      tool.run(actor, cleaned, {
-        callId: options.callId,
-        deadline: tool.write ? options.deadline : Date.now() + limit,
-        defer: options.defer,
-        unattended: options.unattended === true,
-        approval: options.approval,
-      }),
+      withToolSource(options.source, () =>
+        tool.run(actor, cleaned, {
+          callId: options.callId,
+          deadline: tool.write ? options.deadline : Date.now() + limit,
+          defer: options.defer,
+          unattended: options.unattended === true,
+          approval: options.approval,
+        }),
+      ),
       late,
     ]);
     return marked(tool.name, output);

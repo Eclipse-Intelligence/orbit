@@ -1,11 +1,13 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import AgentMailboxSettings from "@/components/crm/agent-mailbox-settings";
 import AiAccountsSettings from "@/components/crm/ai-accounts-settings";
 import ClickUpSettings from "@/components/crm/clickup-settings";
 import EnrichmentSettingsCard from "@/components/crm/enrichment-settings";
 import WebChecksSettings from "@/components/crm/web-checks-settings";
 import IntegrationsSettings from "@/components/crm/integrations-settings";
 import { SettingsPage } from "@/components/crm/settings-ui";
+import { agentMailboxView } from "@/lib/agent-mail/mailbox";
 import { listAiAccounts } from "@/lib/ai-accounts/store";
 import { getUserActor } from "@/lib/auth/user";
 import { listCompanions } from "@/lib/companion/pairing";
@@ -48,12 +50,13 @@ export default async function IntegrationSettingsPage({
     listCompanions(user),
     linearStatus(),
   ]);
-  const [enrichment, unenriched, webChecks, unchecked, learned] = await Promise.all([
+  const [enrichment, unenriched, webChecks, unchecked, learned, agentMailbox] = await Promise.all([
     getEnrichmentSettings(user),
     unenrichedCompanyCount(user),
     listWebChecks(user),
     uncheckedCompanyCount(user),
     learnedIcp(user),
+    agentMailboxView(user),
   ]);
   const live = mailbox?.status === "connected";
   const [calls, transcripts, calendar, mirror] = await Promise.all([
@@ -90,6 +93,7 @@ export default async function IntegrationSettingsPage({
       />
       <ClickUpSettings view={clickup} canAdmin={canAdmin} />
       <AiAccountsSettings accounts={aiAccounts} companions={companions} />
+      <AgentMailboxSettings view={agentMailbox} />
       <EnrichmentSettingsCard
         settings={enrichment}
         providers={providerStatuses()}

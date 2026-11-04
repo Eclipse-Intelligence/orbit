@@ -13,6 +13,7 @@ import { applyEdits, textEdits, type TextEdit } from "@/lib/docs/live/text-diff"
 import { searchDocs } from "@/lib/docs/search";
 import { archiveDoc, assistantMayEdit, createDoc, editDoc, getDoc, listBacklinks, moveDoc, readDoc, renameDoc, shareDoc } from "@/lib/docs/store";
 import { dailyHref, docHref, type DocDetail, type DocDiffLine, type DocEdit, type DocSummary } from "@/lib/docs/types";
+import { toolSource } from "@/lib/assistant/source";
 
 type Args = Record<string, unknown>;
 type Names = (id: unknown) => string;
@@ -22,7 +23,9 @@ export type SaveDocAction = (typeof SAVE_DOC_ACTIONS)[number];
 
 export const UNATTENDED_DOC_ACTIONS: readonly SaveDocAction[] = ["replace", "append", "edit", "tag"];
 
-const PROVENANCE: Provenance = { operation: "save_doc", source: "assistant" };
+function provenance(): Provenance {
+  return { operation: "save_doc", source: toolSource() };
+}
 
 function str(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
@@ -382,7 +385,7 @@ export async function runDocAction(actor: UserActor, args: Args, context: { unat
       throw new CrmError("invalid_input", "Say what to add to the doc.", 400, { field: "content" });
     }
     try {
-      const { doc, changed } = await editDoc(actor, requireDoc(args), edit, PROVENANCE, {
+      const { doc, changed } = await editDoc(actor, requireDoc(args), edit, provenance(), {
         assistantCanEdit: context.unattended === true,
         ...(context.unattended ? {} : approvedPlan(edit, context.approval)),
       });
@@ -393,24 +396,24 @@ export async function runDocAction(actor: UserActor, args: Args, context: { unat
     }
   }
   if (action === "create") {
-    const doc = await createDoc(actor, { title: str(args.title), content: raw(args.content), folderId: str(args.folderId) || null, shared: args.shared === true }, PROVENANCE);
+    const doc = await createDoc(actor, { title: str(args.title), content: raw(args.content), folderId: str(args.folderId) || null, shared: args.shared === true }, provenance());
     return { saved: true, doc: summaryOf(doc) };
   }
   if (action === "rename") {
     if (!str(args.title)) throw new CrmError("invalid_input", "Give the new title.", 400, { field: "title" });
-    const result = await renameDoc(actor, requireDoc(args), str(args.title), PROVENANCE);
+    const result = await renameDoc(actor, requireDoc(args), str(args.title), provenance());
     return { saved: true, doc: summaryOf(result.doc), linksUpdated: result.linksUpdated };
   }
   if (action === "move") {
-    const result = await moveDoc(actor, requireDoc(args), { folderId: str(args.folderId) || null, allowVisibilityChange: args.allowVisibilityChange === true }, PROVENANCE);
+    const result = await moveDoc(actor, requireDoc(args), { folderId: str(args.folderId) || null, allowVisibilityChange: args.allowVisibilityChange === true }, provenance());
     return { saved: true, doc: summaryOf(result.page), visibility: result.visibility };
   }
   if (action === "share" || action === "unshare") {
-    const result = await shareDoc(actor, requireDoc(args), action === "share", PROVENANCE);
+    const result = await shareDoc(actor, requireDoc(args), action === "share", provenance());
     return { saved: true, doc: summaryOf(result.doc), visibility: result.visibility };
   }
-  if (action === "archive") return { saved: true, doc: summaryOf(await archiveDoc(actor, requireDoc(args), PROVENANCE)) };
-  const note = await appendToDailyNote(actor, { text: str(args.content), date: str(args.date) || undefined, meetings: args.meetings === true }, PROVENANCE);
+  if (action === "archive") return { saved: true, doc: summaryOf(await archiveDoc(actor, requireDoc(args), provenance())) };
+  const note = await appendToDailyNote(actor, { text: str(args.content), date: str(args.date) || undefined, meetings: args.meetings === true }, provenance());
   return { saved: true, doc: summaryOf(note.page), date: note.date };
 }
 

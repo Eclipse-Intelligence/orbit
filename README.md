@@ -706,6 +706,29 @@ Claude Code runs with Orbit's tools only, plus web search when it is on. It has 
 
 Every `/api/companion` route allows 600 requests a minute per Mac and answers with `cache-control: no-store`.
 
+### Agent mailbox (email Orbit)
+
+Email Orbit at its own address, `orbit@ai-mail.geteclipse.co` by default, to give it work. The email starts an assistant chat on your Claude plan through Orbit Agent (never the LLM API key), Orbit does the work with its tools and replies in the same email thread with what it did, or what it needs. Reply by email to carry on. The mailbox lives in MachineMail and never appears in Mail.
+
+Setup, once, by an owner or admin:
+
+1. In MachineMail, verify `ai-mail.geteclipse.co` (done) and create an organisation API key with message read, send and reply, inbox and webhook permissions.
+2. In Vercel, add it as `MACHINE_MAIL_API_KEY` under Settings › Environment Variables, check `SITE_URL` is Orbit's https address, and redeploy.
+3. Apply the `agent_mailbox` migration to the hosted project before deploying (see Migrations in `CONVENTIONS.md`).
+4. In Settings › Integrations, Agent mailbox, check the address and choose Set up. Orbit creates the inbox (an address that already exists in your MachineMail organisation is fine) and a webhook to `<SITE_URL>/api/machinemail/webhook` for `message.received`. Check setup runs it again, for example after `SITE_URL` changes.
+5. Who can give it work starts as `mark@geteclipse.co` and `mark@ridgeon.me`, both as the person who set it up. Owners and admins can add addresses and map each one to a workspace member; that member's work runs as them, on their Mac.
+
+How it works:
+
+- Only mail from a listed address that passes email authentication is acted on: DMARC pass for the sender's domain, or a DKIM signature that passes and aligns with it. Mail MachineMail rated suspicious, and its quarantined, spam and unauthenticated events, are never acted on. Everything else is stored but never answered.
+- Each new email starts a chat titled "Email: <subject>", marked Email in Past chats. The message is MachineMail's cleaned text (`trust.content.text`) with a note saying it came by email, from whom and when; forwarded text is marked as outside material. Attachments become chat files (up to 10 and 25 MB a message; high risk files and anything over the limit are left out with a note).
+- The chat runs on your chosen Claude model (your latest Claude chat's), or Fable 5.1. If Orbit Agent isn't running, Orbit replies "Got it. Orbit Agent isn't running on your Mac, so I'll start as soon as it is." and keeps the job queued for 24 hours.
+- Changes you asked for run straight away, audited with `source: "email"`, except anything that contacts someone other than you, deletes, archives, merges, undoes or spends credits. Those are listed in the reply with "Reply yes to go ahead, or tell me what to change." A short yes (yes, go ahead, approve, ok, do it) approves them all; anything else is your next message.
+- When the work is done Orbit sends one reply in the thread: the assistant's answer, what changed, anything waiting for your OK and a link that opens the chat in Orbit (`/?chat=<id>`), where you can carry on.
+- In any chat the assistant can read the agent mailbox (`search_email` with `mailbox: "agent"`, then `get_email_thread`) and send from it (`send_email` with `from: "agent"`, after you approve the card). Only owners, admins and members on the list can.
+
+Security: deliveries are checked against the webhook's signing secret (HMAC-SHA256 of the timestamp and raw body, compared in constant time, refused when more than five minutes off), each event id is handled once, the secret is stored encrypted with `APP_SECRET`, replies go only to the sender's own address, and nothing logs secrets or email text.
+
 ## Opportunities
 
 ### Stage history and stalled deals
@@ -821,6 +844,7 @@ Every variable Orbit reads. `.env.example` lists them with comments (aliases suc
 | `LLM_API_KEY`, `LLM_API_BASE_URL`, `LLM_MODEL` | Assistant, call summaries, Mail AI (summaries, prepared replies, Write with AI, Ask, invites from a thread), activity and task pads, workflow AI steps | Default gateway `https://api.llmapi.ai/v1`, default model `claude-haiku-5-5` (the assistant and workflow steps pick their own). |
 | `GRANOLA_API_KEY`, `GRANOLA_API_BASE_URL` | Granola for the key's owner | Others connect their own key in Settings. |
 | `CLICKUP_API_TOKEN`, `CLICKUP_API_BASE_URL` | ClickUp | |
+| `MACHINE_MAIL_API_KEY` | Agent mailbox | MachineMail organisation key. Server only. See Agent mailbox. |
 | `LINEAR_API_KEY`, `LINEAR_TEAM_KEY`, `LINEAR_API_URL` | Linear | Team key default `CNT`. |
 | `CONTEXT_DEV_API_KEY`, `HUNTER_API_KEY`, `ENROW_API_KEY`, `ICYPEAS_API_KEY` | Enrichment | Each key turns its provider on. |
 | `PARALLEL_API_KEY` | Web checks | Turns on the Parallel Decisions API for tagging, filling gaps, weekly signals and ICP fit, the Check the web workflow step, and the assistant's `check_web`. |
