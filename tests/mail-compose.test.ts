@@ -166,6 +166,7 @@ describe("mail replies and read statuses", () => {
     });
     assert.ok(html.includes("<strong>Next steps</strong><br>"));
     assert.ok(html.includes("<strong>Pricing</strong> is <em>agreed</em>."));
+    assert.ok(composeEmailHtml({ body: "***Both*** and **see *this***" }).includes("<strong><em>Both</em></strong> and"));
     assert.ok(html.includes('<a href="https://example.com/terms">the terms</a> and Acme.'));
     assert.ok(html.includes("Keep 2 * 3 * 4, snake_case_name and a ** pair."));
     assert.ok(!/\*\*Pricing|\]\(|##/.test(html));

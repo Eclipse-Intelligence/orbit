@@ -1,5 +1,5 @@
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
-import { Annotation, EditorSelection, type Extension, type Range } from "@codemirror/state";
+import { Annotation, EditorSelection, type EditorState, type Extension, type Range, type SelectionRange } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin, keymap, placeholder, type DecorationSet, type ViewUpdate } from "@codemirror/view";
 import { formatSpans, headingMarker, type FormatSpan } from "@/lib/mail/inline-format";
 
@@ -75,34 +75,70 @@ const livePreview = ViewPlugin.fromClass(
   { decorations: (plugin) => plugin.decorations },
 );
 
-function wrappedBy(view: EditorView, from: number, to: number, marker: FormatMarker) {
-  const doc = view.state.doc;
-  if (doc.sliceString(from - marker.length, from) !== marker || doc.sliceString(to, to + marker.length) !== marker) return false;
-  if (marker === "**") return true;
-  return doc.sliceString(from - 2, from - 1) !== "*" || doc.sliceString(to + 1, to + 2) !== "*" || doc.sliceString(from - 3, from) === "***";
+export type ActiveFormats = { bold: boolean; italic: boolean };
+
+const KIND: Record<FormatMarker, "bold" | "italic"> = { "**": "bold", "*": "italic" };
+
+function enclosingSpans(state: EditorState, range: SelectionRange) {
+  const line = state.doc.lineAt(range.from);
+  if (range.to > line.to) return [];
+  const found: Extract<FormatSpan, { kind: "bold" | "italic" }>[] = [];
+  const visit = (spans: FormatSpan[]) => {
+    for (const span of spans) {
+      if (span.kind === "link") continue;
+      const inside = range.empty ? range.from >= span.inner[0] && range.from <= span.inner[1] : range.from >= span.from && range.to <= span.to;
+      if (!inside) continue;
+      found.push(span);
+      visit(span.spans);
+    }
+  };
+  visit(formatSpans(line.text, line.from));
+  return found;
+}
+
+const WORD_CHAR = /[\p{L}\p{N}_'’-]/u;
+
+function wordAround(state: EditorState, pos: number) {
+  const line = state.doc.lineAt(pos);
+  let from = pos - line.from;
+  let to = from;
+  while (from > 0 && WORD_CHAR.test(line.text[from - 1])) from -= 1;
+  while (to < line.text.length && WORD_CHAR.test(line.text[to])) to += 1;
+  if (from === pos - line.from || to === pos - line.from) return null;
+  return { from: line.from + from, to: line.from + to };
+}
+
+export function activeFormats(state: EditorState): ActiveFormats {
+  const spans = enclosingSpans(state, state.selection.main);
+  return { bold: spans.some((span) => span.kind === "bold"), italic: spans.some((span) => span.kind === "italic") };
 }
 
 export function toggleFormat(view: EditorView, marker: FormatMarker) {
+  const state = view.state;
   view.dispatch(
-    view.state.changeByRange((range) => {
-      const text = view.state.sliceDoc(range.from, range.to);
-      if (!range.empty && wrappedBy(view, range.from, range.to, marker)) {
+    state.changeByRange((range) => {
+      const span = enclosingSpans(state, range)
+        .filter((candidate) => candidate.kind === KIND[marker])
+        .at(-1);
+      if (span) {
+        const [innerFrom, innerTo] = span.inner;
+        const open = innerFrom - span.from;
+        const whole = range.from < innerFrom || range.to > innerTo;
         return {
           changes: [
-            { from: range.from - marker.length, to: range.from },
-            { from: range.to, to: range.to + marker.length },
+            { from: span.from, to: innerFrom },
+            { from: innerTo, to: span.to },
           ],
-          range: EditorSelection.range(range.from - marker.length, range.to - marker.length),
+          range: EditorSelection.range((whole ? innerFrom : range.from) - open, (whole ? innerTo : range.to) - open),
         };
       }
-      if (text.length >= marker.length * 2 && text.startsWith(marker) && text.endsWith(marker)) {
-        const inner = text.slice(marker.length, text.length - marker.length);
-        return { changes: { from: range.from, to: range.to, insert: inner }, range: EditorSelection.range(range.from, range.from + inner.length) };
-      }
+      const word = range.empty ? wordAround(state, range.head) : null;
+      const from = word?.from ?? range.from;
+      const to = word?.to ?? range.to;
       return {
         changes: [
-          { from: range.from, insert: marker },
-          { from: range.to, insert: marker },
+          { from, insert: marker },
+          { from: to, insert: marker },
         ],
         range: EditorSelection.range(range.from + marker.length, range.to + marker.length),
       };
