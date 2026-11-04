@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type DragEvent, type FormEvent } from "react";
 import Button from "@/components/_ui/button";
 import { AttachButton, AttachmentList, useEmailAttachments } from "@/components/crm/email-attachments";
 import {
@@ -11,21 +11,25 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/_ui/dropdown-menu";
+import BodyEditor, { type BodyEditorHandle } from "@/components/mail/body-editor";
 import { useComposer } from "@/components/mail/compose-dock";
 import { writeWithAi } from "@/components/mail/mail-cache";
 import RecipientField from "@/components/mail/recipient-field";
 import { laterDetail, laterOptions } from "@/lib/mail/later";
-import { useShortcutHint } from "@/components/shortcuts/shortcuts-provider";
+import { useShortcutHint, useShortcuts } from "@/components/shortcuts/shortcuts-provider";
 import type { MailAddress } from "@/lib/mail/types";
 import type { ComposeAccount, DraftFile, DraftMode, MailDraft } from "@/lib/mail/view";
 import { cn } from "@/lib/utils";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
 import BellIcon from "@/public/assets/images/mail/bell.svg";
+import BoldIcon from "@/public/assets/images/mail/bold.svg";
+import ItalicIcon from "@/public/assets/images/mail/italic.svg";
 import SparkleIcon from "@/public/assets/images/mail/sparkle.svg";
 import ClockIcon from "@/public/assets/images/mail/clock.svg";
 import TrashIcon from "@/public/assets/images/mail/trash.svg";
 
 const SAVE_DELAY_MS = 1500;
+const FILE_LINK_ERROR = "That's a link to a file on your computer, which no one else can open. Drag the screenshot itself, or copy it and paste it here.";
 export const MODE_LABEL: Record<DraftMode, string> = { new: "New email", reply: "Reply", reply_all: "Reply all", forward: "Forward" };
 
 export type SendPayload = {
@@ -110,6 +114,7 @@ export default function MailComposer({
   const aiHint = useShortcutHint("mail-ai-write");
   const id = useId();
   const sendHint = useShortcutHint("submit");
+  const { mac } = useShortcuts();
   const draft = start.draft;
   const [fromId, setFromId] = useState(
     draft?.identityId ? `smtp:${draft.identityId}` : (start.fromId ?? draft?.sourceId ?? start.sourceId),
@@ -134,7 +139,7 @@ export default function MailComposer({
   const draftId = useRef<string | null>(draft?.id || null);
   const chain = useRef<Promise<unknown>>(Promise.resolve());
   const dirty = useRef(false);
-  const textarea = useRef<HTMLTextAreaElement>(null);
+  const editor = useRef<BodyEditorHandle>(null);
   const payload = useRef({
     mode: start.mode,
     messageId: start.messageId,
@@ -181,16 +186,9 @@ export default function MailComposer({
   }, [subject, onSubject]);
 
   useEffect(() => {
-    const element = textarea.current;
-    if (!element || card) return;
-    element.style.height = "auto";
-    element.style.height = `${Math.min(element.scrollHeight, card ? 420 : 560)}px`;
-  }, [body, card]);
-
-  useEffect(() => {
-    if (!card) textarea.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    if (!card) editor.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
     const recipientsFirst = !draft && (start.mode === "forward" || (start.mode === "new" && start.to.length === 0));
-    if (!recipientsFirst) textarea.current?.focus({ preventScroll: true });
+    if (!recipientsFirst) editor.current?.focus();
   }, [card, draft, start.mode, start.to.length]);
 
   function saveNow() {
@@ -248,21 +246,7 @@ export default function MailComposer({
     });
     void attachments.add(named);
     if (images.length === 0) return;
-    const element = textarea.current;
-    const markers = images.map((name) => `[Image: ${name}]`).join("\n");
-    let caret = 0;
-    dirty.current = true;
-    setBody((current) => {
-      const at = Math.min(element && element.value === current ? element.selectionEnd : current.length, current.length);
-      const before = current.slice(0, at);
-      const insert = `${before && !before.endsWith("\n") ? "\n" : ""}${markers}\n`;
-      caret = at + insert.length;
-      return `${before}${insert}${current.slice(at)}`;
-    });
-    window.requestAnimationFrame(() => {
-      element?.focus();
-      element?.setSelectionRange(caret, caret);
-    });
+    editor.current?.insertBlock(images.map((name) => `[Image: ${name}]`).join("\n"));
   }
 
   function dropFiles(event: DragEvent) {
@@ -275,16 +259,17 @@ export default function MailComposer({
     }
     if (/^file:/i.test(event.dataTransfer.getData("text/uri-list") || event.dataTransfer.getData("text/plain"))) {
       event.preventDefault();
-      setError("That's a link to a file on your computer, which no one else can open. Drag the screenshot itself, or copy it and paste it here.");
+      setError(FILE_LINK_ERROR);
     }
   }
 
-  function pasteFiles(event: ClipboardEvent) {
-    const files = Array.from(event.clipboardData.files);
-    if (files.length === 0) return;
-    event.preventDefault();
+  function editorFiles(files: File[]) {
     setError(null);
     takeFiles(files);
+  }
+
+  function fileLinkDropped() {
+    setError(FILE_LINK_ERROR);
   }
 
   function change<T>(setter: (value: T) => void) {
@@ -369,7 +354,7 @@ export default function MailComposer({
       change(setBody)(result.body);
       setAiOpen(false);
       setAiText("");
-      window.setTimeout(() => textarea.current?.focus(), 0);
+      window.setTimeout(() => editor.current?.focus(), 0);
     } catch (problem) {
       setAiError(problem instanceof Error ? problem.message : "The AI didn't answer. Try again.");
     } finally {
@@ -498,7 +483,7 @@ export default function MailComposer({
                   event.preventDefault();
                   event.stopPropagation();
                   setAiOpen(false);
-                  textarea.current?.focus();
+                  editor.current?.focus();
                 }
               }}
               placeholder={body.trim() ? "How should it change? Or press Enter to polish it" : "What should it say? Or press Enter for a sensible reply"}
@@ -531,22 +516,15 @@ export default function MailComposer({
           </button>
         </p>
       )}
-      <label htmlFor={`${id}-body`} className="sr-only">
-        Message
-      </label>
-      <textarea
-        ref={textarea}
-        id={`${id}-body`}
-        data-composer-body=""
+      <BodyEditor
+        ref={editor}
         value={body}
-        onChange={(event) => change(setBody)(event.target.value)}
-        onPaste={pasteFiles}
+        onChange={change(setBody)}
+        onFiles={editorFiles}
+        onFileLink={fileLinkDropped}
+        label="Message"
         placeholder={start.mode === "forward" ? "Add a note" : start.mode === "new" ? "Write your email" : "Write your reply"}
-        rows={card ? 8 : 4}
-        className={cn(
-          "text-foreground placeholder:text-subtle mt-2 min-h-24 w-full resize-none bg-transparent text-[14px] leading-6 outline-none",
-          card && "flex-1",
-        )}
+        fill={card}
       />
       {account?.signature && (
         <div className="flex items-start gap-3 pb-1">
@@ -615,6 +593,26 @@ export default function MailComposer({
         <AttachButton id={`${id}-attach`} onFiles={(files) => void attachments.add(files)} compact />
         <Button variant="ghost" size="icon" aria-label="Write with AI" title={`Write with AI (${aiHint})`} onClick={openAi}>
           <SparkleIcon aria-hidden className="size-3.5" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Bold"
+          title={`Bold (${mac ? "⌘B" : "Ctrl+B"})`}
+          onPointerDown={(event) => event.preventDefault()}
+          onClick={() => editor.current?.toggle("**")}
+        >
+          <BoldIcon aria-hidden className="size-3.5" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Italic"
+          title={`Italic (${mac ? "⌘I" : "Ctrl+I"})`}
+          onPointerDown={(event) => event.preventDefault()}
+          onClick={() => editor.current?.toggle("*")}
+        >
+          <ItalicIcon aria-hidden className="size-3.5" />
         </Button>
         {card && (
           <span role="status" className={cn("caption-style ml-2 min-w-0 truncate", save.kind === "error" ? "text-danger" : "text-subtle")}>

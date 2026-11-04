@@ -594,7 +594,7 @@ export default function ThreadReader({
   function startReply(mode: Exclude<DraftMode, "new">, body?: string) {
     if (!detail || !target) return false;
     if (active) {
-      document.querySelector<HTMLTextAreaElement>("[data-reader-composer] textarea")?.focus();
+      document.querySelector<HTMLElement>("[data-reader-composer] [data-composer-body]")?.focus();
       return;
     }
     const defaults = replyDefaults(mode, target, detail.subject, own);

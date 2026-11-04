@@ -438,7 +438,8 @@ html[data-sidebar-resizing] * {
 @media (pointer: coarse) {
   input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"]),
   textarea,
-  select {
+  select,
+  .mail-body-editor {
     font-size: 16px;
   }
 }
@@ -474,6 +475,75 @@ html[data-sidebar-resizing] * {
   letter-spacing: -0.022em;
   color: var(--foreground);
   text-wrap: balance;
+}
+
+.mail-body-editor {
+  font-size: 14px;
+  line-height: 1.5rem;
+  color: var(--foreground);
+}
+
+.mail-body-editor.cm-focused {
+  outline: none;
+}
+
+.mail-body-editor .cm-scroller {
+  font-family: inherit;
+  line-height: inherit;
+  max-height: 560px;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.mail-body-fill .mail-body-editor {
+  flex: 1;
+  min-height: 0;
+}
+
+.mail-body-fill .mail-body-editor .cm-scroller {
+  max-height: none;
+}
+
+.mail-body-editor .cm-content {
+  min-height: 6rem;
+  padding: 0;
+  caret-color: var(--foreground);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.mail-body-editor .cm-line {
+  padding: 0;
+}
+
+.mail-body-editor .cm-placeholder {
+  color: var(--subtle);
+}
+
+.mail-body-editor ::selection {
+  background: color-mix(in srgb, var(--primary) 45%, transparent);
+}
+
+.mail-body-editor .mail-syntax {
+  color: var(--faint);
+  font-weight: 400;
+  font-style: normal;
+}
+
+.mail-body-editor .mail-strong,
+.mail-body-editor .cm-line.mail-heading {
+  font-weight: 600;
+}
+
+.mail-body-editor .mail-em {
+  font-style: italic;
+}
+
+.mail-body-editor .mail-link {
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+  text-underline-offset: 2px;
 }
 
 .note-measure {
