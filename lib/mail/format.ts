@@ -32,6 +32,31 @@ export function mailFullWhen(iso: string | null) {
   }).format(new Date(iso));
 }
 
+export function firstName(address: MailAddress | null | undefined) {
+  if (!address) return "them";
+  const name = address.name?.trim().split(/\s+/)[0];
+  if (name && !name.includes("@")) return name;
+  const local = address.address.split("@")[0].split(/[._+-]/)[0] || address.address;
+  return local.charAt(0).toUpperCase() + local.slice(1);
+}
+
+export function firstNames(list: MailAddress[]) {
+  const names = list.map(firstName);
+  if (names.length === 0) return "them";
+  if (names.length === 1) return names[0];
+  if (names.length > 3) return `${names[0]} and ${names.length - 1} others`;
+  return `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+}
+
+export function followUpDay(iso: string) {
+  return new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: appTimeZone() }).format(new Date(iso));
+}
+
+export function followUpWhen(iso: string) {
+  const time = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: appTimeZone() }).format(new Date(iso));
+  return `${followUpDay(iso)} at ${time}`;
+}
+
 export function afterSending(openedAt: string, sentAt: string | null) {
   if (!sentAt) return null;
   const seconds = Math.floor((Date.parse(openedAt) - Date.parse(sentAt)) / 1000);

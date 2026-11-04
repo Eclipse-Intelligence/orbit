@@ -8,6 +8,7 @@ import {
   summarisePendingImports,
   type BackgroundTarget,
 } from "@/lib/crm/conversations";
+import { followUpCalls } from "@/lib/crm/follow-ups";
 import { resolveGranolaActor, syncGranola } from "@/lib/crm/granola";
 import { syncMailbox } from "@/lib/crm/inbox";
 import { syncMail } from "@/lib/mail/sync";
@@ -148,6 +149,16 @@ export const DEFAULT_STEPS: SyncStep[] = [
         deadline: context.deadline,
       }),
     }),
+  },
+  {
+    name: "call_follow_ups",
+    minMs: 25_000,
+    applies: (target) => (Boolean(target.granola) || Boolean(target.personalGranola)) && !microsoftStep(target),
+    run: (target, context) =>
+      followUpCalls(target.personalGranola ? target.actor : (target.granola ?? target.actor), {
+        fetchImpl: context.fetchImpl,
+        deadline: Math.min(context.deadline, Date.now() + 30_000),
+      }),
   },
   {
     name: "web_signals",

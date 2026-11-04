@@ -37,6 +37,7 @@ import { copyProposalImage } from "@/lib/proposals/media";
 import { STARTER_TEMPLATES as PROPOSAL_STARTERS } from "@/lib/proposals/starters";
 import { addStep, removeStep, updateStep } from "@/lib/proposals/steps";
 import { blockLinks, BLOCKS_GUIDE, onlyFields, proposalForAgent, templateForAgent, templateSettings } from "@/lib/proposals/agent";
+import { followUpDueAt } from "@/lib/mail/follow-up-rules";
 import { mailOrigin } from "@/lib/mail/origin";
 import { senderKey } from "@/lib/mail/split";
 import type { MailAddress } from "@/lib/mail/types";
@@ -86,6 +87,7 @@ import { CrmError } from "@/lib/crm/errors";
 import { getGranolaStatus } from "@/lib/crm/granola";
 import { companyHref, contactHref, opportunityHref } from "@/lib/crm/hrefs";
 import { getMailbox, listInbox } from "@/lib/crm/inbox";
+import { listFollowUps } from "@/lib/crm/follow-ups";
 import { cancelInvite, createInvite, getMeetingLink, MEETING_RESPONSES, rescheduleInvite, respondToInvite } from "@/lib/crm/invites";
 import { latestEmailCheck, verifyEmail } from "@/lib/enrichment/email-check";
 import { archiveOpportunity, createOpportunity, getOpportunity, listOpportunities, listPipeline, updateOpportunity } from "@/lib/crm/opportunities";
@@ -492,6 +494,41 @@ function sendAtLine(value: unknown) {
   if (!text) return "";
   const at = parseDateTime(text);
   return at ? `Sends ${londonLabel(at)} (London time)` : `Send time not understood: ${text}`;
+}
+
+function followUpArg(value: unknown) {
+  if (!value || typeof value !== "object") return null;
+  const input = value as { afterDays?: unknown; body?: unknown };
+  if (input.afterDays === undefined || input.afterDays === null) return null;
+  const body = typeof input.body === "string" && input.body.trim() ? input.body.trim() : null;
+  return { afterDays: int(input.afterDays, 3, 1, 10), body };
+}
+
+function storedFollowUp(args: Args, name: Names) {
+  const draftId = str(args.draftId);
+  if (!draftId || args.followUp !== undefined) return null;
+  const days = Number(detail(name, `${draftId}:follow_up_days`));
+  if (!Number.isInteger(days) || days < 1) return null;
+  return { afterDays: days, body: detail(name, `${draftId}:follow_up_body`) || null };
+}
+
+function storedReminderLine(args: Args, name: Names) {
+  const draftId = str(args.draftId);
+  if (!draftId || args.remindAfterDays !== undefined || args.followUp !== undefined) return "";
+  const hours = Number(detail(name, `${draftId}:remind_hours`));
+  if (!Number.isInteger(hours) || hours < 1 || storedFollowUp(args, name)) return "";
+  const days = Math.max(1, Math.round(hours / 24));
+  return `Reminder: if nobody replies within ${days} ${days === 1 ? "day" : "days"}`;
+}
+
+function followUpLines(value: unknown) {
+  const followUp = followUpArg(value);
+  if (!followUp) return [];
+  const when = `${followUp.afterDays} working ${followUp.afterDays === 1 ? "day" : "days"}`;
+  return [
+    `Follow-up: sent in the same thread at 09:00 after ${when} if nobody replies${followUp.body ? ":" : ". Orbit writes it then, in your voice."}`,
+    followUp.body ?? "",
+  ].filter(Boolean);
 }
 
 function attachmentLine(args: Args, name: Names) {
@@ -1330,16 +1367,17 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     name: "get_capture",
     label: "Checking Capture",
     description:
-      "What's waiting in Capture, not the mailbox: unfiled conversations from Teams and Granola waiting to be filed and people met in meetings who aren't contacts yet, plus recent mail filed to records. For the user's email itself use search_email.",
+      "What's waiting in Capture, not the mailbox: calls that ended with no next step (with the follow-up Orbit drafted), unfiled conversations from Teams and Granola waiting to be filed and people met in meetings who aren't contacts yet, plus recent mail filed to records. For the user's email itself use search_email.",
     parameters: { type: "object", properties: {} },
     run: async (actor) => {
-      const [mailbox, messages, unfiled, people] = await Promise.all([
+      const [mailbox, messages, unfiled, people, followUps] = await Promise.all([
         getMailbox(actor),
         listInbox(actor),
         listUnfiledImports(actor, 50),
         listPeopleMet(actor),
+        actor.type === "user" ? listFollowUps(actor) : Promise.resolve([]),
       ]);
-      return { mailbox, recentMail: messages, unfiledConversations: unfiled, peopleMet: people };
+      return { mailbox, followUps, recentMail: messages, unfiledConversations: unfiled, peopleMet: people };
     },
   },
   {
@@ -3679,6 +3717,19 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
             "Address to send from (list_email_senders). Leave out for the main mailbox, or the account the conversation is in for a reply. agent sends from Orbit's agent mailbox instead, only when the user asks: a reply to an email from search_email with mailbox agent, or a new email with to and subject, plain text, no files, sendAt or draftId.",
         },
         remindAfterDays: { type: "integer", minimum: 1, maximum: 90, description: "Remind the user in Mail if nobody replies within this many days." },
+        followUp: {
+          type: "object",
+          description:
+            "Orbit sends one follow-up in the same thread, to the same people, at 09:00 on the working day afterDays working days after this email goes out, but only if nobody has replied by then. Set it only when the user asks for one or the cold email playbook says to. Replaces remindAfterDays.",
+          properties: {
+            afterDays: { type: "integer", minimum: 1, maximum: 10, description: "Working days to wait (weekends, UK bank holidays and 24 Dec to 1 Jan don't count)." },
+            body: {
+              type: "string",
+              description: "The follow-up, written like the email with greeting and sign-off. Leave out and Orbit writes it in the user's voice when it's due.",
+            },
+          },
+          required: ["afterDays"],
+        },
         sendAt: { type: "string", description: "Send later at this time, YYYY-MM-DDTHH:mm London time. At least a minute from now and within a year. Leave out to send on approval." },
         attachmentIds: ATTACHMENTS_PARAM,
       },
@@ -3705,6 +3756,8 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
           attachmentLine(args, name),
           str(args.from) === AGENT_MAILBOX ? "Sends from the agent mailbox when you approve." : later ? "Scheduled in Orbit Mail when you approve." : "Sends from Orbit Mail when you approve.",
           str(args.body),
+          ...(str(args.from) === AGENT_MAILBOX ? [] : followUpLines(storedFollowUp(args, name) ?? args.followUp)),
+          str(args.from) === AGENT_MAILBOX ? "" : storedReminderLine(args, name),
         ].filter(Boolean),
       };
     },
@@ -3718,8 +3771,8 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
       if (!replyTo && !draftId && to.length === 0) return { error: "Say who the email is to." };
       const body = required(args.body, "A message");
       if (str(args.from) === AGENT_MAILBOX) {
-        if (draftId || optionalStr(args.sendAt) || strings(args.attachmentIds).length || args.remindAfterDays !== undefined) {
-          return { error: "The agent mailbox sends plain emails now: leave out draftId, sendAt, attachmentIds and remindAfterDays." };
+        if (draftId || optionalStr(args.sendAt) || strings(args.attachmentIds).length || args.remindAfterDays !== undefined || followUpArg(args.followUp)) {
+          return { error: "The agent mailbox sends plain emails now: leave out draftId, sendAt, attachmentIds, remindAfterDays and followUp." };
         }
         return sendFromAgentMailbox(actor, { replyTo, to, cc: strings(args.cc), subject: optionalStr(args.subject) ?? null, body });
       }
@@ -3738,7 +3791,8 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
           cc: strings(args.cc),
           subject: optionalStr(args.subject),
           body,
-          remindHours: typeof args.remindAfterDays === "number" ? int(args.remindAfterDays, 3, 1, 90) * 24 : null,
+          remindHours: typeof args.remindAfterDays === "number" ? int(args.remindAfterDays, 3, 1, 90) * 24 : undefined,
+          followUp: args.followUp === undefined ? undefined : followUpArg(args.followUp),
           attachments: files.ids,
           sendAt: sendAt?.toISOString() ?? null,
         },
@@ -3747,8 +3801,19 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         await discardAttachments(actor, files.copied).catch(() => undefined);
         throw error;
       });
+      const followUp = sent.followUp;
       if (sent.scheduled) {
-        return { sent: false, scheduled: true, sendAt: sent.sendAt, draftId: sent.draftId, to: sent.to, cc: sent.cc, subject: sent.subject, href: sent.href };
+        return {
+          sent: false,
+          scheduled: true,
+          sendAt: sent.sendAt,
+          draftId: sent.draftId,
+          to: sent.to,
+          cc: sent.cc,
+          subject: sent.subject,
+          href: sent.href,
+          ...(followUp ? { followUp: `Follow-up set for ${followUp.afterDays} working days after it sends, at 09:00, if nobody replies.` } : {}),
+        };
       }
       return {
         sent: true,
@@ -3757,6 +3822,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         subject: sent.subject,
         href: sent.href,
         warning: sent.warning,
+        ...(followUp ? { followUpAt: followUpDueAt(Date.now(), followUp.afterDays).toISOString() } : {}),
         timeline: sent.warning ? null : "Filed on the contacts' timelines automatically. Don't log it again.",
       };
     },
@@ -4718,12 +4784,24 @@ export async function recordNames(actor: UserActor, args: Args[], tools: string[
           .join(", "),
       );
     }
-    const drafts = await db.query<{ id: string; subject: string | null; to_recipients: MailAddress[]; cc_recipients: MailAddress[]; bcc_recipients: MailAddress[] }>(
-      "select id, subject, to_recipients, cc_recipients, bcc_recipients from crm.mail_drafts where id = any($1::uuid[]) and user_id = $2",
+    const drafts = await db.query<{
+      id: string;
+      subject: string | null;
+      to_recipients: MailAddress[];
+      cc_recipients: MailAddress[];
+      bcc_recipients: MailAddress[];
+      remind_hours: number | null;
+      follow_up_days: number | null;
+      follow_up_body: string | null;
+    }>(
+      "select id, subject, to_recipients, cc_recipients, bcc_recipients, remind_hours, follow_up_days, follow_up_body from crm.mail_drafts where id = any($1::uuid[]) and user_id = $2",
       [list, actor.userId],
     );
     for (const row of drafts.rows) {
       if (row.subject?.trim()) names.set(`${row.id}:subject`, row.subject.trim());
+      if (row.follow_up_days) names.set(`${row.id}:follow_up_days`, String(row.follow_up_days));
+      if (row.follow_up_days && row.follow_up_body?.trim()) names.set(`${row.id}:follow_up_body`, row.follow_up_body.trim());
+      if (row.remind_hours) names.set(`${row.id}:remind_hours`, String(row.remind_hours));
       for (const [key, people] of [["to", row.to_recipients], ["cc", row.cc_recipients], ["bcc", row.bcc_recipients]] as const) {
         if (people?.length) names.set(`${row.id}:${key}`, people.map((person) => person.address).join(", "));
       }

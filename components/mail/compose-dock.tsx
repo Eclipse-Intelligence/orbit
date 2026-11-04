@@ -32,9 +32,10 @@ type Card = {
   minimised: boolean;
   position: { x: number; y: number } | null;
   layer: number;
+  onSent?: () => void;
 };
 
-type OpenOptions = { to?: MailAddress[]; contactId?: string | null; draft?: MailDraft };
+type OpenOptions = { to?: MailAddress[]; contactId?: string | null; draft?: MailDraft; subject?: string; body?: string; onSent?: () => void };
 
 type ComposerContextValue = {
   openComposer: (options?: OpenOptions) => void;
@@ -69,6 +70,9 @@ function payloadDraft(payload: SendPayload): MailDraft {
     sendError: null,
     identityId: payload.identityId ?? null,
     attachments: payload.files,
+    remindHours: payload.remindHours,
+    followUpDays: payload.followUpDays,
+    followUpBody: payload.followUpBody,
   };
 }
 
@@ -184,6 +188,8 @@ function ComposeCard({
             onSubject={setTitle}
             onClose={onRemove}
             onSent={onRemove}
+            onDelivered={card.onSent}
+            onScheduled={card.onSent}
           />
         )}
       </div>
@@ -233,14 +239,19 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
       ]);
       setAccounts(list);
       const to = options.to ?? (contact?.email ? [{ address: contact.email.toLowerCase(), name: contact.name }] : []);
+      const sourceId = options.draft?.sourceId ?? list[0]?.id ?? "";
+      const prefilled: MailDraft | null =
+        !options.draft && options.body
+          ? { id: "", sourceId, mode: "new", messageId: null, to, cc: [], bcc: [], subject: options.subject ?? "", body: options.body, savedAt: "", sendAt: null, sendError: null }
+          : null;
       const start: ComposerStart = {
         mode: options.draft?.mode ?? "new",
         messageId: options.draft?.messageId ?? null,
-        sourceId: options.draft?.sourceId ?? list[0]?.id ?? "",
+        sourceId,
         to,
         cc: [],
-        subject: "",
-        draft: options.draft ?? null,
+        subject: options.subject ?? "",
+        draft: options.draft ?? prefilled,
       };
       const existing = options.draft ? cardsRef.current.find((card) => card.start.draft?.id === options.draft!.id) : null;
       if (existing) {
@@ -253,7 +264,15 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
         return;
       }
       counter.current += 1;
-      const card: Card = { key: counter.current, start, title: options.draft?.subject ?? "", minimised: false, position: null, layer: ++layers.current };
+      const card: Card = {
+        key: counter.current,
+        start,
+        title: options.draft?.subject ?? options.subject ?? "",
+        minimised: false,
+        position: null,
+        layer: ++layers.current,
+        onSent: options.onSent,
+      };
       cardsRef.current = [...cardsRef.current, card];
       setCards((current) => [...current, card]);
     })();

@@ -204,6 +204,6 @@ describe("prepared replies and automatic reminders", () => {
     const { fetchImpl, prompts } = model([]);
     const report = await prepareMail(owner, { deadline: soon(), fetchImpl });
     assert.equal(prompts.length, 0);
-    assert.deepEqual(report, { prepared: 0, skipped: 0, reminders: 0, checked: 0, pitches: 0 });
+    assert.deepEqual(report, { prepared: 0, skipped: 0, reminders: 0, checked: 0, pitches: 0, deferrals: 0 });
   });
 });

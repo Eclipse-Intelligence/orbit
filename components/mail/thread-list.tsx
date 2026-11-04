@@ -2,13 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import { tagBase } from "@/components/beautifui/record-marks";
-import { mailListWhen, personName, recipientList, snippetCore } from "@/lib/mail/format";
+import { followUpDay, mailListWhen, personName, recipientList, snippetCore } from "@/lib/mail/format";
 import { laterDetail } from "@/lib/mail/later";
 import type { ThreadSummary } from "@/lib/mail/view";
 import { swipeCommit, watchSwipe, type SwipeHandlers } from "@/components/mail/swipe";
 import { cn } from "@/lib/utils";
 import ArchiveIcon from "@/public/assets/images/mail/archive.svg";
 import EyeIcon from "@/public/assets/images/mail/eye.svg";
+import FollowUpIcon from "@/public/assets/images/mail/follow-up.svg";
 import FlagIcon from "@/public/assets/images/mail/flag.svg";
 import InboxIcon from "@/public/assets/images/mail/inbox.svg";
 import ClockIcon from "@/public/assets/images/mail/clock.svg";
@@ -270,6 +271,12 @@ function Row({
               <span className="text-primary-foreground flex items-center gap-1 text-[12px] tabular-nums" title="Comes back to your inbox">
                 <ClockIcon aria-hidden className="size-3" />
                 {laterDetail(thread.snoozedUntil, now)}
+              </span>
+            ) : thread.followUpAt ? (
+              <span className="text-primary-foreground flex items-center gap-1 text-[12px] tabular-nums" title="Follow-up goes out if nobody replies">
+                <FollowUpIcon aria-hidden className="size-3" />
+                <span className="sr-only">Follow-up on</span>
+                {followUpDay(thread.followUpAt)}
               </span>
             ) : (
               <span className={cn("text-[12px] tabular-nums", thread.unread ? "text-foreground" : "text-subtle")}>

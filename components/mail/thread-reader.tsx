@@ -1,6 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { FollowUpBanner, FollowUpCancelledNote } from "@/components/mail/follow-up-banner";
+import DeferralNotice from "@/components/mail/deferral-notice";
 import MessageAttachments from "@/components/mail/message-attachments";
 import ReadStatus from "@/components/mail/read-status";
 import ThreadPeople from "@/components/mail/thread-people";
@@ -153,9 +155,11 @@ function Message({
   swipe,
   onEditDraft,
   onDeleteDraft,
+  footer,
 }: {
   onEditDraft: (message: ThreadMessage) => void;
   onDeleteDraft: (message: ThreadMessage) => void;
+  footer?: ReactNode;
   message: ThreadMessage;
   companies: { id: string; name: string }[];
   own: string[];
@@ -229,8 +233,10 @@ function Message({
         <div className="flex flex-col gap-3 px-4 pb-4 sm:pl-14">
           <MessageBody message={message} title={`Email from ${sender}`} swipe={swipe} hideQuotes={hideQuotes} />
           {message.hasAttachments && <MessageAttachments messageId={message.id} companies={companies} />}
+          {footer}
         </div>
       )}
+      {!expanded && footer && <div className="px-4 pb-3 sm:pl-14">{footer}</div>}
     </article>
   );
 }
@@ -306,12 +312,14 @@ function Thread({
   swipe,
   onEditDraft,
   onDeleteDraft,
+  before,
 }: {
   detail: ThreadDetail;
   own: string[];
   swipe: () => SwipeHandlers;
   onEditDraft: (message: ThreadMessage) => void;
   onDeleteDraft: (message: ThreadMessage) => void;
+  before?: { id: string; node: ReactNode } | null;
 }) {
   const last = detail.messages.length - 1;
   const [open, setOpen] = useState<Set<string>>(
@@ -330,6 +338,7 @@ function Thread({
     <div className="flex flex-col gap-1.5">
       {visible.map((message, index) => (
         <div key={message.id} className="flex flex-col gap-1.5">
+          {before?.id === message.id && before.node}
           <Message
             message={message}
             companies={companies}
@@ -337,6 +346,7 @@ function Thread({
             swipe={swipe}
             onEditDraft={onEditDraft}
             onDeleteDraft={onDeleteDraft}
+            footer={detail.deferral?.messageId === message.id ? <DeferralNotice key={`${detail.deferral.id}:${detail.deferral.at}`} deferral={detail.deferral} /> : null}
             expanded={open.has(message.id)}
             collapsible={detail.messages.length > 1}
             hideQuotes={message.id !== detail.messages[0].id}
@@ -834,6 +844,7 @@ export default function ThreadReader({
                 swipe={swipe}
                 onEditDraft={editOutsideDraft}
                 onDeleteDraft={(message) => void deleteOutsideDraft(message)}
+                before={detail.followUpReplied ? { id: detail.followUpReplied.messageId, node: <FollowUpCancelledNote replied={detail.followUpReplied} /> } : null}
               />
               {draftError && (
                 <p role="alert" className="text-danger px-4 text-[13px]">
@@ -880,6 +891,7 @@ export default function ThreadReader({
                 target && (
                   <>
                   {prepared && <PreparedCard prepared={prepared} onUse={() => void takePrepared(prepared)} onDismiss={() => dismissPrepared(prepared)} />}
+                  {followUp?.action === "send" && <FollowUpBanner key={followUp.id} followUp={followUp} onChanged={onSent} />}
                   <div className="flex flex-wrap items-center gap-2 px-4">
                     {tracked && (
                       <span className="order-last ml-auto">
@@ -893,7 +905,7 @@ export default function ThreadReader({
                       </Button>
                     ))}
                   </div>
-                  {followUp && (
+                  {followUp && followUp.action !== "send" && (
                     <div role="status" className="caption-style text-subtle flex flex-wrap items-center gap-x-2 px-4">
                       <span>
                         {followUp.automatic ? "Orbit will remind you" : "You'll be reminded"} on {mailFullWhen(followUp.at)} if nobody replies.
