@@ -34,7 +34,7 @@ export async function pollAgentMailboxes(options: { fetchImpl?: typeof fetch; no
   for (const target of targets) {
     if (Date.now() > deadline || budget <= 0) break;
     try {
-      const after = new Date(Math.max(now - POLL_LOOKBACK_MS, new Date(target.set_up_at).getTime() - 60_000));
+      const after = new Date(now - POLL_LOOKBACK_MS);
       const listed = (await listRecentMessages(target.address, after, options.fetchImpl)).filter(
         (message) => message.direction !== "outbound" && !(message.labels ?? []).some((label) => ["SENT", "DRAFT"].includes(label.toUpperCase())),
       );
