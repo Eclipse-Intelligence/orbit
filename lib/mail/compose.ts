@@ -12,6 +12,7 @@ import {
   createMicrosoftDraft,
   deleteMicrosoftDraft,
   exportMicrosoftMime,
+  fetchInternetMessageId,
   GraphMailError,
   saveMicrosoftSentCopy,
   sendMicrosoftDraft,
@@ -460,16 +461,17 @@ async function addSendFollowUp(
     recipients: { to: MailAddress[]; cc: MailAddress[]; bcc: MailAddress[] };
     identityId: string | null;
     subject: string | null;
+    originalId: string | null;
   },
 ) {
   await db.query(
     `update crm.mail_reminders set state = case when action = 'send' then 'cancelled' else 'done' end
-     where user_id = $1 and source_id = $2 and thread_key = $3 and kind = 'follow_up' and state = 'waiting'`,
+     where user_id = $1 and source_id = $2 and thread_key = $3 and kind = 'follow_up' and state = 'waiting' and not deferral`,
     [actor.userId, input.sourceId, input.threadKey],
   );
   await db.query(
-    `insert into crm.mail_reminders (workspace_id, user_id, source_id, thread_key, kind, action, due_at, subject, follow_up_body, recipients, identity_id)
-     values ($1, $2, $3, $4, 'follow_up', 'send', $5, $6, $7, $8, $9)`,
+    `insert into crm.mail_reminders (workspace_id, user_id, source_id, thread_key, kind, action, due_at, subject, follow_up_body, recipients, identity_id, used_identity, original_internet_id)
+     values ($1, $2, $3, $4, 'follow_up', 'send', $5, $6, $7, $8, $9, $10, $11)`,
     [
       actor.workspaceId,
       actor.userId,
@@ -480,8 +482,16 @@ async function addSendFollowUp(
       input.body,
       JSON.stringify(input.recipients),
       input.identityId,
+      Boolean(input.identityId),
+      input.originalId,
     ],
   );
+}
+
+function mimeMessageId(raw: string) {
+  const split = raw.search(/\r?\n\r?\n/);
+  const headers = split === -1 ? raw : raw.slice(0, split);
+  return /^message-id:[ \t]*(<[^>\r\n]+>)/im.exec(headers)?.[1]?.slice(0, 1000) ?? null;
 }
 
 export async function sendMailDraft(
@@ -512,12 +522,14 @@ export async function sendMailDraft(
   if (identity && identity.sourceId !== row.source_id) {
     throw new CrmError("invalid_input", `${identity.email} sends through a different mailbox. Choose it again in From.`, 400);
   }
+  let originalId: string | null = null;
   const deliver = async (draft: DraftRow) => {
     const draftUrl = `https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(draft.provider_draft_id)}`;
     if (attached.files.length) {
       await attachToDraft(token, draftUrl, attached.files.map((file) => (inline[file.name] ? { ...file, contentId: inline[file.name] } : file)), fetchImpl);
     }
     if (!identity) {
+      if (input.followUpDays) originalId = await fetchInternetMessageId(token, draft.provider_draft_id, fetchImpl).catch(() => null);
       await sendMicrosoftDraft(token, draft.provider_draft_id, fetchImpl);
       return;
     }
@@ -525,6 +537,7 @@ export async function sendMailDraft(
       name: identity.displayName,
       address: identity.email,
     });
+    originalId = mimeMessageId(raw);
     try {
       await (options.smtp ?? defaultSmtpSender)(identity, { from: identity.email, to: [...input.to, ...input.cc, ...input.bcc].map((item) => item.address), raw });
     } catch (error) {
@@ -570,6 +583,7 @@ export async function sendMailDraft(
         recipients: { to: input.to, cc: input.cc, bcc: input.bcc },
         identityId: identity?.id ?? null,
         subject: row.subject,
+        originalId,
       });
     } else if (input.remindHours && threadKey) {
       await db.query(
@@ -739,13 +753,14 @@ export async function changeScheduledDraft(
 export async function claimDueDrafts(actor: UserActor, limit = 5): Promise<DueDraft[]> {
   return withActor(actor, async (db) => {
     const result = await db.query<DueDraft>(
-      `update crm.mail_drafts set send_at = null
-       where id in (
+      `with picked as materialized (
          select id from crm.mail_drafts
          where user_id = $1 and workspace_id = $2 and send_at <= now()
-         order by send_at limit $3 for update skip locked
+         order by send_at, id limit $3 for update skip locked
        )
-       returning ${DRAFT_COLUMNS}, signature`,
+       update crm.mail_drafts d set send_at = null
+       from picked where d.id = picked.id
+       returning ${DRAFT_COLUMNS.split(",").map((column) => `d.${column.trim()}`).join(", ")}, d.signature`,
       [actor.userId, actor.workspaceId, limit],
     );
     return result.rows;
@@ -949,13 +964,17 @@ type StoredDraft = {
   bcc_recipients: MailAddress[];
   send_at: Date | string | null;
   send_error: string | null;
+  remind_hours: number | null;
+  follow_up_days: number | null;
+  follow_up_body: string | null;
 };
 
 async function storedDraft(actor: UserActor, id: string) {
   if (!isUuid(id)) return null;
   return withActor(actor, async (db) => {
     const result = await db.query<StoredDraft>(
-      `select id, source_id, identity_id, mode, reply_to, subject, to_recipients, cc_recipients, bcc_recipients, send_at, send_error
+      `select id, source_id, identity_id, mode, reply_to, subject, to_recipients, cc_recipients, bcc_recipients, send_at, send_error,
+         remind_hours, follow_up_days, follow_up_body
        from crm.mail_drafts where id = $1 and user_id = $2`,
       [id, actor.userId],
     );
@@ -1011,6 +1030,13 @@ export async function sendForAgent(
     input.to,
     input.cc ?? [],
   );
+  const followUp =
+    input.followUp !== undefined
+      ? input.followUp
+      : stored?.follow_up_days
+        ? { afterDays: stored.follow_up_days, body: stored.follow_up_body }
+        : null;
+  const remindHours = input.remindHours !== undefined ? input.remindHours : (stored?.remind_hours ?? null);
   const draft = readDraftInput({
     id: input.draftId ?? null,
     mode,
@@ -1020,9 +1046,9 @@ export async function sendForAgent(
     ...recipients,
     subject: subject || defaults.subject,
     body: input.body,
-    remindHours: input.followUp ? null : (input.remindHours ?? null),
-    followUpDays: input.followUp ? input.followUp.afterDays : null,
-    followUpBody: input.followUp?.body ?? null,
+    remindHours: followUp ? null : remindHours,
+    followUpDays: followUp ? followUp.afterDays : null,
+    followUpBody: followUp?.body ?? null,
   });
   const attachments = readAttachmentIds(input.attachments);
   const summary = {
@@ -1033,7 +1059,7 @@ export async function sendForAgent(
   const threadHref = original ? `/mail?thread=${encodeURIComponent(`${original.source_id}|${original.tk}`)}` : null;
   if (input.sendAt) {
     const scheduled = await scheduleMailDraft(actor, { ...draft, attachments, sendAt: input.sendAt }, { ...options, storedFiles: "keep" });
-    return { ...summary, warning: null, scheduled: true, sendAt: scheduled.sendAt, draftId: scheduled.id, href: threadHref ?? "/mail?view=scheduled" };
+    return { ...summary, followUp, warning: null, scheduled: true, sendAt: scheduled.sendAt, draftId: scheduled.id, href: threadHref ?? "/mail?view=scheduled" };
   }
   const wasScheduled = Boolean(stored?.send_at || stored?.send_error);
   if (stored?.send_at && !(await claimScheduledDraft(actor, stored.id))) {
@@ -1042,7 +1068,7 @@ export async function sendForAgent(
   let current: string | null = stored?.id ?? null;
   try {
     const result = await sendMailDraft(actor, { ...draft, attachments }, { ...options, storedFiles: "keep", onDraftRow: (id) => (current = id) });
-    return { ...summary, warning: result.warning, scheduled: false, sendAt: null, draftId: null, href: threadHref ?? "/mail?view=sent" };
+    return { ...summary, followUp, warning: result.warning, scheduled: false, sendAt: null, draftId: null, href: threadHref ?? "/mail?view=sent" };
   } catch (error) {
     if (wasScheduled && current) {
       await failDueDraft(actor, current, error instanceof Error ? error.message : "The email didn't send.").catch(() => undefined);

@@ -7,9 +7,10 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
 export async function POST(request: Request) {
+  const deadline = Date.now() + 27_000;
   return mailResponse(async (actor) => {
     const report = await syncMail(actor, { budgetMs: 8_000, backfill: false });
-    const due = await processDueMail(actor, { origin: mailOrigin(request) }).catch(() => null);
+    const due = await processDueMail(actor, { origin: mailOrigin(request), deadline }).catch(() => null);
     return { stored: report.stored, removed: report.removed, due };
   });
 }

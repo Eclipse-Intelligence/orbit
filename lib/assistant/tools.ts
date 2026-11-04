@@ -504,6 +504,23 @@ function followUpArg(value: unknown) {
   return { afterDays: int(input.afterDays, 3, 1, 10), body };
 }
 
+function storedFollowUp(args: Args, name: Names) {
+  const draftId = str(args.draftId);
+  if (!draftId || args.followUp !== undefined) return null;
+  const days = Number(detail(name, `${draftId}:follow_up_days`));
+  if (!Number.isInteger(days) || days < 1) return null;
+  return { afterDays: days, body: detail(name, `${draftId}:follow_up_body`) || null };
+}
+
+function storedReminderLine(args: Args, name: Names) {
+  const draftId = str(args.draftId);
+  if (!draftId || args.remindAfterDays !== undefined || args.followUp !== undefined) return "";
+  const hours = Number(detail(name, `${draftId}:remind_hours`));
+  if (!Number.isInteger(hours) || hours < 1 || storedFollowUp(args, name)) return "";
+  const days = Math.max(1, Math.round(hours / 24));
+  return `Reminder: if nobody replies within ${days} ${days === 1 ? "day" : "days"}`;
+}
+
 function followUpLines(value: unknown) {
   const followUp = followUpArg(value);
   if (!followUp) return [];
@@ -3739,7 +3756,8 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
           attachmentLine(args, name),
           str(args.from) === AGENT_MAILBOX ? "Sends from the agent mailbox when you approve." : later ? "Scheduled in Orbit Mail when you approve." : "Sends from Orbit Mail when you approve.",
           str(args.body),
-          ...(str(args.from) === AGENT_MAILBOX ? [] : followUpLines(args.followUp)),
+          ...(str(args.from) === AGENT_MAILBOX ? [] : followUpLines(storedFollowUp(args, name) ?? args.followUp)),
+          str(args.from) === AGENT_MAILBOX ? "" : storedReminderLine(args, name),
         ].filter(Boolean),
       };
     },
@@ -3773,8 +3791,8 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
           cc: strings(args.cc),
           subject: optionalStr(args.subject),
           body,
-          remindHours: typeof args.remindAfterDays === "number" ? int(args.remindAfterDays, 3, 1, 90) * 24 : null,
-          followUp: followUpArg(args.followUp),
+          remindHours: typeof args.remindAfterDays === "number" ? int(args.remindAfterDays, 3, 1, 90) * 24 : undefined,
+          followUp: args.followUp === undefined ? undefined : followUpArg(args.followUp),
           attachments: files.ids,
           sendAt: sendAt?.toISOString() ?? null,
         },
@@ -3783,7 +3801,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         await discardAttachments(actor, files.copied).catch(() => undefined);
         throw error;
       });
-      const followUp = followUpArg(args.followUp);
+      const followUp = sent.followUp;
       if (sent.scheduled) {
         return {
           sent: false,
@@ -4766,12 +4784,24 @@ export async function recordNames(actor: UserActor, args: Args[], tools: string[
           .join(", "),
       );
     }
-    const drafts = await db.query<{ id: string; subject: string | null; to_recipients: MailAddress[]; cc_recipients: MailAddress[]; bcc_recipients: MailAddress[] }>(
-      "select id, subject, to_recipients, cc_recipients, bcc_recipients from crm.mail_drafts where id = any($1::uuid[]) and user_id = $2",
+    const drafts = await db.query<{
+      id: string;
+      subject: string | null;
+      to_recipients: MailAddress[];
+      cc_recipients: MailAddress[];
+      bcc_recipients: MailAddress[];
+      remind_hours: number | null;
+      follow_up_days: number | null;
+      follow_up_body: string | null;
+    }>(
+      "select id, subject, to_recipients, cc_recipients, bcc_recipients, remind_hours, follow_up_days, follow_up_body from crm.mail_drafts where id = any($1::uuid[]) and user_id = $2",
       [list, actor.userId],
     );
     for (const row of drafts.rows) {
       if (row.subject?.trim()) names.set(`${row.id}:subject`, row.subject.trim());
+      if (row.follow_up_days) names.set(`${row.id}:follow_up_days`, String(row.follow_up_days));
+      if (row.follow_up_days && row.follow_up_body?.trim()) names.set(`${row.id}:follow_up_body`, row.follow_up_body.trim());
+      if (row.remind_hours) names.set(`${row.id}:remind_hours`, String(row.remind_hours));
       for (const [key, people] of [["to", row.to_recipients], ["cc", row.cc_recipients], ["bcc", row.bcc_recipients]] as const) {
         if (people?.length) names.set(`${row.id}:${key}`, people.map((person) => person.address).join(", "));
       }

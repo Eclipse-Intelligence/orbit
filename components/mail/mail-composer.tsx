@@ -79,6 +79,7 @@ export default function MailComposer({
   onSubject,
   onDelivered,
   onUndone,
+  onScheduled,
 }: {
   start: ComposerStart;
   accounts: ComposeAccount[];
@@ -88,6 +89,7 @@ export default function MailComposer({
   onSubject?: (subject: string) => void;
   onDelivered?: () => void;
   onUndone?: () => void;
+  onScheduled?: () => void;
 }) {
   const { queueSend, scheduleSend, pickLater } = useComposer();
   const [aiOpen, setAiOpen] = useState(false);
@@ -318,6 +320,7 @@ export default function MailComposer({
       now,
       onPick: (at, detail) => {
         scheduleSend(handOver(), at, detail);
+        onScheduled?.();
         onClose();
       },
     });

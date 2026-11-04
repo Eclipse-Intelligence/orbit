@@ -32,9 +32,10 @@ type Card = {
   minimised: boolean;
   position: { x: number; y: number } | null;
   layer: number;
+  onSent?: () => void;
 };
 
-type OpenOptions = { to?: MailAddress[]; contactId?: string | null; draft?: MailDraft; subject?: string; body?: string };
+type OpenOptions = { to?: MailAddress[]; contactId?: string | null; draft?: MailDraft; subject?: string; body?: string; onSent?: () => void };
 
 type ComposerContextValue = {
   openComposer: (options?: OpenOptions) => void;
@@ -187,6 +188,8 @@ function ComposeCard({
             onSubject={setTitle}
             onClose={onRemove}
             onSent={onRemove}
+            onDelivered={card.onSent}
+            onScheduled={card.onSent}
           />
         )}
       </div>
@@ -261,7 +264,15 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
         return;
       }
       counter.current += 1;
-      const card: Card = { key: counter.current, start, title: options.draft?.subject ?? options.subject ?? "", minimised: false, position: null, layer: ++layers.current };
+      const card: Card = {
+        key: counter.current,
+        start,
+        title: options.draft?.subject ?? options.subject ?? "",
+        minimised: false,
+        position: null,
+        layer: ++layers.current,
+        onSent: options.onSent,
+      };
       cardsRef.current = [...cardsRef.current, card];
       setCards((current) => [...current, card]);
     })();

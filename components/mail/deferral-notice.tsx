@@ -4,11 +4,19 @@ import { useState } from "react";
 import Button from "@/components/_ui/button";
 import { useComposer } from "@/components/mail/compose-dock";
 import type { DeferredFollowUp } from "@/lib/mail/view";
-import { appTimeZone } from "@/lib/time";
+import { appTimeZone, zonedParts } from "@/lib/time";
 import ClockIcon from "@/public/assets/images/mail/clock.svg";
 
-function dayLabel(at: string) {
-  return new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: appTimeZone() }).format(new Date(at));
+function dayLabel(at: string, now = Date.now()) {
+  const timeZone = appTimeZone();
+  const when = zonedParts(new Date(at), timeZone);
+  const year = when.year !== zonedParts(new Date(now), timeZone).year;
+  const day = new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", ...(year ? { year: "numeric" } : {}), timeZone })
+    .format(new Date(at))
+    .replace(",", "");
+  if (when.hour === 9 && when.minute === 0) return day;
+  const time = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", timeZone }).format(new Date(at));
+  return `${day} at ${time}`;
 }
 
 async function postDeferral(body: { id: string; action: "move" | "cancel"; at?: string }) {

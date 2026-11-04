@@ -26,7 +26,7 @@ async function handle(request: Request) {
     const share = Math.floor(remaining / (targets.length - index));
     try {
       const report = await syncMail(target.actor, { deadline: Date.now() + share });
-      await processDueMail(target.actor).catch((error) => console.error("Due mail failed", error));
+      await processDueMail(target.actor, { deadline: Math.min(deadline - 5_000, Date.now() + 30_000) }).catch((error) => console.error("Due mail failed", error));
       await prepareMail(target.actor, { deadline: Math.min(deadline - 5_000, Date.now() + Math.max(share, 30_000)) }).catch((error) =>
         console.error("Preparing mail failed", error),
       );

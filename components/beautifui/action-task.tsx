@@ -191,8 +191,8 @@ export default function ActionTask({
             )}
             {task.opportunityName && <p>{task.opportunityName}</p>}
             {reminder && <p>Reminder {reminder.toLowerCase()}</p>}
-            {description.links.map((link) => (
-              <p key={link.href}>
+            {description.links.map((link, index) => (
+              <p key={`${index}:${link.href}`}>
                 <Link href={link.href} className="text-soft hover:text-foreground inline-flex items-center gap-1.5 underline-offset-2 hover:underline">
                   <MailIcon aria-hidden className="size-3 shrink-0" />
                   {link.label}

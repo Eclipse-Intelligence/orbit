@@ -10,15 +10,29 @@ import FollowUpIcon from "@/public/assets/images/mail/follow-up.svg";
 
 type Busy = "write" | "send" | "save" | null;
 
+class FollowUpProblem extends Error {
+  constructor(
+    message: string,
+    readonly stale: boolean,
+  ) {
+    super(message);
+  }
+}
+
 async function followUpAction<T>(id: string, action: string, body?: string): Promise<T> {
   const response = await fetch("/api/mail/follow-up", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ id, action, body }),
-  });
+  }).catch(() => null);
+  if (!response) throw new FollowUpProblem("Orbit couldn't reach the server. Try again.", false);
   const json = (await response.json().catch(() => ({}))) as T & { error?: string };
-  if (!response.ok) throw new Error(json.error ?? "Orbit couldn't change the follow-up. Try again.");
+  if (!response.ok) throw new FollowUpProblem(json.error ?? "Orbit couldn't change the follow-up. Try again.", response.status === 404 || response.status === 409);
   return json;
+}
+
+function isStale(problem: unknown) {
+  return problem instanceof FollowUpProblem && problem.stale;
 }
 
 export function FollowUpBanner({ followUp, onChanged }: { followUp: FollowUpReminder; onChanged: () => void }) {
@@ -39,6 +53,10 @@ export function FollowUpBanner({ followUp, onChanged }: { followUp: FollowUpRemi
       await work();
     } catch (problem) {
       setError(problem instanceof Error ? problem.message : "Orbit couldn't change the follow-up. Try again.");
+      if (kind === "send" && isStale(problem)) {
+        showToast({ message: (problem as Error).message, tone: "alert" });
+        onChanged();
+      }
     } finally {
       setBusy(null);
     }
@@ -92,6 +110,10 @@ export function FollowUpBanner({ followUp, onChanged }: { followUp: FollowUpRemi
       .catch((problem: Error) => {
         setGone(false);
         setError(problem.message);
+        if (isStale(problem)) {
+          showToast({ message: problem.message, tone: "alert" });
+          onChanged();
+        }
       });
   }
 

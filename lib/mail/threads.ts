@@ -329,16 +329,24 @@ async function readThread(actor: UserActor, key: string): Promise<ThreadDetail> 
       recipients: { to?: MailAddress[] } | null;
     }>(
       `select id, due_at, automatic, action, follow_up_body, recipients from crm.mail_reminders
-       where user_id = $1 and source_id = $2 and thread_key = $3 and kind = 'follow_up' and state = 'waiting' and deferred_message_id is null
+       where user_id = $1 and source_id = $2 and thread_key = $3 and kind = 'follow_up' and state = 'waiting' and not deferral
        order by action = 'send' desc, due_at limit 1`,
       [actor.userId, sourceId, tk],
     );
     const replied = await db.query<{ reminder_id: string; id: string; from_name: string | null; from_email: string | null }>(
-      `select r.id as reminder_id, x.id, x.from_name, x.from_email from crm.mail_reminders r
+      `with newest as (
+         select * from crm.mail_reminders
+         where user_id = $1 and source_id = $2 and thread_key = $3 and kind = 'follow_up' and action = 'send'
+         order by created_at desc, id desc limit 1
+       )
+       select r.id as reminder_id, x.id, x.from_name, x.from_email from newest r
        cross join lateral (${replyAfterSql("r", "$1", "$4")} limit 1) x
-       where r.user_id = $1 and r.source_id = $2 and r.thread_key = $3 and r.kind = 'follow_up' and r.action = 'send'
-         and r.state in ('waiting', 'replied')
-       order by r.created_at desc limit 1`,
+       where r.state in ('waiting', 'replied')
+         and not exists (
+           select 1 from crm.mail_reminders o
+           where o.user_id = $1 and o.source_id = $2 and o.thread_key = $3 and o.kind = 'follow_up' and o.state = 'waiting'
+             and not o.deferral and o.id <> r.id
+         )`,
       [actor.userId, sourceId, tk, actor.email],
     );
     const reply = replied.rows[0] ?? null;
@@ -355,7 +363,12 @@ async function readThread(actor: UserActor, key: string): Promise<ThreadDetail> 
         .map((row) => row.email)
         .concat(actor.email.toLowerCase()),
     );
-    const sender = rows.filter((row) => row.from_email && !own.has(row.from_email.toLowerCase())).at(-1)?.from_email ?? null;
+    const fromThem = rows.filter((row) => row.from_email && !own.has(row.from_email.toLowerCase()));
+    const sender = fromThem.at(-1)?.from_email ?? null;
+    const deferredOn =
+      deferral && !rows.some((row) => row.id === deferral.messageId)
+        ? { ...deferral, messageId: fromThem.filter((row) => !row.is_draft).at(-1)?.id ?? target?.id ?? deferral.messageId }
+        : deferral;
     const subscription = await threadSubscription(db, actor, sender);
     return {
       subscription,
@@ -376,7 +389,7 @@ async function readThread(actor: UserActor, key: string): Promise<ThreadDetail> 
           }
         : null,
       followUpReplied: reply ? { name: firstName(reply.from_email ? { address: reply.from_email, name: reply.from_name } : null), messageId: reply.id } : null,
-      deferral,
+      deferral: deferredOn,
       messages: rows.map((row) => {
         const html = row.body_html ? cleanEmailHtml(row.body_html) : null;
         return {

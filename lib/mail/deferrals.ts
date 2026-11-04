@@ -106,6 +106,13 @@ async function candidates(db: Db, actor: UserActor) {
            and (d.state <> 'failed' or d.failures >= ${MAX_FAILURES} or d.last_failed_at > now() - make_interval(hours => ${RETRY_HOURS}))
        )
        and ${knownSender("m", "$2", "$5")}
+       and not exists (
+         select 1 from crm.mail_messages later join crm.mail_folders lf on lf.id = later.folder_id
+         where later.user_id = $1 and later.source_id = m.source_id
+           and coalesce(later.thread_key, 'm:' || later.id::text) = coalesce(m.thread_key, 'm:' || m.id::text)
+           and later.id <> m.id and not later.is_draft and lf.role not in ('drafts', 'junk', 'outbox')
+           and coalesce(later.received_at, later.sent_at, later.created_at) > coalesce(m.received_at, m.sent_at, m.created_at)
+       )
      order by at desc
      limit $6`,
     [actor.userId, actor.workspaceId, LOOKBACK_HOURS, actor.email, [...FREE_MAIL_DOMAINS], CANDIDATES_PER_RUN],
@@ -141,7 +148,10 @@ async function noteFailures(actor: UserActor, messageIds: string[]) {
 }
 
 function cleanNote(note: string | null | undefined) {
-  const text = clean(note ?? "").replace(/\s+/g, " ").trim();
+  const text = clean(note ?? "")
+    .replace(/["\u201c\u201d\u2018`{}[\]<>]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
   if (!text) return FALLBACK_NOTE;
   const sentence = /[.!?]$/.test(text) ? text : `${text}.`;
   return sentence.slice(0, NOTE_MAX);
@@ -168,13 +178,18 @@ async function recordDeferral(actor: UserActor, input: DeferralInput, now = Date
   const note = cleanNote(input.note);
   return withActor(actor, async (db) => {
     await db.query("select pg_advisory_xact_lock(hashtext($1))", [`deferral:${actor.userId}:${input.sourceId}:${input.threadKey}`]);
-    const existing = await db.query(
-      `select 1 from crm.mail_reminders
-       where user_id = $1 and (deferred_message_id = $2 or (source_id = $3 and thread_key = $4 and kind = 'follow_up' and state = 'waiting' and deferred_message_id is not null))
+    const existing = await db.query<{ id: string; deferred_message_id: string | null }>(
+      `select id, deferred_message_id from crm.mail_reminders
+       where user_id = $1 and deferral
+         and (deferred_message_id = $2 or (source_id = $3 and thread_key = $4 and kind = 'follow_up' and state = 'waiting'))
+       order by deferred_message_id = $2 desc nulls last, created_at desc
        limit 1`,
       [actor.userId, input.messageId, input.sourceId, input.threadKey],
     );
     if (existing.rows[0]) {
+      if (existing.rows[0].deferred_message_id !== input.messageId) {
+        await db.query("update crm.mail_reminders set deferred_message_id = $2 where id = $1", [existing.rows[0].id, input.messageId]);
+      }
       await noteChecked(db, actor, [input.messageId], "found");
       return null;
     }
@@ -219,12 +234,13 @@ async function recordDeferral(actor: UserActor, input: DeferralInput, now = Date
         )
       : null;
     await db.query(
-      "update crm.mail_reminders set state = 'done' where user_id = $1 and source_id = $2 and thread_key = $3 and kind = 'follow_up' and state = 'waiting'",
+      `update crm.mail_reminders set state = case when action = 'send' then 'replied' else 'done' end
+       where user_id = $1 and source_id = $2 and thread_key = $3 and kind = 'follow_up' and state = 'waiting'`,
       [actor.userId, input.sourceId, input.threadKey],
     );
     const reminder = await db.query<{ id: string }>(
-      `insert into crm.mail_reminders (workspace_id, user_id, source_id, thread_key, kind, due_at, subject, automatic, deferred_message_id, task_id, defer_note)
-       values ($1, $2, $3, $4, 'follow_up', $5, $6, true, $7, $8, $9) returning id`,
+      `insert into crm.mail_reminders (workspace_id, user_id, source_id, thread_key, kind, due_at, subject, automatic, deferral, deferred_message_id, task_id, defer_note)
+       values ($1, $2, $3, $4, 'follow_up', $5, $6, true, true, $7, $8, $9) returning id`,
       [actor.workspaceId, actor.userId, input.sourceId, input.threadKey, input.at.toISOString(), input.subject?.slice(0, 2000) ?? null, input.messageId, task?.id ?? null, note],
     );
     await noteChecked(db, actor, [input.messageId], "found");
@@ -303,22 +319,22 @@ export async function checkDeferrals(actor: UserActor, options: { deadline: numb
 }
 
 export async function threadDeferral(db: Db, actor: UserActor, sourceId: string, key: string, now = Date.now()): Promise<DeferredFollowUp | null> {
-  const result = await db.query<{ id: string; due_at: Date | string; deferred_message_id: string; task_id: string | null }>(
+  const result = await db.query<{ id: string; due_at: Date | string; deferred_message_id: string | null; task_id: string | null }>(
     `select id, due_at, deferred_message_id, task_id from crm.mail_reminders
-     where user_id = $1 and source_id = $2 and thread_key = $3 and kind = 'follow_up' and state = 'waiting' and deferred_message_id is not null
+     where user_id = $1 and source_id = $2 and thread_key = $3 and kind = 'follow_up' and state = 'waiting' and deferral
      order by created_at desc limit 1`,
     [actor.userId, sourceId, key],
   );
   const row = result.rows[0];
   if (!row) return null;
-  return { id: row.id, messageId: row.deferred_message_id, at: iso(row.due_at)!, taskId: row.task_id, options: deferralOptions(now) };
+  return { id: row.id, messageId: row.deferred_message_id ?? "", at: iso(row.due_at)!, taskId: row.task_id, options: deferralOptions(now) };
 }
 
 async function lockDeferral(db: Db, actor: UserActor, id: string) {
   if (!isUuid(id)) throw new CrmError("not_found", "That follow-up has gone.", 404);
   const result = await db.query<{ id: string; source_id: string; thread_key: string; task_id: string | null }>(
     `select id, source_id, thread_key, task_id from crm.mail_reminders
-     where id = $1 and user_id = $2 and kind = 'follow_up' and state = 'waiting' and deferred_message_id is not null
+     where id = $1 and user_id = $2 and kind = 'follow_up' and state = 'waiting' and deferral
      for update`,
     [id, actor.userId],
   );

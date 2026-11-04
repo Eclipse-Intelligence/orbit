@@ -32,8 +32,7 @@ function FollowUpCard({ suggestion, onClosed }: { suggestion: FollowUpSuggestion
   }
 
   function review() {
-    openComposer({ to: [suggestion.to], subject: suggestion.subject, body: suggestion.body });
-    void close("used");
+    openComposer({ to: [suggestion.to], subject: suggestion.subject, body: suggestion.body, onSent: () => void close("used") });
   }
 
   return (

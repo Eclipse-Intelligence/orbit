@@ -8,8 +8,8 @@ import { getAdminPool, getPool } from "@/lib/db/pool";
 import { readDraftInput, saveMailDraft, scheduleMailDraft, sendMailDraft } from "@/lib/mail/compose";
 import { processDueMail } from "@/lib/mail/due";
 import { followUpDueAt } from "@/lib/mail/follow-up-rules";
-import { saveFollowUpBody, sendFollowUpNow } from "@/lib/mail/follow-up";
-import { setMailHelp } from "@/lib/mail/prepare";
+import { FOLLOW_UP_ROW_COLUMNS, followUpUnwritten, restoreFollowUp, saveFollowUpBody, sendDueFollowUp, sendFollowUpNow, writeFollowUpNow, type SendFollowUpRow } from "@/lib/mail/follow-up";
+import { addFollowUp, cancelFollowUp, setMailHelp } from "@/lib/mail/prepare";
 import { syncMail } from "@/lib/mail/sync";
 import { getThread, listThreads, mailNav } from "@/lib/mail/threads";
 import { listNotifications } from "@/lib/workflows/store";
@@ -63,7 +63,9 @@ function mine(id: string, conversationId: string, body = "Here's the pilot.") {
 
 const FOLDERS: Record<string, string> = { inbox: "f-inbox", sentitems: "f-sent", drafts: "f-drafts", archive: "f-archive", deleteditems: "f-trash" };
 
-const mailbox = { inbox: [] as unknown[], sent: [] as unknown[] };
+const mailbox = { inbox: [] as unknown[], sent: [] as unknown[], remote: [] as unknown[] };
+
+const graph = { draftInternetId: null as string | null, checkFails: false, sendFails: false };
 
 function outlook(model: { reply?: string; fail?: boolean } = {}) {
   const calls: Call[] = [];
@@ -88,9 +90,18 @@ function outlook(model: { reply?: string; fail?: boolean } = {}) {
         draftCount += 1;
         return Response.json({ id: `draft-${draftCount}`, subject: "RE: Acme pilot", body: { contentType: "html", content: "<html><body></body></html>" } }, { status: 201 });
       }
-      if (url.endsWith("/send")) return new Response(null, { status: 202 });
+      if (url.endsWith("/send")) return graph.sendFails ? Response.json({ error: { message: "Outlook is down" } }, { status: 500 }) : new Response(null, { status: 202 });
       return Response.json({ id });
     }
+    const conversation = url.match(/\/me\/messages\?\$filter=([^&]+)/)?.[1];
+    if (conversation) {
+      calls.push({ method, url, body: null });
+      if (graph.checkFails) return Response.json({ error: { message: "Try later" } }, { status: 503 });
+      const wanted = decodeURIComponent(conversation).match(/conversationId eq '(.+)'$/)?.[1];
+      const all = [...mailbox.inbox, ...mailbox.sent, ...mailbox.remote] as { conversationId: string }[];
+      return Response.json({ value: all.filter((item) => item.conversationId === wanted) });
+    }
+    if (/\/me\/messages\/[^/?]+\?\$select=internetMessageId$/.test(url)) return Response.json({ internetMessageId: graph.draftInternetId ?? undefined });
     const named = url.match(/\/me\/mailFolders\/(inbox|sentitems|drafts|archive|deleteditems|junkemail|outbox)\?\$select=id$/);
     if (named) return FOLDERS[named[1]] ? Response.json({ id: FOLDERS[named[1]] }) : Response.json({ error: { code: "ErrorFolderNotFound" } }, { status: 404 });
     if (url.startsWith(`${GRAPH}/me/mailFolders?$top=100`)) {
@@ -162,6 +173,18 @@ describe("follow-ups Orbit sends when nobody replies", () => {
     return result.rows[0];
   }
 
+  async function sendRow(conversation: string) {
+    const result = await admin().query<SendFollowUpRow>(
+      `select ${FOLLOW_UP_ROW_COLUMNS} from crm.mail_reminders where thread_key = $1 and action = 'send' order by created_at desc limit 1`,
+      [conversation],
+    );
+    return result.rows[0];
+  }
+
+  async function notes() {
+    return listNotifications(owner, 100);
+  }
+
   async function makeDue(conversation: string) {
     await admin().query("update crm.mail_reminders set due_at = now() - interval '1 minute' where thread_key = $1 and state = 'waiting'", [conversation]);
   }
@@ -225,11 +248,18 @@ describe("follow-ups Orbit sends when nobody replies", () => {
 
   it("writes it in the user's voice when it's due, even with prepared replies off", async () => {
     await startThread("conv-unwritten", { followUpDays: 2 });
+    const reviewed = outlook({ reply: "Hi Jane, a draft you can see first.\n\nMark" });
+    await writeFollowUpNow(owner, (await reminder("conv-unwritten")).id, { fetchImpl: reviewed.fetchImpl });
+    assert.match(reviewed.prompts[0], /What the CRM knows about the people/, "a follow-up the user reviews gets the full context");
+    await saveFollowUpBody(owner, (await reminder("conv-unwritten")).id, "");
     await makeDue("conv-unwritten");
     const run = outlook({ reply: "Hi Jane, did the pilot proposal land? Happy to talk it through.\n\nMark" });
     const report = await processDueMail(owner, { fetchImpl: run.fetchImpl, origin: ORIGIN });
     assert.equal(report.followUpsSent, 1);
     assert.equal(run.prompts.length, 1);
+    assert.match(run.prompts[0], /The conversation so far/);
+    assert.doesNotMatch(run.prompts[0], /What the CRM knows|Notes from recent calls|what [^ ]+ actually sent|About /, "an unreviewed send only reads the thread and the user's voice");
+    assert.ok(run.calls.some((call) => call.url.includes("/me/messages?$filter=")), "Outlook is checked for a reply just before sending");
     assert.match(patched(run.calls)?.body.content ?? "", /did the pilot proposal land/);
     assert.equal((await reminder("conv-unwritten")).follow_up_body, "Hi Jane, did the pilot proposal land? Happy to talk it through.\n\nMark");
   });
@@ -360,5 +390,198 @@ describe("follow-ups Orbit sends when nobody replies", () => {
     assert.equal(row.follow_up_body, "Hi Jane, one more on this.\n\nMark");
     const refused = (await runTool(owner, "send_email", { ...args, from: "agent" })) as { error: string };
     assert.match(refused.error, /followUp/);
+  });
+
+  it("cancelling after Orbit has claimed it stops the send, and says so once it's sending", async () => {
+    await startThread("conv-claimed", { followUpDays: 1, followUpBody: "Any news?" });
+    await admin().query("update crm.mail_reminders set state = 'due' where thread_key = 'conv-claimed' and state = 'waiting'");
+    const row = await sendRow("conv-claimed");
+    assert.equal(await cancelFollowUp(owner, row.id), 1);
+    assert.equal((await reminder("conv-claimed")).state, "cancelled");
+    const run = outlook();
+    assert.equal(await sendDueFollowUp(owner, row, { origin: ORIGIN, fetchImpl: run.fetchImpl }), "gone");
+    assert.equal(sends(run.calls).length, 0);
+    await admin().query("update crm.mail_reminders set state = 'sending' where id = $1", [row.id]);
+    assert.equal(await cancelFollowUp(owner, row.id), 0, "the route answers 409 when nothing changed");
+    await admin().query("update crm.mail_reminders set state = 'cancelled' where id = $1", [row.id]);
+  });
+
+  it("recovers a follow-up stuck while sending without sending it again", async () => {
+    await startThread("conv-stuck", { followUpDays: 1, followUpBody: "Any news?" });
+    await admin().query("update crm.mail_reminders set state = 'sending', sending_at = now() - interval '11 minutes' where thread_key = 'conv-stuck'");
+    const run = outlook();
+    const report = await processDueMail(owner, { fetchImpl: run.fetchImpl, origin: ORIGIN });
+    assert.equal(report.stuck, 1);
+    assert.equal(sends(run.calls).length, 0);
+    assert.equal((await reminder("conv-stuck")).state, "due");
+    assert.ok((await notes()).some((note) => note.title === "Check Sent: Orbit may not have sent this follow-up"));
+    const again = await processDueMail(owner, { fetchImpl: outlook().fetchImpl, origin: ORIGIN });
+    assert.equal(again.stuck, 0);
+  });
+
+  it("stops claiming when the deadline is close", async () => {
+    await startThread("conv-deadline", { followUpDays: 1, followUpBody: "Any news?" });
+    await makeDue("conv-deadline");
+    const run = outlook();
+    const report = await processDueMail(owner, { fetchImpl: run.fetchImpl, origin: ORIGIN, deadline: Date.now() + 1_000 });
+    assert.equal(report.followUpsSent + report.followUps, 0);
+    assert.equal(sends(run.calls).length, 0);
+    assert.equal((await reminder("conv-deadline")).state, "waiting", "left for the next run");
+    await admin().query("update crm.mail_reminders set state = 'cancelled' where thread_key = 'conv-deadline'");
+  });
+
+  it("checks Outlook for a reply the mirror hasn't seen yet", async () => {
+    await startThread("conv-remote", { followUpDays: 1, followUpBody: "Any news?" });
+    const later = new Date(Date.now() + 60_000).toISOString();
+    mailbox.remote.push(message("reply-conv-remote", "conv-remote", { receivedDateTime: later, sentDateTime: later }));
+    await makeDue("conv-remote");
+    const run = outlook();
+    const report = await processDueMail(owner, { fetchImpl: run.fetchImpl, origin: ORIGIN });
+    assert.equal(report.followUpsSent, 0);
+    assert.equal(sends(run.calls).length, 0);
+    assert.equal((await reminder("conv-remote")).state, "replied");
+  });
+
+  it("doesn't send when Outlook can't be checked for a reply", async () => {
+    await startThread("conv-nocheck", { followUpDays: 1, followUpBody: "Any news?" });
+    await makeDue("conv-nocheck");
+    graph.checkFails = true;
+    const run = outlook();
+    try {
+      const report = await processDueMail(owner, { fetchImpl: run.fetchImpl, origin: ORIGIN });
+      assert.equal(report.followUps, 1);
+    } finally {
+      graph.checkFails = false;
+    }
+    assert.equal(sends(run.calls).length, 0);
+    assert.equal((await reminder("conv-nocheck")).state, "due");
+    assert.ok((await notes()).some((note) => /couldn't check Outlook for a reply/.test(note.body ?? "")));
+  });
+
+  it("Undo only brings back a follow-up that's still to come and alone on the thread", async () => {
+    const key = await startThread("conv-undo", { followUpDays: 3, followUpBody: "Any news?" });
+    const id = (await reminder("conv-undo")).id;
+    assert.equal(await cancelFollowUp(owner, id), 1);
+    assert.deepEqual(await restoreFollowUp(owner, id), { restored: true });
+    assert.equal(await cancelFollowUp(owner, id), 1);
+    const other = await addFollowUp(owner, { thread: key, dueAt: new Date(Date.now() + 86_400_000), subject: "Acme pilot" });
+    await assert.rejects(restoreFollowUp(owner, id), (error: { status?: number; message: string }) => error.status === 409 && /can't be brought back/.test(error.message));
+    await cancelFollowUp(owner, other.id);
+    await admin().query("update crm.mail_reminders set due_at = now() - interval '1 minute' where id = $1", [id]);
+    await assert.rejects(restoreFollowUp(owner, id), (error: { status?: number }) => error.status === 409);
+  });
+
+  it("Send now keeps what Orbit wrote before sending, and a conflict is a 409", async () => {
+    await startThread("conv-keep", { followUpDays: 3 });
+    const id = (await reminder("conv-keep")).id;
+    assert.equal(await followUpUnwritten(owner, id), true);
+    graph.sendFails = true;
+    try {
+      await assert.rejects(
+        sendFollowUpNow(owner, id, { origin: ORIGIN, fetchImpl: outlook({ reply: "Hi Jane, any thoughts?\n\nMark" }).fetchImpl }),
+        (error: { status?: number }) => error.status === 502,
+      );
+    } finally {
+      graph.sendFails = false;
+    }
+    const kept = await reminder("conv-keep");
+    assert.equal(kept.state, "waiting");
+    assert.equal(kept.follow_up_body, "Hi Jane, any thoughts?\n\nMark");
+    assert.equal(await followUpUnwritten(owner, id), false);
+
+    await startThread("conv-their-turn", { followUpDays: 3, followUpBody: "Any news?", syncSent: false });
+    await assert.rejects(
+      sendFollowUpNow(owner, (await reminder("conv-their-turn")).id, { origin: ORIGIN, fetchImpl: outlook().fetchImpl }),
+      (error: { status?: number; message: string }) => error.status === 409 && /isn't yours/.test(error.message),
+    );
+  });
+
+  it("only replies to the email it was set on, to the same people", async () => {
+    graph.draftInternetId = "<out-conv-orig-ok@mail.test>";
+    try {
+      await startThread("conv-orig-ok", { followUpDays: 1, followUpBody: "Any news?" });
+      assert.equal((await sendRow("conv-orig-ok")).original_internet_id, "<out-conv-orig-ok@mail.test>");
+      await makeDue("conv-orig-ok");
+      const run = outlook();
+      assert.equal((await processDueMail(owner, { fetchImpl: run.fetchImpl, origin: ORIGIN })).followUpsSent, 1);
+      assert.equal(sends(run.calls).length, 1);
+
+      graph.draftInternetId = "<out-conv-orig@mail.test>";
+      await startThread("conv-orig", { followUpDays: 1, followUpBody: "Any news?" });
+      const at = new Date(Date.now() + 2_000).toISOString();
+      mailbox.sent.push(message("out2-conv-orig", "conv-orig", { from: MARK, toRecipients: [JANE], sentDateTime: at, receivedDateTime: at, bodyPreview: "One more thing" }));
+      await sync();
+      await makeDue("conv-orig");
+      const other = outlook();
+      await processDueMail(owner, { fetchImpl: other.fetchImpl, origin: ORIGIN });
+      assert.equal(sends(other.calls).length, 0);
+      assert.equal((await reminder("conv-orig")).state, "due");
+      assert.ok((await notes()).some((note) => /sent another email in this conversation/.test(note.body ?? "")));
+    } finally {
+      graph.draftInternetId = null;
+    }
+
+    await startThread("conv-people", { followUpDays: 1, followUpBody: "Any news?", syncSent: false });
+    mailbox.sent.push({ ...mine("out-conv-people", "conv-people"), ccRecipients: [{ emailAddress: { name: "Sam", address: "sam@acme.test" } }] });
+    await sync();
+    await makeDue("conv-people");
+    const run = outlook();
+    await processDueMail(owner, { fetchImpl: run.fetchImpl, origin: ORIGIN });
+    assert.equal(sends(run.calls).length, 0);
+    assert.ok((await notes()).some((note) => /people on your latest email/.test(note.body ?? "")));
+  });
+
+  it("won't send from a different address when the one it was sent from has gone", async () => {
+    await startThread("conv-identity", { followUpDays: 1, followUpBody: "Any news?" });
+    await admin().query("update crm.mail_reminders set used_identity = true, identity_id = null where thread_key = 'conv-identity'");
+    await makeDue("conv-identity");
+    const run = outlook();
+    await processDueMail(owner, { fetchImpl: run.fetchImpl, origin: ORIGIN });
+    assert.equal(sends(run.calls).length, 0);
+    assert.equal((await reminder("conv-identity")).state, "due");
+    assert.ok((await notes()).some((note) => /address you sent the email from isn't in Orbit any more/.test(note.body ?? "")));
+  });
+
+  it("shows who replied only for the newest follow-up with nothing else waiting", async () => {
+    const key = (await threadFor("conv-replied")).key;
+    assert.equal((await getThread(owner, key)).followUpReplied?.name, "Jane");
+    const waiting = await addFollowUp(owner, { thread: key, dueAt: new Date(Date.now() + 86_400_000), subject: "Acme pilot" });
+    assert.equal((await getThread(owner, key)).followUpReplied, null);
+    await cancelFollowUp(owner, waiting.id);
+    const sourceId = key.split("|")[0];
+    await admin().query(
+      `insert into crm.mail_reminders (workspace_id, user_id, source_id, thread_key, kind, action, due_at, state, created_at)
+       values ($1, $2, $3, 'conv-replied', 'follow_up', 'send', now() + interval '1 day', 'cancelled', now() + interval '2 minutes')`,
+      [owner.workspaceId, owner.userId, sourceId],
+    );
+    assert.equal((await getThread(owner, key)).followUpReplied, null, "a newer cancelled follow-up hides the old note");
+  });
+
+  it("keeps a draft's follow-up when the assistant sends the draft", async () => {
+    mailbox.inbox.push(message("in-conv-draft", "conv-draft"));
+    await sync();
+    const thread = await threadFor("conv-draft");
+    const draft = await saveMailDraft(
+      owner,
+      readDraftInput({ mode: "reply", messageId: thread.latestId, to: ["jane@acme.test"], body: "Here's the pilot.", followUpDays: 2, followUpBody: "Any thoughts on the pilot?" }),
+      { storedFiles: "replace", origin: ORIGIN, fetchImpl: outlook().fetchImpl },
+    );
+    const args = { draftId: draft.id, body: "Hi Jane,\n\nHere's the pilot.\n\nMark" };
+    const card = describeAction("send_email", args, await recordNames(owner, [args]));
+    assert.ok(card.lines.includes("Follow-up: sent in the same thread at 09:00 after 2 working days if nobody replies:"));
+    assert.ok(card.lines.includes("Any thoughts on the pilot?"));
+    const env = outlook();
+    const original = globalThis.fetch;
+    globalThis.fetch = env.fetchImpl;
+    try {
+      const sent = (await runTool(owner, "send_email", args)) as { sent: boolean; followUpAt?: string };
+      assert.equal(sent.sent, true);
+      assert.ok(sent.followUpAt);
+    } finally {
+      globalThis.fetch = original;
+    }
+    const row = await reminder("conv-draft");
+    assert.equal(row.action, "send");
+    assert.equal(row.follow_up_body, "Any thoughts on the pilot?");
   });
 });

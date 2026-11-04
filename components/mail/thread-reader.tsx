@@ -346,7 +346,7 @@ function Thread({
             swipe={swipe}
             onEditDraft={onEditDraft}
             onDeleteDraft={onDeleteDraft}
-            footer={detail.deferral?.messageId === message.id ? <DeferralNotice key={detail.deferral.id} deferral={detail.deferral} /> : null}
+            footer={detail.deferral?.messageId === message.id ? <DeferralNotice key={`${detail.deferral.id}:${detail.deferral.at}`} deferral={detail.deferral} /> : null}
             expanded={open.has(message.id)}
             collapsible={detail.messages.length > 1}
             hideQuotes={message.id !== detail.messages[0].id}

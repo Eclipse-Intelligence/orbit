@@ -295,6 +295,33 @@ export async function fetchMicrosoftHeaders(token: string, messageId: string, fe
   );
 }
 
+export type ConversationMessage = { from: string | null; fromName: string | null; at: string | null; isDraft: boolean; internetMessageId: string | null };
+
+export async function fetchConversationMessages(token: string, conversationId: string, fetchImpl: typeof fetch = fetch): Promise<ConversationMessage[]> {
+  const filter = encodeURIComponent(`conversationId eq '${conversationId.replace(/'/g, "''")}'`);
+  const page = await graphJson<{ value?: GraphMessage[] }>(
+    `${GRAPH}/me/messages?$filter=${filter}&$select=id,from,receivedDateTime,sentDateTime,isDraft,internetMessageId&$top=50`,
+    token,
+    fetchImpl,
+  );
+  return (page.value ?? []).map((message) => ({
+    from: message.from?.emailAddress?.address?.trim().toLowerCase() || null,
+    fromName: message.from?.emailAddress?.name?.trim() || null,
+    at: message.receivedDateTime ?? message.sentDateTime ?? null,
+    isDraft: Boolean(message.isDraft),
+    internetMessageId: message.internetMessageId ?? null,
+  }));
+}
+
+export async function fetchInternetMessageId(token: string, messageId: string, fetchImpl: typeof fetch = fetch) {
+  const message = await graphJson<{ internetMessageId?: string | null }>(
+    `${GRAPH}/me/messages/${encodeURIComponent(messageId)}?$select=internetMessageId`,
+    token,
+    fetchImpl,
+  );
+  return message.internetMessageId?.slice(0, 1000) || null;
+}
+
 export type DraftMode = "new" | "reply" | "reply_all" | "forward";
 
 const DRAFT_ACTIONS: Record<Exclude<DraftMode, "new">, string> = { reply: "createReply", reply_all: "createReplyAll", forward: "createForward" };

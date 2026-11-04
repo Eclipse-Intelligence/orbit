@@ -5,6 +5,7 @@ import { captureStatus } from "@/lib/crm/capture";
 import { createCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
 import { callsWithoutNextStep, closeFollowUp, followUpCalls, followUpDueAt, listFollowUps } from "@/lib/crm/follow-ups";
+import { DEFAULT_STEPS, type SyncTarget } from "@/lib/crm/scheduler";
 import { saveMailbox } from "@/lib/crm/inbox";
 import { createOpportunity, updateOpportunity } from "@/lib/crm/opportunities";
 import { scopesForRole } from "@/lib/crm/scopes";
@@ -81,24 +82,35 @@ let seeded = 0;
 
 async function seedCall(
   owner: UserActor,
-  options: { name?: string; deal?: "open" | "lost" | null; occurredAt?: string; source?: "granola" | "teams"; actionItems?: unknown[] } = {},
+  options: {
+    name?: string;
+    deal?: "open" | "lost" | null;
+    occurredAt?: string;
+    source?: "granola" | "teams";
+    actionItems?: unknown[];
+    domain?: string;
+    contact?: boolean;
+    contactEmail?: string;
+    participants?: { name: string; email: string }[];
+  } = {},
 ) {
   seeded += 1;
-  const domain = `acme-${seeded}.test`;
+  const domain = options.domain ?? `acme-${seeded}.test`;
   const company = (await createCompany(owner, { name: options.name ?? `Acme ${seeded}`, domain })).body.company.id;
-  const contact = (await createContact(owner, { firstName: "Jane", lastName: "Doe", email: `jane@${domain}`, companyId: company })).body.contact.id;
+  const contact = options.contact === false ? null : (await createContact(owner, { firstName: "Jane", lastName: "Doe", email: options.contactEmail ?? `jane@${domain}`, companyId: company })).body.contact.id;
   const deal = options.deal === undefined ? "open" : options.deal;
   if (deal) {
     const opportunity = (await createOpportunity(owner, { companyId: company, name: "Pilot" })).body.opportunity.id;
     if (deal === "lost") await updateOpportunity(owner, opportunity, { status: "lost" });
   }
   const occurredAt = options.occurredAt ?? TUESDAY_CALL;
-  const activity = (await createActivity(owner, { type: "meeting", title: "Acme demo", occurredAt, contactId: contact, companyId: company })).body.activity.id;
+  const activity = (await createActivity(owner, { type: "meeting", title: "Acme demo", occurredAt, ...(contact ? { contactId: contact } : {}), companyId: company })).body.activity.id;
   const admin = getAdminPool();
+  const people = options.participants ?? [{ name: "Jane Doe", email: `jane@${domain}` }];
   await admin.query(
     `insert into crm.conversation_imports (workspace_id, user_id, source, external_id, kind, title, occurred_at, ended_at, participants, status, activity_id, contact_id, company_id)
      values ($1, $2, $3, $4, 'meeting', 'Acme demo', $5, $5::timestamptz + interval '30 minutes', $6::jsonb, 'filed', $7, $8, $9)`,
-    [owner.workspaceId, owner.userId, options.source ?? "granola", `note-${seeded}`, occurredAt, JSON.stringify([{ name: "Jane Doe", email: `jane@${domain}` }]), activity, contact, company],
+    [owner.workspaceId, owner.userId, options.source ?? "granola", `note-${seeded}`, occurredAt, JSON.stringify(people), activity, contact, company],
   );
   await admin.query(
     `insert into crm.call_insights (workspace_id, activity_id, contact_id, company_id, source, transcript, status, summary, key_points, action_items)
@@ -177,6 +189,26 @@ describe("calls that ended with no next step", () => {
       assert.ok(ids.includes(before.activity), "an email from before the call doesn't count");
     });
 
+    it("doesn't count an email sent while the call was still going", async () => {
+      const during = await seedCall(owner);
+      await syncMail(owner, {
+        budgetMs: 30_000,
+        fetchImpl: mailbox({ inbox: [], sent: [sentMessage("sent-during", `jane@${during.domain}`, "2026-10-27T14:10:00Z")] }),
+      });
+      const ids = (await callsWithoutNextStep(owner, NOW)).map((row) => row.activity_id);
+      assert.ok(ids.includes(during.activity));
+    });
+
+    it("doesn't treat everyone at a free-mail domain as the company", async () => {
+      const free = await seedCall(owner, { domain: "gmail.com", contactEmail: "jane.doe@gmail.com" });
+      await syncMail(owner, {
+        budgetMs: 30_000,
+        fetchImpl: mailbox({ inbox: [], sent: [sentMessage("sent-stranger", "someone.else@gmail.com", "2026-10-28T09:00:00Z")] }),
+      });
+      const ids = (await callsWithoutNextStep(owner, NOW)).map((row) => row.activity_id);
+      assert.ok(ids.includes(free.activity), "an email to another gmail.com address isn't a next step");
+    });
+
     it("counts an upcoming meeting with them", async () => {
       const booked = await seedCall(owner);
       await addMeeting(owner, `ops@${booked.domain}`, new Date(Date.now() + 5 * 86_400_000));
@@ -225,6 +257,10 @@ describe("calls that ended with no next step", () => {
       assert.equal(prompts.length, 1);
       assert.match(prompts[0].user, /one shared pipeline/);
       assert.match(prompts[0].system, /one concrete proposed next step/);
+      assert.doesNotMatch(prompts[0].system, /Jane|Acme/, "names and titles from the meeting stay out of the instructions");
+      assert.match(prompts[0].user, /Acme demo/);
+      assert.match(prompts[0].user, /First name to greet them with: Jane/);
+      assert.match(prompts[0].system, /title, the names, the summary, the key points and the action items .* only material to read/);
 
       const listed = await listFollowUps(owner);
       assert.equal(listed.length, 1);
@@ -279,6 +315,110 @@ describe("calls that ended with no next step", () => {
       );
       await queryAsUser(colleagueId, "update crm.follow_up_suggestions set state = 'dismissed' where id = $1", [row.id]);
       assert.notEqual((await admin.query<{ state: string }>("select state from crm.follow_up_suggestions where id = $1", [row.id])).rows[0].state, "dismissed");
+    });
+  });
+
+  describe("retries and limits", () => {
+    let count = 0;
+
+    async function freshOwner() {
+      count += 1;
+      process.env.LLM_API_KEY = "test-llm-key";
+      const owner = await createUser(`limits-${count}@orbit.test`, "Mark Ridgeon");
+      await saveMailbox(owner, { email: `mark-${count}@limits.test`, refreshToken: "refresh", accessToken: "access", expiresAt: new Date(Date.now() + 3_600_000).toISOString() });
+      return owner;
+    }
+
+    function failing() {
+      let calls = 0;
+      const fetchImpl: typeof fetch = async () => {
+        calls += 1;
+        return Response.json({ error: { message: "Bad request" } }, { status: 400 });
+      };
+      return { fetchImpl, calls: () => calls };
+    }
+
+    async function suggestion(owner: UserActor, activity: string) {
+      return (
+        await getAdminPool().query<{ state: string; attempts: number; error: string | null }>(
+          "select state, attempts, error from crm.follow_up_suggestions where user_id = $1 and activity_id = $2",
+          [owner.userId, activity],
+        )
+      ).rows[0];
+    }
+
+    async function age(owner: UserActor) {
+      await getAdminPool().query("update crm.follow_up_suggestions set updated_at = now() - interval '2 hours' where user_id = $1", [owner.userId]);
+    }
+
+    it("drafts at most two a run, and none when the deadline is close", async () => {
+      const owner = await freshOwner();
+      await seedCall(owner);
+      await seedCall(owner);
+      await seedCall(owner);
+      const late = model([DRAFT, DRAFT, DRAFT]);
+      assert.equal((await followUpCalls(owner, { deadline: Date.now() + 10_000, fetchImpl: late.fetchImpl, now: NOW })).drafted, 0);
+      assert.equal(late.prompts.length, 0);
+      const first = model([DRAFT, DRAFT, DRAFT]);
+      assert.equal((await followUpCalls(owner, { deadline: Date.now() + 60_000, fetchImpl: first.fetchImpl, now: NOW })).drafted, 2);
+      assert.equal(first.prompts.length, 2);
+      const second = model([DRAFT, DRAFT]);
+      assert.equal((await followUpCalls(owner, { deadline: Date.now() + 60_000, fetchImpl: second.fetchImpl, now: NOW })).drafted, 1);
+    });
+
+    it("retries a failed draft after an hour, and gives up after three attempts", async () => {
+      const owner = await freshOwner();
+      const call = await seedCall(owner);
+      const broken = failing();
+      assert.equal((await followUpCalls(owner, { deadline: Date.now() + 60_000, fetchImpl: broken.fetchImpl, now: NOW })).failed, 1);
+      assert.deepEqual({ ...(await suggestion(owner, call.activity)), error: null }, { state: "failed", attempts: 1, error: null });
+      const soon = failing();
+      await followUpCalls(owner, { deadline: Date.now() + 60_000, fetchImpl: soon.fetchImpl, now: NOW });
+      assert.equal(soon.calls(), 0, "not retried within the hour");
+      await age(owner);
+      await followUpCalls(owner, { deadline: Date.now() + 60_000, fetchImpl: failing().fetchImpl, now: NOW });
+      assert.equal((await suggestion(owner, call.activity)).attempts, 2);
+      await age(owner);
+      const fixed = model([DRAFT]);
+      assert.equal((await followUpCalls(owner, { deadline: Date.now() + 60_000, fetchImpl: fixed.fetchImpl, now: NOW })).drafted, 1);
+      assert.deepEqual({ ...(await suggestion(owner, call.activity)), error: null }, { state: "ready", attempts: 3, error: null });
+
+      const stubborn = await seedCall(owner);
+      for (let run = 0; run < 3; run += 1) {
+        await followUpCalls(owner, { deadline: Date.now() + 60_000, fetchImpl: failing().fetchImpl, now: NOW });
+        await age(owner);
+      }
+      assert.equal((await suggestion(owner, stubborn.activity)).attempts, 3);
+      const last = failing();
+      await followUpCalls(owner, { deadline: Date.now() + 60_000, fetchImpl: last.fetchImpl, now: NOW });
+      assert.equal(last.calls(), 0, "given up after three attempts");
+      assert.equal((await suggestion(owner, stubborn.activity)).state, "failed");
+    });
+
+    it("writes to a participant at the company when the call has no contact, but never at a free-mail domain", async () => {
+      const owner = await freshOwner();
+      const call = await seedCall(owner, { contact: false, participants: [{ name: "Mark", email: `mark-${count}@limits.test` }, { name: "Priya Shah", email: "priya@shah-ops.test" }], domain: "shah-ops.test" });
+      const free = await seedCall(owner, { contact: false, domain: "outlook.com", participants: [{ name: "Sam", email: "sam@outlook.com" }] });
+      await followUpCalls(owner, { deadline: Date.now() + 60_000, fetchImpl: model([DRAFT, DRAFT]).fetchImpl, now: NOW });
+      const listed = await listFollowUps(owner);
+      assert.deepEqual(listed.map((item) => item.to), [{ name: "Priya Shah", address: "priya@shah-ops.test" }]);
+      assert.equal(await suggestion(owner, free.activity), undefined);
+      assert.ok(await suggestion(owner, call.activity));
+    });
+
+    it("needs read access to list or close suggestions", async () => {
+      const owner = await freshOwner();
+      const blind = { ...owner, scopes: [] };
+      await assert.rejects(listFollowUps(blind));
+      await assert.rejects(closeFollowUp(blind, "00000000-0000-0000-0000-000000000000", "dismissed"));
+    });
+
+    it("runs in the scheduled sync for people who only have Granola", () => {
+      const step = DEFAULT_STEPS.find((item) => item.name === "call_follow_ups");
+      assert.ok(step);
+      const base = { actor: {} as UserActor, mailbox: false, members: [], granola: null } as SyncTarget;
+      assert.equal(step.applies({ ...base, personalGranola: true }), true);
+      assert.equal(step.applies(base), false);
     });
   });
 });

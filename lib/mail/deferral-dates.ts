@@ -20,7 +20,9 @@ const MAX_AHEAD_DAYS = 365;
 const JANUARY_RETURN_DAY = 8;
 
 const DEFERRAL_HINT =
-  /\b(?:jan(?:uary)?|feb(?:ruary)?|march|apr(?:il)?|may|june|july|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|q[1-4]|quarter|(?:next|this coming) (?:week|month|year|quarter|term|season)|new year|weeks|months|fortnight|spring|summer|autumn|fall|winter|christmas|easter|holidays?|year[- ]end|end of (?:the )?(?:week|month|year|quarter)|circle back|pick (?:this|it|things) (?:back )?up|revisit|reconnect|touch base|come back to (?:this|it|you)|try me|later (?:this|in the) (?:year|month))\b/i;
+  /\b(?:jan(?:uary)?|feb(?:ruary)?|apr(?:il)?|june|july|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|q[1-4]|quarter|(?:next|this coming) (?:week|month|year|quarter|term|season)|new year|weeks|months|fortnight|spring|summer|autumn|winter|christmas|easter|holidays?|year[- ]end|end of (?:the )?(?:week|month|year|quarter)|circle back|pick (?:this|it|things) (?:back )?up|revisit|reconnect|touch base|come back to (?:this|it|you)|try me|later (?:this|in the) (?:year|month))\b/i;
+
+const AMBIGUOUS_MONTH = /\b(?:(?:in|by|after|until|till|before|early|mid|late|of)[ -]+(?:may|march)|(?:may|march),? +(?:20\d{2}|'\d{2}))\b/i;
 
 function validKey(value: string) {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
@@ -38,7 +40,7 @@ function mondayOnOrAfter(key: string) {
 }
 
 export function deferralHint(text: string) {
-  return DEFERRAL_HINT.test(text);
+  return DEFERRAL_HINT.test(text) || AMBIGUOUS_MONTH.test(text);
 }
 
 function deferralDay(when: DeferralWhen) {

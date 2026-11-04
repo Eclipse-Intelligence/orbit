@@ -71,8 +71,12 @@ grant select, insert, update on crm.mail_deferral_checks to authenticated;
 alter table crm.mail_reminders add column if not exists deferred_message_id uuid references crm.mail_messages (id) on delete set null;
 alter table crm.mail_reminders add column if not exists task_id uuid references crm.tasks (id) on delete set null;
 alter table crm.mail_reminders add column if not exists defer_note text;
+alter table crm.mail_reminders add column if not exists deferral boolean not null default false;
+alter table crm.mail_reminders drop constraint if exists mail_reminders_deferral;
+alter table crm.mail_reminders add constraint mail_reminders_deferral check (not deferral or (kind = 'follow_up' and action = 'remind'));
 alter table crm.mail_reminders drop constraint if exists mail_reminders_defer_note;
 alter table crm.mail_reminders add constraint mail_reminders_defer_note check (defer_note is null or char_length(defer_note) <= 300);
 
 create index if not exists mail_reminders_deferred_idx on crm.mail_reminders (deferred_message_id) where deferred_message_id is not null;
+create index if not exists mail_reminders_deferral_idx on crm.mail_reminders (user_id, source_id, thread_key) where deferral;
 create index if not exists mail_reminders_task_idx on crm.mail_reminders (task_id) where task_id is not null;

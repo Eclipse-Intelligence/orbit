@@ -9,7 +9,7 @@ import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { deferralHint, deferralOptions, resolveDeferral } from "@/lib/mail/deferral-dates";
 import { cancelDeferral, moveDeferral } from "@/lib/mail/deferrals";
-import { prepareMail, prepareNudge, setMailHelp } from "@/lib/mail/prepare";
+import { addFollowUp, cancelFollowUp, prepareMail, prepareNudge, setMailHelp } from "@/lib/mail/prepare";
 import { syncMail } from "@/lib/mail/sync";
 import { getThread } from "@/lib/mail/threads";
 import { createUser, queryAsUser, resetDatabase } from "./helpers";
@@ -126,6 +126,16 @@ describe("resolving when someone asked to pick things up", () => {
     assert.ok(!deferralHint("Could you send over the renewal terms this week?"));
   });
 
+  it("only treats May and March as a time next to a preposition or a year", () => {
+    assert.ok(!deferralHint("You may want to review the attached."));
+    assert.ok(!deferralHint("We will march on with the plan."));
+    assert.ok(!deferralHint("The fall in prices helps."));
+    assert.ok(deferralHint("can we pick this up in May?"));
+    assert.ok(deferralHint("Let's talk in May."));
+    assert.ok(deferralHint("Budgets reopen early March."));
+    assert.ok(deferralHint("Speak again May 2027."));
+  });
+
   it("offers later dates to change to", () => {
     const options = deferralOptions(now, "Europe/London");
     assert.deepEqual(options.map((option) => option.label), ["Next week", "In two weeks", "Next month", "In three months"]);
@@ -220,7 +230,9 @@ describe("not now replies", () => {
     await setMailHelp(owner, { prepareReplies: true });
     await prepareNudge(owner, sourceId, key, { fetchImpl });
     await setMailHelp(owner, { prepareReplies: false });
-    assert.match(prompts[0].system, /asked Mark Ridgeon to pick it up later \("Asked to pick this up in January\."\)/);
+    assert.match(prompts[0].system, /asked Mark Ridgeon to pick it up later/);
+    assert.doesNotMatch(prompts[0].system, /Asked to pick this up in January/, "the note is material, not part of the instructions");
+    assert.match(prompts[0].user, /Orbit's note of what they asked[^\n]*\n"""\nAsked to pick this up in January\.\n"""/);
   });
 
   it("Don't follow up removes the reminder and archives the task", async () => {
@@ -261,5 +273,95 @@ describe("not now replies", () => {
     const other = await createUser("someone@orbit.test", "Someone Else");
     assert.ok((await queryAsUser(owner.userId, "select message_id from crm.mail_deferral_checks")).length > 0);
     assert.equal((await queryAsUser(other.userId, "select message_id from crm.mail_deferral_checks")).length, 0);
+  });
+});
+
+describe("deferral bookkeeping", () => {
+  let owner: UserActor;
+  let sourceId: string;
+  const when = monthsAhead(2);
+  const admin = () => getAdminPool();
+  const inbox: unknown[] = [];
+
+  async function sync() {
+    await syncMail(owner, { budgetMs: 30_000, fetchImpl: mailbox({ inbox, sent: [] }) });
+  }
+
+  before(async () => {
+    process.env.LLM_API_KEY = "test-llm-key";
+    owner = await createUser("bookkeeping@orbit.test", "Mark Ridgeon");
+    await saveMailbox(owner, { email: "mark@eclipse.test", refreshToken: "refresh", accessToken: "access", expiresAt: new Date(Date.now() + 3_600_000).toISOString() });
+    const acme = (await createCompany(owner, { name: "Acme", domain: "acme.test" })).body.company.id;
+    await createContact(owner, { firstName: "Jane", lastName: "Doe", email: "jane@acme.test", companyId: acme });
+    await setMailHelp(owner, { prepareReplies: false, autoRemindDays: null });
+    inbox.push(message("m-book", "Thanks Mark. Can we pick this up in January? Budgets are frozen until then.\n\nJane"));
+    await sync();
+    sourceId = (await admin().query<{ source_id: string }>("select source_id from crm.mail_messages where provider_message_id = 'm-book'")).rows[0].source_id;
+  });
+
+  async function deferrals() {
+    return (
+      await admin().query<{ id: string; state: string; deferred_message_id: string | null; task_id: string | null; defer_note: string }>(
+        "select id, state, deferred_message_id, task_id, defer_note from crm.mail_reminders where user_id = $1 and deferral order by created_at",
+        [owner.userId],
+      )
+    ).rows;
+  }
+
+  it("closes a waiting send follow-up as replied, and generic follow-up paths leave the deferral alone", async () => {
+    const insert = (action: string) =>
+      admin().query(
+        `insert into crm.mail_reminders (workspace_id, user_id, source_id, thread_key, kind, action, due_at)
+         values ($1, $2, $3, 'conv-m-book', 'follow_up', $4, now() + interval '2 days') returning id`,
+        [owner.workspaceId, owner.userId, sourceId, action],
+      );
+    const send = (await insert("send")).rows[0].id;
+    const remind = (await insert("remind")).rows[0].id;
+    const { fetchImpl } = model([{ deferrals: [{ n: 1, note: 'Asked to "pick this up" {in} [January] <later>.', precision: "month", date: when }] }]);
+    await prepareMail(owner, { deadline: soon(), fetchImpl });
+    const states = await admin().query<{ id: string; state: string }>("select id, state from crm.mail_reminders where id = any($1::uuid[])", [[send, remind]]);
+    assert.equal(states.rows.find((row) => row.id === send)?.state, "replied");
+    assert.equal(states.rows.find((row) => row.id === remind)?.state, "done");
+    const [deferral] = await deferrals();
+    assert.equal(deferral.state, "waiting");
+    assert.equal(deferral.defer_note, "Asked to pick this up in January later.", "quotes, braces and brackets are stripped");
+
+    await addFollowUp(owner, { thread: `${sourceId}|conv-m-book`, dueAt: new Date(Date.now() + 86_400_000), subject: "Acme" });
+    assert.equal((await deferrals())[0].state, "waiting", "setting a reminder doesn't end the deferral");
+    assert.equal(await cancelFollowUp(owner, deferral.id), 0, "cancelling a reminder can't end a deferral");
+    assert.equal((await deferrals())[0].state, "waiting");
+  });
+
+  it("survives its email moving, and the new copy is reattached rather than counted twice", async () => {
+    const [before] = await deferrals();
+    await admin().query("delete from crm.mail_messages where provider_message_id = 'm-book'");
+    const orphan = (await deferrals())[0];
+    assert.equal(orphan.deferred_message_id, null);
+    inbox.splice(0, inbox.length, message("m-book-moved", "Thanks Mark. Can we pick this up in January? Budgets are frozen until then.\n\nJane", { conversationId: "conv-m-book" }));
+    await sync();
+    const moved = (await admin().query<{ id: string }>("select id from crm.mail_messages where provider_message_id = 'm-book-moved'")).rows[0].id;
+    const detail = await getThread(owner, `${sourceId}|conv-m-book`);
+    assert.equal(detail.deferral?.id, before.id, "the thread still shows the deferral");
+    assert.equal(detail.deferral?.messageId, moved);
+
+    const { fetchImpl } = model([{ deferrals: [{ n: 1, note: "Asked to pick this up in January.", precision: "month", date: when }] }]);
+    await prepareMail(owner, { deadline: soon(), fetchImpl });
+    const after = await deferrals();
+    assert.equal(after.length, 1);
+    assert.equal(after[0].deferred_message_id, moved);
+    assert.equal((await admin().query("select 1 from crm.tasks where title = 'Check in with Jane Doe' and workspace_id = $1", [owner.workspaceId])).rowCount, 1);
+  });
+
+  it("only checks the newest email in a conversation", async () => {
+    inbox.push(
+      message("m-old", "Can we pick this up in January?", { conversationId: "conv-pair", receivedDateTime: ago(3), sentDateTime: ago(3) }),
+      message("m-new", "Thanks, that all works.", { conversationId: "conv-pair", receivedDateTime: ago(2), sentDateTime: ago(2) }),
+    );
+    await sync();
+    const { fetchImpl, prompts } = model([]);
+    await prepareMail(owner, { deadline: soon(), fetchImpl });
+    assert.equal(prompts.length, 0);
+    const checked = await admin().query("select 1 from crm.mail_deferral_checks d join crm.mail_messages m on m.id = d.message_id where m.provider_message_id = 'm-old'");
+    assert.equal(checked.rowCount, 0);
   });
 });

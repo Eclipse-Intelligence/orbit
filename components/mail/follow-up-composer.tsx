@@ -128,7 +128,7 @@ export function FollowUpBlock({ days, body, onBody, onRemove }: { days: number; 
   if (!open && !body.trim()) {
     return (
       <section aria-label="Follow-up" className="animate-rise-in flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl bg-white/[0.035] py-1 pr-1 pl-3">
-        <span className="flex min-w-[13rem] flex-1 cursor-text items-center gap-2 py-1.5 text-[13px] leading-5" onClick={expand} title={`Sent in the same thread in ${when} if nobody replies`}>
+        <span className="flex min-w-[13rem] flex-1 items-center gap-2 py-1.5 text-[13px] leading-5" title={`Sent in the same thread in ${when} if nobody replies`}>
           <FollowUpIcon aria-hidden className="text-primary-foreground size-3.5 shrink-0" />
           <span className="text-foreground">Follow-up</span>
           <span className="text-soft min-w-0">Orbit writes it when it&apos;s due</span>
