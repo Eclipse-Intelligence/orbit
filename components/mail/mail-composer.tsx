@@ -140,6 +140,7 @@ export default function MailComposer({
   const chain = useRef<Promise<unknown>>(Promise.resolve());
   const dirty = useRef(false);
   const editor = useRef<BodyEditorHandle>(null);
+  const [formats, setFormats] = useState({ bold: false, italic: false });
   const payload = useRef({
     mode: start.mode,
     messageId: start.messageId,
@@ -522,6 +523,7 @@ export default function MailComposer({
         onChange={change(setBody)}
         onFiles={editorFiles}
         onFileLink={fileLinkDropped}
+        onFormats={(next) => setFormats((current) => (current.bold === next.bold && current.italic === next.italic ? current : next))}
         label="Message"
         placeholder={start.mode === "forward" ? "Add a note" : start.mode === "new" ? "Write your email" : "Write your reply"}
         fill={card}
@@ -598,6 +600,8 @@ export default function MailComposer({
           variant="ghost"
           size="icon"
           aria-label="Bold"
+          aria-pressed={formats.bold}
+          className={cn(formats.bold && "text-primary-foreground bg-[color-mix(in_srgb,var(--primary)_28%,transparent)] hover:text-white")}
           title={`Bold (${mac ? "⌘B" : "Ctrl+B"})`}
           onPointerDown={(event) => event.preventDefault()}
           onClick={() => editor.current?.toggle("**")}
@@ -608,6 +612,8 @@ export default function MailComposer({
           variant="ghost"
           size="icon"
           aria-label="Italic"
+          aria-pressed={formats.italic}
+          className={cn(formats.italic && "text-primary-foreground bg-[color-mix(in_srgb,var(--primary)_28%,transparent)] hover:text-white")}
           title={`Italic (${mac ? "⌘I" : "Ctrl+I"})`}
           onPointerDown={(event) => event.preventDefault()}
           onClick={() => editor.current?.toggle("*")}

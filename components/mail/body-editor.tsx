@@ -3,8 +3,10 @@
 import { useEffect, useImperativeHandle, useLayoutEffect, useRef, type Ref } from "react";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { bodyEditorExtensions, fromProps, insertBlock, toggleFormat, type FormatMarker } from "@/lib/mail/body-editor";
+import { activeFormats, bodyEditorExtensions, fromProps, insertBlock, toggleFormat, type ActiveFormats, type FormatMarker } from "@/lib/mail/body-editor";
 import { cn } from "@/lib/utils";
+
+const NO_FORMATS: ActiveFormats = { bold: false, italic: false };
 
 export type BodyEditorHandle = {
   focus: () => void;
@@ -19,6 +21,7 @@ export default function BodyEditor({
   onChange,
   onFiles,
   onFileLink,
+  onFormats,
   placeholder,
   label,
   fill,
@@ -28,17 +31,18 @@ export default function BodyEditor({
   onChange: (value: string) => void;
   onFiles: (files: File[]) => void;
   onFileLink: () => void;
+  onFormats: (formats: ActiveFormats) => void;
   placeholder: string;
   label: string;
   fill: boolean;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
-  const latest = useRef({ onChange, onFiles, onFileLink });
+  const latest = useRef({ onChange, onFiles, onFileLink, onFormats });
   const initial = useRef({ value, placeholder, label });
 
   useLayoutEffect(() => {
-    latest.current = { onChange, onFiles, onFileLink };
+    latest.current = { onChange, onFiles, onFileLink, onFormats };
   });
 
   useLayoutEffect(() => {
@@ -56,6 +60,9 @@ export default function BodyEditor({
           }),
           EditorView.updateListener.of((update) => {
             if (update.docChanged && !update.transactions.every((transaction) => transaction.annotation(fromProps))) latest.current.onChange(update.state.doc.toString());
+            if (update.docChanged || update.selectionSet || update.focusChanged) {
+              latest.current.onFormats(update.view.hasFocus ? activeFormats(update.state) : NO_FORMATS);
+            }
           }),
         ],
       }),
