@@ -1,7 +1,8 @@
 import { after } from "next/server";
 import { agentMailbox, mailboxOrigin, noteMailboxError, type AgentMailboxRow } from "@/lib/agent-mail/mailbox";
 import type { IncomingAttachment } from "@/lib/agent-mail/receive";
-import { recordOutbound, simpleHtml } from "@/lib/agent-mail/store";
+import { emailHtml, emailText } from "@/lib/agent-mail/email-format";
+import { recordOutbound } from "@/lib/agent-mail/store";
 import { decideActions, sendMessage, type AssistantAction, type AssistantEvent, type HeadlessTurn } from "@/lib/assistant/chat";
 import { docIdsIn, needsEmailConfirm } from "@/lib/assistant/email-policy";
 import { discardChatFiles, importChatFile, type ChatFile } from "@/lib/assistant/files";
@@ -197,7 +198,7 @@ export function replyText(input: { final: string; done: AssistantAction[]; pendi
   if (input.note) parts.push(input.note);
   if (input.pending.length) {
     parts.push(
-      ["Needs your OK:", ...input.pending.flatMap((action) => [`- ${action.title}`, ...action.lines.slice(0, LINES_PER_ACTION).map((line) => `  ${clip(line.replace(/\s+/g, " "), 400)}`)])].join("\n"),
+      ["Needs your OK:", ...input.pending.flatMap((action) => [`- ${action.title}`, ...action.lines.slice(0, LINES_PER_ACTION).map((line) => `  - ${clip(line.replace(/\s+/g, " "), 400)}`)])].join("\n"),
     );
     parts.push(CONFIRM_PROMPT);
   }
@@ -464,7 +465,7 @@ async function replyOnce(actor: UserActor, row: MailRow, mailbox: AgentMailboxRo
   });
   if (!claimed || !row.from_address) return false;
   try {
-    const sent = await replyToMessage(mailbox.address, row.message_id, { to: [row.from_address], text: body, html: simpleHtml(body) }, options.fetchImpl);
+    const sent = await replyToMessage(mailbox.address, row.message_id, { to: [row.from_address], text: emailText(body), html: emailHtml(body) }, options.fetchImpl);
     await withActor(actor, (db) =>
       db.query(
         `update crm.agent_mail_messages
@@ -474,7 +475,7 @@ async function replyOnce(actor: UserActor, row: MailRow, mailbox: AgentMailboxRo
       ),
     );
     const subject = row.subject && /^re:/i.test(row.subject) ? row.subject : `Re: ${row.subject ?? ""}`.trim();
-    await recordOutbound(actor, mailbox, sent, { to: [row.from_address], subject, text: body }).catch(() => undefined);
+    await recordOutbound(actor, mailbox, sent, { to: [row.from_address], subject, text: emailText(body) }).catch(() => undefined);
     return true;
   } catch (error) {
     const message = error instanceof MachineMailError ? error.message : "Orbit couldn't send the reply.";
@@ -499,7 +500,7 @@ async function sendNotice(actor: UserActor, row: MailRow, mailbox: AgentMailboxR
   });
   if (!claimed || !row.from_address) return;
   try {
-    const sent = await replyToMessage(mailbox.address, row.message_id, { to: [row.from_address], text: OFFLINE_NOTICE, html: simpleHtml(OFFLINE_NOTICE) }, options.fetchImpl);
+    const sent = await replyToMessage(mailbox.address, row.message_id, { to: [row.from_address], text: emailText(OFFLINE_NOTICE), html: emailHtml(OFFLINE_NOTICE) }, options.fetchImpl);
     await recordOutbound(actor, mailbox, sent, { to: [row.from_address], subject: row.subject ? `Re: ${row.subject}` : null, text: OFFLINE_NOTICE }).catch(() => undefined);
   } catch (error) {
     await noteMailboxError(mailbox.id, `Couldn't send the waiting note: ${error instanceof MachineMailError ? error.message : "unknown error"}`);

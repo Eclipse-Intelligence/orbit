@@ -17,6 +17,7 @@ import {
   sweepAgentMail,
 } from "@/lib/agent-mail/jobs";
 import { UNREADABLE_SECRET, agentMailboxView, saveAgentSenders, setUpAgentMailbox } from "@/lib/agent-mail/mailbox";
+import { emailHtml, emailText } from "@/lib/agent-mail/email-format";
 import { WEBHOOK_MAX_BYTES, receiveAgentMail } from "@/lib/agent-mail/receive";
 import { aligned, bareAddress, judgeMail, senderAuthenticated } from "@/lib/agent-mail/senders";
 import { AGENT_SENDS_PER_DAY } from "@/lib/agent-mail/store";
@@ -335,6 +336,41 @@ describe("MachineMail webhook signatures", () => {
     const ahead = Math.floor(now / 1000) + 301;
     assert.equal(verifySignature(secret, `t=${stale},v1=${signPayload(secret, stale, raw)}`, raw, now), false);
     assert.equal(verifySignature(secret, `t=${ahead},v1=${signPayload(secret, ahead, raw)}`, raw, now), false);
+  });
+});
+
+describe("formatting agent mail replies", () => {
+  const reply = [
+    "Your week is light.",
+    "",
+    "**Overdue**",
+    "- [Tip](https://app.clickup.com/t/869fneh89). Was due Mon 2 Nov.",
+    "- Follow up with [Nine Stones](/companies/782a7a33), due 10:20.",
+    "",
+    "Open in Orbit: https://orbit.example.com/?chat=10cf.",
+  ].join("\n");
+
+  it("turns markdown into email HTML with working links", () => {
+    const html = emailHtml(reply, "https://orbit.example.com");
+    assert.match(html, /<p><strong>Overdue<\/strong><\/p>/);
+    assert.match(html, /<li><a href="https:\/\/app\.clickup\.com\/t\/869fneh89">Tip<\/a>\. Was due Mon 2 Nov\.<\/li>/);
+    assert.match(html, /<a href="https:\/\/orbit\.example\.com\/companies\/782a7a33">Nine Stones<\/a>/);
+    assert.match(html, /<a href="https:\/\/orbit\.example\.com\/\?chat=10cf">https:\/\/orbit\.example\.com\/\?chat=10cf<\/a>\./);
+    assert.doesNotMatch(html, /\*\*|\]\(/);
+  });
+
+  it("writes a plain text version without markdown", () => {
+    const text = emailText(reply, "https://orbit.example.com");
+    assert.match(text, /^Overdue\n- Tip/m);
+    assert.match(text, /^- Tip \(https:\/\/app\.clickup\.com\/t\/869fneh89\)\. Was due Mon 2 Nov\.$/m);
+    assert.match(text, /Nine Stones \(https:\/\/orbit\.example\.com\/companies\/782a7a33\)/);
+    assert.doesNotMatch(text, /\*\*|\]\(/);
+  });
+
+  it("escapes HTML and drops links it can't make absolute", () => {
+    const html = emailHtml("<script>x</script> [here](javascript:alert(1)) [home](/)", null);
+    assert.doesNotMatch(html, /<script>|javascript:|href="\/"/);
+    assert.match(html, /&lt;script&gt;/);
   });
 });
 
@@ -1174,7 +1210,7 @@ describe("the email approval policy", () => {
     });
     assert.equal(
       text,
-      `Done.\n\nDone:\n- Create task: Call Acme\n\nNeeds your OK:\n- Send email: Hello\n  To: client@acme.test\n  Hi there\n\n${CONFIRM_PROMPT}\n\nOpen in Orbit: https://orbit.test/?chat=1`,
+      `Done.\n\nDone:\n- Create task: Call Acme\n\nNeeds your OK:\n- Send email: Hello\n  - To: client@acme.test\n  - Hi there\n\n${CONFIRM_PROMPT}\n\nOpen in Orbit: https://orbit.test/?chat=1`,
     );
     assert.doesNotMatch(text, /[\u2013\u2014]/);
   });

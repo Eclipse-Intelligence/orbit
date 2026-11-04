@@ -1,4 +1,5 @@
 import { requireAgentMailAccess, type AgentMailboxRow } from "@/lib/agent-mail/mailbox";
+import { emailHtml, emailText } from "@/lib/agent-mail/email-format";
 import { bareAddress } from "@/lib/agent-mail/senders";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
@@ -114,24 +115,6 @@ export async function agentMailThread(actor: UserActor, id: string) {
   };
 }
 
-function htmlEscape(text: string) {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
-
-export function simpleHtml(text: string) {
-  return text
-    .trim()
-    .split(/\n{2,}/)
-    .map((block) => {
-      const lines = block.split("\n");
-      if (lines.every((line) => /^\s*[-*] /.test(line))) {
-        return `<ul>${lines.map((line) => `<li>${htmlEscape(line.replace(/^\s*[-*] /, ""))}</li>`).join("")}</ul>`;
-      }
-      return `<p>${lines.map((line) => htmlEscape(line).replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1">$1</a>')).join("<br>")}</p>`;
-    })
-    .join("\n");
-}
-
 export async function recordOutbound(
   actor: UserActor,
   mailbox: Pick<AgentMailboxRow, "id" | "address">,
@@ -190,18 +173,18 @@ export async function sendFromAgentMailbox(
       to = [...new Set([...base, ...extra])].filter((address) => address !== mailbox.address);
       if (to.length === 0) throw new CrmError("invalid_input", "Say who the reply is to.", 400, { field: "to" });
       subject = original.subject && /^re:/i.test(original.subject) ? original.subject : `Re: ${original.subject ?? ""}`.trim();
-      sent = await replyToMessage(mailbox.address, original.message_id, { to, cc, text: input.body, html: simpleHtml(input.body) }, fetchImpl);
+      sent = await replyToMessage(mailbox.address, original.message_id, { to, cc, text: emailText(input.body), html: emailHtml(input.body) }, fetchImpl);
     } else {
       to = extra;
       if (to.length === 0) throw new CrmError("invalid_input", "Say who the email is to.", 400, { field: "to" });
       subject = input.subject?.trim() || null;
       if (!subject) throw new CrmError("invalid_input", "A new email needs a subject.", 400, { field: "subject" });
-      sent = await sendNewMessage(mailbox.address, { to, cc, subject, text: input.body, html: simpleHtml(input.body) }, fetchImpl);
+      sent = await sendNewMessage(mailbox.address, { to, cc, subject, text: emailText(input.body), html: emailHtml(input.body) }, fetchImpl);
     }
   } catch (error) {
     if (error instanceof MachineMailError) throw new CrmError("upstream_error", `MachineMail didn't send it: ${error.message}`, 502);
     throw error;
   }
-  await recordOutbound(actor, mailbox, sent, { to, cc, subject, text: input.body }).catch((error) => console.error("Saving the agent mailbox copy failed", error instanceof Error ? error.message : "unknown"));
+  await recordOutbound(actor, mailbox, sent, { to, cc, subject, text: emailText(input.body) }).catch((error) => console.error("Saving the agent mailbox copy failed", error instanceof Error ? error.message : "unknown"));
   return { sent: true, from: mailbox.address, to, cc, subject };
 }
