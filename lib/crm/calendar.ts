@@ -444,40 +444,45 @@ export async function myAddresses(db: Db, actor: UserActor) {
 export async function ownAddresses(db: Db, actor: UserActor) {
   const stored = await readStored(db, actor);
   const accounts = await db.query<{ email: string | null }>(
-    "select email from crm.calendar_accounts where user_id = $1 and workspace_id = $2",
-    [actor.userId, actor.workspaceId],
+    "select email from crm.calendar_accounts where user_id = $1",
+    [actor.userId],
   );
   return [actor.email, stored?.email, ...accounts.rows.map((row) => row.email)];
 }
 
 export async function linkEvents(db: Db, actor: UserActor, only?: string[]) {
-  const filter = only ? "and e.id = any($3::uuid[])" : "";
-  const values = only ? [actor.userId, actor.workspaceId, only] : [actor.userId, actor.workspaceId];
+  const filter = only ? "and e.id = any($2::uuid[])" : "";
+  const values = only ? [actor.userId, only] : [actor.userId];
   await db.query(
     `update crm.calendar_events e
      set contact_ids = '{}', company_ids = '{}'
      from crm.calendars c
      where c.id = e.calendar_id and not c.use_for_crm
-       and e.user_id = $1 and e.workspace_id = $2 ${filter}
+       and e.user_id = $1 ${filter}
        and (cardinality(e.contact_ids) > 0 or cardinality(e.company_ids) > 0)`,
     values,
   );
   const events = await db.query<{
     id: string;
+    workspace_id: string;
     organizer: unknown;
     attendees: unknown;
     contact_ids: string[];
     company_ids: string[];
   }>(
-    `select e.id, e.organizer, e.attendees, e.contact_ids, e.company_ids
+    `select e.id, e.workspace_id, e.organizer, e.attendees, e.contact_ids, e.company_ids
      from crm.calendar_events e
      join crm.calendars c on c.id = e.calendar_id and c.use_for_crm
-     where e.user_id = $1 and e.workspace_id = $2 ${filter}`,
+     where e.user_id = $1 ${filter}`,
     values,
   );
   if (events.rows.length === 0) return 0;
-  const internal = await internalAddresses(db, actor.workspaceId, await ownAddresses(db, actor));
+  const own = await ownAddresses(db, actor);
+  const workspaceIds = [...new Set(events.rows.map((row) => row.workspace_id))];
+  const internals = new Map<string, Awaited<ReturnType<typeof internalAddresses>>>();
+  for (const workspaceId of workspaceIds) internals.set(workspaceId, await internalAddresses(db, workspaceId, own));
   const perEvent = events.rows.map((row) => {
+    const internal = internals.get(row.workspace_id)!;
     const emails = new Set<string>();
     for (const person of [readPerson(row.organizer), ...readPeople(row.attendees)]) {
       if (person && !internal.isInternal(person.email)) emails.add(person.email);
@@ -492,28 +497,30 @@ export async function linkEvents(db: Db, actor: UserActor, only?: string[]) {
   }
   const contacts = new Map<string, { id: string; companyId: string | null }[]>();
   if (allEmails.length > 0) {
-    const found = await db.query<{ id: string; normalized_email: string; company_id: string | null }>(
-      `select id, normalized_email, company_id from crm.contacts
-       where workspace_id = $1 and archived_at is null and normalized_email = any($2::text[])`,
-      [actor.workspaceId, allEmails],
+    const found = await db.query<{ id: string; workspace_id: string; normalized_email: string; company_id: string | null }>(
+      `select id, workspace_id, normalized_email, company_id from crm.contacts
+       where workspace_id = any($1::uuid[]) and archived_at is null and normalized_email = any($2::text[])`,
+      [workspaceIds, allEmails],
     );
     for (const row of found.rows) {
-      const list = contacts.get(row.normalized_email) ?? [];
+      const key = `${row.workspace_id}|${row.normalized_email}`;
+      const list = contacts.get(key) ?? [];
       list.push({ id: row.id, companyId: row.company_id });
-      contacts.set(row.normalized_email, list);
+      contacts.set(key, list);
     }
   }
   const companies = new Map<string, string[]>();
   if (domains.size > 0) {
-    const found = await db.query<{ id: string; domain: string }>(
-      `select id, domain from crm.companies
-       where workspace_id = $1 and archived_at is null and domain = any($2::text[])`,
-      [actor.workspaceId, [...domains]],
+    const found = await db.query<{ id: string; workspace_id: string; domain: string }>(
+      `select id, workspace_id, domain from crm.companies
+       where workspace_id = any($1::uuid[]) and archived_at is null and domain = any($2::text[])`,
+      [workspaceIds, [...domains]],
     );
     for (const row of found.rows) {
-      const list = companies.get(row.domain) ?? [];
+      const key = `${row.workspace_id}|${row.domain}`;
+      const list = companies.get(key) ?? [];
       list.push(row.id);
-      companies.set(row.domain, list);
+      companies.set(key, list);
     }
   }
   let linked = 0;
@@ -521,13 +528,13 @@ export async function linkEvents(db: Db, actor: UserActor, only?: string[]) {
     const contactIds = new Set<string>();
     const companyIds = new Set<string>();
     for (const email of perEvent[index]) {
-      for (const contact of contacts.get(email) ?? []) {
+      for (const contact of contacts.get(`${row.workspace_id}|${email}`) ?? []) {
         contactIds.add(contact.id);
         if (contact.companyId) companyIds.add(contact.companyId);
       }
       const domain = canonicalDomain(email.split("@")[1] ?? "");
       if (domain && !isFreeMailDomain(domain)) {
-        for (const id of companies.get(domain) ?? []) companyIds.add(id);
+        for (const id of companies.get(`${row.workspace_id}|${domain}`) ?? []) companyIds.add(id);
       }
     }
     const nextContacts = [...contactIds].sort();
@@ -1001,9 +1008,9 @@ export async function listPeopleMet(actor: UserActor, now = Date.now()): Promise
       `select e.ical_uid, e.subject, e.starts_at, e.organizer, e.attendees
        from crm.calendar_events e
        join crm.calendars c on c.id = e.calendar_id and c.use_for_crm
-       where e.user_id = $1 and e.workspace_id = $2 and not e.is_cancelled
+       where e.user_id = $1 and not e.is_cancelled
        order by e.starts_at desc`,
-      [actor.userId, actor.workspaceId],
+      [actor.userId],
     );
     if (events.rows.length === 0) return [];
     const internal = await internalAddresses(db, actor.workspaceId, await ownAddresses(db, actor));
@@ -1045,7 +1052,7 @@ export async function listPeopleMet(actor: UserActor, now = Date.now()): Promise
        where workspace_id = $1 and archived_at is null and normalized_email = any($2::text[])
        union
        select email from crm.hidden_attendees
-       where user_id = $3 and workspace_id = $1 and email = any($2::text[])`,
+       where user_id = $3 and email = any($2::text[])`,
       [actor.workspaceId, emails, actor.userId],
     );
     for (const row of known.rows) people.delete(row.email);
@@ -1101,11 +1108,11 @@ export async function createContactFromMeeting(actor: UserActor, email: string) 
   const found = await withActor(actor, async (db) => {
     const result = await db.query<{ organizer: unknown; attendees: unknown }>(
       `select organizer, attendees from crm.calendar_events
-       where user_id = $1 and workspace_id = $2
-         and (attendees @> $3::jsonb or organizer->>'email' = $4)
+       where user_id = $1
+         and (attendees @> $2::jsonb or organizer->>'email' = $3)
        order by starts_at desc
        limit 20`,
-      [actor.userId, actor.workspaceId, JSON.stringify([{ email: wanted }]), wanted],
+      [actor.userId, JSON.stringify([{ email: wanted }]), wanted],
     );
     let name: string | null = null;
     let present = false;

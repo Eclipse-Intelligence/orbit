@@ -63,8 +63,8 @@ function readPending(row: Row | undefined): Pending | null {
 
 async function readRow(db: Db, actor: UserActor, which: AiProvider, lock = false) {
   const result = await db.query<Row>(
-    `select ${COLUMNS} from crm.ai_accounts where user_id = $1 and workspace_id = $2 and provider = $3${lock ? " for update" : ""}`,
-    [actor.userId, actor.workspaceId, which],
+    `select ${COLUMNS} from crm.ai_accounts where user_id = $1 and provider = $2${lock ? " for update" : ""}`,
+    [actor.userId, which],
   );
   return result.rows[0];
 }
@@ -104,10 +104,7 @@ async function saveTokens(db: Db, actor: UserActor, which: AiProvider, tokens: T
 
 export async function listAiAccounts(actor: UserActor): Promise<AiAccountSummary[]> {
   const rows = await withActor(actor, async (db) => {
-    const result = await db.query<Row>(`select ${COLUMNS} from crm.ai_accounts where user_id = $1 and workspace_id = $2`, [
-      actor.userId,
-      actor.workspaceId,
-    ]);
+    const result = await db.query<Row>(`select ${COLUMNS} from crm.ai_accounts where user_id = $1`, [actor.userId]);
     return result.rows;
   });
   return AI_PROVIDERS.map((which) => {
@@ -153,11 +150,7 @@ export async function pollChatGptLogin(actor: UserActor, fetchImpl?: typeof fetc
 export async function disconnectAiAccount(actor: UserActor, which: unknown) {
   const chosen = provider(which);
   await withActor(actor, (db) =>
-    db.query("delete from crm.ai_accounts where user_id = $1 and workspace_id = $2 and provider = $3", [
-      actor.userId,
-      actor.workspaceId,
-      chosen,
-    ]),
+    db.query("delete from crm.ai_accounts where user_id = $1 and provider = $2", [actor.userId, chosen]),
   );
 }
 

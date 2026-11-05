@@ -6,7 +6,7 @@ import Sidebar from "@/components/_common/sidebar/sidebar";
 import CrmChrome from "@/components/crm/chrome";
 import DocsProvider from "@/components/docs/docs-provider";
 import { ShortcutsProvider } from "@/components/shortcuts/shortcuts-provider";
-import { getUserActor } from "@/lib/auth/user";
+import { getHomeActor, getUserActor, getWorkspaceChoices } from "@/lib/auth/user";
 import { syncCalendar } from "@/lib/crm/calendar";
 import { syncCalls } from "@/lib/crm/calls";
 import { syncClickUp } from "@/lib/crm/clickup";
@@ -17,7 +17,7 @@ import { runWorkflowTick } from "@/lib/workflows/engine";
 import { countApprovals, listNotifications } from "@/lib/workflows/store";
 import { listAttention } from "@/lib/crm/relationships";
 import { countOpenTasks } from "@/lib/crm/tasks";
-import { captureStatus } from "@/lib/crm/capture";
+import { captureStatuses } from "@/lib/crm/capture";
 import { unreadBrief } from "@/lib/learning/nightly";
 import { syncTeamsTranscripts } from "@/lib/crm/teams-transcripts";
 import { processDueMail } from "@/lib/mail/due";
@@ -31,24 +31,24 @@ import { docsSeed, emptyDocsNav } from "@/lib/docs/server";
 export const dynamic = "force-dynamic";
 
 export default async function CrmLayout({ children }: { children: React.ReactNode }) {
-  const user = await getUserActor();
-  if (!user) redirect("/login");
+  const [user, home, workspaces] = await Promise.all([getUserActor(), getHomeActor(), getWorkspaceChoices()]);
+  if (!user || !home) redirect("/login");
   if (microsoftConfigured()) {
     after(async () => {
       try {
-        const result = await syncCalls(user);
+        const result = await syncCalls(home);
         if (result.ran && result.error) console.error("Teams call sync failed", result.error);
       } catch (error) {
         console.error("Teams call sync failed", error);
       }
       try {
-        const result = await syncCalendar(user);
+        const result = await syncCalendar(home);
         if (result.ran && result.error) console.error("Calendar sync failed", result.error);
       } catch (error) {
         console.error("Calendar sync failed", error);
       }
       try {
-        const result = await syncTeamsTranscripts(user);
+        const result = await syncTeamsTranscripts(home);
         if (result.ran && result.error) console.error("Teams transcript sync failed", result.error);
       } catch (error) {
         console.error("Teams transcript sync failed", error);
@@ -58,9 +58,9 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
   if (microsoftConfigured()) {
     after(async () => {
       try {
-        const result = await syncMail(user, { budgetMs: 10_000, backfill: false });
+        const result = await syncMail(home, { budgetMs: 10_000, backfill: false });
         if (result.errors.length) console.error("Mail sync failed", result.errors.join("; "));
-        await processDueMail(user);
+        await processDueMail(home);
       } catch (error) {
         console.error("Mail sync failed", error);
       }
@@ -69,7 +69,7 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
   const viewerAddress = (await headers()).get("x-forwarded-for");
   after(async () => {
     try {
-      await noteViewerAddress(user, viewerAddress);
+      await noteViewerAddress(home, viewerAddress);
     } catch (error) {
       console.error("Viewer address failed", error);
     }
@@ -99,7 +99,7 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
       }
     });
   }
-  const [companyCount, openActionCount, attention, boards, notifications, approvals, mailUnread, capture, brief] = await Promise.all([
+  const [companyCount, openActionCount, attention, boards, notifications, approvals, mailUnread, captures, brief] = await Promise.all([
     countCompanies(user),
     countOpenTasks(user, { mine: true }),
     listAttention(user),
@@ -107,9 +107,12 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
     listNotifications(user, 10),
     countApprovals(user),
     mailUnreadCount(user).catch(() => 0),
-    captureStatus(user).catch(() => null),
+    captureStatuses(user).catch(() => null),
     unreadBrief(user).catch(() => null),
   ]);
+
+  const capture = captures?.get(user.workspaceId) ?? null;
+  const choices = workspaces.map((item) => ({ ...item, waiting: item.id !== user.workspaceId && (captures?.get(item.id)?.fresh ?? 0) > 0 }));
 
   return (
     <ShortcutsProvider>
@@ -123,7 +126,12 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
             openActionCount={openActionCount}
             mailUnread={mailUnread}
             capture={capture}
-            workspaceName={user.workspaceName}
+            workspace={{
+              id: user.workspaceId,
+              name: user.workspaceName,
+              viewerName: user.fullName || "",
+              choices,
+            }}
           />
           <CrmChrome
             viewer={{
@@ -132,6 +140,7 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
               email: user.email,
               role: user.role,
               workspaceName: user.workspaceName,
+              workspaceId: user.workspaceId,
             }}
             overdue={attention.overdue}
             today={attention.today}

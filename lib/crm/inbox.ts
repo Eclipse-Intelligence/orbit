@@ -15,6 +15,7 @@ import { hasScope } from "@/lib/crm/scopes";
 import { createTaskInDb } from "@/lib/crm/tasks";
 import { scheduleTaskDue, withDueNote } from "@/lib/crm/task-due";
 import type { UserActor } from "@/lib/crm/types";
+import { routedAway } from "@/lib/mail/routing";
 import {
   fetchInboxMessages,
   refreshMicrosoftToken,
@@ -78,6 +79,7 @@ type SyncCounts = {
 };
 
 export type StoredConnection = MailboxSummary & {
+  workspaceId: string;
   refreshTokenCipher: string | null;
   accessTokenCipher: string | null;
   accessTokenExpiresAt: string | null;
@@ -204,6 +206,21 @@ export async function saveMailbox(
     );
   }
   await withActor(actor, async (db) => {
+    const existing = await readStored(db, actor);
+    if (existing) {
+      await db.query(
+        `update crm.mailbox_connections set
+           email = $2,
+           status = 'connected',
+           refresh_token = $3,
+           access_token = $4,
+           access_token_expires_at = $5,
+           last_error = null
+         where id = $1`,
+        [existing.id, email, encryptSecret(input.refreshToken), encryptSecret(input.accessToken), input.expiresAt],
+      );
+      return;
+    }
     await db.query(
       `insert into crm.mailbox_connections (
          workspace_id, user_id, provider, email, status,
@@ -234,8 +251,8 @@ const SIGNATURE_MAX_LENGTH = 2000;
 
 async function signatureFor(db: Db, actor: UserActor, email: string) {
   const result = await db.query<{ body: string }>(
-    "select body from crm.email_signatures where workspace_id = $1 and user_id = $2 and sender_email = $3",
-    [actor.workspaceId, actor.userId, email.toLowerCase()],
+    "select body from crm.email_signatures where user_id = $1 and sender_email = $2",
+    [actor.userId, email.toLowerCase()],
   );
   return result.rows[0]?.body ?? null;
 }
@@ -244,10 +261,7 @@ export async function saveSignature(actor: UserActor, senderEmail: string, body:
   const email = canonicalEmail(senderEmail);
   const senders = await listSenders(actor);
   const identities = await withActor(actor, async (db) => {
-    const result = await db.query<{ email: string }>("select email from crm.send_identities where user_id = $1 and workspace_id = $2", [
-      actor.userId,
-      actor.workspaceId,
-    ]);
+    const result = await db.query<{ email: string }>("select email from crm.send_identities where user_id = $1", [actor.userId]);
     return result.rows.map((row) => row.email.toLowerCase());
   });
   if (!email || !(senders.some((sender) => sender.email.toLowerCase() === email) || identities.includes(email))) {
@@ -259,11 +273,7 @@ export async function saveSignature(actor: UserActor, senderEmail: string, body:
   }
   await withActor(actor, async (db) => {
     if (!text) {
-      await db.query("delete from crm.email_signatures where workspace_id = $1 and user_id = $2 and sender_email = $3", [
-        actor.workspaceId,
-        actor.userId,
-        email,
-      ]);
+      await db.query("delete from crm.email_signatures where user_id = $1 and sender_email = $2", [actor.userId, email]);
       return;
     }
     await db.query(
@@ -290,13 +300,13 @@ export async function listSenders(actor: UserActor): Promise<Sender[]> {
     const primary = await readStored(db, actor);
     const accounts = await db.query<{ id: string; email: string; display_name: string | null }>(
       `select id, email, display_name from crm.calendar_accounts
-       where user_id = $1 and workspace_id = $2 and provider = 'microsoft' and status = 'connected' and can_send and email is not null
+       where user_id = $1 and provider = 'microsoft' and status = 'connected' and can_send and email is not null
        order by created_at, email`,
-      [actor.userId, actor.workspaceId],
+      [actor.userId],
     );
     const signatures = await db.query<{ sender_email: string; body: string }>(
-      "select sender_email, body from crm.email_signatures where workspace_id = $1 and user_id = $2",
-      [actor.workspaceId, actor.userId],
+      "select sender_email, body from crm.email_signatures where user_id = $1",
+      [actor.userId],
     );
     const signature = (email: string) => signatures.rows.find((row) => row.sender_email === email.toLowerCase())?.body ?? null;
     return [
@@ -333,8 +343,8 @@ async function resolveSender(db: Db, actor: UserActor, from: string | null | und
       }>(
         `select id, email, can_send, status, refresh_token, access_token, access_token_expires_at
          from crm.calendar_accounts
-         where id = $1 and user_id = $2 and workspace_id = $3 and provider = 'microsoft'`,
-        [from, actor.userId, actor.workspaceId],
+         where id = $1 and user_id = $2 and provider = 'microsoft'`,
+        [from, actor.userId],
       )
     : { rows: [] };
   const account = found.rows[0];
@@ -511,8 +521,8 @@ export async function disconnectMailbox(actor: UserActor) {
            access_token = null,
            access_token_expires_at = null,
            last_error = null
-       where user_id = $1 and workspace_id = $2 and provider = 'microsoft'`,
-      [actor.userId, actor.workspaceId],
+       where user_id = $1 and provider = 'microsoft'`,
+      [actor.userId],
     );
   });
 }
@@ -535,6 +545,7 @@ export async function syncMailbox(
       error: "Connect Microsoft to sync this inbox.",
     };
   }
+  const owner = mailboxActor(actor, stored);
   try {
     const token = await currentToken(stored, fetchImpl);
     const since = stored.lastSyncedAt
@@ -550,13 +561,13 @@ export async function syncMailbox(
       .filter((message) => message.providerMessageId);
     const watermark = syncWatermark(stored, since, fetched);
     const followUpIds: string[] = [];
-    const counts = await withActor(actor, async (db) => {
+    const counts = await withActor(owner, async (db) => {
       await lockMailbox(db, stored.id);
       await storeToken(db, stored.id, token);
-      const counts = await fileMessages(db, actor, stored, inbound, followUpIds);
+      const counts = await fileMessages(db, owner, stored, inbound, followUpIds);
       await db.query("savepoint attach_unmatched");
       try {
-        counts.attached += await attachUnmatched(db, actor, stored);
+        counts.attached += await attachUnmatched(db, owner, stored);
         await db.query("release savepoint attach_unmatched");
       } catch (error) {
         await db.query("rollback to savepoint attach_unmatched");
@@ -572,18 +583,18 @@ export async function syncMailbox(
       );
       return counts;
     });
-    await sendFollowUpsToClickUp(actor, followUpIds);
+    await sendFollowUpsToClickUp(owner, followUpIds);
     return counts;
   } catch (error) {
     const message = sanitizeMicrosoftError(
       error instanceof Error ? error.message : "Could not sync the inbox.",
     );
-    await withActor(actor, async (db) => {
+    await withActor(owner, async (db) => {
       await db.query(
         `update crm.mailbox_connections
          set last_attempt_at = now(), last_error = $2
          where id = $1 and user_id = $3`,
-        [stored.id, message, actor.userId],
+        [stored.id, message, owner.userId],
       );
     });
     return {
@@ -623,20 +634,25 @@ export async function fileInboundMessages(
   messages: InboundEmail[],
 ): Promise<SyncCounts> {
   const followUpIds: string[] = [];
-  const counts = await withActor(actor, async (db) => {
-    const stored = await readStored(db, actor);
-    if (!stored) {
-      throw new CrmError(
-        "invalid_input",
-        "Connect Microsoft before filing mail.",
-        400,
-      );
-    }
+  const stored = await withActor(actor, (db) => readStored(db, actor));
+  if (!stored) {
+    throw new CrmError(
+      "invalid_input",
+      "Connect Microsoft before filing mail.",
+      400,
+    );
+  }
+  const owner = mailboxActor(actor, stored);
+  const counts = await withActor(owner, async (db) => {
     await lockMailbox(db, stored.id);
-    return fileMessages(db, actor, stored, messages, followUpIds);
+    return fileMessages(db, owner, stored, messages, followUpIds);
   });
-  await sendFollowUpsToClickUp(actor, followUpIds);
+  await sendFollowUpsToClickUp(owner, followUpIds);
   return counts;
+}
+
+function mailboxActor(actor: UserActor, stored: StoredConnection): UserActor {
+  return stored.workspaceId === actor.workspaceId ? actor : { ...actor, workspaceId: stored.workspaceId };
 }
 
 async function sendFollowUpsToClickUp(actor: UserActor, taskIds: string[]) {
@@ -709,8 +725,9 @@ async function attachUnmatched(
     preview: string | null;
     from_email: string;
     received_at: Date | string | null;
+    conversation_id: string | null;
   }>(
-    `select m.id, m.provider_message_id, m.subject, m.preview, m.from_email, m.received_at
+    `select m.id, m.provider_message_id, m.subject, m.preview, m.from_email, m.received_at, m.conversation_id
      from crm.email_messages m
      where m.connection_id = $1
        and m.workspace_id = $2
@@ -753,6 +770,7 @@ async function attachUnmatched(
     });
     const match = await matchParties(db, actor.workspaceId, parties);
     if (!match.contactId && !match.companyId) continue;
+    if (await routedAway(db, actor.userId, actor.workspaceId, row.conversation_id, row.from_email, mailbox.id)) continue;
     const activityId = await fileActivity(
       db,
       actor,
@@ -810,7 +828,9 @@ async function fileMessages(
       toEmails: message.toEmails,
       ccEmails: message.ccEmails,
     });
-    const match = await matchParties(db, actor.workspaceId, parties);
+    const found = await matchParties(db, actor.workspaceId, parties);
+    const away = (found.contactId || found.companyId) && (await routedAway(db, actor.userId, actor.workspaceId, message.conversationId, message.fromEmail, mailbox.id));
+    const match = away ? { contactId: null, contactName: null, companyId: null, companyName: null } : found;
     let activityId: string | null = null;
     const internetMessageId = clip(message.internetMessageId, 400);
     const logged = internetMessageId
@@ -1059,6 +1079,7 @@ export async function readStored(
 ): Promise<StoredConnection | null> {
   const result = await db.query<{
     id: string;
+    workspace_id: string;
     email: string;
     status: "connected" | "disconnected";
     refresh_token: string | null;
@@ -1068,16 +1089,19 @@ export async function readStored(
     last_attempt_at: Date | string | null;
     last_error: string | null;
   }>(
-    `select id, email, status, refresh_token, access_token, access_token_expires_at,
+    `select id, workspace_id, email, status, refresh_token, access_token, access_token_expires_at,
             last_synced_at, last_attempt_at, last_error
      from crm.mailbox_connections
-     where user_id = $1 and workspace_id = $2 and provider = 'microsoft'`,
-    [actor.userId, actor.workspaceId],
+     where user_id = $1 and provider = 'microsoft'
+     order by status = 'connected' desc, created_at desc
+     limit 1`,
+    [actor.userId],
   );
   const row = result.rows[0];
   if (!row) return null;
   return {
     id: row.id,
+    workspaceId: row.workspace_id,
     email: row.email,
     status: row.status,
     lastSyncedAt: iso(row.last_synced_at),

@@ -166,13 +166,13 @@ export async function listMemories(
   return withActor(actor, async (db) => {
     const result = await db.query<Row>(
       `select ${COLUMNS} from crm.memories
-       where archived_at is null and workspace_id = $1
+       where archived_at is null and (workspace_id = $1 or scope = 'personal' and user_id = $6)
          and ($2::text is null or scope = $2)
          and ($3::text is null or search @@ websearch_to_tsquery('english', $3) or title ilike '%' || $3 || '%')
          and ($5::timestamptz is null or updated_at >= $5)
        order by pinned desc, ${query ? "ts_rank(search, websearch_to_tsquery('english', $3)) desc," : ""} updated_at desc
        limit $4`,
-      [actor.workspaceId, options.scope ?? null, query || null, limit, options.since ?? null],
+      [actor.workspaceId, options.scope ?? null, query || null, limit, options.since ?? null, actor.userId],
     );
     return result.rows.map(mapMemory);
   });

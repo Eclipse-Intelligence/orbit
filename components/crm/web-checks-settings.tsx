@@ -266,7 +266,7 @@ function IdealCustomer({ initial, learned, canAdmin, onSaved }: { initial: strin
         onChange={(event) => setValue(event.target.value)}
       />
       <span className="caption-style text-subtle leading-[1.4]">
-        {value.trim() ? "Companies are scored against this. Saving a change makes them due for rescoring." : "Describe your ideal customer to score companies."}
+        {value.trim() ? "Companies are scored against this. Saving a change makes them due for rescoring. Same as Who it's for in Settings, Brand." : "Describe your ideal customer to score companies. Same as Who it's for in Settings, Brand."}
       </span>
       {canAdmin && (
         <div className="flex flex-wrap items-center justify-end gap-3">

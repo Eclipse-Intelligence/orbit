@@ -1,5 +1,5 @@
 import { withApi } from "@/lib/api/http";
-import { NO_STORE, readObject, requireCompanion } from "@/lib/companion/http";
+import { NO_STORE, readObject, requireCompanionJob } from "@/lib/companion/http";
 import { runCompanionTool } from "@/lib/companion/jobs";
 
 export const dynamic = "force-dynamic";
@@ -7,8 +7,8 @@ export const maxDuration = 120;
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   return withApi(async () => {
-    const auth = await requireCompanion(request);
     const { id } = await context.params;
+    const auth = await requireCompanionJob(request, id);
     const body = await readObject(request, 200_000);
     const result = await runCompanionTool(auth, id, {
       id: typeof body.id === "string" ? body.id : "",

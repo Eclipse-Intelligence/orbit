@@ -64,8 +64,8 @@ export async function noteViewerAddress(actor: UserActor, address: string | null
 export async function readStatusesOn(actor: UserActor) {
   return withActor(actor, async (db) => {
     const result = await db.query<{ read_statuses: boolean }>(
-      "select read_statuses from crm.mail_preferences where workspace_id = $1 and user_id = $2",
-      [actor.workspaceId, actor.userId],
+      "select read_statuses from crm.mail_preferences where user_id = $1 order by updated_at desc limit 1",
+      [actor.userId],
     );
     return result.rows[0]?.read_statuses ?? true;
   });

@@ -41,7 +41,7 @@ export default function CrmChrome({
           <QuickAdd viewerId={viewer.id} />
           <TaskReminders />
           <ShortcutsHelp />
-          <AssistantDock brief={brief} />
+          <AssistantDock brief={brief} workspaceName={viewer.workspaceName} workspaceId={viewer.workspaceId} />
           <PushRegistrar />
         </div>
         </ComposerProvider>

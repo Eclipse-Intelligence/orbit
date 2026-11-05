@@ -19,6 +19,15 @@ export function mailListWhen(iso: string | null, now: number) {
   return new Intl.DateTimeFormat("en-GB", sameYear ? { day: "numeric", month: "short", timeZone } : { day: "numeric", month: "short", year: "numeric", timeZone }).format(at);
 }
 
+export function mailDayWhen(iso: string, now: number) {
+  const at = new Date(iso);
+  const timeZone = appTimeZone();
+  const time = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", timeZone }).format(at);
+  if (dateKey(at, timeZone) === dateKey(now, timeZone)) return `Today ${time}`;
+  if (dateKey(at, timeZone) === dateKey(now - 86_400_000, timeZone)) return `Yesterday ${time}`;
+  return `${new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", timeZone }).format(at)} ${time}`;
+}
+
 export function mailFullWhen(iso: string | null) {
   if (!iso) return "";
   return new Intl.DateTimeFormat("en-GB", {

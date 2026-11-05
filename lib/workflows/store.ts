@@ -558,7 +558,7 @@ export async function listNotifications(actor: UserActor, limit = 20): Promise<N
       created_at: Date;
     }>(
       `select id, title, body, href, source, read_at, created_at from crm.notifications
-       where workspace_id = $1 and user_id = $2 and created_at > now() - interval '30 days'
+       where (workspace_id = $1 or source = 'mail') and user_id = $2 and created_at > now() - interval '30 days'
        order by created_at desc limit $3`,
       [actor.workspaceId, actor.userId, limit],
     );
@@ -578,7 +578,7 @@ export async function markNotificationsRead(actor: UserActor, ids?: string[]) {
   await withActor(actor, (db) =>
     db.query(
       `update crm.notifications set read_at = now()
-       where workspace_id = $1 and user_id = $2 and read_at is null and ($3::uuid[] is null or id = any($3::uuid[]))`,
+       where (workspace_id = $1 or source = 'mail') and user_id = $2 and read_at is null and ($3::uuid[] is null or id = any($3::uuid[]))`,
       [actor.workspaceId, actor.userId, ids && ids.length ? ids.filter((id) => isUuid(id)) : null],
     ),
   );

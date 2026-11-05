@@ -61,8 +61,8 @@ export async function listCompanions(actor: UserActor): Promise<CompanionSummary
   return withActor(actor, async (db) => {
     const result = await db.query<CompanionRow>(
       `select id, name, created_at, last_seen_at from crm.ai_companions
-       where user_id = $1 and workspace_id = $2 and revoked_at is null order by created_at`,
-      [actor.userId, actor.workspaceId],
+       where user_id = $1 and revoked_at is null order by created_at`,
+      [actor.userId],
     );
     const now = Date.now();
     return result.rows.map((row) => summary(row, now));

@@ -89,6 +89,7 @@ type MemberRow = {
   role: WorkspaceRole;
   email: string | null;
   full_name: string | null;
+  is_home: boolean;
 };
 
 type ImportRow = {
@@ -208,7 +209,7 @@ function mapImport(row: ImportRow): ConversationImport {
   };
 }
 
-export function memberActor(row: MemberRow): UserActor {
+export function memberActor(row: Omit<MemberRow, "is_home">): UserActor {
   return {
     type: "user",
     userId: row.user_id,
@@ -224,7 +225,9 @@ export function memberActor(row: MemberRow): UserActor {
 export async function backgroundTargets(): Promise<BackgroundTarget[]> {
   const result = await query<MemberRow>("select * from private.background_members()");
   const groups = new Map<string, UserActor[]>();
+  const homes = new Set<string>();
   for (const row of result.rows) {
+    if (row.is_home) homes.add(`${row.workspace_id}:${row.user_id}`);
     const members = groups.get(row.workspace_id) ?? [];
     members.push(memberActor(row));
     groups.set(row.workspace_id, members);
@@ -233,6 +236,7 @@ export async function backgroundTargets(): Promise<BackgroundTarget[]> {
   for (const members of groups.values()) {
     let added = 0;
     for (const member of members) {
+      if (!homes.has(`${member.workspaceId}:${member.userId}`)) continue;
       const { mailbox, calendarAccounts, calendarFeeds } = await withActor(member, async (db) => {
         const stored = await readStored(db, member);
         return {
@@ -293,7 +297,7 @@ function conflictTarget(key: IntegrationKey) {
 }
 
 const KEY_WHERE =
-  "workspace_id = $1 and source = $2 and connection_id is not distinct from $3::uuid";
+  "source = $2 and (case when $3::uuid is null then workspace_id = $1 and connection_id is null else connection_id = $3::uuid end)";
 
 function keyValues(key: IntegrationKey) {
   return [key.workspaceId, key.source, key.connectionId ?? null];

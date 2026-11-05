@@ -38,13 +38,13 @@ async function claimReminders(actor: UserActor, limit: number) {
     const result = await db.query<ReminderRow>(
       `with picked as materialized (
          select id from crm.mail_reminders
-         where user_id = $1 and workspace_id = $2 and state = 'waiting' and due_at <= now()
-         order by due_at, id limit $3 for update skip locked
+         where user_id = $1 and state = 'waiting' and due_at <= now()
+         order by due_at, id limit $2 for update skip locked
        )
        update crm.mail_reminders r set state = 'due', surfaced_at = now()
        from picked where r.id = picked.id
        returning ${FOLLOW_UP_ROW_COLUMNS.split(", ").map((column) => `r.${column}`).join(", ")}, r.kind, r.action, r.automatic, r.deferral`,
-      [actor.userId, actor.workspaceId, limit],
+      [actor.userId, limit],
     );
     return result.rows;
   });

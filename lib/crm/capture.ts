@@ -9,6 +9,8 @@ import { iso } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
 import type { TeamsTranscriptStatus } from "@/lib/crm/teams-transcripts";
 import type { UserActor } from "@/lib/crm/types";
+import { workspaceActors } from "@/lib/crm/workspaces";
+import { unknownMailOnce, type UnknownEmail } from "@/lib/mail/filing";
 
 export type ToFile = { unfiled: UnfiledImport[]; people: MetPerson[] };
 
@@ -22,7 +24,7 @@ export type CaptureStatus = {
 
 const HAS_MAILBOX = `exists (
   select 1 from crm.mailbox_connections mc
-  where mc.user_id = $1 and mc.workspace_id = $2 and mc.provider = 'microsoft'
+  where mc.user_id = $1 and mc.provider = 'microsoft'
 )`;
 
 const UNFILED_COUNTS = `
@@ -51,9 +53,9 @@ const PEOPLE_COUNTS = `
       union all
       select $3::text
       union all
-      select mc.email from crm.mailbox_connections mc where mc.user_id = $1 and mc.workspace_id = $2 and mc.provider = 'microsoft'
+      select mc.email from crm.mailbox_connections mc where mc.user_id = $1 and mc.provider = 'microsoft'
       union all
-      select ca.email from crm.calendar_accounts ca where ca.user_id = $1 and ca.workspace_id = $2
+      select ca.email from crm.calendar_accounts ca where ca.user_id = $1
     ) raw
     where raw.email is not null and btrim(raw.email) <> ''
   ),
@@ -70,7 +72,7 @@ const PEOPLE_COUNTS = `
       (case when jsonb_typeof(e.attendees) = 'array' then e.attendees else '[]'::jsonb end)
       || (case when jsonb_typeof(e.organizer) = 'object' then jsonb_build_array(e.organizer) else '[]'::jsonb end)
     ) as person
-    where e.user_id = $1 and e.workspace_id = $2 and not e.is_cancelled
+    where e.user_id = $1 and not e.is_cancelled
       and jsonb_typeof(person) = 'object' and jsonb_typeof(person->'email') = 'string'
       and ${HAS_MAILBOX}
     group by 1
@@ -88,7 +90,7 @@ const PEOPLE_COUNTS = `
       )
       and not exists (
         select 1 from crm.hidden_attendees h
-        where h.user_id = $1 and h.workspace_id = $2 and h.email = met.email
+        where h.user_id = $1 and h.email = met.email
       )
   )
   select
@@ -109,7 +111,7 @@ export async function listToFile(actor: UserActor, now = Date.now()): Promise<To
   assertScope(actor.scopes, "crm:read");
   const [unfiled, mailbox] = await Promise.all([
     listUnfiledImports(actor),
-    withActor(actor, async (db) => (await db.query(`select ${HAS_MAILBOX} as connected`, [actor.userId, actor.workspaceId])).rows[0]?.connected === true),
+    withActor(actor, async (db) => (await db.query(`select ${HAS_MAILBOX} as connected`, [actor.userId])).rows[0]?.connected === true),
   ]);
   const people = mailbox ? await listPeopleMet(actor, now) : [];
   return { unfiled, people };
@@ -129,8 +131,33 @@ function later(left: string | null, right: string | null) {
   return left > right ? left : right;
 }
 
-export async function captureStatus(actor: UserActor, now = Date.now()): Promise<CaptureStatus> {
+async function unknownFor(actor: UserActor, now: number, actors?: UserActor[]) {
+  return unknownMailOnce(actor, actors ?? (await workspaceActors(actor)), now).catch((error) => {
+    console.error("Reading email from new people failed", error instanceof Error ? error.message : error);
+    return [] as UnknownEmail[];
+  });
+}
+
+export async function captureStatuses(actor: UserActor, now = Date.now()) {
   assertScope(actor.scopes, "crm:read");
+  const actors = await workspaceActors(actor);
+  const unknown = await unknownFor(actor, now, actors);
+  if (actors.length < 2) {
+    const status = await captureStatus(actor, now, unknown).catch(() => null);
+    return new Map([[actor.workspaceId, status]]);
+  }
+  const statuses = await Promise.all(actors.map((item) => captureStatus(item, now, unknown).catch(() => null)));
+  return new Map(actors.map((item, index) => [item.workspaceId, statuses[index]]));
+}
+
+export async function unknownMailFor(actor: UserActor, now = Date.now()) {
+  const actors = await workspaceActors(actor);
+  return { actors, emails: await unknownFor(actor, now, actors) };
+}
+
+export async function captureStatus(actor: UserActor, now = Date.now(), unknown?: UnknownEmail[]): Promise<CaptureStatus> {
+  assertScope(actor.scopes, "crm:read");
+  const emails = (unknown ?? (await unknownFor(actor, now))).filter((item) => item.workspaceId === actor.workspaceId);
   return withActor(actor, async (db) => {
     const unfiled = (
       await db.query<{ seen_at: Date | null; waiting: number; fresh: number; newest: Date | null }>(UNFILED_COUNTS, [actor.userId, actor.workspaceId])
@@ -149,11 +176,13 @@ export async function captureStatus(actor: UserActor, now = Date.now()): Promise
     const followUps = (
       await db.query<{ waiting: number; fresh: number; newest: Date | null }>(FOLLOW_UP_COUNTS, [actor.userId, actor.workspaceId, seenAt])
     ).rows[0];
+    const freshEmails = emails.filter((item) => !seenAt || item.at > seenAt).length;
+    const newestEmail = emails.reduce<string | null>((latest, item) => (!latest || item.at > latest ? item.at : latest), null);
     return {
-      waiting: unfiled.waiting + people.waiting + followUps.waiting,
+      waiting: unfiled.waiting + people.waiting + followUps.waiting + emails.length,
       followUps: followUps.waiting,
-      fresh: unfiled.fresh + people.fresh + followUps.fresh,
-      newestAt: later(later(iso(unfiled.newest), iso(people.newest)), iso(followUps.newest)),
+      fresh: unfiled.fresh + people.fresh + followUps.fresh + freshEmails,
+      newestAt: later(later(later(iso(unfiled.newest), iso(people.newest)), iso(followUps.newest)), newestEmail),
       seenAt,
     };
   });

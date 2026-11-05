@@ -14,6 +14,8 @@ import { firstName } from "@/lib/mail/format";
 import { replyAfterSql } from "@/lib/mail/follow-up-rules";
 import { threadDeferral } from "@/lib/mail/deferrals";
 import type { MailNav, MailSplit, MailView, ThreadCursor, ThreadDetail, ThreadPerson, ThreadSummary } from "@/lib/mail/view";
+import { workspaceActors } from "@/lib/crm/workspaces";
+import { threadFilingInDb } from "@/lib/mail/routing";
 
 const THREAD_KEY = "coalesce(m.thread_key, 'm:' || m.id::text)";
 
@@ -66,8 +68,8 @@ export async function listThreads(
 ): Promise<{ threads: ThreadSummary[]; next: ThreadCursor | null }> {
   const limit = Math.min(Math.max(Math.trunc(input.limit ?? 50), 1), 100);
   return withActor(actor, async (db) => {
-    const values: unknown[] = [actor.userId, actor.workspaceId];
-    const where = ["m.user_id = $1", "m.workspace_id = $2"];
+    const values: unknown[] = [actor.userId];
+    const where = ["m.user_id = $1"];
     let split: MailSplit | null = null;
     let splitting = false;
     const text = input.query?.trim().slice(0, 300);
@@ -133,7 +135,7 @@ export async function listThreads(
        listed as (
          select r.*, rem.kind as reminder_kind, rem.surfaced_at, snz.until as snoozed_until, fu.at as follow_up_at,
            greatest(r.at, coalesce(rem.surfaced_at, r.at)) as sort_at,
-           ${splitting ? splitCase("r", "$2") : "null"} as split
+           ${splitting ? splitCase("r") : "null"} as split
          from ranked r
          ${splitting ? splitJoin("r", "$1") : ""}
          left join lateral (
@@ -199,7 +201,8 @@ export async function listThreads(
 }
 
 export async function getThread(actor: UserActor, key: string): Promise<ThreadDetail> {
-  const detail = await readThread(actor, key);
+  const actors = await workspaceActors(actor);
+  const detail = await readThread(actor, key, actors);
   if (detail.prepared?.times) {
     detail.prepared = (await freshPrepared(actor, detail.prepared.id).catch(() => null)) ?? detail.prepared;
   }
@@ -211,10 +214,11 @@ const PEOPLE_MAX = 4;
 async function threadPeople(
   db: Db,
   actor: UserActor,
+  actors: UserActor[],
   rows: { from_email: string | null; from_name: string | null; to_recipients: MailAddress[]; cc_recipients: MailAddress[] }[],
 ): Promise<ThreadPerson[]> {
   const own = new Set(
-    (await db.query<{ email: string }>("select lower(email) as email from crm.mail_sources where user_id = $1", [actor.userId])).rows.map((row) => row.email),
+    (await db.query<{ email: string }>("select lower(email) as email from crm.mail_sources where user_id = $1 union select lower(email) from crm.send_identities where user_id = $1", [actor.userId])).rows.map((row) => row.email),
   );
   const seen = new Map<string, string | null>();
   for (const row of rows) {
@@ -228,6 +232,7 @@ async function threadPeople(
   const emails = [...seen.keys()].slice(0, 20);
   if (emails.length === 0) return [];
   const matched = await db.query<{
+    workspace_id: string;
     email: string;
     id: string;
     name: string | null;
@@ -238,7 +243,7 @@ async function threadPeople(
     deal_name: string | null;
     deal_stage: string | null;
   }>(
-    `select distinct on (lower(c.email)) lower(c.email) as email, c.id,
+    `select distinct on (c.workspace_id, lower(c.email)) c.workspace_id, lower(c.email) as email, c.id,
        nullif(trim(concat_ws(' ', c.first_name, c.last_name)), '') as name, c.job_title, c.company_id, co.name as company_name,
        deal.id as deal_id, deal.name as deal_name, deal.stage_name as deal_stage
      from crm.contacts c
@@ -250,29 +255,42 @@ async function threadPeople(
        where o.company_id = c.company_id and o.status = 'open' and o.archived_at is null
        order by o.updated_at desc limit 1
      ) deal on true
-     where c.workspace_id = $1 and c.archived_at is null and lower(c.email) = any($2::text[])
-     order by lower(c.email), c.updated_at desc`,
-    [actor.workspaceId, emails],
+     where c.workspace_id = any($1::uuid[]) and c.archived_at is null and lower(c.email) = any($2::text[])
+     order by c.workspace_id, lower(c.email), c.updated_at desc`,
+    [actors.map((item) => item.workspaceId), emails],
   );
-  const contacts = new Map(matched.rows.map((row) => [row.email, row]));
-  const ordered = [...emails].sort((a, b) => Number(contacts.has(b)) - Number(contacts.has(a)));
+  const contacts = new Map(matched.rows.filter((row) => row.workspace_id === actor.workspaceId).map((row) => [row.email, row]));
+  const elsewhere = new Map<string, { id: string; name: string }[]>();
+  for (const item of actors) {
+    if (item.workspaceId === actor.workspaceId) continue;
+    for (const row of matched.rows) {
+      if (row.workspace_id !== item.workspaceId || contacts.has(row.email)) continue;
+      elsewhere.set(row.email, [...(elsewhere.get(row.email) ?? []), { id: item.workspaceId, name: item.workspaceName }]);
+    }
+  }
+  const outside = new Map(matched.rows.filter((row) => row.workspace_id !== actor.workspaceId).map((row) => [row.email, row]));
+  const rank = (email: string) => (contacts.has(email) ? 2 : elsewhere.has(email) ? 1 : 0);
+  const ordered = [...emails].sort((a, b) => rank(b) - rank(a));
   return ordered.slice(0, PEOPLE_MAX).map((email) => {
     const contact = contacts.get(email);
-    return {
+    const other = outside.get(email);
+    const person: ThreadPerson = {
       email,
-      name: contact?.name ?? seen.get(email) ?? null,
+      name: contact?.name ?? other?.name ?? seen.get(email) ?? null,
       contactId: contact?.id ?? null,
-      title: contact?.job_title ?? null,
+      title: contact?.job_title ?? other?.job_title ?? null,
       companyId: contact?.company_id ?? null,
-      companyName: contact?.company_name ?? null,
+      companyName: contact?.company_name ?? other?.company_name ?? null,
       dealId: contact?.deal_id ?? null,
       dealName: contact?.deal_name ?? null,
       dealStage: contact?.deal_stage ?? null,
     };
+    const places = elsewhere.get(email);
+    return places ? { ...person, elsewhere: places } : person;
   });
 }
 
-async function readThread(actor: UserActor, key: string): Promise<ThreadDetail> {
+async function readThread(actor: UserActor, key: string, actors: UserActor[]): Promise<ThreadDetail> {
   const { sourceId, key: tk } = parseThreadKey(key);
   return withActor(actor, async (db) => {
     const result = await db.query<{
@@ -352,7 +370,7 @@ async function readThread(actor: UserActor, key: string): Promise<ThreadDetail> 
     const reply = replied.rows[0] ?? null;
     const followUp = reminder.rows[0] && !(reply && reply.reminder_id === reminder.rows[0].id) ? reminder.rows[0] : undefined;
     const deferral = await threadDeferral(db, actor, sourceId, tk);
-    const people = await threadPeople(db, actor, rows.length ? rows : result.rows);
+    const people = await threadPeople(db, actor, actors, rows.length ? rows : result.rows);
     const own = new Set(
       (
         await db.query<{ email: string }>(
@@ -370,8 +388,14 @@ async function readThread(actor: UserActor, key: string): Promise<ThreadDetail> 
         ? { ...deferral, messageId: fromThem.filter((row) => !row.is_draft).at(-1)?.id ?? target?.id ?? deferral.messageId }
         : deferral;
     const subscription = await threadSubscription(db, actor, sender);
+    const filing = await threadFilingInDb(db, actor, actors, sourceId, tk, {
+      latestId: (fromThem.at(-1) ?? latest).id,
+      counterpart: sender ?? people[0]?.email ?? null,
+      own,
+    });
     return {
       subscription,
+      filing,
       key,
       account: latest.account,
       subject: latest.subject,
@@ -430,14 +454,14 @@ async function splitCounts(db: Db, actor: UserActor) {
        from scoped s
      ),
      listed as (
-       select r.source_id, r.unread, ${splitCase("r", "$2")} as split
+       select r.source_id, r.unread, ${splitCase("r")} as split
        from ranked r
        ${splitJoin("r", "$1")}
        where r.rn = 1
      )
      select source_id, split, count(*)::int as total, count(*) filter (where unread)::int as unread
      from listed group by source_id, split`,
-    [actor.userId, actor.workspaceId],
+    [actor.userId],
   );
   return result.rows.map((row) => ({ sourceId: row.source_id, split: row.split, total: row.total, unread: row.unread }));
 }

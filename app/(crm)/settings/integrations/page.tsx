@@ -6,10 +6,12 @@ import ClickUpSettings from "@/components/crm/clickup-settings";
 import EnrichmentSettingsCard from "@/components/crm/enrichment-settings";
 import WebChecksSettings from "@/components/crm/web-checks-settings";
 import IntegrationsSettings from "@/components/crm/integrations-settings";
+import MailRoutingSettings from "@/components/mail/mail-routing-settings";
 import { SettingsPage } from "@/components/crm/settings-ui";
 import { agentMailboxView } from "@/lib/agent-mail/mailbox";
 import { listAiAccounts } from "@/lib/ai-accounts/store";
-import { getUserActor } from "@/lib/auth/user";
+import { getUserActor, getWorkspaceChoices } from "@/lib/auth/user";
+import { listAddressHomes, listDomainRules } from "@/lib/mail/routing";
 import { listCompanions } from "@/lib/companion/pairing";
 import { unenrichedCompanyCount } from "@/lib/enrichment/companies";
 import { enrichmentAvailability, getEnrichmentSettings, providerStatuses } from "@/lib/enrichment/settings";
@@ -59,11 +61,14 @@ export default async function IntegrationSettingsPage({
     agentMailboxView(user),
   ]);
   const live = mailbox?.status === "connected";
-  const [calls, transcripts, calendar, mirror] = await Promise.all([
+  const [calls, transcripts, calendar, mirror, workspaces, homes, rules] = await Promise.all([
     mailbox ? getCallSync(user) : Promise.resolve(null),
     live ? getTeamsTranscriptStatus(user) : Promise.resolve(null),
     live ? getCalendarStatus(user) : Promise.resolve(null),
     mailSyncStatus(user),
+    getWorkspaceChoices(),
+    listAddressHomes(user).catch(() => []),
+    listDomainRules(user).catch(() => []),
   ]);
   const headerStore = await headers();
   const host = headerStore.get("x-forwarded-host") ?? headerStore.get("host") ?? "localhost:4173";
@@ -91,6 +96,9 @@ export default async function IntegrationSettingsPage({
         recall={recall}
         linear={linear}
       />
+      {workspaces.length > 1 && homes.length > 0 && (
+        <MailRoutingSettings homes={homes} rules={rules} workspaces={workspaces.map((item) => ({ id: item.id, name: item.name }))} />
+      )}
       <ClickUpSettings view={clickup} canAdmin={canAdmin} />
       <AiAccountsSettings accounts={aiAccounts} companions={companions} />
       <AgentMailboxSettings view={agentMailbox} />

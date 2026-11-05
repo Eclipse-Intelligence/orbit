@@ -365,7 +365,7 @@ async function ownedDocs(actor: UserActor, ids: string[]) {
   const wanted = ids.filter(isUuid);
   if (wanted.length === 0) return new Set<string>();
   return withActor(actor, async (db) => {
-    const result = await db.query<{ id: string }>("select id from crm.pages where id = any($1::uuid[]) and user_id = $2 and workspace_id = $3", [
+    const result = await db.query<{ id: string }>("select id from crm.pages where id = any($1::uuid[]) and user_id = $2 and (workspace_id = $3 or kind = 'daily')", [
       wanted,
       actor.userId,
       actor.workspaceId,

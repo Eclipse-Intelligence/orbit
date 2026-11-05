@@ -23,8 +23,8 @@ type Arrival = {
 export async function mailNotifyLevel(actor: UserActor): Promise<NotifyMail> {
   return withActor(actor, async (db) => {
     const result = await db.query<{ notify_mail: NotifyMail }>(
-      "select notify_mail from crm.mail_preferences where workspace_id = $1 and user_id = $2",
-      [actor.workspaceId, actor.userId],
+      "select notify_mail from crm.mail_preferences where user_id = $1 order by updated_at desc limit 1",
+      [actor.userId],
     );
     return result.rows[0]?.notify_mail ?? "important";
   });
@@ -36,21 +36,21 @@ export async function notifyNewMail(actor: UserActor, messageIds: string[], opti
   if (level === "none") return { sent: 0 };
   const arrivals = await withActor(actor, async (db) => {
     const result = await db.query<Arrival>(
-      `select n.id, n.source_id, n.tk, n.subject, n.snippet, n.from_email, n.from_name, ${splitCase("n", "$2")} as split
+      `select n.id, n.source_id, n.tk, n.subject, n.snippet, n.from_email, n.from_name, ${splitCase("n")} as split
        from (
          select m.id, m.source_id, coalesce(m.thread_key, 'm:' || m.id::text) as tk, m.subject, m.snippet, m.from_email, m.from_name,
            m.focused, coalesce(m.received_at, m.sent_at, m.created_at) as at
          from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
-         where m.user_id = $1 and m.id = any($3::uuid[]) and f.role = 'inbox' and not m.is_read and not m.is_draft
-           and coalesce(m.received_at, m.sent_at, m.created_at) > now() - make_interval(hours => $4)
+         where m.user_id = $1 and m.id = any($2::uuid[]) and f.role = 'inbox' and not m.is_read and not m.is_draft
+           and coalesce(m.received_at, m.sent_at, m.created_at) > now() - make_interval(hours => $3)
            and lower(coalesce(m.from_email, '')) <> all (
              select lower(s.email) from crm.mail_sources s where s.user_id = $1
-             union select lower($5::text)
+             union select lower($4::text)
            )
        ) n
        ${splitJoin("n", "$1")}
        order by n.at asc`,
-      [actor.userId, actor.workspaceId, messageIds, FRESH_HOURS, actor.email],
+      [actor.userId, messageIds, FRESH_HOURS, actor.email],
     );
     return result.rows;
   });
@@ -117,8 +117,8 @@ export async function setMailNotifications(actor: UserActor, input: { mail?: Not
 export async function notificationSettings(actor: UserActor) {
   return withActor(actor, async (db) => {
     const result = await db.query<{ notify_mail: NotifyMail; notify_calendar_minutes: number | null; notify_reads: boolean }>(
-      "select notify_mail, notify_calendar_minutes, notify_reads from crm.mail_preferences where workspace_id = $1 and user_id = $2",
-      [actor.workspaceId, actor.userId],
+      "select notify_mail, notify_calendar_minutes, notify_reads from crm.mail_preferences where user_id = $1 order by updated_at desc limit 1",
+      [actor.userId],
     );
     const devices = await db.query<{ count: number }>("select count(*)::int as count from crm.push_subscriptions where user_id = $1", [actor.userId]);
     const row = result.rows[0];

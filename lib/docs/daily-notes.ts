@@ -34,12 +34,12 @@ async function ensureDaily(db: Db, actor: UserActor, date: string) {
   );
   await db.query(
     `update crm.pages set archived_at = null
-     where workspace_id = $1 and user_id = $2 and kind = 'daily' and daily_date = $3::date and archived_at is not null`,
-    [actor.workspaceId, actor.userId, date],
+     where user_id = $1 and kind = 'daily' and daily_date = $2::date and archived_at is not null`,
+    [actor.userId, date],
   );
   const found = await db.query<{ id: string }>(
-    "select id from crm.pages where workspace_id = $1 and user_id = $2 and kind = 'daily' and daily_date = $3::date",
-    [actor.workspaceId, actor.userId, date],
+    "select id from crm.pages where user_id = $1 and kind = 'daily' and daily_date = $2::date order by created_at limit 1",
+    [actor.userId, date],
   );
   return found.rows[0].id;
 }
@@ -89,8 +89,8 @@ export async function getDailyNote(actor: Actor, date?: string, options: { meeti
   const day = dayOf(date, now);
   const page = await withActor(owner, async (db) => {
     const found = await db.query<{ id: string }>(
-      "select id from crm.pages where workspace_id = $1 and user_id = $2 and kind = 'daily' and daily_date = $3::date",
-      [owner.workspaceId, owner.userId, day],
+      "select id from crm.pages where user_id = $1 and kind = 'daily' and daily_date = $2::date order by created_at limit 1",
+      [owner.userId, day],
     );
     return found.rows[0] ? docDetail(db, owner, found.rows[0].id) : null;
   });
@@ -137,10 +137,10 @@ export async function listDailyNotes(actor: Actor, options: { from?: string; to?
       `select p.id, p.daily_date::text as date, p.edited_at, left(p.content, 600) as head,
          (select count(*)::int from regexp_matches(p.content, '^\\d{2}:\\d{2}( |$)', 'gm')) as entries
        from crm.pages p
-       where p.workspace_id = $1 and p.user_id = $2 and p.kind = 'daily' and p.archived_at is null and p.content <> ''
-         and ($3::date is null or p.daily_date >= $3::date) and ($4::date is null or p.daily_date <= $4::date)
-       order by p.daily_date desc limit $5`,
-      [owner.workspaceId, owner.userId, options.from ?? null, options.to ?? null, limit],
+       where p.user_id = $1 and p.kind = 'daily' and p.archived_at is null and p.content <> ''
+         and ($2::date is null or p.daily_date >= $2::date) and ($3::date is null or p.daily_date <= $3::date)
+       order by p.daily_date desc limit $4`,
+      [owner.userId, options.from ?? null, options.to ?? null, limit],
     );
     return result.rows.map((row) => ({
       id: row.id,

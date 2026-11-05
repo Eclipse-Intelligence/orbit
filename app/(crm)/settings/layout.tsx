@@ -14,6 +14,7 @@ export default async function SettingsLayout({
   if (!user) redirect("/login");
   return (
     <SettingsShell
+      workspace={{ id: user.workspaceId, name: user.workspaceName }}
       viewer={{
         id: user.userId,
         name: user.fullName || user.email,

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { brandOrEmpty } from "@/lib/crm/brand";
 import { withActor } from "@/lib/crm/context";
 import { memberActor } from "@/lib/crm/conversations";
 import { CrmError } from "@/lib/crm/errors";
@@ -14,6 +15,10 @@ import { WRITING_STYLE } from "@/lib/writing-style";
 export type LearningKind = "personal" | "business" | "market" | "brief";
 export type UnitResult = { added?: number; updated?: number; archived?: number; skipped?: string; brief?: boolean; tidied?: { merged: number; retired: number }; tidyError?: string };
 type Options = { deadline: number; fetchImpl?: typeof fetch; now?: Date };
+
+function businessName(actor: UserActor) {
+  return actor.workspaceName.trim() || "the business";
+}
 
 const UNIT_MIN_MS = 25_000;
 const FIRST_LOOKBACK_MS = 7 * 86_400_000;
@@ -58,7 +63,7 @@ async function existingMemories(db: Db, actor: UserActor, scope: MemoryScope, li
   const owner = scope === "personal" ? actor.userId : null;
   const recent = await db.query<Existing>(
     `select id, kind, title, body, pinned, origin from crm.memories
-     where workspace_id = $1 and scope = $2 and archived_at is null and ($3::uuid is null or user_id = $3)
+     where ($3::uuid is not null or workspace_id = $1) and scope = $2 and archived_at is null and ($3::uuid is null or user_id = $3)
      order by pinned desc, updated_at desc limit $4`,
     [actor.workspaceId, scope, owner, Math.ceil(limit / 2)],
   );
@@ -66,7 +71,7 @@ async function existingMemories(db: Db, actor: UserActor, scope: MemoryScope, li
   const related = terms.length
     ? await db.query<Existing>(
         `select id, kind, title, body, pinned, origin from crm.memories
-         where workspace_id = $1 and scope = $2 and archived_at is null and ($3::uuid is null or user_id = $3)
+         where ($3::uuid is not null or workspace_id = $1) and scope = $2 and archived_at is null and ($3::uuid is null or user_id = $3)
            and search @@ to_tsquery('english', $4)
          order by ts_rank(search, to_tsquery('english', $4)) desc, updated_at desc limit $5`,
         [actor.workspaceId, scope, owner, terms.join(" | "), limit],
@@ -184,7 +189,7 @@ async function learnPersonal(actor: UserActor, since: Date, options: Options): P
   const existing = await withActor(actor, (db) => existingMemories(db, actor, "personal", 60, found));
   const material = `${existingBlock(existing)}\n\nMATERIAL\n\n${found}`;
   const ops = await askForOps(
-    `You keep the long-term memory that Orbit's assistant (in Eclipse's CRM) holds about ${name}, so it doesn't start from scratch in each conversation. ` +
+    `You keep the long-term memory that Orbit's assistant (in ${businessName(actor)}'s CRM) holds about ${name}, so it doesn't start from scratch in each conversation. ` +
       `From the material, keep only what will still be useful in future conversations: how ${name} likes things done, corrections they made to the assistant, standing instructions, people and relationships that matter to them and aren't obvious from CRM records, goals and priorities they're working towards, and patterns in how they edit drafts. ` +
       "Write each note as a fact about them (for example \"Mark wants first emails under 90 words\"). Skip one-off requests, anything already obvious from CRM records, personal matters unrelated to their work, and habits Orbit now does automatically (every email sent or received with a contact is filed on the timeline by itself, so never keep a note that emails should be logged by hand, and archive any existing note that says so). Kinds: preference, correction, instruction, person, goal, writing, fact.",
     material,
@@ -252,8 +257,9 @@ async function learnBusiness(actor: UserActor, since: Date, options: Options): P
     .join("\n\n");
   const existing = await withActor(actor, (db) => existingMemories(db, actor, "business", 80, found));
   const material = `${existingBlock(existing)}\n\nMATERIAL\n\n${found}`;
+  const business = businessName(actor);
   const ops = await askForOps(
-    "You keep the shared business memory for Eclipse's CRM, which every member's assistant reads. From the material, learn what helps the team sell and keep customers: the ideal customer profile and audience (who buys, who stalls, who churns), buying triggers, objections and the answers that worked, competitors mentioned and how Eclipse compares, pricing reactions, messaging and approaches that get replies or move deals, and patterns behind wins and losses. " +
+    `You keep the shared business memory for ${business}'s CRM, which every member's assistant reads. From the material, learn what helps the team sell and keep customers: the ideal customer profile and audience (who buys, who stalls, who churns), buying triggers, objections and the answers that worked, competitors mentioned and how ${business} compares, pricing reactions, messaging and approaches that get replies or move deals, and patterns behind wins and losses. ` +
       "Only conclude a pattern when the material supports it, and say how many examples back it. Set companyId only to a company id that appears in the material. Kinds: icp, audience, trigger, objection, competitor, pricing, messaging, win_pattern, loss_pattern, fact.",
     material,
     options,
@@ -295,8 +301,10 @@ async function learnMarket(actor: UserActor, options: Options): Promise<UnitResu
     .join("\n\n");
   const existing = await withActor(actor, (db) => existingMemories(db, actor, "market", 60, found));
   const material = `${existingBlock(existing)}\n\n${context}\n\nMATERIAL\n\n${found}`;
+  const business = businessName(actor);
+  const sells = (await brandOrEmpty(actor)).whatYouSell.trim();
   const ops = await askForOps(
-    "You keep the shared market memory for Eclipse, which sells AI visibility, content operations and related services. From the market notes, keep what matters to Eclipse's sales and positioning: themes and trends building across several notes, competitor moves, launches and funding in the space, and buying signals on specific companies or people in the CRM or on the watchlist (say why it's a reason to get in touch now). " +
+    `You keep the shared market memory for ${business}${sells ? `. What ${business} sells, in its own words: ${clip(sells, 3_000)}\n` : ". "}From the market notes, keep what matters to ${business}'s sales and positioning: themes and trends building across several notes, competitor moves, launches and funding in the space, and buying signals on specific companies or people in the CRM or on the watchlist (say why it's a reason to get in touch now). ` +
       "Merge related notes into one theme rather than one note per article, and update existing notes as a story develops. Use the note's link as the source. Set companyId only to a company id listed above. Kinds: theme, competitor, launch, funding, signal, person, trend.",
     material,
     options,
@@ -344,7 +352,7 @@ async function writeBrief(actor: UserActor, since: Date, options: Options & { da
     .join("\n\n");
   const result = await completeJson({
     system:
-      `Write ${name}'s morning brief in Orbit, Eclipse's CRM. Reply with JSON only: {"brief": string}. The brief is markdown of at most 220 words with up to four short sections, each a heading line starting "### " and two to four bullets: "In your market" (market notes and research mail), "Accounts to act on" (buying signals and why now, with the company link given), "Deals gone quiet" (the stalled deals most worth a nudge, with the deal link given and a suggested next step), and "What Orbit learned" (the most useful new or changed notes). ` +
+      `Write ${name}'s morning brief in Orbit, ${businessName(actor)}'s CRM. Reply with JSON only: {"brief": string}. The brief is markdown of at most 220 words with up to four short sections, each a heading line starting "### " and two to four bullets: "In your market" (market notes and research mail), "Accounts to act on" (buying signals and why now, with the company link given), "Deals gone quiet" (the stalled deals most worth a nudge, with the deal link given and a suggested next step), and "What Orbit learned" (the most useful new or changed notes). ` +
       `Leave out a section with nothing worth saying. Lead with what ${name} should act on today. Link sources with markdown links using the links given. Plain and direct, UK English. ${WRITING_STYLE} ${UNTRUSTED}`,
     user: material,
     schema: BRIEF,
@@ -387,7 +395,7 @@ async function tidyScope(actor: UserActor, scope: MemoryScope, options: Options)
     (
       await db.query<TidyRow>(
         `select id, kind, title, body, pinned, origin, confidence, updated_at, sources from crm.memories
-         where workspace_id = $1 and scope = $2 and archived_at is null and ($3::uuid is null or user_id = $3)
+         where ($3::uuid is not null or workspace_id = $1) and scope = $2 and archived_at is null and ($3::uuid is null or user_id = $3)
          order by pinned desc, updated_at desc limit $4`,
         [actor.workspaceId, scope, owner, TIDY_LIST + 50],
       )
@@ -401,7 +409,7 @@ async function tidyScope(actor: UserActor, scope: MemoryScope, options: Options)
     const over = Math.max(0, rows.length - limit);
     const result = await completeJson({
       system:
-        `You tidy the ${scope === "personal" ? "private memory Orbit's assistant keeps about one person" : `shared ${scope} memory of Eclipse's CRM`}. ` +
+        `You tidy the ${scope === "personal" ? "private memory Orbit's assistant keeps about one person" : `shared ${scope} memory of ${businessName(actor)}'s CRM`}. ` +
         'Reply with JSON only: {"merge": [{"keepId": string, "mergeIds": [string], "title": string, "body": string}], "archive": [{"id": string, "reason": string}]}. ' +
         "Merge notes that say the same thing or are about the same point into the clearest one, with a combined title (at most 12 words) and body (at most 70 words) that keeps every specific fact. " +
         "Archive notes that are out of date, contradicted by a newer note, or too vague to change what anyone does. " +
@@ -448,9 +456,9 @@ async function tidyScope(actor: UserActor, scope: MemoryScope, options: Options)
     const result = await db.query(
       `update crm.memories set archived_at = now() where id in (
          select id from crm.memories
-         where workspace_id = $1 and scope = $2 and archived_at is null and ($3::uuid is null or user_id = $3) and not pinned and origin = 'learning'
+         where ($3::uuid is not null or workspace_id = $1) and scope = $2 and archived_at is null and ($3::uuid is null or user_id = $3) and not pinned and origin = 'learning'
          order by case confidence when 'high' then 3 when 'medium' then 2 else 1 end, updated_at
-         limit greatest(0, (select count(*) from crm.memories where workspace_id = $1 and scope = $2 and archived_at is null and ($3::uuid is null or user_id = $3)) - $4)
+         limit greatest(0, (select count(*) from crm.memories where ($3::uuid is not null or workspace_id = $1) and scope = $2 and archived_at is null and ($3::uuid is null or user_id = $3)) - $4)
        )`,
       [actor.workspaceId, scope, owner, limit],
     );
@@ -478,7 +486,7 @@ async function withTidy(actor: UserActor, kind: LearningKind, result: UnitResult
 async function lastDone(actor: UserActor, kind: LearningKind, beforeDay: string | null = null) {
   return withActor(actor, async (db) => {
     const result = await db.query<{ finished_at: Date }>(
-      `select finished_at from crm.learning_runs where workspace_id = $1 and kind = $2 and status = 'done' and ($3::uuid is null or user_id = $3)
+      `select finished_at from crm.learning_runs where (workspace_id = $1 or kind = 'personal') and kind = $2 and status = 'done' and ($3::uuid is null or user_id = $3)
          and ($4::date is null or (finished_at at time zone 'Europe/London')::date < $4::date)
        order by finished_at desc limit 1`,
       [actor.workspaceId, kind, kind === "personal" || kind === "brief" ? actor.userId : null, beforeDay],
@@ -491,7 +499,7 @@ async function unitState(actor: UserActor, kind: LearningKind, day: string, now:
   return withActor(actor, async (db) => {
     const result = await db.query<{ status: string; started_at: Date; summary: UnitResult | null; hour: number }>(
       `select status, started_at, summary, extract(hour from started_at at time zone 'Europe/London')::int as hour from crm.learning_runs
-       where workspace_id = $1 and kind = $2 and ($3::uuid is null or user_id = $3) and (started_at at time zone 'Europe/London')::date = $4::date
+       where (workspace_id = $1 or kind = 'personal') and kind = $2 and ($3::uuid is null or user_id = $3) and (started_at at time zone 'Europe/London')::date = $4::date
        order by started_at desc limit 20`,
       [actor.workspaceId, kind, kind === "personal" || kind === "brief" ? actor.userId : null, day],
     );
@@ -540,17 +548,19 @@ export async function runUnit(actor: UserActor, kind: LearningKind, options: Uni
   }
 }
 
-type MemberRow = Parameters<typeof memberActor>[0];
+type MemberRow = Parameters<typeof memberActor>[0] & { is_home?: boolean };
 
 export async function runNightlyLearning(options: Options) {
   const now = options.now ?? new Date();
   const day = londonDay(now);
   const rows = (await query<MemberRow>("select * from private.background_members()")).rows;
   const workspaces = new Map<string, UserActor[]>();
+  const elsewhere = new Set<string>();
   for (const row of rows) {
     const list = workspaces.get(row.workspace_id) ?? [];
     list.push(memberActor(row));
     workspaces.set(row.workspace_id, list);
+    if (row.is_home === false) elsewhere.add(`${row.workspace_id}:${row.user_id}`);
   }
   const report: { workspaceId: string; userId?: string; kind: LearningKind; result: UnitResult & { error?: string } }[] = [];
   for (const [workspaceId, members] of workspaces) {
@@ -559,7 +569,7 @@ export async function runNightlyLearning(options: Options) {
       ["business", owner],
       ["market", owner],
     ];
-    const units: [LearningKind, UserActor][] = [...shared, ...members.map((member): [LearningKind, UserActor] => ["personal", member]), ...members.map((member): [LearningKind, UserActor] => ["brief", member])];
+    const units: [LearningKind, UserActor][] = [...shared, ...members.filter((member) => !elsewhere.has(`${workspaceId}:${member.userId}`)).map((member): [LearningKind, UserActor] => ["personal", member]), ...members.map((member): [LearningKind, UserActor] => ["brief", member])];
     for (const [kind, actor] of units) {
       if (options.deadline - Date.now() < UNIT_MIN_MS) return { day, report, stopped: "Out of time for this run." };
       const state = await unitState(actor, kind, day, now);
@@ -603,7 +613,7 @@ export async function learningKinds(actor: UserActor, choice: LearningKind | "al
   const running = await withActor(actor, async (db) => {
     const result = await db.query<{ kind: LearningKind }>(
       `select distinct kind from crm.learning_runs
-       where workspace_id = $1 and kind = any($2::text[]) and status = 'running' and started_at > now() - make_interval(secs => $3::double precision)
+       where (workspace_id = $1 or kind = 'personal') and kind = any($2::text[]) and status = 'running' and started_at > now() - make_interval(secs => $3::double precision)
          and (user_id is null or user_id = $4)`,
       [actor.workspaceId, kinds, STALE_RUN_MS / 1000, actor.userId],
     );
@@ -620,8 +630,8 @@ export type Brief = { id: string; day: string; body: string; createdAt: string }
 export async function latestBrief(actor: UserActor, now = new Date()): Promise<Brief | null> {
   return withActor(actor, async (db) => {
     const result = await db.query<{ id: string; day: string; body: string; created_at: Date }>(
-      `select id, day::text, body, created_at from crm.daily_briefs where user_id = $1 and dismissed_at is null and created_at > $2 order by day desc limit 1`,
-      [actor.userId, new Date(now.getTime() - BRIEF_FRESH_MS)],
+      `select id, day::text, body, created_at from crm.daily_briefs where user_id = $1 and workspace_id = $3 and dismissed_at is null and created_at > $2 order by day desc limit 1`,
+      [actor.userId, new Date(now.getTime() - BRIEF_FRESH_MS), actor.workspaceId],
     );
     const row = result.rows[0];
     return row ? { id: row.id, day: row.day, body: row.body, createdAt: row.created_at.toISOString() } : null;
@@ -651,7 +661,7 @@ export async function learningStatus(actor: UserActor): Promise<LearningStatus[]
   return withActor(actor, async (db) => {
     const result = await db.query<{ kind: LearningKind; status: string; trigger: string; finished_at: Date | null; summary: UnitResult | null; error: string | null }>(
       `select distinct on (kind) kind, status, trigger, finished_at, summary, error from crm.learning_runs
-       where workspace_id = $1 and (user_id is null or user_id = $2) order by kind, started_at desc`,
+       where (workspace_id = $1 or kind = 'personal') and (user_id is null or user_id = $2) order by kind, started_at desc`,
       [actor.workspaceId, actor.userId],
     );
     return result.rows.map((row) => ({ kind: row.kind, status: row.status, trigger: row.trigger, finishedAt: row.finished_at?.toISOString() ?? null, summary: row.summary, error: row.error }));

@@ -196,8 +196,8 @@ async function senderEmail(db: Db, actor: UserActor, input: DraftInput, fallback
 
 async function signatureFor(db: Db, actor: UserActor, email: string) {
   const result = await db.query<{ body: string }>(
-    "select body from crm.email_signatures where workspace_id = $1 and user_id = $2 and sender_email = $3",
-    [actor.workspaceId, actor.userId, email.toLowerCase()],
+    "select body from crm.email_signatures where user_id = $1 and sender_email = $2 order by updated_at desc limit 1",
+    [actor.userId, email.toLowerCase()],
   );
   return result.rows[0]?.body ?? null;
 }
@@ -655,10 +655,10 @@ export async function listScheduledDrafts(actor: UserActor): Promise<MailDraft[]
   return withActor(actor, async (db) => {
     const result = await db.query<DraftRow>(
       `select ${DRAFT_COLUMNS} from crm.mail_drafts
-       where user_id = $1 and workspace_id = $2 and (send_at is not null or send_error is not null)
+       where user_id = $1 and (send_at is not null or send_error is not null)
        order by send_at nulls first, updated_at desc
        limit 200`,
-      [actor.userId, actor.workspaceId],
+      [actor.userId],
     );
     return withFiles(db, result.rows);
   });
@@ -755,13 +755,13 @@ export async function claimDueDrafts(actor: UserActor, limit = 5): Promise<DueDr
     const result = await db.query<DueDraft>(
       `with picked as materialized (
          select id from crm.mail_drafts
-         where user_id = $1 and workspace_id = $2 and send_at <= now()
-         order by send_at, id limit $3 for update skip locked
+         where user_id = $1 and send_at <= now()
+         order by send_at, id limit $2 for update skip locked
        )
        update crm.mail_drafts d set send_at = null
        from picked where d.id = picked.id
        returning ${DRAFT_COLUMNS.split(",").map((column) => `d.${column.trim()}`).join(", ")}, d.signature`,
-      [actor.userId, actor.workspaceId, limit],
+      [actor.userId, limit],
     );
     return result.rows;
   });
@@ -825,18 +825,26 @@ export async function composeAccounts(actor: UserActor): Promise<ComposeAccount[
     const result = await db.query<{ id: string; email: string; signature: string | null }>(
       `select s.id, s.email, sig.body as signature
        from crm.mail_sources s
-       left join crm.email_signatures sig on sig.workspace_id = s.workspace_id and sig.user_id = s.user_id and sig.sender_email = lower(s.email)
-       where s.user_id = $1 and s.workspace_id = $2
+       left join lateral (
+         select e.body from crm.email_signatures e
+         where e.user_id = s.user_id and e.sender_email = lower(s.email)
+         order by e.updated_at desc limit 1
+       ) sig on true
+       where s.user_id = $1
        order by s.connection_id is null, s.created_at`,
-      [actor.userId, actor.workspaceId],
+      [actor.userId],
     );
     const identities = await db.query<{ id: string; email: string; source_id: string; signature: string | null }>(
       `select i.id, i.email, i.source_id, sig.body as signature
        from crm.send_identities i
-       left join crm.email_signatures sig on sig.workspace_id = i.workspace_id and sig.user_id = i.user_id and sig.sender_email = lower(i.email)
-       where i.user_id = $1 and i.workspace_id = $2
+       left join lateral (
+         select e.body from crm.email_signatures e
+         where e.user_id = i.user_id and e.sender_email = lower(i.email)
+         order by e.updated_at desc limit 1
+       ) sig on true
+       where i.user_id = $1
        order by i.created_at`,
-      [actor.userId, actor.workspaceId],
+      [actor.userId],
     );
     return [
       ...result.rows,

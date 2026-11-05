@@ -194,8 +194,8 @@ function mapSettings(actor: UserActor, row: PageRow): BookingPageSettings {
 export async function getBookingPage(actor: UserActor): Promise<BookingPageSettings> {
   return withActor(actor, async (db) => {
     const result = await db.query<PageRow>(
-      `select ${PAGE_COLUMNS} from crm.booking_pages where user_id = $1 and workspace_id = $2`,
-      [actor.userId, actor.workspaceId],
+      `select ${PAGE_COLUMNS} from crm.booking_pages where user_id = $1`,
+      [actor.userId],
     );
     return result.rows[0] ? mapSettings(actor, result.rows[0]) : defaults(actor);
   });
@@ -352,10 +352,10 @@ export async function saveBookingImage(actor: UserActor, kind: BookingImageKind,
   const columns = imageColumns(kind);
   return withActor(actor, async (db) => {
     const result = await db.query<{ version: string }>(
-      `update crm.booking_pages set ${columns.data} = $3, ${columns.mime} = $4
-       where user_id = $1 and workspace_id = $2
+      `update crm.booking_pages set ${columns.data} = $2, ${columns.mime} = $3
+       where user_id = $1
        returning substr(md5(updated_at::text), 1, 12) as version`,
-      [actor.userId, actor.workspaceId, Buffer.from(bytes), mime],
+      [actor.userId, Buffer.from(bytes), mime],
     );
     if (!result.rows[0]) throw new CrmError("not_found", "Save your booking page first.", 404);
     return { version: result.rows[0].version };
@@ -367,9 +367,9 @@ export async function removeBookingImage(actor: UserActor, kind: BookingImageKin
   return withActor(actor, async (db) => {
     const result = await db.query<{ version: string }>(
       `update crm.booking_pages set ${columns.data} = null, ${columns.mime} = null
-       where user_id = $1 and workspace_id = $2
+       where user_id = $1
        returning substr(md5(updated_at::text), 1, 12) as version`,
-      [actor.userId, actor.workspaceId],
+      [actor.userId],
     );
     if (!result.rows[0]) throw new CrmError("not_found", "Save your booking page first.", 404);
     return { version: result.rows[0].version };
@@ -381,8 +381,8 @@ export async function readOwnImage(actor: UserActor, kind: BookingImageKind) {
   return withActor(actor, async (db) => {
     const result = await db.query<{ data: Buffer | null; mime: string | null }>(
       `select ${columns.data} as data, ${columns.mime} as mime from crm.booking_pages
-       where user_id = $1 and workspace_id = $2`,
-      [actor.userId, actor.workspaceId],
+       where user_id = $1`,
+      [actor.userId],
     );
     const row = result.rows[0];
     return row?.data && row.mime ? { data: row.data, mime: row.mime } : null;
@@ -393,9 +393,9 @@ export async function recordBookingError(owner: UserActor, message: string | nul
   await withActor(owner, async (db) => {
     await db.query(
       `update crm.booking_pages
-       set last_error = $3, last_error_at = case when $3::text is null then null else now() end
-       where user_id = $1 and workspace_id = $2 and last_error is distinct from $3`,
-      [owner.userId, owner.workspaceId, message ? message.slice(0, 500) : null],
+       set last_error = $2, last_error_at = case when $2::text is null then null else now() end
+       where user_id = $1 and last_error is distinct from $2`,
+      [owner.userId, message ? message.slice(0, 500) : null],
     );
   });
 }

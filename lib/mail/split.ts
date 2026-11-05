@@ -9,6 +9,7 @@ export const CALENDAR_SUBJECT =
 export const CALENDAR_SENDER = "^(calendar-notification|calendar|noreply-calendar|invites?)@";
 export const AUTOMATED_SENDER =
   "^(no-?reply|do-?not-?reply|donotreply|notifications?|notify|newsletters?|news|updates?|marketing|mailer|mailer-daemon|digest|alerts?|bounces?|automated|robot|billing|receipts?|invoices?|info|hello|team)([._+-][^@]*)?@";
+export const UNSUBSCRIBE_TEXT = "(unsubscribe|opt[ -]?out|manage (your )?(email |subscription )?preferences|email preferences)";
 export const AUTOMATED_DOMAIN = "@(e|em|email|mail|mailer|mg|news|newsletter|marketing|notifications?|alerts?|updates?|bounce|post)\\.";
 
 export function splitJoin(alias: string, userParam: string) {
@@ -21,13 +22,13 @@ export function splitJoin(alias: string, userParam: string) {
   ) rule on true`;
 }
 
-export function splitCase(alias: string, workspaceParam: string) {
+export function splitCase(alias: string) {
   return `case
     when rule.split is not null then rule.split
     when coalesce(${alias}.subject, '') ~* '${CALENDAR_SUBJECT}' or coalesce(${alias}.from_email, '') ~* '${CALENDAR_SENDER}' then 'calendar'
     when exists (
       select 1 from crm.contacts c
-      where c.workspace_id = ${workspaceParam} and c.archived_at is null and c.normalized_email = lower(${alias}.from_email)
+      where c.archived_at is null and c.normalized_email = lower(${alias}.from_email)
     ) then 'important'
     when exists (
       select 1 from crm.mail_messages own

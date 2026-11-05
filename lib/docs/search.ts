@@ -3,7 +3,7 @@ import { iso } from "@/lib/crm/mutate";
 import type { Actor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
 import { excerptFrom } from "@/lib/docs/markdown";
-import { assertDocsRead, pagingNumber, visibilityOf } from "@/lib/docs/store";
+import { assertDocsRead, pageInScope, pagingNumber, viewerId, visibilityOf } from "@/lib/docs/store";
 import type { DocKind, DocSearchHit } from "@/lib/docs/types";
 
 const SEARCH_LIMIT_MAX = 50;
@@ -60,9 +60,9 @@ export async function searchDocs(
       const recent = await db.query<HitRow>(
         `select p.id, p.kind, p.title, p.daily_date::text as daily_date, p.folder_id, p.shared, p.effective_shared, p.user_id, p.edited_at,
            null as title_match, false as body, 0 as score, null as snippet, left(p.content, 400) as head
-         from crm.pages p where p.workspace_id = $1 and p.archived_at is null and p.kind = any($2::text[])
+         from crm.pages p where ${pageInScope("p", 1, 4)} and p.archived_at is null and p.kind = any($2::text[])
          order by p.edited_at desc limit $3`,
-        [actor.workspaceId, kinds, limit],
+        [actor.workspaceId, kinds, limit, viewerId(actor)],
       );
       return recent.rows.map((row) => hit(actor, row));
     }
@@ -82,7 +82,7 @@ export async function searchDocs(
            case when q.ts is null then 0 else ts_rank(p.search, q.ts) end as rank,
            q.ts
          from crm.pages p, q
-         where p.workspace_id = $1 and p.archived_at is null and p.kind = any($5::text[])
+         where ${pageInScope("p", 1, 8)} and p.archived_at is null and p.kind = any($5::text[])
            and ($6::uuid is null or p.folder_id = $6)
            and (
              p.title ilike '%' || q.pattern || '%' escape '\\'
@@ -104,7 +104,7 @@ export async function searchDocs(
          case when body then ts_headline('english', left(content, 50000), ts, 'MaxWords=24, MinWords=10, MaxFragments=1, StartSel="", StopSel=""') end as snippet,
          left(content, 400) as head
        from ranked order by score desc, edited_at desc`,
-      [actor.workspaceId, text, likePattern(text), prefixQuery(text), kinds, options.folderId ?? null, limit],
+      [actor.workspaceId, text, likePattern(text), prefixQuery(text), kinds, options.folderId ?? null, limit, viewerId(actor)],
     );
     return result.rows.map((row) => hit(actor, row));
   });

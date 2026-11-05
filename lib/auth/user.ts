@@ -46,18 +46,7 @@ export async function verifyLocalPassword(email: string, password: string) {
   return result.rows[0]?.user_id ?? null;
 }
 
-export const getUserActor = cache(async (): Promise<UserActor | null> => {
-  const userId = await currentUserId();
-  if (!userId) return null;
-
-  const memberships = await membershipsFor(userId);
-  if (memberships.length === 0) return null;
-
-  const cookieStore = await cookies();
-  const requested = cookieStore.get(WORKSPACE_COOKIE)?.value;
-  const membership =
-    memberships.find((item) => item.workspace_id === requested) ?? memberships[0];
-
+function actorFor(userId: string, membership: MembershipRow): UserActor {
   return {
     type: "user",
     userId,
@@ -68,4 +57,38 @@ export const getUserActor = cache(async (): Promise<UserActor | null> => {
     role: membership.role,
     scopes: scopesForRole(membership.role),
   };
+}
+
+export function pickMembership(memberships: MembershipRow[], requested: string | undefined) {
+  return memberships.find((item) => item.workspace_id === requested) ?? memberships[0];
+}
+
+const currentMemberships = cache(async () => {
+  const userId = await currentUserId();
+  if (!userId) return null;
+  const memberships = await membershipsFor(userId);
+  if (memberships.length === 0) return null;
+  return { userId, memberships };
+});
+
+export const getUserActor = cache(async (): Promise<UserActor | null> => {
+  const current = await currentMemberships();
+  if (!current) return null;
+  const cookieStore = await cookies();
+  const requested = cookieStore.get(WORKSPACE_COOKIE)?.value;
+  return actorFor(current.userId, pickMembership(current.memberships, requested));
+});
+
+export const getHomeActor = cache(async (): Promise<UserActor | null> => {
+  const current = await currentMemberships();
+  if (!current) return null;
+  return actorFor(current.userId, current.memberships[0]);
+});
+
+export type WorkspaceChoice = { id: string; name: string; role: WorkspaceRole; waiting?: boolean };
+
+export const getWorkspaceChoices = cache(async (): Promise<WorkspaceChoice[]> => {
+  const current = await currentMemberships();
+  if (!current) return [];
+  return current.memberships.map((item) => ({ id: item.workspace_id, name: item.workspace_name, role: item.role }));
 });

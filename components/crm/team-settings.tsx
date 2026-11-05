@@ -21,16 +21,27 @@ const ROLE_TONES = { owner: "purple", admin: "blue", member: "neutral" } as cons
 
 type Sent = { link: string; email: string; sent: boolean; sendError?: string };
 
+function nameList(names: string[]) {
+  if (names.length <= 1) return names.join("");
+  return `${names.slice(0, -1).join(", ")} or ${names[names.length - 1]}`;
+}
+
 export default function TeamSettings({
   team,
+  workspaceName,
+  otherWorkspaces,
   viewerId,
   viewerRole,
   mailboxConnected,
+  mailboxEmail,
 }: {
   team: Team;
+  workspaceName: string;
+  otherWorkspaces: string[];
   viewerId: string;
   viewerRole: WorkspaceRole;
   mailboxConnected: boolean;
+  mailboxEmail: string | null;
 }) {
   const router = useRouter();
   const canManage = viewerRole === "owner" || viewerRole === "admin";
@@ -73,8 +84,10 @@ export default function TeamSettings({
     <>
       <SettingsCard
         id="people"
-        title="People"
-        description="Everyone in this workspace sees and works on the same companies, contacts, deals, boards and activity. Each person connects their own email, calendar and AI account."
+        title={`People in ${workspaceName}`}
+        description={`They see and work on ${workspaceName}'s companies, contacts, deals, boards and activity${
+          otherWorkspaces.length ? `, and nothing from ${nameList(otherWorkspaces)}` : ""
+        }. Each person connects their own email, calendar and AI account.`}
       >
         {error && (
           <p role="alert" className="caption-style text-danger">
@@ -93,8 +106,9 @@ export default function TeamSettings({
                     {member.name}
                     {self && <span className="text-subtle"> (you)</span>}
                   </span>
-                  <span className="caption-style text-subtle truncate">
-                    {member.email} · Joined {formatDateLabel(member.joinedAt.slice(0, 10))}
+                  <span className="caption-style text-subtle flex min-w-0 flex-wrap gap-x-1">
+                    <span className="min-w-0 truncate">{member.email} ·</span>
+                    <span className="whitespace-nowrap">Joined {formatDateLabel(member.joinedAt.slice(0, 10))}</span>
                   </span>
                 </span>
                 {canChangeRole ? (
@@ -130,7 +144,9 @@ export default function TeamSettings({
         <SettingsCard
           id="invite"
           title="Invite someone"
-          description="They get a link to set their name and password, then sign in to this workspace."
+          description={`They get a link to join ${workspaceName} only.${
+            otherWorkspaces.length === 1 ? " Your other workspace stays hidden from them." : otherWorkspaces.length > 1 ? " Your other workspaces stay hidden from them." : ""
+          }`}
         >
           <form
             className="flex flex-col gap-3"
@@ -147,7 +163,7 @@ export default function TeamSettings({
                 placeholder="name@company.com"
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
-                className="flex-1"
+                className="sm:flex-1"
               />
               <select
                 aria-label="Role"
@@ -164,7 +180,7 @@ export default function TeamSettings({
             </div>
             <label className="caption-style text-subtle flex items-center gap-2">
               <Checkbox checked={send && mailboxConnected} disabled={!mailboxConnected} onCheckedChange={(value) => setSend(value === true)} />
-              {mailboxConnected ? "Email the invite from my Outlook" : "Connect Microsoft in Settings › Integrations to email invites from Outlook. Until then, copy the link."}
+              {mailboxConnected ? `Email the invite from ${mailboxEmail ?? "my Outlook"}` : "Connect Microsoft in Settings › Integrations to email invites from Outlook. Until then, copy the link."}
             </label>
           </form>
           {sent && (
@@ -228,7 +244,7 @@ export default function TeamSettings({
         open={removing !== null}
         onOpenChange={(open) => !open && setRemoving(null)}
         title={`Remove ${removing?.name ?? "this member"}?`}
-        description="Their companies, contacts, deals and tasks move to you, and their email and calendar connections are disconnected. Everything they logged stays."
+        description="Their companies, contacts, deals and tasks move to you. If they're in another of your workspaces, their email, calendar and other personal connections move there; otherwise they're disconnected. Everything they logged stays."
         confirmLabel="Remove from workspace"
         onConfirm={() => {
           const member = removing;

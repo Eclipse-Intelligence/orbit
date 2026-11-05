@@ -110,9 +110,9 @@ async function loadSources(actor: UserActor): Promise<Source[]> {
     }>(
       `select id, email, refresh_token, access_token, access_token_expires_at
        from crm.calendar_accounts
-       where user_id = $1 and workspace_id = $2 and provider = 'microsoft' and status = 'connected'
+       where user_id = $1 and provider = 'microsoft' and status = 'connected'
          and can_send and email is not null and refresh_token is not null`,
-      [actor.userId, actor.workspaceId],
+      [actor.userId],
     );
     for (const account of accounts.rows) {
       await db.query(
@@ -124,9 +124,9 @@ async function loadSources(actor: UserActor): Promise<Source[]> {
     }
     const rows = await db.query<SourceRow>(
       `select id, email, connection_id, account_id, folders_synced_at, snooze_folder_id, graph_subscription_id, graph_subscription_expires_at
-       from crm.mail_sources where user_id = $1 and workspace_id = $2
+       from crm.mail_sources where user_id = $1
        order by connection_id is null, created_at`,
-      [actor.userId, actor.workspaceId],
+      [actor.userId],
     );
     const sources: Source[] = [];
     for (const row of rows.rows) {
@@ -165,8 +165,8 @@ async function loadSource(actor: UserActor, sourceId: string): Promise<Source | 
   return withActor(actor, async (db) => {
     const found = await db.query<SourceRow>(
       `select id, email, connection_id, account_id, folders_synced_at, snooze_folder_id, graph_subscription_id, graph_subscription_expires_at
-       from crm.mail_sources where id = $1 and user_id = $2 and workspace_id = $3`,
-      [sourceId, actor.userId, actor.workspaceId],
+       from crm.mail_sources where id = $1 and user_id = $2`,
+      [sourceId, actor.userId],
     );
     const row = found.rows[0];
     if (!row) return null;
@@ -475,7 +475,7 @@ export async function syncMail(
   if (hardStop) {
     report.paused = true;
     await withActor(actor, (db) =>
-      db.query("update crm.mail_sources set last_error = $3 where user_id = $1 and workspace_id = $2", [actor.userId, actor.workspaceId, MAIL_HARD_STOP]),
+      db.query("update crm.mail_sources set last_error = $2 where user_id = $1", [actor.userId, MAIL_HARD_STOP]),
     );
     return report;
   }

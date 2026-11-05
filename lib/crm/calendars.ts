@@ -124,9 +124,9 @@ export async function listCalendarGroups(actor: UserActor): Promise<CalendarGrou
       `select id, account_id, connection_id, name, color, is_default, is_visible, use_for_crm, can_edit,
               owner_email, last_synced_at, last_error
        from crm.calendars
-       where user_id = $1 and workspace_id = $2
+       where user_id = $1
        order by is_default desc, lower(name), id`,
-      [actor.userId, actor.workspaceId],
+      [actor.userId],
     );
     const groups: CalendarGroup[] = [];
     if (stored) {
@@ -185,10 +185,10 @@ async function updateCalendar(
   if (!isUuid(calendarId)) throw new CrmError("not_found", "That calendar isn't connected.", 404);
   const row = await withActor(actor, async (db) => {
     const result = await db.query<{ last_synced_at: Date | string | null; provider_calendar_id: string }>(
-      `update crm.calendars set ${column} = $4
-       where id = $1 and user_id = $2 and workspace_id = $3
+      `update crm.calendars set ${column} = $3
+       where id = $1 and user_id = $2
        returning last_synced_at, provider_calendar_id`,
-      [calendarId, actor.userId, actor.workspaceId, value],
+      [calendarId, actor.userId, value],
     );
     return result.rows[0] ?? null;
   });
@@ -268,13 +268,13 @@ export async function listCalendarItems(
          order by abs(extract(epoch from a.occurred_at - e.starts_at))
          limit 1
        ) g on true
-       where e.user_id = $1 and e.workspace_id = $2
+       where e.user_id = $1
          and not e.is_cancelled
-         and e.starts_at < $4
-         and (e.ends_at > $3 or e.starts_at >= $3)
+         and e.starts_at < $3
+         and (e.ends_at > $2 or e.starts_at >= $2)
        order by e.starts_at, e.ends_at desc, e.id
        limit ${EVENTS_SHOWN}`,
-      [actor.userId, actor.workspaceId, range.start.toISOString(), range.end.toISOString()],
+      [actor.userId, range.start.toISOString(), range.end.toISOString()],
     );
     const emails = new Set<string>();
     for (const row of result.rows) {
@@ -366,8 +366,8 @@ export async function createContactFromEvent(actor: UserActor, eventId: string, 
   const found = await withActor(actor, async (db) => {
     const result = await db.query<{ organizer: unknown; attendees: unknown }>(
       `select organizer, attendees from crm.calendar_events
-       where id = $1 and user_id = $2 and workspace_id = $3`,
-      [eventId, actor.userId, actor.workspaceId],
+       where id = $1 and user_id = $2`,
+      [eventId, actor.userId],
     );
     const row = result.rows[0];
     if (!row) return null;

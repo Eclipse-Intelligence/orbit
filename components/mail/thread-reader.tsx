@@ -831,7 +831,7 @@ export default function ThreadReader({
         <div className="mx-auto flex w-full max-w-[52em] flex-col gap-4 px-3 pt-3 pb-32 sm:px-6">
           <h2 className="px-4 text-pretty">{subject?.trim() || "(no subject)"}</h2>
           {detail?.subscription && <SenderNotice subscription={detail.subscription} onUnsubscribe={onUnsubscribe} onBlock={onBlock} />}
-          {detail && <ThreadPeople key={detail.key} people={detail.people ?? []} />}
+          {detail && <ThreadPeople key={detail.key} people={detail.people ?? []} threadKey={detail.key} filing={detail.filing ?? null} />}
           {detail && target && <SummaryLine threadKey={detail.key} latestId={target.id} messages={detail.messages.length} />}
           {detail ? (
             <>

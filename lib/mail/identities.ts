@@ -128,10 +128,7 @@ async function verify(identity: SendIdentity & { password: string }) {
 
 export async function listIdentities(actor: UserActor): Promise<SendIdentity[]> {
   return withActor(actor, async (db) => {
-    const result = await db.query<IdentityRow>(`select ${COLUMNS} from crm.send_identities where user_id = $1 and workspace_id = $2 order by created_at`, [
-      actor.userId,
-      actor.workspaceId,
-    ]);
+    const result = await db.query<IdentityRow>(`select ${COLUMNS} from crm.send_identities where user_id = $1 order by created_at`, [actor.userId]);
     return result.rows.map(toIdentity);
   });
 }

@@ -1,5 +1,8 @@
 import { withActor } from "@/lib/crm/context";
 import type { UserActor } from "@/lib/crm/types";
+import { workspaceActors } from "@/lib/crm/workspaces";
+import { addressHomesInDb, captureWorkspaces } from "@/lib/mail/routing";
+import { filedWorkspaces } from "@/lib/mail/timeline";
 import type { EmailKind } from "@/lib/workflows/definition";
 
 const BOUNCE_SENDER = /^(mailer-daemon|mail-daemon|postmaster|microsoftexchange[0-9a-f]*|bounces?|mdaemon)@/i;
@@ -36,6 +39,24 @@ export function failedRecipient(body: string | null, exclude: string[]) {
 
 export async function queueMailWorkflowEvents(actor: UserActor, messageIds: string[]) {
   if (messageIds.length === 0) return 0;
+  const actors = await workspaceActors(actor);
+  const workspaceIds = actors.map((item) => item.workspaceId);
+  const filed = (await filedWorkspaces(actor, actors, { messageIds })).filter((row) => row.direction === "inbound");
+  const unfiled = messageIds.filter((id) => !filed.some((row) => row.message_id === id));
+  const homes = await withActor(actor, async (db) => captureWorkspaces(db, actor, await addressHomesInDb(db, actor), workspaceIds, unfiled));
+  const byWorkspace = new Map<string, Set<string>>();
+  const add = (workspaceId: string, id: string) => byWorkspace.set(workspaceId, (byWorkspace.get(workspaceId) ?? new Set<string>()).add(id));
+  for (const row of filed) add(row.workspace_id, row.message_id);
+  for (const id of unfiled) add(homes.get(id) ?? actor.workspaceId, id);
+  let queued = 0;
+  for (const target of actors) {
+    const ids = byWorkspace.get(target.workspaceId);
+    if (ids?.size) queued += await queueIn(target, [...ids]);
+  }
+  return queued;
+}
+
+async function queueIn(actor: UserActor, messageIds: string[]) {
   return withActor(actor, async (db) => {
     const wanted = await db.query<{ wanted: boolean }>(
       `select exists (

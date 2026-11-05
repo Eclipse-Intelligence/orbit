@@ -5,7 +5,7 @@ import { SETTINGS_PATHS } from "@/lib/settings-nav";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { after } from "next/server";
-import { getUserActor } from "@/lib/auth/user";
+import { getHomeActor, getUserActor } from "@/lib/auth/user";
 import { discardAttachments, prepareAttachment, type PreparedAttachment } from "@/lib/crm/email-attachments";
 import {
   createContactFromMeeting,
@@ -32,10 +32,17 @@ import {
 } from "@/lib/crm/inbox";
 import { ensureTranscriptSubscription, syncTeamsTranscripts } from "@/lib/crm/teams-transcripts";
 import { actionError } from "@/lib/companies";
+import { createAndFileUnknown, fileUnknownTo, ignoreUnknownMail, moveUnknownMail } from "@/lib/mail/filing";
 import { revalidateRecordPages } from "@/lib/revalidate";
 
 async function requireUser() {
   const user = await getUserActor();
+  if (!user) redirect("/login");
+  return user;
+}
+
+async function requireHomeUser() {
+  const user = await getHomeActor();
   if (!user) redirect("/login");
   return user;
 }
@@ -62,7 +69,7 @@ export async function syncInboxAction() {
 }
 
 export async function syncCallsAction() {
-  const user = await requireUser();
+  const user = await requireHomeUser();
   const result = await syncCalls(user, { force: true });
   refreshRecords();
   if (result.error) integrationsWith("error", result.error);
@@ -70,7 +77,7 @@ export async function syncCallsAction() {
 }
 
 export async function syncCalendarAction() {
-  const user = await requireUser();
+  const user = await requireHomeUser();
   const result = await syncCalendar(user, { force: true });
   refreshRecords();
   if (result.error) integrationsWith("error", result.error);
@@ -106,7 +113,7 @@ export async function enableGranolaWebhookAction() {
 }
 
 export async function syncTranscriptsAction() {
-  const user = await requireUser();
+  const user = await requireHomeUser();
   const result = await syncTeamsTranscripts(user, { force: true });
   const subscription = await ensureTranscriptSubscription(user);
   refreshRecords();
@@ -290,4 +297,52 @@ export async function disconnectInboxAction() {
   revalidatePath("/capture");
   revalidatePath(SETTINGS_PATHS.integrations);
   redirect(SETTINGS_PATHS.integrations);
+}
+
+export async function createAndFileEmailAction(key: string): Promise<CreateAndFileState> {
+  const user = await getUserActor();
+  if (!user) return { error: "Sign in to file email." };
+  try {
+    const filed = await createAndFileUnknown(user, key);
+    refreshRecords();
+    return { ok: true, contactId: filed.contactId, contactName: filed.contactName ?? undefined };
+  } catch (error) {
+    return actionError(error);
+  }
+}
+
+export async function fileEmailToAction(key: string, contactId: string): Promise<CreateAndFileState> {
+  const user = await getUserActor();
+  if (!user) return { error: "Sign in to file email." };
+  try {
+    const filed = await fileUnknownTo(user, key, contactId);
+    refreshRecords();
+    return { ok: true, contactId: filed.contactId, contactName: filed.contactName ?? undefined };
+  } catch (error) {
+    return actionError(error);
+  }
+}
+
+export async function moveEmailAction(key: string, workspaceId: string): Promise<ConversationActionState> {
+  const user = await getUserActor();
+  if (!user) return { error: "Sign in to move email." };
+  try {
+    await moveUnknownMail(user, key, workspaceId);
+  } catch (error) {
+    return actionError(error);
+  }
+  revalidatePath("/capture");
+  return { ok: true };
+}
+
+export async function ignoreEmailAction(key: string): Promise<ConversationActionState> {
+  const user = await getUserActor();
+  if (!user) return { error: "Sign in to ignore email." };
+  try {
+    await ignoreUnknownMail(user, key);
+  } catch (error) {
+    return actionError(error);
+  }
+  revalidatePath("/capture");
+  return { ok: true };
 }

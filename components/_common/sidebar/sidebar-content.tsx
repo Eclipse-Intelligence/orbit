@@ -15,8 +15,9 @@ import type { CaptureStatus } from "@/lib/crm/capture";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import type { BoardSummary } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
+import WorkspaceSwitcher from "@/components/workspaces/workspace-switcher";
+import type { SidebarWorkspace } from "./sidebar";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
-import Logo from "@/public/assets/images/_common/logo.svg";
 import BuildingIcon from "@/public/assets/images/companies/sidebar/building.svg";
 import ClipboardIcon from "@/public/assets/images/companies/sidebar/clipboard.svg";
 import FileSignatureIcon from "@/public/assets/images/companies/sidebar/file-signature.svg";
@@ -35,7 +36,7 @@ type SidebarContentProps = {
   openActionCount: number;
   mailUnread: number;
   capture: CaptureStatus | null;
-  workspaceName: string;
+  workspace: SidebarWorkspace;
 };
 
 export default function SidebarContent({
@@ -45,7 +46,7 @@ export default function SidebarContent({
   openActionCount,
   mailUnread,
   capture,
-  workspaceName,
+  workspace,
 }: SidebarContentProps) {
   const pathname = usePathname();
   const openProfile = useCompaniesStore((state) => state.openProfile);
@@ -63,15 +64,12 @@ export default function SidebarContent({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="border-sidebar-border bg-sidebar-accent flex shrink-0 items-center gap-2 border-b p-3">
-        <Logo aria-hidden className="size-8 shrink-0 overflow-visible" />
-        <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <span className="lead-style block truncate font-medium tracking-[-0.01em]">
-            Orbit
-          </span>
-          <span className="caption-style text-subtle block truncate">
-            {workspaceName}
-          </span>
-        </div>
+        <WorkspaceSwitcher
+          workspaces={workspace.choices}
+          currentId={workspace.id}
+          currentName={workspace.name}
+          viewerName={workspace.viewerName}
+        />
         <CollapseSidebarButton />
       </div>
 
