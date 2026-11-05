@@ -752,7 +752,7 @@ export async function routeArrivedMail(actor: UserActor, ids: string[], options:
     const result = await db.query<Arrival>(
       `select m.id, m.source_id, m.provider_message_id, coalesce(m.thread_key, 'm:' || m.id::text) as tk,
          coalesce(m.received_at, m.created_at) as at, sub.sender, sub.status, sub.unsubscribed_at, sub.cold_pitch_at,
-         coalesce((select p.cold_pitches from crm.mail_preferences p where p.user_id = $1 and p.workspace_id = $3), 'off') as cold_pitches,
+         coalesce((select p.cold_pitches from crm.mail_preferences p where p.user_id = $1 order by p.updated_at desc limit 1), 'off') as cold_pitches,
          exists (
            select 1 from crm.mail_messages s join crm.mail_folders sf on sf.id = s.folder_id
            where s.user_id = $1 and sf.role = 'sent' and s.to_recipients @> jsonb_build_array(jsonb_build_object('address', lower(m.from_email)))
@@ -760,13 +760,13 @@ export async function routeArrivedMail(actor: UserActor, ids: string[], options:
          exists (
            select 1 from crm.mail_messages s join crm.mail_folders sf on sf.id = s.folder_id
            where s.user_id = $1 and s.source_id = m.source_id and coalesce(s.thread_key, 'm:' || s.id::text) = coalesce(m.thread_key, 'm:' || m.id::text)
-             and (sf.role = 'sent' or lower(coalesce(s.from_email, '')) in (select own.email from ${ownSql("$1", "$4")} as own(email) where own.email is not null))
+             and (sf.role = 'sent' or lower(coalesce(s.from_email, '')) in (select own.email from ${ownSql("$1", "$3")} as own(email) where own.email is not null))
          ) as thread_sent
        from crm.mail_messages m
        join crm.mail_folders f on f.id = m.folder_id and f.role = 'inbox'
        ${recordFor("m", "$1")}
        where m.user_id = $1 and m.id = any($2::uuid[]) and sub.sender is not null`,
-      [actor.userId, wanted, actor.workspaceId, actor.email],
+      [actor.userId, wanted, actor.email],
     );
     return result.rows;
   });

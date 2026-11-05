@@ -66,8 +66,8 @@ export async function listThreads(
 ): Promise<{ threads: ThreadSummary[]; next: ThreadCursor | null }> {
   const limit = Math.min(Math.max(Math.trunc(input.limit ?? 50), 1), 100);
   return withActor(actor, async (db) => {
-    const values: unknown[] = [actor.userId, actor.workspaceId];
-    const where = ["m.user_id = $1", "m.workspace_id = $2"];
+    const values: unknown[] = [actor.userId];
+    const where = ["m.user_id = $1"];
     let split: MailSplit | null = null;
     let splitting = false;
     const text = input.query?.trim().slice(0, 300);
@@ -133,7 +133,7 @@ export async function listThreads(
        listed as (
          select r.*, rem.kind as reminder_kind, rem.surfaced_at, snz.until as snoozed_until, fu.at as follow_up_at,
            greatest(r.at, coalesce(rem.surfaced_at, r.at)) as sort_at,
-           ${splitting ? splitCase("r", "$2") : "null"} as split
+           ${splitting ? splitCase("r") : "null"} as split
          from ranked r
          ${splitting ? splitJoin("r", "$1") : ""}
          left join lateral (
@@ -430,14 +430,14 @@ async function splitCounts(db: Db, actor: UserActor) {
        from scoped s
      ),
      listed as (
-       select r.source_id, r.unread, ${splitCase("r", "$2")} as split
+       select r.source_id, r.unread, ${splitCase("r")} as split
        from ranked r
        ${splitJoin("r", "$1")}
        where r.rn = 1
      )
      select source_id, split, count(*)::int as total, count(*) filter (where unread)::int as unread
      from listed group by source_id, split`,
-    [actor.userId, actor.workspaceId],
+    [actor.userId],
   );
   return result.rows.map((row) => ({ sourceId: row.source_id, split: row.split, total: row.total, unread: row.unread }));
 }

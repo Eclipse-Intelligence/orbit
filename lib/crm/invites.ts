@@ -728,8 +728,8 @@ async function readOwnEvent(actor: UserActor, eventId: string) {
       `select id, provider_event_id, connection_id, subject, starts_at, ends_at, is_all_day, organizer, attendees,
               contact_ids, is_cancelled, created_by_orbit, response_status, show_as
        from crm.calendar_events
-       where id = $1 and user_id = $2 and workspace_id = $3`,
-      [eventId, actor.userId, actor.workspaceId],
+       where id = $1 and user_id = $2`,
+      [eventId, actor.userId],
     );
     return {
       stored,

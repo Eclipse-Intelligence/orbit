@@ -66,7 +66,7 @@ export async function savePushSubscription(
       `insert into crm.push_subscriptions (workspace_id, user_id, endpoint, p256dh, auth, user_agent)
        values ($1, $2, $3, $4, $5, $6)
        on conflict (user_id, endpoint) do update set p256dh = excluded.p256dh, auth = excluded.auth,
-         user_agent = excluded.user_agent, last_seen_at = now(), workspace_id = excluded.workspace_id`,
+         user_agent = excluded.user_agent, last_seen_at = now()`,
       [actor.workspaceId, actor.userId, endpoint, p256dh, auth, userAgent?.slice(0, 400) ?? null],
     ),
   );
@@ -99,8 +99,8 @@ export async function pushToUser(
   const subscriptions = await withActor(actor, async (db) => {
     const result = await db.query<{ id: string; endpoint: string; p256dh: string; auth: string }>(
       `select id, endpoint, p256dh, auth from crm.push_subscriptions
-       where user_id = $1 and workspace_id = $2 and ($3::text is null or endpoint = $3)`,
-      [actor.userId, actor.workspaceId, options.endpoint ?? null],
+       where user_id = $1 and ($2::text is null or endpoint = $2)`,
+      [actor.userId, options.endpoint ?? null],
     );
     return result.rows;
   });

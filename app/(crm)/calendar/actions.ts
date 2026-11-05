@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { after } from "next/server";
-import { getUserActor } from "@/lib/auth/user";
+import { getHomeActor, getUserActor } from "@/lib/auth/user";
 import { actionError } from "@/lib/companies";
 import { syncCalendar } from "@/lib/crm/calendar";
 import { CrmError } from "@/lib/crm/errors";
@@ -30,9 +30,10 @@ function refreshRecords() {
 }
 
 function syncLater(user: UserActor) {
+  const home = getHomeActor();
   after(async () => {
     try {
-      const result = await syncCalendar(user, { force: true });
+      const result = await syncCalendar((await home) ?? user, { force: true });
       if (result.error) console.error("Calendar sync failed", result.error);
     } catch (error) {
       console.error("Calendar sync failed", error);
@@ -102,7 +103,7 @@ export async function addCalendarFeedAction(url: string, name: string): Promise<
 export async function syncCalendarsAction(): Promise<CalendarActionState> {
   const user = await getUserActor();
   if (!user) return { error: "Sign in to sync your calendars." };
-  const result = await syncCalendar(user, { force: true });
+  const result = await syncCalendar((await getHomeActor()) ?? user, { force: true });
   refreshRecords();
   if (result.error) return { error: result.error };
   return { ok: true, message: result.complete ? "Calendars synced." : "Synced some calendars. The rest follow shortly." };

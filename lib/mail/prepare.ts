@@ -52,8 +52,8 @@ const UNTRUSTED =
 export async function mailHelpSettings(actor: UserActor): Promise<MailHelpSettings> {
   return withActor(actor, async (db) => {
     const result = await db.query<{ prepare_replies: boolean; auto_remind_days: number | null; cold_pitches: ColdPitchMode }>(
-      "select prepare_replies, auto_remind_days, cold_pitches from crm.mail_preferences where workspace_id = $1 and user_id = $2",
-      [actor.workspaceId, actor.userId],
+      "select prepare_replies, auto_remind_days, cold_pitches from crm.mail_preferences where user_id = $1 order by updated_at desc limit 1",
+      [actor.userId],
     );
     const row = result.rows[0];
     return { prepareReplies: row?.prepare_replies ?? true, autoRemindDays: row ? row.auto_remind_days : 3, coldPitches: row?.cold_pitches ?? "off" };
@@ -232,7 +232,7 @@ async function replyCandidates(db: Db, actor: UserActor, limit: number, pitches:
          )
      ) n
      ${splitJoin("n", "$1")}
-     where ${splitCase("n", "$2")} = 'important' and (not $7 or ${pitchEligible("n", "$1", "$2")})
+     where ${splitCase("n")} = 'important' and (not $7 or ${pitchEligible("n", "$1", "$2")})
      order by n.at desc
      limit $5`,
     [actor.userId, actor.workspaceId, LOOKBACK_HOURS, actor.email, limit, pitches.check, Boolean(pitches.only)],

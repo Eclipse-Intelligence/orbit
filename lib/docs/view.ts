@@ -38,6 +38,7 @@ import {
   listUnlinkedMentions,
   listVersions,
   mapPage,
+  pageInScope,
   pageSelect,
   type PageRow,
 } from "@/lib/docs/store";
@@ -161,7 +162,7 @@ async function summariesByIds(actor: UserActor, ids: string[]) {
   const wanted = [...new Set(ids.filter(isUuid))];
   if (wanted.length === 0) return new Map<string, PageSummary>();
   const rows = await withActor(actor, async (db) => {
-    const result = await db.query<PageRow>(`${pageSelect(false)} where p.id = any($1::uuid[]) and p.workspace_id = $2 and p.archived_at is null`, [wanted, actor.workspaceId]);
+    const result = await db.query<PageRow>(`${pageSelect(false)} where p.id = any($1::uuid[]) and ${pageInScope("p", 2, 3)} and p.archived_at is null`, [wanted, actor.workspaceId, actor.userId]);
     return result.rows;
   });
   return new Map(rows.map((row) => [row.id, toSummary(actor, mapPage(actor, row))]));
@@ -177,17 +178,17 @@ async function navCounts(actor: UserActor, today: string) {
          select array_to_string((string_to_array(t.tag, '/'))[1:n], '/') as path
          from generate_series(1, cardinality(string_to_array(t.tag, '/'))) as n
        ) x
-       where p.workspace_id = $1 and p.archived_at is null
+       where ${pageInScope("p", 1, 2)} and p.archived_at is null
        group by x.path`,
-      [actor.workspaceId],
+      [actor.workspaceId, actor.userId],
     );
     const daily = await db.query<{ count: number; today_id: string | null; today_head: string | null }>(
       `select count(*) filter (where p.content <> '')::int as count,
-         (array_agg(p.id) filter (where p.daily_date = $3::date))[1] as today_id,
-         (array_agg(left(p.content, 4000)) filter (where p.daily_date = $3::date))[1] as today_head
+         (array_agg(p.id) filter (where p.daily_date = $2::date))[1] as today_id,
+         (array_agg(left(p.content, 4000)) filter (where p.daily_date = $2::date))[1] as today_head
        from crm.pages p
-       where p.workspace_id = $1 and p.user_id = $2 and p.kind = 'daily' and p.archived_at is null`,
-      [actor.workspaceId, actor.userId, today],
+       where p.user_id = $1 and p.kind = 'daily' and p.archived_at is null`,
+      [actor.userId, today],
     );
     return { tags: tags.rows, daily: daily.rows[0] };
   });
@@ -302,7 +303,7 @@ export async function docsTitles(actor: UserActor): Promise<Record<string, strin
   return withActor(actor, async (db) => {
     const result = await db.query<{ id: string; title: string; kind: string; daily_date: string | null }>(
       `select p.id, p.title, p.kind, p.daily_date::text as daily_date from crm.pages p
-       where p.workspace_id = $1 and p.archived_at is null and (p.kind = 'note' and p.title <> '' or p.kind = 'daily')
+       where p.archived_at is null and (p.workspace_id = $1 and p.kind = 'note' and p.title <> '' or p.kind = 'daily' and p.user_id = $2)
        order by (p.user_id is not distinct from $2) asc, p.effective_shared asc, p.edited_at asc`,
       [actor.workspaceId, actor.userId],
     );
@@ -382,7 +383,7 @@ export async function docsLinkTargets(actor: UserActor, query: string, fromPageI
 
 async function listSummaries(actor: UserActor, ids: string[]) {
   return withActor(actor, async (db) => {
-    const result = await db.query<PageRow>(`${pageSelect(false)} where p.id = any($1::uuid[]) and p.workspace_id = $2 and p.archived_at is null`, [ids, actor.workspaceId]);
+    const result = await db.query<PageRow>(`${pageSelect(false)} where p.id = any($1::uuid[]) and ${pageInScope("p", 2, 3)} and p.archived_at is null`, [ids, actor.workspaceId, actor.userId]);
     return result.rows.map((row) => mapPage(actor, row));
   });
 }

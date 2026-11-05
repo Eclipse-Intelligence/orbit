@@ -295,10 +295,10 @@ export async function recoverStuckFollowUps(actor: UserActor, options: { send?: 
   const rows = await withActor(actor, async (db) => {
     const result = await db.query<{ id: string; source_id: string; thread_key: string; subject: string | null }>(
       `update crm.mail_reminders set state = 'due', surfaced_at = now()
-       where user_id = $1 and workspace_id = $2 and state = 'sending'
+       where user_id = $1 and state = 'sending'
          and coalesce(sending_at, created_at) < now() - make_interval(mins => ${STUCK_MINUTES})
        returning id, source_id, thread_key, subject`,
-      [actor.userId, actor.workspaceId],
+      [actor.userId],
     );
     return result.rows;
   });

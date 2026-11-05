@@ -4722,7 +4722,7 @@ export async function recordNames(actor: UserActor, args: Args[], tools: string[
        union all
        select id, title from crm.knowledge_items where id = any($1::uuid[]) and workspace_id = $2
        union all
-       select id, coalesce(nullif(title, ''), 'Untitled doc') from crm.pages where id = any($1::uuid[]) and workspace_id = $2
+       select id, coalesce(nullif(title, ''), 'Untitled doc') from crm.pages where id = any($1::uuid[]) and (workspace_id = $2 or (kind = 'daily' and user_id = $3))
        union all
        select id, name from crm.page_folders where id = any($1::uuid[]) and workspace_id = $2
        union all
@@ -4813,8 +4813,8 @@ export async function recordNames(actor: UserActor, args: Args[], tools: string[
     for (const row of emails.rows) names.set(`${row.id}:email`, row.email);
     const events = await db.query<{ id: string; subject: string | null; starts_at: Date; ends_at: Date; organizer: unknown; attendees: unknown }>(
       `select id, subject, starts_at, ends_at, organizer, attendees from crm.calendar_events
-       where id = any($1::uuid[]) and user_id = $2 and workspace_id = $3`,
-      [list, actor.userId, actor.workspaceId],
+       where id = any($1::uuid[]) and user_id = $2`,
+      [list, actor.userId],
     );
     if (events.rows.length === 0) return;
     const own = await myAddresses(db, actor);

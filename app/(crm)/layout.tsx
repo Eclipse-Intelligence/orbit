@@ -6,7 +6,7 @@ import Sidebar from "@/components/_common/sidebar/sidebar";
 import CrmChrome from "@/components/crm/chrome";
 import DocsProvider from "@/components/docs/docs-provider";
 import { ShortcutsProvider } from "@/components/shortcuts/shortcuts-provider";
-import { getUserActor } from "@/lib/auth/user";
+import { getHomeActor, getUserActor, getWorkspaceChoices } from "@/lib/auth/user";
 import { syncCalendar } from "@/lib/crm/calendar";
 import { syncCalls } from "@/lib/crm/calls";
 import { syncClickUp } from "@/lib/crm/clickup";
@@ -31,24 +31,24 @@ import { docsSeed, emptyDocsNav } from "@/lib/docs/server";
 export const dynamic = "force-dynamic";
 
 export default async function CrmLayout({ children }: { children: React.ReactNode }) {
-  const user = await getUserActor();
-  if (!user) redirect("/login");
+  const [user, home, workspaces] = await Promise.all([getUserActor(), getHomeActor(), getWorkspaceChoices()]);
+  if (!user || !home) redirect("/login");
   if (microsoftConfigured()) {
     after(async () => {
       try {
-        const result = await syncCalls(user);
+        const result = await syncCalls(home);
         if (result.ran && result.error) console.error("Teams call sync failed", result.error);
       } catch (error) {
         console.error("Teams call sync failed", error);
       }
       try {
-        const result = await syncCalendar(user);
+        const result = await syncCalendar(home);
         if (result.ran && result.error) console.error("Calendar sync failed", result.error);
       } catch (error) {
         console.error("Calendar sync failed", error);
       }
       try {
-        const result = await syncTeamsTranscripts(user);
+        const result = await syncTeamsTranscripts(home);
         if (result.ran && result.error) console.error("Teams transcript sync failed", result.error);
       } catch (error) {
         console.error("Teams transcript sync failed", error);
@@ -58,9 +58,9 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
   if (microsoftConfigured()) {
     after(async () => {
       try {
-        const result = await syncMail(user, { budgetMs: 10_000, backfill: false });
+        const result = await syncMail(home, { budgetMs: 10_000, backfill: false });
         if (result.errors.length) console.error("Mail sync failed", result.errors.join("; "));
-        await processDueMail(user);
+        await processDueMail(home);
       } catch (error) {
         console.error("Mail sync failed", error);
       }
@@ -69,7 +69,7 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
   const viewerAddress = (await headers()).get("x-forwarded-for");
   after(async () => {
     try {
-      await noteViewerAddress(user, viewerAddress);
+      await noteViewerAddress(home, viewerAddress);
     } catch (error) {
       console.error("Viewer address failed", error);
     }
@@ -123,7 +123,12 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
             openActionCount={openActionCount}
             mailUnread={mailUnread}
             capture={capture}
-            workspaceName={user.workspaceName}
+            workspace={{
+              id: user.workspaceId,
+              name: user.workspaceName,
+              viewerName: user.fullName || "",
+              choices: workspaces,
+            }}
           />
           <CrmChrome
             viewer={{

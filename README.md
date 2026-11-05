@@ -47,7 +47,9 @@ Orbit has no open sign-up. Only an account that belongs to a workspace can sign 
 
 ## Team and permissions
 
-Settings › Team lists everyone in the workspace. The owner and admins invite people by email: Invite creates a link at `/join/<token>`, emails it from your Outlook when Microsoft is connected (otherwise copy it), and lists it under Waiting to join until it is used, cancelled or 14 days old. Inviting the same address again cancels the old link. The invitee sets their name and password on the join page and is signed straight in. With `SUPABASE_SERVICE_ROLE_KEY` set the login is created already confirmed; without it Supabase emails a confirmation link that returns to `/auth/callback`. Someone who already has an Orbit login joins with their existing password. A link only works for the address it was sent to.
+The name under the Orbit logo opens the workspace switcher: pick a workspace to switch, or, if you own a workspace, New workspace to make another one (a name, and whether its brand profile starts blank or copies the current workspace's). Each workspace has its own companies, contacts, deals, boards, workflows, proposals, Knowledge, Capture, tasks, Docs and team. Your mail, calendars, daily notes, About you, signatures, AI accounts, Orbit Agent and phone notifications are the same in every workspace you are in.
+
+Settings › Team lists everyone in the current workspace. The owner and admins invite people by email: Invite creates a link at `/join/<token>`, emails it from your Outlook when Microsoft is connected (the email names the workspace, and the link joins that workspace only) (otherwise copy it), and lists it under Waiting to join until it is used, cancelled or 14 days old. Inviting the same address again cancels the old link. The invitee sets their name and password on the join page and is signed straight in. With `SUPABASE_SERVICE_ROLE_KEY` set the login is created already confirmed; without it Supabase emails a confirmation link that returns to `/auth/callback`. Someone who already has an Orbit login joins with their existing password. A link only works for the address it was sent to.
 
 | Role | Can |
 | --- | --- |

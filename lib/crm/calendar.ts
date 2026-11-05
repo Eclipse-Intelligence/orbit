@@ -444,8 +444,8 @@ export async function myAddresses(db: Db, actor: UserActor) {
 export async function ownAddresses(db: Db, actor: UserActor) {
   const stored = await readStored(db, actor);
   const accounts = await db.query<{ email: string | null }>(
-    "select email from crm.calendar_accounts where user_id = $1 and workspace_id = $2",
-    [actor.userId, actor.workspaceId],
+    "select email from crm.calendar_accounts where user_id = $1",
+    [actor.userId],
   );
   return [actor.email, stored?.email, ...accounts.rows.map((row) => row.email)];
 }
@@ -1001,9 +1001,9 @@ export async function listPeopleMet(actor: UserActor, now = Date.now()): Promise
       `select e.ical_uid, e.subject, e.starts_at, e.organizer, e.attendees
        from crm.calendar_events e
        join crm.calendars c on c.id = e.calendar_id and c.use_for_crm
-       where e.user_id = $1 and e.workspace_id = $2 and not e.is_cancelled
+       where e.user_id = $1 and not e.is_cancelled
        order by e.starts_at desc`,
-      [actor.userId, actor.workspaceId],
+      [actor.userId],
     );
     if (events.rows.length === 0) return [];
     const internal = await internalAddresses(db, actor.workspaceId, await ownAddresses(db, actor));
@@ -1045,7 +1045,7 @@ export async function listPeopleMet(actor: UserActor, now = Date.now()): Promise
        where workspace_id = $1 and archived_at is null and normalized_email = any($2::text[])
        union
        select email from crm.hidden_attendees
-       where user_id = $3 and workspace_id = $1 and email = any($2::text[])`,
+       where user_id = $3 and email = any($2::text[])`,
       [actor.workspaceId, emails, actor.userId],
     );
     for (const row of known.rows) people.delete(row.email);
@@ -1101,11 +1101,11 @@ export async function createContactFromMeeting(actor: UserActor, email: string) 
   const found = await withActor(actor, async (db) => {
     const result = await db.query<{ organizer: unknown; attendees: unknown }>(
       `select organizer, attendees from crm.calendar_events
-       where user_id = $1 and workspace_id = $2
-         and (attendees @> $3::jsonb or organizer->>'email' = $4)
+       where user_id = $1
+         and (attendees @> $2::jsonb or organizer->>'email' = $3)
        order by starts_at desc
        limit 20`,
-      [actor.userId, actor.workspaceId, JSON.stringify([{ email: wanted }]), wanted],
+      [actor.userId, JSON.stringify([{ email: wanted }]), wanted],
     );
     let name: string | null = null;
     let present = false;

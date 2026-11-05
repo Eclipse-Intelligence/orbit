@@ -10,6 +10,7 @@ import {
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import SectionHeader from "@/components/crm/section-header";
+import WorkspaceTile from "@/components/workspaces/workspace-tile";
 import type { Viewer } from "@/components/crm/viewer";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
 import { cn } from "@/lib/utils";
@@ -32,7 +33,7 @@ type NavItem = {
   icon: ComponentType<SVGProps<SVGSVGElement>>;
 };
 
-const GROUPS: { label: string; items: NavItem[] }[] = [
+const GROUPS: { label: string; workspace?: boolean; items: NavItem[] }[] = [
   {
     label: "You",
     items: [
@@ -50,6 +51,7 @@ const GROUPS: { label: string; items: NavItem[] }[] = [
   },
   {
     label: "Workspace",
+    workspace: true,
     items: [
       { href: SETTINGS_PATHS.team, label: "Team", icon: UsersIcon },
       { href: SETTINGS_PATHS.activity, label: "Activity log", icon: ListIcon },
@@ -73,9 +75,11 @@ function isActive(pathname: string, href: string) {
 
 export default function SettingsShell({
   viewer,
+  workspace,
   children,
 }: {
   viewer: Viewer;
+  workspace: { id: string; name: string };
   children: ReactNode;
 }) {
   const pathname = usePathname();
@@ -86,8 +90,18 @@ export default function SettingsShell({
     const list = tabs.current;
     const active = list?.querySelector<HTMLElement>("[aria-current='page']");
     if (!active || !list || list.scrollWidth <= list.clientWidth) return;
-    const offset = active.getBoundingClientRect().left - list.getBoundingClientRect().left + list.scrollLeft;
-    list.scrollLeft = offset - (list.clientWidth - active.offsetWidth) / 2;
+    const left = (element: HTMLElement) => element.getBoundingClientRect().left - list.getBoundingClientRect().left + list.scrollLeft;
+    const padding = parseFloat(getComputedStyle(list).paddingLeft);
+    const links = [...list.querySelectorAll<HTMLElement>("a")];
+    const index = links.indexOf(active);
+    const activeEnd = left(active) + active.offsetWidth;
+    const furthest = list.scrollWidth - list.clientWidth;
+    const preferred = left(links[index - 1] ?? active) - padding;
+    const clean = links
+      .slice(0, index + 1)
+      .map((link) => left(link) - padding)
+      .filter((start) => start <= Math.min(preferred, furthest) && activeEnd - start <= list.clientWidth - padding);
+    list.scrollLeft = clean.at(-1) ?? left(active) - padding;
   }, [pathname]);
 
   useEffect(() => {
@@ -134,7 +148,16 @@ export default function SettingsShell({
           <div className="flex flex-col gap-4 p-3">
           {GROUPS.map((group) => (
           <div key={group.label} className="flex flex-col gap-1">
-          <h2 className="eyebrow-style text-subtle px-2 text-[11px]">{group.label}</h2>
+          <h2 className="eyebrow-style text-subtle flex min-w-0 items-center gap-1.5 px-2 text-[11px]">
+            {group.workspace ? (
+              <>
+                <WorkspaceTile id={workspace.id} name={workspace.name} className="size-3.5 rounded-[4px] text-[8px] tracking-normal" />
+                <span className="truncate">{workspace.name}</span>
+              </>
+            ) : (
+              group.label
+            )}
+          </h2>
           <ul className="flex flex-col gap-0.5">
             {group.items.map((item) => {
               const active = isActive(pathname, item.href);

@@ -106,9 +106,9 @@ export async function readAccounts(db: Db, actor: UserActor): Promise<StoredAcco
             access_token_expires_at, last_synced_at, last_attempt_at, last_error,
             feed_url_cipher, feed_host, feed_etag, feed_last_modified, feed_fetched_at
      from crm.calendar_accounts
-     where user_id = $1 and workspace_id = $2
+     where user_id = $1
      order by created_at, email nulls last, id`,
-    [actor.userId, actor.workspaceId],
+    [actor.userId],
   );
   return result.rows.map(mapAccount);
 }
@@ -227,8 +227,8 @@ export async function disconnectCalendarAccount(actor: UserActor, accountId: str
   if (!isUuid(accountId)) throw new CrmError("not_found", "That calendar account isn't connected.", 404);
   const removed = await withActor(actor, async (db) => {
     const result = await db.query(
-      "delete from crm.calendar_accounts where id = $1 and user_id = $2 and workspace_id = $3",
-      [accountId, actor.userId, actor.workspaceId],
+      "delete from crm.calendar_accounts where id = $1 and user_id = $2",
+      [accountId, actor.userId],
     );
     return result.rowCount ?? 0;
   });
@@ -240,8 +240,8 @@ export async function removeAccountsForEmail(actor: UserActor, email: string) {
   if (!canonical) return;
   await withActor(actor, async (db) => {
     await db.query(
-      "delete from crm.calendar_accounts where user_id = $1 and workspace_id = $2 and provider = 'microsoft' and email = $3",
-      [actor.userId, actor.workspaceId, canonical],
+      "delete from crm.calendar_accounts where user_id = $1 and provider = 'microsoft' and email = $2",
+      [actor.userId, canonical],
     );
   });
 }
@@ -249,10 +249,10 @@ export async function removeAccountsForEmail(actor: UserActor, email: string) {
 export async function hasCalendarAccounts(db: Db, actor: UserActor) {
   const result = await db.query(
     `select 1 from crm.calendar_accounts
-     where user_id = $1 and workspace_id = $2 and provider = 'microsoft'
+     where user_id = $1 and provider = 'microsoft'
        and status = 'connected' and refresh_token is not null
      limit 1`,
-    [actor.userId, actor.workspaceId],
+    [actor.userId],
   );
   return (result.rowCount ?? 0) > 0;
 }
@@ -260,10 +260,10 @@ export async function hasCalendarAccounts(db: Db, actor: UserActor) {
 export async function hasCalendarFeeds(db: Db, actor: UserActor) {
   const result = await db.query(
     `select 1 from crm.calendar_accounts
-     where user_id = $1 and workspace_id = $2 and provider = 'ics'
+     where user_id = $1 and provider = 'ics'
        and status = 'connected' and feed_url_cipher is not null
      limit 1`,
-    [actor.userId, actor.workspaceId],
+    [actor.userId],
   );
   return (result.rowCount ?? 0) > 0;
 }

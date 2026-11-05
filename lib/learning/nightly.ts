@@ -58,7 +58,7 @@ async function existingMemories(db: Db, actor: UserActor, scope: MemoryScope, li
   const owner = scope === "personal" ? actor.userId : null;
   const recent = await db.query<Existing>(
     `select id, kind, title, body, pinned, origin from crm.memories
-     where workspace_id = $1 and scope = $2 and archived_at is null and ($3::uuid is null or user_id = $3)
+     where ($3::uuid is not null or workspace_id = $1) and scope = $2 and archived_at is null and ($3::uuid is null or user_id = $3)
      order by pinned desc, updated_at desc limit $4`,
     [actor.workspaceId, scope, owner, Math.ceil(limit / 2)],
   );
@@ -66,7 +66,7 @@ async function existingMemories(db: Db, actor: UserActor, scope: MemoryScope, li
   const related = terms.length
     ? await db.query<Existing>(
         `select id, kind, title, body, pinned, origin from crm.memories
-         where workspace_id = $1 and scope = $2 and archived_at is null and ($3::uuid is null or user_id = $3)
+         where ($3::uuid is not null or workspace_id = $1) and scope = $2 and archived_at is null and ($3::uuid is null or user_id = $3)
            and search @@ to_tsquery('english', $4)
          order by ts_rank(search, to_tsquery('english', $4)) desc, updated_at desc limit $5`,
         [actor.workspaceId, scope, owner, terms.join(" | "), limit],
@@ -387,7 +387,7 @@ async function tidyScope(actor: UserActor, scope: MemoryScope, options: Options)
     (
       await db.query<TidyRow>(
         `select id, kind, title, body, pinned, origin, confidence, updated_at, sources from crm.memories
-         where workspace_id = $1 and scope = $2 and archived_at is null and ($3::uuid is null or user_id = $3)
+         where ($3::uuid is not null or workspace_id = $1) and scope = $2 and archived_at is null and ($3::uuid is null or user_id = $3)
          order by pinned desc, updated_at desc limit $4`,
         [actor.workspaceId, scope, owner, TIDY_LIST + 50],
       )
@@ -448,9 +448,9 @@ async function tidyScope(actor: UserActor, scope: MemoryScope, options: Options)
     const result = await db.query(
       `update crm.memories set archived_at = now() where id in (
          select id from crm.memories
-         where workspace_id = $1 and scope = $2 and archived_at is null and ($3::uuid is null or user_id = $3) and not pinned and origin = 'learning'
+         where ($3::uuid is not null or workspace_id = $1) and scope = $2 and archived_at is null and ($3::uuid is null or user_id = $3) and not pinned and origin = 'learning'
          order by case confidence when 'high' then 3 when 'medium' then 2 else 1 end, updated_at
-         limit greatest(0, (select count(*) from crm.memories where workspace_id = $1 and scope = $2 and archived_at is null and ($3::uuid is null or user_id = $3)) - $4)
+         limit greatest(0, (select count(*) from crm.memories where ($3::uuid is not null or workspace_id = $1) and scope = $2 and archived_at is null and ($3::uuid is null or user_id = $3)) - $4)
        )`,
       [actor.workspaceId, scope, owner, limit],
     );
@@ -478,7 +478,7 @@ async function withTidy(actor: UserActor, kind: LearningKind, result: UnitResult
 async function lastDone(actor: UserActor, kind: LearningKind, beforeDay: string | null = null) {
   return withActor(actor, async (db) => {
     const result = await db.query<{ finished_at: Date }>(
-      `select finished_at from crm.learning_runs where workspace_id = $1 and kind = $2 and status = 'done' and ($3::uuid is null or user_id = $3)
+      `select finished_at from crm.learning_runs where (workspace_id = $1 or kind = 'personal') and kind = $2 and status = 'done' and ($3::uuid is null or user_id = $3)
          and ($4::date is null or (finished_at at time zone 'Europe/London')::date < $4::date)
        order by finished_at desc limit 1`,
       [actor.workspaceId, kind, kind === "personal" || kind === "brief" ? actor.userId : null, beforeDay],
@@ -491,7 +491,7 @@ async function unitState(actor: UserActor, kind: LearningKind, day: string, now:
   return withActor(actor, async (db) => {
     const result = await db.query<{ status: string; started_at: Date; summary: UnitResult | null; hour: number }>(
       `select status, started_at, summary, extract(hour from started_at at time zone 'Europe/London')::int as hour from crm.learning_runs
-       where workspace_id = $1 and kind = $2 and ($3::uuid is null or user_id = $3) and (started_at at time zone 'Europe/London')::date = $4::date
+       where (workspace_id = $1 or kind = 'personal') and kind = $2 and ($3::uuid is null or user_id = $3) and (started_at at time zone 'Europe/London')::date = $4::date
        order by started_at desc limit 20`,
       [actor.workspaceId, kind, kind === "personal" || kind === "brief" ? actor.userId : null, day],
     );
@@ -540,17 +540,19 @@ export async function runUnit(actor: UserActor, kind: LearningKind, options: Uni
   }
 }
 
-type MemberRow = Parameters<typeof memberActor>[0];
+type MemberRow = Parameters<typeof memberActor>[0] & { is_home?: boolean };
 
 export async function runNightlyLearning(options: Options) {
   const now = options.now ?? new Date();
   const day = londonDay(now);
   const rows = (await query<MemberRow>("select * from private.background_members()")).rows;
   const workspaces = new Map<string, UserActor[]>();
+  const elsewhere = new Set<string>();
   for (const row of rows) {
     const list = workspaces.get(row.workspace_id) ?? [];
     list.push(memberActor(row));
     workspaces.set(row.workspace_id, list);
+    if (row.is_home === false) elsewhere.add(`${row.workspace_id}:${row.user_id}`);
   }
   const report: { workspaceId: string; userId?: string; kind: LearningKind; result: UnitResult & { error?: string } }[] = [];
   for (const [workspaceId, members] of workspaces) {
@@ -559,7 +561,7 @@ export async function runNightlyLearning(options: Options) {
       ["business", owner],
       ["market", owner],
     ];
-    const units: [LearningKind, UserActor][] = [...shared, ...members.map((member): [LearningKind, UserActor] => ["personal", member]), ...members.map((member): [LearningKind, UserActor] => ["brief", member])];
+    const units: [LearningKind, UserActor][] = [...shared, ...members.filter((member) => !elsewhere.has(`${workspaceId}:${member.userId}`)).map((member): [LearningKind, UserActor] => ["personal", member]), ...members.map((member): [LearningKind, UserActor] => ["brief", member])];
     for (const [kind, actor] of units) {
       if (options.deadline - Date.now() < UNIT_MIN_MS) return { day, report, stopped: "Out of time for this run." };
       const state = await unitState(actor, kind, day, now);
@@ -603,7 +605,7 @@ export async function learningKinds(actor: UserActor, choice: LearningKind | "al
   const running = await withActor(actor, async (db) => {
     const result = await db.query<{ kind: LearningKind }>(
       `select distinct kind from crm.learning_runs
-       where workspace_id = $1 and kind = any($2::text[]) and status = 'running' and started_at > now() - make_interval(secs => $3::double precision)
+       where (workspace_id = $1 or kind = 'personal') and kind = any($2::text[]) and status = 'running' and started_at > now() - make_interval(secs => $3::double precision)
          and (user_id is null or user_id = $4)`,
       [actor.workspaceId, kinds, STALE_RUN_MS / 1000, actor.userId],
     );
@@ -620,8 +622,8 @@ export type Brief = { id: string; day: string; body: string; createdAt: string }
 export async function latestBrief(actor: UserActor, now = new Date()): Promise<Brief | null> {
   return withActor(actor, async (db) => {
     const result = await db.query<{ id: string; day: string; body: string; created_at: Date }>(
-      `select id, day::text, body, created_at from crm.daily_briefs where user_id = $1 and dismissed_at is null and created_at > $2 order by day desc limit 1`,
-      [actor.userId, new Date(now.getTime() - BRIEF_FRESH_MS)],
+      `select id, day::text, body, created_at from crm.daily_briefs where user_id = $1 and workspace_id = $3 and dismissed_at is null and created_at > $2 order by day desc limit 1`,
+      [actor.userId, new Date(now.getTime() - BRIEF_FRESH_MS), actor.workspaceId],
     );
     const row = result.rows[0];
     return row ? { id: row.id, day: row.day, body: row.body, createdAt: row.created_at.toISOString() } : null;
@@ -651,7 +653,7 @@ export async function learningStatus(actor: UserActor): Promise<LearningStatus[]
   return withActor(actor, async (db) => {
     const result = await db.query<{ kind: LearningKind; status: string; trigger: string; finished_at: Date | null; summary: UnitResult | null; error: string | null }>(
       `select distinct on (kind) kind, status, trigger, finished_at, summary, error from crm.learning_runs
-       where workspace_id = $1 and (user_id is null or user_id = $2) order by kind, started_at desc`,
+       where (workspace_id = $1 or kind = 'personal') and (user_id is null or user_id = $2) order by kind, started_at desc`,
       [actor.workspaceId, actor.userId],
     );
     return result.rows.map((row) => ({ kind: row.kind, status: row.status, trigger: row.trigger, finishedAt: row.finished_at?.toISOString() ?? null, summary: row.summary, error: row.error }));

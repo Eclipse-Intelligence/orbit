@@ -1,4 +1,5 @@
 import { readJson } from "@/lib/api/http";
+import { companionForJob } from "@/lib/companion/jobs";
 import { authenticateCompanion } from "@/lib/companion/pairing";
 import { CrmError } from "@/lib/crm/errors";
 import { query } from "@/lib/db/pool";
@@ -12,6 +13,10 @@ export async function requireCompanion(request: Request) {
   const auth = await authenticateCompanion(request);
   await allow(`companion:${auth.companionId}`, 600, 60);
   return auth;
+}
+
+export async function requireCompanionJob(request: Request, jobId: string) {
+  return companionForJob(await requireCompanion(request), jobId);
 }
 
 export async function limitPairing(request: Request) {

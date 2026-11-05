@@ -1,6 +1,6 @@
 import type { CompanionCall, CompanionJob, CompanionRequest, CompanionResult } from "@/companion/src/protocol";
 import { EXTERNAL_NOTICE, findTool, runTool, toolJson } from "@/lib/assistant/tools";
-import type { AuthenticatedCompanion } from "@/lib/companion/pairing";
+import { actorFor, type AuthenticatedCompanion } from "@/lib/companion/pairing";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
@@ -40,8 +40,8 @@ async function closeJobs(db: Db, actor: UserActor, conversationIds: string[], me
   for (const conversationId of new Set(conversationIds)) {
     await db.query(
       `insert into crm.assistant_messages (conversation_id, workspace_id, user_id, role, content)
-       values ($1, $2, $3, 'assistant', $4)`,
-      [conversationId, actor.workspaceId, actor.userId, message],
+       select c.id, c.workspace_id, $2, 'assistant', $3 from crm.assistant_conversations c where c.id = $1`,
+      [conversationId, actor.userId, message],
     );
     await db.query("update crm.assistant_conversations set updated_at = now() where id = $1", [conversationId]);
   }
@@ -158,14 +158,30 @@ async function claim(auth: AuthenticatedCompanion): Promise<CompanionJob | null>
       `update crm.ai_companion_jobs set status = 'running', companion_id = $2, claimed_at = now()
        where id = (
          select id from crm.ai_companion_jobs
-         where user_id = $1 and workspace_id = $3 and status = 'queued'
+         where user_id = $1 and status = 'queued'
          order by created_at limit 1 for update skip locked
        )
        returning id, request`,
-      [auth.actor.userId, auth.companionId, auth.actor.workspaceId],
+      [auth.actor.userId, auth.companionId],
     );
     return result.rows[0] ?? null;
   });
+}
+
+export async function companionForJob(auth: AuthenticatedCompanion, jobId: string): Promise<AuthenticatedCompanion> {
+  if (!isUuid(jobId)) throw new CrmError("not_found", "That request is gone.", 404);
+  const workspaceId = await withActor(auth.actor, async (db) => {
+    const result = await db.query<{ workspace_id: string }>("select workspace_id from crm.ai_companion_jobs where id = $1 and user_id = $2", [
+      jobId,
+      auth.actor.userId,
+    ]);
+    return result.rows[0]?.workspace_id ?? null;
+  });
+  if (!workspaceId) throw new CrmError("not_found", "That request is gone.", 404);
+  if (workspaceId === auth.actor.workspaceId) return auth;
+  const actor = await actorFor(auth.actor.userId, workspaceId);
+  if (!actor) throw new CrmError("not_found", "That request is gone.", 404);
+  return { ...auth, actor };
 }
 
 export async function nextCompanionJob(auth: AuthenticatedCompanion, waitMs: number) {

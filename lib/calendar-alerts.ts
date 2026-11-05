@@ -34,20 +34,20 @@ export async function calendarAlerts(actor: UserActor, options: { now?: number; 
   const now = options.now ?? Date.now();
   const { minutes, events } = await withActor(actor, async (db) => {
     const pref = await db.query<{ notify_calendar_minutes: number | null }>(
-      "select notify_calendar_minutes from crm.mail_preferences where workspace_id = $1 and user_id = $2",
-      [actor.workspaceId, actor.userId],
+      "select notify_calendar_minutes from crm.mail_preferences where user_id = $1",
+      [actor.userId],
     );
     const minutes = pref.rows.length ? pref.rows[0].notify_calendar_minutes : 10;
     if (minutes === null) return { minutes, events: [] as EventRow[] };
     const result = await db.query<EventRow>(
       `select subject, starts_at, ends_at, location, online_meeting_url, ical_uid, provider_event_id
        from crm.calendar_events
-       where user_id = $1 and workspace_id = $2 and not is_cancelled and not is_all_day
-         and starts_at > $3::timestamptz - interval '2 minutes'
-         and starts_at <= $3::timestamptz + make_interval(mins => $4)
+       where user_id = $1 and not is_cancelled and not is_all_day
+         and starts_at > $2::timestamptz - interval '2 minutes'
+         and starts_at <= $2::timestamptz + make_interval(mins => $3)
        order by starts_at
        limit 20`,
-      [actor.userId, actor.workspaceId, new Date(now).toISOString(), minutes],
+      [actor.userId, new Date(now).toISOString(), minutes],
     );
     return { minutes, events: result.rows };
   });
@@ -78,12 +78,15 @@ export async function calendarAlerts(actor: UserActor, options: { now?: number; 
 export async function processAllCalendarAlerts(deadline: number) {
   const members = await query<Parameters<typeof memberActor>[0]>("select * from private.calendar_alert_members()");
   let sent = 0;
+  const done = new Set<string>();
   for (const row of members.rows) {
     if (Date.now() > deadline) break;
+    if (done.has(row.user_id)) continue;
+    done.add(row.user_id);
     sent += (await calendarAlerts(memberActor(row)).catch((error) => {
       console.error("Calendar alert failed", error);
       return { sent: 0 };
     })).sent;
   }
-  return { users: members.rows.length, sent };
+  return { users: done.size, sent };
 }

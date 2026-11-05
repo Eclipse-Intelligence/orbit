@@ -107,6 +107,14 @@ const PAGE_JOINS = `crm.pages p
   left join crm.agents agent on agent.id = p.edited_by_agent_id
   left join crm.agents creator on creator.id = p.created_by_agent_id`;
 
+export function viewerId(actor: Actor) {
+  return actor.type === "user" ? actor.userId : null;
+}
+
+export function pageInScope(alias: string, workspaceParam: number, userParam: number) {
+  return `(${alias}.workspace_id = $${workspaceParam} or (${alias}.kind = 'daily' and ${alias}.user_id = $${userParam}::uuid))`;
+}
+
 export function pageSelect(withContent: boolean) {
   return `select ${PAGE_FIELDS}${withContent ? ", p.content" : ""} from ${PAGE_JOINS}`;
 }
@@ -170,8 +178,8 @@ export function mapPage(actor: Actor, row: PageRow): DocSummary {
 export async function loadPage(db: Db, actor: Actor, id: string, options: { lock?: boolean } = {}) {
   if (!isUuid(id)) throw new CrmError("not_found", NOT_FOUND, 404);
   const result = await db.query<FullPageRow>(
-    `${pageSelect(true)} where p.id = $1 and p.workspace_id = $2${options.lock ? " for no key update of p" : ""}`,
-    [id, actor.workspaceId],
+    `${pageSelect(true)} where p.id = $1 and ${pageInScope("p", 2, 3)}${options.lock ? " for no key update of p" : ""}`,
+    [id, actor.workspaceId, viewerId(actor)],
   );
   const row = result.rows[0];
   if (!row) throw new CrmError("not_found", NOT_FOUND, 404);
@@ -549,9 +557,9 @@ export async function readDoc(actor: Actor, id: string, offset: unknown = 0) {
     const result = await db.query<FullPageRow & { characters: number; window_characters: number }>(
       `select x.*, char_length(x.content) as window_characters from (
          select ${PAGE_FIELDS}, substr(p.content, $3 + 1, $4) as content, char_length(p.content) as characters
-         from ${PAGE_JOINS} where p.id = $1 and p.workspace_id = $2
+         from ${PAGE_JOINS} where p.id = $1 and ${pageInScope("p", 2, 5)}
        ) x`,
-      [id, actor.workspaceId, start, DOC_READ_WINDOW],
+      [id, actor.workspaceId, start, DOC_READ_WINDOW, viewerId(actor)],
     );
     const row = result.rows[0];
     if (!row) throw new CrmError("not_found", NOT_FOUND, 404);
@@ -564,8 +572,8 @@ export async function listDocs(actor: Actor, query: DocListQuery = {}): Promise<
   assertDocsRead(actor);
   const limit = pagingNumber(query.limit, 50, 1, 200);
   const offset = pagingNumber(query.offset, 0, 0, 10_000);
-  const values: unknown[] = [actor.workspaceId];
-  const where = ["p.workspace_id = $1", query.archived ? "p.archived_at is not null" : "p.archived_at is null"];
+  const values: unknown[] = [actor.workspaceId, viewerId(actor)];
+  const where = [pageInScope("p", 1, 2), query.archived ? "p.archived_at is not null" : "p.archived_at is null"];
   if (query.folderId === null) {
     where.push("p.kind = 'note' and (p.folder_id is null or not exists (select 1 from crm.page_folders f where f.id = p.folder_id))");
   } else if (query.folderId) {
@@ -603,8 +611,8 @@ export async function listDocTags(actor: Actor): Promise<DocTag[]> {
   return withActor(actor, async (db) => {
     const result = await db.query<{ tag: string; count: number }>(
       `select t.tag, count(*)::int as count from crm.page_tags t join crm.pages p on p.id = t.page_id
-       where p.workspace_id = $1 and p.archived_at is null group by t.tag order by t.tag`,
-      [actor.workspaceId],
+       where ${pageInScope("p", 1, 2)} and p.archived_at is null group by t.tag order by t.tag`,
+      [actor.workspaceId, viewerId(actor)],
     );
     return result.rows;
   });
@@ -1004,7 +1012,7 @@ export async function assistantMayEdit(actor: Actor, id: string) {
   if (actor.type !== "user" || !isUuid(id)) return false;
   return withActor(actor, async (db) => {
     const result = await db.query<{ ok: boolean }>(
-      "select assistant_can_edit and archived_at is null and user_id = $3 as ok from crm.pages where id = $1 and workspace_id = $2",
+      `select assistant_can_edit and archived_at is null and user_id = $3 as ok from crm.pages p where id = $1 and ${pageInScope("p", 2, 3)}`,
       [id, actor.workspaceId, actor.userId],
     );
     return result.rows[0]?.ok === true;
@@ -1185,8 +1193,8 @@ export async function getVersion(actor: Actor, versionId: string): Promise<DocVe
   if (!isUuid(versionId)) throw new CrmError("not_found", "That version doesn't exist.", 404);
   return withActor(actor, async (db) => {
     const result = await db.query<VersionRow & { content: string }>(
-      `select ${VERSION_FIELDS}, v.content from ${VERSION_JOINS} where v.id = $1 and v.workspace_id = $2`,
-      [versionId, actor.workspaceId],
+      `select ${VERSION_FIELDS}, v.content from ${VERSION_JOINS} join crm.pages p on p.id = v.page_id where v.id = $1 and ${pageInScope("p", 2, 3)}`,
+      [versionId, actor.workspaceId, viewerId(actor)],
     );
     const row = result.rows[0];
     if (!row) throw new CrmError("not_found", "That version doesn't exist.", 404);

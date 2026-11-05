@@ -11,8 +11,11 @@ import {
 import SidebarContent from "./sidebar-content";
 import SidebarResizer from "./sidebar-resizer";
 import type { CaptureStatus } from "@/lib/crm/capture";
+import type { WorkspaceChoice } from "@/lib/auth/user";
 import type { BoardSummary } from "@/lib/crm/types";
 import { useCompaniesStore } from "@/stores/companies-store";
+
+export type SidebarWorkspace = { id: string; name: string; viewerName: string; choices: WorkspaceChoice[] };
 
 type SidebarProps = {
   boards: BoardSummary[];
@@ -21,10 +24,10 @@ type SidebarProps = {
   openActionCount: number;
   mailUnread: number;
   capture: CaptureStatus | null;
-  workspaceName: string;
+  workspace: SidebarWorkspace;
 };
 
-export default function Sidebar({ boards, approvals, companyCount, openActionCount, mailUnread, capture, workspaceName }: SidebarProps) {
+export default function Sidebar({ boards, approvals, companyCount, openActionCount, mailUnread, capture, workspace }: SidebarProps) {
   const sidebarOpen = useCompaniesStore((state) => state.sidebarOpen);
   const setSidebarOpen = useCompaniesStore((state) => state.setSidebarOpen);
   const setCapture = useCompaniesStore((state) => state.setCapture);
@@ -46,7 +49,7 @@ export default function Sidebar({ boards, approvals, companyCount, openActionCou
           openActionCount={openActionCount}
           mailUnread={mailUnread}
           capture={capture}
-          workspaceName={workspaceName}
+          workspace={workspace}
         />
         <SidebarResizer />
       </aside>
@@ -68,7 +71,7 @@ export default function Sidebar({ boards, approvals, companyCount, openActionCou
             openActionCount={openActionCount}
             mailUnread={mailUnread}
             capture={capture}
-            workspaceName={workspaceName}
+            workspace={workspace}
           />
         </SheetContent>
       </Sheet>

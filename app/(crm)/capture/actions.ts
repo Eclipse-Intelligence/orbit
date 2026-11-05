@@ -5,7 +5,7 @@ import { SETTINGS_PATHS } from "@/lib/settings-nav";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { after } from "next/server";
-import { getUserActor } from "@/lib/auth/user";
+import { getHomeActor, getUserActor } from "@/lib/auth/user";
 import { discardAttachments, prepareAttachment, type PreparedAttachment } from "@/lib/crm/email-attachments";
 import {
   createContactFromMeeting,
@@ -40,6 +40,12 @@ async function requireUser() {
   return user;
 }
 
+async function requireHomeUser() {
+  const user = await getHomeActor();
+  if (!user) redirect("/login");
+  return user;
+}
+
 function refreshRecords() {
   revalidatePath("/capture");
   revalidatePath(SETTINGS_PATHS.integrations);
@@ -62,7 +68,7 @@ export async function syncInboxAction() {
 }
 
 export async function syncCallsAction() {
-  const user = await requireUser();
+  const user = await requireHomeUser();
   const result = await syncCalls(user, { force: true });
   refreshRecords();
   if (result.error) integrationsWith("error", result.error);
@@ -70,7 +76,7 @@ export async function syncCallsAction() {
 }
 
 export async function syncCalendarAction() {
-  const user = await requireUser();
+  const user = await requireHomeUser();
   const result = await syncCalendar(user, { force: true });
   refreshRecords();
   if (result.error) integrationsWith("error", result.error);
@@ -106,7 +112,7 @@ export async function enableGranolaWebhookAction() {
 }
 
 export async function syncTranscriptsAction() {
-  const user = await requireUser();
+  const user = await requireHomeUser();
   const result = await syncTeamsTranscripts(user, { force: true });
   const subscription = await ensureTranscriptSubscription(user);
   refreshRecords();

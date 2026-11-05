@@ -22,7 +22,7 @@ export type CaptureStatus = {
 
 const HAS_MAILBOX = `exists (
   select 1 from crm.mailbox_connections mc
-  where mc.user_id = $1 and mc.workspace_id = $2 and mc.provider = 'microsoft'
+  where mc.user_id = $1 and mc.provider = 'microsoft'
 )`;
 
 const UNFILED_COUNTS = `
@@ -51,9 +51,9 @@ const PEOPLE_COUNTS = `
       union all
       select $3::text
       union all
-      select mc.email from crm.mailbox_connections mc where mc.user_id = $1 and mc.workspace_id = $2 and mc.provider = 'microsoft'
+      select mc.email from crm.mailbox_connections mc where mc.user_id = $1 and mc.provider = 'microsoft'
       union all
-      select ca.email from crm.calendar_accounts ca where ca.user_id = $1 and ca.workspace_id = $2
+      select ca.email from crm.calendar_accounts ca where ca.user_id = $1
     ) raw
     where raw.email is not null and btrim(raw.email) <> ''
   ),
@@ -70,7 +70,7 @@ const PEOPLE_COUNTS = `
       (case when jsonb_typeof(e.attendees) = 'array' then e.attendees else '[]'::jsonb end)
       || (case when jsonb_typeof(e.organizer) = 'object' then jsonb_build_array(e.organizer) else '[]'::jsonb end)
     ) as person
-    where e.user_id = $1 and e.workspace_id = $2 and not e.is_cancelled
+    where e.user_id = $1 and not e.is_cancelled
       and jsonb_typeof(person) = 'object' and jsonb_typeof(person->'email') = 'string'
       and ${HAS_MAILBOX}
     group by 1
@@ -88,7 +88,7 @@ const PEOPLE_COUNTS = `
       )
       and not exists (
         select 1 from crm.hidden_attendees h
-        where h.user_id = $1 and h.workspace_id = $2 and h.email = met.email
+        where h.user_id = $1 and h.email = met.email
       )
   )
   select
@@ -109,7 +109,7 @@ export async function listToFile(actor: UserActor, now = Date.now()): Promise<To
   assertScope(actor.scopes, "crm:read");
   const [unfiled, mailbox] = await Promise.all([
     listUnfiledImports(actor),
-    withActor(actor, async (db) => (await db.query(`select ${HAS_MAILBOX} as connected`, [actor.userId, actor.workspaceId])).rows[0]?.connected === true),
+    withActor(actor, async (db) => (await db.query(`select ${HAS_MAILBOX} as connected`, [actor.userId])).rows[0]?.connected === true),
   ]);
   const people = mailbox ? await listPeopleMet(actor, now) : [];
   return { unfiled, people };
