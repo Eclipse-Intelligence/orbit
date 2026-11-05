@@ -215,7 +215,7 @@ export async function draftPersonalContext(
   try {
     const result = await completeJson({
       system:
-        `You draft the "About you" settings for ${name}, which their AI assistant in Orbit (Eclipse's CRM) reads so it knows who it is helping. ` +
+        `You draft the "About you" settings for ${name}, which their AI assistant in Orbit, their CRM, reads so it knows who it is helping. ` +
         'Reply with JSON only: {"jobTitle": string, "about": string, "interests": string, "writing": string}. Write about and interests in the first person, as if they wrote it. ' +
         "jobTitle: their current role and company, at most 8 words. " +
         "about: who they are, what they do and are responsible for, who they work with or sell to, and relevant background, in at most 120 words. " +

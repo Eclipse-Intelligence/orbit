@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { after, before, beforeEach, describe, it } from "node:test";
 import { decideActions, getConversation, listConversations, MESSAGE_MAX, sendMessage, type AssistantEvent } from "@/lib/assistant/chat";
 import { settingsFor } from "@/lib/assistant/models";
+import { ECLIPSE_CONTEXT, ECLIPSE_IDEAL_CUSTOMER, ECLIPSE_WEBSITE } from "@/lib/assistant/eclipse";
 import { stablePrompt, systemPrompt } from "@/lib/assistant/prompt";
 import { geminiTool } from "@/lib/assistant/gateway";
 import { londonTime, runTool, toolDefinitions, toolJson } from "@/lib/assistant/tools";
@@ -141,7 +142,8 @@ describe("assistant tools", () => {
   });
 
   it("writes the system prompt with Eclipse context and the house rules", () => {
-    const prompt = systemPrompt(owner, { webSearch: false, now: new Date("2026-10-16T08:00:00Z") });
+    const brand = { workspaceName: "Eclipse", website: ECLIPSE_WEBSITE, whatYouSell: ECLIPSE_CONTEXT, whoItsFor: ECLIPSE_IDEAL_CUSTOMER, tone: "", eclipseTools: true };
+    const prompt = systemPrompt(owner, { webSearch: false, now: new Date("2026-10-16T08:00:00Z"), brand });
     assert.match(prompt, /Eclipse is a content and intelligence platform/);
     assert.ok(!/Tags: #eclipse/.test(prompt));
     assert.match(prompt, /UK English/);

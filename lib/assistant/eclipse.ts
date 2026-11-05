@@ -5,3 +5,8 @@ The main areas are Content (articles with citations, an E-E-A-T review and the s
 For how any feature works, what is live and what isn't, read the docs with eclipse_docs rather than relying on this summary. For what may be said to prospects, the outreach brief in cold_email_playbook is the authority.
 
 Eclipse gives B2B brands, in-house teams and agencies one place to turn what they know about their market into content buyers can trust. It brings together brand context, research, competitor and market signals, keywords and AI visibility, so each article is planned from evidence, written with citations, checked before approval and published where buyers look. Teams can see where they show up in search and AI answers, and improve from there.`;
+
+export const ECLIPSE_WEBSITE = "https://geteclipse.co";
+
+export const ECLIPSE_IDEAL_CUSTOMER =
+  "First, founder-led UK B2B content and SEO agencies of 5 to 30 staff serving B2B SaaS, IT, fintech or cyber clients, who are adding AI visibility work. Second, UK B2B firms of 50 to 500 staff with a named content owner and a budget.";

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { beforeEach, describe, it } from "node:test";
-import { systemPrompt } from "@/lib/assistant/prompt";
+import { systemPrompt, UNBRANDED } from "@/lib/assistant/prompt";
 import { toolDefinitions } from "@/lib/assistant/tools";
 import type { UserActor } from "@/lib/crm/types";
 import { allowedEclipseUrl, clearEclipseSourceCache, listEclipseArticles, readEclipsePage } from "@/lib/eclipse-sources";
@@ -166,7 +166,7 @@ describe("Eclipse articles and docs", () => {
     const names = toolDefinitions().map((tool) => tool.function.name);
     for (const name of ["read_web_page", "eclipse_articles", "eclipse_docs"]) assert.ok(names.includes(name), name);
     const actor = { type: "user", userId: "u", workspaceId: "w", email: "mark@eclipse.test", fullName: "Mark", role: "owner", scopes: [] } as unknown as UserActor;
-    const prompt = systemPrompt(actor, { webSearch: false });
+    const prompt = systemPrompt(actor, { webSearch: false, brand: { ...UNBRANDED, workspaceName: "Eclipse", eclipseTools: true } });
     assert.match(prompt, /https:\/\/geteclipse\.co\/articles/);
     assert.match(prompt, /sales collateral/);
     assert.match(prompt, /https:\/\/docs\.geteclipse\.co/);

@@ -110,10 +110,12 @@ export default function KnowledgePanel({
   target: given,
   initial,
   variant = "section",
+  ownerName = "Your business",
 }: {
   target: KnowledgeTargetProp;
   initial: KnowledgeItem[];
   variant?: "section" | "settings";
+  ownerName?: string;
 }) {
   const targetKey = "companyId" in given ? given.companyId : "eclipse";
   const target = useMemo<KnowledgeTargetProp>(() => (targetKey === "eclipse" ? { eclipse: true } : { companyId: targetKey }), [targetKey]);
@@ -494,7 +496,7 @@ export default function KnowledgePanel({
 
   if (settings) {
     return (
-      <SettingsCard title="Eclipse" action={addMenu}>
+      <SettingsCard title={ownerName} action={addMenu}>
         {body}
       </SettingsCard>
     );
