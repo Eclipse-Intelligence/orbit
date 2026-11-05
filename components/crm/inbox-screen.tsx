@@ -4,11 +4,14 @@ import FollowUpCalls from "@/components/crm/follow-up-calls";
 import PeopleMet from "@/components/crm/people-met";
 import SectionHeader from "@/components/crm/section-header";
 import UnfiledConversations from "@/components/crm/unfiled-conversations";
+import UnknownMail from "@/components/crm/unknown-mail";
 import type { Viewer } from "@/components/crm/viewer";
 import KeyboardList from "@/components/shortcuts/keyboard-list";
 import type { MetPerson } from "@/lib/crm/calendar";
 import type { UnfiledImport } from "@/lib/crm/conversations";
 import type { FollowUpSuggestion } from "@/lib/crm/follow-ups";
+import type { UnknownEmail } from "@/lib/mail/filing";
+import type { WorkspaceChoiceRef } from "@/lib/mail/view";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
 
 export default function CaptureScreen({
@@ -16,6 +19,10 @@ export default function CaptureScreen({
   followUps,
   unfiled,
   people,
+  emails,
+  workspaces,
+  workspaceId,
+  now,
   total,
   newestAt,
   alert,
@@ -24,11 +31,15 @@ export default function CaptureScreen({
   followUps: FollowUpSuggestion[];
   unfiled: UnfiledImport[];
   people: MetPerson[];
+  emails: UnknownEmail[];
+  workspaces: WorkspaceChoiceRef[];
+  workspaceId: string;
+  now: number;
   total: number;
   newestAt: string | null;
   alert: string | null;
 }) {
-  const shown = unfiled.length + people.length;
+  const shown = unfiled.length + people.length + emails.length;
   const toFile = Math.max(total, shown);
 
   return (
@@ -62,6 +73,7 @@ export default function CaptureScreen({
               <p className="caption-style text-subtle leading-[1.4]">Nothing to file.</p>
             ) : (
               <KeyboardList className="flex flex-col gap-6">
+                <UnknownMail emails={emails} workspaces={workspaces} currentId={workspaceId} now={now} />
                 <UnfiledConversations conversations={unfiled} />
                 <PeopleMet people={people} />
               </KeyboardList>

@@ -1,6 +1,7 @@
 import { copyBrandProfile } from "@/lib/crm/brand";
 import { CrmError, isPgError } from "@/lib/crm/errors";
-import type { UserActor } from "@/lib/crm/types";
+import { scopesForRole } from "@/lib/crm/scopes";
+import type { UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
 
 export type CreatedWorkspace = { id: string; name: string; brandSourceId: string | null };
@@ -39,3 +40,23 @@ export async function createWorkspace(
   }
 }
 
+
+export type WorkspaceRef = { id: string; name: string };
+
+export async function workspaceActors(actor: UserActor): Promise<UserActor[]> {
+  const result = await query<{ workspace_id: string; workspace_name: string; role: WorkspaceRole }>(
+    "select workspace_id, workspace_name, role from private.memberships_for($1)",
+    [actor.userId],
+  );
+  return result.rows.map((row) =>
+    row.workspace_id === actor.workspaceId
+      ? actor
+      : { ...actor, workspaceId: row.workspace_id, workspaceName: row.workspace_name, role: row.role, scopes: scopesForRole(row.role) },
+  );
+}
+
+export function actorIn(actors: UserActor[], workspaceId: string) {
+  const found = actors.find((item) => item.workspaceId === workspaceId);
+  if (!found) throw new CrmError("forbidden", "You're not in that workspace.", 403);
+  return found;
+}

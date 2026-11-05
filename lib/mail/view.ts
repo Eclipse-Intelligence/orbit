@@ -77,6 +77,18 @@ export type ThreadPerson = {
   dealId: string | null;
   dealName: string | null;
   dealStage: string | null;
+  elsewhere?: WorkspaceChoiceRef[];
+};
+
+export type WorkspaceChoiceRef = { id: string; name: string };
+
+export type ThreadFiling = {
+  active: WorkspaceChoiceRef;
+  workspaces: WorkspaceChoiceRef[];
+  filedIn: string[];
+  chosen: boolean;
+  domain: string | null;
+  rule: string[] | null;
 };
 
 export type SubscriptionStatus = "subscribed" | "kept" | "unsubscribed" | "ignored" | "research" | "blocked";
@@ -160,6 +172,7 @@ export type ThreadDetail = {
   followUpReplied?: FollowUpReplied | null;
   deferral?: DeferredFollowUp | null;
   subscription?: ThreadSubscription | null;
+  filing?: ThreadFiling | null;
 };
 
 export type ComposeAccount = { id: string; email: string; signature: string | null; sourceId?: string; identityId?: string };

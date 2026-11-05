@@ -32,6 +32,7 @@ import {
 } from "@/lib/crm/inbox";
 import { ensureTranscriptSubscription, syncTeamsTranscripts } from "@/lib/crm/teams-transcripts";
 import { actionError } from "@/lib/companies";
+import { createAndFileUnknown, fileUnknownTo, ignoreUnknownMail, moveUnknownMail } from "@/lib/mail/filing";
 import { revalidateRecordPages } from "@/lib/revalidate";
 
 async function requireUser() {
@@ -296,4 +297,52 @@ export async function disconnectInboxAction() {
   revalidatePath("/capture");
   revalidatePath(SETTINGS_PATHS.integrations);
   redirect(SETTINGS_PATHS.integrations);
+}
+
+export async function createAndFileEmailAction(key: string): Promise<CreateAndFileState> {
+  const user = await getUserActor();
+  if (!user) return { error: "Sign in to file email." };
+  try {
+    const filed = await createAndFileUnknown(user, key);
+    refreshRecords();
+    return { ok: true, contactId: filed.contactId, contactName: filed.contactName ?? undefined };
+  } catch (error) {
+    return actionError(error);
+  }
+}
+
+export async function fileEmailToAction(key: string, contactId: string): Promise<CreateAndFileState> {
+  const user = await getUserActor();
+  if (!user) return { error: "Sign in to file email." };
+  try {
+    const filed = await fileUnknownTo(user, key, contactId);
+    refreshRecords();
+    return { ok: true, contactId: filed.contactId, contactName: filed.contactName ?? undefined };
+  } catch (error) {
+    return actionError(error);
+  }
+}
+
+export async function moveEmailAction(key: string, workspaceId: string): Promise<ConversationActionState> {
+  const user = await getUserActor();
+  if (!user) return { error: "Sign in to move email." };
+  try {
+    await moveUnknownMail(user, key, workspaceId);
+  } catch (error) {
+    return actionError(error);
+  }
+  revalidatePath("/capture");
+  return { ok: true };
+}
+
+export async function ignoreEmailAction(key: string): Promise<ConversationActionState> {
+  const user = await getUserActor();
+  if (!user) return { error: "Sign in to ignore email." };
+  try {
+    await ignoreUnknownMail(user, key);
+  } catch (error) {
+    return actionError(error);
+  }
+  revalidatePath("/capture");
+  return { ok: true };
 }

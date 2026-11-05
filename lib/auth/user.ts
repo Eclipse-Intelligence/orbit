@@ -85,7 +85,7 @@ export const getHomeActor = cache(async (): Promise<UserActor | null> => {
   return actorFor(current.userId, current.memberships[0]);
 });
 
-export type WorkspaceChoice = { id: string; name: string; role: WorkspaceRole };
+export type WorkspaceChoice = { id: string; name: string; role: WorkspaceRole; waiting?: boolean };
 
 export const getWorkspaceChoices = cache(async (): Promise<WorkspaceChoice[]> => {
   const current = await currentMemberships();

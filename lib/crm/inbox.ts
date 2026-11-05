@@ -15,6 +15,7 @@ import { hasScope } from "@/lib/crm/scopes";
 import { createTaskInDb } from "@/lib/crm/tasks";
 import { scheduleTaskDue, withDueNote } from "@/lib/crm/task-due";
 import type { UserActor } from "@/lib/crm/types";
+import { routedAway } from "@/lib/mail/routing";
 import {
   fetchInboxMessages,
   refreshMicrosoftToken,
@@ -724,8 +725,9 @@ async function attachUnmatched(
     preview: string | null;
     from_email: string;
     received_at: Date | string | null;
+    conversation_id: string | null;
   }>(
-    `select m.id, m.provider_message_id, m.subject, m.preview, m.from_email, m.received_at
+    `select m.id, m.provider_message_id, m.subject, m.preview, m.from_email, m.received_at, m.conversation_id
      from crm.email_messages m
      where m.connection_id = $1
        and m.workspace_id = $2
@@ -768,6 +770,7 @@ async function attachUnmatched(
     });
     const match = await matchParties(db, actor.workspaceId, parties);
     if (!match.contactId && !match.companyId) continue;
+    if (await routedAway(db, actor.userId, actor.workspaceId, row.conversation_id, row.from_email)) continue;
     const activityId = await fileActivity(
       db,
       actor,
@@ -825,7 +828,9 @@ async function fileMessages(
       toEmails: message.toEmails,
       ccEmails: message.ccEmails,
     });
-    const match = await matchParties(db, actor.workspaceId, parties);
+    const found = await matchParties(db, actor.workspaceId, parties);
+    const away = (found.contactId || found.companyId) && (await routedAway(db, actor.userId, actor.workspaceId, message.conversationId, message.fromEmail));
+    const match = away ? { contactId: null, contactName: null, companyId: null, companyName: null } : found;
     let activityId: string | null = null;
     const internetMessageId = clip(message.internetMessageId, 400);
     const logged = internetMessageId

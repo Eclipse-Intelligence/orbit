@@ -171,7 +171,8 @@ function UnfiledItem({
       )}
       {filing ? (
         <FilePicker
-          importId={conversation.id}
+          id={conversation.id}
+          onPick={(contact) => fileConversationAction(conversation.id, contact.id)}
           onCancel={() => setFiling(false)}
           onDone={() => {
             setFiling(false);
@@ -208,12 +209,14 @@ function UnfiledItem({
   );
 }
 
-function FilePicker({
-  importId,
+export function FilePicker({
+  id,
+  onPick,
   onCancel,
   onDone,
 }: {
-  importId: string;
+  id: string;
+  onPick: (contact: Contact) => Promise<{ error?: string }>;
   onCancel: () => void;
   onDone: () => void;
 }) {
@@ -227,7 +230,7 @@ function FilePicker({
   const [error, setError] = useState<string | null>(null);
   const trimmed = query.trim();
   const searching = results?.query !== trimmed;
-  const fieldId = `file-conversation-${importId}`;
+  const fieldId = `file-to-${id}`;
 
   useEffect(() => {
     let cancelled = false;
@@ -251,7 +254,7 @@ function FilePicker({
     if (pending) return;
     setPending(contact.id);
     setError(null);
-    const result = await fileConversationAction(importId, contact.id);
+    const result = await onPick(contact);
     setPending(null);
     if (result.error) {
       setError(result.error);

@@ -9,6 +9,8 @@ import { iso } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
 import type { TeamsTranscriptStatus } from "@/lib/crm/teams-transcripts";
 import type { UserActor } from "@/lib/crm/types";
+import { workspaceActors } from "@/lib/crm/workspaces";
+import { unknownMail, type UnknownEmail } from "@/lib/mail/filing";
 
 export type ToFile = { unfiled: UnfiledImport[]; people: MetPerson[] };
 
@@ -129,8 +131,28 @@ function later(left: string | null, right: string | null) {
   return left > right ? left : right;
 }
 
-export async function captureStatus(actor: UserActor, now = Date.now()): Promise<CaptureStatus> {
+async function unknownFor(actor: UserActor, now: number) {
+  const actors = await workspaceActors(actor);
+  return unknownMail(actor, actors, now).catch((error) => {
+    console.error("Reading email from new people failed", error instanceof Error ? error.message : error);
+    return [] as UnknownEmail[];
+  });
+}
+
+export async function captureStatuses(actor: UserActor, now = Date.now()) {
   assertScope(actor.scopes, "crm:read");
+  const actors = await workspaceActors(actor);
+  const unknown = await unknownMail(actor, actors, now).catch((error) => {
+    console.error("Reading email from new people failed", error instanceof Error ? error.message : error);
+    return [] as UnknownEmail[];
+  });
+  const statuses = await Promise.all(actors.map((item) => captureStatus(item, now, unknown).catch(() => null)));
+  return new Map(actors.map((item, index) => [item.workspaceId, statuses[index]]));
+}
+
+export async function captureStatus(actor: UserActor, now = Date.now(), unknown?: UnknownEmail[]): Promise<CaptureStatus> {
+  assertScope(actor.scopes, "crm:read");
+  const emails = (unknown ?? (await unknownFor(actor, now))).filter((item) => item.workspaceId === actor.workspaceId);
   return withActor(actor, async (db) => {
     const unfiled = (
       await db.query<{ seen_at: Date | null; waiting: number; fresh: number; newest: Date | null }>(UNFILED_COUNTS, [actor.userId, actor.workspaceId])
@@ -149,11 +171,13 @@ export async function captureStatus(actor: UserActor, now = Date.now()): Promise
     const followUps = (
       await db.query<{ waiting: number; fresh: number; newest: Date | null }>(FOLLOW_UP_COUNTS, [actor.userId, actor.workspaceId, seenAt])
     ).rows[0];
+    const freshEmails = emails.filter((item) => !seenAt || item.at > seenAt).length;
+    const newestEmail = emails.reduce<string | null>((latest, item) => (!latest || item.at > latest ? item.at : latest), null);
     return {
-      waiting: unfiled.waiting + people.waiting + followUps.waiting,
+      waiting: unfiled.waiting + people.waiting + followUps.waiting + emails.length,
       followUps: followUps.waiting,
-      fresh: unfiled.fresh + people.fresh + followUps.fresh,
-      newestAt: later(later(iso(unfiled.newest), iso(people.newest)), iso(followUps.newest)),
+      fresh: unfiled.fresh + people.fresh + followUps.fresh + freshEmails,
+      newestAt: later(later(later(iso(unfiled.newest), iso(people.newest)), iso(followUps.newest)), newestEmail),
       seenAt,
     };
   });

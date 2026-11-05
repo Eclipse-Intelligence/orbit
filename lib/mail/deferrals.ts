@@ -6,6 +6,7 @@ import { iso, isUuid } from "@/lib/crm/mutate";
 import { dayKeyAt, planTaskDue } from "@/lib/crm/task-due";
 import { archiveTaskInDb, createTaskInDb, readTaskInDb, updateTaskInDb } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
+import { workspaceActors } from "@/lib/crm/workspaces";
 import type { Db } from "@/lib/db/pool";
 import { completeJson } from "@/lib/llm";
 import { clean } from "@/lib/mail/ai";
@@ -13,6 +14,7 @@ import { DEFERRAL_PRECISIONS, deferralHint, deferralOptions, resolveDeferral, ty
 import { stripQuoted } from "@/lib/mail/format";
 import type { DeferredFollowUp } from "@/lib/mail/view";
 import { threadKey } from "@/lib/mail/threads";
+import { filedWorkspaces } from "@/lib/mail/timeline";
 
 const LOOKBACK_HOURS = 48;
 const CANDIDATES_PER_RUN = 24;
@@ -62,13 +64,13 @@ function knownSender(alias: string, workspaceParam: string, freeParam: string) {
   return `(
     exists (
       select 1 from crm.contacts c
-      where c.workspace_id = ${workspaceParam} and c.archived_at is null and c.normalized_email = lower(${alias}.from_email)
+      where c.workspace_id = any(${workspaceParam}::uuid[]) and c.archived_at is null and c.normalized_email = lower(${alias}.from_email)
     )
     or (
       split_part(lower(${alias}.from_email), '@', 2) <> all(${freeParam}::text[])
       and exists (
         select 1 from crm.companies co
-        where co.workspace_id = ${workspaceParam} and co.archived_at is null and co.domain = split_part(lower(${alias}.from_email), '@', 2)
+        where co.workspace_id = any(${workspaceParam}::uuid[]) and co.archived_at is null and co.domain = split_part(lower(${alias}.from_email), '@', 2)
       )
     )
   )`;
@@ -78,20 +80,25 @@ export function deferralText(body: string | null, snippet: string | null) {
   return stripQuoted(body ?? snippet ?? "").slice(0, BODY_CHARS);
 }
 
+async function workspaceIdsOf(actor: UserActor) {
+  return (await workspaceActors(actor)).map((item) => item.workspaceId);
+}
+
 export async function deferralEligible(actor: UserActor, messageId: string, fromEmail: string | null) {
   if (!fromEmail) return false;
+  const workspaceIds = await workspaceIdsOf(actor);
   return withActor(actor, async (db) => {
     const result = await db.query<{ eligible: boolean }>(
       `select ${knownSender("m", "$2", "$3")}
          and not exists (select 1 from crm.mail_deferral_checks d where d.message_id = m.id) as eligible
        from crm.mail_messages m where m.id = $1 and m.user_id = $4`,
-      [messageId, actor.workspaceId, [...FREE_MAIL_DOMAINS], actor.userId],
+      [messageId, workspaceIds, [...FREE_MAIL_DOMAINS], actor.userId],
     );
     return Boolean(result.rows[0]?.eligible);
   });
 }
 
-async function candidates(db: Db, actor: UserActor) {
+async function candidates(db: Db, actor: UserActor, workspaceIds: string[]) {
   const result = await db.query<Candidate>(
     `select m.id, m.source_id, coalesce(m.thread_key, 'm:' || m.id::text) as tk, m.subject, m.from_email, m.from_name, m.body_text, m.snippet,
        coalesce(m.received_at, m.sent_at, m.created_at) as at
@@ -115,7 +122,7 @@ async function candidates(db: Db, actor: UserActor) {
        )
      order by at desc
      limit $6`,
-    [actor.userId, actor.workspaceId, LOOKBACK_HOURS, actor.email, [...FREE_MAIL_DOMAINS], CANDIDATES_PER_RUN],
+    [actor.userId, workspaceIds, LOOKBACK_HOURS, actor.email, [...FREE_MAIL_DOMAINS], CANDIDATES_PER_RUN],
   );
   return result.rows;
 }
@@ -172,10 +179,31 @@ type DeferralInput = {
   at: Date;
 };
 
-async function recordDeferral(actor: UserActor, input: DeferralInput, now = Date.now()) {
+async function deferralActor(actor: UserActor, messageId: string) {
+  const actors = await workspaceActors(actor);
+  const filed = (await filedWorkspaces(actor, actors, { messageIds: [messageId] })).filter((row) => row.direction === "inbound").map((row) => row.workspace_id);
+  if (filed.length === 0 || filed.includes(actor.workspaceId)) return actor;
+  return actors.find((item) => filed.includes(item.workspaceId)) ?? actor;
+}
+
+async function taskActor(actor: UserActor, id: string) {
+  if (!isUuid(id)) return actor;
+  const found = await withActor(actor, (db) =>
+    db.query<{ workspace_id: string }>(
+      "select t.workspace_id from crm.mail_reminders r join crm.tasks t on t.id = r.task_id where r.id = $1 and r.user_id = $2",
+      [id, actor.userId],
+    ),
+  );
+  const workspaceId = found.rows[0]?.workspace_id;
+  if (!workspaceId || workspaceId === actor.workspaceId) return actor;
+  return (await workspaceActors(actor)).find((item) => item.workspaceId === workspaceId) ?? actor;
+}
+
+async function recordDeferral(caller: UserActor, input: DeferralInput, now = Date.now()) {
   const email = input.fromEmail.trim().toLowerCase();
   const domain = email.split("@")[1] ?? "";
   const note = cleanNote(input.note);
+  const actor = await deferralActor(caller, input.messageId);
   return withActor(actor, async (db) => {
     await db.query("select pg_advisory_xact_lock(hashtext($1))", [`deferral:${actor.userId}:${input.sourceId}:${input.threadKey}`]);
     const existing = await db.query<{ id: string; deferred_message_id: string | null }>(
@@ -262,7 +290,8 @@ function emailDate(value: Date | string) {
 }
 
 export async function checkDeferrals(actor: UserActor, options: { deadline: number; fetchImpl?: typeof fetch; now?: number }) {
-  const list = await withActor(actor, (db) => candidates(db, actor));
+  const workspaceIds = await workspaceIdsOf(actor);
+  const list = await withActor(actor, (db) => candidates(db, actor, workspaceIds));
   if (list.length === 0) return 0;
   const withHint = new Set(list.filter((item) => deferralHint(`${item.subject ?? ""}\n${deferralText(item.body_text, item.snippet)}`)).map((item) => item.id));
   await markDeferralChecked(
@@ -349,11 +378,12 @@ async function openTask(db: Db, taskId: string | null) {
   return task && !task.archivedAt && !task.completedAt ? task : null;
 }
 
-export async function moveDeferral(actor: UserActor, id: string, atValue: string, now = Date.now()) {
+export async function moveDeferral(caller: UserActor, id: string, atValue: string, now = Date.now()) {
   const at = new Date(atValue);
   if (Number.isNaN(at.getTime()) || at.getTime() < now + 60_000 || at.getTime() > now + 366 * 86_400_000) {
     throw new CrmError("invalid_input", "Choose a time at least a minute from now and within a year.", 400, { field: "at" });
   }
+  const actor = await taskActor(caller, id);
   return withActor(actor, async (db) => {
     const row = await lockDeferral(db, actor, id);
     await db.query("update crm.mail_reminders set due_at = $2 where id = $1", [row.id, at.toISOString()]);
@@ -365,7 +395,8 @@ export async function moveDeferral(actor: UserActor, id: string, atValue: string
   });
 }
 
-export async function cancelDeferral(actor: UserActor, id: string) {
+export async function cancelDeferral(caller: UserActor, id: string) {
+  const actor = await taskActor(caller, id);
   return withActor(actor, async (db) => {
     const row = await lockDeferral(db, actor, id);
     await db.query("update crm.mail_reminders set state = 'done' where id = $1", [row.id]);

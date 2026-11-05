@@ -9,6 +9,7 @@ export const CALENDAR_SUBJECT =
 export const CALENDAR_SENDER = "^(calendar-notification|calendar|noreply-calendar|invites?)@";
 export const AUTOMATED_SENDER =
   "^(no-?reply|do-?not-?reply|donotreply|notifications?|notify|newsletters?|news|updates?|marketing|mailer|mailer-daemon|digest|alerts?|bounces?|automated|robot|billing|receipts?|invoices?|info|hello|team)([._+-][^@]*)?@";
+export const UNSUBSCRIBE_TEXT = "(unsubscribe|opt[ -]?out|manage (your )?(email |subscription )?preferences|email preferences)";
 export const AUTOMATED_DOMAIN = "@(e|em|email|mail|mailer|mg|news|newsletter|marketing|notifications?|alerts?|updates?|bounce|post)\\.";
 
 export function splitJoin(alias: string, userParam: string) {

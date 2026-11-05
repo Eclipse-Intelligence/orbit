@@ -8,7 +8,7 @@ import { moveMessages, type MessageMove } from "@/lib/mail/actions";
 import { sendMailDraft } from "@/lib/mail/compose";
 import { stripQuoted } from "@/lib/mail/format";
 import { ensureMicrosoftFolder, fetchMicrosoftHeaders, GraphMailError } from "@/lib/mail/microsoft";
-import { AUTOMATED_DOMAIN, AUTOMATED_SENDER, CALENDAR_SENDER, CALENDAR_SUBJECT, senderKey, splitJoin } from "@/lib/mail/split";
+import { AUTOMATED_DOMAIN, AUTOMATED_SENDER, CALENDAR_SENDER, CALENDAR_SUBJECT, senderKey, splitJoin, UNSUBSCRIBE_TEXT } from "@/lib/mail/split";
 import { mailSourceToken } from "@/lib/mail/sync";
 import { parseThreadKey } from "@/lib/mail/threads";
 import { chooseMethod, listUnsubscribeFrom, postOneClick, UnsubscribeRefused, type Lookup, type Mailto } from "@/lib/mail/unsubscribe";
@@ -33,7 +33,6 @@ export const EXISTING_CHOICES: ExistingMailChoice[] = ["archive", "trash", "leav
 export const BACKGROUND_MOVE_MS = 150_000;
 
 const PROTECTED_LIFECYCLES: Record<string, string> = { customer: "client", client: "client", prospect: "prospect", partner: "partner" };
-const UNSUBSCRIBE_TEXT = "(unsubscribe|opt[ -]?out|manage (your )?(email |subscription )?preferences|email preferences)";
 const MOVE_LIMIT = 2_000;
 const MOVE_CHUNK = 40;
 const INLINE_MOVE_MS = 25_000;

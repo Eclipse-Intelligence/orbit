@@ -17,7 +17,7 @@ import { runWorkflowTick } from "@/lib/workflows/engine";
 import { countApprovals, listNotifications } from "@/lib/workflows/store";
 import { listAttention } from "@/lib/crm/relationships";
 import { countOpenTasks } from "@/lib/crm/tasks";
-import { captureStatus } from "@/lib/crm/capture";
+import { captureStatuses } from "@/lib/crm/capture";
 import { unreadBrief } from "@/lib/learning/nightly";
 import { syncTeamsTranscripts } from "@/lib/crm/teams-transcripts";
 import { processDueMail } from "@/lib/mail/due";
@@ -99,7 +99,7 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
       }
     });
   }
-  const [companyCount, openActionCount, attention, boards, notifications, approvals, mailUnread, capture, brief] = await Promise.all([
+  const [companyCount, openActionCount, attention, boards, notifications, approvals, mailUnread, captures, brief] = await Promise.all([
     countCompanies(user),
     countOpenTasks(user, { mine: true }),
     listAttention(user),
@@ -107,9 +107,12 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
     listNotifications(user, 10),
     countApprovals(user),
     mailUnreadCount(user).catch(() => 0),
-    captureStatus(user).catch(() => null),
+    captureStatuses(user).catch(() => null),
     unreadBrief(user).catch(() => null),
   ]);
+
+  const capture = captures?.get(user.workspaceId) ?? null;
+  const choices = workspaces.map((item) => ({ ...item, waiting: item.id !== user.workspaceId && (captures?.get(item.id)?.fresh ?? 0) > 0 }));
 
   return (
     <ShortcutsProvider>
@@ -127,7 +130,7 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
               id: user.workspaceId,
               name: user.workspaceName,
               viewerName: user.fullName || "",
-              choices: workspaces,
+              choices,
             }}
           />
           <CrmChrome

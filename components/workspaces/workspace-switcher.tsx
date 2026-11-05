@@ -38,6 +38,7 @@ export default function WorkspaceSwitcher({
   const [error, setError] = useState<string | null>(null);
   const canCreate = workspaces.some((item) => item.role === "owner");
   const current = workspaces.find((item) => item.id === currentId);
+  const waiting = workspaces.filter((item) => item.waiting && item.id !== currentId);
 
   async function choose(id: string) {
     if (id === currentId || pending) return;
@@ -59,7 +60,7 @@ export default function WorkspaceSwitcher({
           <Button
             variant="ghost"
             size="none"
-            aria-label={`Workspace: ${currentName}. Switch workspace`}
+            aria-label={`Workspace: ${currentName}. Switch workspace${waiting.length ? `. New in Capture in ${waiting.map((item) => item.name).join(" and ")}` : ""}`}
             disabled={pending}
             className="text-foreground hover:text-foreground -m-1 min-w-0 flex-1 justify-start gap-2 rounded-lg p-1 text-left font-normal active:scale-100 data-[state=open]:bg-white/6"
           >
@@ -69,6 +70,7 @@ export default function WorkspaceSwitcher({
               <span className="caption-style text-subtle flex min-w-0 items-center gap-1">
                 <span className="truncate">{currentName}</span>
                 <ChevronDownIcon aria-hidden className="size-3 shrink-0" />
+                {waiting.length > 0 && <span aria-hidden className="bg-primary size-1.5 shrink-0 rounded-full" />}
               </span>
             </span>
           </Button>
@@ -86,6 +88,11 @@ export default function WorkspaceSwitcher({
               >
                 <WorkspaceTile id={item.id} name={item.name} />
                 <span className="min-w-0 flex-1 truncate">{item.name}</span>
+                {item.waiting && !selected && (
+                  <span className="bg-primary size-1.5 shrink-0 rounded-full">
+                    <span className="sr-only">New in Capture</span>
+                  </span>
+                )}
                 {selected && (
                   <>
                     <CheckIcon aria-hidden className="text-foreground size-3.5 shrink-0" />
