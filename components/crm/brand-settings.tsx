@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import Field from "@/components/_ui/field";
@@ -11,6 +11,7 @@ import { SettingsCard } from "@/components/crm/settings-ui";
 import { draftBrandAction, saveBrandProfileAction, setEclipseToolsAction } from "@/app/(crm)/settings/brand/actions";
 import { BRAND_LIMITS, type BrandProfile, type BrandProfileInput } from "@/lib/crm/brand-rules";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
+import { reloadIfStaleDeploy } from "@/lib/stale-deploy";
 import { cn } from "@/lib/utils";
 import ChevronRightIcon from "@/public/assets/images/_common/chevron-right.svg";
 
@@ -58,8 +59,13 @@ export default function BrandSettings({
   const [eclipse, setEclipse] = useState(brand.eclipseTools);
   const [eclipseBusy, setEclipseBusy] = useState(false);
   const [eclipseMessage, setEclipseMessage] = useState<{ text: string; error: boolean } | null>(null);
+  const latestValues = useRef(values);
   const dirty = !same(values, saved);
   const busy = pending !== null;
+
+  useEffect(() => {
+    latestValues.current = values;
+  }, [values]);
 
   function update(key: Key, value: string) {
     setValues((current) => ({ ...current, [key]: value }));
@@ -79,17 +85,22 @@ export default function BrandSettings({
     setError(null);
     setStatus(null);
     setReplace(null);
-    const result = await saveBrandProfileAction(values);
-    setPending(null);
-    if (result.error || !result.saved) {
-      fail(result.error ?? "Could not save the brand profile.", result.field);
-      return;
+    try {
+      const result = await saveBrandProfileAction(values);
+      if (result.error || !result.saved) {
+        fail(result.error ?? "Could not save the brand profile.", result.field);
+        return;
+      }
+      const next = profileOf(result.saved);
+      setSaved(next);
+      setValues(next);
+      setStatus("Saved. The assistant uses this from your next message.");
+      router.refresh();
+    } catch (problem) {
+      if (!reloadIfStaleDeploy(problem)) setError("That didn't save. Try again.");
+    } finally {
+      setPending(null);
     }
-    const next = profileOf(result.saved);
-    setSaved(next);
-    setValues(next);
-    setStatus("Saved. The assistant uses this from your next message.");
-    router.refresh();
   }
 
   async function draft() {
@@ -97,33 +108,44 @@ export default function BrandSettings({
     setError(null);
     setReplace(null);
     setStatus("Reading the website. This takes up to a minute.");
-    const result = await draftBrandAction({ website: values.website });
-    setPending(null);
-    if (result.error || !result.draft) {
+    try {
+      const result = await draftBrandAction({ website: values.website });
+      if (result.error || !result.draft) {
+        setStatus(null);
+        fail(result.error ?? "Could not draft from the website.", result.field);
+        return;
+      }
+      const { draft: drafted, notes } = result.draft;
+      const keys = Object.keys(LABELS) as (keyof Drafted)[];
+      const latest = latestValues.current;
+      const conflicts: Drafted = {};
+      for (const key of keys) {
+        const text = drafted[key].trim();
+        if (text && latest[key].trim() && latest[key].trim() !== text) conflicts[key] = text;
+      }
+      setValues((current) => {
+        const filled: Drafted = {};
+        for (const key of keys) {
+          const text = drafted[key].trim();
+          if (text && !current[key].trim()) filled[key] = text;
+        }
+        return { ...current, ...filled };
+      });
+      const differing = keys.filter((key) => conflicts[key]);
+      const extra = notes.length ? ` ${notes.join(" ")}` : "";
+      if (differing.length) {
+        setReplace(conflicts);
+        setStatus(
+          `Drafted. Empty fields are filled in. The draft is different for ${differing.map((key) => LABELS[key]).join(" and ")}, which you've already written.${extra}`,
+        );
+      } else {
+        setStatus(`Drafted. Check it, change anything that isn't right, then save.${extra}`);
+      }
+    } catch (problem) {
       setStatus(null);
-      fail(result.error ?? "Could not draft from the website.", result.field);
-      return;
-    }
-    const { draft: drafted, notes } = result.draft;
-    const keys = Object.keys(LABELS) as (keyof Drafted)[];
-    const conflicts: Drafted = {};
-    const filled: Drafted = {};
-    for (const key of keys) {
-      const text = drafted[key].trim();
-      if (!text) continue;
-      if (!values[key].trim()) filled[key] = text;
-      else if (values[key].trim() !== text) conflicts[key] = text;
-    }
-    setValues((current) => ({ ...current, ...filled }));
-    const differing = keys.filter((key) => conflicts[key]);
-    const extra = notes.length ? ` ${notes.join(" ")}` : "";
-    if (differing.length) {
-      setReplace(conflicts);
-      setStatus(
-        `Drafted. Empty fields are filled in. The draft is different for ${differing.map((key) => LABELS[key]).join(" and ")}, which you've already written.${extra}`,
-      );
-    } else {
-      setStatus(`Drafted. Check it, change anything that isn't right, then save.${extra}`);
+      if (!reloadIfStaleDeploy(problem)) setError("The draft didn't come back. Try again.");
+    } finally {
+      setPending(null);
     }
   }
 
@@ -137,16 +159,23 @@ export default function BrandSettings({
   async function toggleEclipse(next: boolean) {
     setEclipseBusy(true);
     setEclipseMessage(null);
-    const result = await setEclipseToolsAction(next);
-    setEclipseBusy(false);
-    if (result.error || !result.saved) {
-      setEclipseMessage({ text: result.error ?? "Could not change Eclipse tools.", error: true });
-      return;
+    try {
+      const result = await setEclipseToolsAction(next);
+      if (result.error || !result.saved) {
+        setEclipseMessage({ text: result.error ?? "Could not change Eclipse tools.", error: true });
+        return;
+      }
+      setEclipse(result.saved.eclipseTools);
+      setEclipseMessage({ text: result.saved.eclipseTools ? "On. The assistant can use Eclipse from your next message." : "Off. The assistant won't use Eclipse here.", error: false });
+      router.refresh();
+    } catch (problem) {
+      if (!reloadIfStaleDeploy(problem)) setEclipseMessage({ text: "That didn't change. Try again.", error: true });
+    } finally {
+      setEclipseBusy(false);
     }
-    setEclipse(result.saved.eclipseTools);
-    setEclipseMessage({ text: result.saved.eclipseTools ? "On. The assistant can use Eclipse from your next message." : "Off. The assistant won't use Eclipse here.", error: false });
-    router.refresh();
   }
+
+  const playbookNamesEclipse = !eclipse && /\beclipse_[a-z]/i.test(`${brand.playbook}\n${brand.outreachBrief}\n${brand.whatYouSell}`);
 
   const rows = [
     {
@@ -220,7 +249,7 @@ export default function BrandSettings({
               rows={3}
               maxLength={BRAND_LIMITS.whatYouSell}
               value={values.whatYouSell}
-              readOnly={!canEdit}
+              readOnly={!canEdit || pending === "draft"}
               aria-invalid={errors.whatYouSell ? true : undefined}
               aria-describedby={errors.whatYouSell ? "brand-sell-error" : "brand-sell-hint"}
               onChange={(event) => update("whatYouSell", event.target.value)}
@@ -238,7 +267,7 @@ export default function BrandSettings({
               rows={3}
               maxLength={BRAND_LIMITS.whoItsFor}
               value={values.whoItsFor}
-              readOnly={!canEdit}
+              readOnly={!canEdit || pending === "draft"}
               aria-invalid={errors.whoItsFor ? true : undefined}
               aria-describedby={errors.whoItsFor ? "brand-who-error" : "brand-who-hint"}
               onChange={(event) => update("whoItsFor", event.target.value)}
@@ -251,7 +280,7 @@ export default function BrandSettings({
               rows={2}
               maxLength={BRAND_LIMITS.tone}
               value={values.tone}
-              readOnly={!canEdit}
+              readOnly={!canEdit || pending === "draft"}
               aria-invalid={errors.tone ? true : undefined}
               aria-describedby={errors.tone ? "brand-tone-error" : "brand-tone-hint"}
               onChange={(event) => update("tone", event.target.value)}
@@ -318,6 +347,9 @@ export default function BrandSettings({
             {eclipse
               ? "Lets the assistant read Eclipse articles, docs and product facts, and work in the Eclipse app. On in this workspace only."
               : "Eclipse articles, docs and product facts. Off here, so the assistant never pitches Eclipse in this workspace."}
+            {playbookNamesEclipse && (
+              <span className="mt-1 block">The playbook or brand profile mentions eclipse_ tools, which are off here. Switch them on, or edit the playbook so it doesn&apos;t rely on them.</span>
+            )}
             {eclipseMessage && (
               <span role={eclipseMessage.error ? "alert" : "status"} className={cn("mt-1 block", eclipseMessage.error && "text-danger")}>
                 {eclipseMessage.text}

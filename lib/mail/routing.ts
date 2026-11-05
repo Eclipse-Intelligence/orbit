@@ -113,17 +113,36 @@ export function chosenWorkspaces(actors: UserActor[], ids: unknown) {
   return chosen;
 }
 
+export async function teamDomainsInDb(db: Db, actor: UserActor, workspaceIds: string[]) {
+  const result = await db.query<{ domain: string }>(
+    `select distinct split_part(x.email, '@', 2) as domain
+     from (
+       select lower(email) as email from crm.mail_sources where user_id = $1
+       union select lower(email) from crm.send_identities where user_id = $1
+       union select lower($2::text)
+       union select lower(p.email) from crm.workspace_members wm join crm.profiles p on p.id = wm.user_id where wm.workspace_id = any($3::uuid[])
+     ) x
+     where x.email like '%@%'`,
+    [actor.userId, actor.email, workspaceIds],
+  );
+  return new Set(result.rows.map((row) => row.domain).filter((domain) => domain && !isFreeMailDomain(domain)));
+}
+
 export async function setDomainRule(actor: UserActor, domainValue: string, workspaceIds: unknown): Promise<DomainRule> {
   const domain = ruleDomain(domainValue);
   const actors = await workspaceActors(actor);
   const chosen = chosenWorkspaces(actors, workspaceIds);
-  await withActor(actor, (db) =>
-    db.query(
+  await withActor(actor, async (db) => {
+    const team = await teamDomainsInDb(db, actor, actors.map((item) => item.workspaceId));
+    if (team.has(domain)) {
+      throw new CrmError("invalid_input", `@${domain} is your own or a colleague's domain, so it can't have a rule. File each email on its own.`, 400, { field: "domain" });
+    }
+    await db.query(
       `insert into crm.mail_domain_rules (workspace_id, user_id, domain, workspace_ids) values ($1, $2, $3, $4::uuid[])
        on conflict (user_id, domain) do update set workspace_ids = excluded.workspace_ids, updated_at = now()`,
       [actor.workspaceId, actor.userId, domain, chosen],
-    ),
-  );
+    );
+  });
   return { domain, workspaceIds: chosen };
 }
 
@@ -176,7 +195,7 @@ export function routedSql(filter: string) {
     select t.*, c.workspace_id, c.id, c.normalized_email, c.company_id
     from targeted t
     join crm.contacts c on c.id = t.route_contact and c.archived_at is null and c.workspace_id = any($3::uuid[])
-    where t.direction = 'inbound'
+    where t.direction = 'inbound' and c.workspace_id = any(t.allowed)
       and not exists (
         select 1 from crm.contacts c2 where c2.workspace_id = c.workspace_id and c2.archived_at is null and c2.normalized_email = t.address
       )
@@ -374,6 +393,44 @@ export function filingDomain(address: string | null, own: Set<string>) {
   return domain;
 }
 
+export type FilingBasis = "chosen" | "rule" | "matched" | "capture";
+
+export async function effectiveFilingInDb(
+  db: Db,
+  actor: UserActor,
+  actors: UserActor[],
+  sourceId: string,
+  key: string,
+  input: { latestId: string; counterpart: string | null; own: Set<string> },
+) {
+  const workspaceIds = actors.map((item) => item.workspaceId);
+  const domain = filingDomain(input.counterpart, input.own);
+  const route = await threadRoute(db, actor, sourceId, key);
+  const ruleRow = domain
+    ? (await db.query<{ workspace_ids: string[] }>("select workspace_ids from crm.mail_domain_rules where user_id = $1 and domain = $2", [actor.userId, domain])).rows[0]
+    : undefined;
+  const rule = ruleRow ? ruleRow.workspace_ids.filter((id) => workspaceIds.includes(id)) : null;
+  const chosen = route?.filed_in?.filter((id) => workspaceIds.includes(id)) ?? [];
+  let basis: FilingBasis = chosen.length ? "chosen" : "rule";
+  let filedIn = chosen.length ? chosen : rule?.length ? rule : [];
+  if (filedIn.length === 0) {
+    basis = "matched";
+    const matched = await db.query<{ workspace_id: string }>(
+      `${routedSql("m.source_id = $6 and coalesce(m.thread_key, 'm:' || m.id::text) = $7")}
+       select distinct x.workspace_id from matched x`,
+      routedParams(actor, workspaceIds, [sourceId, key]),
+    );
+    filedIn = matched.rows.map((row) => row.workspace_id);
+  }
+  if (filedIn.length === 0) {
+    basis = "capture";
+    const homes = await addressHomesInDb(db, actor);
+    const capture = await captureWorkspaces(db, actor, homes, workspaceIds, [input.latestId]);
+    filedIn = [capture.get(input.latestId) ?? actor.workspaceId];
+  }
+  return { filedIn: workspaceIds.filter((id) => filedIn.includes(id)), basis, chosen: chosen.length > 0, domain, rule: rule?.length ? rule : null };
+}
+
 export async function threadFilingInDb(
   db: Db,
   actor: UserActor,
@@ -383,49 +440,43 @@ export async function threadFilingInDb(
   input: { latestId: string; counterpart: string | null; own: Set<string> },
 ): Promise<ThreadFiling | null> {
   if (actors.length < 2) return null;
-  const workspaceIds = actors.map((item) => item.workspaceId);
-  const domain = filingDomain(input.counterpart, input.own);
-  const route = await threadRoute(db, actor, sourceId, key);
-  const ruleRow = domain
-    ? (await db.query<{ workspace_ids: string[] }>("select workspace_ids from crm.mail_domain_rules where user_id = $1 and domain = $2", [actor.userId, domain])).rows[0]
-    : undefined;
-  const rule = ruleRow ? ruleRow.workspace_ids.filter((id) => workspaceIds.includes(id)) : null;
-  const chosen = route?.filed_in?.filter((id) => workspaceIds.includes(id)) ?? [];
-  let filedIn = chosen.length ? chosen : rule?.length ? rule : [];
-  if (filedIn.length === 0) {
-    const matched = await db.query<{ workspace_id: string }>(
-      `${routedSql("m.source_id = $6 and coalesce(m.thread_key, 'm:' || m.id::text) = $7")}
-       select distinct x.workspace_id from matched x`,
-      routedParams(actor, workspaceIds, [sourceId, key]),
-    );
-    filedIn = matched.rows.map((row) => row.workspace_id);
-  }
-  if (filedIn.length === 0) {
-    const homes = await addressHomesInDb(db, actor);
-    const capture = await captureWorkspaces(db, actor, homes, workspaceIds, [input.latestId]);
-    filedIn = [capture.get(input.latestId) ?? actor.workspaceId];
-  }
+  const effective = await effectiveFilingInDb(db, actor, actors, sourceId, key, input);
   return {
     active: { id: actor.workspaceId, name: actor.workspaceName },
     workspaces: refs(actors),
-    filedIn: workspaceIds.filter((id) => filedIn.includes(id)),
-    chosen: chosen.length > 0,
-    domain,
-    rule: rule?.length ? rule : null,
+    filedIn: effective.filedIn,
+    chosen: effective.chosen,
+    domain: effective.domain,
+    rule: effective.rule,
   };
 }
 
-export async function routedAway(db: Db, userId: string, workspaceId: string, conversationId: string | null | undefined, fromEmail: string | null | undefined) {
+export async function routedAway(
+  db: Db,
+  userId: string,
+  workspaceId: string,
+  conversationId: string | null | undefined,
+  fromEmail: string | null | undefined,
+  connectionId?: string | null,
+) {
   const result = await db.query<{ away: boolean | null }>(
-    `select coalesce(
-       (select not ($2::uuid = any(rt.filed_in)) from crm.mail_thread_routes rt
-        where rt.user_id = $1 and rt.thread_key = $3 and rt.filed_in is not null
-        order by rt.updated_at desc limit 1),
+    `with source as (
+       select s.id from crm.mail_sources s where s.user_id = $1 and s.connection_id = $5::uuid
+     ),
+     route as (
+       select rt.filed_in from crm.mail_thread_routes rt
+       where rt.user_id = $1 and rt.thread_key = $3 and rt.filed_in is not null
+         and (not exists (select 1 from source) or rt.source_id in (select id from source))
+       order by rt.updated_at desc
+       limit 1
+     )
+     select coalesce(
+       (select not ($2::uuid = any(r.filed_in)) from route r),
        (select not ($2::uuid = any(rl.workspace_ids)) from crm.mail_domain_rules rl
         where rl.user_id = $1 and rl.domain = split_part(lower($4::text), '@', 2)),
        false
      ) as away`,
-    [userId, workspaceId, conversationId ?? "", fromEmail ?? ""],
+    [userId, workspaceId, conversationId ?? "", fromEmail ?? "", connectionId ?? null],
   );
   return Boolean(result.rows[0]?.away);
 }

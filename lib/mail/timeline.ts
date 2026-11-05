@@ -1,6 +1,7 @@
 import { createActivityInDb } from "@/lib/crm/activities";
 import { isRecent } from "@/lib/crm/communications";
 import { withActor } from "@/lib/crm/context";
+import { recordAudit } from "@/lib/crm/mutate";
 import { hasScope } from "@/lib/crm/scopes";
 import { scheduleTaskDue, withDueNote } from "@/lib/crm/task-due";
 import { createTaskInDb } from "@/lib/crm/tasks";
@@ -29,6 +30,7 @@ type Candidate = {
   address: string;
   direction: "inbound" | "outbound";
   attachments: boolean;
+  relink_id: string | null;
 };
 
 type RuledSender = { message_id: string; address: string; from_name: string | null; workspace_id: string };
@@ -75,23 +77,32 @@ async function ruledSenders(db: Db, actor: UserActor, workspaceIds: string[], fi
   return result.rows;
 }
 
+const SAME_MESSAGE = `(a.metadata->>'mailMessageId' = x.id::text or (x.internet_message_id is not null and a.metadata->>'internetMessageId' = x.internet_message_id))`;
+
 async function candidates(db: Db, actor: UserActor, workspaceIds: string[], filter: { sql: string; params: unknown[] }, limit: number) {
   const limitParam = `$${6 + filter.params.length}`;
   const result = await db.query<Candidate>(
     `${routedSql(filter.sql)}
      select distinct on (x.id, x.workspace_id, coalesce(x.contact_id, x.company_id))
        x.id as message_id, x.internet_message_id, x.subject, x.snippet, x.body_text, x.at, x.account, x.folder_role,
-       x.workspace_id, x.contact_id, x.company_id, x.address, x.direction, x.has_attachments as attachments
+       x.workspace_id, x.contact_id, x.company_id, x.address, x.direction, x.has_attachments as attachments,
+       case when x.contact_id is not null then (
+         select a.id from crm.activities a
+         left join crm.contacts ac on ac.id = a.contact_id
+         where a.workspace_id = x.workspace_id and a.type = 'email' and ${SAME_MESSAGE}
+           and (a.contact_id is null or (ac.archived_at is not null and ac.normalized_email = x.contact_email))
+         order by a.created_at
+         limit 1
+       ) end as relink_id
      from matched x
      where not exists (
        select 1 from crm.activities a
        where a.workspace_id = x.workspace_id and a.type = 'email'
-         and (a.contact_id = x.contact_id or (x.contact_id is null and a.contact_id is null and a.company_id = x.company_id))
          and (
-           a.metadata->>'mailMessageId' = x.id::text
-           or (x.internet_message_id is not null and a.metadata->>'internetMessageId' = x.internet_message_id)
+           (${SAME_MESSAGE} and (x.contact_id is null or a.contact_id = x.contact_id))
            or (
-             a.metadata->>'mailMessageId' is null and a.metadata->>'internetMessageId' is null
+             (a.contact_id = x.contact_id or (x.contact_id is null and a.contact_id is null and a.company_id = x.company_id))
+             and a.metadata->>'mailMessageId' is null and a.metadata->>'internetMessageId' is null
              and (a.metadata->>'direction' = 'outbound') = (x.direction = 'outbound')
              and a.title = left(coalesce(nullif(trim(x.subject), ''), '(no subject)'), 200)
              and abs(extract(epoch from a.occurred_at - x.at)) < 180
@@ -103,6 +114,30 @@ async function candidates(db: Db, actor: UserActor, workspaceIds: string[], filt
     routedParams(actor, workspaceIds, [...filter.params, limit]),
   );
   return result.rows;
+}
+
+async function relinkActivity(db: Db, actor: UserActor, activityId: string, row: Candidate) {
+  const before = await db.query<{ contact_id: string | null; company_id: string | null }>(
+    "select contact_id, company_id from crm.activities where id = $1 and workspace_id = $2 for update",
+    [activityId, actor.workspaceId],
+  );
+  const current = before.rows[0];
+  if (!current) return false;
+  const companyId = current.company_id ?? row.company_id;
+  const updated = await db.query("update crm.activities set contact_id = $3, company_id = $4 where id = $1 and workspace_id = $2", [
+    activityId,
+    actor.workspaceId,
+    row.contact_id,
+    companyId,
+  ]);
+  if (!updated.rowCount) return false;
+  const fields = ["contactId", ...(companyId !== current.company_id ? ["companyId"] : [])];
+  await recordAudit(db, actor, "activity.updated", "activity", activityId, { operation: "relink_mail", source: "microsoft" }, {
+    fields,
+    before: { contactId: current.contact_id, ...(fields.includes("companyId") ? { companyId: current.company_id } : {}) },
+    after: { contactId: row.contact_id, ...(fields.includes("companyId") ? { companyId } : {}) },
+  });
+  return true;
 }
 
 async function openTasks(db: Db, companyId: string) {
@@ -179,10 +214,20 @@ export async function fileMailOnTimeline(
   const rows = await withActor(actor, (db) => candidates(db, actor, workspaceIds, filter, options.limit ?? BATCH));
   let filed = 0;
   const followUps = new Map<string, string[]>();
+  const relinked = new Set<string>();
   for (const row of rows.sort((left, right) => new Date(left.at).getTime() - new Date(right.at).getTime())) {
     const target = byWorkspace.get(row.workspace_id);
     if (!target) continue;
     const at = new Date(row.at);
+    if (row.relink_id && !relinked.has(row.relink_id)) {
+      relinked.add(row.relink_id);
+      try {
+        await withActor(target, (db) => relinkActivity(db, target, row.relink_id!, row));
+      } catch (error) {
+        console.error("Moving an email onto its contact failed", error);
+      }
+      continue;
+    }
     try {
       const taskId = await withActor(target, async (db) => {
         await createActivityInDb(

@@ -22,13 +22,13 @@ export async function switchWorkspaceAction(id: string): Promise<{ error?: strin
   return {};
 }
 
-export async function createWorkspaceAction(input: { name: string; brandStart: string }): Promise<{ id?: string; error?: string }> {
+export async function createWorkspaceAction(input: { name: string; brandStart: string }): Promise<{ id?: string; warning?: string; error?: string }> {
   const user = await getUserActor();
   if (!user) redirect("/login");
   try {
     const created = await createWorkspace(user, input);
     await selectWorkspace(created.id);
-    return { id: created.id };
+    return created.warning ? { id: created.id, warning: created.warning } : { id: created.id };
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Couldn't create the workspace." };
   }

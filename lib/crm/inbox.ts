@@ -770,7 +770,7 @@ async function attachUnmatched(
     });
     const match = await matchParties(db, actor.workspaceId, parties);
     if (!match.contactId && !match.companyId) continue;
-    if (await routedAway(db, actor.userId, actor.workspaceId, row.conversation_id, row.from_email)) continue;
+    if (await routedAway(db, actor.userId, actor.workspaceId, row.conversation_id, row.from_email, mailbox.id)) continue;
     const activityId = await fileActivity(
       db,
       actor,
@@ -829,7 +829,7 @@ async function fileMessages(
       ccEmails: message.ccEmails,
     });
     const found = await matchParties(db, actor.workspaceId, parties);
-    const away = (found.contactId || found.companyId) && (await routedAway(db, actor.userId, actor.workspaceId, message.conversationId, message.fromEmail));
+    const away = (found.contactId || found.companyId) && (await routedAway(db, actor.userId, actor.workspaceId, message.conversationId, message.fromEmail, mailbox.id));
     const match = away ? { contactId: null, contactName: null, companyId: null, companyName: null } : found;
     let activityId: string | null = null;
     const internetMessageId = clip(message.internetMessageId, 400);

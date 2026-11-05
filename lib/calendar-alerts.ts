@@ -34,7 +34,7 @@ export async function calendarAlerts(actor: UserActor, options: { now?: number; 
   const now = options.now ?? Date.now();
   const { minutes, events } = await withActor(actor, async (db) => {
     const pref = await db.query<{ notify_calendar_minutes: number | null }>(
-      "select notify_calendar_minutes from crm.mail_preferences where user_id = $1",
+      "select notify_calendar_minutes from crm.mail_preferences where user_id = $1 order by updated_at desc limit 1",
       [actor.userId],
     );
     const minutes = pref.rows.length ? pref.rows[0].notify_calendar_minutes : 10;

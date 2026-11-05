@@ -244,7 +244,7 @@ export default function TeamSettings({
         open={removing !== null}
         onOpenChange={(open) => !open && setRemoving(null)}
         title={`Remove ${removing?.name ?? "this member"}?`}
-        description="Their companies, contacts, deals and tasks move to you, and their email and calendar connections are disconnected. Everything they logged stays."
+        description="Their companies, contacts, deals and tasks move to you. If they're in another of your workspaces, their email, calendar and other personal connections move there; otherwise they're disconnected. Everything they logged stays."
         confirmLabel="Remove from workspace"
         onConfirm={() => {
           const member = removing;

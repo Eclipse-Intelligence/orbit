@@ -4,7 +4,9 @@ import { scopesForRole } from "@/lib/crm/scopes";
 import type { UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
 
-export type CreatedWorkspace = { id: string; name: string; brandSourceId: string | null };
+export type CreatedWorkspace = { id: string; name: string; brandSourceId: string | null; warning: string | null };
+
+export const BRAND_COPY_FAILED = "The workspace was created but its brand profile couldn't be copied. Fill it in under Settings, Brand.";
 
 export function canCreateWorkspaces(roles: string[]) {
   return roles.includes("owner");
@@ -28,10 +30,16 @@ export async function createWorkspace(
       brandSourceId,
     ]);
     const id = result.rows[0].id;
+    let warning: string | null = null;
     if (brandSourceId) {
-      await copyBrandProfile(actor, brandSourceId, id).catch((error) => console.error("Copying the brand profile failed", error instanceof Error ? error.message : "unknown"));
+      try {
+        await copyBrandProfile(actor, brandSourceId, id);
+      } catch (error) {
+        console.error("Copying the brand profile failed", error instanceof Error ? error.message : "unknown");
+        warning = BRAND_COPY_FAILED;
+      }
     }
-    return { id, name, brandSourceId };
+    return { id, name, brandSourceId, warning };
   } catch (error) {
     if (isPgError(error) && (error.code === "42501" || error.code === "22023")) {
       throw new CrmError(error.code === "42501" ? "forbidden" : "invalid_input", error.message, error.code === "42501" ? 403 : 400);

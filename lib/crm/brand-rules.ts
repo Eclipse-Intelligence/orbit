@@ -26,6 +26,7 @@ export type BrandProfile = BrandProfileInput &
     eclipseTools: boolean;
     playbookUpdatedAt: string | null;
     updatedAt: string | null;
+    unread?: boolean;
   };
 
 export type BrandDraft = {

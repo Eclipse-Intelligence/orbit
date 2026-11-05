@@ -12,7 +12,7 @@ The full Eclipse product documentation is at https://docs.geteclipse.co. When yo
 
 `;
 
-export type PromptBrand = Pick<BrandProfile, "workspaceName" | "website" | "whatYouSell" | "whoItsFor" | "tone" | "eclipseTools">;
+export type PromptBrand = Pick<BrandProfile, "workspaceName" | "website" | "whatYouSell" | "whoItsFor" | "tone" | "eclipseTools" | "unread">;
 
 export const UNBRANDED: PromptBrand = { workspaceName: "", website: "", whatYouSell: "", whoItsFor: "", tone: "", eclipseTools: false };
 
@@ -27,7 +27,9 @@ function aboutSection(brand: PromptBrand, name: string) {
   ].filter(Boolean);
   const unknown = brand.whatYouSell.trim()
     ? ""
-    : `${name === "the business" ? "The business" : name} hasn't said what it sells yet (Settings, Brand), so you don't know its offer. Never claim a product, an offer or a client result on its behalf. When writing for it needs that, ask the user, and suggest filling in the brand profile once.`;
+    : brand.unread
+      ? `Orbit couldn't read ${name}'s brand profile just now. Never claim a product, an offer or a client result on its behalf without asking the user.`
+      : `${name === "the business" ? "The business" : name} hasn't said what it sells yet (Settings, Brand), so you don't know its offer. Never claim a product, an offer or a client result on its behalf. When writing for it needs that, ask the user, and suggest filling in the brand profile once.`;
   return [...lines, unknown].filter(Boolean).join("\n\n");
 }
 

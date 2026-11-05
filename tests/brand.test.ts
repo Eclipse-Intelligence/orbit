@@ -6,11 +6,12 @@ import { COLD_EMAIL_PLAYBOOK, ECLIPSE_OUTREACH_BRIEF, playbookFor } from "@/lib/
 import { ECLIPSE_CONTEXT, ECLIPSE_IDEAL_CUSTOMER, ECLIPSE_WEBSITE } from "@/lib/assistant/eclipse";
 import { systemPrompt, UNBRANDED } from "@/lib/assistant/prompt";
 import { runTool, toolDefinitions } from "@/lib/assistant/tools";
-import { copyBrandProfile, draftBrandFromWebsite, getBrand, saveBrandPlaybook, saveBrandProfile, setEclipseTools } from "@/lib/crm/brand";
+import { brandOrEmpty, copyBrandProfile, draftBrandFromWebsite, getBrand, saveBrandPlaybook, saveBrandProfile, setEclipseTools } from "@/lib/crm/brand";
 import { CrmError } from "@/lib/crm/errors";
 import { createProof } from "@/lib/crm/proof";
 import { scopesForRole } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
+import { BRAND_COPY_FAILED, createWorkspace } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { getEnrichmentSettings, icpHashOf } from "@/lib/enrichment/settings";
 import { createUser, queryAsUser, resetDatabase } from "./helpers";
@@ -301,5 +302,42 @@ describe("drafting from the website", () => {
     assert.equal(calls.some((call) => call.url === "https://elsewhere.test/"), false);
     assert.deepEqual(await getBrand(ridgeon), before);
     await assert.rejects(draftBrandFromWebsite(ridgeon, { website: "" }), /Add the website first/);
+  });
+});
+
+describe("when the brand profile can't be copied or read", () => {
+  it("creates the workspace and warns when the brand profile couldn't be copied", async () => {
+    const pool = getAdminPool();
+    await pool.query(`
+      create or replace function public.refuse_brand_copy() returns trigger language plpgsql as $$
+      begin
+        if current_user = 'authenticated' then raise exception 'copy refused'; end if;
+        return new;
+      end $$;
+      drop trigger if exists refuse_brand_copy on crm.workspace_brands;
+      create trigger refuse_brand_copy before insert or update on crm.workspace_brands for each row execute function public.refuse_brand_copy();
+    `);
+    try {
+      const created = await createWorkspace(eclipse, { name: "Broken copy", brandStart: "copy" });
+      assert.equal(created.warning, BRAND_COPY_FAILED);
+      const stored = await pool.query("select 1 from crm.workspace_members where workspace_id = $1 and user_id = $2", [created.id, eclipse.userId]);
+      assert.equal(stored.rowCount, 1);
+    } finally {
+      await pool.query("drop trigger if exists refuse_brand_copy on crm.workspace_brands; drop function if exists public.refuse_brand_copy()");
+    }
+    const fine = await createWorkspace(eclipse, { name: "Fine copy", brandStart: "copy" });
+    assert.equal(fine.warning, null);
+  });
+
+  it("keeps Eclipse tools off and doesn't claim the business hasn't said what it sells when the profile can't be read", async () => {
+    const broken: UserActor = { ...eclipse, workspaceId: "not-a-workspace" };
+    const brand = await brandOrEmpty(broken);
+    assert.equal(brand.unread, true);
+    assert.equal(brand.eclipseTools, false);
+    const prompt = systemPrompt(broken, { webSearch: false, brand });
+    assert.doesNotMatch(prompt, /hasn't said what it sells/);
+    assert.match(prompt, /couldn't read Eclipse's brand profile/);
+    assert.doesNotMatch(prompt, /eclipse_articles/);
+    assert.match(systemPrompt(eclipse, { webSearch: false, brand: { ...UNBRANDED, workspaceName: "Eclipse" } }), /hasn't said what it sells/);
   });
 });

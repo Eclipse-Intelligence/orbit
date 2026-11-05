@@ -8,6 +8,7 @@ import { Input } from "@/components/_ui/input";
 import { Radio } from "@/components/_ui/radio";
 import WorkspaceTile from "@/components/workspaces/workspace-tile";
 import { createWorkspaceAction } from "@/app/(crm)/workspaces";
+import { reloadIfStaleDeploy } from "@/lib/stale-deploy";
 import { cn } from "@/lib/utils";
 
 type BrandStart = "blank" | "copy";
@@ -75,18 +76,33 @@ export default function NewWorkspaceDialog({
   const [start, setStart] = useState<BrandStart>("blank");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
 
   async function create() {
     if (pending) return;
-    setPending(true);
-    setError(null);
-    const result = await createWorkspaceAction({ name, brandStart: start });
-    if (result.error || !result.id) {
-      setPending(false);
-      setError(result.error ?? "Couldn't create the workspace.");
+    if (warning) {
+      onCreated();
       return;
     }
-    onCreated();
+    setPending(true);
+    setError(null);
+    try {
+      const result = await createWorkspaceAction({ name, brandStart: start });
+      if (result.error || !result.id) {
+        setPending(false);
+        setError(result.error ?? "Couldn't create the workspace.");
+        return;
+      }
+      if (result.warning) {
+        setPending(false);
+        setWarning(result.warning);
+        return;
+      }
+      onCreated();
+    } catch (problem) {
+      setPending(false);
+      if (!reloadIfStaleDeploy(problem)) setError("Couldn't create the workspace. Try again.");
+    }
   }
 
   return (
@@ -94,6 +110,10 @@ export default function NewWorkspaceDialog({
       open={open}
       onOpenChange={(next) => {
         if (pending) return;
+        if (warning && !next) {
+          onCreated();
+          return;
+        }
         if (!next) setError(null);
         onOpenChange(next);
       }}
@@ -141,18 +161,25 @@ export default function NewWorkspaceDialog({
                 title={`Copy from ${currentName}`}
                 icon={<WorkspaceTile id={currentId} name={currentName} className="size-8 rounded-lg text-[13px]" />}
               >
-                What you sell, who it&apos;s for, tone and the cold email playbook. Proof and Knowledge start empty.
+                Copies what you sell, who it&apos;s for, tone and the playbook. Eclipse tools stay off; switch them on in Brand if you need them. Proof and Knowledge start empty.
               </StartOption>
             </fieldset>
+            {warning && (
+              <p role="alert" className="caption-style text-danger">
+                {warning}
+              </p>
+            )}
           </div>
           <DialogFooter>
-            <DialogClose asChild>
-              <Button variant="ghost" size="md" disabled={pending}>
-                Cancel
-              </Button>
-            </DialogClose>
+            {!warning && (
+              <DialogClose asChild>
+                <Button variant="ghost" size="md" disabled={pending}>
+                  Cancel
+                </Button>
+              </DialogClose>
+            )}
             <Button variant="primary" size="md" type="submit" disabled={pending || !name.trim()}>
-              {pending ? "Creating…" : "Create"}
+              {warning ? "Open workspace" : pending ? "Creating…" : "Create"}
             </Button>
           </DialogFooter>
         </form>

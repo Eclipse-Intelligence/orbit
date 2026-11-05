@@ -41,7 +41,7 @@ export default function ThreadPeople({ people, threadKey, filing: initialFiling 
         return;
       }
       setAdded((current) => ({ ...current, [person.email]: result.person! }));
-      if (filing && !filing.filedIn.includes(active.id)) setFiling({ ...filing, filedIn: [...filing.filedIn, active.id] });
+      if (result.filing !== undefined) setFiling(result.filing);
       return;
     }
     const result = await addContactInlineAction({ name: fallbackName(person), email: person.email });

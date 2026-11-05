@@ -17,6 +17,34 @@ $$;
 revoke all on function private.home_workspace_id(uuid) from public;
 grant execute on function private.home_workspace_id(uuid) to crm_app;
 
+create or replace function private.memberships_for(p_user_id uuid)
+returns table (
+  workspace_id uuid,
+  workspace_name text,
+  workspace_slug text,
+  role text,
+  email text,
+  full_name text
+)
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+begin
+  return query
+  select w.id, w.name, w.slug, m.role, p.email, p.full_name
+  from crm.workspace_members m
+  join crm.workspaces w on w.id = m.workspace_id
+  join crm.profiles p on p.id = m.user_id
+  where m.user_id = p_user_id
+  order by m.created_at, m.workspace_id;
+end;
+$$;
+
+revoke all on function private.memberships_for(uuid) from public;
+grant execute on function private.memberships_for(uuid) to crm_app;
+
 create or replace function private.create_workspace(p_user uuid, p_name text, p_brand_source uuid)
 returns uuid
 language plpgsql
@@ -350,6 +378,8 @@ begin
   delete from crm.granola_keys where workspace_id = p_workspace and user_id = p_user;
   delete from crm.readwise_keys where workspace_id = p_workspace and user_id = p_user;
   delete from crm.recall_keys where workspace_id = p_workspace and user_id = p_user;
+  update crm.personal_tokens set revoked_at = now()
+    where workspace_id = p_workspace and user_id = p_user and revoked_at is null;
   update crm.agent_mail_messages
     set status = 'failed', status_reason = 'They left the workspace.', advancing_until = null
     where workspace_id = p_workspace and user_id = p_user and status in ('received', 'working') and replied_at is null;
@@ -360,6 +390,66 @@ $$;
 
 revoke all on function private.team_remove(uuid, uuid, uuid) from public;
 grant execute on function private.team_remove(uuid, uuid, uuid) to crm_app;
+
+do $$
+declare
+  v_member record;
+  v_applied boolean := false;
+begin
+  if to_regclass('private.schema_migrations') is not null then
+    execute 'select exists (select 1 from private.schema_migrations where filename = $1)'
+      into v_applied using '20261229100000_workspaces.sql';
+  end if;
+  if v_applied then
+    return;
+  end if;
+  for v_member in
+    select m.user_id, m.workspace_id, private.home_workspace_id(m.user_id) as home_id
+    from crm.workspace_members m
+    where m.workspace_id <> private.home_workspace_id(m.user_id)
+  loop
+    perform private.move_personal_rows(v_member.user_id, v_member.workspace_id, v_member.home_id);
+  end loop;
+end
+$$;
+
+create or replace function private.pages_resolve_links()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if new.archived_at is null and btrim(new.title) <> '' then
+    update crm.page_links l set target_page_id = new.id
+    from crm.pages s
+    where l.target_kind = 'page'
+      and l.target_page_id is null
+      and l.target_key = lower(btrim(new.title))
+      and s.id = l.page_id
+      and s.id <> new.id
+      and (new.effective_shared or s.user_id = new.user_id)
+      and (
+        l.workspace_id = new.workspace_id
+        or (
+          s.kind = 'daily'
+          and s.user_id is not null
+          and exists (select 1 from crm.workspace_members m where m.workspace_id = new.workspace_id and m.user_id = s.user_id)
+        )
+      );
+  end if;
+  if tg_op = 'UPDATE' then
+    update crm.page_links l set target_page_id = null
+    from crm.pages s
+    where l.target_page_id = new.id
+      and s.id = l.page_id
+      and not (new.effective_shared or s.user_id is not distinct from new.user_id);
+  end if;
+  return null;
+end;
+$$;
+
+revoke all on function private.pages_resolve_links() from public;
 
 create or replace function private.calendar_alert_members()
 returns table (

@@ -9,6 +9,7 @@ import { SettingsCard } from "@/components/crm/settings-ui";
 import { saveBrandPlaybookAction } from "@/app/(crm)/settings/brand/actions";
 import { BRAND_LIMITS, type BrandPlaybookInput, type BrandProfile } from "@/lib/crm/brand-rules";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
+import { reloadIfStaleDeploy } from "@/lib/stale-deploy";
 import ChevronLeftIcon from "@/public/assets/images/_common/chevron-left.svg";
 
 function same(left: BrandPlaybookInput, right: BrandPlaybookInput) {
@@ -37,18 +38,23 @@ export default function PlaybookSettings({ brand, canEdit }: { brand: BrandProfi
     setSaving(true);
     setError(null);
     setStatus(null);
-    const result = await saveBrandPlaybookAction(values);
-    setSaving(false);
-    if (result.error || !result.saved) {
-      if (result.field === "playbook" || result.field === "outreachBrief") setErrors({ [result.field]: result.error });
-      else setError(result.error ?? "Could not save the playbook.");
-      return;
+    try {
+      const result = await saveBrandPlaybookAction(values);
+      if (result.error || !result.saved) {
+        if (result.field === "playbook" || result.field === "outreachBrief") setErrors({ [result.field]: result.error });
+        else setError(result.error ?? "Could not save the playbook.");
+        return;
+      }
+      const next = { playbook: result.saved.playbook, outreachBrief: result.saved.outreachBrief };
+      setSaved(next);
+      setValues(next);
+      setStatus("Saved. The assistant uses it for the next first email.");
+      router.refresh();
+    } catch (problem) {
+      if (!reloadIfStaleDeploy(problem)) setError("That didn't save. Try again.");
+    } finally {
+      setSaving(false);
     }
-    const next = { playbook: result.saved.playbook, outreachBrief: result.saved.outreachBrief };
-    setSaved(next);
-    setValues(next);
-    setStatus("Saved. The assistant uses it for the next first email.");
-    router.refresh();
   }
 
   return (

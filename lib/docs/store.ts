@@ -218,7 +218,9 @@ type LinkRow = { key: string; pageId: string | null; label: string; heading: str
 
 type LinkPlan = { content: string; links: LinkRow[]; tags: string[]; mentions: DocMention[] };
 
-async function planLinks(db: Db, page: { id: string; workspace_id: string; user_id: string | null }, content: string, depth = 0): Promise<LinkPlan> {
+type LinkedPage = { id: string; workspace_id: string; user_id: string | null; kind: string };
+
+async function planLinks(db: Db, page: LinkedPage, content: string, depth = 0, preferWorkspace = page.workspace_id): Promise<LinkPlan> {
   const parsed = parseDoc(content);
   const raws = [...new Set(parsed.links.flatMap((link) => (link.heading !== null && link.title ? [link.target, link.title] : [link.target])))];
   const found = new Map<string, { key: string; id: string | null; title: string | null }>();
@@ -228,12 +230,12 @@ async function planLinks(db: Db, page: { id: string; workspace_id: string; user_
        from unnest($1::text[]) as k(raw)
        left join lateral (
          select t.id, t.title from crm.pages t
-         where t.workspace_id = $2 and t.archived_at is null and t.id <> $3 and lower(t.title) = lower(k.raw)
+         where (t.workspace_id = $2 or $5::boolean) and t.archived_at is null and t.id <> $3 and lower(t.title) = lower(k.raw)
            and (t.effective_shared or t.user_id = $4)
-         order by (t.user_id is not distinct from $4) desc, t.effective_shared desc, t.edited_at desc
+         order by (t.workspace_id = $6) desc, (t.user_id is not distinct from $4) desc, t.effective_shared desc, t.edited_at desc
          limit 1
        ) c on true`,
-      [raws, page.workspace_id, page.id, page.user_id],
+      [raws, page.workspace_id, page.id, page.user_id, page.kind === "daily" && page.user_id !== null, preferWorkspace],
     );
     for (const row of result.rows) found.set(row.raw, row);
   }
@@ -285,7 +287,7 @@ async function planLinks(db: Db, page: { id: string; workspace_id: string; user_
   }
   if (renames.length > 0 && depth === 0) {
     for (const rename of renames) rewritten = rewriteLinkTitle(rewritten, rename.from, rename.to).content;
-    if (rewritten !== content) return planLinks(db, page, rewritten, depth + 1);
+    if (rewritten !== content) return planLinks(db, page, rewritten, depth + 1, preferWorkspace);
   }
   return { content: rewritten, links: [...rows.values()], tags: parsed.tags, mentions: parsed.mentions };
 }
@@ -383,7 +385,7 @@ export async function commitPage(db: Db, actor: Actor, page: FullPageRow, next: 
     throw new CrmError("invalid_input", "A daily note is named after its date, so it can't be renamed.", 400, { field: "title" });
   }
   const contentChanged = next.content !== page.content;
-  const plan = contentChanged ? await planLinks(db, page, next.content) : null;
+  const plan = contentChanged ? await planLinks(db, page, next.content, 0, actor.workspaceId) : null;
   const content = plan?.content ?? next.content;
   const titleChanged = next.title !== page.title;
   if (!titleChanged && content === page.content && options.live === undefined) return { changed: false, versioned: false };
@@ -1115,12 +1117,12 @@ export async function listUnlinkedMentions(actor: Actor, id: string): Promise<Do
     const result = await db.query<ReferenceRow>(
       `select ${REFERENCE_FIELDS} from crm.pages p
        left join crm.page_folders f on f.id = p.folder_id
-       where p.workspace_id = $1 and p.id <> $2 and p.archived_at is null
+       where ${pageInScope("p", 1, 4)} and p.id <> $2 and p.archived_at is null
          and p.search @@ phraseto_tsquery('english', $3)
          and strpos(lower(p.content), lower($3)) > 0
          and not exists (select 1 from crm.page_links l where l.page_id = p.id and l.target_page_id = $2)
        order by p.edited_at desc limit 50`,
-      [actor.workspaceId, page.id, title],
+      [actor.workspaceId, page.id, title, viewerId(actor)],
     );
     return result.rows.map((row) => reference(actor, row, row.content.toLowerCase().indexOf(title.toLowerCase())));
   });
@@ -1134,9 +1136,9 @@ export async function docsMentioning(actor: Actor, target: { kind: MentionKind; 
       `select ${REFERENCE_FIELDS} from crm.page_links l
        join crm.pages p on p.id = l.page_id
        left join crm.page_folders f on f.id = p.folder_id
-       where l.workspace_id = $1 and l.target_kind = $2 and l.target_record_id = $3 and p.archived_at is null
+       where (l.workspace_id = $1 or (p.kind = 'daily' and p.user_id = $4::uuid)) and l.target_kind = $2 and l.target_record_id = $3 and p.archived_at is null
        order by p.edited_at desc limit 100`,
-      [actor.workspaceId, target.kind, target.id],
+      [actor.workspaceId, target.kind, target.id, viewerId(actor)],
     );
     return result.rows.map((row) => reference(actor, row, row.content.indexOf(`](${target.kind}:${target.id})`)));
   });

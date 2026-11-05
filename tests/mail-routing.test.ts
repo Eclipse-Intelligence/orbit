@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
+import { saveBrandProfile } from "@/lib/crm/brand";
 import { captureStatuses, markCaptureSeen } from "@/lib/crm/capture";
+import { isFreeMailDomain } from "@/lib/crm/communications";
+import { withActor } from "@/lib/crm/context";
 import { createCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
 import { scopesForRole } from "@/lib/crm/scopes";
@@ -10,13 +13,16 @@ import { getAdminPool, getPool } from "@/lib/db/pool";
 import {
   addPersonHere,
   createAndFileUnknown,
+  fileUnknownTo,
   ignoreUnknownMail,
   listUnknownMail,
   moveUnknownMail,
   setThreadDomainRule,
   setThreadFiling,
+  threadBrand,
 } from "@/lib/mail/filing";
-import { listAddressHomes, setAddressHome, setDomainRule } from "@/lib/mail/routing";
+import { writeNudge } from "@/lib/mail/prepare";
+import { listAddressHomes, routedAway, setAddressHome, setDomainRule } from "@/lib/mail/routing";
 import { getThread } from "@/lib/mail/threads";
 import { fileMailOnTimeline } from "@/lib/mail/timeline";
 import { queueMailWorkflowEvents } from "@/lib/workflows/mail-events";
@@ -357,5 +363,99 @@ describe("mail across workspaces", () => {
     assert.equal(statuses.get(ridgeon.workspaceId)?.fresh, 1);
     assert.equal(statuses.get(eclipse.workspaceId)?.fresh, 0);
     assert.ok((statuses.get(ridgeon.workspaceId)?.waiting ?? 0) >= 1);
+  });
+  it("drops a chosen contact when the thread is filed away from its workspace", async () => {
+    const admin = getAdminPool();
+    const office = (await createContact(eclipse, { firstName: "Pat", lastName: "Office", email: "office@quietfirm.test" })).body.contact;
+    const pat = await addMessage(eclipse, primary, { id: "pat", from: "pat.home@quietfirm.test", name: "Pat Lane", to: ["mark@geteclipse.co"], subject: "From my other address" });
+    await fileUnknownTo(eclipse, pat.key, office.id);
+    const onOffice = async () =>
+      (await admin.query<{ title: string }>("select title from crm.activities where contact_id = $1 and type = 'email' order by occurred_at", [office.id])).rows.map((row) => row.title);
+    assert.deepEqual(await onOffice(), ["From my other address"]);
+
+    await admin.query("update crm.mail_thread_routes set filed_in = $3::uuid[] where user_id = $1 and thread_key = $2", [eclipse.userId, "pat", [ridgeon.workspaceId]]);
+    await addMessage(eclipse, primary, { id: "pat-2", thread: "pat", from: "pat.home@quietfirm.test", to: ["mark@geteclipse.co"], subject: "Re: From my other address", at: minutesAgo(2) });
+    await fileMailOnTimeline(eclipse);
+    assert.deepEqual(await onOffice(), ["From my other address"]);
+
+    await setThreadFiling(eclipse, pat.key, [ridgeon.workspaceId]);
+    const route = await admin.query<{ contact_id: string | null }>("select contact_id from crm.mail_thread_routes where user_id = $1 and thread_key = 'pat'", [eclipse.userId]);
+    assert.equal(route.rows[0]?.contact_id, null);
+    assert.deepEqual(await emailActivities(ridgeon.workspaceId, "pat.home@quietfirm.test"), ["From my other address", "Re: From my other address"]);
+    assert.deepEqual(await onOffice(), ["From my other address"]);
+  });
+
+  it("checks the older inbox filer against the same thread choice and its source", async () => {
+    const admin = getAdminPool();
+    const connection = (await admin.query<{ connection_id: string }>("select connection_id from crm.mail_sources where id = $1", [primary.sourceId])).rows[0].connection_id;
+    await admin.query(
+      `insert into crm.mail_thread_routes (workspace_id, user_id, source_id, thread_key, filed_in, updated_at) values
+         ($1, $2, $3, 'shared-key', $4::uuid[], now() - interval '1 hour'),
+         ($1, $2, $5, 'shared-key', $6::uuid[], now())`,
+      [eclipse.workspaceId, eclipse.userId, primary.sourceId, [eclipse.workspaceId], extra.sourceId, [ridgeon.workspaceId]],
+    );
+    const away = (workspaceId: string, connectionId?: string) =>
+      withActor(eclipse, (db) => routedAway(db, eclipse.userId, workspaceId, "shared-key", "someone@elsewhere.test", connectionId));
+    assert.equal(await away(eclipse.workspaceId, connection), false);
+    assert.equal(await away(ridgeon.workspaceId, connection), true);
+    assert.equal(await away(eclipse.workspaceId), true);
+    assert.equal(await withActor(eclipse, (db) => routedAway(db, eclipse.userId, eclipse.workspaceId, "no-route", "zoe@brightwave.io", connection)), true);
+    assert.equal(await withActor(eclipse, (db) => routedAway(db, eclipse.userId, ridgeon.workspaceId, "no-route", "zoe@brightwave.io", connection)), false);
+  });
+
+  it("files the thread here when you add someone while a rule sends it elsewhere", async () => {
+    await createContact(eclipse, { firstName: "Ann", lastName: "Cobalt", email: "ann@cobaltworks.test", jobTitle: "COO" });
+    await setDomainRule(eclipse, "cobaltworks.test", [eclipse.workspaceId]);
+    const ann = await addMessage(eclipse, primary, { id: "ann", from: "ann@cobaltworks.test", name: "Ann Cobalt", to: ["mark@geteclipse.co"], subject: "Q2 plan", at: minutesAgo(1) });
+    await fileMailOnTimeline(eclipse);
+    assert.deepEqual((await getThread(ridgeon, ann.key)).filing?.filedIn, [eclipse.workspaceId]);
+    const added = await addPersonHere(ridgeon, ann.key, "ann@cobaltworks.test");
+    assert.deepEqual(added.filing?.filedIn, [eclipse.workspaceId, ridgeon.workspaceId]);
+    assert.equal(added.filing?.chosen, true);
+    assert.deepEqual(await emailActivities(ridgeon.workspaceId, "ann@cobaltworks.test"), ["Q2 plan"]);
+    assert.deepEqual(await emailActivities(eclipse.workspaceId, "ann@cobaltworks.test"), ["Q2 plan"]);
+  });
+
+  it("refuses domain rules for your own, a colleague's or a consumer domain", async () => {
+    const admin = getAdminPool();
+    await assert.rejects(setDomainRule(eclipse, "@geteclipse.co", [ridgeon.workspaceId]), /your own or a colleague's domain/);
+    const sam = await createUser("sam@partnerco.test", "Sam Partner");
+    await admin.query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [ridgeon.workspaceId, sam.userId]);
+    await assert.rejects(setDomainRule(eclipse, "partnerco.test", [eclipse.workspaceId]), /your own or a colleague's domain/);
+    for (const domain of ["btinternet.com", "outlook.co.uk", "hotmail.fr", "yahoo.de", "sky.com", "virginmedia.com", "gmx.de"]) {
+      assert.ok(isFreeMailDomain(domain), domain);
+    }
+    await assert.rejects(setDomainRule(eclipse, "@btinternet.com", [ridgeon.workspaceId]), /can't have a rule/);
+  });
+
+  it("writes prepared replies and nudges with the brand of the workspace the thread is filed in", async () => {
+    const provenance = { operation: "test", source: "test" } as const;
+    await saveBrandProfile(eclipse, { website: "", whatYouSell: "AI visibility for agencies.", whoItsFor: "", tone: "" }, provenance);
+    await saveBrandProfile(ridgeon, { website: "", whatYouSell: "Fractional marketing leadership.", whoItsFor: "", tone: "" }, provenance);
+    const sells = async (thread: string) => (await threadBrand(eclipse, primary.sourceId, thread))?.whatYouSell ?? null;
+    assert.equal(await sells("sophie"), "Fractional marketing leadership.");
+    assert.equal(await sells("james"), null);
+    assert.equal(await sells("iggy"), "AI visibility for agencies.");
+    assert.equal(await sells("fresh"), "Fractional marketing leadership.");
+    assert.equal((await threadBrand(ridgeon, primary.sourceId, "sophie"))?.whatYouSell, "Fractional marketing leadership.");
+
+    const prompts: string[] = [];
+    const fetchImpl: typeof fetch = async (_input, init) => {
+      prompts.push(String(init?.body ?? ""));
+      return Response.json({ model: "test-model", choices: [{ message: { content: JSON.stringify({ body: "Hi, any news? Mark" }) }, finish_reason: "stop" }] });
+    };
+    const previous = process.env.LLM_API_KEY;
+    process.env.LLM_API_KEY = "test-llm-key";
+    try {
+      await writeNudge(eclipse, primary.sourceId, "sophie", { fetchImpl });
+      await writeNudge(eclipse, primary.sourceId, "james", { fetchImpl });
+    } finally {
+      if (previous === undefined) delete process.env.LLM_API_KEY;
+      else process.env.LLM_API_KEY = previous;
+    }
+    assert.equal(prompts.length, 2);
+    assert.match(prompts[0], /Fractional marketing leadership/);
+    assert.doesNotMatch(prompts[0], /AI visibility for agencies/);
+    assert.doesNotMatch(prompts[1], /Fractional marketing leadership|AI visibility for agencies/);
   });
 });

@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { createActivity, listActivities } from "@/lib/crm/activities";
-import { createContact } from "@/lib/crm/contacts";
+import { createCompany } from "@/lib/crm/companies";
+import { archiveContact, createContact } from "@/lib/crm/contacts";
 import { saveMailbox } from "@/lib/crm/inbox";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
@@ -107,5 +108,45 @@ describe("mail on the contact timeline", () => {
     assert.equal(reply.metadata.internetMessageId, "<in-1@mail.test>");
     const raj = await getAdminPool().query("select title from crm.activities a join crm.contacts c on c.id = a.contact_id where c.normalized_email = 'raj@acme.test'");
     assert.deepEqual(raj.rows.map((row) => row.title), ["Pilot"]);
+  });
+
+  it("keeps one activity per email when its sender becomes a contact, or the contact is archived", async () => {
+    const admin = getAdminPool();
+    const company = (await createCompany(owner, { name: "Brightlane", domain: "brightlane.test" })).body.company;
+    await addMessage("inbox", { id: "nora-1", subject: "Brightlane brief", from: "nora@brightlane.test", to: ["mark@other.test"], at: hoursAgo(1), body: "Here is the brief." });
+    const filedOn = async () =>
+      (
+        await admin.query<{ id: string; contact_id: string | null; company_id: string | null }>(
+          "select id, contact_id, company_id from crm.activities where type = 'email' and metadata->>'internetMessageId' = '<nora-1@mail.test>'",
+        )
+      ).rows;
+    const created = async () =>
+      Number((await admin.query("select count(*) from crm.audit_events where event_type = 'activity.created' and workspace_id = $1", [owner.workspaceId])).rows[0].count);
+
+    assert.equal((await fileMailOnTimeline(owner, { now: NOW })).filed, 1);
+    const first = await filedOn();
+    assert.equal(first.length, 1);
+    assert.equal(first[0].contact_id, null);
+    assert.equal(first[0].company_id, company.id);
+    const before = await created();
+
+    const nora = (await createContact(owner, { firstName: "Nora", lastName: "Hale", email: "nora@brightlane.test", companyId: company.id })).body.contact;
+    assert.equal((await fileMailOnTimeline(owner, { now: NOW })).filed, 0);
+    const relinked = await filedOn();
+    assert.deepEqual(relinked, [{ id: first[0].id, contact_id: nora.id, company_id: company.id }]);
+    assert.equal(await created(), before);
+    const updated = await admin.query("select 1 from crm.audit_events where event_type = 'activity.updated' and entity_id = $1", [first[0].id]);
+    assert.equal(updated.rowCount, 1);
+    assert.equal((await fileMailOnTimeline(owner, { now: NOW })).filed, 0);
+
+    await archiveContact(owner, nora.id);
+    assert.equal((await fileMailOnTimeline(owner, { now: NOW })).filed, 0);
+    assert.equal((await filedOn()).length, 1);
+    assert.equal(await created(), before);
+
+    const again = (await createContact(owner, { firstName: "Nora", lastName: "Hale", email: "nora@brightlane.test", companyId: company.id })).body.contact;
+    assert.equal((await fileMailOnTimeline(owner, { now: NOW })).filed, 0);
+    assert.deepEqual((await filedOn()).map((row) => row.contact_id), [again.id]);
+    assert.equal(await created(), before);
   });
 });

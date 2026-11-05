@@ -58,7 +58,10 @@ export async function getBrand(actor: UserActor): Promise<BrandProfile> {
 }
 
 export async function brandOrEmpty(actor: UserActor): Promise<BrandProfile> {
-  return getBrand(actor).catch(() => mapBrand(actor.workspaceId, actor.workspaceName, undefined));
+  return getBrand(actor).catch((error) => {
+    console.error("Reading the brand profile failed", error instanceof Error ? error.message : error);
+    return { ...mapBrand(actor.workspaceId, actor.workspaceName, undefined), unread: true };
+  });
 }
 
 function requireAdmin(actor: UserActor) {

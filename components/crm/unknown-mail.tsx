@@ -177,8 +177,7 @@ function EmailCard({
               size="sm"
               disabled={pending !== null}
               onClick={() => void move(others[0])}
-              data-row-key="m"
-              title={`Move to ${others[0].name}'s Capture (M)`}
+              title={`Move to ${others[0].name}'s Capture`}
             >
               <WorkspaceTile id={others[0].id} name={others[0].name} className="size-4 rounded-[5px] text-[9px]" />
               {pending === "move" ? "Moving…" : `Move to ${others[0].name}`}
@@ -186,7 +185,7 @@ function EmailCard({
           ) : others.length > 1 ? (
             <DropdownMenu modal={false}>
               <DropdownMenuTrigger asChild>
-                <Button variant="secondary" size="sm" disabled={pending !== null} data-row-key="m" title="Move to another workspace's Capture (M)">
+                <Button variant="secondary" size="sm" disabled={pending !== null} title="Move to another workspace's Capture">
                   {pending === "move" ? "Moving…" : "Move to"}
                   <ChevronDownIcon aria-hidden className="size-3" />
                 </Button>

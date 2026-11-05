@@ -1,17 +1,22 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
+import { readFileSync } from "node:fs";
+import { authenticatePersonal, createPersonalToken, listPersonalTokens } from "@/lib/auth/personal";
 import { membershipsFor, pickMembership } from "@/lib/auth/user";
+import { relinkCalendar } from "@/lib/crm/calendar";
 import { listCalendarItems } from "@/lib/crm/calendars";
 import { createCompany, listCompanies } from "@/lib/crm/companies";
+import { createContact } from "@/lib/crm/contacts";
 import { backgroundTargets } from "@/lib/crm/conversations";
 import { CrmError } from "@/lib/crm/errors";
 import { listPipeline } from "@/lib/crm/opportunities";
 import { scopesForRole } from "@/lib/crm/scopes";
 import { acceptInvite, createInvite, removeMember } from "@/lib/crm/team";
 import type { UserActor } from "@/lib/crm/types";
-import { createWorkspace } from "@/lib/crm/workspaces";
+import { createWorkspace, workspaceActors } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { listDailyNotes, openDailyNote } from "@/lib/docs/daily-notes";
+import { createDoc, docsMentioning, getDoc, listUnlinkedMentions, saveDoc } from "@/lib/docs/store";
 import { listThreads, mailUnreadCount } from "@/lib/mail/threads";
 import { sectionIndex, workspaceInitial, workspaceTone } from "@/lib/workspace-paths";
 import { createUser, queryAsUser, resetDatabase } from "./helpers";
@@ -239,6 +244,115 @@ describe("workspaces", () => {
     assert.deepEqual(kept.rows, [{ workspace_id: mark.workspaceId }]);
     const left = await membershipsFor(hannahId);
     assert.deepEqual(left.map((item) => item.workspace_id), [mark.workspaceId]);
+  });
+
+  it("links meetings to the contacts of the workspace their calendar is in, whoever runs the relink", async () => {
+    const admin = getAdminPool();
+    const lena = (await createContact(ridgeon, { firstName: "Lena", lastName: "Ortiz", email: "lena@harbourline.test" })).body.contact;
+    await createContact(mark, { firstName: "Lena", lastName: "Ortiz", email: "lena@harbourline.test" });
+    await admin.query("update crm.calendars set use_for_crm = true where user_id = $1", [mark.userId]);
+    await admin.query(
+      `update crm.calendar_events set attendees = '[{"email": "lena@harbourline.test", "name": "Lena Ortiz"}]'::jsonb
+       where user_id = $1 and provider_event_id = 'event-1'`,
+      [mark.userId],
+    );
+    await relinkCalendar(mark);
+    const linked = await admin.query<{ workspace_id: string; contact_ids: string[] }>(
+      "select workspace_id, contact_ids from crm.calendar_events where user_id = $1 and provider_event_id = 'event-1'",
+      [mark.userId],
+    );
+    assert.equal(linked.rows[0].workspace_id, ridgeon.workspaceId);
+    assert.deepEqual(linked.rows[0].contact_ids, [lena.id]);
+    await admin.query("update crm.calendar_events set contact_ids = '{}' where user_id = $1", [mark.userId]);
+    await relinkCalendar(ridgeon);
+    const again = await admin.query<{ contact_ids: string[] }>("select contact_ids from crm.calendar_events where user_id = $1 and provider_event_id = 'event-1'", [mark.userId]);
+    assert.deepEqual(again.rows[0].contact_ids, [lena.id]);
+  });
+
+  it("resolves links and mentions in a daily note against the workspace it is written in, for its owner only", async () => {
+    const now = new Date("2026-11-06T09:00:00Z");
+    const plan = await createDoc(ridgeon, { title: "Ridgeon plan", content: "Retainers first.", shared: true });
+    const lena = (await getAdminPool().query<{ id: string }>("select id from crm.contacts where workspace_id = $1 and normalized_email = 'lena@harbourline.test'", [ridgeon.workspaceId])).rows[0].id;
+    const daily = await openDailyNote(ridgeon, "2026-11-06", { now });
+    await saveDoc(ridgeon, daily.page.id, { content: `Read [[Ridgeon plan]] and [[Pricing ideas]]. Call @[Lena Ortiz](contact:${lena}).` });
+    const detail = await getDoc(ridgeon, daily.page.id);
+    assert.equal(detail.links.find((link) => link.title === "Ridgeon plan")?.pageId, plan.id);
+    assert.equal(detail.links.find((link) => link.title === "Pricing ideas")?.pageId, null);
+    const pricing = await createDoc(ridgeon, { title: "Pricing ideas", content: "", shared: true });
+    assert.equal((await getDoc(mark, daily.page.id)).links.find((link) => link.title === "Pricing ideas")?.pageId, pricing.id);
+
+    assert.deepEqual((await docsMentioning(ridgeon, { kind: "contact", id: lena })).map((item) => item.id), [daily.page.id]);
+    const mentioned = await createDoc(ridgeon, { title: "Harbourline", content: "", shared: true });
+    await saveDoc(ridgeon, daily.page.id, { content: `Read [[Ridgeon plan]] and [[Pricing ideas]]. Call @[Lena Ortiz](contact:${lena}). Harbourline next.` });
+    assert.deepEqual((await listUnlinkedMentions(ridgeon, mentioned.id)).map((item) => item.id), [daily.page.id]);
+
+    const sam = await createUser("sam@ridgeon.test", "Sam Lee");
+    await getAdminPool().query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [ridgeon.workspaceId, sam.userId]);
+    const samHere = inWorkspace(sam, ridgeon.workspaceId, "Mark Ridgeon", "member");
+    assert.deepEqual(await docsMentioning(samHere, { kind: "contact", id: lena }), []);
+    assert.deepEqual(await listUnlinkedMentions(samHere, mentioned.id), []);
+    const links = await queryAsUser(sam.userId, "select * from crm.page_links where page_id = $1", [daily.page.id]);
+    assert.equal(links.length, 0);
+  });
+
+  it("stops a personal token from a workspace someone leaves and leaves it off their list", async () => {
+    const admin = getAdminPool();
+    const tess = await createUser("tess@ridgeon.test", "Tess Hart");
+    await admin.query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [ridgeon.workspaceId, tess.userId]);
+    const tessHere = inWorkspace(tess, ridgeon.workspaceId, "Mark Ridgeon", "member");
+    const issued = await createPersonalToken(tessHere, "Claude");
+    const kept = await createPersonalToken(tess, "Home");
+    assert.equal((await authenticatePersonal(issued.token)).actor.workspaceId, ridgeon.workspaceId);
+    await removeMember(ridgeon, tess.userId);
+    const stored = await admin.query<{ revoked: boolean }>("select revoked_at is not null as revoked from crm.personal_tokens where id = $1", [issued.details.id]);
+    assert.equal(stored.rows[0].revoked, true);
+    await assert.rejects(authenticatePersonal(issued.token), /Invalid credentials/);
+    assert.deepEqual((await listPersonalTokens(tess)).map((token) => token.id), [kept.details.id]);
+  });
+
+  it("always lists memberships in the order that picks the home workspace", async () => {
+    const admin = getAdminPool();
+    const tie = await createUser("tie@ridgeon.test", "Tie Break");
+    const joined = (await admin.query<{ created_at: Date }>("select created_at from crm.workspace_members where user_id = $1", [tie.userId])).rows[0].created_at;
+    await admin.query("insert into crm.workspace_members (workspace_id, user_id, role, created_at) values ($1, $2, 'member', $3)", [ridgeon.workspaceId, tie.userId, joined]);
+    const home = (await admin.query<{ id: string }>("select private.home_workspace_id($1) as id", [tie.userId])).rows[0].id;
+    const listed = await membershipsFor(tie.userId);
+    assert.equal(listed.length, 2);
+    assert.equal(listed[0].workspace_id, home);
+    assert.equal((await workspaceActors(tie))[0].workspaceId, home);
+  });
+
+  it("gathers each person's own things into their home workspace when the migration runs", async () => {
+    const admin = getAdminPool();
+    await admin.query("insert into crm.ai_accounts (workspace_id, user_id, provider) values ($1, $2, 'chatgpt')", [mark.workspaceId, mark.userId]);
+    await admin.query("update crm.ai_accounts set workspace_id = $1 where user_id = $2", [ridgeon.workspaceId, mark.userId]);
+    await admin.query("update crm.mail_preferences set workspace_id = $1 where user_id = $2", [ridgeon.workspaceId, mark.userId]);
+    const outside = async () =>
+      Number(
+        (
+          await admin.query(
+            `select (select count(*) from crm.calendar_accounts where user_id = $1 and workspace_id <> $2)
+               + (select count(*) from crm.mail_sources where user_id = $1 and workspace_id <> $2)
+               + (select count(*) from crm.calendar_events where user_id = $1 and workspace_id <> $2)
+               + (select count(*) from crm.ai_accounts where user_id = $1 and workspace_id <> $2)
+               + (select count(*) from crm.mail_preferences where user_id = $1 and workspace_id <> $2) as total`,
+            [mark.userId, mark.workspaceId],
+          )
+        ).rows[0].total,
+      );
+    assert.ok((await outside()) > 0);
+    const migrations = ["20261229100000_workspaces.sql", "20261229200000_brand_profiles.sql", "20261229300000_mail_workspace_routing.sql"];
+    await admin.query("create table private.schema_migrations (filename text primary key)");
+    await admin.query("insert into private.schema_migrations (filename) values ($1)", [migrations[0]]);
+    await admin.query(readFileSync(`supabase/migrations/${migrations[0]}`, "utf8"));
+    assert.ok((await outside()) > 0);
+    await admin.query("drop table private.schema_migrations");
+    for (const file of migrations) await admin.query(readFileSync(`supabase/migrations/${file}`, "utf8"));
+    assert.equal(await outside(), 0);
+    const preferences = await admin.query("select 1 from crm.mail_preferences where user_id = $1", [mark.userId]);
+    assert.equal(preferences.rowCount, 1);
+    for (const file of migrations) await admin.query(readFileSync(`supabase/migrations/${file}`, "utf8"));
+    assert.equal(await outside(), 0);
   });
 
   it("works out where switching lands and how a workspace looks", () => {

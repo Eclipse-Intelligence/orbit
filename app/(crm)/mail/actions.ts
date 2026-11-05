@@ -6,6 +6,7 @@ import { CrmError } from "@/lib/crm/errors";
 import { addPersonHere, setThreadDomainRule, setThreadFiling, type AddedPerson, type FilingChange } from "@/lib/mail/filing";
 import { revalidateRecordPages } from "@/lib/revalidate";
 import { removeDomainRule, setAddressHome } from "@/lib/mail/routing";
+import type { ThreadFiling } from "@/lib/mail/view";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
 import { COLD_PITCH_MODES, setMailHelp, type ColdPitchMode } from "@/lib/mail/prepare";
 import { setReadStatuses } from "@/lib/mail/tracking";
@@ -70,13 +71,13 @@ export async function setThreadDomainRuleAction(key: string, workspaceIds: strin
   }
 }
 
-export async function addPersonHereAction(key: string, email: string): Promise<{ person?: AddedPerson; error?: string }> {
+export async function addPersonHereAction(key: string, email: string): Promise<{ person?: AddedPerson; filing?: ThreadFiling | null; error?: string }> {
   const user = await getUserActor();
   if (!user) return { error: "Sign in again." };
   try {
-    const person = await addPersonHere(user, key, email);
+    const { filing, ...person } = await addPersonHere(user, key, email);
     refreshFiled();
-    return { person };
+    return { person, filing };
   } catch (error) {
     return filingError(error);
   }

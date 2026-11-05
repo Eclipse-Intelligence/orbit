@@ -10,7 +10,7 @@ import { assertScope } from "@/lib/crm/scopes";
 import type { TeamsTranscriptStatus } from "@/lib/crm/teams-transcripts";
 import type { UserActor } from "@/lib/crm/types";
 import { workspaceActors } from "@/lib/crm/workspaces";
-import { unknownMail, type UnknownEmail } from "@/lib/mail/filing";
+import { unknownMailOnce, type UnknownEmail } from "@/lib/mail/filing";
 
 export type ToFile = { unfiled: UnfiledImport[]; people: MetPerson[] };
 
@@ -131,9 +131,8 @@ function later(left: string | null, right: string | null) {
   return left > right ? left : right;
 }
 
-async function unknownFor(actor: UserActor, now: number) {
-  const actors = await workspaceActors(actor);
-  return unknownMail(actor, actors, now).catch((error) => {
+async function unknownFor(actor: UserActor, now: number, actors?: UserActor[]) {
+  return unknownMailOnce(actor, actors ?? (await workspaceActors(actor)), now).catch((error) => {
     console.error("Reading email from new people failed", error instanceof Error ? error.message : error);
     return [] as UnknownEmail[];
   });
@@ -142,12 +141,18 @@ async function unknownFor(actor: UserActor, now: number) {
 export async function captureStatuses(actor: UserActor, now = Date.now()) {
   assertScope(actor.scopes, "crm:read");
   const actors = await workspaceActors(actor);
-  const unknown = await unknownMail(actor, actors, now).catch((error) => {
-    console.error("Reading email from new people failed", error instanceof Error ? error.message : error);
-    return [] as UnknownEmail[];
-  });
+  const unknown = await unknownFor(actor, now, actors);
+  if (actors.length < 2) {
+    const status = await captureStatus(actor, now, unknown).catch(() => null);
+    return new Map([[actor.workspaceId, status]]);
+  }
   const statuses = await Promise.all(actors.map((item) => captureStatus(item, now, unknown).catch(() => null)));
   return new Map(actors.map((item, index) => [item.workspaceId, statuses[index]]));
+}
+
+export async function unknownMailFor(actor: UserActor, now = Date.now()) {
+  const actors = await workspaceActors(actor);
+  return { actors, emails: await unknownFor(actor, now, actors) };
 }
 
 export async function captureStatus(actor: UserActor, now = Date.now(), unknown?: UnknownEmail[]): Promise<CaptureStatus> {

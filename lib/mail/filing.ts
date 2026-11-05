@@ -1,3 +1,5 @@
+import { cache } from "react";
+import { brandOrEmpty, type BrandProfile } from "@/lib/crm/brand";
 import { withActor } from "@/lib/crm/context";
 import { FREE_MAIL_DOMAINS } from "@/lib/crm/communications";
 import { CrmError } from "@/lib/crm/errors";
@@ -12,6 +14,7 @@ import {
   captureWorkspaceSql,
   chosenWorkspaces,
   contactElsewhere,
+  effectiveFilingInDb,
   ensureContactInDb,
   filingDomain,
   homesJson,
@@ -112,6 +115,17 @@ async function threadMessagesFiledIn(actor: UserActor, sourceId: string, key: st
   });
 }
 
+export async function threadBrand(actor: UserActor, sourceId: string, key: string): Promise<BrandProfile | null> {
+  const actors = await workspaceActors(actor);
+  if (actors.length < 2) return brandOrEmpty(actors[0] ?? actor);
+  const effective = await withActor(actor, async (db) => {
+    const info = await threadInfo(db, actor, sourceId, key);
+    return effectiveFilingInDb(db, actor, actors, sourceId, key, { latestId: info.latestId, counterpart: info.counterpart?.email ?? null, own: info.own });
+  }).catch(() => null);
+  if (!effective || effective.filedIn.length !== 1) return null;
+  return brandOrEmpty(actorIn(actors, effective.filedIn[0]));
+}
+
 export type FilingChange = { filing: ThreadFiling | null; kept: string[] };
 
 export async function setThreadFiling(actor: UserActor, threadKey: string, workspaceIds: unknown): Promise<FilingChange> {
@@ -133,7 +147,14 @@ export async function setThreadFiling(actor: UserActor, threadKey: string, works
       await ensureContactInDb(db, target, info.counterpart, copy, { operation: "file_mail_thread", source: "mail" });
     });
   }
-  await withActor(actor, (db) => upsertRoute(db, actor, sourceId, key, { filedIn: chosen, ignored: false }));
+  await withActor(actor, async (db) => {
+    const route = await threadRoute(db, actor, sourceId, key);
+    const contact = route?.contact_id
+      ? (await db.query<{ workspace_id: string }>("select workspace_id from crm.contacts where id = $1", [route.contact_id])).rows[0]
+      : undefined;
+    const keepContact = !route?.contact_id || (contact !== undefined && chosen.includes(contact.workspace_id));
+    await upsertRoute(db, actor, sourceId, key, { filedIn: chosen, ignored: false, ...(keepContact ? {} : { contactId: null }) });
+  });
   await fileMailOnTimeline(actor, { filter: { thread: { sourceId, key } }, actors });
   const dropped = (before?.filedIn ?? []).filter((id) => !chosen.includes(id));
   const kept = await threadMessagesFiledIn(actor, sourceId, key, dropped);
@@ -163,7 +184,7 @@ export async function setThreadDomainRule(actor: UserActor, threadKey: string, w
 
 export type AddedPerson = { contactId: string; companyId: string | null; companyName: string | null; title: string | null };
 
-export async function addPersonHere(actor: UserActor, threadKey: string, emailValue: string): Promise<AddedPerson> {
+export async function addPersonHere(actor: UserActor, threadKey: string, emailValue: string): Promise<AddedPerson & { filing: ThreadFiling | null }> {
   assertScope(actor.scopes, "contacts:write");
   const { sourceId, key } = parseRouteKey(threadKey);
   const email = canonicalEmail(emailValue);
@@ -173,12 +194,15 @@ export async function addPersonHere(actor: UserActor, threadKey: string, emailVa
   const added = await withActor(actor, async (db) => {
     const info = await threadInfo(db, actor, sourceId, key);
     if (!info.people.includes(email)) throw new CrmError("not_found", "They aren't on this conversation.", 404, { field: "email" });
+    const effective =
+      actors.length > 1
+        ? await effectiveFilingInDb(db, actor, actors, sourceId, key, { latestId: info.latestId, counterpart: info.counterpart?.email ?? null, own: info.own })
+        : null;
     const copy = await contactElsewhere(db, email, allIds, actor.workspaceId);
     const saved = await ensureContactInDb(db, actor, { email, name: null }, copy, { operation: "add_from_workspace", source: "mail" });
-    const route = await threadRoute(db, actor, sourceId, key);
-    const filedIn = route?.filed_in?.filter((id) => allIds.includes(id)) ?? [];
-    if (filedIn.length && !filedIn.includes(actor.workspaceId)) {
-      await upsertRoute(db, actor, sourceId, key, { filedIn: [...filedIn, actor.workspaceId] });
+    if (effective && !effective.filedIn.includes(actor.workspaceId)) {
+      const filedIn = effective.basis === "capture" ? [actor.workspaceId] : [...effective.filedIn, actor.workspaceId];
+      await upsertRoute(db, actor, sourceId, key, { filedIn: allIds.filter((id) => filedIn.includes(id)), ignored: false });
     }
     const row = await db.query<{ company_id: string | null; company_name: string | null; job_title: string | null }>(
       "select c.company_id, co.name as company_name, c.job_title from crm.contacts c left join crm.companies co on co.id = c.company_id where c.id = $1",
@@ -187,7 +211,7 @@ export async function addPersonHere(actor: UserActor, threadKey: string, emailVa
     return { contactId: saved.contactId, companyId: row.rows[0]?.company_id ?? null, companyName: row.rows[0]?.company_name ?? null, title: row.rows[0]?.job_title ?? null };
   });
   await fileMailOnTimeline(actor, { filter: { thread: { sourceId, key } }, actors });
-  return added;
+  return { ...added, filing: await filingFor(actor, actors, sourceId, key) };
 }
 
 export async function unknownMail(actor: UserActor, actors: UserActor[], now = Date.now()): Promise<UnknownEmail[]> {
@@ -288,9 +312,22 @@ export async function unknownMail(actor: UserActor, actors: UserActor[], now = D
   });
 }
 
-export async function listUnknownMail(actor: UserActor, now = Date.now()) {
-  const actors = await workspaceActors(actor);
-  const rows = await unknownMail(actor, actors, now);
+const requestUnknown = cache(() => new Map<string, Promise<UnknownEmail[]>>());
+
+export function unknownMailOnce(actor: UserActor, actors: UserActor[], now = Date.now()) {
+  const store = requestUnknown();
+  const key = `${actor.userId}|${actors.map((item) => item.workspaceId).join(",")}`;
+  const found = store.get(key);
+  if (found) return found;
+  const pending = unknownMail(actor, actors, now);
+  store.set(key, pending);
+  pending.catch(() => store.delete(key));
+  return pending;
+}
+
+export async function listUnknownMail(actor: UserActor, now = Date.now(), known?: { actors: UserActor[]; emails: UnknownEmail[] }) {
+  const actors = known?.actors ?? (await workspaceActors(actor));
+  const rows = known?.emails ?? (await unknownMailOnce(actor, actors, now));
   const here = rows.filter((row) => row.workspaceId === actor.workspaceId);
   return { emails: here.slice(0, CAPTURE_SHOWN), total: here.length, workspaces: refs(actors) };
 }
