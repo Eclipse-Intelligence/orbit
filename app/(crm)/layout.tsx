@@ -137,6 +137,7 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
               email: user.email,
               role: user.role,
               workspaceName: user.workspaceName,
+              workspaceId: user.workspaceId,
             }}
             overdue={attention.overdue}
             today={attention.today}

@@ -1,3 +1,4 @@
+import { copyBrandProfile } from "@/lib/crm/brand";
 import { CrmError, isPgError } from "@/lib/crm/errors";
 import type { UserActor } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
@@ -25,7 +26,11 @@ export async function createWorkspace(
       name,
       brandSourceId,
     ]);
-    return { id: result.rows[0].id, name, brandSourceId };
+    const id = result.rows[0].id;
+    if (brandSourceId) {
+      await copyBrandProfile(actor, brandSourceId, id).catch((error) => console.error("Copying the brand profile failed", error instanceof Error ? error.message : "unknown"));
+    }
+    return { id, name, brandSourceId };
   } catch (error) {
     if (isPgError(error) && (error.code === "42501" || error.code === "22023")) {
       throw new CrmError(error.code === "42501" ? "forbidden" : "invalid_input", error.message, error.code === "42501" ? 403 : 400);

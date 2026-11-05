@@ -4,4 +4,5 @@ export type Viewer = {
   email: string;
   role: string;
   workspaceName: string;
+  workspaceId?: string;
 };

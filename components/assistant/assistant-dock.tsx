@@ -1,5 +1,6 @@
 "use client";
 
+import WorkspaceTile from "@/components/workspaces/workspace-tile";
 import { useCallback, useEffect, useId, useRef, useState, type CSSProperties, type DragEvent, type FormEvent } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
@@ -591,22 +592,10 @@ function MentionChip({ mention }: { mention: Mention }) {
   );
 }
 
-const TILE_TONES = [
-  "bg-(--tag-blue-bg) text-(--tag-blue-text) shadow-[inset_0_0_0_1px_var(--tag-blue-border)]",
-  "bg-(--tag-orange-bg) text-(--tag-orange-text) shadow-[inset_0_0_0_1px_var(--tag-orange-border)]",
-  "bg-(--tag-green-bg) text-(--tag-green-text) shadow-[inset_0_0_0_1px_var(--tag-green-border)]",
-  "bg-(--tag-teal-bg) text-(--tag-teal-text) shadow-[inset_0_0_0_1px_var(--tag-teal-border)]",
-  "bg-(--tag-red-bg) text-(--tag-red-text) shadow-[inset_0_0_0_1px_var(--tag-red-border)]",
-  "bg-(--tag-purple-bg) text-(--tag-purple-text) shadow-[inset_0_0_0_1px_var(--tag-purple-border)]",
-];
-
-function WorkspaceChip({ name }: { name: string }) {
-  const tone = TILE_TONES[[...name].reduce((sum, letter) => sum + letter.charCodeAt(0), 0) % TILE_TONES.length];
+function WorkspaceChip({ id, name }: { id: string; name: string }) {
   return (
     <span title={`Working in ${name}`} className="text-soft flex h-[22px] max-w-[45%] shrink-0 items-center gap-1.5 rounded-full bg-white/[0.05] pr-2 pl-[3px] text-[12px] leading-none">
-      <span aria-hidden className={cn("inline-flex size-4 shrink-0 items-center justify-center rounded-full text-[9px] leading-none font-semibold", tone)}>
-        {name.trim().charAt(0).toUpperCase()}
-      </span>
+      <WorkspaceTile id={id} name={name} className="size-4 rounded-full text-[9px]" />
       <span className="truncate">
         <span className="sr-only">Working in </span>
         {name}
@@ -615,7 +604,7 @@ function WorkspaceChip({ name }: { name: string }) {
   );
 }
 
-export default function AssistantDock({ brief = null, workspaceName = "" }: { brief?: UnreadBrief | null; workspaceName?: string }) {
+export default function AssistantDock({ brief = null, workspaceName = "", workspaceId = "" }: { brief?: UnreadBrief | null; workspaceName?: string; workspaceId?: string }) {
   const where = workspaceName.trim();
   const askLabel = where ? `Ask Orbit in ${where}` : "Ask Orbit anything";
   const router = useRouter();
@@ -1085,7 +1074,7 @@ export default function AssistantDock({ brief = null, workspaceName = "" }: { br
         )}
         <header className={cn("flex h-11 shrink-0 items-center gap-1 pt-1 pr-2", where ? "pl-4" : "pl-5")}>
           <span className="flex min-w-0 flex-1 items-center gap-2">
-            {where && <WorkspaceChip name={where} />}
+            {where && <WorkspaceChip id={workspaceId || where} name={where} />}
             <span className="text-subtle min-w-0 truncate text-[13px]">{conversation?.title ?? "New chat"}</span>
           </span>
           {pendingBrief && (
