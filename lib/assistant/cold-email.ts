@@ -195,10 +195,10 @@ export function senderFirstName(fullName: string | null, email: string) {
   return local ? local[0].toUpperCase() + local.slice(1) : "the sender";
 }
 
-export function playbookFor(sender: PlaybookSender) {
+export function playbookFor(sender: PlaybookSender, playbook: string) {
   const booked = sender.bookingUrl
-    ? COLD_EMAIL_PLAYBOOK.replace(PLAYBOOK_BOOKING, sender.bookingUrl)
-    : COLD_EMAIL_PLAYBOOK.replace(`offer the booking page exactly as written, ${PLAYBOOK_BOOKING}`, "suggest two times, since there's no booking page set up yet");
+    ? playbook.replaceAll(PLAYBOOK_BOOKING, sender.bookingUrl)
+    : playbook.replace(`offer the booking page exactly as written, ${PLAYBOOK_BOOKING}`, "suggest two times, since there's no booking page set up yet");
   return booked.replace(new RegExp(`\\b${PLAYBOOK_SENDER}\\b`, "g"), sender.firstName);
 }
 
@@ -233,6 +233,27 @@ Don't claim:
 - Anything from a client's workspace.`;
 
 export { PROOF_PERMISSIONS, type ProofPermission };
+
+export type ColdEmailBrand = { name: string; claims: string };
+
+const NO_CLAIMS = "No product claims are written down for this business yet. Only facts in prospect_evidence and client proof from the proof list may be stated.";
+
+function claimsOf(brand?: ColdEmailBrand) {
+  return brand?.claims.trim() || NO_CLAIMS;
+}
+
+function nameOf(brand?: ColdEmailBrand) {
+  return brand?.name.trim() || "the sender's business";
+}
+
+function claimsLabel(brand?: ColdEmailBrand) {
+  return brand?.name.trim() ? `${brand.name.trim()} claims and proof allowed` : "Product claims and proof allowed";
+}
+
+function ownProductFix(brand?: ColdEmailBrand) {
+  const name = nameOf(brand);
+  return `Remove the line that offers what their company already does. Pitch ${name} only as something that adds to their own work, or leave ${name} out.`;
+}
 
 export type Evidence = { fact: string; source?: string; kind?: "fact" | "proof"; client?: string; permission?: ProofPermission; approvedWording?: string; listed?: boolean };
 
@@ -708,7 +729,7 @@ function evidenceLine(item: Evidence, index: number) {
 }
 
 export async function judgeColdEmail(
-  input: { subject: string; body: string; evidence: Evidence[]; firstTouch?: boolean; theirOffer?: string },
+  input: { subject: string; body: string; evidence: Evidence[]; firstTouch?: boolean; theirOffer?: string; brand?: ColdEmailBrand },
   options: CheckOptions = {},
 ): Promise<ColdEmailCheck[]> {
   if (!jevConfigured()) return [];
@@ -737,7 +758,7 @@ export async function judgeColdEmail(
         : { id: `E${index + 1}`, kind: "fact", fact: item.fact.slice(0, 400), source: (item.source ?? "").slice(0, 200) },
     ),
     prospect_company_already_offers: (input.theirOffer ?? "").slice(0, 1200) || "Not given.",
-    approved_product_claims: ECLIPSE_OUTREACH_BRIEF,
+    approved_product_claims: claimsOf(input.brand),
     draft: { subject: input.subject, opener: sentences[0] ?? "", middle: sentences.slice(1, -1).join(" "), cta: question, full_body: core },
   };
   const questions = {
@@ -770,7 +791,7 @@ export async function judgeColdEmail(
     claims_supported: {
       type: "noul",
       instructions:
-        "Are all statements about what Eclipse does or achieves in draft.full_body within approved_product_claims? A client result or client name is allowed when it comes from a client proof item from the proof list in prospect_evidence, keeping that item's facts and figures (a described only client is never named). Proof list items are cleared for use as they stand, so never mark one down for its content. Client results that aren't on the proof list, figures beyond the evidence, multipliers and promises that the recipient will get the same result are not allowed.",
+        `Are all statements about what ${nameOf(input.brand)} does or achieves in draft.full_body within approved_product_claims? A client result or client name is allowed when it comes from a client proof item from the proof list in prospect_evidence, keeping that item's facts and figures (a described only client is never named). Proof list items are cleared for use as they stand, so never mark one down for its content. Client results that aren't on the proof list, figures beyond the evidence, multipliers and promises that the recipient will get the same result are not allowed.`,
       criteria: {
         true: "Every product statement is allowed by the brief, and any client result comes from the proof list.",
         false: "A product statement or client result is not allowed, overstated, invented, or names a described only client.",
@@ -779,7 +800,7 @@ export async function judgeColdEmail(
     one_angle: {
       type: "noul",
       instructions:
-        "Does draft.full_body carry only one kind of new information (a proof list line, a finding from an Eclipse article, or an offer of something made for the recipient's own company), with at most one figure? A finding and client proof in the same email, stacked results or two or more figures count as no.",
+        "Does draft.full_body carry only one kind of new information (a proof list line, a finding from an article or study, or an offer of something made for the recipient's own company), with at most one figure? A finding and client proof in the same email, stacked results or two or more figures count as no.",
       criteria: { true: "One angle and at most one figure.", false: "It mixes a finding with proof, stacks results or uses more than one figure." },
     },
     subject_honest: {
@@ -865,7 +886,7 @@ export async function judgeColdEmail(
     yes("problem_hedged", "Problem framed honestly", "Frame the problem as common ('if', 'may'), never as something they have, and don't promise them a client's result."),
     yes(
       "claims_supported",
-      "Eclipse claims and proof allowed",
+      claimsLabel(input.brand),
       "Keep to what the outreach brief allows. Use client results only from the proof list, keeping their facts and figures, and cut anything invented or beyond the evidence.",
     ),
     yes("one_angle", "One angle", "Use one angle, either the proof line, the finding or the offer, with at most one figure. Save the other for the follow-up."),
@@ -874,7 +895,7 @@ export async function judgeColdEmail(
     yes("not_telling_them_about_themselves", "Doesn't tell them what they know", "Cut the description of their business, products or role. They know it. Keep at most a few words pointing at a trigger or something they asked, then go straight to the new point."),
     yes("new_information", "Tells them something new", "Give them one specific thing they probably don't know: proof from the proof list, or a finding that takes their point one step further. Don't just agree with them."),
     yes("value_without_reply", "Value without a reply", "Put the proof line or the finding in the email itself so they get the value without replying. There's no link in a first email."),
-    yes("not_their_own_product", "Doesn't pitch what they have", "Remove the line that offers what their company already does. Pitch Eclipse as the system they'd run client work on, or leave Eclipse out."),
+    yes("not_their_own_product", "Doesn't pitch what they have", ownProductFix(input.brand)),
   ];
   const kind = answers.cta_kind?.choice;
   checks.push({
@@ -920,7 +941,7 @@ const VALUE_SCHEMA = z.object({
 });
 
 export async function reviewColdEmailValue(
-  input: { subject: string; body: string; evidence: Evidence[]; firstTouch?: boolean; theirOffer?: string },
+  input: { subject: string; body: string; evidence: Evidence[]; firstTouch?: boolean; theirOffer?: string; brand?: ColdEmailBrand },
   options: CheckOptions = {},
 ): Promise<ColdEmailCheck[]> {
   const followUp = input.firstTouch === false;
@@ -981,7 +1002,7 @@ export async function reviewColdEmailValue(
     },
     {
       id: "claims_supported",
-      label: "Eclipse claims and proof allowed",
+      label: claimsLabel(input.brand),
       pass: review.claimsWithinEvidence,
       note: review.claimsWithinEvidence ? "Client proof and figures are within the evidence." : "A client result, name or figure goes beyond the evidence, or it promises them a result.",
       fix: "Use client results only from the proof list, keeping their facts and figures, and cut anything invented or promised.",
@@ -1000,7 +1021,7 @@ export async function reviewColdEmailValue(
       label: "Doesn't pitch what they have",
       pass: !review.pitchesWhatTheyHave,
       note: review.pitchesWhatTheyHave ? "Pitches something their company already offers." : "Nothing pitched that they already have.",
-      fix: "Remove the line that offers what their company already does. Pitch Eclipse as the system they'd run client work on, or leave Eclipse out.",
+      fix: ownProductFix(input.brand),
       source: "review",
     },
     {
@@ -1030,7 +1051,7 @@ export async function reviewColdEmailValue(
 }
 
 export async function checkColdEmail(
-  input: { subject: string; body: string; evidence: Evidence[]; firstTouch?: boolean; theirOffer?: string },
+  input: { subject: string; body: string; evidence: Evidence[]; firstTouch?: boolean; theirOffer?: string; brand?: ColdEmailBrand },
   options: CheckOptions = {},
 ) {
   const rules = lintColdEmail(input);

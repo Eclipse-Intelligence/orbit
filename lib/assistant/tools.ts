@@ -23,7 +23,8 @@ import { scheduleIndexing } from "@/lib/knowledge/background";
 import { mapSite } from "@/lib/knowledge/site";
 import { MindcaseError } from "@/lib/mindcase";
 import { callEclipseTool, EclipseMcpError, eclipseGuide, findEclipseTools } from "@/lib/eclipse-mcp";
-import { checkColdEmail, ECLIPSE_OUTREACH_BRIEF, evidenceFrom, playbookFor, proofListFor, senderFirstName, withProofList } from "@/lib/assistant/cold-email";
+import { checkColdEmail, evidenceFrom, playbookFor, proofListFor, senderFirstName, withProofList } from "@/lib/assistant/cold-email";
+import { brandOrEmpty } from "@/lib/crm/brand";
 import { listProof } from "@/lib/crm/proof";
 import { socialLookup } from "@/lib/social-lookup";
 import { getBookingPage } from "@/lib/booking/pages";
@@ -1763,14 +1764,14 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     name: "search_knowledge",
     label: "Searching Knowledge",
     description:
-      "Search the documents, decks, PDFs, spreadsheets, pages and transcripts in Orbit's Knowledge by meaning and by keyword, and the user's Docs (their own notes and daily notes, plus docs shared with the workspace). Each Knowledge item is tagged to a company or to Eclipse. Returns the best matching Knowledge passages in results, with their item id, title, company and offset, and matching docs in docs, each marked type doc with its docId. Pass companyId to search one company's Knowledge (add withEclipse to include Eclipse's own material), scope eclipse for Eclipse alone (no docs), or neither to search everything. Read a doc with read_knowledge and docId.",
+      "Search the documents, decks, PDFs, spreadsheets, pages and transcripts in Orbit's Knowledge by meaning and by keyword, and the user's Docs (their own notes and daily notes, plus docs shared with the workspace). Each Knowledge item is tagged to a company or to the workspace's own business. Returns the best matching Knowledge passages in results, with their item id, title, company and offset, and matching docs in docs, each marked type doc with its docId. Pass companyId to search one company's Knowledge (add withEclipse to include the business's own material), scope eclipse for the business's own material alone (no docs), or neither to search everything. Read a doc with read_knowledge and docId.",
     parameters: {
       type: "object",
       properties: {
         query: { type: "string", description: "What to look for, in plain words." },
         companyId: idParam("Only this company's knowledge."),
         scope: { type: "string", enum: ["all", "company", "eclipse"] },
-        withEclipse: { type: "boolean", description: "With companyId, also search Eclipse's own material." },
+        withEclipse: { type: "boolean", description: "With companyId, also search the business's own material." },
         limit: { type: "integer", minimum: 1, maximum: 100, description: "How many passages to return, up to 100. Defaults to 10. Ask for more when a question needs a lot of one document." },
         docs: { type: "boolean", description: "Also search Docs. Defaults to true; false searches Knowledge alone." },
       },
@@ -1837,10 +1838,10 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
   {
     name: "list_knowledge",
     label: "Looking at Knowledge",
-    description: "List the items in Knowledge for one company, for Eclipse, or for everything, with a short summary of each.",
+    description: "List the items in Knowledge for one company, for the business itself, or for everything, with a short summary of each.",
     parameters: {
       type: "object",
-      properties: { companyId: idParam("Only this company's items."), eclipse: { type: "boolean", description: "Only Eclipse's own material." } },
+      properties: { companyId: idParam("Only this company's items."), eclipse: { type: "boolean", description: "Only the business's own material." } },
     },
     run: async (actor, args) => {
       const companyId = optionalStr(args.companyId);
@@ -1868,7 +1869,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     label: "Adding to Knowledge",
     write: true,
     description:
-      "Add to Knowledge for a company, or for Eclipse (the business's own material). Pass one source per call: urls for links (web pages, files by link such as PDF, Word, PowerPoint or Excel, YouTube videos and podcast episodes), emailId for a file attached to one of the user's emails (find it with list_email_attachments), or chatFileId for a file the user attached in this chat (Knowledge is shared with the whole workspace, so only add a chat file when the user asks). Orbit reads and indexes it in the background (recordings are transcribed), and a file can then be attached to emails from Knowledge. For a whole website, list its pages with map_website and pass the ones the user wants.",
+      "Add to Knowledge for a company, or for the business itself (eclipse true, the workspace's own material). Pass one source per call: urls for links (web pages, files by link such as PDF, Word, PowerPoint or Excel, YouTube videos and podcast episodes), emailId for a file attached to one of the user's emails (find it with list_email_attachments), or chatFileId for a file the user attached in this chat (Knowledge is shared with the whole workspace, so only add a chat file when the user asks). Orbit reads and indexes it in the background (recordings are transcribed), and a file can then be attached to emails from Knowledge. For a whole website, list its pages with map_website and pass the ones the user wants.",
     parameters: {
       type: "object",
       properties: {
@@ -1877,11 +1878,11 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         chatFileId: idParam("Chat file id from the note on the user's message, to add a file they attached in this chat. Leave out for other sources."),
         attachment: { type: "string", description: "With emailId: the file's name from list_email_attachments. Leave out when the email has one file." },
         companyId: idParam("Company the knowledge is about."),
-        eclipse: { type: "boolean", description: "True for Eclipse's own knowledge instead of a company's." },
+        eclipse: { type: "boolean", description: "True for the business's own knowledge instead of a company's." },
       },
     },
     describe: (args, name) => {
-      const owner = args.eclipse === true ? "Eclipse" : name(args.companyId);
+      const owner = args.eclipse === true ? "this workspace" : name(args.companyId);
       if (str(args.chatFileId)) {
         return {
           title: `Add to Knowledge for ${owner}`,
@@ -2066,14 +2067,20 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     name: "cold_email_playbook",
     label: "Reading the cold email playbook",
     description:
-      "How to research a prospect and write a first email to someone who doesn't know the user: checks before research, research steps and tools, the three angles (client proof from the proof list, a finding, or something made for them) and when not to send, how to use client proof, the rules (50 to 90 words, no link, one figure, one easy question, no meeting ask, no invented facts), the follow-up, replies, measuring, examples, and the Eclipse outreach brief of what may and may not be claimed, and the proof list of client results, which the user keeps and which can be used as it stands without checking it against anything. Read it before writing any first email to a prospect.",
+      "How to research a prospect and write a first email to someone who doesn't know the user: checks before research, research steps and tools, the three angles (client proof from the proof list, a finding, or something made for them) and when not to send, how to use client proof, the rules (50 to 90 words, no link, one figure, one easy question, no meeting ask, no invented facts), the follow-up, replies, measuring, examples, and the outreach brief of what may and may not be claimed, and the proof list of client results, which the user keeps and which can be used as it stands without checking it against anything. Read it before writing any first email to a prospect.",
     parameters: { type: "object", properties: {} },
     run: async (actor) => {
-      const [page, proof] = await Promise.all([getBookingPage(actor).catch(() => null), listProof(actor)]);
+      const [page, proof, brand] = await Promise.all([getBookingPage(actor).catch(() => null), listProof(actor), brandOrEmpty(actor)]);
       const bookingUrl = page?.exists && page.enabled ? `${siteOrigin() ?? "https://orbit.geteclipse.co"}/book/${page.slug}` : null;
+      const owner = actor.workspaceName || "This workspace";
       return {
-        playbook: playbookFor({ firstName: senderFirstName(actor.fullName, actor.email), bookingUrl }),
-        eclipseBrief: ECLIPSE_OUTREACH_BRIEF,
+        playbook: brand.playbook ? playbookFor({ firstName: senderFirstName(actor.fullName, actor.email), bookingUrl }, brand.playbook) : null,
+        ...(brand.playbook
+          ? {}
+          : {
+              playbookNote: `${owner} has no cold email playbook yet (Settings, Brand). Write from your evidence and the brand profile, keep to the rules for first emails in your instructions, and run cold_email_check.`,
+            }),
+        outreachBrief: brand.outreachBrief || null,
         proofList: proofListFor(proof),
         ...(proof.length === 0 ? { proofNote: "The proof list is empty, so there's no client proof to use yet. Use a finding or something made for them. Proof is added in Settings, Knowledge." } : {}),
       };
@@ -2108,12 +2115,14 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     },
     run: async (actor, args, context) => {
       const body = required(args.body, "The email");
+      const brand = await brandOrEmpty(actor);
       return checkColdEmail({
         subject: str(args.subject),
         body,
         evidence: withProofList(evidenceFrom(args.evidence), await listProof(actor), { subject: str(args.subject), body }),
         firstTouch: args.firstTouch !== false,
         theirOffer: optionalStr(args.theirOffer),
+        brand: { name: actor.workspaceName, claims: brand.outreachBrief || brand.whatYouSell },
       }, { deadline: context.deadline });
     },
   },
@@ -4589,8 +4598,14 @@ export function toolDescription(tool: Pick<AssistantTool, "description" | "write
   return tool.write ? `${tool.description} ${APPROVAL_NOTE}` : tool.description;
 }
 
-export function toolDefinitions() {
-  return ASSISTANT_TOOLS.map((tool) => ({
+export const ECLIPSE_TOOL_NAMES: ReadonlySet<string> = new Set(["eclipse_guide", "eclipse_tools", "eclipse_read", "eclipse_action", "eclipse_articles", "eclipse_docs"]);
+
+export function assistantTools(options: { eclipseTools?: boolean } = {}) {
+  return options.eclipseTools === false ? ASSISTANT_TOOLS.filter((tool) => !ECLIPSE_TOOL_NAMES.has(tool.name)) : ASSISTANT_TOOLS;
+}
+
+export function toolDefinitions(options: { eclipseTools?: boolean } = {}) {
+  return assistantTools(options).map((tool) => ({
     type: "function" as const,
     function: { name: tool.name, description: toolDescription(tool), parameters: tool.parameters },
   }));
@@ -4854,12 +4869,15 @@ export async function runTool(
   actor: UserActor,
   name: string,
   args: Args,
-  options: { deadline?: number; callId?: string; defer?: Defer; unattended?: boolean; approval?: DocApproval; source?: AssistantSource } = {},
+  options: { deadline?: number; callId?: string; defer?: Defer; unattended?: boolean; approval?: DocApproval; source?: AssistantSource; eclipseTools?: boolean } = {},
 ) {
   if (options.unattended && name !== "save_doc") return { error: "Only doc edits can run without approval. Propose this for approval instead." };
   const resolved = resolveTool(name, args);
   if (!resolved) return { error: `There is no tool called ${name}.` };
   const { tool } = resolved;
+  if (ECLIPSE_TOOL_NAMES.has(tool.name) && !(options.eclipseTools ?? (await brandOrEmpty(actor)).eclipseTools)) {
+    return { error: "Eclipse tools are off in this workspace. An owner or admin can turn them on in Settings, Brand." };
+  }
   const cleaned = dropStrayNulls(resolved.args, tool.parameters) as Args;
   const limit = Math.max(5_000, Math.min(TOOL_TIMEOUT_MS, (options.deadline ?? Date.now() + TOOL_TIMEOUT_MS) - Date.now()));
   let timer: ReturnType<typeof setTimeout> | undefined;

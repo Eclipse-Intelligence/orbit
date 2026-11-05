@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils";
 import BarChartIcon from "@/public/assets/images/companies/sidebar/bar-chart.svg";
 import BookIcon from "@/public/assets/images/companies/sidebar/book-closed.svg";
 import CalendarIcon from "@/public/assets/images/companies/sidebar/calendar.svg";
+import BrandIcon from "@/public/assets/images/settings/brand.svg";
 import CodeIcon from "@/public/assets/images/settings/code.svg";
 import FileTextIcon from "@/public/assets/images/settings/file-text.svg";
 import LightbulbIcon from "@/public/assets/images/settings/lightbulb.svg";
@@ -54,6 +55,7 @@ const GROUPS: { label: string; workspace?: boolean; items: NavItem[] }[] = [
     workspace: true,
     items: [
       { href: SETTINGS_PATHS.team, label: "Team", icon: UsersIcon },
+      { href: SETTINGS_PATHS.brand, label: "Brand", icon: BrandIcon },
       { href: SETTINGS_PATHS.activity, label: "Activity log", icon: ListIcon },
       { href: SETTINGS_PATHS.pipeline, label: "Pipeline", icon: BarChartIcon },
       { href: SETTINGS_PATHS.tags, label: "Tags and lifecycles", icon: TagIcon },

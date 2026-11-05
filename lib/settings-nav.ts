@@ -3,6 +3,7 @@ export const SETTINGS_ROOT = "/settings";
 export const SETTINGS_PATHS = {
   general: "/settings/general",
   team: "/settings/team",
+  brand: "/settings/brand",
   activity: "/settings/activity",
   emailTemplates: "/settings/email-templates",
   calendars: "/settings/calendars",
@@ -23,6 +24,8 @@ const HASH_TARGETS: Record<string, string> = {
   team: SETTINGS_PATHS.team,
   members: SETTINGS_PATHS.team,
   invites: SETTINGS_PATHS.team,
+  brand: SETTINGS_PATHS.brand,
+  playbook: SETTINGS_PATHS.brand,
   activity: SETTINGS_PATHS.activity,
   "activity-log": SETTINGS_PATHS.activity,
   activities: SETTINGS_PATHS.activity,

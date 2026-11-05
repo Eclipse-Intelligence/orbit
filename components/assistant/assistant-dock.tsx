@@ -591,7 +591,33 @@ function MentionChip({ mention }: { mention: Mention }) {
   );
 }
 
-export default function AssistantDock({ brief = null }: { brief?: UnreadBrief | null }) {
+const TILE_TONES = [
+  "bg-(--tag-blue-bg) text-(--tag-blue-text) shadow-[inset_0_0_0_1px_var(--tag-blue-border)]",
+  "bg-(--tag-orange-bg) text-(--tag-orange-text) shadow-[inset_0_0_0_1px_var(--tag-orange-border)]",
+  "bg-(--tag-green-bg) text-(--tag-green-text) shadow-[inset_0_0_0_1px_var(--tag-green-border)]",
+  "bg-(--tag-teal-bg) text-(--tag-teal-text) shadow-[inset_0_0_0_1px_var(--tag-teal-border)]",
+  "bg-(--tag-red-bg) text-(--tag-red-text) shadow-[inset_0_0_0_1px_var(--tag-red-border)]",
+  "bg-(--tag-purple-bg) text-(--tag-purple-text) shadow-[inset_0_0_0_1px_var(--tag-purple-border)]",
+];
+
+function WorkspaceChip({ name }: { name: string }) {
+  const tone = TILE_TONES[[...name].reduce((sum, letter) => sum + letter.charCodeAt(0), 0) % TILE_TONES.length];
+  return (
+    <span title={`Working in ${name}`} className="text-soft flex h-[22px] max-w-[45%] shrink-0 items-center gap-1.5 rounded-full bg-white/[0.05] pr-2 pl-[3px] text-[12px] leading-none">
+      <span aria-hidden className={cn("inline-flex size-4 shrink-0 items-center justify-center rounded-full text-[9px] leading-none font-semibold", tone)}>
+        {name.trim().charAt(0).toUpperCase()}
+      </span>
+      <span className="truncate">
+        <span className="sr-only">Working in </span>
+        {name}
+      </span>
+    </span>
+  );
+}
+
+export default function AssistantDock({ brief = null, workspaceName = "" }: { brief?: UnreadBrief | null; workspaceName?: string }) {
+  const where = workspaceName.trim();
+  const askLabel = where ? `Ask Orbit in ${where}` : "Ask Orbit anything";
   const router = useRouter();
   const pathname = usePathname();
   const { mac } = useShortcuts();
@@ -1020,7 +1046,7 @@ export default function AssistantDock({ brief = null }: { brief?: UnreadBrief | 
           className="group text-subtle hover:text-foreground focus-visible:ring-ring/60 ease-power3-out flex h-11 w-full cursor-text items-center gap-2.5 rounded-full bg-[#1f1f1f]/90 pr-2 pl-5 text-left text-[14px] shadow-[0_12px_40px_rgba(0,0,0,0.5)] backdrop-blur-xl transition-[color,background-color] duration-150 outline-none hover:bg-[#232323]/95 focus-visible:ring-2 md:w-[24rem]"
         >
           {pendingBrief && <span aria-hidden className="bg-primary -ml-1 size-2 shrink-0 rounded-full" />}
-          <span className="min-w-0 flex-1 truncate">{messages.length > 0 ? conversation?.title ?? "Continue your chat" : "Ask Orbit anything"}</span>
+          <span className="min-w-0 flex-1 truncate">{messages.length > 0 ? conversation?.title ?? "Continue your chat" : askLabel}</span>
           {pendingBrief && <span className="sr-only">Your morning brief is ready</span>}
           <Kbd aria-hidden className="max-md:hidden">
             O
@@ -1057,8 +1083,11 @@ export default function AssistantDock({ brief = null }: { brief?: UnreadBrief | 
             </span>
           </div>
         )}
-        <header className="flex h-11 shrink-0 items-center gap-1 pt-1 pr-2 pl-5">
-          <span className="text-subtle min-w-0 flex-1 truncate text-[13px]">{conversation?.title ?? "New chat"}</span>
+        <header className={cn("flex h-11 shrink-0 items-center gap-1 pt-1 pr-2", where ? "pl-4" : "pl-5")}>
+          <span className="flex min-w-0 flex-1 items-center gap-2">
+            {where && <WorkspaceChip name={where} />}
+            <span className="text-subtle min-w-0 truncate text-[13px]">{conversation?.title ?? "New chat"}</span>
+          </span>
           {pendingBrief && (
             <Button variant="secondary" size="sm" className="mr-1 shrink-0 gap-1.5" disabled={busy} onClick={() => void showBrief(pendingBrief)}>
               <span aria-hidden className="bg-primary size-1.5 rounded-full" />
@@ -1162,7 +1191,11 @@ export default function AssistantDock({ brief = null }: { brief?: UnreadBrief | 
                   </li>
                 ))}
               </ul>
-              <p className="caption-style text-subtle">Changes need your approval.</p>
+              <p className="caption-style text-subtle">
+                {where
+                  ? `Works with ${where}'s records, brand profile and Knowledge. Your mail and calendar are all here. Changes need your approval.`
+                  : "Changes need your approval."}
+              </p>
             </div>
           )}
           {error && (
@@ -1201,7 +1234,7 @@ export default function AssistantDock({ brief = null }: { brief?: UnreadBrief | 
                 setMentions(nextMentions);
               }}
               onSubmit={() => send(draft)}
-              placeholder={webSearch ? "Ask about Orbit or the web… Type @ to tag" : "Ask about Orbit… Type @ to tag"}
+              placeholder={where ? `${askLabel}… Type @ to tag` : webSearch ? "Ask about Orbit or the web… Type @ to tag" : "Ask about Orbit… Type @ to tag"}
             />
             <div className="flex items-center gap-1.5">
               <Select

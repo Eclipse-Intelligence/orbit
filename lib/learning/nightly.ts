@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { brandOrEmpty } from "@/lib/crm/brand";
 import { withActor } from "@/lib/crm/context";
 import { memberActor } from "@/lib/crm/conversations";
 import { CrmError } from "@/lib/crm/errors";
@@ -14,6 +15,10 @@ import { WRITING_STYLE } from "@/lib/writing-style";
 export type LearningKind = "personal" | "business" | "market" | "brief";
 export type UnitResult = { added?: number; updated?: number; archived?: number; skipped?: string; brief?: boolean; tidied?: { merged: number; retired: number }; tidyError?: string };
 type Options = { deadline: number; fetchImpl?: typeof fetch; now?: Date };
+
+function businessName(actor: UserActor) {
+  return actor.workspaceName.trim() || "the business";
+}
 
 const UNIT_MIN_MS = 25_000;
 const FIRST_LOOKBACK_MS = 7 * 86_400_000;
@@ -184,7 +189,7 @@ async function learnPersonal(actor: UserActor, since: Date, options: Options): P
   const existing = await withActor(actor, (db) => existingMemories(db, actor, "personal", 60, found));
   const material = `${existingBlock(existing)}\n\nMATERIAL\n\n${found}`;
   const ops = await askForOps(
-    `You keep the long-term memory that Orbit's assistant (in Eclipse's CRM) holds about ${name}, so it doesn't start from scratch in each conversation. ` +
+    `You keep the long-term memory that Orbit's assistant (in ${businessName(actor)}'s CRM) holds about ${name}, so it doesn't start from scratch in each conversation. ` +
       `From the material, keep only what will still be useful in future conversations: how ${name} likes things done, corrections they made to the assistant, standing instructions, people and relationships that matter to them and aren't obvious from CRM records, goals and priorities they're working towards, and patterns in how they edit drafts. ` +
       "Write each note as a fact about them (for example \"Mark wants first emails under 90 words\"). Skip one-off requests, anything already obvious from CRM records, personal matters unrelated to their work, and habits Orbit now does automatically (every email sent or received with a contact is filed on the timeline by itself, so never keep a note that emails should be logged by hand, and archive any existing note that says so). Kinds: preference, correction, instruction, person, goal, writing, fact.",
     material,
@@ -252,8 +257,9 @@ async function learnBusiness(actor: UserActor, since: Date, options: Options): P
     .join("\n\n");
   const existing = await withActor(actor, (db) => existingMemories(db, actor, "business", 80, found));
   const material = `${existingBlock(existing)}\n\nMATERIAL\n\n${found}`;
+  const business = businessName(actor);
   const ops = await askForOps(
-    "You keep the shared business memory for Eclipse's CRM, which every member's assistant reads. From the material, learn what helps the team sell and keep customers: the ideal customer profile and audience (who buys, who stalls, who churns), buying triggers, objections and the answers that worked, competitors mentioned and how Eclipse compares, pricing reactions, messaging and approaches that get replies or move deals, and patterns behind wins and losses. " +
+    `You keep the shared business memory for ${business}'s CRM, which every member's assistant reads. From the material, learn what helps the team sell and keep customers: the ideal customer profile and audience (who buys, who stalls, who churns), buying triggers, objections and the answers that worked, competitors mentioned and how ${business} compares, pricing reactions, messaging and approaches that get replies or move deals, and patterns behind wins and losses. ` +
       "Only conclude a pattern when the material supports it, and say how many examples back it. Set companyId only to a company id that appears in the material. Kinds: icp, audience, trigger, objection, competitor, pricing, messaging, win_pattern, loss_pattern, fact.",
     material,
     options,
@@ -295,8 +301,10 @@ async function learnMarket(actor: UserActor, options: Options): Promise<UnitResu
     .join("\n\n");
   const existing = await withActor(actor, (db) => existingMemories(db, actor, "market", 60, found));
   const material = `${existingBlock(existing)}\n\n${context}\n\nMATERIAL\n\n${found}`;
+  const business = businessName(actor);
+  const sells = (await brandOrEmpty(actor)).whatYouSell.trim();
   const ops = await askForOps(
-    "You keep the shared market memory for Eclipse, which sells AI visibility, content operations and related services. From the market notes, keep what matters to Eclipse's sales and positioning: themes and trends building across several notes, competitor moves, launches and funding in the space, and buying signals on specific companies or people in the CRM or on the watchlist (say why it's a reason to get in touch now). " +
+    `You keep the shared market memory for ${business}${sells ? `. What ${business} sells, in its own words: ${clip(sells, 3_000)}\n` : ". "}From the market notes, keep what matters to ${business}'s sales and positioning: themes and trends building across several notes, competitor moves, launches and funding in the space, and buying signals on specific companies or people in the CRM or on the watchlist (say why it's a reason to get in touch now). ` +
       "Merge related notes into one theme rather than one note per article, and update existing notes as a story develops. Use the note's link as the source. Set companyId only to a company id listed above. Kinds: theme, competitor, launch, funding, signal, person, trend.",
     material,
     options,
@@ -344,7 +352,7 @@ async function writeBrief(actor: UserActor, since: Date, options: Options & { da
     .join("\n\n");
   const result = await completeJson({
     system:
-      `Write ${name}'s morning brief in Orbit, Eclipse's CRM. Reply with JSON only: {"brief": string}. The brief is markdown of at most 220 words with up to four short sections, each a heading line starting "### " and two to four bullets: "In your market" (market notes and research mail), "Accounts to act on" (buying signals and why now, with the company link given), "Deals gone quiet" (the stalled deals most worth a nudge, with the deal link given and a suggested next step), and "What Orbit learned" (the most useful new or changed notes). ` +
+      `Write ${name}'s morning brief in Orbit, ${businessName(actor)}'s CRM. Reply with JSON only: {"brief": string}. The brief is markdown of at most 220 words with up to four short sections, each a heading line starting "### " and two to four bullets: "In your market" (market notes and research mail), "Accounts to act on" (buying signals and why now, with the company link given), "Deals gone quiet" (the stalled deals most worth a nudge, with the deal link given and a suggested next step), and "What Orbit learned" (the most useful new or changed notes). ` +
       `Leave out a section with nothing worth saying. Lead with what ${name} should act on today. Link sources with markdown links using the links given. Plain and direct, UK English. ${WRITING_STYLE} ${UNTRUSTED}`,
     user: material,
     schema: BRIEF,
@@ -401,7 +409,7 @@ async function tidyScope(actor: UserActor, scope: MemoryScope, options: Options)
     const over = Math.max(0, rows.length - limit);
     const result = await completeJson({
       system:
-        `You tidy the ${scope === "personal" ? "private memory Orbit's assistant keeps about one person" : `shared ${scope} memory of Eclipse's CRM`}. ` +
+        `You tidy the ${scope === "personal" ? "private memory Orbit's assistant keeps about one person" : `shared ${scope} memory of ${businessName(actor)}'s CRM`}. ` +
         'Reply with JSON only: {"merge": [{"keepId": string, "mergeIds": [string], "title": string, "body": string}], "archive": [{"id": string, "reason": string}]}. ' +
         "Merge notes that say the same thing or are about the same point into the clearest one, with a combined title (at most 12 words) and body (at most 70 words) that keeps every specific fact. " +
         "Archive notes that are out of date, contradicted by a newer note, or too vague to change what anyone does. " +

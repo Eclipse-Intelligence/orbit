@@ -277,15 +277,15 @@ describe("cold email triggers, subjects and tailored offers", () => {
   });
 
   it("writes the playbook for whoever is sending", () => {
-    const mark = playbookFor({ firstName: "Mark", bookingUrl: "https://orbit.geteclipse.co/book/mark" });
+    const mark = playbookFor({ firstName: "Mark", bookingUrl: "https://orbit.geteclipse.co/book/mark" }, COLD_EMAIL_PLAYBOOK);
     assert.equal(mark, COLD_EMAIL_PLAYBOOK);
-    const priya = playbookFor({ firstName: "Priya", bookingUrl: "https://orbit.geteclipse.co/book/priya" });
+    const priya = playbookFor({ firstName: "Priya", bookingUrl: "https://orbit.geteclipse.co/book/priya" }, COLD_EMAIL_PLAYBOOK);
     assert.doesNotMatch(priya, /\bMark\b/);
     assert.match(priya, /Sign-off\. Just "Priya"/);
     assert.match(priya, /goes to Priya for approval/);
     assert.match(priya, /https:\/\/orbit\.geteclipse\.co\/book\/priya/);
     assert.match(priya, /Marketing|marketing|market notes/);
-    const unbooked = playbookFor({ firstName: "Sam", bookingUrl: null });
+    const unbooked = playbookFor({ firstName: "Sam", bookingUrl: null }, COLD_EMAIL_PLAYBOOK);
     assert.doesNotMatch(unbooked, /\/book\//);
     assert.match(unbooked, /suggest two times, since there's no booking page set up yet/);
     assert.equal(senderFirstName("Priya Shah", "priya@eclipse.test"), "Priya");
@@ -347,7 +347,7 @@ describe("cold email value grading", () => {
         },
       });
     };
-    const result = await checkColdEmail({ ...WEAK, evidence: EVIDENCE, theirOffer: OFFER }, { fetchImpl });
+    const result = await checkColdEmail({ ...WEAK, evidence: EVIDENCE, theirOffer: OFFER, brand: { name: "Eclipse", claims: ECLIPSE_OUTREACH_BRIEF } }, { fetchImpl });
     assert.equal(sent[0].state.prospect_company_already_offers, OFFER);
     assert.match(sent[0].state.approved_product_claims, /Anything on the proof list in Knowledge can be used as it stands/);
     assert.match(sent[0].questions.claims_supported.instructions, /Proof list items are cleared for use as they stand/);

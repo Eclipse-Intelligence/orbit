@@ -4,7 +4,8 @@ import { chatFileNote, chatFilesFor, removeChatObjects, type ChatFile } from "@/
 import { connectedProviders } from "@/lib/ai-accounts/store";
 import { systemPrompt } from "@/lib/assistant/prompt";
 import { docLinkOf } from "@/lib/assistant/doc-link";
-import { ACTION_ALTERNATIVES, ASSISTANT_TOOLS, actionAlternative, describeAction, findTool, recordNames, runTool, toolDescription, toolJson } from "@/lib/assistant/tools";
+import { ACTION_ALTERNATIVES, actionAlternative, assistantTools, describeAction, findTool, recordNames, runTool, toolDefinitions, toolDescription, toolJson } from "@/lib/assistant/tools";
+import { brandOrEmpty } from "@/lib/crm/brand";
 import { approvalFor, editsWithoutApproval, type DocApproval } from "@/lib/assistant/docs";
 import type { DocDiffLine } from "@/lib/docs/types";
 import type { CompanionResult, Effort } from "@/companion/src/protocol";
@@ -517,9 +518,9 @@ async function declinePending(actor: UserActor, conversationId: string, rows: Me
   }
 }
 
-function companionTools() {
+function companionTools(eclipseTools: boolean) {
   return [
-    ...ASSISTANT_TOOLS.map((tool) => ({
+    ...assistantTools({ eclipseTools }).map((tool) => ({
       name: tool.name,
       description: toolDescription(tool),
       parameters: tool.parameters,
@@ -601,7 +602,7 @@ export async function isBriefConversation(actor: UserActor, conversationId: stri
 }
 
 async function promptFor(actor: UserActor, conversation: ConversationRow) {
-  const [links, about, colleagues, brief, briefChat, focus] = await Promise.all([
+  const [links, about, colleagues, brief, briefChat, focus, brand] = await Promise.all([
     userLinks(actor).catch(() => null),
     getPersonalContext(actor).catch(() => null),
     getColleagues(actor).catch(() => []),
@@ -617,11 +618,13 @@ async function promptFor(actor: UserActor, conversation: ConversationRow) {
         .map((row) => row.content)
         .join("\n"),
     ).catch(() => ""),
+    brandOrEmpty(actor),
   ]);
   const learned = await memoryBriefing(actor, { focus }).catch(() => "");
   return {
-    system: systemPrompt(actor, { webSearch: conversation.web_search, links, about: aboutYouSection(about, colleagues), briefReady: Boolean(brief) && !briefChat }),
+    system: systemPrompt(actor, { webSearch: conversation.web_search, links, about: aboutYouSection(about, colleagues), briefReady: Boolean(brief) && !briefChat, brand }),
     learned,
+    eclipseTools: brand.eclipseTools,
   };
 }
 
@@ -648,7 +651,7 @@ async function runCompanionTurn(
   if (!online && (!headless || (await listCompanions(actor)).length === 0)) throw new AssistantError(await companionOfflineMessage(actor));
   const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
   const earlier = new Set(rows.map((row) => row.id));
-  const { system, learned } = await promptFor(actor, conversation);
+  const { system, learned, eclipseTools } = await promptFor(actor, conversation);
   const transcript = buildPrompt(history(rows));
   const jobId = await enqueueCompanionJob(actor, conversation.id, {
     model: apiModel,
@@ -656,7 +659,7 @@ async function runCompanionTurn(
     webSearch: conversation.web_search,
     system,
     prompt: learned ? `${learned}\n${LEARNED_NOTE}\n\n${transcript}` : transcript,
-    tools: companionTools(),
+    tools: companionTools(eclipseTools),
   }, { agentMailId: headless?.agentMailId ?? null });
   if (headless) {
     headless.queued?.({ jobId, online });
@@ -790,7 +793,8 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
   const chosen = assistantModel(conversation.model);
   if (chosen?.source === "claude") return runCompanionTurn(actor, conversation, chosen.apiModel, emit, deadline, signal, options.headless);
   if (options.headless) throw new AssistantError(HEADLESS_MODEL_ERROR);
-  const { system, learned } = await promptFor(actor, conversation);
+  const { system, learned, eclipseTools } = await promptFor(actor, conversation);
+  const tools = toolDefinitions({ eclipseTools });
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
     if (signal?.aborted) return;
     const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
@@ -814,6 +818,7 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
       reasoning: conversation.reasoning,
       webSearch: conversation.web_search,
       messages: [{ role: "system", content: system }, ...learnedMessages(learned), ...messages],
+      tools,
       timeoutMs: Math.min(240_000, remaining - 5_000),
       fetchImpl,
       actor,
@@ -841,7 +846,7 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
       reads.map(async (call) => {
         const label = findTool(call.function.name)?.label ?? call.function.name;
         emit({ type: "tool", id: call.id, name: call.function.name, label, status: "running" });
-        const output = await runTool(actor, call.function.name, parseArgs(call.function.arguments), { deadline: deadline - 20_000 });
+        const output = await runTool(actor, call.function.name, parseArgs(call.function.arguments), { deadline: deadline - 20_000, eclipseTools });
         await insertMessage(actor, conversation.id, {
           role: "tool",
           content: toolJson(output),
