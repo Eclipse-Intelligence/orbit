@@ -13,7 +13,7 @@ import SidebarResizer from "./sidebar-resizer";
 import type { CaptureStatus } from "@/lib/crm/capture";
 import type { WorkspaceChoice } from "@/lib/auth/user";
 import type { BoardSummary } from "@/lib/crm/types";
-import { NO_CAPTURE_COUNTS, useCompaniesStore } from "@/stores/companies-store";
+import { CAPTURE_SECTIONS, NO_CAPTURE_COUNTS, useCompaniesStore, type CaptureCounts } from "@/stores/companies-store";
 
 export type SidebarWorkspace = { id: string; name: string; viewerName: string; choices: WorkspaceChoice[] };
 
@@ -30,15 +30,20 @@ export default function Sidebar({ boards, companyCount, openActionCount, mailUnr
   const sidebarOpen = useCompaniesStore((state) => state.sidebarOpen);
   const setSidebarOpen = useCompaniesStore((state) => state.setSidebarOpen);
   const setCapture = useCompaniesStore((state) => state.setCapture);
-  const waiting = capture?.waiting ?? 0;
-  const fresh = capture?.fresh ?? 0;
-  const newestAt = capture?.newestAt ?? null;
-  const sections = capture?.sections ?? NO_CAPTURE_COUNTS;
-  const { approvals, followUps, replies, tasks, toFile } = sections;
-
   useEffect(() => {
-    setCapture({ waiting, fresh, newestAt, sections: { approvals, followUps, replies, tasks, toFile } });
-  }, [setCapture, waiting, fresh, newestAt, approvals, followUps, replies, tasks, toFile]);
+    const known = useCompaniesStore.getState().capture;
+    const read = capture?.sections ?? NO_CAPTURE_COUNTS;
+    const unread = new Set(capture?.failed ?? []);
+    const sections = Object.fromEntries(
+      CAPTURE_SECTIONS.map((id) => [id, unread.has(id) ? (known?.sections[id] ?? 0) : read[id]]),
+    ) as CaptureCounts;
+    setCapture({
+      waiting: CAPTURE_SECTIONS.reduce((sum, id) => sum + sections[id], 0),
+      fresh: capture?.fresh ?? 0,
+      newestAt: capture?.newestAt ?? null,
+      sections,
+    });
+  }, [setCapture, capture]);
 
   return (
     <>
@@ -66,7 +71,7 @@ export default function Sidebar({ boards, companyCount, openActionCount, mailUnr
           <SheetCloseButton label="Close menu" className="absolute top-3 right-3 z-10 mr-0" />
           <SidebarContent
             boards={boards}
-              companyCount={companyCount}
+            companyCount={companyCount}
             openActionCount={openActionCount}
             mailUnread={mailUnread}
             capture={capture}

@@ -12,6 +12,12 @@ export const AUTOMATED_SENDER =
 export const UNSUBSCRIBE_TEXT = "(unsubscribe|opt[ -]?out|manage (your )?(email |subscription )?preferences|email preferences)";
 export const AUTOMATED_DOMAIN = "@(e|em|email|mail|mailer|mg|news|newsletter|marketing|notifications?|alerts?|updates?|bounce|post)\\.";
 
+const SINGLE_KEY = "^m:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$";
+
+export function sameThread(alias: string, key: string) {
+  return `(${alias}.thread_key = ${key} or (${alias}.thread_key is null and ${alias}.id = (case when ${key} ~ '${SINGLE_KEY}' then substr(${key}, 3)::uuid end)))`;
+}
+
 export function splitJoin(alias: string, userParam: string) {
   return `left join lateral (
     select sr.split from crm.mail_sender_rules sr
@@ -33,7 +39,12 @@ export function splitCase(alias: string) {
     when exists (
       select 1 from crm.mail_messages own
       join crm.mail_folders own_folder on own_folder.id = own.folder_id
-      where own.source_id = ${alias}.source_id and coalesce(own.thread_key, 'm:' || own.id::text) = ${alias}.tk and own_folder.role = 'sent'
+      where own.source_id = ${alias}.source_id and own.thread_key = ${alias}.tk and own_folder.role = 'sent'
+    ) then 'important'
+    when ${alias}.tk = 'm:' || ${alias}.id::text and exists (
+      select 1 from crm.mail_messages own
+      join crm.mail_folders own_folder on own_folder.id = own.folder_id
+      where own.id = ${alias}.id and own.thread_key is null and own_folder.role = 'sent'
     ) then 'important'
     when coalesce(${alias}.from_email, '') ~* '${AUTOMATED_SENDER}' or coalesce(${alias}.from_email, '') ~* '${AUTOMATED_DOMAIN}' then 'news'
     when ${alias}.focused is false then 'other'

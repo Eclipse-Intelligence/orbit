@@ -10,6 +10,7 @@ import { listFollowUps } from "@/lib/crm/follow-ups";
 import { getGranolaStatus } from "@/lib/crm/granola";
 import { getMailbox, shouldSyncMailbox, syncMailbox } from "@/lib/crm/inbox";
 import { getTeamsTranscriptStatus } from "@/lib/crm/teams-transcripts";
+import type { CaptureSection } from "@/lib/crm/capture-format";
 import { listUnknownMail } from "@/lib/mail/filing";
 import { microsoftConfigured } from "@/lib/microsoft/oauth";
 
@@ -17,6 +18,13 @@ export const dynamic = "force-dynamic";
 
 function requestTime() {
   return new Date();
+}
+
+function logged<T>(label: string, fallback: T) {
+  return (error: unknown) => {
+    console.error(label, error instanceof Error ? error.message : error);
+    return fallback;
+  };
 }
 
 export default async function CapturePage() {
@@ -31,19 +39,26 @@ export default async function CapturePage() {
   }
   const live = mailbox?.status === "connected";
   const context = await captureContext(user, openedAt.getTime());
+  const failed = new Set<CaptureSection>(context.failed);
   const [items, status, calls, granola, transcripts, calendar, followUps, unknown, others] = await Promise.all([
-    listToFile(user, openedAt.getTime()),
-    captureStatus(user, openedAt.getTime(), context),
+    listToFile(user, openedAt.getTime()).catch((error) => {
+      failed.add("toFile");
+      return logged("Reading what's waiting to file failed", { unfiled: [], people: [] })(error);
+    }),
+    captureStatus(user, openedAt.getTime(), context).catch(logged("Counting Capture failed", null)),
     mailbox ? getCallSync(user) : Promise.resolve(null),
     getGranolaStatus(user),
     live ? getTeamsTranscriptStatus(user) : Promise.resolve(null),
     live ? getCalendarStatus(user) : Promise.resolve(null),
-    listFollowUps(user).catch(() => []),
-    listUnknownMail(user, openedAt.getTime(), { actors: context.actors, emails: context.unknown }).catch((error) => {
-      console.error("Reading email from new people failed", error instanceof Error ? error.message : error);
-      return { emails: [], total: 0, workspaces: [{ id: user.workspaceId, name: user.workspaceName }] };
+    listFollowUps(user).catch((error) => {
+      failed.add("followUps");
+      return logged("Reading call follow-ups failed", [])(error);
     }),
-    listWaitingOnOthers(user, openedAt).catch(() => []),
+    listUnknownMail(user, openedAt.getTime(), { actors: context.actors, emails: context.unknown }).catch((error) => {
+      failed.add("toFile");
+      return logged("Reading email from new people failed", { emails: [], total: 0, workspaces: [{ id: user.workspaceId, name: user.workspaceName }] })(error);
+    }),
+    listWaitingOnOthers(user, openedAt).catch(logged("Reading approvals waiting on others failed", [])),
   ]);
   after(async () => {
     try {
@@ -67,6 +82,7 @@ export default async function CapturePage() {
         approvals: here.approvals,
         others,
         nudges: here.nudges,
+        reminders: here.reminders,
         calls: followUps,
         replies: here.replies,
         tasks: here.tasks,
@@ -74,11 +90,12 @@ export default async function CapturePage() {
         unfiled: items.unfiled,
         people: items.people,
       }}
-      toFileTotal={status.sections.toFile}
+      toFileTotal={status?.sections.toFile ?? 0}
+      failed={[...failed]}
       workspaces={unknown.workspaces}
       workspaceId={user.workspaceId}
       now={openedAt.getTime()}
-      newestAt={status.newestAt}
+      newestAt={status?.newestAt ?? null}
       alert={connectionAlert({ mailbox, calendar, calls, granola, transcripts })}
     />
   );

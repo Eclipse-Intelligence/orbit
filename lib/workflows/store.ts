@@ -516,6 +516,10 @@ export async function decideApproval(
 ) {
   if (!isUuid(runId)) throw new CrmError("not_found", "Approval not found.", 404);
   const claimed = await withActor(actor, async (db) => {
+    const owner = await db.query<{ owner_id: string }>("select owner_id from crm.workflow_runs where id = $1", [runId]);
+    if (owner.rows[0] && owner.rows[0].owner_id !== actor.userId) {
+      throw new CrmError("forbidden", "Only the person this approval is waiting on can decide it.", 403);
+    }
     const result = await db.query<{ state: RunState }>(
       `select state from crm.workflow_runs
        where id = $1 and owner_id = $2 and status = 'waiting' and waiting_for = 'approval'
@@ -546,9 +550,6 @@ export async function decideApproval(
   return executeRun(runId, actor.userId, actor.workspaceId, { deadline: Date.now() + 50_000, fetchImpl: options.fetchImpl });
 }
 
-const UPDATES_ONLY = `coalesce(source, '') <> 'workflow_approval'
-  and not (coalesce(source, '') = 'mail' and (title like 'No reply yet:%' or title like 'Time to check in:%' or href = '/capture'))`;
-
 export async function listNotifications(actor: UserActor, limit = 20): Promise<Notification[]> {
   return withActor(actor, async (db) => {
     const result = await db.query<{
@@ -562,7 +563,7 @@ export async function listNotifications(actor: UserActor, limit = 20): Promise<N
     }>(
       `select id, title, body, href, source, read_at, created_at from crm.notifications
        where (workspace_id = $1 or source = 'mail') and user_id = $2 and created_at > now() - interval '30 days'
-         and ${UPDATES_ONLY}
+         and category is null
        order by created_at desc limit $3`,
       [actor.workspaceId, actor.userId, limit],
     );

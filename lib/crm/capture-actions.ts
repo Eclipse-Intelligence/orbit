@@ -9,14 +9,16 @@ import type { UserActor } from "@/lib/crm/types";
 import { applyMailAction } from "@/lib/mail/actions";
 import { createAndFileUnknown, fileUnknownTo, ignoreUnknownMail, moveUnknownMail } from "@/lib/mail/filing";
 import { updatePrepared } from "@/lib/mail/prepare";
-import { dismissReply } from "@/lib/mail/waiting";
+import { dismissReply, finishReminder } from "@/lib/mail/waiting";
 import { decideApproval } from "@/lib/workflows/store";
+import { workspaceActors } from "@/lib/crm/workspaces";
 
 export type CaptureAction =
   | { kind: "approve"; runId: string }
   | { kind: "reject"; runId: string; note: string | null }
   | { kind: "nudge-dismiss"; id: string }
   | { kind: "call-dismiss"; id: string }
+  | { kind: "reminder-done"; id: string }
   | { kind: "reply-done"; thread: string }
   | { kind: "reply-snooze"; thread: string; until: string }
   | { kind: "reply-dismiss"; thread: string; at: string }
@@ -63,6 +65,7 @@ export function readCaptureAction(body: unknown): CaptureAction {
       return { kind: "reject", runId: id(input.runId), note: text(input.note, 1000) || null };
     case "nudge-dismiss":
     case "call-dismiss":
+    case "reminder-done":
     case "task-done":
     case "import-ignore":
       return { kind: input.kind, id: id(input.id) };
@@ -93,6 +96,13 @@ export function readCaptureAction(body: unknown): CaptureAction {
   }
 }
 
+export async function captureActor(signedIn: UserActor, workspaceId: unknown) {
+  if (workspaceId === undefined || workspaceId === null || workspaceId === signedIn.workspaceId) return signedIn;
+  const found = typeof workspaceId === "string" && isUuid(workspaceId) ? (await workspaceActors(signedIn)).find((item) => item.workspaceId === workspaceId) : undefined;
+  if (!found) throw new CrmError("conflict", "You're no longer in that workspace, so this change wasn't made. Reload Capture.", 409);
+  return found;
+}
+
 export async function runCaptureAction(actor: UserActor, action: CaptureAction, options: { fetchImpl?: typeof fetch } = {}): Promise<CaptureOutcome> {
   switch (action.kind) {
     case "approve":
@@ -106,6 +116,9 @@ export async function runCaptureAction(actor: UserActor, action: CaptureAction, 
       return { ok: true };
     case "call-dismiss":
       await closeFollowUp(actor, action.id, "dismissed");
+      return { ok: true };
+    case "reminder-done":
+      await finishReminder(actor, action.id);
       return { ok: true };
     case "reply-done":
       await applyMailAction(actor, { thread: action.thread, action: "archive", view: { role: "inbox" } }, options.fetchImpl);

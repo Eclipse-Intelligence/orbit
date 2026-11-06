@@ -6,6 +6,7 @@ export type SwipeHandlers = {
   onDrag?: (dx: number) => void;
   onRelease?: (commit: SwipeDirection | null, velocity: number) => void;
   scroller?: () => HTMLElement | null;
+  width?: () => number;
 };
 
 const LOCK_RATIO = 0.75;
@@ -140,7 +141,7 @@ export function watchSwipe(target: Document | HTMLElement, handlers: () => Swipe
     const dx = touch.clientX - from.x;
     const speed = velocityOf(from.samples);
     const current = handlers();
-    release(swipeCommit(dx, speed, window.innerWidth, { left: Boolean(current.canLeft), right: Boolean(current.canRight) }), speed);
+    release(swipeCommit(dx, speed, current.width?.() ?? window.innerWidth, { left: Boolean(current.canLeft), right: Boolean(current.canRight) }), speed);
   }
 
   function cancel() {

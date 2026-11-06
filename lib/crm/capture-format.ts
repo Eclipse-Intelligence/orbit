@@ -4,6 +4,8 @@ export const REPLY_AMBER_WORKING_DAYS = 3;
 
 export type CaptureSectionCounts = { approvals: number; followUps: number; replies: number; tasks: number; toFile: number };
 
+export type CaptureSection = keyof CaptureSectionCounts;
+
 const PARTS: { id: keyof CaptureSectionCounts; one: string; many: string }[] = [
   { id: "approvals", one: "approval", many: "approvals" },
   { id: "followUps", one: "follow-up", many: "follow-ups" },

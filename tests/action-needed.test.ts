@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { after, before, describe, it } from "node:test";
-import { listWaitingOnOthers, pastOneWorkingDay, snoozeTask, taskSnoozeChoices, waitingFor, waitingIn } from "@/lib/crm/action-needed";
-import { captureStatus, captureStatuses, listToFile, markCaptureSeen } from "@/lib/crm/capture";
-import { readCaptureAction, runCaptureAction } from "@/lib/crm/capture-actions";
+import { listWaitingOnOthers, pastOneWorkingDay, snoozeTask, waitingFor, waitingIn } from "@/lib/crm/action-needed";
+import { onWorkingDay, taskSnoozeChoices } from "@/lib/crm/task-snooze";
+import { dayKeyAt, nextWorkingDay, shiftDay, wallClockAt, weekday } from "@/lib/crm/working-days";
+import { runTool } from "@/lib/assistant/tools";
+import { captureContext, captureStatus, captureStatuses, listToFile, markCaptureSeen, waitingHere } from "@/lib/crm/capture";
+import { captureActor, readCaptureAction, runCaptureAction } from "@/lib/crm/capture-actions";
 import { captureSummary, dueLabel } from "@/lib/crm/capture-format";
 import { createCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
@@ -11,9 +15,12 @@ import { createTask, getTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { createWorkspace, workspaceActors } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool } from "@/lib/db/pool";
+import { unknownMail } from "@/lib/mail/filing";
 import { dismissReply, replyArrival, waitingMail, workingDaysCutoff, workingDaysSince } from "@/lib/mail/waiting";
 import { startOfDay } from "@/lib/time";
 import { listNotifications } from "@/lib/workflows/store";
+import { sendAlert } from "@/lib/alerts";
+import { notify } from "@/lib/workflows/engine";
 import { createUser, queryAsUser, resetDatabase } from "./helpers";
 
 type Box = { sourceId: string; inbox: string; sent: string; archive: string; snoozed: string; trash: string };
@@ -194,10 +201,8 @@ describe("working days for Capture", () => {
     const friday = taskSnoozeChoices("2026-11-06T14:00:00Z", new Date("2026-11-06T10:00:00Z"));
     assert.deepEqual(
       friday.map((choice) => [choice.id, choice.label, choice.at]),
-      [
-        ["later", "Later today", "2026-11-06T13:00:00.000Z"],
-        ["tomorrow", "Next working day", "2026-11-09T14:00:00.000Z"],
-      ],
+      [["tomorrow", "Next working day", "2026-11-09T14:00:00.000Z"]],
+      "no Later today for tasks, and next week is the same Monday",
     );
     const thursday = taskSnoozeChoices("2026-05-21T08:00:00Z", new Date("2026-05-21T20:30:00Z"));
     assert.deepEqual(
@@ -208,7 +213,10 @@ describe("working days for Capture", () => {
       ],
       "next week skips the bank holiday Monday",
     );
-    assert.equal(taskSnoozeChoices(null, new Date("2026-11-04T10:00:00Z"))[1].at, "2026-11-05T09:00:00.000Z", "no time of day means 09:00");
+    assert.equal(taskSnoozeChoices(null, new Date("2026-11-04T10:00:00Z"))[0].at, "2026-11-05T09:00:00.000Z", "no time of day means 09:00");
+    assert.equal(onWorkingDay(new Date("2026-11-07T15:30:00Z")).toISOString(), "2026-11-09T15:30:00.000Z", "a Saturday moves to Monday at the same time");
+    assert.equal(onWorkingDay(new Date("2026-12-25T10:00:00Z")).toISOString(), "2027-01-04T10:00:00.000Z", "Christmas moves past the break");
+    assert.equal(onWorkingDay(new Date("2026-11-10T10:00:00Z")).toISOString(), "2026-11-10T10:00:00.000Z");
   });
 
   it("labels due dates and sums sections for the bell", () => {
@@ -370,7 +378,7 @@ describe("Tasks, approvals and To file", () => {
     james = await teammate(mark, "james@eclipse-tasks.test", "James Carter");
   });
 
-  it("lists your overdue tasks, then today's, and never a colleague's", async () => {
+  it("lists your overdue tasks and unowned ones, then today's, and never a colleague's", async () => {
     const today = startOfDay(new Date());
     const due = (offset: number) => new Date(today.getTime() + offset).toISOString();
     const make = async (actor: UserActor, title: string, dueAt: string, ownerId: string | null = actor.userId) =>
@@ -378,7 +386,7 @@ describe("Tasks, approvals and To file", () => {
     const later = await make(mark, "Review Q4 pipeline", due(60_000));
     const overdue = await make(mark, "Send revised SOW", due(-2 * DAY_MS));
     await make(mark, "Next week thing", due(3 * DAY_MS));
-    await make(mark, "Nobody's job", due(-DAY_MS), null);
+    const unowned = await make(mark, "Nobody's job", due(-DAY_MS), null);
     await make(james, "James's task", due(-DAY_MS));
 
     const tasks = (await waitingFor(mark, [mark])).tasks;
@@ -386,26 +394,42 @@ describe("Tasks, approvals and To file", () => {
       tasks.map((task) => [task.title, task.overdue]),
       [
         ["Send revised SOW", true],
+        ["Nobody's job", true],
         ["Review Q4 pipeline", false],
       ],
     );
     assert.deepEqual(
       (await waitingFor(james, [james])).tasks.map((task) => task.title),
       ["James's task"],
+      "members don't see tasks nobody owns that they didn't create",
     );
 
-    const choice = tasks[0].snooze.find((item) => item.id === "tomorrow")!;
+    const choice = taskSnoozeChoices(tasks[0].dueAt, new Date()).find((item) => item.id === "tomorrow")!;
     await runCaptureAction(mark, { kind: "task-snooze", id: overdue, until: choice.at });
     assert.equal((await getTask(mark, overdue)).dueAt, choice.at);
     await assert.rejects(snoozeTask(mark, later, new Date(Date.now() - 60_000).toISOString()), /at least a minute from now/);
     await runCaptureAction(mark, { kind: "task-done", id: later });
     assert.ok((await getTask(mark, later)).completedAt);
+    assert.deepEqual(
+      (await waitingFor(mark, [mark])).tasks.map((task) => task.title),
+      ["Nobody's job"],
+    );
+    let saturday = dayKeyAt(new Date(Date.now() + 2 * DAY_MS));
+    while (weekday(saturday) !== 6) saturday = shiftDay(saturday, 1);
+    await runCaptureAction(mark, { kind: "task-snooze", id: overdue, until: new Date(wallClockAt(saturday, 10, 0)).toISOString() });
+    assert.equal(
+      (await getTask(mark, overdue)).dueAt,
+      new Date(wallClockAt(nextWorkingDay(saturday), 10, 0)).toISOString(),
+      "a custom Saturday moves to the next working day",
+    );
+    await runCaptureAction(mark, { kind: "task-done", id: overdue });
+    await runCaptureAction(mark, { kind: "task-done", id: unowned });
     assert.deepEqual((await waitingFor(mark, [mark])).tasks, []);
   });
 
   it("shows approvals waiting on you, and admins see a colleague's that has waited over a working day", async () => {
     const mine = await waitingRun(mark, "Send intro email to Priya Shah");
-    const stale = await waitingRun(james, "Send renewal reminder to Brightline", new Date(Date.now() - 10 * DAY_MS));
+    const stale = await waitingRun(james, "Send renewal reminder to Brightline", new Date(Date.now() - 30 * DAY_MS));
     await waitingRun(james, "Fresh request");
 
     assert.deepEqual(
@@ -421,7 +445,11 @@ describe("Tasks, approvals and To file", () => {
     assert.ok(others[0].waitingDays >= 2);
     assert.deepEqual(await listWaitingOnOthers(james), [], "members don't see colleagues' approvals");
 
-    await assert.rejects(runCaptureAction(mark, { kind: "approve", runId: stale }), /already been dealt with/, "nobody decides on someone else's behalf");
+    await assert.rejects(
+      runCaptureAction(mark, { kind: "approve", runId: stale }),
+      /Only the person this approval is waiting on can decide it/,
+      "nobody decides on someone else's behalf",
+    );
     await runCaptureAction(mark, { kind: "reject", runId: mine, note: "Not yet" });
     const run = await getAdminPool().query<{ status: string; state: { decisions?: Record<string, { approved: boolean; note: string | null }> } }>(
       "select status, state from crm.workflow_runs where id = $1",
@@ -468,22 +496,34 @@ describe("Tasks, approvals and To file", () => {
     assert.ok(fresh.newestAt && fresh.newestAt > (fresh.seenAt ?? ""));
   });
 
-  it("keeps tasks, approvals and No reply yet alerts out of the bell", async () => {
+  it("keeps what Capture shows out of the bell by its tag, and the migration tags older alerts when it runs again", async () => {
     const admin = getAdminPool();
-    const insert = (title: string, source: string | null, href: string | null) =>
-      admin.query("insert into crm.notifications (workspace_id, user_id, title, href, source) values ($1, $2, $3, $4, $5)", [
-        mark.workspaceId,
-        mark.userId,
-        title,
-        href,
-        source,
-      ]);
-    await insert("Approve: Send intro", "workflow_approval", `/workflows?approve=x`);
-    await insert("No reply yet: Pilot pricing", "mail", "/mail?thread=a");
-    await insert("Demo with Acme ended with no next step", "mail", "/capture");
-    await insert("Follow-up sent to Grace", "mail", "/mail?thread=b");
-    await insert("Workflow failed: Granola to ClickUp", "workflow", "/workflows");
-    assert.deepEqual((await listNotifications(mark)).map((item) => item.title).sort(), ["Follow-up sent to Grace", "Workflow failed: Granola to ClickUp"]);
+    const quiet = { send: async () => undefined };
+    await notify(mark, mark.userId, { title: "Approve: Send intro", href: "/workflows?approve=x", source: "workflow_approval", category: "capture" });
+    await sendAlert(
+      mark,
+      { title: "Time to check in: Renewal", body: "Pick this up now.", url: "/mail?thread=c", bell: { title: "Time to check in: Renewal", href: "/mail?thread=c", category: "capture" } },
+      quiet,
+    );
+    await sendAlert(mark, { title: "Follow-up sent to Grace", body: "Pricing", url: "/mail?thread=b", bell: { title: "Follow-up sent to Grace", href: "/mail?thread=b" } }, quiet);
+    await notify(mark, mark.userId, { title: "Workflow failed: Granola to ClickUp", href: "/workflows", source: "workflow" });
+    const legacy = (title: string, href: string) =>
+      admin.query("insert into crm.notifications (workspace_id, user_id, title, href, source) values ($1, $2, $3, $4, 'mail')", [mark.workspaceId, mark.userId, title, href]);
+    await legacy("No reply yet: Pilot pricing", "/mail?thread=a");
+    await legacy("Demo with Acme ended with no next step", "/capture");
+    const titles = async () => (await listNotifications(mark)).map((item) => item.title).sort();
+    assert.deepEqual(
+      await titles(),
+      ["Demo with Acme ended with no next step", "Follow-up sent to Grace", "No reply yet: Pilot pricing", "Workflow failed: Granola to ClickUp"],
+      "the bell doesn't match on title text",
+    );
+    await admin.query(readFileSync("supabase/migrations/20261230100000_action_needed.sql", "utf8"));
+    assert.deepEqual(await titles(), ["Follow-up sent to Grace", "Workflow failed: Granola to ClickUp"], "running the migration again tags the older rows");
+    const tags = await admin.query<{ category: string | null }>("select category from crm.notifications where user_id = $1 and title like 'No reply yet:%'", [mark.userId]);
+    assert.deepEqual(
+      tags.rows.map((row) => row.category),
+      ["capture"],
+    );
   });
 
   it("refuses changes it doesn't understand", () => {
@@ -494,5 +534,253 @@ describe("Tasks, approvals and To file", () => {
       thread: "a|b",
       until: "2026-11-09T08:00:00Z",
     });
+  });
+});
+
+describe("Capture after review", () => {
+  const ago = (days: number) => new Date(Date.now() - days * DAY_MS).toISOString();
+  let mark: UserActor;
+  let personal: UserActor;
+  let box: Box;
+
+  before(async () => {
+    mark = await createUser("mark@eclipse-review.test", "Mark Ridgeon");
+    const created = await createWorkspace(mark, { name: "Mark Ridgeon", brandStart: "blank" });
+    personal = { ...mark, workspaceId: created.id, workspaceName: "Mark Ridgeon", role: "owner", scopes: scopesForRole("owner") };
+    box = await mailbox(mark);
+  });
+
+  async function replyKeys(actors: UserActor[] = [mark]) {
+    return (await waitingMail(mark, actors, new Date())).replies.map((item) => item.key);
+  }
+
+  it("treats send identities and other addresses on the profile as yours", async () => {
+    const admin = getAdminPool();
+    await admin.query(
+      `insert into crm.send_identities (workspace_id, user_id, source_id, email, smtp_host, smtp_port, username, password_cipher)
+       values ($1, $2, $3, 'mark@ridgeon-review.test', 'smtp.test', 587, 'mark', 'cipher')`,
+      [mark.workspaceId, mark.userId, box.sourceId],
+    );
+    await admin.query("update crm.profiles set other_emails = array['Mark.R@gmail-review.test'] where id = $1", [mark.userId]);
+    const fromIdentity = await message(mark, box, { from: "mark@ridgeon-review.test", to: [mark.email], at: ago(10) });
+    const fromOther = await message(mark, box, { from: "mark.r@gmail-review.test", to: [mark.email], at: ago(10) });
+    const toOther = await message(mark, box, { from: "anna@client-review.test", to: ["mark.r@gmail-review.test"], at: ago(10) });
+    const keys = await replyKeys();
+    assert.ok(keys.includes(toOther.key), "email to your other address waits on you");
+    assert.ok(!keys.includes(fromIdentity.key), "email from your send identity isn't someone waiting");
+    assert.ok(!keys.includes(fromOther.key), "email from your other address isn't someone waiting");
+    const unknown = (await unknownMail(mark, [mark])).map((item) => item.key);
+    assert.ok(!unknown.includes(fromOther.key) && !unknown.includes(fromIdentity.key), "your own addresses are never strangers");
+  });
+
+  it("leaves out newsletters, blocked senders and cold pitches", async () => {
+    const admin = getAdminPool();
+    const subscription = (sender: string, status: string, link: string | null, pitched: boolean) =>
+      admin.query(
+        `insert into crm.mail_subscriptions (workspace_id, user_id, sender, status, list_unsubscribe, cold_pitch_at)
+         values ($1, $2, $3, $4, $5, case when $6 then now() end)`,
+        [mark.workspaceId, mark.userId, sender, status, link, pitched],
+      );
+    await subscription("editor@letters-review.test", "subscribed", "https://letters-review.test/u", false);
+    await subscription("@blocked-review.test", "blocked", null, false);
+    await subscription("growth@pitch-review.test", "subscribed", null, true);
+    const letter = await message(mark, box, { from: "editor@letters-review.test", to: [mark.email], at: ago(9) });
+    const blocked = await message(mark, box, { from: "sam@blocked-review.test", to: [mark.email], at: ago(9) });
+    const pitch = await message(mark, box, { from: "growth@pitch-review.test", to: [mark.email], at: ago(9) });
+    const prepared = await message(mark, box, { from: "seller@vendor-review.test", to: [mark.email], at: ago(9) });
+    await admin.query(
+      `insert into crm.mail_prepared (workspace_id, user_id, source_id, thread_key, message_id, kind, state, body)
+       values ($1, $2, $3, $4, $5, 'pitch', 'ready', 'Not interested, thanks.')`,
+      [mark.workspaceId, mark.userId, box.sourceId, prepared.key.split("|")[1], prepared.id],
+    );
+    const keys = await replyKeys();
+    const unknown = (await unknownMail(mark, [mark])).map((item) => item.key);
+    for (const skipped of [letter, blocked, pitch, prepared]) {
+      assert.ok(!keys.includes(skipped.key), `${skipped.key} isn't a reply`);
+      assert.ok(!unknown.includes(skipped.key), `${skipped.key} isn't to file`);
+    }
+  });
+
+  it("shows an admin who isn't the owner Waiting on others, but never other people's mail", async () => {
+    const ada = await teammate(mark, "ada@eclipse-review.test", "Ada Price", "admin");
+    const run = await waitingRun(mark, "Send the contract to Halden", new Date(Date.now() - 30 * DAY_MS));
+    assert.deepEqual(
+      (await listWaitingOnOthers(ada)).map((item) => [item.id, item.ownerName]),
+      [[run, "Mark Ridgeon"]],
+    );
+    assert.ok((await replyKeys()).length > 0, "Mark has replies waiting");
+    const adas = await waitingMail(ada, [ada], new Date());
+    assert.deepEqual([adas.replies, adas.nudges, adas.reminders], [[], [], []]);
+    assert.equal((await queryAsUser<{ id: string }>(ada.userId, "select id from crm.mail_messages")).length, 0);
+    await assert.rejects(runCaptureAction(ada, { kind: "approve", runId: run }), /Only the person this approval is waiting on/);
+  });
+
+  it("places replies by Filed in, then the domain rule, then who knows the sender, else the home workspace", async () => {
+    const admin = getAdminPool();
+    await createContact(personal, { firstName: "Lin", lastName: "Wu", email: "lin@kestrel-review.test" });
+    const filed = await message(mark, box, { thread: "review-filed", from: "grace@halden-review.test", to: [mark.email], at: ago(8) });
+    const ruled = await message(mark, box, { thread: "review-ruled", from: "tom@becker-review.test", to: [mark.email], at: ago(8) });
+    const known = await message(mark, box, { thread: "review-known", from: "lin@kestrel-review.test", to: [mark.email], at: ago(8) });
+    const single = await message(mark, box, { from: "lin@kestrel-review.test", to: [mark.email], at: ago(8) });
+    await admin.query("update crm.mail_messages set thread_key = null where id = $1", [single.id]);
+    const home = await message(mark, box, { thread: "review-home", from: "zed@other-review.test", to: [mark.email], at: ago(8) });
+    await admin.query(
+      "insert into crm.mail_thread_routes (workspace_id, user_id, source_id, thread_key, filed_in) values ($1, $2, $3, 'review-filed', $4::uuid[])",
+      [mark.workspaceId, mark.userId, box.sourceId, [personal.workspaceId]],
+    );
+    await admin.query("insert into crm.mail_domain_rules (workspace_id, user_id, domain, workspace_ids) values ($1, $2, 'becker-review.test', $3::uuid[])", [
+      mark.workspaceId,
+      mark.userId,
+      [personal.workspaceId],
+    ]);
+    const actors = await workspaceActors(mark);
+    const replies = (await waitingMail(mark, actors, new Date())).replies;
+    const where = (key: string) => {
+      const found = replies.find((item) => item.key === key);
+      return found ? (found.workspaceId === personal.workspaceId ? "personal" : found.workspaceId === mark.workspaceId ? "home" : "other") : "missing";
+    };
+    const singleKey = `${box.sourceId}|m:${single.id}`;
+    assert.deepEqual(
+      [where(filed.key), where(ruled.key), where(known.key), where(singleKey), where(home.key)],
+      ["personal", "personal", "personal", "personal", "home"],
+    );
+  });
+
+  it("keeps a stranger's email in To file for the whole window instead of moving it to Replies", async () => {
+    const recent = await message(mark, box, { thread: "review-stranger", from: "kit@stranger-review.test", to: [mark.email], at: ago(20) });
+    const old = await message(mark, box, { thread: "review-old", from: "old@stranger-review.test", to: [mark.email], at: ago(31) });
+    const context = await captureContext(mark);
+    const here = waitingHere(context, mark.workspaceId);
+    const toFile = context.unknown.map((item) => item.key);
+    assert.ok(toFile.includes(recent.key), "20 days old is still to file");
+    assert.ok(!here.replies.some((item) => item.key === recent.key), "and isn't also a reply");
+    assert.ok(
+      (await replyKeys()).includes(recent.key),
+      "Replies would list it, so To file is what keeps it out",
+    );
+    assert.ok(!toFile.includes(old.key) && !(await replyKeys()).includes(old.key), "past 30 days it is in neither");
+  });
+
+  it("lists a due follow-up reminder with no draft as No reply yet or Time to check in, and Done clears it", async () => {
+    const admin = getAdminPool();
+    const sent = (thread: string, subject: string) =>
+      message(mark, box, { thread, from: mark.email, to: ["olivia@client-review.test"], subject, folder: "sent", at: ago(5) });
+    const remind = async (thread: string, subject: string, deferral = false) =>
+      (
+        await admin.query<{ id: string }>(
+          `insert into crm.mail_reminders (workspace_id, user_id, source_id, thread_key, kind, due_at, state, subject, surfaced_at, deferral)
+           values ($1, $2, $3, $4, 'follow_up', $5, 'due', $6, $5, $7) returning id`,
+          [mark.workspaceId, mark.userId, box.sourceId, thread, ago(1), subject, deferral],
+        )
+      ).rows[0].id;
+    await sent("review-rem-plain", "Proposal");
+    const plain = await remind("review-rem-plain", "Proposal");
+    const drafted = await sent("review-rem-draft", "Pricing");
+    await remind("review-rem-draft", "Pricing");
+    await nudge(mark, box, drafted.id, "review-rem-draft");
+    await sent("review-rem-answered", "Timeline");
+    await remind("review-rem-answered", "Timeline");
+    await message(mark, box, { thread: "review-rem-answered", from: "olivia@client-review.test", to: [mark.email], at: ago(0.5) });
+    await sent("review-rem-later", "Renewal");
+    const later = await remind("review-rem-later", "Renewal", true);
+    await admin.query("insert into crm.mail_reminders (workspace_id, user_id, source_id, thread_key, kind, due_at, state, subject) values ($1, $2, $3, 'review-rem-sent', 'follow_up', $4, 'sent', 'Sent')", [
+      mark.workspaceId,
+      mark.userId,
+      box.sourceId,
+      ago(1),
+    ]);
+
+    const waiting = await waitingFor(mark, [mark]);
+    assert.deepEqual(
+      waiting.reminders.map((item) => [item.subject, item.checkIn, item.to.map((person) => person.address)]).sort(),
+      [
+        ["Proposal", false, ["olivia@client-review.test"]],
+        ["Renewal", true, ["olivia@client-review.test"]],
+      ],
+    );
+    assert.ok(waiting.nudges.some((item) => item.subject === "Pricing"), "the one with a draft shows as a follow-up instead");
+    assert.equal((await captureStatus(mark)).sections.followUps, waiting.nudges.length + waiting.reminders.length);
+
+    await runCaptureAction(mark, { kind: "reminder-done", id: plain });
+    const state = await admin.query<{ state: string }>("select state from crm.mail_reminders where id = $1", [plain]);
+    assert.equal(state.rows[0].state, "done");
+    assert.deepEqual(
+      (await waitingFor(mark, [mark])).reminders.map((item) => item.id),
+      [later],
+    );
+  });
+
+  it("says which section couldn't be read instead of showing it empty", async () => {
+    const admin = getAdminPool();
+    await admin.query("alter table crm.capture_dismissals rename to capture_dismissals_hidden");
+    try {
+      const waiting = await waitingFor(mark, [mark]);
+      assert.deepEqual(waiting.failed, ["replies"]);
+      assert.deepEqual(waiting.replies, []);
+      assert.ok(waiting.reminders.length > 0, "follow-ups still read");
+      const status = await captureStatus(mark);
+      assert.deepEqual(status.failed, ["replies"]);
+    } finally {
+      await admin.query("alter table crm.capture_dismissals_hidden rename to capture_dismissals");
+    }
+    assert.deepEqual((await waitingFor(mark, [mark])).failed, []);
+  });
+
+  it("applies the task limit to each workspace", async () => {
+    const admin = getAdminPool();
+    const overdue = new Date(Date.now() - 3 * DAY_MS);
+    await admin.query(
+      "insert into crm.tasks (workspace_id, title, due_at, owner_id, created_by_user_id) select $1, 'Home ' || g, $2, $3, $3 from generate_series(1, 105) g",
+      [mark.workspaceId, overdue, mark.userId],
+    );
+    await admin.query("insert into crm.tasks (workspace_id, title, due_at, owner_id, created_by_user_id) values ($1, 'Personal one', $2, $3, $3), ($1, 'Personal two', $2, $3, $3)", [
+      personal.workspaceId,
+      new Date(overdue.getTime() + 60_000),
+      mark.userId,
+    ]);
+    const tasks = (await waitingFor(mark, await workspaceActors(mark))).tasks;
+    assert.equal(tasks.filter((item) => item.workspaceId === mark.workspaceId).length, 100);
+    assert.deepEqual(
+      tasks
+        .filter((item) => item.workspaceId === personal.workspaceId)
+        .map((item) => item.title)
+        .sort(),
+      ["Personal one", "Personal two"],
+    );
+    await admin.query("delete from crm.tasks where workspace_id = any($1::uuid[])", [[mark.workspaceId, personal.workspaceId]]);
+  });
+
+  it("makes a change in the workspace it came from, and refuses one you're no longer in", async () => {
+    const stranger = await createUser("someone@else-review.test", "Someone Else");
+    assert.equal((await captureActor(mark, undefined)).workspaceId, mark.workspaceId);
+    assert.equal((await captureActor(mark, personal.workspaceId)).workspaceId, personal.workspaceId);
+    await assert.rejects(captureActor(mark, stranger.workspaceId), (error: Error & { status?: number }) => {
+      assert.match(error.message, /no longer in that workspace/);
+      assert.equal(error.status, 409);
+      return true;
+    });
+    await assert.rejects(captureActor(mark, "not-a-workspace"), /no longer in that workspace/);
+  });
+
+  it("gives the assistant every section of Capture without a mixed total", async () => {
+    const result = (await runTool(mark, "get_capture", {})) as Record<string, unknown> & {
+      followUps: Record<string, unknown>;
+      toFile: Record<string, unknown>;
+    };
+    assert.deepEqual(
+      Object.keys(result)
+        .filter((key) => key !== "notice")
+        .sort(),
+      ["approvals", "followUps", "replies", "tasks", "toFile", "unreadSections"],
+    );
+    assert.deepEqual(Object.keys(result.followUps).sort(), ["calls", "emails", "noReplyYet"]);
+    assert.deepEqual(Object.keys(result.toFile).sort(), ["conversations", "emails", "peopleMet"]);
+    assert.deepEqual(result.unreadSections, []);
+    assert.ok(Array.isArray(result.replies));
+    const noReply = result.followUps.noReplyYet as { subject: string; kind: string }[];
+    assert.deepEqual(
+      noReply.map((item) => [item.subject, item.kind]),
+      [["Renewal", "time to check in"]],
+    );
   });
 });

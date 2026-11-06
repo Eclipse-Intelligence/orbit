@@ -16,6 +16,7 @@ type CompaniesState = {
   mailUnread: number | null;
   capture: CaptureBadge | null;
   captureCleared: CaptureCounts;
+  captureLive: boolean;
   captureSeen: string | null;
   openProfile: () => void;
   closeProfile: () => void;
@@ -23,6 +24,7 @@ type CompaniesState = {
   setMailUnread: (count: number) => void;
   setCapture: (capture: CaptureBadge | null) => void;
   setCaptureCleared: (cleared: CaptureCounts) => void;
+  setCaptureLive: (live: boolean) => void;
   setCaptureSeen: (newestAt: string | null) => void;
 };
 
@@ -44,12 +46,14 @@ export const useCompaniesStore = create<CompaniesState>((set) => ({
   mailUnread: null,
   capture: null,
   captureCleared: NO_CAPTURE_COUNTS,
+  captureLive: false,
   captureSeen: null,
   openProfile: () => set({ profileOpen: true }),
   closeProfile: () => set({ profileOpen: false }),
   setSidebarOpen: (sidebarOpen) => set({ sidebarOpen }),
   setMailUnread: (mailUnread) => set({ mailUnread }),
-  setCapture: (capture) => set({ capture }),
+  setCapture: (capture) => set((state) => (state.captureLive ? { capture } : { capture, captureCleared: NO_CAPTURE_COUNTS })),
   setCaptureCleared: (captureCleared) => set({ captureCleared }),
+  setCaptureLive: (captureLive) => set({ captureLive }),
   setCaptureSeen: (captureSeen) => set({ captureSeen: captureSeen ?? new Date().toISOString() }),
 }));

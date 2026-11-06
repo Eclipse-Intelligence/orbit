@@ -1370,18 +1370,26 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     name: "get_capture",
     label: "Checking Capture",
     description:
-      "Everything waiting on the user in Capture for this workspace, in its sections: approvals (workflow steps waiting on them), follow-ups (Orbit's ready follow-up emails for sent mail nobody answered, and calls that ended with no next step, each with the draft), replies (emails from people waiting two or more working days for their reply), tasks (theirs, overdue then due today) and to file (email from people not in Orbit, unfiled Teams and Granola conversations, and people met who aren't contacts). For the mailbox itself use search_email.",
+      "Everything waiting on the user in Capture for this workspace, in its sections: approvals (workflow steps waiting on them), follow-ups (Orbit's ready follow-up emails for sent mail nobody answered, sent mail whose follow-up reminder is due with no draft yet, and calls that ended with no next step, each with the draft), replies (emails from people waiting two or more working days for their reply), tasks (theirs, overdue then due today) and to file (email from people not in Orbit, unfiled Teams and Granola conversations, and people met who aren't contacts). unreadSections lists any section Orbit couldn't read this time. For the mailbox itself use search_email.",
     parameters: { type: "object", properties: {} },
     run: async (actor) => {
       const now = Date.now();
       const context = await captureContext(actor, now);
       const here = waitingHere(context, actor.workspaceId);
+      const unread: string[] = [...context.failed];
       const [toFile, calls, unknown] = await Promise.all([
-        listToFile(actor, now),
-        listFollowUps(actor).catch(() => []),
-        listUnknownMail(actor, now, { actors: context.actors, emails: context.unknown }).catch(() => ({ emails: [], total: 0 })),
+        listToFile(actor, now).catch(() => {
+          unread.push("toFile");
+          return { unfiled: [], people: [] };
+        }),
+        listFollowUps(actor).catch(() => {
+          unread.push("followUps");
+          return [];
+        }),
+        listUnknownMail(actor, now, { actors: context.actors, emails: context.unknown }),
       ]);
       return {
+        unreadSections: [...new Set(unread)],
         approvals: here.approvals.map((item) => ({
           runId: item.id,
           title: item.title,
@@ -1400,6 +1408,13 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
             draft: item.body,
           })),
           calls: calls.map((item) => ({ id: item.id, title: item.title, source: item.source, to: item.to.address, subject: item.subject, draft: item.body })),
+          noReplyYet: here.reminders.map((item) => ({
+            thread: item.key,
+            subject: item.subject,
+            to: item.to.map((person) => person.address),
+            kind: item.checkIn ? "time to check in" : "no reply yet",
+            since: item.at,
+          })),
         },
         replies: here.replies.map((item) => ({
           thread: item.key,
@@ -1413,7 +1428,6 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         })),
         tasks: here.tasks.map((item) => ({ id: item.id, title: item.title, dueAt: item.dueAt, overdue: item.overdue, company: item.companyName, contact: item.contactName })),
         toFile: {
-          total: unknown.total + toFile.unfiled.length + toFile.people.length,
           emails: unknown.emails.map((item) => ({ thread: item.key, from: item.name ? `${item.name} <${item.email}>` : item.email, to: item.address, subject: item.subject, receivedAt: item.at })),
           conversations: toFile.unfiled.map((item) => ({
             id: item.id,

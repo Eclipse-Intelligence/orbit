@@ -13,23 +13,26 @@ import { FilePicker } from "@/components/capture/file-picker";
 import { useComposer } from "@/components/mail/compose-dock";
 import WorkspaceTile from "@/components/workspaces/workspace-tile";
 import { formatMeetingWhen } from "@/lib/companies";
-import type { OthersApproval, SnoozeChoice, WaitingApproval, WaitingTask } from "@/lib/crm/action-needed";
+import type { OthersApproval, WaitingApproval, WaitingTask } from "@/lib/crm/action-needed";
 import type { MetPerson } from "@/lib/crm/calendar";
 import { agoLabel, dayLabel, dueLabel, REPLY_AMBER_WORKING_DAYS, sinceLabel } from "@/lib/crm/capture-format";
 import type { CaptureAction } from "@/lib/crm/capture-actions";
 import type { UnfiledImport } from "@/lib/crm/conversations";
 import type { FollowUpSuggestion } from "@/lib/crm/follow-ups";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
+import { onWorkingDay, taskSnoozeChoices, type SnoozeChoice } from "@/lib/crm/task-snooze";
 import { tasksHref } from "@/lib/crm/task-views";
 import type { UnknownEmail } from "@/lib/mail/filing";
-import { laterOptions } from "@/lib/mail/later";
+import { laterDetail, laterOptions } from "@/lib/mail/later";
 import { threadHref, type WorkspaceChoiceRef } from "@/lib/mail/view";
-import type { WaitingNudge, WaitingReply } from "@/lib/mail/waiting";
+import type { WaitingNudge, WaitingReminder, WaitingReply } from "@/lib/mail/waiting";
 import { cn } from "@/lib/utils";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
 import ChevronRightIcon from "@/public/assets/images/_common/chevron-right.svg";
 import MicIcon from "@/public/assets/images/_common/mic.svg";
 import PhoneIcon from "@/public/assets/images/_common/phone.svg";
+import CheckIcon from "@/public/assets/images/assistant/check.svg";
+import CrossIcon from "@/public/assets/images/companies/detail/x.svg";
 import ZapIcon from "@/public/assets/images/companies/sidebar/zap.svg";
 import FollowUpIcon from "@/public/assets/images/mail/follow-up.svg";
 import SparkleIcon from "@/public/assets/images/mail/sparkle.svg";
@@ -70,19 +73,27 @@ function DraftLine({ text, ready = true }: { text: string; ready?: boolean }) {
   );
 }
 
+function names(people: { name: string | null; address: string }[]) {
+  return people.map((person) => person.name || person.address).join(", ");
+}
+
 function replyChoices(): SnoozeChoice[] {
   return laterOptions(Date.now()).filter((option) => REPLY_SNOOZE.has(option.id));
 }
 
 function useSnoozePicker() {
   const { pickLater } = useComposer();
-  return (choices: SnoozeChoice[], description: string, pick: (choice: SnoozeChoice) => void) =>
+  return (choices: SnoozeChoice[], description: string, pick: (choice: SnoozeChoice) => void, adjust: (at: Date) => Date = (at) => at) =>
     pickLater({
       title: "Snooze until",
       description,
       options: choices,
       now: Date.now(),
-      onPick: (at, detail) => pick({ id: "custom", label: detail, detail, at }),
+      onPick: (at) => {
+        const chosen = adjust(new Date(at));
+        const detail = laterDetail(chosen, Date.now());
+        pick({ id: "custom", label: detail, detail, at: chosen.toISOString() });
+      },
     });
 }
 
@@ -129,6 +140,7 @@ export function ApprovalItem({ item, now, clearId }: { item: WaitingApproval; no
   const onClear = useClear(clearId);
   return (
     <CaptureRow
+      rowId={clearId}
       mark={<IconMark icon={ZapIcon} />}
       title={item.title}
       titleHref={item.email?.href ?? `/workflows?approve=${item.id}#approval-${item.id}`}
@@ -137,6 +149,7 @@ export function ApprovalItem({ item, now, clearId }: { item: WaitingApproval; no
       detail={item.details ? <p className="ui-style text-soft line-clamp-2 whitespace-pre-line">{item.details}</p> : null}
       actions={[
         {
+          id: "reject",
           label: "Reject",
           variant: "subtle",
           hint: "R",
@@ -154,6 +167,7 @@ export function ApprovalItem({ item, now, clearId }: { item: WaitingApproval; no
           ),
         },
         {
+          id: "approve",
           label: "Approve",
           variant: "primary",
           key: "a",
@@ -193,19 +207,21 @@ export function OthersApprovals({ items }: { items: OthersApproval[] }) {
 export function NudgeItem({ item, now, clearId }: { item: WaitingNudge; now: number; clearId: string }) {
   const onClear = useClear(clearId);
   const router = useRouter();
-  const names = item.to.map((person) => person.name || person.address).join(", ");
+  const people = names(item.to);
   const opened = item.opens > 0 ? `Opened ${item.opens} ${item.opens === 1 ? "time" : "times"}. ` : "";
   const dismiss = () => onClear("Dismissed", { kind: "nudge-dismiss", id: item.id });
   return (
     <CaptureRow
+      rowId={clearId}
       mark={<IconMark icon={FollowUpIcon} />}
       title={item.subject?.trim() || "(no subject)"}
       titleHref={threadHref(item.key)}
       when={`Sent ${sinceLabel(item.sentAt, now)}`}
-      meta={`${names ? `To ${names} · ` : ""}${opened}Nobody has replied.${opened ? "" : " Orbit has a follow-up ready."}`}
+      meta={`${people ? `To ${people} · ` : ""}${opened}Nobody has replied.`}
       detail={<DraftLine text={item.body} />}
       actions={[
         {
+          id: "review",
           label: "Review and send",
           variant: "secondary",
           opens: true,
@@ -213,6 +229,7 @@ export function NudgeItem({ item, now, clearId }: { item: WaitingNudge; now: num
           run: () => router.push(threadHref(item.key, "prepared")),
         },
         {
+          id: "dismiss",
           label: "Not needed",
           variant: "ghost",
           key: "e",
@@ -225,19 +242,56 @@ export function NudgeItem({ item, now, clearId }: { item: WaitingNudge; now: num
   );
 }
 
+export function ReminderItem({ item, now, clearId }: { item: WaitingReminder; now: number; clearId: string }) {
+  const onClear = useClear(clearId);
+  const router = useRouter();
+  const people = names(item.to);
+  const done = () => onClear("Done", { kind: "reminder-done", id: item.id });
+  return (
+    <CaptureRow
+      rowId={clearId}
+      mark={<IconMark icon={FollowUpIcon} />}
+      title={item.subject?.trim() || "(no subject)"}
+      titleHref={threadHref(item.key)}
+      badge={
+        <Tag size="sm" tone="amber" className="text-[12px]">
+          {item.checkIn ? "Time to check in" : "No reply yet"}
+        </Tag>
+      }
+      when={agoLabel(item.at, now)}
+      meta={people ? `To ${people}` : null}
+      actions={[
+        {
+          id: "reply",
+          label: "Reply",
+          variant: "secondary",
+          key: "r",
+          hint: "R",
+          opens: true,
+          run: () => router.push(threadHref(item.key, "reply")),
+        },
+        { id: "done", label: "Done", variant: "ghost", key: "e", hint: "E", run: done },
+      ]}
+      swipe={{ left: { label: "Done", run: done } }}
+    />
+  );
+}
+
 export function CallItem({ item, now, clearId, onSent }: { item: FollowUpSuggestion; now: number; clearId: string; onSent: () => void }) {
   const onClear = useClear(clearId);
   const { openComposer } = useComposer();
   const dismiss = () => onClear("Dismissed", { kind: "call-dismiss", id: item.id });
   return (
     <CaptureRow
+      rowId={clearId}
       mark={<IconMark icon={item.source === "teams" ? PhoneIcon : MicIcon} />}
       title={item.title}
       when={dayLabel(item.callAt, now)}
-      meta={`${SOURCE[item.source]} · No next step was agreed.`}
+      meta={`${SOURCE[item.source]} · To ${item.to.name ?? item.to.address} · No next step was agreed.`}
       detail={<DraftLine text={item.body} />}
       actions={[
         {
+          id: "review",
           label: "Review and send",
           variant: "secondary",
           opens: true,
@@ -251,6 +305,7 @@ export function CallItem({ item, now, clearId, onSent }: { item: FollowUpSuggest
             }),
         },
         {
+          id: "dismiss",
           label: "Not needed",
           variant: "ghost",
           key: "e",
@@ -276,6 +331,7 @@ export function ReplyItem({ item, now, clearId }: { item: WaitingReply; now: num
       until: choice.at,
     });
   const notNeeded: MenuItem = {
+    id: "not-needed",
     label: "No reply needed",
     run: () =>
       onClear("Dismissed", {
@@ -286,6 +342,7 @@ export function ReplyItem({ item, now, clearId }: { item: WaitingReply; now: num
   };
   return (
     <CaptureRow
+      rowId={clearId}
       mark={<PersonMark name={name} />}
       title={item.subject?.trim() || "(no subject)"}
       titleHref={threadHref(item.key)}
@@ -299,14 +356,16 @@ export function ReplyItem({ item, now, clearId }: { item: WaitingReply; now: num
       detail={item.snippet ? <DraftLine text={item.snippet} ready={item.ready} /> : null}
       actions={[
         {
+          id: "reply",
           label: "Reply",
           variant: "secondary",
           key: "r",
           hint: "R",
           run: () => router.push(threadHref(item.key, "reply")),
         },
-        { label: "Done", variant: "ghost", key: "e", hint: "E", run: done },
+        { id: "done", label: "Done", variant: "ghost", key: "e", hint: "E", run: done },
         {
+          id: "snooze",
           label: "Snooze",
           variant: "ghost",
           key: "h",
@@ -325,41 +384,27 @@ export function ReplyItem({ item, now, clearId }: { item: WaitingReply; now: num
 
 function DoneCircle({ overdue, title, onClick }: { overdue: boolean; title: string; onClick: () => void }) {
   return (
-    <button
-      type="button"
+    <Button
+      variant="ghost"
+      size="icon-sm"
       onClick={onClick}
       aria-label={`Mark “${title}” done`}
       title="Mark done (E)"
       className={cn(
-        "group/done mt-px flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full text-white transition-colors duration-150",
-        overdue ? "bg-danger hover:bg-success" : "bg-secondary text-subtle hover:bg-success hover:text-white",
+        "group/done hover:bg-success mt-px text-white hover:text-white",
+        overdue ? "bg-danger" : "bg-secondary text-subtle",
       )}
     >
-      <svg
-        aria-hidden
-        width="12"
-        height="12"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2.4"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        className="hidden group-hover/done:block"
-      >
-        <path d="M5 12.5 10 17.5 19 7.5" />
-      </svg>
-      <span className="group-hover/done:hidden">
-        {overdue ? (
-          <svg aria-hidden width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
-            <path d="M6 6 18 18M18 6 6 18" />
-          </svg>
-        ) : (
-          <span className="block size-1.5 rounded-full bg-current" />
-        )}
+      <CheckIcon aria-hidden className="hidden size-3 group-hover/done:block" />
+      <span aria-hidden className="flex group-hover/done:hidden">
+        {overdue ? <CrossIcon className="size-3.5" /> : <span className="block size-1.5 rounded-full bg-current" />}
       </span>
-    </button>
+    </Button>
   );
+}
+
+function taskChoices(item: WaitingTask) {
+  return taskSnoozeChoices(item.dueAt, new Date());
 }
 
 export function TaskItem({ item, now, clearId }: { item: WaitingTask; now: number; clearId: string }) {
@@ -377,6 +422,7 @@ export function TaskItem({ item, now, clearId }: { item: WaitingTask; now: numbe
   const record = item.companyName ?? item.contactName;
   return (
     <CaptureRow
+      rowId={clearId}
       mark={<DoneCircle overdue={item.overdue} title={item.title} onClick={done} />}
       title={item.title}
       chips={
@@ -390,15 +436,17 @@ export function TaskItem({ item, now, clearId }: { item: WaitingTask; now: numbe
         </span>
       }
       actions={[
-        { label: "Done", variant: "secondary", key: "e", hint: "E", run: done },
+        { id: "done", label: "Done", variant: "secondary", key: "e", hint: "E", run: done },
         {
+          id: "snooze",
           label: "Snooze",
           variant: "ghost",
           key: "h",
           hint: "H",
-          snooze: { choices: () => item.snooze, pick: snooze },
+          snooze: { choices: () => taskChoices(item), pick: snooze },
         },
         {
+          id: "open",
           label: "Open",
           variant: "ghost",
           opens: true,
@@ -409,7 +457,7 @@ export function TaskItem({ item, now, clearId }: { item: WaitingTask; now: numbe
       ]}
       swipe={{
         left: { label: "Done", run: done },
-        right: () => pick(item.snooze, "The task's due time moves, on a working day.", snooze),
+        right: () => pick(taskChoices(item), "The task's due time moves. A weekend or bank holiday moves to the next working day.", snooze, onWorkingDay),
       }}
     />
   );
@@ -462,6 +510,7 @@ export function EmailItem({
     });
   const actions: RowAction[] = [
     {
+      id: "create",
       label: "Create contact & file",
       variant: "secondary",
       key: "a",
@@ -469,6 +518,7 @@ export function EmailItem({
       run: () => onClear("Filed", { kind: "email-create", key: item.key }),
     },
     {
+      id: "file",
       label: "File to…",
       variant: "secondary",
       key: "f",
@@ -479,6 +529,7 @@ export function EmailItem({
   ];
   if (others.length > 0) {
     actions.push({
+      id: "move",
       label: "Move to",
       variant: "secondary",
       phoneMore: true,
@@ -486,6 +537,7 @@ export function EmailItem({
     });
   }
   actions.push({
+    id: "ignore",
     label: "Ignore",
     variant: "ghost",
     key: "i",
@@ -494,6 +546,7 @@ export function EmailItem({
   });
   return (
     <CaptureRow
+      rowId={clearId}
       mark={<PersonMark name={label} />}
       title={label}
       titleHref={threadHref(item.key)}
@@ -512,6 +565,7 @@ export function EmailItem({
       }
       actions={actions}
       more={others.map((target) => ({
+        id: `move-${target.id}`,
         label: `Move to ${target.name}`,
         run: () => move(target),
       }))}
@@ -544,6 +598,30 @@ function participants(item: UnfiledImport) {
     .join(", ");
 }
 
+function plainSummary(markdown: string) {
+  return markdown
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/__([^_]+)__/g, "$1")
+    .replace(/^\s*[-*]\s+/gm, "• ")
+    .trim();
+}
+
+function Summary({ id, text, source }: { id: string; text: string; source: string }) {
+  const [open, setOpen] = useState(false);
+  const summaryId = `capture-summary-${id}`;
+  return (
+    <span className="flex flex-col items-start gap-1 pt-0.5">
+      <span id={summaryId} className={cn("caption-style text-soft leading-[1.5] whitespace-pre-wrap", !open && "line-clamp-3")}>
+        {text}
+      </span>
+      <Button variant="link" size="none" className="caption-style text-subtle" aria-expanded={open} aria-controls={summaryId} onClick={() => setOpen((value) => !value)}>
+        {open ? "Show less" : `Show the ${source} summary`}
+      </Button>
+    </span>
+  );
+}
+
 export function ImportItem({
   item,
   now,
@@ -560,6 +638,7 @@ export function ImportItem({
   const onClear = useClear(clearId);
   const ignore = () => onClear("Ignored", { kind: "import-ignore", id: item.id });
   const people = participants(item);
+  const summary = item.sourceSummary ? plainSummary(item.sourceSummary) : "";
   const create = (person: { email: string; name: string | null }) =>
     onClear("Filed", {
       kind: "import-create",
@@ -567,6 +646,7 @@ export function ImportItem({
       email: person.email,
     });
   const actions: RowAction[] = item.newPeople.map((person, index) => ({
+    id: `create-${person.email}`,
     label: `Create ${person.name ?? person.email} & file`,
     variant: "secondary",
     key: index === 0 ? "a" : undefined,
@@ -576,6 +656,7 @@ export function ImportItem({
   }));
   actions.push(
     {
+      id: "file",
       label: "File to…",
       variant: "secondary",
       key: "f",
@@ -583,14 +664,16 @@ export function ImportItem({
       phoneMore: item.newPeople.length > 0,
       run: () => onFiling(true),
     },
-    { label: "Ignore", variant: "ghost", key: "i", hint: "I", run: ignore },
+    { id: "ignore", label: "Ignore", variant: "ghost", key: "i", hint: "I", run: ignore },
   );
   return (
     <CaptureRow
+      rowId={clearId}
       mark={<IconMark icon={item.source === "teams" ? PhoneIcon : MicIcon} />}
       title={item.title || (item.kind === "call" ? "Teams call" : "Meeting")}
       when={item.occurredAt ? dayLabel(item.occurredAt, now) : null}
       meta={`${SOURCE[item.source]} · ${people ? `${people}, no contact matched` : "No contact matched"}`}
+      detail={summary ? <Summary id={item.id} text={summary} source={SOURCE[item.source]} /> : null}
       actions={actions}
       swipe={{ left: { label: "Ignore", run: ignore } }}
       below={
@@ -614,22 +697,26 @@ export function ImportItem({
   );
 }
 
+function meetingLine(label: string, meeting: MetPerson["lastMeeting"]) {
+  if (!meeting) return null;
+  return `${label} ${formatMeetingWhen(meeting.startsAt)}: ${meeting.subject?.trim() || "Untitled meeting"}`;
+}
+
 export function PersonItem({ item, clearId }: { item: MetPerson; clearId: string }) {
   const onClear = useClear(clearId);
   const label = item.name ?? item.email;
   const hide = () => onClear("Hidden", { kind: "person-hide", email: item.email });
-  const meeting = item.nextMeeting
-    ? `Next ${formatMeetingWhen(item.nextMeeting.startsAt)}`
-    : item.lastMeeting
-      ? `Last ${formatMeetingWhen(item.lastMeeting.startsAt)}`
-      : "";
+  const meeting = meetingLine("Next", item.nextMeeting) ?? meetingLine("Last", item.lastMeeting);
   return (
     <CaptureRow
+      rowId={clearId}
       mark={<PersonMark name={label} />}
       title={label}
-      meta={`${item.email} · ${item.meetings} ${item.meetings === 1 ? "meeting" : "meetings"}${meeting ? `. ${meeting}` : ""}`}
+      meta={`${item.email} · ${item.meetings} ${item.meetings === 1 ? "meeting" : "meetings"}`}
+      detail={meeting ? <span className="ui-style text-soft truncate">{meeting}</span> : null}
       actions={[
         {
+          id: "create",
           label: "Create contact",
           variant: "secondary",
           key: "a",
@@ -640,7 +727,7 @@ export function PersonItem({ item, clearId }: { item: MetPerson; clearId: string
               email: item.email,
             }),
         },
-        { label: "Hide", variant: "ghost", key: "i", hint: "I", run: hide },
+        { id: "hide", label: "Hide", variant: "ghost", key: "i", hint: "I", run: hide },
       ]}
       swipe={{ left: { label: "Hide", run: hide } }}
     />

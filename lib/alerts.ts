@@ -1,7 +1,7 @@
 import { withActor } from "@/lib/crm/context";
 import type { UserActor } from "@/lib/crm/types";
 import { pushToUser, type PushSender } from "@/lib/push";
-import { notify } from "@/lib/workflows/engine";
+import { notify, type NotificationCategory } from "@/lib/workflows/engine";
 
 type Alert = {
   key?: string;
@@ -9,7 +9,7 @@ type Alert = {
   body: string;
   url: string;
   tag?: string;
-  bell?: { title: string; body?: string | null; href?: string | null };
+  bell?: { title: string; body?: string | null; href?: string | null; category?: NotificationCategory };
 };
 
 export async function sendAlert(actor: UserActor, alert: Alert, options: { send?: PushSender } = {}) {
@@ -25,7 +25,7 @@ export async function sendAlert(actor: UserActor, alert: Alert, options: { send?
     if (!fresh) return { sent: 0, skipped: true };
   }
   if (alert.bell) {
-    await notify(actor, actor.userId, { title: alert.bell.title, body: alert.bell.body ?? null, href: alert.bell.href ?? null, source: "mail" }).catch(() => undefined);
+    await notify(actor, actor.userId, { title: alert.bell.title, body: alert.bell.body ?? null, href: alert.bell.href ?? null, source: "mail", category: alert.bell.category }).catch(() => undefined);
   }
   const result = await pushToUser(actor, { title: alert.title, body: alert.body, url: alert.url, tag: alert.tag }, options);
   return { sent: result.sent, skipped: false };

@@ -28,6 +28,22 @@ drop trigger if exists capture_dismissals_personal_workspace on crm.capture_dism
 create trigger capture_dismissals_personal_workspace before insert on crm.capture_dismissals
   for each row execute function private.personal_row_workspace();
 
+alter table crm.notifications add column if not exists category text;
+alter table crm.notifications drop constraint if exists notifications_category;
+alter table crm.notifications add constraint notifications_category check (category is null or category in ('capture'));
+
+update crm.notifications set category = 'capture'
+where category is null
+  and (
+    source = 'workflow_approval'
+    or (source = 'mail' and (title like 'No reply yet:%' or title like 'Time to check in:%' or href = '/capture'))
+  );
+
+create index if not exists contacts_normalized_email_idx on crm.contacts (normalized_email)
+  where normalized_email is not null and archived_at is null;
+create index if not exists mail_reminders_follow_up_due_idx on crm.mail_reminders (user_id, source_id, thread_key)
+  where kind = 'follow_up' and state = 'due';
+
 create index if not exists workflow_runs_waiting_idx on crm.workflow_runs (workspace_id, updated_at)
   where status = 'waiting' and waiting_for = 'approval';
 create index if not exists mail_prepared_ready_idx on crm.mail_prepared (user_id, kind)

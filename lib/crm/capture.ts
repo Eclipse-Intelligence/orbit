@@ -1,7 +1,7 @@
 import { cache } from "react";
 import { EMPTY_WAITING, waitingIn, waitingOnce, type Waiting } from "@/lib/crm/action-needed";
 import { withActor } from "@/lib/crm/context";
-import type { CaptureSectionCounts } from "@/lib/crm/capture-format";
+import type { CaptureSection, CaptureSectionCounts } from "@/lib/crm/capture-format";
 import { listPeopleMet, type CalendarStatus, type MetPerson } from "@/lib/crm/calendar";
 import type { CallSyncSummary } from "@/lib/crm/calls";
 import { FREE_MAIL_DOMAINS } from "@/lib/crm/communications";
@@ -12,6 +12,7 @@ import { iso } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
 import type { TeamsTranscriptStatus } from "@/lib/crm/teams-transcripts";
 import type { UserActor } from "@/lib/crm/types";
+import { CALL_FOLLOW_UP_LIMIT } from "@/lib/crm/follow-ups";
 import { workspaceActors } from "@/lib/crm/workspaces";
 import { unknownMailOnce, type UnknownEmail } from "@/lib/mail/filing";
 
@@ -23,12 +24,14 @@ export type CaptureStatus = {
   newestAt: string | null;
   seenAt: string | null;
   sections: CaptureSectionCounts;
+  failed: CaptureSection[];
 };
 
 export type CaptureContext = {
   actors: UserActor[];
   unknown: UnknownEmail[];
   waiting: Waiting;
+  failed: CaptureSection[];
 };
 
 const HAS_MAILBOX = `exists (
@@ -113,8 +116,12 @@ const FOLLOW_UP_COUNTS = `
     count(*)::int as waiting,
     count(*) filter (where $3::timestamptz is null or s.created_at > $3)::int as fresh,
     max(s.created_at) as newest
-  from crm.follow_up_suggestions s
-  where s.user_id = $1 and s.workspace_id = $2 and s.state = 'ready' and s.body is not null and s.person_email is not null`;
+  from (
+    select s.created_at from crm.follow_up_suggestions s
+    where s.user_id = $1 and s.workspace_id = $2 and s.state = 'ready' and s.body is not null and s.person_email is not null
+    order by s.created_at desc
+    limit $4
+  ) s`;
 
 export async function listToFile(actor: UserActor, now = Date.now()): Promise<ToFile> {
   assertScope(actor.scopes, "crm:read");
@@ -135,14 +142,14 @@ function later(left: string | null, right: string | null) {
 async function unknownFor(actor: UserActor, now: number, actors?: UserActor[]) {
   return unknownMailOnce(actor, actors ?? (await workspaceActors(actor)), now).catch((error) => {
     console.error("Reading email from new people failed", error instanceof Error ? error.message : error);
-    return [] as UnknownEmail[];
+    return null;
   });
 }
 
 async function waitingFor(actor: UserActor, actors: UserActor[], now: number) {
   return waitingOnce(actor, actors, new Date(now)).catch((error) => {
     console.error("Reading what is waiting on you failed", error instanceof Error ? error.message : error);
-    return EMPTY_WAITING;
+    return { ...EMPTY_WAITING, failed: ["approvals", "followUps", "replies", "tasks"] as CaptureSection[] };
   });
 }
 
@@ -157,7 +164,8 @@ export function captureContext(actor: UserActor, now = Date.now()) {
   const pending = (async () => {
     const actors = await workspaceActors(actor);
     const [unknown, waiting] = await Promise.all([unknownFor(actor, now, actors), waitingFor(actor, actors, now)]);
-    return { actors, unknown, waiting };
+    const failed: CaptureSection[] = [...waiting.failed, ...(unknown ? [] : ["toFile" as const])];
+    return { actors, unknown: unknown ?? [], waiting, failed };
   })();
   store.set(key, pending);
   pending.catch(() => store.delete(key));
@@ -204,14 +212,14 @@ export async function captureStatus(actor: UserActor, now = Date.now(), known?: 
       ])
     ).rows[0];
     const followUps = (
-      await db.query<{ waiting: number; fresh: number; newest: Date | null }>(FOLLOW_UP_COUNTS, [actor.userId, actor.workspaceId, seenAt])
+      await db.query<{ waiting: number; fresh: number; newest: Date | null }>(FOLLOW_UP_COUNTS, [actor.userId, actor.workspaceId, seenAt, CALL_FOLLOW_UP_LIMIT])
     ).rows[0];
     const freshEmails = emails.filter((item) => !seenAt || item.at > seenAt).length;
     const newestEmail = emails.reduce<string | null>((latest, item) => (!latest || item.at > latest ? item.at : latest), null);
-    const waiting = arrivals([...here.approvals, ...here.nudges, ...here.replies, ...here.tasks], now, seenAt);
+    const waiting = arrivals([...here.approvals, ...here.nudges, ...here.reminders, ...here.replies, ...here.tasks], now, seenAt);
     const sections: CaptureSectionCounts = {
       approvals: here.approvals.length,
-      followUps: followUps.waiting + here.nudges.length,
+      followUps: followUps.waiting + here.nudges.length + here.reminders.length,
       replies: here.replies.length,
       tasks: here.tasks.length,
       toFile: unfiled.waiting + people.waiting + emails.length,
@@ -222,6 +230,7 @@ export async function captureStatus(actor: UserActor, now = Date.now(), known?: 
       newestAt: later(later(later(later(iso(unfiled.newest), iso(people.newest)), iso(followUps.newest)), newestEmail), waiting.newest),
       seenAt,
       sections,
+      failed: context.failed,
     };
   });
 }

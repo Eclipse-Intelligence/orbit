@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import Button from "@/components/_ui/button";
 import {
@@ -12,7 +12,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/_ui/dropdown-menu";
 import { swipeCommit, watchSwipe, type SwipeHandlers } from "@/components/mail/swipe";
-import type { SnoozeChoice } from "@/lib/crm/action-needed";
+import type { SnoozeChoice } from "@/lib/crm/task-snooze";
 import { KEYBOARD_ROW_CLASS } from "@/lib/shortcuts";
 import { cn } from "@/lib/utils";
 import ArchiveIcon from "@/public/assets/images/mail/archive.svg";
@@ -20,9 +20,10 @@ import ClockIcon from "@/public/assets/images/mail/clock.svg";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
 import MoreIcon from "@/public/assets/images/_common/more.svg";
 
-export type MenuItem = { label: string; run: () => void };
+export type MenuItem = { id: string; label: string; run: () => void };
 
 export type RowAction = {
+  id: string;
   label: string;
   variant: "primary" | "secondary" | "subtle" | "ghost";
   run?: () => void;
@@ -44,8 +45,12 @@ export type RowSwipe = {
   right?: () => void;
 };
 
+export type CaptureList = { leaving: ReadonlySet<string>; swiped: (id: string) => void };
+
+export const CaptureListContext = createContext<CaptureList>({ leaving: new Set(), swiped: () => undefined });
+
+export const COLLAPSE_MS = 220;
 const OUT_MS = 180;
-const COLLAPSE_MS = 220;
 
 function SnoozeItems({ choices, pick, extra }: { choices: SnoozeChoice[]; pick: (choice: SnoozeChoice) => void; extra?: MenuItem[] }) {
   return (
@@ -59,7 +64,7 @@ function SnoozeItems({ choices, pick, extra }: { choices: SnoozeChoice[]; pick: 
       ))}
       {extra && extra.length > 0 && <DropdownMenuSeparator />}
       {extra?.map((item) => (
-        <DropdownMenuItem key={item.label} className="max-sm:py-2.5" onSelect={item.run}>
+        <DropdownMenuItem key={item.id} className="max-sm:py-2.5" onSelect={item.run}>
           {item.label}
         </DropdownMenuItem>
       ))}
@@ -95,23 +100,24 @@ function SnoozeButton({ action, hint }: { action: RowAction & { snooze: NonNulla
 
 function MoreMenu({ actions, extra }: { actions: RowAction[]; extra: MenuItem[] }) {
   const [choices, setChoices] = useState<SnoozeChoice[]>([]);
-  const snooze = actions.find((action) => action.snooze)?.snooze;
+  const snoozeAction = actions.find((action) => action.snooze);
+  const snooze = snoozeAction?.snooze;
   const plain = actions.filter((action) => !action.snooze && action.run);
   return (
     <DropdownMenu modal={false} onOpenChange={(open) => open && snooze && setChoices(snooze.choices())}>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon" aria-label="More actions" className="ml-auto sm:hidden">
+        <Button variant="ghost" size="icon" aria-label="More actions" className="ml-auto sm:hidden" data-row-key={snoozeAction?.key}>
           <MoreIcon aria-hidden className="size-3.5" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-[13rem]">
         {plain.map((action) => (
-          <DropdownMenuItem key={action.label} className="max-sm:py-2.5" disabled={action.disabled} onSelect={() => action.run?.()}>
+          <DropdownMenuItem key={action.id} className="max-sm:py-2.5" disabled={action.disabled} onSelect={() => action.run?.()}>
             {action.label}
           </DropdownMenuItem>
         ))}
         {extra.map((item) => (
-          <DropdownMenuItem key={item.label} className="max-sm:py-2.5" onSelect={item.run}>
+          <DropdownMenuItem key={item.id} className="max-sm:py-2.5" onSelect={item.run}>
             {item.label}
           </DropdownMenuItem>
         ))}
@@ -122,7 +128,22 @@ function MoreMenu({ actions, extra }: { actions: RowAction[]; extra: MenuItem[] 
   );
 }
 
+function PhoneKeys({ actions }: { actions: RowAction[] }) {
+  const keyed = actions.filter((action) => action.phoneMore && action.key && action.run && !action.snooze && !action.disabled);
+  if (keyed.length === 0) return null;
+  return (
+    <span aria-hidden className="sm:hidden">
+      {keyed.map((action) => (
+        <button key={action.id} type="button" tabIndex={-1} data-row-key={action.key} className="sr-only" onClick={action.run}>
+          {action.label}
+        </button>
+      ))}
+    </span>
+  );
+}
+
 export default function CaptureRow({
+  rowId,
   mark,
   title,
   titleHref,
@@ -136,6 +157,7 @@ export default function CaptureRow({
   swipe,
   below,
 }: {
+  rowId: string;
   mark: ReactNode;
   title: string;
   titleHref?: string;
@@ -149,6 +171,8 @@ export default function CaptureRow({
   swipe?: RowSwipe;
   below?: ReactNode;
 }) {
+  const list = useContext(CaptureListContext);
+  const leaving = list.leaving.has(rowId);
   const [active, setActive] = useState(false);
   const [offset, setOffset] = useState(0);
   const [dragging, setDragging] = useState(false);
@@ -163,15 +187,30 @@ export default function CaptureRow({
   const armed = offset !== 0 && swipeCommit(offset, 0, width, allowed) !== null;
   const phoneMore = actions.filter((action) => action.phoneMore);
   const hasMore = phoneMore.length > 0 || more.length > 0;
+  const closing = leaving || height !== null;
+
+  useEffect(() => {
+    if (!leaving) return;
+    const element = row.current;
+    if (!element) return;
+    const frames: number[] = [];
+    setHeight((current) => current ?? element.offsetHeight);
+    frames.push(window.requestAnimationFrame(() => frames.push(window.requestAnimationFrame(() => setHeight(0)))));
+    return () => {
+      frames.forEach((frame) => window.cancelAnimationFrame(frame));
+      setHeight(null);
+    };
+  }, [leaving]);
 
   useEffect(() => {
     const later = (run: () => void, ms: number) => timers.current.push(window.setTimeout(run, ms));
     handlers.current = {
-      canLeft: allowed.left && height === null,
-      canRight: allowed.right && height === null,
+      canLeft: allowed.left && !closing,
+      canRight: allowed.right && !closing,
       scroller: () => row.current?.closest<HTMLElement>(".overflow-y-auto") ?? null,
+      width: () => row.current?.offsetWidth ?? window.innerWidth,
       onDrag: (dx) => {
-        if (!swipe || height !== null) return;
+        if (!swipe || closing) return;
         const rowWidth = row.current?.offsetWidth ?? 360;
         setWidth(rowWidth);
         setDragging(true);
@@ -195,6 +234,7 @@ export default function CaptureRow({
             window.requestAnimationFrame(() => window.requestAnimationFrame(() => setHeight(0)));
           }, OUT_MS);
           later(() => {
+            list.swiped(rowId);
             left.run();
             setHeight(null);
             setOffset(0);
@@ -234,13 +274,20 @@ export default function CaptureRow({
     <li
       ref={row}
       data-list-row=""
+      data-capture-row={rowId}
+      data-leaving={leaving ? "" : undefined}
       onFocus={(event) => {
         if (event.target === event.currentTarget) setActive(true);
       }}
       onBlur={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setActive(false);
       }}
-      className={cn(KEYBOARD_ROW_CLASS, "relative overflow-hidden", height !== null && "ease-power3-in-out transition-[height,opacity] duration-200")}
+      className={cn(
+        KEYBOARD_ROW_CLASS,
+        "relative overflow-hidden",
+        height !== null && "ease-power3-in-out transition-[height,opacity] duration-200",
+        closing && "pointer-events-none",
+      )}
       style={height !== null ? { height, opacity: height === 0 ? 0 : 1 } : undefined}
     >
       {offset !== 0 && swipe && (
@@ -287,12 +334,12 @@ export default function CaptureRow({
             <div className="flex shrink-0 flex-wrap items-center gap-1.5 max-sm:pl-[34px]">
               {actions.map((action) =>
                 action.render ? (
-                  <span key={action.label} className={cn("contents", action.phoneMore && "max-sm:hidden")}>
+                  <span key={action.id} className={cn("contents", action.phoneMore && "max-sm:hidden")}>
                     {action.render(hintFor(action))}
                   </span>
                 ) : action.snooze ? (
                   <SnoozeButton
-                    key={action.label}
+                    key={action.id}
                     action={
                       action as RowAction & {
                         snooze: NonNullable<RowAction["snooze"]>;
@@ -302,7 +349,7 @@ export default function CaptureRow({
                   />
                 ) : (
                   <Button
-                    key={action.label}
+                    key={action.id}
                     variant={action.variant}
                     size="sm"
                     className={cn("max-w-full", action.phoneMore && "max-sm:hidden")}
@@ -317,6 +364,7 @@ export default function CaptureRow({
                   </Button>
                 ),
               )}
+              <PhoneKeys actions={actions} />
               {hasMore && <MoreMenu actions={phoneMore} extra={more} />}
             </div>
           )}
