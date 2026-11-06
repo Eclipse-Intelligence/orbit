@@ -108,28 +108,27 @@ function escapePattern(text: string) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+const SIGNATURE_LINES = 8;
+
 export function stripSignature(text: string, options: { signature?: string | null; name?: string | null } = {}) {
-  let body = text;
-  const dashes = body.search(/^-- ?$/m);
-  if (dashes > 0) body = body.slice(0, dashes);
+  let lines = text.split("\n");
+  const dashes = lines.findLastIndex((line) => /^-- ?$/.test(line));
+  if (dashes > 0 && lines.length - dashes <= SIGNATURE_LINES) lines = lines.slice(0, dashes);
   const signatureLine = (options.signature ?? "")
     .split("\n")
     .map((line) => line.trim())
-    .find((line) => line.length >= 2);
+    .find((line) => line.length >= 4);
   if (signatureLine) {
-    const at = body.lastIndexOf(signatureLine);
-    if (at > 0) body = body.slice(0, at);
+    const at = lines.findLastIndex((line) => line.trim().toLowerCase() === signatureLine.toLowerCase());
+    if (at > 0) lines = lines.slice(0, at);
   }
-  const full = options.name?.trim().replace(/\s+/g, " ") ?? "";
-  const first = full.split(" ")[0] ?? "";
+  const first = options.name?.trim().split(/\s+/)[0] ?? "";
   if (first.length >= 2) {
-    const names = [...new Set([full, first])].map(escapePattern).join("|");
-    const signOff = new RegExp(`^\\s*(?:${names})[.!,]?\\s*$`, "i");
-    const lines = body.split("\n");
-    const index = lines.findIndex((line, position) => position > 0 && signOff.test(line));
-    if (index > 0) body = lines.slice(0, index + 1).join("\n");
+    const signOff = new RegExp(`^\\s*${escapePattern(first)}[.!,]?\\s*$`, "i");
+    const index = lines.findLastIndex((line, position) => position > 0 && signOff.test(line));
+    if (index > 0) lines = lines.slice(0, index + 1);
   }
-  return body.replace(/\n{3,}/g, "\n\n").trim();
+  return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 export function stripQuoted(text: string) {

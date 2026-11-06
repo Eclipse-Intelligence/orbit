@@ -111,7 +111,7 @@ describe("personal learning across workspaces", () => {
     await admin.query("delete from crm.memories");
     const titles = ["Eclipse ICP is UK agencies", "Writes in UK English", "James O'Toole cofounder trial", "Hates hype words"];
     for (const title of titles) {
-      await admin.query("insert into crm.memories (workspace_id, user_id, scope, kind, title, body) values ($1, $2, 'personal', 'preference', $3, $3)", [eclipse.workspaceId, eclipse.userId, title]);
+      await admin.query("insert into crm.memories (workspace_id, user_id, scope, kind, title, body) values ($1, $2, 'personal', 'fact', $3, $3)", [eclipse.workspaceId, eclipse.userId, title]);
     }
     const { fetchImpl, calls } = gateway({
       sort: (user) => ({

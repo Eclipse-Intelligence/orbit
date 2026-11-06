@@ -224,17 +224,26 @@ export async function emailWritingNotes(db: Db, actor: UserActor) {
   return result.rows.map((row) => (row.body.startsWith(row.title.replace(/…$/, "")) ? row.body : `${row.title}: ${row.body}`));
 }
 
-export const BUSINESS_KINDS = new Set(["fact", "goal", "person", "icp", "objection", "competitor", "messaging"]);
+export const BUSINESS_KINDS = new Set(["icp", "objection", "competitor", "messaging"]);
 
 function escapeRegex(text: string) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-export async function businessNamesInDb(db: Db) {
-  const result = await db.query<{ name: string }>(
-    "select name from crm.workspaces union select name from crm.products",
+export async function businessNamesInDb(db: Db, actor: Pick<UserActor, "fullName">) {
+  const result = await db.query<{ name: string; product: boolean }>(
+    "select name, false as product from crm.workspaces union select name, true from crm.products",
   );
-  return result.rows.map((row) => row.name.trim()).filter((name) => name.length >= 3);
+  const full = actor.fullName?.trim().replace(/\s+/g, " ").toLowerCase() ?? "";
+  const own = new Set([full, full.split(" ")[0] ?? ""].filter(Boolean));
+  return [
+    ...new Set(
+      result.rows
+        .map((row) => ({ name: row.name.trim().replace(/\s+/g, " "), product: row.product }))
+        .filter((row) => row.name.length >= (row.product ? 4 : 3) && !own.has(row.name.toLowerCase()))
+        .map((row) => row.name),
+    ),
+  ];
 }
 
 export function namesBusiness(text: string, names: string[]) {
@@ -243,6 +252,10 @@ export function namesBusiness(text: string, names: string[]) {
 
 export function mayApplyEverywhere(kind: string, text: string, names: string[]) {
   return !BUSINESS_KINDS.has(kind.trim().toLowerCase()) && !namesBusiness(text, names);
+}
+
+export async function everywhereAllowed(actor: UserActor, kind: string, text: string) {
+  return withActor(actor, async (db) => mayApplyEverywhere(kind, text, await businessNamesInDb(db, actor)));
 }
 
 export async function rememberNote(
@@ -256,7 +269,7 @@ export async function rememberNote(
   const title = typeof input.title === "string" && input.title.trim() ? input.title : words.length > 10 ? `${words.slice(0, 10).join(" ")}…` : body;
   const kind = typeof input.kind === "string" ? input.kind : "note";
   return withActor(actor, async (db) => {
-    const everywhere = input.allWorkspaces === true && mayApplyEverywhere(kind, `${title} ${body}`, await businessNamesInDb(db));
+    const everywhere = input.allWorkspaces === true && mayApplyEverywhere(kind, `${title} ${body}`, await businessNamesInDb(db, actor));
     return insertMemory(
       db,
       actor,

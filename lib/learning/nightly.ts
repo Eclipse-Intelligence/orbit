@@ -11,7 +11,7 @@ import { businessNamesInDb, insertMemory, mayApplyEverywhere, reviseMemory, sear
 import { mapNote, NOTE_SELECT } from "@/lib/learning/market";
 import { stalledDealsInDb } from "@/lib/crm/pipeline-history";
 import { researchMail } from "@/lib/mail/subscriptions";
-import { WRITING_STYLE } from "@/lib/writing-style";
+import { writingStyle } from "@/lib/writing-style";
 
 export type LearningKind = "personal" | "business" | "market" | "brief";
 export type UnitResult = {
@@ -128,12 +128,12 @@ function existingBlock(items: Existing[], actor?: UserActor) {
 
 const OPS_FORMAT =
   'Reply with JSON only: {"add": [{"kind": string, "title": string, "body": string, "confidence": "low"|"medium"|"high", "sources": [{"label": string, "url": string}], "companyId": string or null}], "update": [{"id": string, "title": string, "body": string, "confidence": string, "sources": [...]}], "archive": [{"id": string, "reason": string}]}. ' +
-  "Each note holds one idea: a title of at most 12 words and a body of at most 70 words. Prefer updating an existing note over adding a near duplicate, and archive a note only when the material clearly contradicts it or it no longer holds. Never archive or rewrite notes pinned or written by the user; add a new note instead if needed. Sources name where it came from (for example \"Call with Pulse, 12 Oct\") with the link given in the material when there is one. Return empty arrays when nothing is worth keeping. Keep at most 8 additions. UK English. " +
-  WRITING_STYLE;
+  "Each note holds one idea: a title of at most 12 words and a body of at most 70 words. Prefer updating an existing note over adding a near duplicate, and archive a note only when the material clearly contradicts it or it no longer holds. Never archive or rewrite notes pinned or written by the user; add a new note instead if needed. Sources name where it came from (for example \"Call with Pulse, 12 Oct\") with the link given in the material when there is one. Return empty arrays when nothing is worth keeping. Keep at most 8 additions. UK English.";
 
-async function askForOps(system: string, material: string, options: Options) {
+async function askForOps(actor: UserActor, system: string, material: string, options: Options) {
+  const style = writingStyle((await brandOrEmpty(actor)).eclipseTools);
   const result = await completeJson({
-    system: `${system} ${OPS_FORMAT} ${UNTRUSTED}`,
+    system: `${system} ${OPS_FORMAT} ${style} ${UNTRUSTED}`,
     user: material,
     schema: OPS,
     maxTokens: AI_TOKENS,
@@ -151,7 +151,7 @@ async function applyOps(actor: UserActor, scope: MemoryScope, ops: Ops, existing
     let added = 0;
     let updated = 0;
     let archived = 0;
-    const names = personal ? await businessNamesInDb(db) : [];
+    const names = personal ? await businessNamesInDb(db, actor) : [];
     const everywhere = (kind: string, text: string, wanted: boolean | null | undefined) => (wanted === true ? mayApplyEverywhere(kind, text, names) : wanted);
     for (const item of (ops.add ?? []).slice(0, 8)) {
       if (!item.title.trim() || !item.body.trim()) continue;
@@ -269,6 +269,7 @@ async function learnPersonal(actor: UserActor, since: Date, options: Options): P
   const business = businessName(actor);
   const elsewhere = gathered.others.length ? ` ${name} also works in other workspaces (${gathered.others.join(", ")}), each for a different business.` : "";
   const ops = await askForOps(
+    actor,
     `You keep the long-term memory that Orbit's assistant (in ${business}'s CRM) holds about ${name}, so it doesn't start from scratch in each conversation.${elsewhere} ` +
       `From the material, keep only what will still be useful in future conversations: how ${name} likes things done, corrections they made to the assistant, standing instructions, people and relationships that matter to them and aren't obvious from CRM records, goals and priorities they're working towards, and patterns in how they edit drafts. ` +
       "Write each note as a fact about them (for example \"Mark wants first emails under 90 words\"). Skip one-off requests, anything already obvious from CRM records, personal matters unrelated to their work, and habits Orbit now does automatically (every email sent or received with a contact is filed on the timeline by itself, so never keep a note that emails should be logged by hand, and archive any existing note that says so). Kinds: preference, correction, instruction, person, goal, writing, fact. " +
@@ -340,6 +341,7 @@ async function learnBusiness(actor: UserActor, since: Date, options: Options): P
   const material = `${existingBlock(existing)}\n\nMATERIAL\n\n${found}`;
   const business = businessName(actor);
   const ops = await askForOps(
+    actor,
     `You keep the shared business memory for ${business}'s CRM, which every member's assistant reads. From the material, learn what helps the team sell and keep customers: the ideal customer profile and audience (who buys, who stalls, who churns), buying triggers, objections and the answers that worked, competitors mentioned and how ${business} compares, pricing reactions, messaging and approaches that get replies or move deals, and patterns behind wins and losses. ` +
       "Only conclude a pattern when the material supports it, and say how many examples back it. Set companyId only to a company id that appears in the material. Kinds: icp, audience, trigger, objection, competitor, pricing, messaging, win_pattern, loss_pattern, fact.",
     material,
@@ -385,6 +387,7 @@ async function learnMarket(actor: UserActor, options: Options): Promise<UnitResu
   const business = businessName(actor);
   const sells = (await brandOrEmpty(actor)).whatYouSell.trim();
   const ops = await askForOps(
+    actor,
     `You keep the shared market memory for ${business}${sells ? `. What ${business} sells, in its own words: ${clip(sells, 3_000)}\n` : ". "}From the market notes, keep what matters to ${business}'s sales and positioning: themes and trends building across several notes, competitor moves, launches and funding in the space, and buying signals on specific companies or people in the CRM or on the watchlist (say why it's a reason to get in touch now). ` +
       "Merge related notes into one theme rather than one note per article, and update existing notes as a story develops. Use the note's link as the source. Set companyId only to a company id listed above. Kinds: theme, competitor, launch, funding, signal, person, trend.",
     material,
@@ -437,7 +440,7 @@ async function writeBrief(actor: UserActor, since: Date, options: Options & { da
   const result = await completeJson({
     system:
       `Write ${name}'s morning brief in Orbit, ${businessName(actor)}'s CRM. Reply with JSON only: {"brief": string}. The brief is markdown of at most 220 words with up to four short sections, each a heading line starting "### " and two to four bullets: "In your market" (market notes and research mail), "Accounts to act on" (buying signals and why now, with the company link given), "Deals gone quiet" (the stalled deals most worth a nudge, with the deal link given and a suggested next step), and "What Orbit learned" (the most useful new or changed notes). ` +
-      `Leave out a section with nothing worth saying. Lead with what ${name} should act on today. Link sources with markdown links using the links given. Plain and direct, UK English. ${WRITING_STYLE} ${UNTRUSTED}`,
+      `Leave out a section with nothing worth saying. Lead with what ${name} should act on today. Link sources with markdown links using the links given. Plain and direct, UK English. ${writingStyle((await brandOrEmpty(actor)).eclipseTools)} ${UNTRUSTED}`,
     user: material,
     schema: BRIEF,
     maxTokens: AI_TOKENS,
@@ -451,7 +454,6 @@ async function writeBrief(actor: UserActor, since: Date, options: Options & { da
     db.query(
       `insert into crm.daily_briefs (workspace_id, user_id, day, body) values ($1, $2, $3, $4)
        on conflict (workspace_id, user_id, day) do update set
-         workspace_id = excluded.workspace_id,
          body = excluded.body,
          dismissed_at = null,
          created_at = now(),
@@ -506,7 +508,7 @@ async function tidyScope(actor: UserActor, scope: MemoryScope, options: Options)
         "Notes marked pinned or written by the user are never archived and their text is never changed; you may merge learned duplicates into them. " +
         (personal ? `Only merge notes that apply in the same place (all workspaces, or only ${businessName(actor)}). ` : "") +
         "Leave everything else alone. UK English. " +
-        WRITING_STYLE,
+        writingStyle((await brandOrEmpty(actor)).eclipseTools),
       user: `NOTES (newest first):\n${listed.map((row) => `- id ${row.id} [${row.kind}, ${row.confidence}, ${shortDate(row.updated_at)}${row.pinned ? ", pinned" : ""}${row.origin !== "learning" ? ", written by the user" : ""}${personal ? whereTag(actor, row) : ""}] ${row.title}: ${clip(row.body, 300)}`).join("\n")}`,
       schema: TIDY,
       maxTokens: AI_TOKENS,
@@ -631,7 +633,7 @@ export async function sortPersonalMemories(actor: UserActor, options: Options): 
        left join crm.workspace_brands b on b.workspace_id = w.id
        order by w.created_at limit 20`,
     );
-    return { settled: 0, notes: notes.rows, workspaces: workspaces.rows, names: await businessNamesInDb(db) };
+    return { settled: 0, notes: notes.rows, workspaces: workspaces.rows, names: await businessNamesInDb(db, actor) };
   });
   if (!gathered) return { sorted: 0 };
   if (gathered.settled) return { sorted: gathered.settled };

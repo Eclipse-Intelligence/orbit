@@ -339,9 +339,9 @@ export default function BookingPageSettings({
 
   function copyFrom(other: { workspaceName: string; page: Settings }) {
     const copied = draftFrom(other.page);
-    setDraft({ ...copied, slug: draft.slug === other.page.slug ? `${other.page.slug}-2` : draft.slug, enabled: false, inviteSender: "" });
+    setDraft({ ...copied, slug: draft.slug === other.page.slug ? `${other.page.slug}-2` : draft.slug, enabled: false, inviteSender: "", videoUrl: "" });
     setErrors({});
-    setMessage(`Copied from ${other.workspaceName}. Check the link, then save.`);
+    setMessage(`Copied from ${other.workspaceName}, without the background video and photos. Check the link and intro, then save.`);
   }
 
   function setDay(day: Weekday, ranges: WeeklyHours[Weekday]) {

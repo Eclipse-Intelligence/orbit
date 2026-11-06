@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { createActivity } from "@/lib/crm/activities";
+import { saveBrandProfile } from "@/lib/crm/brand";
 import { captureStatus } from "@/lib/crm/capture";
 import { createCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
@@ -350,6 +351,18 @@ describe("calls that ended with no next step", () => {
     async function age(owner: UserActor) {
       await getAdminPool().query("update crm.follow_up_suggestions set updated_at = now() - interval '2 hours' where user_id = $1", [owner.userId]);
     }
+
+    it("writes the follow-up for the business of the call's workspace", async () => {
+      const owner = await freshOwner();
+      await getAdminPool().query("update crm.workspaces set name = 'Mark Ridgeon Consulting' where id = $1", [owner.workspaceId]);
+      const here = { ...owner, workspaceName: "Mark Ridgeon Consulting" };
+      await saveBrandProfile(here, { website: "", whatYouSell: "Fractional COO work for scale-ups.", whoItsFor: "", tone: "Short and plain." }, { operation: "test", source: "test" });
+      await seedCall(here);
+      const { fetchImpl, prompts } = model([DRAFT]);
+      assert.equal((await followUpCalls(here, { deadline: Date.now() + 60_000, fetchImpl, now: NOW })).drafted, 1);
+      assert.match(prompts[0].user, /About Mark Ridgeon Consulting, the business Mark writes for[\s\S]*Fractional COO work for scale-ups/);
+      assert.doesNotMatch(prompts[0].system, /piece/);
+    });
 
     it("drafts at most two a run, and none when the deadline is close", async () => {
       const owner = await freshOwner();

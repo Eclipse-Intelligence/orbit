@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { after } from "next/server";
 import { applyMailAction, threadForEmail } from "@/lib/mail/actions";
 import { addFollowUp } from "@/lib/mail/prepare";
-import { forgetMemory, recall, rememberNote } from "@/lib/learning/memories";
+import { everywhereAllowed, forgetMemory, recall, rememberNote } from "@/lib/learning/memories";
 import { addWatchItems, listWatchlist, removeWatchItems, WATCH_KINDS } from "@/lib/learning/market";
 import { latestBrief, learningKinds, learnNow, LEARNING_KINDS, type LearningKind } from "@/lib/learning/nightly";
 import { bookingUrl } from "@/lib/assistant/links";
@@ -544,6 +544,8 @@ function detail(name: Names, key: string) {
   const value = name(key);
   return value === key ? "" : value;
 }
+
+const REMEMBER_HERE_KEY = "remember:this_workspace";
 
 function sendFromKey(args: Args) {
   return `${str(args.draftId) || str(args.replyToEmailId) || "new"}:send_from`;
@@ -4929,17 +4931,33 @@ const TOOL_LIST: AssistantTool[] = [
         forgetId: { type: "string", description: "Id of a learned note to forget instead of saving one." },
       },
     },
-    describe: (args) =>
+    details: async (actor, args): Promise<Record<string, string>> => {
+      if (str(args.forgetId) || args.shared === true || args.allWorkspaces !== true) return {};
+      const allowed = await everywhereAllowed(actor, str(args.kind) || "note", `${str(args.title)} ${str(args.body)}`);
+      return allowed ? {} : { [REMEMBER_HERE_KEY]: "yes" };
+    },
+    describe: (args, name) =>
       str(args.forgetId)
         ? { title: "Forget a note", lines: [str(args.title) || "The note you chose"] }
         : {
             title: args.shared === true ? "Remember for the whole team" : "Remember for you",
-            lines: [str(args.title), str(args.body), args.shared !== true && args.allWorkspaces === true ? "All workspaces" : ""].filter(Boolean),
+            lines: [
+              str(args.title),
+              str(args.body),
+              args.shared !== true && args.allWorkspaces === true ? (detail(name, REMEMBER_HERE_KEY) ? "This workspace" : "All workspaces") : "",
+            ].filter(Boolean),
           },
     run: async (actor, args) => {
       const forgetId = str(args.forgetId);
       if (forgetId) return forgetMemory(actor, forgetId);
-      return { memory: await rememberNote(actor, args, "assistant") };
+      const memory = await rememberNote(actor, args, "assistant");
+      const downgraded = args.shared !== true && args.allWorkspaces === true && memory.allWorkspaces !== true;
+      return {
+        memory,
+        ...(downgraded
+          ? { note: `Kept to ${actor.workspaceName} only, because it is about a business (its kind or a workspace or product name), not about how the user works everywhere.` }
+          : {}),
+      };
     },
   },
   {

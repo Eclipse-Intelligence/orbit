@@ -29,6 +29,25 @@ grant select, insert, update, delete on crm.personal_context_workspaces to authe
 
 drop trigger if exists mail_prepared_mail_workspace on crm.mail_prepared;
 
+update crm.memories m set all_workspaces = null
+where m.scope = 'personal'
+  and m.all_workspaces
+  and m.archived_at is null
+  and (
+    m.kind in ('icp', 'objection', 'competitor', 'messaging')
+    or exists (
+      select 1
+      from crm.workspace_members wm
+      join crm.workspaces w on w.id = wm.workspace_id
+      join crm.profiles p on p.id = wm.user_id
+      where wm.user_id = m.user_id
+        and char_length(btrim(w.name)) >= 3
+        and lower(btrim(w.name)) <> lower(btrim(coalesce(p.full_name, '')))
+        and lower(btrim(w.name)) <> lower(split_part(btrim(coalesce(p.full_name, '')), ' ', 1))
+        and (m.title || ' ' || m.body) ~* ('\m' || regexp_replace(btrim(w.name), '([.*+?^${}()|\[\]\\])', '\\\1', 'g') || '\M')
+    )
+  );
+
 alter table crm.daily_briefs drop constraint if exists daily_briefs_unique;
 drop index if exists crm.daily_briefs_unique;
 create unique index if not exists daily_briefs_workspace_user_day on crm.daily_briefs (workspace_id, user_id, day);
@@ -50,6 +69,8 @@ as $$
       and not (b.user_id = p_user_id and b.workspace_id = p_workspace_id)
   )
 $$;
+
+drop function if exists private.booking_slug_taken(text, uuid);
 
 revoke all on function private.booking_slug_taken(text, uuid, uuid) from public;
 grant execute on function private.booking_slug_taken(text, uuid, uuid) to crm_app;

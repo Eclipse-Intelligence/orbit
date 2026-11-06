@@ -20,6 +20,7 @@ import {
   type DraftMode,
 } from "@/lib/mail/microsoft";
 import { notePreparedSent } from "@/lib/mail/prepare";
+import { addressHomesInDb } from "@/lib/mail/routing";
 import { mailSourceToken } from "@/lib/mail/sync";
 import { readStatusesOn } from "@/lib/mail/tracking";
 import type { MailAddress } from "@/lib/mail/types";
@@ -857,14 +858,11 @@ export async function composeAccounts(actor: UserActor): Promise<ComposeAccount[
 
 async function workspaceSender(db: Db, actor: UserActor, accounts: ComposeAccount[]) {
   if (accounts.length === 0) return null;
-  const homes = await db.query<{ address: string; workspace_id: string }>("select address, workspace_id from crm.mail_address_homes where user_id = $1", [actor.userId]);
-  const sources = await db.query<{ id: string; workspace_id: string }>("select id, workspace_id from crm.mail_sources where user_id = $1", [actor.userId]);
-  const homed = new Map(homes.rows.map((row) => [row.address, row.workspace_id]));
-  const sourceHome = new Map(sources.rows.map((row) => [row.id, row.workspace_id]));
-  const here = (item: ComposeAccount) => homed.get(item.email.toLowerCase()) === actor.workspaceId;
-  const mailboxHere = (item: ComposeAccount) =>
-    !item.identityId && sourceHome.get(item.id) === actor.workspaceId && (homed.get(item.email.toLowerCase()) ?? actor.workspaceId) === actor.workspaceId;
-  return accounts.find(here) ?? accounts.find(mailboxHere) ?? accounts.find((item) => !item.identityId) ?? accounts[0];
+  const homes = new Map((await addressHomesInDb(db, actor)).map((home) => [home.address, home]));
+  const homeOf = (item: ComposeAccount) => homes.get(item.email.toLowerCase());
+  const chosenHere = (item: ComposeAccount) => homeOf(item)?.workspaceId === actor.workspaceId && homeOf(item)?.defaultWorkspaceId !== actor.workspaceId;
+  const here = (item: ComposeAccount) => homeOf(item)?.workspaceId === actor.workspaceId;
+  return accounts.find(chosenHere) ?? accounts.find(here) ?? accounts.find((item) => !item.identityId) ?? accounts[0];
 }
 
 export async function defaultSender(actor: UserActor) {

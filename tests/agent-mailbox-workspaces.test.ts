@@ -224,6 +224,8 @@ describe("agent mailboxes in several workspaces", () => {
     assert.equal(fake.repliesFrom(ECLIPSE_BOX).filter((request) => request.url.includes(toEclipse.message_id)).length, 1);
     assert.equal(fake.repliesFrom(RIDGEON_BOX).filter((request) => request.url.includes(toRidgeon.message_id)).length, 1);
     assert.deepEqual(fake.repliesFrom(RIDGEON_BOX)[0].body?.to, [MARK_RIDGEON]);
+    const opened = String((fake.repliesFrom(RIDGEON_BOX)[0].body as { text?: string } | undefined)?.text ?? "");
+    assert.match(opened, new RegExp(`Open in Orbit: https?://[^/\\s]+/open\\?workspace=${ridgeon.workspaceId}&to=%2F%3Fchat%3D[0-9a-f-]{36}`));
   });
 
   it("polls every mailbox, so a busy one never starves the other", async () => {

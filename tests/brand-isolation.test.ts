@@ -7,15 +7,17 @@ import { DEFAULT_WEEKLY_HOURS } from "@/lib/booking/rules";
 import { logActivity } from "@/lib/crm/activities";
 import { saveBrandProfile } from "@/lib/crm/brand";
 import { createContact } from "@/lib/crm/contacts";
+import { withActor } from "@/lib/crm/context";
 import { saveMailbox } from "@/lib/crm/inbox";
 import { aboutWriterNote, getPersonalContext, savePersonalContext } from "@/lib/crm/personal-context";
 import type { UserActor } from "@/lib/crm/types";
 import { createWorkspace } from "@/lib/crm/workspaces";
 import { encryptSecret } from "@/lib/crypto/secret";
 import { getAdminPool, getPool } from "@/lib/db/pool";
-import { latestBrief, learnNow } from "@/lib/learning/nightly";
+import { latestBrief, learnNow, sortPersonalMemories } from "@/lib/learning/nightly";
 import { rememberNote } from "@/lib/learning/memories";
 import { defaultSender, resolveSendAccount } from "@/lib/mail/compose";
+import { draftWithAi, voiceSamples } from "@/lib/mail/ai";
 import { stripSignature } from "@/lib/mail/format";
 import { prepareMail, setMailHelp } from "@/lib/mail/prepare";
 import { setAddressHome } from "@/lib/mail/routing";
@@ -171,6 +173,31 @@ describe("brand isolation between workspaces", () => {
     assert.equal(stripSignature("Hi Tom,\n\nThe plan.\n\nMark\n\nMark Ridgeon\nFractional COO", { name: "Mark Ridgeon" }), "Hi Tom,\n\nThe plan.\n\nMark");
     assert.equal(stripSignature("Hi Tom,\n\nThe plan.\n\nThanks\n-- \nMark Ridgeon"), "Hi Tom,\n\nThe plan.\n\nThanks");
     assert.equal(stripSignature("Hi Tom,\n\nThe plan.\nMark Ridgeon | Fractional COO", { signature: "Mark Ridgeon | Fractional COO" }), "Hi Tom,\n\nThe plan.");
+    const middle = "Hi Tom,\n--\nOne\nTwo\nThree\nFour\nFive\nSix\nSeven\nEight\nNine";
+    assert.equal(stripSignature(middle), middle);
+    assert.equal(stripSignature("Hi Tom,\n\nMark the dates.\nCOO", { signature: "COO\nridgeon.me", name: "Mark Ridgeon" }), "Hi Tom,\n\nMark the dates.\nCOO");
+    assert.equal(stripSignature("Hi Tom,\n\nWe use Mark Ridgeon | Fractional COO style.\n\nMark\nMark Ridgeon | Fractional COO", { signature: "Mark Ridgeon | Fractional COO", name: "Mark Ridgeon" }), "Hi Tom,\n\nWe use Mark Ridgeon | Fractional COO style.\n\nMark");
+  });
+
+  it("keeps Eclipse's own voice samples through the addresses homed there by default", async () => {
+    const eclipseVoice = await withActor(eclipse, (db) => voiceSamples(db, eclipse));
+    assert.ok(eclipseVoice.length > 0);
+    assert.ok(eclipseVoice.some((sample) => sample.includes("ECLIPSE VOICE")));
+    assert.ok(!eclipseVoice.some((sample) => sample.includes("RIDGEON VOICE")));
+    const ridgeonVoice = await withActor(ridgeon, (db) => voiceSamples(db, ridgeon));
+    assert.deepEqual(ridgeonVoice.map((sample) => sample.includes("RIDGEON VOICE")), [true]);
+    assert.doesNotMatch(ridgeonVoice[0], /Fractional COO/);
+  });
+
+  it("writes with AI for the workspace the thread is filed in, even when viewed from another", async () => {
+    const found = await getAdminPool().query<{ id: string }>("select id from crm.mail_messages where provider_message_id = 'm-priya'");
+    const { fetchImpl, prompts } = model(() => ({ body: "Hi Priya,\n\nHappy to talk next week.\n\nMark" }));
+    await draftWithAi(eclipse, { mode: "reply", messageId: found.rows[0].id, to: [], subject: "", instruction: "say yes", current: "" }, { fetchImpl });
+    const text = `${prompts[0].system}\n${prompts[0].user}`;
+    assert.match(text, /About Mark Ridgeon, the business Mark writes for/);
+    assert.match(text, /RIDGEON VOICE/);
+    assert.match(text, /RIDGEON TITLE/);
+    for (const leak of [/ECLIPSE OFFER/, /ECLIPSE VOICE/, /ECLIPSE TITLE/, /piece/]) assert.doesNotMatch(text, leak);
   });
 
   it("prepares a consulting reply as Mark Ridgeon, with only that workspace's voice, notes, people, About you and no Eclipse link", async () => {
@@ -259,11 +286,42 @@ describe("brand isolation between workspaces", () => {
   });
 
   it("keeps notes about a business to their workspace", async () => {
-    const fact = await rememberNote(ridgeon, { body: "Scale-ups buy a 90 day plan first", kind: "fact", allWorkspaces: true });
-    assert.equal(fact.allWorkspaces, false);
+    const icp = await rememberNote(ridgeon, { body: "Scale-ups buy a 90 day plan first", kind: "icp", allWorkspaces: true });
+    assert.equal(icp.allWorkspaces, false);
     const named = await rememberNote(ridgeon, { body: "Keep Eclipse emails under 90 words", kind: "preference", allWorkspaces: true });
     assert.equal(named.allWorkspaces, false);
     const general = await rememberNote(ridgeon, { body: "Prefers plain words", kind: "preference", allWorkspaces: true });
     assert.equal(general.allWorkspaces, true);
+    const fact = await rememberNote(ridgeon, { body: "Mark Ridgeon works from Lisbon in March", kind: "fact", allWorkspaces: true });
+    assert.equal(fact.allWorkspaces, true, "the person's own name isn't a business, even when a workspace is called that");
+
+    const args = { body: "Always offer the Eclipse demo first", kind: "instruction", allWorkspaces: true };
+    const names = await recordNames(ridgeon, [args], ["remember"]);
+    const card = describeAction("remember", args, names).lines;
+    assert.ok(card.includes("This workspace"));
+    assert.ok(!card.includes("All workspaces"));
+    const kept = (await runTool(ridgeon, "remember", args)) as { memory: { allWorkspaces: boolean }; note?: string };
+    assert.equal(kept.memory.allWorkspaces, false);
+    assert.match(kept.note ?? "", /Kept to Mark Ridgeon only/);
+    const plain = { body: "Likes short answers", kind: "preference", allWorkspaces: true };
+    assert.ok(describeAction("remember", plain, await recordNames(ridgeon, [plain], ["remember"])).lines.includes("All workspaces"));
+  });
+
+  it("keeps the nightly sort from spreading notes about a business", async () => {
+    const admin = getAdminPool();
+    await admin.query("delete from crm.memories where scope = 'personal'");
+    const titles = { "ICP is scale-ups": "icp", "Eclipse demo goes first": "preference", "Writes in UK English": "fact" } as const;
+    for (const [title, kind] of Object.entries(titles)) {
+      await admin.query("insert into crm.memories (workspace_id, user_id, scope, kind, title, body) values ($1, $2, 'personal', $3, $4, $4)", [ridgeon.workspaceId, eclipse.userId, kind, title]);
+    }
+    const ids = await admin.query<{ id: string }>("select id from crm.memories where scope = 'personal'");
+    const { fetchImpl } = model(() => ({ notes: ids.rows.map((row) => ({ id: row.id, allWorkspaces: true })) }));
+    await sortPersonalMemories(ridgeon, { deadline: Date.now() + 60_000, fetchImpl });
+    const rows = await admin.query<{ title: string; all_workspaces: boolean }>("select title, all_workspaces from crm.memories where scope = 'personal' order by title");
+    assert.deepEqual(Object.fromEntries(rows.rows.map((row) => [row.title, row.all_workspaces])), {
+      "Eclipse demo goes first": false,
+      "ICP is scale-ups": false,
+      "Writes in UK English": true,
+    });
   });
 });
