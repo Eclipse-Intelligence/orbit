@@ -89,11 +89,15 @@ export async function saveAboutYou(actor: UserActor, raw: unknown): Promise<Pers
       jobTitle,
     ]);
     if (!member.rowCount) throw new CrmError("forbidden", "You're not in this workspace.", 403);
-    await db.query(
-      `insert into crm.personal_context_workspaces (user_id, workspace_id, about) values ($1, $2, $3)
-       on conflict (user_id, workspace_id) do update set about = excluded.about`,
-      [actor.userId, actor.workspaceId, about],
-    );
+    if (about) {
+      await db.query(
+        `insert into crm.personal_context_workspaces (user_id, workspace_id, about) values ($1, $2, $3)
+         on conflict (user_id, workspace_id) do update set about = excluded.about`,
+        [actor.userId, actor.workspaceId, about],
+      );
+    } else {
+      await db.query("delete from crm.personal_context_workspaces where user_id = $1 and workspace_id = $2", [actor.userId, actor.workspaceId]);
+    }
     return readContext(db, actor);
   });
 }
@@ -189,7 +193,7 @@ async function readSite(url: string, options: { fetchImpl?: typeof fetch; lookup
 export async function draftPersonalContext(
   actor: UserActor,
   input: { linkedinUrl?: unknown; websiteUrl?: unknown },
-  options: { fetchImpl?: typeof fetch; lookup?: Lookup; render?: Renderer | null; deadline?: number } = {},
+  options: { fetchImpl?: typeof fetch; lookup?: Lookup; render?: Renderer | null; deadline?: number; multiWorkspace?: boolean } = {},
 ): Promise<PersonalDraft> {
   const linkedin = link(input.linkedinUrl, "linkedinUrl");
   const website = link(input.websiteUrl, "websiteUrl");
@@ -241,7 +245,7 @@ export async function draftPersonalContext(
   }
 
   const name = actor.fullName || actor.email;
-  const workspace = (await getPersonalContext(actor).catch(() => null))?.multiWorkspace
+  const workspace = options.multiWorkspace
     ? `They work for more than one business. Write jobTitle and about for their work at ${actor.workspaceName} only, and leave their other businesses out of them. `
     : "";
   try {

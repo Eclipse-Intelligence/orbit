@@ -5,6 +5,7 @@ import { after } from "next/server";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { getUserActor } from "@/lib/auth/user";
+import { workspaceActors } from "@/lib/crm/workspaces";
 import { runHeldAgentMail } from "@/lib/agent-mail/held";
 import { startAgentMailJob } from "@/lib/agent-mail/jobs";
 import { saveAgentSenders, setUpAgentMailbox } from "@/lib/agent-mail/mailbox";
@@ -119,7 +120,8 @@ export async function saveYouAction(input: unknown): Promise<{ error?: string; f
 export async function draftAboutYouAction(input: { linkedinUrl: string; websiteUrl: string }): Promise<{ error?: string; field?: string; draft?: PersonalDraft }> {
   const user = await requireUser();
   try {
-    return { draft: await draftPersonalContext(user, input, { deadline: Date.now() + 100_000 }) };
+    const multiWorkspace = (await workspaceActors(user).catch(() => [user])).length > 1;
+    return { draft: await draftPersonalContext(user, input, { deadline: Date.now() + 100_000, multiWorkspace }) };
   } catch (error) {
     if (error instanceof CrmError) return { error: error.message, field: typeof error.details?.field === "string" ? error.details.field : undefined };
     return { error: "Could not draft About you. Try again, or fill it in yourself." };

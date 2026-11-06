@@ -79,6 +79,7 @@ export default function AboutYouSettings({
   const [errors, setErrors] = useState<Partial<Record<FieldKey, string>>>({});
   const [aboutError, setAboutError] = useState<string | null>(null);
   const [aboutStatus, setAboutStatus] = useState<string | null>(null);
+  const [draftError, setDraftError] = useState<string | null>(null);
   const [youError, setYouError] = useState<string | null>(null);
   const [youStatus, setYouStatus] = useState<string | null>(null);
   const [pending, setPending] = useState<Pending>(null);
@@ -100,6 +101,7 @@ export default function AboutYouSettings({
   function updateYou(key: keyof YouInput, value: string) {
     setYou((current) => ({ ...current, [key]: value }));
     clear(key);
+    if (key === "linkedinUrl") setDraftError(null);
     setYouError(null);
     setYouStatus(null);
   }
@@ -144,6 +146,7 @@ export default function AboutYouSettings({
 
   async function draft() {
     setPending("draft");
+    setDraftError(null);
     setAboutError(null);
     setYouError(null);
     setYouStatus(null);
@@ -152,6 +155,7 @@ export default function AboutYouSettings({
     setPending(null);
     if (result.error || !result.draft) {
       setAboutStatus(null);
+      if (result.field === "linkedinUrl") setDraftError("Check your LinkedIn link in You, below.");
       if (result.field === "linkedinUrl" || result.field === "websiteUrl") setErrors({ [result.field]: result.error });
       else setAboutError(result.error ?? "Could not draft About you.");
       return;
@@ -227,12 +231,20 @@ export default function AboutYouSettings({
               size="sm"
               type="button"
               disabled={busy || (!you.linkedinUrl.trim() && !website.trim())}
+              aria-describedby={draftError ? "about-draft-caption about-draft-error" : "about-draft-caption"}
               onClick={() => void draft()}
             >
               {pending === "draft" ? "Drafting…" : "Draft from my LinkedIn and website"}
             </Button>
-            <span className="caption-style text-subtle">Fills in this card and You below for you to check. Nothing is saved until you save.</span>
+            <span id="about-draft-caption" className="caption-style text-subtle">
+              Fills in this card and You below for you to check. Nothing is saved until you save.
+            </span>
           </div>
+          {draftError && (
+            <p id="about-draft-error" role="alert" className="caption-style text-danger">
+              {draftError}
+            </p>
+          )}
           <SaveRow
             label="Save About you"
             pending={pending === "about"}
