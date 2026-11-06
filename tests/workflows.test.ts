@@ -180,7 +180,7 @@ describe("workflows", () => {
     const alerts = await listNotifications(owner);
     assert.ok(alerts.some((item) => item.title === "Acme Flows looks at risk" && item.body === "Finance may push back on renewal"));
     const followUp = (await listTasks(owner, { view: "all", companyId })).data.find((task) => task.title === "Check in with Acme Flows");
-    assert.equal(followUp?.description, "Health turned At risk: Finance may push back on renewal");
+    assert.match(followUp?.description ?? "", /^Health turned At risk: Finance may push back on renewal(\n\nDue \w{3} \d{1,2} \w{3} because .+\.)?$/);
     const approvals = await listApprovals(owner);
     assert.equal(approvals.length, 1);
     assert.equal(approvals[0].title, "Create Linear issues for Acme Flows?");
