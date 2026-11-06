@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import ContactsScreen from "@/components/crm/contacts-screen";
 import { PAGE_SIZE, pageFromParams, pageOffset } from "@/components/crm/paging";
-import { getUserActor } from "@/lib/auth/user";
+import { getMoveTargets, getUserActor } from "@/lib/auth/user";
 import { listContacts } from "@/lib/crm/contacts";
 import { contactHref } from "@/lib/crm/hrefs";
 import { getMailbox } from "@/lib/crm/inbox";
@@ -32,10 +32,11 @@ export default async function ContactsPage({
   const page = pageFromParams(params);
   filters.limit = PAGE_SIZE;
   filters.offset = pageOffset(page);
-  const [listed, mailbox, tags] = await Promise.all([
+  const [listed, mailbox, tags, moveTargets] = await Promise.all([
     listContacts(user, filters),
     getMailbox(user),
     listTags(user),
+    getMoveTargets(user),
   ]);
   const available = enrichmentAvailability();
   const lookups = available.email || available.linkedin || available.phone ? await contactLookups(user, listed.data.map((contact) => contact.id)) : {};
@@ -56,6 +57,7 @@ export default async function ContactsPage({
       tag={filters.tag ?? ""}
       tags={tags}
       mailboxConnected={mailbox?.status === "connected"}
+      moveTargets={moveTargets}
       enrichment={{ available, lookups }}
       view={{
         sort: filters.sort ?? DEFAULT_CONTACT_SORT,

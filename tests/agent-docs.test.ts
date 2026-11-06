@@ -44,7 +44,7 @@ function referenceRows(doc: string) {
 }
 
 async function mcpTools(actor: Actor) {
-  const server = createCrmMcpServer(actor);
+  const server = createCrmMcpServer(actor, actor.type === "user" ? { workspaces: [{ id: "00000000-0000-4000-8000-000000000005", name: "Mark Ridgeon" }] } : {});
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
   await server.connect(serverSide);
   const client = new Client({ name: "docs-check", version: "1.0.0" });

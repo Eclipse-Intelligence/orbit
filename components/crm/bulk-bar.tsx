@@ -13,12 +13,14 @@ import {
   DialogTitle,
 } from "@/components/_ui/dialog";
 import BulkEmailDialog from "@/components/crm/bulk-email-dialog";
+import MoveWorkspaceDialog, { type MoveKind } from "@/components/crm/move-workspace-dialog";
 import { TagOptions, TagPopover } from "@/components/crm/tags";
 import type { BulkActionResult } from "@/app/(crm)/bulk";
 import type { BulkSelection } from "@/hooks/use-bulk-selection";
 import { downloadCsv, type CsvCell } from "@/lib/csv";
 import type { Recipient } from "@/lib/crm/personalise";
 import type { TagCount } from "@/lib/crm/types";
+import type { WorkspaceRef } from "@/lib/crm/workspaces";
 import { cn } from "@/lib/utils";
 
 const NOTICE_MS = 10_000;
@@ -144,6 +146,7 @@ export default function BulkActions({
   mailboxConnected,
   tagging,
   extraActions = [],
+  move,
 }: {
   selection: BulkSelection;
   noun: [string, string];
@@ -156,6 +159,7 @@ export default function BulkActions({
   mailboxConnected: boolean;
   tagging?: BulkTagging;
   extraActions?: BulkExtraAction[];
+  move?: { kind: MoveKind; workspaces: WorkspaceRef[]; currentWorkspace: string };
 }) {
   const router = useRouter();
   const [extraBusy, setExtraBusy] = useState<{ key: string; text: string } | null>(null);
@@ -163,6 +167,7 @@ export default function BulkActions({
   const [confirmExtra, setConfirmExtra] = useState<{ action: BulkExtraAction; ids: string[] } | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [tagMenu, setTagMenu] = useState(false);
+  const [moving, setMoving] = useState(false);
   const [busy, setBusy] = useState<"archive" | "undo" | "export" | "email" | "tag" | "extra" | null>(
     null,
   );
@@ -412,6 +417,11 @@ export default function BulkActions({
                       {extraBusy?.key === action.key ? extraBusy.text : action.label}
                     </Button>
                   ))}
+                  {move && move.workspaces.length > 0 && (
+                    <Button variant="secondary" size="sm" onClick={() => setMoving(true)} disabled={busy !== null}>
+                      Move to workspace…
+                    </Button>
+                  )}
                   <Button
                     variant="secondary"
                     size="sm"
@@ -484,6 +494,22 @@ export default function BulkActions({
           )}
         </DialogContent>
       </Dialog>
+      {move && move.workspaces.length > 0 && (
+        <MoveWorkspaceDialog
+          open={moving}
+          onOpenChange={setMoving}
+          kind={move.kind}
+          ids={ids}
+          subject={count(ids.length, noun)}
+          currentWorkspace={move.currentWorkspace}
+          workspaces={move.workspaces}
+          onDone={(result) => {
+            if (!result.copy) selection.clear();
+            show(result.message, "status");
+            router.refresh();
+          }}
+        />
+      )}
       {composing && (
         <BulkEmailDialog
           recipients={composing}

@@ -2,6 +2,7 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import { authenticateAgent, consumeRateLimit } from "@/lib/auth/agent";
 import { authenticatePersonal, consumePersonalRateLimit, isPersonalToken } from "@/lib/auth/personal";
 import { errorResponse } from "@/lib/api/http";
+import { moveTargets } from "@/lib/crm/move-workspace";
 import { createCrmMcpServer } from "@/server/mcp/server";
 
 export const runtime = "nodejs";
@@ -19,7 +20,7 @@ export async function POST(request: Request) {
           await consumeRateLimit(found);
           return found;
         });
-    const server = createCrmMcpServer(actor);
+    const server = createCrmMcpServer(actor, { workspaces: await moveTargets(actor) });
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,

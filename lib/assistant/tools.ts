@@ -86,6 +86,7 @@ import type { AiFilter } from "@/lib/ai-fields/params";
 import { displayAiValue, likelihoodText, type AiCell, type AiField } from "@/lib/ai-fields/types";
 import { archiveContact, createContact, getContact, listContacts, updateContact } from "@/lib/crm/contacts";
 import { mergeCompanies, mergeContacts } from "@/lib/crm/merge";
+import { MOVE_LIMIT, moveRecordsToWorkspace, moveTargetNamed, previewMoveToWorkspace, type MovePreview } from "@/lib/crm/move-workspace";
 import { createContactAndFile, fileImport, getConversationImport, summariseImport, type ConversationImport } from "@/lib/crm/conversations";
 import { archiveEmailTemplate, createEmailTemplate, listEmailTemplates, updateEmailTemplate } from "@/lib/crm/email-templates";
 import { CrmError } from "@/lib/crm/errors";
@@ -914,6 +915,44 @@ export const WORKSPACE_READ_TOOLS: ReadonlySet<string> = new Set([
   "search_knowledge",
 ]);
 
+export const MOVE_TOOL = "move_records_to_workspace";
+
+const MULTI_WORKSPACE_TOOLS: ReadonlySet<string> = new Set([MOVE_TOOL]);
+
+const CROSS_WORKSPACE_ARGS: Record<string, string[]> = { [MOVE_TOOL]: ["companyIds", "contactIds"] };
+
+function moveCardKey(args: Args) {
+  return ["move", str(args.toWorkspace), ...strings(args.companyIds), ...strings(args.contactIds), args.copy === true ? "copy" : "move"].join("|");
+}
+
+function countedParts(parts: [number, string, string][]) {
+  return parts.filter(([value]) => value > 0).map(([value, one, many]) => `${value} ${value === 1 ? one : many}`);
+}
+
+function moveCardDetails(key: string, preview: MovePreview, copy: boolean, copyDeals: boolean): Record<string, string> {
+  const deals = copy ? (copyDeals ? preview.dealsAvailable : 0) : preview.deals;
+  const goes = countedParts([
+    [preview.contacts, "contact", "contacts"],
+    [deals, "deal", "deals"],
+    [copy ? 0 : preview.tasks, "task", "tasks"],
+    [preview.activities, "activity", "activities"],
+    [copy ? 0 : preview.files, "file", "files"],
+  ]);
+  const along = [
+    ...preview.companiesAlong.map((company) => `${company} comes too`),
+    ...preview.links.map((link) => (link.matched ? `Linked to existing ${link.into}` : `${link.name} stays here, and a copy goes over`)),
+  ];
+  const where = preview.pipelineKind === "board" ? preview.pipelineName : "the pipeline";
+  return {
+    [`${key}:goes`]: goes.length > 0 ? `${copy ? "Copies" : "Goes with them"}: ${goes.join(", ")}` : copy ? "Copies the details only" : "Nothing else goes with them",
+    [`${key}:along`]: along.join("; "),
+    [`${key}:merges`]: preview.merges.map((merge) => `${merge.name} merges into existing ${merge.into}`).join("; "),
+    [`${key}:deals`]: deals > 0 ? `Deals go to ${where ?? "the pipeline"}, ${preview.stageName ?? "the stage with the same name"}` : "",
+    [`${key}:boards`]: !copy && preview.boards.length > 0 ? `Comes off ${preview.boards.join(", ")}` : "",
+    [`${key}:behind`]: preview.aiFields.length > 0 ? `Not carried over: AI fields ${preview.aiFields.join(", ")}` : "",
+  };
+}
+
 const SINGLE_RECORD_TOOLS = new Set(["get_company", "get_contact", "get_board", "get_deal_history"]);
 
 function unsupportedWorkspace() {
@@ -1029,7 +1068,8 @@ export async function crossWorkspaceRefusal(actor: UserActor, name: string, args
     }
   }
   const ids = new Set<string>();
-  collectIds(resolved.args, ids);
+  const checked = CROSS_WORKSPACE_ARGS[resolved.tool.name];
+  collectIds(checked ? checked.map((key) => resolved.args[key]) : resolved.args, ids);
   if (ids.size === 0) return null;
   const elsewhere = await withActor(actor, async (db) => {
     const result = await db.query<{ workspace_id: string; kind: string }>(
@@ -3072,6 +3112,89 @@ const TOOL_LIST: AssistantTool[] = [
     },
   },
   {
+    name: MOVE_TOOL,
+    label: "Moving to another workspace",
+    write: true,
+    description: `Move companies or people from this workspace to another of the user's workspaces, or copy them there with copy (up to ${MOVE_LIMIT}). A company takes its people, deals, tasks, activity, emails, proposals and Knowledge, and comes off this workspace's boards. A person moved on their own brings their company, unless toWorkspace already has it (they are linked to it) or colleagues stay behind (the company is copied). A company or person toWorkspace already has (same domain or LinkedIn, or same email, LinkedIn or Sales Navigator) is merged into it, filling only empty fields. Deals go on pipelineId and stageId from toWorkspace (from get_pipeline or list_boards with workspace), by default its pipeline and the stage with the same name. A copy keeps everything here, copies activity, and copies deals only with copyDeals. AI field answers don't travel. Moving needs owner or admin in this workspace; any member of both can copy.`,
+    parameters: {
+      type: "object",
+      properties: {
+        toWorkspace: { type: "string", description: "The other workspace's name or id." },
+        companyIds: { type: "array", items: { type: "string" }, description: "Companies to move." },
+        contactIds: { type: "array", items: { type: "string" }, description: "People to move." },
+        copy: { type: "boolean", description: "Keep them in this workspace too and copy them over." },
+        copyDeals: { type: "boolean", description: "With copy, copy their deals too." },
+        pipelineId: idParam("Pipeline or board in toWorkspace for the deals."),
+        stageId: idParam("Stage on that pipeline or board. Leave it out to match each deal's stage by name."),
+      },
+      required: ["toWorkspace"],
+    },
+    details: async (actor, args) => {
+      const key = moveCardKey(args);
+      const found = await moveTargetNamed(actor, str(args.toWorkspace));
+      const out: Record<string, string> = found ? { [`${key}:workspace`]: found.name } : {};
+      try {
+        const preview = await previewMoveToWorkspace(actor, {
+          workspaceId: str(args.toWorkspace),
+          companyIds: strings(args.companyIds),
+          contactIds: strings(args.contactIds),
+          copy: args.copy === true,
+          copyDeals: args.copyDeals === true,
+          pipelineId: str(args.pipelineId) || null,
+          stageId: str(args.stageId) || null,
+        });
+        return { ...out, ...moveCardDetails(key, preview, args.copy === true, args.copyDeals === true) };
+      } catch (error) {
+        return { ...out, [`${key}:error`]: error instanceof CrmError ? error.message : "Orbit couldn't check what moves." };
+      }
+    },
+    describe: (args, name) => {
+      const companies = strings(args.companyIds);
+      const people = strings(args.contactIds);
+      const key = moveCardKey(args);
+      const detail = (part: string) => {
+        const value = name(`${key}:${part}`);
+        return value === `${key}:${part}` ? "" : value;
+      };
+      const all = [...companies, ...people];
+      const label = all.length === 1 ? name(all[0]) : `${all.length} records`;
+      return {
+        title: `${args.copy === true ? "Copy" : "Move"} to ${detail("workspace") || str(args.toWorkspace)}: ${label}`,
+        lines: [
+          companies.length > 0 ? nameList(companies, name, "Companies") : "",
+          people.length > 0 ? nameList(people, name, "People") : "",
+          args.copy === true ? "Copy: they stay here too" : "Move: they leave this workspace",
+          detail("goes"),
+          detail("along"),
+          detail("merges"),
+          detail("deals"),
+          detail("boards"),
+          detail("behind"),
+          detail("error") ? `Check first: ${detail("error")}` : "",
+        ],
+      };
+    },
+    run: async (actor, args) => {
+      const result = await moveRecordsToWorkspace(
+        actor,
+        {
+          workspaceId: str(args.toWorkspace),
+          companyIds: strings(args.companyIds),
+          contactIds: strings(args.contactIds),
+          copy: args.copy === true,
+          copyDeals: args.copyDeals === true,
+          pipelineId: str(args.pipelineId) || null,
+          stageId: str(args.stageId) || null,
+        },
+        { operation: MOVE_TOOL, ...provenanceSource() },
+      );
+      return {
+        ...result,
+        note: `These records are now in ${result.target.name}. Their links only open there, so tell the user to switch to ${result.target.name} in the sidebar to open them.`,
+      };
+    },
+  },
+  {
     name: "find_contact_details",
     label: "Finding contact details",
     write: true,
@@ -3621,12 +3744,16 @@ const TOOL_LIST: AssistantTool[] = [
   {
     name: "list_proposal_templates",
     label: "Looking at proposal templates",
-    description: "Proposal and NDA templates, and the starters a new template can begin from. Only active templates can be used to create and send.",
-    parameters: { type: "object", properties: {} },
-    run: async (actor) => ({
-      templates: (await listTemplates(actor)).map((template) => ({ id: template.id, name: template.name, kind: template.kind, status: template.status })),
-      starters: PROPOSAL_STARTERS.map((starter) => ({ key: starter.key, name: starter.name, kind: starter.kind })),
-    }),
+    description:
+      "Proposal and NDA templates, and the starters a new template can begin from. Only active templates can be used to create and send. With id, one template instead: name, kind, status, settings (accent colour, days valid) and every block, including the default Next steps that new proposals start with.",
+    parameters: { type: "object", properties: { id: idParam("Template id, to read one template with its blocks.") } },
+    run: async (actor, args) => {
+      if (str(args.id)) return { template: templateForAgent(await getTemplate(actor, str(args.id))) };
+      return {
+        templates: (await listTemplates(actor)).map((template) => ({ id: template.id, name: template.name, kind: template.kind, status: template.status })),
+        starters: PROPOSAL_STARTERS.map((starter) => ({ key: starter.key, name: starter.name, kind: starter.kind })),
+      };
+    },
   },
   {
     name: "create_proposal",
@@ -3829,13 +3956,6 @@ const TOOL_LIST: AssistantTool[] = [
     },
   },
   {
-    name: "get_proposal_template",
-    label: "Reading a proposal template",
-    description: "One proposal or NDA template: name, kind, status, settings (accent colour, days valid) and every block, including the default Next steps that new proposals start with.",
-    parameters: { type: "object", properties: { id: idParam("Template id from list_proposal_templates.") }, required: ["id"] },
-    run: async (actor, args) => ({ template: templateForAgent(await getTemplate(actor, required(args.id, "A template id"))) }),
-  },
-  {
     name: "create_proposal_template",
     label: "Creating a proposal template",
     write: true,
@@ -3882,7 +4002,7 @@ const TOOL_LIST: AssistantTool[] = [
     label: "Editing a proposal template",
     write: true,
     description:
-      "Change a proposal or NDA template: name, status (draft, active or archived), accent colour, days valid, or blocks (replaces them; read them with get_proposal_template first). Blocks work as update_proposal describes; default Next steps are items on a steps block (title, side client or us, dueInDays). Changes apply to proposals created afterwards.",
+      "Change a proposal or NDA template: name, status (draft, active or archived), accent colour, days valid, or blocks (replaces them; read them with list_proposal_templates and its id first). Blocks work as update_proposal describes; default Next steps are items on a steps block (title, side client or us, dueInDays). Changes apply to proposals created afterwards.",
     parameters: {
       type: "object",
       properties: {
@@ -3891,7 +4011,7 @@ const TOOL_LIST: AssistantTool[] = [
         status: { type: "string", enum: ["draft", "active", "archived"] },
         accent: { type: "string", description: "Accent colour such as #4124fb." },
         validDays: { type: "integer", minimum: 1, maximum: 365 },
-        blocks: blocksParam("Every block, in order, as get_proposal_template returns them. Keep each block's id."),
+        blocks: blocksParam("Every block, in order, as list_proposal_templates with id returns them. Keep each block's id."),
       },
       required: ["id"],
     },
@@ -4933,6 +5053,7 @@ const MERGED_TOOLS: Record<string, { tool: string; args: (args: Args) => Args }>
   },
   linear_comment: { tool: "linear_update_issue", args: ({ issue, body }) => ({ issue, comment: body }) },
   forget: { tool: "remember", args: ({ memoryId, title }) => ({ forgetId: memoryId, title }) },
+  get_proposal_template: { tool: "list_proposal_templates", args: ({ id }) => ({ id }) },
 };
 
 function resolveTool(name: string, args: Args = {}) {
@@ -4960,11 +5081,15 @@ export function toolDescription(tool: Pick<AssistantTool, "description" | "write
 
 export const ECLIPSE_TOOL_NAMES: ReadonlySet<string> = new Set(["eclipse_guide", "eclipse_tools", "eclipse_read", "eclipse_action", "eclipse_articles", "eclipse_docs"]);
 
-export function assistantTools(options: { eclipseTools?: boolean } = {}) {
-  return options.eclipseTools === false ? ASSISTANT_TOOLS.filter((tool) => !ECLIPSE_TOOL_NAMES.has(tool.name)) : ASSISTANT_TOOLS;
+export type ToolOptions = { eclipseTools?: boolean; multiWorkspace?: boolean };
+
+export function assistantTools(options: ToolOptions = {}) {
+  return ASSISTANT_TOOLS.filter(
+    (tool) => !(options.eclipseTools === false && ECLIPSE_TOOL_NAMES.has(tool.name)) && !(options.multiWorkspace !== true && MULTI_WORKSPACE_TOOLS.has(tool.name)),
+  );
 }
 
-export function toolDefinitions(options: { eclipseTools?: boolean } = {}) {
+export function toolDefinitions(options: ToolOptions = {}) {
   return assistantTools(options).map((tool) => ({
     type: "function" as const,
     function: { name: tool.name, description: toolDescription(tool), parameters: tool.parameters },

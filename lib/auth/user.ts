@@ -92,3 +92,8 @@ export const getWorkspaceChoices = cache(async (): Promise<WorkspaceChoice[]> =>
   if (!current) return [];
   return current.memberships.map((item) => ({ id: item.workspace_id, name: item.workspace_name, role: item.role }));
 });
+
+export async function getMoveTargets(actor: UserActor): Promise<{ id: string; name: string }[]> {
+  const choices = await getWorkspaceChoices();
+  return choices.filter((choice) => choice.id !== actor.workspaceId).map((choice) => ({ id: choice.id, name: choice.name }));
+}

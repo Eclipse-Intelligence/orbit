@@ -133,9 +133,18 @@ async function moveReferences(
   }
 }
 
-async function copyColumns(db: Db, table: "companies" | "contacts", workspaceId: string, keepId: string, mergeId: string, columns: string[], extra: Record<string, unknown>) {
+async function copyColumns(
+  db: Db,
+  table: "companies" | "contacts",
+  workspaceId: string,
+  keepId: string,
+  mergeId: string,
+  columns: string[],
+  extra: Record<string, unknown>,
+  mergeWorkspaceId = workspaceId,
+) {
   const sets = columns.map((column) => `${column} = m.${column}`);
-  const values: unknown[] = [keepId, workspaceId, mergeId];
+  const values: unknown[] = [keepId, workspaceId, mergeId, mergeWorkspaceId];
   for (const [column, value] of Object.entries(extra)) {
     values.push(value);
     sets.push(`${column} = $${values.length}`);
@@ -144,7 +153,7 @@ async function copyColumns(db: Db, table: "companies" | "contacts", workspaceId:
   await db.query(
     `update crm.${table} k set ${sets.join(", ")}
      from crm.${table} m
-     where k.id = $1 and k.workspace_id = $2 and m.id = $3 and m.workspace_id = $2`,
+     where k.id = $1 and k.workspace_id = $2 and m.id = $3 and m.workspace_id = $4`,
     values,
   );
 }
@@ -300,4 +309,68 @@ export async function mergeContacts(
       return { kept, merged, moved, filled, tagsAdded: tags.added };
     },
   );
+}
+
+export type GapFill = {
+  filled: string[];
+  tagsAdded: string[];
+  before: Record<string, unknown>;
+  after: Record<string, unknown>;
+};
+
+type GapFillOptions = { fromWorkspaceId?: string; skip?: string[] };
+
+export async function fillCompanyGaps(db: Db, workspaceId: string, keepId: string, mergeId: string, options: GapFillOptions = {}): Promise<GapFill> {
+  const from = options.fromWorkspaceId ?? workspaceId;
+  const keep = await readCompanyInDb(db, keepId, workspaceId);
+  const merge = await readCompanyInDb(db, mergeId, from);
+  if (!keep || !merge) throw new CrmError("not_found", "Company not found.", 404);
+  const fills = (await fillsFor(db, workspaceId, COMPANY_FILLS, keep, merge)).filter((fill) => !options.skip?.includes(fill.field));
+  const tags = unionTags(keep.tags, merge.tags);
+  await copyColumns(
+    db,
+    "companies",
+    workspaceId,
+    keepId,
+    mergeId,
+    fills.flatMap((fill) => fill.columns),
+    tags.added.length > 0 ? { tags: tags.tags } : {},
+    from,
+  );
+  const kept = await readCompanyInDb(db, keepId, workspaceId);
+  if (!kept) throw new CrmError("not_found", "Company not found.", 404);
+  return {
+    filled: fills.map((fill) => fill.field),
+    tagsAdded: tags.added,
+    before: { ...beforeFields(fills, keep), tags: keep.tags },
+    after: { ...beforeFields(fills, kept), tags: kept.tags },
+  };
+}
+
+export async function fillContactGaps(db: Db, workspaceId: string, keepId: string, mergeId: string, options: GapFillOptions = {}): Promise<GapFill> {
+  const from = options.fromWorkspaceId ?? workspaceId;
+  const keep = await readContactInDb(db, keepId, workspaceId);
+  const merge = await readContactInDb(db, mergeId, from);
+  if (!keep || !merge) throw new CrmError("not_found", "Contact not found.", 404);
+  const fills = (await fillsFor(db, workspaceId, CONTACT_FILLS, keep, merge)).filter((fill) => !options.skip?.includes(fill.field));
+  const tags = unionTags(keep.tags, merge.tags);
+  const notes = mergedNotes(keep, merge);
+  await copyColumns(
+    db,
+    "contacts",
+    workspaceId,
+    keepId,
+    mergeId,
+    fills.flatMap((fill) => fill.columns),
+    { ...(tags.added.length > 0 ? { tags: tags.tags } : {}), ...(notes !== null ? { notes } : {}) },
+    from,
+  );
+  const kept = await readContactInDb(db, keepId, workspaceId);
+  if (!kept) throw new CrmError("not_found", "Contact not found.", 404);
+  return {
+    filled: [...fills.map((fill) => fill.field), ...(notes !== null ? ["notes"] : [])],
+    tagsAdded: tags.added,
+    before: { ...beforeFields(fills, keep), tags: keep.tags, notes: keep.notes },
+    after: { ...beforeFields(fills, kept), tags: kept.tags, notes: kept.notes },
+  };
 }
