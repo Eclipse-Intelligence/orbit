@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import KeyboardList from "@/components/shortcuts/keyboard-list";
 import { ScrollArea } from "@/components/_ui/scroll-area";
 import {
@@ -16,12 +17,15 @@ import CompanyRow from "./company-row";
 import TableFooter from "./table-footer";
 import { PAGE_SIZE } from "@/components/crm/paging";
 import {
+  gridTemplate,
   TABLE_CELL_CLASS,
   TABLE_GRID_CLASS,
-  TABLE_GRID_FIT_CLASS,
   tableColumns,
   TABLE_ROW_CLASS,
 } from "./table-columns";
+import { AddColumnMenu, AiColumnHeader } from "@/components/ai-fields/column-menu";
+import { aiSortValue } from "@/lib/ai-fields/params";
+import type { AiField } from "@/lib/ai-fields/types";
 import {
   archiveCompaniesAction,
   companyRecipientsAction,
@@ -56,6 +60,12 @@ export default function CompaniesTable({
   tags,
   filters,
   enrichment,
+  aiFields = [],
+  hiddenFields = [],
+  canManage = false,
+  onAddField,
+  onEditField,
+  onFilterField,
 }: {
   companies: Company[];
   total: number;
@@ -67,8 +77,18 @@ export default function CompaniesTable({
   tags: TagCount[];
   filters: CompanyListQuery;
   enrichment: { company: boolean; logoClientId: string | null; fit?: boolean };
+  aiFields?: AiField[];
+  hiddenFields?: AiField[];
+  canManage?: boolean;
+  onAddField?: () => void;
+  onEditField?: (field: AiField) => void;
+  onFilterField?: (field: AiField) => void;
 }) {
   const replaceParams = useListParams();
+  const [columnMessage, setColumnMessage] = useState<{ text: string; error: boolean } | null>(null);
+  const setColumnError = (text: string | null) => setColumnMessage(text ? { text, error: true } : null);
+  const addColumn = (canManage && aiFields.length > 0) || hiddenFields.length > 0;
+  const columns = tableColumns(Boolean(enrichment.fit), aiFields, addColumn);
   const findDetails: BulkExtraAction = {
     key: "find-details",
     label: "Find details",
@@ -80,26 +100,50 @@ export default function CompaniesTable({
   };
   const current = { sort: filters.sort ?? DEFAULT_COMPANY_SORT, order: filters.order ?? defaultCompanyOrder(filters.sort ?? DEFAULT_COMPANY_SORT) };
   const sortBy = (column: CompanySort) =>
-    replaceParams(nextSort(column, current, { sort: DEFAULT_COMPANY_SORT, order: defaultCompanyOrder }));
+    replaceParams(
+      nextSort(column, filters.aiSort ? { sort: "" as CompanySort, order: current.order } : current, { sort: DEFAULT_COMPANY_SORT, order: defaultCompanyOrder }),
+    );
   const header = (key: string, label: string) => {
     const column = SORTABLE[key];
     if (!column) return label;
-    return <SortHeader label={label} direction={current.sort === column ? current.order : null} onSort={() => sortBy(column)} />;
+    return <SortHeader label={label} direction={!filters.aiSort && current.sort === column ? current.order : null} onSort={() => sortBy(column)} />;
   };
+  const aiHeader = (field: AiField) => (
+    <AiColumnHeader
+      field={field}
+      direction={filters.aiSort === field.id ? (filters.order === "asc" ? "asc" : "desc") : null}
+      canManage={canManage}
+      onSort={(order) => replaceParams({ sort: aiSortValue(field.id), order })}
+      onFilter={() => onFilterField?.(field)}
+      onEdit={() => onEditField?.(field)}
+      onAdd={() => onAddField?.()}
+      onError={setColumnError}
+      onNotice={(text) => setColumnMessage({ text, error: false })}
+    />
+  );
   return (
     <div className="border-border flex min-h-0 flex-1 flex-col border-t">
+      {columnMessage && (
+        <p role={columnMessage.error ? "alert" : "status"} className={cn("caption-style px-4 py-2", columnMessage.error ? "text-danger" : "text-subtle")}>
+          {columnMessage.text}
+        </p>
+      )}
       <ScrollArea orientation="both" className="min-h-0 flex-1">
         <KeyboardList sequence>
-        <Table role="table" className={cn(enrichment.fit ? TABLE_GRID_FIT_CLASS : TABLE_GRID_CLASS, "w-full pb-24")}>
+        <Table role="table" className={cn(TABLE_GRID_CLASS, "w-full pb-24")} style={gridTemplate(columns.length)}>
           <TableHeader role="rowgroup" className="contents">
             <TableRow role="row" className={cn(TABLE_ROW_CLASS, "group")}>
-              {tableColumns(Boolean(enrichment.fit)).map((column) => (
+              {columns.map((column) => (
                 <TableHead
                   key={column.key}
                   role="columnheader"
                   className={cn(TABLE_CELL_CLASS, column.className)}
                 >
-                  {column.key === "name" ? (
+                  {column.key === "add" ? (
+                    <AddColumnMenu canManage={canManage} hidden={hiddenFields} onAdd={() => onAddField?.()} onError={setColumnError} />
+                  ) : column.aiFieldId ? (
+                    aiHeader(aiFields.find((field) => field.id === column.aiFieldId)!)
+                  ) : column.key === "name" ? (
                     <span className="flex items-center gap-2">
                       <span className="flex size-6 items-center justify-center">
                         <SelectAllCheckbox
@@ -129,6 +173,9 @@ export default function CompaniesTable({
                 onToggle={(range) => selection.toggle(company.id, range)}
                 logoClientId={enrichment.logoClientId}
                 showFit={Boolean(enrichment.fit)}
+                aiFields={aiFields}
+                canManage={canManage}
+                addColumn={addColumn}
               />
             ))}
             {companies.length === 0 && (

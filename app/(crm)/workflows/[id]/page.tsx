@@ -11,6 +11,7 @@ import { listContacts } from "@/lib/crm/contacts";
 import { CrmError } from "@/lib/crm/errors";
 import { listPipeline } from "@/lib/crm/opportunities";
 import { getWorkflow, listRuns } from "@/lib/workflows/store";
+import { listAiFields } from "@/lib/ai-fields/fields";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -43,7 +44,7 @@ export default async function WorkflowPage({
   if (!user) redirect("/login");
   if (!workflow) notFound();
   const query = await searchParams;
-  const [runs, boards, pipeline, members, companies, contacts, lifecycles, proposalTemplates, products] = await Promise.all([
+  const [runs, boards, pipeline, members, companies, contacts, lifecycles, proposalTemplates, products, aiFields] = await Promise.all([
     workflow.mine ? listRuns(user, workflow.id) : Promise.resolve([]),
     listBoards(user),
     listPipeline(user),
@@ -53,6 +54,7 @@ export default async function WorkflowPage({
     listLifecycles(user),
     listTemplates(user, { status: "usable", kind: "proposal" }),
     listProducts(user),
+    listAiFields(user).catch(() => []),
   ]);
   const fullBoards = await Promise.all(boards.map((board) => getBoard(user, board.id)));
   return (
@@ -73,6 +75,7 @@ export default async function WorkflowPage({
         lifecycles: lifecycles.map((item) => ({ value: item.value, label: item.label })),
         proposalTemplates: proposalTemplates.map((template) => ({ id: template.id, name: template.name })),
         products: products.map((product) => ({ id: product.id, name: product.name, priceGbp: product.priceGbp, priceUsd: product.priceUsd })),
+        aiFields: aiFields.map((field) => ({ id: field.id, label: field.label })),
       }}
       records={{
         companies: companies.data.map((company) => ({ id: company.id, name: company.name })),

@@ -80,6 +80,10 @@ import { listCalendarItems } from "@/lib/crm/calendars";
 import { getInsightTranscript, getInsightsForActivities } from "@/lib/crm/call-insights";
 import { createTaskWithClickUp, getClickUpPicker, getClickUpState, pushClickUpTask } from "@/lib/crm/clickup";
 import { archiveCompany, createCompany, getCompany, listCompanies, listMembers, updateCompany } from "@/lib/crm/companies";
+import { getCompanyAnswers } from "@/lib/ai-fields/answers";
+import { listAiFields } from "@/lib/ai-fields/fields";
+import type { AiFilter } from "@/lib/ai-fields/params";
+import { displayAiValue, likelihoodText, type AiCell, type AiField } from "@/lib/ai-fields/types";
 import { archiveContact, createContact, getContact, listContacts, updateContact } from "@/lib/crm/contacts";
 import { mergeCompanies, mergeContacts } from "@/lib/crm/merge";
 import { createContactAndFile, fileImport, getConversationImport, summariseImport, type ConversationImport } from "@/lib/crm/conversations";
@@ -227,6 +231,43 @@ function eclipseArguments(args: Args): Record<string, unknown> {
 
 function withCompany(company: Company) {
   return { ...company, href: companyHref(company.id) };
+}
+
+function aiCellText(field: Pick<AiField, "kind">, cell: AiCell | undefined) {
+  if (!cell || cell.state === "outside" || cell.state === "checking") return null;
+  if (cell.state === "unknown") return "Unknown";
+  return displayAiValue(field, cell.value);
+}
+
+function withAiFields(company: Company, fields: AiField[]) {
+  const { aiFields, ...rest } = company;
+  return {
+    ...withCompany(rest),
+    aiFields: Object.fromEntries(fields.map((field) => [field.label, aiCellText(field, aiFields?.[field.id])])),
+  };
+}
+
+function findAiField(fields: AiField[], name: unknown) {
+  const wanted = typeof name === "string" ? name.trim().toLowerCase() : "";
+  if (!wanted) return null;
+  return fields.find((field) => field.id === wanted || field.label.toLowerCase() === wanted) ?? null;
+}
+
+function aiFiltersFrom(fields: AiField[], value: unknown) {
+  const filters: AiFilter[] = [];
+  for (const raw of Array.isArray(value) ? value.slice(0, 10) : []) {
+    const item = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+    const field = findAiField(fields, item.field);
+    if (!field) throw new CrmError("invalid_input", `There's no AI field called ${String(item.field ?? "")}.`, 400);
+    const unknown = item.includeUnknown === true;
+    if (item.is === "yes" || item.is === "no" || item.is === "unknown") filters.push({ fieldId: field.id, op: "is", value: item.is });
+    else if (typeof item.contains === "string" && item.contains.trim()) filters.push({ fieldId: field.id, op: "has", text: item.contains.trim().slice(0, 100) });
+    else if (Array.isArray(item.anyOf)) filters.push({ fieldId: field.id, op: "any", options: item.anyOf.filter((option): option is string => typeof option === "string").slice(0, 30), unknown });
+    else if (typeof item.min === "number" || typeof item.max === "number") {
+      filters.push({ fieldId: field.id, op: "range", min: typeof item.min === "number" ? item.min : null, max: typeof item.max === "number" ? item.max : null, unknown });
+    }
+  }
+  return filters;
 }
 
 function withContact(contact: Contact) {
@@ -730,7 +771,7 @@ function pick(args: Args, keys: string[]) {
   return out;
 }
 
-const WORKFLOW_GUIDE = `A definition is {trigger, steps}. trigger.type is one of: ${TRIGGER_TYPES.join(", ")}. call_summary_ready, task_completed: no other fields. record_created and manual: object (company or contact). field_changed: object, field (company: lifecycle, health (healthy, watch or at_risk; set from every summarised call), ownerId, industry, sizeCategory, source, description; contact: ownerId, jobTitle, companyId, source, notes), optional to. stage_changed: optional pipelineId (board id; omit for Opportunities) and stageId. added_to_board: boardId. activity_logged: optional activityType (call, email, meeting, note). schedule: frequency (daily, weekly or monthly), weekday (0 Sunday to 6 Saturday, for weekly), dayOfMonth (1 to 28, for monthly), time (HH:mm London). email_received: kind (any: any new email from a contact; reply: a reply to an email the user sent; bounce: an undeliverable notice, where the contact is the person whose address bounced; auto_reply: out of office or "I've left" replies), fromContactsOnly (default true); it runs privately for the user on their own inbox and gives {{email.subject}}, {{email.from}}, {{email.fromName}}, {{email.text}}, {{email.kind}}, {{email.failedRecipient}} and {{email.url}}. proposal_event: event (sent, viewed (first open), signed (by the client), completed (countersigned) or declined), optional kind (proposal or nda); it gives {{proposal.title}}, {{proposal.status}}, {{proposal.total}}, {{proposal.signedBy}}, {{proposal.declineReason}}, {{proposal.url}} (in Orbit) and {{proposal.clientUrl}} (the client's link), with the proposal's company and contact. Any trigger except manual, schedule, email_received and proposal_event can take mine: true to only fire for the user's own changes.
+const WORKFLOW_GUIDE = `A definition is {trigger, steps}. trigger.type is one of: ${TRIGGER_TYPES.join(", ")}. call_summary_ready, task_completed: no other fields. record_created and manual: object (company or contact). field_changed: object, field (company: lifecycle, health (healthy, watch or at_risk; set from every summarised call), ownerId, industry, sizeCategory, source, description, or ai:<id> for an AI field, with ids from list_companies; contact: ownerId, jobTitle, companyId, source, notes), optional to. stage_changed: optional pipelineId (board id; omit for Opportunities) and stageId. added_to_board: boardId. activity_logged: optional activityType (call, email, meeting, note). schedule: frequency (daily, weekly or monthly), weekday (0 Sunday to 6 Saturday, for weekly), dayOfMonth (1 to 28, for monthly), time (HH:mm London). email_received: kind (any: any new email from a contact; reply: a reply to an email the user sent; bounce: an undeliverable notice, where the contact is the person whose address bounced; auto_reply: out of office or "I've left" replies), fromContactsOnly (default true); it runs privately for the user on their own inbox and gives {{email.subject}}, {{email.from}}, {{email.fromName}}, {{email.text}}, {{email.kind}}, {{email.failedRecipient}} and {{email.url}}. proposal_event: event (sent, viewed (first open), signed (by the client), completed (countersigned) or declined), optional kind (proposal or nda); it gives {{proposal.title}}, {{proposal.status}}, {{proposal.total}}, {{proposal.signedBy}}, {{proposal.declineReason}}, {{proposal.url}} (in Orbit) and {{proposal.clientUrl}} (the client's link), with the proposal's company and contact. Any trigger except manual, schedule, email_received and proposal_event can take mine: true to only fire for the user's own changes.
 steps is a list run in order. Each step is {id, type, label, config}; ids are lowercase like ai_1, if_1, notify_1 and unique. type is one of: ${STEP_TYPES.join(", ")}. An if step has then and else lists; a loop step has a body list run once per item; a path that ends simply stops (inside a loop it moves to the next item).
 config by type: ai {prompt, model (claude-haiku-5-5, claude-sonnet-5-5 or claude-opus-5-5), outputs: [{key, type: text|number|boolean|list|choice, description, choices}], webSearch (true lets it search the web and adds a sources list output), context (true adds the record's details, recent activity, deals and the user's recent emails with the contact), linkedin (true reads the contact's LinkedIn profile now through Mindcase and adds it; best for checking job changes)}. find_records {object: contact|company, lifecycles: [lifecycle names; for contacts, their company's], tag, owner: ""|owner|<member id>, openOpportunity: any|yes|no, quietDays (no activity for at least this many days), search, order: least_contacted|oldest|newest|name, limit (1 to 100), skipDays (skip records this workflow found within this many days, so weekly runs work through a list in batches)}; it outputs records and count. Feed {{steps.find_records_1.records}} to a loop: inside it, company and contact steps act on each record in turn. upsert_record {object: company|contact, company: name, domain, website; contact: email, firstName, lastName, jobTitle, companyId; create (default true; new companies are enriched when auto-enrichment is on), useInRun (true makes it the run's record for later steps)}; it outputs id, name, created, found and url, so update_record {object: contact, field: companyId, value: "{{steps.upsert_record_1.id}}"} moves a contact to it. webhook {url (https), body (optional template; empty sends the run's company, contact and step results as JSON)} posts to Slack, Zapier, Make or any service and outputs status and response. decide {about (optional template added as context, such as "{{contact.name}}, {{contact.jobTitle}}"), questions: up to 20 [{key (lowercase first, letters, numbers or underscores, not sources), type: yes_no|choice|score, question (a template), options (choice: 2 to 50 option texts; score: 2 to 10 level descriptions, lowest first)}]} asks the live web through Parallel for $0.001 a check, sending only the run's company name, domain and website, today's date, the questions and about. Questions and about can only use company name, domain, website, industry and lifecycle, contact name, first and last name, job title and LinkedIn, earlier step answers, loop.item and loop.index; email, call and note fields come out empty. A rate-limited or briefly unavailable check is retried once a minute later. Each question key becomes an output: yes_no gives how likely it is true, 0 to 100; choice gives the chosen option's text ("" when the evidence doesn't settle it) and <key>Confidence, 0 to 100; score gives the level from 0 (the first) to one decimal; a refused question gives null, so is_empty catches it. It also outputs sources (up to 10 links) and runs in test runs, so if and filter can branch on it, for example {left: "{{steps.decide_1.hiring}}", op: greater_than, right: "60"}. if and filter {match: all|any, conditions: [{left: "{{path}}", op: is|is_not|contains|not_contains|is_empty|is_not_empty|greater_than|less_than, right}]}; filter stops the path when false. loop {items: "{{steps.ai_1.requests}}", limit}. delay {amount, unit: minutes|hours|days}. approval {title, details} pauses for the user to approve. create_task {title, notes, dueInDays, dueDate (optional template giving a YYYY-MM-DD day, such as "{{steps.ai_1.followUpOn}}" from an AI output that works out when to follow up; it overrides dueInDays), assignee: owner|record_owner|<member id>, link: company|contact|none, clickup: boolean}; due dates never land on a weekend, a bank holiday or 24 Dec to 1 Jan, and skip days when the assignee's own calendar has less than an hour free between 09:00 and 17:30, with the move explained in the notes. add_note {title, body}. update_record {object, field, value}; fields: company lifecycle, health, ownerId, industry, sizeCategory, source, description, name, domain, website, linkedinUrl, phone; contact ownerId, jobTitle, companyId, source, notes, firstName, lastName, email, phone, linkedinUrl. board {boardId, stageId} adds the company to a board or moves its card. notify {to: owner|record_owner|<member id>, title, body}. send_email {subject, body} to the run's contact. linear_issue {title, description, priority: urgent|high|medium|low}. create_proposal {templateId (an active proposal template from list_proposal_templates), currency: GBP|USD, products: ai|fixed, productIds (for fixed), guidance (for ai: how to choose), title (optional)} drafts a proposal for the run's contact at their company; with products ai it reads the call summary and transcript (or the record's history) and picks from the live product catalogue, so the prompt never needs the product list. It outputs url, title, total, products and reason, and creates nothing in test runs.
 Text fields take {{company.name}}, {{company.id}}, {{company.url}}, {{contact.id}}, {{contact.companyName}}, {{contact.linkedinUrl}}, {{company.health}}, {{company.healthReason}}, {{call.sentiment}}, {{contact.name}}, {{contact.firstName}}, {{contact.email}}, {{call.summary}}, {{call.keyPoints}}, {{call.transcript}}, {{activity.title}}, {{deal.name}}, {{deal.stage}}, {{change.to}}, {{task.title}}, {{owner.name}}, {{today}}, {{steps.<id>.<output key>}} and {{loop.item}}. Keep workflows small: only the nodes the job needs.`;
@@ -881,7 +922,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     name: "list_companies",
     label: "Looking at companies",
     description:
-      "List companies with optional search and filters. Returns total and a page of companies. Each company has icpFit, its ICP fit score from 0 (not a fit) to 4 (strong fit) when Web checks has scored it, otherwise null. To find the best-fitting companies, sort by fit (highest first) and page through with offset instead of reading every company.",
+      "List companies with optional search and filters. Returns total, the workspace's AI fields (column name, question, type, options) and a page of companies. Each company has icpFit, its ICP fit score from 0 (not a fit) to 4 (strong fit) when Web checks has scored it, otherwise null, and aiFields, each AI field's answer by column name (Yes or No, a number, short text, options joined with commas, Unknown, or null when not checked or not in that field's companies). Filter by AI fields with ai and sort by one with aiSort. To find the best-fitting companies, sort by fit (highest first) and page through with offset instead of reading every company.",
     parameters: {
       type: "object",
       properties: {
@@ -892,11 +933,33 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         ownerId: { type: "string", description: "Member id, or 'unassigned'." },
         sort: { type: "string", enum: ["name", "domain", "updated", "created", "interaction", "strength", "owner", "fit"], description: "fit sorts by ICP fit, best first; interaction by last contact." },
         order: { type: "string", enum: ["asc", "desc"] },
+        ai: {
+          type: "array",
+          description: "AI field filters, all of which must match. Give field (column name) and one of: is (yes, no or unknown) for yes or no fields; min and/or max for numbers; contains for short text; anyOf (option names) for pick from list. includeUnknown also keeps companies without an answer for ranges and anyOf.",
+          items: {
+            type: "object",
+            properties: {
+              field: { type: "string" },
+              is: { type: "string", enum: ["yes", "no", "unknown"] },
+              min: { type: "number" },
+              max: { type: "number" },
+              contains: { type: "string" },
+              anyOf: { type: "array", items: { type: "string" } },
+              includeUnknown: { type: "boolean" },
+            },
+            required: ["field"],
+          },
+        },
+        aiSort: { type: "string", description: "Column name of an AI field to sort by instead of sort. Use order desc for high to low (Yes first)." },
         limit: limitParam,
         offset: offsetParam,
       },
     },
     run: async (actor, args) => {
+      const fields = await listAiFields(actor);
+      const ai = aiFiltersFrom(fields, args.ai);
+      const sortField = typeof args.aiSort === "string" && args.aiSort.trim() ? findAiField(fields, args.aiSort) : null;
+      if (typeof args.aiSort === "string" && args.aiSort.trim() && !sortField) throw new CrmError("invalid_input", `There's no AI field called ${args.aiSort}.`, 400);
       const result = await listCompanies(actor, {
         query: optionalStr(args.query),
         lifecycle: optionalStr(args.lifecycle),
@@ -908,26 +971,47 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         limit: int(args.limit, 50, 1, 100),
         offset: int(args.offset, 0, 0, 10000),
         relationships: true,
+        aiFields: true,
+        ...(ai.length > 0 ? { ai } : {}),
+        ...(sortField ? { aiSort: sortField.id } : {}),
       });
-      return { ...result, data: result.data.map(withCompany) };
+      return {
+        ...result,
+        aiFields: fields.map((field) => ({ id: field.id, name: field.label, question: field.question, type: field.kind, ...(field.kind === "pick" ? { options: field.options, multiple: field.multiple } : {}) })),
+        data: result.data.map((company) => withAiFields(company, fields)),
+      };
     },
   },
   {
     name: "get_company",
     label: "Reading a company",
     description:
-      "Everything about one company: details, people, opportunities, open and done tasks, the full activity timeline, call summaries, upcoming and recent meetings, and relationship status.",
+      "Everything about one company: details, people, opportunities, open and done tasks, the full activity timeline, call summaries, upcoming and recent meetings, relationship status, and its AI field answers with sources.",
     parameters: { type: "object", properties: { companyId: idParam("Company id.") }, required: ["companyId"] },
     run: async (actor, args) => {
       const id = required(args.companyId, "A company id");
-      const [context, meetings, knowledge] = await Promise.all([
+      const [context, meetings, knowledge, ai] = await Promise.all([
         getCompanyContext(actor, id),
         getMeetings(actor, { companyId: id }),
         listKnowledge(actor, { companyId: id }, 500).catch(() => []),
+        getCompanyAnswers(actor, id).catch(() => ({ fields: [], answers: [] })),
       ]);
       return {
         ...context,
         company: withCompany(context.company),
+        aiFields: ai.fields.map((field) => {
+          const answer = ai.answers.find((item) => item.fieldId === field.id);
+          return {
+            name: field.label,
+            question: field.question,
+            answer: aiCellText(field, answer),
+            setByHand: answer?.manual ?? false,
+            likelihood: answer ? likelihoodText(answer) : null,
+            reason: answer?.reason ?? null,
+            sources: answer?.sources ?? [],
+            checkedAt: answer?.checkedAt ?? null,
+          };
+        }),
         contacts: context.contacts.map(withContact),
         opportunities: context.opportunities.map(withOpportunity),
         tasks: context.tasks.map(withTask),

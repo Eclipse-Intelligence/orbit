@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getUserActor } from "@/lib/auth/user";
 import { companiesCsvRows } from "@/lib/companies";
+import { listAiFields } from "@/lib/ai-fields/fields";
 import {
   archiveCompanies,
   archiveContacts,
@@ -67,7 +68,7 @@ export async function exportSelectedContactsAction(ids: string[]) {
 
 export async function exportSelectedCompaniesAction(ids: string[]) {
   const user = await requireUser();
-  return companiesCsvRows(await getCompaniesByIds(user, bulkIds(ids)));
+  return companiesCsvRows(await getCompaniesByIds(user, bulkIds(ids), { aiFields: true }), await listAiFields(user));
 }
 
 export async function companyRecipientsAction(companyIds: string[]): Promise<Recipient[]> {

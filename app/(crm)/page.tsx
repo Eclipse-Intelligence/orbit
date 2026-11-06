@@ -9,6 +9,8 @@ import { listLifecycles } from "@/lib/crm/lifecycles";
 import { listTags } from "@/lib/crm/tags";
 import { companyQueryFromSearchParams } from "@/lib/crm/validation";
 import { enrichmentAvailability, getEnrichmentSettings } from "@/lib/enrichment/settings";
+import { hiddenAiFields, listAiFields, publicField } from "@/lib/ai-fields/fields";
+import { listCompanyViews } from "@/lib/crm/company-views";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -37,16 +39,25 @@ export default async function CompaniesPage({
   filters.limit = PAGE_SIZE;
   filters.offset = pageOffset(page);
 
-  const [listed, members, mailbox, tags, lifecycles, settings] = await Promise.all([
-    listCompanies(user, { ...filters, relationships: true }),
+  const [listed, members, mailbox, tags, lifecycles, settings, aiFields, hidden, views] = await Promise.all([
+    listCompanies(user, { ...filters, relationships: true, aiFields: true }),
     listMembers(user),
     getMailbox(user),
     listTags(user),
     listLifecycles(user),
     getEnrichmentSettings(user),
+    listAiFields(user),
+    hiddenAiFields(user),
+    listCompanyViews(user),
   ]);
 
   const available = enrichmentAvailability();
+  const known = new Set(aiFields.map((field) => field.id));
+  const shown = {
+    ...filters,
+    ai: filters.ai?.filter((filter) => known.has(filter.fieldId)),
+    aiSort: filters.aiSort && known.has(filters.aiSort) ? filters.aiSort : undefined,
+  };
 
   return (
     <Companies
@@ -54,12 +65,15 @@ export default async function CompaniesPage({
       total={listed.total}
       page={page}
       now={requestTime()}
-      filters={filters}
+      filters={shown}
       members={members}
       tags={tags}
       lifecycles={lifecycles}
       mailboxConnected={mailbox?.status === "connected"}
       enrichment={{ company: available.company, logoClientId: available.logoClientId, fit: settings.webIcp }}
+      aiFields={aiFields.map(publicField)}
+      hiddenAiFields={hidden}
+      views={views}
       viewer={{
         id: user.userId,
         name: user.fullName || user.email,

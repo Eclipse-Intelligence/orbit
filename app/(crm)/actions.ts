@@ -8,6 +8,7 @@ import { SESSION_COOKIE, supabaseConfigured } from "@/lib/auth/config";
 import { createSupabaseServer } from "@/lib/auth/supabase";
 import { getUserActor } from "@/lib/auth/user";
 import { companiesCsvRows, actionError } from "@/lib/companies";
+import { listAiFields } from "@/lib/ai-fields/fields";
 import {
   archiveCompany,
   createCompany,
@@ -236,12 +237,12 @@ export async function exportCompaniesAction(filters: CompanyListQuery) {
   let offset = 0;
   let total = 0;
   do {
-    const page = await listCompanies(user, { ...filters, limit: 100, offset });
+    const page = await listCompanies(user, { ...filters, aiFields: true, limit: 100, offset });
     rows.push(...page.data);
     total = page.total;
     offset += page.data.length;
   } while (rows.length < total && offset < 5000);
-  return companiesCsvRows(rows);
+  return companiesCsvRows(rows, await listAiFields(user));
 }
 
 export async function updateNameAction(name: string): Promise<{ error?: string }> {

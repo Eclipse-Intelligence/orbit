@@ -42,6 +42,8 @@ import type { ClickUpPicker } from "@/lib/crm/clickup";
 import type { Company, CompanyContext, CompanyWrite, Member, TagCount } from "@/lib/crm/types";
 import type { EnrichmentAvailability } from "@/lib/enrichment/settings";
 import type { CompanyFit } from "@/lib/enrichment/web-checks";
+import CompanyAiFields from "@/components/ai-fields/company-ai-fields";
+import type { AiAnswer, AiField } from "@/lib/ai-fields/types";
 import { cn } from "@/lib/utils";
 
 function OpenLink({ href, label }: { href: string; label: string }) {
@@ -80,6 +82,8 @@ export default function CompanyRecord({
   proposals = [],
   knowledge = [],
   fit = null,
+  aiFields = [],
+  aiAnswers = [],
 }: {
   viewer: Viewer;
   context: CompanyContext;
@@ -93,6 +97,8 @@ export default function CompanyRecord({
   proposals?: DocumentSummary[];
   knowledge?: KnowledgeItem[];
   fit?: CompanyFit;
+  aiFields?: AiField[];
+  aiAnswers?: AiAnswer[];
 }) {
   const router = useRouter();
   const listHref = useListHref("companies");
@@ -288,6 +294,15 @@ export default function CompanyRecord({
           <>
             <CompanyHealth company={company} />
 
+            <CompanyAiFields
+              companyId={company.id}
+              fields={aiFields}
+              answers={aiAnswers}
+              fit={fit}
+              canAdmin={viewer.role === "owner" || viewer.role === "admin"}
+              archived={Boolean(company.archivedAt)}
+            />
+
             {editing ? (
               <CompanyEditor
                 key={company.id}
@@ -333,32 +348,6 @@ export default function CompanyRecord({
                     <Detail label="Sectors">{sectorLabel(company.brand.industries)}</Detail>
                   )}
                   <InlineField label="Size" value={company.sizeCategory ?? ""} onSave={(value) => patch({ sizeCategory: value || null })} />
-                  {fit && (
-                    <Detail label="ICP fit">
-                      <span className="flex flex-col gap-1">
-                        <span>
-                          {fit.label}, {fit.score.toFixed(1)} of 4
-                          {fit.stale && <span className="text-subtle"> (before your ICP changed)</span>}
-                        </span>
-                        {fit.sources.length > 0 && (
-                          <details className="caption-style text-subtle">
-                            <summary className="cursor-pointer select-none rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/60">
-                              {fit.sources.length} {fit.sources.length === 1 ? "source" : "sources"}
-                            </summary>
-                            <ul className="mt-1 flex flex-col gap-1">
-                              {fit.sources.map((source) => (
-                                <li key={source.url} className="min-w-0">
-                                  <a href={source.url} target="_blank" rel="noreferrer" className="block truncate underline underline-offset-2">
-                                    {source.title || bareUrl(source.url)}
-                                  </a>
-                                </li>
-                              ))}
-                            </ul>
-                          </details>
-                        )}
-                      </span>
-                    </Detail>
-                  )}
                   {company.brand?.employees && <Detail label="Employees">{employeesLabel(company.brand.employees)}</Detail>}
                   <InlineField
                     label="LinkedIn"

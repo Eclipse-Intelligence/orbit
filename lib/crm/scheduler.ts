@@ -17,6 +17,7 @@ import type { UserActor } from "@/lib/crm/types";
 import { granolaApiKey, granolaClient } from "@/lib/granola";
 import { query } from "@/lib/db/pool";
 import { runWebSignals, webChecksConfigured } from "@/lib/enrichment/web-checks";
+import { runAiFields } from "@/lib/ai-fields/runner";
 import { microsoftConfigured } from "@/lib/microsoft/oauth";
 import { syncReaderToKnowledge } from "@/lib/readwise/sync";
 
@@ -166,6 +167,13 @@ export const DEFAULT_STEPS: SyncStep[] = [
     oncePerWorkspace: true,
     applies: () => webChecksConfigured(),
     run: (target, context) => runWebSignals(target.actor, { deadline: Math.min(context.deadline, Date.now() + 8_000), fetchImpl: context.fetchImpl }),
+  },
+  {
+    name: "ai_fields",
+    minMs: 10_000,
+    oncePerWorkspace: true,
+    applies: () => webChecksConfigured(),
+    run: (target, context) => runAiFields(target.actor, { deadline: Math.min(context.deadline, Date.now() + 12_000), fetchImpl: context.fetchImpl }),
   },
 ];
 

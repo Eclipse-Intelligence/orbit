@@ -183,8 +183,8 @@ When a tool is merged into another, add its old name to `MERGED_TOOLS` in `tools
 
 | Tool | What it does | Approval | Outside | Notable limits |
 | --- | --- | --- | --- | --- |
-| `list_companies` | Lists companies with search, lifecycle, health, tag and owner filters and sorting, with relationship and ICP fit (0 to 4). | No | Yes | `limit` up to 100 (default 50), `offset` up to 10,000. |
-| `get_company` | Everything about one company: details, people, deals, open and done tasks, the activity timeline, call summaries, meetings, relationship and its Knowledge items. | No | Yes | Up to 500 Knowledge items listed. |
+| `list_companies` | Lists companies with search, lifecycle, health, tag, owner and AI field filters (`ai`: yes or no, number ranges, text contains, any of the options, optionally with Unknown) and sorting (including `aiSort` by an AI field), with relationship, ICP fit (0 to 4), the workspace's AI fields and each company's answers by column name. | No | Yes | `limit` up to 100 (default 50), `offset` up to 10,000. |
+| `get_company` | Everything about one company: details, people, deals, open and done tasks, the activity timeline, call summaries, meetings, relationship, its Knowledge items and its AI field answers (likelihood, reason, sources, checked date, whether set by hand). | No | Yes | Up to 500 Knowledge items listed. |
 | `list_quiet_relationships` | Every company with no interaction in the last N days. | No | No | Default 21 days; up to 100 companies. |
 | `create_company` | Adds a company. | Yes | No | |
 | `update_company` | Changes one company's details by `companyId`; only the fields passed change. Health is set by hand only when the user asks, with a reason. With `companyIds` it makes the same change (owner, lifecycle, industry, size, source) to many companies. | Yes | No | `companyIds` up to 100 a call. |

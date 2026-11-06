@@ -25,6 +25,7 @@ export type BuilderOptions = {
   lifecycles: { value: string; label: string }[];
   proposalTemplates: { id: string; name: string }[];
   products: { id: string; name: string; priceGbp: number | null; priceUsd: number | null }[];
+  aiFields?: { id: string; label: string }[];
 };
 
 export function matchLifecycleOption(options: BuilderOptions["lifecycles"], value: string) {

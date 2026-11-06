@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Button from "@/components/_ui/button";
 import FilterMenu from "@/components/_common/filter-menu";
 import MobileFilters from "./mobile-filters";
@@ -24,6 +24,10 @@ import ListSearch from "@/components/shortcuts/list-search";
 import type { BulkSelection } from "@/hooks/use-bulk-selection";
 import { downloadCsv } from "@/lib/csv";
 import type { CompanyListQuery, CompanyPresence, LifecycleCount, Member, TagCount } from "@/lib/crm/types";
+import ViewMenu, { useDropEditedView } from "@/components/ai-fields/view-menu";
+import { AiFilterChip } from "@/components/ai-fields/ai-filters";
+import { aiFilterValue, aiParamKey, type AiFilter } from "@/lib/ai-fields/params";
+import type { AiField, CompanyView } from "@/lib/ai-fields/types";
 import ShareIcon from "@/public/assets/images/companies/toolbar/share.svg";
 import PlusIcon from "@/public/assets/images/_common/plus.svg";
 
@@ -40,6 +44,14 @@ type ToolbarProps = {
   lifecycles?: LifecycleCount[];
   selection: BulkSelection;
   fit?: boolean;
+  aiFields?: AiField[];
+  views?: CompanyView[];
+  canManage?: boolean;
+  total?: number;
+  filterField?: string | null;
+  onFilterFieldChange?: (fieldId: string | null) => void;
+  mobileOpen?: boolean;
+  onMobileOpenChange?: (open: boolean) => void;
 };
 
 export default function CompaniesToolbar({
@@ -49,19 +61,35 @@ export default function CompaniesToolbar({
   lifecycles = [],
   fit = false,
   selection,
+  aiFields = [],
+  views = [],
+  canManage = false,
+  total = 0,
+  filterField = null,
+  onFilterFieldChange,
+  mobileOpen,
+  onMobileOpenChange,
 }: ToolbarProps) {
   const router = useRouter();
   const [exporting, setExporting] = useState(false);
+  useDropEditedView(views, canManage);
+
+  const searchParams = useSearchParams();
+  const pending = useRef<string | null>(null);
+  useEffect(() => {
+    pending.current = null;
+  }, [searchParams]);
 
   const replaceParams = useCallback(
     (updates: Record<string, string | null>) => {
-      const params = new URLSearchParams(window.location.search);
+      const params = new URLSearchParams(pending.current ?? window.location.search);
       params.delete("page");
       for (const [key, value] of Object.entries(updates)) {
         if (!value) params.delete(key);
         else params.set(key, value);
       }
       const next = params.toString();
+      pending.current = next;
       router.replace(next ? `/?${next}` : "/", { scroll: false });
     },
     [router],
@@ -98,10 +126,28 @@ export default function CompaniesToolbar({
     ...members.map((member) => ({ value: member.id, label: member.name })),
   ];
 
+  const setAiFilter = (field: AiField, filter: AiFilter | null) => replaceParams({ [aiParamKey(field.id)]: filter ? aiFilterValue(filter) : null });
+  const chipFields = aiFields.filter((field) => field.id === filterField || filters.ai?.some((filter) => filter.fieldId === field.id));
+  const sortedBy = filters.aiSort ? aiFields.find((field) => field.id === filters.aiSort) : null;
+
   return (
-    <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 px-4 py-4">
+    <div className="flex shrink-0 flex-col gap-2 px-4 py-4">
+    <div className="flex flex-wrap items-center justify-between gap-2 sm:flex-nowrap sm:items-start">
       <div className="flex items-center gap-2 sm:hidden">
-        <MobileFilters filters={filters} members={members} tagOptions={tagOptions} lifecycleOptions={lifecycleOptions} fit={fit} onChange={replaceParams} />
+        <MobileFilters
+          filters={filters}
+          members={members}
+          tagOptions={tagOptions}
+          lifecycleOptions={lifecycleOptions}
+          fit={fit}
+          onChange={replaceParams}
+          aiFields={aiFields}
+          views={views}
+          canManage={canManage}
+          total={total}
+          open={mobileOpen}
+          onOpenChange={onMobileOpenChange}
+        />
         <PresenceFilter
           fields={PRESENCE_FIELDS}
           has={filters.has ?? []}
@@ -112,7 +158,8 @@ export default function CompaniesToolbar({
         />
       </div>
 
-      <div className="hidden min-w-0 flex-wrap items-center gap-2 sm:flex">
+      <div className="hidden min-w-0 flex-1 flex-wrap items-center gap-2 sm:flex">
+        {(views.length > 0 || canManage) && <ViewMenu views={views} canManage={canManage} />}
         <ListSearch noun="companies" />
         <FilterMenu
           label="Owner"
@@ -178,6 +225,26 @@ export default function CompaniesToolbar({
           Add company
         </Button>
       </div>
+    </div>
+      {(chipFields.length > 0 || sortedBy) && (
+        <div className="flex flex-wrap items-center gap-2 max-sm:hidden">
+          {chipFields.map((field) => (
+            <AiFilterChip
+              key={field.id}
+              field={field}
+              filter={filters.ai?.find((filter) => filter.fieldId === field.id)}
+              open={filterField === field.id}
+              onOpenChange={(open) => onFilterFieldChange?.(open ? field.id : null)}
+              onChange={(filter) => setAiFilter(field, filter)}
+            />
+          ))}
+          {sortedBy && (
+            <span className="caption-style text-subtle">
+              Sorted by {sortedBy.label}, {filters.order === "asc" ? "low to high" : "high to low"}
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 }

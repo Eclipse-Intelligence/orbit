@@ -16,6 +16,8 @@ import { manualWorkflows } from "@/lib/workflows/store";
 import { listDocuments } from "@/lib/proposals/documents";
 import { resumeStale, scheduleCallBackfill } from "@/lib/knowledge/background";
 import { listKnowledge } from "@/lib/knowledge/store";
+import { getCompanyAnswers } from "@/lib/ai-fields/answers";
+import { publicField } from "@/lib/ai-fields/fields";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -50,7 +52,7 @@ export default async function CompanyPage({
   if (!user) redirect("/login");
   if (!context) notFound();
 
-  const [members, mailbox, clickup, meetings, tags, workflows, proposals, knowledge, fit] = await Promise.all([
+  const [members, mailbox, clickup, meetings, tags, workflows, proposals, knowledge, fit, ai] = await Promise.all([
     listMembers(user),
     getMailbox(user),
     getClickUpPicker(user),
@@ -63,6 +65,10 @@ export default async function CompanyPage({
       return [];
     }),
     getCompanyFit(user, context.company.id).catch(() => null),
+    getCompanyAnswers(user, context.company.id).catch((error: unknown) => {
+      console.error("AI fields failed to load", error);
+      return { fields: [], answers: [] };
+    }),
   ]);
   resumeStale(user, knowledge);
   scheduleCallBackfill(user, context.company.id);
@@ -87,6 +93,8 @@ export default async function CompanyPage({
       tags={tags}
       enrichment={enrichmentAvailability()}
       fit={fit}
+      aiFields={ai.fields.map(publicField)}
+      aiAnswers={ai.answers}
     />
   );
 }
