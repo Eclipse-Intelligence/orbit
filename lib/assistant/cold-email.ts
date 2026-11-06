@@ -195,11 +195,18 @@ export function senderFirstName(fullName: string | null, email: string) {
   return local ? local[0].toUpperCase() + local.slice(1) : "the sender";
 }
 
+const FIRST_NAME_TOKEN = "{{first_name}}";
+const BOOKING_TOKEN = "{{booking_url}}";
+
 export function playbookFor(sender: PlaybookSender, playbook: string) {
+  const template =
+    playbook === COLD_EMAIL_PLAYBOOK
+      ? playbook.replaceAll(PLAYBOOK_BOOKING, BOOKING_TOKEN).replace(new RegExp(`\\b${PLAYBOOK_SENDER}\\b`, "g"), FIRST_NAME_TOKEN)
+      : playbook;
   const booked = sender.bookingUrl
-    ? playbook.replaceAll(PLAYBOOK_BOOKING, sender.bookingUrl)
-    : playbook.replace(`offer the booking page exactly as written, ${PLAYBOOK_BOOKING}`, "suggest two times, since there's no booking page set up yet");
-  return booked.replace(new RegExp(`\\b${PLAYBOOK_SENDER}\\b`, "g"), sender.firstName);
+    ? template.replaceAll(BOOKING_TOKEN, sender.bookingUrl)
+    : template.replace(`offer the booking page exactly as written, ${BOOKING_TOKEN}`, "suggest two times, since there's no booking page set up yet").replaceAll(BOOKING_TOKEN, "the booking page");
+  return booked.replaceAll(FIRST_NAME_TOKEN, sender.firstName);
 }
 
 export const ECLIPSE_OUTREACH_BRIEF = `# Eclipse outreach brief (what you may say)
@@ -234,7 +241,7 @@ Don't claim:
 
 export { PROOF_PERMISSIONS, type ProofPermission };
 
-export type ColdEmailBrand = { name: string; claims: string; eclipseTools?: boolean };
+export type ColdEmailBrand = { name: string; claims: string; eclipseTools?: boolean; rubric?: ColdEmailRubric };
 
 const NO_CLAIMS = "No product claims are written down for this business yet. Only facts in prospect_evidence and client proof from the proof list may be stated.";
 
@@ -365,24 +372,55 @@ const HYPE = ["delve", "unlock", "leverage", "game-changing", "game changer", "r
 const SUBJECT_HYPE = /\b(ai-powered|roi|free|guarantee[ds]?|boost|skyrocket|revolutionary|game-?changing|secret|10x)\b/i;
 const SUBJECT_URGENCY = /\b(urgent|asap|today|tomorrow|deadline|last chance|limited time|act now|time-sensitive|don't miss|ending soon)\b/i;
 const EMOJI = /\p{Extended_Pictographic}/u;
-const TAILORED =
+const ECLIPSE_TAILORED =
   /\b(your|you)\b[^.?!]*\b(prompts?|questions|snapshot|breakdown|analysis|audit|results|answers|rankings|where (you|your))\b|\b(prompts?|questions|snapshot|breakdown|analysis|audit|results)\b[^.?!]*\b(your|you)\b|\bwhere\b[^.?!]*\b(don't|doesn't|do not|does not|isn't|aren't)\s+(come up|appear|show up)\b/i;
+const GENERIC_TAILORED =
+  /\b(your|you)\b[^.?!]*\b(snapshot|breakdown|analysis|audit|review|results|plan|sketch|draft)\b|\b(snapshot|breakdown|analysis|audit|review|plan|sketch)\b[^.?!]*\b(your|you)\b/i;
 const GENERIC_RESOURCE = /\b(article|link|guide|report|deck|case study|whitepaper|ebook|e-book|blog)\b/i;
 const MEETING_WORDS = /\b(call|meeting|chat|demo|calendly|zoom|catch up|catch-up)\b/i;
 const MEETING_TIME = /\b(\d+|fifteen|thirty|twenty)[ -]?(min|minute)|\bbook (a|some) time\b|\bjump on\b|\bhop on\b|\bfind a time\b/i;
 const BOOKING = /\/book\/|\bbooking (page|link)\b|\bcalendly\b/i;
 const LINK = /\bhttps?:\/\/|\bwww\.|\b[a-z0-9-]+(\.[a-z0-9-]+)*\.(com|co|uk|io|ai|org|net|app)\b/i;
 const ATTACHMENT = /\b(attached|attachment|attaching|enclosed|the pdf)\b/i;
-const FIRST_EMAIL_EXTRAS: [RegExp, string][] = [
-  [/\b(loom|video|screen recording)\b/i, "a video or Loom"],
-  [/\b(pricing|priced|prices?)\b|£\s?\d/i, "pricing"],
-  [/\bpilot\b/i, "the pilot"],
-  [/\breference calls?\b|\bspeak to (one of )?(our|a) (client|customer)s?\b/i, "a reference call"],
-];
+const VIDEO_EXTRA: [RegExp, string] = [/\b(loom|video|screen recording)\b/i, "a video or Loom"];
+const PRICING_EXTRA: [RegExp, string] = [/\b(pricing|priced|prices?)\b|£\s?\d/i, "pricing"];
+const REFERENCE_EXTRA: [RegExp, string] = [/\breference calls?\b|\bspeak to (one of )?(our|a) (client|customer)s?\b/i, "a reference call"];
+
+export type ColdEmailRubric = {
+  tailored: RegExp;
+  extras: [RegExp, string][];
+  extrasFix: string;
+  ownProductExample: string;
+  tailoredExample: string;
+  pieceRule: boolean;
+};
+
+export const ECLIPSE_RUBRIC: ColdEmailRubric = {
+  tailored: ECLIPSE_TAILORED,
+  extras: [VIDEO_EXTRA, PRICING_EXTRA, [/\bpilot\b/i, "the pilot"], REFERENCE_EXTRA],
+  extrasFix: "Leave video or Loom offers, pricing, the pilot and reference calls out of a first email. They come after a reply.",
+  ownProductExample: "such as offering an agency an AI visibility audit or snapshot",
+  tailoredExample: "for example the buyer questions where their brand doesn't appear in AI answers",
+  pieceRule: true,
+};
+
+export const GENERIC_RUBRIC: ColdEmailRubric = {
+  tailored: GENERIC_TAILORED,
+  extras: [VIDEO_EXTRA, PRICING_EXTRA, REFERENCE_EXTRA],
+  extrasFix: "Leave video or Loom offers, pricing and reference calls out of a first email. They come after a reply.",
+  ownProductExample: "such as offering them a service their own company already sells",
+  tailoredExample: "for example a short review of their own numbers or process",
+  pieceRule: false,
+};
+
+export function rubricOf(brand?: ColdEmailBrand) {
+  return brand?.rubric ?? (brand?.eclipseTools === true ? ECLIPSE_RUBRIC : GENERIC_RUBRIC);
+}
+
 const ECLIPSE_NAMES = ["Eclipse", "Cntent"];
 
 function claimPatterns(brand?: ColdEmailBrand) {
-  const eclipse = !brand || brand.eclipseTools === true;
+  const eclipse = brand?.eclipseTools === true;
   const names = [...new Set([brand?.name ?? "", ...(eclipse ? ECLIPSE_NAMES : [])].map((name) => name.trim().toLowerCase()).filter(Boolean))];
   const alternatives = names.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+"));
   const own = alternatives.length ? `|${alternatives.join("|")}` : "";
@@ -550,14 +588,15 @@ export function lintColdEmail(input: { subject: string; body: string; firstTouch
     firstName && mentions(subject, firstName) ? "their first name" : "",
     subjectClients.length ? "a client's name" : "",
   ].filter(Boolean);
-  const tailoredClose = closing(sentences).endsWith("?") && GATED.test(closing(sentences)) && TAILORED.test(closing(sentences)) && !GENERIC_RESOURCE.test(closing(sentences));
-  const gatedSentences = sentences.filter((sentence) => GATED.test(sentence) && !(TAILORED.test(sentence) && !GENERIC_RESOURCE.test(sentence)));
+  const rubric = rubricOf(input.brand);
+  const tailoredClose = closing(sentences).endsWith("?") && GATED.test(closing(sentences)) && rubric.tailored.test(closing(sentences)) && !GENERIC_RESOURCE.test(closing(sentences));
+  const gatedSentences = sentences.filter((sentence) => GATED.test(sentence) && !(rubric.tailored.test(sentence) && !GENERIC_RESOURCE.test(sentence)));
   const gated = gatedSentences.length > 0;
   const [fewest, most] = followUp ? [30, 60] : [tailoredClose ? 30 : 50, 90];
   const [fewestSentences, mostSentences] = followUp ? [2, 5] : [3, 5];
   const linked = LINK.test(core);
   const attached = ATTACHMENT.test(core);
-  const extras = FIRST_EMAIL_EXTRAS.filter(([pattern]) => pattern.test(core)).map(([, name]) => name);
+  const extras = rubric.extras.filter(([pattern]) => pattern.test(core)).map(([, name]) => name);
   const findingToo = proof.entries.length > 0 && proof.used.length > 0 && (patterns.finding.test(core) || figures.some((figure) => !proof.used.some((entry) => wordingOf(entry).includes(normalise(figure)))));
   const plainProblems = [BULLET.test(core) ? "bullets" : "", BOLD.test(core) ? "bold" : ""].filter(Boolean);
   const checks: Omit<ColdEmailCheck, "source">[] = [
@@ -683,7 +722,7 @@ export function lintColdEmail(input: { subject: string; body: string; firstTouch
       label: "No pitch extras",
       pass: followUp || extras.length === 0,
       note: followUp ? "Not checked in a follow-up." : extras.length ? `Mentions ${listed(extras)}.` : "None.",
-      fix: "Leave video or Loom offers, pricing, the pilot and reference calls out of a first email. They come after a reply.",
+      fix: rubric.extrasFix,
     },
     {
       id: "no_filler",
@@ -706,13 +745,17 @@ export function lintColdEmail(input: { subject: string; body: string; firstTouch
       note: midSentenceColons(`${subject}\n${core}`).length ? `Colon in: "${midSentenceColons(`${subject}\n${core}`)[0].slice(0, 80)}".` : "None.",
       fix: "Replace each colon in the middle of a sentence with a full stop or a comma.",
     },
-    {
-      id: "no_piece",
-      label: "Says article, not piece",
-      pass: piecesOf(`${subject}\n${core}`).length === 0,
-      note: piecesOf(`${subject}\n${core}`).length ? 'Uses "piece".' : "Fine.",
-      fix: 'Call it an "article", never a "piece".',
-    },
+    ...(rubric.pieceRule
+      ? [
+          {
+            id: "no_piece",
+            label: "Says article, not piece",
+            pass: piecesOf(`${subject}\n${core}`).length === 0,
+            note: piecesOf(`${subject}\n${core}`).length ? 'Uses "piece".' : "Fine.",
+            fix: 'Call it an "article", never a "piece".',
+          },
+        ]
+      : []),
   ];
   return checks.map((check) => ({ ...check, source: "rules" as const, ...(check.pass ? { fix: undefined } : {}) }));
 }
@@ -753,6 +796,7 @@ export async function judgeColdEmail(
 ): Promise<ColdEmailCheck[]> {
   if (!jevConfigured()) return [];
   const followUp = input.firstTouch === false;
+  const rubric = rubricOf(input.brand);
   const core = bodyCore(input.body);
   const sentences = sentencesOf(core);
   const question = [...sentences].reverse().find((sentence) => sentence.endsWith("?")) ?? (followUp ? (sentences.at(-1) ?? "") : "");
@@ -842,7 +886,7 @@ export async function judgeColdEmail(
     not_their_own_product: {
       type: "noul",
       instructions:
-        "Does draft.full_body avoid offering or pitching something that prospect_company_already_offers says the recipient's company already provides, such as offering an agency an AI visibility audit or snapshot?",
+        `Does draft.full_body avoid offering or pitching something that prospect_company_already_offers says the recipient's company already provides, ${rubric.ownProductExample}?`,
       criteria: { true: "Nothing pitched duplicates what they already offer, or nothing is pitched.", false: "It pitches a capability they already have." },
     },
     cta_kind: {
@@ -850,7 +894,7 @@ export async function judgeColdEmail(
       instructions: "Classify the call to action in draft.cta.",
       criteria: {
         question_about_their_work: "Asks about the recipient's own work, method or experience in a way an expert can answer.",
-        tailored_offer: "Offers a specific analysis made for the recipient's own company (for example the buyer questions where their brand doesn't appear in AI answers) that can't be included without preparing it for them.",
+        tailored_offer: `Offers a specific analysis made for the recipient's own company (${rubric.tailoredExample}) that can't be included without preparing it for them.`,
         useful_offer: "Offers a general resource, such as an article or report, that is not already included in the email.",
         interest: "Asks whether they are interested in the topic.",
         meeting_request: "Asks for a call, meeting or demo.",
@@ -964,6 +1008,7 @@ export async function reviewColdEmailValue(
   options: CheckOptions = {},
 ): Promise<ColdEmailCheck[]> {
   const followUp = input.firstTouch === false;
+  const rubric = rubricOf(input.brand);
   const result = await completeJson({
     system: [
       "You judge emails to prospects for whether they are worth the recipient's time, not their format. The recipient is a busy expert who gets many cold emails and owes the sender nothing.",
@@ -971,9 +1016,9 @@ export async function reviewColdEmailValue(
       'Reply with JSON only: {"newInformation": boolean, "valueWithoutReply": boolean, "pitchesWhatTheyHave": boolean, "questionAboutTheirWork": boolean, "tailoredOffer": boolean, "describesThemToThemselves": boolean, "claimsWithinEvidence": boolean, "oneAngle": boolean, "worthReplying": number, "biggestGap": string}.',
       "newInformation: true only if the email gives one specific thing they probably don't know, such as proof from the proof list of what a team did and what changed, a specific finding or number, or something about their own brand, rather than agreeing with them, or handing their own point back.",
       "valueWithoutReply: true if they get the useful part (the proof line, the finding or the figure) without replying, or if it ends with a specific offer of something made for their own company. A first email has no link, so the value has to be in the sentences, and the absence of a link is never a fault.",
-      "pitchesWhatTheyHave: true if it offers or pitches something their company already provides, such as offering an agency an AI visibility audit.",
+      `pitchesWhatTheyHave: true if it offers or pitches something their company already provides, ${rubric.ownProductExample}.`,
       "questionAboutTheirWork: true if it ends with an easy question about their own work or method that an expert can answer from experience.",
-      "tailoredOffer: true if it instead ends by offering a specific analysis made for their own company (such as the buyer questions where their brand doesn't appear in AI answers), not a general article or resource.",
+      `tailoredOffer: true if it instead ends by offering a specific analysis made for their own company (${rubric.tailoredExample}), not a general article or resource.`,
       "describesThemToThemselves: true if, beyond at most one brief hook, it tells them what their own company, products, prices, role, clients, posts or numbers are.",
       "claimsWithinEvidence: true only if every client name or client result comes from a client proof item from the proof list in the evidence, keeping its facts and figures (a described only client is never named), every figure is in the evidence, and it never promises the recipient a client's result or uses multipliers. Proof list items are cleared for use as they stand. True when it mentions no clients and every figure is in the evidence.",
       "oneAngle: true if it carries only one of a proof list line, a finding or an offer made for them, with at most one figure. A finding and proof together, stacked results or two figures make it false.",

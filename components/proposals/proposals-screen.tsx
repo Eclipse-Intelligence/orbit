@@ -332,7 +332,7 @@ function ProductEditor({ product, onDone, onCancel }: { product?: Product; onDon
           maxLength={120}
           autoFocus={!adding}
           autoComplete="off"
-          placeholder={adding ? "Add a product, such as Agency Pilot" : "Product name"}
+          placeholder={adding ? "Add a product, such as Starter package" : "Product name"}
           onFocus={() => setOpen(true)}
           onChange={() => setAdded(null)}
           className="placeholder:text-subtle text-foreground focus-visible:ring-ring/60 -mx-1.5 h-8 min-w-0 flex-1 rounded-md bg-transparent px-1.5 text-[14px] outline-none focus-visible:ring-2"

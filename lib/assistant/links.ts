@@ -2,11 +2,13 @@ import { getBookingPage } from "@/lib/booking/pages";
 import { bookingPath } from "@/lib/booking/rules";
 import { getMeetingLink } from "@/lib/crm/invites";
 import type { UserActor } from "@/lib/crm/types";
+import { defaultSender } from "@/lib/mail/compose";
 import { siteOrigin } from "@/lib/site-url";
 
 export type UserLinks = {
   booking: { url: string; enabled: boolean; title: string; durationMinutes: number } | null;
   meetingLink: string | null;
+  defaultFrom?: string | null;
 };
 
 function productionOrigin() {
@@ -20,12 +22,13 @@ export function bookingUrl(slug: string) {
 }
 
 export async function userLinks(actor: UserActor): Promise<UserLinks> {
-  const [page, meetingLink] = await Promise.all([getBookingPage(actor), getMeetingLink(actor)]);
+  const [page, meetingLink, sender] = await Promise.all([getBookingPage(actor), getMeetingLink(actor), defaultSender(actor).catch(() => null)]);
   return {
     booking: page.exists
       ? { url: bookingUrl(page.slug), enabled: page.enabled, title: page.title || page.defaultTitle, durationMinutes: page.durationMinutes }
       : null,
     meetingLink,
+    defaultFrom: sender?.email ?? null,
   };
 }
 
@@ -36,6 +39,7 @@ export function linksSection(links: UserLinks | null) {
       ? `- Booking page, where people pick a time with the user: ${links.booking.url} ("${links.booking.title}", ${links.booking.durationMinutes} minutes${links.booking.enabled ? "" : ", currently switched off, so don't send it until they switch it on in Settings, Booking page"}).`
       : "- No booking page yet. It can be set up in Settings, Booking page.",
     links.meetingLink ? `- Video meeting link for calls: ${links.meetingLink}. This is a meeting room, not the booking page.` : "",
+    links.defaultFrom ? `- New emails go from ${links.defaultFrom} unless the user asks for another address. Replies go from the address the email came to.` : "",
   ].filter(Boolean);
   return `\n\n# The user's links\n${lines.join("\n")}\nWhen someone should choose a time, put the booking page link in the email exactly as written above. Never shorten it, change the address or make one up.`;
 }

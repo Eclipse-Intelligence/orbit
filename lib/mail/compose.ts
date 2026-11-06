@@ -846,11 +846,57 @@ export async function composeAccounts(actor: UserActor): Promise<ComposeAccount[
        order by i.created_at`,
       [actor.userId],
     );
-    return [
-      ...result.rows,
+    const accounts: ComposeAccount[] = [
+      ...result.rows.map((row) => ({ id: row.id, email: row.email, signature: row.signature })),
       ...identities.rows.map((row) => ({ id: `smtp:${row.id}`, email: row.email, signature: row.signature, sourceId: row.source_id, identityId: row.id })),
     ];
+    const chosen = await workspaceSender(db, actor, accounts);
+    return accounts.map((item) => (item === chosen ? { ...item, default: true } : item));
   });
+}
+
+async function workspaceSender(db: Db, actor: UserActor, accounts: ComposeAccount[]) {
+  if (accounts.length === 0) return null;
+  const homes = await db.query<{ address: string; workspace_id: string }>("select address, workspace_id from crm.mail_address_homes where user_id = $1", [actor.userId]);
+  const sources = await db.query<{ id: string; workspace_id: string }>("select id, workspace_id from crm.mail_sources where user_id = $1", [actor.userId]);
+  const homed = new Map(homes.rows.map((row) => [row.address, row.workspace_id]));
+  const sourceHome = new Map(sources.rows.map((row) => [row.id, row.workspace_id]));
+  const here = (item: ComposeAccount) => homed.get(item.email.toLowerCase()) === actor.workspaceId;
+  const mailboxHere = (item: ComposeAccount) =>
+    !item.identityId && sourceHome.get(item.id) === actor.workspaceId && (homed.get(item.email.toLowerCase()) ?? actor.workspaceId) === actor.workspaceId;
+  return accounts.find(here) ?? accounts.find(mailboxHere) ?? accounts.find((item) => !item.identityId) ?? accounts[0];
+}
+
+export async function defaultSender(actor: UserActor) {
+  return (await composeAccounts(actor)).find((item) => item.default) ?? null;
+}
+
+function receivingIdentity(accounts: ComposeAccount[], sourceId: string, addressed: MailAddress[]) {
+  const to = new Set(addressed.map((item) => item.address.toLowerCase()));
+  const identity = accounts.find((item) => item.identityId && item.sourceId === sourceId && to.has(item.email.toLowerCase()));
+  return identity?.identityId ? { sourceId, identityId: identity.identityId, email: identity.email } : null;
+}
+
+export async function plannedSender(actor: UserActor, input: { draftId?: string | null; replyTo?: string | null }) {
+  const accounts = await composeAccounts(actor);
+  const emailOf = (sourceId: string, identityId: string | null) =>
+    (identityId ? accounts.find((item) => item.identityId === identityId) : accounts.find((item) => item.id === sourceId))?.email ?? null;
+  if (input.draftId) {
+    const stored = await storedDraft(actor, input.draftId);
+    if (stored) return emailOf(stored.source_id, stored.identity_id);
+  }
+  if (input.replyTo && isUuid(input.replyTo)) {
+    const original = await withActor(actor, async (db) => {
+      const result = await db.query<{ source_id: string; to_recipients: MailAddress[] | null; cc_recipients: MailAddress[] | null }>(
+        "select source_id, to_recipients, cc_recipients from crm.mail_messages where id = $1 and user_id = $2",
+        [input.replyTo, actor.userId],
+      );
+      return result.rows[0] ?? null;
+    });
+    if (!original) return null;
+    return receivingIdentity(accounts, original.source_id, [...(original.to_recipients ?? []), ...(original.cc_recipients ?? [])])?.email ?? emailOf(original.source_id, null);
+  }
+  return accounts.find((item) => item.default)?.email ?? null;
 }
 
 export async function deleteDraftMessage(actor: UserActor, messageId: string, fetchImpl: typeof fetch = fetch) {
@@ -875,7 +921,7 @@ export async function resolveSendAccount(actor: UserActor, from: string | null |
   const wanted = from?.trim().toLowerCase();
   const account = wanted
     ? accounts.find((item) => item.id === from || item.email.toLowerCase() === wanted)
-    : accounts.find((item) => !item.identityId);
+    : (accounts.find((item) => item.default) ?? accounts.find((item) => !item.identityId));
   if (!account) {
     const choices = accounts.map((item) => item.email).join(", ");
     throw new CrmError("invalid_input", wanted ? `You can't send from ${from}. You can send from: ${choices || "no connected accounts"}.` : "Connect a mailbox in Settings › Integrations first.", 400, {
@@ -900,18 +946,21 @@ type ToolDraftInput = {
 
 export async function saveDraftForAgent(actor: UserActor, input: ToolDraftInput, options: { origin: string | null; fetchImpl?: typeof fetch }) {
   const replying = Boolean(input.replyTo);
-  const account = replying && !input.from ? null : await resolveSendAccount(actor, input.from);
+  const chosen = replying && !input.from ? null : await resolveSendAccount(actor, input.from);
   const thread = replying
     ? await withActor(actor, async (db) => {
         if (!isUuid(input.replyTo!)) return null;
-        const result = await db.query<{ source_id: string; tk: string }>(
-          "select source_id, coalesce(thread_key, 'm:' || id::text) as tk from crm.mail_messages where id = $1 and user_id = $2",
+        const result = await db.query<{ source_id: string; tk: string; to_recipients: MailAddress[] | null; cc_recipients: MailAddress[] | null }>(
+          "select source_id, coalesce(thread_key, 'm:' || id::text) as tk, to_recipients, cc_recipients from crm.mail_messages where id = $1 and user_id = $2",
           [input.replyTo, actor.userId],
         );
         return result.rows[0] ?? null;
       })
     : null;
   if (replying && !thread) throw new CrmError("not_found", "That email isn't in Orbit Mail. Search for it again.", 404);
+  const account =
+    chosen ??
+    (thread ? receivingIdentity(await composeAccounts(actor), thread.source_id, [...(thread.to_recipients ?? []), ...(thread.cc_recipients ?? [])]) : null);
   if (!replying && !input.subject?.trim()) throw new CrmError("invalid_input", "Add a subject.", 400, { field: "subject" });
   const ids = readAttachmentIds(input.attachments);
   const attachments = await attachmentSummary(actor, ids);
@@ -1000,7 +1049,7 @@ export async function sendForAgent(
   const replyTo = input.replyTo ?? stored?.reply_to ?? null;
   const replying = Boolean(replyTo);
   const accounts = await composeAccounts(actor);
-  const account = input.from
+  let account: { sourceId: string; identityId: string | null } | null = input.from
     ? await resolveSendAccount(actor, input.from)
     : stored
       ? { sourceId: stored.source_id, identityId: stored.identity_id }
@@ -1019,6 +1068,7 @@ export async function sendForAgent(
       })
     : null;
   if (replying && !original) throw new CrmError("not_found", "That email isn't in Orbit Mail. Search for it again.", 404);
+  if (original && !account) account = receivingIdentity(accounts, original.source_id, [...(original.to_recipients ?? []), ...(original.cc_recipients ?? [])]);
   const subject = input.subject?.trim() || stored?.subject?.trim() || "";
   if (!replying && !subject) throw new CrmError("invalid_input", "Add a subject.", 400, { field: "subject" });
   const mode: DraftMode = stored?.mode === "forward" && !input.replyTo ? "forward" : replying ? (input.replyAll ? "reply_all" : "reply") : "new";

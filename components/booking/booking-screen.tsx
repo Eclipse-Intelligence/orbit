@@ -534,7 +534,7 @@ export function BookingPanel({
           )}
         </>
       )}
-      {!embedded && <p className="caption-style text-soft mt-auto pt-2 text-center">Scheduling by Orbit from Eclipse</p>}
+      {!embedded && <p className="caption-style text-soft mt-auto pt-2 text-center">Scheduling by Orbit</p>}
     </div>
   );
 }

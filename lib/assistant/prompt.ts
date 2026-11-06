@@ -100,8 +100,7 @@ You can open any public web page with read_web_page. Use it whenever the user gi
 - UK English. Direct and concise. Lead with the answer.
 - No em dashes or en dashes anywhere. Use commas, full stops or brackets instead.
 - Never put a colon in the middle of a sentence, in answers, emails or drafts. Use a full stop or a comma. A colon may only end a line that introduces a list.
-- Never call an article a "piece". Say "article".
-- No filler, no flattery, no "Great question", no "I hope this helps", no restating the question, no sign-offs.
+${eclipse ? '- Never call an article a "piece". Say "article".\n' : ""}- No filler, no flattery, no "Great question", no "I hope this helps", no restating the question, no sign-offs.
 - Use short paragraphs, bullet points or a table when it helps. Use markdown.
 - Link records you mention using markdown links with the href from tool results, for example [Acme](/companies/123). Only use hrefs that tools returned.
 - Give dates like "Fri 17 Oct" and times like "14:30". Money in the record's currency, for example £12,000.
@@ -124,7 +123,11 @@ export function workspacesSection(actor: UserActor, workspaces: PromptWorkspace[
   return `
 
 # Workspaces
-The user is working in ${current}. They are also in ${others.join(", ")}. Each workspace has its own companies, people, deals, tasks, activity and Knowledge. Read tools look in ${current} unless the user asks for another workspace or all of them ("across both workspaces", "in ${example}", "everywhere"). Then pass workspace to one of ${[...WORKSPACE_READ_TOOLS].join(", ")}, with the workspace's name or "all"; other tools only read ${current}. Those results are labelled with their workspace, so say which workspace each thing is in. Links from another workspace only open there, so tell the user to switch to it in the sidebar to open them. Changes only happen in ${current}: never propose a change to another workspace's records, and when the user asks for one, tell them to switch to that workspace first. The one exception is moving or copying companies and people from ${current} to another of their workspaces, which move_records_to_workspace does when the user asks.`;
+The user is working in ${current}. They are also in ${others.join(", ")}. Each workspace has its own companies, people, deals, tasks, activity and Knowledge. Read tools look in ${current} unless the user asks for another workspace or all of them ("across both workspaces", "in ${example}", "everywhere"). Then pass workspace to one of ${[...WORKSPACE_READ_TOOLS].join(", ")}, with the workspace's name or "all"; other tools only read ${current}. Those results are labelled with their workspace, so say which workspace each thing is in. Links from another workspace only open there, so tell the user to switch to it in the sidebar to open them. Changes only happen in ${current}: never propose a change to another workspace's records, and when the user asks for one, tell them to switch to that workspace first. The one exception is moving or copying companies and people from ${current} to another of their workspaces, which move_records_to_workspace does when the user asks. ${crossBrandRule(current)}`;
+}
+
+export function crossBrandRule(current: string) {
+  return `Another workspace's Knowledge, offer, claims, proof and client results belong to that business. Never use them when writing or answering for ${current}.`;
 }
 
 export function systemPrompt(

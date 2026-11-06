@@ -85,7 +85,7 @@ export const EMAIL_POLICY: Record<string, EmailRule> = {
   update_proposal_template: (args) => text(args.status) === "archived",
   update_watchlist: (args) => Array.isArray(args.remove) && args.remove.length > 0,
 
-  remember: (args) => text(args.forgetId).length > 0 || args.shared === true,
+  remember: (args) => text(args.forgetId).length > 0 || args.shared === true || args.allWorkspaces === true,
   share_workflow: SHARES,
   save_doc: docNeedsConfirm,
   add_to_knowledge: (args) => text(args.chatFileId).length > 0,

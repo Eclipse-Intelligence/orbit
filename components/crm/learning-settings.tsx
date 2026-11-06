@@ -404,13 +404,13 @@ export function WatchlistCard({ items }: { items: WatchItem[] }) {
             </select>
           </Field>
           <Field label="Name" htmlFor="watch-label" error={error?.field === "label" ? error.message : undefined}>
-            <Input id="watch-label" value={label} maxLength={160} placeholder="Profound" onChange={(event) => setLabel(event.target.value)} aria-invalid={error?.field === "label" ? true : undefined} />
+            <Input id="watch-label" value={label} maxLength={160} placeholder="Acme" onChange={(event) => setLabel(event.target.value)} aria-invalid={error?.field === "label" ? true : undefined} />
           </Field>
           <Field label="Link (optional)" htmlFor="watch-url" error={error?.field === "url" ? error.message : undefined} className="sm:col-start-2">
-            <Input id="watch-url" type="url" inputMode="url" value={url} placeholder="https://x.com/tryprofound" onChange={(event) => setUrl(event.target.value)} aria-invalid={error?.field === "url" ? true : undefined} />
+            <Input id="watch-url" type="url" inputMode="url" value={url} placeholder="https://x.com/acme" onChange={(event) => setUrl(event.target.value)} aria-invalid={error?.field === "url" ? true : undefined} />
           </Field>
           <Field label="Why it's watched (optional)" htmlFor="watch-notes" className="sm:col-start-2">
-            <Input id="watch-notes" value={notes} maxLength={500} placeholder="Closest competitor in AI visibility" onChange={(event) => setNotes(event.target.value)} />
+            <Input id="watch-notes" value={notes} maxLength={500} placeholder="Closest competitor" onChange={(event) => setNotes(event.target.value)} />
           </Field>
           <div className="sm:col-start-2">
             <Button variant="secondary" size="sm" type="submit" disabled={busy || !label.trim()}>

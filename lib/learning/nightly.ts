@@ -4,9 +4,10 @@ import { withActor } from "@/lib/crm/context";
 import { memberActor } from "@/lib/crm/conversations";
 import { CrmError } from "@/lib/crm/errors";
 import type { UserActor } from "@/lib/crm/types";
+import { workspaceActors } from "@/lib/crm/workspaces";
 import { query, type Db } from "@/lib/db/pool";
 import { completeJson } from "@/lib/llm";
-import { insertMemory, reviseMemory, searchTerms, visibleMemorySql, type Memory, type MemoryScope } from "@/lib/learning/memories";
+import { businessNamesInDb, insertMemory, mayApplyEverywhere, reviseMemory, searchTerms, visibleMemorySql, type Memory, type MemoryScope } from "@/lib/learning/memories";
 import { mapNote, NOTE_SELECT } from "@/lib/learning/market";
 import { stalledDealsInDb } from "@/lib/crm/pipeline-history";
 import { researchMail } from "@/lib/mail/subscriptions";
@@ -150,6 +151,8 @@ async function applyOps(actor: UserActor, scope: MemoryScope, ops: Ops, existing
     let added = 0;
     let updated = 0;
     let archived = 0;
+    const names = personal ? await businessNamesInDb(db) : [];
+    const everywhere = (kind: string, text: string, wanted: boolean | null | undefined) => (wanted === true ? mayApplyEverywhere(kind, text, names) : wanted);
     for (const item of (ops.add ?? []).slice(0, 8)) {
       if (!item.title.trim() || !item.body.trim()) continue;
       await insertMemory(
@@ -163,7 +166,7 @@ async function applyOps(actor: UserActor, scope: MemoryScope, ops: Ops, existing
           confidence: item.confidence ?? "medium",
           sources: item.sources ?? [],
           companyId: item.companyId && companyIds.has(item.companyId) ? item.companyId : null,
-          allWorkspaces: personal && item.allWorkspaces === true,
+          allWorkspaces: personal && everywhere(item.kind, `${item.title} ${item.body}`, item.allWorkspaces) === true,
         },
         "learning",
       );
@@ -191,7 +194,10 @@ async function applyOps(actor: UserActor, scope: MemoryScope, ops: Ops, existing
         body: item.body ?? undefined,
         confidence: item.confidence ?? undefined,
         sources: item.sources ?? undefined,
-        allWorkspaces: personal && !learnedElsewhere ? (item.allWorkspaces ?? undefined) : undefined,
+        allWorkspaces:
+          personal && !learnedElsewhere
+            ? (everywhere(current.kind, `${item.title ?? current.title} ${item.body ?? current.body}`, item.allWorkspaces) ?? undefined)
+            : undefined,
       });
       updated += 1;
     }
@@ -233,7 +239,12 @@ async function learnPersonal(actor: UserActor, since: Date, options: Options): P
          and body is not null and sent_body is not null and btrim(body) <> btrim(sent_body) order by updated_at desc limit 6`,
       [actor.userId, since, actor.workspaceId],
     );
-    const about = await db.query<{ about: string | null; writing: string | null }>("select about, writing from crm.personal_context where user_id = $1", [actor.userId]);
+    const about = await db.query<{ about: string | null; writing: string | null }>(
+      `select coalesce(nullif(btrim(w.about), ''), c.about) as about, c.writing from crm.personal_context c
+       left join crm.personal_context_workspaces w on w.user_id = c.user_id and w.workspace_id = $2
+       where c.user_id = $1`,
+      [actor.userId, actor.workspaceId],
+    );
     const others = await db.query<{ name: string }>("select name from crm.workspaces where id <> $1 order by name limit 20", [actor.workspaceId]);
     return { chat: chat.rows, decisions: decisions.rows, edits: edits.rows, about: about.rows[0] ?? null, others: others.rows.map((row) => row.name) };
   });
@@ -399,7 +410,10 @@ async function writeBrief(actor: UserActor, since: Date, options: Options & { da
     return { notes: notes.rows.map(mapNote), learned: learned.rows, stalled };
   });
   const hours = Math.min(72, Math.max(1, Math.ceil(((options.now ?? new Date()).getTime() - since.getTime()) / 3_600_000)));
-  const research = await researchMail(actor, { hours, limit: BRIEF_RESEARCH_LIMIT }).catch((error) => {
+  const workspaceIds = await workspaceActors(actor)
+    .then((list) => list.map((item) => item.workspaceId))
+    .catch(() => [actor.workspaceId]);
+  const research = await researchMail(actor, { hours, limit: BRIEF_RESEARCH_LIMIT, workspaceIds }).catch((error) => {
     console.error("Reading research mail failed", error instanceof Error ? error.message : error);
     return [];
   });
@@ -436,7 +450,8 @@ async function writeBrief(actor: UserActor, since: Date, options: Options & { da
   await withActor(actor, (db) =>
     db.query(
       `insert into crm.daily_briefs (workspace_id, user_id, day, body) values ($1, $2, $3, $4)
-       on conflict (user_id, day) do update set
+       on conflict (workspace_id, user_id, day) do update set
+         workspace_id = excluded.workspace_id,
          body = excluded.body,
          dismissed_at = null,
          created_at = now(),
@@ -609,14 +624,14 @@ export async function sortPersonalMemories(actor: UserActor, options: Options): 
     const memberships = await db.query<{ count: number }>("select count(*)::int as count from crm.workspaces");
     if ((memberships.rows[0]?.count ?? 0) <= 1) {
       await db.query("update crm.memories set all_workspaces = false where id = any($1::uuid[]) and all_workspaces is null", [notes.rows.map((row) => row.id)]);
-      return { settled: notes.rows.length, notes: [], workspaces: [] };
+      return { settled: notes.rows.length, notes: [], workspaces: [], names: [] as string[] };
     }
     const workspaces = await db.query<{ id: string; name: string; sells: string | null }>(
       `select w.id, w.name, b.what_you_sell as sells from crm.workspaces w
        left join crm.workspace_brands b on b.workspace_id = w.id
        order by w.created_at limit 20`,
     );
-    return { settled: 0, notes: notes.rows, workspaces: workspaces.rows };
+    return { settled: 0, notes: notes.rows, workspaces: workspaces.rows, names: await businessNamesInDb(db) };
   });
   if (!gathered) return { sorted: 0 };
   if (gathered.settled) return { sorted: gathered.settled };
@@ -639,7 +654,10 @@ export async function sortPersonalMemories(actor: UserActor, options: Options): 
     deadline: options.deadline,
     fetchImpl: options.fetchImpl,
   });
-  const everywhere = new Set(result.data.notes.filter((note) => note.allWorkspaces).map((note) => note.id));
+  const allowed = new Set(
+    gathered.notes.filter((row) => mayApplyEverywhere(row.kind, `${row.title} ${row.body}`, gathered.names)).map((row) => row.id),
+  );
+  const everywhere = new Set(result.data.notes.filter((note) => note.allWorkspaces && allowed.has(note.id)).map((note) => note.id));
   const ids = gathered.notes.map((row) => row.id);
   await withActor(actor, (db) =>
     db.query("update crm.memories set all_workspaces = (id = any($2::uuid[])) where id = any($1::uuid[]) and all_workspaces is null", [ids, ids.filter((id) => everywhere.has(id))]),

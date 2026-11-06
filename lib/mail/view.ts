@@ -175,7 +175,7 @@ export type ThreadDetail = {
   filing?: ThreadFiling | null;
 };
 
-export type ComposeAccount = { id: string; email: string; signature: string | null; sourceId?: string; identityId?: string };
+export type ComposeAccount = { id: string; email: string; signature: string | null; sourceId?: string; identityId?: string; default?: boolean };
 
 export type DraftMode = "new" | "reply" | "reply_all" | "forward";
 

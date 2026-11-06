@@ -8,6 +8,12 @@ import type { UserActor } from "@/lib/crm/types";
 
 const ARTICLE = "https://geteclipse.co/articles/why-your-ai-visibility-platform-needs-repeated-prompt-tests/";
 
+const ECLIPSE_BRAND = { name: "Eclipse", claims: "", eclipseTools: true };
+
+function eclipseLint(input: Parameters<typeof lintColdEmail>[0]) {
+  return lintColdEmail({ brand: ECLIPSE_BRAND, ...input });
+}
+
 const FINDING = {
   subject: "runs behind AI visibility scores",
   body: "Hi David,\n\nYour 2 Oct post asked how teams choose the prompts behind an AI visibility score. The harder question may be how many times each prompt runs. A brand named in 6 out of 20 runs could just as easily be named in 3 or 10 next time.\n\nHow many runs per prompt do you use before you report a change to a client?\n\nMark",
@@ -60,27 +66,27 @@ describe("cold email rule checks", () => {
   it("passes the v2 finding example and flags one that gates the article", () => {
     assert.ok(!bodyCore(FINDING.body).endsWith("Mark"));
     assert.deepEqual(figuresIn(FINDING.body), ["6 out of 20"]);
-    assert.deepEqual(failed(lintColdEmail({ ...FINDING, evidence: EVIDENCE })), []);
-    const weak = lintColdEmail({ ...WEAK, evidence: EVIDENCE });
+    assert.deepEqual(failed(eclipseLint({ ...FINDING, evidence: EVIDENCE })), []);
+    const weak = eclipseLint({ ...WEAK, evidence: EVIDENCE });
     assert.deepEqual(failed(weak), ["gives_first"]);
     assert.match(noteOf(weak, "gives_first"), /Offers to send something general instead of including it/);
   });
 
   it("fails a link or an attachment in a first email, but not in the follow-up", () => {
     const linked = { ...FINDING, body: FINDING.body.replace("next time.", `next time.\n\n${ARTICLE}`) };
-    const checks = lintColdEmail({ ...linked, evidence: EVIDENCE });
+    const checks = eclipseLint({ ...linked, evidence: EVIDENCE });
     assert.deepEqual(failed(checks), ["no_link"]);
     assert.equal(noteOf(checks, "no_link"), "Has a link.");
-    const bare = lintColdEmail({ ...FINDING, body: FINDING.body.replace("next time.", "next time, as geteclipse.co/articles shows."), evidence: EVIDENCE });
+    const bare = eclipseLint({ ...FINDING, body: FINDING.body.replace("next time.", "next time, as geteclipse.co/articles shows."), evidence: EVIDENCE });
     assert.ok(failed(bare).includes("no_link"));
-    const attached = lintColdEmail({ ...FINDING, body: FINDING.body.replace("next time.", "next time, as the attached PDF shows."), evidence: EVIDENCE });
+    const attached = eclipseLint({ ...FINDING, body: FINDING.body.replace("next time.", "next time, as the attached PDF shows."), evidence: EVIDENCE });
     assert.equal(noteOf(attached, "no_link"), "Mentions an attachment.");
     const followUp = "Hi David,\n\nOne more on this. A brand named in 6 out of 20 runs could just as easily be named in 3 or 10 next time, which is why we test each prompt several times.\n\n" + ARTICLE + "\n\nNo need to reply if it's not on your list right now.\n\nMark";
-    assert.ok(!failed(lintColdEmail({ subject: "runs behind scores", body: followUp, firstTouch: false, evidence: EVIDENCE })).includes("no_link"));
+    assert.ok(!failed(eclipseLint({ subject: "runs behind scores", body: followUp, firstTouch: false, evidence: EVIDENCE })).includes("no_link"));
   });
 
   it("flags two figures and a 95-word body", () => {
-    const twoFigures = lintColdEmail({
+    const twoFigures = eclipseLint({
       ...FINDING,
       body: FINDING.body.replace("could just as easily be named in 3 or 10 next time.", "scores 30%, though it could just as easily be named in 3 or 10 next time."),
       evidence: [...EVIDENCE, { fact: "Article: a brand named in 6 out of 20 runs scores 30%.", source: ARTICLE }],
@@ -91,22 +97,22 @@ describe("cold email rule checks", () => {
       "next time.",
       "next time, because answers shift from one run to the next even when nothing about the brand has changed, and that churn is easy to mistake for a real lift in a client report.",
     );
-    const checks = lintColdEmail({ ...FINDING, body: long, evidence: EVIDENCE });
+    const checks = eclipseLint({ ...FINDING, body: long, evidence: EVIDENCE });
     assert.deepEqual(failed(checks), ["length"]);
     assert.match(noteOf(checks, "length"), /^95 words in the body \(aim for 50 to 90, never over 100\)/);
   });
 
   it("flags an email that describes the prospect's own business back to them", () => {
-    const check = lintColdEmail({ ...TYLER, evidence: [] }).find((item) => item.id === "not_about_them")!;
+    const check = eclipseLint({ ...TYLER, evidence: [] }).find((item) => item.id === "not_about_them")!;
     assert.equal(check.pass, false);
     assert.match(check.note, /The sentence about them is long: "Your CORE Analysis runs 200\+ buyer prompts/);
-    assert.equal(noteOf(lintColdEmail({ ...FINDING, evidence: EVIDENCE }), "not_about_them"), "One short reference to them.");
+    assert.equal(noteOf(eclipseLint({ ...FINDING, evidence: EVIDENCE }), "not_about_them"), "One short reference to them.");
   });
 
   it("only allows figures that appear in the evidence, and still bans hype, meetings, colons and piece", () => {
-    const unsourced = lintColdEmail({ ...FINDING, evidence: EVIDENCE.slice(0, 1) });
+    const unsourced = eclipseLint({ ...FINDING, evidence: EVIDENCE.slice(0, 1) });
     assert.match(noteOf(unsourced, "numbers_sourced"), /Not in your evidence: 6 out of 20/);
-    const pushy = lintColdEmail({
+    const pushy = eclipseLint({
       subject: "Re: Quick question!",
       body: "Hi David,\n\nI hope this email finds you well. Our game-changing platform delivers 10x results: I wrote a piece on it. Do you have 15 minutes for a call next week? Or should I send a deck?\n\nMark",
       evidence: EVIDENCE,
@@ -115,7 +121,7 @@ describe("cold email rule checks", () => {
   });
 
   it("keeps the booking link, video, pricing, the pilot and promises out of a first email", () => {
-    const extras = lintColdEmail({
+    const extras = eclipseLint({
       ...FINDING,
       body: FINDING.body.replace(
         "next time.",
@@ -125,50 +131,50 @@ describe("cold email rule checks", () => {
     });
     for (const id of ["no_link", "no_meeting", "no_first_email_extras", "no_promise"]) assert.ok(failed(extras).includes(id), id);
     assert.match(noteOf(extras, "no_first_email_extras"), /a video or Loom, pricing and the pilot/);
-    const bullets = lintColdEmail({ ...FINDING, body: FINDING.body.replace("The harder question", "\n- **The harder question**"), evidence: EVIDENCE });
+    const bullets = eclipseLint({ ...FINDING, body: FINDING.body.replace("The harder question", "\n- **The harder question**"), evidence: EVIDENCE });
     assert.equal(noteOf(bullets, "plain_text"), "Uses bullets and bold.");
   });
 });
 
 describe("cold email client proof", () => {
   it("passes proof from the proof list", () => {
-    const checks = lintColdEmail({ ...PROOF, evidence: PROOF_EVIDENCE });
+    const checks = eclipseLint({ ...PROOF, evidence: PROOF_EVIDENCE });
     assert.deepEqual(failed(checks), []);
     assert.equal(noteOf(checks, "proof_approved"), "Uses the proof list entry for Northwind.");
     const described = { ...NORTHWIND, permission: "described" as const };
     const anonymous = PROOF.body.replace("Northwind, a 12-person B2B SEO agency, moved", "A 12-person B2B SEO agency moved");
-    assert.deepEqual(failed(lintColdEmail({ ...PROOF, body: anonymous, evidence: [PROOF_EVIDENCE[0], described] })), []);
+    assert.deepEqual(failed(eclipseLint({ ...PROOF, body: anonymous, evidence: [PROOF_EVIDENCE[0], described] })), []);
   });
 
   it("fails proof with no proof entry behind it", () => {
-    const checks = lintColdEmail({ ...PROOF, evidence: PROOF_EVIDENCE.slice(0, 1) });
+    const checks = eclipseLint({ ...PROOF, evidence: PROOF_EVIDENCE.slice(0, 1) });
     assert.deepEqual(failed(checks), ["proof_approved"]);
     assert.match(noteOf(checks, "proof_approved"), /^States a client result or names a client with no proof list entry behind it/);
-    const pitch = lintColdEmail({ subject: "content results", body: "Hi Sam,\n\nWe helped a SaaS client publish more. We can do the same for Pulse. Have you got 15 minutes this week?\n\nMark", evidence: [] });
+    const pitch = eclipseLint({ subject: "content results", body: "Hi Sam,\n\nWe helped a SaaS client publish more. We can do the same for Pulse. Have you got 15 minutes this week?\n\nMark", evidence: [] });
     for (const id of ["proof_approved", "no_promise", "no_meeting"]) assert.ok(failed(pitch).includes(id), id);
   });
 
   it("lets proof from the list be put in other words", () => {
     const reworded = PROOF.body.replace("They went from two articles a month per client to eight.", "They now publish eight articles a month for every client.");
-    assert.deepEqual(failed(lintColdEmail({ ...PROOF, body: reworded, evidence: PROOF_EVIDENCE })), []);
+    assert.deepEqual(failed(eclipseLint({ ...PROOF, body: reworded, evidence: PROOF_EVIDENCE })), []);
     const anonymous = reworded.replace("Northwind, a 12-person B2B SEO agency, moved", "A 12-person B2B SEO agency moved");
-    assert.equal(lintColdEmail({ ...PROOF, body: anonymous, evidence: PROOF_EVIDENCE }).find((check) => check.id === "proof_approved")!.pass, true);
+    assert.equal(eclipseLint({ ...PROOF, body: anonymous, evidence: PROOF_EVIDENCE }).find((check) => check.id === "proof_approved")!.pass, true);
   });
 
   it("fails a described only entry that names the client", () => {
-    const checks = lintColdEmail({ ...PROOF, evidence: [PROOF_EVIDENCE[0], { ...NORTHWIND, permission: "described" }] });
+    const checks = eclipseLint({ ...PROOF, evidence: [PROOF_EVIDENCE[0], { ...NORTHWIND, permission: "described" }] });
     assert.deepEqual(failed(checks), ["proof_approved"]);
     assert.equal(noteOf(checks, "proof_approved"), "Names Northwind, whose entry is described only.");
   });
 
   it("fails a finding next to proof, and a client name in the subject", () => {
-    const mixed = lintColdEmail({
+    const mixed = eclipseLint({
       ...PROOF,
       body: PROOF.body.replace("to eight.", "to eight. Our article shows a brand named in 6 out of 20 runs could be named in 3 next time."),
       evidence: [...PROOF_EVIDENCE, ...EVIDENCE],
     });
     assert.ok(failed(mixed).includes("one_angle"));
-    assert.match(noteOf(lintColdEmail({ ...PROOF, subject: "what Northwind changed", evidence: PROOF_EVIDENCE }), "subject"), /a client's name/);
+    assert.match(noteOf(eclipseLint({ ...PROOF, subject: "what Northwind changed", evidence: PROOF_EVIDENCE }), "subject"), /a client's name/);
   });
 
   it("reads proof entries from the tool's evidence input", async () => {
@@ -189,10 +195,24 @@ describe("cold email client proof", () => {
   it("looks for client claims in the workspace's own name, and in Eclipse's only when Eclipse tools are on", () => {
     const claim = (who: string) => ({ ...FINDING, body: FINDING.body.replace("next time.", `next time. ${who} has helped three firms with this.`), evidence: EVIDENCE });
     const ridgeon = { name: "Mark Ridgeon", claims: "", eclipseTools: false };
-    assert.match(noteOf(lintColdEmail({ ...claim("Mark Ridgeon"), brand: ridgeon }), "proof_approved"), /no proof list entry behind it/);
-    assert.equal(noteOf(lintColdEmail({ ...claim("Eclipse"), brand: ridgeon }), "proof_approved"), "No client proof.");
-    assert.match(noteOf(lintColdEmail({ ...claim("Eclipse"), brand: { ...ridgeon, eclipseTools: true } }), "proof_approved"), /no proof list entry behind it/);
-    assert.match(noteOf(lintColdEmail(claim("Cntent")), "proof_approved"), /no proof list entry behind it/);
+    assert.match(noteOf(eclipseLint({ ...claim("Mark Ridgeon"), brand: ridgeon }), "proof_approved"), /no proof list entry behind it/);
+    assert.equal(noteOf(eclipseLint({ ...claim("Eclipse"), brand: ridgeon }), "proof_approved"), "No client proof.");
+    assert.match(noteOf(eclipseLint({ ...claim("Eclipse"), brand: { ...ridgeon, eclipseTools: true } }), "proof_approved"), /no proof list entry behind it/);
+    assert.match(noteOf(eclipseLint(claim("Cntent")), "proof_approved"), /no proof list entry behind it/);
+    assert.equal(noteOf(lintColdEmail(claim("Cntent")), "proof_approved"), "No client proof.");
+  });
+
+  it("uses generic wording and extras for a workspace without Eclipse tools", () => {
+    const ridgeon = { name: "Mark Ridgeon", claims: "", eclipseTools: false };
+    const body = "Hi David,\n\nSaw you're hiring a head of operations. I wrote a piece on how teams plan the first ninety days, and the pilot is open.\n\nHow do you plan the first month for a new hire?\n\nMark";
+    const generic = lintColdEmail({ subject: "first ninety days", body, brand: ridgeon });
+    assert.ok(!generic.some((check) => check.id === "no_piece"));
+    assert.doesNotMatch(noteOf(generic, "no_first_email_extras"), /pilot/);
+    const eclipse = eclipseLint({ subject: "first ninety days", body });
+    assert.ok(eclipse.some((check) => check.id === "no_piece"));
+    assert.match(noteOf(eclipse, "no_first_email_extras"), /the pilot/);
+    const playbook = playbookFor({ firstName: "Priya", bookingUrl: null }, "Sign off as {{first_name}}. If a call makes sense, offer the booking page exactly as written, {{booking_url}}.");
+    assert.equal(playbook, "Sign off as Priya. If a call makes sense, suggest two times, since there's no booking page set up yet.");
   });
 
   it("fills proof in from the proof list and fails proof that isn't on it", () => {
@@ -213,13 +233,13 @@ describe("cold email client proof", () => {
     };
     const byId = withProofList([PROOF_EVIDENCE[0], { kind: "proof", fact: "", source: entry.id }], [entry], PROOF);
     assert.deepEqual(byId[1], { fact: "A 12-person B2B SEO agency, client content", kind: "proof", source: entry.id, client: "Northwind", permission: "named", approvedWording: entry.result, listed: true });
-    assert.deepEqual(failed(lintColdEmail({ ...PROOF, evidence: byId })), []);
+    assert.deepEqual(failed(eclipseLint({ ...PROOF, evidence: byId })), []);
     const invented = withProofList([PROOF_EVIDENCE[0], { ...NORTHWIND, client: "Contoso" }], [entry], { body: PROOF.body.replaceAll("Northwind", "Contoso") });
-    assert.equal(noteOf(lintColdEmail({ ...PROOF, body: PROOF.body.replaceAll("Northwind", "Contoso"), evidence: invented }), "proof_approved"), "The proof for Contoso isn't on the proof list.");
+    assert.equal(noteOf(eclipseLint({ ...PROOF, body: PROOF.body.replaceAll("Northwind", "Contoso"), evidence: invented }), "proof_approved"), "The proof for Contoso isn't on the proof list.");
     const unmentioned = withProofList(PROOF_EVIDENCE.slice(0, 1), [{ ...entry, permission: "described" }], PROOF);
-    assert.equal(noteOf(lintColdEmail({ ...PROOF, evidence: unmentioned }), "proof_approved"), "Names Northwind, whose entry is described only.");
+    assert.equal(noteOf(eclipseLint({ ...PROOF, evidence: unmentioned }), "proof_approved"), "Names Northwind, whose entry is described only.");
     const pastReview = withProofList([{ kind: "proof", fact: "", source: entry.id }], [{ ...entry, reviewOn: "2020-01-01", approvedBy: "" }], PROOF);
-    assert.deepEqual(failed(lintColdEmail({ ...PROOF, evidence: pastReview })), []);
+    assert.deepEqual(failed(eclipseLint({ ...PROOF, evidence: pastReview })), []);
     const paraphrased = PROOF.body.replace("to eight.", "to eight. Another agency went from four days of review to one.");
     const extra = withProofList(
       [PROOF_EVIDENCE[0], { kind: "proof", fact: "", source: entry.id }, { kind: "proof", fact: "Fabrikam", source: "made-up", client: "Fabrikam", permission: "named", approvedWording: "cut review time from four days to one" }],
@@ -227,13 +247,13 @@ describe("cold email client proof", () => {
       { ...PROOF, body: paraphrased },
     );
     assert.deepEqual(extra[2], { fact: "Fabrikam", kind: "proof", source: "made-up", client: "Fabrikam", listed: false });
-    assert.equal(noteOf(lintColdEmail({ ...PROOF, body: paraphrased, evidence: extra }), "proof_approved"), "The proof for Fabrikam isn't on the proof list.");
+    assert.equal(noteOf(eclipseLint({ ...PROOF, body: paraphrased, evidence: extra }), "proof_approved"), "The proof for Fabrikam isn't on the proof list.");
     const subjectOnly = withProofList([], [{ ...entry, permission: "described" }], { subject: "northwind and ai search", body: FINDING.body });
-    assert.match(noteOf(lintColdEmail({ subject: "northwind and ai search", body: FINDING.body, evidence: [...EVIDENCE, ...subjectOnly] }), "subject"), /a client's name/);
+    assert.match(noteOf(eclipseLint({ subject: "northwind and ai search", body: FINDING.body, evidence: [...EVIDENCE, ...subjectOnly] }), "subject"), /a client's name/);
     const second = { ...entry, id: "0b6a3a7e-9d0c-4f55-8f0e-2a4c1b9d7e21", permission: "described" as const };
     const twice = withProofList([PROOF_EVIDENCE[0], { kind: "proof", fact: "", source: entry.id }, { kind: "proof", fact: "", source: entry.id }], [entry, second], PROOF);
     assert.equal(twice.length, 2);
-    assert.deepEqual(failed(lintColdEmail({ ...PROOF, evidence: twice })), []);
+    assert.deepEqual(failed(eclipseLint({ ...PROOF, evidence: twice })), []);
     assert.deepEqual(proofListFor([{ ...entry, reviewOn: "2020-01-01" }])[0], {
       id: entry.id,
       client: "Northwind",
@@ -255,13 +275,13 @@ describe("cold email triggers, subjects and tailored offers", () => {
   };
 
   it("accepts the made for them example and flags a general offer instead", () => {
-    assert.deepEqual(failed(lintColdEmail(MADE_FOR_THEM)), []);
-    const general = lintColdEmail({ ...MADE_FOR_THEM, body: MADE_FOR_THEM.body.replace("Want me to send the five buyer questions where Pulse doesn't come up today?", "Shall I send you the full article?") });
+    assert.deepEqual(failed(eclipseLint(MADE_FOR_THEM)), []);
+    const general = eclipseLint({ ...MADE_FOR_THEM, body: MADE_FOR_THEM.body.replace("Want me to send the five buyer questions where Pulse doesn't come up today?", "Shall I send you the full article?") });
     assert.ok(failed(general).includes("gives_first"));
   });
 
   it("flags subjects with numbers, hype, title case, urgency, first names or filler", () => {
-    const subjectOf = (subject: string) => lintColdEmail({ ...FINDING, subject, evidence: EVIDENCE }).find((check) => check.id === "subject")!;
+    const subjectOf = (subject: string) => eclipseLint({ ...FINDING, subject, evidence: EVIDENCE }).find((check) => check.id === "subject")!;
     assert.equal(subjectOf("runs behind AI visibility scores").pass, true);
     assert.equal(subjectOf("Pulse and Profound compared").pass, true);
     assert.match(subjectOf("Boost Your AI Visibility Today").note, /hype \("Boost"\), Title Case, urgency \("Today"\)/);
@@ -272,7 +292,7 @@ describe("cold email triggers, subjects and tailored offers", () => {
     assert.match(subjectOf("David, runs per prompt").note, /their first name/);
     assert.match(subjectOf("runs per prompt \u{1F680}").note, /an emoji/);
     assert.match(subjectOf("quick question").note, /"quick question"/);
-    assert.ok(failed(lintColdEmail({ ...FINDING, subject: "quick question", evidence: EVIDENCE })).includes("no_filler"));
+    assert.ok(failed(eclipseLint({ ...FINDING, subject: "quick question", evidence: EVIDENCE })).includes("no_filler"));
   });
 
   it("gives the follow-up its own length and lets it end with an easy way out", () => {
@@ -281,13 +301,15 @@ describe("cold email triggers, subjects and tailored offers", () => {
       body: "Hi David,\n\nOne more on this. A 12-person B2B SEO agency moved their client content into Eclipse in March. They went from two articles a month per client to eight.\n\nNo need to reply if it's not on your list right now.\n\nMark",
       evidence: [{ ...NORTHWIND, permission: "described" as const }],
     };
-    assert.deepEqual(failed(lintColdEmail({ ...followUp, firstTouch: false })), []);
-    assert.ok(failed(lintColdEmail(followUp)).includes("one_cta"));
+    assert.deepEqual(failed(eclipseLint({ ...followUp, firstTouch: false })), []);
+    assert.ok(failed(eclipseLint(followUp)).includes("one_cta"));
   });
 
   it("writes the playbook for whoever is sending", () => {
     const mark = playbookFor({ firstName: "Mark", bookingUrl: "https://orbit.geteclipse.co/book/mark" }, COLD_EMAIL_PLAYBOOK);
-    assert.equal(mark, COLD_EMAIL_PLAYBOOK);
+    assert.equal(mark, COLD_EMAIL_PLAYBOOK.replaceAll("{{first_name}}", "Mark").replaceAll("{{booking_url}}", "https://orbit.geteclipse.co/book/mark"));
+    assert.doesNotMatch(mark, /\{\{/);
+    assert.match(playbookFor({ firstName: "Priya", bookingUrl: "https://orbit.example.com/book/priya" }, mark),/Sign-off\. Just "Priya"[^]*https:\/\/orbit\.example\.com\/book\/priya/);
     const priya = playbookFor({ firstName: "Priya", bookingUrl: "https://orbit.geteclipse.co/book/priya" }, COLD_EMAIL_PLAYBOOK);
     assert.doesNotMatch(priya, /\bMark\b/);
     assert.match(priya, /Sign-off\. Just "Priya"/);

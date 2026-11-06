@@ -13,6 +13,7 @@ import { getUserActor } from "@/lib/auth/user";
 import { getMeetingLink } from "@/lib/crm/invites";
 import { getPersonalContext } from "@/lib/crm/personal-context";
 import { getMyEmails } from "@/lib/crm/profile";
+import { workspaceActors } from "@/lib/crm/workspaces";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -20,11 +21,12 @@ export const maxDuration = 120;
 export default async function GeneralSettingsPage() {
   const user = await getUserActor();
   if (!user) redirect("/login");
-  const [myEmails, meetingLink, notifications, about] = await Promise.all([
+  const [myEmails, meetingLink, notifications, about, workspaces] = await Promise.all([
     getMyEmails(user),
     getMeetingLink(user),
     notificationSettings(user),
     getPersonalContext(user),
+    workspaceActors(user).catch(() => [user]),
   ]);
   return (
     <SettingsPage
@@ -48,6 +50,7 @@ export default async function GeneralSettingsPage() {
           linkedinUrl: about.linkedinUrl,
           websiteUrl: about.websiteUrl,
         }}
+        workspace={workspaces.length > 1 ? { name: user.workspaceName, about: about.workspaceAbout, jobTitle: about.workspaceJobTitle } : null}
       />
       <MyEmailsSettings emails={myEmails} />
       <NotificationSettings

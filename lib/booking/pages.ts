@@ -4,6 +4,7 @@ import { CrmError, isPgError } from "@/lib/crm/errors";
 import { getInviteSetup } from "@/lib/crm/invites";
 import { defaultInviteAddress, readInviteSenders, type InviteSenderOption } from "@/lib/crm/invite-senders";
 import { canonicalEmail } from "@/lib/crm/normalize";
+import { workspaceActors } from "@/lib/crm/workspaces";
 import type { UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
 import {
@@ -203,19 +204,32 @@ function mapSettings(actor: UserActor, row: PageRow): BookingPageSettings {
 export async function getBookingPage(actor: UserActor): Promise<BookingPageSettings> {
   return withActor(actor, async (db) => {
     const result = await db.query<PageRow>(
-      `select ${PAGE_COLUMNS} from crm.booking_pages where user_id = $1`,
-      [actor.userId],
+      `select ${PAGE_COLUMNS} from crm.booking_pages where user_id = $1 and workspace_id = $2`,
+      [actor.userId, actor.workspaceId],
     );
     return result.rows[0] ? mapSettings(actor, result.rows[0]) : defaults(actor);
   });
 }
 
-export async function bookingDefaultSender(actor: UserActor) {
+export type OtherBookingPage = { workspaceName: string; page: BookingPageSettings };
+
+export async function otherBookingPages(actor: UserActor): Promise<OtherBookingPage[]> {
+  const actors = await workspaceActors(actor);
+  if (actors.length < 2) return [];
+  const names = new Map(actors.map((item) => [item.workspaceId, item.workspaceName]));
   return withActor(actor, async (db) => {
-    const page = await db.query<{ workspace_id: string }>("select workspace_id from crm.booking_pages where user_id = $1", [actor.userId]);
-    const owner = { ...actor, workspaceId: page.rows[0]?.workspace_id ?? actor.workspaceId };
-    return defaultInviteAddress(db, owner, await readInviteSenders(db, owner), { mainFirst: true });
+    const result = await db.query<PageRow & { workspace_id: string }>(
+      `select workspace_id, ${PAGE_COLUMNS} from crm.booking_pages where user_id = $1 and workspace_id <> $2 order by created_at`,
+      [actor.userId, actor.workspaceId],
+    );
+    return result.rows
+      .filter((row) => names.has(row.workspace_id))
+      .map((row) => ({ workspaceName: names.get(row.workspace_id)!, page: mapSettings(actor, row) }));
   });
+}
+
+export async function bookingDefaultSender(actor: UserActor) {
+  return withActor(actor, async (db) => defaultInviteAddress(db, actor, await readInviteSenders(db, actor), { mainFirst: true }));
 }
 
 export async function getBookingSetup(actor: UserActor): Promise<BookingSetup> {
@@ -232,8 +246,8 @@ export async function getBookingSetup(actor: UserActor): Promise<BookingSetup> {
 export async function bookingInviteSender(owner: UserActor) {
   return withActor(owner, async (db) => {
     const result = await db.query<{ invite_sender: string | null }>(
-      "select invite_sender from crm.booking_pages where user_id = $1",
-      [owner.userId],
+      "select invite_sender from crm.booking_pages where user_id = $1 and workspace_id = $2",
+      [owner.userId, owner.workspaceId],
     );
     return result.rows[0]?.invite_sender ?? null;
   });
@@ -326,7 +340,7 @@ export async function saveBookingPage(actor: UserActor, input: BookingPageInput)
            workspace_id, user_id, slug, enabled, title, intro, duration_minutes, buffer_minutes,
            min_notice_minutes, horizon_days, weekly_hours, background_video_url, invite_sender
          ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13)
-         on conflict (user_id) do update set
+         on conflict (user_id, workspace_id) do update set
            slug = excluded.slug,
            enabled = excluded.enabled,
            title = excluded.title,
@@ -368,9 +382,10 @@ export async function saveBookingPage(actor: UserActor, input: BookingPageInput)
 export async function checkSlugAvailable(actor: UserActor, raw: unknown) {
   const checked = checkSlug(typeof raw === "string" ? raw : "");
   if (!checked.ok) return { slug: null, available: false, error: checked.error };
-  const result = await query<{ taken: boolean }>("select private.booking_slug_taken($1, $2) as taken", [
+  const result = await query<{ taken: boolean }>("select private.booking_slug_taken($1, $2, $3) as taken", [
     checked.value,
     actor.userId,
+    actor.workspaceId,
   ]);
   const taken = result.rows[0]?.taken ?? false;
   return {
@@ -399,9 +414,9 @@ export async function saveBookingImage(actor: UserActor, kind: BookingImageKind,
   return withActor(actor, async (db) => {
     const result = await db.query<{ version: string }>(
       `update crm.booking_pages set ${columns.data} = $2, ${columns.mime} = $3
-       where user_id = $1
+       where user_id = $1 and workspace_id = $4
        returning substr(md5(updated_at::text), 1, 12) as version`,
-      [actor.userId, Buffer.from(bytes), mime],
+      [actor.userId, Buffer.from(bytes), mime, actor.workspaceId],
     );
     if (!result.rows[0]) throw new CrmError("not_found", "Save your booking page first.", 404);
     return { version: result.rows[0].version };
@@ -413,9 +428,9 @@ export async function removeBookingImage(actor: UserActor, kind: BookingImageKin
   return withActor(actor, async (db) => {
     const result = await db.query<{ version: string }>(
       `update crm.booking_pages set ${columns.data} = null, ${columns.mime} = null
-       where user_id = $1
+       where user_id = $1 and workspace_id = $2
        returning substr(md5(updated_at::text), 1, 12) as version`,
-      [actor.userId],
+      [actor.userId, actor.workspaceId],
     );
     if (!result.rows[0]) throw new CrmError("not_found", "Save your booking page first.", 404);
     return { version: result.rows[0].version };
@@ -427,8 +442,8 @@ export async function readOwnImage(actor: UserActor, kind: BookingImageKind) {
   return withActor(actor, async (db) => {
     const result = await db.query<{ data: Buffer | null; mime: string | null }>(
       `select ${columns.data} as data, ${columns.mime} as mime from crm.booking_pages
-       where user_id = $1`,
-      [actor.userId],
+       where user_id = $1 and workspace_id = $2`,
+      [actor.userId, actor.workspaceId],
     );
     const row = result.rows[0];
     return row?.data && row.mime ? { data: row.data, mime: row.mime } : null;
@@ -440,8 +455,8 @@ export async function recordBookingError(owner: UserActor, message: string | nul
     await db.query(
       `update crm.booking_pages
        set last_error = $2, last_error_at = case when $2::text is null then null else now() end
-       where user_id = $1 and last_error is distinct from $2`,
-      [owner.userId, message ? message.slice(0, 500) : null],
+       where user_id = $1 and workspace_id = $3 and last_error is distinct from $2`,
+      [owner.userId, message ? message.slice(0, 500) : null, owner.workspaceId],
     );
   });
 }

@@ -16,6 +16,7 @@ import { megabytes } from "@/lib/crm/email-attachments";
 import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
+import { workspaceActors } from "@/lib/crm/workspaces";
 import { query } from "@/lib/db/pool";
 import { MachineMailError, downloadAttachment, replyToMessage, retryableStatus } from "@/lib/machinemail";
 import { ATTACHMENT_MAX_BYTES, storageConfigured } from "@/lib/storage";
@@ -536,7 +537,10 @@ async function finishWithReply(
   );
   const pending = input.pending?.actions ?? [];
   const origin = mailboxOrigin(mailbox);
-  const body = replyText({ final, done, pending, note: input.note, link: origin ? `${origin}/?chat=${conversationId}` : null });
+  const chat = `/?chat=${conversationId}`;
+  const switching = origin ? (await workspaceActors(actor).catch(() => [actor])).length > 1 : false;
+  const link = origin ? (switching ? `${origin}/open?workspace=${encodeURIComponent(actor.workspaceId)}&to=${encodeURIComponent(chat)}` : `${origin}${chat}`) : null;
+  const body = replyText({ final, done, pending, note: input.note, link });
   await replyOnce(actor, row, mailbox, body, options, input.pending && pending.length ? { messageId: input.pending.id, actionIds: pending.map((action) => action.id) } : null);
 }
 

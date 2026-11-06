@@ -224,6 +224,27 @@ export async function emailWritingNotes(db: Db, actor: UserActor) {
   return result.rows.map((row) => (row.body.startsWith(row.title.replace(/…$/, "")) ? row.body : `${row.title}: ${row.body}`));
 }
 
+export const BUSINESS_KINDS = new Set(["fact", "goal", "person", "icp", "objection", "competitor", "messaging"]);
+
+function escapeRegex(text: string) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export async function businessNamesInDb(db: Db) {
+  const result = await db.query<{ name: string }>(
+    "select name from crm.workspaces union select name from crm.products",
+  );
+  return result.rows.map((row) => row.name.trim()).filter((name) => name.length >= 3);
+}
+
+export function namesBusiness(text: string, names: string[]) {
+  return names.some((name) => new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRegex(name).replace(/\s+/g, "\\s+")}($|[^\\p{L}\\p{N}])`, "iu").test(text));
+}
+
+export function mayApplyEverywhere(kind: string, text: string, names: string[]) {
+  return !BUSINESS_KINDS.has(kind.trim().toLowerCase()) && !namesBusiness(text, names);
+}
+
 export async function rememberNote(
   actor: UserActor,
   input: { title?: unknown; body?: unknown; kind?: unknown; shared?: unknown; sources?: unknown; allWorkspaces?: unknown },
@@ -233,15 +254,17 @@ export async function rememberNote(
   if (!body) throw new CrmError("invalid_input", "Say what to remember.", 400, { field: "body" });
   const words = body.split(/\s+/);
   const title = typeof input.title === "string" && input.title.trim() ? input.title : words.length > 10 ? `${words.slice(0, 10).join(" ")}…` : body;
-  return withActor(actor, (db) =>
-    insertMemory(
+  const kind = typeof input.kind === "string" ? input.kind : "note";
+  return withActor(actor, async (db) => {
+    const everywhere = input.allWorkspaces === true && mayApplyEverywhere(kind, `${title} ${body}`, await businessNamesInDb(db));
+    return insertMemory(
       db,
       actor,
       input.shared === true ? "business" : "personal",
-      { kind: typeof input.kind === "string" ? input.kind : "note", title, body, sources: input.sources, confidence: "high", allWorkspaces: input.allWorkspaces === true },
+      { kind, title, body, sources: input.sources, confidence: "high", allWorkspaces: everywhere },
       origin,
-    ),
-  );
+    );
+  });
 }
 
 export async function updateMemory(actor: UserActor, id: string, patch: { title?: unknown; body?: unknown; pinned?: unknown; allWorkspaces?: unknown }) {

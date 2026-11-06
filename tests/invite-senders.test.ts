@@ -896,17 +896,19 @@ describe("choosing who sends an invite", () => {
     assert.equal(choices.rowCount, 0);
   });
 
-  it("defaults booking invites to the address homed in the page's workspace", async () => {
+  it("defaults booking invites to the address homed in the page's workspace, with one page per workspace", async () => {
     await saveBookingPage(ridgeon, bookingPage);
     assert.equal((await getBookingSetup(ridgeon)).defaultSender, MAIN);
     await setAddressHome(eclipse, CONSULTING, ridgeon.workspaceId);
-    const setup = await getBookingSetup(eclipse);
+    const setup = await getBookingSetup(ridgeon);
     assert.equal(setup.defaultSender, CONSULTING);
-    await saveBookingPage(eclipse, { ...bookingPage, inviteSender: CONSULTING });
-    assert.equal((await getBookingPage(eclipse)).inviteSender, null);
-    await saveBookingPage(eclipse, { ...bookingPage, inviteSender: MAIN });
-    assert.equal((await getBookingPage(eclipse)).inviteSender, MAIN);
-    await saveBookingPage(eclipse, { ...bookingPage, inviteSender: CONSULTING });
+    assert.equal((await getBookingSetup(eclipse)).defaultSender, MAIN);
+    assert.equal((await getBookingPage(eclipse)).exists, false);
+    await saveBookingPage(ridgeon, { ...bookingPage, inviteSender: CONSULTING });
+    assert.equal((await getBookingPage(ridgeon)).inviteSender, null);
+    await saveBookingPage(ridgeon, { ...bookingPage, inviteSender: MAIN });
+    assert.equal((await getBookingPage(ridgeon)).inviteSender, MAIN);
+    await saveBookingPage(ridgeon, { ...bookingPage, inviteSender: CONSULTING });
     const calls: Call[] = [];
     await bookSlot("mark", { start: "2026-10-19T13:00:00.000Z", name: "Ann", email: "ann@booker.test" }, { ip: "203.0.113.92", now: NOW, fetchImpl: graph(calls) });
     const post = graphWrites(calls).find((call) => call.method === "POST")!;

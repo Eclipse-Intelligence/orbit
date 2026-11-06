@@ -434,7 +434,7 @@ describe("mail across workspaces", () => {
     await saveBrandProfile(ridgeon, { website: "", whatYouSell: "Fractional marketing leadership.", whoItsFor: "", tone: "" }, provenance);
     const sells = async (thread: string) => (await threadBrand(eclipse, primary.sourceId, thread))?.whatYouSell ?? null;
     assert.equal(await sells("sophie"), "Fractional marketing leadership.");
-    assert.equal(await sells("james"), null);
+    assert.equal(await sells("james"), "AI visibility for agencies.");
     assert.equal(await sells("iggy"), "AI visibility for agencies.");
     assert.equal(await sells("fresh"), "Fractional marketing leadership.");
     assert.equal((await threadBrand(ridgeon, primary.sourceId, "sophie"))?.whatYouSell, "Fractional marketing leadership.");
@@ -456,6 +456,7 @@ describe("mail across workspaces", () => {
     assert.equal(prompts.length, 2);
     assert.match(prompts[0], /Fractional marketing leadership/);
     assert.doesNotMatch(prompts[0], /AI visibility for agencies/);
-    assert.doesNotMatch(prompts[1], /Fractional marketing leadership|AI visibility for agencies/);
+    assert.match(prompts[1], /AI visibility for agencies/);
+    assert.doesNotMatch(prompts[1], /Fractional marketing leadership/);
   });
 });

@@ -240,7 +240,8 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
       ]);
       setAccounts(list);
       const to = options.to ?? (contact?.email ? [{ address: contact.email.toLowerCase(), name: contact.name }] : []);
-      const sourceId = options.draft?.sourceId ?? list[0]?.id ?? "";
+      const preferred = list.find((item) => item.default) ?? list[0];
+      const sourceId = options.draft?.sourceId ?? preferred?.sourceId ?? preferred?.id ?? "";
       const prefilled: MailDraft | null =
         !options.draft && options.body
           ? { id: "", sourceId, mode: "new", messageId: null, to, cc: [], bcc: [], subject: options.subject ?? "", body: options.body, savedAt: "", sendAt: null, sendError: null }
@@ -253,6 +254,7 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
         cc: [],
         subject: options.subject ?? "",
         draft: options.draft ?? prefilled,
+        fromId: options.draft ? null : (preferred?.id ?? null),
       };
       const existing = options.draft ? cardsRef.current.find((card) => card.start.draft?.id === options.draft!.id) : null;
       if (existing) {

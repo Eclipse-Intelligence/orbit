@@ -9,6 +9,7 @@ import { sendMailDraft } from "@/lib/mail/compose";
 import { stripQuoted } from "@/lib/mail/format";
 import { ensureMicrosoftFolder, fetchMicrosoftHeaders, GraphMailError } from "@/lib/mail/microsoft";
 import { AUTOMATED_DOMAIN, AUTOMATED_SENDER, CALENDAR_SENDER, CALENDAR_SUBJECT, senderKey, splitJoin, UNSUBSCRIBE_TEXT } from "@/lib/mail/split";
+import { addressHomesInDb, captureWorkspaceSql, homesJson } from "@/lib/mail/routing";
 import { mailSourceToken } from "@/lib/mail/sync";
 import { parseThreadKey } from "@/lib/mail/threads";
 import { chooseMethod, listUnsubscribeFrom, postOneClick, UnsubscribeRefused, type Lookup, type Mailto } from "@/lib/mail/unsubscribe";
@@ -830,21 +831,31 @@ export async function threadSubscription(db: Db, actor: UserActor, address: stri
 
 type ResearchEmail = { id: string; from: string; name: string | null; subject: string | null; receivedAt: string | null; account: string; text: string };
 
-export async function researchMail(actor: UserActor, options: { hours?: number; limit?: number } = {}): Promise<ResearchEmail[]> {
+export async function researchMail(actor: UserActor, options: { hours?: number; limit?: number; workspaceIds?: string[] } = {}): Promise<ResearchEmail[]> {
   const hours = Math.min(Math.max(Math.trunc(options.hours ?? 24), 1), 24 * 30);
   const limit = Math.min(Math.max(Math.trunc(options.limit ?? 50), 1), 200);
+  const scoped = (options.workspaceIds?.length ?? 0) > 1;
   return withActor(actor, async (db) => {
+    const homes = scoped ? homesJson(await addressHomesInDb(db, actor)) : "[]";
+    const capture = captureWorkspaceSql("n", "rt", "$5", "$6");
     const result = await db.query<{ id: string; from_email: string; from_name: string | null; subject: string | null; at: Date; account: string; body_text: string | null; snippet: string | null }>(
-      `select m.id, lower(m.from_email) as from_email, m.from_name, m.subject, coalesce(m.received_at, m.created_at) as at, s.email as account, m.body_text, m.snippet
-       from crm.mail_messages m
-       join crm.mail_folders f on f.id = m.folder_id
-       join crm.mail_sources s on s.id = m.source_id
-       ${recordFor("m", "$1")}
-       where m.user_id = $1 and sub.status = 'research' and f.role not in ('trash', 'junk', 'outbox', 'sent', 'drafts') and not m.is_draft
-         and coalesce(m.received_at, m.created_at) > now() - make_interval(hours => $2)
-       order by coalesce(m.received_at, m.created_at) desc
+      `select n.id, n.from_email, n.from_name, n.subject, n.at, n.account, n.body_text, n.snippet
+       from (
+         select m.id, lower(m.from_email) as from_email, m.from_name, m.subject, coalesce(m.received_at, m.created_at) as at, s.email as account,
+           m.body_text, m.snippet, m.to_recipients, m.cc_recipients, m.source_id, coalesce(m.thread_key, 'm:' || m.id::text) as tk, s.workspace_id as source_workspace
+         from crm.mail_messages m
+         join crm.mail_folders f on f.id = m.folder_id
+         join crm.mail_sources s on s.id = m.source_id
+         ${recordFor("m", "$1")}
+         where m.user_id = $1 and sub.status = 'research' and f.role not in ('trash', 'junk', 'outbox', 'sent', 'drafts') and not m.is_draft
+           and coalesce(m.received_at, m.created_at) > now() - make_interval(hours => $2)
+       ) n
+       left join crm.mail_thread_routes rt on rt.user_id = $1 and rt.source_id = n.source_id and rt.thread_key = n.tk
+       where not $4::boolean
+         or case when cardinality(coalesce(rt.filed_in, '{}'::uuid[])) > 0 then $7::uuid = any(rt.filed_in) else ${capture.workspace} = $7::uuid end
+       order by n.at desc
        limit $3`,
-      [actor.userId, hours, limit],
+      [actor.userId, hours, limit, scoped, homes, options.workspaceIds ?? [], actor.workspaceId],
     );
     return result.rows.map((row) => ({
       id: row.id,
