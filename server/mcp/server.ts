@@ -12,7 +12,7 @@ import { registerLearningTools } from "@/server/mcp/learning";
 import { registerMailTools } from "@/server/mcp/mail";
 import { registerProposalTools } from "@/server/mcp/proposals";
 import { registerReaderTools } from "@/server/mcp/readwise";
-import { registerOperationTools } from "@/server/mcp/operations";
+import { registerMoveTool, registerOperationTools } from "@/server/mcp/operations";
 import { registerRelationshipTools } from "@/server/mcp/relationships";
 
 const writeShape = {
@@ -81,7 +81,7 @@ function writeFromArgs(args: {
   };
 }
 
-export function createCrmMcpServer(actor: Actor) {
+export function createCrmMcpServer(actor: Actor, options: { workspaces?: { id: string; name: string }[] } = {}) {
   if (actor.type === "agent" && actor.scopes.length > 0 && actor.scopes.every((scope) => scope === "market:write")) {
     const market = new McpServer(
       { name: "crm", version: "1.0.0" },
@@ -186,6 +186,7 @@ export function createCrmMcpServer(actor: Actor) {
 
   registerRelationshipTools(server, actor);
   registerOperationTools(server, actor);
+  registerMoveTool(server, actor, options.workspaces ?? []);
   if (actor.type === "user") registerMailTools(server, actor);
   if (actor.type === "user") registerReaderTools(server, actor);
   registerProposalTools(server, actor);

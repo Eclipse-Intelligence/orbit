@@ -1,16 +1,18 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import ConfirmDialog from "@/components/_ui/confirm-dialog";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/_ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/_ui/dropdown-menu";
 import { Label } from "@/components/_ui/label";
+import MoveWorkspaceDialog from "@/components/crm/move-workspace-dialog";
 import RecordPicker, { type PickedRecord } from "@/components/crm/record-picker";
 import { mergeCompanyAction } from "@/app/(crm)/actions";
 import { mergeContactAction } from "@/app/(crm)/records";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
+import type { WorkspaceRef } from "@/lib/crm/workspaces";
 import MoreIcon from "@/public/assets/images/_common/more.svg";
 
 const COPY = {
@@ -24,8 +26,24 @@ const COPY = {
   },
 } as const;
 
-export default function MergeRecordMenu({ kind, id, name }: { kind: "company" | "contact"; id: string; name: string }) {
+const NOTICE_MS = 6000;
+
+export default function MergeRecordMenu({
+  kind,
+  id,
+  name,
+  moveTargets = [],
+  workspaceName = "",
+}: {
+  kind: "company" | "contact";
+  id: string;
+  name: string;
+  moveTargets?: WorkspaceRef[];
+  workspaceName?: string;
+}) {
   const router = useRouter();
+  const [moving, setMoving] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const pickerId = useId();
   const [picking, setPicking] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -33,6 +51,12 @@ export default function MergeRecordMenu({ kind, id, name }: { kind: "company" | 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const copy = COPY[kind];
+
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), NOTICE_MS);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
 
   async function merge() {
     if (!target) return;
@@ -55,6 +79,11 @@ export default function MergeRecordMenu({ kind, id, name }: { kind: "company" | 
           Merging…
         </span>
       )}
+      {notice && (
+        <span role="status" className="ui-style max-w-[16em] truncate text-subtle">
+          {notice}
+        </span>
+      )}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="secondary" size="icon" aria-label="More actions" title="More" disabled={busy}>
@@ -70,6 +99,16 @@ export default function MergeRecordMenu({ kind, id, name }: { kind: "company" | 
           >
             Merge into…
           </DropdownMenuItem>
+          {moveTargets.length > 0 && (
+            <DropdownMenuItem
+              onSelect={() => {
+                setNotice(null);
+                setMoving(true);
+              }}
+            >
+              Move to workspace…
+            </DropdownMenuItem>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
       <Dialog open={picking} onOpenChange={setPicking}>
@@ -107,6 +146,25 @@ export default function MergeRecordMenu({ kind, id, name }: { kind: "company" | 
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {moveTargets.length > 0 && (
+        <MoveWorkspaceDialog
+          open={moving}
+          onOpenChange={setMoving}
+          kind={kind}
+          ids={[id]}
+          subject={name}
+          currentWorkspace={workspaceName}
+          workspaces={moveTargets}
+          onDone={(result) => {
+            if (result.copy) {
+              setNotice(result.message);
+              router.refresh();
+              return;
+            }
+            router.push(kind === "company" ? "/" : "/contacts");
+          }}
+        />
+      )}
       {target && (
         <ConfirmDialog
           open={confirming}

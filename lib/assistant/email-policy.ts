@@ -78,6 +78,7 @@ export const EMAIL_POLICY: Record<string, EmailRule> = {
   set_board_stages: REMOVES,
   merge_companies: REMOVES,
   merge_contacts: REMOVES,
+  move_records_to_workspace: REMOVES,
   undo_change: REMOVES,
   save_email_template: (args) => args.archived === true,
   save_product: (args) => args.archived === true,

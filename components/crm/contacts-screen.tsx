@@ -37,6 +37,7 @@ import { DEFAULT_CONTACT_SORT, defaultContactOrder, nextSort, type SortOrder } f
 import type { ContactLookups } from "@/lib/enrichment/contacts";
 import type { ContactField } from "@/lib/enrichment/providers";
 import type { EnrichmentAvailability } from "@/lib/enrichment/settings";
+import type { WorkspaceRef } from "@/lib/crm/workspaces";
 import { KEYBOARD_ROW_CLASS } from "@/lib/shortcuts";
 import { cn } from "@/lib/utils";
 
@@ -83,6 +84,7 @@ export default function ContactsScreen({
   mailboxConnected,
   enrichment,
   view,
+  moveTargets = [],
 }: {
   viewer: Viewer;
   contacts: Contact[];
@@ -94,6 +96,7 @@ export default function ContactsScreen({
   mailboxConnected: boolean;
   enrichment: { available: EnrichmentAvailability; lookups: ContactLookups };
   view: ContactListView;
+  moveTargets?: WorkspaceRef[];
 }) {
   const router = useRouter();
   const tagHref = useTagHref();
@@ -260,6 +263,7 @@ export default function ContactsScreen({
         }
         mailboxConnected={mailboxConnected}
         extraActions={finders}
+        move={{ kind: "contact", workspaces: moveTargets, currentWorkspace: viewer.workspaceName }}
         tagging={{
           tags,
           selectedTags: (ids) => [

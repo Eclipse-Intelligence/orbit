@@ -41,6 +41,7 @@ import type { MeetingsSummary } from "@/lib/crm/calendar";
 import type { ClickUpPicker } from "@/lib/crm/clickup";
 import type { Company, CompanyContext, CompanyWrite, Member, TagCount } from "@/lib/crm/types";
 import type { EnrichmentAvailability } from "@/lib/enrichment/settings";
+import type { WorkspaceRef } from "@/lib/crm/workspaces";
 import type { CompanyFit } from "@/lib/enrichment/web-checks";
 import CompanyAiFields from "@/components/ai-fields/company-ai-fields";
 import type { AiAnswer, AiField } from "@/lib/ai-fields/types";
@@ -84,6 +85,7 @@ export default function CompanyRecord({
   fit = null,
   aiFields = [],
   aiAnswers = [],
+  moveTargets = [],
 }: {
   viewer: Viewer;
   context: CompanyContext;
@@ -99,6 +101,7 @@ export default function CompanyRecord({
   fit?: CompanyFit;
   aiFields?: AiField[];
   aiAnswers?: AiAnswer[];
+  moveTargets?: WorkspaceRef[];
 }) {
   const router = useRouter();
   const listHref = useListHref("companies");
@@ -160,7 +163,7 @@ export default function CompanyRecord({
         action={
           <div className="flex items-center gap-1">
             {!company.archivedAt && <RunWorkflowButton object="company" recordId={company.id} workflows={workflows} />}
-            {!company.archivedAt && <MergeRecordMenu kind="company" id={company.id} name={company.name} />}
+            {!company.archivedAt && <MergeRecordMenu kind="company" id={company.id} name={company.name} moveTargets={moveTargets} workspaceName={viewer.workspaceName} />}
             {company.archivedAt ? null : confirmArchive ? (
               <>
                 <Button

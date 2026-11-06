@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import Companies from "@/components/companies/companies";
 import { PAGE_SIZE, pageFromParams, pageOffset } from "@/components/crm/paging";
-import { getUserActor } from "@/lib/auth/user";
+import { getMoveTargets, getUserActor } from "@/lib/auth/user";
 import { listCompanies, listMembers } from "@/lib/crm/companies";
 import { companyHref } from "@/lib/crm/hrefs";
 import { getMailbox } from "@/lib/crm/inbox";
@@ -39,7 +39,7 @@ export default async function CompaniesPage({
   filters.limit = PAGE_SIZE;
   filters.offset = pageOffset(page);
 
-  const [listed, members, mailbox, tags, lifecycles, settings, aiFields, hidden, views] = await Promise.all([
+  const [listed, members, mailbox, tags, lifecycles, settings, aiFields, hidden, views, moveTargets] = await Promise.all([
     listCompanies(user, { ...filters, relationships: true, aiFields: true }),
     listMembers(user),
     getMailbox(user),
@@ -49,6 +49,7 @@ export default async function CompaniesPage({
     listAiFields(user),
     hiddenAiFields(user),
     listCompanyViews(user),
+    getMoveTargets(user),
   ]);
 
   const available = enrichmentAvailability();
@@ -74,6 +75,7 @@ export default async function CompaniesPage({
       aiFields={aiFields.map(publicField)}
       hiddenAiFields={hidden}
       views={views}
+      moveTargets={moveTargets}
       viewer={{
         id: user.userId,
         name: user.fullName || user.email,

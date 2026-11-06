@@ -519,9 +519,9 @@ async function declinePending(actor: UserActor, conversationId: string, rows: Me
   }
 }
 
-function companionTools(eclipseTools: boolean) {
+function companionTools(eclipseTools: boolean, multiWorkspace: boolean) {
   return [
-    ...assistantTools({ eclipseTools }).map((tool) => ({
+    ...assistantTools({ eclipseTools, multiWorkspace }).map((tool) => ({
       name: tool.name,
       description: toolDescription(tool),
       parameters: tool.parameters,
@@ -655,6 +655,7 @@ async function promptFor(actor: UserActor, conversation: ConversationRow) {
     system: systemPrompt(actor, { webSearch: conversation.web_search, links, about: aboutYouSection(about, colleagues), briefReady: Boolean(brief) && !briefChat, brand, workspaces }),
     learned,
     eclipseTools: brand.eclipseTools,
+    multiWorkspace: workspaces.length > 1,
   };
 }
 
@@ -681,7 +682,7 @@ async function runCompanionTurn(
   if (!online && (!headless || (await listCompanions(actor)).length === 0)) throw new AssistantError(await companionOfflineMessage(actor));
   const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
   const earlier = new Set(rows.map((row) => row.id));
-  const { system, learned, eclipseTools } = await promptFor(actor, conversation);
+  const { system, learned, eclipseTools, multiWorkspace } = await promptFor(actor, conversation);
   const transcript = buildPrompt(history(rows));
   const jobId = await enqueueCompanionJob(actor, conversation.id, {
     model: apiModel,
@@ -689,7 +690,7 @@ async function runCompanionTurn(
     webSearch: conversation.web_search,
     system,
     prompt: learned ? `${learned}\n${LEARNED_NOTE}\n\n${transcript}` : transcript,
-    tools: companionTools(eclipseTools),
+    tools: companionTools(eclipseTools, multiWorkspace),
   }, { agentMailId: headless?.agentMailId ?? null });
   if (headless) {
     headless.queued?.({ jobId, online });
@@ -823,8 +824,8 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
   const chosen = assistantModel(conversation.model);
   if (chosen?.source === "claude") return runCompanionTurn(actor, conversation, chosen.apiModel, emit, deadline, signal, options.headless);
   if (options.headless) throw new AssistantError(HEADLESS_MODEL_ERROR);
-  const { system, learned, eclipseTools } = await promptFor(actor, conversation);
-  const tools = toolDefinitions({ eclipseTools });
+  const { system, learned, eclipseTools, multiWorkspace } = await promptFor(actor, conversation);
+  const tools = toolDefinitions({ eclipseTools, multiWorkspace });
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
     if (signal?.aborted) return;
     const rows = await withActor(actor, (db) => readMessages(db, conversation.id));

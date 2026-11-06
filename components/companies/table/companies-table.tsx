@@ -39,6 +39,7 @@ import { QUIET_DAYS, type Company, type CompanyListQuery, type CompanySort, type
 import { activeFilterCount } from "@/lib/companies";
 import { DEFAULT_COMPANY_SORT, defaultCompanyOrder, nextSort } from "@/lib/sorting";
 import { cn } from "@/lib/utils";
+import type { WorkspaceRef } from "@/lib/crm/workspaces";
 
 const SORTABLE: Record<string, CompanySort | undefined> = {
   name: "name",
@@ -57,6 +58,8 @@ export default function CompaniesTable({
   filtered,
   selection,
   mailboxConnected,
+  moveTargets = [],
+  workspaceName = "",
   tags,
   filters,
   enrichment,
@@ -74,6 +77,8 @@ export default function CompaniesTable({
   filtered: boolean;
   selection: BulkSelection;
   mailboxConnected: boolean;
+  moveTargets?: WorkspaceRef[];
+  workspaceName?: string;
   tags: TagCount[];
   filters: CompanyListQuery;
   enrichment: { company: boolean; logoClientId: string | null; fit?: boolean };
@@ -212,6 +217,7 @@ export default function CompaniesTable({
         recipients={companyRecipientsAction}
         mailboxConnected={mailboxConnected}
         extraActions={enrichment.company ? [findDetails] : []}
+        move={{ kind: "company", workspaces: moveTargets, currentWorkspace: workspaceName }}
         tagging={{
           tags,
           selectedTags: (ids) => [
