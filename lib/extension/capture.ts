@@ -23,6 +23,7 @@ import type { Db } from "@/lib/db/pool";
 import {
   DIFF_FIELDS,
   EXTENSION_SOURCE,
+  looksLikeDateOrDuration,
   type CaptureResponse,
   type DiffField,
   type DiffResponse,
@@ -53,6 +54,11 @@ function text(value: unknown, max: number) {
   if (typeof value !== "string") return null;
   const clean = value.replace(/\s+/g, " ").trim();
   return clean ? clean.slice(0, max) : null;
+}
+
+function readable(value: unknown, max: number) {
+  const tidy = text(value, max);
+  return tidy && !looksLikeDateOrDuration(tidy) ? tidy : null;
 }
 
 function longText(value: unknown, max: number, field: string) {
@@ -163,7 +169,7 @@ function personInput(value: unknown) {
   return {
     firstName: text(person.firstName, 80),
     lastName: text(person.lastName, 80),
-    jobTitle: text(person.jobTitle, 120),
+    jobTitle: readable(person.jobTitle, 120),
     location: text(person.location, 200),
     linkedinUrl,
     salesNavigatorUrl,
@@ -178,7 +184,7 @@ function companyInput(value: unknown) {
   if (domainText && !domain) throw new CrmError("invalid_input", "Enter a domain like example.com.", 400, { field: "domain" });
   const linkedin = text(company.linkedinUrl, 500);
   return {
-    name: text(company.name, 200),
+    name: readable(company.name, 200),
     domain,
     linkedinUrl: linkedin ? canonicalCompanyLinkedin(linkedin) : null,
     industry: text(company.industry, 120),
@@ -359,9 +365,9 @@ function row(field: DiffField, label: string, before: string | null, after: stri
 
 function pagePerson(value: unknown): PagePerson {
   const page = object(value) ?? {};
-  const name = text(page.name, 160);
-  let firstName = text(page.firstName, 80);
-  let lastName = text(page.lastName, 80);
+  const name = readable(page.name, 160);
+  let firstName = readable(page.firstName, 80);
+  let lastName = readable(page.lastName, 80);
   if (name && !firstName && !lastName) {
     const parts = name.split(" ");
     firstName = parts[0] ?? null;
@@ -375,11 +381,11 @@ function pagePerson(value: unknown): PagePerson {
     firstName,
     lastName,
     headline: text(page.headline, 300),
-    jobTitle: text(page.jobTitle, 120),
+    jobTitle: readable(page.jobTitle, 120),
     location: text(page.location, 200),
     linkedinUrl: linkedin ? canonicalLinkedin(linkedin) : null,
     salesNavigatorUrl: lead ? canonicalSalesNavigator(lead) : null,
-    companyName: text(page.companyName, 200),
+    companyName: readable(page.companyName, 200),
     companyLinkedinUrl: companyUrl ? canonicalCompanyLinkedin(companyUrl) : null,
   };
 }
@@ -388,7 +394,7 @@ function pageCompany(value: unknown): PageCompany {
   const page = object(value) ?? {};
   const linkedin = text(page.linkedinUrl, 500);
   return {
-    name: text(page.name, 200),
+    name: readable(page.name, 200),
     tagline: text(page.tagline, 500),
     website: text(page.website, 500),
     industry: text(page.industry, 120),

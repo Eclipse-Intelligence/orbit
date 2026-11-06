@@ -1,6 +1,6 @@
 import type { ThreadMessage } from "../../../lib/extension/protocol";
 import { canonicalProfile } from "../urls";
-import { clean, firstElement, firstText, safeAll, textOf } from "./text";
+import { clean, firstElement, firstText, realValue, safeAll, textOf } from "./text";
 
 export type ThreadPartner = { name: string | null; profileUrl: string | null };
 
@@ -74,9 +74,9 @@ function threadIn(root: ParentNode): Element | null {
   return main ?? null;
 }
 
-function headerIn(scope: ParentNode | null): Element | null {
+function headerIn(scope: ParentNode | null, selectors = HEADER): Element | null {
   if (!scope) return null;
-  for (const selector of HEADER) {
+  for (const selector of selectors) {
     const found = safeAll(scope, selector).find((element) => !element.closest(CONVERSATION_LIST) && !element.closest(EVENT));
     if (found) return found;
   }
@@ -85,20 +85,23 @@ function headerIn(scope: ParentNode | null): Element | null {
 
 export function readPartner(root: ParentNode, url: string): ThreadPartner {
   const thread = threadIn(root);
-  const header = headerIn(thread) ?? (thread ? null : headerIn(root));
+  const header = headerIn(thread, [...HEADER, "header", "[role='banner']"]) ?? (thread ? null : headerIn(root));
   const candidates = [
     ...(header && header.matches("a[href*='/in/']") ? [header] : []),
     ...safeAll(header, "a[href*='/in/']"),
     ...safeAll(thread, "a[href*='/in/']"),
   ];
   let profileUrl: string | null = null;
+  let profileAnchor: Element | null = null;
   for (const anchor of candidates) {
     if (anchor.closest(EVENT) || anchor.closest(CONVERSATION_LIST)) continue;
     profileUrl = canonicalProfile(anchor.getAttribute("href"), url);
+    profileAnchor = anchor;
     if (profileUrl) break;
   }
-  const name = header ? firstText(header, PARTNER_NAME) : firstText(thread, PARTNER_NAME.slice(0, -1));
-  return { name, profileUrl };
+  const named = header ? firstText(header, PARTNER_NAME) : firstText(thread, PARTNER_NAME.slice(0, -1));
+  const fromLink = header && profileUrl ? realValue(textOf(profileAnchor)) : null;
+  return { name: realValue(named) ?? fromLink, profileUrl };
 }
 
 function eventsIn(root: ParentNode) {

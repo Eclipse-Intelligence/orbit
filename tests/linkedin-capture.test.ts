@@ -41,15 +41,16 @@ import { browserRows } from "@/lib/extension/settings";
 import { safeNextPath } from "@/lib/auth/next-path";
 import { dueFrom, messageKey, messageKeys } from "@/lib/extension/capture";
 import { dueLabel } from "@/lib/extension/records";
-import type {
-  CaptureResponse,
-  DiffResponse,
-  LogCheckResponse,
-  LookupResponse,
-  MeResponse,
-  PairRedeemResponse,
-  PairStartResponse,
-  ThreadMessage,
+import {
+  looksLikeDateOrDuration,
+  type CaptureResponse,
+  type DiffResponse,
+  type LogCheckResponse,
+  type LookupResponse,
+  type MeResponse,
+  type PairRedeemResponse,
+  type PairStartResponse,
+  type ThreadMessage,
 } from "@/lib/extension/protocol";
 import { createAgent, createUser, resetDatabase } from "./helpers";
 
@@ -1068,5 +1069,57 @@ describe("LinkedIn capture fixes", () => {
     );
     assert.equal(rows[0].usedLabel, "Last used 30 Dec 2025");
     assert.equal(rows[1].usedLabel, "Last used 30 Oct");
+  });
+
+  it("tells date ranges and durations apart from real names", () => {
+    for (const value of ["Jan 2016 - Sep 2024", "Oct 2024 - Present · 2 yrs 2 mos", "Mar 2024 to now", "2015 to 2018", "Full-time · 13 yrs 3 mos", "9 mos", "Present", "2019"]) {
+      assert.equal(looksLikeDateOrDuration(value), true, value);
+    }
+    for (const value of ["PORTABL", "Northwind", "2020 Ventures", "May Lewis", "Now Pensions", "Chief Commercial Officer (CCO)", "London Area, United Kingdom"]) {
+      assert.equal(looksLikeDateOrDuration(value), false, value);
+    }
+  });
+
+  it("never makes a company from a date range read off the page", async () => {
+    const before = await getAdminPool().query("select 1 from crm.companies where workspace_id = $1", [mark.workspaceId]);
+    const saved = await call<CaptureResponse>(captureRoute, "/api/extension/capture", {
+      token,
+      workspace: mark.workspaceId,
+      body: saveBody({
+        person: person({ firstName: "Dana", lastName: "Range", jobTitle: "Oct 2024 - Present", linkedinUrl: "https://www.linkedin.com/in/dana-range" }),
+        company: { name: "Jan 2016 - Sep 2024", domain: null, linkedinUrl: null },
+      }),
+    });
+    assert.equal(saved.status, 200);
+    assert.equal(saved.data.created.company, false);
+    assert.equal(saved.data.company, null);
+    assert.equal(saved.data.person?.jobTitle, null);
+    const afterSave = await getAdminPool().query("select 1 from crm.companies where workspace_id = $1", [mark.workspaceId]);
+    assert.equal(afterSave.rowCount, before.rowCount);
+    const named = await getAdminPool().query("select 1 from crm.companies where name ilike '%2016%'");
+    assert.equal(named.rowCount, 0);
+
+    const diff = await call<DiffResponse>(diffRoute, "/api/extension/diff", {
+      token,
+      workspace: mark.workspaceId,
+      body: {
+        contactId: saved.data.person?.id,
+        person: {
+          name: "Dana Range",
+          firstName: "Dana",
+          lastName: "Range",
+          headline: null,
+          jobTitle: "Jan 2016 - Sep 2024",
+          location: null,
+          linkedinUrl: "https://www.linkedin.com/in/dana-range",
+          salesNavigatorUrl: null,
+          companyName: "Oct 2024 - Present · 2 yrs 2 mos",
+          companyLinkedinUrl: null,
+        },
+      },
+    });
+    assert.equal(diff.status, 200);
+    assert.equal(diff.data.changes.find((row) => row.field === "company"), undefined);
+    assert.equal(diff.data.changes.find((row) => row.field === "jobTitle"), undefined);
   });
 });

@@ -4,6 +4,32 @@ export const WORKSPACE_HEADER = "x-orbit-workspace";
 export const PAIRING_TTL_MINUTES = 10;
 export const SALES_NAVIGATOR_ID = /^[A-Za-z0-9_-]{6,120}$/;
 
+const MONTH = "(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\\.?";
+const DATE = `(?:\\d{1,2}\\s+)?(?:${MONTH}\\s+)?\\d{4}`;
+const DATE_RANGE = new RegExp(`^${DATE}\\s*(?:-|\\u2013|\\u2014|to|until)\\s*(${DATE}|present|now|today)$`, "i");
+const SINGLE_DATE = new RegExp(`^(?:${DATE}|present)$`, "i");
+const DURATION = /^(?:less than (?:a|one) (?:year|month)|(?:\d+\+?\s*(?:yrs?|years?|mos?|months?)\s*)+)$/i;
+
+function dateParts(value: string | null | undefined) {
+  if (typeof value !== "string") return [];
+  return value
+    .replace(/\s+/g, " ")
+    .split(/\s*[·•]\s*/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+export function dateRangeIn(value: string | null | undefined): "current" | "past" | null {
+  const first = dateParts(value)[0];
+  const match = first ? DATE_RANGE.exec(first) : null;
+  if (!match) return null;
+  return /^(?:present|now|today)$/i.test(match[1]) ? "current" : "past";
+}
+
+export function looksLikeDateOrDuration(value: string | null | undefined) {
+  return dateParts(value).some((part) => DATE_RANGE.test(part) || SINGLE_DATE.test(part) || DURATION.test(part));
+}
+
 export type PairStartResponse = { code: string; secret: string; expiresAt: string; approveUrl: string };
 
 export type PairRedeemResponse =
