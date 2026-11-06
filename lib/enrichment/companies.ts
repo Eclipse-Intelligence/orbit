@@ -1,4 +1,4 @@
-import { createCompany, getCompany, updateCompany } from "@/lib/crm/companies";
+import { createCompany, findByLinkedin, getCompany, updateCompany } from "@/lib/crm/companies";
 import { FREE_MAIL_DOMAINS } from "@/lib/crm/communications";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
@@ -228,6 +228,11 @@ export async function enrichCompany(actor: Actor, companyId: string, options: Op
   }
   const profile = brandProfile(result.brand);
   const write = onlyEmpty(company, brandToCompany(result.brand, domain));
+  if (write.linkedinUrl) {
+    const linkedinUrl = write.linkedinUrl;
+    const taken = await withActor(actor, (db) => findByLinkedin(db, actor.workspaceId, linkedinUrl));
+    if (taken && taken.company.id !== companyId) delete write.linkedinUrl;
+  }
   const fields = Object.keys(write);
   if (fields.length > 0) {
     try {

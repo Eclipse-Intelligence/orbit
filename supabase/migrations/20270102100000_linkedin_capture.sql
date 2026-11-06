@@ -7,13 +7,41 @@ alter table crm.contacts drop constraint if exists contacts_sales_navigator_url_
 alter table crm.contacts add constraint contacts_sales_navigator_url_format
   check (sales_navigator_url is null or (char_length(sales_navigator_url) <= 300 and sales_navigator_url like 'https://www.linkedin.com/sales/lead/%'));
 
-create index if not exists contacts_sales_navigator_idx
+alter table crm.contacts drop constraint if exists contacts_identity;
+alter table crm.contacts add constraint contacts_identity check (
+  nullif(trim(coalesce(first_name, '') || coalesce(last_name, '')), '') is not null
+  or email is not null
+  or phone is not null
+  or linkedin_url is not null
+  or sales_navigator_url is not null
+);
+
+drop index if exists crm.contacts_sales_navigator_idx;
+create unique index if not exists contacts_workspace_sales_navigator_active_uidx
   on crm.contacts (workspace_id, sales_navigator_url)
   where sales_navigator_url is not null and archived_at is null;
 
-create index if not exists companies_linkedin_url_idx
-  on crm.companies (workspace_id, linkedin_url)
-  where linkedin_url is not null and archived_at is null;
+do $$
+begin
+  if exists (
+    select 1
+    from crm.companies c
+    where c.linkedin_url is not null and c.archived_at is null
+    group by c.workspace_id, c.linkedin_url
+    having count(*) > 1
+  ) then
+    raise notice 'Some workspaces have two active companies with the same LinkedIn page, so companies_workspace_linkedin_active_uidx was not created. Merge them and run this migration again.';
+    create index if not exists companies_linkedin_url_idx
+      on crm.companies (workspace_id, linkedin_url)
+      where linkedin_url is not null and archived_at is null;
+  else
+    drop index if exists crm.companies_linkedin_url_idx;
+    create unique index if not exists companies_workspace_linkedin_active_uidx
+      on crm.companies (workspace_id, linkedin_url)
+      where linkedin_url is not null and archived_at is null;
+  end if;
+end;
+$$;
 
 create table if not exists crm.extension_browsers (
   id uuid primary key default gen_random_uuid(),
@@ -86,9 +114,6 @@ create policy extension_browser_workspaces_owner on crm.extension_browser_worksp
   );
 
 drop policy if exists extension_pairings_owner on crm.extension_pairings;
-create policy extension_pairings_owner on crm.extension_pairings
-  for select to authenticated
-  using (user_id = (select private.session_user_id()));
 
 revoke all on crm.extension_browsers from anon, authenticated, crm_agent;
 revoke all on crm.extension_browser_workspaces from anon, authenticated, crm_agent;
@@ -104,10 +129,6 @@ security definer
 set search_path = ''
 as $$
 begin
-  if current_user not in ('crm_app', 'postgres') then
-    raise exception 'forbidden' using errcode = '42501';
-  end if;
-
   delete from crm.extension_pairings p where p.expires_at < now() - interval '1 day';
 
   insert into crm.extension_pairings (code_hash, secret_hash, expires_at)
@@ -122,12 +143,14 @@ security definer
 set search_path = ''
 as $$
 begin
-  if current_user not in ('crm_app', 'postgres') then
-    raise exception 'forbidden' using errcode = '42501';
-  end if;
-
   return query
-  select case when p.status = 'pending' and p.expires_at <= now() then 'expired' else p.status end, p.expires_at
+  select
+    case
+      when p.status = 'pending' and p.expires_at <= now() then 'expired'
+      when p.status = 'approved' and p.decided_at < now() - interval '10 minutes' then 'expired'
+      else p.status
+    end,
+    p.expires_at
   from crm.extension_pairings p
   where p.code_hash = p_code_hash;
 end;
@@ -149,10 +172,6 @@ declare
   v_allowed uuid[];
   v_id uuid;
 begin
-  if current_user not in ('crm_app', 'postgres') then
-    raise exception 'forbidden' using errcode = '42501';
-  end if;
-
   select coalesce(array_agg(distinct m.workspace_id), '{}')
   into v_allowed
   from crm.workspace_members m
@@ -192,10 +211,6 @@ declare
   v_pairing crm.extension_pairings;
   v_browser uuid;
 begin
-  if current_user not in ('crm_app', 'postgres') then
-    raise exception 'forbidden' using errcode = '42501';
-  end if;
-
   select * into v_pairing
   from crm.extension_pairings p
   where p.code_hash = p_code_hash and p.secret_hash = p_secret_hash
@@ -242,10 +257,6 @@ security definer
 set search_path = ''
 as $$
 begin
-  if current_user not in ('crm_app', 'postgres') then
-    raise exception 'forbidden' using errcode = '42501';
-  end if;
-
   update crm.extension_browsers b
   set last_used_at = now()
   where b.token_hash = p_token_hash
@@ -255,7 +266,7 @@ begin
   return query
   select b.id, b.user_id, b.name,
     coalesce((
-      select array_agg(w.workspace_id order by w.created_at, w.workspace_id)
+      select array_agg(w.workspace_id order by m.created_at, w.workspace_id)
       from crm.extension_browser_workspaces w
       join crm.workspace_members m on m.workspace_id = w.workspace_id and m.user_id = w.user_id
       where w.browser_id = b.id
@@ -266,13 +277,32 @@ begin
 end;
 $$;
 
+create or replace function private.extension_revoke_browser(p_browser_id uuid)
+returns boolean
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_id uuid;
+begin
+  update crm.extension_browsers b
+  set revoked_at = now()
+  where b.id = p_browser_id and b.revoked_at is null
+  returning b.id into v_id;
+  return v_id is not null;
+end;
+$$;
+
 revoke all on function private.extension_pairing_start(text, text, timestamptz) from public;
 revoke all on function private.extension_pairing_status(text) from public;
 revoke all on function private.extension_pairing_decide(text, uuid, text, uuid[], boolean) from public;
 revoke all on function private.extension_pairing_redeem(text, text, text) from public;
 revoke all on function private.authenticate_extension(text) from public;
+revoke all on function private.extension_revoke_browser(uuid) from public;
 grant execute on function private.extension_pairing_start(text, text, timestamptz) to crm_app;
 grant execute on function private.extension_pairing_status(text) to crm_app;
 grant execute on function private.extension_pairing_decide(text, uuid, text, uuid[], boolean) to crm_app;
 grant execute on function private.extension_pairing_redeem(text, text, text) to crm_app;
 grant execute on function private.authenticate_extension(text) to crm_app;
+grant execute on function private.extension_revoke_browser(uuid) to crm_app;

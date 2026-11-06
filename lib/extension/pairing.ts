@@ -29,13 +29,8 @@ export type ExtensionAuth = {
 
 export type PairingState = "pending" | "approved" | "declined" | "used" | "expired" | "missing";
 
-export function normalisePairingCode(code: string) {
+function normalisePairingCode(code: string) {
   return code.toUpperCase().replace(/[^A-Z0-9]/g, "");
-}
-
-export function formatPairingCode(code: string) {
-  const clean = normalisePairingCode(code);
-  return clean.length === 8 ? `${clean.slice(0, 4)}-${clean.slice(4)}` : clean;
 }
 
 function newCode() {
@@ -52,7 +47,7 @@ export async function startPairing(orbitUrl: string): Promise<PairStartResponse>
   const secret = randomBytes(32).toString("base64url");
   const expiresAt = new Date(Date.now() + PAIRING_TTL_MINUTES * 60_000);
   await query("select private.extension_pairing_start($1, $2, $3)", [codeHash(code), hashToken(secret), expiresAt.toISOString()]);
-  const approveUrl = `${orbitUrl.replace(/\/$/, "")}/connect/chrome?code=${encodeURIComponent(code)}`;
+  const approveUrl = `${orbitUrl.replace(/\/$/, "")}/connect/chrome`;
   return { code, secret, expiresAt: expiresAt.toISOString(), approveUrl };
 }
 
@@ -69,7 +64,7 @@ export async function decidePairing(
   input: { code: unknown; name?: unknown; workspaceIds?: unknown; approve: boolean },
 ) {
   const code = typeof input.code === "string" ? input.code : "";
-  if (normalisePairingCode(code).length !== 8) throw new CrmError("invalid_input", "That code isn't valid. Press Connect in the extension again.", 400);
+  if (normalisePairingCode(code).length !== 8) throw new CrmError("invalid_input", "Enter the 8-character code from the Orbit panel.", 400, { field: "code" });
   const ids = Array.isArray(input.workspaceIds) ? input.workspaceIds.filter((id): id is string => typeof id === "string" && isUuid(id)) : [];
   if (input.approve && ids.length === 0) throw new CrmError("invalid_input", "Choose at least one workspace.", 400, { field: "workspaceIds" });
   const name = typeof input.name === "string" ? input.name.replace(/\s+/g, " ").trim().slice(0, 120) : "";
@@ -85,7 +80,7 @@ export async function decidePairing(
   const status = result.rows[0]?.status;
   if (status === "no_workspaces") throw new CrmError("invalid_input", "Choose a workspace you're a member of.", 400, { field: "workspaceIds" });
   if (status !== "approved" && status !== "declined") {
-    throw new CrmError("expired", "That code has expired or was already used. Press Connect in the extension again.", 410);
+    throw new CrmError("expired", "That code isn't valid, has expired or was already used. Check the code in the Orbit panel, or press Connect there again.", 410);
   }
   return status;
 }
@@ -226,25 +221,6 @@ export async function setBrowserWorkspaces(actor: UserActor, id: unknown, worksp
 }
 
 export async function revokeSelf(auth: ExtensionAuth) {
-  const actor = (await extensionActors(auth))[0];
-  if (actor) {
-    await revokeBrowser(actor, auth.browserId);
-    return;
-  }
-  const memberships = await membershipsFor(auth.userId);
-  const membership = memberships[0];
-  if (!membership) return;
-  await revokeBrowser(
-    {
-      type: "user",
-      userId: auth.userId,
-      email: membership.email ?? "",
-      fullName: membership.full_name,
-      workspaceId: membership.workspace_id,
-      workspaceName: membership.workspace_name,
-      role: membership.role,
-      scopes: [],
-    },
-    auth.browserId,
-  );
+  const result = await query<{ revoked: boolean }>("select private.extension_revoke_browser($1) as revoked", [auth.browserId]);
+  if (!result.rows[0]?.revoked) throw new CrmError("not_found", "This browser is already disconnected.", 404);
 }

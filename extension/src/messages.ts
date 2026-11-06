@@ -5,9 +5,9 @@ export type ReadMessage = { type: "orbit:read"; what: ReadWhat };
 
 export type ReadReply = { ok: true; result: ReadResult } | { ok: false; error: string };
 
-export type BadgeMessage = { type: "orbit:badge"; tabId: number; url: string; status: MatchStatus };
+type BadgeMessage = { type: "orbit:badge"; tabId: number; url: string; status: MatchStatus };
 
-export type SignedOutMessage = { type: "orbit:signed-out" };
+type SignedOutMessage = { type: "orbit:signed-out" };
 
 export type BackgroundMessage = BadgeMessage | SignedOutMessage;
 

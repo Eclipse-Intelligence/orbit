@@ -6,13 +6,18 @@ export type ThreadPartner = { name: string | null; profileUrl: string | null };
 
 export type PageThread = { person: ThreadPartner; messages: ThreadMessage[] };
 
-const HEADER = [".msg-thread__link-to-profile", ".msg-title-bar", ".msg-overlay-bubble-header", ".msg-entity-lockup", "header"];
+const THREAD = [".msg-thread", ".msg-convo-wrapper", ".msg-overlay-conversation-bubble"];
+const LIST = [".msg-s-message-list", ".msg-s-message-list-content"];
+const HEADER = [".msg-thread__link-to-profile", ".msg-title-bar", ".msg-overlay-bubble-header", ".msg-entity-lockup"];
 const PARTNER_NAME = [".msg-entity-lockup__entity-title", ".msg-thread__link-to-profile h2", ".msg-title-bar h2", "h2"];
 const EVENT = ".msg-s-event-listitem, [data-event-urn]";
 const HEADING = ".msg-s-message-list__time-heading";
 const SENDER = [".msg-s-message-group__name", ".msg-s-message-group__profile-link", "[data-sender-name]"];
 const TIME = ["time.msg-s-message-group__timestamp", ".msg-s-message-group__timestamp", "time"];
 const BODY = [".msg-s-event-listitem__body", ".msg-s-event__content p", "p"];
+const CONVERSATION_LIST = ".msg-conversations-container, .msg-conversation-listitem, [class*='conversation-list']";
+const EVENT_LIMIT = 200;
+const TEXT_LIMIT = 5000;
 
 const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
 const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
@@ -60,36 +65,67 @@ export function parseWhen(day: string | null, time: string | null, now = new Dat
   return Number.isNaN(base.getTime()) ? null : base.toISOString();
 }
 
+function threadIn(root: ParentNode): Element | null {
+  for (const selector of THREAD) {
+    const found = safeAll(root, selector).find((element) => !element.closest(CONVERSATION_LIST));
+    if (found) return found;
+  }
+  const main = safeAll(root, "main").find((element) => safeAll(element, EVENT).length > 0);
+  return main ?? null;
+}
+
+function headerIn(scope: ParentNode | null): Element | null {
+  if (!scope) return null;
+  for (const selector of HEADER) {
+    const found = safeAll(scope, selector).find((element) => !element.closest(CONVERSATION_LIST) && !element.closest(EVENT));
+    if (found) return found;
+  }
+  return null;
+}
+
 export function readPartner(root: ParentNode, url: string): ThreadPartner {
-  const header = firstElement(root, HEADER) ?? root;
-  const thread = firstElement(root, [".msg-thread", "[class*='msg-thread']", "main"]);
+  const thread = threadIn(root);
+  const header = headerIn(thread) ?? (thread ? null : headerIn(root));
   const candidates = [
-    ...(header instanceof Element && header.matches("a[href*='/in/']") ? [header] : []),
+    ...(header && header.matches("a[href*='/in/']") ? [header] : []),
     ...safeAll(header, "a[href*='/in/']"),
     ...safeAll(thread, "a[href*='/in/']"),
-    ...safeAll(root, "a[href*='/in/']"),
   ];
   let profileUrl: string | null = null;
   for (const anchor of candidates) {
-    if (anchor.closest(EVENT) || anchor.closest(".msg-conversations-container, .msg-conversation-listitem, [class*='conversation-list']")) continue;
+    if (anchor.closest(EVENT) || anchor.closest(CONVERSATION_LIST)) continue;
     profileUrl = canonicalProfile(anchor.getAttribute("href"), url);
     if (profileUrl) break;
   }
-  const name = firstText(header, PARTNER_NAME) ?? firstText(root, PARTNER_NAME);
+  const name = header ? firstText(header, PARTNER_NAME) : firstText(thread, PARTNER_NAME.slice(0, -1));
   return { name, profileUrl };
 }
 
 function eventsIn(root: ParentNode) {
-  const events = safeAll(root, EVENT);
+  const thread = threadIn(root);
+  const list = firstElement(thread ?? root, LIST);
+  const scope = list && (thread ? thread.contains(list) : !list.closest(CONVERSATION_LIST)) ? list : thread;
+  if (!scope) return { scope: null, events: [] };
+  const events = safeAll(scope, EVENT);
   const outer = events.filter((event) => !events.some((other) => other !== event && event.contains(other)));
-  if (outer.length > 0) return outer;
-  return safeAll(root, "[role='list'] li, ul li").filter((item) => item.querySelector("p") && !item.querySelector("li"));
+  if (outer.length > 0) return { scope, events: outer };
+  const items = safeAll(scope, "[role='list'] li, ul li").filter((item) => item.querySelector("p") && !item.querySelector("li") && !item.closest(CONVERSATION_LIST));
+  return { scope, events: items };
+}
+
+function directionOf(event: Element, sender: string | null, partner: string | null): "mine" | "theirs" | null {
+  const className = event.getAttribute("class") ?? "";
+  if (/--other\b/.test(className)) return "theirs";
+  if (sender && sameName(sender, partner)) return "theirs";
+  if (/msg-s-event-listitem/.test(className)) return "mine";
+  return null;
 }
 
 export function readThread(root: ParentNode, url: string, now = new Date()): PageThread {
   const person = readPartner(root, url);
-  const events = eventsIn(root);
-  const headings = safeAll(root, HEADING);
+  const found = eventsIn(root);
+  const events = found.events.slice(-EVENT_LIMIT);
+  const headings = safeAll(found.scope, HEADING);
   const messages: ThreadMessage[] = [];
   let sender: string | null = null;
   let time: string | null = null;
@@ -101,13 +137,13 @@ export function readThread(root: ParentNode, url: string, now = new Date()): Pag
       sender = named;
       time = firstText(event, TIME);
     }
-    const className = event.getAttribute("class") ?? "";
-    const other = /--other\b/.test(className) ? true : /msg-s-event-listitem/.test(className) ? false : null;
-    const text = clean(textOf(firstElement(event, BODY)));
+    const text = clean(textOf(firstElement(event, BODY)))?.slice(0, TEXT_LIMIT);
     if (!text) continue;
-    const from = sender ?? person.name ?? "Unknown";
-    const mine = sender ? !sameName(sender, person.name) && other !== true : other === false;
-    messages.push({ from: mine ? from : (person.name ?? from), mine, when: [day, time].filter(Boolean).join(", ") || null, at: parseWhen(day, time, now), text });
+    const direction = directionOf(event, sender, person.name);
+    if (!direction) continue;
+    const mine = direction === "mine";
+    const from = mine ? (sender ?? "You") : (person.name ?? sender ?? "Unknown");
+    messages.push({ from, mine, when: [day, time].filter(Boolean).join(", ") || null, at: parseWhen(day, time, now), text });
   }
   return { person, messages };
 }

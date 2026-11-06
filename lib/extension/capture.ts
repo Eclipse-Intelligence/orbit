@@ -1,13 +1,14 @@
 import { createHash } from "node:crypto";
 import { createActivityInDb } from "@/lib/crm/activities";
-import { readCompanyInDb, scheduleEnrichment, updateCompanyInDb, upsertCompanyInDb } from "@/lib/crm/companies";
-import { readContactInDb, updateContactInDb, upsertContactInDb } from "@/lib/crm/contacts";
+import { createCompanyInDb, findByLinkedin, readCompanyInDb, scheduleEnrichment, updateCompanyInDb } from "@/lib/crm/companies";
+import { findContactByProfileInDb, readContactInDb, updateContactInDb, upsertContactInDb } from "@/lib/crm/contacts";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { iso, isUuid, recordAudit } from "@/lib/crm/mutate";
 import {
   canonicalCompanyLinkedin,
   canonicalDomain,
+  isSharedHost,
   canonicalLinkedin,
   canonicalSalesNavigator,
   normalizeCompanyName,
@@ -17,7 +18,7 @@ import { createOpportunityInDb } from "@/lib/crm/opportunities";
 import { isReminderMinutes } from "@/lib/crm/reminder-options";
 import { assertScope } from "@/lib/crm/scopes";
 import { createTaskInDb } from "@/lib/crm/tasks";
-import type { CompanyWrite, Contact, ContactWrite, Provenance, UserActor } from "@/lib/crm/types";
+import type { Company, CompanyWrite, Contact, ContactWrite, Provenance, UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
 import {
   DIFF_FIELDS,
@@ -34,8 +35,9 @@ import {
   type TaskResponse,
   type ThreadMessage,
 } from "@/lib/extension/protocol";
-import { companySummaryInDb, dayLabel, matchCompany, personSummary } from "@/lib/extension/records";
-import { appTimeZone, startOfDay, zonedParts, zonedTimeToDate } from "@/lib/time";
+import { companySummaryInDb, dayLabel, dueLabel, matchCompany, personSummary } from "@/lib/extension/records";
+import { dayKeyAt, nextWorkingDay, shiftDay, wallClockAt, weekday } from "@/lib/crm/task-due";
+import { appTimeZone, toIsoInstant } from "@/lib/time";
 
 const MESSAGE_LIMIT = 200;
 const BODY_LIMIT = 10_000;
@@ -82,6 +84,7 @@ function sourceUrlFrom(value: unknown) {
 
 async function onBoard(db: Db, actor: UserActor, companyId: string | null, boardId: string | null, stageId: string | null, prov: Provenance, name: string) {
   if (!boardId) return null;
+  assertScope(actor.scopes, "opportunities:write");
   if (!companyId) throw new CrmError("invalid_input", "Add a company to put this on a board.", 400, { field: "boardId" });
   const board = await db.query<{ kind: string }>("select kind from crm.pipelines where id = $1 and workspace_id = $2 and archived_at is null", [
     boardId,
@@ -99,21 +102,54 @@ async function onBoard(db: Db, actor: UserActor, companyId: string | null, board
   return createOpportunityInDb(db, actor, { companyId, pipelineId: boardId, stageId: stageId ?? undefined }, prov, name);
 }
 
-async function findOrCreateCompany(
-  db: Db,
-  actor: UserActor,
-  input: { name: string | null; domain: string | null; linkedinUrl: string | null } & Omit<CompanyWrite, "name" | "domain" | "linkedinUrl">,
-  prov: Provenance,
-) {
-  const found = await matchCompany(db, actor.workspaceId, input);
-  if (found) {
-    const company = await readCompanyInDb(db, found.id, actor.workspaceId);
-    if (company) return { company, created: false };
+type CompanyFind = { name: string | null; domain: string | null; linkedinUrl: string | null } & Omit<CompanyWrite, "name" | "domain" | "linkedinUrl">;
+
+async function domainTaken(db: Db, workspaceId: string, domain: string, exceptId: string | null) {
+  const result = await db.query(
+    "select 1 from crm.companies where workspace_id = $1 and domain = $2 and archived_at is null and ($3::uuid is null or id <> $3) limit 1",
+    [workspaceId, domain, exceptId],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+async function gapFill(db: Db, actor: UserActor, company: Company, input: CompanyFind, prov: Provenance) {
+  const write: CompanyWrite = {};
+  if (input.domain && !company.domain && !(await domainTaken(db, actor.workspaceId, input.domain, company.id))) write.domain = input.domain;
+  if (input.linkedinUrl && !company.linkedinUrl && !(await findByLinkedin(db, actor.workspaceId, input.linkedinUrl))) write.linkedinUrl = input.linkedinUrl;
+  if (input.industry && !company.industry) write.industry = input.industry;
+  if (input.sizeCategory && !company.sizeCategory) write.sizeCategory = input.sizeCategory;
+  if (input.description && !company.description) write.description = input.description;
+  if (Object.keys(write).length === 0) return { company, gainedDomain: false };
+  const updated = await updateCompanyInDb(db, actor, company.id, write, prov);
+  return { company: updated.company, gainedDomain: Boolean(write.domain) };
+}
+
+async function findOrCreateCompany(db: Db, actor: UserActor, input: CompanyFind, prov: Provenance) {
+  const match = await matchCompany(db, actor.workspaceId, input);
+  if (match.found) {
+    const company = await readCompanyInDb(db, match.found.id, actor.workspaceId);
+    if (company) {
+      const filled = await gapFill(db, actor, company, input, prov);
+      return { company: filled.company, created: false, gainedDomain: filled.gainedDomain };
+    }
   }
-  if (!input.name && !input.domain) return null;
-  const write: CompanyWrite = { ...input, name: input.name ?? undefined, domain: input.domain, linkedinUrl: input.linkedinUrl, source: SOURCE_LABEL };
-  const saved = await upsertCompanyInDb(db, actor, write, prov);
-  return { company: saved.company, created: saved.created };
+  const domain = input.domain && !(await domainTaken(db, actor.workspaceId, input.domain, null)) ? input.domain : null;
+  const name = input.name ?? domain;
+  if (!name) return null;
+  try {
+    const company = await createCompanyInDb(db, actor, { ...input, name, domain, source: SOURCE_LABEL }, prov);
+    return { company, created: true, gainedDomain: false };
+  } catch (error) {
+    if (error instanceof CrmError && error.code === "duplicate_company") {
+      throw new CrmError(
+        "duplicate_company",
+        `There's already a company called ${name} in Orbit with a different LinkedIn page or domain. Add this company's domain to save it separately.`,
+        409,
+        error.details,
+      );
+    }
+    throw error;
+  }
 }
 
 function personInput(value: unknown) {
@@ -155,62 +191,79 @@ export async function capture(actor: UserActor, body: Input): Promise<CaptureRes
   if (body.kind === "person") return capturePerson(actor, body);
   if (body.kind === "company") return captureCompany(actor, body);
   if (body.kind === "link") return linkPerson(actor, body);
+  if (body.kind === "link_company") return linkCompany(actor, body);
   throw new CrmError("invalid_input", "Choose what to save.", 400, { field: "kind" });
+}
+
+function enrichAfter(actor: UserActor, company: { id: string } | null, needed: boolean) {
+  if (needed && company) scheduleEnrichment(actor, company.id);
 }
 
 async function capturePerson(actor: UserActor, body: Input): Promise<CaptureResponse> {
   assertScope(actor.scopes, "contacts:write");
   const person = personInput(body.person);
-  if (!person.firstName && !person.lastName && !person.linkedinUrl) {
+  if (!person.firstName && !person.lastName && !person.linkedinUrl && !person.salesNavigatorUrl) {
     throw new CrmError("invalid_input", "Add their name before saving.", 400, { field: "firstName" });
   }
   const company = companyInput(body.company);
+  const ownerSet = body.ownerId !== undefined;
   const ownerId = body.ownerId === null ? null : (uuid(body.ownerId) ?? actor.userId);
   const tags = tagsFrom(body.tags);
   const boardId = uuid(body.boardId);
   const stageId = uuid(body.stageId);
   const prov = provenance("linkedin_capture", sourceUrlFrom(body.sourceUrl) ?? person.linkedinUrl ?? person.salesNavigatorUrl);
   const result = await withActor(actor, async (db) => {
+    const existing = await findContactByProfileInDb(db, actor.workspaceId, person);
+    if (!existing) assertScope(actor.scopes, "leads:write");
     const savedCompany =
       company && (company.name || company.domain || company.linkedinUrl)
-        ? await findOrCreateCompany(db, actor, { name: company.name, domain: company.domain, linkedinUrl: company.linkedinUrl, ownerId, tags }, prov)
+        ? await findOrCreateCompany(
+            db,
+            actor,
+            { name: company.name, domain: company.domain, linkedinUrl: company.linkedinUrl, ...(existing ? {} : { ownerId, tags }) },
+            prov,
+          )
         : null;
-    const contact = await upsertContactInDb(
-      db,
-      actor,
-      {
-        firstName: person.firstName,
-        lastName: person.lastName,
-        jobTitle: person.jobTitle,
-        location: person.location,
-        linkedinUrl: person.linkedinUrl,
-        salesNavigatorUrl: person.salesNavigatorUrl,
-        companyId: savedCompany?.company.id ?? undefined,
-        ownerId,
-        tags,
-        source: SOURCE_LABEL,
-      },
-      prov,
-      { nameMatch: false },
-    );
+    const write: ContactWrite = {};
+    if (person.linkedinUrl) write.linkedinUrl = person.linkedinUrl;
+    if (person.salesNavigatorUrl) write.salesNavigatorUrl = person.salesNavigatorUrl;
+    if (person.firstName) write.firstName = person.firstName;
+    if (person.lastName) write.lastName = person.lastName;
+    if (person.jobTitle) write.jobTitle = person.jobTitle;
+    if (person.location) write.location = person.location;
+    if (savedCompany && (!existing?.companyId || existing.companyId === savedCompany.company.id)) write.companyId = savedCompany.company.id;
+    if (!existing) {
+      write.ownerId = ownerId;
+      write.tags = tags;
+      write.source = SOURCE_LABEL;
+    } else {
+      if (ownerSet) write.ownerId = ownerId;
+      if (tags.length > 0) write.tags = [...existing.tags, ...tags];
+    }
+    const contact = await upsertContactInDb(db, actor, write, prov, { nameMatch: false });
     const opportunity = await onBoard(db, actor, savedCompany?.company.id ?? null, boardId, stageId, prov, savedCompany?.company.name ?? contact.contact.name);
-    await recordAudit(db, actor, "lead.created", "lead", savedCompany?.company.id ?? contact.contact.id, prov, {
-      companyId: savedCompany?.company.id ?? null,
-      contactId: contact.contact.id,
-      companyCreated: savedCompany?.created ?? false,
-      contactCreated: contact.created,
-      opportunityId: opportunity?.id ?? null,
-      activityId: null,
-      taskId: null,
-    });
+    if (contact.created) {
+      await recordAudit(db, actor, "lead.created", "lead", savedCompany?.company.id ?? contact.contact.id, prov, {
+        companyId: savedCompany?.company.id ?? null,
+        contactId: contact.contact.id,
+        companyCreated: savedCompany?.created ?? false,
+        contactCreated: true,
+        opportunityId: opportunity?.id ?? null,
+        activityId: null,
+        taskId: null,
+      });
+    }
     return {
-      person: await personSummary(db, actor, contact.contact.id),
-      company: savedCompany ? await companySummaryInDb(db, actor, savedCompany.company) : null,
-      created: { contact: contact.created, company: savedCompany?.created ?? false },
+      enrich: Boolean(savedCompany && (savedCompany.created || savedCompany.gainedDomain)),
+      response: {
+        person: await personSummary(db, actor, contact.contact.id),
+        company: savedCompany ? await companySummaryInDb(db, actor, savedCompany.company) : null,
+        created: { contact: contact.created, company: savedCompany?.created ?? false },
+      },
     };
   });
-  if (result.created.company && result.company) scheduleEnrichment(actor, result.company.id);
-  return result;
+  enrichAfter(actor, result.response.company, result.enrich);
+  return result.response;
 }
 
 async function captureCompany(actor: UserActor, body: Input): Promise<CaptureResponse> {
@@ -241,13 +294,35 @@ async function captureCompany(actor: UserActor, body: Input): Promise<CaptureRes
     if (!saved) throw new CrmError("invalid_input", "Enter a company name.", 400, { field: "name" });
     await onBoard(db, actor, saved.company.id, uuid(body.boardId), uuid(body.stageId), prov, saved.company.name);
     return {
-      person: null,
-      company: await companySummaryInDb(db, actor, saved.company),
-      created: { contact: false, company: saved.created },
+      enrich: saved.created || saved.gainedDomain,
+      response: {
+        person: null,
+        company: await companySummaryInDb(db, actor, saved.company),
+        created: { contact: false, company: saved.created },
+      },
     };
   });
-  if (result.created.company && result.company) scheduleEnrichment(actor, result.company.id);
-  return result;
+  enrichAfter(actor, result.response.company, result.enrich);
+  return result.response;
+}
+
+async function linkCompany(actor: UserActor, body: Input): Promise<CaptureResponse> {
+  assertScope(actor.scopes, "companies:write");
+  const companyId = uuid(body.companyId);
+  if (!companyId) throw new CrmError("not_found", "That company isn't in Orbit any more.", 404);
+  const linkedin = text(body.linkedinUrl, 500);
+  const linkedinUrl = linkedin ? canonicalCompanyLinkedin(linkedin) : null;
+  if (!linkedinUrl) throw new CrmError("invalid_input", "There's no LinkedIn company page here to save.", 400, { field: "linkedinUrl" });
+  const prov = provenance("linkedin_link", sourceUrlFrom(body.sourceUrl) ?? linkedinUrl);
+  return withActor(actor, async (db) => {
+    const company = await readCompanyInDb(db, companyId, actor.workspaceId);
+    if (!company || company.archivedAt) throw new CrmError("not_found", "That company isn't in Orbit any more.", 404);
+    if (company.linkedinUrl && company.linkedinUrl !== linkedinUrl) {
+      throw new CrmError("conflict", `${company.name} already has a different LinkedIn page saved.`, 409);
+    }
+    const updated = company.linkedinUrl ? company : (await updateCompanyInDb(db, actor, companyId, { linkedinUrl }, prov)).company;
+    return { person: null, company: await companySummaryInDb(db, actor, updated), created: { contact: false, company: false } };
+  });
 }
 
 async function linkPerson(actor: UserActor, body: Input): Promise<CaptureResponse> {
@@ -369,7 +444,8 @@ export async function diff(actor: UserActor, body: Input): Promise<DiffResponse>
   if (contactId) {
     const page = pagePerson(body.person);
     const prov = provenance("linkedin_update", page.linkedinUrl ?? page.salesNavigatorUrl);
-    return withActor(actor, async (db) => {
+    let enrich: string | null = null;
+    const result = await withActor(actor, async (db) => {
       const contact = await readContactInDb(db, contactId, actor.workspaceId);
       if (!contact) throw new CrmError("not_found", "That person isn't in Orbit any more.", 404);
       const rows = personRows(contact, page);
@@ -386,8 +462,10 @@ export async function diff(actor: UserActor, body: Input): Promise<DiffResponse>
             write.lastName = page.lastName;
           }
           if (item.field === "company") {
+            assertScope(actor.scopes, "companies:write");
             const company = await findOrCreateCompany(db, actor, { name: page.companyName, domain: null, linkedinUrl: page.companyLinkedinUrl }, prov);
             if (company) write.companyId = company.company.id;
+            if (company && (company.created || company.gainedDomain)) enrich = company.company.id;
           }
         }
         await updateContactInDb(db, actor, contactId, write, prov);
@@ -400,10 +478,13 @@ export async function diff(actor: UserActor, body: Input): Promise<DiffResponse>
         company: null,
       };
     });
+    if (enrich) scheduleEnrichment(actor, enrich);
+    return result;
   }
   const page = pageCompany(body.company);
   const prov = provenance("linkedin_update", page.linkedinUrl);
-  return withActor(actor, async (db) => {
+  let gainedDomain = false;
+  const result = await withActor(actor, async (db) => {
     const company = await readCompanyInDb(db, companyId!, actor.workspaceId);
     if (!company) throw new CrmError("not_found", "That company isn't in Orbit any more.", 404);
     const rows = companyRows(company, page);
@@ -417,10 +498,12 @@ export async function diff(actor: UserActor, body: Input): Promise<DiffResponse>
         if (item.field === "linkedinUrl") write.linkedinUrl = page.linkedinUrl;
         if (item.field === "website" && page.website) {
           write.website = page.website;
-          if (!company.domain) write.domain = canonicalDomain(page.website);
+          const host = canonicalDomain(page.website);
+          if (!company.domain && host && !isSharedHost(host) && !(await domainTaken(db, actor.workspaceId, host, company.id))) write.domain = host;
         }
       }
       await updateCompanyInDb(db, actor, company.id, write, prov);
+      gainedDomain = Boolean(write.domain);
     }
     const updated = await readCompanyInDb(db, company.id, actor.workspaceId);
     return {
@@ -430,27 +513,32 @@ export async function diff(actor: UserActor, body: Input): Promise<DiffResponse>
       company: updated ? await companySummaryInDb(db, actor, updated) : null,
     };
   });
+  if (gainedDomain) scheduleEnrichment(actor, companyId!);
+  return result;
 }
 
 export function dueFrom(value: unknown, now = new Date()) {
   if (value === null || value === undefined || value === "") return null;
   const timeZone = appTimeZone();
-  const offsets: Record<string, number> = { today: 0, tomorrow: 1, next_week: 7 };
-  let day: { year: number; month: number; day: number } | null = null;
-  if (typeof value === "string" && value in offsets) {
-    const start = startOfDay(now, timeZone, offsets[value]);
-    const parts = zonedParts(start, timeZone);
-    day = { year: parts.year, month: parts.month, day: parts.day };
-  } else if (typeof value === "string") {
+  const today = dayKeyAt(now, timeZone);
+  let key: string | null = null;
+  if (value === "today") key = today;
+  else if (value === "tomorrow") key = nextWorkingDay(shiftDay(today, 1));
+  else if (value === "next_week") key = shiftDay(today, (8 - weekday(today)) % 7 || 7);
+  else if (typeof value === "string") {
     const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
     if (match) {
       const [year, month, date] = match.slice(1).map(Number);
       const check = new Date(Date.UTC(year, month - 1, date));
-      if (check.getUTCMonth() === month - 1 && check.getUTCDate() === date) day = { year, month, day: date };
+      if (check.getUTCMonth() === month - 1 && check.getUTCDate() === date) key = match[0];
     }
   }
-  if (!day) throw new CrmError("invalid_input", "Choose when it's due.", 400, { field: "due" });
-  return zonedTimeToDate({ ...day, hour: 9, minute: 0, second: 0 }, timeZone).toISOString();
+  if (!key) throw new CrmError("invalid_input", "Choose when it's due.", 400, { field: "due" });
+  if (key === today) {
+    const endOfDay = wallClockAt(today, 17, 30, timeZone);
+    return new Date(Math.max(endOfDay, now.getTime() + 60 * 60_000)).toISOString();
+  }
+  return new Date(wallClockAt(key, 9, 0, timeZone)).toISOString();
 }
 
 async function linkedRecords(db: Db, actor: UserActor, body: Input) {
@@ -491,7 +579,7 @@ export async function addTask(actor: UserActor, body: Input): Promise<TaskRespon
         id: task.id,
         title: task.title,
         dueAt: task.dueAt,
-        dueLabel: task.dueAt ? dayLabel(task.dueAt) : null,
+        dueLabel: task.dueAt ? dueLabel(task.dueAt) : null,
         overdue: false,
         dueToday: false,
       },
@@ -519,8 +607,22 @@ function messageText(value: string) {
   return value.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
-export function messageKey(message: { mine: boolean; text: string }) {
-  return createHash("sha256").update(`${message.mine ? "me" : "them"}|${messageText(message.text)}`).digest("hex").slice(0, 32);
+export function messageKey(message: { mine: boolean; text: string; at?: string | null }, occurrence = 0) {
+  const base = `${message.mine ? "me" : "them"}|${messageText(message.text)}`;
+  const at = message.at ? new Date(message.at) : null;
+  const suffix = at && !Number.isNaN(at.getTime()) ? `|${at.toISOString().slice(0, 16)}` : occurrence > 0 ? `|#${occurrence}` : "";
+  return createHash("sha256").update(`${base}${suffix}`).digest("hex").slice(0, 32);
+}
+
+export function messageKeys(messages: { mine: boolean; text: string; at?: string | null }[]) {
+  const counts = new Map<string, number>();
+  return messages.map((message) => {
+    if (message.at) return messageKey(message);
+    const base = messageKey({ mine: message.mine, text: message.text });
+    const occurrence = counts.get(base) ?? 0;
+    counts.set(base, occurrence + 1);
+    return messageKey(message, occurrence);
+  });
 }
 
 function threadMessages(value: unknown): ThreadMessage[] {
@@ -567,9 +669,10 @@ export async function checkLogged(actor: UserActor, body: Input): Promise<LogChe
     const contact = await readContactInDb(db, contactId, actor.workspaceId);
     if (!contact) throw new CrmError("not_found", "That person isn't in Orbit any more.", 404);
     const logged = await loggedKeys(db, actor, contactId);
+    const keys = messageKeys(messages);
     return {
-      messages: messages.map((message) => {
-        const at = logged.byKey.get(messageKey(message)) ?? null;
+      messages: messages.map((_, index) => {
+        const at = logged.byKey.get(keys[index]) ?? null;
         return { loggedAt: at, loggedLabel: at ? `Logged ${dayLabel(at)}` : null };
       }),
       lastLogged: logged.last ? { ...logged.last, label: dayLabel(logged.last.at) } : null,
@@ -603,7 +706,7 @@ export async function logLinkedin(actor: UserActor, body: Input): Promise<LogRes
           occurredAt,
           contactId,
           companyId: contact.companyId,
-          metadata: { direction, linkedinMessageKeys: [messageKey({ mine: direction === "sent", text: message })] },
+          metadata: { direction, linkedinMessageKeys: [messageKey({ mine: direction === "sent", text: message, at: occurredAt ? toIsoInstant(occurredAt) : null })] },
         },
         provenance("log_linkedin_message", contact.linkedinUrl),
       );
@@ -619,8 +722,9 @@ export async function logLinkedin(actor: UserActor, body: Input): Promise<LogRes
     if (!contact) throw new CrmError("not_found", "That person isn't in Orbit any more.", 404);
     const logged = await loggedKeys(db, actor, contactId);
     const seen = new Set<string>();
-    const fresh = messages.filter((message) => {
-      const key = messageKey(message);
+    const keys = messageKeys(messages);
+    const fresh = messages.filter((_, index) => {
+      const key = keys[index];
       if (logged.byKey.has(key) || seen.has(key)) return false;
       seen.add(key);
       return true;

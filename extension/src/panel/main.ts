@@ -1,6 +1,7 @@
 import type {
   CaptureRequest,
   CaptureResponse,
+  CompanySummary,
   DiffField,
   DiffRequest,
   DiffResponse,
@@ -22,6 +23,7 @@ import { LINKEDIN_URL, orbitHref, TOKEN_KEY, WORKSPACE_KEY } from "../config";
 import type { BackgroundMessage, ReadReply } from "../messages";
 import type { ReadResult, ReadWhat } from "../parsers";
 import { classifyUrl, domainFrom, onLinkedin } from "../urls";
+import { resetIds } from "./dom";
 import { connectView, loadingView, readyView, waitingView, type Actions } from "./views";
 import { currentLookup, currentWorkspace, initialStore, localDateTime, shortLocation, tagList, type Active, type Store } from "./state";
 
@@ -29,22 +31,65 @@ const DISCONNECTED = "This browser was disconnected from Orbit. Connect again.";
 
 let s: Store = initialStore();
 let sequence = 0;
-let pollTimer: ReturnType<typeof setInterval> | null = null;
+let pollTimer: ReturnType<typeof setTimeout> | null = null;
+let polling = false;
 let flashTimer: ReturnType<typeof setTimeout> | null = null;
+let diffToken = 0;
 let focusForm = false;
+let focusMenu = false;
+let focusAfter: string | null = null;
 const readCache = new Map<string, ReadResult>();
 
 const root = document.getElementById("app")!;
+const liveStatus = document.getElementById("live-status");
+const liveAlert = document.getElementById("live-alert");
+
+const MENU_BUTTONS = { workspace: "workspace-menu-button", more: "more-menu-button" } as const;
+
+function statusText() {
+  if (s.phase === "loading") return "Loading";
+  if (s.phase === "waiting") return "Waiting for you to approve this browser in Orbit";
+  if (s.phase !== "ready") return null;
+  if (s.flash) return s.flash;
+  if (s.target.kind === "other") return null;
+  if (!s.lookup) return s.lookupError ? null : "Looking this up in Orbit";
+  if (s.active === "update" && !s.diff) return "Comparing with the page";
+  return currentLookup(s)?.presence ?? null;
+}
+
+function alertText() {
+  if (s.phase === "connect") return s.connectNotice;
+  if (s.phase !== "ready") return null;
+  return s.error ?? (!s.lookup ? s.lookupError : null);
+}
+
+function announce(region: HTMLElement | null, text: string | null) {
+  if (region && region.textContent !== (text ?? "")) region.textContent = text ?? "";
+}
+
+function menuItems() {
+  return Array.from(root.querySelectorAll<HTMLElement>(".menu [role^='menuitem']"));
+}
 
 function render() {
   const active = document.activeElement as HTMLElement | null;
-  const focusId = active?.id || null;
+  const focusId = focusAfter ?? (active?.id || null);
+  focusAfter = null;
   const scroll = root.querySelector(".body")?.scrollTop ?? 0;
+  resetIds();
   const view =
     s.phase === "loading" ? loadingView() : s.phase === "connect" ? connectView(s, actions) : s.phase === "waiting" ? waitingView(s, actions) : readyView(s, actions);
   root.replaceChildren(view);
+  announce(liveStatus, statusText());
+  announce(liveAlert, alertText());
   const body = root.querySelector(".body");
   if (body) body.scrollTop = scroll;
+  if (focusMenu) {
+    focusMenu = false;
+    const items = menuItems();
+    (items.find((item) => item.getAttribute("aria-checked") === "true") ?? items[0])?.focus();
+    return;
+  }
   if (focusForm) {
     focusForm = false;
     const target = root.querySelector<HTMLElement>("[data-autofocus]");
@@ -53,6 +98,13 @@ function render() {
     return;
   }
   if (focusId) document.getElementById(focusId)?.focus();
+}
+
+function closeMenu() {
+  if (!s.menu) return;
+  focusAfter = MENU_BUTTONS[s.menu];
+  s.menu = null;
+  render();
 }
 
 function showFlash(message: string) {
@@ -66,7 +118,7 @@ function showFlash(message: string) {
 
 async function signOut(notice: string | null) {
   stopPolling();
-  await chrome.storage.local.remove(TOKEN_KEY);
+  await chrome.storage.local.remove([TOKEN_KEY, WORKSPACE_KEY]);
   const message: BackgroundMessage = { type: "orbit:signed-out" };
   void chrome.runtime.sendMessage(message).catch(() => undefined);
   s = { ...initialStore(), phase: "connect", connectNotice: notice };
@@ -85,8 +137,23 @@ async function handleError(error: unknown) {
 }
 
 function stopPolling() {
-  if (pollTimer) clearInterval(pollTimer);
+  if (pollTimer) clearTimeout(pollTimer);
   pollTimer = null;
+}
+
+function schedulePoll() {
+  stopPolling();
+  pollTimer = setTimeout(() => void poll(), 2000);
+}
+
+function defaultWorkspace(result: LookupResponse | null, stored: unknown) {
+  const allowed = s.me?.workspaces ?? [];
+  const isAllowed = (id: unknown): id is string => typeof id === "string" && allowed.some((item) => item.id === id);
+  const homeId = s.me?.homeWorkspaceId;
+  const home = isAllowed(homeId) ? homeId : null;
+  const found = (result?.workspaces ?? []).filter((item) => item.status === "in" && isAllowed(item.workspaceId)).map((item) => item.workspaceId);
+  if (found.length > 0) return home && found.includes(home) ? home : found[0];
+  return home ?? (isAllowed(stored) ? stored : null) ?? allowed[0]?.id ?? null;
 }
 
 async function loadMe(refresh = true) {
@@ -96,7 +163,7 @@ async function loadMe(refresh = true) {
     s.me = me;
     const stored = (await chrome.storage.local.get(WORKSPACE_KEY))[WORKSPACE_KEY];
     const known = me.workspaces.some((item) => item.id === s.workspaceId);
-    if (!known) s.workspaceId = me.workspaces.find((item) => item.id === stored)?.id ?? me.workspaces[0]?.id ?? null;
+    if (!known) s.workspaceId = defaultWorkspace(null, stored);
     s.phase = "ready";
     s.error = null;
     if (refresh) await refreshPage(true);
@@ -140,6 +207,7 @@ function emptyLookup(kind: LookupResponse["kind"]): LookupResponse {
       person: null,
       company: null,
       candidates: [],
+      companyCandidates: [],
       presence: "Not in Orbit",
     })),
   };
@@ -212,6 +280,7 @@ function lookupQuery(): LookupQuery | null {
   if (target.kind === "person" || target.kind === "lead") {
     return {
       url: target.canonical,
+      linkedinUrl: target.kind === "lead" ? (s.person?.linkedinUrl ?? undefined) : undefined,
       name: s.person?.name ?? undefined,
       company: s.person?.companyName ?? undefined,
       companyUrl: s.person?.companyLinkedinUrl ?? undefined,
@@ -270,8 +339,10 @@ async function refreshPage(force: boolean, delay = 0) {
   render();
   let read = readCache.get(key) ?? null;
   if (!read) {
+    const tabId = s.tabId;
     if (delay) await sleep(delay);
-    read = await readTab(s.tabId, what);
+    if (run !== sequence) return;
+    read = await readTab(tabId, what);
     if (run !== sequence) return;
     if (read) readCache.set(key, read);
   }
@@ -287,9 +358,8 @@ async function refreshPage(force: boolean, delay = 0) {
     s.lookupError = null;
     if (!samePage) {
       const stored = (await chrome.storage.local.get(WORKSPACE_KEY))[WORKSPACE_KEY];
-      const allowed = s.me?.workspaces ?? [];
-      const found = result.workspaces.find((item) => item.status === "in" && allowed.some((workspace) => workspace.id === item.workspaceId));
-      s.workspaceId = found?.workspaceId ?? allowed.find((item) => item.id === stored)?.id ?? allowed[0]?.id ?? null;
+      if (run !== sequence) return;
+      s.workspaceId = defaultWorkspace(result, stored);
     }
   } catch (error) {
     if (run !== sequence) return;
@@ -302,7 +372,7 @@ async function refreshPage(force: boolean, delay = 0) {
   }
   if (!samePage || force) {
     const kept = samePage ? s.form : {};
-    s.form = { ...defaultForm(), ...pick(kept, ["owner", "tags", "board", "stage"]) };
+    s.form = { ...defaultForm(), ...pick(kept, ["owner", "ownerTouched", "tags", "board", "stage"]) };
   }
   s.loadingPage = false;
   reportBadge();
@@ -378,8 +448,7 @@ const actions: Actions = {
       s.busy = false;
       render();
       actions.openApproveTab();
-      stopPolling();
-      pollTimer = setInterval(() => void poll(), 2000);
+      schedulePoll();
     } catch (error) {
       s.busy = false;
       s.connectNotice = error instanceof Error ? error.message : "Couldn't reach Orbit.";
@@ -400,22 +469,29 @@ const actions: Actions = {
     render();
   },
   toggleMenu(menu) {
-    s.menu = s.menu === menu ? null : menu;
+    if (s.menu === menu) {
+      closeMenu();
+      return;
+    }
+    s.menu = menu;
+    focusMenu = true;
     render();
   },
   chooseWorkspace(id) {
     s.workspaceId = id;
     s.menu = null;
+    focusAfter = MENU_BUTTONS.workspace;
     s.active = null;
     s.diff = null;
     s.conversation = null;
     s.error = null;
-    s.form = { ...s.form, board: "", stage: "", owner: s.me?.user.id ?? "" };
+    s.form = { ...s.form, board: "", stage: "", owner: s.me?.user.id ?? "", ownerTouched: "" };
     void chrome.storage.local.set({ [WORKSPACE_KEY]: id });
     render();
     if (s.target.kind === "conversation") void loadLastLogged(sequence);
   },
   openOrbit(path = "/") {
+    if (s.menu) focusAfter = MENU_BUTTONS[s.menu];
     s.menu = null;
     void chrome.tabs.create({ url: orbitHref(path) });
     render();
@@ -443,7 +519,7 @@ const actions: Actions = {
   },
   async savePerson() {
     const f = s.form;
-    if (!f["p.firstName"] && !f["p.lastName"] && !f["p.linkedinUrl"]) {
+    if (!f["p.firstName"] && !f["p.lastName"] && !f["p.linkedinUrl"] && !f["p.salesNavigatorUrl"]) {
       s.error = "Add a name first. Press Edit to fill it in.";
       render();
       return;
@@ -460,7 +536,7 @@ const actions: Actions = {
         salesNavigatorUrl: f["p.salesNavigatorUrl"] || null,
       },
       company: f["p.company"] || domain ? { name: f["p.company"] || null, domain, linkedinUrl: s.person?.companyLinkedinUrl ?? null } : null,
-      ownerId: f.owner || null,
+      ...(f.ownerTouched ? { ownerId: f.owner || null } : {}),
       tags: tagList(f.tags),
       boardId: f.board || null,
       stageId: stageFor(f.board, f.stage),
@@ -507,7 +583,13 @@ const actions: Actions = {
     const result = await write<CaptureResponse>("/api/extension/capture", body);
     if (result) await done(`Saved on ${candidate.name}'s record.`);
   },
-  rejectMatch(candidate: PersonSummary) {
+  async confirmCompany(candidate: CompanySummary) {
+    if (s.target.kind !== "company" || !s.target.canonical) return;
+    const body: CaptureRequest = { kind: "link_company", companyId: candidate.id, linkedinUrl: s.target.canonical, sourceUrl: s.target.canonical };
+    const result = await write<CaptureResponse>("/api/extension/capture", body);
+    if (result) await done(`Saved on ${candidate.name}.`);
+  },
+  rejectMatch(candidate: { id: string }) {
     s.rejected.add(candidate.id);
     render();
   },
@@ -526,7 +608,7 @@ const actions: Actions = {
       contactId,
       companyId,
     });
-    if (result) await done("Task added.");
+    if (result) await done(result.task.dueLabel ? `Task added, due ${result.task.dueLabel.replace(/^(Today|Tomorrow)$/, (label) => label.toLowerCase())}.` : "Task added.");
   },
   async addNote(contactId, companyId) {
     const body = s.form["n.body"]?.trim();
@@ -571,9 +653,18 @@ const actions: Actions = {
   async readConversation() {
     const person = currentLookup(s)?.person;
     if (s.tabId === null || !person || !s.token) return;
+    const run = sequence;
+    const pageKey = s.pageKey;
+    const workspaceId = s.workspaceId;
+    const stale = () => run !== sequence || pageKey !== s.pageKey || workspaceId !== s.workspaceId;
+    const bail = () => {
+      s.busy = false;
+      render();
+    };
     s.busy = true;
     render();
     const read = await readTab(s.tabId, "thread");
+    if (stale()) return bail();
     const messages = read?.what === "thread" ? read.thread.messages : [];
     if (!read) {
       s.busy = false;
@@ -588,15 +679,18 @@ const actions: Actions = {
         workspaceId: s.workspaceId,
         body: { contactId: person.id, messages },
       });
+      if (stale()) return bail();
       checks = checked.data.messages;
       s.lastLogged = checked.data.lastLogged;
     } catch (error) {
+      if (stale()) return bail();
       if (error instanceof OrbitError && error.status === 401) {
         await signOut(DISCONNECTED);
         return;
       }
     }
     s.conversation = {
+      pageKey,
       messages,
       checks,
       ticked: new Set(messages.map((_, index) => index).filter((index) => !checks[index]?.loggedAt)),
@@ -615,6 +709,11 @@ const actions: Actions = {
   async logConversation(contactId) {
     const conversation = s.conversation;
     if (!conversation) return;
+    if (conversation.pageKey !== s.pageKey) {
+      s.conversation = null;
+      render();
+      return;
+    }
     const messages = conversation.messages.filter((_, index) => conversation.ticked.has(index) && !conversation.checks[index]?.loggedAt);
     if (messages.length === 0) return;
     const body: LogRequest = {
@@ -669,13 +768,18 @@ function diffRequest(): DiffRequest | null {
 async function loadDiff() {
   const request = diffRequest();
   if (!request || !s.token) return;
+  const token = ++diffToken;
+  const run = sequence;
+  const workspaceId = s.workspaceId;
+  const stale = () => token !== diffToken || run !== sequence || workspaceId !== s.workspaceId || s.active !== "update";
   try {
-    const result = await call<DiffResponse>("/api/extension/diff", { token: s.token, workspaceId: s.workspaceId, body: request });
-    if (s.active !== "update") return;
+    const result = await call<DiffResponse>("/api/extension/diff", { token: s.token, workspaceId, body: request });
+    if (stale()) return;
     s.diff = result.data;
     s.diffTicks = new Set(result.data.changes.filter((row) => row.changed).map((row) => row.field));
     render();
   } catch (error) {
+    if (stale()) return;
     s.active = null;
     await handleError(error);
   }
@@ -690,10 +794,20 @@ document.addEventListener("click", (event) => {
 });
 
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && s.menu) {
-    s.menu = null;
-    render();
+  if (!s.menu) return;
+  if (event.key === "Escape" || event.key === "Tab") {
+    event.preventDefault();
+    closeMenu();
+    return;
   }
+  const items = menuItems();
+  if (items.length === 0 || !["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+  event.preventDefault();
+  const index = items.indexOf(document.activeElement as HTMLElement);
+  const last = items.length - 1;
+  const next =
+    event.key === "Home" ? 0 : event.key === "End" ? last : event.key === "ArrowDown" ? (index < 0 || index === last ? 0 : index + 1) : index <= 0 ? last : index - 1;
+  items[next].focus();
 });
 
 chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
@@ -713,18 +827,24 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 async function poll() {
-  if (!s.pairing) return;
-  if (Date.parse(s.pairing.expiresAt) < Date.now()) {
-    stopPolling();
+  pollTimer = null;
+  const pairing = s.pairing;
+  if (!pairing || polling) return;
+  if (Date.parse(pairing.expiresAt) < Date.now()) {
     s.pairing = null;
     s.phase = "connect";
     s.connectNotice = "The code expired. Connect again.";
     render();
     return;
   }
+  polling = true;
   try {
-    const result = await call<PairRedeemResponse>("/api/extension/pair/redeem", { body: { code: s.pairing.code, secret: s.pairing.secret } });
-    if (result.data.status !== "approved") return;
+    const result = await call<PairRedeemResponse>("/api/extension/pair/redeem", { body: { code: pairing.code, secret: pairing.secret } });
+    if (s.pairing !== pairing) return;
+    if (result.data.status !== "approved") {
+      schedulePoll();
+      return;
+    }
     stopPolling();
     await chrome.storage.local.set({ [TOKEN_KEY]: result.data.token });
     s.token = result.data.token;
@@ -733,13 +853,18 @@ async function poll() {
     render();
     await loadMe(true);
   } catch (error) {
+    if (s.pairing !== pairing) return;
     if (error instanceof OrbitError && (error.status === 410 || error.status === 400 || error.status === 404)) {
       stopPolling();
       s.pairing = null;
       s.phase = "connect";
       s.connectNotice = error.message;
       render();
+      return;
     }
+    schedulePoll();
+  } finally {
+    polling = false;
   }
 }
 

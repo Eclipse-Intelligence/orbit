@@ -50,7 +50,7 @@ export async function call<T>(path: string, options: CallOptions = {}): Promise<
   return { status: response.status, data: data as T };
 }
 
-export function lookupPath(query: LookupQuery) {
+function lookupPath(query: LookupQuery) {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) if (typeof value === "string" && value.trim()) params.set(key, value.trim());
   return `/api/extension/lookup?${params.toString()}`;

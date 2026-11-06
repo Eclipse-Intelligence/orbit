@@ -21,10 +21,11 @@ export function h(tag: string, props?: Props, ...children: Child[]): HTMLElement
       continue;
     }
     if (key === "class") element.className = String(value);
-    else if (key === "html") element.innerHTML = String(value);
+    else if (key === "trustedSvg") element.innerHTML = String(value);
     else if (key === "style" && typeof value === "object") Object.assign(element.style, value);
-    else if (key.startsWith("on") && typeof value === "function") element.addEventListener(key.slice(2).toLowerCase(), value as EventListener);
-    else if (PROPERTIES.has(key)) (element as unknown as Record<string, unknown>)[key] = value;
+    else if (/^on/i.test(key)) {
+      if (typeof value === "function") element.addEventListener(key.slice(2).toLowerCase(), value as EventListener);
+    } else if (PROPERTIES.has(key)) (element as unknown as Record<string, unknown>)[key] = value;
     else element.setAttribute(key, value === true ? "" : String(value));
   }
   append(element, children);
@@ -35,9 +36,15 @@ export function cx(...names: (string | false | null | undefined)[]) {
   return names.filter(Boolean).join(" ");
 }
 
-let counter = 0;
+const used = new Map<string, number>();
 
-export function uid(prefix = "f") {
-  counter += 1;
-  return `${prefix}-${counter}`;
+export function resetIds() {
+  used.clear();
+}
+
+export function uid(key: string) {
+  const base = `f-${key.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "field"}`;
+  const count = (used.get(base) ?? 0) + 1;
+  used.set(base, count);
+  return count === 1 ? base : `${base}-${count}`;
 }

@@ -9,6 +9,13 @@ import WorkspaceTile from "@/components/workspaces/workspace-tile";
 
 type Workspace = { id: string; name: string };
 
+const CODE_ALPHABET = /[^ABCDEFGHJKLMNPQRSTUVWXYZ23456789]/g;
+
+function formatCode(value: string) {
+  const clean = value.toUpperCase().replace(CODE_ALPHABET, "").slice(0, 8);
+  return clean.length > 4 ? `${clean.slice(0, 4)}-${clean.slice(4)}` : clean;
+}
+
 function WorkspaceChoice({ workspace, checked, onChange }: { workspace: Workspace; checked: boolean; onChange: (checked: boolean) => void }) {
   const id = useId();
   return (
@@ -20,13 +27,24 @@ function WorkspaceChoice({ workspace, checked, onChange }: { workspace: Workspac
   );
 }
 
-export default function ConnectChromeForm({ code, suggestedName, workspaces }: { code: string; suggestedName: string; workspaces: Workspace[] }) {
+export default function ConnectChromeForm({
+  suggestedName,
+  homeWorkspaceId,
+  workspaces,
+}: {
+  suggestedName: string;
+  homeWorkspaceId: string | null;
+  workspaces: Workspace[];
+}) {
+  const codeId = useId();
   const nameId = useId();
+  const [code, setCode] = useState("");
   const [name, setName] = useState(suggestedName);
-  const [chosen, setChosen] = useState<string[]>(workspaces.map((workspace) => workspace.id));
+  const [chosen, setChosen] = useState<string[]>(homeWorkspaceId ? [homeWorkspaceId] : []);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<"approved" | "declined" | null>(null);
   const [pending, start] = useTransition();
+  const complete = code.replace("-", "").length === 8;
 
   function decide(approve: boolean) {
     setError(null);
@@ -40,8 +58,8 @@ export default function ConnectChromeForm({ code, suggestedName, workspaces }: {
   if (done) {
     return (
       <div role="status" className="border-sidebar-border bg-sidebar-accent flex flex-col gap-2 rounded-xl border p-5">
-        <h2 className="leading-6">{done === "approved" ? "Connected" : "Cancelled"}</h2>
-        <p className="text-subtle text-[14px] leading-5">
+        <h2>{done === "approved" ? "Connected" : "Cancelled"}</h2>
+        <p className="text-subtle">
           {done === "approved"
             ? "Go back to LinkedIn. The extension finishes connecting by itself, and you can close this tab."
             : "Nothing was connected. You can close this tab."}
@@ -59,8 +77,28 @@ export default function ConnectChromeForm({ code, suggestedName, workspaces }: {
       }}
     >
       <div className="flex flex-col gap-2">
-        <span className="caption-style text-soft">Code shown in the extension</span>
-        <span className="font-mono text-[20px] leading-none tracking-[0.12em]">{code}</span>
+        <label htmlFor={codeId} className="caption-style text-soft">
+          Code shown in the Orbit panel
+        </label>
+        <Input
+          id={codeId}
+          value={code}
+          required
+          autoFocus
+          autoComplete="off"
+          autoCapitalize="characters"
+          spellCheck={false}
+          placeholder="ABCD-EFGH"
+          aria-describedby={`${codeId}-hint`}
+          className="font-mono tracking-[0.12em] uppercase"
+          onChange={(event) => {
+            setCode(formatCode(event.target.value));
+            setError(null);
+          }}
+        />
+        <span id={`${codeId}-hint`} className="caption-style text-subtle">
+          Only approve a code you see in your own browser&apos;s Orbit panel right now.
+        </span>
       </div>
       <div className="flex flex-col gap-2">
         <label htmlFor={nameId} className="caption-style text-soft">
@@ -81,20 +119,20 @@ export default function ConnectChromeForm({ code, suggestedName, workspaces }: {
           />
         ))}
       </fieldset>
-      <div className="caption-style text-subtle flex flex-col gap-1.5 leading-[1.4]">
+      <div className="caption-style text-subtle flex flex-col gap-1.5">
         <span>It can look up and save people and companies, and add tasks, notes and LinkedIn activity.</span>
         <span>It can&apos;t read your mail, calendars, docs or assistant chats.</span>
       </div>
       {error && (
-        <p role="alert" className="caption-style text-danger leading-[1.4]">
+        <p role="alert" className="caption-style text-danger">
           {error}
         </p>
       )}
       <div className="flex justify-end gap-1.5">
-        <Button type="button" variant="ghost" size="md" disabled={pending} onClick={() => decide(false)}>
+        <Button type="button" variant="ghost" size="md" disabled={pending || !complete} onClick={() => decide(false)}>
           Cancel
         </Button>
-        <Button type="submit" variant="primary" size="md" disabled={pending || chosen.length === 0 || !name.trim()}>
+        <Button type="submit" variant="primary" size="md" disabled={pending || !complete || chosen.length === 0 || !name.trim()}>
           Approve
         </Button>
       </div>

@@ -2,24 +2,21 @@ export const EXTENSION_SOURCE = "linkedin_extension";
 export const EXTENSION_TOKEN_PREFIX = "olx_";
 export const WORKSPACE_HEADER = "x-orbit-workspace";
 export const PAIRING_TTL_MINUTES = 10;
-
-export type ApiError = { error: { code: string; message: string; details?: Record<string, unknown> } };
+export const SALES_NAVIGATOR_ID = /^[A-Za-z0-9_-]{6,120}$/;
 
 export type PairStartResponse = { code: string; secret: string; expiresAt: string; approveUrl: string };
-
-export type PairRedeemRequest = { code: string; secret: string };
 
 export type PairRedeemResponse =
   | { status: "pending"; expiresAt: string }
   | { status: "approved"; token: string; browser: { id: string; name: string } };
 
-export type Person = { id: string; name: string };
+type Person = { id: string; name: string };
 
-export type ExtensionStage = { id: string; name: string };
+type ExtensionStage = { id: string; name: string };
 
 export type ExtensionBoard = { id: string; name: string; kind: "sales" | "board"; stages: ExtensionStage[] };
 
-export type ExtensionLifecycle = { value: string; label: string };
+type ExtensionLifecycle = { value: string; label: string };
 
 export type ExtensionWorkspace = {
   id: string;
@@ -34,6 +31,7 @@ export type MeResponse = {
   browser: { id: string; name: string };
   user: { id: string; name: string; email: string };
   orbitUrl: string;
+  homeWorkspaceId: string | null;
   workspaces: ExtensionWorkspace[];
 };
 
@@ -81,7 +79,7 @@ export type PersonSummary = {
   url: string;
 };
 
-export type AiFieldValue = { id: string; label: string; value: string; detail: string | null; meta: string | null };
+type AiFieldValue = { id: string; label: string; value: string; detail: string | null; meta: string | null };
 
 export type CompanySummary = {
   id: string;
@@ -106,6 +104,7 @@ export type CompanySummary = {
 
 export type LookupQuery = {
   url: string;
+  linkedinUrl?: string;
   name?: string;
   company?: string;
   companyUrl?: string;
@@ -120,6 +119,7 @@ export type WorkspaceLookup = {
   person: PersonSummary | null;
   company: CompanySummary | null;
   candidates: PersonSummary[];
+  companyCandidates: CompanySummary[];
   presence: string;
 };
 
@@ -148,7 +148,7 @@ export type PageCompany = {
   linkedinUrl: string | null;
 };
 
-export type CapturePersonRequest = {
+type CapturePersonRequest = {
   kind: "person";
   person: {
     firstName: string | null;
@@ -159,14 +159,14 @@ export type CapturePersonRequest = {
     salesNavigatorUrl: string | null;
   };
   company: { name: string | null; domain: string | null; linkedinUrl: string | null } | null;
-  ownerId: string | null;
+  ownerId?: string | null;
   tags: string[];
   boardId: string | null;
   stageId: string | null;
   sourceUrl: string | null;
 };
 
-export type CaptureCompanyRequest = {
+type CaptureCompanyRequest = {
   kind: "company";
   company: {
     name: string;
@@ -184,9 +184,11 @@ export type CaptureCompanyRequest = {
   sourceUrl: string | null;
 };
 
-export type LinkRequest = { kind: "link"; contactId: string; linkedinUrl: string | null; salesNavigatorUrl: string | null; sourceUrl: string | null };
+type LinkRequest = { kind: "link"; contactId: string; linkedinUrl: string | null; salesNavigatorUrl: string | null; sourceUrl: string | null };
 
-export type CaptureRequest = CapturePersonRequest | CaptureCompanyRequest | LinkRequest;
+type LinkCompanyRequest = { kind: "link_company"; companyId: string; linkedinUrl: string; sourceUrl: string | null };
+
+export type CaptureRequest = CapturePersonRequest | CaptureCompanyRequest | LinkRequest | LinkCompanyRequest;
 
 export type CaptureResponse = {
   person: PersonSummary | null;
@@ -210,25 +212,13 @@ export type DiffRow = { field: DiffField; label: string; before: string | null; 
 
 export type DiffResponse = { changes: DiffRow[]; applied: DiffField[]; person: PersonSummary | null; company: CompanySummary | null };
 
-export type TaskDue = "today" | "tomorrow" | "next_week";
-
-export type TaskRequest = {
-  title: string;
-  due: TaskDue | string | null;
-  remindMinutes: number | null;
-  contactId?: string | null;
-  companyId?: string | null;
-};
-
 export type TaskResponse = { task: TaskSummary };
-
-export type NoteRequest = { body: string; contactId?: string | null; companyId?: string | null };
 
 export type NoteResponse = { activityId: string };
 
 export type ThreadMessage = { from: string; mine: boolean; when: string | null; at: string | null; text: string };
 
-export type LogMessageRequest = {
+type LogMessageRequest = {
   kind: "message";
   contactId: string;
   direction: "received" | "sent";
@@ -236,7 +226,7 @@ export type LogMessageRequest = {
   text: string;
 };
 
-export type LogConversationRequest = {
+type LogConversationRequest = {
   kind: "conversation";
   contactId: string;
   title: string | null;
@@ -247,8 +237,6 @@ export type LogConversationRequest = {
 export type LogRequest = LogMessageRequest | LogConversationRequest;
 
 export type LogResponse = { activityId: string; logged: number; skipped: number };
-
-export type LogCheckRequest = { contactId: string; messages: ThreadMessage[] };
 
 export type LogCheckResponse = {
   messages: { loggedAt: string | null; loggedLabel: string | null }[];

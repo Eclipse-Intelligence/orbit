@@ -5,7 +5,7 @@ import { readProfile } from "./profile";
 import { readPartner, readThread, type PageThread, type ThreadPartner } from "./thread";
 
 export { parseWhen } from "./thread";
-export { readCompany, readLead, readPartner, readProfile, readThread };
+export { readThread };
 export type { PageThread, ThreadPartner };
 
 export type ReadWhat = "profile" | "lead" | "company" | "thread-person" | "thread";

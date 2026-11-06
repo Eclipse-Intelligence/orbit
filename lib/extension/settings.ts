@@ -21,6 +21,10 @@ function format(date: Date, options: Intl.DateTimeFormatOptions) {
   return new Intl.DateTimeFormat("en-GB", { ...options, timeZone: appTimeZone() }).format(date);
 }
 
+function sameYear(left: Date, right: Date) {
+  return format(left, { year: "numeric" }) === format(right, { year: "numeric" });
+}
+
 export function browserRows(browsers: BrowserSummary[], now = new Date()): BrowserRowView[] {
   const today = startOfDay(now).getTime();
   return browsers.map((browser) => {
@@ -30,7 +34,7 @@ export function browserRows(browsers: BrowserSummary[], now = new Date()): Brows
       ? "Not used yet"
       : usedToday
         ? `Used today at ${format(used, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" })}`
-        : `Last used ${format(used, { day: "numeric", month: "short" })}`;
+        : `Last used ${format(used, { day: "numeric", month: "short", ...(sameYear(used, now) ? {} : { year: "numeric" }) })}`;
     return {
       id: browser.id,
       name: browser.name,

@@ -29,7 +29,7 @@ export function safeAll(root: ParentNode | null | undefined, selector: string): 
   }
 }
 
-export function safeOne(root: ParentNode | null | undefined, selector: string): Element | null {
+function safeOne(root: ParentNode | null | undefined, selector: string): Element | null {
   if (!root) return null;
   try {
     return root.querySelector(selector);

@@ -45,9 +45,9 @@ function companyFromLine(line: string | null) {
   return clean(line?.split(/\s+·\s+|\s+•\s+/)[0] ?? null);
 }
 
-export type ExperienceRole = { jobTitle: string | null; companyName: string | null; companyLinkedinUrl: string | null };
+type ExperienceRole = { jobTitle: string | null; companyName: string | null; companyLinkedinUrl: string | null };
 
-export function readExperience(root: ParentNode, base: string): ExperienceRole {
+function readExperience(root: ParentNode, base: string): ExperienceRole {
   const empty = { jobTitle: null, companyName: null, companyLinkedinUrl: null };
   const section = sectionTitled(root, "experience", /^experience$/i);
   if (!section) return empty;

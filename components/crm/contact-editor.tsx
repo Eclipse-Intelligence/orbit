@@ -167,6 +167,12 @@ export default function ContactEditor({
           defaultValue={editing?.linkedinUrl ?? ""}
         />
         <Field
+          id="contact-sales-navigator"
+          name="salesNavigatorUrl"
+          label="Sales Navigator"
+          defaultValue={editing?.salesNavigatorUrl ?? ""}
+        />
+        <Field
           id="contact-location"
           name="location"
           label="Location"

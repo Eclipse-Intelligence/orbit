@@ -3,6 +3,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { after, before, describe, it } from "node:test";
 import { build } from "esbuild";
 import { chromium, type Browser, type Page } from "playwright-core";
+import { orbitHref } from "@/extension/src/config";
+import { dueDate } from "@/extension/src/panel/state";
 import { canonicalCompany, canonicalProfile, classifyUrl, domainFrom, onLinkedin, targetFromPath } from "@/extension/src/urls";
 import type { PageCompany, PagePerson } from "@/lib/extension/protocol";
 import type { PageThread } from "@/extension/src/parsers";
@@ -52,14 +54,42 @@ describe("LinkedIn URL classification", () => {
     assert.equal(domainFrom("https://www.linkedin.com/company/acme"), null);
     assert.equal(domainFrom(""), null);
   });
+
+  it("ignores links to other sites and short Sales Navigator ids", () => {
+    assert.equal(canonicalProfile("https://other.example/in/hannah-okafor", LINKEDIN), null);
+    assert.equal(canonicalCompany("https://other.example/company/acme", "https://www.linkedin.com/in/someone"), null);
+    assert.equal(canonicalProfile("https://uk.linkedin.com/in/hannah-okafor", LINKEDIN), "https://www.linkedin.com/in/hannah-okafor");
+    assert.equal(canonicalProfile("/in/hannah-okafor", "http://127.0.0.1:4410/messaging/"), "https://www.linkedin.com/in/hannah-okafor");
+    assert.equal(classifyUrl("https://www.linkedin.com/sales/lead/ACwA", LINKEDIN).kind, "other");
+  });
+
+  it("only opens Orbit addresses on the Orbit origin", () => {
+    assert.equal(orbitHref("/open?workspace=1&to=%2Fcontacts%2F2"), "https://orbit.geteclipse.co/open?workspace=1&to=%2Fcontacts%2F2");
+    assert.equal(orbitHref("https://orbit.geteclipse.co/companies/1"), "https://orbit.geteclipse.co/companies/1");
+    assert.equal(orbitHref("https://other.example/page"), "https://orbit.geteclipse.co/");
+    assert.equal(orbitHref("//other.example/page"), "https://orbit.geteclipse.co/");
+    assert.equal(orbitHref("@other.example"), "https://orbit.geteclipse.co/@other.example");
+  });
+
+  it("shows the same due dates the server uses", () => {
+    const friday = new Date(2026, 10, 6, 10, 0);
+    assert.equal(dueDate("today", friday), "2026-11-06");
+    assert.equal(dueDate("tomorrow", friday), "2026-11-09");
+    assert.equal(dueDate("next_week", friday), "2026-11-09");
+    const monday = new Date(2026, 10, 9, 10, 0);
+    assert.equal(dueDate("tomorrow", monday), "2026-11-10");
+    assert.equal(dueDate("next_week", monday), "2026-11-16");
+    assert.equal(dueDate("2026-12-01", monday), "2026-12-01");
+  });
 });
 
-describe("LinkedIn page parsers", { skip: existsSync(CHROMIUM) ? false : "Chromium is not installed" }, () => {
+describe("LinkedIn page parsers", () => {
   let browser: Browser;
   let page: Page;
   let bundle: string;
 
   before(async () => {
+    if (!existsSync(CHROMIUM)) throw new Error(`Chromium isn't at ${CHROMIUM}. Install it with playwright or set PLAYWRIGHT_CHROMIUM.`);
     const built = await build({
       entryPoints: ["extension/src/parsers/index.ts"],
       bundle: true,
@@ -67,7 +97,7 @@ describe("LinkedIn page parsers", { skip: existsSync(CHROMIUM) ? false : "Chromi
       format: "iife",
       globalName: "OrbitParsers",
       platform: "browser",
-      target: "chrome120",
+      target: "chrome116",
       logLevel: "silent",
     });
     bundle = built.outputFiles[0].text;
@@ -208,6 +238,63 @@ describe("LinkedIn page parsers", { skip: existsSync(CHROMIUM) ? false : "Chromi
     assert.equal(read.messages[4].text, "Great. Also, could you join our team call on the 14th?");
     const first = new Date(read.messages[0].at!);
     assert.deepEqual([first.getFullYear(), first.getMonth(), first.getDate(), first.getHours(), first.getMinutes()], [2026, 10, 3, 16, 42]);
+  });
+
+  it("reads the partner and messages only from the open thread", async () => {
+    const partner = await read<{ name: string | null; profileUrl: string | null }>("thread-noisy.html", "thread-person", "https://www.linkedin.com/messaging/thread/2-NOISY/");
+    assert.deepEqual(partner, { name: "Sam Patel", profileUrl: null });
+    const thread = await read<PageThread>("thread-noisy.html", "thread", "https://www.linkedin.com/messaging/thread/2-NOISY/");
+    assert.deepEqual(
+      thread.messages.map((message) => [message.from, message.mine, message.text]),
+      [["Sam Patel", false, "Are you free on Thursday?"]],
+    );
+  });
+
+  it("skips messages it can't tell the direction of, and never reads outside the thread", async () => {
+    const thread = await read<PageThread>("thread-plain.html", "thread", "https://www.linkedin.com/messaging/thread/2-PLAIN/");
+    assert.deepEqual(thread.person, { name: "Priya Shah", profileUrl: "https://www.linkedin.com/in/priya-shah-seo" });
+    assert.deepEqual(
+      thread.messages.map((message) => [message.from, message.mine, message.text]),
+      [
+        ["Priya Shah", false, "Can you send pricing?"],
+        ["Priya Shah", false, "Thanks!"],
+      ],
+    );
+  });
+
+  it("finds no messages on a page without a thread", async () => {
+    await page.setContent("<html><body><header><h2>Messaging</h2><a href='/in/mark-ridgeon/'>Me</a></header><ul><li><p>Try Premium</p></li></ul></body></html>");
+    await page.addScriptTag({ content: bundle });
+    const thread = await page.evaluate(() => {
+      const parsers = (window as unknown as { OrbitParsers: { readThread: (root: ParentNode, url: string) => unknown } }).OrbitParsers;
+      return parsers.readThread(document, "https://www.linkedin.com/messaging/thread/2-NONE/");
+    });
+    assert.deepEqual(thread, { person: { name: null, profileUrl: null }, messages: [] });
+  });
+
+  it("keeps the last 200 messages and caps each at 5,000 characters", async () => {
+    await load("thread-priya.html");
+    const thread = await page.evaluate(() => {
+      const list = document.querySelector(".msg-s-message-list-content")!;
+      for (let index = 0; index < 250; index += 1) {
+        const item = document.createElement("li");
+        const event = document.createElement("div");
+        event.className = "msg-s-event-listitem msg-s-event-listitem--other";
+        event.setAttribute("data-event-urn", `urn:li:msg_message:x${index}`);
+        const body = document.createElement("p");
+        body.className = "msg-s-event-listitem__body";
+        body.textContent = index === 249 ? "x".repeat(6000) : `Message ${index}`;
+        event.appendChild(body);
+        item.appendChild(event);
+        list.appendChild(item);
+      }
+      const parsers = (window as unknown as { OrbitParsers: { readThread: (root: ParentNode, url: string) => unknown } }).OrbitParsers;
+      return parsers.readThread(document, "https://www.linkedin.com/messaging/thread/2-MWE4ZjQ/");
+    });
+    const read = thread as PageThread;
+    assert.equal(read.messages.length, 200);
+    assert.equal(read.messages[0].text, "Message 50");
+    assert.equal(read.messages[199].text.length, 5000);
   });
 
   it("parses LinkedIn's day headings and times", async () => {

@@ -1,6 +1,7 @@
 import { CrmError } from "@/lib/crm/errors";
 import { cleanLifecycle } from "@/lib/companies";
 import { ACCOUNT_HEALTH, type CompanyWrite } from "@/lib/crm/types";
+import { SALES_NAVIGATOR_ID } from "@/lib/extension/protocol";
 
 const NAME_SUFFIXES = new Set([
   "inc",
@@ -41,7 +42,7 @@ function foldText(value: string) {
     .normalize("NFC");
 }
 
-function isSharedHost(host: string) {
+export function isSharedHost(host: string) {
   return SHARED_HOSTS.some((shared) => host === shared || host.endsWith(`.${shared}`));
 }
 
@@ -180,7 +181,7 @@ export function canonicalSalesNavigator(value: string): string | null {
   } catch {
     return null;
   }
-  if (!/^[A-Za-z0-9_-]{6,120}$/.test(id)) return null;
+  if (!SALES_NAVIGATOR_ID.test(id)) return null;
   return `https://www.linkedin.com/sales/lead/${id}`;
 }
 

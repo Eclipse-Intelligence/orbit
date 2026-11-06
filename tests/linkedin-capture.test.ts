@@ -18,16 +18,29 @@ import { POST as v1ContactUpsert } from "@/app/api/v1/contacts/upsert/route";
 import { GET as exportRoute } from "@/app/api/v1/export/[resource]/route";
 import { POST as importRoute } from "@/app/api/v1/import/[resource]/route";
 import { createBoard } from "@/lib/crm/boards";
-import { upsertCompany } from "@/lib/crm/companies";
-import { getContact, upsertContact } from "@/lib/crm/contacts";
+import { createCompany, updateCompany, upsertCompany } from "@/lib/crm/companies";
+import { createContact, getContact, upsertContact } from "@/lib/crm/contacts";
 import { canonicalSalesNavigator } from "@/lib/crm/normalize";
 import { scopesForRole } from "@/lib/crm/scopes";
 import { createTask, listTasks } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { allowedExtensionOrigins } from "@/lib/extension/http";
-import { decidePairing, listBrowsers, pairingState, redeemPairing, revokeBrowser, setBrowserWorkspaces, startPairing } from "@/lib/extension/pairing";
-import { dueFrom, messageKey } from "@/lib/extension/capture";
+import {
+  authenticateExtension,
+  decidePairing,
+  listBrowsers,
+  pairingState,
+  redeemPairing,
+  revokeBrowser,
+  revokeSelf,
+  setBrowserWorkspaces,
+  startPairing,
+} from "@/lib/extension/pairing";
+import { browserRows } from "@/lib/extension/settings";
+import { safeNextPath } from "@/lib/auth/next-path";
+import { dueFrom, messageKey, messageKeys } from "@/lib/extension/capture";
+import { dueLabel } from "@/lib/extension/records";
 import type {
   CaptureResponse,
   DiffResponse,
@@ -64,6 +77,12 @@ async function call<T>(
   );
   const text = await response.text();
   return { status: response.status, headers: response.headers, data: (text ? JSON.parse(text) : null) as T };
+}
+
+function inLookup(data: LookupResponse, workspaceId: string) {
+  const found = data.workspaces.find((item) => item.workspaceId === workspaceId);
+  assert.ok(found, `No lookup for workspace ${workspaceId}`);
+  return found;
 }
 
 function inWorkspace(actor: UserActor, id: string, name: string): UserActor {
@@ -103,7 +122,8 @@ describe("LinkedIn capture pairing", () => {
     const started = await call<PairStartResponse>(pairRoute, "/api/extension/pair", { body: {}, ip: "10.0.0.1" });
     assert.equal(started.status, 200);
     assert.match(started.data.code, /^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/);
-    assert.equal(started.data.approveUrl, `https://orbit.test/connect/chrome?code=${started.data.code}`);
+    assert.equal(started.data.approveUrl, "https://orbit.test/connect/chrome");
+    assert.ok(!started.data.approveUrl.includes(started.data.code.slice(0, 4)));
     const { code, secret } = started.data;
 
     const pending = await call<PairRedeemResponse>(redeemRoute, "/api/extension/pair/redeem", { body: { code, secret } });
@@ -271,6 +291,13 @@ describe("LinkedIn capture credential scope", () => {
     assert.equal(fromExtension.headers.get("access-control-allow-origin"), ORIGIN);
     const withoutOrigin = await call(meRoute, "/api/extension/me", { token, origin: null });
     assert.equal(withoutOrigin.status, 200);
+    const postWithoutOrigin = await call(noteRoute, "/api/extension/note", { token, origin: null, workspace: mark.workspaceId, body: { body: "x" } });
+    assert.equal(postWithoutOrigin.status, 403);
+    const pairWithoutOrigin = await call<{ error: { code: string } }>(pairRoute, "/api/extension/pair", { body: {}, origin: null, ip: "10.9.9.9" });
+    assert.equal(pairWithoutOrigin.status, 403);
+    assert.equal(pairWithoutOrigin.data.error.code, "origin_not_allowed");
+    const pairFromPage = await call(pairRoute, "/api/extension/pair", { body: {}, origin: "https://evil.test", ip: "10.9.9.9" });
+    assert.equal(pairFromPage.status, 403);
   });
 });
 
@@ -308,7 +335,8 @@ describe("LinkedIn capture records", () => {
 
     const priya = await call<LookupResponse>(lookupRoute, `/api/extension/lookup?url=${encodeURIComponent("https://www.linkedin.com/in/priya-shah-seo/?trk=x")}`, { token });
     assert.equal(priya.data.kind, "person");
-    const [eclipse, side] = priya.data.workspaces;
+    const eclipse = inLookup(priya.data, mark.workspaceId);
+    const side = inLookup(priya.data, ridgeon.workspaceId);
     assert.equal(eclipse.status, "in");
     assert.equal(eclipse.matchedOn, "linkedin");
     assert.equal(eclipse.person?.company?.name, "Northlight SEO");
@@ -338,7 +366,7 @@ describe("LinkedIn capture records", () => {
     assert.equal((await getContact(mark, tom.id)).salesNavigatorUrl, null);
 
     const wrongCompany = await call<LookupResponse>(lookupRoute, `/api/extension/lookup?url=${encodeURIComponent(leadUrl)}&name=Tom%20Reilly&company=Other`, { token });
-    assert.equal(wrongCompany.data.workspaces[0].status, "none");
+    assert.equal(inLookup(wrongCompany.data, mark.workspaceId).status, "none");
 
     const linked = await call<CaptureResponse>(captureRoute, "/api/extension/capture", {
       token,
@@ -352,7 +380,7 @@ describe("LinkedIn capture records", () => {
 
     const other = (await upsertContact(mark, { firstName: "Ann", lastName: "Lee", companyId: brightline.id, linkedinUrl: "linkedin.com/in/ann-lee-one" })).body.contact;
     const notHer = await call<LookupResponse>(lookupRoute, `/api/extension/lookup?url=${encodeURIComponent("https://www.linkedin.com/in/ann-lee-two")}&name=Ann%20Lee&company=Brightline%20PR`, { token });
-    assert.equal(notHer.data.workspaces[0].status, "none");
+    assert.equal(inLookup(notHer.data, mark.workspaceId).status, "none");
 
     const separate = await call<CaptureResponse>(captureRoute, "/api/extension/capture", {
       token,
@@ -456,12 +484,27 @@ describe("LinkedIn capture records", () => {
 
     const byPage = await call<LookupResponse>(lookupRoute, `/api/extension/lookup?url=${encodeURIComponent("https://www.linkedin.com/company/kestrel-content/posts/")}`, { token });
     assert.equal(byPage.data.kind, "company");
-    assert.equal(byPage.data.workspaces[0].matchedOn, "linkedin");
-    const byDomain = await call<LookupResponse>(lookupRoute, `/api/extension/lookup?url=${encodeURIComponent("https://www.linkedin.com/company/123456/")}&domain=www.kestrelcontent.com`, { token });
-    assert.equal(byDomain.data.workspaces[0].matchedOn, "domain");
-    const byName = await call<LookupResponse>(lookupRoute, `/api/extension/lookup?url=${encodeURIComponent("https://www.linkedin.com/company/999/")}&name=Kestrel%20Content%20Co%20Ltd`, { token });
-    assert.equal(byName.data.workspaces[0].matchedOn, "name");
-    assert.equal(byName.data.workspaces[1].status, "none");
+    assert.equal(inLookup(byPage.data, mark.workspaceId).matchedOn, "linkedin");
+    const unlinked = (await upsertCompany(mark, { name: "Plover Media", domain: "plovermedia.com" })).body.company;
+    const byDomain = await call<LookupResponse>(lookupRoute, `/api/extension/lookup?url=${encodeURIComponent("https://www.linkedin.com/company/plover-media/")}&domain=www.plovermedia.com`, { token });
+    assert.equal(inLookup(byDomain.data, mark.workspaceId).status, "in");
+    assert.equal(inLookup(byDomain.data, mark.workspaceId).matchedOn, "domain");
+    assert.equal(inLookup(byDomain.data, mark.workspaceId).company?.id, unlinked.id);
+    const byName = await call<LookupResponse>(lookupRoute, `/api/extension/lookup?url=${encodeURIComponent("https://www.linkedin.com/company/plover-media/")}&name=Plover%20Media%20Ltd`, { token });
+    assert.equal(inLookup(byName.data, mark.workspaceId).matchedOn, "name");
+    assert.equal(inLookup(byName.data, mark.workspaceId).status, "in");
+    assert.equal(inLookup(byName.data, ridgeon.workspaceId).status, "none");
+
+    const otherPage = await call<LookupResponse>(lookupRoute, `/api/extension/lookup?url=${encodeURIComponent("https://www.linkedin.com/company/999/")}&name=Kestrel%20Content%20Co%20Ltd`, { token });
+    assert.equal(inLookup(otherPage.data, mark.workspaceId).status, "maybe");
+    assert.equal(inLookup(otherPage.data, mark.workspaceId).presence, "Possible match");
+    assert.equal(inLookup(otherPage.data, mark.workspaceId).company, null);
+    assert.deepEqual(inLookup(otherPage.data, mark.workspaceId).companyCandidates.map((item) => item.id), [saved.data.company?.id]);
+    const otherDomain = await call<LookupResponse>(lookupRoute, `/api/extension/lookup?url=${encodeURIComponent("https://www.linkedin.com/company/123456/")}&domain=www.kestrelcontent.com`, { token });
+    assert.equal(inLookup(otherDomain.data, mark.workspaceId).status, "maybe");
+    const elsewhere = await call<LookupResponse>(lookupRoute, `/api/extension/lookup?url=${encodeURIComponent("https://www.linkedin.com/company/plover-other/")}&name=Plover%20Media&domain=plover.io`, { token });
+    assert.equal(inLookup(elsewhere.data, mark.workspaceId).status, "maybe");
+    assert.deepEqual(inLookup(elsewhere.data, mark.workspaceId).companyCandidates.map((item) => item.id), [unlinked.id]);
 
     const upserted = await upsertCompany(mark, { name: "Kestrel (renamed on LinkedIn)", linkedinUrl: "linkedin.com/company/kestrel-content" });
     assert.equal(upserted.body.matchedOn, "linkedin");
@@ -564,7 +607,7 @@ describe("LinkedIn capture records", () => {
     const thread: ThreadMessage[] = [
       { from: "Priya Log", mine: false, when: "3 Nov, 16:42", at: "2026-11-03T16:42:00.000Z", text: "Thanks for the audit." },
       { from: "Mark Ridgeon", mine: true, when: "3 Nov, 17:05", at: "2026-11-03T17:05:00.000Z", text: "Glad it helped." },
-      { from: "Priya Log", mine: false, when: "6 Nov, 08:02", at: null, text: "Could you join our  team call on the 14th?" },
+      { from: "Priya Log", mine: false, when: "6 Nov, 08:02", at: "2026-11-06T08:02:00.000Z", text: "Could you join our  team call on the 14th?" },
     ];
     const before = await call<LogCheckResponse>(logCheckRoute, "/api/extension/log/check", { token, workspace: mark.workspaceId, body: { contactId: contact.id, messages: thread } });
     assert.deepEqual(before.data.messages.map((item) => Boolean(item.loggedAt)), [false, false, true]);
@@ -608,10 +651,10 @@ describe("LinkedIn capture records", () => {
     assert.ok(sources.rows.some((row) => row.event_type === "task.created"));
 
     const lookup = await call<LookupResponse>(lookupRoute, `/api/extension/lookup?url=${encodeURIComponent("https://www.linkedin.com/in/priya-log")}`, { token });
-    const person = lookup.data.workspaces[0].person!;
+    const person = inLookup(lookup.data, mark.workspaceId).person!;
     assert.equal(person.lastContact?.kind, "LinkedIn");
     assert.equal(person.tasks[0].title, "Send pricing for both clients");
-    assert.equal(person.tasks[0].dueLabel, "Tomorrow");
+    assert.equal(person.tasks[0].dueLabel, dueLabel(dueFrom("tomorrow")!));
   });
 
   it("can't see tasks it isn't allowed to and can't write to another person's records in other workspaces", async () => {
@@ -622,9 +665,9 @@ describe("LinkedIn capture records", () => {
     await createTask(member, { title: "Mine only", companyId: company.id, ownerId: colleague.userId });
     const otherToken = await connect(member, [mark.workspaceId], "Colleague's Chrome");
     const visible = await call<LookupResponse>(lookupRoute, `/api/extension/lookup?url=${encodeURIComponent("https://www.linkedin.com/company/x")}&domain=privatetask.test`, { token: otherToken });
-    assert.equal(visible.data.workspaces[0].company?.openTasks, 1);
+    assert.equal(inLookup(visible.data, mark.workspaceId).company?.openTasks, 1);
     const ownerView = await call<LookupResponse>(lookupRoute, `/api/extension/lookup?url=${encodeURIComponent("https://www.linkedin.com/company/x")}&domain=privatetask.test`, { token });
-    assert.equal(ownerView.data.workspaces[0].company?.openTasks, 1);
+    assert.equal(inLookup(ownerView.data, mark.workspaceId).company?.openTasks, 1);
     const refused = await call(noteRoute, "/api/extension/note", { token: otherToken, workspace: ridgeon.workspaceId, body: { body: "x", companyId: company.id } });
     assert.equal(refused.status, 403);
   });
@@ -678,5 +721,352 @@ describe("contact location and Sales Navigator lead", () => {
     assert.match(header, /Company,Location,Sales Navigator,Source/);
     const jo = rows.find((row) => row.includes("jo@park.test"));
     assert.ok(jo?.includes("\"Cardiff, Wales\",https://www.linkedin.com/sales/lead/ACwAAAjoPark22"));
+  });
+});
+
+describe("LinkedIn capture fixes", () => {
+  let mark: UserActor;
+  let side: UserActor;
+  let token: string;
+
+  function person(overrides: Record<string, unknown>) {
+    return { firstName: null, lastName: null, jobTitle: null, location: null, linkedinUrl: null, salesNavigatorUrl: null, ...overrides };
+  }
+
+  function saveBody(body: Record<string, unknown>) {
+    return { kind: "person", company: null, tags: [], boardId: null, stageId: null, sourceUrl: null, ...body };
+  }
+
+  before(async () => {
+    mark = await createUser("mark-fixes@linkedin.test", "Mark Ridgeon");
+    const admin = getAdminPool();
+    const workspace = await admin.query<{ id: string }>("insert into crm.workspaces (name, slug) values ('Side fixes', 'side-fixes') returning id");
+    await admin.query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'owner')", [workspace.rows[0].id, mark.userId]);
+    side = inWorkspace(mark, workspace.rows[0].id, "Side fixes");
+    token = await connect(mark, [side.workspaceId, mark.workspaceId]);
+  });
+
+  it("lists workspaces oldest membership first and names the home workspace", async () => {
+    const me = await call<MeResponse>(meRoute, "/api/extension/me", { token });
+    assert.deepEqual(me.data.workspaces.map((item) => item.id), [mark.workspaceId, side.workspaceId]);
+    assert.equal(me.data.homeWorkspaceId, mark.workspaceId);
+    const sideOnly = await connect(mark, [side.workspaceId], "Side only");
+    const limited = await call<MeResponse>(meRoute, "/api/extension/me", { token: sideOnly });
+    assert.equal(limited.data.homeWorkspaceId, null);
+    await getAdminPool().query("update crm.workspace_members set created_at = '2026-01-01T00:00:00Z' where user_id = $1", [mark.userId]);
+    const sorted = [mark.workspaceId, side.workspaceId].sort();
+    const tied = await call<MeResponse>(meRoute, "/api/extension/me", { token });
+    assert.deepEqual(tied.data.workspaces.map((item) => item.id), sorted);
+    assert.equal(tied.data.homeWorkspaceId, sorted[0]);
+  });
+
+  it("never treats a company with another LinkedIn page or domain as the same one", async () => {
+    const london = (await upsertCompany(mark, { name: "Harbour Studio", linkedinUrl: "linkedin.com/company/harbour-studio-london" })).body.company;
+    const refused = await call<{ error: { code: string; message: string } }>(captureRoute, "/api/extension/capture", {
+      token,
+      workspace: mark.workspaceId,
+      body: saveBody({
+        person: person({ firstName: "Ola", lastName: "Harbour", linkedinUrl: "https://www.linkedin.com/in/ola-harbour" }),
+        company: { name: "Harbour Studio", domain: null, linkedinUrl: "https://www.linkedin.com/company/harbour-studio-leeds" },
+      }),
+    });
+    assert.equal(refused.status, 409);
+    assert.match(refused.data.error.message, /different LinkedIn page or domain/);
+
+    const saved = await call<CaptureResponse>(captureRoute, "/api/extension/capture", {
+      token,
+      workspace: mark.workspaceId,
+      body: saveBody({
+        person: person({ firstName: "Ola", lastName: "Harbour", linkedinUrl: "https://www.linkedin.com/in/ola-harbour" }),
+        company: { name: "Harbour Studio", domain: "harbourleeds.co.uk", linkedinUrl: "https://www.linkedin.com/company/harbour-studio-leeds" },
+      }),
+    });
+    assert.equal(saved.status, 200);
+    assert.equal(saved.data.created.company, true);
+    assert.notEqual(saved.data.company?.id, london.id);
+    assert.equal(saved.data.company?.linkedinUrl, "https://www.linkedin.com/company/harbour-studio-leeds");
+    const untouched = await getAdminPool().query<{ linkedin_url: string }>("select linkedin_url from crm.companies where id = $1", [london.id]);
+    assert.equal(untouched.rows[0].linkedin_url, "https://www.linkedin.com/company/harbour-studio-london");
+
+    const tern = (await upsertCompany(mark, { name: "Tern", domain: "tern.io", linkedinUrl: "linkedin.com/company/tern-io" })).body.company;
+    const group = await call<CaptureResponse>(captureRoute, "/api/extension/capture", {
+      token,
+      workspace: mark.workspaceId,
+      body: {
+        kind: "company",
+        company: { name: "Tern Group", domain: "tern.io", linkedinUrl: "https://www.linkedin.com/company/tern-group", industry: null, sizeCategory: null, description: null },
+        lifecycle: null,
+        tags: [],
+        boardId: null,
+        stageId: null,
+        sourceUrl: null,
+      },
+    });
+    assert.equal(group.status, 200);
+    assert.equal(group.data.created.company, true);
+    assert.notEqual(group.data.company?.id, tern.id);
+    assert.equal(group.data.company?.domain, null);
+  });
+
+  it("fills only the empty fields of a company it matched", async () => {
+    const quay = (await upsertCompany(mark, { name: "Quay Labs", industry: "Software" })).body.company;
+    const saved = await call<CaptureResponse>(captureRoute, "/api/extension/capture", {
+      token,
+      workspace: mark.workspaceId,
+      body: {
+        kind: "company",
+        company: { name: "Quay Labs", domain: "quaylabs.io", linkedinUrl: "https://www.linkedin.com/company/quay-labs", industry: "Marketing", sizeCategory: "11-50", description: "Research for brands" },
+        lifecycle: null,
+        tags: [],
+        boardId: null,
+        stageId: null,
+        sourceUrl: null,
+      },
+    });
+    assert.equal(saved.data.created.company, false);
+    assert.equal(saved.data.company?.id, quay.id);
+    assert.equal(saved.data.company?.domain, "quaylabs.io");
+    assert.equal(saved.data.company?.linkedinUrl, "https://www.linkedin.com/company/quay-labs");
+    assert.equal(saved.data.company?.industry, "Software");
+    assert.equal(saved.data.company?.sizeCategory, "11-50");
+  });
+
+  it("links a possible company match by its LinkedIn page", async () => {
+    const plain = (await upsertCompany(mark, { name: "Gannet Works", domain: "gannet.works" })).body.company;
+    const linked = await call<CaptureResponse>(captureRoute, "/api/extension/capture", {
+      token,
+      workspace: mark.workspaceId,
+      body: { kind: "link_company", companyId: plain.id, linkedinUrl: "https://www.linkedin.com/company/gannet-works/", sourceUrl: null },
+    });
+    assert.equal(linked.status, 200);
+    assert.equal(linked.data.company?.linkedinUrl, "https://www.linkedin.com/company/gannet-works");
+    const again = await call<{ error: { message: string } }>(captureRoute, "/api/extension/capture", {
+      token,
+      workspace: mark.workspaceId,
+      body: { kind: "link_company", companyId: plain.id, linkedinUrl: "https://www.linkedin.com/company/gannet-other", sourceUrl: null },
+    });
+    assert.equal(again.status, 409);
+    assert.match(again.data.error.message, /different LinkedIn page/);
+  });
+
+  it("keeps what a colleague saved when someone saves the same person again", async () => {
+    const colleague = await createUser("colleague-fixes@linkedin.test", "Colleague");
+    await getAdminPool().query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [mark.workspaceId, colleague.userId]);
+    const member = { ...colleague, workspaceId: mark.workspaceId, workspaceName: mark.workspaceName, role: "member" as const, scopes: scopesForRole("member") };
+    const firm = (await upsertCompany(member, { name: "Bright Partners", domain: "brightpartners.test" })).body.company;
+    const ola = (
+      await upsertContact(member, {
+        firstName: "Ola",
+        lastName: "Bright",
+        jobTitle: "Founder",
+        location: "Leeds, England",
+        linkedinUrl: "linkedin.com/in/ola-bright",
+        companyId: firm.id,
+        ownerId: colleague.userId,
+        tags: ["vip"],
+        source: "Referral",
+      })
+    ).body.contact;
+
+    const resaved = await call<CaptureResponse>(captureRoute, "/api/extension/capture", {
+      token,
+      workspace: mark.workspaceId,
+      body: saveBody({
+        person: person({ firstName: "Ola", lastName: "Bright", linkedinUrl: "https://www.linkedin.com/in/ola-bright/" }),
+        company: { name: "Another Firm", domain: null, linkedinUrl: null },
+      }),
+    });
+    assert.equal(resaved.status, 200);
+    assert.equal(resaved.data.created.contact, false);
+    assert.equal(resaved.data.person?.id, ola.id);
+    const kept = await getContact(mark, ola.id);
+    assert.equal(kept?.jobTitle, "Founder");
+    assert.equal(kept?.location, "Leeds, England");
+    assert.equal(kept?.ownerId, colleague.userId);
+    assert.deepEqual(kept?.tags, ["vip"]);
+    assert.equal(kept?.source, "Referral");
+    assert.equal(kept?.companyId, firm.id);
+
+    const tagged = await call<CaptureResponse>(captureRoute, "/api/extension/capture", {
+      token,
+      workspace: mark.workspaceId,
+      body: saveBody({
+        person: person({ firstName: "Ola", lastName: "Bright", jobTitle: "CEO", linkedinUrl: "https://www.linkedin.com/in/ola-bright" }),
+        tags: ["agency"],
+        ownerId: mark.userId,
+      }),
+    });
+    assert.deepEqual([...(tagged.data.person?.tags ?? [])].sort(), ["agency", "vip"]);
+    assert.equal(tagged.data.person?.jobTitle, "CEO");
+    assert.equal(tagged.data.person?.owner?.id, mark.userId);
+    const leads = await getAdminPool().query("select 1 from crm.audit_events where event_type = 'lead.created' and changes->>'contactId' = $1", [ola.id]);
+    assert.equal(leads.rowCount, 0);
+  });
+
+  it("saves and matches a Sales Navigator lead with nothing else to go on", async () => {
+    const saved = await call<CaptureResponse>(captureRoute, "/api/extension/capture", {
+      token,
+      workspace: mark.workspaceId,
+      body: saveBody({ person: person({ salesNavigatorUrl: "https://www.linkedin.com/sales/lead/ACwAAOnlyLead1,NAME_SEARCH" }) }),
+    });
+    assert.equal(saved.status, 200);
+    assert.equal(saved.data.created.contact, true);
+    const upserted = await upsertContact(mark, { salesNavigatorUrl: "https://www.linkedin.com/sales/lead/ACwAAOnlyLead1", jobTitle: "Buyer" });
+    assert.equal(upserted.body.matchedOn, "sales_navigator");
+    assert.equal(upserted.body.contact.id, saved.data.person?.id);
+    await assert.rejects(
+      createContact(mark, { firstName: "Copy", salesNavigatorUrl: "https://www.linkedin.com/sales/lead/ACwAAOnlyLead1" }),
+      (error: Error & { code?: string }) => error.code === "duplicate_contact",
+    );
+    await assert.rejects(
+      getAdminPool().query("update crm.contacts set first_name = null, last_name = null, sales_navigator_url = null where id = $1", [saved.data.person?.id]),
+      /contacts_identity/,
+    );
+  });
+
+  it("matches a lead page by the public profile link on it", async () => {
+    const lena = (await upsertContact(mark, { firstName: "Lena", lastName: "Park", linkedinUrl: "linkedin.com/in/lena-park" })).body.contact;
+    const lookup = await call<LookupResponse>(
+      lookupRoute,
+      `/api/extension/lookup?url=${encodeURIComponent("https://www.linkedin.com/sales/lead/ACwAALenaPark1,NAME_SEARCH")}&linkedinUrl=${encodeURIComponent("https://www.linkedin.com/in/lena-park/")}`,
+      { token },
+    );
+    const found = inLookup(lookup.data, mark.workspaceId);
+    assert.equal(found.status, "in");
+    assert.equal(found.matchedOn, "linkedin");
+    assert.equal(found.person?.id, lena.id);
+  });
+
+  it("keeps LinkedIn pages and domains on the company they belong to when upserting", async () => {
+    const wren = (await upsertCompany(mark, { name: "Wren", domain: "wren.io" })).body.company;
+    const labs = (await upsertCompany(mark, { name: "Wren Labs", linkedinUrl: "linkedin.com/company/wren-labs" })).body.company;
+    const upserted = await upsertCompany(mark, { name: "Wren", domain: "wren.io", linkedinUrl: "linkedin.com/company/wren-labs" });
+    assert.equal(upserted.body.company.id, wren.id);
+    assert.equal(upserted.body.company.linkedinUrl, null);
+    const labsRow = await getAdminPool().query<{ linkedin_url: string }>("select linkedin_url from crm.companies where id = $1", [labs.id]);
+    assert.equal(labsRow.rows[0].linkedin_url, "https://www.linkedin.com/company/wren-labs");
+
+    const finch = (await upsertCompany(mark, { name: "Finch", domain: "finch.io", website: "https://finch.io", linkedinUrl: "linkedin.com/company/finch" })).body.company;
+    const moved = await upsertCompany(mark, { name: "Finch", domain: "finch.co", website: "https://finch.co", linkedinUrl: "linkedin.com/company/finch" });
+    assert.equal(moved.body.company.id, finch.id);
+    assert.equal(moved.body.company.domain, "finch.io");
+    assert.equal(moved.body.company.website, "https://finch.io/");
+
+    await assert.rejects(createCompany(mark, { name: "Other Finch", linkedinUrl: "linkedin.com/company/finch" }), /already has that LinkedIn page/);
+    await assert.rejects(updateCompany(mark, labs.id, { linkedinUrl: "linkedin.com/company/finch" }), /already has that LinkedIn page/);
+    const index = await getAdminPool().query("select 1 from pg_indexes where schemaname = 'crm' and indexname = 'companies_workspace_linkedin_active_uidx'");
+    assert.equal(index.rowCount, 1);
+  });
+
+  it("only takes a domain from the page's website when it isn't a shared host", async () => {
+    const shared = (await upsertCompany(mark, { name: "Shared Host Co" })).body.company;
+    const applied = await call<DiffResponse>(diffRoute, "/api/extension/diff", {
+      token,
+      workspace: mark.workspaceId,
+      body: {
+        companyId: shared.id,
+        company: { name: "Shared Host Co", tagline: null, website: "https://www.facebook.com/sharedhostco", industry: null, sizeCategory: null, location: null, linkedinUrl: null },
+        apply: ["website"],
+      },
+    });
+    assert.deepEqual(applied.data.applied, ["website"]);
+    assert.match(applied.data.company?.website ?? "", /facebook\.com\/sharedhostco/);
+    assert.equal(applied.data.company?.domain, null);
+
+    const own = (await upsertCompany(mark, { name: "Own Host Co" })).body.company;
+    const owned = await call<DiffResponse>(diffRoute, "/api/extension/diff", {
+      token,
+      workspace: mark.workspaceId,
+      body: {
+        companyId: own.id,
+        company: { name: "Own Host Co", tagline: null, website: "https://www.ownhost.example/", industry: null, sizeCategory: null, location: null, linkedinUrl: null },
+        apply: ["website"],
+      },
+    });
+    assert.equal(owned.data.company?.domain, "ownhost.example");
+  });
+
+  it("signs out only the browser that asks, once", async () => {
+    const own = await connect(mark, [mark.workspaceId], "Sign out once");
+    const other = await connect(mark, [mark.workspaceId], "Keep me");
+    const auth = await authenticateExtension(new Request("https://orbit.test/api/extension/revoke", { headers: { authorization: `Bearer ${own}` } }));
+    await revokeSelf(auth);
+    await assert.rejects(revokeSelf(auth), /already disconnected/);
+    assert.equal((await call(meRoute, "/api/extension/me", { token: own })).status, 401);
+    assert.equal((await call(meRoute, "/api/extension/me", { token: other })).status, 200);
+  });
+
+  it("logs the same words again when they were sent on another occasion", async () => {
+    const contact = (await upsertContact(mark, { firstName: "Tom", lastName: "Again", linkedinUrl: "linkedin.com/in/tom-again" })).body.contact;
+    const plain = messageKeys([
+      { mine: false, text: "Thanks!" },
+      { mine: false, text: "Thanks!" },
+    ]);
+    assert.notEqual(plain[0], plain[1]);
+    assert.equal(plain[0], messageKey({ mine: false, text: "thanks!" }));
+    assert.equal(
+      messageKey({ mine: false, text: "Thanks!", at: "2026-11-02T09:00:10.000Z" }),
+      messageKey({ mine: false, text: "Thanks!", at: "2026-11-02T09:00:40.000Z" }),
+    );
+    const thread: ThreadMessage[] = [
+      { from: "Tom Again", mine: false, when: "2 Nov, 09:00", at: "2026-11-02T09:00:00.000Z", text: "Thanks!" },
+      { from: "Mark Ridgeon", mine: true, when: "3 Nov, 10:00", at: "2026-11-03T10:00:00.000Z", text: "Here is the report." },
+      { from: "Tom Again", mine: false, when: "4 Nov, 11:00", at: "2026-11-04T11:00:00.000Z", text: "Thanks!" },
+    ];
+    const logged = await call<{ logged: number; skipped: number }>(logRoute, "/api/extension/log", {
+      token,
+      workspace: mark.workspaceId,
+      body: { kind: "conversation", contactId: contact.id, title: null, threadUrl: null, messages: thread },
+    });
+    assert.equal(logged.data.logged, 3);
+    const later = [...thread, { from: "Tom Again", mine: false, when: "6 Nov, 08:00", at: "2026-11-06T08:00:00.000Z", text: "Thanks!" }];
+    const check = await call<LogCheckResponse>(logCheckRoute, "/api/extension/log/check", { token, workspace: mark.workspaceId, body: { contactId: contact.id, messages: later } });
+    assert.deepEqual(check.data.messages.map((item) => Boolean(item.loggedAt)), [true, true, true, false]);
+  });
+
+  it("dates quick task choices so they aren't overdue straight away", () => {
+    assert.equal(dueFrom("today", new Date("2026-11-06T10:00:00Z")), "2026-11-06T17:30:00.000Z");
+    assert.equal(dueFrom("today", new Date("2026-11-06T17:00:00Z")), "2026-11-06T18:00:00.000Z");
+    assert.equal(dueFrom("tomorrow", new Date("2026-11-06T10:00:00Z")), "2026-11-09T09:00:00.000Z");
+    assert.equal(dueFrom("tomorrow", new Date("2026-11-04T10:00:00Z")), "2026-11-05T09:00:00.000Z");
+    assert.equal(dueFrom("tomorrow", new Date("2026-08-28T10:00:00Z")), "2026-09-01T08:00:00.000Z");
+    assert.equal(dueFrom("next_week", new Date("2026-11-06T10:00:00Z")), "2026-11-09T09:00:00.000Z");
+    assert.equal(dueFrom("next_week", new Date("2026-11-09T10:00:00Z")), "2026-11-16T09:00:00.000Z");
+    assert.equal(dueFrom("2026-11-06", new Date("2026-11-06T12:00:00Z")), "2026-11-06T17:30:00.000Z");
+    assert.equal(dueFrom("2026-11-20", new Date("2026-11-06T12:00:00Z")), "2026-11-20T09:00:00.000Z");
+  });
+
+  it("calls an approved code expired once its window has passed", async () => {
+    const started = await startPairing("https://orbit.test");
+    await decidePairing(mark, { code: started.code, name: "Late Chrome", workspaceIds: [mark.workspaceId], approve: true });
+    assert.equal((await pairingState(started.code)).state, "approved");
+    await getAdminPool().query("update crm.extension_pairings set decided_at = now() - interval '11 minutes' where status = 'approved'");
+    assert.equal((await pairingState(started.code)).state, "expired");
+    await assert.rejects(redeemPairing(started.code, started.secret), /expired/);
+    await assert.rejects(decidePairing(mark, { code: "", name: "Chrome", workspaceIds: [mark.workspaceId], approve: true }), /8-character code/);
+  });
+
+  it("only returns to safe pages after signing in", () => {
+    assert.equal(safeNextPath("/connect/chrome?name=Chrome"), "/connect/chrome?name=Chrome");
+    assert.equal(safeNextPath("/open?workspace=a&to=/companies/b"), "/open?workspace=a&to=/companies/b");
+    assert.equal(safeNextPath("/openx"), null);
+    assert.equal(safeNextPath("/connect/../mail"), null);
+    assert.equal(safeNextPath("/connect/%2e%2e/mail"), null);
+    assert.equal(safeNextPath("/connect/./chrome"), null);
+    assert.equal(safeNextPath("/connect/chrome\u0007"), null);
+    assert.equal(safeNextPath("/connect/%0d%0aSet-Cookie"), null);
+    assert.equal(safeNextPath("//evil.test/connect/"), null);
+  });
+
+  it("shows the year on Last used when it was another year", () => {
+    const rows = browserRows(
+      [
+        { id: "a", name: "Old", createdAt: "2025-03-01T10:00:00Z", lastUsedAt: "2025-12-30T10:00:00Z", workspaces: [] },
+        { id: "b", name: "Recent", createdAt: "2026-03-01T10:00:00Z", lastUsedAt: "2026-10-30T10:00:00Z", workspaces: [] },
+      ],
+      new Date("2026-11-06T12:00:00Z"),
+    );
+    assert.equal(rows[0].usedLabel, "Last used 30 Dec 2025");
+    assert.equal(rows[1].usedLabel, "Last used 30 Oct");
   });
 });

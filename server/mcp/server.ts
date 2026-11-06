@@ -22,6 +22,7 @@ const writeShape = {
   description: z.string().nullable().optional(),
   industry: z.string().nullable().optional(),
   sizeCategory: z.string().nullable().optional(),
+  linkedinUrl: z.string().nullable().optional().describe("LinkedIn company, school or showcase page, such as https://www.linkedin.com/company/acme"),
   lifecycle: z.string().max(40).optional().describe("lead, prospect, customer, churned, or any custom lifecycle name"),
   ownerId: z.uuid().nullable().optional(),
   source: z.string().nullable().optional(),
@@ -57,6 +58,7 @@ function writeFromArgs(args: {
   description?: string | null;
   industry?: string | null;
   sizeCategory?: string | null;
+  linkedinUrl?: string | null;
   lifecycle?: CompanyWrite["lifecycle"];
   ownerId?: string | null;
   source?: string | null;
@@ -70,6 +72,7 @@ function writeFromArgs(args: {
     description: args.description,
     industry: args.industry,
     sizeCategory: args.sizeCategory,
+    linkedinUrl: args.linkedinUrl,
     lifecycle: args.lifecycle,
     ownerId: args.ownerId,
     source: args.source,
@@ -162,7 +165,7 @@ export function createCrmMcpServer(actor: Actor) {
     "upsert_company",
     {
       description:
-        "Create a company or update the existing company with the same domain, or the same name when neither record has a domain. Omitted fields are left unchanged.",
+        "Create a company or update the existing company with the same domain, then the same LinkedIn page, then the same name when neither record has a domain. Omitted fields are left unchanged.",
       inputSchema: writeShape,
     },
     async (args) => {

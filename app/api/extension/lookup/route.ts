@@ -12,6 +12,7 @@ export async function GET(request: Request) {
     return {
       body: await lookupPage(await extensionActors(auth), {
         url: params.get("url") ?? "",
+        linkedinUrl: value("linkedinUrl"),
         name: value("name"),
         company: value("company"),
         companyUrl: value("companyUrl"),

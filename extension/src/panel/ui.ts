@@ -29,7 +29,7 @@ function hashOf(value: string) {
   return hash;
 }
 
-export function tagColour(label: string) {
+function tagColour(label: string) {
   return TAG_PALETTE[hashOf(label) % TAG_PALETTE.length];
 }
 
@@ -73,22 +73,28 @@ type ButtonOptions = {
   disabled?: boolean;
   pressed?: boolean;
   expanded?: boolean;
+  haspopup?: boolean;
   icon?: IconName;
   iconAfter?: IconName;
   type?: "button" | "submit";
   id?: string;
 };
 
+function textKey(children: Child[]): string {
+  return children.map((child) => (typeof child === "string" || typeof child === "number" ? String(child) : Array.isArray(child) ? textKey(child) : "")).join(" ");
+}
+
 export function button(options: ButtonOptions, ...children: Child[]) {
   return h(
     "button",
     {
       type: options.type ?? "button",
-      id: options.id,
+      id: options.id ?? uid(`button-${options.label ?? textKey(children)}`),
       class: cx("btn", `btn-${options.variant}`, `btn-${options.size ?? "sm"}`, options.className),
       "aria-label": options.label,
       "aria-pressed": options.pressed === undefined ? undefined : String(options.pressed),
       "aria-expanded": options.expanded === undefined ? undefined : String(options.expanded),
+      "aria-haspopup": options.haspopup ? "menu" : undefined,
       disabled: options.disabled,
       onClick: options.onClick,
     },
@@ -101,7 +107,7 @@ export function button(options: ButtonOptions, ...children: Child[]) {
 export function status(tone: "in" | "new" | "maybe" | "wait", title: string, detail?: Child) {
   return h(
     "div",
-    { class: "status", role: "status" },
+    { class: "status" },
     h("span", { class: cx("dot", `dot-${tone}`), "aria-hidden": "true" }),
     h("span", { class: "status-text" }, h("span", { class: "status-title" }, title), detail ? h("span", { class: "caption subtle" }, detail) : null),
   );
@@ -120,7 +126,7 @@ export function card(children: Child, className?: string) {
   return h("div", { class: cx("card", className) }, children);
 }
 
-export function avatar(text: string, square = false) {
+function avatar(text: string, square = false) {
   return h("span", { class: cx("avatar", square && "avatar-square"), "aria-hidden": "true" }, text);
 }
 
@@ -174,7 +180,7 @@ function fieldShell(id: string, label: string, control: HTMLElement, hint?: stri
 }
 
 export function textField(options: FieldOptions) {
-  const id = options.id ?? uid("text");
+  const id = options.id ?? uid(`text-${options.label}`);
   const input = h("input", {
     id,
     class: "input",
@@ -188,7 +194,7 @@ export function textField(options: FieldOptions) {
 }
 
 export function areaField(options: FieldOptions & { rows?: number }) {
-  const id = options.id ?? uid("area");
+  const id = options.id ?? uid(`area-${options.label}`);
   const area = h("textarea", {
     id,
     class: "input textarea",
@@ -210,7 +216,7 @@ export function selectField(options: {
   id?: string;
   disabled?: boolean;
 }) {
-  const id = options.id ?? uid("select");
+  const id = options.id ?? uid(`select-${options.label}`);
   const select = h(
     "select",
     {
@@ -270,7 +276,7 @@ export function note(text: Child) {
 }
 
 export function alert(text: string) {
-  return h("p", { class: "caption alert", role: "alert" }, text);
+  return h("p", { class: "caption alert" }, text);
 }
 
 export function formActions(onCancel: () => void, submitLabel: string, onSubmit: () => void, busy: boolean) {
@@ -280,4 +286,56 @@ export function formActions(onCancel: () => void, submitLabel: string, onSubmit:
     button({ variant: "ghost", size: "sm", onClick: onCancel, disabled: busy }, "Cancel"),
     button({ variant: "primary", size: "sm", onClick: onSubmit, disabled: busy }, busy ? "Saving" : submitLabel),
   );
+}
+
+const HOLD_MS = 800;
+
+export function holdButton(options: { label: string; holding?: string; className?: string; role?: string; id?: string; onConfirm: () => void }) {
+  const text = h("span", { class: "hold-text" }, options.label);
+  const element = h(
+    "button",
+    {
+      type: "button",
+      id: options.id,
+      class: cx("hold", options.className),
+      role: options.role,
+      "aria-live": "polite",
+      "data-hold": "true",
+    },
+    h("span", { class: "hold-fill", "aria-hidden": "true" }),
+    text,
+  );
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const stop = () => {
+    if (timer) clearTimeout(timer);
+    timer = null;
+    element.classList.remove("is-holding");
+    text.textContent = options.label;
+  };
+  const start = () => {
+    if (timer) return;
+    element.classList.add("is-holding");
+    text.textContent = options.holding ?? "Keep holding";
+    timer = setTimeout(() => {
+      timer = null;
+      element.classList.remove("is-holding");
+      text.textContent = options.label;
+      if (element.isConnected) options.onConfirm();
+    }, HOLD_MS);
+  };
+  element.addEventListener("pointerdown", (event) => {
+    if (event.button === 0) start();
+  });
+  for (const name of ["pointerup", "pointerleave", "pointercancel", "blur"]) element.addEventListener(name, stop);
+  element.addEventListener("keydown", (event) => {
+    if ((event.key === "Enter" || event.key === " ") && !event.repeat) {
+      event.preventDefault();
+      start();
+    }
+  });
+  element.addEventListener("keyup", (event) => {
+    if (event.key === "Enter" || event.key === " ") stop();
+  });
+  element.addEventListener("contextmenu", (event) => event.preventDefault());
+  return element;
 }

@@ -104,6 +104,7 @@ export async function saveContactAction(
     jobTitle: text(formData, "jobTitle") || null,
     linkedinUrl: text(formData, "linkedinUrl") || null,
     location: formData.has("location") ? text(formData, "location") || null : undefined,
+    salesNavigatorUrl: formData.has("salesNavigatorUrl") ? text(formData, "salesNavigatorUrl") || null : undefined,
     companyId: optionalId(text(formData, "companyId")),
     ownerId: optionalId(text(formData, "ownerId")),
     source: text(formData, "source") || null,

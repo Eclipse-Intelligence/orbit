@@ -1,4 +1,4 @@
-import type { PageKind } from "../../lib/extension/protocol";
+import { SALES_NAVIGATOR_ID, type PageKind } from "../../lib/extension/protocol";
 
 export type PageTarget = { kind: PageKind; canonical: string | null; path: string };
 
@@ -16,7 +16,7 @@ function originHost(origin: string) {
   }
 }
 
-export function isLinkedinHost(url: URL, linkedinOrigin: string) {
+function isLinkedinHost(url: URL, linkedinOrigin: string) {
   const expected = originHost(linkedinOrigin);
   const host = bareHost(url.host);
   if (!expected) return false;
@@ -46,7 +46,7 @@ export function targetFromPath(pathname: string): PageTarget {
   }
   if (first === "sales" && (parts[1] === "lead" || parts[1] === "people") && parts[2]) {
     const id = decode(parts[2]).split(",")[0].trim();
-    if (/^[A-Za-z0-9_-]{4,200}$/.test(id)) return { kind: "lead", canonical: `${REAL_ORIGIN}/sales/lead/${id}`, path };
+    if (SALES_NAVIGATOR_ID.test(id)) return { kind: "lead", canonical: `${REAL_ORIGIN}/sales/lead/${id}`, path };
   }
   if (first === "messaging" && parts[1] === "thread" && parts[2]) {
     const id = decode(parts[2]).trim();
@@ -78,7 +78,12 @@ export function targetFromUrl(url: string): PageTarget {
 function resolvedTarget(href: string | null | undefined, base: string) {
   if (!href) return null;
   try {
-    return targetFromPath(new URL(href, base).pathname);
+    const url = new URL(href, base);
+    const host = bareHost(url.host);
+    const onLinkedinHost = host === "linkedin.com" || host.endsWith(".linkedin.com");
+    if (!onLinkedinHost && host !== bareHost(new URL(base).host)) return null;
+    if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+    return targetFromPath(url.pathname);
   } catch {
     return null;
   }

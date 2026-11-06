@@ -11,7 +11,11 @@ export async function GET(request: Request) {
   const to = url.searchParams.get("to") ?? "";
   const workspace = url.searchParams.get("workspace") ?? "";
   const choices = await getWorkspaceChoices();
-  if (choices.length === 0) return NextResponse.redirect(new URL("/login", url));
+  if (choices.length === 0) {
+    const login = new URL("/login", url);
+    login.searchParams.set("next", `${url.pathname}${url.search}`);
+    return NextResponse.redirect(login);
+  }
   const response = NextResponse.redirect(new URL(RECORD_PATH.test(to) ? to : "/", url));
   if (choices.some((choice) => choice.id === workspace)) {
     response.cookies.set(WORKSPACE_COOKIE, workspace, sessionCookieOptions(60 * 60 * 24 * 365));

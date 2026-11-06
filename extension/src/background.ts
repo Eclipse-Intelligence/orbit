@@ -11,6 +11,7 @@ const TITLES: Record<MatchStatus, string> = { in: "In Orbit", maybe: "Possible m
 const cache = new Map<string, { at: number; status: MatchStatus }>();
 const reported = new Map<number, { url: string; status: MatchStatus }>();
 const latest = new Map<number, string>();
+const inflight = new Map<string, Promise<MatchStatus>>();
 
 void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => undefined);
 
@@ -26,9 +27,17 @@ async function paint(tabId: number, status: MatchStatus) {
   } catch {}
 }
 
-async function statusFor(canonical: string): Promise<MatchStatus> {
+function statusFor(canonical: string): Promise<MatchStatus> {
   const cached = cache.get(canonical);
-  if (cached && Date.now() - cached.at < CACHE_MS) return cached.status;
+  if (cached && Date.now() - cached.at < CACHE_MS) return Promise.resolve(cached.status);
+  const running = inflight.get(canonical);
+  if (running) return running;
+  const pending = fetchStatus(canonical).finally(() => inflight.delete(canonical));
+  inflight.set(canonical, pending);
+  return pending;
+}
+
+async function fetchStatus(canonical: string): Promise<MatchStatus> {
   const token = await readToken();
   if (!token) return "none";
   try {
@@ -76,6 +85,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local" || !(TOKEN_KEY in changes)) return;
   cache.clear();
+  inflight.clear();
   reported.clear();
 });
 
@@ -83,6 +93,7 @@ chrome.runtime.onMessage.addListener((message) => {
   if (!isBackgroundMessage(message)) return;
   if (message.type === "orbit:signed-out") {
     cache.clear();
+    inflight.clear();
     reported.clear();
     return;
   }

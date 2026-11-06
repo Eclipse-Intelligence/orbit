@@ -12,6 +12,7 @@ import {
   chips,
   facts,
   formActions,
+  holdButton,
   initials,
   lifecycleColour,
   note,
@@ -42,7 +43,8 @@ export type Actions = {
   savePerson(): void;
   saveCompany(): void;
   confirmMatch(candidate: PersonSummary): void;
-  rejectMatch(candidate: PersonSummary): void;
+  confirmCompany(candidate: CompanySummary): void;
+  rejectMatch(candidate: { id: string }): void;
   addTask(contactId: string | null, companyId: string | null): void;
   addNote(contactId: string | null, companyId: string | null): void;
   logMessage(contactId: string): void;
@@ -73,6 +75,7 @@ const COMPANY_ACTIONS: { key: string; label: string; icon: IconName }[] = [
 const READS = [
   ["The page address", "To check if a person or company is in Orbit."],
   ["Name, headline, company and location", "Only while this panel is open, from the page you're on."],
+  ["Thread header", "The name and profile link at the top of a message thread, while this panel is open."],
   ["Messages", "Only when you press Log this conversation."],
 ];
 
@@ -95,7 +98,7 @@ function shell(s: Store, a: Actions, body: Child[], footer?: Child[]) {
     "div",
     { class: "panel" },
     header(s, a),
-    s.flash ? h("div", { class: "flash", role: "status" }, icon("check"), s.flash) : null,
+    s.flash ? h("div", { class: "flash" }, icon("check"), s.flash) : null,
     h("div", { class: "body" }, s.error ? alert(s.error) : null, body),
     footer ? h("div", { class: "footer" }, footer) : null,
   );
@@ -118,6 +121,8 @@ function header(s: Store, a: Actions) {
           size: "sm",
           className: cx("workspace-button", menuOpen && "is-open"),
           label: `Workspace: ${workspace.name}. Change workspace`,
+          id: "workspace-menu-button",
+          haspopup: true,
           expanded: menuOpen,
           onClick: () => a.toggleMenu("workspace"),
         },
@@ -130,13 +135,16 @@ function header(s: Store, a: Actions) {
     h(
       "div",
       { class: "menu-anchor" },
-      button({ variant: "ghost", size: "icon", label: "Orbit menu", expanded: moreOpen, onClick: () => a.toggleMenu("more") }, icon("more")),
+      button(
+        { variant: "ghost", size: "icon", label: "Orbit menu", id: "more-menu-button", haspopup: true, expanded: moreOpen, onClick: () => a.toggleMenu("more") },
+        icon("more"),
+      ),
       moreOpen
         ? h(
             "div",
             { class: "menu menu-right", role: "menu", "aria-label": "Orbit menu" },
-            h("button", { type: "button", class: "menu-item ui", role: "menuitem", onClick: () => a.openOrbit("/") }, "Open Orbit"),
-            h("button", { type: "button", class: "menu-item ui", role: "menuitem", onClick: () => a.disconnect() }, "Disconnect"),
+            h("button", { type: "button", id: "menu-open-orbit", class: "menu-item ui", role: "menuitem", tabindex: "-1", onClick: () => a.openOrbit("/") }, "Open Orbit"),
+            holdButton({ label: "Hold to disconnect", id: "menu-disconnect", className: "menu-item ui menu-item-danger", role: "menuitem", onConfirm: () => a.disconnect() }),
           )
         : null,
     ),
@@ -155,8 +163,10 @@ function workspaceMenu(s: Store, a: Actions) {
         "button",
         {
           type: "button",
+          id: `menu-workspace-${item.id}`,
           class: cx("menu-item ui", !selected && "menu-item-other"),
           role: "menuitemradio",
+          tabindex: "-1",
           "aria-checked": String(selected),
           onClick: () => a.chooseWorkspace(item.id),
         },
@@ -199,7 +209,7 @@ export function waitingView(s: Store, a: Actions) {
       h(
         "div",
         { class: "waiting" },
-        status("wait", "Approve in Orbit", "Orbit opened in a new tab. Check it shows this code."),
+        status("wait", "Enter this code in Orbit", "Orbit opened in a new tab. Type this code there to approve this browser."),
         card(h("span", { class: "code", "aria-label": `Code ${s.pairing?.code ?? ""}` }, s.pairing?.code ?? ""), "code-card"),
         h(
           "div",
@@ -214,7 +224,7 @@ export function waitingView(s: Store, a: Actions) {
 }
 
 export function loadingView() {
-  return h("div", { class: "panel" }, h("div", { class: "body" }, h("p", { class: "caption subtle", role: "status" }, "Loading")));
+  return h("div", { class: "panel" }, h("div", { class: "body" }, h("p", { class: "caption subtle" }, "Loading")));
 }
 
 function idleView(s: Store, a: Actions) {
@@ -224,7 +234,7 @@ function idleView(s: Store, a: Actions) {
 }
 
 function pageLoading(s: Store, a: Actions) {
-  return shell(s, a, [h("p", { class: "caption subtle", role: "status" }, "Looking this up in Orbit")]);
+  return shell(s, a, [h("p", { class: "caption subtle" }, "Looking this up in Orbit")]);
 }
 
 function lookupFailed(s: Store, a: Actions) {
@@ -385,14 +395,14 @@ function messageForm(s: Store, a: Actions, person: PersonSummary) {
 }
 
 function diffForm(s: Store, a: Actions, person: PersonSummary | null) {
-  if (!s.diff) return section("Update from page", [h("p", { class: "caption subtle", role: "status" }, "Comparing with the page")]);
+  if (!s.diff) return section("Update from page", [h("p", { class: "caption subtle" }, "Comparing with the page")]);
   const ticked = s.diff.changes.filter((row) => row.changed && s.diffTicks.has(row.field)).length;
   return section("Update from page", [
     h(
       "ul",
       { class: "diff" },
       s.diff.changes.map((row) => {
-        const id = uid("diff");
+        const id = uid(`diff-${row.field}`);
         return h(
           "li",
           null,
@@ -478,7 +488,10 @@ function boardOptions(s: Store, a: Actions, includeLifecycle: boolean) {
     label: "Owner",
     value: s.form.owner ?? "",
     options: [...members.map((member) => ({ value: member.id, label: member.name })), { value: "", label: "Unassigned" }],
-    onChange: (value) => a.setForm("owner", value),
+    onChange: (value) => {
+      a.setForm("ownerTouched", "1");
+      a.setForm("owner", value);
+    },
   });
   const boardField = selectField({
     label: "Board",
@@ -713,9 +726,42 @@ function newCompany(s: Store, a: Actions) {
   );
 }
 
+function possibleCompany(s: Store, a: Actions, candidates: CompanySummary[]) {
+  const pageName = s.company?.name ?? s.form["c.name"] ?? "this company";
+  return shell(s, a, [
+    status("maybe", "Possible match", "Same name, but a different LinkedIn page or domain. Check it's the same company."),
+    candidates.map((candidate) =>
+      card([
+        recordHead({
+          initials: initials(candidate.name).slice(0, 1),
+          name: candidate.name,
+          lines: [candidate.domain ?? shortUrl(candidate.website), candidate.linkedinUrl ? `LinkedIn: ${shortUrl(candidate.linkedinUrl)}` : "No LinkedIn page saved"],
+          square: true,
+        }),
+        h(
+          "div",
+          { class: "row" },
+          candidate.linkedinUrl
+            ? null
+            : button({ variant: "primary", size: "sm", onClick: () => a.confirmCompany(candidate), disabled: s.busy }, "Same company"),
+          button({ variant: "secondary", size: "sm", onClick: () => a.rejectMatch(candidate), disabled: s.busy }, "Not them"),
+          h("span", { class: "push" }, openInOrbit(() => a.openOrbit(candidate.url), "Open")),
+        ),
+        note(
+          candidate.linkedinUrl
+            ? `${candidate.name} already has another LinkedIn page. Press Not them to save ${pageName} as a new company.`
+            : `Same company saves this LinkedIn page on ${candidate.name}, so it matches straight away next time.`,
+        ),
+      ]),
+    ),
+  ]);
+}
+
 function companyView(s: Store, a: Actions) {
   const wl = currentLookup(s);
   if (wl?.status === "in" && wl.company) return inOrbitCompany(s, a, wl, wl.company);
+  const candidates = (wl?.companyCandidates ?? []).filter((candidate) => !s.rejected.has(candidate.id));
+  if (wl?.status === "maybe" && candidates.length > 0) return possibleCompany(s, a, candidates);
   return newCompany(s, a);
 }
 
@@ -738,7 +784,7 @@ function conversationPick(s: Store, a: Actions, person: PersonSummary) {
           "ul",
           { class: "messages" },
           conversation.messages.map((message, index) => {
-            const id = uid("message");
+            const id = uid(`message-${index}`);
             const logged = conversation.checks[index]?.loggedAt ?? null;
             return h(
               "li",
@@ -804,7 +850,7 @@ function conversationView(s: Store, a: Actions) {
       profile ? h("div", { class: "row" }, button({ variant: "secondary", size: "sm", onClick: () => a.openLinkedin(profile), iconAfter: "external" }, "Open their profile")) : null,
     ]);
   }
-  if (s.conversation) return conversationPick(s, a, person);
+  if (s.conversation && s.conversation.pageKey === s.pageKey) return conversationPick(s, a, person);
   const last = s.lastLogged ? `Last logged here ${s.lastLogged.label}, ${s.lastLogged.count} message${s.lastLogged.count === 1 ? "" : "s"}` : null;
   return shell(s, a, [
     h("div", { class: "status-row" }, status("in", "In Orbit", "Matched by the profile link in this thread"), openInOrbit(() => a.openOrbit(person.url))),

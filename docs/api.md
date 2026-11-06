@@ -111,13 +111,13 @@ Response:
 { "company": {}, "created": true, "matchedOn": null }
 ```
 
-`matchedOn` is `domain`, `linkedin`, `name`, or `null` when a new row was inserted. An upsert matches the domain first, then `linkedinUrl` (the same LinkedIn company page), then the same normalised name on a company without a domain. A company matched on its LinkedIn page keeps its own domain when the upsert gives a different one. Provide a name or a domain.
+`matchedOn` is `domain`, `linkedin`, `name`, or `null` when a new row was inserted. An upsert matches the domain first, then `linkedinUrl` (the same LinkedIn company, school or showcase page), then the same normalised name on a company without a domain. A company matched on its LinkedIn page keeps its own domain and website when the upsert gives a different domain. When the domain matches one company and the LinkedIn page another, the domain's company is updated and the LinkedIn page stays where it is. A LinkedIn page belongs to one active company in a workspace: creating or updating another company with it returns 409 `duplicate_company` with `details.existingId` and `details.matchedOn` `linkedin`. Provide a name or a domain.
 
 `POST /api/v1/companies/bulk` accepts `{ "companies": [ ... ], "provenance": { "source": "", "sourceUrl": "" } }` with 1 to 50 companies. Each item is validated on its own. The response is `{ "results": [ { "index": 0, "status": "created", "company": {}, "matchedOn": null } ] }`. `status` is `created`, `updated`, `matched`, or `error`. `matched` means an existing company was found and no fields changed. An error item includes `{ "code", "message" }` and does not roll back the items that succeeded.
 
 ## Company fields
 
-`name`, `domain`, `website`, `description`, `industry`, `sizeCategory`, `linkedinUrl` (a LinkedIn company page, stored as `https://www.linkedin.com/company/<slug>`), `lifecycle`, `ownerId`, `source`, `sourceReference`, `tags`, and on updates `health` (`healthy`, `watch`, `at_risk` or null) with an optional `healthReason`.
+`name`, `domain`, `website`, `description`, `industry`, `sizeCategory`, `linkedinUrl` (a LinkedIn company page, stored as `https://www.linkedin.com/company/<slug>`; `/school/<slug>` and `/showcase/<slug>` pages are kept as they are), `lifecycle`, `ownerId`, `source`, `sourceReference`, `tags`, and on updates `health` (`healthy`, `watch`, `at_risk` or null) with an optional `healthReason`.
 
 Responses also carry `health`, `healthReason`, `healthAt` and `healthActivityId` (the call it came from; null when set by hand). Health is normally set from call summaries.
 
@@ -151,7 +151,7 @@ Codes include `unauthorized` (401), `forbidden` (403), `not_found` (404), `inval
 
 Contact fields: `companyId`, `firstName`, `lastName`, `email`, `phone`, `jobTitle`, `linkedinUrl`, `location` (free text up to 200 characters, such as `Bristol, England`), `salesNavigatorUrl` (a Sales Navigator lead link, stored as `https://www.linkedin.com/sales/lead/<id>`), `ownerId`, `source`, `sourceReference`, `notes`, `tags`. Tags follow the rules in [Tags](#tags).
 
-`POST /api/v1/contacts` creates a person. A name, email, phone, or LinkedIn profile is required. Matching email or LinkedIn returns 409 `duplicate_contact`.
+`POST /api/v1/contacts` creates a person. A name, email, phone, LinkedIn profile or Sales Navigator lead is required. Matching email, LinkedIn or Sales Navigator lead returns 409 `duplicate_contact` (a lead link belongs to one active contact in a workspace).
 
 `POST /api/v1/contacts/upsert` matches email, then LinkedIn, then Sales Navigator lead, then the same name at the same company. `200` with `{ "contact", "created", "matchedOn" }`. `matchedOn` is `email`, `linkedin`, `sales_navigator`, `name`, or `null`.
 
@@ -246,15 +246,15 @@ Deliveries from the assistant carry `source` `assistant`, or `email` for changes
 
 ## LinkedIn capture extension API
 
-`/api/extension/*` serves only the LinkedIn capture Chrome extension (see LinkedIn capture in `docs/architecture.md`). It isn't part of the agent API: agent and personal tokens are refused there, and its browser credentials (`olx_…`) are refused everywhere else. Requests with an `Origin` other than `chrome-extension://<id>` for an ID in `LINKEDIN_EXTENSION_ID` get 403, and only those origins get CORS headers.
+`/api/extension/*` serves only the LinkedIn capture Chrome extension (see LinkedIn capture in `docs/architecture.md`). It isn't part of the agent API: agent and personal tokens are refused there, and its browser credentials (`olx_…`) are refused everywhere else. Requests with an `Origin` other than `chrome-extension://<id>` for an ID in `LINKEDIN_EXTENSION_ID` get 403 `origin_not_allowed`, and so does any `POST` without an `Origin` (Chrome sends it on the extension's `POST`s but not its `GET`s, which need the browser credential anyway). Only those origins get CORS headers.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `POST` | `/pair` | Start connecting: a code, a secret and the Orbit page to approve it on. Up to 10 from one address every 10 minutes |
+| `POST` | `/pair` | Start connecting: a code, a secret and the Orbit page to approve it on (`/connect/chrome`, without the code, which the person types there). Up to 10 from one address every 10 minutes |
 | `POST` | `/pair/redeem` | `{ code, secret }`: 202 while waiting, 200 with the credential once approved (once only), 410 when expired, used or cancelled |
 | `GET` | `/me` | The browser, the person and each allowed workspace with its members, boards and stages, and lifecycles |
-| `GET` | `/lookup?url=&name=&company=&companyUrl=&domain=` | In Orbit, possible match or not, in every allowed workspace |
-| `POST` | `/capture` | Save a person (`kind: person`) or company (`kind: company`), or link a possible match (`kind: link`) |
+| `GET` | `/lookup?url=&linkedinUrl=&name=&company=&companyUrl=&domain=` | In Orbit, possible match or not, in every allowed workspace (`linkedinUrl` is the public profile link on a lead page). Possible people are in `candidates`, possible companies in `companyCandidates` |
+| `POST` | `/capture` | Save a person (`kind: person`) or company (`kind: company`), or link a possible match (`kind: link` for a person, `kind: link_company` for a company) |
 | `POST` | `/diff` | What differs between the page and the record; with `apply` it saves the ticked fields |
 | `POST` | `/task`, `/note`, `/log`, `/log/check` | Add a task (yours), a note, a LinkedIn message or the ticked on-screen messages as one activity, and check which were logged before |
 | `POST` | `/revoke` | Sign this browser out |

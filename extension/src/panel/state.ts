@@ -16,7 +16,8 @@ import type { PageTarget } from "../urls";
 
 export type Active = "task" | "note" | "message" | "update" | "people" | null;
 
-export type Conversation = {
+type Conversation = {
+  pageKey: string | null;
   messages: ThreadMessage[];
   checks: LogCheckResponse["messages"];
   ticked: Set<number>;
@@ -118,7 +119,7 @@ function pad(value: number) {
   return String(value).padStart(2, "0");
 }
 
-export function localDate(date: Date) {
+function localDate(date: Date) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
@@ -126,11 +127,19 @@ export function localDateTime(date: Date) {
   return `${localDate(date)}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+function addDays(date: Date, days: number) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
+}
+
 export function dueDate(choice: string, now = new Date()) {
   const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   if (choice === "today") return localDate(start);
-  if (choice === "tomorrow") return localDate(new Date(start.getFullYear(), start.getMonth(), start.getDate() + 1));
-  if (choice === "next_week") return localDate(new Date(start.getFullYear(), start.getMonth(), start.getDate() + 7));
+  if (choice === "tomorrow") {
+    let next = addDays(start, 1);
+    while (next.getDay() === 0 || next.getDay() === 6) next = addDays(next, 1);
+    return localDate(next);
+  }
+  if (choice === "next_week") return localDate(addDays(start, (8 - start.getDay()) % 7 || 7));
   return choice;
 }
 

@@ -4,6 +4,11 @@ export const TOKEN_KEY = "orbitToken";
 export const WORKSPACE_KEY = "orbitWorkspace";
 
 export function orbitHref(path: string) {
-  if (/^https?:\/\//i.test(path)) return path;
-  return `${ORBIT_URL}${path.startsWith("/") ? "" : "/"}${path}`;
+  const root = `${ORBIT_URL}/`;
+  try {
+    const url = new URL(path, root);
+    return url.origin === new URL(root).origin ? url.toString() : root;
+  } catch {
+    return root;
+  }
 }

@@ -10,6 +10,14 @@ const out = "extension/dist";
 const orbitUrl = (process.env.ORBIT_URL || "https://orbit.geteclipse.co").replace(/\/+$/, "");
 const linkedinUrl = (process.env.LINKEDIN_URL || "https://www.linkedin.com").replace(/\/+$/, "");
 const version = JSON.parse(readFileSync(`${source}/version.json`, "utf8")).version;
+const chromeVersion = "116";
+const target = `chrome${chromeVersion}`;
+const font = `${source}/fonts/geist-latin.woff2`;
+
+if (!existsSync(font)) {
+  console.error(`Missing ${font}. The panel font must be bundled with the extension.`);
+  process.exit(1);
+}
 
 function origin(value, name) {
   try {
@@ -42,7 +50,7 @@ await build({
   outdir: out,
   bundle: true,
   format: "esm",
-  target: "chrome120",
+  target,
   platform: "browser",
   minify: zip,
   legalComments: "none",
@@ -59,7 +67,7 @@ await build({
   outdir: out,
   bundle: true,
   format: "iife",
-  target: "chrome120",
+  target,
   platform: "browser",
   minify: zip,
   legalComments: "none",
@@ -68,8 +76,7 @@ await build({
 
 copyFileSync(`${source}/src/panel/panel.html`, `${out}/panel.html`);
 copyFileSync(`${source}/src/panel/panel.css`, `${out}/panel.css`);
-const font = "node_modules/next/dist/next-devtools/server/font/geist-latin.woff2";
-if (existsSync(font)) copyFileSync(font, `${out}/geist-latin.woff2`);
+copyFileSync(font, `${out}/geist-latin.woff2`);
 for (const size of [16, 32, 48, 128]) copyFileSync(`${source}/icons/icon-${size}.png`, `${out}/icons/icon-${size}.png`);
 
 const icons = { 16: "icons/icon-16.png", 32: "icons/icon-32.png", 48: "icons/icon-48.png", 128: "icons/icon-128.png" };
@@ -79,7 +86,7 @@ const manifest = {
   short_name: "Orbit",
   description: "Look up and save LinkedIn people and companies in Orbit, and log conversations when you ask.",
   version,
-  minimum_chrome_version: "116",
+  minimum_chrome_version: chromeVersion,
   ...(zip ? {} : { key: publicKey }),
   permissions: ["sidePanel", "storage"],
   host_permissions: [`${linkedinOrigin}/*`, `${orbitOrigin}/*`],

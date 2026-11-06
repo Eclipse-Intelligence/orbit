@@ -4,8 +4,9 @@ A Chrome extension that opens Orbit in Chrome's side panel next to LinkedIn and 
 
 ## What it reads, and when
 
-- **The page address**, on every LinkedIn page you open, to check whether the person or company is in Orbit. The toolbar icon shows a green dot when it is, and an amber dot for a possible match.
+- **The page address**, on every LinkedIn page you open, to check whether the person or company is in Orbit. The toolbar icon shows a green dot when it is in any of your workspaces. An amber dot for a possible match shows only after the side panel has read the page and found one.
 - **The top of a profile and the current role in Experience** (name, headline, company, location), or a company page's name, tagline and About details, only while the side panel is open, once per page.
+- **The thread header** on `/messaging/thread` pages (the other person's name and profile link), only while the side panel is open, to find them in Orbit.
 - **Messages**, only when you press Log this conversation, and only the ones already on screen.
 
 It never opens, scrolls or clicks anything, never calls LinkedIn's own APIs, and saves nothing until you press Save, Add or Log. Sales Navigator lead pages are read only; lead lists and Sales Navigator notes are never touched.
@@ -58,11 +59,13 @@ Add the Chrome Web Store ID to the list once the listing exists.
 
 ## Connect
 
-1. Open the side panel and press Connect.
-2. Orbit opens in a new tab showing the same code as the panel. Check the code, name the browser, choose its workspaces and press Approve.
+1. Open the side panel and press Connect. The panel shows an 8-character code.
+2. Orbit opens in a new tab. Type the code from the panel, name the browser, choose its workspaces and press Approve. Only approve a code you see in your own browser's Orbit panel right now.
 3. The panel connects by itself. The code works for 10 minutes.
 
-The browser can look up and save people and companies, and add tasks, notes and LinkedIn activity in the chosen workspaces. It can't read mail, calendars, docs or assistant chats. Revoke it, or change its workspaces, in Orbit under Settings › Integrations › LinkedIn capture. Disconnect in the panel's menu revokes it too.
+Saving a new person also adds their company when it isn't in Orbit yet, with the same tags. The board and stage you choose put their company on that board.
+
+The browser can look up and save people and companies, and add tasks, notes and LinkedIn activity in the chosen workspaces. It can't read mail, calendars, docs or assistant chats. Revoke it, or change its workspaces, in Orbit under Settings › Integrations › LinkedIn capture. Hold to disconnect in the panel's menu revokes it too.
 
 ## Publish privately on the Chrome Web Store
 
@@ -87,6 +90,7 @@ Bump `version` in `extension/version.json` before each new upload.
 - `src/content.ts`: the reader. It only answers the panel's `orbit:read` messages, using `src/parsers`.
 - `src/parsers`: pure functions that read a profile, company page, Sales Navigator lead or message thread from the page and return empty fields when LinkedIn's markup changes.
 - `src/panel`: the side panel.
+- `fonts/geist-latin.woff2`: the panel font (Geist, SIL Open Font License). The build stops if it is missing.
 - `../lib/extension/protocol.ts`: the request and response types shared with Orbit.
 
 Parser tests run against invented fixture pages in `tests/fixtures/linkedin`: `npx tsx --test tests/extension-parsers.test.ts`.

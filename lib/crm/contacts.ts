@@ -215,7 +215,7 @@ function prepareContact(input: ContactWrite, mode: "create" | "patch" | "upsert"
       if (!url) {
         throw new CrmError(
           "invalid_input",
-          "Enter a Sales Navigator lead link like linkedin.com/sales/lead/ACwAA....",
+          "Enter a Sales Navigator lead link like linkedin.com/sales/lead/ACwAAB9xK2s.",
           400,
           { field: "salesNavigatorUrl" },
         );
@@ -242,11 +242,12 @@ function prepareContact(input: ContactWrite, mode: "create" | "patch" | "upsert"
     Boolean(next.firstName || next.lastName) ||
     Boolean(next.email) ||
     Boolean(next.phone) ||
-    Boolean(next.linkedinUrl);
+    Boolean(next.linkedinUrl) ||
+    Boolean(next.salesNavigatorUrl);
   if (mode === "create" && !identifiable) {
     throw new CrmError(
       "invalid_input",
-      "Enter a name, email, phone, or LinkedIn profile.",
+      "Enter a name, email, phone, LinkedIn profile or Sales Navigator lead.",
       400,
       { field: "email" },
     );
@@ -354,7 +355,8 @@ function hasIdentity(row: ContactRow, write: PreparedContact) {
   const email = write.email === undefined ? row.email : write.email;
   const phone = write.phone === undefined ? row.phone : write.phone;
   const linkedin = write.linkedinUrl === undefined ? row.linkedin_url : write.linkedinUrl;
-  return Boolean(first || last || email || phone || linkedin);
+  const lead = write.salesNavigatorUrl === undefined ? row.sales_navigator_url : write.salesNavigatorUrl;
+  return Boolean(first || last || email || phone || linkedin || lead);
 }
 
 async function applyContact(
@@ -367,7 +369,7 @@ async function applyContact(
   if (!hasIdentity(current, write)) {
     throw new CrmError(
       "invalid_input",
-      "A contact needs a name, email, phone, or LinkedIn profile.",
+      "A contact needs a name, email, phone, LinkedIn profile or Sales Navigator lead.",
       400,
       { field: "email" },
     );
@@ -497,6 +499,13 @@ async function insertContact(
   } catch (error) {
     constraintError(error, "duplicate_contact", "A matching contact already exists.");
   }
+}
+
+export async function findContactByProfileInDb(db: Db, workspaceId: string, input: Pick<ContactWrite, "linkedinUrl" | "salesNavigatorUrl">) {
+  const write = prepareContact({ linkedinUrl: input.linkedinUrl, salesNavigatorUrl: input.salesNavigatorUrl }, "patch");
+  if (!write.normalizedLinkedin && !write.salesNavigatorUrl) return null;
+  const match = await findMatch(db, workspaceId, write, false);
+  return match ? mapContact(match.row) : null;
 }
 
 export async function upsertContactInDb(

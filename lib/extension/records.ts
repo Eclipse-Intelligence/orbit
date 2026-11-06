@@ -58,7 +58,7 @@ export function dueLabel(value: string, now = new Date()) {
   return dayLabel(value, now);
 }
 
-export function moneyLabel(value: string | null, currency: string) {
+function moneyLabel(value: string | null, currency: string) {
   if (!value) return null;
   const amount = Number(value);
   if (!Number.isFinite(amount)) return value;
@@ -73,7 +73,7 @@ export function moneyLabel(value: string | null, currency: string) {
   }
 }
 
-export function openPath(workspaceId: string, path: string) {
+function openPath(workspaceId: string, path: string) {
   return `/open?workspace=${encodeURIComponent(workspaceId)}&to=${encodeURIComponent(path)}`;
 }
 
@@ -155,7 +155,7 @@ async function lastContactFor(db: Db, workspaceId: string, contactId: string): P
   return { kind: ACTIVITY_KINDS[row.type] ?? "Activity", title, occurredAt, whenLabel: dayLabel(occurredAt) };
 }
 
-export async function personSummaryInDb(db: Db, actor: UserActor, contact: Contact): Promise<PersonSummary> {
+async function personSummaryInDb(db: Db, actor: UserActor, contact: Contact): Promise<PersonSummary> {
   const company = contact.companyId ? await readCompanyInDb(db, contact.companyId, actor.workspaceId) : null;
   const deal = await dealFor(db, actor.workspaceId, contact.companyId, contact.id);
   const lastContact = await lastContactFor(db, actor.workspaceId, contact.id);
@@ -250,12 +250,12 @@ export async function personSummary(db: Db, actor: UserActor, contactId: string)
   return contact ? personSummaryInDb(db, actor, contact) : null;
 }
 
-export async function companySummary(db: Db, actor: UserActor, companyId: string) {
+async function companySummary(db: Db, actor: UserActor, companyId: string) {
   const company = await readCompanyInDb(db, companyId, actor.workspaceId);
   return company ? companySummaryInDb(db, actor, company) : null;
 }
 
-export function pageKind(url: string): PageKind {
+function pageKind(url: string): PageKind {
   if (canonicalSalesNavigator(url)) return "lead";
   if (canonicalLinkedin(url)) return "person";
   if (canonicalCompanyLinkedin(url)) return "company";
@@ -297,7 +297,7 @@ async function companiesNamed(db: Db, workspaceId: string, name: string | null, 
   return result.rows.map((row) => row.id);
 }
 
-export async function possibleMatches(
+async function possibleMatches(
   db: Db,
   workspaceId: string,
   input: { name: string | null; company: string | null; companyUrl: string | null; linkedinUrl: string | null; salesNavigatorUrl: string | null },
@@ -331,7 +331,7 @@ function presenceFor(status: WorkspaceLookup["status"], person: PersonSummary | 
 }
 
 async function lookupPerson(db: Db, actor: UserActor, kind: PageKind, query: LookupQuery) {
-  const linkedinUrl = kind === "person" ? canonicalLinkedin(query.url) : null;
+  const linkedinUrl = kind === "person" ? canonicalLinkedin(query.url) : query.linkedinUrl ? canonicalLinkedin(query.linkedinUrl) : null;
   const salesNavigatorUrl = kind === "lead" ? canonicalSalesNavigator(query.url) : null;
   let matchedOn: PersonMatch | null = null;
   let contactId: string | null = null;
@@ -345,7 +345,7 @@ async function lookupPerson(db: Db, actor: UserActor, kind: PageKind, query: Loo
   }
   if (contactId) {
     const person = await personSummary(db, actor, contactId);
-    if (person) return { status: "in" as const, matchedOn, person, company: null, candidates: [] };
+    if (person) return { status: "in" as const, matchedOn, person, company: null, candidates: [], companyCandidates: [] };
   }
   const companyUrl = query.companyUrl ? canonicalCompanyLinkedin(query.companyUrl) : null;
   const ids = await possibleMatches(db, actor.workspaceId, {
@@ -360,39 +360,62 @@ async function lookupPerson(db: Db, actor: UserActor, kind: PageKind, query: Loo
     const candidate = await personSummary(db, actor, id);
     if (candidate) candidates.push(candidate);
   }
-  if (candidates.length > 0) return { status: "maybe" as const, matchedOn: "name" as const, person: null, company: null, candidates };
-  return { status: "none" as const, matchedOn: null, person: null, company: null, candidates: [] };
+  if (candidates.length > 0) return { status: "maybe" as const, matchedOn: "name" as const, person: null, company: null, candidates, companyCandidates: [] };
+  return { status: "none" as const, matchedOn: null, person: null, company: null, candidates: [], companyCandidates: [] };
 }
 
-export async function matchCompany(db: Db, workspaceId: string, input: { linkedinUrl: string | null; domain: string | null; name: string | null }) {
+type CompanyCandidateRow = { id: string; linkedin_url: string | null; domain: string | null };
+
+export type CompanyMatchResult = { found: { id: string; matchedOn: CompanyMatch } | null; candidates: string[] };
+
+export async function matchCompany(
+  db: Db,
+  workspaceId: string,
+  input: { linkedinUrl: string | null; domain: string | null; name: string | null },
+): Promise<CompanyMatchResult> {
+  const conflicts = (row: CompanyCandidateRow) =>
+    Boolean((input.linkedinUrl && row.linkedin_url && row.linkedin_url !== input.linkedinUrl) || (input.domain && row.domain && row.domain !== input.domain));
   const attempts: [CompanyMatch, string, string | null][] = [
     ["linkedin", "c.linkedin_url = $2", input.linkedinUrl],
     ["domain", "c.domain = $2", input.domain],
     ["name", "c.normalized_name = $2", input.name ? normalizeCompanyName(input.name) || null : null],
   ];
+  const candidates: string[] = [];
   for (const [matchedOn, condition, value] of attempts) {
     if (!value) continue;
-    const result = await db.query<{ id: string }>(
-      `select c.id from crm.companies c
+    const result = await db.query<CompanyCandidateRow>(
+      `select c.id, c.linkedin_url, c.domain from crm.companies c
        where c.workspace_id = $1 and c.archived_at is null and ${condition}
        order by c.updated_at desc
-       limit 1`,
+       limit 20`,
       [workspaceId, value],
     );
-    if (result.rows[0]) return { id: result.rows[0].id, matchedOn };
+    for (const row of result.rows) {
+      if (matchedOn !== "linkedin" && conflicts(row)) {
+        if (!candidates.includes(row.id)) candidates.push(row.id);
+        continue;
+      }
+      return { found: { id: row.id, matchedOn }, candidates: [] };
+    }
   }
-  return null;
+  return { found: null, candidates: candidates.slice(0, CANDIDATE_LIMIT) };
 }
 
 async function lookupCompany(db: Db, actor: UserActor, query: LookupQuery) {
-  const found = await matchCompany(db, actor.workspaceId, {
+  const match = await matchCompany(db, actor.workspaceId, {
     linkedinUrl: canonicalCompanyLinkedin(query.url),
     domain: query.domain ? canonicalDomain(query.domain) : null,
     name: cleanLookupText(query.name),
   });
-  const company = found ? await companySummary(db, actor, found.id) : null;
-  if (found && company) return { status: "in" as const, matchedOn: found.matchedOn, person: null, company, candidates: [] };
-  return { status: "none" as const, matchedOn: null, person: null, company: null, candidates: [] };
+  const company = match.found ? await companySummary(db, actor, match.found.id) : null;
+  if (match.found && company) return { status: "in" as const, matchedOn: match.found.matchedOn, person: null, company, candidates: [], companyCandidates: [] };
+  const companyCandidates: CompanySummary[] = [];
+  for (const id of match.candidates) {
+    const candidate = await companySummary(db, actor, id);
+    if (candidate) companyCandidates.push(candidate);
+  }
+  if (companyCandidates.length > 0) return { status: "maybe" as const, matchedOn: "name" as const, person: null, company: null, candidates: [], companyCandidates };
+  return { status: "none" as const, matchedOn: null, person: null, company: null, candidates: [], companyCandidates: [] };
 }
 
 export async function lookupPage(actors: UserActor[], query: LookupQuery): Promise<LookupResponse> {
@@ -401,7 +424,7 @@ export async function lookupPage(actors: UserActor[], query: LookupQuery): Promi
   const canonical =
     kind === "person" ? canonicalLinkedin(url) : kind === "lead" ? canonicalSalesNavigator(url) : kind === "company" ? canonicalCompanyLinkedin(url) : null;
   if (kind === "other" || kind === "conversation") return { kind, url: canonical, workspaces: [] };
-  const workspaces = await Promise.all(
+  const settled = await Promise.allSettled(
     actors.map((actor) =>
       withActor(actor, async (db): Promise<WorkspaceLookup> => {
         const found = kind === "company" ? await lookupCompany(db, actor, query) : await lookupPerson(db, actor, kind, query);
@@ -414,6 +437,8 @@ export async function lookupPage(actors: UserActor[], query: LookupQuery): Promi
       }),
     ),
   );
+  const workspaces = settled.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
+  if (workspaces.length === 0 && settled[0]?.status === "rejected") throw settled[0].reason;
   return { kind, url: canonical, workspaces };
 }
 

@@ -10,7 +10,7 @@ import refreshSvg from "../../../public/assets/images/mail/refresh.svg";
 import usersSvg from "../../../public/assets/images/companies/sidebar/users.svg";
 import { h } from "./dom";
 
-export const ICONS = {
+const ICONS = {
   check: checkSvg as string,
   chevron: chevronSvg as string,
   clipboard: clipboardSvg as string,
@@ -25,6 +25,19 @@ export const ICONS = {
 
 export type IconName = keyof typeof ICONS;
 
+let instance = 0;
+
+function uniqueIds(svg: string) {
+  const referenced = new Set([...svg.matchAll(/url\(#([^)]+)\)|href="#([^"]+)"/g)].map((match) => match[1] ?? match[2]));
+  if (referenced.size === 0) return svg.replace(/\sid="[^"]*"/g, "");
+  instance += 1;
+  const suffix = `-i${instance}`;
+  return svg
+    .replace(/\sid="([^"]*)"/g, (_, id: string) => (referenced.has(id) ? ` id="${id}${suffix}"` : ""))
+    .replace(/url\(#([^)]+)\)/g, (_, id: string) => `url(#${id}${suffix})`)
+    .replace(/href="#([^"]+)"/g, (_, id: string) => `href="#${id}${suffix}"`);
+}
+
 export function icon(name: IconName, className = "icon") {
-  return h("span", { class: className, "aria-hidden": "true", html: ICONS[name] });
+  return h("span", { class: className, "aria-hidden": "true", trustedSvg: uniqueIds(ICONS[name]) });
 }

@@ -27,7 +27,8 @@ function corsHeaders(request: Request): Record<string, string> {
 
 function assertOrigin(request: Request) {
   const origin = request.headers.get("origin");
-  if (origin && !allowedExtensionOrigins().includes(origin.toLowerCase())) {
+  const required = request.method !== "GET" && request.method !== "HEAD";
+  if ((required && !origin) || (origin && !allowedExtensionOrigins().includes(origin.toLowerCase()))) {
     throw new CrmError("origin_not_allowed", "Only the Orbit extension can use this.", 403);
   }
 }
