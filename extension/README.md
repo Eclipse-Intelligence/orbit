@@ -93,4 +93,4 @@ Bump `version` in `extension/version.json` before each new upload.
 - `fonts/geist-latin.woff2`: the panel font (Geist, SIL Open Font License). The build stops if it is missing.
 - `../lib/extension/protocol.ts`: the request and response types shared with Orbit.
 
-Parser tests run against invented fixture pages in `tests/fixtures/linkedin`: `npx tsx --test tests/extension-parsers.test.ts`.
+Parser tests run against the fixture pages in `tests/fixtures/linkedin`: invented pages in LinkedIn's older markup, and `profile-real-2026.html`, a real profile from 2026 with every name, link and description replaced. LinkedIn's class names are hashed and change between releases, so the parsers read headings, the page title, links, `aria-label`s and the text itself, and only use the old class names as a fallback. Run them with `npx tsx --test tests/extension-parsers.test.ts`.

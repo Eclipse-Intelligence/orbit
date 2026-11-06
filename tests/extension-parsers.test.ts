@@ -162,6 +162,224 @@ describe("LinkedIn page parsers", () => {
     assert.equal(person.companyLinkedinUrl, null);
   });
 
+  it("reads a profile in LinkedIn's 2026 markup without its classes", async () => {
+    const person = await read<PagePerson>("profile-real-2026.html", "profile", "https://www.linkedin.com/in/alex-carter-example/");
+    assert.deepEqual(person, {
+      name: "Alex Carter",
+      firstName: "Alex",
+      lastName: "Carter",
+      headline: "Fractional Revenue & Growth Leader | Helping founder-led B2B software and services firms build steady, repeatable sales | CCO at Northwind",
+      jobTitle: "Chief Commercial Officer (CCO)",
+      location: "Leeds Area, United Kingdom",
+      linkedinUrl: "https://www.linkedin.com/in/alex-carter-example",
+      salesNavigatorUrl: null,
+      companyName: "NORTHWIND",
+      companyLinkedinUrl: "https://www.linkedin.com/company/90000001",
+    });
+  });
+
+  it("reads the name from the page title even with a notification count", async () => {
+    await load("profile-real-2026.html");
+    const person = await page.evaluate(() => {
+      document.title = "(3) Alex Carter | LinkedIn";
+      const parsers = (window as unknown as { OrbitParsers: { readPage: (root: ParentNode, url: string, what: string) => { person: PagePerson } } }).OrbitParsers;
+      return parsers.readPage(document, "https://www.linkedin.com/in/alex-carter-example/", "profile").person;
+    });
+    assert.equal(person.name, "Alex Carter");
+    assert.equal(person.headline?.endsWith("CCO at Northwind"), true);
+  });
+
+  it("takes the company of a grouped role, never its dates, when no role is current", async () => {
+    await load("profile-real-2026.html");
+    const person = await page.evaluate(() => {
+      const entries = Array.from(document.querySelectorAll("[componentkey^='entity-collection-item']"));
+      entries.slice(0, 3).forEach((entry) => entry.remove());
+      const parsers = (window as unknown as { OrbitParsers: { readPage: (root: ParentNode, url: string, what: string) => { person: PagePerson } } }).OrbitParsers;
+      return parsers.readPage(document, "https://www.linkedin.com/in/alex-carter-example/", "profile").person;
+    });
+    assert.equal(person.jobTitle, "Sales & Commercial Director");
+    assert.equal(person.companyName, "Contoso (UK Group)");
+    assert.equal(person.companyLinkedinUrl, "https://www.linkedin.com/company/90000004");
+  });
+
+  it("falls back to the headline and top card when Experience is missing", async () => {
+    await load("profile-real-2026.html");
+    const person = await page.evaluate(() => {
+      document.querySelector("[componentkey$='ExperienceTopLevelSection']")?.remove();
+      const parsers = (window as unknown as { OrbitParsers: { readPage: (root: ParentNode, url: string, what: string) => { person: PagePerson } } }).OrbitParsers;
+      return parsers.readPage(document, "https://www.linkedin.com/in/alex-carter-example/", "profile").person;
+    });
+    assert.equal(person.jobTitle, "CCO");
+    assert.equal(person.companyName, "NORTHWIND");
+    assert.equal(person.location, "Leeds Area, United Kingdom");
+  });
+
+  it("never reads date ranges, durations or employment types as a name, title or company", async () => {
+    await page.setContent(`<html><head><title>LinkedIn</title></head><body><main>
+      <section><h2>Jan 2016 - Sep 2024</h2><p>Oct 2024 - Present · 2 yrs 2 mos</p></section>
+      <section><h2>Experience</h2>
+        <div componentkey="entity-collection-item-1"><a href="/company/1/"><p>Jan 2016 - Sep 2024 · 8 yrs 9 mos</p><p>Full-time · 13 yrs 3 mos</p><p>London Area, United Kingdom · Hybrid</p></a></div>
+      </section></main></body></html>`);
+    await page.addScriptTag({ content: bundle });
+    const person = await page.evaluate(() => {
+      const parsers = (window as unknown as { OrbitParsers: { readPage: (root: ParentNode, url: string, what: string) => { person: PagePerson } } }).OrbitParsers;
+      return parsers.readPage(document, "https://www.linkedin.com/in/someone", "profile").person;
+    });
+    assert.equal(person.name, null);
+    assert.equal(person.firstName, null);
+    assert.equal(person.headline, null);
+    assert.equal(person.jobTitle, null);
+    assert.equal(person.companyName, null);
+  });
+
+  it("reads the current role when it isn't the first Experience entry", async () => {
+    await page.setContent(`<html><head><title>Jo Bloggs | LinkedIn</title></head><body><main>
+      <section><h2>Jo Bloggs</h2><p>Advisor</p></section>
+      <section><h2 componentkey="ProfileNullStateCardAnchor_Experience">Experience</h2>
+        <div componentkey="entity-collection-item-1"><a href="/company/11/"><p>Head of Sales</p><p>Old Co · Full-time</p><p>Jan 2016 - Sep 2024 · 8 yrs 9 mos</p></a></div>
+        <div componentkey="entity-collection-item-2"><a href="/company/22/"><p>New Co</p><p>Full-time · 2 yrs</p></a>
+          <ul><li><a href="/company/22/"><p>Managing Director</p><p>Oct 2024 - Present · 2 yrs 2 mos</p></a></li>
+          <li><a href="/company/22/"><p>Sales Director</p><p>Jan 2024 - Oct 2024 · 10 mos</p></a></li></ul></div>
+      </section></main></body></html>`);
+    await page.addScriptTag({ content: bundle });
+    const person = await page.evaluate(() => {
+      const parsers = (window as unknown as { OrbitParsers: { readPage: (root: ParentNode, url: string, what: string) => { person: PagePerson } } }).OrbitParsers;
+      return parsers.readPage(document, "https://www.linkedin.com/in/jo-bloggs", "profile").person;
+    });
+    assert.equal(person.name, "Jo Bloggs");
+    assert.equal(person.headline, "Advisor");
+    assert.equal(person.jobTitle, "Managing Director");
+    assert.equal(person.companyName, "New Co");
+    assert.equal(person.companyLinkedinUrl, "https://www.linkedin.com/company/22");
+  });
+
+  async function readHtml(html: string, url: string) {
+    await page.setContent(html);
+    await page.addScriptTag({ content: bundle });
+    return page.evaluate((address) => {
+      const parsers = (window as unknown as { OrbitParsers: { readPage: (root: ParentNode, url: string, what: string) => { person: PagePerson } } }).OrbitParsers;
+      return parsers.readPage(document, address, "profile").person;
+    }, url);
+  }
+
+  function profileHtml(name: string, top: string, experience: string) {
+    return `<html><head><title>${name} | LinkedIn</title></head><body><main>
+      <section><h2>${name}</h2>${top}</section>
+      <section><h2>Experience</h2>${experience}</section></main></body></html>`;
+  }
+
+  const LANGUAGES = [
+    {
+      language: "German",
+      employment: "Vollzeit",
+      current: "Okt. 2024 \u2013 Heute · 2 J. 2 Mon.",
+      past: "Jan. 2016 \u2013 Sept. 2024 · 8 J. 9 Mon.",
+      total: "13 J. 3 Mon.",
+      place: "Berlin, Deutschland · Hybrid",
+    },
+    {
+      language: "Spanish",
+      employment: "Jornada completa",
+      current: "oct. 2024 - actualidad · 2 años 2 meses",
+      past: "ene. 2016 - sept. 2024 · 8 años 9 meses",
+      total: "13 años 3 meses",
+      place: "Madrid, España · Híbrido",
+    },
+    {
+      language: "French",
+      employment: "Temps plein",
+      current: "oct. 2024 - aujourd’hui · 2 ans 2 mois",
+      past: "janv. 2016 - sept. 2024 · 8 ans 9 mois",
+      total: "13 ans 3 mois",
+      place: "Lyon, France · Hybride",
+    },
+  ];
+
+  for (const words of LANGUAGES) {
+    it(`reads the current role from ${words.language} flat Experience entries`, async () => {
+      const person = await readHtml(
+        profileHtml(
+          "Jo Bloggs",
+          "<p>Advisor</p>",
+          `<div componentkey="entity-collection-item-1"><a href="/company/11/"><p>Head of Sales</p><p>Old Co · ${words.employment}</p><p>${words.past}</p><p>${words.place}</p></a></div>
+           <div componentkey="entity-collection-item-2"><a href="/company/22/"><p>Managing Director</p><p>New Co · ${words.employment}</p><p>${words.current}</p><p>${words.place}</p></a></div>`,
+        ),
+        "https://www.linkedin.com/in/jo-bloggs",
+      );
+      assert.equal(person.jobTitle, "Managing Director");
+      assert.equal(person.companyName, "New Co");
+      assert.equal(person.companyLinkedinUrl, "https://www.linkedin.com/company/22");
+    });
+
+    it(`reads the current role from a ${words.language} grouped Experience entry`, async () => {
+      const person = await readHtml(
+        profileHtml(
+          "Jo Bloggs",
+          "<p>Advisor</p>",
+          `<div componentkey="entity-collection-item-1"><a href="/company/22/"><p>New Co</p><p>${words.employment} · ${words.total}</p><p>${words.place}</p></a>
+             <ul><li><a href="/company/22/"><p>Sales Director</p><p>${words.past}</p></a></li>
+             <li><a href="/company/22/"><p>Managing Director</p><p>${words.current}</p></a></li></ul></div>`,
+        ),
+        "https://www.linkedin.com/in/jo-bloggs",
+      );
+      assert.equal(person.jobTitle, "Managing Director");
+      assert.equal(person.companyName, "New Co");
+      assert.equal(person.companyLinkedinUrl, "https://www.linkedin.com/company/22");
+    });
+  }
+
+  it("keeps companies and titles that start with Greater or end in Area", async () => {
+    const flat = await readHtml(
+      profileHtml(
+        "Jo Bloggs",
+        "<p>Greater Manchester, England, United Kingdom</p><p>Greater London Area Manager at Greater Anglia</p><p>Greater Manchester, England, United Kingdom</p>",
+        `<div componentkey="entity-collection-item-1"><a href="/company/33/"><p>Greater London Area Manager</p><p>Greater Anglia · Full-time</p><p>Oct 2024 - Present · 2 yrs</p><p>Norwich Area, United Kingdom · Hybrid</p></a></div>`,
+      ),
+      "https://www.linkedin.com/in/jo-bloggs",
+    );
+    assert.equal(flat.headline, "Greater London Area Manager at Greater Anglia");
+    assert.equal(flat.jobTitle, "Greater London Area Manager");
+    assert.equal(flat.companyName, "Greater Anglia");
+    assert.equal(flat.location, "Greater Manchester, England, United Kingdom");
+
+    const grouped = await readHtml(
+      profileHtml(
+        "Jo Bloggs",
+        "<p>Inspector</p>",
+        `<div componentkey="entity-collection-item-1"><a href="/company/44/"><p>Greater Manchester Police</p><p>Full-time · 12 yrs</p><p>Manchester Area, United Kingdom</p></a>
+           <ul><li><a href="/company/44/"><p>Inspector</p><p>Jan 2020 - Present · 6 yrs</p></a></li></ul></div>
+         <div componentkey="entity-collection-item-2"><a href="/company/55/"><p>Greater London Authority</p><p>Full-time · 3 yrs</p></a>
+           <ul><li><a href="/company/55/"><p>Analyst</p><p>Jan 2016 - Dec 2019 · 4 yrs</p></a></li></ul></div>`,
+      ),
+      "https://www.linkedin.com/in/jo-bloggs",
+    );
+    assert.equal(grouped.jobTitle, "Inspector");
+    assert.equal(grouped.companyName, "Greater Manchester Police");
+
+    const headerless = await readHtml(
+      profileHtml(
+        "Jo Bloggs",
+        "<p>Inspector</p>",
+        `<div componentkey="entity-collection-item-1"><a href="/company/44/"><p>Manchester Area, United Kingdom</p><p>Full-time · 12 yrs</p></a>
+           <ul><li><a href="/company/44/"><p>Inspector</p><p>Jan 2020 - Present · 6 yrs</p></a></li></ul></div>`,
+      ),
+      "https://www.linkedin.com/in/jo-bloggs",
+    );
+    assert.equal(headerless.companyName, null);
+  });
+
+  it("never takes the top card's company line as a headline or title", async () => {
+    const person = await readHtml(
+      `<html><head><title>Jo Bloggs | LinkedIn</title></head><body><main><section><h2>Jo Bloggs</h2>
+        <p>NORTHWIND + 1 more · University of Eastbridge</p><p>Leeds Area, United Kingdom</p></section></main></body></html>`,
+      "https://www.linkedin.com/in/jo-bloggs",
+    );
+    assert.equal(person.headline, null);
+    assert.equal(person.jobTitle, null);
+    assert.equal(person.companyName, "NORTHWIND");
+    assert.equal(person.location, "Leeds Area, United Kingdom");
+  });
+
   it("returns nulls instead of throwing on an empty page", async () => {
     await page.setContent("<html><body><p>Loading</p></body></html>");
     await page.addScriptTag({ content: bundle });

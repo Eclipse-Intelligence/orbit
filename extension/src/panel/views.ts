@@ -448,11 +448,12 @@ function companyFromPage(s: Store, wl: WorkspaceLookup | null) {
 }
 
 function personFactsCard(s: Store, a: Actions, wl: WorkspaceLookup | null) {
-  const name = [s.form["p.firstName"], s.form["p.lastName"]].filter(Boolean).join(" ") || "Unknown name";
+  const readName = [s.form["p.firstName"], s.form["p.lastName"]].filter(Boolean).join(" ");
+  const name = readName || "Name not read";
   const editButton = button({ variant: "ghost", size: "sm", onClick: () => a.toggleEdit(), expanded: s.editing }, s.editing ? "Done" : "Edit");
   if (s.editing) {
     return card([
-      recordHead({ initials: initials(name), name, lines: [s.person?.headline ?? null], action: editButton }),
+      recordHead({ initials: initials(readName), name, lines: [s.person?.headline ?? null], action: editButton }),
       h(
         "div",
         { class: "divider form-stack" },
@@ -476,7 +477,7 @@ function personFactsCard(s: Store, a: Actions, wl: WorkspaceLookup | null) {
   ];
   if (s.form["p.linkedinUrl"]) rows.push({ label: "LinkedIn", value: h("span", { class: "soft" }, shortUrl(s.form["p.linkedinUrl"])) });
   if (s.form["p.salesNavigatorUrl"]) rows.push({ label: "Sales Nav", value: h("span", { class: "soft" }, "Lead page") });
-  return card([recordHead({ initials: initials(name), name, lines: [s.person?.headline ?? null], action: editButton }), h("div", { class: "divider" }, facts(rows))]);
+  return card([recordHead({ initials: initials(readName), name, lines: [s.person?.headline ?? null], action: editButton }), h("div", { class: "divider" }, facts(rows))]);
 }
 
 function boardOptions(s: Store, a: Actions, includeLifecycle: boolean) {

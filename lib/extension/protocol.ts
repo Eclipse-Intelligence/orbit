@@ -4,6 +4,44 @@ export const WORKSPACE_HEADER = "x-orbit-workspace";
 export const PAIRING_TTL_MINUTES = 10;
 export const SALES_NAVIGATOR_ID = /^[A-Za-z0-9_-]{6,120}$/;
 
+const LETTERS = "\\p{L}{3,12}\\.?";
+const MONTH_NAME = "(?:jan|feb|f[eé]v|m[aä]r|apr|avr|abr|ma[iy]|mag|mei|jun|jui|giu|jul|lug|aug|ao[uû]|ago|sep|set|o[ck]t|ott|nov|de[cz]|d[eé]c|dic|ene|gen)\\p{L}*\\.?";
+const DATE_SHAPE = `(?:(?:\\d{1,2}\\.?\\s+)?(?:${LETTERS}\\s+(?:de\\s+)?)?\\d{4}|\\d{1,2}[./]\\d{4})`;
+const RANGE_END = `(${DATE_SHAPE}|[\\p{L}'\u2019]+(?:\\s+[\\p{L}'\u2019]+){0,2})`;
+const SEPARATOR = "(?:\\s*[-\u2013\u2014]\\s*|\\s+(?:to|until|bis|a|à|al|tot|até|au)\\s+)";
+const DATE_RANGE = new RegExp(`^${DATE_SHAPE}${SEPARATOR}${RANGE_END}(?:\\s*,.*)?$`, "iu");
+const CURRENT = "(?:present|now|today|heute|actualidad|actualmente|aujourd['\u2019]hui|atual|presente|huidig|heden|oggi|o momento)";
+const SINGLE_DATE = new RegExp(`^(?:(?:\\d{1,2}\\.?\\s+)?(?:${MONTH_NAME}\\s+(?:de\\s+)?)?\\d{4}|${CURRENT})$`, "iu");
+const DURATION_UNIT =
+  "(?:yrs?|years?|mos?|months?|j\\.?|jahre?n?|mon\\.?|monate?n?|años?|meses|mes|ans?|mois|anni|anno|mesi|mese|jaar|jaren|jr\\.?|maanden|maand|mnd\\.?|anos?)";
+const DURATION = new RegExp(`^(?:less than (?:a|one) (?:year|month)|(?:\\d+\\+?\\s*${DURATION_UNIT}(?:\\s+|$))+)$`, "iu");
+const EMPLOYMENT =
+  /^(?:full[- ]time|part[- ]time|self[- ]employed|freelance|freelancer|contract|contractor|internship|apprenticeship|seasonal|permanent|temporary|volunteer|trainee|vollzeit|teilzeit|selbstst[aä]ndig|freiberuflich|praktikum|jornada (?:completa|parcial)|aut[oó]nomo|temps (?:plein|partiel)|ind[eé]pendant|tempo (?:integral|parcial)|aut[oô]nomo|tempo pieno|voltijd|deeltijd|zzp)$/iu;
+
+function dateParts(value: string | null | undefined) {
+  if (typeof value !== "string") return [];
+  return value
+    .replace(/\s+/g, " ")
+    .split(/\s*[·•]\s*/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+export function dateRangeIn(value: string | null | undefined): "current" | "past" | null {
+  const first = dateParts(value)[0];
+  const match = first ? DATE_RANGE.exec(first) : null;
+  if (!match) return null;
+  return /\d{4}/.test(match[1]) ? "past" : "current";
+}
+
+export function looksLikeDateOrDuration(value: string | null | undefined) {
+  return dateParts(value).some((part) => DATE_RANGE.test(part) || SINGLE_DATE.test(part) || DURATION.test(part));
+}
+
+export function looksLikeEmploymentType(value: string | null | undefined) {
+  return dateParts(value).some((part) => EMPLOYMENT.test(part));
+}
+
 export type PairStartResponse = { code: string; secret: string; expiresAt: string; approveUrl: string };
 
 export type PairRedeemResponse =

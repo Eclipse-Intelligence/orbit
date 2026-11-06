@@ -17,21 +17,23 @@ import {
 } from "@/lib/crm/normalize";
 import { LIFECYCLES, type Company, type Contact, type UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
-import type {
-  CompanyBrief,
-  CompanyMatch,
-  CompanySummary,
-  DealSummary,
-  ExtensionBoard,
-  ExtensionWorkspace,
-  LastContact,
-  LookupQuery,
-  LookupResponse,
-  PageKind,
-  PersonMatch,
-  PersonSummary,
-  TaskSummary,
-  WorkspaceLookup,
+import {
+  looksLikeDateOrDuration,
+  looksLikeEmploymentType,
+  type CompanyBrief,
+  type CompanyMatch,
+  type CompanySummary,
+  type DealSummary,
+  type ExtensionBoard,
+  type ExtensionWorkspace,
+  type LastContact,
+  type LookupQuery,
+  type LookupResponse,
+  type PageKind,
+  type PersonMatch,
+  type PersonSummary,
+  type TaskSummary,
+  type WorkspaceLookup,
 } from "@/lib/extension/protocol";
 import { appTimeZone, startOfDay, zonedParts } from "@/lib/time";
 
@@ -270,7 +272,7 @@ function pageKind(url: string): PageKind {
 
 function cleanLookupText(value: string | undefined, max = 200) {
   const text = value?.replace(/\s+/g, " ").trim().slice(0, max);
-  return text || null;
+  return text && !looksLikeDateOrDuration(text) && !looksLikeEmploymentType(text) ? text : null;
 }
 
 async function contactIdsWhere(db: Db, workspaceId: string, column: "normalized_linkedin" | "sales_navigator_url", value: string) {

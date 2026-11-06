@@ -41,15 +41,18 @@ import { browserRows } from "@/lib/extension/settings";
 import { safeNextPath } from "@/lib/auth/next-path";
 import { dueFrom, messageKey, messageKeys } from "@/lib/extension/capture";
 import { dueLabel } from "@/lib/extension/records";
-import type {
-  CaptureResponse,
-  DiffResponse,
-  LogCheckResponse,
-  LookupResponse,
-  MeResponse,
-  PairRedeemResponse,
-  PairStartResponse,
-  ThreadMessage,
+import {
+  dateRangeIn,
+  looksLikeDateOrDuration,
+  looksLikeEmploymentType,
+  type CaptureResponse,
+  type DiffResponse,
+  type LogCheckResponse,
+  type LookupResponse,
+  type MeResponse,
+  type PairRedeemResponse,
+  type PairStartResponse,
+  type ThreadMessage,
 } from "@/lib/extension/protocol";
 import { createAgent, createUser, resetDatabase } from "./helpers";
 
@@ -1068,5 +1071,113 @@ describe("LinkedIn capture fixes", () => {
     );
     assert.equal(rows[0].usedLabel, "Last used 30 Dec 2025");
     assert.equal(rows[1].usedLabel, "Last used 30 Oct");
+  });
+
+  it("tells date ranges and durations apart from real names", () => {
+    for (const value of ["Jan 2016 - Sep 2024", "Oct 2024 - Present · 2 yrs 2 mos", "Mar 2024 to now", "2015 to 2018", "Full-time · 13 yrs 3 mos", "9 mos", "Present", "2019"]) {
+      assert.equal(looksLikeDateOrDuration(value), true, value);
+    }
+    for (const value of [
+      "Okt. 2024 \u2013 Heute · 2 J. 2 Mon.",
+      "Okt. 2024 \u2013 Heute, Vollzeit",
+      "Jan. 2016 \u2013 Sept. 2024",
+      "oct. 2024 - actualidad",
+      "ene. 2016 - sept. 2024 · 8 años 9 meses",
+      "oct. 2024 - aujourd’hui · 2 ans 2 mois",
+      "out. de 2024 - o momento",
+      "gen 2020 - Oggi",
+      "okt. 2024 - Huidig",
+      "Heute",
+      "actualidad",
+    ]) {
+      assert.equal(looksLikeDateOrDuration(value), true, value);
+    }
+    for (const value of [
+      "PORTABL",
+      "Northwind",
+      "2020 Ventures",
+      "May Lewis",
+      "Now Pensions",
+      "Vision 2030",
+      "7 Eleven",
+      "Chief Commercial Officer (CCO)",
+      "London Area, United Kingdom",
+      "Greater Anglia",
+      "Greater London Authority",
+      "Greater Manchester Police",
+    ]) {
+      assert.equal(looksLikeDateOrDuration(value), false, value);
+    }
+    assert.equal(dateRangeIn("Okt. 2024 \u2013 Heute · 2 J. 2 Mon."), "current");
+    assert.equal(dateRangeIn("oct. 2024 - aujourd’hui"), "current");
+    assert.equal(dateRangeIn("janv. 2016 - sept. 2024 · 8 ans 9 mois"), "past");
+    assert.equal(dateRangeIn("Oct 2024 - Present · 2 yrs 2 mos"), "current");
+    assert.equal(dateRangeIn("2015 to 2018"), "past");
+    for (const value of ["Full-time", "Freelance", "Vollzeit", "Jornada completa", "Temps plein", "PORTABL · Freelance"]) {
+      assert.equal(looksLikeEmploymentType(value), true, value);
+    }
+    assert.equal(looksLikeEmploymentType("Contract Manager"), false);
+  });
+
+  it("blanks employment types and localised dates read as a company or name", async () => {
+    for (const name of ["oct. 2024 - actualidad", "Full-time", "Vollzeit"]) {
+      const slug = `blank-${name.replace(/[^a-z]/gi, "").toLowerCase()}`;
+      const saved = await call<CaptureResponse>(captureRoute, "/api/extension/capture", {
+        token,
+        workspace: mark.workspaceId,
+        body: saveBody({
+          person: person({ firstName: "Robin", lastName: "Okt. 2024 \u2013 Heute", linkedinUrl: `https://www.linkedin.com/in/${slug}` }),
+          company: { name, domain: null, linkedinUrl: null },
+        }),
+      });
+      assert.equal(saved.status, 200, name);
+      assert.equal(saved.data.company, null, name);
+      assert.equal(saved.data.person?.lastName, null, name);
+    }
+    const leaked = await getAdminPool().query("select 1 from crm.companies where name in ('oct. 2024 - actualidad', 'Full-time', 'Vollzeit')");
+    assert.equal(leaked.rowCount, 0);
+  });
+
+  it("never makes a company from a date range read off the page", async () => {
+    const before = await getAdminPool().query("select 1 from crm.companies where workspace_id = $1", [mark.workspaceId]);
+    const saved = await call<CaptureResponse>(captureRoute, "/api/extension/capture", {
+      token,
+      workspace: mark.workspaceId,
+      body: saveBody({
+        person: person({ firstName: "Dana", lastName: "Range", jobTitle: "Oct 2024 - Present", linkedinUrl: "https://www.linkedin.com/in/dana-range" }),
+        company: { name: "Jan 2016 - Sep 2024", domain: null, linkedinUrl: null },
+      }),
+    });
+    assert.equal(saved.status, 200);
+    assert.equal(saved.data.created.company, false);
+    assert.equal(saved.data.company, null);
+    assert.equal(saved.data.person?.jobTitle, null);
+    const afterSave = await getAdminPool().query("select 1 from crm.companies where workspace_id = $1", [mark.workspaceId]);
+    assert.equal(afterSave.rowCount, before.rowCount);
+    const named = await getAdminPool().query("select 1 from crm.companies where name ilike '%2016%'");
+    assert.equal(named.rowCount, 0);
+
+    const diff = await call<DiffResponse>(diffRoute, "/api/extension/diff", {
+      token,
+      workspace: mark.workspaceId,
+      body: {
+        contactId: saved.data.person?.id,
+        person: {
+          name: "Dana Range",
+          firstName: "Dana",
+          lastName: "Range",
+          headline: null,
+          jobTitle: "Jan 2016 - Sep 2024",
+          location: null,
+          linkedinUrl: "https://www.linkedin.com/in/dana-range",
+          salesNavigatorUrl: null,
+          companyName: "Oct 2024 - Present · 2 yrs 2 mos",
+          companyLinkedinUrl: null,
+        },
+      },
+    });
+    assert.equal(diff.status, 200);
+    assert.equal(diff.data.changes.find((row) => row.field === "company"), undefined);
+    assert.equal(diff.data.changes.find((row) => row.field === "jobTitle"), undefined);
   });
 });
