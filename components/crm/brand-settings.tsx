@@ -205,7 +205,7 @@ export default function BrandSettings({
       <SettingsCard
         id="brand-profile"
         title="Brand profile"
-        description={`Used by the assistant in ${name} only. About you, signatures and AI accounts are yours and stay the same in every workspace.`}
+        description={`Used by the assistant in ${name} only. How you write, signatures and AI accounts are yours and stay the same in every workspace.`}
       >
         <form className="flex flex-col gap-4" noValidate onSubmit={save}>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-end">

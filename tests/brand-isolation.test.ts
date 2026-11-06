@@ -9,7 +9,7 @@ import { saveBrandProfile } from "@/lib/crm/brand";
 import { createContact } from "@/lib/crm/contacts";
 import { withActor } from "@/lib/crm/context";
 import { saveMailbox } from "@/lib/crm/inbox";
-import { aboutWriterNote, getPersonalContext, savePersonalContext } from "@/lib/crm/personal-context";
+import { aboutWriterNote, aboutYouSection, getPersonalContext, saveAboutYou, saveYou } from "@/lib/crm/personal-context";
 import type { UserActor } from "@/lib/crm/types";
 import { createWorkspace } from "@/lib/crm/workspaces";
 import { encryptSecret } from "@/lib/crypto/secret";
@@ -105,9 +105,9 @@ describe("brand isolation between workspaces", () => {
     await saveMailbox(eclipse, { email: MAIN, refreshToken: "refresh", accessToken: "access", expiresAt: new Date(Date.now() + 3_600_000).toISOString() });
     await saveBrandProfile(eclipse, { website: "https://geteclipse.co", whatYouSell: "ECLIPSE OFFER, an AI visibility platform.", whoItsFor: "", tone: "" }, WEB);
     await saveBrandProfile(ridgeon, { website: "https://ridgeon.me", whatYouSell: "RIDGEON OFFER, fractional COO work for scale-ups.", whoItsFor: "", tone: "" }, WEB);
-    const about = { jobTitle: "Founder, Eclipse", about: "USER ABOUT I run Eclipse and Ridgeon Consultancy.", interests: "", writing: "", linkedinUrl: "", websiteUrl: "" };
-    await savePersonalContext(eclipse, about);
-    await savePersonalContext(ridgeon, { ...about, workspaceAbout: "RIDGEON ABOUT Fractional COO for scale-ups.", workspaceJobTitle: "Fractional COO" });
+    await saveAboutYou(eclipse, { jobTitle: "Founder, Eclipse", about: "ECLIPSE ABOUT I run Eclipse and Ridgeon Consultancy." });
+    await saveAboutYou(ridgeon, { jobTitle: "Fractional COO", about: "RIDGEON ABOUT Fractional COO for scale-ups." });
+    await saveYou(eclipse, { linkedinUrl: "", interests: "", writing: "SHARED WRITING Short lines." });
 
     await saveBookingPage(eclipse, { slug: "mark", enabled: true, durationMinutes: 30, bufferMinutes: 10, minNoticeMinutes: 240, horizonDays: 21, weeklyHours: DEFAULT_WEEKLY_HOURS });
 
@@ -214,8 +214,8 @@ describe("brand isolation between workspaces", () => {
     assert.match(text, /RIDGEON TITLE/);
     assert.match(text, /RIDGEON CALL NOTE/);
     assert.match(text, /RIDGEON ABOUT/);
-    assert.match(text, /What Mark Ridgeon sells, its customers and proof come only from About Mark Ridgeon/);
-    for (const leak of [/ECLIPSE OFFER/, /About Eclipse/, /ECLIPSE VOICE/, /ECLIPSE NOTE/, /ECLIPSE TITLE/, /ECLIPSE CALL NOTE/, /USER ABOUT/, /\/book\/mark/, /Fractional COO\nridgeon\.me/, /piece/]) {
+    assert.match(text, /SHARED WRITING/);
+    for (const leak of [/ECLIPSE OFFER/, /About Eclipse/, /ECLIPSE VOICE/, /ECLIPSE NOTE/, /ECLIPSE TITLE/, /ECLIPSE CALL NOTE/, /ECLIPSE ABOUT/, /Founder, Eclipse/, /\/book\/mark/, /Fractional COO\nridgeon\.me/, /piece/]) {
       assert.doesNotMatch(text, leak);
     }
     const stored = await getAdminPool().query<{ workspace_id: string; body: string }>("select workspace_id, body from crm.mail_prepared where kind = 'reply'");
@@ -224,18 +224,44 @@ describe("brand isolation between workspaces", () => {
     assert.doesNotMatch(stored.rows[0].body, /\/book\//);
   });
 
-  it("uses the workspace's own About you only where it is set", async () => {
+  it("keeps About you to each workspace, shares only the You card, and leaks nothing into a workspace without one", async () => {
     const here = await getPersonalContext(eclipse);
-    assert.equal(here.workspaceAbout, "");
-    assert.match(aboutWriterNote(here, "Mark"), /USER ABOUT[\s\S]*What Eclipse sells/);
+    assert.deepEqual([here.jobTitle, here.about, here.writing], ["Founder, Eclipse", "ECLIPSE ABOUT I run Eclipse and Ridgeon Consultancy.", "SHARED WRITING Short lines."]);
+    assert.match(aboutWriterNote(here, "Mark"), /Mark's role: Founder, Eclipse\.\nAbout Mark: ECLIPSE ABOUT[^\n]*\nThis is for Eclipse\. If it mentions another business of theirs, don't sell, name or cite that business here\.\nHow Mark writes: SHARED WRITING/);
     const there = await getPersonalContext(ridgeon);
-    assert.equal(there.workspaceAbout, "RIDGEON ABOUT Fractional COO for scale-ups.");
-    assert.match(aboutWriterNote(there, "Mark"), /Mark's role: Fractional COO\.[\s\S]*RIDGEON ABOUT/);
-    const single = await createUser("solo@orbit-isolation.test", "Solo Person");
-    await assert.rejects(
-      savePersonalContext(single, { jobTitle: "", about: "", interests: "", writing: "", linkedinUrl: "", websiteUrl: "", workspaceAbout: "Elsewhere" }),
-      /only in one workspace/,
+    assert.deepEqual([there.jobTitle, there.about, there.writing], ["Fractional COO", "RIDGEON ABOUT Fractional COO for scale-ups.", "SHARED WRITING Short lines."]);
+    const section = aboutYouSection(there);
+    assert.match(section, /Role: Fractional COO\n\nAbout them, in their own words:\nRIDGEON ABOUT[^\n]*\nThis is for Mark Ridgeon\./);
+    assert.doesNotMatch(section, /ECLIPSE ABOUT|Founder, Eclipse/);
+
+    await saveAboutYou(ridgeon, { jobTitle: "", about: "" });
+    const empty = await getPersonalContext(ridgeon);
+    assert.deepEqual([empty.jobTitle, empty.about], ["", ""]);
+    for (const text of [aboutWriterNote(empty, "Mark"), aboutYouSection(empty)]) {
+      assert.doesNotMatch(text, /ECLIPSE ABOUT|Founder, Eclipse|This is for/);
+      assert.match(text, /SHARED WRITING/);
+    }
+    assert.equal((await getPersonalContext(eclipse)).about, "ECLIPSE ABOUT I run Eclipse and Ridgeon Consultancy.");
+    await saveAboutYou(ridgeon, { jobTitle: "Fractional COO", about: "RIDGEON ABOUT Fractional COO for scale-ups." });
+  });
+
+  it("reads the workspace's own About you when learning, and none from another workspace", async () => {
+    const admin = getAdminPool();
+    const run = model(() => ({ add: [], update: [], archive: [] }));
+    const conversation = await admin.query<{ id: string }>(
+      "insert into crm.assistant_conversations (workspace_id, user_id, title, model, reasoning) values ($1, $2, 'Plan', 'claude-sonnet-5-5', 'medium') returning id",
+      [ridgeon.workspaceId, ridgeon.userId],
     );
+    await admin.query("insert into crm.assistant_messages (conversation_id, workspace_id, user_id, role, content) values ($1, $2, $3, 'user', 'Keep consulting emails short.')", [
+      conversation.rows[0].id,
+      ridgeon.workspaceId,
+      ridgeon.userId,
+    ]);
+    await learnNow(ridgeon, { kinds: ["personal"], deadline: Date.now() + 600_000, fetchImpl: run.fetchImpl });
+    const personal = run.prompts.find((prompt) => prompt.system.includes("long-term memory"));
+    assert.ok(personal);
+    assert.match(personal.user, /What Mark Ridgeon wrote in About you: RIDGEON ABOUT/);
+    assert.doesNotMatch(personal.user, /ECLIPSE ABOUT/);
   });
 
   it("sends a new email from the address homed in the workspace, and shows it on the card", async () => {

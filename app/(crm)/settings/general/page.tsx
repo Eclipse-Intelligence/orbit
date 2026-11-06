@@ -42,15 +42,10 @@ export default async function GeneralSettingsPage() {
         passwords={supabaseConfigured()}
       />
       <AboutYouSettings
-        initial={{
-          jobTitle: about.jobTitle,
-          about: about.about,
-          interests: about.interests,
-          writing: about.writing,
-          linkedinUrl: about.linkedinUrl,
-          websiteUrl: about.websiteUrl,
-        }}
-        workspace={workspaces.length > 1 ? { name: user.workspaceName, about: about.workspaceAbout, jobTitle: about.workspaceJobTitle } : null}
+        about={{ jobTitle: about.jobTitle, about: about.about }}
+        you={{ linkedinUrl: about.linkedinUrl, interests: about.interests, writing: about.writing }}
+        website={about.website}
+        workspaceName={workspaces.length > 1 ? user.workspaceName : null}
       />
       <MyEmailsSettings emails={myEmails} />
       <NotificationSettings

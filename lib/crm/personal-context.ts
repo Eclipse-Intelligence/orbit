@@ -2,18 +2,17 @@ import { z } from "zod";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import type { UserActor } from "@/lib/crm/types";
-import { workspaceActors } from "@/lib/crm/workspaces";
 import type { Db } from "@/lib/db/pool";
 import { completeJson, LlmError } from "@/lib/llm";
 import { mindcaseConfigured, MindcaseError } from "@/lib/mindcase";
-import { normaliseLinkedIn, normaliseWebsite, PERSONAL_LIMITS, type PersonalContextInput } from "@/lib/personal-context-rules";
+import { normaliseLinkedIn, normaliseWebsite, PERSONAL_LIMITS, type AboutYouInput, type YouInput } from "@/lib/personal-context-rules";
 import { socialLookup } from "@/lib/social-lookup";
 import { readWebPage, type Lookup, type WebPage } from "@/lib/web-page";
 import type { Renderer } from "@/lib/browserbase";
 import { writingStyle } from "@/lib/writing-style";
 import { brandOrEmpty } from "@/lib/crm/brand";
 
-export type PersonalContext = PersonalContextInput & { updatedAt: string | null; workspaceAbout: string; workspaceJobTitle: string; workspaceName: string };
+export type PersonalContext = AboutYouInput & YouInput & { website: string; workspaceName: string; multiWorkspace: boolean };
 
 export type Colleague = { name: string; email: string | null; jobTitle: string | null };
 
@@ -23,81 +22,37 @@ type Row = {
   interests: string | null;
   writing: string | null;
   linkedin_url: string | null;
-  website_url: string | null;
-  updated_at: Date | null;
-  workspace_about: string | null;
-  workspace_job_title: string | null;
+  website: string | null;
+  workspaces: number;
 };
 
-const EMPTY: PersonalContext = {
-  jobTitle: "",
-  about: "",
-  interests: "",
-  writing: "",
-  linkedinUrl: "",
-  websiteUrl: "",
-  updatedAt: null,
-  workspaceAbout: "",
-  workspaceJobTitle: "",
-  workspaceName: "",
-};
+const SELECT = `select m.job_title, w.about, c.interests, c.writing, c.linkedin_url, b.website,
+    (select count(*)::int from crm.workspace_members x where x.user_id = m.user_id) as workspaces
+  from crm.workspace_members m
+  left join crm.personal_context c on c.user_id = m.user_id
+  left join crm.personal_context_workspaces w on w.user_id = m.user_id and w.workspace_id = m.workspace_id
+  left join crm.workspace_brands b on b.workspace_id = m.workspace_id
+  where m.user_id = $1 and m.workspace_id = $2`;
 
-function mapRow(row: Row | undefined, workspaceName: string): PersonalContext {
-  if (!row) return { ...EMPTY, workspaceName };
+async function readContext(db: Db, actor: UserActor): Promise<PersonalContext> {
+  const row = (await db.query<Row>(SELECT, [actor.userId, actor.workspaceId])).rows[0];
   return {
-    jobTitle: row.job_title ?? "",
-    about: row.about ?? "",
-    interests: row.interests ?? "",
-    writing: row.writing ?? "",
-    linkedinUrl: row.linkedin_url ?? "",
-    websiteUrl: row.website_url ?? "",
-    updatedAt: row.updated_at ? row.updated_at.toISOString() : null,
-    workspaceAbout: row.workspace_about ?? "",
-    workspaceJobTitle: row.workspace_job_title ?? "",
-    workspaceName,
+    jobTitle: row?.job_title ?? "",
+    about: row?.about ?? "",
+    interests: row?.interests ?? "",
+    writing: row?.writing ?? "",
+    linkedinUrl: row?.linkedin_url ?? "",
+    website: row?.website ?? "",
+    workspaceName: actor.workspaceName,
+    multiWorkspace: (row?.workspaces ?? 0) > 1,
   };
-}
-
-const SELECT = `select p.job_title, c.about, c.interests, c.writing, c.linkedin_url, c.website_url, c.updated_at,
-    w.about as workspace_about, w.job_title as workspace_job_title
-  from crm.profiles p
-  left join crm.personal_context c on c.user_id = p.id
-  left join crm.personal_context_workspaces w on w.user_id = p.id and w.workspace_id = $2
-  where p.id = $1`;
-
-async function readContext(db: Db, actor: UserActor) {
-  return mapRow((await db.query<Row>(SELECT, [actor.userId, actor.workspaceId])).rows[0], actor.workspaceName);
 }
 
 export async function getPersonalContext(actor: UserActor): Promise<PersonalContext> {
   return withActor(actor, (db) => readContext(db, actor));
 }
 
-export function effectiveAbout(context: PersonalContext) {
-  return {
-    jobTitle: context.workspaceJobTitle.trim() || context.jobTitle,
-    about: context.workspaceAbout.trim() || context.about,
-  };
-}
-
-export function aboutFraming(workspaceName: string) {
-  const business = workspaceName.trim() || "this business";
-  return `This is about the person. What ${business} sells, its customers and proof come only from About ${business}, its Knowledge and proof list. If About you names another business of theirs, don't sell, name or cite it here.`;
-}
-
-function workspaceText(input: Record<string, unknown>, key: "workspaceAbout" | "workspaceJobTitle", limit: "about" | "jobTitle", label: string) {
-  const value = input[key];
-  if (value !== undefined && value !== null && typeof value !== "string") {
-    throw new CrmError("invalid_input", `${label} must be text.`, 400, { field: key });
-  }
-  const trimmed = (value ?? "").trim().replace(/\r\n/g, "\n");
-  if (trimmed.length > PERSONAL_LIMITS[limit]) {
-    throw new CrmError("invalid_input", `${label} can be up to ${PERSONAL_LIMITS[limit].toLocaleString("en-GB")} characters.`, 400, { field: key });
-  }
-  return trimmed || null;
-}
-
-function text(input: Record<string, unknown>, key: keyof typeof PERSONAL_LIMITS & keyof PersonalContextInput, label: string) {
+function text(input: Record<string, unknown>, key: keyof typeof PERSONAL_LIMITS & (keyof AboutYouInput | keyof YouInput), label: string) {
   const value = input[key];
   if (value !== undefined && value !== null && typeof value !== "string") {
     throw new CrmError("invalid_input", `${label} must be text.`, 400, { field: key });
@@ -118,42 +73,44 @@ function link(value: unknown, field: "linkedinUrl" | "websiteUrl") {
   return checked.url;
 }
 
-export async function savePersonalContext(actor: UserActor, raw: unknown): Promise<PersonalContext> {
-  if (!raw || typeof raw !== "object") throw new CrmError("invalid_input", "Send the About you fields.", 400);
-  const input = raw as Record<string, unknown>;
+function fields(raw: unknown, message: string) {
+  if (!raw || typeof raw !== "object") throw new CrmError("invalid_input", message, 400);
+  return raw as Record<string, unknown>;
+}
+
+export async function saveAboutYou(actor: UserActor, raw: unknown): Promise<PersonalContext> {
+  const input = fields(raw, "Send your role and About you.");
+  const jobTitle = text(input, "jobTitle", "Your role");
+  const about = text(input, "about", "About you");
+  return withActor(actor, async (db) => {
+    const member = await db.query("update crm.workspace_members set job_title = $3 where user_id = $1 and workspace_id = $2", [
+      actor.userId,
+      actor.workspaceId,
+      jobTitle,
+    ]);
+    if (!member.rowCount) throw new CrmError("forbidden", "You're not in this workspace.", 403);
+    await db.query(
+      `insert into crm.personal_context_workspaces (user_id, workspace_id, about) values ($1, $2, $3)
+       on conflict (user_id, workspace_id) do update set about = excluded.about`,
+      [actor.userId, actor.workspaceId, about],
+    );
+    return readContext(db, actor);
+  });
+}
+
+export async function saveYou(actor: UserActor, raw: unknown): Promise<PersonalContext> {
+  const input = fields(raw, "Send your LinkedIn profile, how you write and what you care about.");
   const values = {
-    jobTitle: text(input, "jobTitle", "Your role"),
-    about: text(input, "about", "About you"),
+    linkedinUrl: link(input.linkedinUrl, "linkedinUrl"),
     interests: text(input, "interests", "What you care about"),
     writing: text(input, "writing", "How you write"),
-    linkedinUrl: link(input.linkedinUrl, "linkedinUrl"),
-    websiteUrl: link(input.websiteUrl, "websiteUrl"),
   };
-  const workspace =
-    "workspaceAbout" in input || "workspaceJobTitle" in input
-      ? { about: workspaceText(input, "workspaceAbout", "about", "About you here"), jobTitle: workspaceText(input, "workspaceJobTitle", "jobTitle", "Your role here") }
-      : null;
-  if (workspace && (await workspaceActors(actor)).length < 2) {
-    throw new CrmError("invalid_input", "You're only in one workspace, so About you covers it.", 400, { field: "workspaceAbout" });
-  }
   return withActor(actor, async (db) => {
-    await db.query("update crm.profiles set job_title = $2 where id = $1", [actor.userId, values.jobTitle]);
     await db.query(
-      `insert into crm.personal_context (user_id, about, interests, writing, linkedin_url, website_url)
-       values ($1, $2, $3, $4, $5, $6)
-       on conflict (user_id) do update set about = excluded.about, interests = excluded.interests, writing = excluded.writing,
-         linkedin_url = excluded.linkedin_url, website_url = excluded.website_url`,
-      [actor.userId, values.about, values.interests, values.writing, values.linkedinUrl, values.websiteUrl],
+      `insert into crm.personal_context (user_id, interests, writing, linkedin_url) values ($1, $2, $3, $4)
+       on conflict (user_id) do update set interests = excluded.interests, writing = excluded.writing, linkedin_url = excluded.linkedin_url`,
+      [actor.userId, values.interests, values.writing, values.linkedinUrl],
     );
-    if (workspace?.about || workspace?.jobTitle) {
-      await db.query(
-        `insert into crm.personal_context_workspaces (user_id, workspace_id, about, job_title) values ($1, $2, $3, $4)
-         on conflict (user_id, workspace_id) do update set about = excluded.about, job_title = excluded.job_title`,
-        [actor.userId, actor.workspaceId, workspace.about, workspace.jobTitle],
-      );
-    } else if (workspace) {
-      await db.query("delete from crm.personal_context_workspaces where user_id = $1 and workspace_id = $2", [actor.userId, actor.workspaceId]);
-    }
     return readContext(db, actor);
   });
 }
@@ -161,7 +118,7 @@ export async function savePersonalContext(actor: UserActor, raw: unknown): Promi
 export async function getColleagues(actor: UserActor): Promise<Colleague[]> {
   return withActor(actor, async (db) => {
     const result = await db.query<{ full_name: string | null; email: string | null; job_title: string | null }>(
-      `select p.full_name, p.email, p.job_title
+      `select p.full_name, p.email, m.job_title
          from crm.workspace_members m join crm.profiles p on p.id = m.user_id
         where m.workspace_id = $1 and m.user_id <> $2
         order by coalesce(p.full_name, p.email) limit 50`,
@@ -171,12 +128,16 @@ export async function getColleagues(actor: UserActor): Promise<Colleague[]> {
   });
 }
 
+function otherBusinessRule(context: PersonalContext) {
+  if (!context.multiWorkspace) return "";
+  return `\nThis is for ${context.workspaceName.trim() || "this business"}. If it mentions another business of theirs, don't sell, name or cite that business here.`;
+}
+
 export function aboutYouSection(context: PersonalContext | null, colleagues: Colleague[] = []) {
   if (!context) return "";
-  const own = effectiveAbout(context);
   const lines = [
-    own.jobTitle ? `Role: ${own.jobTitle}` : "",
-    own.about ? `About them, in their own words:\n${own.about}\n${aboutFraming(context.workspaceName)}` : "",
+    context.jobTitle ? `Role: ${context.jobTitle}` : "",
+    context.about ? `About them, in their own words:\n${context.about}${otherBusinessRule(context)}` : "",
     context.interests ? `What they care about, their interests and the views they hold:\n${context.interests}` : "",
     context.writing ? `How they write:\n${context.writing}` : "",
   ].filter(Boolean);
@@ -191,10 +152,9 @@ export function aboutYouSection(context: PersonalContext | null, colleagues: Col
 
 export function aboutWriterNote(context: PersonalContext | null, name: string) {
   if (!context) return "";
-  const own = effectiveAbout(context);
   const parts = [
-    own.jobTitle ? `${name}'s role: ${own.jobTitle}.` : "",
-    own.about ? `About ${name}: ${own.about.slice(0, 800)}\n${aboutFraming(context.workspaceName)}` : "",
+    context.jobTitle ? `${name}'s role: ${context.jobTitle}.` : "",
+    context.about ? `About ${name}: ${context.about.slice(0, 800)}${otherBusinessRule(context)}` : "",
     context.writing ? `How ${name} writes: ${context.writing.slice(0, 600)}` : "",
   ].filter(Boolean);
   return parts.length ? `What ${name} has told Orbit about themselves:\n${parts.join("\n")}` : "";
@@ -209,7 +169,7 @@ const DRAFT_SCHEMA = z.object({
   writing: z.string(),
 });
 
-export type PersonalDraft = { draft: Omit<PersonalContextInput, "linkedinUrl" | "websiteUrl">; sources: string[]; notes: string[] };
+export type PersonalDraft = { draft: AboutYouInput & Omit<YouInput, "linkedinUrl">; sources: string[]; notes: string[] };
 
 async function readSite(url: string, options: { fetchImpl?: typeof fetch; lookup?: Lookup; render?: Renderer | null }) {
   const pages: WebPage[] = [await readWebPage(url, options)];
@@ -243,7 +203,7 @@ export async function draftPersonalContext(
   if (website) {
     try {
       for (const page of await readSite(website, { fetchImpl: options.fetchImpl, lookup: options.lookup, render: options.render })) {
-        material.push(`Page from their website, ${page.url}${page.title ? ` (${page.title})` : ""}:\n${page.text.slice(0, 8_000)}`);
+        material.push(`Page from the website, ${page.url}${page.title ? ` (${page.title})` : ""}:\n${page.text.slice(0, 8_000)}`);
         sources.push(page.url);
       }
     } catch (error) {
@@ -281,12 +241,16 @@ export async function draftPersonalContext(
   }
 
   const name = actor.fullName || actor.email;
+  const workspace = (await getPersonalContext(actor).catch(() => null))?.multiWorkspace
+    ? `They work for more than one business. Write jobTitle and about for their work at ${actor.workspaceName} only, and leave their other businesses out of them. `
+    : "";
   try {
     const result = await completeJson({
       system:
         `You draft the "About you" settings for ${name}, which their AI assistant in Orbit, their CRM, reads so it knows who it is helping. ` +
         'Reply with JSON only: {"jobTitle": string, "about": string, "interests": string, "writing": string}. Write about and interests in the first person, as if they wrote it. ' +
         "jobTitle: their current role and company, at most 8 words. " +
+        workspace +
         "about: who they are, what they do and are responsible for, who they work with or sell to, and relevant background, in at most 120 words. " +
         "interests: the topics they care about and the specific views and beliefs they hold, one per line, at most 8 lines. Keep their actual positions and wording; skip anything generic. " +
         "writing: how they write, judged from their posts and pages (tone, length, structure, habits, how they open and close), in at most 70 words, as instructions to someone writing for them. " +
