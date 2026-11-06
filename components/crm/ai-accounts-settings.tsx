@@ -16,6 +16,7 @@ import type { AiAccountSummary } from "@/lib/ai-accounts/store";
 import type { CompanionSummary } from "@/lib/companion/pairing";
 import { formatWhen } from "@/lib/companies";
 import { cn } from "@/lib/utils";
+import { agentPackageUrl } from "@/companion/src/release";
 
 const PRODUCTION_URL = "https://orbit.geteclipse.co";
 const PAIR_POLL_MS = 3_000;
@@ -193,7 +194,7 @@ function CopyLine({ text }: { text: string }) {
 }
 
 function agentCommand(origin: string, code?: string) {
-  const base = `npx -y --package=${origin}/downloads/orbit-agent.tgz orbit-agent`;
+  const base = `npx -y --package=${agentPackageUrl(origin)} orbit-agent`;
   const pair = code ? ` --pair ${code}` : "";
   return `${base}${pair}${origin === PRODUCTION_URL ? "" : ` --url ${origin}`} --install`;
 }

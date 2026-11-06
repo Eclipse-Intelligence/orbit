@@ -37,6 +37,7 @@ import { shapeFor } from "@/companion/src/schema";
 import { launchPath, launchPlist } from "@/companion/src/launch";
 import { PROPOSED, STOPPED, cleanEnv, runTurn, type Sdk } from "@/companion/src/turn";
 import { createUser, resetDatabase } from "./helpers";
+import { agentPackageUrl } from "@/companion/src/release";
 
 function bearer(token: string) {
   return new Request("https://orbit.test/api/companion/me", { headers: { authorization: `Bearer ${token}` } });
@@ -610,7 +611,7 @@ describe("companion turn runner", () => {
   it("writes a Mac launch file that starts at login and restarts", () => {
     const plist = launchPlist({ npx: "/opt/homebrew/bin/npx", url: "https://orbit.geteclipse.co", path: "/opt/homebrew/bin:/usr/bin", log: "/Users/m/Library/Logs/orbit-agent.log" });
     assert.ok(plist.includes("<string>co.geteclipse.orbit-agent</string>"));
-    assert.ok(plist.includes("<string>--package=https://orbit.geteclipse.co/downloads/orbit-agent.tgz</string>"));
+    assert.ok(plist.includes(`<string>--package=${agentPackageUrl("https://orbit.geteclipse.co")}</string>`));
     assert.ok(plist.includes("<key>RunAtLoad</key>\n  <true/>"));
     assert.ok(plist.includes("<key>KeepAlive</key>\n  <true/>"));
     assert.ok(!plist.includes("--pair"));

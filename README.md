@@ -713,7 +713,7 @@ Claude account models run through Orbit Agent, a small command-line program on y
 2. In Settings › Integrations, AI accounts, choose Pair a Mac. Orbit shows a command with a one-time code that works for 10 minutes:
 
    ```bash
-   npx -y --package=https://orbit.geteclipse.co/downloads/orbit-agent.tgz orbit-agent --pair ABCD-EFGH --install
+   npx -y --package=https://orbit.geteclipse.co/downloads/orbit-agent-1.5.0.tgz orbit-agent --pair ABCD-EFGH --install
    ```
 
    On any other Orbit address the command uses that address for the package and adds `--url <address>`.
@@ -925,6 +925,6 @@ API: `docs/api.md`. MCP: `docs/mcp.md`. Assistant and its tools: `docs/assistant
 | `npm run db:reset`     | Drop local CRM data and set up again                       |
 | `npm run agent:create` | Issue a revocable agent token                              |
 | `npm run mcp`          | MCP server over stdio                                      |
-| `npm run companion:pack` | Bundle the Orbit Agent into `public/downloads/orbit-agent.tgz` (part of `build`) |
+| `npm run companion:pack` | Bundle the Orbit Agent into `public/downloads/orbit-agent-<version>.tgz` and `orbit-agent.tgz` (part of `build`) |
 | `npm run extension:build` | Build the LinkedIn capture Chrome extension into `extension/dist` (see `extension/README.md`) |
 | `npm run extension:zip` | Build it for the Chrome Web Store as `extension/dist/orbit-linkedin-capture.zip` |
