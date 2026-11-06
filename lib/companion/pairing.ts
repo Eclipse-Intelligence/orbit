@@ -7,6 +7,7 @@ import { scopesForRole } from "@/lib/crm/scopes";
 import { hashToken } from "@/lib/crm/tokens";
 import type { UserActor } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
+import { agentPackageUrl } from "@/companion/src/release";
 
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const CODE_TTL_MS = 10 * 60 * 1000;
@@ -127,7 +128,7 @@ export async function authenticateCompanion(request: Request): Promise<Authentic
   return { companionId: row.companion_id, name: row.name, actor };
 }
 
-const AGENT_START_COMMAND = "npx -y --package=https://orbit.geteclipse.co/downloads/orbit-agent.tgz orbit-agent --install";
+const AGENT_START_COMMAND = `npx -y --package=${agentPackageUrl("https://orbit.geteclipse.co")} orbit-agent --install`;
 
 function sinceText(iso: string, now: number) {
   const minutes = Math.max(1, Math.round((now - new Date(iso).getTime()) / 60_000));
