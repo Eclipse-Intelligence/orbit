@@ -192,7 +192,8 @@ export async function moveImportToWorkspace(owner: UserActor, importId: string, 
   } catch (error) {
     if (isPgError(error)) {
       if (error.code === "P0002") throw new CrmError("not_found", "Conversation not found.", 404);
-      if (error.code === "55000") throw new CrmError("conflict", "This conversation is already filed.", 409);
+      if (error.code === "55000") throw new CrmError("conflict", "This conversation is already filed or ignored.", 409);
+      if (error.code === "23505") throw new CrmError("conflict", "A colleague already has this conversation in that workspace.", 409, { field: "workspaceId" });
       if (error.code === "42501") throw new CrmError("forbidden", "Choose a workspace you're in.", 403, { field: "workspaceId" });
     }
     throw error;

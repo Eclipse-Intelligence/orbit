@@ -871,18 +871,31 @@ function blocksParam(description: string) {
 
 
 export const WORKSPACE_READ_TOOLS: ReadonlySet<string> = new Set([
+  "get_overview",
   "search_records",
   "list_companies",
   "get_company",
   "list_contacts",
   "get_contact",
   "list_tasks",
+  "get_pipeline",
+  "get_deal_history",
+  "pipeline_report",
+  "stalled_deals",
+  "list_boards",
+  "get_board",
   "list_opportunities",
   "list_activities",
+  "list_quiet_relationships",
+  "list_tags",
   "search_knowledge",
 ]);
 
-const SINGLE_RECORD_TOOLS = new Set(["get_company", "get_contact"]);
+const SINGLE_RECORD_TOOLS = new Set(["get_company", "get_contact", "get_board", "get_deal_history"]);
+
+function unsupportedWorkspace() {
+  return `Only these tools can read another workspace: ${[...WORKSPACE_READ_TOOLS].join(", ")}. Use one of them with workspace, or leave workspace out to use the current workspace.`;
+}
 
 const WORKSPACE_PARAM = {
   type: "string",
@@ -949,9 +962,10 @@ async function runAcross(tool: AssistantTool, actor: UserActor, scope: { targets
     return labelled(only.target, actor, only.output);
   }
   const single = SINGLE_RECORD_TOOLS.has(tool.name);
-  const found = outcomes.filter((item) => !("error" in item) || !(single && item.error instanceof CrmError && item.error.status === 404));
+  const missing = (error: unknown) => error instanceof CrmError && error.status === 404;
+  const found = outcomes.filter((item) => !("error" in item) || !(single && missing(item.error)));
   if (found.length === 0 || found.every((item) => "error" in item)) {
-    const first = outcomes.find((item) => "error" in item);
+    const first = outcomes.find((item) => "error" in item && !missing(item.error)) ?? outcomes.find((item) => "error" in item);
     if (first && "error" in first) throw first.error;
   }
   return {
@@ -969,6 +983,9 @@ const CROSS_WORKSPACE_KINDS: [string, string][] = [
   ["tasks", "task"],
   ["opportunities", "opportunity"],
   ["activities", "activity"],
+  ["pipelines", "board"],
+  ["workflows", "workflow"],
+  ["workflow_runs", "workflow run"],
 ];
 
 function switchMessage(name: string, current: UserActor, what: string) {
@@ -5167,6 +5184,11 @@ export async function runTool(
       if (refusal) return { error: refusal, field: "workspace" };
     } else if (WORKSPACE_READ_TOOLS.has(tool.name)) {
       scope = await workspaceTargets(actor, requestedWorkspace);
+    } else if (typeof requestedWorkspace === "string" && requestedWorkspace.trim()) {
+      const wanted = requestedWorkspace.trim();
+      const actors = await workspaceActors(actor);
+      const current = wanted.toLowerCase() === "all" ? actors.length === 1 : matchWorkspace(actors, wanted)?.workspaceId === actor.workspaceId;
+      if (!current) return { error: unsupportedWorkspace(), field: "workspace" };
     }
   } catch (error) {
     if (error instanceof CrmError) return { error: error.message, field: error.details?.field ?? null };

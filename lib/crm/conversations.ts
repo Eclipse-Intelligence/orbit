@@ -407,22 +407,37 @@ export async function knownImports(
   return new Set(result.rows.map((row) => row.external_id));
 }
 
-export async function knownAnywhere(
+export type KnownImport = { workspaces: Set<string>; mine: boolean };
+
+export async function knownImportsFor(
   db: Db,
   workspaceIds: string[],
   source: ConversationSource,
   externalIds: string[],
-  userId?: string | null,
+  userId: string,
 ) {
-  if (externalIds.length === 0 || workspaceIds.length === 0) return new Set<string>();
-  const result = await db.query<{ external_id: string }>(
-    `select distinct external_id from crm.conversation_imports
+  const known = new Map<string, KnownImport>();
+  if (externalIds.length === 0 || workspaceIds.length === 0) return known;
+  const result = await db.query<{ external_id: string; workspace_id: string; mine: boolean }>(
+    `select external_id, workspace_id, bool_or(user_id = $4) as mine from crm.conversation_imports
      where workspace_id = any($1::uuid[]) and source = $2 and external_id = any($3::text[])
-       and ($4::uuid is null or user_id = $4)
-       and not ${RETRYABLE}`,
-    [workspaceIds, source, externalIds, userId ?? null],
+       and (user_id = $4 or source = 'granola' or status = 'filed')
+       and not ${RETRYABLE}
+     group by external_id, workspace_id`,
+    [workspaceIds, source, externalIds, userId],
   );
-  return new Set(result.rows.map((row) => row.external_id));
+  for (const row of result.rows) {
+    const entry = known.get(row.external_id) ?? { workspaces: new Set<string>(), mine: false };
+    entry.workspaces.add(row.workspace_id);
+    entry.mine ||= row.mine;
+    known.set(row.external_id, entry);
+  }
+  return known;
+}
+
+export function importSettled(known: KnownImport | undefined, workspaceIds: string[]) {
+  if (!known) return false;
+  return known.mine || workspaceIds.every((id) => known.workspaces.has(id));
 }
 
 export async function importPlaceholder(db: Db, workspaceIds: string[], source: ConversationSource, externalId: string, userId: string) {
@@ -434,6 +449,11 @@ export async function importPlaceholder(db: Db, workspaceIds: string[], source: 
     [workspaceIds, source, externalId, userId],
   );
   return result.rows[0] ?? null;
+}
+
+export async function dropPlaceholder(db: Db, importId: string) {
+  await db.query("delete from crm.conversation_imports where id = $1 and status = 'pending' and activity_id is null", [importId]);
+  await db.query("update crm.conversation_imports set error = null, attempts = 0 where id = $1", [importId]);
 }
 
 export async function retryableImports(actor: UserActor, source: ConversationSource, limit = 20) {
@@ -525,9 +545,9 @@ export async function internalAddresses(db: Db, workspaceId: string, extra: (str
   };
 }
 
-export async function lockImportKey(db: Db, workspaceId: string, source: ConversationSource, externalId: string) {
+export async function lockImportKey(db: Db, scope: string, source: ConversationSource, externalId: string) {
   await db.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [
-    `import:${workspaceId}:${source}:${externalId}`,
+    `import:${scope}:${source}:${externalId}`,
   ]);
 }
 
@@ -931,16 +951,25 @@ export async function summariseImport(
   options: { fetchImpl?: typeof fetch; deadline?: number } = {},
 ) {
   const claimed = await withActor(actor, async (db) => {
+    const key = await db.query<{ source: ConversationSource; external_id: string; user_id: string | null }>(
+      "select source, external_id, user_id from crm.conversation_imports where id = $1 and workspace_id = $2",
+      [importId, actor.workspaceId],
+    );
+    if (!key.rows[0]) return null;
+    await db.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [
+      `summary:${key.rows[0].source}:${key.rows[0].external_id}:${key.rows[0].user_id ?? ""}`,
+    ]);
     const row = await lockImport(db, actor, importId);
     if (!row || row.status !== "filed" || !row.activity_id || !row.transcript?.trim()) return null;
     const sibling = await siblingSummary(db, row.id);
     const blocking = await db.query(BLOCKING_INSIGHT, [row.activity_id, PENDING_STALE_MS / 1000]);
     if ((blocking.rowCount ?? 0) > 0) return null;
+    if (!sibling && (await siblingSummarising(db, row.id))) return null;
     const existing = await db.query("select 1 from crm.call_insights where activity_id = $1", [
       row.activity_id,
     ]);
     await db.query(
-      "update crm.conversation_imports set attempts = attempts + 1 where id = $1",
+      "update crm.conversation_imports set attempts = attempts + 1, summary_claimed_at = now() where id = $1",
       [row.id],
     );
     return {
@@ -983,6 +1012,25 @@ export async function summariseImport(
     });
     return null;
   }
+}
+
+async function siblingSummarising(db: Db, importId: string) {
+  const result = await db.query(
+    `select 1
+     from crm.conversation_imports me
+     join crm.conversation_imports sib
+       on sib.source = me.source and sib.external_id = me.external_id and sib.id <> me.id
+      and sib.user_id is not distinct from me.user_id
+     where me.id = $1
+       and sib.summary_claimed_at > now() - make_interval(secs => $2::double precision)
+       and not exists (
+         select 1 from crm.call_insights ci
+         where ci.activity_id = sib.activity_id and ci.status in ('ready', 'failed')
+       )
+     limit 1`,
+    [importId, PENDING_STALE_MS / 1000],
+  );
+  return (result.rowCount ?? 0) > 0;
 }
 
 async function siblingSummary(db: Db, importId: string): Promise<ReusedSummary | null> {

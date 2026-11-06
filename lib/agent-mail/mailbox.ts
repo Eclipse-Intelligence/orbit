@@ -70,7 +70,13 @@ export async function agentMailboxFor(actor: UserActor, mailboxId: string): Prom
   });
 }
 
-export const OTHER_WORKSPACE_PLACEHOLDER = "ridgeon@ai-mail.geteclipse.co";
+export function otherWorkspacePlaceholder(workspace: { slug: string | null; name: string }) {
+  const domain = DEFAULT_ADDRESS.split("@")[1];
+  const generated = !workspace.slug || /^ws-[0-9a-f]{16}$/.test(workspace.slug);
+  const named = workspace.name.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
+  const local = generated ? named || workspace.slug : workspace.slug;
+  return `${local || "workspace"}@${domain}`;
+}
 
 export function addressTakenMessage(address: string) {
   return `${address} is another workspace's agent mailbox. Choose another address.`;
@@ -130,13 +136,22 @@ export async function agentMailboxView(actor: UserActor): Promise<AgentMailboxVi
     mailbox?.set_up_at ? heldAgentMail(actor) : Promise.resolve([]),
     mailbox ? Promise.resolve(false) : addressTaken(DEFAULT_ADDRESS, actor.workspaceId).catch(() => false),
   ]);
+  const placeholder = defaultTaken
+    ? otherWorkspacePlaceholder({
+        slug: await withActor(actor, async (db) => {
+          const result = await db.query<{ slug: string }>("select slug from crm.workspaces where id = $1", [actor.workspaceId]);
+          return result.rows[0]?.slug ?? null;
+        }),
+        name: actor.workspaceName,
+      })
+    : DEFAULT_ADDRESS;
   return {
     configured: machineMailConfigured(),
     canAdmin,
     workspaceId: actor.workspaceId,
     workspaceName: actor.workspaceName,
     address: mailbox?.address ?? (defaultTaken ? "" : DEFAULT_ADDRESS),
-    placeholder: defaultTaken ? OTHER_WORKSPACE_PLACEHOLDER : DEFAULT_ADDRESS,
+    placeholder,
     setUp: Boolean(mailbox?.set_up_at),
     setUpAt: iso(mailbox?.set_up_at ?? null),
     lastReceivedAt: iso(mailbox?.last_received_at ?? null),

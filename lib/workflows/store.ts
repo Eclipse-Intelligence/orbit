@@ -516,15 +516,24 @@ export async function decideApproval(
 ) {
   if (!isUuid(runId)) throw new CrmError("not_found", "Approval not found.", 404);
   const claimed = await withActor(actor, async (db) => {
-    const owner = await db.query<{ owner_id: string }>("select owner_id from crm.workflow_runs where id = $1", [runId]);
+    const owner = await db.query<{ owner_id: string; workspace_id: string; workspace_name: string | null }>(
+      `select r.owner_id, r.workspace_id, w.name as workspace_name
+       from crm.workflow_runs r left join crm.workspaces w on w.id = r.workspace_id
+       where r.id = $1`,
+      [runId],
+    );
     if (owner.rows[0] && owner.rows[0].owner_id !== actor.userId) {
       throw new CrmError("forbidden", "Only the person this approval is waiting on can decide it.", 403);
     }
+    if (owner.rows[0] && owner.rows[0].workspace_id !== actor.workspaceId) {
+      const name = owner.rows[0].workspace_name ?? "another workspace";
+      throw new CrmError("conflict", `This approval is in ${name}. Switch to ${name} in the sidebar, then try again.`, 409);
+    }
     const result = await db.query<{ state: RunState }>(
       `select state from crm.workflow_runs
-       where id = $1 and owner_id = $2 and status = 'waiting' and waiting_for = 'approval'
+       where id = $1 and owner_id = $2 and workspace_id = $3 and status = 'waiting' and waiting_for = 'approval'
        for update`,
-      [runId, actor.userId],
+      [runId, actor.userId, actor.workspaceId],
     );
     const row = result.rows[0];
     if (!row?.state.waitingStep) return false;

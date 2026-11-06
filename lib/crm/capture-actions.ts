@@ -2,6 +2,7 @@ import { snoozeTask } from "@/lib/crm/action-needed";
 import { createContactFromMeeting, hideAttendee } from "@/lib/crm/calendar";
 import { moveImport } from "@/lib/crm/call-routing";
 import { createContactAndFile, fileImport, ignoreImport } from "@/lib/crm/conversations";
+import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { closeFollowUp } from "@/lib/crm/follow-ups";
 import { isUuid } from "@/lib/crm/mutate";
@@ -107,13 +108,22 @@ export async function captureActor(signedIn: UserActor, workspaceId: unknown) {
   return found;
 }
 
+async function approvalActor(actor: UserActor, runId: string) {
+  const run = await withActor(actor, async (db) => {
+    const result = await db.query<{ workspace_id: string }>("select workspace_id from crm.workflow_runs where id = $1 and owner_id = $2", [runId, actor.userId]);
+    return result.rows[0] ?? null;
+  });
+  if (!run || run.workspace_id === actor.workspaceId) return actor;
+  return (await workspaceActors(actor)).find((item) => item.workspaceId === run.workspace_id) ?? actor;
+}
+
 export async function runCaptureAction(actor: UserActor, action: CaptureAction, options: { fetchImpl?: typeof fetch } = {}): Promise<CaptureOutcome> {
   switch (action.kind) {
     case "approve":
-      await decideApproval(actor, action.runId, { approved: true }, options);
+      await decideApproval(await approvalActor(actor, action.runId), action.runId, { approved: true }, options);
       return { ok: true };
     case "reject":
-      await decideApproval(actor, action.runId, { approved: false, note: action.note }, options);
+      await decideApproval(await approvalActor(actor, action.runId), action.runId, { approved: false, note: action.note }, options);
       return { ok: true };
     case "nudge-dismiss":
       await updatePrepared(actor, action.id, "dismiss");

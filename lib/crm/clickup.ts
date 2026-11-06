@@ -78,7 +78,7 @@ type ClickUpSyncResult = {
 
 export type ClickUpPicker = { lists: ClickUpListChoice[]; listId: string };
 
-export type ClickUpSharedList = { workspaceName: string; listNames: string[] };
+export type ClickUpSharedList = { workspaceId: string; workspaceName: string; listNames: string[] };
 
 export type ClickUpSettingsView = {
   workspaceId: string;
@@ -1047,7 +1047,7 @@ export async function getClickUpSettings(
   const view: ClickUpSettingsView = {
     workspaceId: actor.workspaceId,
     workspaceName: actor.workspaceName,
-    shared: state ? await sharedLists(actor, state) : [],
+    shared: state ? await sharedLists(actor, state).catch(() => []) : [],
     configured: Boolean(token),
     error: null,
     user: null,
@@ -1110,7 +1110,7 @@ export async function sharedLists(
     if (!row) return [];
     const theirs = scopeIds({ watchedListIds: row.watched_list_ids ?? [], defaultListId: row.default_list_id });
     const listNames = theirs.filter((id) => mine.has(id)).map((id) => names.get(id) ?? "a list");
-    return listNames.length ? [{ workspaceName: other.workspaceName, listNames }] : [];
+    return listNames.length ? [{ workspaceId: other.workspaceId, workspaceName: other.workspaceName, listNames }] : [];
   });
 }
 

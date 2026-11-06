@@ -75,8 +75,8 @@ export default function ClickUpSettings({
               : " · Checked every 10 minutes"}
           </span>
           {view.shared.map((item) => (
-            <span key={item.workspaceName} className="text-subtle">
-              {`${item.workspaceName} also uses ${item.listNames.join(", ")}, so its tasks sync into both workspaces.`}
+            <span key={item.workspaceId} className="text-subtle">
+              {`${item.workspaceName} also uses ${item.listNames.join(", ")}. Tasks in a list both workspaces watch sync into both.`}
             </span>
           ))}
           {(view.error || view.lastError) && (

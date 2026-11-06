@@ -8,13 +8,15 @@ import {
   attachTeamsTranscripts,
   claimIntegration,
   configuredSiteOrigin,
+  dropPlaceholder,
   ensureIntegration,
   errorText,
   finishIntegration,
   getIntegrationStatus,
   importConflict,
   importPlaceholder,
-  knownAnywhere,
+  importSettled,
+  knownImportsFor,
   lockImportKey,
   memberActor,
   readIntegration,
@@ -160,19 +162,21 @@ function speakers(text: string): Participant[] {
 type Spread = { importId: string; to: string };
 
 async function spreadPlan(db: Db, owner: UserActor, workspaceIds: string[]) {
-  const result = await db.query<{ id: string; workspace_id: string; external_id: string; call_workspaces: string[] }>(
-    `select i.id, i.workspace_id, i.external_id,
+  const result = await db.query<{ id: string; workspace_id: string; external_id: string; status: string; call_workspaces: string[] }>(
+    `select i.id, i.workspace_id, i.external_id, i.status,
        array(
          select distinct r.workspace_id from crm.call_records r
          where r.teams_call_id = i.call_id and r.activity_id is not null and r.workspace_id = any($2::uuid[])
        ) as call_workspaces
      from crm.conversation_imports i
-     where i.user_id = $1 and i.source = 'teams' and i.status in ('pending', 'unfiled')
-       and i.call_id is not null and i.workspace_id = any($2::uuid[])`,
+     where i.user_id = $1 and i.source = 'teams' and i.status in ('pending', 'unfiled', 'filed')
+       and i.call_id is not null and i.workspace_id = any($2::uuid[])
+     order by (i.status = 'filed') desc, i.created_at`,
     [owner.userId, workspaceIds],
   );
   const moves: Spread[] = [];
   const copies: Spread[] = [];
+  const planned = new Set<string>();
   for (const row of result.rows) {
     if (row.call_workspaces.length === 0) continue;
     const present = await db.query<{ workspace_id: string }>(
@@ -180,9 +184,12 @@ async function spreadPlan(db: Db, owner: UserActor, workspaceIds: string[]) {
        where user_id = $1 and source = 'teams' and external_id = $2 and workspace_id = any($3::uuid[])`,
       [owner.userId, row.external_id, row.call_workspaces],
     );
-    const missing = row.call_workspaces.filter((id) => !present.rows.some((item) => item.workspace_id === id));
+    const missing = row.call_workspaces.filter(
+      (id) => !present.rows.some((item) => item.workspace_id === id) && !planned.has(`${row.external_id}:${id}`),
+    );
     if (missing.length === 0) continue;
-    if (!row.call_workspaces.includes(row.workspace_id)) {
+    for (const id of missing) planned.add(`${row.external_id}:${id}`);
+    if (row.status !== "filed" && !row.call_workspaces.includes(row.workspace_id)) {
       moves.push({ importId: row.id, to: missing[0] });
       for (const id of missing.slice(1)) copies.push({ importId: row.id, to: id });
     } else {
@@ -210,15 +217,20 @@ async function copyImport(db: Db, importId: string, workspaceId: string) {
 
 type NameFiling = { importId: string; workspaceId: string; targets: string[] };
 
-async function expiredByName(db: Db, owner: UserActor, actors: UserActor[], cutoff: string) {
+async function expiredByName(db: Db, owner: UserActor, actors: UserActor[], cutoff: string, spread: string[]) {
   const workspaceIds = actors.map((item) => item.workspaceId);
   const result = await db.query<{ id: string; workspace_id: string; participants: Participant[] | null; occurred_at: Date | null }>(
-    `select id, workspace_id, participants, occurred_at from crm.conversation_imports
-     where user_id = $1 and source = 'teams' and status = 'pending' and workspace_id = any($2::uuid[])
-       and coalesce(occurred_at, created_at) < $3::timestamptz
-     order by occurred_at nulls last
+    `select i.id, i.workspace_id, i.participants, i.occurred_at from crm.conversation_imports i
+     where i.user_id = $1 and i.source = 'teams' and i.status = 'pending' and i.workspace_id = any($2::uuid[])
+       and coalesce(i.occurred_at, i.created_at) < $3::timestamptz
+       and not (i.id = any($4::uuid[]))
+       and not exists (
+         select 1 from crm.call_records r
+         where r.teams_call_id = i.call_id and r.activity_id is not null and r.workspace_id = any($2::uuid[])
+       )
+     order by i.occurred_at nulls last
      limit 50`,
-    [owner.userId, workspaceIds, cutoff],
+    [owner.userId, workspaceIds, cutoff, spread],
   );
   const own = await ownCallAddresses(db, owner);
   const filings: NameFiling[] = [];
@@ -239,7 +251,8 @@ export async function settleTeamsTranscripts(owner: UserActor, now = Date.now(),
   for (const move of plan.moves) {
     await moveImportToWorkspace(owner, move.importId, move.to).catch((error) => console.error("Moving a Teams transcript failed", errorText(error, "")));
   }
-  const named = await withActor(owner, (db) => expiredByName(db, owner, actors, cutoff));
+  const spread = [...new Set([...plan.moves, ...plan.copies].map((item) => item.importId))];
+  const named = await withActor(owner, (db) => expiredByName(db, owner, actors, cutoff, spread));
   for (const filing of named) {
     if (filing.targets.includes(filing.workspaceId)) continue;
     await moveImportToWorkspace(owner, filing.importId, filing.targets[0]).catch((error) =>
@@ -279,17 +292,14 @@ async function importTeamsTranscript(
   if (!externalId) return "skipped";
   const actors = everyone ?? (await workspaceActors(actor));
   const workspaceIds = actors.map((item) => item.workspaceId);
-  const known = await withActor(actor, (db) =>
-    knownAnywhere(db, workspaceIds, "teams", [externalId]),
-  );
-  if (known.has(externalId)) return "skipped";
+  const known = await withActor(actor, (db) => knownImportsFor(db, workspaceIds, "teams", [externalId], actor.userId));
+  if (importSettled(known.get(externalId), workspaceIds)) return "skipped";
   const raw = await fetchTranscriptContent(token, identity.objectId, transcript, fetchImpl, deadline);
   const text = transcriptToText(raw).slice(0, 1_000_000);
   const callId = transcript.callId?.trim().slice(0, 200) || null;
   return withActor(actor, async (db) => {
     await lockImportKey(db, actor.userId, "teams", externalId);
-    const again = await knownAnywhere(db, workspaceIds, "teams", [externalId]);
-    if (again.has(externalId)) return "skipped";
+    const again = (await knownImportsFor(db, workspaceIds, "teams", [externalId], actor.userId)).get(externalId);
     const calls = callId
       ? (
           await db.query<{ workspace_id: string }>(
@@ -299,8 +309,11 @@ async function importTeamsTranscript(
           )
         ).rows.map((row) => row.workspace_id)
       : [];
+    if (importSettled(again, workspaceIds)) return "skipped";
+    const open = calls.filter((id) => !again?.workspaces.has(id));
+    if (again && open.length === 0) return "skipped";
     const stored = await readStored(db, actor);
-    const placement = calls.length > 0 ? calls : [await captureWorkspaceInDb(db, actor, actors, [], [stored?.email])];
+    const placement = calls.length > 0 ? open : [await captureWorkspaceInDb(db, actor, actors, [], [stored?.email])];
     const placeholder = await importPlaceholder(db, workspaceIds, "teams", externalId, actor.userId);
     const ids: string[] = [];
     for (const workspaceId of placement) {
@@ -334,9 +347,7 @@ async function importTeamsTranscript(
       ids.push(saved.rows[0].id);
       await attachTeamsTranscripts(db, workspaceId);
     }
-    if (placeholder && !placement.includes(placeholder.workspace_id)) {
-      await db.query("update crm.conversation_imports set status = 'ignored', error = null where id = $1", [placeholder.id]);
-    }
+    if (placeholder && !placement.includes(placeholder.workspace_id)) await dropPlaceholder(db, placeholder.id);
     const status = await db.query<{ filed: boolean }>(
       "select bool_or(status = 'filed') as filed from crm.conversation_imports where id = any($1::uuid[])",
       [ids],
@@ -423,9 +434,8 @@ export async function syncTeamsTranscripts(
     const listed = fetched.transcripts.map((item) => item.id);
     const everyone = await workspaceActors(actor);
     const scoped = { ...options, actors: everyone };
-    const known = await withActor(actor, (db) =>
-      knownAnywhere(db, everyone.map((item) => item.workspaceId), "teams", listed),
-    );
+    const everyoneIds = everyone.map((item) => item.workspaceId);
+    const known = await withActor(actor, (db) => knownImportsFor(db, everyoneIds, "teams", listed, actor.userId));
     const result: TranscriptSyncResult = { ...idle, ran: true };
     let complete = fetched.complete;
     let firstError: string | null = null;
@@ -439,7 +449,7 @@ export async function syncTeamsTranscripts(
       if (value === "filed") result.filed += 1;
     };
     for (const transcript of fetched.transcripts) {
-      if (known.has(transcript.id)) continue;
+      if (importSettled(known.get(transcript.id), everyoneIds)) continue;
       if (!timeLeft(options.deadline, STEP_RESERVE_MS)) {
         complete = false;
         break;

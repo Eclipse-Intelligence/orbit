@@ -886,6 +886,6 @@ describe("clickup per workspace", () => {
     const saved = await saveClickUpSettings(ridgeon, { teamId: TEAM, defaultListId: ZEUS, watchedListIds: [RELATIONSHIPS] }, { fetchImpl });
     assert.match(saved.warning ?? "", /Eclipse also uses Relationships/);
     const view = await getClickUpSettings(ridgeon, { fetchImpl });
-    assert.deepEqual(view.shared, [{ workspaceName: "Eclipse", listNames: ["Relationships"] }]);
+    assert.deepEqual(view.shared, [{ workspaceId: eclipse.workspaceId, workspaceName: "Eclipse", listNames: ["Relationships"] }]);
   });
 });

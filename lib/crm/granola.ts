@@ -7,6 +7,7 @@ import {
   claimIntegration,
   clip,
   configuredSiteOrigin,
+  dropPlaceholder,
   ensureIntegration,
   errorText,
   finishIntegration,
@@ -14,7 +15,8 @@ import {
   importActivityInput,
   importConflict,
   importPlaceholder,
-  knownAnywhere,
+  importSettled,
+  knownImportsFor,
   lockImportKey,
   memberActor,
   readIntegration,
@@ -242,24 +244,29 @@ export async function fileGranolaNote(owner: UserActor, note: GranolaNote, every
   const externalUrl = clip(note.web_url, 2000);
   return withActor(owner, async (db) => {
     for (const workspaceId of workspaceIds) await lockImportKey(db, workspaceId, "granola", note.id);
-    const known = await knownAnywhere(db, workspaceIds, "granola", [note.id]);
-    if (known.has(note.id)) return "skipped";
+    const known = (await knownImportsFor(db, workspaceIds, "granola", [note.id], owner.userId)).get(note.id);
+    if (importSettled(known, workspaceIds)) return "skipped";
+    const open = actors.filter((item) => !known?.workspaces.has(item.workspaceId));
+    const placeholder = await importPlaceholder(db, workspaceIds, "granola", note.id, owner.userId);
     const own = await ownCallAddresses(db, owner, [note.owner?.email]);
-    let route = await routeCallInDb(db, owner, actors, participants, { own, occurredAt });
+    let route = await routeCallInDb(db, owner, open, participants, { own, occurredAt });
     let added = 0;
     for (const person of route.ruled) {
-      const target = actors.find((item) => item.workspaceId === person.workspaceId);
+      const target = open.find((item) => item.workspaceId === person.workspaceId);
       if (!target || !hasScope(target.scopes, "contacts:write") || !hasScope(target.scopes, "companies:write")) continue;
       const copy = await contactElsewhere(db, person.email, workspaceIds, target.workspaceId);
       await ensureContactInDb(db, target, person, copy, { operation: "call_domain_rule", source: "granola" });
       added += 1;
     }
-    if (added > 0) route = await routeCallInDb(db, owner, actors, participants, { own, occurredAt });
-    const captureId = await captureWorkspaceInDb(db, owner, actors, participants, [note.owner?.email, owner.email]);
+    if (added > 0) route = await routeCallInDb(db, owner, open, participants, { own, occurredAt });
+    if (route.targets.length === 0 && known) {
+      if (placeholder) await dropPlaceholder(db, placeholder.id);
+      return "skipped";
+    }
+    const captureId = await captureWorkspaceInDb(db, owner, open, participants, [note.owner?.email, owner.email]);
     const writes = route.targets.length > 0
       ? route.targets
-      : [{ actor: actors.find((item) => item.workspaceId === captureId) ?? owner, match: null }];
-    const placeholder = await importPlaceholder(db, workspaceIds, "granola", note.id, owner.userId);
+      : [{ actor: open.find((item) => item.workspaceId === captureId) ?? owner, match: null }];
     for (const write of writes) {
       let activityId: string | null = null;
       if (write.match) {
@@ -329,7 +336,7 @@ export async function fileGranolaNote(owner: UserActor, note: GranolaNote, every
       );
     }
     if (placeholder && !writes.some((write) => write.actor.workspaceId === placeholder.workspace_id)) {
-      await db.query("update crm.conversation_imports set status = 'ignored', error = null where id = $1", [placeholder.id]);
+      await dropPlaceholder(db, placeholder.id);
     }
     return route.targets.length > 0 ? "filed" : "unfiled";
   });
@@ -342,10 +349,9 @@ async function importGranolaNote(
   everyone?: UserActor[],
 ): Promise<ImportOutcome> {
   const actors = everyone ?? (await workspaceActors(actor));
-  const known = await withActor(actor, (db) =>
-    knownAnywhere(db, actors.map((item) => item.workspaceId), "granola", [noteId]),
-  );
-  if (known.has(noteId)) return "skipped";
+  const workspaceIds = actors.map((item) => item.workspaceId);
+  const known = await withActor(actor, (db) => knownImportsFor(db, workspaceIds, "granola", [noteId], actor.userId));
+  if (importSettled(known.get(noteId), workspaceIds)) return "skipped";
   const note = await api.getNote(noteId);
   if (!note || note.deleted_at) return "missing";
   return fileGranolaNote(actor, note, actors);
@@ -416,18 +422,18 @@ export async function syncGranola(
       cursor = body.cursor;
     }
     const everyone = await workspaceActors(owner);
-    const known = await withActor(owner, (db) =>
-      knownAnywhere(db, everyone.map((item) => item.workspaceId), "granola", ids),
-    );
+    const everyoneIds = everyone.map((item) => item.workspaceId);
+    const known = await withActor(owner, (db) => knownImportsFor(db, everyoneIds, "granola", ids, owner.userId));
+    const unsettled = ids.filter((id) => !importSettled(known.get(id), everyoneIds));
     const retries = (await retryableImports(owner, "granola"))
       .map((item) => item.externalId)
       .filter((id) => !ids.includes(id));
-    const fresh = [...ids.filter((id) => !known.has(id)), ...retries];
+    const fresh = [...unsettled, ...retries];
     const result: GranolaSyncResult = {
       ...idle,
       ran: true,
       fetched: ids.length,
-      skipped: ids.length - ids.filter((id) => !known.has(id)).length,
+      skipped: ids.length - unsettled.length,
     };
     let firstError: string | null = null;
     await inPool(fresh, CONCURRENCY, async (id) => {

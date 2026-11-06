@@ -1,5 +1,5 @@
 import { linksSection, type UserLinks } from "@/lib/assistant/links";
-import { londonTime } from "@/lib/assistant/tools";
+import { WORKSPACE_READ_TOOLS, londonTime } from "@/lib/assistant/tools";
 import type { BrandProfile } from "@/lib/crm/brand-rules";
 import type { UserActor } from "@/lib/crm/types";
 
@@ -124,7 +124,7 @@ export function workspacesSection(actor: UserActor, workspaces: PromptWorkspace[
   return `
 
 # Workspaces
-The user is working in ${current}. They are also in ${others.join(", ")}. Each workspace has its own companies, people, deals, tasks, activity and Knowledge. Read tools look in ${current} unless the user asks for another workspace or all of them ("across both workspaces", "in ${example}", "everywhere"). Then pass workspace to search_records, list_companies, get_company, list_contacts, get_contact, list_tasks, list_opportunities, list_activities or search_knowledge, with the workspace's name or "all". Those results are labelled with their workspace, so say which workspace each thing is in. Links from another workspace only open there, so tell the user to switch to it in the sidebar to open them. Changes only happen in ${current}: never propose a change to another workspace's records, and when the user asks for one, tell them to switch to that workspace first.`;
+The user is working in ${current}. They are also in ${others.join(", ")}. Each workspace has its own companies, people, deals, tasks, activity and Knowledge. Read tools look in ${current} unless the user asks for another workspace or all of them ("across both workspaces", "in ${example}", "everywhere"). Then pass workspace to one of ${[...WORKSPACE_READ_TOOLS].join(", ")}, with the workspace's name or "all"; other tools only read ${current}. Those results are labelled with their workspace, so say which workspace each thing is in. Links from another workspace only open there, so tell the user to switch to it in the sidebar to open them. Changes only happen in ${current}: never propose a change to another workspace's records, and when the user asks for one, tell them to switch to that workspace first.`;
 }
 
 export function systemPrompt(

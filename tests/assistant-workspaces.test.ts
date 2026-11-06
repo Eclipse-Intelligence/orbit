@@ -3,7 +3,9 @@ import { after, before, describe, it } from "node:test";
 import type { CompanionResult } from "@/companion/src/protocol";
 import { applyCompanionResult, sendMessage, type AssistantEvent } from "@/lib/assistant/chat";
 import { systemPrompt } from "@/lib/assistant/prompt";
-import { ASSISTANT_TOOLS, crossWorkspaceRefusal, runTool } from "@/lib/assistant/tools";
+import { ASSISTANT_TOOLS, WORKSPACE_READ_TOOLS, crossWorkspaceRefusal, runTool } from "@/lib/assistant/tools";
+import { createBoard } from "@/lib/crm/boards";
+import { runCaptureAction } from "@/lib/crm/capture-actions";
 import { createCompany, getCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
 import { scopesForRole } from "@/lib/crm/scopes";
@@ -11,6 +13,8 @@ import { createTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { createWorkspace } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool } from "@/lib/db/pool";
+import type { WorkflowDefinition } from "@/lib/workflows/definition";
+import { createWorkflow, decideApproval, saveWorkflow, setWorkflowStatus, startRun } from "@/lib/workflows/store";
 import { createUser, resetDatabase } from "./helpers";
 
 type Labelled = { workspace: { id: string; name: string }; note?: string; current?: boolean; error?: string };
@@ -75,17 +79,8 @@ describe("assistant across workspaces", () => {
 
   it("adds the workspace parameter to the main read tools only", () => {
     const withParam = ASSISTANT_TOOLS.filter((tool) => "workspace" in ((tool.parameters.properties ?? {}) as object)).map((tool) => tool.name).sort();
-    assert.deepEqual(withParam, [
-      "get_company",
-      "get_contact",
-      "list_activities",
-      "list_companies",
-      "list_contacts",
-      "list_opportunities",
-      "list_tasks",
-      "search_knowledge",
-      "search_records",
-    ]);
+    assert.deepEqual(withParam, [...WORKSPACE_READ_TOOLS].sort());
+    for (const name of ["get_overview", "get_pipeline", "get_board", "list_quiet_relationships", "search_records", "get_company"]) assert.ok(withParam.includes(name), name);
     assert.ok(ASSISTANT_TOOLS.every((tool) => !tool.write || !("workspace" in ((tool.parameters.properties ?? {}) as object))));
     assert.ok(ASSISTANT_TOOLS.length <= 126);
   });
@@ -226,10 +221,75 @@ describe("assistant across workspaces", () => {
     ];
     const prompt = systemPrompt(eclipse, { webSearch: false, workspaces });
     assert.match(prompt, /# Workspaces\nThe user is working in Eclipse\. They are also in Mark Ridgeon\./);
-    assert.match(prompt, /pass workspace to search_records/);
+    assert.match(prompt, /pass workspace to one of get_overview, search_records/);
     assert.match(prompt, /Changes only happen in Eclipse/);
     assert.doesNotMatch(prompt, /[\u2013\u2014]/);
     assert.doesNotMatch(systemPrompt(eclipse, { webSearch: false, workspaces: workspaces.slice(0, 1) }), /# Workspaces/);
     assert.doesNotMatch(systemPrompt(priya, { webSearch: false }), /# Workspaces/);
+  });
+
+  it("reads the pipeline, boards, quiet relationships and overview of another workspace", async () => {
+    const pipeline = (await runTool(eclipse, "get_pipeline", { workspace: "Mark Ridgeon" })) as Found & { stages?: unknown[] };
+    assert.equal(pipeline.workspace.name, "Mark Ridgeon");
+    assert.ok(Array.isArray(pipeline.stages));
+    const quiet = (await runTool(eclipse, "list_quiet_relationships", { workspace: "Mark Ridgeon" })) as Found;
+    assert.equal(quiet.workspace.name, "Mark Ridgeon");
+    const overview = (await runTool(eclipse, "get_overview", { workspace: "all" })) as { workspaces: Found[] };
+    assert.deepEqual(overview.workspaces.map((item) => item.workspace.name), ["Eclipse", "Mark Ridgeon"]);
+    const board = await createBoard(ridgeon, { name: "Retainers" });
+    const one = (await runTool(eclipse, "get_board", { boardId: board.id, workspace: "all" })) as { workspaces: (Found & { name?: string })[] };
+    assert.deepEqual(one.workspaces.map((item) => [item.workspace.name, item.name]), [["Mark Ridgeon", "Retainers"]]);
+  });
+
+  it("says which tools can read another workspace when another tool is given one", async () => {
+    const refused = (await runTool(eclipse, "list_team_members", { workspace: "Mark Ridgeon" })) as { error?: string; members?: unknown };
+    assert.equal(refused.members, undefined);
+    assert.match(refused.error ?? "", /Only these tools can read another workspace: .*get_pipeline/);
+    const everywhere = (await runTool(eclipse, "list_team_members", { workspace: "all" })) as { error?: string };
+    assert.match(everywhere.error ?? "", /Only these tools/);
+    const here = (await runTool(eclipse, "list_team_members", { workspace: "Eclipse" })) as { error?: string; members?: unknown };
+    assert.equal(here.error, undefined);
+    assert.ok(Array.isArray(here.members));
+  });
+
+  it("refuses a write to all workspaces from someone in one workspace", async () => {
+    const refused = (await runTool(priya, "create_task", { title: "Everywhere", workspace: "all" })) as { error?: string };
+    assert.match(refused.error ?? "", /one workspace at a time/);
+    assert.match((await crossWorkspaceRefusal(priya, "create_task", { title: "Everywhere", workspace: "all" })) ?? "", /one workspace at a time/);
+  });
+
+  it("only answers a workflow approval in the run's own workspace", async () => {
+    const definition: WorkflowDefinition = {
+      version: 2,
+      trigger: { type: "manual", object: "company" },
+      triggerPosition: { x: 0, y: 0 },
+      nodes: [{ id: "approval_1", type: "approval", config: { title: "Send the retainer to {{company.name}}?", details: "" }, position: { x: 0, y: 0 } }],
+      edges: [{ source: "trigger", handle: "out", target: "approval_1" }],
+    };
+    const workflow = await createWorkflow(ridgeon, { name: "Retainer check" });
+    await saveWorkflow(ridgeon, workflow.id, { definition });
+    await setWorkflowStatus(ridgeon, workflow.id, "active");
+    const waiting = async () => {
+      const started = await startRun(ridgeon, workflow.id, { test: false, record: { type: "company", id: consulting } });
+      assert.equal(started.status, "waiting");
+      return started.runId;
+    };
+
+    const first = await waiting();
+    assert.match((await crossWorkspaceRefusal(eclipse, "decide_workflow_approval", { runId: first, approve: true })) ?? "", /That workflow run is in Mark Ridgeon/);
+    const refused = (await runTool(eclipse, "decide_workflow_approval", { runId: first, approve: true })) as { error?: string };
+    assert.match(refused.error ?? "", /That workflow run is in Mark Ridgeon.*Switch to Mark Ridgeon in the sidebar/);
+    await assert.rejects(decideApproval(eclipse, first, { approved: true }), /This approval is in Mark Ridgeon\. Switch to Mark Ridgeon in the sidebar/);
+    const state = await getAdminPool().query<{ status: string; workspace_id: string }>("select status, workspace_id from crm.workflow_runs where id = $1", [first]);
+    assert.deepEqual(state.rows[0], { status: "waiting", workspace_id: ridgeon.workspaceId });
+
+    const decided = (await runTool(ridgeon, "decide_workflow_approval", { runId: first, approve: true })) as { status?: string; error?: string };
+    assert.equal(decided.error, undefined);
+    assert.equal(decided.status, "succeeded");
+
+    const second = await waiting();
+    await runCaptureAction(eclipse, { kind: "approve", runId: second });
+    const run = await getAdminPool().query<{ status: string }>("select status from crm.workflow_runs where id = $1", [second]);
+    assert.equal(run.rows[0].status, "succeeded");
   });
 });

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { continueAfterCompanion, startAgentMailJob } from "@/lib/agent-mail/jobs";
-import { OTHER_WORKSPACE_PLACEHOLDER, addressTakenMessage, agentMailboxView, saveAgentSenders, setUpAgentMailbox } from "@/lib/agent-mail/mailbox";
-import { FETCHES_PER_MAILBOX, pollAgentMailboxes } from "@/lib/agent-mail/poll";
+import { addressTakenMessage, otherWorkspacePlaceholder, agentMailboxView, saveAgentSenders, setUpAgentMailbox } from "@/lib/agent-mail/mailbox";
+import { FETCHES_PER_MAILBOX, pollAgentMailboxes, rotated } from "@/lib/agent-mail/poll";
 import { receiveAgentMail } from "@/lib/agent-mail/receive";
 import { DEFAULT_ADDRESS } from "@/lib/agent-mail/senders";
 import { applyCompanionResult } from "@/lib/assistant/chat";
@@ -150,7 +150,8 @@ describe("agent mailboxes in several workspaces", () => {
   it("gives each workspace its own address and never lets one take another's", async () => {
     await setUpAgentMailbox(eclipse, { address: ECLIPSE_BOX }, fake.fetchImpl);
     const before = await agentMailboxView(ridgeon);
-    assert.deepEqual([before.workspaceName, before.address, before.placeholder, before.setUp], ["Mark Ridgeon", "", OTHER_WORKSPACE_PLACEHOLDER, false]);
+    assert.deepEqual([before.workspaceName, before.address, before.placeholder, before.setUp], ["Mark Ridgeon", "", "mark-ridgeon@ai-mail.geteclipse.co", false]);
+    assert.equal(otherWorkspacePlaceholder({ slug: "consulting", name: "Mark Ridgeon" }), "consulting@ai-mail.geteclipse.co");
 
     const calls = fake.requests.length;
     await assert.rejects(
@@ -253,5 +254,35 @@ describe("agent mailboxes in several workspaces", () => {
     const second = await pollAgentMailboxes({ fetchImpl: failing, start: async (job) => void started.push(job) });
     assert.equal(second.failed, 1);
     assert.equal((await mailRow(late.message_id))?.workspace_id, ridgeon.workspaceId);
+  });
+
+  it("stores the same message id listed by two mailboxes in each of them", async () => {
+    const shared = "msg_ws_shared_1";
+    const copies = [ECLIPSE_BOX, RIDGEON_BOX].map((inbox) => ({ ...message(fake, inbox, inbox === ECLIPSE_BOX ? MARK_ECLIPSE : MARK_RIDGEON, "Shared id"), message_id: shared }));
+    const fetchImpl: typeof fetch = async (input) => {
+      const parts = new URL(String(input)).pathname.split("/").map(decodeURIComponent);
+      if (parts.at(-1) === "messages") {
+        const inbox = parts.at(-2);
+        return Response.json({ messages: copies.filter((mail) => mail.inbox_id === inbox).map((mail) => ({ message_id: mail.message_id, labels: mail.labels, direction: "inbound" })) });
+      }
+      const found = copies.find((mail) => mail.inbox_id === parts.at(-3) && mail.message_id === parts.at(-1));
+      return found ? Response.json(found) : Response.json({}, { status: 404 });
+    };
+    const report = await pollAgentMailboxes({ fetchImpl, start: async () => undefined });
+    assert.equal(report.failed, 0);
+    assert.equal(report.stored, 2);
+    const rows = await getAdminPool().query<{ workspace_id: string; event_id: string }>(
+      "select workspace_id, event_id from crm.agent_mail_messages where message_id = $1 order by event_id",
+      [shared],
+    );
+    assert.deepEqual(rows.rows.map((row) => row.workspace_id).sort(), [eclipse.workspaceId, ridgeon.workspaceId].sort());
+    assert.ok(rows.rows.every((row) => row.event_id.startsWith("poll:") && row.event_id.endsWith(`:${shared}`)));
+  });
+
+  it("starts each poll from a different mailbox", () => {
+    assert.deepEqual(rotated(["a", "b", "c"], 0), ["a", "b", "c"]);
+    assert.deepEqual(rotated(["a", "b", "c"], 60_000), ["b", "c", "a"]);
+    assert.deepEqual(rotated(["a", "b", "c"], 120_000), ["c", "a", "b"]);
+    assert.deepEqual(rotated(["a"], 60_000), ["a"]);
   });
 });

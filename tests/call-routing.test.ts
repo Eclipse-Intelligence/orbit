@@ -4,7 +4,9 @@ import { listToFile } from "@/lib/crm/capture";
 import { readCaptureAction, runCaptureAction } from "@/lib/crm/capture-actions";
 import { createCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
-import { summariseImport } from "@/lib/crm/conversations";
+import { importSettled, knownImportsFor, recordImportFailure, summariseImport } from "@/lib/crm/conversations";
+import { withActor } from "@/lib/crm/context";
+import { moveImportToWorkspace } from "@/lib/crm/call-routing";
 import { fileGranolaNote } from "@/lib/crm/granola";
 import { scopesForRole } from "@/lib/crm/scopes";
 import { settleTeamsTranscripts } from "@/lib/crm/teams-transcripts";
@@ -238,5 +240,220 @@ describe("calls across workspaces", () => {
     assert.ok(rows.every((row) => row.status === "filed" && row.activity_id));
     await settleTeamsTranscripts(eclipse);
     assert.equal((await imports("tr-route-1")).length, 2);
+  });
+
+  async function colleagueIn(workspaceId: string, email: string, name: string): Promise<UserActor> {
+    const admin = getAdminPool();
+    const id = (await admin.query<{ id: string }>("select private.create_local_user($1, 'password-123', $2) as id", [email, name])).rows[0].id;
+    await admin.query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [workspaceId, id]);
+    await admin.query("delete from crm.workspace_members where user_id = $1 and workspace_id <> $2", [id, workspaceId]);
+    return { ...eclipse, userId: id, email, fullName: name, workspaceId, workspaceName: "Eclipse", role: "member", scopes: scopesForRole("member") };
+  }
+
+  async function importRow(id: string) {
+    const result = await getAdminPool().query<{ id: string; workspace_id: string; status: string; user_id: string | null; unfiled_at: Date | null }>(
+      "select id, workspace_id, status, user_id, unfiled_at from crm.conversation_imports where id = $1",
+      [id],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async function seedImport(workspaceId: string, userId: string, source: "granola" | "teams", externalId: string, status: string, unfiledAt: string | null = null) {
+    const result = await getAdminPool().query<{ id: string }>(
+      `insert into crm.conversation_imports (workspace_id, user_id, source, external_id, kind, title, occurred_at, participants, transcript, status, unfiled_at)
+       values ($1, $2, $3, $4, $5, 'Seeded', now(), '[]', 'Mark: Hello.', $6, $7::timestamptz) returning id`,
+      [workspaceId, userId, source, externalId, source === "granola" ? "meeting" : "call", status, unfiledAt],
+    );
+    return result.rows[0].id;
+  }
+
+  it("keeps a call that failed first, was retried into another workspace and is moved back", async () => {
+    await setAddressHome(eclipse, "mark@geteclipse.co", ridgeon.workspaceId);
+    const id = "not_route_retry01";
+    await recordImportFailure(eclipse, { source: "granola", kind: "meeting", externalId: id }, "Granola timed out.");
+    const [placeholder] = await imports(id);
+    assert.equal(placeholder.workspace_id, eclipse.workspaceId);
+    assert.equal(placeholder.status, "pending");
+
+    const call = note(id, eclipse, [{ name: "Una Known", email: "una@unknown-retry.com" }]);
+    assert.equal(await fileGranolaNote(eclipse, call), "unfiled");
+    const rows = await imports(id);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].workspace_id, ridgeon.workspaceId);
+    assert.equal(rows[0].status, "unfiled");
+
+    await getAdminPool().query("update crm.conversation_imports set unfiled_at = now() - interval '3 days' where id = $1", [rows[0].id]);
+    await runCaptureAction(ridgeon, { kind: "import-move", id: rows[0].id, workspaceId: eclipse.workspaceId });
+    const moved = await importRow(rows[0].id);
+    assert.equal(moved?.workspace_id, eclipse.workspaceId);
+    assert.equal(moved?.status, "unfiled");
+    assert.ok(Date.now() - new Date(moved!.unfiled_at!).getTime() < 60_000);
+    assert.ok((await listToFile(eclipse)).unfiled.some((item) => item.id === rows[0].id));
+    await setAddressHome(eclipse, "mark@geteclipse.co", eclipse.workspaceId);
+  });
+
+  it("replaces an ignored or pending copy when moving, and only drops the moving call for the person's own filed one", async () => {
+    const ignored = await seedImport(eclipse.workspaceId, eclipse.userId, "granola", "not_move_ignored01", "ignored");
+    const moving = await seedImport(ridgeon.workspaceId, eclipse.userId, "granola", "not_move_ignored01", "unfiled", hoursAgo(72));
+    assert.equal(await moveImportToWorkspace(eclipse, moving, eclipse.workspaceId), moving);
+    assert.equal(await importRow(ignored), null);
+    assert.equal((await importRow(moving))?.workspace_id, eclipse.workspaceId);
+
+    const pendingTeams = await seedImport(eclipse.workspaceId, eclipse.userId, "teams", "tr-move-pending01", "pending");
+    const movingTeams = await seedImport(ridgeon.workspaceId, eclipse.userId, "teams", "tr-move-pending01", "unfiled");
+    assert.equal(await moveImportToWorkspace(eclipse, movingTeams, eclipse.workspaceId), movingTeams);
+    assert.equal(await importRow(pendingTeams), null);
+    assert.equal((await importRow(movingTeams))?.workspace_id, eclipse.workspaceId);
+
+    const filed = await seedImport(eclipse.workspaceId, eclipse.userId, "granola", "not_move_filed01", "filed");
+    const duplicate = await seedImport(ridgeon.workspaceId, eclipse.userId, "granola", "not_move_filed01", "unfiled");
+    assert.equal(await moveImportToWorkspace(eclipse, duplicate, eclipse.workspaceId), filed);
+    assert.equal(await importRow(duplicate), null);
+    assert.equal((await importRow(filed))?.status, "filed");
+  });
+
+  it("never drops a person's call because a colleague has the same note in the workspace", async () => {
+    const cara = await colleagueIn(eclipse.workspaceId, "cara@geteclipse.co", "Cara Colleague");
+    const theirs = await seedImport(eclipse.workspaceId, cara.userId, "granola", "not_move_colleague01", "filed");
+    const mine = await seedImport(ridgeon.workspaceId, eclipse.userId, "granola", "not_move_colleague01", "unfiled");
+    await assert.rejects(moveImportToWorkspace(eclipse, mine, eclipse.workspaceId), /A colleague already has this conversation in that workspace/);
+    assert.equal((await importRow(mine))?.workspace_id, ridgeon.workspaceId);
+    assert.equal((await importRow(theirs))?.status, "filed");
+
+    await recordImportFailure(cara, { source: "granola", kind: "meeting", externalId: "not_move_colleague02" }, "Granola timed out.");
+    const [placeholder] = await imports("not_move_colleague02");
+    const waiting = await seedImport(ridgeon.workspaceId, eclipse.userId, "granola", "not_move_colleague02", "unfiled");
+    assert.equal(await moveImportToWorkspace(eclipse, waiting, eclipse.workspaceId), waiting);
+    assert.equal(await importRow(placeholder.id), null);
+    assert.deepEqual([(await importRow(waiting))?.workspace_id, (await importRow(waiting))?.user_id], [eclipse.workspaceId, eclipse.userId]);
+  });
+
+  it("files a note in the person's other workspaces when a colleague already imported it in one", async () => {
+    const cara = await colleagueIn(eclipse.workspaceId, "cora@geteclipse.co", "Cora Colleague");
+    await createContact(eclipse, { firstName: "Gita", lastName: "Guest", email: "gita@shared-note.com" });
+    await createCompany(ridgeon, { name: "Shared Note", domain: "shared-note.com" });
+    const call = note("not_route_colleague01", eclipse, [{ name: "Gita Guest", email: "gita@shared-note.com" }]);
+
+    assert.equal(await fileGranolaNote(cara, call), "filed");
+    assert.deepEqual((await imports(call.id)).map((row) => row.workspace_id), [eclipse.workspaceId]);
+
+    assert.equal(await fileGranolaNote(eclipse, call), "filed");
+    const rows = await imports(call.id);
+    assert.deepEqual(rows.map((row) => row.workspace_id), [eclipse.workspaceId, ridgeon.workspaceId]);
+    assert.ok(rows.every((row) => row.status === "filed"));
+    assert.equal((await importRow(rows[0].id))?.user_id, cara.userId);
+    assert.equal((await activities(eclipse.workspaceId, call.id)).length, 1);
+    assert.equal((await activities(ridgeon.workspaceId, call.id)).length, 1);
+    assert.equal(await fileGranolaNote(eclipse, call), "skipped");
+
+    const nobody = note("not_route_colleague02", eclipse, [{ name: "Gita Guest", email: "gita@shared-note.com" }]);
+    await getAdminPool().query("update crm.companies set archived_at = now() where workspace_id = $1 and domain = 'shared-note.com'", [ridgeon.workspaceId]);
+    assert.equal(await fileGranolaNote(cara, nobody), "filed");
+    assert.equal(await fileGranolaNote(eclipse, nobody), "skipped");
+    assert.equal((await imports(nobody.id)).length, 1);
+  });
+
+  it("copies a transcript filed by hand into a workspace that logs its call later", async () => {
+    const admin = getAdminPool();
+    const tess = await createContact(eclipse, { firstName: "Tess", lastName: "Typed", phone: "+447700900777" });
+    const activity = (
+      await admin.query<{ id: string }>(
+        "insert into crm.activities (workspace_id, type, title, occurred_at, contact_id, actor_user_id) values ($1, 'call', 'Call with Tess', now(), $2, $3) returning id",
+        [eclipse.workspaceId, tess.body.contact.id, eclipse.userId],
+      )
+    ).rows[0].id;
+    await admin.query(
+      `insert into crm.conversation_imports (workspace_id, user_id, source, external_id, kind, call_id, title, occurred_at, participants, transcript, status, activity_id, contact_id)
+       values ($1, $2, 'teams', 'tr-hand-1', 'call', 'call-hand-1', 'Teams call', now(), '[]', 'Mark: Hello.\nTess: Hi.', 'filed', $3, $4)`,
+      [eclipse.workspaceId, eclipse.userId, activity, tess.body.contact.id],
+    );
+    await settleTeamsTranscripts(eclipse);
+    assert.equal((await imports("tr-hand-1")).length, 1);
+
+    const tessa = await createContact(ridgeon, { firstName: "Tess", lastName: "Typed", phone: "+447700900777" });
+    const later = (
+      await admin.query<{ id: string }>(
+        "insert into crm.activities (workspace_id, type, title, occurred_at, contact_id, actor_user_id) values ($1, 'call', 'Call with Tess', now(), $2, $3) returning id",
+        [ridgeon.workspaceId, tessa.body.contact.id, eclipse.userId],
+      )
+    ).rows[0].id;
+    await admin.query(
+      `insert into crm.call_records (workspace_id, connection_id, provider_call_id, direction, counterpart_number, started_at, contact_id, activity_id, teams_call_id)
+       values ($1, $2, 'pstn-hand-1', 'outbound', '+447700900777', now(), $3, $4, 'call-hand-1')`,
+      [ridgeon.workspaceId, connectionId, tessa.body.contact.id, later],
+    );
+    await settleTeamsTranscripts(eclipse);
+    const rows = await imports("tr-hand-1");
+    assert.deepEqual(rows.map((row) => [row.workspace_id, row.status, row.activity_id]), [
+      [eclipse.workspaceId, "filed", activity],
+      [ridgeon.workspaceId, "filed", later],
+    ]);
+  });
+
+  it("files a moved transcript with its call, never by a name match elsewhere", async () => {
+    const admin = getAdminPool();
+    const side = await createWorkspace(eclipse, { name: "Side two", brandStart: "blank" });
+    await createContact(eclipse, { firstName: "Nina", lastName: "Named" });
+    const vic = await createContact(ridgeon, { firstName: "Vic", lastName: "Voice", phone: "+447700900888" });
+    const activity = (
+      await admin.query<{ id: string }>(
+        "insert into crm.activities (workspace_id, type, title, occurred_at, contact_id, actor_user_id) values ($1, 'call', 'Call with Vic', now(), $2, $3) returning id",
+        [ridgeon.workspaceId, vic.body.contact.id, eclipse.userId],
+      )
+    ).rows[0].id;
+    await admin.query(
+      `insert into crm.call_records (workspace_id, connection_id, provider_call_id, direction, counterpart_number, started_at, contact_id, activity_id, teams_call_id)
+       values ($1, $2, 'pstn-named-1', 'outbound', '+447700900888', now(), $3, $4, 'call-named-1')`,
+      [ridgeon.workspaceId, connectionId, vic.body.contact.id, activity],
+    );
+    await admin.query(
+      `insert into crm.conversation_imports (workspace_id, user_id, source, external_id, kind, call_id, title, occurred_at, participants, transcript, status)
+       values ($1, $2, 'teams', 'tr-named-1', 'call', 'call-named-1', 'Teams call', $3::timestamptz, $4::jsonb, 'Mark: Hello.\nNina Named: Hi.', 'pending')`,
+      [side.id, eclipse.userId, hoursAgo(72), JSON.stringify([{ name: "Nina Named", email: null }])],
+    );
+    await settleTeamsTranscripts(eclipse);
+    const rows = await imports("tr-named-1");
+    assert.deepEqual(rows.map((row) => [row.workspace_id, row.status, row.activity_id]), [[ridgeon.workspaceId, "filed", activity]]);
+  });
+
+  it("pays for one summary when two workspaces summarise the same call at once", async () => {
+    await createContact(eclipse, { firstName: "Rae", lastName: "Race", email: "rae@race-co.com" });
+    await createCompany(ridgeon, { name: "Race Co", domain: "race-co.com" });
+    const call = note("not_route_race01", eclipse, [{ name: "Rae Race", email: "rae@race-co.com" }]);
+    assert.equal(await fileGranolaNote(eclipse, call), "filed");
+    const rows = await imports(call.id);
+    const here = rows.find((row) => row.workspace_id === eclipse.workspaceId)!;
+    const there = rows.find((row) => row.workspace_id === ridgeon.workspaceId)!;
+    const slow: typeof fetch = async (input, init) => {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      return llm(input, init);
+    };
+    const [first, second] = await Promise.all([
+      summariseImport(eclipse, here.id, { fetchImpl: slow }),
+      summariseImport(ridgeon, there.id, { fetchImpl: slow }),
+    ]);
+    assert.equal(llmCalls, 1);
+    assert.equal([first, second].filter((item) => item?.status === "ready").length, 1);
+    const late = await summariseImport(first ? ridgeon : eclipse, first ? there.id : here.id, { fetchImpl: slow });
+    assert.equal(late?.status, "ready");
+    assert.equal(llmCalls, 1);
+  });
+
+  it("treats a colleague's Teams transcript as known only in its own workspace", async () => {
+    const colin = await colleagueIn(eclipse.workspaceId, "colin@geteclipse.co", "Colin Colleague");
+    await seedImport(eclipse.workspaceId, colin.userId, "teams", "tr-known-colleague1", "filed");
+    await seedImport(eclipse.workspaceId, colin.userId, "teams", "tr-known-colleague2", "pending");
+    const both = [eclipse.workspaceId, ridgeon.workspaceId];
+    const known = await withActor(eclipse, (db) => knownImportsFor(db, both, "teams", ["tr-known-colleague1", "tr-known-colleague2"], eclipse.userId));
+    const filed = known.get("tr-known-colleague1");
+    assert.deepEqual([...(filed?.workspaces ?? [])], [eclipse.workspaceId]);
+    assert.equal(filed?.mine, false);
+    assert.equal(known.has("tr-known-colleague2"), false);
+    assert.equal(importSettled(filed, both), false);
+    assert.equal(importSettled(filed, [eclipse.workspaceId]), true);
+    await seedImport(ridgeon.workspaceId, eclipse.userId, "teams", "tr-known-colleague1", "pending");
+    const mine = (await withActor(eclipse, (db) => knownImportsFor(db, both, "teams", ["tr-known-colleague1"], eclipse.userId))).get("tr-known-colleague1");
+    assert.equal(mine?.mine, true);
+    assert.equal(importSettled(mine, both), true);
   });
 });
