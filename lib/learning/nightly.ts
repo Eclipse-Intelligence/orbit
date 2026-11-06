@@ -181,7 +181,9 @@ async function applyOps(actor: UserActor, scope: MemoryScope, ops: Ops, existing
           { kind: current.kind, title: item.title?.trim() || current.title, body: item.body?.trim() || current.body, confidence: item.confidence ?? "medium", sources: item.sources ?? [], allWorkspaces: false },
           "learning",
         );
+        await db.query("update crm.memories set all_workspaces = false where id = $1", [current.id]);
         added += 1;
+        updated += 1;
         continue;
       }
       await reviseMemory(db, item.id, {
@@ -592,8 +594,8 @@ async function unitState(actor: UserActor, kind: LearningKind, day: string, now:
 type UnitOptions = Options & { trigger: "nightly" | "manual"; rebuildBrief?: boolean };
 
 const SORT = z.object({ notes: z.array(z.object({ id: z.string(), allWorkspaces: z.boolean() })) });
-const SORT_BATCH = 150;
-const SORT_TOKENS = 4_000;
+const SORT_BATCH = 60;
+const SORT_TOKENS = SORT_BATCH * 60 + 1_000;
 
 export async function sortPersonalMemories(actor: UserActor, options: Options): Promise<{ sorted: number }> {
   const gathered = await withActor(actor, async (db) => {
@@ -604,20 +606,25 @@ export async function sortPersonalMemories(actor: UserActor, options: Options): 
       [actor.userId, SORT_BATCH],
     );
     if (!notes.rows.length) return null;
+    const memberships = await db.query<{ count: number }>("select count(*)::int as count from crm.workspaces");
+    if ((memberships.rows[0]?.count ?? 0) <= 1) {
+      await db.query("update crm.memories set all_workspaces = false where id = any($1::uuid[]) and all_workspaces is null", [notes.rows.map((row) => row.id)]);
+      return { settled: notes.rows.length, notes: [], workspaces: [] };
+    }
     const workspaces = await db.query<{ id: string; name: string; sells: string | null }>(
       `select w.id, w.name, b.what_you_sell as sells from crm.workspaces w
        left join crm.workspace_brands b on b.workspace_id = w.id
-       where w.id = any($1::uuid[])`,
-      [[...new Set(notes.rows.map((row) => row.workspace_id))]],
+       order by w.created_at limit 20`,
     );
-    return { notes: notes.rows, workspaces: workspaces.rows };
+    return { settled: 0, notes: notes.rows, workspaces: workspaces.rows };
   });
   if (!gathered) return { sorted: 0 };
+  if (gathered.settled) return { sorted: gathered.settled };
   const name = actor.fullName || actor.email;
   const names = new Map(gathered.workspaces.map((row) => [row.id, row.name.trim() || "the business"]));
   const result = await completeJson({
     system:
-      `Orbit keeps private notes about ${name}, and ${name} works in more than one workspace, each for a different business. Each note was learned in the workspace named beside it. ` +
+      `Orbit keeps private notes about ${name}. ${name} belongs to the workspaces listed under WORKSPACES, and each note was learned in the workspace named beside it. ` +
       `Sort every note. allWorkspaces true is for how ${name} works, writes and wants the assistant to behave in general, wherever they are working. ` +
       "allWorkspaces false keeps it to the workspace it was learned in: anything about that business, its products, pitch, ICP, clients, partners, people, boards or deals. When unsure, false. " +
       'Reply with JSON only: {"notes": [{"id": string, "allWorkspaces": boolean}]}, one entry for every note. ' +

@@ -234,7 +234,7 @@ Don't claim:
 
 export { PROOF_PERMISSIONS, type ProofPermission };
 
-export type ColdEmailBrand = { name: string; claims: string };
+export type ColdEmailBrand = { name: string; claims: string; eclipseTools?: boolean };
 
 const NO_CLAIMS = "No product claims are written down for this business yet. Only facts in prospect_evidence and client proof from the proof list may be stated.";
 
@@ -379,18 +379,36 @@ const FIRST_EMAIL_EXTRAS: [RegExp, string][] = [
   [/\bpilot\b/i, "the pilot"],
   [/\breference calls?\b|\bspeak to (one of )?(our|a) (client|customer)s?\b/i, "a reference call"],
 ];
-const PROMISE = /\b(we|i|eclipse) (can|could|will|'ll|would) do (the same|this|that) for\b|\bdo the same for (you|your)\b|\b(you|your team)( will|'ll| could| can| would)( also)? (see|get|achieve|hit|reach) (the same|similar|those|these)\b|\bsame results? for (you|your)\b|\bguarantee/i;
+const ECLIPSE_NAMES = ["Eclipse", "Cntent"];
+
+function claimPatterns(brand?: ColdEmailBrand) {
+  const eclipse = !brand || brand.eclipseTools === true;
+  const names = [...new Set([brand?.name ?? "", ...(eclipse ? ECLIPSE_NAMES : [])].map((name) => name.trim().toLowerCase()).filter(Boolean))];
+  const alternatives = names.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+"));
+  const own = alternatives.length ? `|${alternatives.join("|")}` : "";
+  const named = alternatives.join("|");
+  return {
+    promise: new RegExp(
+      `\\b(we|i${own}) (can|could|will|'ll|would) do (the same|this|that) for\\b|\\bdo the same for (you|your)\\b|\\b(you|your team)( will|'ll| could| can| would)( also)? (see|get|achieve|hit|reach) (the same|similar|those|these)\\b|\\bsame results? for (you|your)\\b|\\bguarantee`,
+      "i",
+    ),
+    proofClaim: [
+      new RegExp(`\\b(we|i${own})( have|'ve| has)? (helped|worked with)\\b`, "i"),
+      /\bour (clients?|customers?)\b/i,
+      new RegExp(`\\b(clients?|customers?) of (ours${own})\\b`, "i"),
+      /\bteams? like yours\b/i,
+      ...(named ? [new RegExp(`\\b(moved|switched|brought|put|started|began|adopted|since)\\b[^.?!]{0,80}\\b(${named})\\b`, "i")] : []),
+      ...(eclipse ? [/\bwhen eclipse was still called cntent\b/i] : []),
+      /\ban? (\d+|[a-z]+)-(person|people|strong)\b/i,
+    ],
+    finding: new RegExp(
+      `\\b(our|an|the|this|that|one|a recent${named ? `|(${named})'s` : ""}) (article|study|survey|analysis)\\b|\\b(research|data|the study|the article) (shows|found|suggests)\\b|\\b(we${own}) found\\b|\\bour data\\b`,
+      "i",
+    ),
+  };
+}
+
 const MULTIPLIER = /\b\d+(\.\d+)?\s?x\b|\b(doubled|tripled|quadrupled|halved|tenfold|twofold|threefold)\b|\b(twice|two times|three times|four times|five times|ten times|\d+ times) (as|more|faster|the)\b|\broi\b/i;
-const PROOF_CLAIM = [
-  /\b(we|i|eclipse|cntent)( have|'ve)? (helped|worked with)\b/i,
-  /\bour (clients?|customers?)\b/i,
-  /\b(clients?|customers?) of (ours|eclipse|cntent)\b/i,
-  /\bteams? like yours\b/i,
-  /\b(moved|switched|brought|put|started|began|adopted|since)\b[^.?!]{0,80}\b(eclipse|cntent)\b/i,
-  /\bwhen eclipse was still called cntent\b/i,
-  /\ban? (\d+|[a-z]+)-(person|people|strong)\b/i,
-];
-const FINDING = /\b(our|an|the|this|that|one|eclipse's|a recent) (article|study|survey|analysis)\b|\b(research|data|the study|the article) (shows|found|suggests)\b|\b(we|eclipse) found\b|\bour data\b/i;
 const BULLET = /^\s*([-*\u2022\u00b7]|\d+[.)])\s+/m;
 const BOLD = /\*\*[^*\n]+\*\*|__[^_\n]+__/;
 
@@ -447,13 +465,13 @@ function listed(items: string[]) {
   return items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
 }
 
-function proofUse(core: string, sentences: string[], evidence: Evidence[]) {
+function proofUse(core: string, sentences: string[], evidence: Evidence[], proofClaim: RegExp[]) {
   const entries = evidence.filter((item) => item.kind === "proof");
   const coreText = normalise(core);
   const named = entries.filter((entry) => entry.client && mentions(core, entry.client));
   const quoted = entries.filter((entry) => wordingOf(entry) && coreText.includes(wordingOf(entry)));
   const used = [...new Set([...named, ...quoted])];
-  const claims = sentences.filter((sentence) => PROOF_CLAIM.some((pattern) => pattern.test(sentence)));
+  const claims = sentences.filter((sentence) => proofClaim.some((pattern) => pattern.test(sentence)));
   return { entries, named, quoted, used, claims };
 }
 
@@ -495,8 +513,9 @@ function proofCheck(proof: ReturnType<typeof proofUse>): Omit<ColdEmailCheck, "s
   return { id: "proof_approved", label, pass: true, note: `Uses the proof list entry for ${listed(shown.map((entry) => entry.client ?? "a client"))}.` };
 }
 
-export function lintColdEmail(input: { subject: string; body: string; firstTouch?: boolean; evidence?: Evidence[] }): ColdEmailCheck[] {
+export function lintColdEmail(input: { subject: string; body: string; firstTouch?: boolean; evidence?: Evidence[]; brand?: ColdEmailBrand }): ColdEmailCheck[] {
   const followUp = input.firstTouch === false;
+  const patterns = claimPatterns(input.brand);
   const evidence = input.evidence ?? [];
   const subject = input.subject.trim();
   const core = bodyCore(input.body);
@@ -513,7 +532,7 @@ export function lintColdEmail(input: { subject: string; body: string; firstTouch
   const asksMeeting = questions.some((question) => MEETING_WORDS.test(question)) || MEETING_TIME.test(core) || BOOKING.test(core);
   const filler = FILLER.filter((phrase) => lower.includes(phrase));
   const hype = HYPE.filter((word) => new RegExp(`\\b${word}`, "i").test(lower));
-  const proof = proofUse(core, sentences, evidence);
+  const proof = proofUse(core, sentences, evidence, patterns.proofClaim);
   const firstName = greetingName(input.body);
   const subjectClients = proof.entries.filter((entry) => entry.client && mentions(subject, entry.client));
   const subjectTail = subject.split(/\s+/).slice(1);
@@ -539,7 +558,7 @@ export function lintColdEmail(input: { subject: string; body: string; firstTouch
   const linked = LINK.test(core);
   const attached = ATTACHMENT.test(core);
   const extras = FIRST_EMAIL_EXTRAS.filter(([pattern]) => pattern.test(core)).map(([, name]) => name);
-  const findingToo = proof.entries.length > 0 && proof.used.length > 0 && (FINDING.test(core) || figures.some((figure) => !proof.used.some((entry) => wordingOf(entry).includes(normalise(figure)))));
+  const findingToo = proof.entries.length > 0 && proof.used.length > 0 && (patterns.finding.test(core) || figures.some((figure) => !proof.used.some((entry) => wordingOf(entry).includes(normalise(figure)))));
   const plainProblems = [BULLET.test(core) ? "bullets" : "", BOLD.test(core) ? "bold" : ""].filter(Boolean);
   const checks: Omit<ColdEmailCheck, "source">[] = [
     {
@@ -641,8 +660,8 @@ export function lintColdEmail(input: { subject: string; body: string; firstTouch
     {
       id: "no_promise",
       label: "No promise of their result",
-      pass: !PROMISE.test(core),
-      note: PROMISE.test(core) ? `Promises the result: "${core.match(PROMISE)![0]}".` : "None.",
+      pass: !patterns.promise.test(core),
+      note: patterns.promise.test(core) ? `Promises the result: "${core.match(patterns.promise)![0]}".` : "None.",
       fix: 'Say what happened for the client, not what will happen for them. Never "we can do the same for you". Anything about the prospect uses "may" or "if".',
     },
     {

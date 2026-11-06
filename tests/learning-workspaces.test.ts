@@ -139,6 +139,36 @@ describe("personal learning across workspaces", () => {
     assert.equal(calls.length, 1);
   });
 
+  it("sorts a long backlog in batches of 60, each run carrying on where the last stopped", async () => {
+    const admin = getAdminPool();
+    await admin.query("delete from crm.memories");
+    await admin.query(
+      `insert into crm.memories (workspace_id, user_id, scope, kind, title, body, updated_at)
+       select $1, $2, 'personal', 'fact', 'Backlog note ' || n, 'Backlog note ' || n, now() - make_interval(mins => n) from generate_series(1, 65) n`,
+      [eclipse.workspaceId, eclipse.userId],
+    );
+    const { fetchImpl, calls } = gateway({ sort: (user) => ({ notes: [...user.matchAll(/id ([0-9a-f-]{36}) /g)].map((match) => ({ id: match[1], allWorkspaces: true })) }) });
+    assert.deepEqual(await sortPersonalMemories(eclipse, { deadline: Date.now() + 60_000, fetchImpl }), { sorted: 60 });
+    assert.equal((calls[0].user.match(/^- id /gm) ?? []).length, 60);
+    assert.deepEqual(await sortPersonalMemories(ridgeon, { deadline: Date.now() + 60_000, fetchImpl }), { sorted: 5 });
+    assert.equal((calls[1].user.match(/^- id /gm) ?? []).length, 5);
+    const left = await admin.query<{ count: number }>("select count(*)::int as count from crm.memories where all_workspaces is null");
+    assert.equal(left.rows[0].count, 0);
+    assert.deepEqual(await sortPersonalMemories(eclipse, { deadline: Date.now() + 60_000, fetchImpl }), { sorted: 0 });
+    assert.equal(calls.length, 2);
+  });
+
+  it("keeps the notes of someone in one workspace to that workspace without a model call", async () => {
+    const solo = await createUser("solo@wlp.test", "Solo Person");
+    const admin = getAdminPool();
+    await admin.query("insert into crm.memories (workspace_id, user_id, scope, kind, title, body) values ($1, $2, 'personal', 'fact', 'Solo note', 'Solo note.')", [solo.workspaceId, solo.userId]);
+    const { fetchImpl, calls } = gateway({});
+    assert.deepEqual(await sortPersonalMemories(solo, { deadline: Date.now() + 60_000, fetchImpl }), { sorted: 1 });
+    assert.equal(calls.length, 0);
+    const row = await admin.query<{ all_workspaces: boolean | null }>("select all_workspaces from crm.memories where user_id = $1", [solo.userId]);
+    assert.deepEqual(row.rows, [{ all_workspaces: false }]);
+  });
+
   it("runs the personal learner in every workspace from that workspace's own conversations", async () => {
     const admin = getAdminPool();
     await admin.query("delete from crm.memories");
@@ -146,6 +176,12 @@ describe("personal learning across workspaces", () => {
     const general = (
       await admin.query<{ id: string }>(
         "insert into crm.memories (workspace_id, user_id, scope, kind, title, body, all_workspaces) values ($1, $2, 'personal', 'writing', 'Keeps emails short', 'Mark keeps emails short.', true) returning id",
+        [eclipse.workspaceId, eclipse.userId],
+      )
+    ).rows[0].id;
+    const signOff = (
+      await admin.query<{ id: string }>(
+        "insert into crm.memories (workspace_id, user_id, scope, kind, title, body, all_workspaces) values ($1, $2, 'personal', 'writing', 'Signs off with Mark', 'Mark signs off with Mark.', true) returning id",
         [eclipse.workspaceId, eclipse.userId],
       )
     ).rows[0].id;
@@ -174,12 +210,15 @@ describe("personal learning across workspaces", () => {
                 { kind: "preference", title: "Consulting proposals fit on one page", body: "Mark's consulting clients want a one page proposal.", allWorkspaces: false },
                 { kind: "writing", title: "Plain words in proposals", body: "Mark wants plain words.", allWorkspaces: true },
               ],
-              update: [{ id: idOf(user, "Keeps emails short"), body: "Mark keeps consulting emails short.", allWorkspaces: false }],
+              update: [
+                { id: idOf(user, "Keeps emails short"), body: "Mark keeps consulting emails short.", allWorkspaces: false },
+                { id: idOf(user, "Signs off with Mark"), body: "Mark signs off with just his first name.", allWorkspaces: true },
+              ],
             }
           : { add: [{ kind: "instruction", title: "Mention the Agency Pilot to agencies", body: "Mark wants the Agency Pilot offered to agencies.", allWorkspaces: false }] },
     });
     const run = await runNightlyLearning({ deadline: Date.now() + 600_000, fetchImpl, now: new Date("2026-11-04T02:00:00Z") });
-    const personal = run.report.filter((item) => item.kind === "personal");
+    const personal = run.report.filter((item) => item.kind === "personal" && item.userId === eclipse.userId);
     assert.equal(personal.length, 2);
     assert.deepEqual(personal.map((item) => item.workspaceId).sort(), [eclipse.workspaceId, ridgeon.workspaceId].sort());
     assert.equal(calls.filter((call) => call.kind === "sort").length, 1);
@@ -193,12 +232,14 @@ describe("personal learning across workspaces", () => {
     assert.doesNotMatch(prompts.find((call) => call.system.includes("Eclipse's CRM"))!.user, /one page proposal/);
 
     const inRidgeon = (await listMemories(ridgeon, { scope: "personal" })).map((memory) => memory.title).sort();
-    assert.deepEqual(inRidgeon, ["Consulting proposals fit on one page", "Keeps emails short", "Keeps emails short", "Plain words in proposals"]);
+    assert.deepEqual(inRidgeon, ["Consulting proposals fit on one page", "Keeps emails short", "Plain words in proposals", "Signs off with Mark"]);
     const inEclipse = (await listMemories(eclipse, { scope: "personal" })).map((memory) => memory.title).sort();
-    assert.deepEqual(inEclipse, ["Keeps emails short", "Mention the Agency Pilot to agencies", "Old unsorted note", "Plain words in proposals"]);
+    assert.deepEqual(inEclipse, ["Keeps emails short", "Mention the Agency Pilot to agencies", "Old unsorted note", "Plain words in proposals", "Signs off with Mark"]);
     const kept = (await listMemories(eclipse, { scope: "personal" })).find((memory) => memory.id === general)!;
     assert.equal(kept.body, "Mark keeps emails short.");
-    assert.equal(kept.allWorkspaces, true);
+    assert.equal(kept.allWorkspaces, false);
+    const revised = (await listMemories(ridgeon, { scope: "personal" })).find((memory) => memory.id === signOff)!;
+    assert.deepEqual([revised.body, revised.allWorkspaces, revised.workspaceName], ["Mark signs off with just his first name.", true, "Eclipse"]);
     const local = await admin.query<{ body: string; all_workspaces: boolean }>("select body, all_workspaces from crm.memories where workspace_id = $1 and title = 'Keeps emails short'", [ridgeon.workspaceId]);
     assert.deepEqual(local.rows, [{ body: "Mark keeps consulting emails short.", all_workspaces: false }]);
 

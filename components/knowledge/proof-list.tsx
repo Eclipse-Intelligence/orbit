@@ -16,6 +16,7 @@ import { PERMISSION_LABEL, PROOF_LIMITS, PROOF_PERMISSIONS, productSuggestions, 
 export default function ProofList({ entries, workspaceName }: { entries: ProofEntry[]; workspaceName: string }) {
   const [editing, setEditing] = useState<{ entry: ProofEntry | null } | null>(null);
   const products = useMemo(() => productSuggestions(entries, workspaceName), [entries, workspaceName]);
+  const usual = useMemo(() => productSuggestions(entries, "")[0] ?? "", [entries]);
 
   function open(entry: ProofEntry | null) {
     setEditing({ entry });
@@ -63,19 +64,19 @@ export default function ProofList({ entries, workspaceName }: { entries: ProofEn
             <SheetDescription className="sr-only">A client result the assistant can use in cold emails</SheetDescription>
             <SheetCloseButton />
           </SheetHeader>
-          {editing && <ProofForm entry={editing.entry} products={products} onClose={() => setEditing(null)} />}
+          {editing && <ProofForm entry={editing.entry} products={products} usual={usual} onClose={() => setEditing(null)} />}
         </SheetContent>
       </Sheet>
     </SettingsCard>
   );
 }
 
-function ProofForm({ entry, products, onClose }: { entry: ProofEntry | null; products: string[]; onClose: () => void }) {
+function ProofForm({ entry, products, usual, onClose }: { entry: ProofEntry | null; products: string[]; usual: string; onClose: () => void }) {
   const router = useRouter();
   const id = useId();
   const [client, setClient] = useState(entry?.client ?? "");
   const [description, setDescription] = useState(entry?.description ?? "");
-  const [product, setProduct] = useState(entry ? entry.product : (products[0] ?? ""));
+  const [product, setProduct] = useState(entry ? entry.product : usual);
   const [usedFor, setUsedFor] = useState(entry?.usedFor ?? "");
   const [result, setResult] = useState(entry?.result ?? "");
   const [measured, setMeasured] = useState(entry?.measured ?? "");

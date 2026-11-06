@@ -186,6 +186,15 @@ describe("cold email client proof", () => {
     );
   });
 
+  it("looks for client claims in the workspace's own name, and in Eclipse's only when Eclipse tools are on", () => {
+    const claim = (who: string) => ({ ...FINDING, body: FINDING.body.replace("next time.", `next time. ${who} has helped three firms with this.`), evidence: EVIDENCE });
+    const ridgeon = { name: "Mark Ridgeon", claims: "", eclipseTools: false };
+    assert.match(noteOf(lintColdEmail({ ...claim("Mark Ridgeon"), brand: ridgeon }), "proof_approved"), /no proof list entry behind it/);
+    assert.equal(noteOf(lintColdEmail({ ...claim("Eclipse"), brand: ridgeon }), "proof_approved"), "No client proof.");
+    assert.match(noteOf(lintColdEmail({ ...claim("Eclipse"), brand: { ...ridgeon, eclipseTools: true } }), "proof_approved"), /no proof list entry behind it/);
+    assert.match(noteOf(lintColdEmail(claim("Cntent")), "proof_approved"), /no proof list entry behind it/);
+  });
+
   it("fills proof in from the proof list and fails proof that isn't on it", () => {
     const entry: ProofEntry = {
       id: "6f1d8a52-3c1e-4c4b-9a55-0d6c2b1f7e10",
