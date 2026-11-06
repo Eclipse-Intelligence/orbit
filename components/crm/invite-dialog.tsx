@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import Field from "@/components/_ui/field";
 import { DatePicker } from "@/components/_ui/date-picker";
 import { Input } from "@/components/_ui/input";
+import { NativeSelect } from "@/components/_ui/native-select";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/_ui/select";
 import { searchContactsToFileAction } from "@/app/(crm)/search";
 import { sendInviteAction } from "@/app/(crm)/calendar/actions";
@@ -39,10 +40,10 @@ export type InviteGuestDraft = {
 
 export type InvitePrefill = { date?: string; time?: string; guests?: InviteGuestDraft[]; title?: string; durationMinutes?: number; notes?: string };
 
-type ErrorKey = "title" | "startLocal" | "durationMinutes" | "attendees" | "notes" | "form";
+type ErrorKey = "from" | "title" | "startLocal" | "durationMinutes" | "attendees" | "notes" | "form";
 type Errors = Partial<Record<ErrorKey, string>>;
 
-const FIELD_ERRORS = new Set<string>(["title", "startLocal", "durationMinutes", "attendees", "notes"]);
+const FIELD_ERRORS = new Set<string>(["from", "title", "startLocal", "durationMinutes", "attendees", "notes"]);
 
 const RESULTS_SHOWN = 6;
 
@@ -64,7 +65,35 @@ function guestLabel(guest: InviteGuestDraft) {
   return guest.name ?? guest.email;
 }
 
-function ConnectionNotice({ setup }: { setup: InviteSetup }) {
+type SenderOption = InviteSetup["senders"][number];
+
+function formErrorHref(message: string, sender: SenderOption | null) {
+  if (sender?.fixHref && message === sender.problem) return sender.fixHref;
+  const allow = /^Allow invites for (\S+) in Settings/.exec(message);
+  if (allow) return `/api/microsoft/connect?purpose=send_account&hint=${encodeURIComponent(allow[1])}`;
+  if (/^Choose a calendar for invite holds/.test(message)) return "/settings/email-templates#sending-addresses";
+  if (/in Settings › Calendars/.test(message)) return "/settings/calendars";
+  if (/Reconnect Microsoft|Connect Microsoft/.test(message)) return "/settings/integrations";
+  return null;
+}
+
+function SenderNotice({ sender }: { sender: SenderOption }) {
+  if (!sender.problem) return null;
+  return (
+    <div role="alert" className="border-danger/40 flex flex-col items-start gap-1 rounded-lg border px-3 py-2.5">
+      {sender.fixHref ? (
+        <Button variant="link" size="none" className="text-danger text-left whitespace-normal" href={sender.fixHref}>
+          {sender.problem}
+        </Button>
+      ) : (
+        <p className="caption-style text-danger">{sender.problem}</p>
+      )}
+    </div>
+  );
+}
+
+function ConnectionNotice({ setup, sender }: { setup: InviteSetup; sender: SenderOption | null }) {
+  if (sender && !sender.primary) return <SenderNotice sender={sender} />;
   if (setup.connected && setup.canWriteCalendar) return null;
   return (
     <div role="alert" className="border-danger/40 flex flex-col items-start gap-1 rounded-lg border px-3 py-2.5">
@@ -111,11 +140,13 @@ function InviteForm({
   const [errors, setErrors] = useState<Errors>({});
   const [pending, setPending] = useState(false);
   const [transactionId, setTransactionId] = useState(() => crypto.randomUUID());
+  const [from, setFrom] = useState(() => setup.defaultFrom ?? setup.senders[0]?.address ?? "");
+  const sender = setup.senders.find((item) => item.address === from) ?? null;
   const trimmed = query.trim();
   const firstContact = guests.find((guest) => guest.contactId);
   const title = titleDraft ?? inviteTitle(firstContact?.name ?? null, setup.workspaceName ?? "");
   const own = new Set(setup.ownEmails);
-  const blocked = !setup.connected || !setup.canWriteCalendar;
+  const blocked = sender ? Boolean(sender.problem) : !setup.connected || !setup.canWriteCalendar;
   const field = (name: string) => `${ids}-${name}`;
 
   useEffect(() => {
@@ -259,10 +290,12 @@ function InviteForm({
       includeMeetingLink: Boolean(setup.meetingLink) && includeLink,
       contactIds: guests.map((guest) => guest.contactId).filter((id): id is string => Boolean(id)),
       transactionId,
+      from: sender?.address,
     });
     setPending(false);
     if (result.error) {
-      const key = (result.field && FIELD_ERRORS.has(result.field) ? result.field : "form") as ErrorKey;
+      const shown = result.field === "from" ? setup.senders.length > 1 : Boolean(result.field && FIELD_ERRORS.has(result.field));
+      const key = (shown && result.field ? result.field : "form") as ErrorKey;
       setErrors({ [key]: result.error });
       return;
     }
@@ -280,11 +313,34 @@ function InviteForm({
       <DialogHeader>
         <DialogTitle>New meeting</DialogTitle>
         <DialogDescription>
-          Outlook sends the invite from your connected mailbox and adds it to your calendar.
+          {sender?.kind === "smtp"
+            ? `Orbit emails the invite from ${sender.address} and holds the time in your calendar.`
+            : `Outlook sends the invite from ${sender?.address ?? "your connected mailbox"} and adds it to your calendar.`}
         </DialogDescription>
       </DialogHeader>
       <div className="flex flex-col gap-4 px-6 py-5">
-        <ConnectionNotice setup={setup} />
+        <ConnectionNotice setup={setup} sender={sender} />
+        {setup.senders.length > 1 && (
+          <Field label="From" htmlFor={field("from")} error={errors.from}>
+            <NativeSelect
+              id={field("from")}
+              value={from}
+              aria-invalid={errors.from ? true : undefined}
+              aria-describedby={errors.from ? `${field("from")}-error` : undefined}
+              onChange={(event) => {
+                setFrom(event.target.value);
+                setError("from", undefined);
+                setError("form", undefined);
+              }}
+            >
+              {setup.senders.map((option) => (
+                <option key={option.address} value={option.address}>
+                  {option.address}
+                </option>
+              ))}
+            </NativeSelect>
+          </Field>
+        )}
         <Field label="Title" htmlFor={field("title")} required error={errors.title}>
           <Input
             id={field("title")}
@@ -503,8 +559,8 @@ function InviteForm({
         </div>
         {errors.form && (
           <p role="alert" className="caption-style text-danger">
-            {/Reconnect Microsoft|Connect Microsoft/.test(errors.form) ? (
-              <Button variant="link" size="none" className="text-danger text-left whitespace-normal" href="/settings/integrations">
+            {formErrorHref(errors.form, sender) ? (
+              <Button variant="link" size="none" className="text-danger text-left whitespace-normal" href={formErrorHref(errors.form, sender)!}>
                 {errors.form}
               </Button>
             ) : (

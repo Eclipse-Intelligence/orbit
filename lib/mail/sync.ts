@@ -1,8 +1,8 @@
 import { withActor } from "@/lib/crm/context";
+import { storeAccountToken } from "@/lib/crm/calendar-accounts";
 import { currentToken, readStored, storeToken, type StoredTokens } from "@/lib/crm/inbox";
 import { CrmError } from "@/lib/crm/errors";
 import type { UserActor } from "@/lib/crm/types";
-import { encryptSecret } from "@/lib/crypto/secret";
 import type { Db } from "@/lib/db/pool";
 import { randomBytes } from "node:crypto";
 import { mailOrigin } from "@/lib/mail/origin";
@@ -155,10 +155,7 @@ async function saveToken(db: Db, source: Source, token: MicrosoftToken) {
     await storeToken(db, source.connection_id, token);
     return;
   }
-  await db.query(
-    "update crm.calendar_accounts set refresh_token = $2, access_token = $3, access_token_expires_at = $4 where id = $1",
-    [source.account_id, encryptSecret(token.refreshToken), encryptSecret(token.accessToken), token.expiresAt],
-  );
+  if (source.account_id) await storeAccountToken(db, source.account_id, token);
 }
 
 async function loadSource(actor: UserActor, sourceId: string): Promise<Source | null> {

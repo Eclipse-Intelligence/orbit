@@ -41,6 +41,11 @@ export async function addressHomesInDb(db: Db, actor: UserActor): Promise<Addres
      from crm.send_identities i
      left join crm.mail_address_homes h on h.user_id = i.user_id and h.address = lower(i.email)
      where i.user_id = $1
+     union all
+     select lower(a.email), 'mailbox', a.workspace_id, h.workspace_id, 2, a.created_at
+     from crm.calendar_accounts a
+     left join crm.mail_address_homes h on h.user_id = a.user_id and h.address = lower(a.email)
+     where a.user_id = $1 and a.provider = 'microsoft' and a.can_send and a.email is not null
      order by rank, created_at`,
     [actor.userId],
   );

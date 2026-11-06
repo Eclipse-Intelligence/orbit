@@ -186,7 +186,7 @@ function CancelMeeting({ item }: { item: CalendarItem }) {
     }
     const message =
       result.warning ??
-      `Cancelled ${eventTitle(item)}. Outlook let your guests know.`;
+      `Cancelled ${eventTitle(item)}. Your guests were told.`;
     setDone(message);
     notify(message);
     router.refresh();
@@ -285,7 +285,7 @@ function MoveMeeting({ item }: { item: CalendarItem }) {
       return;
     }
     const moved = whenLine({ ...item, startsAt: result.startsAt, endsAt: result.endsAt });
-    const note = result.warning ?? `Moved ${eventTitle(item)} to ${moved}. Outlook let your guests know.`;
+    const note = result.warning ?? `Moved ${eventTitle(item)} to ${moved}. Your guests were told.`;
     setDone(note);
     setOpen(false);
     notify(note);

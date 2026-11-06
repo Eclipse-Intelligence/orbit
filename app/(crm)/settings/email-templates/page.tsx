@@ -13,13 +13,14 @@ import { readStatusesOn } from "@/lib/mail/tracking";
 import SendingAddressesSettings from "@/components/mail/sending-addresses-settings";
 import { composeAccounts } from "@/lib/mail/compose";
 import { listIdentities } from "@/lib/mail/identities";
+import { listHoldCalendars } from "@/lib/crm/invite-senders";
 
 export const dynamic = "force-dynamic";
 
 export default async function EmailTemplateSettingsPage() {
   const user = await getUserActor();
   if (!user) redirect("/login");
-  const [templates, contacts, senders, readStatuses, identities, accounts, help] = await Promise.all([
+  const [templates, contacts, senders, readStatuses, identities, accounts, help, holdCalendars] = await Promise.all([
     listEmailTemplates(user),
     listContacts(user, { limit: 20 }),
     listSenders(user),
@@ -27,6 +28,7 @@ export default async function EmailTemplateSettingsPage() {
     listIdentities(user).catch(() => []),
     composeAccounts(user).catch(() => []),
     mailHelpSettings(user).catch(() => ({ prepareReplies: true, autoRemindDays: 3, coldPitches: "off" as const })),
+    listHoldCalendars(user).catch(() => []),
   ]);
   const sources = accounts.filter((account) => !account.identityId).map((account) => ({ id: account.id, email: account.email }));
   const allSenders = [
@@ -45,6 +47,7 @@ export default async function EmailTemplateSettingsPage() {
             identities={identities}
             sources={sources}
             suggestedSource={null}
+            holdCalendars={holdCalendars}
           />
           <SignaturesSettings senders={allSenders} />
           <MailHelpSettings initial={help} />

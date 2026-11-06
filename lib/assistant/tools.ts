@@ -95,7 +95,7 @@ import { getMailbox } from "@/lib/crm/inbox";
 import { listFollowUps } from "@/lib/crm/follow-ups";
 import { captureContext, listToFile, waitingHere } from "@/lib/crm/capture";
 import { listUnknownMail } from "@/lib/mail/filing";
-import { cancelInvite, createInvite, getMeetingLink, MEETING_RESPONSES, rescheduleInvite, respondToInvite } from "@/lib/crm/invites";
+import { cancelInvite, createInvite, getInviteSetup, getMeetingLink, MEETING_RESPONSES, rescheduleInvite, resolveInviteFrom, respondToInvite } from "@/lib/crm/invites";
 import { latestEmailCheck, verifyEmail } from "@/lib/enrichment/email-check";
 import { archiveOpportunity, createOpportunity, getOpportunity, listOpportunities, listPipeline, updateOpportunity } from "@/lib/crm/opportunities";
 import { pipelineReport, stageHistory, stalledDeals, STALLED_DAYS } from "@/lib/crm/pipeline-history";
@@ -2498,10 +2498,10 @@ const TOOL_LIST: AssistantTool[] = [
     name: "get_settings",
     label: "Checking settings",
     description:
-      "Your meeting link, your email addresses, the booking page, the status of Microsoft mail and calendar, ClickUp and Granola, and the lifecycles companies can have (built in and the workspace's own, such as Consultant) with how many companies each has.",
+      "Your meeting link, your email addresses, the addresses that can send meeting invites (inviteSenders, with defaultInviteFrom for this workspace and a problem when one can't send), the booking page, the status of Microsoft mail and calendar, ClickUp and Granola, and the lifecycles companies can have (built in and the workspace's own, such as Consultant) with how many companies each has.",
     parameters: { type: "object", properties: {} },
     run: async (actor) => {
-      const [meetingLink, emails, booking, mailbox, calendar, clickup, picker, granola, lifecycles] = await Promise.all([
+      const [meetingLink, emails, booking, mailbox, calendar, clickup, picker, granola, lifecycles, invites] = await Promise.all([
         getMeetingLink(actor),
         getMyEmails(actor),
         getBookingPage(actor),
@@ -2511,10 +2511,13 @@ const TOOL_LIST: AssistantTool[] = [
         getClickUpPicker(actor),
         getGranolaStatus(actor),
         listLifecycles(actor),
+        getInviteSetup(actor),
       ]);
       return {
         meetingLink,
         myEmails: emails,
+        inviteSenders: invites.senders.map((sender) => ({ address: sender.address, kind: sender.kind, main: sender.primary, problem: sender.problem })),
+        defaultInviteFrom: invites.defaultFrom,
         bookingPage: { ...booking, publicUrl: booking.exists ? bookingUrl(booking.slug) : null },
         microsoftMail: mailbox,
         calendar,
@@ -4245,10 +4248,12 @@ const TOOL_LIST: AssistantTool[] = [
     name: "create_meeting_invite",
     label: "Sending an invite",
     write: true,
-    description: "Create an Outlook meeting and send invites. Times are London time.",
+    description:
+      "Create a meeting and send invites. Times are London time. from picks which of the user's addresses sends it (see get_settings); leave it out to use the default for this workspace: the address whose home is this workspace, else the last one used here, else the main Microsoft mailbox. Microsoft addresses send through Outlook; other addresses email a standard invite and hold the time in a Microsoft calendar.",
     parameters: {
       type: "object",
       properties: {
+        from: { type: "string", description: "The address that sends the invite. Defaults to this workspace's invite address." },
         title: { type: "string" },
         startLocal: { type: "string", description: "YYYY-MM-DDTHH:mm London time." },
         durationMinutes: { type: "integer", minimum: 15, maximum: 480 },
@@ -4262,9 +4267,17 @@ const TOOL_LIST: AssistantTool[] = [
       },
       required: ["title", "startLocal", "durationMinutes", "attendees"],
     },
-    describe: (args) => ({
+    details: async (actor, args) => {
+      try {
+        return { "invite:from": await resolveInviteFrom(actor, optionalStr(args.from)) };
+      } catch {
+        return { "invite:from": optionalStr(args.from) ?? "" };
+      }
+    },
+    describe: (args, name) => ({
       title: `Send invite: ${str(args.title)}`,
       lines: [
+        `From: ${detail(name, "invite:from") || optionalStr(args.from) || "your default address"}`,
         `When: ${formatDateTimeLabel(str(args.startLocal))} for ${args.durationMinutes} minutes`,
         `Guests: ${(Array.isArray(args.attendees) ? args.attendees : [])
           .map((guest) => (guest && typeof guest === "object" ? str((guest as Args).name) || str((guest as Args).email) : ""))
@@ -4286,6 +4299,7 @@ const TOOL_LIST: AssistantTool[] = [
         contactIds: strings(args.contactIds),
         notes: str(args.notes),
         includeMeetingLink: args.includeMeetingLink !== false,
+        from: optionalStr(args.from),
       });
       return { invite: result };
     },
@@ -4295,7 +4309,7 @@ const TOOL_LIST: AssistantTool[] = [
     label: "Moving a meeting",
     write: true,
     description:
-      "Move an Outlook meeting the user organises to a new time. Outlook sends the guests an updated invite and the meeting link stays. Times are London time. Use an event id from list_calendar_events with canCancel true.",
+      "Move a meeting the user organises to a new time. The address that sent the invite sends the guests an updated invite and the meeting link stays. Times are London time. Use an event id from list_calendar_events with canCancel true.",
     parameters: {
       type: "object",
       properties: {
@@ -4336,7 +4350,7 @@ const TOOL_LIST: AssistantTool[] = [
     label: "Cancelling a meeting",
     write: true,
     description:
-      "Cancel a meeting the user organised, by its id from list_calendar_events. Outlook sends the cancellation to every guest, with message if given, and it's logged on the guests' timelines. Only meetings that haven't started, in the calendar of the mailbox connected in Settings › Integrations.",
+      "Cancel a meeting the user organised, by its id from list_calendar_events. The address that sent the invite sends the cancellation to every guest (Outlook for Microsoft accounts, an email cancellation for other addresses), with message if given, and it's logged on the guests' timelines. Only meetings that haven't started, in the calendar of a connected Microsoft account.",
     parameters: {
       type: "object",
       properties: {
@@ -4368,7 +4382,7 @@ const TOOL_LIST: AssistantTool[] = [
     label: "Answering an invite",
     write: true,
     description:
-      "Accept, say maybe to (tentative) or decline a meeting someone else organised, by its id from list_calendar_events with canRespond true. Outlook sends the response to the organiser, with note if given, unless tellOrganiser is false. Tentative and decline can suggest a new time in London time, if the organiser allows new time proposals. Only meetings that haven't started, in the calendar of the mailbox connected in Settings › Integrations.",
+      "Accept, say maybe to (tentative) or decline a meeting someone else organised, by its id from list_calendar_events with canRespond true. Outlook sends the response to the organiser, with note if given, unless tellOrganiser is false. Tentative and decline can suggest a new time in London time, if the organiser allows new time proposals. Only meetings that haven't started, in the calendar of a connected Microsoft account, answered from that account.",
     parameters: {
       type: "object",
       properties: {

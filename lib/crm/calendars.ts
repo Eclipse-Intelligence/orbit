@@ -45,6 +45,7 @@ export type CalendarGroup = {
   connected: boolean;
   scopeMissing: boolean;
   canSend: boolean;
+  canInvite: boolean;
   lastSyncedAt: string | null;
   lastError: string | null;
   calendars: CalendarEntry[];
@@ -149,6 +150,7 @@ export async function listCalendarGroups(actor: UserActor): Promise<CalendarGrou
         connected: stored.status === "connected" && Boolean(stored.refreshTokenCipher),
         scopeMissing: Boolean(state.rows[0]?.scope_missing),
         canSend: true,
+        canInvite: true,
         lastSyncedAt: iso(state.rows[0]?.last_synced_at ?? null),
         lastError: state.rows[0]?.last_error ?? null,
         calendars: calendars.rows.filter((row) => row.connection_id === stored.id).map(mapCalendar),
@@ -167,6 +169,7 @@ export async function listCalendarGroups(actor: UserActor): Promise<CalendarGrou
           (account.provider === "ics" ? Boolean(account.feed) : Boolean(account.refreshTokenCipher)),
         scopeMissing: account.scopeMissing,
         canSend: account.provider === "microsoft" && account.canSend,
+        canInvite: account.provider === "microsoft" && account.canSend && account.calendarWrite === true,
         lastSyncedAt: account.lastSyncedAt,
         lastError: account.lastError,
         calendars: calendars.rows.filter((row) => row.account_id === account.id).map(mapCalendar),
@@ -227,6 +230,7 @@ type ItemRow = {
   granola_contact_id: string | null;
   granola_company_id: string | null;
   connection_id: string | null;
+  account_id: string | null;
   created_by_orbit: boolean;
   response_status: string | null;
 };
@@ -253,7 +257,7 @@ export async function listCalendarItems(
     const result = await db.query<ItemRow>(
       `select e.id, e.calendar_id, e.subject, e.starts_at, e.ends_at, e.is_all_day, e.show_as,
               e.location, e.web_link, e.online_meeting_url, e.organizer, e.attendees,
-              e.connection_id, e.created_by_orbit, e.response_status, e.ical_uid,
+              e.connection_id, e.account_id, e.created_by_orbit, e.response_status, e.ical_uid,
               g.id as granola_id, g.contact_id as granola_contact_id, g.company_id as granola_company_id
        from crm.calendar_events e
        join crm.calendars c on c.id = e.calendar_id and c.is_visible
@@ -297,19 +301,29 @@ export async function listCalendarItems(
     const internal = await internalAddresses(db, actor.workspaceId, await ownAddresses(db, actor));
     const stored = await readStored(db, actor);
     const writable = stored?.status === "connected" && stored.refreshTokenCipher ? stored.id : null;
+    const accounts = await db.query<{ id: string }>(
+      `select id from crm.calendar_accounts
+       where user_id = $1 and provider = 'microsoft' and status = 'connected' and refresh_token is not null
+         and calendar_write is distinct from false`,
+      [actor.userId],
+    );
+    const writableAccounts = new Set(accounts.rows.map((row) => row.id));
+    const canWrite = (row: ItemRow) =>
+      Boolean(row.connection_id ? writable && row.connection_id === writable : row.account_id && writableAccounts.has(row.account_id));
     const own = await myAddresses(db, actor);
+    const identities = await db.query<{ email: string }>("select email from crm.send_identities where user_id = $1", [actor.userId]);
+    for (const row of identities.rows) own.add(row.email.toLowerCase());
     const organised = (row: ItemRow) => {
       const organizer = readPerson(row.organizer);
       return row.created_by_orbit || row.response_status === "organizer" || Boolean(organizer && own.has(organizer.email));
     };
     const answerable = (row: ItemRow) =>
-      Boolean(writable) &&
-      row.connection_id === writable &&
+      canWrite(row) &&
       new Date(row.starts_at).getTime() > now &&
       readPerson(row.organizer) !== null &&
       !organised(row);
     const cancellable = (row: ItemRow) => {
-      if (!writable || row.connection_id !== writable || new Date(row.starts_at).getTime() <= now) return false;
+      if (!canWrite(row) || new Date(row.starts_at).getTime() <= now) return false;
       const organizer = readPerson(row.organizer);
       if (!row.created_by_orbit && !(organizer && own.has(organizer.email))) return false;
       return readPeople(row.attendees).some((person) => !own.has(person.email));

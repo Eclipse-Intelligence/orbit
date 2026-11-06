@@ -4,12 +4,13 @@ import { appSecret } from "@/lib/auth/config";
 import { CrmError } from "@/lib/crm/errors";
 import { contactHref } from "@/lib/crm/hrefs";
 import { sendOwnMail } from "@/lib/crm/inbox";
-import { openInviteSender, sendInvite } from "@/lib/crm/invites";
+import { INVITE_NOT_CONNECTED, INVITE_RECONNECT, openInviteSender, sendInvite } from "@/lib/crm/invites";
 import { canonicalEmail } from "@/lib/crm/normalize";
 import type { UserActor } from "@/lib/crm/types";
 import { openClient, query } from "@/lib/db/pool";
 import { fetchCalendarView } from "@/lib/microsoft/calendar";
 import {
+  bookingInviteSender,
   loadBookingOwner,
   loadBookingPage,
   loadBusy,
@@ -212,8 +213,13 @@ async function liveBusy(
 
 function unavailable(error: unknown) {
   if (error instanceof CrmError) {
-    if (error.code === "not_connected") return "Microsoft isn't connected, so the booking page can't create meetings. Connect Microsoft in Settings › Integrations.";
-    if (error.code === "scope_missing") return "Microsoft hasn't allowed Orbit to create meetings. Reconnect Microsoft in Settings › Integrations.";
+    if (error.code === "not_connected" && error.message === INVITE_NOT_CONNECTED) {
+      return "Microsoft isn't connected, so the booking page can't create meetings. Connect Microsoft in Settings › Integrations.";
+    }
+    if (error.code === "scope_missing" && error.message === INVITE_RECONNECT) {
+      return "Microsoft hasn't allowed Orbit to create meetings. Reconnect Microsoft in Settings › Integrations.";
+    }
+    if (error.details?.field === "from") return error.message;
     return `Microsoft couldn't create the meeting: ${error.message}`;
   }
   return "Orbit couldn't create the meeting.";
@@ -260,7 +266,7 @@ export async function bookSlot(slug: string, input: BookingInput, context: Booki
     const busy = await loadBusy(page.userId, busyWindow.from, busyWindow.to);
     if (!isOpenSlot(page.rules, start, now, busy)) throw new CrmError("conflict", SLOT_TAKEN, 409, { field: "start" });
     const sender = await openOwnerSender(owner, fetchImpl);
-    booked.mailbox = sender.stored.email;
+    booked.mailbox = sender.mainEmail;
     if (sender.own.has(email)) {
       throw invalid("That's the organiser's address. Use your own email.", "email");
     }
@@ -411,7 +417,7 @@ async function failed(owner: UserActor, error: unknown) {
 
 async function openOwnerSender(owner: UserActor, fetchImpl: typeof fetch) {
   try {
-    return await openInviteSender(owner, { fetchImpl });
+    return await openInviteSender(owner, { fetchImpl, from: await bookingInviteSender(owner), use: "booking" });
   } catch (error) {
     throw await failed(owner, error);
   }

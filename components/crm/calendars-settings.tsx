@@ -31,9 +31,10 @@ function needsReconnect(group: CalendarGroup) {
 }
 
 function sourceLine(group: CalendarGroup) {
-  if (group.kind === "primary") return "Main account · from Integrations · calendar and mail";
+  if (group.kind === "primary") return "Main account · from Integrations · calendar, mail and invites";
   if (group.provider === "ics") return "Calendar link · read-only";
-  return group.canSend ? "Calendar and mail" : "Calendar only";
+  if (group.canSend) return group.canInvite ? "Calendar, mail and invites" : "Calendar and mail";
+  return "Calendar only";
 }
 
 function allowSendingHref(group: CalendarGroup) {
@@ -194,6 +195,15 @@ export default function CalendarsSettings({
                   title={`Let Orbit read and send email for ${group.email ?? "this account"}`}
                 >
                   Add mail
+                </a>
+              )}
+              {configured && group.kind === "account" && group.provider === "microsoft" && group.connected && group.canSend && !group.canInvite && (
+                <a
+                  href={allowSendingHref(group)}
+                  className={buttonVariants({ variant: "secondary", size: "sm" })}
+                  title={`Let Orbit send meeting invites from ${group.email ?? "this account"}`}
+                >
+                  Allow invites
                 </a>
               )}
               {group.kind === "account" && (

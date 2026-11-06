@@ -2,6 +2,8 @@ import { withActor } from "@/lib/crm/context";
 import { memberActor } from "@/lib/crm/conversations";
 import { CrmError, isPgError } from "@/lib/crm/errors";
 import { getInviteSetup } from "@/lib/crm/invites";
+import { defaultInviteAddress, readInviteSenders, type InviteSenderOption } from "@/lib/crm/invite-senders";
+import { canonicalEmail } from "@/lib/crm/normalize";
 import type { UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
 import {
@@ -49,12 +51,15 @@ export type BookingPageSettings = {
   version: string;
   lastError: string | null;
   lastErrorAt: string | null;
+  inviteSender: string | null;
 };
 
 export type BookingSetup = {
   connected: boolean;
   canWriteCalendar: boolean;
   meetingLink: string | null;
+  senders: InviteSenderOption[];
+  defaultSender: string | null;
 };
 
 export type BookingPageInput = {
@@ -68,6 +73,7 @@ export type BookingPageInput = {
   horizonDays?: unknown;
   weeklyHours?: unknown;
   videoUrl?: unknown;
+  inviteSender?: unknown;
 };
 
 export type PublicBookingPage = {
@@ -106,6 +112,7 @@ type PageRow = {
   version: string;
   last_error: string | null;
   last_error_at: Date | string | null;
+  invite_sender: string | null;
 };
 
 type PublicRow = {
@@ -160,13 +167,14 @@ function defaults(actor: UserActor): BookingPageSettings {
     version: "0",
     lastError: null,
     lastErrorAt: null,
+    inviteSender: null,
   };
 }
 
 const PAGE_COLUMNS = `slug, enabled, title, intro, duration_minutes, buffer_minutes, min_notice_minutes,
   horizon_days, weekly_hours, time_zone, background_video_url,
   avatar is not null as has_avatar, background_poster is not null as has_poster,
-  substr(md5(updated_at::text), 1, 12) as version, last_error, last_error_at`;
+  substr(md5(updated_at::text), 1, 12) as version, last_error, last_error_at, invite_sender`;
 
 function mapSettings(actor: UserActor, row: PageRow): BookingPageSettings {
   return {
@@ -188,6 +196,7 @@ function mapSettings(actor: UserActor, row: PageRow): BookingPageSettings {
     version: row.version,
     lastError: row.last_error,
     lastErrorAt: row.last_error_at ? new Date(row.last_error_at).toISOString() : null,
+    inviteSender: row.invite_sender,
   };
 }
 
@@ -201,9 +210,43 @@ export async function getBookingPage(actor: UserActor): Promise<BookingPageSetti
   });
 }
 
+export async function bookingDefaultSender(actor: UserActor) {
+  return withActor(actor, async (db) => {
+    const page = await db.query<{ workspace_id: string }>("select workspace_id from crm.booking_pages where user_id = $1", [actor.userId]);
+    const owner = { ...actor, workspaceId: page.rows[0]?.workspace_id ?? actor.workspaceId };
+    return defaultInviteAddress(db, owner, await readInviteSenders(db, owner), { mainFirst: true });
+  });
+}
+
 export async function getBookingSetup(actor: UserActor): Promise<BookingSetup> {
+  const [setup, defaultSender] = await Promise.all([getInviteSetup(actor), bookingDefaultSender(actor)]);
+  return {
+    connected: setup.connected,
+    canWriteCalendar: setup.canWriteCalendar,
+    meetingLink: setup.meetingLink,
+    senders: setup.senders,
+    defaultSender,
+  };
+}
+
+export async function bookingInviteSender(owner: UserActor) {
+  return withActor(owner, async (db) => {
+    const result = await db.query<{ invite_sender: string | null }>(
+      "select invite_sender from crm.booking_pages where user_id = $1",
+      [owner.userId],
+    );
+    return result.rows[0]?.invite_sender ?? null;
+  });
+}
+
+async function cleanInviteSender(actor: UserActor, value: unknown) {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value !== "string") throw invalid("Choose who invites come from.", "inviteSender");
+  const address = canonicalEmail(value);
   const setup = await getInviteSetup(actor);
-  return { connected: setup.connected, canWriteCalendar: setup.canWriteCalendar, meetingLink: setup.meetingLink };
+  const found = setup.senders.find((sender) => sender.address === address);
+  if (!found) throw invalid(`${value.trim().slice(0, 80)} can't send invites. Choose another address.`, "inviteSender");
+  return found.address === (await bookingDefaultSender(actor)) ? null : found.address;
 }
 
 function cleanText(value: unknown, max: number, field: string, label: string) {
@@ -272,6 +315,7 @@ function cleanBookingPage(input: BookingPageInput) {
 
 export async function saveBookingPage(actor: UserActor, input: BookingPageInput) {
   const page = cleanBookingPage(input);
+  const inviteSender = await cleanInviteSender(actor, input.inviteSender);
   if (page.enabled && !Object.values(page.weeklyHours).some((ranges) => ranges.length > 0)) {
     throw invalid("Turn on at least one day before you switch the page on.", "weeklyHours");
   }
@@ -280,8 +324,8 @@ export async function saveBookingPage(actor: UserActor, input: BookingPageInput)
       const result = await db.query<PageRow>(
         `insert into crm.booking_pages (
            workspace_id, user_id, slug, enabled, title, intro, duration_minutes, buffer_minutes,
-           min_notice_minutes, horizon_days, weekly_hours, background_video_url
-         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12)
+           min_notice_minutes, horizon_days, weekly_hours, background_video_url, invite_sender
+         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13)
          on conflict (user_id) do update set
            slug = excluded.slug,
            enabled = excluded.enabled,
@@ -292,7 +336,8 @@ export async function saveBookingPage(actor: UserActor, input: BookingPageInput)
            min_notice_minutes = excluded.min_notice_minutes,
            horizon_days = excluded.horizon_days,
            weekly_hours = excluded.weekly_hours,
-           background_video_url = excluded.background_video_url
+           background_video_url = excluded.background_video_url,
+           invite_sender = excluded.invite_sender
          returning ${PAGE_COLUMNS}`,
         [
           actor.workspaceId,
@@ -307,6 +352,7 @@ export async function saveBookingPage(actor: UserActor, input: BookingPageInput)
           page.horizonDays,
           JSON.stringify(page.weeklyHours),
           page.videoUrl,
+          inviteSender,
         ],
       );
       return mapSettings(actor, result.rows[0]);
