@@ -7,6 +7,7 @@ import {
   cancelCompanionJob,
   checkCompanionJob,
   companionBusy,
+  companionExpectingWork,
   companionWorking,
   enqueueCompanionJob,
   failCompanionJob,
@@ -247,6 +248,22 @@ describe("Orbit Agent turns", () => {
     const drafts = events.filter((event) => event.type === "draft").map((event) => (event as { text: string }).text);
     assert.deepEqual(drafts, ["Here is the start", "Here is the start of it"]);
     assert.ok(events.some((event) => event.type === "message" && event.message.content === "Here is the start of it."));
+  });
+
+  it("tells an idle Mac to check back later and keeps a busy one waiting", async () => {
+    const quiet = await createUser("agent-quiet@orbit.test", "Quiet Person");
+    const quietMac = (await pairMac(quiet, "Quiet Mac")).auth;
+    assert.equal(await companionExpectingWork(quietMac), false);
+    const started = Date.now();
+    assert.equal(await nextCompanionJob(quietMac, 0), null);
+    assert.ok(Date.now() - started < 1_500, "an idle check returns straight away");
+    const events: AssistantEvent[] = [];
+    const run = sendMessage(quiet, { message: "Hello", model: "claude/claude-haiku-5-5", reasoning: "low", webSearch: false }, (event) => events.push(event), {
+      deadline: deadline(),
+    });
+    await answer(quietMac, async () => ({ steps: [{ text: "Hi.", calls: [] }], results: {}, sources: [], model: null, usage: null }));
+    await run;
+    assert.equal(await companionExpectingWork(quietMac), true);
   });
 
   it("only gives a job to the Mac that claimed it", async () => {

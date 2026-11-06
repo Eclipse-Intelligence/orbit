@@ -184,6 +184,25 @@ export async function companionForJob(auth: AuthenticatedCompanion, jobId: strin
   return { ...auth, actor };
 }
 
+export const IDLE_RETRY_MS = 10_000;
+const BUSY_WINDOW = "3 minutes";
+
+export async function companionExpectingWork(auth: AuthenticatedCompanion) {
+  return withActor(auth.actor, async (db) => {
+    const result = await db.query<{ busy: boolean }>(
+      `select exists (
+         select 1 from crm.ai_companion_jobs
+         where user_id = $1 and greatest(created_at, coalesce(claimed_at, created_at), coalesce(finished_at, created_at)) > now() - interval '${BUSY_WINDOW}'
+       ) or exists (
+         select 1 from crm.assistant_messages
+         where user_id = $1 and role = 'user' and created_at > now() - interval '${BUSY_WINDOW}'
+       ) as busy`,
+      [auth.actor.userId],
+    );
+    return result.rows[0]?.busy ?? false;
+  });
+}
+
 export async function nextCompanionJob(auth: AuthenticatedCompanion, waitMs: number) {
   const until = Date.now() + waitMs;
   for (;;) {

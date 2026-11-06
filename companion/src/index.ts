@@ -8,7 +8,7 @@ import { installLaunchAgent, LOG_FILE, uninstallLaunchAgent } from "./launch";
 import type { CompanionJob } from "./protocol";
 import { cleanEnv, runTurn, type Sdk } from "./turn";
 
-const VERSION = "1.4.1";
+const VERSION = "1.5.0";
 const DRAFT_EVERY_MS = 500;
 const DEFAULT_URL = "https://orbit.geteclipse.co";
 const ACCOUNT_TIMEOUT_MS = 45_000;
@@ -167,9 +167,10 @@ async function serve(api: Api, cwd: string) {
   let backoff = 1_000;
   for (;;) {
     try {
-      const { job } = await api.next();
+      const { job, retryAfterMs } = await api.next();
       backoff = 1_000;
       if (job) await handle(api, job, cwd);
+      else if (retryAfterMs && retryAfterMs > 0) await new Promise((resolve) => setTimeout(resolve, Math.min(retryAfterMs, 60_000)));
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
         await clearConfig();

@@ -36,7 +36,7 @@ export function createApi(baseUrl: string, token: string | null, fetchImpl: type
   return {
     pair: (code: string, name: string) => call<PairResponse>("/api/companion/pair", { body: { code, name } }),
     me: () => call<Me>("/api/companion/me"),
-    next: () => call<{ job: CompanionJob | null }>("/api/companion/next", { timeoutMs: 70_000 }),
+    next: () => call<{ job: CompanionJob | null; retryAfterMs?: number }>("/api/companion/next?mode=short", { timeoutMs: 70_000 }),
     tool: (jobId: string, toolCall: CompanionCall) =>
       call<CompanionToolResult>(`/api/companion/jobs/${jobId}/tool`, { body: toolCall, timeoutMs: 130_000 }),
     complete: (jobId: string, result: CompanionResult) => call<{ ok: true }>(`/api/companion/jobs/${jobId}/complete`, { body: result }),
