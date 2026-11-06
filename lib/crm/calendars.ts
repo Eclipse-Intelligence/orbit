@@ -74,6 +74,7 @@ export type CalendarItem = {
   attendees: EventPerson[];
   granolaHref: string | null;
   createdByOrbit: boolean;
+  personal: boolean;
   canCancel: boolean;
   organisedByMe: boolean;
   myResponse: string | null;
@@ -233,6 +234,9 @@ type ItemRow = {
   account_id: string | null;
   created_by_orbit: boolean;
   response_status: string | null;
+  invite_identity_id: string | null;
+  invite_uid: string | null;
+  contact_ids: string[] | null;
 };
 
 function readResponse(value: unknown, email: string) {
@@ -258,6 +262,7 @@ export async function listCalendarItems(
       `select e.id, e.calendar_id, e.subject, e.starts_at, e.ends_at, e.is_all_day, e.show_as,
               e.location, e.web_link, e.online_meeting_url, e.organizer, e.attendees,
               e.connection_id, e.account_id, e.created_by_orbit, e.response_status, e.ical_uid,
+              e.invite_identity_id, e.invite_uid, e.contact_ids,
               g.id as granola_id, g.contact_id as granola_contact_id, g.company_id as granola_company_id
        from crm.calendar_events e
        join crm.calendars c on c.id = e.calendar_id and c.is_visible
@@ -322,8 +327,15 @@ export async function listCalendarItems(
       new Date(row.starts_at).getTime() > now &&
       readPerson(row.organizer) !== null &&
       !organised(row);
+    const personal = (row: ItemRow) =>
+      row.created_by_orbit &&
+      !row.invite_identity_id &&
+      !row.invite_uid &&
+      (row.contact_ids ?? []).length === 0 &&
+      !readPeople(row.attendees).some((person) => !own.has(person.email));
     const cancellable = (row: ItemRow) => {
       if (!canWrite(row) || new Date(row.starts_at).getTime() <= now) return false;
+      if (personal(row)) return true;
       const organizer = readPerson(row.organizer);
       if (!row.created_by_orbit && !(organizer && own.has(organizer.email))) return false;
       return readPeople(row.attendees).some((person) => !own.has(person.email));
@@ -363,6 +375,7 @@ export async function listCalendarItems(
         ),
         granolaHref,
         createdByOrbit: row.created_by_orbit,
+        personal: personal(row),
         canCancel: cancellable(row),
         organisedByMe: organised(row),
         myResponse: row.response_status,

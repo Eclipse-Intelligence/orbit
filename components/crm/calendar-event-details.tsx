@@ -178,7 +178,7 @@ function CancelMeeting({ item }: { item: CalendarItem }) {
     if (pending) return;
     setPending(true);
     setError(null);
-    const result = await cancelInviteAction(item.id, comment);
+    const result = await cancelInviteAction(item.id, item.personal ? "" : comment);
     setPending(false);
     if (result.error) {
       setError(result.error);
@@ -186,7 +186,7 @@ function CancelMeeting({ item }: { item: CalendarItem }) {
     }
     const message =
       result.warning ??
-      `Cancelled ${eventTitle(item)}. Your guests were told.`;
+      (item.personal ? `Deleted ${eventTitle(item)}.` : `Cancelled ${eventTitle(item)}. Your guests were told.`);
     setDone(message);
     notify(message);
     router.refresh();
@@ -206,26 +206,32 @@ function CancelMeeting({ item }: { item: CalendarItem }) {
         size="sm"
         className="text-danger self-start"
         data-shortcut="cancel-meeting"
-        title="Cancel meeting (Delete)"
+        title={item.personal ? "Delete event (Delete)" : "Cancel meeting (Delete)"}
         onClick={() => setConfirming(true)}
       >
-        Cancel meeting
+        {item.personal ? "Delete event" : "Cancel meeting"}
       </Button>
     );
   }
   return (
     <div className="border-line-strong flex basis-full flex-col gap-2 rounded-lg border p-3">
-      <p className="text-[14px] leading-5">Cancel this meeting for everyone?</p>
-      <label className="caption-style text-subtle" htmlFor={fieldId}>
-        Message to guests (optional)
-      </label>
-      <textarea
-        id={fieldId}
-        value={comment}
-        maxLength={INVITE_COMMENT_MAX}
-        onChange={(event) => setComment(event.target.value)}
-        className={cn(textareaClass, "min-h-16")}
-      />
+      <p className="text-[14px] leading-5">
+        {item.personal ? "Delete this event from your calendar?" : "Cancel this meeting for everyone?"}
+      </p>
+      {!item.personal && (
+        <>
+          <label className="caption-style text-subtle" htmlFor={fieldId}>
+            Message to guests (optional)
+          </label>
+          <textarea
+            id={fieldId}
+            value={comment}
+            maxLength={INVITE_COMMENT_MAX}
+            onChange={(event) => setComment(event.target.value)}
+            className={cn(textareaClass, "min-h-16")}
+          />
+        </>
+      )}
       {error && (
         <p role="alert" className="caption-style text-danger">
           {error}
@@ -240,7 +246,7 @@ function CancelMeeting({ item }: { item: CalendarItem }) {
           autoFocus
           onClick={cancel}
         >
-          {pending ? "Cancelling…" : "Cancel meeting"}
+          {pending ? (item.personal ? "Deleting…" : "Cancelling…") : item.personal ? "Delete event" : "Cancel meeting"}
         </Button>
         <Button
           variant="ghost"
@@ -248,7 +254,7 @@ function CancelMeeting({ item }: { item: CalendarItem }) {
           disabled={pending}
           onClick={() => setConfirming(false)}
         >
-          Keep meeting
+          {item.personal ? "Keep event" : "Keep meeting"}
         </Button>
       </div>
     </div>
@@ -273,7 +279,7 @@ function MoveMeeting({ item }: { item: CalendarItem }) {
     if (pending) return;
     setPending(true);
     setError(null);
-    const result = await moveInviteAction(item.id, { startLocal: `${date}T${time}`, message });
+    const result = await moveInviteAction(item.id, { startLocal: `${date}T${time}`, message: item.personal ? "" : message });
     setPending(false);
     if (result.gone && result.error) {
       notify(result.error);
@@ -281,11 +287,11 @@ function MoveMeeting({ item }: { item: CalendarItem }) {
       return;
     }
     if (result.error || !result.startsAt || !result.endsAt) {
-      setError(result.error ?? "Could not move this meeting.");
+      setError(result.error ?? (item.personal ? "Could not move this event." : "Could not move this meeting."));
       return;
     }
     const moved = whenLine({ ...item, startsAt: result.startsAt, endsAt: result.endsAt });
-    const note = result.warning ?? `Moved ${eventTitle(item)} to ${moved}. Your guests were told.`;
+    const note = result.warning ?? `Moved ${eventTitle(item)} to ${moved}.${item.personal ? "" : " Your guests were told."}`;
     setDone(note);
     setOpen(false);
     notify(note);
@@ -308,7 +314,7 @@ function MoveMeeting({ item }: { item: CalendarItem }) {
   }
   return (
     <div className="border-line-strong flex basis-full flex-col gap-3 rounded-lg border p-3">
-      <p className="text-[14px] leading-5">Move this meeting</p>
+      <p className="text-[14px] leading-5">{item.personal ? "Move this event" : "Move this meeting"}</p>
       <div className="grid grid-cols-[1fr_7em] gap-2">
         <Field label="Date" htmlFor={`${ids}-date`}>
           <DatePicker id={`${ids}-date`} value={date} onChange={setDate} />
@@ -329,16 +335,20 @@ function MoveMeeting({ item }: { item: CalendarItem }) {
         </Field>
       </div>
       <p className="caption-style text-subtle -mt-1">{zoneLabel()} time. Keeps the same length.</p>
-      <label className="caption-style text-subtle" htmlFor={`${ids}-message`}>
-        Message to guests (optional)
-      </label>
-      <textarea
-        id={`${ids}-message`}
-        value={message}
-        maxLength={INVITE_COMMENT_MAX}
-        onChange={(event) => setMessage(event.target.value)}
-        className={cn(textareaClass, "min-h-16")}
-      />
+      {!item.personal && (
+        <>
+          <label className="caption-style text-subtle" htmlFor={`${ids}-message`}>
+            Message to guests (optional)
+          </label>
+          <textarea
+            id={`${ids}-message`}
+            value={message}
+            maxLength={INVITE_COMMENT_MAX}
+            onChange={(event) => setMessage(event.target.value)}
+            className={cn(textareaClass, "min-h-16")}
+          />
+        </>
+      )}
       {error && (
         <p role="alert" className="caption-style text-danger">
           {error}
@@ -346,7 +356,7 @@ function MoveMeeting({ item }: { item: CalendarItem }) {
       )}
       <div className="flex flex-wrap items-center gap-2">
         <Button variant="secondary" size="sm" disabled={pending || !date || !time} onClick={move}>
-          {pending ? "Moving…" : "Move meeting"}
+          {pending ? "Moving…" : item.personal ? "Move event" : "Move meeting"}
         </Button>
         <Button variant="ghost" size="sm" disabled={pending} onClick={() => setOpen(false)}>
           Keep time

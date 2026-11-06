@@ -92,18 +92,21 @@ function SenderNotice({ sender }: { sender: SenderOption }) {
   );
 }
 
-function ConnectionNotice({ setup, sender }: { setup: InviteSetup; sender: SenderOption | null }) {
+function ConnectionNotice({ setup, sender, personal }: { setup: InviteSetup; sender: SenderOption | null; personal: boolean }) {
   if (sender && !sender.primary) return <SenderNotice sender={sender} />;
   if (setup.connected && setup.canWriteCalendar) return null;
+  const goal = personal ? "add events" : "send invites";
   return (
     <div role="alert" className="border-danger/40 flex flex-col items-start gap-1 rounded-lg border px-3 py-2.5">
       <Button variant="link" size="none" className="text-danger text-left whitespace-normal" href="/settings/integrations">
-        {setup.connected ? "Reconnect Microsoft to send invites" : "Connect Microsoft in Settings › Integrations to send invites"}
+        {setup.connected ? `Reconnect Microsoft to ${goal}` : `Connect Microsoft in Settings › Integrations to ${goal}`}
       </Button>
       <p className="caption-style text-subtle">
         {setup.connected
           ? "Orbit now needs permission to add events to your Outlook calendar."
-          : "Invites go out from your Outlook calendar."}
+          : personal
+            ? "Events go into your Outlook calendar."
+            : "Invites go out from your Outlook calendar."}
       </p>
     </div>
   );
@@ -136,17 +139,23 @@ function InviteForm({
   const [results, setResults] = useState<{ query: string; contacts: Contact[]; failed?: boolean } | null>(null);
   const [active, setActive] = useState(0);
   const [notes, setNotes] = useState(prefill.notes ?? "");
-  const [includeLink, setIncludeLink] = useState(Boolean(setup.meetingLink));
+  const [linkChoice, setLinkChoice] = useState<boolean | null>(null);
   const [errors, setErrors] = useState<Errors>({});
   const [pending, setPending] = useState(false);
   const [transactionId, setTransactionId] = useState(() => crypto.randomUUID());
   const [from, setFrom] = useState(() => setup.defaultFrom ?? setup.senders[0]?.address ?? "");
-  const sender = setup.senders.find((item) => item.address === from) ?? null;
+  const calendars = setup.calendars;
+  const [calendarFrom, setCalendarFrom] = useState(() => setup.defaultCalendar ?? calendars[0]?.address ?? "");
+  const personal = guests.length === 0;
+  const options = personal ? calendars : setup.senders;
+  const chosen = personal ? calendarFrom : from;
+  const sender = options.find((item) => item.address === chosen) ?? null;
+  const includeLink = Boolean(setup.meetingLink) && (linkChoice ?? !personal);
   const trimmed = query.trim();
   const firstContact = guests.find((guest) => guest.contactId);
   const title = titleDraft ?? inviteTitle(firstContact?.name ?? null, setup.workspaceName ?? "");
   const own = new Set(setup.ownEmails);
-  const blocked = sender ? Boolean(sender.problem) : !setup.connected || !setup.canWriteCalendar;
+  const blocked = sender ? Boolean(sender.problem) : personal || !setup.connected || !setup.canWriteCalendar;
   const field = (name: string) => `${ids}-${name}`;
 
   useEffect(() => {
@@ -270,9 +279,7 @@ function InviteForm({
     const start = parseDateTime(`${date}T${time}`);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !start) next.startLocal = "Pick a date and start time.";
     else if (start.getTime() <= Date.now()) next.startLocal = "Pick a start time in the future.";
-    if (guests.length === 0) {
-      next.attendees = trimmed ? "Press Enter to add this guest first." : "Add at least one guest.";
-    }
+    if (guests.length === 0 && trimmed) next.attendees = "Press Enter to add this guest first.";
     setErrors(next);
     return Object.keys(next).length === 0;
   }
@@ -287,20 +294,20 @@ function InviteForm({
       durationMinutes: Number(duration),
       attendees: guests.map((guest) => ({ email: guest.email, name: guest.name })),
       notes,
-      includeMeetingLink: Boolean(setup.meetingLink) && includeLink,
+      includeMeetingLink: includeLink,
       contactIds: guests.map((guest) => guest.contactId).filter((id): id is string => Boolean(id)),
       transactionId,
       from: sender?.address,
     });
     setPending(false);
     if (result.error) {
-      const shown = result.field === "from" ? setup.senders.length > 1 : Boolean(result.field && FIELD_ERRORS.has(result.field));
+      const shown = result.field === "from" ? options.length > 1 : Boolean(result.field && FIELD_ERRORS.has(result.field));
       const key = (shown && result.field ? result.field : "form") as ErrorKey;
       setErrors({ [key]: result.error });
       return;
     }
     setTransactionId(crypto.randomUUID());
-    const message = sentMessage(result.guests ?? guests);
+    const message = personal ? `Added ${title.trim()} to your calendar` : sentMessage(result.guests ?? guests);
     onSent(result.warning ? `${message}. ${result.warning}` : `${message}.`);
     router.refresh();
     onClose();
@@ -311,29 +318,32 @@ function InviteForm({
   return (
     <form noValidate onSubmit={submit}>
       <DialogHeader>
-        <DialogTitle>New meeting</DialogTitle>
+        <DialogTitle>New event</DialogTitle>
         <DialogDescription>
-          {sender?.kind === "smtp"
-            ? `Orbit emails the invite from ${sender.address} and holds the time in your calendar.`
-            : `Outlook sends the invite from ${sender?.address ?? "your connected mailbox"} and adds it to your calendar.`}
+          {personal
+            ? `Adds it to ${sender ? `the ${sender.address} calendar` : "your calendar"}. Nobody is invited.`
+            : sender?.kind === "smtp"
+              ? `Orbit emails the invite from ${sender.address} and holds the time in your calendar.`
+              : `Outlook sends the invite from ${sender?.address ?? "your connected mailbox"} and adds it to your calendar.`}
         </DialogDescription>
       </DialogHeader>
       <div className="flex flex-col gap-4 px-6 py-5">
-        <ConnectionNotice setup={setup} sender={sender} />
-        {setup.senders.length > 1 && (
-          <Field label="From" htmlFor={field("from")} error={errors.from}>
+        <ConnectionNotice setup={setup} sender={sender} personal={personal} />
+        {options.length > 1 && (
+          <Field label={personal ? "Calendar" : "From"} htmlFor={field("from")} error={errors.from}>
             <NativeSelect
               id={field("from")}
-              value={from}
+              value={chosen}
               aria-invalid={errors.from ? true : undefined}
               aria-describedby={errors.from ? `${field("from")}-error` : undefined}
               onChange={(event) => {
-                setFrom(event.target.value);
+                if (personal) setCalendarFrom(event.target.value);
+                else setFrom(event.target.value);
                 setError("from", undefined);
                 setError("form", undefined);
               }}
             >
-              {setup.senders.map((option) => (
+              {options.map((option) => (
                 <option key={option.address} value={option.address}>
                   {option.address}
                 </option>
@@ -347,7 +357,7 @@ function InviteForm({
             value={title}
             maxLength={INVITE_TITLE_MAX}
             autoComplete="off"
-            placeholder="What's the meeting about?"
+            placeholder={personal ? "What's it for?" : "What's the meeting about?"}
             aria-invalid={errors.title ? true : undefined}
             onChange={(event) => {
               setTitleDraft(event.target.value);
@@ -413,9 +423,8 @@ function InviteForm({
         <Field
           label="Guests"
           htmlFor={field("guests")}
-          required
           error={errors.attendees}
-          hint="Search your contacts, or type any email address and press Enter."
+          hint="Optional. Search your contacts, or type any email address and press Enter."
         >
           <div className="relative">
             <div
@@ -521,7 +530,7 @@ function InviteForm({
             id={field("notes")}
             value={notes}
             maxLength={INVITE_NOTES_MAX}
-            placeholder="Agenda or anything guests should know"
+            placeholder={personal ? "Anything to remember" : "Agenda or anything guests should know"}
             onChange={(event) => setNotes(event.target.value)}
             className={cn(textareaClass, "min-h-24")}
           />
@@ -530,10 +539,10 @@ function InviteForm({
           <Checkbox
             id={field("link")}
             className="mt-0.5"
-            checked={Boolean(setup.meetingLink) && includeLink}
+            checked={includeLink}
             disabled={!setup.meetingLink}
             aria-describedby={field("link-detail")}
-            onCheckedChange={(next) => setIncludeLink(next === true)}
+            onCheckedChange={(next) => setLinkChoice(next === true)}
           />
           <div className="flex min-w-0 flex-col gap-0.5">
             <label
@@ -574,7 +583,7 @@ function InviteForm({
           Cancel
         </Button>
         <Button variant="primary" size="sm" type="submit" disabled={pending || blocked}>
-          {pending ? "Sending…" : "Send invites"}
+          {pending ? (personal ? "Adding…" : "Sending…") : personal ? "Add to calendar" : "Send invite"}
         </Button>
       </DialogFooter>
     </form>
