@@ -202,10 +202,25 @@ describe("prepared replies and automatic reminders", () => {
 
   it("finds figures written as digits by the sender and spelled out in the reply", () => {
     const james = "1. Time: 15-20 hrs per week\n2. Demo (for the first 2-4 prospects)\n3. Pipeline (10-20 deals)";
-    assert.deepEqual(spelledFigures("Fifteen to twenty hours a week, and a demo for two to four prospects.", james), ["Fifteen", "twenty", "two", "four"]);
-    assert.deepEqual(spelledFigures("Thanks for the three questions. 15-20 hrs is fine, one more thing to cover.", james), []);
-    assert.deepEqual(spelledFigures("Twenty-five deals and twenty five more.", "Aiming for 25 deals"), ["Twenty-five", "twenty five"]);
+    assert.deepEqual(spelledFigures("Fifteen to twenty hours a week, and a demo for two to four prospects.", james), ["Fifteen to twenty", "two to four"]);
+    assert.deepEqual(spelledFigures("Thanks for the three questions. 15-20 hrs is fine, one more thing, and the two of us can meet in two weeks.", james), []);
+    assert.deepEqual(spelledFigures("Twenty-five deals, four hours, one hour and seventeen days.", "Aiming for 25 deals, 4hrs a week, 1 hr calls, 17 days"), [
+      "Twenty-five deals",
+      "four hours",
+      "one hour",
+      "seventeen days",
+    ]);
     assert.deepEqual(spelledFigures("Fifteen hours", "No figures here"), []);
+  });
+
+  it("ignores times, dates, years, ordinals, money, percentages and list markers", () => {
+    const reply = "Two works, on the second, from one to two, the two of us, fourteen minutes, four thousand pounds, five pounds, twenty per cent, three items.";
+    assert.deepEqual(spelledFigures(reply, "Free 1-2pm or 2-4 pm on the 2nd"), []);
+    assert.deepEqual(spelledFigures(reply, "Or 14:02 on 2026-03-02, or 3/4, or 14.30"), []);
+    assert.deepEqual(spelledFigures(reply, "Budget £4k, or 5 pounds, $20, up 20% or 20 per cent"), []);
+    assert.deepEqual(spelledFigures(reply, "In 2026 and 2027, 2010-2020"), []);
+    assert.deepEqual(spelledFigures(reply, "1. One\n2. Two\n3) Three"), []);
+    assert.deepEqual(spelledFigures("The two of us can meet in two weeks.", "The 2-4 prospects and 2 deals"), []);
   });
 
   it("mirrors the sender, uses learned writing notes for this workspace and redrafts spelled out figures", async () => {
@@ -225,6 +240,8 @@ describe("prepared replies and automatic reminders", () => {
     await note(owner.workspaceId, "writing", "Mark's LinkedIn posts open with a question", false);
     await note(elsewhere.id, "writing", "Mark signs Ridgeon emails with his full name", false);
     await note(elsewhere.id, "instruction", "Mark never uses exclamation marks in emails", true);
+    await note(owner.workspaceId, "note", "Mark signs off emails with just his first name", false);
+    await note(owner.workspaceId, "note", "Mark is in Lisbon in March", false);
     await createContact(owner, { firstName: "James", lastName: "Hart", email: "james@hart.test" });
     await syncMail(owner, {
       budgetMs: 30_000,
@@ -250,30 +267,61 @@ describe("prepared replies and automatic reminders", () => {
     assert.equal(report.prepared, 1);
     assert.equal(prompts.length, 2);
     const [system, user] = [prompts[0].system, prompts[0].user];
-    assert.match(system, /Mirror the sender of the latest email: their register and formality, their length or shorter, and their own terms and abbreviations\./);
+    assert.match(system, /Be brief: the sender's length or shorter, in Mark's voice from the examples/);
+    assert.match(system, /Mirror the sender of the latest email: the same register and formality, and the same terms and abbreviations\./);
     assert.match(system, /in digits \(15-20 stays 15-20, hrs stays hrs\), and never spell numbers out as words/);
     assert.match(system, /Don't restate their points back to them\./);
-    assert.match(system, /Be brief\. When they propose to talk or meet, thank them for what they sent, say Mark will go through it, leave the detail for the conversation/);
+    assert.match(system, /When they propose to talk or meet and no time is fixed yet, thank them for anything they sent \(a plan, answers or a document\), say Mark will go through it, leave the detail for the conversation/);
+    assert.match(system, /When a time is already fixed, confirm it and don't offer times\./);
     assert.match(system, /Only answer each point in writing when they ask for written answers before meeting\./);
     assert.match(system, /Avoid \[square brackets\]\. Use one only when the reply can't be sent without a fact Mark must supply, and never more than two\./);
     assert.match(user, /What Orbit has learned about how Mark writes email/);
     assert.match(user, /- Mark's real replies are shorter than the drafts he is offered/);
     assert.match(user, /- Mark replaces bracketed reply options with his own answer/);
     assert.match(user, /- Mark never uses exclamation marks in emails/);
+    assert.match(user, /- Mark signs off emails with just his first name/);
+    assert.doesNotMatch(user, /Lisbon/);
     assert.doesNotMatch(user, /signs Ridgeon emails/);
     assert.doesNotMatch(user, /board reviews/);
     assert.doesNotMatch(user, /LinkedIn posts/);
-    assert.match(prompts[1].system, /An earlier draft wrote "Fifteen", "twenty" in words\. Write those figures in digits, exactly as the sender did\./);
+    assert.match(prompts[1].system, /An earlier draft wrote "Fifteen to twenty" in words\. Write those figures in digits, exactly as the sender did\./);
     const thread = (await listThreads(owner, { view: { role: "inbox" } })).threads.find((item) => item.subject === "Commercial plan")!;
     assert.match((await getThread(owner, thread.key)).prepared?.body ?? "", /15-20 hrs works/);
 
     const proposal = (await listThreads(owner, { view: { role: "sent" } })).threads.find((item) => item.subject === "Proposal")!;
     const nudge = model([{ body: "Hi Priya, any thoughts on Friday? Mark" }]);
     await prepareNudge(owner, proposal.sourceId, proposal.key.slice(proposal.sourceId.length + 1), { fetchImpl: nudge.fetchImpl });
-    assert.match(nudge.prompts[0].system, /Mirror the other person in the conversation/);
+    assert.match(nudge.prompts[0].system, /Mirror Mark's own earlier email in this conversation/);
     assert.match(nudge.prompts[0].system, /Never use \[square brackets\]\./);
     assert.match(nudge.prompts[0].user, /- Mark's real replies are shorter than the drafts he is offered/);
     assert.doesNotMatch(nudge.prompts[0].user, /signs Ridgeon emails/);
+  });
+
+  it("keeps the first draft when the redraft fails or changes its decision", async () => {
+    const from = { emailAddress: { name: "James Hart", address: "james@hart.test" } };
+    const content = (text: string) => ({ contentType: "text", content: text });
+    const first = (body: string) => ({ model: "test-model", choices: [{ message: { content: JSON.stringify({ needsReply: true, meeting: false, body }) }, finish_reason: "stop" }] });
+
+    await syncMail(owner, { budgetMs: 30_000, fetchImpl: mailbox({ inbox: [message("m-james-hours", { conversationId: "conv-hours", subject: "Hours", from, body: content("Could you give it 4 hrs a week?") })], sent: [] }) });
+    let calls = 0;
+    const failing: typeof fetch = async () => {
+      calls += 1;
+      return calls === 1 ? Response.json(first("Hi James,\n\nFour hours a week is fine.\n\nMark")) : Response.json({ error: { message: "Bad request" } }, { status: 400 });
+    };
+    assert.equal((await prepareMail(owner, { deadline: soon(), fetchImpl: failing })).prepared, 1);
+    assert.equal(calls, 2);
+    const hours = (await listThreads(owner, { view: { role: "inbox" } })).threads.find((item) => item.subject === "Hours")!;
+    assert.equal((await getThread(owner, hours.key)).prepared?.body, "Hi James,\n\nFour hours a week is fine.\n\nMark");
+
+    await syncMail(owner, { budgetMs: 30_000, fetchImpl: mailbox({ inbox: [message("m-james-seats", { conversationId: "conv-seats", subject: "Seats", from, body: content("We need 3 seats for the launch.") })], sent: [] }) });
+    const { fetchImpl, prompts } = model([
+      { needsReply: true, meeting: false, body: "Hi James,\n\nThree seats are yours.\n\nMark" },
+      { needsReply: false, meeting: false, body: null },
+    ]);
+    assert.equal((await prepareMail(owner, { deadline: soon(), fetchImpl })).prepared, 1);
+    assert.equal(prompts.length, 2);
+    const seats = (await listThreads(owner, { view: { role: "inbox" } })).threads.find((item) => item.subject === "Seats")!;
+    assert.equal((await getThread(owner, seats.key)).prepared?.body, "Hi James,\n\nThree seats are yours.\n\nMark");
   });
 
   it("does nothing when switched off", async () => {

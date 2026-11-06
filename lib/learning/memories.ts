@@ -209,13 +209,13 @@ export async function listMemories(
 
 const WRITING_NOTE_LIMIT = 20;
 const EMAIL_WORDS = String.raw`\m(e-?mails?|mail|inbox|repl(y|ies|ied|ying)|drafts?|sign-?offs?|greetings?|subject lines?|follow-?ups?|nudges?)\M`;
-const OTHER_CHANNELS = String.raw`\m(linkedin|posts?|articles?|blogs?|tweets?|threads|docs?|slides?|decks?)\M`;
+const OTHER_CHANNELS = String.raw`\m(linkedin|posts?|articles?|blogs?|tweets?|slides?|decks?)\M`;
 
 export async function emailWritingNotes(db: Db, actor: UserActor) {
   const result = await db.query<{ title: string; body: string }>(
     `select title, body from crm.memories
      where archived_at is null and scope = 'personal' and user_id = $2 and ${visibleMemorySql("$1", "$2")}
-       and kind in ('writing', 'preference', 'correction', 'instruction')
+       and kind in ('writing', 'preference', 'correction', 'instruction', 'note')
        and ((title || ' ' || body) ~* $3 or kind = 'writing' and not (title || ' ' || body) ~* $4)
      order by pinned desc, updated_at desc
      limit $5`,
