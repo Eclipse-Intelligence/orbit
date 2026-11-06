@@ -731,7 +731,7 @@ export default function StepConfig({
           ) : (
             field("guidance", "How to choose (optional)", {
               rows: 3,
-              placeholder: "Agency Pilot for new clients. Pro when they want ongoing monitoring.",
+              placeholder: "Starter for new clients. Ongoing support when they want more.",
               hint: `It picks from your ${priced.length} product${priced.length === 1 ? "" : "s"} with ${currency === "USD" ? "dollar" : "pound"} prices, reading the call summary and transcript, and says why.`,
             })
           )}

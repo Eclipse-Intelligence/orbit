@@ -28,7 +28,7 @@ import { reloadIfStaleDeploy } from "@/lib/stale-deploy";
 import { cn } from "@/lib/utils";
 
 const SAMPLE_ITEMS: Item[] = [
-  { productId: null, name: "Agency Pilot", description: "Three months of work, with weekly reporting.", billing: "one_off", unitPrice: 2500, quantity: 1 },
+  { productId: null, name: "Starter package", description: "Three months of work, with weekly reporting.", billing: "one_off", unitPrice: 2500, quantity: 1 },
   { productId: null, name: "Pro", description: "Ongoing monitoring.", billing: "monthly", unitPrice: 900, quantity: 1 },
 ];
 

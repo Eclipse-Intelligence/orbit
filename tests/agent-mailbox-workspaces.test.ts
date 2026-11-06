@@ -205,8 +205,11 @@ describe("agent mailboxes in several workspaces", () => {
       assert.equal(row.status, "working");
       const conversation = await admin.query<{ workspace_id: string }>("select workspace_id from crm.assistant_conversations where id = $1", [row.conversation_id]);
       assert.equal(conversation.rows[0].workspace_id, workspace.workspaceId);
-      const job = await admin.query<{ workspace_id: string }>("select workspace_id from crm.ai_companion_jobs where agent_mail_id = $1", [row.id]);
+      const job = await admin.query<{ workspace_id: string; request: unknown }>("select workspace_id, request from crm.ai_companion_jobs where agent_mail_id = $1", [row.id]);
       assert.equal(job.rows[0].workspace_id, workspace.workspaceId);
+      const prompt = JSON.stringify(job.rows[0].request);
+      assert.doesNotMatch(prompt, /# Workspaces/);
+      if (workspace === ridgeon) assert.doesNotMatch(prompt, /# Eclipse\\n/);
     }
 
     for (let round = 0; round < 2; round += 1) {
@@ -221,6 +224,8 @@ describe("agent mailboxes in several workspaces", () => {
     assert.equal(fake.repliesFrom(ECLIPSE_BOX).filter((request) => request.url.includes(toEclipse.message_id)).length, 1);
     assert.equal(fake.repliesFrom(RIDGEON_BOX).filter((request) => request.url.includes(toRidgeon.message_id)).length, 1);
     assert.deepEqual(fake.repliesFrom(RIDGEON_BOX)[0].body?.to, [MARK_RIDGEON]);
+    const opened = String((fake.repliesFrom(RIDGEON_BOX)[0].body as { text?: string } | undefined)?.text ?? "");
+    assert.match(opened, new RegExp(`Open in Orbit: https?://[^/\\s]+/open\\?workspace=${ridgeon.workspaceId}&to=%2F%3Fchat%3D[0-9a-f-]{36}`));
   });
 
   it("polls every mailbox, so a busy one never starves the other", async () => {

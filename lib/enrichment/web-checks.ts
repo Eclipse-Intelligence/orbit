@@ -35,12 +35,17 @@ export const DEFAULT_SIGNALS: Omit<WebCheck, "id">[] = [
     kind: "signal",
     label: "New leader",
     noteKind: "hire",
-    question: "Has the company announced a new CEO, managing director, or head of marketing, growth or content in the last 30 days?",
+    question: "Has the company announced a new CEO, managing director or other senior leader in the last 30 days?",
   },
   { kind: "signal", label: "Acquired or merged", noteKind: "signal", question: "Has the company been acquired, merged with another business, or announced a sale in the last 30 days?" },
   { kind: "signal", label: "Layoffs", noteKind: "signal", question: "Has the company announced layoffs, redundancies or office closures in the last 30 days?" },
-  { kind: "signal", label: "Launch", noteKind: "launch", question: "Has the company launched a new product, service, brand or website in the last 30 days?" },
-  { kind: "signal", label: "Hiring in marketing", noteKind: "hire", question: "Is the company currently advertising jobs in marketing, content or SEO?" },
+  {
+    kind: "signal",
+    label: "Launch or expansion",
+    noteKind: "launch",
+    question: "Has the company launched a new product or service, or expanded into a new market or location, in the last 30 days?",
+  },
+  { kind: "signal", label: "Hiring", noteKind: "hire", question: "Is the company hiring more than usual, for example several open roles or a stated plan to grow the team?" },
 ];
 
 const SIZE_OPTIONS: Record<string, { value: string; description: string }> = {

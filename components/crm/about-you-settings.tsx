@@ -18,15 +18,23 @@ function same(left: PersonalContextInput, right: PersonalContextInput) {
   return (Object.keys(left) as Key[]).every((key) => left[key].trim() === right[key].trim());
 }
 
-export default function AboutYouSettings({ initial }: { initial: PersonalContextInput }) {
+type WorkspaceAbout = { name: string; about: string; jobTitle: string };
+
+type ScopedKey = "workspaceAbout" | "workspaceJobTitle";
+
+export default function AboutYouSettings({ initial, workspace = null }: { initial: PersonalContextInput; workspace?: WorkspaceAbout | null }) {
   const router = useRouter();
   const [saved, setSaved] = useState(initial);
   const [values, setValues] = useState(initial);
-  const [errors, setErrors] = useState<Partial<Record<Key, string>>>({});
+  const startScoped = { about: workspace?.about ?? "", jobTitle: workspace?.jobTitle ?? "" };
+  const [savedScoped, setSavedScoped] = useState(startScoped);
+  const [scoped, setScoped] = useState(startScoped);
+  const [errors, setErrors] = useState<Partial<Record<Key | ScopedKey, string>>>({});
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [pending, setPending] = useState<"save" | "draft" | null>(null);
-  const dirty = !same(values, saved);
+  const scopedDirty = Boolean(workspace) && (scoped.about.trim() !== savedScoped.about.trim() || scoped.jobTitle.trim() !== savedScoped.jobTitle.trim());
+  const dirty = !same(values, saved) || scopedDirty;
 
   function update(key: Key, value: string) {
     setValues((current) => ({ ...current, [key]: value }));
@@ -35,8 +43,15 @@ export default function AboutYouSettings({ initial }: { initial: PersonalContext
     setStatus(null);
   }
 
+  function updateScoped(key: "about" | "jobTitle", value: string) {
+    setScoped((current) => ({ ...current, [key]: value }));
+    setErrors((current) => ({ ...current, [key === "about" ? "workspaceAbout" : "workspaceJobTitle"]: undefined }));
+    setError(null);
+    setStatus(null);
+  }
+
   function fail(message: string, field?: string) {
-    if (field && field in values) setErrors({ [field]: message });
+    if (field && (field in values || field === "workspaceAbout" || field === "workspaceJobTitle")) setErrors({ [field]: message });
     else setError(message);
   }
 
@@ -45,7 +60,7 @@ export default function AboutYouSettings({ initial }: { initial: PersonalContext
     setPending("save");
     setError(null);
     setStatus(null);
-    const result = await saveAboutYouAction(values);
+    const result = await saveAboutYouAction(workspace ? { ...values, workspaceAbout: scoped.about, workspaceJobTitle: scoped.jobTitle } : values);
     setPending(null);
     if (result.error || !result.saved) {
       fail(result.error ?? "Could not save About you.", result.field);
@@ -61,6 +76,9 @@ export default function AboutYouSettings({ initial }: { initial: PersonalContext
     };
     setSaved(next);
     setValues(next);
+    const nextScoped = { about: result.saved.workspaceAbout, jobTitle: result.saved.workspaceJobTitle };
+    setSavedScoped(nextScoped);
+    setScoped(nextScoped);
     setStatus("Saved. The assistant uses this from your next message.");
     router.refresh();
   }
@@ -146,7 +164,7 @@ export default function AboutYouSettings({ initial }: { initial: PersonalContext
             autoComplete="organization-title"
             maxLength={PERSONAL_LIMITS.jobTitle}
             value={values.jobTitle}
-            placeholder="Founder and CEO, Eclipse"
+            placeholder="Founder and CEO, Acme"
             aria-invalid={errors.jobTitle ? true : undefined}
             aria-describedby={errors.jobTitle ? "about-role-error" : "about-role-hint"}
             onChange={(event) => update("jobTitle", event.target.value)}
@@ -203,6 +221,43 @@ export default function AboutYouSettings({ initial }: { initial: PersonalContext
             className={AREA}
           />
         </Field>
+        {workspace && (
+          <div className="border-border flex flex-col gap-4 border-t pt-4">
+            <div className="flex flex-col gap-1">
+              <h3>About you in {workspace.name}</h3>
+              <p className="caption-style text-subtle">Used instead of your role and About you when Orbit writes for {workspace.name}. Leave empty to use the ones above.</p>
+            </div>
+            <Field label={`Your role in ${workspace.name}`} htmlFor="about-workspace-role" error={errors.workspaceJobTitle}>
+              <Input
+                id="about-workspace-role"
+                autoComplete="off"
+                maxLength={PERSONAL_LIMITS.jobTitle}
+                value={scoped.jobTitle}
+                placeholder={values.jobTitle || "Founder and CEO, Acme"}
+                aria-invalid={errors.workspaceJobTitle ? true : undefined}
+                aria-describedby={errors.workspaceJobTitle ? "about-workspace-role-error" : undefined}
+                onChange={(event) => updateScoped("jobTitle", event.target.value)}
+              />
+            </Field>
+            <Field
+              label={`About you in ${workspace.name}`}
+              htmlFor="about-workspace-about"
+              error={errors.workspaceAbout}
+              hint={`${scoped.about.length}/${PERSONAL_LIMITS.about}`}
+            >
+              <textarea
+                id="about-workspace-about"
+                rows={4}
+                maxLength={PERSONAL_LIMITS.about}
+                value={scoped.about}
+                aria-invalid={errors.workspaceAbout ? true : undefined}
+                aria-describedby={errors.workspaceAbout ? "about-workspace-about-error" : "about-workspace-about-hint"}
+                onChange={(event) => updateScoped("about", event.target.value)}
+                className={AREA}
+              />
+            </Field>
+          </div>
+        )}
         {error && (
           <p role="alert" className="caption-style text-danger">
             {error}
@@ -213,7 +268,15 @@ export default function AboutYouSettings({ initial }: { initial: PersonalContext
             {pending === "save" ? "Saving…" : "Save About you"}
           </Button>
           {dirty && !busy && (
-            <Button variant="ghost" size="sm" type="button" onClick={() => setValues(saved)}>
+            <Button
+              variant="ghost"
+              size="sm"
+              type="button"
+              onClick={() => {
+                setValues(saved);
+                setScoped(savedScoped);
+              }}
+            >
               Undo changes
             </Button>
           )}

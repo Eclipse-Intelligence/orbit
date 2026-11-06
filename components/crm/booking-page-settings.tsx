@@ -252,10 +252,14 @@ export default function BookingPageSettings({
   page,
   setup,
   origin,
+  workspaceName,
+  copies = [],
 }: {
   page: Settings;
   setup: BookingSetup;
   origin: string;
+  workspaceName?: string;
+  copies?: { workspaceName: string; page: Settings }[];
 }) {
   const router = useRouter();
   const [saved, setSaved] = useState(page);
@@ -331,6 +335,13 @@ export default function BookingPageSettings({
       return next;
     });
     setMessage(null);
+  }
+
+  function copyFrom(other: { workspaceName: string; page: Settings }) {
+    const copied = draftFrom(other.page);
+    setDraft({ ...copied, slug: draft.slug === other.page.slug ? `${other.page.slug}-2` : draft.slug, enabled: false, inviteSender: "", videoUrl: "" });
+    setErrors({});
+    setMessage(`Copied from ${other.workspaceName}, without the background video and photos. Check the link and intro, then save.`);
   }
 
   function setDay(day: Weekday, ranges: WeeklyHours[Weekday]) {
@@ -445,6 +456,16 @@ export default function BookingPageSettings({
 
   return (
     <form className="flex flex-col gap-6" noValidate onSubmit={save}>
+      {!page.exists && copies.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="caption-style text-subtle">No booking page{workspaceName ? ` in ${workspaceName}` : ""} yet.</p>
+          {copies.map((copy) => (
+            <Button key={copy.page.slug} variant="secondary" size="sm" type="button" onClick={() => copyFrom(copy)}>
+              Copy from {copy.workspaceName}
+            </Button>
+          ))}
+        </div>
+      )}
       {(warnings.length > 0 || page.lastError) && (
         <div className="flex flex-col gap-2">
           {page.lastError && (

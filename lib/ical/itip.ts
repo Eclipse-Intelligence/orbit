@@ -98,7 +98,7 @@ export function buildItip(event: ItipEvent) {
   const text = description(event);
   const lines = [
     "BEGIN:VCALENDAR",
-    "PRODID:-//Eclipse//Orbit//EN",
+    "PRODID:-//Orbit//Orbit//EN",
     "VERSION:2.0",
     "CALSCALE:GREGORIAN",
     `METHOD:${event.method}`,

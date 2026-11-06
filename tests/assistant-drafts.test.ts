@@ -96,8 +96,8 @@ describe("assistant drafts", () => {
     assert.deepEqual(sent.to, ["andrew@pulse.test"]);
     assert.match(sent.href, /^\/mail\?thread=/);
     assert.ok(calls.some((call) => call.method === "POST" && call.url.endsWith("/send")));
-    const listed = (await runTool(owner, "list_email_senders", {})) as { senders: { email: string; primary: boolean }[] };
-    assert.deepEqual(listed.senders, [{ email: "mark@eclipse.test", primary: true }]);
+    const listed = (await runTool(owner, "list_email_senders", {})) as { senders: { email: string; primary: boolean; default: boolean }[] };
+    assert.deepEqual(listed.senders, [{ email: "mark@eclipse.test", primary: true, default: true }]);
   });
 
   it("offers Confirm and send on a draft, which sends it instead of saving it", async () => {

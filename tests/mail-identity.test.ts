@@ -3,7 +3,7 @@ import { after, before, describe, it } from "node:test";
 import { saveMailbox } from "@/lib/crm/inbox";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
-import { composeAccounts, readDraftInput, sendMailDraft } from "@/lib/mail/compose";
+import { composeAccounts, plannedSender, readDraftInput, sendForAgent, sendMailDraft } from "@/lib/mail/compose";
 import { listIdentities, rewriteMime, saveIdentity, type SentSaver, type SmtpSender } from "@/lib/mail/identities";
 import { syncMail } from "@/lib/mail/sync";
 import { listThreads } from "@/lib/mail/threads";
@@ -155,5 +155,17 @@ describe("sending from another address", () => {
       /mark@ridgeon.test couldn't send: Connection refused/,
     );
     assert.equal((await listIdentities(owner))[0].lastError, "Connection refused");
+  });
+
+  it("replies for the assistant from the address the email came to", async () => {
+    assert.equal(await plannedSender(owner, { replyTo: messageId }), "mark@ridgeon.test");
+    const smtpCalls: Parameters<SmtpSender>[1][] = [];
+    await sendForAgent(
+      owner,
+      { replyTo: messageId, to: [], body: "Thanks, that works." },
+      { origin: null, fetchImpl: outlook().fetchImpl, smtp: async (_identity, message) => void smtpCalls.push(message), saveSent: async () => undefined },
+    );
+    assert.equal(smtpCalls.length, 1);
+    assert.equal(smtpCalls[0].from, "mark@ridgeon.test");
   });
 });

@@ -55,7 +55,7 @@ async function searchProbe(model: string) {
       tools: [PROBE_TOOL],
       messages: [
         { role: "system", content: "Search the web to answer. Reply in one sentence." },
-        { role: "user", content: "What does the company at geteclipse.co do? Search the web." },
+        { role: "user", content: "What does the organisation at example.com do? Search the web." },
       ],
     });
     return { model, searched: result.sources.length > 0, sources: result.sources.slice(0, 3), reply: result.content.slice(0, 240), ms: Date.now() - started };

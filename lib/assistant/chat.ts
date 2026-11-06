@@ -628,7 +628,7 @@ export async function isBriefConversation(actor: UserActor, conversationId: stri
   });
 }
 
-async function promptFor(actor: UserActor, conversation: ConversationRow) {
+async function promptFor(actor: UserActor, conversation: ConversationRow, options: { headless?: boolean } = {}) {
   const [links, about, colleagues, brief, briefChat, focus, brand, workspaces] = await Promise.all([
     userLinks(actor).catch(() => null),
     getPersonalContext(actor).catch(() => null),
@@ -651,11 +651,12 @@ async function promptFor(actor: UserActor, conversation: ConversationRow) {
       .catch(() => []),
   ]);
   const learned = await memoryBriefing(actor, { focus }).catch(() => "");
+  const shown = options.headless ? [] : workspaces;
   return {
-    system: systemPrompt(actor, { webSearch: conversation.web_search, links, about: aboutYouSection(about, colleagues), briefReady: Boolean(brief) && !briefChat, brand, workspaces }),
+    system: systemPrompt(actor, { webSearch: conversation.web_search, links, about: aboutYouSection(about, colleagues), briefReady: Boolean(brief) && !briefChat, brand, workspaces: shown }),
     learned,
     eclipseTools: brand.eclipseTools,
-    multiWorkspace: workspaces.length > 1,
+    multiWorkspace: shown.length > 1,
   };
 }
 
@@ -682,7 +683,7 @@ async function runCompanionTurn(
   if (!online && (!headless || (await listCompanions(actor)).length === 0)) throw new AssistantError(await companionOfflineMessage(actor));
   const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
   const earlier = new Set(rows.map((row) => row.id));
-  const { system, learned, eclipseTools, multiWorkspace } = await promptFor(actor, conversation);
+  const { system, learned, eclipseTools, multiWorkspace } = await promptFor(actor, conversation, { headless: Boolean(headless) });
   const transcript = buildPrompt(history(rows));
   const jobId = await enqueueCompanionJob(actor, conversation.id, {
     model: apiModel,

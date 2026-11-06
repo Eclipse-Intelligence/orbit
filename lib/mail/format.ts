@@ -104,6 +104,33 @@ export function visibleText(text: string) {
     .trim();
 }
 
+function escapePattern(text: string) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+const SIGNATURE_LINES = 8;
+
+export function stripSignature(text: string, options: { signature?: string | null; name?: string | null } = {}) {
+  let lines = text.split("\n");
+  const dashes = lines.findLastIndex((line) => /^-- ?$/.test(line));
+  if (dashes > 0 && lines.length - dashes <= SIGNATURE_LINES) lines = lines.slice(0, dashes);
+  const signatureLine = (options.signature ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => line.length >= 4);
+  if (signatureLine) {
+    const at = lines.findLastIndex((line) => line.trim().toLowerCase() === signatureLine.toLowerCase());
+    if (at > 0) lines = lines.slice(0, at);
+  }
+  const first = options.name?.trim().split(/\s+/)[0] ?? "";
+  if (first.length >= 2) {
+    const signOff = new RegExp(`^\\s*${escapePattern(first)}[.!,]?\\s*$`, "i");
+    const index = lines.findLastIndex((line, position) => position > 0 && signOff.test(line));
+    if (index > 0) lines = lines.slice(0, index + 1);
+  }
+  return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 export function stripQuoted(text: string) {
   const clean = visibleText(text);
   const cut = clean.search(/^(On .{3,200}wrote:|From: .+|-{3,}\s*Original Message\s*-{3,}|_{20,})\s*$/m);

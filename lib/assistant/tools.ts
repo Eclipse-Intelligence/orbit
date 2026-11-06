@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { after } from "next/server";
 import { applyMailAction, threadForEmail } from "@/lib/mail/actions";
 import { addFollowUp } from "@/lib/mail/prepare";
-import { forgetMemory, recall, rememberNote } from "@/lib/learning/memories";
+import { everywhereAllowed, forgetMemory, recall, rememberNote } from "@/lib/learning/memories";
 import { addWatchItems, listWatchlist, removeWatchItems, WATCH_KINDS } from "@/lib/learning/market";
 import { latestBrief, learningKinds, learnNow, LEARNING_KINDS, type LearningKind } from "@/lib/learning/nightly";
 import { bookingUrl } from "@/lib/assistant/links";
@@ -30,7 +30,7 @@ import { socialLookup } from "@/lib/social-lookup";
 import { getBookingPage } from "@/lib/booking/pages";
 import { listLifecycles } from "@/lib/crm/lifecycles";
 import { getMailThread, mailSyncStatus, searchMail } from "@/lib/mail/store";
-import { cancelScheduledDraft, changeScheduledDraft, composeAccounts, getScheduledDraft, listScheduledDrafts, saveDraftForAgent, sendForAgent } from "@/lib/mail/compose";
+import { cancelScheduledDraft, changeScheduledDraft, composeAccounts, defaultSender, getScheduledDraft, plannedSender, listScheduledDrafts, saveDraftForAgent, sendForAgent } from "@/lib/mail/compose";
 import { createProduct, createTemplate, getTemplate, listProducts, listTemplates, updateProduct, updateTemplate } from "@/lib/proposals/catalogue";
 import { createDocument, getDocument, listDocuments, reviseDocument, sendDocument, updateDocument, withdrawDocument, type DocumentDetail } from "@/lib/proposals/documents";
 import { STATUS_LABELS } from "@/lib/proposals/model";
@@ -545,6 +545,12 @@ function detail(name: Names, key: string) {
   return value === key ? "" : value;
 }
 
+const REMEMBER_HERE_KEY = "remember:this_workspace";
+
+function sendFromKey(args: Args) {
+  return `${str(args.draftId) || str(args.replyToEmailId) || "new"}:send_from`;
+}
+
 function contactRecipient(contactId: unknown, name: Names) {
   const id = str(contactId);
   if (!id) return "";
@@ -998,7 +1004,7 @@ export async function workspaceTargets(actor: UserActor, value: unknown): Promis
 }
 
 function otherWorkspaceNote(target: UserActor, current: UserActor) {
-  return `These results are from ${target.workspaceName}, not ${current.workspaceName}. Their links only open in ${target.workspaceName}, so tell the user to switch to ${target.workspaceName} in the sidebar to open them. Changes can only be made in ${current.workspaceName}.`;
+  return `These results are from ${target.workspaceName}, not ${current.workspaceName}. Their links only open in ${target.workspaceName}, so tell the user to switch to ${target.workspaceName} in the sidebar to open them. Changes can only be made in ${current.workspaceName}. Another workspace's Knowledge, offer, claims, proof and client results belong to that business. Never use them when writing or answering for ${current.workspaceName}.`;
 }
 
 function labelled(target: UserActor, current: UserActor, output: unknown) {
@@ -1480,9 +1486,12 @@ const TOOL_LIST: AssistantTool[] = [
   {
     name: "list_email_senders",
     label: "Checking email accounts",
-    description: "The email addresses the user can send from in Orbit Mail: their connected mailboxes and other sending addresses. The first is the main one.",
+    description:
+      "The email addresses the user can send from in Orbit Mail: their connected mailboxes and other sending addresses. The first is the main one. default is the one a new email goes from in this workspace when send_email has no from.",
     parameters: { type: "object", properties: {} },
-    run: async (actor) => ({ senders: (await composeAccounts(actor)).map((item, index) => ({ email: item.email, primary: index === 0 })) }),
+    run: async (actor) => ({
+      senders: (await composeAccounts(actor)).map((item, index) => ({ email: item.email, primary: index === 0, default: item.default === true })),
+    }),
   },
   {
     name: "list_workflows",
@@ -2430,10 +2439,10 @@ const TOOL_LIST: AssistantTool[] = [
     parameters: { type: "object", properties: {} },
     run: async (actor) => {
       const [page, proof, brand] = await Promise.all([getBookingPage(actor).catch(() => null), listProof(actor), brandOrEmpty(actor)]);
-      const bookingUrl = page?.exists && page.enabled ? `${siteOrigin() ?? "https://orbit.geteclipse.co"}/book/${page.slug}` : null;
+      const booking = page?.exists && page.enabled ? bookingUrl(page.slug) : null;
       const owner = actor.workspaceName || "This workspace";
       return {
-        playbook: brand.playbook ? playbookFor({ firstName: senderFirstName(actor.fullName, actor.email), bookingUrl }, brand.playbook) : null,
+        playbook: brand.playbook ? playbookFor({ firstName: senderFirstName(actor.fullName, actor.email), bookingUrl: booking }, brand.playbook) : null,
         ...(brand.playbook
           ? {}
           : {
@@ -2551,10 +2560,10 @@ const TOOL_LIST: AssistantTool[] = [
     name: "get_settings",
     label: "Checking settings",
     description:
-      "Your meeting link, your email addresses, the addresses that can send meeting invites (inviteSenders, with defaultInviteFrom for this workspace and a problem when one can't send), the Microsoft calendars a personal event can go in (eventCalendars, with defaultEventCalendar), the booking page, the status of Microsoft mail and calendar, ClickUp and Granola, and the lifecycles companies can have (built in and the workspace's own, such as Consultant) with how many companies each has.",
+      "Your meeting link, your email addresses, the address a new email goes from in this workspace when send_email has no from (defaultEmailFrom), the addresses that can send meeting invites (inviteSenders, with defaultInviteFrom for this workspace and a problem when one can't send), the Microsoft calendars a personal event can go in (eventCalendars, with defaultEventCalendar), the booking page, the status of Microsoft mail and calendar, ClickUp and Granola, and the lifecycles companies can have (built in and the workspace's own, such as Consultant) with how many companies each has.",
     parameters: { type: "object", properties: {} },
     run: async (actor) => {
-      const [meetingLink, emails, booking, mailbox, calendar, clickup, picker, granola, lifecycles, invites] = await Promise.all([
+      const [meetingLink, emails, booking, mailbox, calendar, clickup, picker, granola, lifecycles, invites, sender] = await Promise.all([
         getMeetingLink(actor),
         getMyEmails(actor),
         getBookingPage(actor),
@@ -2565,10 +2574,12 @@ const TOOL_LIST: AssistantTool[] = [
         getGranolaStatus(actor),
         listLifecycles(actor),
         getInviteSetup(actor),
+        defaultSender(actor).catch(() => null),
       ]);
       return {
         meetingLink,
         myEmails: emails,
+        defaultEmailFrom: sender?.email ?? null,
         inviteSenders: invites.senders.map((sender) => ({ address: sender.address, kind: sender.kind, main: sender.primary, problem: sender.problem })),
         defaultInviteFrom: invites.defaultFrom,
         eventCalendars: invites.calendars.map((calendar) => ({ address: calendar.address, main: calendar.primary, problem: calendar.problem })),
@@ -4167,7 +4178,7 @@ const TOOL_LIST: AssistantTool[] = [
         from: {
           type: "string",
           description:
-            "Address to send from (list_email_senders). Leave out for the main mailbox, or the account the conversation is in for a reply. agent sends from Orbit's agent mailbox instead, only when the user asks: a reply to an email from search_email with mailbox agent, or a new email with to and subject, plain text, no files, sendAt or draftId.",
+            "Address to send from (list_email_senders). Leave out to send a new email from this workspace's default address (defaultEmailFrom in get_settings), or a reply from the address the email came to. agent sends from Orbit's agent mailbox instead, only when the user asks: a reply to an email from search_email with mailbox agent, or a new email with to and subject, plain text, no files, sendAt or draftId.",
         },
         remindAfterDays: { type: "integer", minimum: 1, maximum: 90, description: "Remind the user in Mail if nobody replies within this many days." },
         followUp: {
@@ -4188,6 +4199,11 @@ const TOOL_LIST: AssistantTool[] = [
       },
       required: ["body"],
     },
+    details: async (actor, args): Promise<Record<string, string>> => {
+      if (str(args.from)) return {};
+      const from = await plannedSender(actor, { draftId: optionalStr(args.draftId) ?? null, replyTo: optionalStr(args.replyToEmailId) ?? null });
+      return from ? { [sendFromKey(args)]: from } : {};
+    },
     describe: (args, name) => {
       const draftId = str(args.draftId);
       const draftSubject = draftId ? detail(name, `${draftId}:subject`) : "";
@@ -4204,7 +4220,13 @@ const TOOL_LIST: AssistantTool[] = [
             replying ? `To: ${args.replyAll ? `everyone on the email from ${sender}` : sender}${people.length ? `, plus ${people.join(", ")}` : ""}` : people.length ? `To: ${people.join(", ")}` : "",
             strings(args.cc).length ? `Cc: ${strings(args.cc).join(", ")}` : "",
           ]),
-          str(args.from) === AGENT_MAILBOX ? "From: the agent mailbox" : str(args.from) ? `From: ${str(args.from)}` : "",
+          str(args.from) === AGENT_MAILBOX
+            ? "From: the agent mailbox"
+            : str(args.from)
+              ? `From: ${str(args.from)}`
+              : detail(name, sendFromKey(args))
+                ? `From: ${detail(name, sendFromKey(args))}`
+                : "",
           sendAtLine(args.sendAt),
           attachmentLine(args, name),
           str(args.from) === AGENT_MAILBOX ? "Sends from the agent mailbox when you approve." : later ? "Scheduled in Orbit Mail when you approve." : "Sends from Orbit Mail when you approve.",
@@ -4827,7 +4849,7 @@ const TOOL_LIST: AssistantTool[] = [
     label: "Checking what Orbit has learned",
     description:
       "Search everything Orbit has learned: notes about the user and how they like to work, the business (ICP, audience, objections, competitors, what messaging works, win and loss patterns) and the market (themes, competitor moves, signals), plus the market notes received. Each result has its sources and date.",
-    parameters: { type: "object", properties: { query: { type: "string", description: "Words to look for, for example \"objections price agencies\"." } }, required: ["query"] },
+    parameters: { type: "object", properties: { query: { type: "string", description: "Words to look for, for example \"pricing objections\"." } }, required: ["query"] },
     run: async (actor, args) => recall(actor, required(args.query, "A search")),
   },
   {
@@ -4909,17 +4931,33 @@ const TOOL_LIST: AssistantTool[] = [
         forgetId: { type: "string", description: "Id of a learned note to forget instead of saving one." },
       },
     },
-    describe: (args) =>
+    details: async (actor, args): Promise<Record<string, string>> => {
+      if (str(args.forgetId) || args.shared === true || args.allWorkspaces !== true) return {};
+      const allowed = await everywhereAllowed(actor, str(args.kind) || "note", `${str(args.title)} ${str(args.body)}`);
+      return allowed ? {} : { [REMEMBER_HERE_KEY]: "yes" };
+    },
+    describe: (args, name) =>
       str(args.forgetId)
         ? { title: "Forget a note", lines: [str(args.title) || "The note you chose"] }
         : {
             title: args.shared === true ? "Remember for the whole team" : "Remember for you",
-            lines: [str(args.title), str(args.body), args.shared !== true && args.allWorkspaces === true ? "All workspaces" : ""].filter(Boolean),
+            lines: [
+              str(args.title),
+              str(args.body),
+              args.shared !== true && args.allWorkspaces === true ? (detail(name, REMEMBER_HERE_KEY) ? "This workspace" : "All workspaces") : "",
+            ].filter(Boolean),
           },
     run: async (actor, args) => {
       const forgetId = str(args.forgetId);
       if (forgetId) return forgetMemory(actor, forgetId);
-      return { memory: await rememberNote(actor, args, "assistant") };
+      const memory = await rememberNote(actor, args, "assistant");
+      const downgraded = args.shared !== true && args.allWorkspaces === true && memory.allWorkspaces !== true;
+      return {
+        memory,
+        ...(downgraded
+          ? { note: `Kept to ${actor.workspaceName} only, because it is about a business (its kind or a workspace or product name), not about how the user works everywhere.` }
+          : {}),
+      };
     },
   },
   {

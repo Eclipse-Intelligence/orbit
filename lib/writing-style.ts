@@ -1,5 +1,10 @@
-export const WRITING_STYLE =
-  'No em dashes or en dashes. Never put a colon in the middle of a sentence; use a full stop or a comma instead. Never call an article a "piece"; say "article".';
+export const WRITING_STYLE = "No em dashes or en dashes. Never put a colon in the middle of a sentence; use a full stop or a comma instead.";
+
+export const PIECE_RULE = 'Never call an article a "piece"; say "article".';
+
+export function writingStyle(eclipseTools: boolean | undefined) {
+  return eclipseTools ? `${WRITING_STYLE} ${PIECE_RULE}` : WRITING_STYLE;
+}
 
 const URL = /\bhttps?:\/\/\S+/gi;
 

@@ -115,15 +115,41 @@ async function threadMessagesFiledIn(actor: UserActor, sourceId: string, key: st
   });
 }
 
-export async function threadBrand(actor: UserActor, sourceId: string, key: string): Promise<BrandProfile | null> {
-  const actors = await workspaceActors(actor);
-  if (actors.length < 2) return brandOrEmpty(actors[0] ?? actor);
-  const effective = await withActor(actor, async (db) => {
+export type ThreadWorkspace = { actor: UserActor; resolved: boolean };
+
+async function receivingHome(db: Db, actor: UserActor, messageId: string) {
+  const result = await db.query<{ to_recipients: { address?: string }[] | null; cc_recipients: { address?: string }[] | null; account: string }>(
+    `select m.to_recipients, m.cc_recipients, s.email as account
+     from crm.mail_messages m join crm.mail_sources s on s.id = m.source_id
+     where m.id = $1 and m.user_id = $2`,
+    [messageId, actor.userId],
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  const homes = await addressHomesInDb(db, actor);
+  const addressed = [...(row.to_recipients ?? []), ...(row.cc_recipients ?? [])].map((item) => (item?.address ?? "").toLowerCase());
+  const received = addressed.find((address) => homes.some((home) => home.address === address)) ?? row.account.toLowerCase();
+  return homes.find((home) => home.address === received)?.workspaceId ?? null;
+}
+
+export async function threadWorkspace(actor: UserActor, sourceId: string, key: string, known?: UserActor[]): Promise<ThreadWorkspace> {
+  const actors = known ?? (await workspaceActors(actor));
+  if (actors.length < 2) return { actor: actors[0] ?? actor, resolved: true };
+  const found = await withActor(actor, async (db) => {
     const info = await threadInfo(db, actor, sourceId, key);
-    return effectiveFilingInDb(db, actor, actors, sourceId, key, { latestId: info.latestId, counterpart: info.counterpart?.email ?? null, own: info.own });
+    const effective = await effectiveFilingInDb(db, actor, actors, sourceId, key, { latestId: info.latestId, counterpart: info.counterpart?.email ?? null, own: info.own });
+    if (effective.filedIn.length === 1) return effective.filedIn[0];
+    if (effective.filedIn.length < 2) return null;
+    const home = await receivingHome(db, actor, info.latestId);
+    return home && effective.filedIn.includes(home) ? home : null;
   }).catch(() => null);
-  if (!effective || effective.filedIn.length !== 1) return null;
-  return brandOrEmpty(actorIn(actors, effective.filedIn[0]));
+  const target = found ? actors.find((item) => item.workspaceId === found) : undefined;
+  return target ? { actor: target, resolved: true } : { actor, resolved: false };
+}
+
+export async function threadBrand(actor: UserActor, sourceId: string, key: string): Promise<BrandProfile | null> {
+  const found = await threadWorkspace(actor, sourceId, key);
+  return found.resolved ? brandOrEmpty(found.actor) : null;
 }
 
 export type FilingChange = { filing: ThreadFiling | null; kept: string[] };
