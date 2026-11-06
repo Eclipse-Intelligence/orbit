@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import LoginForm from "@/components/auth/login-form";
 import { supabaseConfigured } from "@/lib/auth/config";
 import { getUserActor } from "@/lib/auth/user";
+import { safeNextPath } from "@/lib/auth/next-path";
 
 export const dynamic = "force-dynamic";
 
@@ -16,13 +17,15 @@ export default async function LoginPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const user = await getUserActor();
-  if (user) redirect("/mail");
-  const { confirmed } = await searchParams;
+  const { confirmed, next } = await searchParams;
+  const after = safeNextPath(typeof next === "string" ? next : null);
+  if (user) redirect(after ?? "/mail");
 
   return (
     <main className="flex min-h-dvh items-center justify-center px-4 py-10">
       <LoginForm
         resets={supabaseConfigured()}
+        next={after ?? undefined}
         notice={confirmed ? "Email confirmed. Sign in to continue." : undefined}
         hintEmail={
           process.env.NODE_ENV === "production" || supabaseConfigured()

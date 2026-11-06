@@ -435,6 +435,19 @@ describe("MCP", () => {
     assert.match(text, /mcp\.example/);
     assert.equal(upserted.payload.result?.isError, undefined);
 
+    const linked = await callTool("upsert_company", {
+      name: "Mcp Co renamed",
+      linkedinUrl: "https://www.linkedin.com/company/mcp-co/",
+    });
+    assert.match(linked.payload.result?.content?.[0]?.text ?? "", /"created": true/);
+    const byPage = await callTool("upsert_company", {
+      name: "Mcp Co on LinkedIn",
+      linkedinUrl: "linkedin.com/company/mcp-co",
+    });
+    const byPageText = byPage.payload.result?.content?.[0]?.text ?? "";
+    assert.match(byPageText, /"matchedOn": "linkedin"/);
+    assert.match(byPageText, /Mcp Co on LinkedIn/);
+
     const searched = await callTool("search_companies", { query: "Mcp" });
     assert.match(searched.payload.result?.content?.[0]?.text ?? "", /Mcp Co/);
   });

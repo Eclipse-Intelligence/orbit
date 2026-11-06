@@ -320,6 +320,27 @@ export default function ContactRecord({
                     }
                     onSave={(value) => patch({ linkedinUrl: value || null })}
                   />
+                  <InlineField label="Location" value={shown.location ?? ""} onSave={(value) => patch({ location: value || null })} />
+                  <InlineField
+                    label="Sales Navigator"
+                    value={shown.salesNavigatorUrl ?? ""}
+                    display={shown.salesNavigatorUrl ? shown.salesNavigatorUrl.replace(/^https?:\/\/(www\.)?/, "") : undefined}
+                    accessory={
+                      shown.salesNavigatorUrl ? (
+                        <a
+                          href={shown.salesNavigatorUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          aria-label="Open in Sales Navigator"
+                          title="Open in Sales Navigator"
+                          className="text-subtle hover:text-foreground focus-visible:ring-ring/60 inline-flex size-7 shrink-0 items-center justify-center rounded-full outline-none transition-colors duration-150 hover:bg-white/6 focus-visible:ring-2"
+                        >
+                          <ExternalIcon aria-hidden className="size-3.5" />
+                        </a>
+                      ) : null
+                    }
+                    onSave={(value) => patch({ salesNavigatorUrl: value || null })}
+                  />
                   <InlineField
                     label="Owner"
                     type="select"

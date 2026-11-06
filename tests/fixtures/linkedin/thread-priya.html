@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Messaging | LinkedIn</title>
+    <style>
+      body { margin: 0; background: #f4f2ee; font-family: -apple-system, system-ui, sans-serif; color: #191919; }
+      .global-nav { height: 52px; background: #fff; border-bottom: 1px solid #e0dfdc; display: flex; align-items: center; gap: 16px; padding: 0 32px; }
+      .global-nav__logo { width: 34px; height: 34px; border-radius: 4px; background: #0a66c2; }
+      .msg-page { max-width: 1128px; margin: 24px auto; display: flex; background: #fff; border: 1px solid #e0dfdc; border-radius: 8px; min-height: 620px; }
+      .msg-conversations-container { width: 300px; border-right: 1px solid #e0dfdc; }
+      .msg-conversation-listitem { display: flex; gap: 10px; padding: 12px 16px; border-bottom: 1px solid #ebebeb; font-size: 14px; color: #191919; text-decoration: none; }
+      .msg-conversation-listitem.active { background: #edf3f8; }
+      .msg-conversation-listitem span.photo { width: 44px; height: 44px; border-radius: 50%; background: #c7c7c7; flex-shrink: 0; }
+      .msg-thread { flex: 1; display: flex; flex-direction: column; }
+      .msg-title-bar { padding: 12px 16px; border-bottom: 1px solid #ebebeb; }
+      .msg-title-bar a { text-decoration: none; color: inherit; }
+      .msg-title-bar h2 { margin: 0; font-size: 16px; }
+      .msg-title-bar p { margin: 2px 0 0; font-size: 12px; color: #666; }
+      .msg-s-message-list-content { list-style: none; margin: 0; padding: 12px 16px; display: flex; flex-direction: column; gap: 12px; }
+      .msg-s-message-list__time-heading-container { text-align: center; font-size: 12px; color: #666; }
+      .msg-s-message-group__meta { display: flex; gap: 8px; align-items: baseline; font-size: 14px; }
+      .msg-s-message-group__profile-link { color: #191919; font-weight: 600; text-decoration: none; }
+      .msg-s-message-group__timestamp { font-size: 12px; color: #666; }
+      .msg-s-event-listitem__body { margin: 4px 0 0; font-size: 14px; line-height: 1.45; }
+      .msg-form { margin-top: auto; border-top: 1px solid #ebebeb; padding: 12px 16px; color: #999; font-size: 14px; }
+    </style>
+  </head>
+  <body>
+    <header class="global-nav"><span class="global-nav__logo"></span></header>
+    <div class="msg-page">
+      <aside class="msg-conversations-container">
+        <a class="msg-conversation-listitem" href="/in/hannah-okafor/"><span class="photo"></span><span>Hannah Okafor<br />Thanks for connecting</span></a>
+        <a class="msg-conversation-listitem active" href="/messaging/thread/2-MWE4ZjQ/"><span class="photo"></span><span>Priya Shah<br />Great. Also, could you join</span></a>
+      </aside>
+      <section class="msg-thread">
+        <div class="msg-title-bar">
+          <a class="msg-thread__link-to-profile" href="https://www.linkedin.com/in/priya-shah-seo/">
+            <h2 class="msg-entity-lockup__entity-title">Priya Shah</h2>
+          </a>
+          <p>Founder and CEO, Northlight SEO</p>
+        </div>
+        <ul class="msg-s-message-list-content">
+            <li class="msg-s-message-list__time-heading-container"><time class="msg-s-message-list__time-heading t-12 t-black--light">3 Nov</time></li>
+            <li class="msg-s-message-list__event clearfix">
+              <div class="msg-s-event-listitem msg-s-event-listitem--other" data-event-urn="urn:li:msg_message:35083">
+                <div class="msg-s-message-group__meta">
+                  <a class="msg-s-message-group__profile-link" href="/in/priya-shah-seo/"><span class="msg-s-message-group__name">Priya Shah</span></a>
+                  <time class="msg-s-message-group__timestamp">16:42</time>
+                </div>
+                <div class="msg-s-event-listitem__message-bubble"><p class="msg-s-event-listitem__body t-14 t-black--light">Thanks for the audit. The AI answers section was eye opening, two of our clients don't show up at all.</p></div>
+              </div>
+            </li>
+            <li class="msg-s-message-list__event clearfix">
+              <div class="msg-s-event-listitem" data-event-urn="urn:li:msg_message:24251">
+                <div class="msg-s-message-group__meta">
+                  <a class="msg-s-message-group__profile-link" href="/in/mark-ridgeon/"><span class="msg-s-message-group__name">Mark Ridgeon</span></a>
+                  <time class="msg-s-message-group__timestamp">17:05</time>
+                </div>
+                <div class="msg-s-event-listitem__message-bubble"><p class="msg-s-event-listitem__body t-14 t-black--light">Glad it helped. Happy to scope a pilot for those two. Would a 6 week trial work?</p></div>
+              </div>
+            </li>
+            <li class="msg-s-message-list__time-heading-container"><time class="msg-s-message-list__time-heading t-12 t-black--light">5 Nov</time></li>
+            <li class="msg-s-message-list__event clearfix">
+              <div class="msg-s-event-listitem msg-s-event-listitem--other" data-event-urn="urn:li:msg_message:71699">
+                <div class="msg-s-message-group__meta">
+                  <a class="msg-s-message-group__profile-link" href="/in/priya-shah-seo/"><span class="msg-s-message-group__name">Priya Shah</span></a>
+                  <time class="msg-s-message-group__timestamp">09:18</time>
+                </div>
+                <div class="msg-s-event-listitem__message-bubble"><p class="msg-s-event-listitem__body t-14 t-black--light">Yes, 6 weeks is fine. Can you send pricing for both clients together?</p></div>
+              </div>
+            </li>
+            <li class="msg-s-message-list__event clearfix">
+              <div class="msg-s-event-listitem" data-event-urn="urn:li:msg_message:49024">
+                <div class="msg-s-message-group__meta">
+                  <a class="msg-s-message-group__profile-link" href="/in/mark-ridgeon/"><span class="msg-s-message-group__name">Mark Ridgeon</span></a>
+                  <time class="msg-s-message-group__timestamp">09:31</time>
+                </div>
+                <div class="msg-s-event-listitem__message-bubble"><p class="msg-s-event-listitem__body t-14 t-black--light">Will do. I'll send the proposal by Friday.</p></div>
+              </div>
+            </li>
+            <li class="msg-s-message-list__time-heading-container"><time class="msg-s-message-list__time-heading t-12 t-black--light">6 Nov</time></li>
+            <li class="msg-s-message-list__event clearfix">
+              <div class="msg-s-event-listitem msg-s-event-listitem--other" data-event-urn="urn:li:msg_message:84180">
+                <div class="msg-s-message-group__meta">
+                  <a class="msg-s-message-group__profile-link" href="/in/priya-shah-seo/"><span class="msg-s-message-group__name">Priya Shah</span></a>
+                  <time class="msg-s-message-group__timestamp">08:02</time>
+                </div>
+                <div class="msg-s-event-listitem__message-bubble"><p class="msg-s-event-listitem__body t-14 t-black--light">Great. Also, could you join our team call on the 14th?</p></div>
+              </div>
+            </li>
+        </ul>
+        <div class="msg-form">Write a message</div>
+      </section>
+    </div>
+  </body>
+</html>

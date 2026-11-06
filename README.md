@@ -78,12 +78,29 @@ Removing someone moves their companies, contacts, deals and tasks to whoever rem
 | Templates and signatures | `/settings/email-templates` | Reusable emails (below) and a signature per sending address |
 | Calendars | `/settings/calendars` | Calendar accounts and links, Show and Use for CRM, Add mail for extra Microsoft accounts |
 | Booking page | `/settings/booking-page` | Your public booking page at `/book/<link>` (below) |
-| Integrations | `/settings/integrations` | Microsoft 365 mail and the Outlook calendar, Teams calls and transcripts, Granola (each with its status, last error and Sync now), your Granola key, your Readwise Reader token, your Recall key, Linear, ClickUp, AI accounts and Orbit Agent, enrichment providers |
+| Integrations | `/settings/integrations` | LinkedIn capture (connected browsers, their workspaces, Hold to revoke), Microsoft 365 mail and the Outlook calendar, Teams calls and transcripts, Granola (each with its status, last error and Sync now), your Granola key, your Readwise Reader token, your Recall key, Linear, ClickUp, AI accounts and Orbit Agent, enrichment providers |
 | Pipeline | `/settings/pipeline` | Opportunity stages (each board has its own stages, set on the board) |
 | Tags and lifecycles | `/settings/tags` | Rename, merge, and delete tags and custom lifecycles |
 | API and webhooks | `/settings/api` | Your mail in Claude (personal MCP tokens), REST and MCP addresses, how to issue agent tokens, webhooks and recent deliveries |
 
 Rarely used parts (token instructions, recent webhook deliveries, watched ClickUp lists, and similar) are collapsed until you open them. Old links keep working: `/settings#calendars`, `#pipeline`, `#tags`, `#webhooks`, `#clickup` and the rest open the matching page, and `#meeting-link` scrolls to it on General.
+
+## LinkedIn capture
+
+A Chrome extension (in `extension/`, see `extension/README.md`) that opens Orbit in Chrome's side panel next to LinkedIn and Sales Navigator. It shows whether the person or company on the page is in Orbit (a green dot on its toolbar icon when it is in any of your workspaces, amber for a possible match once the panel has read the page), saves new people and companies, and adds tasks, notes and LinkedIn messages. Nothing is added to LinkedIn's pages and nothing is saved until you press Save or Log.
+
+- **Connect:** press Connect in the panel. It shows an 8-character code and opens `/connect/chrome`; type the code there, name the browser, choose its workspaces (only your home workspace is ticked to start with) and press Approve. Only approve a code you see in your own browser's Orbit panel right now. The panel picks up its own credential. Codes last 10 minutes and work once.
+- **What it can reach:** looking up and saving people and companies, tasks, notes and LinkedIn activity, boards and stages for the save form, and AI field answers to show. Never mail, calendars, docs or assistant chats. It works only in the workspaces you gave it, and only while you are still a member.
+- **Matching:** people by their saved LinkedIn profile (on a lead page, the public profile link on it), then their saved Sales Navigator lead. The same name at a company with the same name is only a Possible match, which you confirm with Same person (that saves the link on their record) or Not them (save as someone new). Companies match on their LinkedIn page, then domain, then name, but never a company whose saved LinkedIn page or domain is different: that is a Possible match, where Same company saves the LinkedIn page on it and Not them saves a new company. A matched company only gets the details it is missing.
+- **Saving a new person:** their company is matched or added too, and the tags and board stage you choose also go on a company that is added with them. Saving someone already in Orbit (by their profile or lead link) only adds what the page has: it never clears a field, keeps their owner unless you change it, adds your tags to theirs and keeps their company.
+- **Workspace:** the panel starts in your home workspace (your oldest), unless the person or company is only in another one.
+- **Tasks:** Today is due at 17:30 (or an hour from now if that's later), Tomorrow at 09:00 on the next working day, Next week at 09:00 next Monday.
+- **What it reads:** the page address when you move between pages, the top of the profile and the current role while the panel is open, the thread header (name and profile link) on a message thread while the panel is open, and the messages on screen only when you press Log this conversation. It never opens, scrolls or clicks LinkedIn, and never calls LinkedIn's own APIs. On Sales Navigator it reads lead pages only, and leaves lead lists and notes alone.
+- **Revoke:** Settings › Integrations › LinkedIn capture lists each browser with its workspaces and when it was last used. Workspaces changes what it can reach; Hold to revoke signs it out straight away.
+
+Changes it makes are audited with source `linkedin_extension`, as you.
+
+Contacts have a Location and a Sales Navigator lead link, on the contact page, in the API and MCP (`location`, `salesNavigatorUrl`) and in CSV import and export (`Location`, `Sales Navigator`).
 
 ## Email templates
 
@@ -811,7 +828,7 @@ A workflow is built on a canvas, like n8n. It always starts with a When node (th
 | Wait for approval | Optional. Pauses until you approve or reject it in Capture or on the Workflows page; rejecting stops the run. The approval waits in Capture under Approvals and comes as a push notification on every device with notifications on; tapping it opens the approval. |
 | Find records | Lists up to 100 companies or contacts by lifecycle, tag, owner, open deal, how long since you were last in touch and a search, ordered by longest since last contact, oldest, newest or name. Skip records found in the last N days so a weekly or monthly run works through a long list in batches. Give its records to For each item, and inside the loop the company and contact nodes act on each record in turn. |
 | Find or create record | Finds a company (by domain, then name) or a contact (by email), or creates it. New companies are enriched when auto-enrichment is on. Its id lets later nodes use it, for example Update record setting a contact's Company to `{{steps.upsert_record_1.id}}` to move them; it can also become the run's company or contact. |
-| Create task, Add note, Update record | Act on the run's company or contact. Tasks can go to ClickUp too. Update record covers lifecycle, health, owner, industry, size, source, description, name, domain, website, LinkedIn and phone on companies, and owner, job title, company, source, notes, name, email, phone and LinkedIn on contacts. |
+| Create task, Add note, Update record | Act on the run's company or contact. Tasks can go to ClickUp too. Update record covers lifecycle, health, owner, industry, size, source, description, name, domain, website, LinkedIn and phone on companies, and owner, job title, company, source, notes, name, email, phone, LinkedIn, location and Sales Navigator lead on contacts. |
 | Add to or move on a board | Puts the company on a board or moves its card. |
 | Notify someone | Sends an in-app notification to you, the record's owner, or a member. |
 | Send email | Emails the run's contact from your mailbox and logs it. |
@@ -863,6 +880,8 @@ Every variable Orbit reads. `.env.example` lists them with comments (aliases suc
 | `CONTEXT_DEV_API_KEY`, `HUNTER_API_KEY`, `ENROW_API_KEY`, `ICYPEAS_API_KEY` | Enrichment | Each key turns its provider on. |
 | `PARALLEL_API_KEY` | Web checks | Turns on the Parallel Decisions API for tagging, filling gaps, weekly signals and ICP fit, the Check the web workflow step, the assistant's `check_web`, and AI fields (with the Parallel Task API for number and short text fields). |
 | `NEXT_PUBLIC_CONTEXT_LOGO_CLIENT_ID` | Logos in lists | context.dev Logo Link public client id. |
+| `LINKEDIN_EXTENSION_ID` | LinkedIn capture | Comma-separated Chrome extension IDs allowed to call `/api/extension` (CORS). The unpacked build is `fdlhldfkiompmkjhobgnddjdaocjnfkd`; add the Chrome Web Store ID when it is published. A request from any other origin is refused. |
+| `LINKEDIN_EXTENSION_URL` | LinkedIn capture | Optional. The https link behind Get the extension in Settings (the private Chrome Web Store listing). Defaults to `extension/README.md` on GitHub. |
 
 ## Hosted Supabase
 
@@ -894,3 +913,5 @@ API: `docs/api.md`. MCP: `docs/mcp.md`. Assistant and its tools: `docs/assistant
 | `npm run agent:create` | Issue a revocable agent token                              |
 | `npm run mcp`          | MCP server over stdio                                      |
 | `npm run companion:pack` | Bundle the Orbit Agent into `public/downloads/orbit-agent.tgz` (part of `build`) |
+| `npm run extension:build` | Build the LinkedIn capture Chrome extension into `extension/dist` (see `extension/README.md`) |
+| `npm run extension:zip` | Build it for the Chrome Web Store as `extension/dist/orbit-linkedin-capture.zip` |
