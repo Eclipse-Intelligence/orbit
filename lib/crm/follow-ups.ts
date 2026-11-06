@@ -36,6 +36,7 @@ export type FollowUpSuggestion = {
   to: { name: string | null; address: string };
   subject: string;
   body: string;
+  callAt: string;
   createdAt: string;
 };
 
@@ -412,6 +413,7 @@ export async function listFollowUps(actor: UserActor, limit = 20): Promise<Follo
         to: { name: row.person_name, address: row.person_email },
         subject: row.subject ?? "Following up",
         body: row.body,
+        callAt: iso(row.call_at) ?? new Date(0).toISOString(),
         createdAt: iso(row.created_at) ?? new Date(0).toISOString(),
       };
     });

@@ -13,13 +13,12 @@ import SidebarResizer from "./sidebar-resizer";
 import type { CaptureStatus } from "@/lib/crm/capture";
 import type { WorkspaceChoice } from "@/lib/auth/user";
 import type { BoardSummary } from "@/lib/crm/types";
-import { useCompaniesStore } from "@/stores/companies-store";
+import { NO_CAPTURE_COUNTS, useCompaniesStore } from "@/stores/companies-store";
 
 export type SidebarWorkspace = { id: string; name: string; viewerName: string; choices: WorkspaceChoice[] };
 
 type SidebarProps = {
   boards: BoardSummary[];
-  approvals: number;
   companyCount: number;
   openActionCount: number;
   mailUnread: number;
@@ -27,24 +26,25 @@ type SidebarProps = {
   workspace: SidebarWorkspace;
 };
 
-export default function Sidebar({ boards, approvals, companyCount, openActionCount, mailUnread, capture, workspace }: SidebarProps) {
+export default function Sidebar({ boards, companyCount, openActionCount, mailUnread, capture, workspace }: SidebarProps) {
   const sidebarOpen = useCompaniesStore((state) => state.sidebarOpen);
   const setSidebarOpen = useCompaniesStore((state) => state.setSidebarOpen);
   const setCapture = useCompaniesStore((state) => state.setCapture);
   const waiting = capture?.waiting ?? 0;
   const fresh = capture?.fresh ?? 0;
   const newestAt = capture?.newestAt ?? null;
+  const sections = capture?.sections ?? NO_CAPTURE_COUNTS;
+  const { approvals, followUps, replies, tasks, toFile } = sections;
 
   useEffect(() => {
-    setCapture({ waiting, fresh, newestAt });
-  }, [setCapture, waiting, fresh, newestAt]);
+    setCapture({ waiting, fresh, newestAt, sections: { approvals, followUps, replies, tasks, toFile } });
+  }, [setCapture, waiting, fresh, newestAt, approvals, followUps, replies, tasks, toFile]);
 
   return (
     <>
       <aside className="relative hidden w-(--sidebar-width) shrink-0 border-r border-sidebar-border bg-sidebar sidebar-collapsed:lg:hidden docs-focus:lg:hidden lg:flex lg:flex-col">
         <SidebarContent
           boards={boards}
-          approvals={approvals}
           companyCount={companyCount}
           openActionCount={openActionCount}
           mailUnread={mailUnread}
@@ -66,8 +66,7 @@ export default function Sidebar({ boards, approvals, companyCount, openActionCou
           <SheetCloseButton label="Close menu" className="absolute top-3 right-3 z-10 mr-0" />
           <SidebarContent
             boards={boards}
-            approvals={approvals}
-            companyCount={companyCount}
+              companyCount={companyCount}
             openActionCount={openActionCount}
             mailUnread={mailUnread}
             capture={capture}

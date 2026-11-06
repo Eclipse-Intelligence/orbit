@@ -103,7 +103,7 @@ export type MeetingsSummary = {
   recent: Meeting[];
 };
 
-export type MeetingRef = { subject: string | null; startsAt: string };
+type MeetingRef = { subject: string | null; startsAt: string };
 
 export type MetPerson = {
   email: string;

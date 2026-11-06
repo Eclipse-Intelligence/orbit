@@ -4,20 +4,24 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popover";
-import { useAttention, useNotifications } from "@/components/crm/attention";
+import { useNotifications } from "@/components/crm/attention";
 import { markNotificationsReadAction } from "@/app/(crm)/workflows/actions";
 import { relativeWhen } from "@/lib/companies";
-import { companyHref } from "@/lib/crm/hrefs";
-import { tasksHref } from "@/lib/crm/task-views";
+import { captureSummary } from "@/lib/crm/capture-format";
 import { cn } from "@/lib/utils";
+import { captureLeft, useCompaniesStore } from "@/stores/companies-store";
 import BellIcon from "@/public/assets/images/companies/header/bell.svg";
+import ChevronRightIcon from "@/public/assets/images/_common/chevron-right.svg";
+import CaptureIcon from "@/public/assets/images/companies/sidebar/mail.svg";
 
 export default function Notifications() {
   const [open, setOpen] = useState(false);
   const [read, setRead] = useState<string[]>([]);
   const router = useRouter();
-  const items = useAttention();
   const updates = useNotifications();
+  const capture = useCompaniesStore((state) => state.capture);
+  const cleared = useCompaniesStore((state) => state.captureCleared);
+  const waiting = captureLeft(capture, cleared);
   const unread = updates.filter((item) => !item.readAt && !read.includes(item.id));
 
   function toggle(next: boolean) {
@@ -31,17 +35,42 @@ export default function Notifications() {
   return (
     <Popover open={open} onOpenChange={toggle}>
       <PopoverTrigger asChild>
-        <Button variant="secondary" size="icon" aria-label="Notifications" data-shortcut="notifications" title="Notifications (⇧N)" className="data-[state=open]:bg-muted relative">
+        <Button
+          variant="secondary"
+          size="icon"
+          aria-label={unread.length > 0 ? "Notifications, unread" : "Notifications"}
+          data-shortcut="notifications"
+          title="Notifications (⇧N)"
+          className="data-[state=open]:bg-muted relative"
+        >
           <BellIcon aria-hidden className="size-3.5" />
-          {(items.length > 0 || unread.length > 0) && (
-            <span className="bg-danger absolute top-1 right-1 size-1.5 rounded-full" />
-          )}
+          {unread.length > 0 && <span className="bg-danger absolute top-1 right-1 size-1.5 rounded-full" />}
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-[min(360px,calc(100vw-2rem))]">
         <div className="flex max-h-[min(560px,calc(100dvh-6rem))] flex-col gap-3 overflow-auto px-4 py-5">
           <h2>Notifications</h2>
-          {updates.length > 0 && (
+          {waiting.total > 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-auto w-full items-center justify-start gap-2.5 rounded-lg bg-white/[0.04] px-2.5 py-2.5 text-left whitespace-normal"
+              onClick={() => {
+                setOpen(false);
+                router.push("/capture");
+              }}
+            >
+              <span aria-hidden className="bg-primary text-primary-foreground flex size-6 shrink-0 items-center justify-center rounded-full">
+                <CaptureIcon className="size-3" />
+              </span>
+              <span className="flex min-w-0 flex-1 flex-col gap-1">
+                <span className="text-foreground text-[14px] leading-5">{waiting.total} waiting in Capture</span>
+                <span className="caption-style text-subtle">{captureSummary(waiting.sections)}</span>
+              </span>
+              <ChevronRightIcon aria-hidden className="text-subtle size-3 shrink-0" />
+            </Button>
+          )}
+          {updates.length > 0 ? (
             <ul className="flex flex-col gap-1">
               {updates.map((item) => {
                 const fresh = unread.some((entry) => entry.id === item.id);
@@ -67,39 +96,9 @@ export default function Notifications() {
                 );
               })}
             </ul>
-          )}
-          {items.length === 0 ? (
-            updates.length === 0 && <p className="caption-style text-subtle">No tasks are due.</p>
           ) : (
-            <ul className="flex flex-col gap-2">
-              {items.map((item) => (
-                <li key={item.id}>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-auto w-full items-start justify-start rounded-lg px-2 py-2 text-left whitespace-normal"
-                    onClick={() => {
-                      setOpen(false);
-                      if (item.companyId) router.push(companyHref(item.companyId));
-                      else router.push(tasksHref("today"));
-                    }}
-                  >
-                    <span className="flex min-w-0 flex-col gap-1">
-                      <span className="truncate text-[14px] leading-5">{item.title}</span>
-                      <span className="caption-style text-subtle">
-                        {[item.overdue ? "Overdue" : "Due", item.companyName, item.dueAt ? relativeWhen(item.dueAt) : "No due date"]
-                          .filter(Boolean)
-                          .join(" · ")}
-                      </span>
-                    </span>
-                  </Button>
-                </li>
-              ))}
-            </ul>
+            waiting.total === 0 && <p className="caption-style text-subtle">No updates.</p>
           )}
-          <Button variant="subtle" size="sm" href={tasksHref("today")} className="self-start">
-            Open tasks
-          </Button>
         </div>
       </PopoverContent>
     </Popover>

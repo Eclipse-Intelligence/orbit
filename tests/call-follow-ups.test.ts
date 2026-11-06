@@ -274,7 +274,7 @@ describe("calls that ended with no next step", () => {
       assert.deepEqual(bell.rows, [{ title: "Demo with Acme ended with no next step", href: "/capture" }]);
 
       const status = await captureStatus(owner);
-      assert.equal(status.followUps, 1);
+      assert.equal(status.sections.followUps, 1);
       assert.equal(status.waiting, 1);
       assert.equal(status.fresh, 1, "a new follow-up counts toward the Capture dot");
 

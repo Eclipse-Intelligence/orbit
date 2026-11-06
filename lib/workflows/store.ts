@@ -546,6 +546,9 @@ export async function decideApproval(
   return executeRun(runId, actor.userId, actor.workspaceId, { deadline: Date.now() + 50_000, fetchImpl: options.fetchImpl });
 }
 
+const UPDATES_ONLY = `coalesce(source, '') <> 'workflow_approval'
+  and not (coalesce(source, '') = 'mail' and (title like 'No reply yet:%' or title like 'Time to check in:%' or href = '/capture'))`;
+
 export async function listNotifications(actor: UserActor, limit = 20): Promise<Notification[]> {
   return withActor(actor, async (db) => {
     const result = await db.query<{
@@ -559,6 +562,7 @@ export async function listNotifications(actor: UserActor, limit = 20): Promise<N
     }>(
       `select id, title, body, href, source, read_at, created_at from crm.notifications
        where (workspace_id = $1 or source = 'mail') and user_id = $2 and created_at > now() - interval '30 days'
+         and ${UPDATES_ONLY}
        order by created_at desc limit $3`,
       [actor.workspaceId, actor.userId, limit],
     );
@@ -594,16 +598,5 @@ export async function manualWorkflows(actor: UserActor, object: "company" | "con
       [actor.workspaceId, actor.userId, object],
     );
     return result.rows;
-  });
-}
-
-export async function countApprovals(actor: UserActor) {
-  return withActor(actor, async (db) => {
-    const result = await db.query<{ total: number }>(
-      `select count(*)::int as total from crm.workflow_runs
-       where workspace_id = $1 and owner_id = $2 and status = 'waiting' and waiting_for = 'approval'`,
-      [actor.workspaceId, actor.userId],
-    );
-    return result.rows[0]?.total ?? 0;
   });
 }

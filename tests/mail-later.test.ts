@@ -206,8 +206,10 @@ describe("remind me, send later and follow-ups", () => {
     const intro = inbox.threads.find((item) => item.subject === "Intro");
     assert.equal(intro?.reminder?.kind, "follow_up");
     assert.equal(inbox.threads.find((item) => item.key === thread)?.reminder, null);
+    const stored = await getAdminPool().query<{ title: string }>("select title from crm.notifications where user_id = $1", [owner.userId]);
+    assert.ok(stored.rows.some((note) => note.title === "No reply yet: Intro"));
     const notes = await listNotifications(owner, 10);
-    assert.ok(notes.some((note) => note.title === "No reply yet: Intro"));
+    assert.ok(!notes.some((note) => note.title === "No reply yet: Intro"), "the bell leaves it to Capture");
   });
 
   it("sends a scheduled email when it is due and reports a failure", async () => {

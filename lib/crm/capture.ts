@@ -1,4 +1,7 @@
+import { cache } from "react";
+import { EMPTY_WAITING, waitingIn, waitingOnce, type Waiting } from "@/lib/crm/action-needed";
 import { withActor } from "@/lib/crm/context";
+import type { CaptureSectionCounts } from "@/lib/crm/capture-format";
 import { listPeopleMet, type CalendarStatus, type MetPerson } from "@/lib/crm/calendar";
 import type { CallSyncSummary } from "@/lib/crm/calls";
 import { FREE_MAIL_DOMAINS } from "@/lib/crm/communications";
@@ -16,10 +19,16 @@ export type ToFile = { unfiled: UnfiledImport[]; people: MetPerson[] };
 
 export type CaptureStatus = {
   waiting: number;
-  followUps: number;
   fresh: number;
   newestAt: string | null;
   seenAt: string | null;
+  sections: CaptureSectionCounts;
+};
+
+export type CaptureContext = {
+  actors: UserActor[];
+  unknown: UnknownEmail[];
+  waiting: Waiting;
 };
 
 const HAS_MAILBOX = `exists (
@@ -34,7 +43,7 @@ const UNFILED_COUNTS = `
   unfiled as (
     select coalesce(i.unfiled_at, i.created_at) as arrived
     from crm.conversation_imports i
-    where i.workspace_id = $2 and i.status = 'unfiled'
+    where i.workspace_id = $2 and i.user_id = $1 and i.status = 'unfiled'
   )
   select
     (select seen_at from seen) as seen_at,
@@ -110,19 +119,11 @@ const FOLLOW_UP_COUNTS = `
 export async function listToFile(actor: UserActor, now = Date.now()): Promise<ToFile> {
   assertScope(actor.scopes, "crm:read");
   const [unfiled, mailbox] = await Promise.all([
-    listUnfiledImports(actor),
+    listUnfiledImports(actor, 50, { mine: true }),
     withActor(actor, async (db) => (await db.query(`select ${HAS_MAILBOX} as connected`, [actor.userId])).rows[0]?.connected === true),
   ]);
   const people = mailbox ? await listPeopleMet(actor, now) : [];
   return { unfiled, people };
-}
-
-export function newestArrival(items: ToFile, now = Date.now()) {
-  const times = [
-    ...items.unfiled.map((item) => item.unfiledAt ?? item.createdAt),
-    ...items.people.map((person) => person.firstSeenAt).filter((value): value is string => Boolean(value) && new Date(value!).getTime() <= now),
-  ];
-  return times.reduce<string | null>((latest, value) => (!latest || value > latest ? value : latest), null);
 }
 
 function later(left: string | null, right: string | null) {
@@ -138,26 +139,55 @@ async function unknownFor(actor: UserActor, now: number, actors?: UserActor[]) {
   });
 }
 
+async function waitingFor(actor: UserActor, actors: UserActor[], now: number) {
+  return waitingOnce(actor, actors, new Date(now)).catch((error) => {
+    console.error("Reading what is waiting on you failed", error instanceof Error ? error.message : error);
+    return EMPTY_WAITING;
+  });
+}
+
+const requestContext = cache(() => new Map<string, Promise<CaptureContext>>());
+
+export function captureContext(actor: UserActor, now = Date.now()) {
+  assertScope(actor.scopes, "crm:read");
+  const store = requestContext();
+  const key = `${actor.userId}|${actor.workspaceId}`;
+  const found = store.get(key);
+  if (found) return found;
+  const pending = (async () => {
+    const actors = await workspaceActors(actor);
+    const [unknown, waiting] = await Promise.all([unknownFor(actor, now, actors), waitingFor(actor, actors, now)]);
+    return { actors, unknown, waiting };
+  })();
+  store.set(key, pending);
+  pending.catch(() => store.delete(key));
+  return pending;
+}
+
+export function waitingHere(context: CaptureContext, workspaceId: string) {
+  return waitingIn(context.waiting, workspaceId, context.unknown.map((item) => item.key));
+}
+
 export async function captureStatuses(actor: UserActor, now = Date.now()) {
-  assertScope(actor.scopes, "crm:read");
-  const actors = await workspaceActors(actor);
-  const unknown = await unknownFor(actor, now, actors);
-  if (actors.length < 2) {
-    const status = await captureStatus(actor, now, unknown).catch(() => null);
-    return new Map([[actor.workspaceId, status]]);
-  }
-  const statuses = await Promise.all(actors.map((item) => captureStatus(item, now, unknown).catch(() => null)));
-  return new Map(actors.map((item, index) => [item.workspaceId, statuses[index]]));
+  const context = await captureContext(actor, now);
+  const others = context.actors.length < 2 ? [actor] : context.actors;
+  const statuses = await Promise.all(others.map((item) => captureStatus(item, now, context).catch(() => null)));
+  return new Map(others.map((item, index) => [item.workspaceId, statuses[index]]));
 }
 
-export async function unknownMailFor(actor: UserActor, now = Date.now()) {
-  const actors = await workspaceActors(actor);
-  return { actors, emails: await unknownFor(actor, now, actors) };
+function arrivals(items: { arrivedAt: string }[], now: number, seenAt: string | null) {
+  const arrived = items.map((item) => item.arrivedAt).filter((at) => new Date(at).getTime() <= now);
+  return {
+    fresh: arrived.filter((at) => !seenAt || at > seenAt).length,
+    newest: arrived.reduce<string | null>((latest, at) => (!latest || at > latest ? at : latest), null),
+  };
 }
 
-export async function captureStatus(actor: UserActor, now = Date.now(), unknown?: UnknownEmail[]): Promise<CaptureStatus> {
+export async function captureStatus(actor: UserActor, now = Date.now(), known?: CaptureContext): Promise<CaptureStatus> {
   assertScope(actor.scopes, "crm:read");
-  const emails = (unknown ?? (await unknownFor(actor, now))).filter((item) => item.workspaceId === actor.workspaceId);
+  const context = known ?? (await captureContext(actor, now));
+  const emails = context.unknown.filter((item) => item.workspaceId === actor.workspaceId);
+  const here = waitingHere(context, actor.workspaceId);
   return withActor(actor, async (db) => {
     const unfiled = (
       await db.query<{ seen_at: Date | null; waiting: number; fresh: number; newest: Date | null }>(UNFILED_COUNTS, [actor.userId, actor.workspaceId])
@@ -178,12 +208,20 @@ export async function captureStatus(actor: UserActor, now = Date.now(), unknown?
     ).rows[0];
     const freshEmails = emails.filter((item) => !seenAt || item.at > seenAt).length;
     const newestEmail = emails.reduce<string | null>((latest, item) => (!latest || item.at > latest ? item.at : latest), null);
+    const waiting = arrivals([...here.approvals, ...here.nudges, ...here.replies, ...here.tasks], now, seenAt);
+    const sections: CaptureSectionCounts = {
+      approvals: here.approvals.length,
+      followUps: followUps.waiting + here.nudges.length,
+      replies: here.replies.length,
+      tasks: here.tasks.length,
+      toFile: unfiled.waiting + people.waiting + emails.length,
+    };
     return {
-      waiting: unfiled.waiting + people.waiting + followUps.waiting + emails.length,
-      followUps: followUps.waiting,
-      fresh: unfiled.fresh + people.fresh + followUps.fresh + freshEmails,
-      newestAt: later(later(later(iso(unfiled.newest), iso(people.newest)), iso(followUps.newest)), newestEmail),
+      waiting: sections.approvals + sections.followUps + sections.replies + sections.tasks + sections.toFile,
+      fresh: unfiled.fresh + people.fresh + followUps.fresh + freshEmails + waiting.fresh,
+      newestAt: later(later(later(later(iso(unfiled.newest), iso(people.newest)), iso(followUps.newest)), newestEmail), waiting.newest),
       seenAt,
+      sections,
     };
   });
 }

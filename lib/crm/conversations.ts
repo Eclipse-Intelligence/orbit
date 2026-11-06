@@ -500,7 +500,7 @@ export async function lockImportKey(db: Db, workspaceId: string, source: Convers
   ]);
 }
 
-export type NewPerson = { name: string | null; email: string };
+type NewPerson = { name: string | null; email: string };
 export type UnfiledImport = ConversationImport & { newPeople: NewPerson[] };
 
 function personName(person: Participant) {
@@ -544,16 +544,16 @@ async function withNewPeople(db: Db, actor: UserActor, imports: ConversationImpo
   }));
 }
 
-export async function listUnfiledImports(actor: UserActor, limit = 50): Promise<UnfiledImport[]> {
+export async function listUnfiledImports(actor: UserActor, limit = 50, options: { mine?: boolean } = {}): Promise<UnfiledImport[]> {
   assertScope(actor.scopes, "crm:read");
   return withActor(actor, async (db) => {
     const result = await db.query<ImportRow>(
       `select ${IMPORT_COLUMNS}
        from crm.conversation_imports i
-       where i.workspace_id = $1 and i.status = 'unfiled'
+       where i.workspace_id = $1 and i.status = 'unfiled' and ($3::uuid is null or i.user_id = $3)
        order by i.occurred_at desc nulls last, i.created_at desc
        limit $2`,
-      [actor.workspaceId, Math.min(Math.max(limit, 1), 200)],
+      [actor.workspaceId, Math.min(Math.max(limit, 1), 200), options.mine ? actor.userId : null],
     );
     return withNewPeople(db, actor, result.rows.map(mapImport));
   });

@@ -1,10 +1,11 @@
 import { redirect } from "next/navigation";
 import { after } from "next/server";
-import CaptureScreen from "@/components/crm/inbox-screen";
+import CaptureScreen from "@/components/capture/capture-screen";
 import { getUserActor } from "@/lib/auth/user";
+import { listWaitingOnOthers } from "@/lib/crm/action-needed";
 import { getCalendarStatus } from "@/lib/crm/calendar";
 import { getCallSync } from "@/lib/crm/calls";
-import { captureStatus, connectionAlert, listToFile, markCaptureSeen, newestArrival, unknownMailFor } from "@/lib/crm/capture";
+import { captureContext, captureStatus, connectionAlert, listToFile, markCaptureSeen, waitingHere } from "@/lib/crm/capture";
 import { listFollowUps } from "@/lib/crm/follow-ups";
 import { getGranolaStatus } from "@/lib/crm/granola";
 import { getMailbox, shouldSyncMailbox, syncMailbox } from "@/lib/crm/inbox";
@@ -18,12 +19,6 @@ function requestTime() {
   return new Date();
 }
 
-function later(left: string | null, right: string | null) {
-  if (!left) return right;
-  if (!right) return left;
-  return left > right ? left : right;
-}
-
 export default async function CapturePage() {
   const user = await getUserActor();
   if (!user) redirect("/login");
@@ -35,19 +30,20 @@ export default async function CapturePage() {
     mailbox = await getMailbox(user);
   }
   const live = mailbox?.status === "connected";
-  const known = await unknownMailFor(user, openedAt.getTime());
-  const [items, status, calls, granola, transcripts, calendar, followUps, unknown] = await Promise.all([
+  const context = await captureContext(user, openedAt.getTime());
+  const [items, status, calls, granola, transcripts, calendar, followUps, unknown, others] = await Promise.all([
     listToFile(user, openedAt.getTime()),
-    captureStatus(user, openedAt.getTime(), known.emails),
+    captureStatus(user, openedAt.getTime(), context),
     mailbox ? getCallSync(user) : Promise.resolve(null),
     getGranolaStatus(user),
     live ? getTeamsTranscriptStatus(user) : Promise.resolve(null),
     live ? getCalendarStatus(user) : Promise.resolve(null),
     listFollowUps(user).catch(() => []),
-    listUnknownMail(user, openedAt.getTime(), known).catch((error) => {
+    listUnknownMail(user, openedAt.getTime(), { actors: context.actors, emails: context.unknown }).catch((error) => {
       console.error("Reading email from new people failed", error instanceof Error ? error.message : error);
       return { emails: [], total: 0, workspaces: [{ id: user.workspaceId, name: user.workspaceName }] };
     }),
+    listWaitingOnOthers(user, openedAt).catch(() => []),
   ]);
   after(async () => {
     try {
@@ -56,6 +52,7 @@ export default async function CapturePage() {
       console.error("Could not mark Capture as seen", error);
     }
   });
+  const here = waitingHere(context, user.workspaceId);
 
   return (
     <CaptureScreen
@@ -66,15 +63,22 @@ export default async function CapturePage() {
         role: user.role,
         workspaceName: user.workspaceName,
       }}
-      followUps={followUps}
-      unfiled={items.unfiled}
-      people={items.people}
-      emails={unknown.emails}
+      data={{
+        approvals: here.approvals,
+        others,
+        nudges: here.nudges,
+        calls: followUps,
+        replies: here.replies,
+        tasks: here.tasks,
+        emails: unknown.emails,
+        unfiled: items.unfiled,
+        people: items.people,
+      }}
+      toFileTotal={status.sections.toFile}
       workspaces={unknown.workspaces}
       workspaceId={user.workspaceId}
       now={openedAt.getTime()}
-      total={status.waiting - status.followUps}
-      newestAt={later(later(newestArrival(items, openedAt.getTime()), status.newestAt), unknown.emails[0]?.at ?? null)}
+      newestAt={status.newestAt}
       alert={connectionAlert({ mailbox, calendar, calls, granola, transcripts })}
     />
   );
