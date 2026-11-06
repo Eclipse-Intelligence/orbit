@@ -124,7 +124,7 @@ export default function CompaniesToolbar({
 
   return (
     <div className="flex shrink-0 flex-col gap-2 px-4 py-4">
-    <div className="flex flex-wrap items-center justify-between gap-2">
+    <div className="flex flex-wrap items-center justify-between gap-2 sm:flex-nowrap sm:items-start">
       <div className="flex items-center gap-2 sm:hidden">
         <MobileFilters
           filters={filters}
@@ -150,7 +150,7 @@ export default function CompaniesToolbar({
         />
       </div>
 
-      <div className="hidden min-w-0 flex-wrap items-center gap-2 sm:flex">
+      <div className="hidden min-w-0 flex-1 flex-wrap items-center gap-2 sm:flex">
         {(views.length > 0 || canManage) && <ViewMenu views={views} canManage={canManage} />}
         <ListSearch noun="companies" />
         <FilterMenu

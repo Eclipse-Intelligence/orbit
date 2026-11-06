@@ -36,12 +36,14 @@ function FieldRow({
   field,
   stats,
   canAdmin,
+  configured,
   onEdit,
   onError,
 }: {
   field: AiField;
   stats: AiFieldStats | undefined;
   canAdmin: boolean;
+  configured: boolean;
   onEdit: () => void;
   onError: (message: string | null) => void;
 }) {
@@ -50,7 +52,8 @@ function FieldRow({
   const total = stats?.total ?? 0;
   const answered = stats?.answered ?? 0;
   const checked = stats?.checked ?? 0;
-  const filling = !field.paused && ((stats?.running ?? 0) > 0 || checked < total);
+  const running = (stats?.running ?? 0) > 0;
+  const filling = configured && !field.paused && (running || checked < total);
   const lastRun = shortDate(field.lastRunAt);
   const refresh = field.paused ? "Paused" : `${AI_FIELD_REFRESH_LABELS[field.refresh]}${lastRun ? `, last run ${lastRun}` : ""}`;
 
@@ -103,7 +106,7 @@ function FieldRow({
           <Button variant="secondary" size="sm" onClick={onEdit} disabled={busy}>
             Edit
           </Button>
-          <Button variant="ghost" size="sm" disabled={busy || filling} onClick={() => void run(() => checkFieldAgainAction(field.id))}>
+          <Button variant="ghost" size="sm" disabled={busy || running} onClick={() => void run(() => checkFieldAgainAction(field.id))}>
             Check all again
           </Button>
           <span className="ml-auto">
@@ -221,6 +224,7 @@ export default function AiFieldsSettings({
                 field={field}
                 stats={stats.find((item) => item.fieldId === field.id)}
                 canAdmin={canAdmin}
+                configured={configured}
                 onEdit={() => setDialog({ open: true, field })}
                 onError={setError}
               />
