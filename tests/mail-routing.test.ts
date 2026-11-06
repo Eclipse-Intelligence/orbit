@@ -172,7 +172,7 @@ describe("mail across workspaces", () => {
     await addMessage(eclipse, primary, { id: "rita", from: "rita@replied.test", to: ["mark@geteclipse.co"], subject: "Catch up", at: minutesAgo(60) });
     await addMessage(eclipse, primary, { id: "rita-reply", thread: "rita", from: "mark@geteclipse.co", to: ["rita@replied.test"], subject: "Re: Catch up", at: minutesAgo(10), sent: true });
     const iggy = await addMessage(eclipse, primary, { id: "iggy", from: "iggy@ignore.test", to: ["mark@geteclipse.co"], subject: "Hi" });
-    await addMessage(eclipse, primary, { id: "old", from: "old@friend.test", to: ["mark@geteclipse.co"], subject: "Long ago", at: minutesAgo(60 * 24 * 20) });
+    await addMessage(eclipse, primary, { id: "old", from: "old@friend.test", to: ["mark@geteclipse.co"], subject: "Long ago", at: minutesAgo(60 * 24 * 31) });
     await addMessage(eclipse, primary, { id: "colleague", from: "priya@geteclipse.co", to: ["mark@geteclipse.co"], subject: "Release notes" });
 
     assert.deepEqual(await senders(eclipse), ["daniel@lumenagency.co.uk", "iggy@ignore.test"]);

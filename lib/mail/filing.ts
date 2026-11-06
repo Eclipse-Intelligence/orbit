@@ -28,9 +28,9 @@ import {
 } from "@/lib/mail/routing";
 import { splitCase, splitJoin, UNSUBSCRIBE_TEXT } from "@/lib/mail/split";
 import { fileMailOnTimeline } from "@/lib/mail/timeline";
+import { captureCutoff, ownAddressesSql } from "@/lib/mail/waiting";
 import type { ThreadFiling } from "@/lib/mail/view";
 
-const CAPTURE_DAYS = 14;
 const CAPTURE_SCAN = 300;
 const CAPTURE_SHOWN = 30;
 
@@ -218,7 +218,7 @@ export async function unknownMail(actor: UserActor, actors: UserActor[], now = D
   const workspaceIds = actors.map((item) => item.workspaceId);
   return withActor(actor, async (db) => {
     const homes = await addressHomesInDb(db, actor);
-    const capture = captureWorkspaceSql("n", "rt", "$6", "$3");
+    const capture = captureWorkspaceSql("n", "n", "$6", "$3");
     const result = await db.query<{
       id: string;
       source_id: string;
@@ -232,9 +232,7 @@ export async function unknownMail(actor: UserActor, actors: UserActor[], now = D
       capture_workspace_id: string;
     }>(
       `with own as (
-         select lower(email) as email from crm.mail_sources where user_id = $1
-         union select lower(email) from crm.send_identities where user_id = $1
-         union select lower($2::text)
+         ${ownAddressesSql("$1", "$2")}
        ),
        own_domains as (
          select distinct split_part(x.e, '@', 2) as domain
@@ -245,60 +243,69 @@ export async function unknownMail(actor: UserActor, actors: UserActor[], now = D
          where x.e like '%@%' and split_part(x.e, '@', 2) <> all($4::text[])
        ),
        inbound as (
-         select m.id, m.source_id, coalesce(m.thread_key, 'm:' || m.id::text) as tk, m.subject, m.snippet, m.from_email, m.from_name, m.focused,
-           m.to_recipients, m.cc_recipients, coalesce(m.received_at, m.created_at) as at, s.email as account, s.workspace_id as source_workspace,
-           right(coalesce(m.body_text, ''), 4000) ~* '${UNSUBSCRIBE_TEXT}' as bulk
+         select m.id, m.source_id, coalesce(m.thread_key, 'm:' || m.id::text) as tk, coalesce(m.received_at, m.created_at) as at
          from crm.mail_messages m
          join crm.mail_folders f on f.id = m.folder_id
-         join crm.mail_sources s on s.id = m.source_id
          where m.user_id = $1 and not m.is_draft and f.role in ('inbox', 'archive', 'snoozed')
-           and coalesce(m.received_at, m.created_at) > to_timestamp($5::double precision / 1000) - make_interval(days => ${CAPTURE_DAYS})
+           and (m.received_at >= $5 or (m.received_at is null and m.created_at >= $5))
            and nullif(m.from_email, '') is not null
            and lower(m.from_email) not in (select email from own)
        ),
-       latest as (
-         select distinct on (i.source_id, i.tk) i.* from inbound i order by i.source_id, i.tk, i.at desc
-       )
-       select n.id, n.source_id, n.tk, n.subject, n.snippet, lower(n.from_email) as from_email, n.from_name, n.at,
-         ${capture.received} as received_by, ${capture.workspace} as capture_workspace_id
-       from latest n
-       ${splitJoin("n", "$1")}
-       left join crm.mail_thread_routes rt on rt.user_id = $1 and rt.source_id = n.source_id and rt.thread_key = n.tk
-       where ${splitCase("n")} = 'important'
-         and not n.bulk
-         and rt.ignored_at is null and rt.filed_in is null and rt.contact_id is null
-         and ${NOT_AUTOMATED("lower(n.from_email)")}
-         and split_part(lower(n.from_email), '@', 2) not in (select domain from own_domains)
-         and not exists (
-           select 1 from crm.contacts c
-           where c.workspace_id = any($3::uuid[]) and c.archived_at is null and c.normalized_email = lower(n.from_email)
-         )
-         and not (
-           split_part(lower(n.from_email), '@', 2) <> all($4::text[])
-           and exists (
-             select 1 from crm.companies co
-             where co.workspace_id = any($3::uuid[]) and co.archived_at is null and co.domain = split_part(lower(n.from_email), '@', 2)
+       latest as materialized (
+         select distinct on (i.source_id, i.tk) i.id, i.source_id, i.tk, i.at from inbound i order by i.source_id, i.tk, i.at desc
+       ),
+       candidates as materialized (
+         select l.id, l.source_id, l.tk, l.at, m.subject, m.snippet, lower(m.from_email) as from_email, m.from_name, m.focused,
+           m.to_recipients, m.cc_recipients, s.email as account, s.workspace_id as source_workspace, rt.capture_workspace_id
+         from latest l
+         join crm.mail_messages m on m.id = l.id
+         join crm.mail_sources s on s.id = l.source_id
+         left join crm.mail_thread_routes rt on rt.user_id = $1 and rt.source_id = l.source_id and rt.thread_key = l.tk
+         where rt.ignored_at is null and rt.filed_in is null and rt.contact_id is null
+           and ${NOT_AUTOMATED("lower(m.from_email)")}
+           and split_part(lower(m.from_email), '@', 2) not in (select domain from own_domains)
+           and not exists (
+             select 1 from crm.contacts c
+             where c.workspace_id = any($3::uuid[]) and c.archived_at is null and c.normalized_email = lower(m.from_email)
            )
-         )
-         and not exists (
-           select 1 from crm.mail_subscriptions ms
-           where ms.user_id = $1 and (ms.sender = lower(n.from_email) or ms.sender = '@' || split_part(lower(n.from_email), '@', 2))
-             and (ms.status <> 'subscribed' or ms.cold_pitch_at is not null or ms.list_unsubscribe is not null)
-         )
-         and not exists (
-           select 1 from crm.mail_prepared p
-           where p.user_id = $1 and p.source_id = n.source_id and p.thread_key = n.tk and p.kind = 'pitch' and p.state = 'ready'
-         )
-         and not exists (
-           select 1 from crm.mail_messages o join crm.mail_folders ofo on ofo.id = o.folder_id
-           where o.user_id = $1 and o.source_id = n.source_id and coalesce(o.thread_key, 'm:' || o.id::text) = n.tk
-             and ofo.role = 'sent' and coalesce(o.sent_at, o.created_at) > n.at
-         )
-       order by n.at desc
+           and not (
+             split_part(lower(m.from_email), '@', 2) <> all($4::text[])
+             and exists (
+               select 1 from crm.companies co
+               where co.workspace_id = any($3::uuid[]) and co.archived_at is null and co.domain = split_part(lower(m.from_email), '@', 2)
+             )
+           )
+           and not exists (
+             select 1 from crm.mail_subscriptions ms
+             where ms.user_id = $1 and (ms.sender = lower(m.from_email) or ms.sender = '@' || split_part(lower(m.from_email), '@', 2))
+               and (ms.status <> 'subscribed' or ms.cold_pitch_at is not null or ms.list_unsubscribe is not null)
+           )
+           and not exists (
+             select 1 from crm.mail_prepared p
+             where p.user_id = $1 and p.source_id = l.source_id and p.thread_key = l.tk and p.kind = 'pitch' and p.state = 'ready'
+           )
+           and not exists (
+             select 1 from crm.mail_messages o join crm.mail_folders ofo on ofo.id = o.folder_id
+             where o.source_id = l.source_id and o.thread_key = l.tk and ofo.role = 'sent' and coalesce(o.sent_at, o.created_at) > l.at
+           )
+       )
+       select n.id, n.source_id, n.tk, n.subject, n.snippet, n.from_email, n.from_name, n.at,
+         ${capture.received} as received_by, ${capture.workspace} as capture_workspace_id
+       from (
+         select n.* from candidates n
+         ${splitJoin("n", "$1")}
+         where ${splitCase("n")} = 'important'
+         order by n.at desc
+         offset 0
+       ) n
+       where not exists (
+         select 1 from crm.mail_messages b where b.id = n.id and right(coalesce(b.body_text, ''), 4000) ~* '${UNSUBSCRIBE_TEXT}'
+       )
        limit ${CAPTURE_SCAN}`,
-      [actor.userId, actor.email, workspaceIds, [...FREE_MAIL_DOMAINS], now, homesJson(homes)],
+      [actor.userId, actor.email, workspaceIds, [...FREE_MAIL_DOMAINS], captureCutoff(now), homesJson(homes)],
     );
-    return result.rows.map((row) => ({
+    const rows = result.rows.sort((left, right) => new Date(right.at).getTime() - new Date(left.at).getTime());
+    return rows.map((row) => ({
       key: `${row.source_id}|${row.tk}`,
       messageId: row.id,
       name: row.from_name?.trim() || null,

@@ -75,7 +75,7 @@ import { BULK_LIMIT, runBulk } from "@/lib/crm/bulk";
 import { attachableFiles, discardAttachments } from "@/lib/crm/email-attachments";
 import { activitySummaries, archiveActivity, listActivities, readActivityState, updateActivity } from "@/lib/crm/activities";
 import { ACTIVITY_EDIT_FIELDS, ACTIVITY_FIELD_LABELS, EDITABLE_TYPES, type ActivityEdit, type ActivityEditField } from "@/lib/crm/activity-edit";
-import { getCalendarStatus, getMeetings, listPeopleMet, myAddresses, readPeople, readPerson, relinkCalendar } from "@/lib/crm/calendar";
+import { getCalendarStatus, getMeetings, myAddresses, readPeople, readPerson, relinkCalendar } from "@/lib/crm/calendar";
 import { listCalendarItems } from "@/lib/crm/calendars";
 import { getInsightTranscript, getInsightsForActivities } from "@/lib/crm/call-insights";
 import { createTaskWithClickUp, getClickUpPicker, getClickUpState, pushClickUpTask } from "@/lib/crm/clickup";
@@ -86,13 +86,15 @@ import type { AiFilter } from "@/lib/ai-fields/params";
 import { displayAiValue, likelihoodText, type AiCell, type AiField } from "@/lib/ai-fields/types";
 import { archiveContact, createContact, getContact, listContacts, updateContact } from "@/lib/crm/contacts";
 import { mergeCompanies, mergeContacts } from "@/lib/crm/merge";
-import { createContactAndFile, fileImport, getConversationImport, listUnfiledImports, summariseImport, type ConversationImport } from "@/lib/crm/conversations";
+import { createContactAndFile, fileImport, getConversationImport, summariseImport, type ConversationImport } from "@/lib/crm/conversations";
 import { archiveEmailTemplate, createEmailTemplate, listEmailTemplates, updateEmailTemplate } from "@/lib/crm/email-templates";
 import { CrmError } from "@/lib/crm/errors";
 import { getGranolaStatus } from "@/lib/crm/granola";
 import { companyHref, contactHref, opportunityHref } from "@/lib/crm/hrefs";
-import { getMailbox, listInbox } from "@/lib/crm/inbox";
+import { getMailbox } from "@/lib/crm/inbox";
 import { listFollowUps } from "@/lib/crm/follow-ups";
+import { captureContext, listToFile, waitingHere } from "@/lib/crm/capture";
+import { listUnknownMail } from "@/lib/mail/filing";
 import { cancelInvite, createInvite, getMeetingLink, MEETING_RESPONSES, rescheduleInvite, respondToInvite } from "@/lib/crm/invites";
 import { latestEmailCheck, verifyEmail } from "@/lib/enrichment/email-check";
 import { archiveOpportunity, createOpportunity, getOpportunity, listOpportunities, listPipeline, updateOpportunity } from "@/lib/crm/opportunities";
@@ -1452,17 +1454,76 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     name: "get_capture",
     label: "Checking Capture",
     description:
-      "What's waiting in Capture, not the mailbox: calls that ended with no next step (with the follow-up Orbit drafted), unfiled conversations from Teams and Granola waiting to be filed and people met in meetings who aren't contacts yet, plus recent mail filed to records. For the user's email itself use search_email.",
+      "Everything waiting on the user in Capture for this workspace, in its sections: approvals (workflow steps waiting on them), follow-ups (Orbit's ready follow-up emails for sent mail nobody answered, sent mail whose follow-up reminder is due with no draft yet, and calls that ended with no next step, each with the draft), replies (emails from people waiting two or more working days for their reply), tasks (theirs, overdue then due today) and to file (email from people not in Orbit, unfiled Teams and Granola conversations, and people met who aren't contacts). unreadSections lists any section Orbit couldn't read this time. For the mailbox itself use search_email.",
     parameters: { type: "object", properties: {} },
     run: async (actor) => {
-      const [mailbox, messages, unfiled, people, followUps] = await Promise.all([
-        getMailbox(actor),
-        listInbox(actor),
-        listUnfiledImports(actor, 50),
-        listPeopleMet(actor),
-        actor.type === "user" ? listFollowUps(actor) : Promise.resolve([]),
+      const now = Date.now();
+      const context = await captureContext(actor, now);
+      const here = waitingHere(context, actor.workspaceId);
+      const unread: string[] = [...context.failed];
+      const [toFile, calls, unknown] = await Promise.all([
+        listToFile(actor, now).catch(() => {
+          unread.push("toFile");
+          return { unfiled: [], people: [] };
+        }),
+        listFollowUps(actor).catch(() => {
+          unread.push("followUps");
+          return [];
+        }),
+        listUnknownMail(actor, now, { actors: context.actors, emails: context.unknown }),
       ]);
-      return { mailbox, followUps, recentMail: messages, unfiledConversations: unfiled, peopleMet: people };
+      return {
+        unreadSections: [...new Set(unread)],
+        approvals: here.approvals.map((item) => ({
+          runId: item.id,
+          title: item.title,
+          workflow: item.workflowName,
+          company: item.companyName,
+          details: item.details.slice(0, 400),
+          waitingSince: item.createdAt,
+        })),
+        followUps: {
+          emails: here.nudges.map((item) => ({
+            thread: item.key,
+            subject: item.subject,
+            to: item.to.map((person) => person.address),
+            sentAt: item.sentAt,
+            opens: item.opens,
+            draft: item.body,
+          })),
+          calls: calls.map((item) => ({ id: item.id, title: item.title, source: item.source, to: item.to.address, subject: item.subject, draft: item.body })),
+          noReplyYet: here.reminders.map((item) => ({
+            thread: item.key,
+            subject: item.subject,
+            to: item.to.map((person) => person.address),
+            kind: item.checkIn ? "time to check in" : "no reply yet",
+            since: item.at,
+          })),
+        },
+        replies: here.replies.map((item) => ({
+          thread: item.key,
+          from: item.from.name ? `${item.from.name} <${item.from.email}>` : item.from.email,
+          company: item.company,
+          subject: item.subject,
+          snippet: item.snippet,
+          receivedAt: item.at,
+          workingDaysWaiting: item.waitingDays,
+          replyReady: item.ready,
+        })),
+        tasks: here.tasks.map((item) => ({ id: item.id, title: item.title, dueAt: item.dueAt, overdue: item.overdue, company: item.companyName, contact: item.contactName })),
+        toFile: {
+          emails: unknown.emails.map((item) => ({ thread: item.key, from: item.name ? `${item.name} <${item.email}>` : item.email, to: item.address, subject: item.subject, receivedAt: item.at })),
+          conversations: toFile.unfiled.map((item) => ({
+            id: item.id,
+            source: item.source,
+            title: item.title,
+            occurredAt: item.occurredAt,
+            people: item.participants.map((person) => person.name || person.email).filter(Boolean),
+            newPeople: item.newPeople,
+          })),
+          peopleMet: toFile.people.map((person) => ({ email: person.email, name: person.name, meetings: person.meetings })),
+        },
+      };
     },
   },
   {

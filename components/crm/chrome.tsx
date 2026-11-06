@@ -11,27 +11,22 @@ import { ComposerProvider } from "@/components/mail/compose-dock";
 import PushRegistrar from "@/components/push/push-registrar";
 import ShortcutsHelp from "@/components/shortcuts/shortcuts-help";
 import type { Viewer } from "@/components/crm/viewer";
-import type { Task } from "@/lib/crm/types";
 import type { UnreadBrief } from "@/lib/learning/nightly";
 import type { Notification } from "@/lib/workflows/store";
 
 export default function CrmChrome({
   viewer,
-  overdue,
-  today,
   notifications,
   brief = null,
   children,
 }: {
   viewer: Viewer;
-  overdue: Task[];
-  today: Task[];
   notifications?: Notification[];
   brief?: UnreadBrief | null;
   children: ReactNode;
 }) {
   return (
-    <AttentionProvider overdue={overdue} today={today} notifications={notifications}>
+    <AttentionProvider notifications={notifications}>
       <QuickAddProvider>
         <ComposerProvider>
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">

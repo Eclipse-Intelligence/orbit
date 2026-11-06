@@ -101,7 +101,7 @@ async function checkFollowUp(actor: UserActor, reminder: ReminderRow, options: {
       body,
       url: href,
       tag: `${reminder.source_id}|${reminder.thread_key}`,
-      bell: { title, body: "Orbit has put the conversation back at the top of your inbox.", href },
+      bell: { title, body: "Orbit has put the conversation back at the top of your inbox.", href, category: "capture" },
     },
     { send: quiet ? async () => undefined : options.send },
   );

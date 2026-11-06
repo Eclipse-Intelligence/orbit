@@ -13,13 +13,12 @@ import SidebarResizer from "./sidebar-resizer";
 import type { CaptureStatus } from "@/lib/crm/capture";
 import type { WorkspaceChoice } from "@/lib/auth/user";
 import type { BoardSummary } from "@/lib/crm/types";
-import { useCompaniesStore } from "@/stores/companies-store";
+import { CAPTURE_SECTIONS, NO_CAPTURE_COUNTS, useCompaniesStore, type CaptureCounts } from "@/stores/companies-store";
 
 export type SidebarWorkspace = { id: string; name: string; viewerName: string; choices: WorkspaceChoice[] };
 
 type SidebarProps = {
   boards: BoardSummary[];
-  approvals: number;
   companyCount: number;
   openActionCount: number;
   mailUnread: number;
@@ -27,24 +26,30 @@ type SidebarProps = {
   workspace: SidebarWorkspace;
 };
 
-export default function Sidebar({ boards, approvals, companyCount, openActionCount, mailUnread, capture, workspace }: SidebarProps) {
+export default function Sidebar({ boards, companyCount, openActionCount, mailUnread, capture, workspace }: SidebarProps) {
   const sidebarOpen = useCompaniesStore((state) => state.sidebarOpen);
   const setSidebarOpen = useCompaniesStore((state) => state.setSidebarOpen);
   const setCapture = useCompaniesStore((state) => state.setCapture);
-  const waiting = capture?.waiting ?? 0;
-  const fresh = capture?.fresh ?? 0;
-  const newestAt = capture?.newestAt ?? null;
-
   useEffect(() => {
-    setCapture({ waiting, fresh, newestAt });
-  }, [setCapture, waiting, fresh, newestAt]);
+    const known = useCompaniesStore.getState().capture;
+    const read = capture?.sections ?? NO_CAPTURE_COUNTS;
+    const unread = new Set(capture?.failed ?? []);
+    const sections = Object.fromEntries(
+      CAPTURE_SECTIONS.map((id) => [id, unread.has(id) ? (known?.sections[id] ?? 0) : read[id]]),
+    ) as CaptureCounts;
+    setCapture({
+      waiting: CAPTURE_SECTIONS.reduce((sum, id) => sum + sections[id], 0),
+      fresh: capture?.fresh ?? 0,
+      newestAt: capture?.newestAt ?? null,
+      sections,
+    });
+  }, [setCapture, capture]);
 
   return (
     <>
       <aside className="relative hidden w-(--sidebar-width) shrink-0 border-r border-sidebar-border bg-sidebar sidebar-collapsed:lg:hidden docs-focus:lg:hidden lg:flex lg:flex-col">
         <SidebarContent
           boards={boards}
-          approvals={approvals}
           companyCount={companyCount}
           openActionCount={openActionCount}
           mailUnread={mailUnread}
@@ -66,7 +71,6 @@ export default function Sidebar({ boards, approvals, companyCount, openActionCou
           <SheetCloseButton label="Close menu" className="absolute top-3 right-3 z-10 mr-0" />
           <SidebarContent
             boards={boards}
-            approvals={approvals}
             companyCount={companyCount}
             openActionCount={openActionCount}
             mailUnread={mailUnread}

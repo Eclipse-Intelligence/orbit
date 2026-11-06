@@ -43,7 +43,8 @@ type ComposerContextValue = {
   queueSend: (payload: Promise<SendPayload>, meta?: SendMeta) => void;
   scheduleSend: (payload: Promise<SendPayload>, sendAt: string, detail: string) => void;
   pickLater: (request: LaterRequest) => void;
-  showToast: (toast: Toast) => void;
+  showToast: (toast: Toast) => number;
+  dismissToast: (id: number) => void;
   undoLatest: () => boolean;
 };
 
@@ -396,8 +397,8 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo(
-    () => ({ openComposer, sent, queueSend, scheduleSend, pickLater: setLater, showToast, undoLatest }),
-    [openComposer, sent, queueSend, scheduleSend, showToast, undoLatest],
+    () => ({ openComposer, sent, queueSend, scheduleSend, pickLater: setLater, showToast, dismissToast: dismiss, undoLatest }),
+    [openComposer, sent, queueSend, scheduleSend, showToast, dismiss, undoLatest],
   );
   const docked = cards.filter((card) => !card.minimised && !card.position);
   const desktop = viewport >= 768;

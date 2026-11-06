@@ -179,6 +179,12 @@ export type ComposeAccount = { id: string; email: string; signature: string | nu
 
 export type DraftMode = "new" | "reply" | "reply_all" | "forward";
 
+export type ComposeIntent = "reply" | "prepared";
+
+export function threadHref(key: string, compose?: ComposeIntent) {
+  return `/mail?thread=${encodeURIComponent(key)}${compose ? `&compose=${compose}` : ""}`;
+}
+
 export type DraftFile = { id: string; name: string; size: number; contentType: string };
 
 export type MailDraft = {

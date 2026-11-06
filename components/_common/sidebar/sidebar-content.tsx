@@ -10,7 +10,7 @@ import SidebarNavItem from "./sidebar-nav-item";
 import SidebarSection from "./sidebar-section";
 import SidebarShortcuts from "./sidebar-shortcuts";
 import { CollapseSidebarButton } from "./sidebar-toggle";
-import { captureHasNew, useCompaniesStore } from "@/stores/companies-store";
+import { captureHasNew, captureLeft, useCompaniesStore } from "@/stores/companies-store";
 import type { CaptureStatus } from "@/lib/crm/capture";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import type { BoardSummary } from "@/lib/crm/types";
@@ -31,7 +31,6 @@ import MessageIcon from "@/public/assets/images/companies/sidebar/message-questi
 
 type SidebarContentProps = {
   boards: BoardSummary[];
-  approvals: number;
   companyCount: number;
   openActionCount: number;
   mailUnread: number;
@@ -41,7 +40,6 @@ type SidebarContentProps = {
 
 export default function SidebarContent({
   boards,
-  approvals,
   companyCount,
   openActionCount,
   mailUnread,
@@ -53,8 +51,10 @@ export default function SidebarContent({
   const liveMailUnread = useCompaniesStore((state) => state.mailUnread);
   const unreadMail = liveMailUnread ?? mailUnread;
   const liveCapture = useCompaniesStore((state) => state.capture);
+  const captureCleared = useCompaniesStore((state) => state.captureCleared);
   const captureSeen = useCompaniesStore((state) => state.captureSeen);
-  const toFile = liveCapture ?? capture;
+  const waiting = liveCapture ?? capture;
+  const waitingCount = captureLeft(waiting, captureCleared).total;
   const [boardsOpen, setBoardsOpen] = useState(true);
   const current = (href: string) =>
     href === "/"
@@ -100,10 +100,10 @@ export default function SidebarContent({
               href="/capture"
               icon={MailIcon}
               label="Capture"
-              count={toFile && toFile.waiting > 0 ? toFile.waiting : undefined}
-              countLabel="waiting to file"
+              count={waitingCount > 0 ? waitingCount : undefined}
+              countLabel="waiting on you"
               accent
-              dot={!current("/capture") && captureHasNew(toFile, captureSeen)}
+              dot={!current("/capture") && captureHasNew(waiting, captureSeen)}
               dotLabel="New since you last looked"
               active={current("/capture")}
             />
@@ -152,7 +152,6 @@ export default function SidebarContent({
               href="/workflows"
               icon={ZapIcon}
               label="Workflows"
-              count={approvals > 0 ? approvals : undefined}
               active={current("/workflows")}
             />
           </SidebarSection>
