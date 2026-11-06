@@ -27,6 +27,7 @@ import PlugIcon from "@/public/assets/images/settings/plug.svg";
 import SlidersIcon from "@/public/assets/images/settings/sliders.svg";
 import TagIcon from "@/public/assets/images/settings/tag.svg";
 import UsersIcon from "@/public/assets/images/companies/sidebar/users.svg";
+import SparkleIcon from "@/public/assets/images/assistant/sparkle.svg";
 
 type NavItem = {
   href: string;
@@ -59,6 +60,7 @@ const GROUPS: { label: string; workspace?: boolean; items: NavItem[] }[] = [
       { href: SETTINGS_PATHS.activity, label: "Activity log", icon: ListIcon },
       { href: SETTINGS_PATHS.pipeline, label: "Pipeline", icon: BarChartIcon },
       { href: SETTINGS_PATHS.tags, label: "Tags and lifecycles", icon: TagIcon },
+      { href: SETTINGS_PATHS.aiFields, label: "AI fields", icon: SparkleIcon },
       { href: SETTINGS_PATHS.emailTemplates, label: "Templates and signatures", icon: FileTextIcon },
       { href: SETTINGS_PATHS.knowledge, label: "Knowledge", icon: BookIcon },
     ],

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import { cleanLifecycle } from "@/lib/companies";
+import { aiFiltersFromParams, aiSortField } from "@/lib/ai-fields/params";
 import { normalizeTag } from "@/lib/crm/normalize";
 import { appTimeZone, parseDateTime, startOfDay } from "@/lib/time";
 import {
@@ -138,7 +139,11 @@ export function companyQueryFromSearchParams(
   if (sort && (COMPANY_SORTS as readonly string[]).includes(sort)) {
     query.sort = sort as CompanyListQuery["sort"];
   }
+  const aiSort = aiSortField(sort);
+  if (aiSort) query.aiSort = aiSort;
   if (order === "asc" || order === "desc") query.order = order;
+  const ai = aiFiltersFromParams(params);
+  if (ai.length > 0) query.ai = ai;
   const has = presenceList(params, "has", COMPANY_PRESENCE);
   if (has) query.has = has;
   const missing = presenceList(params, "missing", COMPANY_PRESENCE)?.filter((field) => !has?.includes(field));

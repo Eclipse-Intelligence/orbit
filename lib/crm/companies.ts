@@ -16,15 +16,15 @@ import {
   type MutationOutcome,
 } from "@/lib/crm/mutate";
 import {
-  likePattern,
   normalizeCompanyName,
   normalizeCompanyWrite,
-  normalizeTag,
   sameTags,
 } from "@/lib/crm/normalize";
 import { assertScope } from "@/lib/crm/scopes";
+import { aiSortSql, companyWhere, CURRENT_FIT } from "@/lib/crm/company-query";
+import { readAiCells } from "@/lib/ai-fields/cells";
 import { defaultCompanyOrder } from "@/lib/sorting";
-import { LIFECYCLES, QUIET_DAYS } from "@/lib/crm/types";
+import { LIFECYCLES } from "@/lib/crm/types";
 import type {
   Actor,
   BulkItemResult,
@@ -32,7 +32,6 @@ import type {
   CompanyListQuery,
   AccountHealth,
   CompanyBrand,
-  CompanyPresence,
   CompanySort,
   CompanyWrite,
   Lifecycle,
@@ -42,7 +41,6 @@ import type {
   WorkspaceRole,
 } from "@/lib/crm/types";
 
-const CURRENT_FIT = "(case when es.web_icp and ws.icp_hash = es.icp_hash then ws.icp_score end)";
 
 const COMPANY_SQL = `
   select
@@ -146,11 +144,6 @@ const SORT_COLUMNS: Record<CompanySort, string> = {
 
 const NULLS_LAST = new Set<CompanySort>(["domain", "interaction", "strength", "owner", "fit"]);
 
-const PRESENCE_SQL: Record<CompanyPresence, string> = {
-  domain: "c.domain is not null",
-  contacts: "exists (select 1 from crm.contacts ct where ct.company_id = c.id and ct.archived_at is null)",
-  interactions: "exists (select 1 from crm.activities a where a.company_id = c.id and a.archived_at is null)",
-};
 
 function mapCompany(row: CompanyRow): Company {
   return {
@@ -514,72 +507,32 @@ export async function listCompanies(actor: Actor, query: CompanyListQuery = {}) 
 
   return withActor(actor, async (db) => {
     const values: unknown[] = [actor.workspaceId];
-    const where = ["c.workspace_id = $1"];
-    if (!query.includeArchived) where.push("c.archived_at is null");
-    if (query.health === "none") where.push("c.health is null");
-    else if (query.health) {
-      values.push(query.health);
-      where.push(`c.health = $${values.length}`);
-    }
-    if (query.lifecycle) {
-      values.push(query.lifecycle);
-      where.push(`lower(c.lifecycle) = lower($${values.length})`);
-    }
-    if (query.ownerId === "unassigned") where.push("c.owner_id is null");
-    else if (query.ownerId) {
-      values.push(query.ownerId);
-      where.push(`c.owner_id = $${values.length}`);
-    }
-    const tag = query.tag ? normalizeTag(query.tag) : "";
-    if (tag) {
-      values.push([tag]);
-      where.push(`c.tags @> $${values.length}::text[]`);
-    }
-    const text = query.query?.trim();
-    if (text) {
-      values.push(likePattern(text.slice(0, 200)));
-      const ref = `$${values.length}`;
-      where.push(`(
-        c.name ilike ${ref} escape '\\'
-        or coalesce(c.domain, '') ilike ${ref} escape '\\'
-        or coalesce(c.industry, '') ilike ${ref} escape '\\'
-        or c.normalized_name ilike ${ref} escape '\\'
-      )`);
-    }
-    for (const field of query.has ?? []) where.push(PRESENCE_SQL[field]);
-    for (const field of query.missing ?? []) where.push(`not (${PRESENCE_SQL[field]})`);
-    if (query.quiet) {
-      values.push(QUIET_DAYS);
-      where.push(`not exists (
-        select 1 from crm.activities qa
-        where qa.workspace_id = c.workspace_id
-          and qa.archived_at is null
-          and qa.occurred_at >= now() - make_interval(days => $${values.length}::int)
-          and (
-            qa.company_id = c.id
-            or qa.contact_id in (
-              select qc.id from crm.contacts qc
-              where qc.company_id = c.id and qc.workspace_id = c.workspace_id and qc.archived_at is null
-            )
-          )
-      )`);
-    }
-    const whereSql = where.join(" and ");
+    const whereSql = companyWhere(query, values);
     const count = await db.query<{ total: number }>(
       `select count(*)::int as total from crm.companies c where ${whereSql}`,
       values,
     );
-    const listed = [...values, limit, offset];
+    const listed = [...values];
+    const ordering = query.aiSort
+      ? aiSortSql(query.aiSort, query.order === "asc" ? "asc" : "desc", listed)
+      : `${SORT_COLUMNS[sort]} ${direction}${nulls}`;
+    listed.push(limit, offset);
     const rows = await db.query<CompanyRow>(
       `${COMPANY_SQL}
        where ${whereSql}
-       order by ${SORT_COLUMNS[sort]} ${direction}${nulls}, lower(c.name) asc, c.id asc
+       order by ${ordering}, lower(c.name) asc, c.id asc
        limit $${listed.length - 1} offset $${listed.length}`,
       listed,
     );
-    const relationships = query.relationships ? await relationshipsInDb(db, actor.workspaceId, "company", rows.rows.map((row) => row.id)) : {};
+    const ids = rows.rows.map((row) => row.id);
+    const relationships = query.relationships ? await relationshipsInDb(db, actor.workspaceId, "company", ids) : {};
+    const cells = query.aiFields ? await readAiCells(db, actor.workspaceId, ids) : {};
     return {
-      data: rows.rows.map((row) => ({ ...mapCompany(row), ...(relationships[row.id] ? { relationship: relationships[row.id] } : {}) })),
+      data: rows.rows.map((row) => ({
+        ...mapCompany(row),
+        ...(relationships[row.id] ? { relationship: relationships[row.id] } : {}),
+        ...(query.aiFields ? { aiFields: cells[row.id] ?? {} } : {}),
+      })),
       total: count.rows[0]?.total ?? 0,
       limit,
       offset,
@@ -641,6 +594,8 @@ function scheduleEnrichment(actor: Actor, companyId: string) {
       .then((module) => module.autoEnrichCompany(actor, companyId))
       .then(() => import("@/lib/enrichment/web-checks"))
       .then((module) => module.autoCheckCompany(actor, companyId))
+      .then(() => import("@/lib/ai-fields/runner"))
+      .then((module) => module.autoAiFields(actor, companyId))
       .catch(() => undefined);
   };
   try {
@@ -840,7 +795,7 @@ export async function updateCompanyInDb(db: Db, actor: Actor, id: string, input:
   return applyUpdate(db, actor, current, normalizeCompanyWrite(input, "patch"), provenance, "company.updated");
 }
 
-export async function getCompaniesByIds(actor: Actor, ids: string[]) {
+export async function getCompaniesByIds(actor: Actor, ids: string[], options: { aiFields?: boolean } = {}) {
   assertScope(actor.scopes, "crm:read");
   const wanted = [...new Set(ids.filter(isUuid))].slice(0, 100);
   if (wanted.length === 0) return [];
@@ -849,7 +804,8 @@ export async function getCompaniesByIds(actor: Actor, ids: string[]) {
       `${COMPANY_SQL} where c.workspace_id = $1 and c.id = any($2::uuid[])`,
       [actor.workspaceId, wanted],
     );
-    const byId = new Map(rows.rows.map((row) => [row.id, mapCompany(row)]));
+    const cells = options.aiFields ? await readAiCells(db, actor.workspaceId, wanted) : {};
+    const byId = new Map(rows.rows.map((row) => [row.id, options.aiFields ? { ...mapCompany(row), aiFields: cells[row.id] ?? {} } : mapCompany(row)]));
     return wanted.flatMap((id) => byId.get(id) ?? []);
   });
 }

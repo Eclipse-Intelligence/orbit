@@ -1,5 +1,7 @@
 import type { Relationship } from "@/lib/crm/relationship-score";
 import type { Scope } from "@/lib/crm/scopes";
+import type { AiFilter } from "@/lib/ai-fields/params";
+import type { AiCell } from "@/lib/ai-fields/types";
 
 export const LIFECYCLES = ["lead", "prospect", "customer", "churned"] as const;
 export type BuiltInLifecycle = (typeof LIFECYCLES)[number];
@@ -90,6 +92,7 @@ export type Company = {
   relationship?: Relationship;
   openTaskCount: number;
   icpFit: number | null;
+  aiFields?: Record<string, AiCell>;
   tags: string[];
   health: AccountHealth | null;
   healthReason: string | null;
@@ -138,6 +141,9 @@ export type CompanyListQuery = {
   has?: CompanyPresence[];
   missing?: CompanyPresence[];
   quiet?: boolean;
+  ai?: AiFilter[];
+  aiSort?: string;
+  aiFields?: boolean;
   limit?: number;
   offset?: number;
   relationships?: boolean;

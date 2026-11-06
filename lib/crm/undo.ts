@@ -584,6 +584,7 @@ export async function listRecentChanges(actor: Actor, options: { limit?: number;
       "e.event_type not like '%.undone'",
       "e.event_type not like '%.merged'",
       "not (e.event_type = 'activity.created' and coalesce(e.source, '') = any($3::text[]))",
+      "not (e.event_type = 'company.ai_field_changed' and coalesce(e.source, '') = 'parallel')",
     ];
     if (options.entityType && isEntity(options.entityType)) {
       values.push(options.entityType);

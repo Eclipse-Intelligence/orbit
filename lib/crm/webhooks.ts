@@ -21,6 +21,7 @@ export const WEBHOOK_EVENTS = [
   "company.archived",
   "company.merged",
   "company.undone",
+  "company.ai_field_changed",
   "contact.created",
   "contact.updated",
   "contact.archived",

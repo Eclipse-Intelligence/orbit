@@ -14,6 +14,7 @@ export const SETTINGS_PATHS = {
   api: "/settings/api",
   learning: "/settings/learning",
   knowledge: "/settings/knowledge",
+  aiFields: "/settings/ai-fields",
 } as const;
 
 const HASH_TARGETS: Record<string, string> = {

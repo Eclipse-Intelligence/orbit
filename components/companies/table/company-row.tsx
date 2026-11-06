@@ -19,7 +19,11 @@ import type { Company } from "@/lib/crm/types";
 import { KEYBOARD_ROW_CLASS } from "@/lib/shortcuts";
 import { fitLabel } from "@/lib/enrichment/fit";
 import { cn } from "@/lib/utils";
+import { AiCellButton } from "@/components/ai-fields/answer-detail";
+import type { AiField } from "@/lib/ai-fields/types";
 import {
+  ADD_CELL_CLASS,
+  AI_CELL_CLASS,
   TABLE_CELL_CLASS,
   TABLE_ROW_CLASS,
   columnClass,
@@ -36,6 +40,9 @@ type CompanyRowProps = {
   onToggle: (range: boolean) => void;
   logoClientId: string | null;
   showFit?: boolean;
+  aiFields?: AiField[];
+  canManage?: boolean;
+  addColumn?: boolean;
 };
 
 function cellClass(key: TableColumnKey) {
@@ -56,6 +63,9 @@ export default function CompanyRow({
   onToggle,
   logoClientId,
   showFit = false,
+  aiFields = [],
+  canManage = false,
+  addColumn = false,
 }: CompanyRowProps) {
   const router = useRouter();
   const href = companyHref(company.id);
@@ -64,6 +74,11 @@ export default function CompanyRow({
     ...(company.industry ? [{ label: company.industry, base: undefined }] : []),
     ...(company.sizeCategory ? [{ label: company.sizeCategory, base: undefined }] : []),
   ];
+  const aiCells = aiFields.map((field) => (
+    <TableCell key={field.id} role="cell" className={cn(TABLE_CELL_CLASS, AI_CELL_CLASS)}>
+      <AiCellButton field={field} cell={company.aiFields?.[field.id]} companyId={company.id} companyName={company.name} canManage={canManage} />
+    </TableCell>
+  ));
 
   return (
     <TableRow
@@ -90,7 +105,7 @@ export default function CompanyRow({
       )}
     >
       <TableCell role="cell" className={cellClass("name")}>
-        <span className="flex min-w-[240px] items-center gap-2">
+        <span className={cn("flex min-w-[240px] items-center gap-2", aiFields.length > 0 && "max-sm:min-w-[172px]")}>
           <span className="relative flex size-6 shrink-0 items-center justify-center">
             <span
               className={cn(
@@ -116,11 +131,14 @@ export default function CompanyRow({
               event.preventDefault();
               onToggle(event.shiftKey);
             }}
-            className="max-w-[220px] truncate text-[13px] font-medium underline-offset-[3px] rounded-sm outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/60"
+            className={cn(
+              "max-w-[220px] truncate text-[13px] font-medium underline-offset-[3px] rounded-sm outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/60",
+              aiFields.length > 0 && "max-sm:max-w-[118px]",
+            )}
           >
             {company.name}
           </Link>
-          <RowTags tags={company.tags} className="flex-nowrap" />
+          <RowTags tags={company.tags} className={cn("flex-nowrap", aiFields.length > 0 && "max-sm:hidden")} />
         </span>
       </TableCell>
       <TableCell role="cell" className={cellClass("categories")}>
@@ -139,6 +157,7 @@ export default function CompanyRow({
       <TableCell role="cell" className={cellClass("health")} title={company.healthReason ?? undefined}>
         {company.health ? <HealthMark health={company.health} /> : <span className="text-subtle text-[13px]">Not set</span>}
       </TableCell>
+      {!showFit && aiCells}
       {showFit && (
         <TableCell role="cell" className={cn(cellClass("fit"), "text-[13px] tabular-nums")} title={company.icpFit === null ? undefined : fitLabel(company.icpFit)}>
           {company.icpFit === null ? (
@@ -151,6 +170,7 @@ export default function CompanyRow({
           )}
         </TableCell>
       )}
+      {showFit && aiCells}
       <TableCell role="cell" className={cellClass("domain")} onClick={stop}>
         {company.domain ? (
           <a
@@ -168,6 +188,7 @@ export default function CompanyRow({
       <TableCell role="cell" className={cn(cellClass("owner"), "text-subtle text-[13px]")}>
         {company.ownerName ?? "Unassigned"}
       </TableCell>
+      {addColumn && <TableCell role="cell" aria-hidden className={cn(TABLE_CELL_CLASS, ADD_CELL_CLASS)} />}
     </TableRow>
   );
 }

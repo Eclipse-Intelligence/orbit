@@ -2,6 +2,7 @@ import { DEFAULT_COMPANY_SORT, defaultCompanyOrder } from "@/lib/sorting";
 import { CrmError } from "@/lib/crm/errors";
 import { LIFECYCLES, type AccountHealth, type BuiltInLifecycle, type CompanyListQuery, type CompanySort, type Lifecycle } from "@/lib/crm/types";
 import { appTimeZone } from "@/lib/time";
+import { displayAiValue, type AiCell, type AiField } from "@/lib/ai-fields/types";
 
 export const ANY_LIFECYCLE = "any";
 export const ALL_OWNERS = "all";
@@ -60,11 +61,12 @@ export function sortValue(sort: CompanySort = DEFAULT_COMPANY_SORT, order?: "asc
 
 export function activeFilterCount(filters: CompanyListQuery) {
   const sort = filters.sort ?? DEFAULT_COMPANY_SORT;
-  const defaultSort = sort === DEFAULT_COMPANY_SORT && (filters.order ?? defaultCompanyOrder(sort)) === defaultCompanyOrder(sort);
+  const defaultSort = !filters.aiSort && sort === DEFAULT_COMPANY_SORT && (filters.order ?? defaultCompanyOrder(sort)) === defaultCompanyOrder(sort);
   return (
     [Boolean(filters.query), Boolean(filters.lifecycle), Boolean(filters.health), Boolean(filters.ownerId), Boolean(filters.tag), Boolean(filters.quiet), !defaultSort].filter(Boolean).length +
     (filters.has?.length ?? 0) +
-    (filters.missing?.length ?? 0)
+    (filters.missing?.length ?? 0) +
+    (filters.ai?.length ?? 0)
   );
 }
 
@@ -158,7 +160,9 @@ export function companiesCsvRows(
     tags: string[];
     createdAt: string;
     updatedAt: string;
+    aiFields?: Record<string, AiCell>;
   }[],
+  aiFields: Pick<AiField, "id" | "label" | "kind">[] = [],
 ) {
   return [
     [
@@ -174,6 +178,7 @@ export function companiesCsvRows(
       "Tags",
       "Created",
       "Updated",
+      ...aiFields.map((field) => field.label),
     ],
     ...companies.map((company) => [
       company.name,
@@ -188,8 +193,15 @@ export function companiesCsvRows(
       company.tags.join("; "),
       company.createdAt,
       company.updatedAt,
+      ...aiFields.map((field) => aiCsvValue(field, company.aiFields?.[field.id])),
     ]),
   ];
+}
+
+function aiCsvValue(field: Pick<AiField, "kind">, cell: AiCell | undefined) {
+  if (!cell) return "";
+  if (cell.state === "answered") return displayAiValue(field, cell.value);
+  return cell.state === "unknown" ? "Unknown" : "";
 }
 
 export function actionError(error: unknown) {

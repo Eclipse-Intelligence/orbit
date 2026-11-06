@@ -98,6 +98,18 @@ export default function TriggerEditor({
                       {field.label}
                     </option>
                   ))}
+                  {trigger.object === "company" && (options.aiFields?.length ?? 0) > 0 && (
+                    <optgroup label="AI fields">
+                      {options.aiFields?.map((field) => (
+                        <option key={field.id} value={`ai:${field.id}`}>
+                          {field.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {trigger.object === "company" && trigger.field.startsWith("ai:") && !options.aiFields?.some((field) => `ai:${field.id}` === trigger.field) && (
+                    <option value={trigger.field}>Deleted AI field</option>
+                  )}
                 </select>
               </Labelled>
               <Labelled id="trigger-to" label="Changes to (optional)">

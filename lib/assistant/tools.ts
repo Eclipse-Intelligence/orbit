@@ -80,6 +80,10 @@ import { listCalendarItems } from "@/lib/crm/calendars";
 import { getInsightTranscript, getInsightsForActivities } from "@/lib/crm/call-insights";
 import { createTaskWithClickUp, getClickUpPicker, getClickUpState, pushClickUpTask } from "@/lib/crm/clickup";
 import { archiveCompany, createCompany, getCompany, listCompanies, listMembers, updateCompany } from "@/lib/crm/companies";
+import { getCompanyAnswers } from "@/lib/ai-fields/answers";
+import { listAiFields } from "@/lib/ai-fields/fields";
+import type { AiFilter } from "@/lib/ai-fields/params";
+import { displayAiValue, likelihoodText, type AiCell, type AiField } from "@/lib/ai-fields/types";
 import { archiveContact, createContact, getContact, listContacts, updateContact } from "@/lib/crm/contacts";
 import { mergeCompanies, mergeContacts } from "@/lib/crm/merge";
 import { createContactAndFile, fileImport, getConversationImport, listUnfiledImports, summariseImport, type ConversationImport } from "@/lib/crm/conversations";
@@ -225,6 +229,43 @@ function eclipseArguments(args: Args): Record<string, unknown> {
 
 function withCompany(company: Company) {
   return { ...company, href: companyHref(company.id) };
+}
+
+function aiCellText(field: Pick<AiField, "kind">, cell: AiCell | undefined) {
+  if (!cell || cell.state === "outside" || cell.state === "checking") return null;
+  if (cell.state === "unknown") return "Unknown";
+  return displayAiValue(field, cell.value);
+}
+
+function withAiFields(company: Company, fields: AiField[]) {
+  const { aiFields, ...rest } = company;
+  return {
+    ...withCompany(rest),
+    aiFields: Object.fromEntries(fields.map((field) => [field.label, aiCellText(field, aiFields?.[field.id])])),
+  };
+}
+
+function findAiField(fields: AiField[], name: unknown) {
+  const wanted = typeof name === "string" ? name.trim().toLowerCase() : "";
+  if (!wanted) return null;
+  return fields.find((field) => field.id === wanted || field.label.toLowerCase() === wanted) ?? null;
+}
+
+function aiFiltersFrom(fields: AiField[], value: unknown) {
+  const filters: AiFilter[] = [];
+  for (const raw of Array.isArray(value) ? value.slice(0, 10) : []) {
+    const item = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+    const field = findAiField(fields, item.field);
+    if (!field) throw new CrmError("invalid_input", `There's no AI field called ${String(item.field ?? "")}.`, 400);
+    const unknown = item.includeUnknown === true;
+    if (item.is === "yes" || item.is === "no" || item.is === "unknown") filters.push({ fieldId: field.id, op: "is", value: item.is });
+    else if (typeof item.contains === "string" && item.contains.trim()) filters.push({ fieldId: field.id, op: "has", text: item.contains.trim().slice(0, 100) });
+    else if (Array.isArray(item.anyOf)) filters.push({ fieldId: field.id, op: "any", options: item.anyOf.filter((option): option is string => typeof option === "string").slice(0, 30), unknown });
+    else if (typeof item.min === "number" || typeof item.max === "number") {
+      filters.push({ fieldId: field.id, op: "range", min: typeof item.min === "number" ? item.min : null, max: typeof item.max === "number" ? item.max : null, unknown });
+    }
+  }
+  return filters;
 }
 
 function withContact(contact: Contact) {
@@ -879,7 +920,7 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
     name: "list_companies",
     label: "Looking at companies",
     description:
-      "List companies with optional search and filters. Returns total and a page of companies. Each company has icpFit, its ICP fit score from 0 (not a fit) to 4 (strong fit) when Web checks has scored it, otherwise null. To find the best-fitting companies, sort by fit (highest first) and page through with offset instead of reading every company.",
+      "List companies with optional search and filters. Returns total, the workspace's AI fields (column name, question, type, options) and a page of companies. Each company has icpFit, its ICP fit score from 0 (not a fit) to 4 (strong fit) when Web checks has scored it, otherwise null, and aiFields, each AI field's answer by column name (Yes or No, a number, short text, options joined with commas, Unknown, or null when not checked or not in that field's companies). Filter by AI fields with ai and sort by one with aiSort. To find the best-fitting companies, sort by fit (highest first) and page through with offset instead of reading every company.",
     parameters: {
       type: "object",
       properties: {
@@ -890,11 +931,33 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         ownerId: { type: "string", description: "Member id, or 'unassigned'." },
         sort: { type: "string", enum: ["name", "domain", "updated", "created", "interaction", "strength", "owner", "fit"], description: "fit sorts by ICP fit, best first; interaction by last contact." },
         order: { type: "string", enum: ["asc", "desc"] },
+        ai: {
+          type: "array",
+          description: "AI field filters, all of which must match. Give field (column name) and one of: is (yes, no or unknown) for yes or no fields; min and/or max for numbers; contains for short text; anyOf (option names) for pick from list. includeUnknown also keeps companies without an answer for ranges and anyOf.",
+          items: {
+            type: "object",
+            properties: {
+              field: { type: "string" },
+              is: { type: "string", enum: ["yes", "no", "unknown"] },
+              min: { type: "number" },
+              max: { type: "number" },
+              contains: { type: "string" },
+              anyOf: { type: "array", items: { type: "string" } },
+              includeUnknown: { type: "boolean" },
+            },
+            required: ["field"],
+          },
+        },
+        aiSort: { type: "string", description: "Column name of an AI field to sort by instead of sort. Use order desc for high to low (Yes first)." },
         limit: limitParam,
         offset: offsetParam,
       },
     },
     run: async (actor, args) => {
+      const fields = await listAiFields(actor);
+      const ai = aiFiltersFrom(fields, args.ai);
+      const sortField = typeof args.aiSort === "string" && args.aiSort.trim() ? findAiField(fields, args.aiSort) : null;
+      if (typeof args.aiSort === "string" && args.aiSort.trim() && !sortField) throw new CrmError("invalid_input", `There's no AI field called ${args.aiSort}.`, 400);
       const result = await listCompanies(actor, {
         query: optionalStr(args.query),
         lifecycle: optionalStr(args.lifecycle),
@@ -906,26 +969,47 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
         limit: int(args.limit, 50, 1, 100),
         offset: int(args.offset, 0, 0, 10000),
         relationships: true,
+        aiFields: true,
+        ...(ai.length > 0 ? { ai } : {}),
+        ...(sortField ? { aiSort: sortField.id } : {}),
       });
-      return { ...result, data: result.data.map(withCompany) };
+      return {
+        ...result,
+        aiFields: fields.map((field) => ({ name: field.label, question: field.question, type: field.kind, ...(field.kind === "pick" ? { options: field.options, multiple: field.multiple } : {}) })),
+        data: result.data.map((company) => withAiFields(company, fields)),
+      };
     },
   },
   {
     name: "get_company",
     label: "Reading a company",
     description:
-      "Everything about one company: details, people, opportunities, open and done tasks, the full activity timeline, call summaries, upcoming and recent meetings, and relationship status.",
+      "Everything about one company: details, people, opportunities, open and done tasks, the full activity timeline, call summaries, upcoming and recent meetings, relationship status, and its AI field answers with sources.",
     parameters: { type: "object", properties: { companyId: idParam("Company id.") }, required: ["companyId"] },
     run: async (actor, args) => {
       const id = required(args.companyId, "A company id");
-      const [context, meetings, knowledge] = await Promise.all([
+      const [context, meetings, knowledge, ai] = await Promise.all([
         getCompanyContext(actor, id),
         getMeetings(actor, { companyId: id }),
         listKnowledge(actor, { companyId: id }, 500).catch(() => []),
+        getCompanyAnswers(actor, id).catch(() => ({ fields: [], answers: [] })),
       ]);
       return {
         ...context,
         company: withCompany(context.company),
+        aiFields: ai.fields.map((field) => {
+          const answer = ai.answers.find((item) => item.fieldId === field.id);
+          return {
+            name: field.label,
+            question: field.question,
+            answer: aiCellText(field, answer),
+            setByHand: answer?.manual ?? false,
+            likelihood: answer ? likelihoodText(answer) : null,
+            reason: answer?.reason ?? null,
+            sources: answer?.sources ?? [],
+            checkedAt: answer?.checkedAt ?? null,
+          };
+        }),
         contacts: context.contacts.map(withContact),
         opportunities: context.opportunities.map(withOpportunity),
         tasks: context.tasks.map(withTask),

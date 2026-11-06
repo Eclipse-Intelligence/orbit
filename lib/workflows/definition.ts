@@ -425,7 +425,7 @@ export function safeDefinition(value: unknown): WorkflowDefinition | null {
 export function eventTriggerTypes(eventType: string, entityType: string, changes: Record<string, unknown>): TriggerType[] {
   if (eventType === "call_summary.ready") return ["call_summary_ready"];
   if (eventType === "company.created" || eventType === "contact.created") return ["record_created"];
-  if (eventType === "company.updated" || eventType === "contact.updated") return ["field_changed"];
+  if (eventType === "company.updated" || eventType === "contact.updated" || eventType === "company.ai_field_changed") return ["field_changed"];
   if (eventType === "opportunity.stage_changed") return ["stage_changed"];
   if (eventType === "opportunity.created") {
     const after = (changes.after ?? {}) as { pipelineKind?: string };
