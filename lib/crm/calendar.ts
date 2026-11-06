@@ -256,7 +256,8 @@ async function saveEvents(
          organizer = case when crm.calendar_events.invite_identity_id is null then excluded.organizer else crm.calendar_events.organizer end,
          attendees = case when crm.calendar_events.invite_identity_id is null then excluded.attendees else crm.calendar_events.attendees end,
          show_as = excluded.show_as,
-         response_status = case when crm.calendar_events.invite_identity_id is null then excluded.response_status else crm.calendar_events.response_status end`,
+         response_status = case when crm.calendar_events.invite_identity_id is null then excluded.response_status else crm.calendar_events.response_status end,
+         invite_hold_missing = false`,
       [
         actor.workspaceId,
         calendarId,
@@ -272,10 +273,20 @@ async function saveEvents(
 }
 
 async function removeEvents(db: Db, calendarId: string, keep: string[] | null, window: { start: Date; end: Date }) {
+  if (keep) {
+    await db.query(
+      `update crm.calendar_events set invite_hold_missing = true
+       where calendar_id = $1 and provider_event_id <> all($2::text[])
+         and (invite_identity_id is not null or invite_uid is not null)
+         and not invite_hold_missing and not (created_by_orbit and starts_at >= $3)`,
+      [calendarId, keep, window.end.toISOString()],
+    );
+  }
   const result = keep
     ? await db.query(
         `delete from crm.calendar_events
          where calendar_id = $1 and provider_event_id <> all($2::text[])
+           and invite_identity_id is null and invite_uid is null
            and not (created_by_orbit and starts_at >= $3)`,
         [calendarId, keep, window.end.toISOString()],
       )

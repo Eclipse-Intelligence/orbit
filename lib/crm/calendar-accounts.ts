@@ -120,9 +120,9 @@ export async function readAccounts(db: Db, actor: UserActor): Promise<StoredAcco
 export async function storeAccountToken(db: Db, accountId: string, token: MicrosoftToken) {
   await db.query(
     `update crm.calendar_accounts
-     set refresh_token = $2, access_token = $3, access_token_expires_at = $4
+     set refresh_token = $2, access_token = $3, access_token_expires_at = $4, calendar_write = coalesce($5::boolean, calendar_write)
      where id = $1`,
-    [accountId, encryptSecret(token.refreshToken), encryptSecret(token.accessToken), token.expiresAt],
+    [accountId, encryptSecret(token.refreshToken), encryptSecret(token.accessToken), token.expiresAt, grantsCalendarWrite(token.scope)],
   );
 }
 
@@ -210,7 +210,7 @@ export async function connectCalendarAccount(
          last_attempt_at = null,
          last_error = null,
          can_send = coalesce($10::boolean, crm.calendar_accounts.can_send),
-         calendar_write = case when $11::boolean then true else coalesce(crm.calendar_accounts.calendar_write, $11::boolean) end
+         calendar_write = coalesce($11::boolean, crm.calendar_accounts.calendar_write)
        returning id`,
       [
         actor.workspaceId,
@@ -230,13 +230,21 @@ export async function connectCalendarAccount(
   });
 }
 
+export async function forgetInviteSender(db: Db, actor: UserActor, address: string | null) {
+  const canonical = address ? canonicalEmail(address) : null;
+  if (!canonical) return;
+  await db.query("update crm.booking_pages set invite_sender = null where user_id = $1 and invite_sender = $2", [actor.userId, canonical]);
+  await db.query("delete from crm.invite_sender_choices where user_id = $1 and address = $2", [actor.userId, canonical]);
+}
+
 export async function disconnectCalendarAccount(actor: UserActor, accountId: string) {
   if (!isUuid(accountId)) throw new CrmError("not_found", "That calendar account isn't connected.", 404);
   const removed = await withActor(actor, async (db) => {
-    const result = await db.query(
-      "delete from crm.calendar_accounts where id = $1 and user_id = $2",
+    const result = await db.query<{ email: string | null }>(
+      "delete from crm.calendar_accounts where id = $1 and user_id = $2 returning email",
       [accountId, actor.userId],
     );
+    for (const row of result.rows) await forgetInviteSender(db, actor, row.email);
     return result.rowCount ?? 0;
   });
   if (removed === 0) throw new CrmError("not_found", "That calendar account isn't connected.", 404);

@@ -63,7 +63,11 @@ const BUFFERS = [0, 5, 10, 15, 20, 30, 45, 60].filter((value) => value <= BOOKIN
 const END_OPTIONS = [...TIME_OPTIONS.slice(1), "24:00"];
 const ACCEPT = BOOKING_IMAGE_TYPES.join(",");
 
-function draftFrom(page: Settings): Draft {
+function staleSender(page: Settings, setup: BookingSetup) {
+  return page.inviteSender && !setup.senders.some((sender) => sender.address === page.inviteSender) ? page.inviteSender : null;
+}
+
+function draftFrom(page: Settings, setup?: BookingSetup): Draft {
   return {
     slug: page.slug,
     enabled: page.enabled,
@@ -75,7 +79,7 @@ function draftFrom(page: Settings): Draft {
     horizonDays: String(page.horizonDays),
     weeklyHours: page.weeklyHours,
     videoUrl: page.videoUrl ?? "",
-    inviteSender: page.inviteSender ?? "",
+    inviteSender: setup && staleSender(page, setup) ? "" : (page.inviteSender ?? ""),
   };
 }
 
@@ -255,11 +259,11 @@ export default function BookingPageSettings({
 }) {
   const router = useRouter();
   const [saved, setSaved] = useState(page);
-  const [draft, setDraft] = useState(() => draftFrom(page));
+  const [draft, setDraft] = useState(() => draftFrom(page, setup));
   if (saved !== page) {
     const changed = JSON.stringify(draftFrom(saved)) !== JSON.stringify(draftFrom(page));
     setSaved(page);
-    if (changed) setDraft(draftFrom(page));
+    if (changed) setDraft(draftFrom(page, setup));
   }
   const [slugState, setSlugState] = useState<SlugState>({ slug: "", state: "idle", message: null });
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -374,7 +378,8 @@ export default function BookingPageSettings({
     }));
     setPending(false);
     if (result.error || !result.page) {
-      setErrors({ [result.field ?? "form"]: result.error ?? "Could not save the booking page." });
+      const field = result.field === "inviteSender" && setup.senders.length <= 1 ? "form" : (result.field ?? "form");
+      setErrors({ [field]: result.error ?? "Could not save the booking page." });
       return;
     }
     setMessage(result.page.enabled ? "Saved. Your page is live." : "Saved. Your page is off.");
@@ -382,11 +387,17 @@ export default function BookingPageSettings({
   }
 
 
-  const mainSender = setup.senders.find((sender) => sender.primary) ?? null;
+  const defaultSender = setup.senders.find((sender) => sender.address === setup.defaultSender) ?? null;
   const inviteSender = draft.inviteSender
     ? setup.senders.find((sender) => sender.address === draft.inviteSender) ?? null
-    : mainSender;
+    : defaultSender;
+  const stale = staleSender(page, setup);
   const warnings: ReactNode[] = [];
+  if (stale && !draft.inviteSender) {
+    warnings.push(
+      `Invites came from ${stale}, which can't send any more. Save to send them from ${defaultSender?.address ?? "your main mailbox"} instead.`,
+    );
+  }
   if (inviteSender && !inviteSender.primary) {
     if (inviteSender.problem) {
       warnings.push(
@@ -533,12 +544,9 @@ export default function BookingPageSettings({
           <Field label="Invites from" htmlFor="booking-invite-sender" error={errors.inviteSender}>
             <NativeSelect
               id="booking-invite-sender"
-              value={draft.inviteSender || mainSender?.address || ""}
+              value={draft.inviteSender || defaultSender?.address || ""}
               aria-invalid={errors.inviteSender ? true : undefined}
-              onChange={(event) => {
-                const chosen = setup.senders.find((sender) => sender.address === event.target.value);
-                update("inviteSender", chosen?.primary ? "" : event.target.value);
-              }}
+              onChange={(event) => update("inviteSender", event.target.value === setup.defaultSender ? "" : event.target.value)}
             >
               {setup.senders.map((sender) => (
                 <option key={sender.address} value={sender.address}>

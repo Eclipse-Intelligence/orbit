@@ -2,6 +2,7 @@ alter table crm.calendar_events add column if not exists invite_identity_id uuid
 alter table crm.calendar_events add column if not exists invite_uid text;
 alter table crm.calendar_events add column if not exists invite_sequence integer not null default 0;
 alter table crm.calendar_events add column if not exists invite_notes text;
+alter table crm.calendar_events add column if not exists invite_hold_missing boolean not null default false;
 
 alter table crm.calendar_events drop constraint if exists calendar_events_invite_uid_length;
 alter table crm.calendar_events
@@ -20,9 +21,17 @@ create index if not exists calendar_events_invite_uid_idx
 create index if not exists calendar_events_invite_identity_idx
   on crm.calendar_events (invite_identity_id) where invite_identity_id is not null;
 
-grant update (invite_identity_id, invite_uid, invite_sequence, invite_notes) on crm.calendar_events to authenticated;
+grant update (invite_identity_id, invite_uid, invite_sequence, invite_notes, invite_hold_missing, provider_event_id) on crm.calendar_events to authenticated;
 
 alter table crm.send_identities add column if not exists hold_calendar_id uuid references crm.calendars (id) on delete set null;
+alter table crm.send_identities add column if not exists reply_uid_validity bigint;
+alter table crm.send_identities add column if not exists reply_last_uid bigint;
+
+alter table crm.send_identities drop constraint if exists send_identities_reply_cursor;
+alter table crm.send_identities
+  add constraint send_identities_reply_cursor check (
+    (reply_uid_validity is null or reply_uid_validity >= 0) and (reply_last_uid is null or reply_last_uid >= 0)
+  );
 
 alter table crm.booking_pages add column if not exists invite_sender text;
 

@@ -2,7 +2,7 @@ import { withActor } from "@/lib/crm/context";
 import { memberActor } from "@/lib/crm/conversations";
 import { CrmError, isPgError } from "@/lib/crm/errors";
 import { getInviteSetup } from "@/lib/crm/invites";
-import type { InviteSenderOption } from "@/lib/crm/invite-senders";
+import { defaultInviteAddress, readInviteSenders, type InviteSenderOption } from "@/lib/crm/invite-senders";
 import { canonicalEmail } from "@/lib/crm/normalize";
 import type { UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
@@ -59,6 +59,7 @@ export type BookingSetup = {
   canWriteCalendar: boolean;
   meetingLink: string | null;
   senders: InviteSenderOption[];
+  defaultSender: string | null;
 };
 
 export type BookingPageInput = {
@@ -209,9 +210,23 @@ export async function getBookingPage(actor: UserActor): Promise<BookingPageSetti
   });
 }
 
+export async function bookingDefaultSender(actor: UserActor) {
+  return withActor(actor, async (db) => {
+    const page = await db.query<{ workspace_id: string }>("select workspace_id from crm.booking_pages where user_id = $1", [actor.userId]);
+    const owner = { ...actor, workspaceId: page.rows[0]?.workspace_id ?? actor.workspaceId };
+    return defaultInviteAddress(db, owner, await readInviteSenders(db, owner), { mainFirst: true });
+  });
+}
+
 export async function getBookingSetup(actor: UserActor): Promise<BookingSetup> {
-  const setup = await getInviteSetup(actor);
-  return { connected: setup.connected, canWriteCalendar: setup.canWriteCalendar, meetingLink: setup.meetingLink, senders: setup.senders };
+  const [setup, defaultSender] = await Promise.all([getInviteSetup(actor), bookingDefaultSender(actor)]);
+  return {
+    connected: setup.connected,
+    canWriteCalendar: setup.canWriteCalendar,
+    meetingLink: setup.meetingLink,
+    senders: setup.senders,
+    defaultSender,
+  };
 }
 
 export async function bookingInviteSender(owner: UserActor) {
@@ -231,7 +246,7 @@ async function cleanInviteSender(actor: UserActor, value: unknown) {
   const setup = await getInviteSetup(actor);
   const found = setup.senders.find((sender) => sender.address === address);
   if (!found) throw invalid(`${value.trim().slice(0, 80)} can't send invites. Choose another address.`, "inviteSender");
-  return found.primary ? null : found.address;
+  return found.address === (await bookingDefaultSender(actor)) ? null : found.address;
 }
 
 function cleanText(value: unknown, max: number, field: string, label: string) {

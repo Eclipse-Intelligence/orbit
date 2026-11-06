@@ -4277,7 +4277,7 @@ const TOOL_LIST: AssistantTool[] = [
     describe: (args, name) => ({
       title: `Send invite: ${str(args.title)}`,
       lines: [
-        `From: ${optionalStr(args.from) ?? (detail(name, "invite:from") || "your default address")}`,
+        `From: ${detail(name, "invite:from") || optionalStr(args.from) || "your default address"}`,
         `When: ${formatDateTimeLabel(str(args.startLocal))} for ${args.durationMinutes} minutes`,
         `Guests: ${(Array.isArray(args.attendees) ? args.attendees : [])
           .map((guest) => (guest && typeof guest === "object" ? str((guest as Args).name) || str((guest as Args).email) : ""))

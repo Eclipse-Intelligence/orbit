@@ -67,6 +67,16 @@ function guestLabel(guest: InviteGuestDraft) {
 
 type SenderOption = InviteSetup["senders"][number];
 
+function formErrorHref(message: string, sender: SenderOption | null) {
+  if (sender?.fixHref && message === sender.problem) return sender.fixHref;
+  const allow = /^Allow invites for (\S+) in Settings/.exec(message);
+  if (allow) return `/api/microsoft/connect?purpose=send_account&hint=${encodeURIComponent(allow[1])}`;
+  if (/^Choose a calendar for invite holds/.test(message)) return "/settings/email-templates#sending-addresses";
+  if (/in Settings › Calendars/.test(message)) return "/settings/calendars";
+  if (/Reconnect Microsoft|Connect Microsoft/.test(message)) return "/settings/integrations";
+  return null;
+}
+
 function SenderNotice({ sender }: { sender: SenderOption }) {
   if (!sender.problem) return null;
   return (
@@ -284,7 +294,8 @@ function InviteForm({
     });
     setPending(false);
     if (result.error) {
-      const key = (result.field && FIELD_ERRORS.has(result.field) ? result.field : "form") as ErrorKey;
+      const shown = result.field === "from" ? setup.senders.length > 1 : Boolean(result.field && FIELD_ERRORS.has(result.field));
+      const key = (shown && result.field ? result.field : "form") as ErrorKey;
       setErrors({ [key]: result.error });
       return;
     }
@@ -548,8 +559,8 @@ function InviteForm({
         </div>
         {errors.form && (
           <p role="alert" className="caption-style text-danger">
-            {/Reconnect Microsoft|Connect Microsoft/.test(errors.form) ? (
-              <Button variant="link" size="none" className="text-danger text-left whitespace-normal" href="/settings/integrations">
+            {formErrorHref(errors.form, sender) ? (
+              <Button variant="link" size="none" className="text-danger text-left whitespace-normal" href={formErrorHref(errors.form, sender)!}>
                 {errors.form}
               </Button>
             ) : (

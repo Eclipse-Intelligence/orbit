@@ -22,7 +22,8 @@ export type ItipEvent = {
 
 export type ItipReply = {
   uid: string;
-  sequence: number;
+  sequence: number | null;
+  organizer: string | null;
   responses: { email: string; response: string }[];
 };
 
@@ -217,7 +218,9 @@ export function readItipReply(text: string): ItipReply | null {
   if (!event) return null;
   const uid = textOf(event, "UID")?.trim();
   if (!uid || uid.length > 400) return null;
-  const sequence = Number(first(event, "SEQUENCE")?.value ?? 0);
+  const rawSequence = first(event, "SEQUENCE")?.value?.trim();
+  const sequence = rawSequence ? Number(rawSequence) : null;
+  const organizer = canonicalEmail((first(event, "ORGANIZER")?.value ?? "").replace(/^mailto:/i, "").trim());
   const responses: ItipReply["responses"] = [];
   for (const attendee of all(event, "ATTENDEE")) {
     const email = canonicalEmail(attendee.value.replace(/^mailto:/i, "").trim());
@@ -225,5 +228,10 @@ export function readItipReply(text: string): ItipReply | null {
     if (email && status) responses.push({ email, response: status });
   }
   if (responses.length === 0) return null;
-  return { uid, sequence: Number.isInteger(sequence) && sequence >= 0 ? sequence : 0, responses };
+  return {
+    uid,
+    sequence: sequence === null ? null : Number.isInteger(sequence) && sequence >= 0 ? sequence : 0,
+    organizer: organizer ?? null,
+    responses,
+  };
 }

@@ -2,16 +2,25 @@ import assert from "node:assert/strict";
 import { after, before, beforeEach, describe, it } from "node:test";
 import { describeAction, recordNames, runTool } from "@/lib/assistant/tools";
 import { bookSlot } from "@/lib/booking/book";
-import { getBookingPage, saveBookingPage } from "@/lib/booking/pages";
+import { getBookingPage, getBookingSetup, saveBookingPage } from "@/lib/booking/pages";
 import { DEFAULT_WEEKLY_HOURS } from "@/lib/booking/rules";
 import { storeGrantedScopes, syncCalendar } from "@/lib/crm/calendar";
-import { listCalendarItems } from "@/lib/crm/calendars";
+import { disconnectCalendarAccount } from "@/lib/crm/calendar-accounts";
+import { listCalendarGroups, listCalendarItems } from "@/lib/crm/calendars";
 import { createContact } from "@/lib/crm/contacts";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { saveMailbox } from "@/lib/crm/inbox";
-import { domainScore, listHoldCalendars, setHoldCalendar } from "@/lib/crm/invite-senders";
-import { cancelInvite, createInvite, getInviteSetup, rescheduleInvite, respondToInvite, saveMeetingLink } from "@/lib/crm/invites";
+import { chooseHoldProblem, domainScore, listHoldCalendars, setHoldCalendar } from "@/lib/crm/invite-senders";
+import {
+  bookingSenderGone,
+  cancelInvite,
+  createInvite,
+  getInviteSetup,
+  rescheduleInvite,
+  respondToInvite,
+  saveMeetingLink,
+} from "@/lib/crm/invites";
 import { scopesForRole } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
 import { createWorkspace } from "@/lib/crm/workspaces";
@@ -19,8 +28,9 @@ import { encryptSecret } from "@/lib/crypto/secret";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { buildItip, buildItipMime, readItipReply } from "@/lib/ical/itip";
 import { parseIcs } from "@/lib/ical/parse";
+import { removeIdentity } from "@/lib/mail/identities";
 import { applyInviteReplies, readInviteReplies } from "@/lib/mail/invite-replies";
-import { setAddressHome } from "@/lib/mail/routing";
+import { listAddressHomes, setAddressHome } from "@/lib/mail/routing";
 import type { GraphEvent } from "@/lib/microsoft/calendar";
 import { createUser, resetDatabase } from "./helpers";
 
@@ -49,7 +59,7 @@ function utc(iso: string) {
 
 function graph(
   calls: Call[],
-  options: { scope?: (refresh: string) => string; events?: () => GraphEvent[]; calendars?: () => unknown[] } = {},
+  options: { scope?: (refresh: string) => string; events?: () => GraphEvent[]; calendars?: () => unknown[]; patchStatus?: number } = {},
 ) {
   let created = 0;
   return (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -87,6 +97,9 @@ function graph(
         },
         201,
       );
+    }
+    if (init?.method === "PATCH" && options.patchStatus) {
+      return json({ error: { code: "ErrorItemNotFound", message: "The specified object was not found in the store." } }, options.patchStatus);
     }
     if (init?.method === "PATCH") {
       const patch = body as Record<string, unknown>;
@@ -133,6 +146,23 @@ function calendarPart(raw: string) {
         ? body.replace(/=\r?\n/g, "").replace(/=([0-9A-F]{2})/gi, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)))
         : body;
   return { method, text: text.replace(/\r?\n[ \t]/g, "") };
+}
+
+function replyFor(uid: string, partstat: string, options: { organizer?: string | null; attendee?: string; sequence?: number | null } = {}) {
+  const organizer = options.organizer === undefined ? NEO : options.organizer;
+  return [
+    "BEGIN:VCALENDAR",
+    "METHOD:REPLY",
+    "BEGIN:VEVENT",
+    `UID:${uid}`,
+    options.sequence === null ? null : `SEQUENCE:${options.sequence ?? 0}`,
+    organizer ? `ORGANIZER:mailto:${organizer}` : null,
+    `ATTENDEE;PARTSTAT=${partstat}:mailto:${options.attendee ?? JANE}`,
+    "END:VEVENT",
+    "END:VCALENDAR",
+  ]
+    .filter(Boolean)
+    .join("\r\n");
 }
 
 function invite(overrides: Record<string, unknown> = {}) {
@@ -226,7 +256,9 @@ describe("iCalendar invites", () => {
       "END:VEVENT",
       "END:VCALENDAR",
     ].join("\r\n");
-    assert.deepEqual(readItipReply(reply), { uid: "orbit-abc@ridgeon.me", sequence: 1, responses: [{ email: JANE, response: "accepted" }] });
+    assert.deepEqual(readItipReply(reply), { uid: "orbit-abc@ridgeon.me", sequence: 1, organizer: null, responses: [{ email: JANE, response: "accepted" }] });
+    assert.equal(readItipReply(reply.replace("SEQUENCE:1\r\n", ""))?.sequence, null);
+    assert.equal(readItipReply(reply.replace("SEQUENCE:1", `ORGANIZER:mailto:${NEO.toUpperCase()}`))?.organizer, NEO);
     assert.equal(readItipReply(buildItip(event)), null);
     assert.equal(readItipReply("not a calendar"), null);
   });
@@ -249,7 +281,7 @@ describe("choosing who sends an invite", () => {
   let consultingCalendar: string;
   let mainCalendar: string;
 
-  async function account(email: string, refresh: string, providerCalendarId: string, write: boolean | null = null) {
+  async function account(email: string, refresh: string, providerCalendarId: string, write: boolean | null = true) {
     const admin = getAdminPool();
     const row = await admin.query<{ id: string }>(
       `insert into crm.calendar_accounts (workspace_id, user_id, provider, email, status, refresh_token, access_token, access_token_expires_at, can_send, calendar_write)
@@ -333,7 +365,7 @@ describe("choosing who sends an invite", () => {
     const writes = graphWrites(calls);
     assert.equal(writes.length, 1);
     assert.equal(writes[0].url, "https://graph.microsoft.com/v1.0/me/calendars/cal-mr/events");
-    assert.equal(writes[0].auth, "Bearer token-for-mr-refresh");
+    assert.equal(writes[0].auth, "Bearer cached-mr-refresh");
     assert.ok(!calls.some((call) => call.auth.includes("main")));
     const saved = await getAdminPool().query<{ account_id: string | null; connection_id: string | null; calendar_id: string; contact_ids: string[]; organizer: { email: string } }>(
       "select account_id, connection_id, calendar_id, contact_ids, organizer from crm.calendar_events where id = $1",
@@ -382,7 +414,7 @@ describe("choosing who sends an invite", () => {
     const writes = graphWrites(calls);
     assert.equal(writes.length, 1);
     assert.equal(writes[0].url, "https://graph.microsoft.com/v1.0/me/calendars/cal-mr/events");
-    assert.equal(writes[0].auth, "Bearer token-for-mr-refresh");
+    assert.equal(writes[0].auth, "Bearer cached-mr-refresh");
     const hold = writes[0].body as { attendees: unknown[]; showAs: string; responseRequested: boolean; subject: string };
     assert.deepEqual(hold.attendees, []);
     assert.equal(hold.showAs, "busy");
@@ -450,29 +482,29 @@ describe("choosing who sends an invite", () => {
     assert.equal(synced.rows[0].organizer.email, NEO);
     assert.equal(synced.rows[0].attendees[0].email, JANE);
 
-    const reply = [
-      "BEGIN:VCALENDAR",
-      "METHOD:REPLY",
-      "BEGIN:VEVENT",
-      `UID:${row.rows[0].invite_uid}`,
-      "SEQUENCE:0",
-      `ATTENDEE;PARTSTAT=ACCEPTED:mailto:${JANE}`,
-      "END:VEVENT",
-      "END:VCALENDAR",
-    ].join("\r\n");
-    assert.equal(await applyInviteReplies(eclipse, identityId, ["junk", reply]), 1);
+    const reply = replyFor(row.rows[0].invite_uid, "ACCEPTED");
+    assert.equal(await applyInviteReplies(eclipse, { id: identityId, email: NEO }, [{ text: "junk", senders: [JANE] }, { text: reply, senders: [JANE] }]), 1);
     const answered = await getAdminPool().query<{ attendees: { email: string; response: string }[] }>(
       "select attendees from crm.calendar_events where id = $1",
       [result.eventId],
     );
     assert.equal(answered.rows[0].attendees[0].response, "accepted");
     const declined = reply.replace("ACCEPTED", "DECLINED");
-    const read = await readInviteReplies(eclipse, { now: NOW, reader: async (identity, since) => {
+    const cursors: unknown[] = [];
+    const reader = async (identity: { email: string }, options: { since: Date; cursor: unknown }) => {
       assert.equal(identity.email, NEO);
-      assert.ok(since.getTime() <= Date.now());
-      return [declined];
-    } });
-    assert.equal(read, 1);
+      assert.ok(options.since.getTime() <= Date.now());
+      cursors.push(options.cursor);
+      return { messages: cursors.length === 1 ? [{ text: declined, senders: [JANE] }] : [], cursor: { uidValidity: "77", lastUid: 40 + cursors.length } };
+    };
+    assert.equal(await readInviteReplies(eclipse, { now: NOW, reader }), 1);
+    assert.equal(await readInviteReplies(eclipse, { now: NOW, reader }), 0);
+    assert.deepEqual(cursors, [null, { uidValidity: "77", lastUid: 41 }]);
+    const cursor = await getAdminPool().query<{ reply_uid_validity: string; reply_last_uid: string }>(
+      "select reply_uid_validity, reply_last_uid from crm.send_identities where id = $1",
+      [identityId],
+    );
+    assert.deepEqual(cursor.rows[0], { reply_uid_validity: "77", reply_last_uid: "42" });
   });
 
   it("moves and cancels an SMTP invite with a higher SEQUENCE and updates the hold", async () => {
@@ -488,7 +520,7 @@ describe("choosing who sends an invite", () => {
     const patch = graphWrites(calls)[0];
     assert.equal(patch.method, "PATCH");
     assert.equal(patch.url, `https://graph.microsoft.com/v1.0/me/events/${created.providerEventId}`);
-    assert.equal(patch.auth, "Bearer token-for-mr-refresh");
+    assert.equal(patch.auth, "Bearer cached-mr-refresh");
     assert.equal((patch.body as { body?: unknown }).body, undefined);
     const update = calendarPart(sent[0].raw);
     assert.equal(update.method, "REQUEST");
@@ -509,7 +541,7 @@ describe("choosing who sends an invite", () => {
     assert.equal(cancelled.warning, null);
     const removal = graphWrites(cancelCalls)[0];
     assert.equal(removal.method, "DELETE");
-    assert.equal(removal.auth, "Bearer token-for-mr-refresh");
+    assert.equal(removal.auth, "Bearer cached-mr-refresh");
     const cancel = calendarPart(cancelSent[0].raw);
     assert.equal(cancel.method, "CANCEL");
     assert.match(cancel.text, /SEQUENCE:2/);
@@ -528,8 +560,8 @@ describe("choosing who sends an invite", () => {
     await cancelInvite(ridgeon, created.eventId!, "", { fetchImpl: graph(calls), now: NOW });
     const writes = graphWrites(calls);
     assert.deepEqual(writes.map((call) => [call.method, call.auth]), [
-      ["PATCH", "Bearer token-for-mr-refresh"],
-      ["POST", "Bearer token-for-mr-refresh"],
+      ["PATCH", "Bearer cached-mr-refresh"],
+      ["POST", "Bearer cached-mr-refresh"],
     ]);
     assert.match(writes[1].url, /\/cancel$/);
 
@@ -549,7 +581,7 @@ describe("choosing who sends an invite", () => {
     await respondToInvite(ridgeon, { eventId: invited.rows[0].id, response: "accept" }, { fetchImpl: graph(answerCalls), now: NOW });
     const answer = graphWrites(answerCalls)[0];
     assert.match(answer.url, /\/me\/events\/their-evt\/accept$/);
-    assert.equal(answer.auth, "Bearer token-for-mr-refresh");
+    assert.equal(answer.auth, "Bearer cached-mr-refresh");
   });
 
   it("never falls back to another address when the chosen one fails", async () => {
@@ -559,10 +591,11 @@ describe("choosing who sends an invite", () => {
       { code: "upstream_error", field: "from", message: /mark@ridgeon\.me couldn't send the invite: 535/ },
     );
     assert.deepEqual(graphWrites(calls).map((call) => call.method), ["POST", "DELETE"]);
-    assert.ok(graphWrites(calls).every((call) => call.auth === "Bearer token-for-mr-refresh"));
+    assert.ok(graphWrites(calls).every((call) => call.auth === "Bearer cached-mr-refresh"));
     const lastError = await getAdminPool().query<{ last_error: string }>("select last_error from crm.send_identities where id = $1", [identityId]);
     assert.match(lastError.rows[0].last_error, /535/);
 
+    await getAdminPool().query("update crm.calendar_accounts set access_token_expires_at = now() - interval '1 hour' where id = $1", [consultingId]);
     const readOnly: Call[] = [];
     await rejects(
       () => createInvite(ridgeon, invite({ from: CONSULTING }), {
@@ -572,6 +605,8 @@ describe("choosing who sends an invite", () => {
       { code: "scope_missing", field: "from", message: `Allow invites for ${CONSULTING} in Settings › Calendars first.` },
     );
     assert.equal(graphWrites(readOnly).length, 0);
+    const downgraded = await getAdminPool().query<{ calendar_write: boolean | null }>("select calendar_write from crm.calendar_accounts where id = $1", [consultingId]);
+    assert.equal(downgraded.rows[0].calendar_write, false);
     const setup = await getInviteSetup(ridgeon);
     const consulting = setup.senders.find((sender) => sender.address === CONSULTING)!;
     assert.equal(consulting.problem, `Allow invites for ${CONSULTING} in Settings › Calendars first.`);
@@ -630,7 +665,7 @@ describe("choosing who sends an invite", () => {
     await bookSlot("mark", { start: "2026-10-19T14:00:00.000Z", name: "Bea", email: "bea@booker.test" }, { ip: "203.0.113.91", now: NOW, fetchImpl: graph(calls) });
     const post = graphWrites(calls).find((call) => call.method === "POST")!;
     assert.equal(post.url, "https://graph.microsoft.com/v1.0/me/calendars/cal-mr/events");
-    assert.equal(post.auth, "Bearer token-for-mr-refresh");
+    assert.equal(post.auth, "Bearer cached-mr-refresh");
     await rejects(() => saveBookingPage(eclipse, { ...page, inviteSender: "nobody@else.test" }), { field: "inviteSender" });
     await saveBookingPage(eclipse, { ...page, inviteSender: MAIN });
     assert.equal((await getBookingPage(eclipse)).inviteSender, null);
@@ -655,6 +690,258 @@ describe("choosing who sends an invite", () => {
     } finally {
       globalThis.fetch = original;
     }
-    assert.equal(graphWrites(calls)[0].auth, "Bearer token-for-mr-refresh");
+    assert.equal(graphWrites(calls)[0].auth, "Bearer cached-mr-refresh");
+  });
+
+  const bookingPage = {
+    slug: "mark",
+    enabled: true,
+    title: null,
+    intro: null,
+    durationMinutes: 30,
+    bufferMinutes: 0,
+    minNoticeMinutes: 0,
+    horizonDays: 21,
+    weeklyHours: DEFAULT_WEEKLY_HOURS,
+    videoUrl: "",
+  };
+
+  async function eventRow(id: string) {
+    const row = await getAdminPool().query<{
+      provider_event_id: string;
+      invite_hold_missing: boolean;
+      invite_sequence: number;
+      is_cancelled: boolean;
+      starts_at: Date;
+    }>("select provider_event_id, invite_hold_missing, invite_sequence, is_cancelled, starts_at from crm.calendar_events where id = $1", [id]);
+    return row.rows[0];
+  }
+
+  it("defaults From to an address homed here even when the home is its own workspace", async () => {
+    await getAdminPool().query("update crm.calendar_accounts set workspace_id = $2 where id = $1", [consultingId, ridgeon.workspaceId]);
+    const homes = await listAddressHomes(eclipse);
+    assert.equal(homes.find((home) => home.address === CONSULTING)?.workspaceId, ridgeon.workspaceId);
+    await setAddressHome(eclipse, CONSULTING, ridgeon.workspaceId);
+    const rows = await getAdminPool().query("select 1 from crm.mail_address_homes where address = $1", [CONSULTING]);
+    assert.equal(rows.rowCount, 0);
+    await createInvite(ridgeon, invite({ from: ZEUS }), { fetchImpl: graph([]), now: NOW });
+    assert.equal((await getInviteSetup(ridgeon)).defaultFrom, CONSULTING);
+    assert.equal((await getInviteSetup(eclipse)).defaultFrom, MAIN);
+    await setAddressHome(eclipse, ZEUS, ridgeon.workspaceId);
+    assert.equal((await getInviteSetup(ridgeon)).defaultFrom, ZEUS);
+  });
+
+  it("treats an account whose calendar access isn't known yet as needing Allow invites until a sync learns it", async () => {
+    await getAdminPool().query(
+      "update crm.calendar_accounts set calendar_write = null, access_token_expires_at = now() - interval '1 hour' where id = $1",
+      [consultingId],
+    );
+    const setup = await getInviteSetup(ridgeon);
+    const consulting = setup.senders.find((sender) => sender.address === CONSULTING)!;
+    assert.equal(consulting.problem, `Allow invites for ${CONSULTING} in Settings › Calendars first.`);
+    assert.match(consulting.fixHref!, /purpose=send_account&hint=mark%40markridgeon\.com/);
+    const neo = setup.senders.find((sender) => sender.address === NEO)!;
+    assert.equal(neo.problem, `Allow invites for ${CONSULTING} in Settings › Calendars first.`);
+    const calls: Call[] = [];
+    await rejects(() => createInvite(ridgeon, invite({ from: CONSULTING }), { fetchImpl: graph(calls), now: NOW }), {
+      field: "from",
+      message: `Allow invites for ${CONSULTING} in Settings › Calendars first.`,
+    });
+    assert.equal(graphWrites(calls).length, 0);
+    const groups = await listCalendarGroups(eclipse);
+    assert.equal(groups.find((group) => group.id === consultingId)?.canInvite, false);
+
+    await syncCalendar(eclipse, {
+      fetchImpl: graph([], { calendars: () => [{ id: "cal-mr", name: "Calendar", isDefaultCalendar: true, canEdit: true }] }),
+      force: true,
+      now: NOW,
+      accountId: consultingId,
+    });
+    const learned = await getAdminPool().query<{ calendar_write: boolean | null }>("select calendar_write from crm.calendar_accounts where id = $1", [consultingId]);
+    assert.equal(learned.rows[0].calendar_write, true);
+    assert.equal((await getInviteSetup(ridgeon)).senders.find((sender) => sender.address === CONSULTING)?.problem, null);
+    assert.equal((await listCalendarGroups(eclipse)).find((group) => group.id === consultingId)?.canInvite, true);
+
+    await getAdminPool().query("update crm.calendar_accounts set calendar_write = false where id = $1", [consultingId]);
+    const created = await getAdminPool().query<{ id: string }>(
+      `insert into crm.calendar_events (workspace_id, calendar_id, account_id, user_id, provider_event_id, subject, starts_at, ends_at, organizer, attendees, created_by_orbit)
+       values ($1, $2, $3, $4, 'mine', 'Mine', '2026-10-22T10:00:00Z', '2026-10-22T10:30:00Z', $5::jsonb, $6::jsonb, true) returning id`,
+      [eclipse.workspaceId, consultingCalendar, consultingId, eclipse.userId, JSON.stringify({ email: CONSULTING }), JSON.stringify([{ email: JANE, response: "none" }])],
+    );
+    const items = await listCalendarItems(eclipse, { start: new Date("2026-10-22T00:00:00Z"), end: new Date("2026-10-23T00:00:00Z") }, NOW);
+    assert.equal(items.find((item) => item.id === created.rows[0].id)?.canCancel, false);
+  });
+
+  it("asks for a hold calendar instead of using the main one when no domain matches", async () => {
+    await getAdminPool().query("update crm.send_identities set email = 'mark@unrelated.org' where id = $1", [identityId]);
+    const sender = (await getInviteSetup(ridgeon)).senders.find((item) => item.address === "mark@unrelated.org")!;
+    assert.equal(sender.problem, chooseHoldProblem("mark@unrelated.org"));
+    assert.equal(sender.fixHref, "/settings/email-templates#sending-addresses");
+    await setHoldCalendar(eclipse, identityId, mainCalendar);
+    assert.equal((await getInviteSetup(ridgeon)).senders.find((item) => item.address === "mark@unrelated.org")?.problem, null);
+  });
+
+  it("keeps an SMTP invite when its hold disappears, and still tells guests when it's moved or cancelled", async () => {
+    const created = await createInvite(ridgeon, invite({ from: NEO }), { fetchImpl: graph([]), now: NOW, smtp: smtp([]), saveSent: quiet });
+    await syncCalendar(eclipse, {
+      fetchImpl: graph([], { calendars: () => [{ id: "cal-mr", name: "Calendar", isDefaultCalendar: true, canEdit: true }], events: () => [] }),
+      force: true,
+      now: NOW,
+      accountId: consultingId,
+    });
+    const kept = await eventRow(created.eventId!);
+    assert.equal(kept.invite_hold_missing, true);
+
+    const calls: Call[] = [];
+    const sent: Sent[] = [];
+    await rescheduleInvite(ridgeon, { eventId: created.eventId, startLocal: "2026-10-21T10:00" }, { fetchImpl: graph(calls), now: NOW, smtp: smtp(sent), saveSent: quiet });
+    assert.deepEqual(graphWrites(calls).map((call) => call.method), ["POST"]);
+    assert.deepEqual((graphWrites(calls)[0].body as { attendees: unknown[] }).attendees, []);
+    assert.equal(sent.length, 1);
+    assert.match(calendarPart(sent[0].raw).text, /SEQUENCE:1/);
+    const moved = await eventRow(created.eventId!);
+    assert.equal(moved.invite_hold_missing, false);
+    assert.equal(moved.provider_event_id, "evt-1");
+    assert.equal(moved.invite_sequence, 1);
+    assert.equal(moved.is_cancelled, false);
+
+    await getAdminPool().query("update crm.calendar_events set invite_hold_missing = true where id = $1", [created.eventId]);
+    const cancelCalls: Call[] = [];
+    const cancelSent: Sent[] = [];
+    const cancelled = await cancelInvite(ridgeon, created.eventId!, "", { fetchImpl: graph(cancelCalls), now: NOW, smtp: smtp(cancelSent), saveSent: quiet });
+    assert.equal(cancelled.warning, null);
+    assert.equal(graphWrites(cancelCalls).length, 0);
+    assert.equal(calendarPart(cancelSent[0].raw).method, "CANCEL");
+    assert.equal((await eventRow(created.eventId!)).is_cancelled, true);
+  });
+
+  it("recreates a deleted hold when moving an SMTP invite instead of cancelling it", async () => {
+    const created = await createInvite(ridgeon, invite({ from: NEO }), { fetchImpl: graph([]), now: NOW, smtp: smtp([]), saveSent: quiet });
+    const calls: Call[] = [];
+    const sent: Sent[] = [];
+    const moved = await rescheduleInvite(
+      ridgeon,
+      { eventId: created.eventId, startLocal: "2026-10-21T10:00" },
+      { fetchImpl: graph(calls, { patchStatus: 404 }), now: NOW, smtp: smtp(sent), saveSent: quiet },
+    );
+    assert.equal(moved.startsAt, "2026-10-21T09:00:00.000Z");
+    assert.deepEqual(graphWrites(calls).map((call) => call.method), ["PATCH", "POST"]);
+    assert.equal(sent.length, 1);
+    const row = await eventRow(created.eventId!);
+    assert.equal(row.is_cancelled, false);
+    assert.equal(row.provider_event_id, "evt-1");
+    assert.equal(row.starts_at.toISOString(), "2026-10-21T09:00:00.000Z");
+  });
+
+  it("only bumps SEQUENCE when the update is sent", async () => {
+    const created = await createInvite(ridgeon, invite({ from: NEO }), { fetchImpl: graph([]), now: NOW, smtp: smtp([]), saveSent: quiet });
+    await rejects(
+      () => rescheduleInvite(ridgeon, { eventId: created.eventId, startLocal: "2026-10-21T10:00" }, { fetchImpl: graph([]), now: NOW, smtp: smtp([], "421 try later"), saveSent: quiet }),
+      { code: "upstream_error", field: "from" },
+    );
+    assert.equal((await eventRow(created.eventId!)).invite_sequence, 0);
+    const sent: Sent[] = [];
+    await cancelInvite(ridgeon, created.eventId!, "", { fetchImpl: graph([]), now: NOW, smtp: smtp(sent), saveSent: quiet });
+    assert.match(calendarPart(sent[0].raw).text, /SEQUENCE:1/);
+    assert.equal((await eventRow(created.eventId!)).invite_sequence, 1);
+  });
+
+  it("ignores replies that don't come from the guest or aren't for this organiser", async () => {
+    const created = await createInvite(ridgeon, invite({ from: NEO }), { fetchImpl: graph([]), now: NOW, smtp: smtp([]), saveSent: quiet });
+    const uid = (await getAdminPool().query<{ invite_uid: string }>("select invite_uid from crm.calendar_events where id = $1", [created.eventId])).rows[0].invite_uid;
+    const identity = { id: identityId, email: NEO };
+    const response = async () =>
+      (await getAdminPool().query<{ attendees: { response: string }[] }>("select attendees from crm.calendar_events where id = $1", [created.eventId])).rows[0]
+        .attendees[0].response;
+    assert.equal(await applyInviteReplies(eclipse, identity, [{ text: replyFor(uid, "DECLINED"), senders: ["mallory@evil.test"] }]), 0);
+    assert.equal(await applyInviteReplies(eclipse, identity, [{ text: replyFor(uid, "DECLINED", { organizer: "someone@else.test" }), senders: [JANE] }]), 0);
+    assert.equal(await applyInviteReplies(eclipse, identity, [{ text: replyFor(uid, "DECLINED", { organizer: null }), senders: [JANE] }]), 0);
+    assert.equal(
+      await applyInviteReplies(eclipse, identity, [{ text: replyFor(uid, "DECLINED", { attendee: "mallory@evil.test" }), senders: ["mallory@evil.test"] }]),
+      0,
+    );
+    assert.equal(await response(), "none");
+    await getAdminPool().query("update crm.calendar_events set invite_sequence = 3 where id = $1", [created.eventId]);
+    assert.equal(await applyInviteReplies(eclipse, identity, [{ text: replyFor(uid, "ACCEPTED", { sequence: 1 }), senders: [JANE] }]), 0);
+    assert.equal(await applyInviteReplies(eclipse, identity, [{ text: replyFor(uid, "ACCEPTED", { sequence: null }), senders: [JANE] }]), 1);
+    assert.equal(await response(), "accepted");
+  });
+
+  it("won't remove an address with upcoming invites, and forgets it once removed", async () => {
+    const created = await createInvite(ridgeon, invite({ from: NEO }), { fetchImpl: graph([]), now: NOW, smtp: smtp([]), saveSent: quiet });
+    await saveBookingPage(eclipse, { ...bookingPage, inviteSender: NEO });
+    await rejects(() => removeIdentity(eclipse, identityId, NOW), {
+      code: "conflict",
+      message: `Cancel the upcoming meeting sent from ${NEO} first, so its guests hear about it.`,
+    });
+    await cancelInvite(ridgeon, created.eventId!, "", { fetchImpl: graph([]), now: NOW, smtp: smtp([]), saveSent: quiet });
+    await removeIdentity(eclipse, identityId, NOW);
+    assert.equal((await getBookingPage(eclipse)).inviteSender, null);
+    const choices = await getAdminPool().query("select 1 from crm.invite_sender_choices where address = $1", [NEO]);
+    assert.equal(choices.rowCount, 0);
+    const orphan = await getAdminPool().query<{ invite_identity_id: string | null }>("select invite_identity_id from crm.calendar_events where id = $1", [created.eventId]);
+    assert.equal(orphan.rows[0].invite_identity_id, null);
+    await getAdminPool().query("update crm.calendar_events set is_cancelled = false where id = $1", [created.eventId]);
+    await rejects(() => cancelInvite(ridgeon, created.eventId!, "", { fetchImpl: graph([]), now: NOW }), {
+      message: /address that sent this invite was removed/,
+    });
+  });
+
+  it("forgets a disconnected account as the booking page's sender", async () => {
+    await saveBookingPage(eclipse, { ...bookingPage, inviteSender: ZEUS });
+    await createInvite(ridgeon, invite({ from: ZEUS }), { fetchImpl: graph([]), now: NOW });
+    await disconnectCalendarAccount(eclipse, zeusId);
+    assert.equal((await getBookingPage(eclipse)).inviteSender, null);
+    const choices = await getAdminPool().query("select 1 from crm.invite_sender_choices where address = $1", [ZEUS]);
+    assert.equal(choices.rowCount, 0);
+  });
+
+  it("defaults booking invites to the address homed in the page's workspace", async () => {
+    await saveBookingPage(ridgeon, bookingPage);
+    assert.equal((await getBookingSetup(ridgeon)).defaultSender, MAIN);
+    await setAddressHome(eclipse, CONSULTING, ridgeon.workspaceId);
+    const setup = await getBookingSetup(eclipse);
+    assert.equal(setup.defaultSender, CONSULTING);
+    await saveBookingPage(eclipse, { ...bookingPage, inviteSender: CONSULTING });
+    assert.equal((await getBookingPage(eclipse)).inviteSender, null);
+    await saveBookingPage(eclipse, { ...bookingPage, inviteSender: MAIN });
+    assert.equal((await getBookingPage(eclipse)).inviteSender, MAIN);
+    await saveBookingPage(eclipse, { ...bookingPage, inviteSender: CONSULTING });
+    const calls: Call[] = [];
+    await bookSlot("mark", { start: "2026-10-19T13:00:00.000Z", name: "Ann", email: "ann@booker.test" }, { ip: "203.0.113.92", now: NOW, fetchImpl: graph(calls) });
+    const post = graphWrites(calls).find((call) => call.method === "POST")!;
+    assert.equal(post.url, "https://graph.microsoft.com/v1.0/me/calendars/cal-mr/events");
+  });
+
+  it("explains a booking whose invite address can't send any more", async () => {
+    await saveBookingPage(eclipse, bookingPage);
+    await getAdminPool().query("update crm.booking_pages set invite_sender = 'gone@nowhere.test' where user_id = $1", [eclipse.userId]);
+    await rejects(
+      () => bookSlot("mark", { start: "2026-10-19T13:00:00.000Z", name: "Ann", email: "ann@booker.test" }, { ip: "203.0.113.93", now: NOW, fetchImpl: graph([]) }),
+      { code: "unavailable" },
+    );
+    assert.equal((await getBookingPage(eclipse)).lastError, bookingSenderGone("gone@nowhere.test"));
+    await getAdminPool().query("update crm.booking_pages set invite_sender = $2 where user_id = $1", [eclipse.userId, ZEUS]);
+    await getAdminPool().query("update crm.calendar_accounts set calendar_write = false where id = $1", [zeusId]);
+    await rejects(
+      () => bookSlot("mark", { start: "2026-10-19T14:00:00.000Z", name: "Bea", email: "bea@booker.test" }, { ip: "203.0.113.94", now: NOW, fetchImpl: graph([]) }),
+      { code: "unavailable" },
+    );
+    assert.equal((await getBookingPage(eclipse)).lastError, `Allow invites for ${ZEUS} in Settings › Calendars first.`);
+  });
+
+  it("lists invite senders and the default in get_settings", async () => {
+    await setAddressHome(eclipse, NEO, ridgeon.workspaceId);
+    const output = (await runTool(ridgeon, "get_settings", {})) as {
+      inviteSenders?: { address: string; kind: string; main: boolean; problem: string | null }[];
+      defaultInviteFrom?: string | null;
+    };
+    assert.deepEqual(output.inviteSenders?.map((sender) => [sender.address, sender.kind, sender.main]), [
+      [MAIN, "microsoft", true],
+      [CONSULTING, "microsoft", false],
+      [ZEUS, "microsoft", false],
+      [NEO, "smtp", false],
+    ]);
+    assert.equal(output.defaultInviteFrom, NEO);
   });
 });

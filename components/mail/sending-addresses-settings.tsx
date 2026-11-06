@@ -32,6 +32,12 @@ export default function SendingAddressesSettings({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [shown, setShown] = useState(identities);
+  const [holds, setHolds] = useState<Record<string, string>>({});
+  if (shown !== identities) {
+    setShown(identities);
+    setHolds({});
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -57,6 +63,8 @@ export default function SendingAddressesSettings({
   async function setHold(id: string, holdCalendarId: string) {
     setBusy(true);
     setError(null);
+    setNotice(null);
+    setHolds((current) => ({ ...current, [id]: holdCalendarId }));
     const response = await fetch("/api/mail/identities", {
       method: "PATCH",
       headers: { "content-type": "application/json" },
@@ -65,6 +73,11 @@ export default function SendingAddressesSettings({
     const body = (await response?.json().catch(() => ({}))) as { error?: string } | undefined;
     setBusy(false);
     if (!response?.ok) {
+      setHolds((current) => {
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
       setError(body?.error ?? "That didn't save. Try again.");
       return;
     }
@@ -73,8 +86,15 @@ export default function SendingAddressesSettings({
 
   async function remove(id: string) {
     setBusy(true);
-    await fetch(`/api/mail/identities?id=${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => null);
+    setError(null);
+    setNotice(null);
+    const response = await fetch(`/api/mail/identities?id=${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => null);
+    const body = (await response?.json().catch(() => ({}))) as { error?: string } | undefined;
     setBusy(false);
+    if (!response?.ok) {
+      setError(body?.error ?? "That address wasn't removed. Try again.");
+      return;
+    }
     router.refresh();
   }
 
@@ -108,7 +128,11 @@ export default function SendingAddressesSettings({
                   <label className="caption-style text-subtle flex w-full flex-col gap-1 sm:w-auto sm:min-w-[16em]">
                     Invites hold time in
                     <NativeSelect
-                      value={identity.holdCalendarId && holdCalendars.some((item) => item.id === identity.holdCalendarId) ? identity.holdCalendarId : ""}
+                      aria-label={`Calendar that holds the time for invites from ${identity.email}`}
+                      value={
+                        holds[identity.id] ??
+                        (identity.holdCalendarId && holdCalendars.some((item) => item.id === identity.holdCalendarId) ? identity.holdCalendarId : "")
+                      }
                       disabled={busy}
                       onChange={(event) => void setHold(identity.id, event.target.value)}
                     >
@@ -121,7 +145,7 @@ export default function SendingAddressesSettings({
                     </NativeSelect>
                   </label>
                 )}
-                <Button variant="ghost" size="sm" disabled={busy} onClick={() => void remove(identity.id)}>
+                <Button variant="ghost" size="sm" disabled={busy} aria-label={`Remove ${identity.email}`} onClick={() => void remove(identity.id)}>
                   Remove
                 </Button>
               </li>
@@ -185,11 +209,6 @@ export default function SendingAddressesSettings({
                 ))}
               </select>
             </label>
-            {error && (
-              <p role="alert" className="caption-style text-danger">
-                {error}
-              </p>
-            )}
             <div className="flex gap-2">
               <Button variant="primary" type="submit" disabled={busy}>
                 {busy ? "Checking…" : "Check and save"}
@@ -199,6 +218,11 @@ export default function SendingAddressesSettings({
               </Button>
             </div>
           </form>
+        )}
+        {error && (
+          <p role="alert" className="caption-style text-danger">
+            {error}
+          </p>
         )}
         {notice && (
           <p role="status" className="caption-style text-subtle">

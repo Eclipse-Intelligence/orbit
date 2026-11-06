@@ -4,6 +4,7 @@ import nodemailer from "nodemailer";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
+import { forgetInviteSender } from "@/lib/crm/calendar-accounts";
 import { canonicalEmail } from "@/lib/crm/normalize";
 import type { UserActor } from "@/lib/crm/types";
 import { decryptSecret, encryptSecret } from "@/lib/crypto/secret";
@@ -93,6 +94,11 @@ export const defaultSmtpSender: SmtpSender = async (identity, message) => {
   }
 };
 
+export function imapTimeouts(deadline?: number) {
+  const left = deadline === undefined ? 30_000 : Math.max(1_000, deadline - Date.now());
+  return { connectionTimeout: Math.min(15_000, left), greetingTimeout: Math.min(15_000, left), socketTimeout: Math.min(30_000, left) };
+}
+
 export const defaultSentSaver: SentSaver = async (identity, raw) => {
   if (!identity.imapHost) return;
   const client = new ImapFlow({
@@ -101,6 +107,7 @@ export const defaultSentSaver: SentSaver = async (identity, raw) => {
     secure: (identity.imapPort ?? 993) === 993,
     auth: { user: identity.username, pass: identity.password },
     logger: false,
+    ...imapTimeouts(),
   });
   await client.connect();
   try {
@@ -201,9 +208,31 @@ export async function saveIdentity(
   });
 }
 
-export async function removeIdentity(actor: UserActor, id: string) {
+export async function removeIdentity(actor: UserActor, id: string, now = Date.now()) {
   if (!isUuid(id)) return;
-  await withActor(actor, (db) => db.query("delete from crm.send_identities where id = $1 and user_id = $2", [id, actor.userId]));
+  await withActor(actor, async (db) => {
+    const open = await db.query<{ email: string; meetings: number }>(
+      `select i.email, count(e.id)::int as meetings
+       from crm.send_identities i
+       left join crm.calendar_events e on e.invite_identity_id = i.id and not e.is_cancelled and e.ends_at > $3
+       where i.id = $1 and i.user_id = $2
+       group by i.email`,
+      [id, actor.userId, new Date(now).toISOString()],
+    );
+    const found = open.rows[0];
+    if (!found) return;
+    if (found.meetings > 0) {
+      throw new CrmError(
+        "conflict",
+        found.meetings === 1
+          ? `Cancel the upcoming meeting sent from ${found.email} first, so its guests hear about it.`
+          : `Cancel the ${found.meetings} upcoming meetings sent from ${found.email} first, so their guests hear about them.`,
+        409,
+      );
+    }
+    await db.query("delete from crm.send_identities where id = $1 and user_id = $2", [id, actor.userId]);
+    await forgetInviteSender(db, actor, found.email);
+  });
 }
 
 export async function identityForSend(actor: UserActor, id: string) {

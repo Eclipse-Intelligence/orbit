@@ -219,7 +219,7 @@ function unavailable(error: unknown) {
     if (error.code === "scope_missing" && error.message === INVITE_RECONNECT) {
       return "Microsoft hasn't allowed Orbit to create meetings. Reconnect Microsoft in Settings › Integrations.";
     }
-    if (error.details?.field === "from") return `Invites from can't send: ${error.message}`;
+    if (error.details?.field === "from") return error.message;
     return `Microsoft couldn't create the meeting: ${error.message}`;
   }
   return "Orbit couldn't create the meeting.";
@@ -417,7 +417,7 @@ async function failed(owner: UserActor, error: unknown) {
 
 async function openOwnerSender(owner: UserActor, fetchImpl: typeof fetch) {
   try {
-    return await openInviteSender(owner, { fetchImpl, from: await bookingInviteSender(owner), fallback: "main" });
+    return await openInviteSender(owner, { fetchImpl, from: await bookingInviteSender(owner), use: "booking" });
   } catch (error) {
     throw await failed(owner, error);
   }

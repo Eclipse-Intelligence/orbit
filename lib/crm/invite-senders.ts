@@ -8,6 +8,7 @@ import { isUuid } from "@/lib/crm/mutate";
 import { canonicalDomain, canonicalEmail } from "@/lib/crm/normalize";
 import type { UserActor } from "@/lib/crm/types";
 import { CALENDAR_WRITE_RECONNECT } from "@/lib/microsoft/calendar";
+import { addressHomesInDb } from "@/lib/mail/routing";
 import { grantsCalendarWrite, microsoftConfigured, refreshMicrosoftToken, type MicrosoftToken } from "@/lib/microsoft/oauth";
 
 export const INVITE_NOT_CONNECTED = "Connect Microsoft in Settings › Integrations to send invites.";
@@ -64,6 +65,7 @@ type IdentityRow = { id: string; email: string; hold_calendar_id: string | null 
 
 const CALENDARS_HREF = "/settings/calendars";
 const INTEGRATIONS_HREF = "/settings/integrations";
+const HOLDS_HREF = "/settings/email-templates#sending-addresses";
 
 function iso(value: Date | string | null) {
   return value ? new Date(value).toISOString() : null;
@@ -75,6 +77,10 @@ export function allowInvitesHref(email: string) {
 
 export function allowInvitesProblem(email: string) {
   return `Allow invites for ${email} in Settings › Calendars first.`;
+}
+
+export function chooseHoldProblem(email: string) {
+  return `Choose a calendar for invite holds from ${email} in Settings › Templates and signatures.`;
 }
 
 function reconnectAccountProblem(email: string) {
@@ -136,6 +142,11 @@ async function readAccountRows(db: Db, actor: UserActor) {
   return result.rows;
 }
 
+function accountScopes(write: boolean | null) {
+  if (write === null) return null;
+  return write ? "Calendars.ReadWrite" : "Calendars.Read";
+}
+
 function accountSource(row: AccountRow): GraphSource {
   return {
     kind: "account",
@@ -146,7 +157,7 @@ function accountSource(row: AccountRow): GraphSource {
       accessTokenCipher: row.access_token,
       accessTokenExpiresAt: iso(row.access_token_expires_at),
     },
-    scopes: null,
+    scopes: accountScopes(row.calendar_write),
   };
 }
 
@@ -208,9 +219,10 @@ export async function readInviteSenders(db: Db, actor: UserActor): Promise<Invit
     const address = canonicalEmail(row.email) ?? row.email.toLowerCase();
     const calendar = calendars.find((item) => item.account_id === row.id && item.is_default) ?? null;
     const connected = row.status === "connected" && Boolean(row.refresh_token);
+    const needsWrite = row.calendar_write !== true;
     const problem = !configured || !connected
       ? reconnectAccountProblem(address)
-      : row.calendar_write === false
+      : needsWrite
         ? allowInvitesProblem(address)
         : !calendar
           ? `${address} has no calendar Orbit can add meetings to. Check it in Settings › Calendars.`
@@ -220,7 +232,7 @@ export async function readInviteSenders(db: Db, actor: UserActor): Promise<Invit
       kind: "microsoft",
       primary: false,
       problem,
-      fixHref: problem ? (row.calendar_write === false && connected ? allowInvitesHref(address) : CALENDARS_HREF) : null,
+      fixHref: problem ? (configured && connected && needsWrite ? allowInvitesHref(address) : CALENDARS_HREF) : null,
       source: accountSources.get(row.id) ?? null,
       calendar: calendar ? graphCalendar(calendar) : null,
       identityId: null,
@@ -230,16 +242,21 @@ export async function readInviteSenders(db: Db, actor: UserActor): Promise<Invit
   const holds = holdCalendarsFrom(calendars, mainSource, accountSources);
   for (const row of identities.rows) {
     const address = canonicalEmail(row.email) ?? row.email.toLowerCase();
-    const hold = pickHold(holds, address, row.hold_calendar_id, mainSource?.id ?? null);
-    const problem = hold
-      ? null
-      : `Orbit needs a Microsoft calendar to hold the time for invites from ${address}. Connect one in Settings › Calendars.`;
+    const hold = pickHold(holds, address, row.hold_calendar_id);
+    const holdProblem = hold ? holdWriteProblem(hold) : null;
+    const problem = holdProblem
+      ? holdProblem.problem
+      : hold
+        ? null
+        : holds.length === 0
+          ? `Orbit needs a Microsoft calendar to hold the time for invites from ${address}. Connect one in Settings › Calendars.`
+          : chooseHoldProblem(address);
     push({
       address,
       kind: "smtp",
       primary: false,
       problem,
-      fixHref: problem ? CALENDARS_HREF : null,
+      fixHref: holdProblem ? holdProblem.fixHref : problem ? (holds.length === 0 ? CALENDARS_HREF : HOLDS_HREF) : null,
       source: hold?.source ?? null,
       calendar: hold ? graphCalendar(hold.row) : null,
       identityId: row.id,
@@ -266,24 +283,28 @@ function holdCalendarsFrom(calendars: CalendarRow[], main: GraphSource | null, a
   return options;
 }
 
-function pickHold(holds: HoldOption[], address: string, chosen: string | null, mainId: string | null) {
+function pickHold(holds: HoldOption[], address: string, chosen: string | null) {
   if (chosen) {
     const picked = holds.find((hold) => hold.row.id === chosen);
     if (picked) return picked;
   }
-  const defaults = holds.filter((hold) => hold.row.is_default);
   let best: HoldOption | null = null;
   let bestScore = 0;
-  for (const hold of defaults) {
-    if (hold.source.kind !== "account") continue;
+  for (const hold of holds) {
+    if (!hold.row.is_default) continue;
     const score = domainScore(address, hold.source.email);
     if (score > bestScore) {
       best = hold;
       bestScore = score;
     }
   }
-  if (best) return best;
-  return defaults.find((hold) => hold.source.kind === "connection" && hold.source.id === mainId) ?? defaults[0] ?? holds[0] ?? null;
+  return best;
+}
+
+function holdWriteProblem(hold: HoldOption) {
+  const write = grantsCalendarWrite(hold.source.scopes);
+  if (hold.source.kind === "connection") return write === false ? { problem: INVITE_RECONNECT, fixHref: INTEGRATIONS_HREF } : null;
+  return write === true ? null : { problem: allowInvitesProblem(hold.source.email), fixHref: allowInvitesHref(hold.source.email) };
 }
 
 export async function listHoldCalendars(actor: UserActor): Promise<HoldCalendar[]> {
@@ -296,7 +317,7 @@ export async function listHoldCalendars(actor: UserActor): Promise<HoldCalendar[
     );
     const main =
       configured && stored && stored.status === "connected" && stored.refreshTokenCipher
-        ? { kind: "connection" as const, id: stored.id, email: stored.email.toLowerCase(), tokens: stored, scopes: null }
+        ? { kind: "connection" as const, id: stored.id, email: canonicalEmail(stored.email) ?? stored.email.toLowerCase(), tokens: stored, scopes: null }
         : null;
     return holdCalendarsFrom(calendars, main, accounts).map((hold) => ({
       id: hold.row.id,
@@ -320,23 +341,32 @@ export async function setHoldCalendar(actor: UserActor, identityId: string, cale
   if (!updated.rowCount) throw new CrmError("not_found", "That sending address isn't set up any more.", 404);
 }
 
-export async function defaultInviteAddress(db: Db, actor: UserActor, senders: InviteSenderCandidate[]) {
+export async function homedInviteAddress(db: Db, actor: UserActor, senders: Pick<InviteSenderOption, "address">[], workspaceId: string) {
+  const homes = (await addressHomesInDb(db, actor)).filter((home) => home.workspaceId === workspaceId);
+  const chosen = new Set(homes.filter((home) => home.workspaceId !== home.defaultWorkspaceId).map((home) => home.address));
+  const implicit = new Set(homes.map((home) => home.address));
+  return (senders.find((sender) => chosen.has(sender.address)) ?? senders.find((sender) => implicit.has(sender.address)))?.address ?? null;
+}
+
+export async function defaultInviteAddress(
+  db: Db,
+  actor: UserActor,
+  senders: InviteSenderCandidate[],
+  options: { mainFirst?: boolean } = {},
+) {
   if (senders.length === 0) return null;
   const known = new Set(senders.map((sender) => sender.address));
-  const homes = await db.query<{ address: string }>(
-    "select address from crm.mail_address_homes where user_id = $1 and workspace_id = $2",
-    [actor.userId, actor.workspaceId],
-  );
-  const homed = new Set(homes.rows.map((row) => row.address));
-  const home = senders.find((sender) => homed.has(sender.address));
-  if (home) return home.address;
+  const home = await homedInviteAddress(db, actor, senders, actor.workspaceId);
+  if (home) return home;
+  const primary = senders.find((sender) => sender.primary);
+  if (options.mainFirst && primary) return primary.address;
   const last = await db.query<{ address: string }>(
     "select address from crm.invite_sender_choices where user_id = $1 and workspace_id = $2",
     [actor.userId, actor.workspaceId],
   );
   const remembered = last.rows[0]?.address;
   if (remembered && known.has(remembered)) return remembered;
-  return (senders.find((sender) => sender.primary) ?? senders.find((sender) => !sender.problem) ?? senders[0]).address;
+  return (primary ?? senders.find((sender) => !sender.problem) ?? senders[0]).address;
 }
 
 export function pickInviteSender(senders: InviteSenderCandidate[], from: unknown, fallback: string | null) {
@@ -381,10 +411,6 @@ async function saveSourceToken(actor: UserActor, source: GraphSource, token: Mic
   await withActor(actor, async (db) => {
     if (source.kind === "account") {
       await storeAccountToken(db, source.id, token);
-      const write = grantsCalendarWrite(token.scope);
-      if (write !== null) {
-        await db.query("update crm.calendar_accounts set calendar_write = $2 where id = $1", [source.id, write]);
-      }
       return;
     }
     await storeToken(db, source.id, token);

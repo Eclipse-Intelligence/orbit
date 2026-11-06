@@ -169,7 +169,7 @@ export async function listCalendarGroups(actor: UserActor): Promise<CalendarGrou
           (account.provider === "ics" ? Boolean(account.feed) : Boolean(account.refreshTokenCipher)),
         scopeMissing: account.scopeMissing,
         canSend: account.provider === "microsoft" && account.canSend,
-        canInvite: account.provider === "microsoft" && account.canSend && account.calendarWrite !== false,
+        canInvite: account.provider === "microsoft" && account.canSend && account.calendarWrite === true,
         lastSyncedAt: account.lastSyncedAt,
         lastError: account.lastError,
         calendars: calendars.rows.filter((row) => row.account_id === account.id).map(mapCalendar),
@@ -303,7 +303,8 @@ export async function listCalendarItems(
     const writable = stored?.status === "connected" && stored.refreshTokenCipher ? stored.id : null;
     const accounts = await db.query<{ id: string }>(
       `select id from crm.calendar_accounts
-       where user_id = $1 and provider = 'microsoft' and status = 'connected' and refresh_token is not null`,
+       where user_id = $1 and provider = 'microsoft' and status = 'connected' and refresh_token is not null
+         and calendar_write is distinct from false`,
       [actor.userId],
     );
     const writableAccounts = new Set(accounts.rows.map((row) => row.id));
