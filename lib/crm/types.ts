@@ -120,9 +120,20 @@ export type CompanyWrite = {
   healthReason?: string | null;
 };
 
+export type ProvenanceSource =
+  | "web"
+  | "mcp"
+  | "csv"
+  | "assistant"
+  | "email"
+  | "microsoft"
+  | "parallel"
+  | "linkedin_extension"
+  | (string & {});
+
 export type Provenance = {
   operation: string;
-  source?: string | null;
+  source?: ProvenanceSource | null;
   sourceUrl?: string | null;
   workflowId?: string;
   depth?: number;
@@ -160,14 +171,16 @@ export type Member = {
 export type UpsertResult = {
   company: Company;
   created: boolean;
-  matchedOn: "domain" | "name" | null;
+  matchedOn: CompanyMatchedOn | null;
 };
+
+export type CompanyMatchedOn = "domain" | "linkedin" | "name";
 
 export type BulkItemResult = {
   index: number;
   status: "created" | "updated" | "matched" | "error";
   company?: Company;
-  matchedOn?: "domain" | "name" | null;
+  matchedOn?: CompanyMatchedOn | null;
   error?: { code: string; message: string };
 };
 
@@ -204,6 +217,8 @@ export type Contact = {
   phone: string | null;
   jobTitle: string | null;
   linkedinUrl: string | null;
+  location: string | null;
+  salesNavigatorUrl: string | null;
   ownerId: string | null;
   ownerName: string | null;
   source: string | null;
@@ -225,6 +240,8 @@ export type ContactWrite = {
   phone?: string | null;
   jobTitle?: string | null;
   linkedinUrl?: string | null;
+  location?: string | null;
+  salesNavigatorUrl?: string | null;
   ownerId?: string | null;
   source?: string | null;
   sourceReference?: string | null;
@@ -232,7 +249,7 @@ export type ContactWrite = {
   tags?: string[] | null;
 };
 
-export type ContactMatch = "email" | "linkedin" | "name";
+export type ContactMatch = "email" | "linkedin" | "sales_navigator" | "name";
 
 export type ContactListQuery = {
   query?: string;
@@ -440,7 +457,7 @@ export type LeadResult = {
   task: Task | null;
   companyCreated: boolean;
   contactCreated: boolean;
-  companyMatchedOn: "domain" | "name" | null;
+  companyMatchedOn: CompanyMatchedOn | null;
   contactMatchedOn: ContactMatch | null;
 };
 

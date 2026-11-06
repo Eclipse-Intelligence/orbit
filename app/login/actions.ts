@@ -10,6 +10,7 @@ import {
 } from "@/lib/auth/config";
 import { signSession } from "@/lib/auth/session";
 import { createSupabaseServer } from "@/lib/auth/supabase";
+import { safeNextPath } from "@/lib/auth/next-path";
 import { membershipsFor, verifyLocalPassword } from "@/lib/auth/user";
 import { actionError } from "@/lib/companies";
 
@@ -65,7 +66,7 @@ export async function signInAction(
     return { ...kept, ...actionError(error) };
   }
 
-  redirect("/mail");
+  redirect(safeNextPath(text(formData, "next")) ?? "/mail");
 }
 
 export async function requestResetAction(

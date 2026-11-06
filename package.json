@@ -12,7 +12,9 @@
     "db:reset": "tsx scripts/setup-db.ts --reset",
     "agent:create": "tsx scripts/create-agent.ts",
     "mcp": "tsx scripts/mcp-stdio.ts",
-    "companion:pack": "node scripts/pack-companion.mjs"
+    "companion:pack": "node scripts/pack-companion.mjs",
+    "extension:build": "node scripts/build-extension.mjs",
+    "extension:zip": "node scripts/build-extension.mjs --zip"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",

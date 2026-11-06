@@ -162,10 +162,14 @@ export async function importContactsCsv(actor: Actor, csv: string): Promise<Impo
       const jobTitle = columnValue(row, pick(["title", "job title"]));
       const source = columnValue(row, pick(["source"]));
       const notes = columnValue(row, pick(["notes"]));
+      const location = columnValue(row, pick(["location"]));
+      const salesNavigator = columnValue(row, pick(["sales navigator", "sales navigator url", "sales navigator lead"]));
       const tags = columnValue(row, pick(["tags", "tag"]));
       if (jobTitle !== undefined) input.jobTitle = jobTitle;
       if (source !== undefined) input.source = source;
       if (notes !== undefined) input.notes = notes;
+      if (location !== undefined) input.location = location;
+      if (salesNavigator !== undefined) input.salesNavigatorUrl = salesNavigator;
       if (tags !== undefined) input.tags = parseTagList(tags);
       const companyDomain = columnValue(row, pick(["company domain", "domain"]));
       const companyName = columnValue(row, pick(["company", "company name"]));
@@ -268,7 +272,7 @@ export async function exportContactsCsv(actor: Actor) {
 
 export function contactsCsvRows(rows: Contact[]) {
   return [
-    ["First name", "Last name", "Email", "Phone", "Title", "LinkedIn", "Company", "Source", "Notes", "Tags"],
+    ["First name", "Last name", "Email", "Phone", "Title", "LinkedIn", "Company", "Location", "Sales Navigator", "Source", "Notes", "Tags"],
     ...rows.map((contact) => [
       contact.firstName ?? "",
       contact.lastName ?? "",
@@ -277,6 +281,8 @@ export function contactsCsvRows(rows: Contact[]) {
       contact.jobTitle ?? "",
       contact.linkedinUrl ?? "",
       contact.companyName ?? "",
+      contact.location ?? "",
+      contact.salesNavigatorUrl ?? "",
       contact.source ?? "",
       contact.notes ?? "",
       contact.tags.join("; "),

@@ -111,13 +111,13 @@ Response:
 { "company": {}, "created": true, "matchedOn": null }
 ```
 
-`matchedOn` is `domain`, `name`, or `null` when a new row was inserted. Provide a name or a domain.
+`matchedOn` is `domain`, `linkedin`, `name`, or `null` when a new row was inserted. An upsert matches the domain first, then `linkedinUrl` (the same LinkedIn company page), then the same normalised name on a company without a domain. A company matched on its LinkedIn page keeps its own domain when the upsert gives a different one. Provide a name or a domain.
 
 `POST /api/v1/companies/bulk` accepts `{ "companies": [ ... ], "provenance": { "source": "", "sourceUrl": "" } }` with 1 to 50 companies. Each item is validated on its own. The response is `{ "results": [ { "index": 0, "status": "created", "company": {}, "matchedOn": null } ] }`. `status` is `created`, `updated`, `matched`, or `error`. `matched` means an existing company was found and no fields changed. An error item includes `{ "code", "message" }` and does not roll back the items that succeeded.
 
 ## Company fields
 
-`name`, `domain`, `website`, `description`, `industry`, `sizeCategory`, `lifecycle`, `ownerId`, `source`, `sourceReference`, `tags`, and on updates `health` (`healthy`, `watch`, `at_risk` or null) with an optional `healthReason`.
+`name`, `domain`, `website`, `description`, `industry`, `sizeCategory`, `linkedinUrl` (a LinkedIn company page, stored as `https://www.linkedin.com/company/<slug>`), `lifecycle`, `ownerId`, `source`, `sourceReference`, `tags`, and on updates `health` (`healthy`, `watch`, `at_risk` or null) with an optional `healthReason`.
 
 Responses also carry `health`, `healthReason`, `healthAt` and `healthActivityId` (the call it came from; null when set by hand). Health is normally set from call summaries.
 
@@ -149,11 +149,11 @@ Codes include `unauthorized` (401), `forbidden` (403), `not_found` (404), `inval
 
 `GET /api/v1/contacts` with `q`, `company_id`, `owner`, `tag`, `sort` (`name`, `company`, `updated`, `created`; default `name`), `order` (`asc` or `desc`), `has` and `missing` (comma-separated `email`, `phone`, `linkedin`, `company`), `limit`, `offset`, `include_archived=true`.
 
-Contact fields: `companyId`, `firstName`, `lastName`, `email`, `phone`, `jobTitle`, `linkedinUrl`, `ownerId`, `source`, `sourceReference`, `notes`, `tags`. Tags follow the rules in [Tags](#tags).
+Contact fields: `companyId`, `firstName`, `lastName`, `email`, `phone`, `jobTitle`, `linkedinUrl`, `location` (free text up to 200 characters, such as `Bristol, England`), `salesNavigatorUrl` (a Sales Navigator lead link, stored as `https://www.linkedin.com/sales/lead/<id>`), `ownerId`, `source`, `sourceReference`, `notes`, `tags`. Tags follow the rules in [Tags](#tags).
 
 `POST /api/v1/contacts` creates a person. A name, email, phone, or LinkedIn profile is required. Matching email or LinkedIn returns 409 `duplicate_contact`.
 
-`POST /api/v1/contacts/upsert` matches email, then LinkedIn, then the same name at the same company. `200` with `{ "contact", "created", "matchedOn" }`. `matchedOn` is `email`, `linkedin`, `name`, or `null`.
+`POST /api/v1/contacts/upsert` matches email, then LinkedIn, then Sales Navigator lead, then the same name at the same company. `200` with `{ "contact", "created", "matchedOn" }`. `matchedOn` is `email`, `linkedin`, `sales_navigator`, `name`, or `null`.
 
 `GET`, `PATCH`, and `DELETE /api/v1/contacts/:id` read, partially update, and archive. `DELETE` sets `archived_at`.
 
@@ -203,7 +203,7 @@ Agent tokens see every task in the workspace; people in the app only see tasks t
 
 `GET /api/v1/export/companies`, `/contacts`, `/opportunities`, `/activities`, and `/tasks` return CSV.
 
-`POST /api/v1/import/companies` and `POST /api/v1/import/contacts` accept `text/csv` or `{ "csv": "..." }`. Up to 50 rows. Companies match by domain. Contacts match by the usual contact rules and attach to a company with the same domain or name. A column that is absent, or a cell that is empty, leaves that field as it is. Exports include a `Tags` column with tags separated by `; `. On import a non-empty `Tags` cell (split on `;`) replaces that record's tags. Without the matching write scope the import returns 403.
+`POST /api/v1/import/companies` and `POST /api/v1/import/contacts` accept `text/csv` or `{ "csv": "..." }`. Up to 50 rows. Companies match by domain. Contacts match by the usual contact rules and attach to a company with the same domain or name. A column that is absent, or a cell that is empty, leaves that field as it is. Exports include a `Tags` column with tags separated by `; `. Contact exports include `Location` and `Sales Navigator`, and imports read those columns too. On import a non-empty `Tags` cell (split on `;`) replaces that record's tags. Without the matching write scope the import returns 403.
 
 ## Communications
 
@@ -242,7 +242,24 @@ An endpoint subscribed to `*` also receives every other audited event, which can
 
 A delivery is `POST` JSON of `{ "id", "type", "createdAt", "workspaceId", "entity": { "type", "id" }, "actor": { "type", "userId", "agentId" }, "source", "sourceUrl", "data" }`, where `data` is the audit event's changes, with headers `X-CRM-Event`, `X-CRM-Event-Id`, `X-CRM-Timestamp`, and `X-CRM-Signature: v1=<hex>`. The signature is HMAC SHA-256 of `{timestamp}.{body}` using the endpoint secret. Deliveries go out right after the change that queued them. A non-2xx response is retried after 1, 5, 30 and 120 minutes, and marked failed after the fifth attempt; retries run on the next delivery or the scheduled sync (every 10 minutes), whichever comes first.
 
-Deliveries from the assistant carry `source` `assistant`, or `email` for changes an agent mailbox job ran (see Agent mailbox in `docs/assistant.md`).
+Deliveries from the assistant carry `source` `assistant`, or `email` for changes an agent mailbox job ran (see Agent mailbox in `docs/assistant.md`). Changes made from the LinkedIn capture Chrome extension carry `source` `linkedin_extension`, the person as the actor, and the LinkedIn page as `sourceUrl`.
+
+## LinkedIn capture extension API
+
+`/api/extension/*` serves only the LinkedIn capture Chrome extension (see LinkedIn capture in `docs/architecture.md`). It isn't part of the agent API: agent and personal tokens are refused there, and its browser credentials (`olx_…`) are refused everywhere else. Requests with an `Origin` other than `chrome-extension://<id>` for an ID in `LINKEDIN_EXTENSION_ID` get 403, and only those origins get CORS headers.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/pair` | Start connecting: a code, a secret and the Orbit page to approve it on. Up to 10 from one address every 10 minutes |
+| `POST` | `/pair/redeem` | `{ code, secret }`: 202 while waiting, 200 with the credential once approved (once only), 410 when expired, used or cancelled |
+| `GET` | `/me` | The browser, the person and each allowed workspace with its members, boards and stages, and lifecycles |
+| `GET` | `/lookup?url=&name=&company=&companyUrl=&domain=` | In Orbit, possible match or not, in every allowed workspace |
+| `POST` | `/capture` | Save a person (`kind: person`) or company (`kind: company`), or link a possible match (`kind: link`) |
+| `POST` | `/diff` | What differs between the page and the record; with `apply` it saves the ticked fields |
+| `POST` | `/task`, `/note`, `/log`, `/log/check` | Add a task (yours), a note, a LinkedIn message or the ticked on-screen messages as one activity, and check which were logged before |
+| `POST` | `/revoke` | Sign this browser out |
+
+Every call except `pair`, `pair/redeem`, `me`, `lookup` and `revoke` names its workspace in `X-Orbit-Workspace`; one the browser wasn't given, or that the person has left, gets 403 `workspace_not_allowed`. Each browser is limited to 300 requests a minute.
 
 ## Agent mailbox webhook
 

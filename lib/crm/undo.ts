@@ -86,6 +86,8 @@ const FIELDS: Record<EntityType, Record<string, string>> = {
     phone: "Phone",
     jobTitle: "Job title",
     linkedinUrl: "LinkedIn",
+    location: "Location",
+    salesNavigatorUrl: "Sales Navigator",
     ownerId: "Owner",
     source: "Source",
     sourceReference: "Source reference",

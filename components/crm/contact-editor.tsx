@@ -166,6 +166,12 @@ export default function ContactEditor({
           label="LinkedIn"
           defaultValue={editing?.linkedinUrl ?? ""}
         />
+        <Field
+          id="contact-location"
+          name="location"
+          label="Location"
+          defaultValue={editing?.location ?? ""}
+        />
         <RecordSelect
           id="contact-company"
           name="companyId"

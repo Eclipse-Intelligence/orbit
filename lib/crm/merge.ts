@@ -46,6 +46,8 @@ const CONTACT_FILLS: Fill<Contact>[] = [
   { field: "phone", columns: ["phone"] },
   { field: "jobTitle", columns: ["job_title"] },
   { field: "linkedinUrl", columns: ["linkedin_url", "normalized_linkedin"] },
+  { field: "location", columns: ["location"] },
+  { field: "salesNavigatorUrl", columns: ["sales_navigator_url"] },
   { field: "companyId", columns: ["company_id"] },
   { field: "ownerId", columns: ["owner_id"] },
   { field: "source", columns: ["source"] },

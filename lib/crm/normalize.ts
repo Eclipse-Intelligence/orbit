@@ -161,6 +161,29 @@ export function canonicalCompanyLinkedin(value: string): string | null {
   return `https://www.linkedin.com/${kind}/${slug}`;
 }
 
+export function canonicalSalesNavigator(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  let url: URL;
+  try {
+    url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`);
+  } catch {
+    return null;
+  }
+  const host = url.hostname.replace(/\.$/, "").replace(/^www\./, "").toLowerCase();
+  if (host !== "linkedin.com" && !host.endsWith(".linkedin.com")) return null;
+  const parts = url.pathname.split("/").filter(Boolean);
+  if (parts.length < 3 || parts[0].toLowerCase() !== "sales" || !["lead", "people"].includes(parts[1].toLowerCase())) return null;
+  let id: string;
+  try {
+    id = decodeURIComponent(parts[2]).split(",")[0].trim();
+  } catch {
+    return null;
+  }
+  if (!/^[A-Za-z0-9_-]{6,120}$/.test(id)) return null;
+  return `https://www.linkedin.com/sales/lead/${id}`;
+}
+
 export function canonicalImageUrl(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed || trimmed.length > 1000) return null;

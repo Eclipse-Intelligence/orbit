@@ -230,6 +230,20 @@ async function findMatch(
   return { company: mapCompany(row), matchedOn } as const;
 }
 
+export async function findByLinkedin(db: Db, workspaceId: string, linkedinUrl: string) {
+  const result = await db.query<CompanyRow>(
+    `${COMPANY_SQL}
+     where c.workspace_id = $1
+       and c.archived_at is null
+       and c.linkedin_url = $2
+     order by c.updated_at desc
+     limit 1`,
+    [workspaceId, linkedinUrl],
+  );
+  const row = result.rows[0];
+  return row ? ({ company: mapCompany(row), matchedOn: "linkedin" } as const) : null;
+}
+
 async function matchLifecycle(db: Db, workspaceId: string, value: string | undefined) {
   if (!value || (LIFECYCLES as readonly string[]).includes(value)) return value;
   const found = await db.query<{ lifecycle: string }>(
@@ -447,17 +461,26 @@ async function createInTransaction(
 async function upsertInTransaction(
   db: Db,
   actor: Actor,
-  write: CompanyWrite & { normalizedName?: string },
+  input: CompanyWrite & { normalizedName?: string },
   provenance?: Provenance,
 ): Promise<UpsertResult & { changed: boolean }> {
+  let write = input;
   await lockCompanies(db, actor.workspaceId);
-  const match = await findMatch(
-    db,
-    actor.workspaceId,
-    write.domain ?? null,
-    write.normalizedName ?? null,
-    true,
-  );
+  const byDomain = write.domain ? await findMatch(db, actor.workspaceId, write.domain, null) : null;
+  const byLinkedin = byDomain || !write.linkedinUrl ? null : await findByLinkedin(db, actor.workspaceId, write.linkedinUrl);
+  const match =
+    byDomain ??
+    byLinkedin ??
+    (await findMatch(
+      db,
+      actor.workspaceId,
+      write.domain ?? null,
+      write.normalizedName ?? null,
+      true,
+    ));
+  if (byLinkedin?.company.domain && write.domain && write.domain !== byLinkedin.company.domain) {
+    write = { ...write, domain: undefined };
+  }
   if (!match) {
     const toInsert =
       write.name && write.normalizedName
@@ -588,7 +611,7 @@ export async function getCompany(actor: Actor, id: string) {
   });
 }
 
-function scheduleEnrichment(actor: Actor, companyId: string) {
+export function scheduleEnrichment(actor: Actor, companyId: string) {
   const run = () => {
     void import("@/lib/enrichment/companies")
       .then((module) => module.autoEnrichCompany(actor, companyId))

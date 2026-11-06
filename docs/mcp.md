@@ -89,7 +89,7 @@ claude mcp add --transport http orbit https://orbit.geteclipse.co/api/mcp --head
 | --- | --- | --- | --- | --- | --- |
 | `search_contacts` | Searches people by name, email, title, phone or company. | `query`, `company_id`, `tag`, `limit` (up to 100) | `crm:read` | No | Both |
 | `get_contact` | One contact by id. | `id` | `crm:read` | No | Both |
-| `upsert_contact` | Creates or updates a contact, matching email, then LinkedIn, then the same name at the same company. Omitted fields stay; `tags` replaces the list. | `companyId`, `firstName`, `lastName`, `email`, `phone`, `jobTitle`, `linkedinUrl`, `ownerId`, `source`, `sourceReference`, `notes`, `tags`, provenance | `contacts:write` | Yes | Both |
+| `upsert_contact` | Creates or updates a contact, matching email, then LinkedIn, then Sales Navigator lead, then the same name at the same company. Omitted fields stay; `tags` replaces the list. | `companyId`, `firstName`, `lastName`, `email`, `phone`, `jobTitle`, `linkedinUrl`, `location`, `salesNavigatorUrl`, `ownerId`, `source`, `sourceReference`, `notes`, `tags`, provenance | `contacts:write` | Yes | Both |
 | `archive_contact` | Archives a contact. | `id`, provenance | `contacts:write` | Yes | Both |
 | `merge_contacts` | Merges a duplicate into the contact to keep (see Merging). | `keep_id`, `merge_id`, provenance | `contacts:write` | Yes | Both |
 

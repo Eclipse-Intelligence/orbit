@@ -1,0 +1,256 @@
+export const EXTENSION_SOURCE = "linkedin_extension";
+export const EXTENSION_TOKEN_PREFIX = "olx_";
+export const WORKSPACE_HEADER = "x-orbit-workspace";
+export const PAIRING_TTL_MINUTES = 10;
+
+export type ApiError = { error: { code: string; message: string; details?: Record<string, unknown> } };
+
+export type PairStartResponse = { code: string; secret: string; expiresAt: string; approveUrl: string };
+
+export type PairRedeemRequest = { code: string; secret: string };
+
+export type PairRedeemResponse =
+  | { status: "pending"; expiresAt: string }
+  | { status: "approved"; token: string; browser: { id: string; name: string } };
+
+export type Person = { id: string; name: string };
+
+export type ExtensionStage = { id: string; name: string };
+
+export type ExtensionBoard = { id: string; name: string; kind: "sales" | "board"; stages: ExtensionStage[] };
+
+export type ExtensionLifecycle = { value: string; label: string };
+
+export type ExtensionWorkspace = {
+  id: string;
+  name: string;
+  role: "owner" | "admin" | "member";
+  members: Person[];
+  boards: ExtensionBoard[];
+  lifecycles: ExtensionLifecycle[];
+};
+
+export type MeResponse = {
+  browser: { id: string; name: string };
+  user: { id: string; name: string; email: string };
+  orbitUrl: string;
+  workspaces: ExtensionWorkspace[];
+};
+
+export type PageKind = "person" | "lead" | "company" | "conversation" | "other";
+
+export type MatchStatus = "in" | "maybe" | "none";
+
+export type PersonMatch = "linkedin" | "sales_navigator" | "name";
+
+export type CompanyMatch = "linkedin" | "domain" | "name";
+
+export type DealSummary = { id: string; name: string; value: string | null; board: string; stage: string | null };
+
+export type TaskSummary = { id: string; title: string; dueAt: string | null; dueLabel: string | null; overdue: boolean; dueToday: boolean };
+
+export type LastContact = { kind: string; title: string; occurredAt: string; whenLabel: string };
+
+export type CompanyBrief = {
+  id: string;
+  name: string;
+  domain: string | null;
+  lifecycle: string;
+  lifecycleLabel: string;
+  linkedinUrl: string | null;
+  url: string;
+};
+
+export type PersonSummary = {
+  id: string;
+  name: string;
+  firstName: string | null;
+  lastName: string | null;
+  jobTitle: string | null;
+  email: string | null;
+  location: string | null;
+  linkedinUrl: string | null;
+  salesNavigatorUrl: string | null;
+  tags: string[];
+  owner: Person | null;
+  company: CompanyBrief | null;
+  deal: DealSummary | null;
+  lastContact: LastContact | null;
+  tasks: TaskSummary[];
+  addedLabel: string;
+  url: string;
+};
+
+export type AiFieldValue = { id: string; label: string; value: string; detail: string | null; meta: string | null };
+
+export type CompanySummary = {
+  id: string;
+  name: string;
+  domain: string | null;
+  website: string | null;
+  industry: string | null;
+  sizeCategory: string | null;
+  lifecycle: string;
+  lifecycleLabel: string;
+  linkedinUrl: string | null;
+  tags: string[];
+  owner: Person | null;
+  deal: DealSummary | null;
+  people: { id: string; name: string; jobTitle: string | null }[];
+  openTasks: number;
+  nextDueLabel: string | null;
+  tasks: TaskSummary[];
+  aiFields: AiFieldValue[];
+  url: string;
+};
+
+export type LookupQuery = {
+  url: string;
+  name?: string;
+  company?: string;
+  companyUrl?: string;
+  domain?: string;
+};
+
+export type WorkspaceLookup = {
+  workspaceId: string;
+  workspaceName: string;
+  status: MatchStatus;
+  matchedOn: PersonMatch | CompanyMatch | null;
+  person: PersonSummary | null;
+  company: CompanySummary | null;
+  candidates: PersonSummary[];
+  presence: string;
+};
+
+export type LookupResponse = { kind: PageKind; url: string | null; workspaces: WorkspaceLookup[] };
+
+export type PagePerson = {
+  name: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  headline: string | null;
+  jobTitle: string | null;
+  location: string | null;
+  linkedinUrl: string | null;
+  salesNavigatorUrl: string | null;
+  companyName: string | null;
+  companyLinkedinUrl: string | null;
+};
+
+export type PageCompany = {
+  name: string | null;
+  tagline: string | null;
+  website: string | null;
+  industry: string | null;
+  sizeCategory: string | null;
+  location: string | null;
+  linkedinUrl: string | null;
+};
+
+export type CapturePersonRequest = {
+  kind: "person";
+  person: {
+    firstName: string | null;
+    lastName: string | null;
+    jobTitle: string | null;
+    location: string | null;
+    linkedinUrl: string | null;
+    salesNavigatorUrl: string | null;
+  };
+  company: { name: string | null; domain: string | null; linkedinUrl: string | null } | null;
+  ownerId: string | null;
+  tags: string[];
+  boardId: string | null;
+  stageId: string | null;
+  sourceUrl: string | null;
+};
+
+export type CaptureCompanyRequest = {
+  kind: "company";
+  company: {
+    name: string;
+    domain: string | null;
+    linkedinUrl: string | null;
+    industry: string | null;
+    sizeCategory: string | null;
+    description: string | null;
+  };
+  lifecycle: string | null;
+  ownerId: string | null;
+  tags: string[];
+  boardId: string | null;
+  stageId: string | null;
+  sourceUrl: string | null;
+};
+
+export type LinkRequest = { kind: "link"; contactId: string; linkedinUrl: string | null; salesNavigatorUrl: string | null; sourceUrl: string | null };
+
+export type CaptureRequest = CapturePersonRequest | CaptureCompanyRequest | LinkRequest;
+
+export type CaptureResponse = {
+  person: PersonSummary | null;
+  company: CompanySummary | null;
+  created: { contact: boolean; company: boolean };
+};
+
+export const DIFF_FIELDS = ["name", "jobTitle", "location", "company", "linkedinUrl", "salesNavigatorUrl", "website", "industry", "sizeCategory"] as const;
+
+export type DiffField = (typeof DIFF_FIELDS)[number];
+
+export type DiffRequest = {
+  contactId?: string;
+  companyId?: string;
+  person?: PagePerson;
+  company?: PageCompany;
+  apply?: DiffField[];
+};
+
+export type DiffRow = { field: DiffField; label: string; before: string | null; after: string | null; changed: boolean };
+
+export type DiffResponse = { changes: DiffRow[]; applied: DiffField[]; person: PersonSummary | null; company: CompanySummary | null };
+
+export type TaskDue = "today" | "tomorrow" | "next_week";
+
+export type TaskRequest = {
+  title: string;
+  due: TaskDue | string | null;
+  remindMinutes: number | null;
+  contactId?: string | null;
+  companyId?: string | null;
+};
+
+export type TaskResponse = { task: TaskSummary };
+
+export type NoteRequest = { body: string; contactId?: string | null; companyId?: string | null };
+
+export type NoteResponse = { activityId: string };
+
+export type ThreadMessage = { from: string; mine: boolean; when: string | null; at: string | null; text: string };
+
+export type LogMessageRequest = {
+  kind: "message";
+  contactId: string;
+  direction: "received" | "sent";
+  occurredAt: string | null;
+  text: string;
+};
+
+export type LogConversationRequest = {
+  kind: "conversation";
+  contactId: string;
+  title: string | null;
+  threadUrl: string | null;
+  messages: ThreadMessage[];
+};
+
+export type LogRequest = LogMessageRequest | LogConversationRequest;
+
+export type LogResponse = { activityId: string; logged: number; skipped: number };
+
+export type LogCheckRequest = { contactId: string; messages: ThreadMessage[] };
+
+export type LogCheckResponse = {
+  messages: { loggedAt: string | null; loggedLabel: string | null }[];
+  lastLogged: { at: string; label: string; count: number } | null;
+};

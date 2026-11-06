@@ -103,6 +103,7 @@ export async function saveContactAction(
     phone: text(formData, "phone") || null,
     jobTitle: text(formData, "jobTitle") || null,
     linkedinUrl: text(formData, "linkedinUrl") || null,
+    location: formData.has("location") ? text(formData, "location") || null : undefined,
     companyId: optionalId(text(formData, "companyId")),
     ownerId: optionalId(text(formData, "ownerId")),
     source: text(formData, "source") || null,

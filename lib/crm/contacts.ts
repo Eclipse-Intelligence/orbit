@@ -21,6 +21,7 @@ import {
 import {
   canonicalEmail,
   canonicalLinkedin,
+  canonicalSalesNavigator,
   cleanText,
   likePattern,
   normalizedLinkedin,
@@ -55,6 +56,8 @@ const CONTACT_SQL = `
     c.job_title,
     c.linkedin_url,
     c.normalized_linkedin,
+    c.location,
+    c.sales_navigator_url,
     c.owner_id,
     p.full_name as owner_name,
     c.source,
@@ -84,6 +87,8 @@ type ContactRow = {
   job_title: string | null;
   linkedin_url: string | null;
   normalized_linkedin: string | null;
+  location: string | null;
+  sales_navigator_url: string | null;
   owner_id: string | null;
   owner_name: string | null;
   source: string | null;
@@ -107,6 +112,8 @@ type PreparedContact = {
   jobTitle?: string | null;
   linkedinUrl?: string | null;
   normalizedLinkedin?: string | null;
+  location?: string | null;
+  salesNavigatorUrl?: string | null;
   ownerId?: string | null;
   source?: string | null;
   sourceReference?: string | null;
@@ -133,6 +140,8 @@ function mapContact(row: ContactRow): Contact {
     phone: row.phone,
     jobTitle: row.job_title,
     linkedinUrl: row.linkedin_url,
+    location: row.location,
+    salesNavigatorUrl: row.sales_navigator_url,
     ownerId: row.owner_id,
     ownerName: row.owner_name,
     source: row.source,
@@ -197,6 +206,23 @@ function prepareContact(input: ContactWrite, mode: "create" | "patch" | "upsert"
       next.normalizedLinkedin = normalizedLinkedin(url);
     }
   }
+  if (input.location !== undefined) next.location = cleanText(input.location, 200, "location");
+  if (input.salesNavigatorUrl !== undefined) {
+    if (input.salesNavigatorUrl === null || input.salesNavigatorUrl.trim() === "") {
+      next.salesNavigatorUrl = null;
+    } else {
+      const url = canonicalSalesNavigator(input.salesNavigatorUrl);
+      if (!url) {
+        throw new CrmError(
+          "invalid_input",
+          "Enter a Sales Navigator lead link like linkedin.com/sales/lead/ACwAA....",
+          400,
+          { field: "salesNavigatorUrl" },
+        );
+      }
+      next.salesNavigatorUrl = url;
+    }
+  }
   if (input.ownerId !== undefined) next.ownerId = input.ownerId || null;
   if (input.source !== undefined) next.source = cleanText(input.source, 120, "source");
   if (input.sourceReference !== undefined) {
@@ -229,11 +255,12 @@ function prepareContact(input: ContactWrite, mode: "create" | "patch" | "upsert"
     const canMatch =
       Boolean(next.email) ||
       Boolean(next.normalizedLinkedin) ||
+      Boolean(next.salesNavigatorUrl) ||
       Boolean(next.personKey && next.companyId);
     if (!canMatch) {
       throw new CrmError(
         "invalid_input",
-        "Provide an email, LinkedIn profile, or a name and company.",
+        "Provide an email, LinkedIn profile, Sales Navigator lead, or a name and company.",
         400,
         { field: "email" },
       );
@@ -257,7 +284,7 @@ export async function readContactInDb(db: Db, id: string, workspaceId?: string) 
   return row ? mapContact(row) : null;
 }
 
-async function findMatch(db: Db, workspaceId: string, write: PreparedContact) {
+async function findMatch(db: Db, workspaceId: string, write: PreparedContact, nameMatch = true) {
   if (write.normalizedEmail) {
     const byEmail = await db.query<ContactRow>(
       `${CONTACT_SQL}
@@ -276,7 +303,17 @@ async function findMatch(db: Db, workspaceId: string, write: PreparedContact) {
     );
     if (byLinkedin.rows[0]) return { row: byLinkedin.rows[0], matchedOn: "linkedin" as const };
   }
-  if (!write.personKey || !write.companyId) return null;
+  if (write.salesNavigatorUrl) {
+    const byLead = await db.query<ContactRow>(
+      `${CONTACT_SQL}
+       where c.workspace_id = $1 and c.archived_at is null and c.sales_navigator_url = $2
+       order by c.updated_at desc
+       limit 1`,
+      [workspaceId, write.salesNavigatorUrl],
+    );
+    if (byLead.rows[0]) return { row: byLead.rows[0], matchedOn: "sales_navigator" as const };
+  }
+  if (!nameMatch || !write.personKey || !write.companyId) return null;
   const named = await db.query<ContactRow>(
     `${CONTACT_SQL}
      where c.workspace_id = $1
@@ -356,6 +393,13 @@ async function applyContact(
     [differs(write.jobTitle, current.job_title), "job_title", "jobTitle", write.jobTitle ?? null],
     [linkedinChanged, "linkedin_url", "linkedinUrl", write.linkedinUrl ?? null],
     [linkedinChanged, "normalized_linkedin", "linkedinUrl", write.normalizedLinkedin ?? null],
+    [differs(write.location, current.location), "location", "location", write.location ?? null],
+    [
+      differs(write.salesNavigatorUrl, current.sales_navigator_url),
+      "sales_navigator_url",
+      "salesNavigatorUrl",
+      write.salesNavigatorUrl ?? null,
+    ],
     [differs(write.ownerId, current.owner_id), "owner_id", "ownerId", write.ownerId ?? null],
     [differs(write.source, current.source), "source", "source", write.source ?? null],
     [
@@ -416,9 +460,10 @@ async function insertContact(
       `insert into crm.contacts (
         workspace_id, company_id, first_name, last_name, email, normalized_email,
         phone, job_title, linkedin_url, normalized_linkedin, owner_id, source,
-        source_reference, notes, tags, created_by_user_id, created_by_agent_id
+        source_reference, notes, tags, created_by_user_id, created_by_agent_id,
+        location, sales_navigator_url
       ) values (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
       ) returning id`,
       [
         actor.workspaceId,
@@ -438,6 +483,8 @@ async function insertContact(
         write.tags ?? [],
         actorRef.userId,
         actorRef.agentId,
+        write.location ?? null,
+        write.salesNavigatorUrl ?? null,
       ],
     );
     const saved = await readContact(db, inserted.rows[0].id, actor.workspaceId);
@@ -457,10 +504,11 @@ export async function upsertContactInDb(
   actor: Actor,
   input: ContactWrite,
   provenance?: Provenance,
+  options: { nameMatch?: boolean } = {},
 ): Promise<{ contact: Contact; created: boolean; matchedOn: ContactMatch | null; changed: boolean }> {
-  const write = prepareContact(input, "upsert");
+  const write = prepareContact(input, options.nameMatch === false ? "create" : "upsert");
   await lockNamespace(db, actor.workspaceId, "contacts");
-  const match = await findMatch(db, actor.workspaceId, write);
+  const match = await findMatch(db, actor.workspaceId, write, options.nameMatch !== false);
   if (!match) {
     const contact = await insertContact(db, actor, write, provenance);
     return { contact, created: true, matchedOn: null, changed: true };
