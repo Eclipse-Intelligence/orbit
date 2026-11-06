@@ -944,4 +944,277 @@ describe("choosing who sends an invite", () => {
     ]);
     assert.equal(output.defaultInviteFrom, NEO);
   });
+
+  function personalEvent(overrides: Record<string, unknown> = {}) {
+    return invite({ title: "Dentist", attendees: [], notes: "Bring the forms", includeMeetingLink: undefined, ...overrides });
+  }
+
+  async function counts() {
+    const admin = getAdminPool();
+    const contacts = await admin.query<{ count: string }>("select count(*) from crm.contacts");
+    const activities = await admin.query<{ count: string }>("select count(*) from crm.activities where type = 'meeting'");
+    return { contacts: Number(contacts.rows[0].count), activities: Number(activities.rows[0].count) };
+  }
+
+  it("adds a personal event with no guests: no attendees, no iTIP email, no contacts and no timeline activity", async () => {
+    const before = await counts();
+    const calls: Call[] = [];
+    const sent: Sent[] = [];
+    const result = await createInvite(ridgeon, personalEvent(), { fetchImpl: graph(calls), now: NOW, smtp: smtp(sent), saveSent: quiet });
+    assert.equal(result.personal, true);
+    assert.equal(result.from, MAIN);
+    assert.deepEqual(result.guests, []);
+    assert.equal(result.loggedOn, 0);
+    assert.equal(result.warning, null);
+    assert.equal(sent.length, 0);
+    const writes = graphWrites(calls);
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0].method, "POST");
+    assert.equal(writes[0].url, "https://graph.microsoft.com/v1.0/me/calendars/cal-main/events");
+    const draft = writes[0].body as Record<string, unknown> & { body: { content: string } };
+    assert.deepEqual(draft.attendees, []);
+    assert.equal(draft.showAs, "busy");
+    assert.equal(draft.responseRequested, false);
+    assert.equal(draft.subject, "Dentist");
+    assert.equal(draft.location, undefined);
+    assert.match(draft.body.content, /Bring the forms/);
+    assert.doesNotMatch(draft.body.content, /Invite sent from|Join:/);
+    assert.deepEqual(await counts(), before);
+    const row = await getAdminPool().query<{
+      calendar_id: string;
+      created_by_orbit: boolean;
+      invite_identity_id: string | null;
+      invite_uid: string | null;
+      attendees: unknown[];
+      contact_ids: string[];
+      show_as: string;
+    }>("select * from crm.calendar_events where id = $1", [result.eventId]);
+    assert.equal(row.rows[0].calendar_id, mainCalendar);
+    assert.equal(row.rows[0].created_by_orbit, true);
+    assert.equal(row.rows[0].invite_identity_id, null);
+    assert.equal(row.rows[0].invite_uid, null);
+    assert.deepEqual(row.rows[0].attendees, []);
+    assert.deepEqual(row.rows[0].contact_ids, []);
+    assert.equal(row.rows[0].show_as, "busy");
+    const items = await listCalendarItems(ridgeon, { start: new Date("2026-10-20T00:00:00Z"), end: new Date("2026-10-21T00:00:00Z") }, NOW);
+    const item = items.find((entry) => entry.id === result.eventId)!;
+    assert.equal(item.personal, true);
+    assert.equal(item.canCancel, true);
+
+    const linked = await createInvite(ridgeon, personalEvent({ includeMeetingLink: true }), { fetchImpl: graph(calls), now: NOW });
+    assert.equal(linked.personal, true);
+    assert.deepEqual((graphWrites(calls)[1].body as { location: unknown }).location, { displayName: "https://whereby.com/mark" });
+    await rejects(() => createInvite(ridgeon, personalEvent({ attendees: [{ email: MAIN }] }), { fetchImpl: graph([]), now: NOW }), {
+      field: "attendees",
+      message: /someone other than yourself/,
+    });
+  });
+
+  it("offers only Microsoft calendars for personal events, defaulting by home, then last used, then main", async () => {
+    const setup = await getInviteSetup(ridgeon);
+    assert.deepEqual(setup.calendars.map((calendar) => calendar.address), [MAIN, CONSULTING, ZEUS]);
+    assert.equal(setup.defaultCalendar, MAIN);
+    await setAddressHome(eclipse, NEO, ridgeon.workspaceId);
+    const homedSmtp = await getInviteSetup(ridgeon);
+    assert.equal(homedSmtp.defaultFrom, NEO);
+    assert.equal(homedSmtp.defaultCalendar, MAIN);
+
+    const calls: Call[] = [];
+    const sent: Sent[] = [];
+    await rejects(() => createInvite(ridgeon, personalEvent({ from: NEO }), { fetchImpl: graph(calls), now: NOW, smtp: smtp(sent), saveSent: quiet }), {
+      field: "from",
+      message: `${NEO} has no calendar. Choose a Microsoft calendar, or add a guest to send an invite from it.`,
+    });
+    await rejects(() => createInvite(ridgeon, personalEvent({ from: "someone@else.test" }), { fetchImpl: graph(calls), now: NOW }), {
+      code: "not_found",
+      field: "from",
+    });
+    assert.equal(graphWrites(calls).length, 0);
+    assert.equal(sent.length, 0);
+    const defaulted = await createInvite(ridgeon, personalEvent(), { fetchImpl: graph(calls), now: NOW, smtp: smtp(sent), saveSent: quiet });
+    assert.equal(defaulted.from, MAIN);
+    assert.equal(sent.length, 0);
+
+    const consulting = await createInvite(ridgeon, personalEvent({ from: CONSULTING }), { fetchImpl: graph(calls), now: NOW });
+    assert.equal(consulting.from, CONSULTING);
+    assert.equal(graphWrites(calls).at(-1)!.url, "https://graph.microsoft.com/v1.0/me/calendars/cal-mr/events");
+    assert.equal(graphWrites(calls).at(-1)!.auth, "Bearer cached-mr-refresh");
+    const remembered = await getInviteSetup(ridgeon);
+    assert.equal(remembered.defaultCalendar, CONSULTING);
+    assert.equal(remembered.defaultFrom, NEO);
+    assert.equal((await getInviteSetup(eclipse)).defaultCalendar, MAIN);
+
+    await setAddressHome(eclipse, ZEUS, ridgeon.workspaceId);
+    assert.equal((await getInviteSetup(ridgeon)).defaultCalendar, ZEUS);
+    await getAdminPool().query("update crm.calendar_accounts set calendar_write = false where id = $1", [zeusId]);
+    await rejects(() => createInvite(ridgeon, personalEvent(), { fetchImpl: graph(calls), now: NOW }), {
+      field: "from",
+      message: `Allow invites for ${ZEUS} in Settings › Calendars first.`,
+    });
+  });
+
+  it("moves a personal event with PATCH and deletes it with DELETE, telling nobody", async () => {
+    const created = await createInvite(ridgeon, personalEvent({ from: CONSULTING }), { fetchImpl: graph([]), now: NOW });
+    const before = await counts();
+    const calls: Call[] = [];
+    const sent: Sent[] = [];
+    const moved = await rescheduleInvite(
+      ridgeon,
+      { eventId: created.eventId, startLocal: "2026-10-21T10:00", message: "Running late" },
+      { fetchImpl: graph(calls), now: NOW, smtp: smtp(sent), saveSent: quiet },
+    );
+    assert.equal(moved.startsAt, "2026-10-21T09:00:00.000Z");
+    assert.deepEqual(moved.guests, []);
+    assert.equal(moved.loggedOn, 0);
+    const cancelled = await cancelInvite(ridgeon, created.eventId!, "Not needed", { fetchImpl: graph(calls), now: NOW, smtp: smtp(sent), saveSent: quiet });
+    assert.equal(cancelled.warning, null);
+    assert.equal(cancelled.loggedOn, 0);
+    assert.ok(!calls.some((call) => call.method === "GET" && call.url.includes("/me/events/")));
+    const writes = graphWrites(calls);
+    assert.deepEqual(
+      writes.map((call) => [call.method, call.url, call.auth]),
+      [
+        ["PATCH", `https://graph.microsoft.com/v1.0/me/events/${created.providerEventId}`, "Bearer cached-mr-refresh"],
+        ["DELETE", `https://graph.microsoft.com/v1.0/me/events/${created.providerEventId}`, "Bearer cached-mr-refresh"],
+      ],
+    );
+    assert.equal((writes[0].body as { body?: unknown }).body, undefined);
+    assert.equal(sent.length, 0);
+    assert.deepEqual(await counts(), before);
+    const row = await getAdminPool().query<{ is_cancelled: boolean }>("select is_cancelled from crm.calendar_events where id = $1", [created.eventId]);
+    assert.equal(row.rows[0].is_cancelled, true);
+  });
+
+  it("syncs personal events like any other event and never keeps them as missing invite holds", async () => {
+    const created = await createInvite(ridgeon, personalEvent({ from: CONSULTING }), { fetchImpl: graph([]), now: NOW });
+    const listed = {
+      id: created.providerEventId,
+      subject: "Dentist (moved in Outlook)",
+      start: utc("2026-10-20T14:00:00.000Z"),
+      end: utc("2026-10-20T14:30:00.000Z"),
+      organizer: { emailAddress: { address: CONSULTING } },
+      attendees: [],
+      showAs: "busy",
+      responseStatus: { response: "organizer" },
+    };
+    const calendars = () => [{ id: "cal-mr", name: "Calendar", isDefaultCalendar: true, canEdit: true }];
+    await syncCalendar(eclipse, { fetchImpl: graph([], { calendars, events: () => [listed] }), force: true, now: NOW, accountId: consultingId });
+    const synced = await getAdminPool().query<{ subject: string; organizer: { email: string }; invite_hold_missing: boolean }>(
+      "select subject, organizer, invite_hold_missing from crm.calendar_events where id = $1",
+      [created.eventId],
+    );
+    assert.equal(synced.rows[0].subject, "Dentist (moved in Outlook)");
+    assert.equal(synced.rows[0].organizer.email, CONSULTING);
+    const items = await listCalendarItems(ridgeon, { start: new Date("2026-10-20T00:00:00Z"), end: new Date("2026-10-21T00:00:00Z") }, NOW);
+    assert.equal(items.find((item) => item.id === created.eventId)?.personal, true);
+
+    await syncCalendar(eclipse, { fetchImpl: graph([], { calendars, events: () => [] }), force: true, now: NOW, accountId: consultingId });
+    const gone = await getAdminPool().query("select id from crm.calendar_events where id = $1", [created.eventId]);
+    assert.equal(gone.rowCount, 0);
+  });
+
+  it("lets the assistant add a personal event with no guests and names it on the card", async () => {
+    const soon = new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10);
+    const args = { title: "Dentist", startLocal: `${soon}T14:00`, durationMinutes: 30, from: CONSULTING };
+    const card = describeAction("create_meeting_invite", args, await recordNames(ridgeon, [args], ["create_meeting_invite"]));
+    assert.match(card.title, /^Add to calendar: Dentist, .+14:00 for 30 minutes, mark@markridgeon\.com$/);
+    const plain = { title: "Dentist", startLocal: `${soon}T14:00`, durationMinutes: 30, attendees: [] };
+    const defaultCard = describeAction("create_meeting_invite", plain, await recordNames(ridgeon, [plain], ["create_meeting_invite"]));
+    assert.match(defaultCard.title, /, mark@geteclipse\.co$/);
+    const before = await counts();
+    const calls: Call[] = [];
+    const original = globalThis.fetch;
+    globalThis.fetch = graph(calls);
+    try {
+      const output = (await runTool(ridgeon, "create_meeting_invite", args)) as { event?: { from: string; personal: boolean }; error?: string };
+      assert.equal(output.error, undefined);
+      assert.equal(output.event?.personal, true);
+      assert.equal(output.event?.from, CONSULTING);
+    } finally {
+      globalThis.fetch = original;
+    }
+    const writes = graphWrites(calls);
+    assert.equal(writes.length, 1);
+    assert.deepEqual((writes[0].body as { attendees: unknown[] }).attendees, []);
+    assert.equal((writes[0].body as { location?: unknown }).location, undefined);
+    assert.deepEqual(await counts(), before);
+    const output = (await runTool(ridgeon, "get_settings", {})) as { eventCalendars?: { address: string }[]; defaultEventCalendar?: string | null };
+    assert.deepEqual(output.eventCalendars?.map((calendar) => calendar.address), [MAIN, CONSULTING, ZEUS]);
+    assert.equal(output.defaultEventCalendar, CONSULTING);
+  });
+
+  it("describes moving and deleting a personal event without guests or messages, and keeps meeting cards for invites", async () => {
+    const personal = await createInvite(ridgeon, personalEvent({ from: CONSULTING }), { fetchImpl: graph([]), now: NOW });
+    const cancelArgs = { eventId: personal.eventId, message: "Not needed" };
+    const cancelCard = describeAction("cancel_meeting", cancelArgs, await recordNames(ridgeon, [cancelArgs], ["cancel_meeting"]));
+    assert.match(cancelCard.title, /^Delete from your calendar: Dentist, .*20 Oct.*14:00\. Nobody is told\.$/);
+    assert.deepEqual(cancelCard.lines.filter(Boolean), []);
+    const moveArgs = { eventId: personal.eventId, startLocal: "2026-10-21T10:00", message: "Running late" };
+    const moveCard = describeAction("move_meeting", moveArgs, await recordNames(ridgeon, [moveArgs], ["move_meeting"]));
+    assert.equal(moveCard.title, "Move event: Dentist");
+    assert.ok(!moveCard.lines.some((line) => /Message to guests|Guests/.test(line)));
+    assert.match(moveCard.lines.filter(Boolean).at(-1)!, /^To: .*21 Oct.*10:00 for 30 minutes$/);
+
+    const meeting = await createInvite(ridgeon, invite({ from: CONSULTING }), { fetchImpl: graph([]), now: NOW });
+    const meetingCancel = { eventId: meeting.eventId, message: "Sorry" };
+    const meetingCancelCard = describeAction("cancel_meeting", meetingCancel, await recordNames(ridgeon, [meetingCancel], ["cancel_meeting"]));
+    assert.equal(meetingCancelCard.title, "Cancel meeting: Strategy call");
+    assert.ok(meetingCancelCard.lines.includes("Outlook tells every guest when you approve."));
+    const meetingMove = { eventId: meeting.eventId, startLocal: "2026-10-21T10:00", message: "New slot" };
+    const meetingMoveCard = describeAction("move_meeting", meetingMove, await recordNames(ridgeon, [meetingMove], ["move_meeting"]));
+    assert.equal(meetingMoveCard.title, "Move meeting: Strategy call");
+    assert.ok(meetingMoveCard.lines.includes("Message to guests: New slot"));
+  });
+
+  it("refuses contacts without guests, empty guest addresses and a meeting link that isn't saved", async () => {
+    const calls: Call[] = [];
+    const janeId = (await getAdminPool().query<{ id: string }>("select id from crm.contacts where workspace_id = $1", [ridgeon.workspaceId])).rows[0].id;
+    await rejects(() => createInvite(ridgeon, personalEvent({ contactIds: [janeId] }), { fetchImpl: graph(calls), now: NOW }), {
+      field: "attendees",
+      message: "Add each guest's email address, or leave contactIds empty for a personal event.",
+    });
+    const soon = new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10);
+    const original = globalThis.fetch;
+    globalThis.fetch = graph(calls);
+    try {
+      const withContacts = (await runTool(ridgeon, "create_meeting_invite", {
+        title: "Catch up",
+        startLocal: `${soon}T14:00`,
+        durationMinutes: 30,
+        contactIds: [janeId],
+      })) as { error?: string };
+      assert.equal(withContacts.error, "Add each guest's email address, or leave contactIds empty for a personal event.");
+      const blank = (await runTool(ridgeon, "create_meeting_invite", {
+        title: "Catch up",
+        startLocal: `${soon}T14:00`,
+        durationMinutes: 30,
+        attendees: [{ email: "" }],
+      })) as { error?: string; invite?: unknown; event?: unknown };
+      assert.match(blank.error ?? "", /Every guest needs an email address/);
+      assert.equal(blank.event, undefined);
+      assert.equal(blank.invite, undefined);
+    } finally {
+      globalThis.fetch = original;
+    }
+    await saveMeetingLink(eclipse, "");
+    await rejects(() => createInvite(ridgeon, personalEvent({ includeMeetingLink: true }), { fetchImpl: graph(calls), now: NOW }), {
+      field: "includeMeetingLink",
+      message: "Add your meeting link in Settings › General first.",
+    });
+    assert.equal(graphWrites(calls).length, 0);
+  });
+
+  it("remembers the last personal calendar across workspaces, though the event is stored in its calendar's workspace", async () => {
+    const created = await createInvite(ridgeon, personalEvent({ from: ZEUS }), { fetchImpl: graph([]), now: NOW });
+    const stored = await getAdminPool().query<{ workspace_id: string }>("select workspace_id from crm.calendar_events where id = $1", [created.eventId]);
+    assert.equal(stored.rows[0].workspace_id, eclipse.workspaceId);
+    assert.notEqual(stored.rows[0].workspace_id, ridgeon.workspaceId);
+    assert.equal((await getInviteSetup(ridgeon)).defaultCalendar, ZEUS);
+    assert.equal((await getInviteSetup(ridgeon)).defaultFrom, MAIN);
+    assert.equal((await getInviteSetup(eclipse)).defaultCalendar, MAIN);
+    const calls: Call[] = [];
+    const next = await createInvite(ridgeon, personalEvent(), { fetchImpl: graph(calls), now: NOW });
+    assert.equal(next.from, ZEUS);
+    assert.equal(graphWrites(calls)[0].url, "https://graph.microsoft.com/v1.0/me/calendars/cal-zv/events");
+  });
 });

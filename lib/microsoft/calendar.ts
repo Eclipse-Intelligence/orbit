@@ -496,20 +496,25 @@ export function inviteDraft(input: {
   };
 }
 
-export function holdDraft(input: {
+type PersonalEventInput = {
   subject: string;
   start: Date;
   end: Date;
   timeZone: string;
   notes: string | null;
   link: string | null;
-  sentFrom: string;
   transactionId: string;
-}) {
-  const content = inviteBodyHtml(
-    [`Invite sent from ${input.sentFrom} by Orbit.`, input.notes].filter(Boolean).join("\n\n"),
-    input.link,
-  );
+};
+
+export function holdDraft(input: PersonalEventInput & { sentFrom: string }) {
+  return personalDraft({
+    ...input,
+    notes: [`Invite sent from ${input.sentFrom} by Orbit.`, input.notes].filter(Boolean).join("\n\n"),
+  });
+}
+
+export function personalDraft(input: PersonalEventInput) {
+  const content = inviteBodyHtml(input.notes || null, input.link);
   return {
     subject: input.subject,
     ...(content ? { body: { contentType: "HTML" as const, content } } : {}),
@@ -624,7 +629,7 @@ async function graphWrite(
 
 export async function createGraphEvent(
   accessToken: string,
-  draft: GraphEventDraft | ReturnType<typeof holdDraft>,
+  draft: GraphEventDraft | ReturnType<typeof personalDraft>,
   options: { calendarId?: string | null; fetchImpl?: typeof fetch } = {},
 ) {
   const response = await graphWrite(eventsUrl(options.calendarId), accessToken, draft, options.fetchImpl ?? fetch, true);

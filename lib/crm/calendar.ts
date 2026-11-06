@@ -191,6 +191,24 @@ export function readPeople(value: unknown) {
   return value.map(readPerson).filter((person): person is CalendarPerson => person !== null);
 }
 
+export type PersonalEventRow = {
+  created_by_orbit: boolean;
+  invite_identity_id: string | null;
+  invite_uid: string | null;
+  contact_ids: string[] | null;
+  attendees: unknown;
+};
+
+export function isPersonalEvent(row: PersonalEventRow, own: Set<string>) {
+  return (
+    row.created_by_orbit &&
+    !row.invite_identity_id &&
+    !row.invite_uid &&
+    (row.contact_ids ?? []).length === 0 &&
+    !readPeople(row.attendees).some((person) => !own.has(person.email))
+  );
+}
+
 async function setScopeMissing(db: Db, key: IntegrationKey, missing: boolean) {
   await db.query(
     `update crm.integration_state set scope_missing = $3
