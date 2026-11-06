@@ -1,5 +1,5 @@
 import { backgroundTargets } from "@/lib/crm/conversations";
-import { followUpCalls } from "@/lib/crm/follow-ups";
+import { followUpCallsAcross } from "@/lib/crm/follow-ups";
 import { cronAuthorization } from "@/lib/crm/scheduler";
 import { processDueMail } from "@/lib/mail/due";
 import { prepareMail } from "@/lib/mail/prepare";
@@ -30,7 +30,7 @@ async function handle(request: Request) {
       await prepareMail(target.actor, { deadline: Math.min(deadline - 5_000, Date.now() + Math.max(share, 30_000)) }).catch((error) =>
         console.error("Preparing mail failed", error),
       );
-      await followUpCalls(target.actor, { deadline: Math.min(deadline - 5_000, Date.now() + 30_000) }).catch((error) =>
+      await followUpCallsAcross(target.actor, { deadline: Math.min(deadline - 5_000, Date.now() + 30_000) }).catch((error) =>
         console.error("Call follow-ups failed", error),
       );
       users.push({ userId: target.actor.userId, report });

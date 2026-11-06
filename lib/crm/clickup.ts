@@ -21,6 +21,7 @@ import { canonicalDomain, canonicalEmail } from "@/lib/crm/normalize";
 import { assertScope } from "@/lib/crm/scopes";
 import { archiveTask, createTask, createTaskInDb, updateTaskInDb } from "@/lib/crm/tasks";
 import type { Provenance, Task, TaskWrite, UserActor, WorkspaceRole } from "@/lib/crm/types";
+import { workspaceActors } from "@/lib/crm/workspaces";
 import { decryptSecret, encryptSecret } from "@/lib/crypto/secret";
 import {
   CLICKUP_EVENTS,
@@ -77,7 +78,12 @@ type ClickUpSyncResult = {
 
 export type ClickUpPicker = { lists: ClickUpListChoice[]; listId: string };
 
+export type ClickUpSharedList = { workspaceName: string; listNames: string[] };
+
 export type ClickUpSettingsView = {
+  workspaceId: string;
+  workspaceName: string;
+  shared: ClickUpSharedList[];
   configured: boolean;
   error: string | null;
   user: { username: string | null; email: string | null } | null;
@@ -388,9 +394,9 @@ async function lockClickUpTask(db: Db, workspaceId: string, taskId: string) {
   await db.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [`clickup:${workspaceId}:${taskId}`]);
 }
 
-async function readSyncRow(db: Db, id: string, lock = false) {
-  if (lock) await db.query("select 1 from crm.tasks where id = $1 for update", [id]);
-  const result = await db.query<SyncRow>(`select ${SYNC_COLUMNS} ${SYNC_FROM} where t.id = $1`, [id]);
+async function readSyncRow(db: Db, workspaceId: string, id: string, lock = false) {
+  if (lock) await db.query("select 1 from crm.tasks where id = $1 and workspace_id = $2 for update", [id, workspaceId]);
+  const result = await db.query<SyncRow>(`select ${SYNC_COLUMNS} ${SYNC_FROM} where t.id = $1 and t.workspace_id = $2`, [id, workspaceId]);
   return result.rows[0] ?? null;
 }
 
@@ -493,13 +499,13 @@ async function createRemote(s: Session, taskId: string) {
     const result = await db.query<{ id: string }>(
       `update crm.tasks
        set clickup_sync = clickup_sync || jsonb_build_object('creatingAt', $2::bigint)
-       where id = $1 and clickup_task_id is null and clickup_list_id is not null and archived_at is null
+       where id = $1 and workspace_id = $4 and clickup_task_id is null and clickup_list_id is not null and archived_at is null
          and coalesce((clickup_sync->>'creatingAt')::bigint, 0) < $3::bigint
        returning id`,
-      [taskId, Date.now(), Date.now() - CREATE_CLAIM_MS],
+      [taskId, Date.now(), Date.now() - CREATE_CLAIM_MS, s.actor.workspaceId],
     );
     if (!result.rows[0]) return null;
-    return readSyncRow(db, taskId);
+    return readSyncRow(db, s.actor.workspaceId, taskId);
   });
   if (!claimed || !claimed.clickup_list_id) return "unchanged" as const;
   const row = claimed;
@@ -584,7 +590,7 @@ async function updateRemote(s: Session, row: SyncRow) {
 }
 
 async function pushRow(s: Session, taskId: string) {
-  const row = await withActor(s.actor, (db) => readSyncRow(db, taskId));
+  const row = await withActor(s.actor, (db) => readSyncRow(db, s.actor.workspaceId, taskId));
   if (!row || row.archived_at) return "unchanged" as const;
   if (!row.clickup_task_id) return row.clickup_list_id ? createRemote(s, taskId) : ("unchanged" as const);
   return updateRemote(s, row);
@@ -721,7 +727,7 @@ async function pullRemote(s: Session, task: ClickUpTask, watched: Set<string>): 
     const linked = await linkedRow(db, s.actor.workspaceId, taskId);
     if (linked) {
       if (linked.archived_at) return "unchanged";
-      const row = (await readSyncRow(db, linked.id, true)) ?? linked;
+      const row = (await readSyncRow(db, s.actor.workspaceId, linked.id, true)) ?? linked;
       const snap = snapshotOf(row);
       const listChanged = Boolean(listId && listId !== row.clickup_list_id);
       if (!listChanged && snap.remoteUpdatedAt && changedAt <= snap.remoteUpdatedAt) return "unchanged";
@@ -934,9 +940,21 @@ export async function syncClickUpFor(actor: UserActor, options: ClickUpOptions =
   return syncClickUp({ ...options, actor, force: true });
 }
 
-export async function pushClickUpTask(actor: UserActor, taskId: string, options: ClickUpOptions = {}) {
+export async function taskWorkspaceActor(actor: UserActor, taskId: string) {
+  const found = await withActor(actor, (db) =>
+    db.query<{ workspace_id: string }>("select workspace_id from crm.tasks where id = $1", [taskId]),
+  );
+  const workspaceId = found.rows[0]?.workspace_id;
+  if (!workspaceId) return null;
+  if (workspaceId === actor.workspaceId) return actor;
+  return (await workspaceActors(actor)).find((item) => item.workspaceId === workspaceId) ?? null;
+}
+
+export async function pushClickUpTask(signedIn: UserActor, taskId: string, options: ClickUpOptions = {}) {
   const token = clickupToken();
   if (!token || !isUuid(taskId)) return "unchanged" as const;
+  const actor = await taskWorkspaceActor(signedIn, taskId);
+  if (!actor) return "unchanged" as const;
   const state = await getClickUpState(actor);
   if (!state?.teamId) return "unchanged" as const;
   const deadline = options.deadline ?? Date.now() + INLINE_BUDGET_MS;
@@ -950,11 +968,13 @@ export async function pushClickUpTask(actor: UserActor, taskId: string, options:
 }
 
 export async function sendTaskToDefaultList(
-  actor: UserActor,
+  signedIn: UserActor,
   taskId: string,
   options: ClickUpOptions = {},
 ) {
   if (!clickupToken() || !isUuid(taskId)) return "unchanged" as const;
+  const actor = await taskWorkspaceActor(signedIn, taskId);
+  if (!actor) return "unchanged" as const;
   const state = await getClickUpState(actor);
   if (!state?.teamId || !state.defaultListId) return "unchanged" as const;
   if (!state.lists.some((list) => list.id === state.defaultListId)) return "unchanged" as const;
@@ -1025,6 +1045,9 @@ export async function getClickUpSettings(
   const token = clickupToken();
   const state = await getClickUpState(actor);
   const view: ClickUpSettingsView = {
+    workspaceId: actor.workspaceId,
+    workspaceName: actor.workspaceName,
+    shared: state ? await sharedLists(actor, state) : [],
     configured: Boolean(token),
     error: null,
     user: null,
@@ -1063,6 +1086,38 @@ export async function getClickUpSettings(
     view.error = error instanceof ClickUpError ? error.message : "Could not reach ClickUp.";
   }
   return view;
+}
+
+export async function sharedLists(
+  actor: UserActor,
+  state: Pick<ClickUpState, "teamId" | "watchedListIds" | "defaultListId" | "lists">,
+): Promise<ClickUpSharedList[]> {
+  const mine = new Set(scopeIds(state));
+  if (!state.teamId || mine.size === 0) return [];
+  const others = (await workspaceActors(actor)).filter((item) => item.workspaceId !== actor.workspaceId);
+  if (others.length === 0) return [];
+  const rows = await withActor(actor, async (db) => {
+    const result = await db.query<{ workspace_id: string; default_list_id: string | null; watched_list_ids: string[] | null }>(
+      `select workspace_id, default_list_id, watched_list_ids from crm.integration_state
+       where source = 'clickup' and connection_id is null and team_id = $1 and workspace_id = any($2::uuid[])`,
+      [state.teamId, others.map((item) => item.workspaceId)],
+    );
+    return result.rows;
+  });
+  const names = new Map(state.lists.map((list) => [list.id, list.name]));
+  return others.flatMap((other) => {
+    const row = rows.find((item) => item.workspace_id === other.workspaceId);
+    if (!row) return [];
+    const theirs = scopeIds({ watchedListIds: row.watched_list_ids ?? [], defaultListId: row.default_list_id });
+    const listNames = theirs.filter((id) => mine.has(id)).map((id) => names.get(id) ?? "a list");
+    return listNames.length ? [{ workspaceName: other.workspaceName, listNames }] : [];
+  });
+}
+
+export function sharedWarning(shared: ClickUpSharedList[]) {
+  if (shared.length === 0) return null;
+  const parts = shared.map((item) => `${item.workspaceName} also uses ${item.listNames.join(", ")}`);
+  return `${parts.join(". ")}. Tasks in a list both workspaces watch sync into both.`;
 }
 
 function webhookScope(lists: ClickUpListChoice[], ids: string[]) {
@@ -1146,7 +1201,8 @@ export async function saveClickUpSettings(
       }
     }
   }
-  return { teamId: input.teamId, defaultListId, watchedListIds: watched, warning };
+  const shared = sharedWarning(await sharedLists(actor, { teamId: input.teamId, watchedListIds: watched, defaultListId, lists }).catch(() => []));
+  return { teamId: input.teamId, defaultListId, watchedListIds: watched, warning: shared ? `${warning ?? "Saved."} ${shared}` : warning };
 }
 
 async function clearWebhook(actor: UserActor) {
@@ -1176,7 +1232,7 @@ export async function enableClickUpWebhook(
   if (!/^https:\/\//.test(site)) {
     throw new CrmError("invalid_input", "Set SITE_URL to the https address of Orbit before turning on instant sync.", 400);
   }
-  const endpoint = `${site}/api/clickup/webhook`;
+  const endpoint = `${site}/api/clickup/webhook?workspace=${actor.workspaceId}`;
   const api = client(token, options);
   const scope = webhookScope(state.lists, scopeIds(state));
   let created: { id: string; secret: string | null };

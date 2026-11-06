@@ -1,5 +1,5 @@
 import { after } from "next/server";
-import { agentMailbox, mailboxOrigin, noteMailboxError, type AgentMailboxRow } from "@/lib/agent-mail/mailbox";
+import { agentMailboxFor, mailboxOrigin, noteMailboxError, type AgentMailboxRow } from "@/lib/agent-mail/mailbox";
 import type { IncomingAttachment } from "@/lib/agent-mail/receive";
 import { emailHtml, emailText } from "@/lib/agent-mail/email-format";
 import { recordOutbound } from "@/lib/agent-mail/store";
@@ -210,10 +210,10 @@ async function lease(actor: UserActor, mailId: string, statuses: string[]) {
   return withActor(actor, async (db) => {
     const result = await db.query<MailRow>(
       `update crm.agent_mail_messages set advancing_until = now() + interval '5 minutes'
-       where id = $1 and user_id = $2 and status = any($3::text[]) and replied_at is null
+       where id = $1 and user_id = $2 and workspace_id = $4 and status = any($3::text[]) and replied_at is null
          and (advancing_until is null or advancing_until < now())
        returning ${MAIL_COLUMNS}`,
-      [mailId, actor.userId, statuses],
+      [mailId, actor.userId, statuses, actor.workspaceId],
     );
     return result.rows[0] ?? null;
   });
@@ -571,7 +571,7 @@ export async function advanceAgentMail(actor: UserActor, mailId: string, options
   if (!row) return;
   let next: "advance" | "process" | null = null;
   try {
-    const mailbox = await agentMailbox(actor);
+    const mailbox = await agentMailboxFor(actor, row.mailbox_id);
     if (!mailbox) {
       await setStatus(actor, row.id, "failed", { error: "The agent mailbox was removed." });
       return;
@@ -680,7 +680,7 @@ async function otherLeased(actor: UserActor, conversationId: string, mailId: str
 export async function processAgentMail(actor: UserActor, mailId: string, options: Options = {}) {
   const row = await lease(actor, mailId, ["received"]);
   if (!row) return;
-  const mailbox = await agentMailbox(actor);
+  const mailbox = await agentMailboxFor(actor, row.mailbox_id);
   if (!mailbox) {
     await release(actor, row.id);
     return;
@@ -804,6 +804,15 @@ async function readMail(actor: UserActor, mailId: string) {
   });
 }
 
+async function mailActor(actor: UserActor, mailId: string) {
+  const workspaceId = await withActor(actor, async (db) => {
+    const result = await db.query<{ workspace_id: string }>("select workspace_id from crm.agent_mail_messages where id = $1 and user_id = $2", [mailId, actor.userId]);
+    return result.rows[0]?.workspace_id ?? null;
+  }).catch(() => null);
+  if (!workspaceId) return null;
+  return workspaceId === actor.workspaceId ? actor : actorFor(actor.userId, workspaceId);
+}
+
 export async function startAgentMailJob(job: { mailId: string; userId: string; workspaceId: string }, options: Options = {}) {
   const actor = await actorFor(job.userId, job.workspaceId);
   if (!actor) {
@@ -818,7 +827,9 @@ export async function continueAfterCompanion(actor: UserActor, jobId: string, op
     const result = await db.query<{ agent_mail_id: string | null }>("select agent_mail_id from crm.ai_companion_jobs where id = $1 and user_id = $2", [jobId, actor.userId]);
     return result.rows[0]?.agent_mail_id ?? null;
   }).catch(() => null);
-  if (mailId) await advanceAgentMail(actor, mailId, options);
+  if (!mailId) return;
+  const target = await mailActor(actor, mailId);
+  if (target) await advanceAgentMail(target, mailId, options);
 }
 
 export function continueAfterCompanionLater(actor: UserActor, jobId: string) {

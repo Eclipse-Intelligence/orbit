@@ -85,7 +85,7 @@ export type StoredConnection = MailboxSummary & {
   accessTokenExpiresAt: string | null;
 };
 
-type PartyMatch = {
+export type PartyMatch = {
   contactId: string | null;
   contactName: string | null;
   companyId: string | null;

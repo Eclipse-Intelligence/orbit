@@ -17,6 +17,7 @@ import {
   processClickUpEvent,
   pushClickUpTask,
   saveClickUpSettings,
+  sendTaskToDefaultList,
   syncClickUp,
   toClickUpDue,
 } from "@/lib/crm/clickup";
@@ -24,8 +25,10 @@ import { createCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
 import { fileInboundMessages, saveMailbox } from "@/lib/crm/inbox";
 import { syncTargets } from "@/lib/crm/scheduler";
-import { completeTask, getTask, updateTask } from "@/lib/crm/tasks";
+import { scopesForRole } from "@/lib/crm/scopes";
+import { completeTask, createTask, getTask, updateTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
+import { createWorkspace } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { createUser, resetDatabase } from "./helpers";
 
@@ -716,7 +719,7 @@ describe("clickup sync", () => {
     const enabled = await enableClickUpWebhook(owner, "http://localhost:4173", { fetchImpl });
     assert.equal(enabled.enabled, true);
     const hook = [...fake.webhooks.values()][0];
-    assert.equal(hook.endpoint, `${SITE}/api/clickup/webhook`);
+    assert.equal(hook.endpoint, `${SITE}/api/clickup/webhook?workspace=${owner.workspaceId}`);
     assert.equal(hook.space_id, null);
     assert.equal(hook.list_id, null);
     const stored = await getAdminPool().query<{ webhook_secret: string; webhook_scope: string }>(
@@ -817,5 +820,72 @@ describe("clickup sync", () => {
     const { targets } = await syncTargets({ fetchImpl });
     const mine = targets.find((target) => target.actor.workspaceId === owner.workspaceId);
     assert.equal(mine?.clickup?.userId, owner.userId);
+  });
+});
+
+describe("clickup per workspace", () => {
+  const RELATIONSHIPS = "901223313517";
+  const ZEUS = "901219828897";
+  let eclipse: UserActor;
+  let ridgeon: UserActor;
+  let fake: Fake;
+  let fetchImpl: typeof fetch;
+
+  before(async () => {
+    eclipse = await createUser("mark@perworkspace.test", "Mark Ridgeon");
+    await getAdminPool().query("update crm.workspaces set name = 'Eclipse' where id = $1", [eclipse.workspaceId]);
+    eclipse = { ...eclipse, workspaceName: "Eclipse" };
+    const created = await createWorkspace(eclipse, { name: "Mark Ridgeon", brandStart: "blank" });
+    ridgeon = { ...eclipse, workspaceId: created.id, workspaceName: "Mark Ridgeon", role: "owner", scopes: scopesForRole("owner") };
+    fake = makeFake();
+    fetchImpl = clickup(fake);
+  });
+
+  it("keeps a default list per workspace and sends each task to its own workspace's list", async () => {
+    await saveClickUpSettings(eclipse, { teamId: TEAM, defaultListId: RELATIONSHIPS, watchedListIds: [] }, { fetchImpl });
+    const saved = await saveClickUpSettings(ridgeon, { teamId: TEAM, defaultListId: ZEUS, watchedListIds: [] }, { fetchImpl });
+    assert.equal(saved.warning, null);
+    assert.equal((await getClickUpSettings(eclipse, { fetchImpl })).defaultListId, RELATIONSHIPS);
+    const view = await getClickUpSettings(ridgeon, { fetchImpl });
+    assert.equal(view.defaultListId, ZEUS);
+    assert.equal(view.workspaceName, "Mark Ridgeon");
+
+    const here = await createTask(eclipse, { title: "Eclipse follow-up" });
+    const there = await createTask(ridgeon, { title: "Consultancy follow-up" });
+    assert.equal(await sendTaskToDefaultList(eclipse, there.body.task.id, { fetchImpl }), "pushed");
+    assert.equal(await sendTaskToDefaultList(ridgeon, here.body.task.id, { fetchImpl }), "pushed");
+    assert.equal((await taskRow(there.body.task.id)).clickup_list_id, ZEUS);
+    assert.equal((await taskRow(here.body.task.id)).clickup_list_id, RELATIONSHIPS);
+    const posted = fake.requests.filter((item) => item.method === "POST" && /^\/list\/\d+\/task$/.test(item.path));
+    assert.deepEqual(
+      posted.map((item) => [item.path, (item.body as { name: string }).name]),
+      [
+        [`/list/${ZEUS}/task`, "Consultancy follow-up"],
+        [`/list/${RELATIONSHIPS}/task`, "Eclipse follow-up"],
+      ],
+    );
+
+    await updateTask(eclipse, there.body.task.id, { title: "Consultancy follow-up, renamed" });
+    assert.equal(await pushClickUpTask(eclipse, there.body.task.id, { fetchImpl }), "pushed");
+    const remote = fake.tasks.get((await taskRow(there.body.task.id)).clickup_task_id!)!;
+    assert.equal(remote.name, "Consultancy follow-up, renamed");
+    assert.equal(remote.list?.id, ZEUS);
+  });
+
+  it("gives each workspace its own instant sync webhook without removing the other's", async () => {
+    await enableClickUpWebhook(eclipse, SITE, { fetchImpl });
+    await enableClickUpWebhook(ridgeon, SITE, { fetchImpl });
+    const hooks = [...fake.webhooks.values()].map((hook) => hook.endpoint).sort();
+    assert.deepEqual(hooks, [`${SITE}/api/clickup/webhook?workspace=${eclipse.workspaceId}`, `${SITE}/api/clickup/webhook?workspace=${ridgeon.workspaceId}`].sort());
+    await enableClickUpWebhook(ridgeon, SITE, { fetchImpl, replace: true });
+    assert.equal(fake.webhooks.size, 2);
+    assert.ok([...fake.webhooks.values()].some((hook) => hook.endpoint.endsWith(eclipse.workspaceId)));
+  });
+
+  it("says when another workspace already uses a list", async () => {
+    const saved = await saveClickUpSettings(ridgeon, { teamId: TEAM, defaultListId: ZEUS, watchedListIds: [RELATIONSHIPS] }, { fetchImpl });
+    assert.match(saved.warning ?? "", /Eclipse also uses Relationships/);
+    const view = await getClickUpSettings(ridgeon, { fetchImpl });
+    assert.deepEqual(view.shared, [{ workspaceName: "Eclipse", listNames: ["Relationships"] }]);
   });
 });

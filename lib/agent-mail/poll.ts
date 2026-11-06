@@ -5,7 +5,7 @@ import { query } from "@/lib/db/pool";
 import { MachineMailError, getMessage, listRecentMessages, machineMailConfigured } from "@/lib/machinemail";
 
 export const POLL_LOOKBACK_MS = 48 * 60 * 60 * 1000;
-const FETCHES_PER_RUN = 10;
+export const FETCHES_PER_MAILBOX = 10;
 
 const LABEL_EVENTS: [string, string][] = [
   ["QUARANTINE", "message.received.quarantined"],
@@ -30,9 +30,9 @@ export async function pollAgentMailboxes(options: { fetchImpl?: typeof fetch; no
   const deadline = options.deadline ?? now + 30_000;
   const start = options.start ?? startAgentMailJob;
   const targets = (await query<PollTarget>("select * from private.agent_mailbox_poll_targets()")).rows;
-  let budget = FETCHES_PER_RUN;
   for (const target of targets) {
-    if (Date.now() > deadline || budget <= 0) break;
+    if (Date.now() > deadline) break;
+    let budget = FETCHES_PER_MAILBOX;
     try {
       const after = new Date(now - POLL_LOOKBACK_MS);
       const listed = (await listRecentMessages(target.address, after, options.fetchImpl)).filter(

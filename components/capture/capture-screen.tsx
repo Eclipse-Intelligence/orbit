@@ -93,7 +93,7 @@ async function post(action: CaptureAction, workspaceId: string, keepalive: boole
     response = await fetch("/api/capture", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ...action, workspaceId }),
+      body: JSON.stringify({ ...action, captureWorkspaceId: workspaceId }),
       keepalive,
     });
   } catch {
@@ -249,6 +249,7 @@ export default function CaptureScreen({
         <ImportItem
           key={item.id}
           item={item}
+          others={others}
           now={now}
           filing={filing === `import:${item.id}`}
           onFiling={(open) => setFiling(open ? `import:${item.id}` : null)}

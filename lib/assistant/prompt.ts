@@ -114,9 +114,22 @@ export function stablePrompt(brand: PromptBrand = UNBRANDED) {
   return stable(brand);
 }
 
+export type PromptWorkspace = { id: string; name: string };
+
+export function workspacesSection(actor: UserActor, workspaces: PromptWorkspace[] = []) {
+  const others = workspaces.filter((item) => item.id !== actor.workspaceId).map((item) => item.name);
+  if (others.length === 0) return "";
+  const current = actor.workspaceName;
+  const example = others[0];
+  return `
+
+# Workspaces
+The user is working in ${current}. They are also in ${others.join(", ")}. Each workspace has its own companies, people, deals, tasks, activity and Knowledge. Read tools look in ${current} unless the user asks for another workspace or all of them ("across both workspaces", "in ${example}", "everywhere"). Then pass workspace to search_records, list_companies, get_company, list_contacts, get_contact, list_tasks, list_opportunities, list_activities or search_knowledge, with the workspace's name or "all". Those results are labelled with their workspace, so say which workspace each thing is in. Links from another workspace only open there, so tell the user to switch to it in the sidebar to open them. Changes only happen in ${current}: never propose a change to another workspace's records, and when the user asks for one, tell them to switch to that workspace first.`;
+}
+
 export function systemPrompt(
   actor: UserActor,
-  options: { webSearch: boolean; now?: Date; links?: UserLinks | null; about?: string; briefReady?: boolean; brand?: PromptBrand },
+  options: { webSearch: boolean; now?: Date; links?: UserLinks | null; about?: string; briefReady?: boolean; brand?: PromptBrand; workspaces?: PromptWorkspace[] },
 ) {
   const now = options.now ?? new Date();
   const today = new Intl.DateTimeFormat("en-GB", {
@@ -134,5 +147,5 @@ export function systemPrompt(
   return `${stable(options.brand ?? UNBRANDED)}
 
 # Right now
-You're talking with ${actor.fullName || actor.email} (${actor.email}). Today is ${today}. The time now is ${londonTime(now.toISOString())} (Europe/London). Every time in tool results is already in London time with its UTC offset. Talk about times in London time. ${search}${brief}${options.about ?? ""}${linksSection(options.links ?? null)}`;
+You're talking with ${actor.fullName || actor.email} (${actor.email}). Today is ${today}. The time now is ${londonTime(now.toISOString())} (Europe/London). Every time in tool results is already in London time with its UTC offset. Talk about times in London time. ${search}${brief}${options.about ?? ""}${linksSection(options.links ?? null)}${workspacesSection(actor, options.workspaces)}`;
 }

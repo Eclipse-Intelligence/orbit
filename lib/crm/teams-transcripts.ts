@@ -13,7 +13,8 @@ import {
   finishIntegration,
   getIntegrationStatus,
   importConflict,
-  knownImports,
+  importPlaceholder,
+  knownAnywhere,
   lockImportKey,
   memberActor,
   readIntegration,
@@ -21,14 +22,17 @@ import {
   recordIntegrationError,
   retryableImports,
   safeEqual,
-  summarisePendingImports,
+  summarisePendingAcross,
   timeLeft,
   validTime,
   type IntegrationKey,
   type IntegrationStatus,
   type Participant,
 } from "@/lib/crm/conversations";
+import { captureWorkspaceInDb, moveImportToWorkspace, ownCallAddresses, routeCallInDb } from "@/lib/crm/call-routing";
 import { readStored } from "@/lib/crm/inbox";
+import { workspaceActors } from "@/lib/crm/workspaces";
+import type { Db } from "@/lib/db/pool";
 import type { UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { decryptSecret, encryptSecret } from "@/lib/crypto/secret";
 import { appAccessToken } from "@/lib/microsoft/calls";
@@ -92,7 +96,7 @@ type OwnerLookup = (subscriptionIds: string[]) => Promise<Map<string, Subscripti
 
 type Identity = { tenantId: string; objectId: string; connectionId: string };
 
-type Options = { fetchImpl?: typeof fetch; deadline?: number; now?: number };
+type Options = { fetchImpl?: typeof fetch; deadline?: number; now?: number; actors?: UserActor[] };
 
 type Schedule = (task: () => Promise<unknown>) => void;
 
@@ -136,8 +140,8 @@ export async function getTeamsTranscriptStatus(
   const pending = await withActor(actor, async (db) => {
     const result = await db.query<{ total: number }>(
       `select count(*)::int as total from crm.conversation_imports
-       where workspace_id = $1 and source = 'teams' and status = 'pending' and user_id = $2`,
-      [actor.workspaceId, actor.userId],
+       where source = 'teams' and status = 'pending' and user_id = $1`,
+      [actor.userId],
     );
     return result.rows[0]?.total ?? 0;
   });
@@ -153,20 +157,110 @@ function speakers(text: string): Participant[] {
   return [...names].slice(0, 50).map((name) => ({ name, email: null }));
 }
 
-async function settleTranscripts(actor: UserActor, now: number) {
-  return withActor(actor, async (db) => {
-    const attached = await attachTeamsTranscripts(db, actor.workspaceId);
+type Spread = { importId: string; to: string };
+
+async function spreadPlan(db: Db, owner: UserActor, workspaceIds: string[]) {
+  const result = await db.query<{ id: string; workspace_id: string; external_id: string; call_workspaces: string[] }>(
+    `select i.id, i.workspace_id, i.external_id,
+       array(
+         select distinct r.workspace_id from crm.call_records r
+         where r.teams_call_id = i.call_id and r.activity_id is not null and r.workspace_id = any($2::uuid[])
+       ) as call_workspaces
+     from crm.conversation_imports i
+     where i.user_id = $1 and i.source = 'teams' and i.status in ('pending', 'unfiled')
+       and i.call_id is not null and i.workspace_id = any($2::uuid[])`,
+    [owner.userId, workspaceIds],
+  );
+  const moves: Spread[] = [];
+  const copies: Spread[] = [];
+  for (const row of result.rows) {
+    if (row.call_workspaces.length === 0) continue;
+    const present = await db.query<{ workspace_id: string }>(
+      `select workspace_id from crm.conversation_imports
+       where user_id = $1 and source = 'teams' and external_id = $2 and workspace_id = any($3::uuid[])`,
+      [owner.userId, row.external_id, row.call_workspaces],
+    );
+    const missing = row.call_workspaces.filter((id) => !present.rows.some((item) => item.workspace_id === id));
+    if (missing.length === 0) continue;
+    if (!row.call_workspaces.includes(row.workspace_id)) {
+      moves.push({ importId: row.id, to: missing[0] });
+      for (const id of missing.slice(1)) copies.push({ importId: row.id, to: id });
+    } else {
+      for (const id of missing) copies.push({ importId: row.id, to: id });
+    }
+  }
+  return { moves, copies };
+}
+
+async function copyImport(db: Db, importId: string, workspaceId: string) {
+  const result = await db.query<{ id: string }>(
+    `insert into crm.conversation_imports (
+       workspace_id, user_id, source, external_id, kind, call_id, title, occurred_at, ended_at,
+       participants, external_url, transcript, source_summary, status
+     )
+     select $2, user_id, source, external_id, kind, call_id, title, occurred_at, ended_at,
+       participants, external_url, transcript, source_summary, 'pending'
+     from crm.conversation_imports where id = $1
+     on conflict do nothing
+     returning id`,
+    [importId, workspaceId],
+  );
+  return result.rows[0]?.id ?? null;
+}
+
+type NameFiling = { importId: string; workspaceId: string; targets: string[] };
+
+async function expiredByName(db: Db, owner: UserActor, actors: UserActor[], cutoff: string) {
+  const workspaceIds = actors.map((item) => item.workspaceId);
+  const result = await db.query<{ id: string; workspace_id: string; participants: Participant[] | null; occurred_at: Date | null }>(
+    `select id, workspace_id, participants, occurred_at from crm.conversation_imports
+     where user_id = $1 and source = 'teams' and status = 'pending' and workspace_id = any($2::uuid[])
+       and coalesce(occurred_at, created_at) < $3::timestamptz
+     order by occurred_at nulls last
+     limit 50`,
+    [owner.userId, workspaceIds, cutoff],
+  );
+  const own = await ownCallAddresses(db, owner);
+  const filings: NameFiling[] = [];
+  for (const row of result.rows) {
+    const people = Array.isArray(row.participants) ? row.participants : [];
+    const route = await routeCallInDb(db, owner, actors, people, { own, names: true, occurredAt: row.occurred_at ? new Date(row.occurred_at).toISOString() : null });
+    const targets = route.targets.filter((target) => target.match.contactId).map((target) => target.actor.workspaceId);
+    if (targets.length > 0) filings.push({ importId: row.id, workspaceId: row.workspace_id, targets });
+  }
+  return filings;
+}
+
+export async function settleTeamsTranscripts(owner: UserActor, now = Date.now(), everyone?: UserActor[]) {
+  const actors = everyone ?? (await workspaceActors(owner));
+  const workspaceIds = actors.map((item) => item.workspaceId);
+  const cutoff = new Date(now - UNFILED_AFTER_MS).toISOString();
+  const plan = await withActor(owner, (db) => spreadPlan(db, owner, workspaceIds));
+  for (const move of plan.moves) {
+    await moveImportToWorkspace(owner, move.importId, move.to).catch((error) => console.error("Moving a Teams transcript failed", errorText(error, "")));
+  }
+  const named = await withActor(owner, (db) => expiredByName(db, owner, actors, cutoff));
+  for (const filing of named) {
+    if (filing.targets.includes(filing.workspaceId)) continue;
+    await moveImportToWorkspace(owner, filing.importId, filing.targets[0]).catch((error) =>
+      console.error("Moving a Teams transcript failed", errorText(error, "")),
+    );
+  }
+  return withActor(owner, async (db) => {
+    for (const copy of plan.copies) await copyImport(db, copy.importId, copy.to);
+    let attached = 0;
+    for (const workspaceId of workspaceIds) attached += await attachTeamsTranscripts(db, workspaceId);
     const expired = await db.query(
       `update crm.conversation_imports
        set status = 'unfiled'
-       where workspace_id = $1 and source = 'teams' and user_id = $2 and status = 'pending'
+       where workspace_id = any($1::uuid[]) and source = 'teams' and user_id = $2 and status = 'pending'
          and coalesce(occurred_at, created_at) < $3::timestamptz`,
-      [actor.workspaceId, actor.userId, new Date(now - UNFILED_AFTER_MS).toISOString()],
+      [workspaceIds, owner.userId, cutoff],
     );
     const pending = await db.query<{ total: number }>(
       `select count(*)::int as total from crm.conversation_imports
-       where workspace_id = $1 and source = 'teams' and user_id = $2 and status = 'pending'`,
-      [actor.workspaceId, actor.userId],
+       where workspace_id = any($1::uuid[]) and source = 'teams' and user_id = $2 and status = 'pending'`,
+      [workspaceIds, owner.userId],
     );
     return { attached, expired: expired.rowCount ?? 0, pending: pending.rows[0]?.total ?? 0 };
   });
@@ -179,52 +273,75 @@ async function importTeamsTranscript(
   transcript: CallTranscript,
   fetchImpl: typeof fetch = fetch,
   deadline?: number,
+  everyone?: UserActor[],
 ): Promise<"skipped" | "filed" | "pending"> {
   const externalId = transcript.id.trim().slice(0, 400);
   if (!externalId) return "skipped";
+  const actors = everyone ?? (await workspaceActors(actor));
+  const workspaceIds = actors.map((item) => item.workspaceId);
   const known = await withActor(actor, (db) =>
-    knownImports(db, actor.workspaceId, "teams", [externalId]),
+    knownAnywhere(db, workspaceIds, "teams", [externalId]),
   );
   if (known.has(externalId)) return "skipped";
   const raw = await fetchTranscriptContent(token, identity.objectId, transcript, fetchImpl, deadline);
   const text = transcriptToText(raw).slice(0, 1_000_000);
+  const callId = transcript.callId?.trim().slice(0, 200) || null;
   return withActor(actor, async (db) => {
-    await lockImportKey(db, actor.workspaceId, "teams", `${actor.userId}:${externalId}`);
-    const again = await knownImports(db, actor.workspaceId, "teams", [externalId]);
+    await lockImportKey(db, actor.userId, "teams", externalId);
+    const again = await knownAnywhere(db, workspaceIds, "teams", [externalId]);
     if (again.has(externalId)) return "skipped";
-    const saved = await db.query<{ id: string }>(
-      `insert into crm.conversation_imports (
-         workspace_id, user_id, source, external_id, kind, call_id, title,
-         occurred_at, ended_at, participants, transcript, status
-       ) values (
-         $1, $2, 'teams', $3, 'call', $4, 'Teams call', $5::timestamptz, $6::timestamptz,
-         $7::jsonb, $8, 'pending'
-       )
-       on conflict ${importConflict("teams")} do update
-         set transcript = excluded.transcript,
-             participants = excluded.participants,
-             occurred_at = coalesce(crm.conversation_imports.occurred_at, excluded.occurred_at),
-             ended_at = coalesce(crm.conversation_imports.ended_at, excluded.ended_at),
-             error = null,
-             attempts = 0
-       returning id`,
-      [
-        actor.workspaceId,
-        actor.userId,
-        externalId,
-        transcript.callId?.trim().slice(0, 200) || null,
-        validTime(transcript.createdDateTime),
-        validTime(transcript.endDateTime),
-        JSON.stringify(speakers(text)),
-        text || null,
-      ],
+    const calls = callId
+      ? (
+          await db.query<{ workspace_id: string }>(
+            `select distinct workspace_id from crm.call_records
+             where teams_call_id = $1 and activity_id is not null and workspace_id = any($2::uuid[])`,
+            [callId, workspaceIds],
+          )
+        ).rows.map((row) => row.workspace_id)
+      : [];
+    const stored = await readStored(db, actor);
+    const placement = calls.length > 0 ? calls : [await captureWorkspaceInDb(db, actor, actors, [], [stored?.email])];
+    const placeholder = await importPlaceholder(db, workspaceIds, "teams", externalId, actor.userId);
+    const ids: string[] = [];
+    for (const workspaceId of placement) {
+      const saved = await db.query<{ id: string }>(
+        `insert into crm.conversation_imports (
+           workspace_id, user_id, source, external_id, kind, call_id, title,
+           occurred_at, ended_at, participants, transcript, status
+         ) values (
+           $1, $2, 'teams', $3, 'call', $4, 'Teams call', $5::timestamptz, $6::timestamptz,
+           $7::jsonb, $8, 'pending'
+         )
+         on conflict ${importConflict("teams")} do update
+           set transcript = excluded.transcript,
+               participants = excluded.participants,
+               occurred_at = coalesce(crm.conversation_imports.occurred_at, excluded.occurred_at),
+               ended_at = coalesce(crm.conversation_imports.ended_at, excluded.ended_at),
+               error = null,
+               attempts = 0
+         returning id`,
+        [
+          workspaceId,
+          actor.userId,
+          externalId,
+          callId,
+          validTime(transcript.createdDateTime),
+          validTime(transcript.endDateTime),
+          JSON.stringify(speakers(text)),
+          text || null,
+        ],
+      );
+      ids.push(saved.rows[0].id);
+      await attachTeamsTranscripts(db, workspaceId);
+    }
+    if (placeholder && !placement.includes(placeholder.workspace_id)) {
+      await db.query("update crm.conversation_imports set status = 'ignored', error = null where id = $1", [placeholder.id]);
+    }
+    const status = await db.query<{ filed: boolean }>(
+      "select bool_or(status = 'filed') as filed from crm.conversation_imports where id = any($1::uuid[])",
+      [ids],
     );
-    await attachTeamsTranscripts(db, actor.workspaceId);
-    const status = await db.query<{ status: string }>(
-      "select status from crm.conversation_imports where id = $1",
-      [saved.rows[0].id],
-    );
-    return status.rows[0]?.status === "filed" ? "filed" : "pending";
+    return status.rows[0]?.filed ? "filed" : "pending";
   });
 }
 
@@ -243,6 +360,7 @@ async function importOrRecord(
       transcript,
       options.fetchImpl ?? fetch,
       options.deadline,
+      options.actors,
     );
   } catch (error) {
     const message = sanitizeTranscriptError(errorText(error, "Could not import a Teams transcript."));
@@ -303,8 +421,10 @@ export async function syncTeamsTranscripts(
       options.deadline,
     );
     const listed = fetched.transcripts.map((item) => item.id);
+    const everyone = await workspaceActors(actor);
+    const scoped = { ...options, actors: everyone };
     const known = await withActor(actor, (db) =>
-      knownImports(db, actor.workspaceId, "teams", listed),
+      knownAnywhere(db, everyone.map((item) => item.workspaceId), "teams", listed),
     );
     const result: TranscriptSyncResult = { ...idle, ran: true };
     let complete = fetched.complete;
@@ -324,7 +444,7 @@ export async function syncTeamsTranscripts(
         complete = false;
         break;
       }
-      outcome(await importOrRecord(actor, token, identity, transcript, options));
+      outcome(await importOrRecord(actor, token, identity, transcript, scoped));
     }
     for (const retry of await retryableImports(actor, "teams")) {
       if (listed.includes(retry.externalId) || !retry.callId) continue;
@@ -343,7 +463,7 @@ export async function syncTeamsTranscripts(
             token,
             identity,
             { ...transcript, callId: transcript.callId ?? retry.callId },
-            options,
+            scoped,
           ),
         );
       } catch (error) {
@@ -357,7 +477,7 @@ export async function syncTeamsTranscripts(
         result.failed += 1;
       }
     }
-    const settled = await settleTranscripts(actor, now);
+    const settled = await settleTeamsTranscripts(actor, now, everyone);
     result.filed += settled.attached;
     result.unfiled = settled.expired;
     result.pending = settled.pending;
@@ -368,9 +488,10 @@ export async function syncTeamsTranscripts(
       }),
     );
     if (firstError) result.error = firstError;
-    result.summarised = await summarisePendingImports(actor, {
+    result.summarised = await summarisePendingAcross(actor, {
       fetchImpl: options.fetchImpl,
       deadline: options.deadline,
+      actors: everyone,
     });
     return result;
   } catch (error) {
@@ -563,7 +684,7 @@ async function processTranscriptNotification(
       options,
     );
     if (typeof outcome === "object") return;
-    await summarisePendingImports(actor, { fetchImpl: options.fetchImpl, deadline: options.deadline });
+    await summarisePendingAcross(actor, { fetchImpl: options.fetchImpl, deadline: options.deadline });
   } catch (error) {
     if (!identity) return;
     await recordIntegrationError(

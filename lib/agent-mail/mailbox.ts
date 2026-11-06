@@ -2,7 +2,7 @@ import { heldAgentMail, type HeldAgentMail } from "@/lib/agent-mail/held";
 import { decryptSecret, encryptSecret } from "@/lib/crypto/secret";
 import { listMembers } from "@/lib/crm/companies";
 import { withActor } from "@/lib/crm/context";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, isPgError } from "@/lib/crm/errors";
 import { iso, isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
@@ -19,7 +19,10 @@ export type AgentMailMember = { id: string; name: string };
 export type AgentMailboxView = {
   configured: boolean;
   canAdmin: boolean;
+  workspaceId: string;
+  workspaceName: string;
   address: string;
+  placeholder: string;
   setUp: boolean;
   setUpAt: string | null;
   lastReceivedAt: string | null;
@@ -60,6 +63,24 @@ export async function agentMailbox(actor: UserActor): Promise<AgentMailboxRow | 
   });
 }
 
+export async function agentMailboxFor(actor: UserActor, mailboxId: string): Promise<AgentMailboxRow | null> {
+  return withActor(actor, async (db) => {
+    const result = await db.query<AgentMailboxRow>(`select ${MAILBOX_COLUMNS} from crm.agent_mailboxes where id = $1 and workspace_id = $2`, [mailboxId, actor.workspaceId]);
+    return result.rows[0] ?? null;
+  });
+}
+
+export const OTHER_WORKSPACE_PLACEHOLDER = "ridgeon@ai-mail.geteclipse.co";
+
+export function addressTakenMessage(address: string) {
+  return `${address} is another workspace's agent mailbox. Choose another address.`;
+}
+
+export async function addressTaken(address: string, workspaceId: string) {
+  const result = await query<{ taken: boolean }>("select private.agent_mailbox_address_taken($1, $2) as taken", [address, workspaceId]);
+  return result.rows[0]?.taken === true;
+}
+
 export function mailboxOrigin(mailbox: Pick<AgentMailboxRow, "webhook_url">) {
   const configured = siteOrigin();
   if (configured) return configured;
@@ -87,7 +108,7 @@ export async function requireAgentMailAccess(actor: UserActor) {
 export async function agentMailboxView(actor: UserActor): Promise<AgentMailboxView> {
   const canAdmin = isWorkspaceAdmin(actor);
   const mailbox = await agentMailbox(actor);
-  const [senders, members, last, held] = await Promise.all([
+  const [senders, members, last, held, defaultTaken] = await Promise.all([
     withActor(actor, async (db) => {
       const result = await db.query<{ address: string; user_id: string; name: string | null }>(
         `select s.address, s.user_id, coalesce(nullif(p.full_name, ''), p.email) as name
@@ -107,11 +128,15 @@ export async function agentMailboxView(actor: UserActor): Promise<AgentMailboxVi
       return result.rows[0] ?? null;
     }),
     mailbox?.set_up_at ? heldAgentMail(actor) : Promise.resolve([]),
+    mailbox ? Promise.resolve(false) : addressTaken(DEFAULT_ADDRESS, actor.workspaceId).catch(() => false),
   ]);
   return {
     configured: machineMailConfigured(),
     canAdmin,
-    address: mailbox?.address ?? DEFAULT_ADDRESS,
+    workspaceId: actor.workspaceId,
+    workspaceName: actor.workspaceName,
+    address: mailbox?.address ?? (defaultTaken ? "" : DEFAULT_ADDRESS),
+    placeholder: defaultTaken ? OTHER_WORKSPACE_PLACEHOLDER : DEFAULT_ADDRESS,
     setUp: Boolean(mailbox?.set_up_at),
     setUpAt: iso(mailbox?.set_up_at ?? null),
     lastReceivedAt: iso(mailbox?.last_received_at ?? null),
@@ -158,6 +183,9 @@ export async function setUpAgentMailbox(actor: UserActor, input: { address?: unk
   if (existing?.set_up_at && typeof input.address === "string" && input.address.trim() && cleanMailboxAddress(input.address) !== existing.address) {
     throw new CrmError("invalid_input", "The address can't change once the mailbox is set up.", 400, { field: "address" });
   }
+  if (!existing?.set_up_at && (await addressTaken(address, actor.workspaceId))) {
+    throw new CrmError("conflict", addressTakenMessage(address), 409, { field: "address" });
+  }
   const url = `${webhookOrigin()}${WEBHOOK_PATH}`;
   let webhook: { id: string; secret: string };
   try {
@@ -168,6 +196,14 @@ export async function setUpAgentMailbox(actor: UserActor, input: { address?: unk
     upstream(error);
   }
   if (existing?.webhook_id && existing.webhook_id !== webhook.id) await deleteWebhook(existing.webhook_id, fetchImpl).catch(() => undefined);
+  await saveMailbox(actor, address, webhook, url).catch((error) => {
+    if (isPgError(error) && error.code === "23505") throw new CrmError("conflict", addressTakenMessage(address), 409, { field: "address" });
+    throw error;
+  });
+  return { message: existing?.set_up_at ? "Checked. The agent mailbox is set up." : "The agent mailbox is set up." };
+}
+
+async function saveMailbox(actor: UserActor, address: string, webhook: { id: string; secret: string }, url: string) {
   await withActor(actor, async (db) => {
     await db.query(
       `insert into crm.agent_mailboxes (workspace_id, address, display_name) values ($1, $2, $3)
@@ -192,7 +228,6 @@ export async function setUpAgentMailbox(actor: UserActor, input: { address?: unk
       }
     }
   });
-  return { message: existing?.set_up_at ? "Checked. The agent mailbox is set up." : "The agent mailbox is set up." };
 }
 
 export async function saveAgentSenders(actor: UserActor, rows: unknown) {
@@ -215,6 +250,11 @@ export async function saveAgentSenders(actor: UserActor, rows: unknown) {
   const mailbox = await agentMailbox(actor);
   if (!mailbox?.set_up_at) throw new CrmError("invalid_input", "Set up the agent mailbox first.", 400);
   if (seen.has(mailbox.address)) throw new CrmError("invalid_input", "The agent mailbox can't give itself work.", 400, { field: "senders" });
+  for (const address of seen.keys()) {
+    if (await addressTaken(address, actor.workspaceId)) {
+      throw new CrmError("invalid_input", `${address} is another workspace's agent mailbox, so it can't give this one work.`, 400, { field: "senders" });
+    }
+  }
   await withActor(actor, async (db) => {
     await db.query("delete from crm.agent_mailbox_senders where workspace_id = $1", [actor.workspaceId]);
     for (const [address, userId] of seen) {
