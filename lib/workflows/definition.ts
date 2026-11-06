@@ -107,6 +107,8 @@ export const FIELD_OPTIONS: Record<RecordObject, { key: string; label: string }[
     { key: "email", label: "Email" },
     { key: "phone", label: "Phone" },
     { key: "linkedinUrl", label: "LinkedIn" },
+    { key: "location", label: "Location" },
+    { key: "salesNavigatorUrl", label: "Sales Navigator" },
   ],
 };
 

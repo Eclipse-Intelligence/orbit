@@ -94,7 +94,7 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
     "upsert_contact",
     {
       description:
-        "Create or update a contact. Matches email, then LinkedIn, then the same name at the same company. Omitted fields stay unchanged.",
+        "Create or update a contact. Matches email, then LinkedIn, then Sales Navigator lead, then the same name at the same company. Omitted fields stay unchanged.",
       inputSchema: {
         companyId: z.uuid().nullable().optional(),
         firstName: z.string().nullable().optional(),
@@ -103,6 +103,8 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
         phone: z.string().nullable().optional(),
         jobTitle: z.string().nullable().optional(),
         linkedinUrl: z.string().nullable().optional(),
+        location: z.string().nullable().optional(),
+        salesNavigatorUrl: z.string().nullable().optional(),
         ownerId: z.uuid().nullable().optional(),
         source: z.string().nullable().optional(),
         sourceReference: z.string().nullable().optional(),
@@ -125,6 +127,8 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
           phone: args.phone,
           jobTitle: args.jobTitle,
           linkedinUrl: args.linkedinUrl,
+          location: args.location,
+          salesNavigatorUrl: args.salesNavigatorUrl,
           ownerId: args.ownerId,
           source: args.source,
           sourceReference: args.sourceReference,

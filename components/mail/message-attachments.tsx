@@ -42,7 +42,8 @@ function size(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export default function MessageAttachments({ messageId, companies = [] }: { messageId: string; companies?: Company[] }) {
+export default function MessageAttachments({ messageId, companies = [], workspaceName = "" }: { messageId: string; companies?: Company[]; workspaceName?: string }) {
+  const ownLabel = workspaceName.trim() || "This workspace";
   const [state, setState] = useState<{ id: string; items: Attachment[] | null; error: string | null } | null>(null);
   const [saved, setSaved] = useState<Saved | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
@@ -119,7 +120,9 @@ export default function MessageAttachments({ messageId, companies = [] }: { mess
                         <span className="truncate">{company.name}</span>
                       </DropdownMenuItem>
                     ))}
-                    <DropdownMenuItem onSelect={() => void addToKnowledge(item, { eclipse: true }, "Eclipse")}>Eclipse</DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => void addToKnowledge(item, { eclipse: true }, ownLabel)}>
+                      <span className="truncate">{ownLabel}</span>
+                    </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
               )}

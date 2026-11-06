@@ -293,12 +293,20 @@ function withTask(task: Task) {
   };
 }
 
+function knowledgeScope(scope: string) {
+  return scope === "eclipse" ? "business" : scope;
+}
+
+function ownKnowledge(args: Args, name: "business" | "withBusiness") {
+  return args[name] === true || args[name === "business" ? "eclipse" : "withEclipse"] === true;
+}
+
 function withKnowledge(item: KnowledgeItem) {
   return {
     id: item.id,
     title: item.title,
     kind: item.kind,
-    scope: item.scope,
+    scope: knowledgeScope(item.scope),
     companyId: item.companyId,
     companyName: item.companyName,
     status: item.status,
@@ -714,6 +722,8 @@ const CONTACT_FIELDS = {
   phone: { type: "string" },
   jobTitle: { type: "string" },
   linkedinUrl: { type: "string" },
+  location: { type: "string", description: "Where they are, such as Bristol, England." },
+  salesNavigatorUrl: { type: "string", description: "Sales Navigator lead link, linkedin.com/sales/lead/<id>." },
   companyId: { type: "string", description: "Company id to link the person to." },
   ownerId: { type: "string" },
   source: { type: "string" },
@@ -774,7 +784,7 @@ function pick(args: Args, keys: string[]) {
 
 const WORKFLOW_GUIDE = `A definition is {trigger, steps}. trigger.type is one of: ${TRIGGER_TYPES.join(", ")}. call_summary_ready, task_completed: no other fields. record_created and manual: object (company or contact). field_changed: object, field (company: lifecycle, health (healthy, watch or at_risk; set from every summarised call), ownerId, industry, sizeCategory, source, description, or ai:<id> for an AI field, with ids from list_companies; contact: ownerId, jobTitle, companyId, source, notes), optional to. stage_changed: optional pipelineId (board id; omit for Opportunities) and stageId. added_to_board: boardId. activity_logged: optional activityType (call, email, meeting, note). schedule: frequency (daily, weekly or monthly), weekday (0 Sunday to 6 Saturday, for weekly), dayOfMonth (1 to 28, for monthly), time (HH:mm London). email_received: kind (any: any new email from a contact; reply: a reply to an email the user sent; bounce: an undeliverable notice, where the contact is the person whose address bounced; auto_reply: out of office or "I've left" replies), fromContactsOnly (default true); it runs privately for the user on their own inbox and gives {{email.subject}}, {{email.from}}, {{email.fromName}}, {{email.text}}, {{email.kind}}, {{email.failedRecipient}} and {{email.url}}. proposal_event: event (sent, viewed (first open), signed (by the client), completed (countersigned) or declined), optional kind (proposal or nda); it gives {{proposal.title}}, {{proposal.status}}, {{proposal.total}}, {{proposal.signedBy}}, {{proposal.declineReason}}, {{proposal.url}} (in Orbit) and {{proposal.clientUrl}} (the client's link), with the proposal's company and contact. Any trigger except manual, schedule, email_received and proposal_event can take mine: true to only fire for the user's own changes.
 steps is a list run in order. Each step is {id, type, label, config}; ids are lowercase like ai_1, if_1, notify_1 and unique. type is one of: ${STEP_TYPES.join(", ")}. An if step has then and else lists; a loop step has a body list run once per item; a path that ends simply stops (inside a loop it moves to the next item).
-config by type: ai {prompt, model (claude-haiku-5-5, claude-sonnet-5-5 or claude-opus-5-5), outputs: [{key, type: text|number|boolean|list|choice, description, choices}], webSearch (true lets it search the web and adds a sources list output), context (true adds the record's details, recent activity, deals and the user's recent emails with the contact), linkedin (true reads the contact's LinkedIn profile now through Mindcase and adds it; best for checking job changes)}. find_records {object: contact|company, lifecycles: [lifecycle names; for contacts, their company's], tag, owner: ""|owner|<member id>, openOpportunity: any|yes|no, quietDays (no activity for at least this many days), search, order: least_contacted|oldest|newest|name, limit (1 to 100), skipDays (skip records this workflow found within this many days, so weekly runs work through a list in batches)}; it outputs records and count. Feed {{steps.find_records_1.records}} to a loop: inside it, company and contact steps act on each record in turn. upsert_record {object: company|contact, company: name, domain, website; contact: email, firstName, lastName, jobTitle, companyId; create (default true; new companies are enriched when auto-enrichment is on), useInRun (true makes it the run's record for later steps)}; it outputs id, name, created, found and url, so update_record {object: contact, field: companyId, value: "{{steps.upsert_record_1.id}}"} moves a contact to it. webhook {url (https), body (optional template; empty sends the run's company, contact and step results as JSON)} posts to Slack, Zapier, Make or any service and outputs status and response. decide {about (optional template added as context, such as "{{contact.name}}, {{contact.jobTitle}}"), questions: up to 20 [{key (lowercase first, letters, numbers or underscores, not sources), type: yes_no|choice|score, question (a template), options (choice: 2 to 50 option texts; score: 2 to 10 level descriptions, lowest first)}]} asks the live web through Parallel for $0.001 a check, sending only the run's company name, domain and website, today's date, the questions and about. Questions and about can only use company name, domain, website, industry and lifecycle, contact name, first and last name, job title and LinkedIn, earlier step answers, loop.item and loop.index; email, call and note fields come out empty. A rate-limited or briefly unavailable check is retried once a minute later. Each question key becomes an output: yes_no gives how likely it is true, 0 to 100; choice gives the chosen option's text ("" when the evidence doesn't settle it) and <key>Confidence, 0 to 100; score gives the level from 0 (the first) to one decimal; a refused question gives null, so is_empty catches it. It also outputs sources (up to 10 links) and runs in test runs, so if and filter can branch on it, for example {left: "{{steps.decide_1.hiring}}", op: greater_than, right: "60"}. if and filter {match: all|any, conditions: [{left: "{{path}}", op: is|is_not|contains|not_contains|is_empty|is_not_empty|greater_than|less_than, right}]}; filter stops the path when false. loop {items: "{{steps.ai_1.requests}}", limit}. delay {amount, unit: minutes|hours|days}. approval {title, details} pauses for the user to approve. create_task {title, notes, dueInDays, dueDate (optional template giving a YYYY-MM-DD day, such as "{{steps.ai_1.followUpOn}}" from an AI output that works out when to follow up; it overrides dueInDays), assignee: owner|record_owner|<member id>, link: company|contact|none, clickup: boolean}; due dates never land on a weekend, a bank holiday or 24 Dec to 1 Jan, and skip days when the assignee's own calendar has less than an hour free between 09:00 and 17:30, with the move explained in the notes. add_note {title, body}. update_record {object, field, value}; fields: company lifecycle, health, ownerId, industry, sizeCategory, source, description, name, domain, website, linkedinUrl, phone; contact ownerId, jobTitle, companyId, source, notes, firstName, lastName, email, phone, linkedinUrl. board {boardId, stageId} adds the company to a board or moves its card. notify {to: owner|record_owner|<member id>, title, body}. send_email {subject, body} to the run's contact. linear_issue {title, description, priority: urgent|high|medium|low}. create_proposal {templateId (an active proposal template from list_proposal_templates), currency: GBP|USD, products: ai|fixed, productIds (for fixed), guidance (for ai: how to choose), title (optional)} drafts a proposal for the run's contact at their company; with products ai it reads the call summary and transcript (or the record's history) and picks from the live product catalogue, so the prompt never needs the product list. It outputs url, title, total, products and reason, and creates nothing in test runs.
+config by type: ai {prompt, model (claude-haiku-5-5, claude-sonnet-5-5 or claude-opus-5-5), outputs: [{key, type: text|number|boolean|list|choice, description, choices}], webSearch (true lets it search the web and adds a sources list output), context (true adds the record's details, recent activity, deals and the user's recent emails with the contact), linkedin (true reads the contact's LinkedIn profile now through Mindcase and adds it; best for checking job changes)}. find_records {object: contact|company, lifecycles: [lifecycle names; for contacts, their company's], tag, owner: ""|owner|<member id>, openOpportunity: any|yes|no, quietDays (no activity for at least this many days), search, order: least_contacted|oldest|newest|name, limit (1 to 100), skipDays (skip records this workflow found within this many days, so weekly runs work through a list in batches)}; it outputs records and count. Feed {{steps.find_records_1.records}} to a loop: inside it, company and contact steps act on each record in turn. upsert_record {object: company|contact, company: name, domain, website; contact: email, firstName, lastName, jobTitle, companyId; create (default true; new companies are enriched when auto-enrichment is on), useInRun (true makes it the run's record for later steps)}; it outputs id, name, created, found and url, so update_record {object: contact, field: companyId, value: "{{steps.upsert_record_1.id}}"} moves a contact to it. webhook {url (https), body (optional template; empty sends the run's company, contact and step results as JSON)} posts to Slack, Zapier, Make or any service and outputs status and response. decide {about (optional template added as context, such as "{{contact.name}}, {{contact.jobTitle}}"), questions: up to 20 [{key (lowercase first, letters, numbers or underscores, not sources), type: yes_no|choice|score, question (a template), options (choice: 2 to 50 option texts; score: 2 to 10 level descriptions, lowest first)}]} asks the live web through Parallel for $0.001 a check, sending only the run's company name, domain and website, today's date, the questions and about. Questions and about can only use company name, domain, website, industry and lifecycle, contact name, first and last name, job title and LinkedIn, earlier step answers, loop.item and loop.index; email, call and note fields come out empty. A rate-limited or briefly unavailable check is retried once a minute later. Each question key becomes an output: yes_no gives how likely it is true, 0 to 100; choice gives the chosen option's text ("" when the evidence doesn't settle it) and <key>Confidence, 0 to 100; score gives the level from 0 (the first) to one decimal; a refused question gives null, so is_empty catches it. It also outputs sources (up to 10 links) and runs in test runs, so if and filter can branch on it, for example {left: "{{steps.decide_1.hiring}}", op: greater_than, right: "60"}. if and filter {match: all|any, conditions: [{left: "{{path}}", op: is|is_not|contains|not_contains|is_empty|is_not_empty|greater_than|less_than, right}]}; filter stops the path when false. loop {items: "{{steps.ai_1.requests}}", limit}. delay {amount, unit: minutes|hours|days}. approval {title, details} pauses for the user to approve. create_task {title, notes, dueInDays, dueDate (optional template giving a YYYY-MM-DD day, such as "{{steps.ai_1.followUpOn}}" from an AI output that works out when to follow up; it overrides dueInDays), assignee: owner|record_owner|<member id>, link: company|contact|none, clickup: boolean}; due dates never land on a weekend, a bank holiday or 24 Dec to 1 Jan, and skip days when the assignee's own calendar has less than an hour free between 09:00 and 17:30, with the move explained in the notes. add_note {title, body}. update_record {object, field, value}; fields: company lifecycle, health, ownerId, industry, sizeCategory, source, description, name, domain, website, linkedinUrl, phone; contact ownerId, jobTitle, companyId, source, notes, firstName, lastName, email, phone, linkedinUrl, location, salesNavigatorUrl. board {boardId, stageId} adds the company to a board or moves its card. notify {to: owner|record_owner|<member id>, title, body}. send_email {subject, body} to the run's contact. linear_issue {title, description, priority: urgent|high|medium|low}. create_proposal {templateId (an active proposal template from list_proposal_templates), currency: GBP|USD, products: ai|fixed, productIds (for fixed), guidance (for ai: how to choose), title (optional)} drafts a proposal for the run's contact at their company; with products ai it reads the call summary and transcript (or the record's history) and picks from the live product catalogue, so the prompt never needs the product list. It outputs url, title, total, products and reason, and creates nothing in test runs.
 Text fields take {{company.name}}, {{company.id}}, {{company.url}}, {{contact.id}}, {{contact.companyName}}, {{contact.linkedinUrl}}, {{company.health}}, {{company.healthReason}}, {{call.sentiment}}, {{contact.name}}, {{contact.firstName}}, {{contact.email}}, {{call.summary}}, {{call.keyPoints}}, {{call.transcript}}, {{activity.title}}, {{deal.name}}, {{deal.stage}}, {{change.to}}, {{task.title}}, {{owner.name}}, {{today}}, {{steps.<id>.<output key>}} and {{loop.item}}. Keep workflows small: only the nodes the job needs.`;
 
 function stageLines(args: Args, name: Names) {
@@ -2060,14 +2070,14 @@ const TOOL_LIST: AssistantTool[] = [
     name: "search_knowledge",
     label: "Searching Knowledge",
     description:
-      "Search the documents, decks, PDFs, spreadsheets, pages and transcripts in Orbit's Knowledge by meaning and by keyword, and the user's Docs (their own notes and daily notes, plus docs shared with the workspace). Each Knowledge item is tagged to a company or to the workspace's own business. Returns the best matching Knowledge passages in results, with their item id, title, company and offset, and matching docs in docs, each marked type doc with its docId. Pass companyId to search one company's Knowledge (add withEclipse to include the business's own material), scope eclipse for the business's own material alone (no docs), or neither to search everything. Read a doc with read_knowledge and docId.",
+      "Search the documents, decks, PDFs, spreadsheets, pages and transcripts in Orbit's Knowledge by meaning and by keyword, and the user's Docs (their own notes and daily notes, plus docs shared with the workspace). Each Knowledge item is tagged to a company or to the workspace's own business. Returns the best matching Knowledge passages in results, with their item id, title, company and offset, and matching docs in docs, each marked type doc with its docId. Pass companyId to search one company's Knowledge (add withBusiness to include the workspace's own material), scope business for the workspace's own material alone (no docs), or neither to search everything. Read a doc with read_knowledge and docId.",
     parameters: {
       type: "object",
       properties: {
         query: { type: "string", description: "What to look for, in plain words." },
         companyId: idParam("Only this company's knowledge."),
-        scope: { type: "string", enum: ["all", "company", "eclipse"] },
-        withEclipse: { type: "boolean", description: "With companyId, also search the business's own material." },
+        scope: { type: "string", enum: ["all", "company", "business"] },
+        withBusiness: { type: "boolean", description: "With companyId, also search the workspace's own material." },
         limit: { type: "integer", minimum: 1, maximum: 100, description: "How many passages to return, up to 100. Defaults to 10. Ask for more when a question needs a lot of one document." },
         docs: { type: "boolean", description: "Also search Docs. Defaults to true; false searches Knowledge alone." },
       },
@@ -2075,13 +2085,13 @@ const TOOL_LIST: AssistantTool[] = [
     },
     run: async (actor, args) => {
       const query = required(args.query, "What to look for");
-      const scope = oneOf(args.scope, ["all", "company", "eclipse"] as const);
+      const scope = oneOf(args.scope === "business" ? "eclipse" : args.scope, ["all", "company", "eclipse"] as const);
       const docs = args.docs !== false && scope !== "eclipse" ? searchDocsForAssistant(actor, query, int(args.limit, 10, 1, 100)).catch(() => []) : Promise.resolve([]);
       const result = await searchKnowledge(actor, {
         query,
         companyId: optionalStr(args.companyId) ?? null,
         scope,
-        withEclipse: args.withEclipse === true,
+        withEclipse: ownKnowledge(args, "withBusiness"),
         limit: int(args.limit, 10, 1, 100),
       });
       return {
@@ -2090,7 +2100,7 @@ const TOOL_LIST: AssistantTool[] = [
           itemId: hit.itemId,
           title: hit.title,
           kind: hit.kind,
-          scope: hit.scope,
+          scope: knowledgeScope(hit.scope),
           companyId: hit.companyId,
           companyName: hit.companyName,
           sourceUrl: hit.sourceUrl,
@@ -2137,11 +2147,11 @@ const TOOL_LIST: AssistantTool[] = [
     description: "List the items in Knowledge for one company, for the business itself, or for everything, with a short summary of each.",
     parameters: {
       type: "object",
-      properties: { companyId: idParam("Only this company's items."), eclipse: { type: "boolean", description: "Only the business's own material." } },
+      properties: { companyId: idParam("Only this company's items."), business: { type: "boolean", description: "Only the workspace's own material." } },
     },
     run: async (actor, args) => {
       const companyId = optionalStr(args.companyId);
-      const items = await listKnowledge(actor, companyId ? { companyId } : args.eclipse === true ? { eclipse: true } : "all", 500);
+      const items = await listKnowledge(actor, companyId ? { companyId } : ownKnowledge(args, "business") ? { eclipse: true } : "all", 500);
       return { items: items.map(withKnowledge) };
     },
   },
@@ -2149,7 +2159,7 @@ const TOOL_LIST: AssistantTool[] = [
     name: "map_website",
     label: "Mapping a website",
     description: "List the pages of a website from its sitemap, or by following its links, so the user can choose which to add to Knowledge with add_to_knowledge.",
-    parameters: { type: "object", properties: { url: { type: "string", description: "The site's address, such as geteclipse.co." } }, required: ["url"] },
+    parameters: { type: "object", properties: { url: { type: "string", description: "The site's address, such as example.com." } }, required: ["url"] },
     run: async (_actor, args) => {
       try {
         const map = await mapSite(args.url, { deadline: Date.now() + 75_000 });
@@ -2165,7 +2175,7 @@ const TOOL_LIST: AssistantTool[] = [
     label: "Adding to Knowledge",
     write: true,
     description:
-      "Add to Knowledge for a company, or for the business itself (eclipse true, the workspace's own material). Pass one source per call: urls for links (web pages, files by link such as PDF, Word, PowerPoint or Excel, YouTube videos and podcast episodes), emailId for a file attached to one of the user's emails (find it with list_email_attachments), or chatFileId for a file the user attached in this chat (Knowledge is shared with the whole workspace, so only add a chat file when the user asks). Orbit reads and indexes it in the background (recordings are transcribed), and a file can then be attached to emails from Knowledge. For a whole website, list its pages with map_website and pass the ones the user wants.",
+      "Add to Knowledge for a company, or for the business itself (business true, the workspace's own material). Pass one source per call: urls for links (web pages, files by link such as PDF, Word, PowerPoint or Excel, YouTube videos and podcast episodes), emailId for a file attached to one of the user's emails (find it with list_email_attachments), or chatFileId for a file the user attached in this chat (Knowledge is shared with the whole workspace, so only add a chat file when the user asks). Orbit reads and indexes it in the background (recordings are transcribed), and a file can then be attached to emails from Knowledge. For a whole website, list its pages with map_website and pass the ones the user wants.",
     parameters: {
       type: "object",
       properties: {
@@ -2174,11 +2184,11 @@ const TOOL_LIST: AssistantTool[] = [
         chatFileId: idParam("Chat file id from the note on the user's message, to add a file they attached in this chat. Leave out for other sources."),
         attachment: { type: "string", description: "With emailId: the file's name from list_email_attachments. Leave out when the email has one file." },
         companyId: idParam("Company the knowledge is about."),
-        eclipse: { type: "boolean", description: "True for the business's own knowledge instead of a company's." },
+        business: { type: "boolean", description: "True for the workspace's own knowledge instead of a company's." },
       },
     },
     describe: (args, name) => {
-      const owner = args.eclipse === true ? "this workspace" : name(args.companyId);
+      const owner = ownKnowledge(args, "business") ? "this workspace" : name(args.companyId);
       if (str(args.chatFileId)) {
         return {
           title: `Add to Knowledge for ${owner}`,
@@ -2208,7 +2218,7 @@ const TOOL_LIST: AssistantTool[] = [
       if (sources === 0) {
         throw new CrmError("invalid_input", "Pass urls to add links, emailId to add a file from an email, or chatFileId to add a file from the chat.", 400, { field: "urls" });
       }
-      const target = targetFrom({ companyId: args.companyId, eclipse: args.eclipse });
+      const target = targetFrom({ companyId: args.companyId, eclipse: ownKnowledge(args, "business") });
       const href = "companyId" in target ? companyHref(target.companyId) : "/settings/knowledge";
       if (chatFileId) {
         const { item, created } = await addChatFileToKnowledge(actor, chatFileId, target, { operation: "add_knowledge_chat_file", ...provenanceSource() });
@@ -2418,7 +2428,7 @@ const TOOL_LIST: AssistantTool[] = [
         evidence: withProofList(evidenceFrom(args.evidence), await listProof(actor), { subject: str(args.subject), body }),
         firstTouch: args.firstTouch !== false,
         theirOffer: optionalStr(args.theirOffer),
-        brand: { name: actor.workspaceName, claims: brand.outreachBrief || brand.whatYouSell },
+        brand: { name: actor.workspaceName, claims: brand.outreachBrief || brand.whatYouSell, eclipseTools: brand.eclipseTools },
       }, { deadline: context.deadline });
     },
   },
@@ -2939,7 +2949,7 @@ const TOOL_LIST: AssistantTool[] = [
         title: titled("Update contact", name(args.contactId)),
         lines: fieldLines(
           args,
-          { firstName: "First name", lastName: "Last name", email: "Email", phone: "Phone", jobTitle: "Job title", linkedinUrl: "LinkedIn", companyId: "Company", ownerId: "Owner", source: "Source", notes: "Notes" },
+          { firstName: "First name", lastName: "Last name", email: "Email", phone: "Phone", jobTitle: "Job title", linkedinUrl: "LinkedIn", location: "Location", salesNavigatorUrl: "Sales Navigator", companyId: "Company", ownerId: "Owner", source: "Source", notes: "Notes" },
           name,
         ),
       };
@@ -4730,7 +4740,7 @@ const TOOL_LIST: AssistantTool[] = [
     label: "Remembering",
     write: true,
     description:
-      "Save a lasting note to Orbit's memory: a preference, correction or standing instruction from the user (private to them), or with shared true a fact about the business that the whole team's assistants should know. To forget a note Orbit learned, when the user says it's wrong or out of date, pass forgetId with its id from recall or the briefing (and its title for the card) instead of a body.",
+      "Save a lasting note to Orbit's memory: a preference, correction or standing instruction from the user (private to them), or with shared true a fact about the business that the whole team's assistants should know. A note for the user stays in this workspace unless allWorkspaces is true, which is only for how they work, write or want the assistant to behave everywhere, never for anything about this business, its products, pitch, clients, partners, people, boards or deals. To forget a note Orbit learned, when the user says it's wrong or out of date, pass forgetId with its id from recall or the briefing (and its title for the card) instead of a body.",
     parameters: {
       type: "object",
       properties: {
@@ -4738,6 +4748,7 @@ const TOOL_LIST: AssistantTool[] = [
         body: { type: "string", description: "The note, at most 70 words, written as a fact." },
         kind: { type: "string", enum: ["preference", "correction", "instruction", "person", "goal", "writing", "icp", "objection", "competitor", "messaging", "fact"] },
         shared: { type: "boolean", description: "True for business knowledge the whole workspace should share." },
+        allWorkspaces: { type: "boolean", description: "For a note about the user, true when it applies in every workspace they work in. Leave out to keep it to this workspace." },
         forgetId: { type: "string", description: "Id of a learned note to forget instead of saving one." },
       },
     },
@@ -4746,7 +4757,7 @@ const TOOL_LIST: AssistantTool[] = [
         ? { title: "Forget a note", lines: [str(args.title) || "The note you chose"] }
         : {
             title: args.shared === true ? "Remember for the whole team" : "Remember for you",
-            lines: [str(args.title), str(args.body)].filter(Boolean),
+            lines: [str(args.title), str(args.body), args.shared !== true && args.allWorkspaces === true ? "All workspaces" : ""].filter(Boolean),
           },
     run: async (actor, args) => {
       const forgetId = str(args.forgetId);
@@ -4877,7 +4888,7 @@ const MERGED_TOOLS: Record<string, { tool: string; args: (args: Args) => Args }>
   complete_task: { tool: "update_task", args: (args) => ({ taskId: args.taskId, completed: true }) },
   archive_task: { tool: "archive_records", args: (args) => ({ taskIds: str(args.taskId) ? [str(args.taskId)] : [] }) },
   archive_email_template: { tool: "save_email_template", args: (args) => ({ id: args.templateId, archived: true }) },
-  add_email_attachment_to_knowledge: { tool: "add_to_knowledge", args: ({ emailId, attachment, companyId, eclipse }) => ({ emailId, attachment, companyId, eclipse }) },
+  add_email_attachment_to_knowledge: { tool: "add_to_knowledge", args: ({ emailId, attachment, companyId, eclipse }) => ({ emailId, attachment, companyId, business: eclipse }) },
   list_lifecycles: { tool: "get_settings", args: () => ({}) },
   reader_highlights: {
     tool: "reader_list",

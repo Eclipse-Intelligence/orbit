@@ -134,7 +134,7 @@ function InviteForm({
   const sender = setup.senders.find((item) => item.address === from) ?? null;
   const trimmed = query.trim();
   const firstContact = guests.find((guest) => guest.contactId);
-  const title = titleDraft ?? inviteTitle(firstContact?.name ?? null);
+  const title = titleDraft ?? inviteTitle(firstContact?.name ?? null, setup.workspaceName ?? "");
   const own = new Set(setup.ownEmails);
   const blocked = sender ? Boolean(sender.problem) : !setup.connected || !setup.canWriteCalendar;
   const field = (name: string) => `${ids}-${name}`;

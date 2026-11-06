@@ -90,6 +90,7 @@ export type InviteSetup = {
   ownEmails: string[];
   senders: InviteSenderOption[];
   defaultFrom: string | null;
+  workspaceName: string;
 };
 
 export type InviteInput = {
@@ -189,6 +190,7 @@ export async function getInviteSetup(actor: UserActor): Promise<InviteSetup> {
       ownEmails: [...own],
       senders: senders.map(senderOption),
       defaultFrom: await defaultInviteAddress(db, actor, senders),
+      workspaceName: actor.workspaceName,
     };
   });
 }

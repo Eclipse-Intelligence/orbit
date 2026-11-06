@@ -40,7 +40,7 @@ function SignatureEditor({ sender }: { sender: Sender }) {
         value={value}
         rows={4}
         maxLength={2000}
-        placeholder={"Mark Ridgeon\nFounder, Eclipse\ngeteclipse.co"}
+        placeholder={"Jane Smith\nFounder, Acme\nacme.com"}
         onChange={(event) => setValue(event.target.value)}
         className={cn(textareaClass, "min-h-20 text-[13.5px]")}
       />

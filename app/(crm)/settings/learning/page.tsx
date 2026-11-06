@@ -7,6 +7,8 @@ import { grokRoutine, marketAgentStatus } from "@/lib/learning/grok";
 import { listMarketNotes, listWatchlist } from "@/lib/learning/market";
 import { listMemories } from "@/lib/learning/memories";
 import { learningStatus } from "@/lib/learning/nightly";
+import { workspaceActors } from "@/lib/crm/workspaces";
+import { brandOrEmpty } from "@/lib/crm/brand";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -15,7 +17,7 @@ export default async function LearningSettingsPage() {
   const user = await getUserActor();
   if (!user) redirect("/login");
   const canAdmin = user.role === "owner" || user.role === "admin";
-  const [personal, business, market, watchlist, notes, statuses, grok, headerStore] = await Promise.all([
+  const [personal, business, market, watchlist, notes, statuses, grok, headerStore, workspaces, brand] = await Promise.all([
     listMemories(user, { scope: "personal", limit: 200 }),
     listMemories(user, { scope: "business", limit: 200 }),
     listMemories(user, { scope: "market", limit: 200 }),
@@ -24,6 +26,8 @@ export default async function LearningSettingsPage() {
     learningStatus(user),
     marketAgentStatus(user).catch(() => null),
     headers(),
+    workspaceActors(user).catch(() => [user]),
+    brandOrEmpty(user),
   ]);
   const host = headerStore.get("x-forwarded-host") ?? headerStore.get("host") ?? "localhost:4173";
   const mcpUrl = `${headerStore.get("x-forwarded-proto") ?? "http"}://${host}/api/mcp`;
@@ -33,10 +37,10 @@ export default async function LearningSettingsPage() {
       description="What Orbit's assistant has learned about you, the business and the market, the watchlist Grok Bot researches, and the market notes it sends."
     >
       <LearningStatusCard statuses={statuses} canRunShared={canAdmin} />
-      <MemoriesCard memories={{ personal, business, market }} />
+      <MemoriesCard memories={{ personal, business, market }} workspaceName={user.workspaceName} manyWorkspaces={workspaces.length > 1} />
       <WatchlistCard items={watchlist} />
       <MarketNotesCard notes={notes} />
-      <GrokCard status={grok} mcpUrl={mcpUrl} routine={grokRoutine(mcpUrl)} canConnect={canAdmin} />
+      <GrokCard status={grok} mcpUrl={mcpUrl} routine={grokRoutine(mcpUrl, user.workspaceName, brand.eclipseTools)} canConnect={canAdmin} />
     </SettingsPage>
   );
 }

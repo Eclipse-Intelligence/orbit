@@ -9,7 +9,7 @@ import Logo from "@/public/assets/images/_common/logo.svg";
 
 const INITIAL: AuthState = {};
 
-export default function LoginForm({ hintEmail, notice, resets }: { hintEmail?: string; notice?: string; resets: boolean }) {
+export default function LoginForm({ hintEmail, notice, resets, next }: { hintEmail?: string; notice?: string; resets: boolean; next?: string }) {
   const [mode, setMode] = useState<"sign-in" | "reset">("sign-in");
   const [state, action, pending] = useActionState(signInAction, INITIAL);
   const [reset, resetAction, resetting] = useActionState(requestResetAction, INITIAL);
@@ -24,6 +24,7 @@ export default function LoginForm({ hintEmail, notice, resets }: { hintEmail?: s
       </div>
       {mode === "sign-in" ? (
         <form action={action} className="border-border bg-card flex w-full flex-col gap-4 rounded-2xl border p-6">
+          {next && <input type="hidden" name="next" value={next} />}
           {notice && (
             <p role="status" className="caption-style text-success">
               {notice}

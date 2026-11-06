@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Tom Reilly | Sales Navigator</title>
+    <style>
+      body { margin: 0; background: #f3f2ef; font-family: -apple-system, system-ui, sans-serif; color: #191919; }
+      .sn-nav { height: 52px; background: #1d2226; display: flex; align-items: center; gap: 16px; padding: 0 32px; color: #fff; font-size: 13px; }
+      .sn-nav span.mark { width: 34px; height: 34px; border-radius: 4px; background: #0a66c2; }
+      .sn-page { max-width: 1128px; margin: 24px auto; padding: 0 24px; display: flex; gap: 24px; }
+      .profile-topcard { flex: 1; background: #fff; border-radius: 8px; border: 1px solid #e0dfdc; padding: 24px; display: flex; gap: 20px; }
+      .profile-topcard__avatar { width: 96px; height: 96px; border-radius: 50%; background: #c7c7c7; display: flex; align-items: center; justify-content: center; font-size: 32px; color: #fff; flex-shrink: 0; }
+      h1 { font-size: 24px; margin: 0 0 6px; }
+      .profile-topcard__summary-position { font-size: 16px; margin-bottom: 6px; }
+      .profile-topcard__location-data { font-size: 14px; color: #666; }
+      .profile-topcard__current-positions { margin-top: 12px; font-size: 14px; }
+      .actions { display: flex; gap: 8px; margin-top: 16px; }
+      .actions span { border-radius: 16px; padding: 6px 16px; font-weight: 600; font-size: 15px; border: 1px solid #0a66c2; color: #0a66c2; }
+      .actions span.primary { background: #0a66c2; color: #fff; }
+      aside { width: 300px; background: #fff; border-radius: 8px; border: 1px solid #e0dfdc; padding: 16px; font-size: 14px; }
+    </style>
+  </head>
+  <body>
+    <header class="sn-nav"><span class="mark"></span><span>Sales Navigator</span><span>Home</span><span>Lists</span><span>Inbox</span></header>
+    <div class="sn-page">
+      <section class="profile-topcard">
+        <div class="profile-topcard__avatar">TR</div>
+        <div>
+          <h1 class="profile-topcard-person-entity__name" data-anonymize="person-name">Tom Reilly</h1>
+          <div class="profile-topcard__summary-position" data-anonymize="headline">Director at Brightline PR</div>
+          <div class="profile-topcard__location-data" data-anonymize="location">Leeds, England, United Kingdom</div>
+          <div class="profile-topcard__current-positions">
+            <span data-anonymize="job-title">Director</span>
+            <span> at </span>
+            <a href="/sales/company/4815162" data-anonymize="company-name">Brightline PR</a>
+          </div>
+          <div class="actions"><span class="primary">Message</span><span>Save</span></div>
+        </div>
+      </section>
+      <aside>
+        <strong>Lead lists</strong>
+        <p>Not on any lists.</p>
+        <strong>Notes</strong>
+        <p>No notes yet.</p>
+      </aside>
+    </div>
+  </body>
+</html>

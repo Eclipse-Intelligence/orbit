@@ -147,6 +147,7 @@ function AddressDetails({ id, message }: { id: string; message: ThreadMessage })
 function Message({
   message,
   companies,
+  workspaceName,
   own,
   expanded,
   collapsible,
@@ -162,6 +163,7 @@ function Message({
   footer?: ReactNode;
   message: ThreadMessage;
   companies: { id: string; name: string }[];
+  workspaceName: string;
   own: string[];
   expanded: boolean;
   collapsible: boolean;
@@ -232,7 +234,7 @@ function Message({
       {expanded && (
         <div className="flex flex-col gap-3 px-4 pb-4 sm:pl-14">
           <MessageBody message={message} title={`Email from ${sender}`} swipe={swipe} hideQuotes={hideQuotes} />
-          {message.hasAttachments && <MessageAttachments messageId={message.id} companies={companies} />}
+          {message.hasAttachments && <MessageAttachments messageId={message.id} companies={companies} workspaceName={workspaceName} />}
           {footer}
         </div>
       )}
@@ -309,6 +311,7 @@ function PreparedCard({ prepared, onUse, onDismiss }: { prepared: PreparedReply;
 function Thread({
   detail,
   own,
+  workspaceName,
   swipe,
   onEditDraft,
   onDeleteDraft,
@@ -316,6 +319,7 @@ function Thread({
 }: {
   detail: ThreadDetail;
   own: string[];
+  workspaceName: string;
   swipe: () => SwipeHandlers;
   onEditDraft: (message: ThreadMessage) => void;
   onDeleteDraft: (message: ThreadMessage) => void;
@@ -342,6 +346,7 @@ function Thread({
           <Message
             message={message}
             companies={companies}
+            workspaceName={workspaceName}
             own={own}
             swipe={swipe}
             onEditDraft={onEditDraft}
@@ -462,6 +467,7 @@ export default function ThreadReader({
   detail,
   error,
   own,
+  workspaceName = "",
   view,
   accounts,
   onAction,
@@ -489,6 +495,7 @@ export default function ThreadReader({
   detail: ThreadDetail | null;
   error: string | null;
   own: string[];
+  workspaceName?: string;
   view: string;
   accounts: ComposeAccount[];
   onAction: (action: ReaderAction) => void;
@@ -852,6 +859,7 @@ export default function ThreadReader({
               <Thread
                 key={detail.key + detail.messages.length}
                 detail={{ ...detail, messages: detail.messages.filter((message) => !removedDrafts.has(message.id)) }}
+                workspaceName={workspaceName}
                 own={own}
                 swipe={swipe}
                 onEditDraft={editOutsideDraft}

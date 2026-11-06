@@ -4,6 +4,15 @@ import { SESSION_COOKIE, supabaseConfigured } from "@/lib/auth/config";
 import { legacyRecordHref } from "@/lib/crm/hrefs";
 import { legacyTasksHref } from "@/lib/crm/task-views";
 import { legacySettingsHref } from "@/lib/settings-nav";
+import { safeNextPath } from "@/lib/auth/next-path";
+
+function loginUrl(request: NextRequest) {
+  const url = request.nextUrl.clone();
+  url.pathname = "/login";
+  const next = safeNextPath(`${request.nextUrl.pathname}${request.nextUrl.search}`);
+  if (next) url.search = `?${new URLSearchParams({ next }).toString()}`;
+  return url;
+}
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -52,19 +61,11 @@ export async function proxy(request: NextRequest) {
       },
     );
     const { data } = await supabase.auth.getClaims();
-    if (!data?.claims.sub) {
-      const url = request.nextUrl.clone();
-      url.pathname = "/login";
-      return NextResponse.redirect(url);
-    }
+    if (!data?.claims.sub) return NextResponse.redirect(loginUrl(request));
     return response;
   }
 
-  if (!request.cookies.get(SESSION_COOKIE)?.value) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/login";
-    return NextResponse.redirect(url);
-  }
+  if (!request.cookies.get(SESSION_COOKIE)?.value) return NextResponse.redirect(loginUrl(request));
 
   return NextResponse.next();
 }

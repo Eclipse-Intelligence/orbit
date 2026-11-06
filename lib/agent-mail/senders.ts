@@ -1,5 +1,4 @@
 export const DEFAULT_ADDRESS = "orbit@ai-mail.geteclipse.co";
-export const DEFAULT_SENDERS = ["mark@geteclipse.co", "mark@ridgeon.me"];
 
 export type AuthenticationResults = {
   spf?: string;

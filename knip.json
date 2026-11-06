@@ -4,7 +4,10 @@
     "scripts/*.{ts,mjs}",
     "tests/*.test.ts",
     "public/sw.js",
-    "companion/src/index.ts"
+    "companion/src/index.ts",
+    "extension/src/background.ts",
+    "extension/src/content.ts",
+    "extension/src/panel/main.ts"
   ],
   "project": [
     "**/*.{ts,tsx,js,mjs}"

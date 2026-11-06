@@ -133,6 +133,7 @@ describe("agent mailboxes in several workspaces", () => {
     await resetDatabase();
     const admin = getAdminPool();
     const mark = await createUser(MARK_ECLIPSE, "Mark Ridgeon");
+    await admin.query("update crm.profiles set other_emails = $2 where id = $1", [mark.userId, [MARK_RIDGEON]]);
     await admin.query("update crm.workspaces set name = 'Eclipse' where id = $1", [mark.workspaceId]);
     eclipse = { ...mark, workspaceName: "Eclipse" };
     const created = await admin.query<{ id: string }>("select private.create_workspace($1, 'Mark Ridgeon', null) as id", [mark.userId]);

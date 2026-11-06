@@ -43,6 +43,8 @@ const HASH_TARGETS: Record<string, string> = {
   recall: SETTINGS_PATHS.integrations,
   clickup: SETTINGS_PATHS.integrations,
   linear: SETTINGS_PATHS.integrations,
+  "linkedin-capture": SETTINGS_PATHS.integrations,
+  linkedin: SETTINGS_PATHS.integrations,
   teams: SETTINGS_PATHS.integrations,
   "ai-accounts": SETTINGS_PATHS.integrations,
   enrichment: SETTINGS_PATHS.integrations,

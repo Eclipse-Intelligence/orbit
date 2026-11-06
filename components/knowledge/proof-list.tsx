@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState, type FormEvent } from "react";
+import { useId, useMemo, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import HoldButton from "@/components/_ui/hold-button";
@@ -11,19 +11,12 @@ import Tag from "@/components/_ui/tag";
 import { Textarea } from "@/components/_ui/textarea";
 import { SettingsCard } from "@/components/crm/settings-ui";
 import { archiveProofAction, saveProofAction } from "@/app/(crm)/proof";
-import {
-  PERMISSION_LABEL,
-  PRODUCT_LABEL,
-  PROOF_LIMITS,
-  PROOF_PERMISSIONS,
-  PROOF_PRODUCTS,
-  type ProofEntry,
-  type ProofPermission,
-  type ProofProduct,
-} from "@/lib/crm/proof-rules";
+import { PERMISSION_LABEL, PROOF_LIMITS, PROOF_PERMISSIONS, productSuggestions, type ProofEntry, type ProofPermission } from "@/lib/crm/proof-rules";
 
-export default function ProofList({ entries }: { entries: ProofEntry[] }) {
+export default function ProofList({ entries, workspaceName }: { entries: ProofEntry[]; workspaceName: string }) {
   const [editing, setEditing] = useState<{ entry: ProofEntry | null } | null>(null);
+  const products = useMemo(() => productSuggestions(entries, workspaceName), [entries, workspaceName]);
+  const usual = useMemo(() => productSuggestions(entries, "")[0] ?? "", [entries]);
 
   function open(entry: ProofEntry | null) {
     setEditing({ entry });
@@ -56,7 +49,7 @@ export default function ProofList({ entries }: { entries: ProofEntry[] }) {
                   </span>
                   <span className="text-soft line-clamp-2 text-[14px] leading-5">“{entry.result}”</span>
                   <span className="caption-style text-subtle">
-                    {[PRODUCT_LABEL[entry.product], entry.description].filter(Boolean).join(". ")}
+                    {[entry.product, entry.description].filter(Boolean).join(". ")}
                   </span>
                 </span>
               </Button>
@@ -71,19 +64,19 @@ export default function ProofList({ entries }: { entries: ProofEntry[] }) {
             <SheetDescription className="sr-only">A client result the assistant can use in cold emails</SheetDescription>
             <SheetCloseButton />
           </SheetHeader>
-          {editing && <ProofForm entry={editing.entry} onClose={() => setEditing(null)} />}
+          {editing && <ProofForm entry={editing.entry} products={products} usual={usual} onClose={() => setEditing(null)} />}
         </SheetContent>
       </Sheet>
     </SettingsCard>
   );
 }
 
-function ProofForm({ entry, onClose }: { entry: ProofEntry | null; onClose: () => void }) {
+function ProofForm({ entry, products, usual, onClose }: { entry: ProofEntry | null; products: string[]; usual: string; onClose: () => void }) {
   const router = useRouter();
   const id = useId();
   const [client, setClient] = useState(entry?.client ?? "");
   const [description, setDescription] = useState(entry?.description ?? "");
-  const [product, setProduct] = useState<ProofProduct>(entry?.product ?? "eclipse");
+  const [product, setProduct] = useState(entry ? entry.product : usual);
   const [usedFor, setUsedFor] = useState(entry?.usedFor ?? "");
   const [result, setResult] = useState(entry?.result ?? "");
   const [measured, setMeasured] = useState(entry?.measured ?? "");
@@ -192,13 +185,20 @@ function ProofForm({ entry, onClose }: { entry: ProofEntry | null; onClose: () =
         </div>
         <label className="flex flex-col gap-2" htmlFor={`${id}-product`}>
           <span className="caption-style text-subtle">Product</span>
-          <NativeSelect id={`${id}-product`} value={product} onChange={(event) => setProduct(event.target.value as ProofProduct)}>
-            {PROOF_PRODUCTS.map((option) => (
-              <option key={option} value={option}>
-                {PRODUCT_LABEL[option]}
-              </option>
+          <Input
+            id={`${id}-product`}
+            value={product}
+            maxLength={PROOF_LIMITS.product}
+            autoComplete="off"
+            list={`${id}-products`}
+            aria-invalid={invalid("product")}
+            onChange={(event) => setProduct(event.target.value)}
+          />
+          <datalist id={`${id}-products`}>
+            {products.map((option) => (
+              <option key={option} value={option} />
             ))}
-          </NativeSelect>
+          </datalist>
         </label>
         <label className="flex flex-col gap-2" htmlFor={`${id}-used-for`}>
           <span className="caption-style text-subtle">Used it for</span>

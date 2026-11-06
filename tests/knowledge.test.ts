@@ -244,6 +244,10 @@ describe("knowledge", () => {
       assert.equal(read.nextOffset, null);
       const listed = (await runTool(owner, "list_knowledge", { eclipse: true })) as { items: { title: string; summary: string | null }[] };
       assert.deepEqual(listed.items.map((item) => item.title), ["Eclipse pricing"]);
+      const own = (await runTool(owner, "list_knowledge", { business: true })) as { items: { title: string; scope: string }[] };
+      assert.deepEqual(own.items.map((item) => [item.title, item.scope]), [["Eclipse pricing", "business"]]);
+      const ownSearch = (await runTool(owner, "search_knowledge", { query: "monthly retainer", scope: "business" })) as { results: { scope: string }[] };
+      assert.ok(ownSearch.results.length > 0 && ownSearch.results.every((hit) => hit.scope === "business"));
       const company = (await runTool(owner, "get_company", { companyId: acme })) as { knowledge: { title: string; summary: string | null }[] };
       assert.ok(company.knowledge.some((item) => item.title === "Acme rollout deck" && item.summary === "A deck about Acme's rollout."));
       const missing = (await runTool(owner, "read_knowledge", { itemId: "00000000-0000-4000-8000-000000000000" })) as { error: string };

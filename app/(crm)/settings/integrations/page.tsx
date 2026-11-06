@@ -13,6 +13,9 @@ import { listAiAccounts } from "@/lib/ai-accounts/store";
 import { getUserActor, getWorkspaceChoices } from "@/lib/auth/user";
 import { listAddressHomes, listDomainRules } from "@/lib/mail/routing";
 import { listCompanions } from "@/lib/companion/pairing";
+import LinkedinCaptureSettings from "@/components/extension/linkedin-capture-settings";
+import { browserRows, extensionDownloadUrl } from "@/lib/extension/settings";
+import { listBrowsers } from "@/lib/extension/pairing";
 import { unenrichedCompanyCount } from "@/lib/enrichment/companies";
 import { enrichmentAvailability, getEnrichmentSettings, providerStatuses } from "@/lib/enrichment/settings";
 import { learnedIcp, listWebChecks, uncheckedCompanyCount, webChecksConfigured } from "@/lib/enrichment/web-checks";
@@ -42,7 +45,7 @@ export default async function IntegrationSettingsPage({
   const notice = typeof resolved.error === "string" ? resolved.error : null;
   const info = typeof resolved.info === "string" ? resolved.info : null;
   const connected = resolved.connected === "1";
-  const [mailbox, granola, readwise, recall, clickup, aiAccounts, companions, linear] = await Promise.all([
+  const [mailbox, granola, readwise, recall, clickup, aiAccounts, companions, linear, browsers] = await Promise.all([
     getMailbox(user),
     getGranolaStatus(user),
     readwiseStatus(user),
@@ -51,6 +54,7 @@ export default async function IntegrationSettingsPage({
     listAiAccounts(user),
     listCompanions(user),
     linearStatus(),
+    listBrowsers(user),
   ]);
   const [enrichment, unenriched, webChecks, unchecked, learned, agentMailbox] = await Promise.all([
     getEnrichmentSettings(user),
@@ -79,6 +83,11 @@ export default async function IntegrationSettingsPage({
       title="Integrations"
       description="The services Orbit reads from and writes to, and where to manage each one."
     >
+      <LinkedinCaptureSettings
+        browsers={browserRows(browsers)}
+        workspaces={workspaces.map((item) => ({ id: item.id, name: item.name }))}
+        extensionUrl={extensionDownloadUrl()}
+      />
       <IntegrationsSettings
         configured={microsoftConfigured()}
         redirectUri={microsoftRedirectUri(`${proto}://${host}`)}

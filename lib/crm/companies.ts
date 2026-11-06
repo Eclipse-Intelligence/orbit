@@ -230,6 +230,20 @@ async function findMatch(
   return { company: mapCompany(row), matchedOn } as const;
 }
 
+export async function findByLinkedin(db: Db, workspaceId: string, linkedinUrl: string) {
+  const result = await db.query<CompanyRow>(
+    `${COMPANY_SQL}
+     where c.workspace_id = $1
+       and c.archived_at is null
+       and c.linkedin_url = $2
+     order by c.updated_at desc
+     limit 1`,
+    [workspaceId, linkedinUrl],
+  );
+  const row = result.rows[0];
+  return row ? ({ company: mapCompany(row), matchedOn: "linkedin" } as const) : null;
+}
+
 async function matchLifecycle(db: Db, workspaceId: string, value: string | undefined) {
   if (!value || (LIFECYCLES as readonly string[]).includes(value)) return value;
   const found = await db.query<{ lifecycle: string }>(
@@ -376,6 +390,15 @@ async function applyUpdate(
       matchedOn: conflict.matchedOn,
     });
   }
+  if (write.linkedinUrl && write.linkedinUrl !== current.linkedinUrl) {
+    const taken = await findByLinkedin(db, actor.workspaceId, write.linkedinUrl);
+    if (taken && taken.company.id !== current.id) {
+      throw new CrmError("duplicate_company", `${taken.company.name} already has that LinkedIn page.`, 409, {
+        existingId: taken.company.id,
+        matchedOn: "linkedin",
+      });
+    }
+  }
   return writeChanges(db, actor, current, write, provenance, eventType);
 }
 
@@ -441,23 +464,42 @@ async function createInTransaction(
       matchedOn: match.matchedOn,
     });
   }
+  const linked = write.linkedinUrl ? await findByLinkedin(db, actor.workspaceId, write.linkedinUrl) : null;
+  if (linked) {
+    throw new CrmError("duplicate_company", `${linked.company.name} already has that LinkedIn page.`, 409, {
+      existingId: linked.company.id,
+      matchedOn: "linkedin",
+    });
+  }
   return insertCompany(db, actor, write, provenance);
 }
 
 async function upsertInTransaction(
   db: Db,
   actor: Actor,
-  write: CompanyWrite & { normalizedName?: string },
+  input: CompanyWrite & { normalizedName?: string },
   provenance?: Provenance,
 ): Promise<UpsertResult & { changed: boolean }> {
+  let write = input;
   await lockCompanies(db, actor.workspaceId);
-  const match = await findMatch(
-    db,
-    actor.workspaceId,
-    write.domain ?? null,
-    write.normalizedName ?? null,
-    true,
-  );
+  const byDomain = write.domain ? await findMatch(db, actor.workspaceId, write.domain, null) : null;
+  const byLinkedin = write.linkedinUrl ? await findByLinkedin(db, actor.workspaceId, write.linkedinUrl) : null;
+  const match =
+    byDomain ??
+    byLinkedin ??
+    (await findMatch(
+      db,
+      actor.workspaceId,
+      write.domain ?? null,
+      write.normalizedName ?? null,
+      true,
+    ));
+  if (byDomain && byLinkedin && byDomain.company.id !== byLinkedin.company.id) {
+    write = { ...write, linkedinUrl: undefined };
+  }
+  if (!byDomain && byLinkedin?.company.domain && write.domain && write.domain !== byLinkedin.company.domain) {
+    write = { ...write, domain: undefined, website: undefined };
+  }
   if (!match) {
     const toInsert =
       write.name && write.normalizedName
@@ -484,6 +526,10 @@ async function upsertInTransaction(
     matchedOn: match.matchedOn,
     changed: updated.changed,
   };
+}
+
+export async function createCompanyInDb(db: Db, actor: Actor, input: CompanyWrite, provenance?: Provenance) {
+  return createInTransaction(db, actor, normalizeCompanyWrite(input, "create"), provenance);
 }
 
 export async function upsertCompanyInDb(
@@ -588,7 +634,7 @@ export async function getCompany(actor: Actor, id: string) {
   });
 }
 
-function scheduleEnrichment(actor: Actor, companyId: string) {
+export function scheduleEnrichment(actor: Actor, companyId: string) {
   const run = () => {
     void import("@/lib/enrichment/companies")
       .then((module) => module.autoEnrichCompany(actor, companyId))
@@ -772,7 +818,7 @@ export async function unarchiveCompanyInDb(db: Db, actor: Actor, id: string, pro
     if (isPgError(error) && error.code === "23505") {
       throw new CrmError(
         "duplicate_company",
-        "Another company already uses this domain or name.",
+        "Another company already uses this domain, name or LinkedIn page.",
         409,
       );
     }
