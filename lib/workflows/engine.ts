@@ -1013,16 +1013,18 @@ export function workflowEmailBody(config: Record<string, unknown>, vars: Vars, a
   return `${body}\n\n${automatedNote(actor)}`;
 }
 
+export type NotificationCategory = "capture";
+
 export async function notify(
   actor: UserActor,
   userId: string,
-  input: { title: string; body?: string | null; href?: string | null; source?: string },
+  input: { title: string; body?: string | null; href?: string | null; source?: string; category?: NotificationCategory },
 ) {
   await withActor(actor, (db) =>
     db.query(
-      `insert into crm.notifications (workspace_id, user_id, title, body, href, source)
-       values ($1, $2, $3, $4, $5, $6)`,
-      [actor.workspaceId, userId, input.title.slice(0, 200), input.body ?? null, input.href ?? null, input.source ?? null],
+      `insert into crm.notifications (workspace_id, user_id, title, body, href, source, category)
+       values ($1, $2, $3, $4, $5, $6, $7)`,
+      [actor.workspaceId, userId, input.title.slice(0, 200), input.body ?? null, input.href ?? null, input.source ?? null, input.category ?? null],
     ),
   );
 }
@@ -1216,7 +1218,7 @@ export async function executeRun(
       await saveRun(actor, run.id, { state: { ...state, at, vars }, status: "waiting", waiting_for: "approval" });
       const title = `Approval needed: ${result.title}`.slice(0, 200);
       const href = `/workflows?approve=${run.id}`;
-      await notify(actor, actor.userId, { title, body: result.details.slice(0, 4000) || null, href, source: "workflow_approval" });
+      await notify(actor, actor.userId, { title, body: result.details.slice(0, 4000) || null, href, source: "workflow_approval", category: "capture" });
       await pushToUser(
         actor,
         { title, body: result.details.replace(/\s+/g, " ").trim().slice(0, 300) || "Open Orbit to approve or reject it.", url: href, tag: `approval-${run.id}` },

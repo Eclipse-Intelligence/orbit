@@ -22,6 +22,7 @@ import {
   replyDefaults,
   SPLIT_LABELS,
   type ComposeAccount,
+  type ComposeIntent,
   type DraftMode,
   type MailSplit,
   type PreparedReply,
@@ -474,7 +475,9 @@ export default function ThreadReader({
   onSplit,
   onUnsubscribe,
   onBlock,
+  compose = null,
 }: {
+  compose?: ComposeIntent | null;
   onUnsubscribe: (mode: UnsubscribeMode) => void;
   onBlock: (sender: string) => void;
   previous: ThreadSummary | null;
@@ -716,6 +719,17 @@ export default function ThreadReader({
       stop?.();
     };
   }, [swipe]);
+
+  const composeStarted = useRef(false);
+  useEffect(() => {
+    if (!compose || !detail || !target || composeStarted.current) return;
+    composeStarted.current = true;
+    const url = new URL(window.location.href);
+    url.searchParams.delete("compose");
+    window.history.replaceState(window.history.state, "", url);
+    const start = compose === "prepared" && prepared ? () => void takePrepared(prepared) : () => startReply("reply");
+    window.setTimeout(start, 0);
+  });
 
   useShortcut("mail-reply", () => startReply("reply"), Boolean(detail));
   useShortcut("mail-reply-all", () => startReply("reply_all"), Boolean(detail));

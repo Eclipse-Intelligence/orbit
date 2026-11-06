@@ -16,7 +16,7 @@ function rowHref(row: HTMLElement) {
   return row.dataset.rowHref ?? row.querySelector<HTMLAnchorElement>("a[href^='/']")?.getAttribute("href") ?? null;
 }
 
-function setActive(row: HTMLElement | null) {
+export function activateRow(row: HTMLElement | null) {
   const current = activeRow();
   if (current && current !== row) current.removeAttribute("data-kb-active");
   if (!row) return;
@@ -85,7 +85,7 @@ export default function KeyboardList({
     }
     const next =
       current < 0 ? (delta > 0 ? 0 : rows.length - 1) : Math.min(rows.length - 1, Math.max(0, current + delta));
-    setActive(rows[next]);
+    activateRow(rows[next]);
     if (extend) {
       const box = rows[next].querySelector<HTMLInputElement>('[data-row-key="x"]');
       if (box && !box.checked && box.getAttribute("aria-checked") !== "true") box.click();

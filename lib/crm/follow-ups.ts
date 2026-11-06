@@ -36,6 +36,7 @@ export type FollowUpSuggestion = {
   to: { name: string | null; address: string };
   subject: string;
   body: string;
+  callAt: string;
   createdAt: string;
 };
 
@@ -367,7 +368,7 @@ export async function followUpCalls(
         body: `${callDay(row.occurred_at)} with ${who}. Orbit drafted a follow-up.`,
         url: CAPTURE_HREF,
         tag: `follow-up:${id}`,
-        bell: { title, body: `${callDay(row.occurred_at)} with ${who}. Orbit drafted a follow-up.`, href: CAPTURE_HREF },
+        bell: { title, body: `${callDay(row.occurred_at)} with ${who}. Orbit drafted a follow-up.`, href: CAPTURE_HREF, category: "capture" },
       },
       { send: quiet ? async () => undefined : options.send },
     ).catch((error) => console.error("Follow-up alert failed", error instanceof Error ? error.message : error));
@@ -389,7 +390,9 @@ type SuggestionRow = {
   created_at: Date | string;
 };
 
-export async function listFollowUps(actor: UserActor, limit = 20): Promise<FollowUpSuggestion[]> {
+export const CALL_FOLLOW_UP_LIMIT = 50;
+
+export async function listFollowUps(actor: UserActor, limit = CALL_FOLLOW_UP_LIMIT): Promise<FollowUpSuggestion[]> {
   assertScope(actor.scopes, "crm:read");
   return withActor(actor, async (db) => {
     const result = await db.query<SuggestionRow>(
@@ -412,6 +415,7 @@ export async function listFollowUps(actor: UserActor, limit = 20): Promise<Follo
         to: { name: row.person_name, address: row.person_email },
         subject: row.subject ?? "Following up",
         body: row.body,
+        callAt: iso(row.call_at) ?? new Date(0).toISOString(),
         createdAt: iso(row.created_at) ?? new Date(0).toISOString(),
       };
     });

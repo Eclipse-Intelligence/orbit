@@ -4,22 +4,10 @@ import { revalidatePath } from "next/cache";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { after } from "next/server";
 import { getHomeActor, getUserActor } from "@/lib/auth/user";
 import { discardAttachments, prepareAttachment, type PreparedAttachment } from "@/lib/crm/email-attachments";
-import {
-  createContactFromMeeting,
-  hideAttendee,
-  relinkCalendar,
-  syncCalendar,
-} from "@/lib/crm/calendar";
+import { syncCalendar } from "@/lib/crm/calendar";
 import { syncCalls } from "@/lib/crm/calls";
-import {
-  createContactAndFile,
-  fileImport,
-  ignoreImport,
-  summariseImport,
-} from "@/lib/crm/conversations";
 import { closeFollowUp } from "@/lib/crm/follow-ups";
 import { enableGranolaWebhook, syncGranolaFor } from "@/lib/crm/granola";
 import {
@@ -32,7 +20,6 @@ import {
 } from "@/lib/crm/inbox";
 import { ensureTranscriptSubscription, syncTeamsTranscripts } from "@/lib/crm/teams-transcripts";
 import { actionError } from "@/lib/companies";
-import { createAndFileUnknown, fileUnknownTo, ignoreUnknownMail, moveUnknownMail } from "@/lib/mail/filing";
 import { revalidateRecordPages } from "@/lib/revalidate";
 
 async function requireUser() {
@@ -124,102 +111,6 @@ export async function syncTranscriptsAction() {
 
 type ConversationActionState = { error?: string; ok?: boolean };
 
-export async function fileConversationAction(
-  importId: string,
-  contactId: string,
-): Promise<ConversationActionState> {
-  const user = await getUserActor();
-  if (!user) return { error: "Sign in to file conversations." };
-  try {
-    await fileImport(user, importId, contactId, { summarise: false });
-  } catch (error) {
-    return actionError(error);
-  }
-  after(async () => {
-    try {
-      await summariseImport(user, importId);
-    } catch (error) {
-      console.error("Conversation summary failed", error);
-    }
-  });
-  refreshRecords();
-  return { ok: true };
-}
-
-type CreateAndFileState = {
-  error?: string;
-  ok?: boolean;
-  contactId?: string;
-  contactName?: string;
-};
-
-export async function createContactAndFileAction(
-  importId: string,
-  email: string,
-): Promise<CreateAndFileState> {
-  const user = await getUserActor();
-  if (!user) return { error: "Sign in to file conversations." };
-  let filed: Awaited<ReturnType<typeof createContactAndFile>>;
-  try {
-    filed = await createContactAndFile(user, importId, email, { summarise: false });
-  } catch (error) {
-    return actionError(error);
-  }
-  after(async () => {
-    try {
-      await summariseImport(user, importId);
-    } catch (error) {
-      console.error("Conversation summary failed", error);
-    }
-  });
-  try {
-    await relinkCalendar(user);
-  } catch (error) {
-    console.error("Could not relink calendar events", error);
-  }
-  refreshRecords();
-  return { ok: true, contactId: filed.contactId, contactName: filed.contactName };
-}
-
-export async function createContactFromMeetingAction(email: string): Promise<CreateAndFileState> {
-  const user = await getUserActor();
-  if (!user) return { error: "Sign in to add contacts." };
-  let created: Awaited<ReturnType<typeof createContactFromMeeting>>;
-  try {
-    created = await createContactFromMeeting(user, email);
-  } catch (error) {
-    return actionError(error);
-  }
-  refreshRecords();
-  return { ok: true, contactId: created.contactId, contactName: created.contactName };
-}
-
-export async function hideAttendeeAction(email: string): Promise<ConversationActionState> {
-  const user = await getUserActor();
-  if (!user) return { error: "Sign in to change this list." };
-  try {
-    await hideAttendee(user, email);
-  } catch (error) {
-    return actionError(error);
-  }
-  revalidatePath("/capture");
-  return { ok: true };
-}
-
-export async function ignoreConversationAction(
-  importId: string,
-): Promise<ConversationActionState> {
-  const user = await getUserActor();
-  if (!user) return { error: "Sign in to change conversations." };
-  try {
-    await ignoreImport(user, importId);
-  } catch (error) {
-    return actionError(error);
-  }
-  revalidatePath("/capture");
-  return { ok: true };
-}
-
 export async function closeFollowUpAction(id: string, state: "used" | "dismissed"): Promise<ConversationActionState> {
   const user = await getUserActor();
   if (!user) return { error: "Sign in to change follow-ups." };
@@ -299,50 +190,3 @@ export async function disconnectInboxAction() {
   redirect(SETTINGS_PATHS.integrations);
 }
 
-export async function createAndFileEmailAction(key: string): Promise<CreateAndFileState> {
-  const user = await getUserActor();
-  if (!user) return { error: "Sign in to file email." };
-  try {
-    const filed = await createAndFileUnknown(user, key);
-    refreshRecords();
-    return { ok: true, contactId: filed.contactId, contactName: filed.contactName ?? undefined };
-  } catch (error) {
-    return actionError(error);
-  }
-}
-
-export async function fileEmailToAction(key: string, contactId: string): Promise<CreateAndFileState> {
-  const user = await getUserActor();
-  if (!user) return { error: "Sign in to file email." };
-  try {
-    const filed = await fileUnknownTo(user, key, contactId);
-    refreshRecords();
-    return { ok: true, contactId: filed.contactId, contactName: filed.contactName ?? undefined };
-  } catch (error) {
-    return actionError(error);
-  }
-}
-
-export async function moveEmailAction(key: string, workspaceId: string): Promise<ConversationActionState> {
-  const user = await getUserActor();
-  if (!user) return { error: "Sign in to move email." };
-  try {
-    await moveUnknownMail(user, key, workspaceId);
-  } catch (error) {
-    return actionError(error);
-  }
-  revalidatePath("/capture");
-  return { ok: true };
-}
-
-export async function ignoreEmailAction(key: string): Promise<ConversationActionState> {
-  const user = await getUserActor();
-  if (!user) return { error: "Sign in to ignore email." };
-  try {
-    await ignoreUnknownMail(user, key);
-  } catch (error) {
-    return actionError(error);
-  }
-  revalidatePath("/capture");
-  return { ok: true };
-}

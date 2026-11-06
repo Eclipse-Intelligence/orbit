@@ -14,8 +14,7 @@ import { listBoards } from "@/lib/crm/boards";
 import { countCompanies } from "@/lib/crm/companies";
 import { syncGranolaOnVisit } from "@/lib/crm/granola";
 import { runWorkflowTick } from "@/lib/workflows/engine";
-import { countApprovals, listNotifications } from "@/lib/workflows/store";
-import { listAttention } from "@/lib/crm/relationships";
+import { listNotifications } from "@/lib/workflows/store";
 import { countOpenTasks } from "@/lib/crm/tasks";
 import { captureStatuses } from "@/lib/crm/capture";
 import { unreadBrief } from "@/lib/learning/nightly";
@@ -99,13 +98,11 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
       }
     });
   }
-  const [companyCount, openActionCount, attention, boards, notifications, approvals, mailUnread, captures, brief] = await Promise.all([
+  const [companyCount, openActionCount, boards, notifications, mailUnread, captures, brief] = await Promise.all([
     countCompanies(user),
     countOpenTasks(user, { mine: true }),
-    listAttention(user),
     listBoards(user),
     listNotifications(user, 10),
-    countApprovals(user),
     mailUnreadCount(user).catch(() => 0),
     captureStatuses(user).catch(() => null),
     unreadBrief(user).catch(() => null),
@@ -121,7 +118,6 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
           <KeepPageInPlace />
           <Sidebar
             boards={boards}
-            approvals={approvals}
             companyCount={companyCount}
             openActionCount={openActionCount}
             mailUnread={mailUnread}
@@ -142,8 +138,6 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
               workspaceName: user.workspaceName,
               workspaceId: user.workspaceId,
             }}
-            overdue={attention.overdue}
-            today={attention.today}
             notifications={notifications}
             brief={brief}
           >

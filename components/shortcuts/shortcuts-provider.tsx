@@ -120,8 +120,7 @@ function rowKeyTarget(key: string) {
   if (!row) return null;
   const focused = document.activeElement;
   if (key === "space" && focused && focused !== row && focused !== document.body) return null;
-  const element = row.querySelector<HTMLElement>(`[data-row-key="${key}"]`);
-  return element && usable(element) ? element : null;
+  return [...row.querySelectorAll<HTMLElement>(`[data-row-key="${key}"]`)].find(usable) ?? null;
 }
 
 function submitFrom(element: Element | null) {

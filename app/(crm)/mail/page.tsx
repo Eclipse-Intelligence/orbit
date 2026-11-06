@@ -28,6 +28,7 @@ export default async function MailPage({
   const nav = await mailNav(user);
   const account = nav.accounts.some((item) => item.id === text(resolved.account)) ? text(resolved.account) : null;
   const threadKey = text(resolved.thread);
+  const compose = text(resolved.compose);
   const scheduledView = text(resolved.view) === "scheduled" && !query;
   const [page, thread, accounts] = await Promise.all([
     scheduledView ? Promise.resolve({ threads: [], next: null }) : listThreads(user, { view, sourceId: account, query }),
@@ -48,6 +49,7 @@ export default async function MailPage({
       initialQuery={{ view: scheduledView ? "scheduled" : mailViewParam(view), account, query }}
       initialPage={page}
       initialThread={thread}
+      initialCompose={thread && (compose === "reply" || compose === "prepared") ? compose : null}
       initialNow={requestTime()}
       accounts={accounts}
     />

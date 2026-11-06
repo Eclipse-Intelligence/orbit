@@ -136,7 +136,7 @@ describe("alerts", () => {
     assert.equal(second.sent.length, 0);
   });
 
-  it("pushes and rings the bell when nobody has replied", async () => {
+  it("pushes when nobody has replied and leaves the bell to Capture", async () => {
     await syncMail(owner, { budgetMs: 30_000, fetchImpl: quietOutlook });
     const admin = getAdminPool();
     const source = (await admin.query<{ id: string }>("select id from crm.mail_sources where user_id = $1", [owner.userId])).rows[0].id;
@@ -149,6 +149,8 @@ describe("alerts", () => {
     const report = await processDueMail(owner, { send, origin: null });
     assert.equal(report.followUps, 1);
     assert.deepEqual(sent.map((item) => item.title), ["No reply yet: Pricing"]);
-    assert.ok((await listNotifications(owner, 5)).some((note) => note.title === "No reply yet: Pricing"));
+    const stored = await admin.query<{ title: string }>("select title from crm.notifications where user_id = $1", [owner.userId]);
+    assert.ok(stored.rows.some((note) => note.title === "No reply yet: Pricing"));
+    assert.ok(!(await listNotifications(owner, 5)).some((note) => note.title === "No reply yet: Pricing"));
   });
 });

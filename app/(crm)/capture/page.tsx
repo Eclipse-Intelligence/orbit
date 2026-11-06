@@ -1,14 +1,16 @@
 import { redirect } from "next/navigation";
 import { after } from "next/server";
-import CaptureScreen from "@/components/crm/inbox-screen";
+import CaptureScreen from "@/components/capture/capture-screen";
 import { getUserActor } from "@/lib/auth/user";
+import { listWaitingOnOthers } from "@/lib/crm/action-needed";
 import { getCalendarStatus } from "@/lib/crm/calendar";
 import { getCallSync } from "@/lib/crm/calls";
-import { captureStatus, connectionAlert, listToFile, markCaptureSeen, newestArrival, unknownMailFor } from "@/lib/crm/capture";
+import { captureContext, captureStatus, connectionAlert, listToFile, markCaptureSeen, waitingHere } from "@/lib/crm/capture";
 import { listFollowUps } from "@/lib/crm/follow-ups";
 import { getGranolaStatus } from "@/lib/crm/granola";
 import { getMailbox, shouldSyncMailbox, syncMailbox } from "@/lib/crm/inbox";
 import { getTeamsTranscriptStatus } from "@/lib/crm/teams-transcripts";
+import type { CaptureSection } from "@/lib/crm/capture-format";
 import { listUnknownMail } from "@/lib/mail/filing";
 import { microsoftConfigured } from "@/lib/microsoft/oauth";
 
@@ -18,10 +20,11 @@ function requestTime() {
   return new Date();
 }
 
-function later(left: string | null, right: string | null) {
-  if (!left) return right;
-  if (!right) return left;
-  return left > right ? left : right;
+function logged<T>(label: string, fallback: T) {
+  return (error: unknown) => {
+    console.error(label, error instanceof Error ? error.message : error);
+    return fallback;
+  };
 }
 
 export default async function CapturePage() {
@@ -35,19 +38,27 @@ export default async function CapturePage() {
     mailbox = await getMailbox(user);
   }
   const live = mailbox?.status === "connected";
-  const known = await unknownMailFor(user, openedAt.getTime());
-  const [items, status, calls, granola, transcripts, calendar, followUps, unknown] = await Promise.all([
-    listToFile(user, openedAt.getTime()),
-    captureStatus(user, openedAt.getTime(), known.emails),
+  const context = await captureContext(user, openedAt.getTime());
+  const failed = new Set<CaptureSection>(context.failed);
+  const [items, status, calls, granola, transcripts, calendar, followUps, unknown, others] = await Promise.all([
+    listToFile(user, openedAt.getTime()).catch((error) => {
+      failed.add("toFile");
+      return logged("Reading what's waiting to file failed", { unfiled: [], people: [] })(error);
+    }),
+    captureStatus(user, openedAt.getTime(), context).catch(logged("Counting Capture failed", null)),
     mailbox ? getCallSync(user) : Promise.resolve(null),
     getGranolaStatus(user),
     live ? getTeamsTranscriptStatus(user) : Promise.resolve(null),
     live ? getCalendarStatus(user) : Promise.resolve(null),
-    listFollowUps(user).catch(() => []),
-    listUnknownMail(user, openedAt.getTime(), known).catch((error) => {
-      console.error("Reading email from new people failed", error instanceof Error ? error.message : error);
-      return { emails: [], total: 0, workspaces: [{ id: user.workspaceId, name: user.workspaceName }] };
+    listFollowUps(user).catch((error) => {
+      failed.add("followUps");
+      return logged("Reading call follow-ups failed", [])(error);
     }),
+    listUnknownMail(user, openedAt.getTime(), { actors: context.actors, emails: context.unknown }).catch((error) => {
+      failed.add("toFile");
+      return logged("Reading email from new people failed", { emails: [], total: 0, workspaces: [{ id: user.workspaceId, name: user.workspaceName }] })(error);
+    }),
+    listWaitingOnOthers(user, openedAt).catch(logged("Reading approvals waiting on others failed", [])),
   ]);
   after(async () => {
     try {
@@ -56,6 +67,7 @@ export default async function CapturePage() {
       console.error("Could not mark Capture as seen", error);
     }
   });
+  const here = waitingHere(context, user.workspaceId);
 
   return (
     <CaptureScreen
@@ -66,15 +78,24 @@ export default async function CapturePage() {
         role: user.role,
         workspaceName: user.workspaceName,
       }}
-      followUps={followUps}
-      unfiled={items.unfiled}
-      people={items.people}
-      emails={unknown.emails}
+      data={{
+        approvals: here.approvals,
+        others,
+        nudges: here.nudges,
+        reminders: here.reminders,
+        calls: followUps,
+        replies: here.replies,
+        tasks: here.tasks,
+        emails: unknown.emails,
+        unfiled: items.unfiled,
+        people: items.people,
+      }}
+      toFileTotal={status?.sections.toFile ?? 0}
+      failed={[...failed]}
       workspaces={unknown.workspaces}
       workspaceId={user.workspaceId}
       now={openedAt.getTime()}
-      total={status.waiting - status.followUps}
-      newestAt={later(later(newestArrival(items, openedAt.getTime()), status.newestAt), unknown.emails[0]?.at ?? null)}
+      newestAt={status?.newestAt ?? null}
       alert={connectionAlert({ mailbox, calendar, calls, granola, transcripts })}
     />
   );

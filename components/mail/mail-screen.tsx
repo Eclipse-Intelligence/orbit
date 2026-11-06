@@ -47,7 +47,7 @@ import UnsubscribeDialog, { unsubscribeToast, type UnsubscribeDone, type Unsubsc
 import { useComposer } from "@/components/mail/compose-dock";
 import { useShortcut } from "@/components/shortcuts/shortcuts-provider";
 import { laterOptions } from "@/lib/mail/later";
-import { MAIL_SPLITS, SPLIT_LABELS, type MailSplit, type ComposeAccount, type MailDraft, type MailNav, type ThreadDetail, type ThreadSummary } from "@/lib/mail/view";
+import { MAIL_SPLITS, SPLIT_LABELS, type MailSplit, type ComposeAccount, type ComposeIntent, type MailDraft, type MailNav, type ThreadDetail, type ThreadSummary } from "@/lib/mail/view";
 import { cn } from "@/lib/utils";
 import { useCompaniesStore } from "@/stores/companies-store";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
@@ -154,6 +154,7 @@ export default function MailScreen({
   initialQuery,
   initialPage,
   initialThread,
+  initialCompose = null,
   initialNow,
   accounts,
 }: {
@@ -163,6 +164,7 @@ export default function MailScreen({
   initialQuery: ListQuery;
   initialPage: ThreadPage;
   initialThread: ThreadDetail | null;
+  initialCompose?: ComposeIntent | null;
   initialNow: number;
 }) {
   const { openComposer, sent: sentCount, pickLater, showToast, undoLatest } = useComposer();
@@ -1165,6 +1167,7 @@ export default function MailScreen({
             own={own}
             view={viewParam}
             accounts={accounts}
+            compose={initialCompose && cursor === initialThread?.key ? initialCompose : null}
             onAction={(action) => {
               if (!cursor) return;
               if (action === "snooze") snooze([cursor]);
