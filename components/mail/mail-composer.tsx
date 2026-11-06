@@ -80,6 +80,7 @@ export default function MailComposer({
   onDelivered,
   onUndone,
   onScheduled,
+  onDiscard,
 }: {
   start: ComposerStart;
   accounts: ComposeAccount[];
@@ -90,6 +91,7 @@ export default function MailComposer({
   onDelivered?: () => void;
   onUndone?: () => void;
   onScheduled?: () => void;
+  onDiscard?: () => void;
 }) {
   const { queueSend, scheduleSend, pickLater } = useComposer();
   const [aiOpen, setAiOpen] = useState(false);
@@ -338,6 +340,7 @@ export default function MailComposer({
     await chain.current.catch(() => null);
     const current = draftId.current;
     draftId.current = null;
+    onDiscard?.();
     onClose();
     if (current) await fetch(`/api/mail/drafts?id=${encodeURIComponent(current)}`, { method: "DELETE" }).catch(() => null);
   }
