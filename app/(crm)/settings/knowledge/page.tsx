@@ -18,7 +18,7 @@ export default async function KnowledgeSettingsPage() {
   return (
     <SettingsPage title="Knowledge" description="Documents and links the assistant searches, and the client proof it may quote. Add company material on each company page.">
       <KnowledgePanel target={{ eclipse: true }} initial={items} variant="settings" ownerName={user.workspaceName} />
-      <ProofList entries={proof} />
+      <ProofList entries={proof} workspaceName={user.workspaceName} />
     </SettingsPage>
   );
 }

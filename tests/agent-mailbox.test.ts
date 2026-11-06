@@ -281,6 +281,7 @@ function answer(text: string, calls: { id: string; name: string; arguments: Reco
 }
 
 async function setUp(owner: UserActor, services: Services, address: string) {
+  await getAdminPool().query("update crm.profiles set other_emails = $2 where id = $1", [owner.userId, [MARK, "mark@ridgeon.me"]]);
   await setUpAgentMailbox(owner, { address }, services.fetchImpl);
 }
 
@@ -506,6 +507,7 @@ describe("setting up the agent mailbox", () => {
     assert.deepEqual(view.senders.map((sender) => [sender.address, sender.userId]), [
       ["mark@geteclipse.co", owner.userId],
       ["mark@ridgeon.me", owner.userId],
+      ["setup-owner@orbit.test", owner.userId],
     ]);
     await assert.rejects(setUpAgentMailbox(owner, { address: "other@ai-mail.geteclipse.co" }, services.fetchImpl), /can't change/);
   });

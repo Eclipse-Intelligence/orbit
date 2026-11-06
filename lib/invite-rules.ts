@@ -2,7 +2,6 @@ import { dateKey, shiftDateKey, weekday } from "@/lib/calendar-view";
 import { canonicalEmail } from "@/lib/crm/normalize";
 import { appTimeZone, zonedParts } from "@/lib/time";
 
-const INVITE_TITLE_PREFIX = "Eclipse";
 export const INVITE_DURATIONS = [15, 30, 45, 60, 90] as const;
 export const INVITE_DEFAULT_DURATION = 30;
 export const INVITE_GUESTS_MAX = 50;
@@ -41,9 +40,11 @@ export function guestEmail(value: string) {
   return canonicalEmail(value);
 }
 
-export function inviteTitle(name: string | null | undefined) {
+export function inviteTitle(name: string | null | undefined, workspaceName: string) {
   const trimmed = name?.trim();
-  return trimmed ? `${INVITE_TITLE_PREFIX} × ${trimmed}` : "";
+  const prefix = workspaceName.trim();
+  if (!trimmed) return "";
+  return prefix ? `${prefix} × ${trimmed}` : trimmed;
 }
 
 function pad(value: number) {

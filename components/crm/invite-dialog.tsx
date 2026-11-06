@@ -113,7 +113,7 @@ function InviteForm({
   const [transactionId, setTransactionId] = useState(() => crypto.randomUUID());
   const trimmed = query.trim();
   const firstContact = guests.find((guest) => guest.contactId);
-  const title = titleDraft ?? inviteTitle(firstContact?.name ?? null);
+  const title = titleDraft ?? inviteTitle(firstContact?.name ?? null, setup.workspaceName ?? "");
   const own = new Set(setup.ownEmails);
   const blocked = !setup.connected || !setup.canWriteCalendar;
   const field = (name: string) => `${ids}-${name}`;

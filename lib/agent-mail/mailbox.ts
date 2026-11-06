@@ -6,7 +6,8 @@ import { CrmError, isPgError } from "@/lib/crm/errors";
 import { iso, isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
-import { DEFAULT_ADDRESS, DEFAULT_SENDERS, bareAddress } from "@/lib/agent-mail/senders";
+import { DEFAULT_ADDRESS, bareAddress } from "@/lib/agent-mail/senders";
+import { myAddresses } from "@/lib/crm/calendar";
 import { MachineMailError, deleteWebhook, ensureInbox, ensureWebhook, machineMailConfigured } from "@/lib/machinemail";
 import { siteOrigin } from "@/lib/site-url";
 
@@ -31,7 +32,6 @@ export type AgentMailboxView = {
   held: HeldAgentMail[];
   senders: AgentSender[];
   members: AgentMailMember[];
-  defaults: string[];
 };
 
 export type AgentMailboxRow = {
@@ -162,7 +162,6 @@ export async function agentMailboxView(actor: UserActor): Promise<AgentMailboxVi
     held,
     senders,
     members,
-    defaults: DEFAULT_SENDERS,
   };
 }
 
@@ -211,14 +210,32 @@ export async function setUpAgentMailbox(actor: UserActor, input: { address?: unk
     upstream(error);
   }
   if (existing?.webhook_id && existing.webhook_id !== webhook.id) await deleteWebhook(existing.webhook_id, fetchImpl).catch(() => undefined);
-  await saveMailbox(actor, address, webhook, url).catch((error) => {
+  const own = existing?.set_up_at ? [] : await ownSenderAddresses(actor, address);
+  await saveMailbox(actor, address, webhook, url, own).catch((error) => {
     if (isPgError(error) && error.code === "23505") throw new CrmError("conflict", addressTakenMessage(address), 409, { field: "address" });
     throw error;
   });
   return { message: existing?.set_up_at ? "Checked. The agent mailbox is set up." : "The agent mailbox is set up." };
 }
 
-async function saveMailbox(actor: UserActor, address: string, webhook: { id: string; secret: string }, url: string) {
+export async function ownSenderAddresses(actor: UserActor, mailboxAddress: string) {
+  const found = await withActor(actor, async (db) => {
+    const own = await myAddresses(db, actor);
+    const more = await db.query<{ email: string }>(
+      "select email from crm.send_identities where user_id = $1 union select email from crm.mail_sources where user_id = $1",
+      [actor.userId],
+    );
+    return [...own, ...more.rows.map((row) => row.email)];
+  });
+  const addresses = [...new Set(found.map((value) => bareAddress(value)).filter((value): value is string => Boolean(value) && value !== mailboxAddress))];
+  const allowed: string[] = [];
+  for (const candidate of addresses.slice(0, SENDERS_MAX)) {
+    if (!(await addressTaken(candidate, actor.workspaceId))) allowed.push(candidate);
+  }
+  return allowed;
+}
+
+async function saveMailbox(actor: UserActor, address: string, webhook: { id: string; secret: string }, url: string, own: string[]) {
   await withActor(actor, async (db) => {
     await db.query(
       `insert into crm.agent_mailboxes (workspace_id, address, display_name) values ($1, $2, $3)
@@ -234,7 +251,7 @@ async function saveMailbox(actor: UserActor, address: string, webhook: { id: str
     const mailboxId = updated.rows[0].id;
     const count = await db.query<{ count: number }>("select count(*)::int as count from crm.agent_mailbox_senders where workspace_id = $1", [actor.workspaceId]);
     if ((count.rows[0]?.count ?? 0) === 0) {
-      for (const sender of DEFAULT_SENDERS) {
+      for (const sender of own) {
         await db.query(
           `insert into crm.agent_mailbox_senders (workspace_id, mailbox_id, address, user_id, created_by)
            values ($1, $2, $3, $4, $4) on conflict (workspace_id, address) do nothing`,

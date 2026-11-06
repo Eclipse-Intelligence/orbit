@@ -27,7 +27,7 @@ import { describeAction, recordNames } from "@/lib/assistant/tools";
 import { saveOtherEmails } from "@/lib/crm/profile";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
-import { defaultInviteSlot, snapTime } from "@/lib/invite-rules";
+import { defaultInviteSlot, inviteTitle, snapTime } from "@/lib/invite-rules";
 import { graphDateTimes, inviteBodyHtml, RESPOND_ORGANISER, type GraphEvent } from "@/lib/microsoft/calendar";
 import { grantsCalendarWrite, MICROSOFT_SCOPES } from "@/lib/microsoft/oauth";
 import { createUser, resetDatabase } from "./helpers";
@@ -559,6 +559,10 @@ describe("sending invites", () => {
     assert.equal(setup.meetingLink, "https://whereby.com/eclipse");
     assert.ok(setup.ownEmails.includes("me@alias.test"));
     assert.ok(setup.ownEmails.includes(MAILBOX));
+    assert.equal(setup.workspaceName, owner.workspaceName);
+    assert.equal(inviteTitle("Jane Doe", "Mark Ridgeon"), "Mark Ridgeon × Jane Doe");
+    assert.equal(inviteTitle("Jane Doe", " "), "Jane Doe");
+    assert.equal(inviteTitle(null, "Eclipse"), "");
     const calls: Call[] = [];
     await rejects(() => createInvite(owner, baseInput(), { fetchImpl: graph(calls), now: NOW }), {
       code: "scope_missing",

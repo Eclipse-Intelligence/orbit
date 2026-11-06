@@ -155,7 +155,7 @@ function targetColumns(target: KnowledgeTarget) {
 export function targetFrom(input: { companyId?: unknown; eclipse?: unknown }): KnowledgeTarget {
   if (input.eclipse === true) return { eclipse: true };
   if (typeof input.companyId === "string" && input.companyId) return { companyId: input.companyId };
-  throw new CrmError("invalid_input", "Choose a company or Eclipse.", 400, { field: "companyId" });
+  throw new CrmError("invalid_input", "Choose a company or this workspace.", 400, { field: "companyId" });
 }
 
 export async function readItem(db: Db, workspaceId: string, id: string) {

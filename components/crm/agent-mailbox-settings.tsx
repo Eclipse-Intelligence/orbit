@@ -266,7 +266,7 @@ export default function AgentMailboxSettings({ view }: { view: AgentMailboxView 
           </div>
         </form>
       ) : (
-        <p className="caption-style text-subtle">{`After setup, mail from ${view.defaults.join(" and ")} runs as you. Change it afterwards.`}</p>
+        <p className="caption-style text-subtle">After setup, mail from your own addresses runs as you. Change it afterwards.</p>
       )}
     </SettingsCard>
   );

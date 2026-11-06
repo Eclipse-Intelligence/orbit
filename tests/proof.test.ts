@@ -4,6 +4,7 @@ import { runTool } from "@/lib/assistant/tools";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { CrmError } from "@/lib/crm/errors";
 import { archiveProof, createProof, listProof, updateProof } from "@/lib/crm/proof";
+import { productSuggestions } from "@/lib/crm/proof-rules";
 import type { UserActor } from "@/lib/crm/types";
 import { createUser, queryAsUser, resetDatabase } from "./helpers";
 
@@ -12,7 +13,7 @@ const WEB = { operation: "proof_test", source: "web" };
 const NORTHWIND = {
   client: "Northwind",
   description: "A 12-person B2B SEO agency",
-  product: "eclipse",
+  product: "Eclipse",
   usedFor: "client content",
   result: "They went from two articles a month per client to eight.",
   measured: "March to June 2026, articles published",
@@ -79,6 +80,20 @@ describe("proof list", () => {
     await assert.rejects(createProof(owner, { ...NORTHWIND, permission: "described", description: "" }, WEB), code("invalid_input", /doesn't identify them/));
     await assert.rejects(createProof(owner, { ...NORTHWIND, reviewOn: "next week" }, WEB), code("invalid_input", /review date/));
     await assert.rejects(createProof(owner, { ...NORTHWIND, reviewOn: "2026-02-31" }, WEB), code("invalid_input", /review date/));
+  });
+
+  it("takes any product name up to 80 characters, or none, and suggests the workspace's own products", async () => {
+    const consulting = await createProof(owner, { ...NORTHWIND, client: "Halden", product: "  Positioning sprint " }, WEB);
+    assert.equal(consulting.product, "Positioning sprint");
+    const none = await createProof(owner, { ...NORTHWIND, client: "Quiet", product: undefined }, WEB);
+    assert.equal(none.product, "");
+    await assert.rejects(createProof(owner, { ...NORTHWIND, product: "x".repeat(81) }, WEB), code("invalid_input", /The product must be 80 characters or fewer/));
+    await assert.rejects(queryAsUser(owner.userId, "update crm.proof_entries set product = $1 where id = $2", ["y".repeat(81), consulting.id]), /proof_entries_product_length/);
+    assert.deepEqual(productSuggestions([{ product: "Eclipse" }, { product: "Cntent" }, { product: "eclipse" }, { product: "" }], "Eclipse"), ["Eclipse", "Cntent"]);
+    assert.deepEqual(productSuggestions([{ product: "Positioning sprint" }], "Mark Ridgeon"), ["Positioning sprint", "Mark Ridgeon"]);
+    assert.deepEqual(productSuggestions([], "Mark Ridgeon"), ["Mark Ridgeon"]);
+    await archiveProof(owner, consulting.id, WEB);
+    await archiveProof(owner, none.id, WEB);
   });
 
   it("keeps proof inside the workspace at the database", async () => {

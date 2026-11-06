@@ -55,6 +55,9 @@ export type Memory = {
   pinned: boolean;
   companyId: string | null;
   origin: "learning" | "assistant" | "manual";
+  workspaceId: string;
+  workspaceName: string;
+  allWorkspaces: boolean | null;
   observedAt: string;
   updatedAt: string;
 };
@@ -70,11 +73,19 @@ type Row = {
   pinned: boolean;
   company_id: string | null;
   origin: Memory["origin"];
+  workspace_id: string;
+  workspace_name: string | null;
+  all_workspaces: boolean | null;
   observed_at: Date;
   updated_at: Date;
 };
 
-const COLUMNS = "id, scope, kind, title, body, sources, confidence, pinned, company_id, origin, observed_at, updated_at";
+const COLUMNS =
+  "id, scope, kind, title, body, sources, confidence, pinned, company_id, origin, workspace_id, all_workspaces, (select w.name from crm.workspaces w where w.id = crm.memories.workspace_id) as workspace_name, observed_at, updated_at";
+
+export function visibleMemorySql(workspaceParam: string, userParam: string) {
+  return `(workspace_id = ${workspaceParam} or scope = 'personal' and user_id = ${userParam} and all_workspaces is true)`;
+}
 
 function mapMemory(row: Row): Memory {
   return {
@@ -88,6 +99,9 @@ function mapMemory(row: Row): Memory {
     pinned: row.pinned,
     companyId: row.company_id,
     origin: row.origin,
+    workspaceId: row.workspace_id,
+    workspaceName: row.workspace_name ?? "",
+    allWorkspaces: row.scope === "personal" ? row.all_workspaces : null,
     observedAt: row.observed_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };
@@ -120,6 +134,7 @@ export type MemoryDraft = {
   confidence?: Confidence;
   companyId?: string | null;
   pinned?: boolean;
+  allWorkspaces?: boolean | null;
 };
 
 function cleanDraft(draft: MemoryDraft) {
@@ -128,20 +143,33 @@ function cleanDraft(draft: MemoryDraft) {
   if (!title || !body) throw new CrmError("invalid_input", "A memory needs a title and some text.", 400, { field: !title ? "title" : "body" });
   const kind = clip(draft.kind, MEMORY_LIMITS.kind).toLowerCase().replace(/[^a-z_ ]/g, "").replace(/\s+/g, "_") || "note";
   const confidence: Confidence = draft.confidence === "low" || draft.confidence === "high" ? draft.confidence : "medium";
-  return { title, body, kind, confidence, sources: cleanSources(draft.sources), companyId: draft.companyId ?? null, pinned: draft.pinned === true };
+  return { title, body, kind, confidence, sources: cleanSources(draft.sources), companyId: draft.companyId ?? null, pinned: draft.pinned === true, allWorkspaces: draft.allWorkspaces === true };
 }
 
 export async function insertMemory(db: Db, actor: UserActor, scope: MemoryScope, draft: MemoryDraft, origin: Memory["origin"]) {
   const clean = cleanDraft(draft);
   const result = await db.query<Row>(
-    `insert into crm.memories (workspace_id, user_id, scope, kind, title, body, sources, confidence, pinned, company_id, origin)
-     values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11) returning ${COLUMNS}`,
-    [actor.workspaceId, scope === "personal" ? actor.userId : null, scope, clean.kind, clean.title, clean.body, JSON.stringify(clean.sources), clean.confidence, clean.pinned, clean.companyId, origin],
+    `insert into crm.memories (workspace_id, user_id, scope, kind, title, body, sources, confidence, pinned, company_id, origin, all_workspaces)
+     values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12) returning ${COLUMNS}`,
+    [
+      actor.workspaceId,
+      scope === "personal" ? actor.userId : null,
+      scope,
+      clean.kind,
+      clean.title,
+      clean.body,
+      JSON.stringify(clean.sources),
+      clean.confidence,
+      clean.pinned,
+      clean.companyId,
+      origin,
+      scope === "personal" ? clean.allWorkspaces : null,
+    ],
   );
   return mapMemory(result.rows[0]);
 }
 
-export async function reviseMemory(db: Db, id: string, patch: { title?: string; body?: string; confidence?: Confidence; sources?: unknown; pinned?: boolean }) {
+export async function reviseMemory(db: Db, id: string, patch: { title?: string; body?: string; confidence?: Confidence; sources?: unknown; pinned?: boolean; allWorkspaces?: boolean }) {
   const current = await db.query<Row>(`select ${COLUMNS} from crm.memories where id = $1 and archived_at is null`, [id]);
   if (!current.rows[0]) throw new CrmError("not_found", "That memory doesn't exist or was forgotten.", 404);
   const row = mapMemory(current.rows[0]);
@@ -149,10 +177,11 @@ export async function reviseMemory(db: Db, id: string, patch: { title?: string; 
   const body = patch.body === undefined ? row.body : patch.body.trim().slice(0, MEMORY_LIMITS.body);
   if (!title || !body) throw new CrmError("invalid_input", "A memory needs a title and some text.", 400);
   const sources = patch.sources === undefined ? row.sources : [...cleanSources(patch.sources), ...row.sources].slice(0, MEMORY_LIMITS.sources);
+  const allWorkspaces = row.scope === "personal" ? (patch.allWorkspaces ?? row.allWorkspaces) : null;
   const result = await db.query<Row>(
-    `update crm.memories set title = $2, body = $3, confidence = $4, sources = $5::jsonb, pinned = $6, observed_at = case when $7 then now() else observed_at end
+    `update crm.memories set title = $2, body = $3, confidence = $4, sources = $5::jsonb, pinned = $6, observed_at = case when $7 then now() else observed_at end, all_workspaces = $8
      where id = $1 returning ${COLUMNS}`,
-    [id, title, body, patch.confidence ?? row.confidence, JSON.stringify(sources), patch.pinned ?? row.pinned, patch.body !== undefined || patch.title !== undefined],
+    [id, title, body, patch.confidence ?? row.confidence, JSON.stringify(sources), patch.pinned ?? row.pinned, patch.body !== undefined || patch.title !== undefined, allWorkspaces],
   );
   return mapMemory(result.rows[0]);
 }
@@ -166,7 +195,7 @@ export async function listMemories(
   return withActor(actor, async (db) => {
     const result = await db.query<Row>(
       `select ${COLUMNS} from crm.memories
-       where archived_at is null and (workspace_id = $1 or scope = 'personal' and user_id = $6)
+       where archived_at is null and ${visibleMemorySql("$1", "$6")}
          and ($2::text is null or scope = $2)
          and ($3::text is null or search @@ websearch_to_tsquery('english', $3) or title ilike '%' || $3 || '%')
          and ($5::timestamptz is null or updated_at >= $5)
@@ -180,7 +209,7 @@ export async function listMemories(
 
 export async function rememberNote(
   actor: UserActor,
-  input: { title?: unknown; body?: unknown; kind?: unknown; shared?: unknown; sources?: unknown },
+  input: { title?: unknown; body?: unknown; kind?: unknown; shared?: unknown; sources?: unknown; allWorkspaces?: unknown },
   origin: "assistant" | "manual" = "assistant",
 ) {
   const body = typeof input.body === "string" ? input.body.trim() : "";
@@ -188,16 +217,23 @@ export async function rememberNote(
   const words = body.split(/\s+/);
   const title = typeof input.title === "string" && input.title.trim() ? input.title : words.length > 10 ? `${words.slice(0, 10).join(" ")}…` : body;
   return withActor(actor, (db) =>
-    insertMemory(db, actor, input.shared === true ? "business" : "personal", { kind: typeof input.kind === "string" ? input.kind : "note", title, body, sources: input.sources, confidence: "high" }, origin),
+    insertMemory(
+      db,
+      actor,
+      input.shared === true ? "business" : "personal",
+      { kind: typeof input.kind === "string" ? input.kind : "note", title, body, sources: input.sources, confidence: "high", allWorkspaces: input.allWorkspaces === true },
+      origin,
+    ),
   );
 }
 
-export async function updateMemory(actor: UserActor, id: string, patch: { title?: unknown; body?: unknown; pinned?: unknown }) {
+export async function updateMemory(actor: UserActor, id: string, patch: { title?: unknown; body?: unknown; pinned?: unknown; allWorkspaces?: unknown }) {
   return withActor(actor, (db) =>
     reviseMemory(db, id, {
       title: typeof patch.title === "string" ? patch.title : undefined,
       body: typeof patch.body === "string" ? patch.body : undefined,
       pinned: typeof patch.pinned === "boolean" ? patch.pinned : undefined,
+      allWorkspaces: typeof patch.allWorkspaces === "boolean" ? patch.allWorkspaces : undefined,
     }),
   );
 }

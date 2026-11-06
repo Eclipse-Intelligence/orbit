@@ -293,12 +293,20 @@ function withTask(task: Task) {
   };
 }
 
+function knowledgeScope(scope: string) {
+  return scope === "eclipse" ? "business" : scope;
+}
+
+function ownKnowledge(args: Args, name: "business" | "withBusiness") {
+  return args[name] === true || args[name === "business" ? "eclipse" : "withEclipse"] === true;
+}
+
 function withKnowledge(item: KnowledgeItem) {
   return {
     id: item.id,
     title: item.title,
     kind: item.kind,
-    scope: item.scope,
+    scope: knowledgeScope(item.scope),
     companyId: item.companyId,
     companyName: item.companyName,
     status: item.status,
@@ -2062,14 +2070,14 @@ const TOOL_LIST: AssistantTool[] = [
     name: "search_knowledge",
     label: "Searching Knowledge",
     description:
-      "Search the documents, decks, PDFs, spreadsheets, pages and transcripts in Orbit's Knowledge by meaning and by keyword, and the user's Docs (their own notes and daily notes, plus docs shared with the workspace). Each Knowledge item is tagged to a company or to the workspace's own business. Returns the best matching Knowledge passages in results, with their item id, title, company and offset, and matching docs in docs, each marked type doc with its docId. Pass companyId to search one company's Knowledge (add withEclipse to include the business's own material), scope eclipse for the business's own material alone (no docs), or neither to search everything. Read a doc with read_knowledge and docId.",
+      "Search the documents, decks, PDFs, spreadsheets, pages and transcripts in Orbit's Knowledge by meaning and by keyword, and the user's Docs (their own notes and daily notes, plus docs shared with the workspace). Each Knowledge item is tagged to a company or to the workspace's own business. Returns the best matching Knowledge passages in results, with their item id, title, company and offset, and matching docs in docs, each marked type doc with its docId. Pass companyId to search one company's Knowledge (add withBusiness to include the workspace's own material), scope business for the workspace's own material alone (no docs), or neither to search everything. Read a doc with read_knowledge and docId.",
     parameters: {
       type: "object",
       properties: {
         query: { type: "string", description: "What to look for, in plain words." },
         companyId: idParam("Only this company's knowledge."),
-        scope: { type: "string", enum: ["all", "company", "eclipse"] },
-        withEclipse: { type: "boolean", description: "With companyId, also search the business's own material." },
+        scope: { type: "string", enum: ["all", "company", "business"] },
+        withBusiness: { type: "boolean", description: "With companyId, also search the workspace's own material." },
         limit: { type: "integer", minimum: 1, maximum: 100, description: "How many passages to return, up to 100. Defaults to 10. Ask for more when a question needs a lot of one document." },
         docs: { type: "boolean", description: "Also search Docs. Defaults to true; false searches Knowledge alone." },
       },
@@ -2077,13 +2085,13 @@ const TOOL_LIST: AssistantTool[] = [
     },
     run: async (actor, args) => {
       const query = required(args.query, "What to look for");
-      const scope = oneOf(args.scope, ["all", "company", "eclipse"] as const);
+      const scope = oneOf(args.scope === "business" ? "eclipse" : args.scope, ["all", "company", "eclipse"] as const);
       const docs = args.docs !== false && scope !== "eclipse" ? searchDocsForAssistant(actor, query, int(args.limit, 10, 1, 100)).catch(() => []) : Promise.resolve([]);
       const result = await searchKnowledge(actor, {
         query,
         companyId: optionalStr(args.companyId) ?? null,
         scope,
-        withEclipse: args.withEclipse === true,
+        withEclipse: ownKnowledge(args, "withBusiness"),
         limit: int(args.limit, 10, 1, 100),
       });
       return {
@@ -2092,7 +2100,7 @@ const TOOL_LIST: AssistantTool[] = [
           itemId: hit.itemId,
           title: hit.title,
           kind: hit.kind,
-          scope: hit.scope,
+          scope: knowledgeScope(hit.scope),
           companyId: hit.companyId,
           companyName: hit.companyName,
           sourceUrl: hit.sourceUrl,
@@ -2139,11 +2147,11 @@ const TOOL_LIST: AssistantTool[] = [
     description: "List the items in Knowledge for one company, for the business itself, or for everything, with a short summary of each.",
     parameters: {
       type: "object",
-      properties: { companyId: idParam("Only this company's items."), eclipse: { type: "boolean", description: "Only the business's own material." } },
+      properties: { companyId: idParam("Only this company's items."), business: { type: "boolean", description: "Only the workspace's own material." } },
     },
     run: async (actor, args) => {
       const companyId = optionalStr(args.companyId);
-      const items = await listKnowledge(actor, companyId ? { companyId } : args.eclipse === true ? { eclipse: true } : "all", 500);
+      const items = await listKnowledge(actor, companyId ? { companyId } : ownKnowledge(args, "business") ? { eclipse: true } : "all", 500);
       return { items: items.map(withKnowledge) };
     },
   },
@@ -2151,7 +2159,7 @@ const TOOL_LIST: AssistantTool[] = [
     name: "map_website",
     label: "Mapping a website",
     description: "List the pages of a website from its sitemap, or by following its links, so the user can choose which to add to Knowledge with add_to_knowledge.",
-    parameters: { type: "object", properties: { url: { type: "string", description: "The site's address, such as geteclipse.co." } }, required: ["url"] },
+    parameters: { type: "object", properties: { url: { type: "string", description: "The site's address, such as example.com." } }, required: ["url"] },
     run: async (_actor, args) => {
       try {
         const map = await mapSite(args.url, { deadline: Date.now() + 75_000 });
@@ -2167,7 +2175,7 @@ const TOOL_LIST: AssistantTool[] = [
     label: "Adding to Knowledge",
     write: true,
     description:
-      "Add to Knowledge for a company, or for the business itself (eclipse true, the workspace's own material). Pass one source per call: urls for links (web pages, files by link such as PDF, Word, PowerPoint or Excel, YouTube videos and podcast episodes), emailId for a file attached to one of the user's emails (find it with list_email_attachments), or chatFileId for a file the user attached in this chat (Knowledge is shared with the whole workspace, so only add a chat file when the user asks). Orbit reads and indexes it in the background (recordings are transcribed), and a file can then be attached to emails from Knowledge. For a whole website, list its pages with map_website and pass the ones the user wants.",
+      "Add to Knowledge for a company, or for the business itself (business true, the workspace's own material). Pass one source per call: urls for links (web pages, files by link such as PDF, Word, PowerPoint or Excel, YouTube videos and podcast episodes), emailId for a file attached to one of the user's emails (find it with list_email_attachments), or chatFileId for a file the user attached in this chat (Knowledge is shared with the whole workspace, so only add a chat file when the user asks). Orbit reads and indexes it in the background (recordings are transcribed), and a file can then be attached to emails from Knowledge. For a whole website, list its pages with map_website and pass the ones the user wants.",
     parameters: {
       type: "object",
       properties: {
@@ -2176,11 +2184,11 @@ const TOOL_LIST: AssistantTool[] = [
         chatFileId: idParam("Chat file id from the note on the user's message, to add a file they attached in this chat. Leave out for other sources."),
         attachment: { type: "string", description: "With emailId: the file's name from list_email_attachments. Leave out when the email has one file." },
         companyId: idParam("Company the knowledge is about."),
-        eclipse: { type: "boolean", description: "True for the business's own knowledge instead of a company's." },
+        business: { type: "boolean", description: "True for the workspace's own knowledge instead of a company's." },
       },
     },
     describe: (args, name) => {
-      const owner = args.eclipse === true ? "this workspace" : name(args.companyId);
+      const owner = ownKnowledge(args, "business") ? "this workspace" : name(args.companyId);
       if (str(args.chatFileId)) {
         return {
           title: `Add to Knowledge for ${owner}`,
@@ -2210,7 +2218,7 @@ const TOOL_LIST: AssistantTool[] = [
       if (sources === 0) {
         throw new CrmError("invalid_input", "Pass urls to add links, emailId to add a file from an email, or chatFileId to add a file from the chat.", 400, { field: "urls" });
       }
-      const target = targetFrom({ companyId: args.companyId, eclipse: args.eclipse });
+      const target = targetFrom({ companyId: args.companyId, eclipse: ownKnowledge(args, "business") });
       const href = "companyId" in target ? companyHref(target.companyId) : "/settings/knowledge";
       if (chatFileId) {
         const { item, created } = await addChatFileToKnowledge(actor, chatFileId, target, { operation: "add_knowledge_chat_file", ...provenanceSource() });
@@ -2420,7 +2428,7 @@ const TOOL_LIST: AssistantTool[] = [
         evidence: withProofList(evidenceFrom(args.evidence), await listProof(actor), { subject: str(args.subject), body }),
         firstTouch: args.firstTouch !== false,
         theirOffer: optionalStr(args.theirOffer),
-        brand: { name: actor.workspaceName, claims: brand.outreachBrief || brand.whatYouSell },
+        brand: { name: actor.workspaceName, claims: brand.outreachBrief || brand.whatYouSell, eclipseTools: brand.eclipseTools },
       }, { deadline: context.deadline });
     },
   },
@@ -4718,7 +4726,7 @@ const TOOL_LIST: AssistantTool[] = [
     label: "Remembering",
     write: true,
     description:
-      "Save a lasting note to Orbit's memory: a preference, correction or standing instruction from the user (private to them), or with shared true a fact about the business that the whole team's assistants should know. To forget a note Orbit learned, when the user says it's wrong or out of date, pass forgetId with its id from recall or the briefing (and its title for the card) instead of a body.",
+      "Save a lasting note to Orbit's memory: a preference, correction or standing instruction from the user (private to them), or with shared true a fact about the business that the whole team's assistants should know. A note for the user stays in this workspace unless allWorkspaces is true, which is only for how they work, write or want the assistant to behave everywhere, never for anything about this business, its products, pitch, clients, partners, people, boards or deals. To forget a note Orbit learned, when the user says it's wrong or out of date, pass forgetId with its id from recall or the briefing (and its title for the card) instead of a body.",
     parameters: {
       type: "object",
       properties: {
@@ -4726,6 +4734,7 @@ const TOOL_LIST: AssistantTool[] = [
         body: { type: "string", description: "The note, at most 70 words, written as a fact." },
         kind: { type: "string", enum: ["preference", "correction", "instruction", "person", "goal", "writing", "icp", "objection", "competitor", "messaging", "fact"] },
         shared: { type: "boolean", description: "True for business knowledge the whole workspace should share." },
+        allWorkspaces: { type: "boolean", description: "For a note about the user, true when it applies in every workspace they work in. Leave out to keep it to this workspace." },
         forgetId: { type: "string", description: "Id of a learned note to forget instead of saving one." },
       },
     },
@@ -4734,7 +4743,7 @@ const TOOL_LIST: AssistantTool[] = [
         ? { title: "Forget a note", lines: [str(args.title) || "The note you chose"] }
         : {
             title: args.shared === true ? "Remember for the whole team" : "Remember for you",
-            lines: [str(args.title), str(args.body)].filter(Boolean),
+            lines: [str(args.title), str(args.body), args.shared !== true && args.allWorkspaces === true ? "All workspaces" : ""].filter(Boolean),
           },
     run: async (actor, args) => {
       const forgetId = str(args.forgetId);
@@ -4865,7 +4874,7 @@ const MERGED_TOOLS: Record<string, { tool: string; args: (args: Args) => Args }>
   complete_task: { tool: "update_task", args: (args) => ({ taskId: args.taskId, completed: true }) },
   archive_task: { tool: "archive_records", args: (args) => ({ taskIds: str(args.taskId) ? [str(args.taskId)] : [] }) },
   archive_email_template: { tool: "save_email_template", args: (args) => ({ id: args.templateId, archived: true }) },
-  add_email_attachment_to_knowledge: { tool: "add_to_knowledge", args: ({ emailId, attachment, companyId, eclipse }) => ({ emailId, attachment, companyId, eclipse }) },
+  add_email_attachment_to_knowledge: { tool: "add_to_knowledge", args: ({ emailId, attachment, companyId, eclipse }) => ({ emailId, attachment, companyId, business: eclipse }) },
   list_lifecycles: { tool: "get_settings", args: () => ({}) },
   reader_highlights: {
     tool: "reader_list",

@@ -59,7 +59,7 @@ export const STARTER_TEMPLATES: Starter[] = [
         heading: "Terms and conditions",
         body: "Signing this proposal means you accept it and our terms and conditions.",
         linkLabel: "Read our terms and conditions",
-        linkUrl: "https://geteclipse.co/terms",
+        linkUrl: "",
       },
     ],
   },

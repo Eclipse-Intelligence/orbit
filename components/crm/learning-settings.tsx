@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import Field from "@/components/_ui/field";
 import { Input } from "@/components/_ui/input";
+import { NativeSelect } from "@/components/_ui/native-select";
 import Tag from "@/components/_ui/tag";
 import { SettingsCard } from "@/components/crm/settings-ui";
 import {
@@ -50,10 +51,16 @@ function summaryText(status: LearningStatus) {
   if (status.status === "running") return "Running now";
   const summary = status.summary;
   if (!summary) return "Done";
-  if (summary.skipped && !summary.tidied) return summary.skipped;
+  if (summary.skipped && !summary.tidied && !summary.sorted) return summary.skipped;
   if (summary.brief) return "Brief written";
   const tidy = summary.tidied ? `weekly tidy: ${summary.tidied.merged} merged, ${summary.tidied.retired} retired` : summary.tidyError ? "weekly tidy failed" : "";
-  const parts = [summary.added ? `${summary.added} new` : "", summary.updated ? `${summary.updated} updated` : "", summary.archived ? `${summary.archived} retired` : "", tidy].filter(Boolean);
+  const parts = [
+    summary.added ? `${summary.added} new` : "",
+    summary.updated ? `${summary.updated} updated` : "",
+    summary.archived ? `${summary.archived} retired` : "",
+    summary.sorted ? `${summary.sorted} sorted by workspace` : "",
+    tidy,
+  ].filter(Boolean);
   return parts.length ? parts.join(", ") : "Nothing changed";
 }
 
@@ -123,11 +130,26 @@ export function LearningStatusCard({ statuses, canRunShared }: { statuses: Learn
   );
 }
 
-function MemoryRow({ memory }: { memory: Memory }) {
+function placeLabel(memory: Memory) {
+  return memory.allWorkspaces ? "All workspaces" : `Only in ${memory.workspaceName || "this workspace"}`;
+}
+
+function PlaceSelect({ id, value, onChange, workspaceName }: { id: string; value: boolean; onChange: (next: boolean) => void; workspaceName: string }) {
+  return (
+    <NativeSelect id={id} value={value ? "all" : "one"} onChange={(event) => onChange(event.target.value === "all")} className="sm:w-auto sm:self-start">
+      <option value="one">Only in {workspaceName || "this workspace"}</option>
+      <option value="all">All workspaces</option>
+    </NativeSelect>
+  );
+}
+
+function MemoryRow({ memory, showPlace }: { memory: Memory; showPlace: boolean }) {
   const router = useRouter();
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(memory.title);
   const [body, setBody] = useState(memory.body);
+  const [everywhere, setEverywhere] = useState(memory.allWorkspaces === true);
+  const placed = showPlace && memory.scope === "personal";
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -151,7 +173,7 @@ function MemoryRow({ memory }: { memory: Memory }) {
           className="flex flex-col gap-2"
           onSubmit={async (event) => {
             event.preventDefault();
-            if (await run(() => updateMemoryAction(memory.id, { title, body }))) setEditing(false);
+            if (await run(() => updateMemoryAction(memory.id, placed ? { title, body, allWorkspaces: everywhere } : { title, body }))) setEditing(false);
           }}
         >
           <label className="sr-only" htmlFor={`memory-title-${memory.id}`}>
@@ -162,11 +184,27 @@ function MemoryRow({ memory }: { memory: Memory }) {
             Note
           </label>
           <textarea id={`memory-body-${memory.id}`} rows={3} value={body} maxLength={1200} onChange={(event) => setBody(event.target.value)} className={AREA} />
+          {placed && (
+            <>
+              <label className="sr-only" htmlFor={`memory-place-${memory.id}`}>
+                Applies in
+              </label>
+              <PlaceSelect id={`memory-place-${memory.id}`} value={everywhere} onChange={setEverywhere} workspaceName={memory.workspaceName} />
+            </>
+          )}
           <div className="flex gap-2">
             <Button variant="primary" size="sm" type="submit" disabled={busy}>
               {busy ? "Saving…" : "Save note"}
             </Button>
-            <Button variant="ghost" size="sm" type="button" onClick={() => setEditing(false)}>
+            <Button
+              variant="ghost"
+              size="sm"
+              type="button"
+              onClick={() => {
+                setEverywhere(memory.allWorkspaces === true);
+                setEditing(false);
+              }}
+            >
               Cancel
             </Button>
           </div>
@@ -181,6 +219,11 @@ function MemoryRow({ memory }: { memory: Memory }) {
             {memory.pinned && (
               <Tag tone="purple" size="sm" className="text-[12px]">
                 Pinned
+              </Tag>
+            )}
+            {placed && (
+              <Tag tone="neutral" size="sm" className="text-[12px]">
+                {placeLabel(memory)}
               </Tag>
             )}
           </div>
@@ -221,13 +264,14 @@ function MemoryRow({ memory }: { memory: Memory }) {
   );
 }
 
-export function MemoriesCard({ memories }: { memories: Record<MemoryScope, Memory[]> }) {
+export function MemoriesCard({ memories, workspaceName, manyWorkspaces }: { memories: Record<MemoryScope, Memory[]>; workspaceName: string; manyWorkspaces: boolean }) {
   const router = useRouter();
   const [scope, setScope] = useState<MemoryScope>("personal");
   const [search, setSearch] = useState("");
   const [adding, setAdding] = useState(false);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
+  const [everywhere, setEverywhere] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const shown = useMemo(() => {
@@ -239,7 +283,7 @@ export function MemoriesCard({ memories }: { memories: Record<MemoryScope, Memor
     event.preventDefault();
     setBusy(true);
     setError(null);
-    const result = await addMemoryAction({ title, body, shared: scope !== "personal" });
+    const result = await addMemoryAction({ title, body, shared: scope !== "personal", allWorkspaces: scope === "personal" && manyWorkspaces && everywhere });
     setBusy(false);
     if (result.error) {
       setError(result.error);
@@ -247,6 +291,7 @@ export function MemoriesCard({ memories }: { memories: Record<MemoryScope, Memor
     }
     setTitle("");
     setBody("");
+    setEverywhere(false);
     setAdding(false);
     router.refresh();
   }
@@ -280,6 +325,11 @@ export function MemoriesCard({ memories }: { memories: Record<MemoryScope, Memor
             <Field label="Note" htmlFor="new-memory-body" hint={scope === "personal" ? "Only you and your assistant see this." : "Every member's assistant sees this."}>
               <textarea id="new-memory-body" rows={3} value={body} maxLength={1200} onChange={(event) => setBody(event.target.value)} className={AREA} aria-describedby="new-memory-body-hint" />
             </Field>
+            {scope === "personal" && manyWorkspaces && (
+              <Field label="Applies in" htmlFor="new-memory-place">
+                <PlaceSelect id="new-memory-place" value={everywhere} onChange={setEverywhere} workspaceName={workspaceName} />
+              </Field>
+            )}
             <div className="flex gap-2">
               <Button variant="primary" size="sm" type="submit" disabled={busy || !body.trim()}>
                 {busy ? "Saving…" : "Save note"}
@@ -298,7 +348,7 @@ export function MemoriesCard({ memories }: { memories: Record<MemoryScope, Memor
         {shown.length ? (
           <ul className="divide-sidebar-border flex flex-col divide-y">
             {shown.map((memory) => (
-              <MemoryRow key={memory.id} memory={memory} />
+              <MemoryRow key={memory.id} memory={memory} showPlace={manyWorkspaces} />
             ))}
           </ul>
         ) : (
