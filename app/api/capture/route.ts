@@ -29,8 +29,8 @@ export async function POST(request: Request) {
   const signedIn = await getUserActor();
   if (!signedIn) return Response.json({ error: "Sign in again." }, { status: 401 });
   try {
-    const body = (await request.json().catch(() => null)) as { workspaceId?: unknown } | null;
-    const actor = await captureActor(signedIn, body?.workspaceId);
+    const body = (await request.json().catch(() => null)) as { captureWorkspaceId?: unknown } | null;
+    const actor = await captureActor(signedIn, body?.captureWorkspaceId);
     const action = readCaptureAction(body);
     const outcome = await runCaptureAction(actor, action);
     if (outcome.importId) {
