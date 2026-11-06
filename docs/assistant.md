@@ -29,7 +29,7 @@ Reasoning is `low`, `medium` (default), `high`, `xhigh` or `max`. A level a mode
 
 ### What the model gets
 
-1. The system prompt from `systemPrompt`: the workspace's brand profile (About <workspace>: what it sells, its website, who it's for and how it writes, from Settings › Brand, or a note that it hasn't said what it sells, so the assistant claims no product; when the profile can't be read, it says so instead and Eclipse tools stay off), what Orbit holds, how to use tools, the rules for mail, proposals, first emails, Eclipse (only when the workspace's Eclipse tools switch is on), Linear, Reader and the web, the house writing style, then the person, the date and time in London, the Web switch and their links. The About you section and colleagues' roles are added when filled in.
+1. The system prompt from `systemPrompt`: the workspace's brand profile (About <workspace>: what it sells, its website, who it's for and how it writes, from Settings › Brand, or a note that it hasn't said what it sells, so the assistant claims no product; when the profile can't be read, it says so instead and Eclipse tools stay off), what Orbit holds, how to use tools, the rules for mail, proposals, first emails, Eclipse (only when the workspace's Eclipse tools switch is on), Linear, Reader and the web, the house writing style, then the person, the date and time in London, the Web switch and their links. The About you section and colleagues' roles are added when filled in. For someone in more than one workspace, a Workspaces section names the current workspace and the others, and says how to read them (see Workspaces).
 2. A `learned_notes` message with what Orbit has learned (pinned notes, the best notes per scope and notes related to the latest messages, about 6,000 tokens at most). It is marked as information, not a message from the user.
 3. The chat so far, rebuilt from stored messages each round. `@` mentions appear as `Name [person id <uuid>]`, and the model uses the id directly. A message with files ends with an Orbit note listing each file's name, type, size and chat file id (see Chat files).
 
@@ -38,7 +38,7 @@ Reasoning is `low`, `medium` (default), `high`, `xhigh` or `max`. A level a mode
 - A message is up to 200,000 characters (`MESSAGE_MAX`). Sending one declines any cards still waiting in that chat.
 - `/api/assistant` gives a turn a 285 second deadline. Each model call gets the smaller of 240 seconds and the time left less five.
 - Read tools the model asks for run straight away, in parallel. A read tool is stopped after 90 seconds (`TOOL_TIMEOUT_MS`), or sooner when the turn is short of time, and returns an error saying so.
-- When the model calls a write tool, the calls are saved as pending cards and the turn ends.
+- When the model calls a write tool, the calls are saved as pending cards and the turn ends. A write aimed at another workspace gets no card: its refusal goes back to the model as the tool result and the loop carries on (see Workspaces).
 - The turn stops after 40 model calls (`MAX_ROUNDS`), pauses with "I ran out of time on this step" when less than 15 seconds are left, and stops with "carry on" when the history is over budget. Stop, or a newer message, aborts the turn on the server within three seconds.
 
 ### History budget (`history` in `chat.ts`)
@@ -104,6 +104,19 @@ A tool with `write: true` changes something, spends credits or contacts someone.
 - `decideActions` claims the chosen cards in one transaction, so a double submit runs nothing twice, then runs approved ones in order. Approved actions are not timed out. Declined ones return `{declined: true}` to the model. Once nothing is pending the model carries on.
 - `save_email_draft` has an alternative button, Confirm and send, which runs `send_email` with the same arguments instead (`ACTION_ALTERNATIVES`).
 - Writes pass `provenance { operation, source: "assistant" }` (`source: "email"` for changes an email job runs), so shared-record changes are audited and can start workflows and webhooks like any other change.
+
+## Workspaces
+
+The assistant works in the workspace the chat belongs to. For someone in several workspaces, the main read tools take an optional `workspace` argument (`WORKSPACE_READ_TOOLS`): `get_overview`, `search_records`, `list_companies`, `get_company`, `list_contacts`, `get_contact`, `list_tasks`, `get_pipeline`, `get_deal_history`, `pipeline_report`, `stalled_deals`, `list_boards`, `get_board`, `list_opportunities`, `list_activities`, `list_quiet_relationships`, `list_tags` and `search_knowledge`. It is `all`, or a workspace's name (case does not matter, and a part that matches one workspace is enough) or id, matched only against the person's own memberships (`workspaceActors`). `runTool` (`workspaceTargets`, `runAcross`) then runs the tool as the person's actor for that workspace, so row-level security and the workspace filter in `lib/crm` apply as usual.
+
+- Leaving it out, or naming the current workspace, runs the tool as before with no label.
+- One other workspace returns the tool's result with `workspace {id, name}` and a `note` saying the links only open in that workspace and to switch to it in the sidebar, and that changes can only be made in the current one.
+- `all` returns `workspaces`, one labelled result per workspace (the current one marked `current: true`; a workspace where the tool failed has `error`). `get_company`, `get_contact`, `get_board` and `get_deal_history` keep only the workspaces where the record exists, and when none has it return the first error that isn't "not found" (or "not found" when that is all there is). Someone in one workspace gets the plain result.
+- Only results from another workspace, or from `all`, are labelled; the current workspace on its own never is.
+- Any other tool given a `workspace` other than the current one returns an error naming the tools that support it, instead of quietly reading the current workspace.
+- A workspace the person isn't in is refused: "You're not in a workspace called X. Your workspaces are …".
+
+Changes stay in the current workspace. `crossWorkspaceRefusal` refuses a write tool called with `workspace` naming another workspace (or `all`), or whose arguments hold the id of a company, person, task, deal, activity, board, workflow or workflow run in another of the person's workspaces (ids are collected from every string in the arguments, nested ones included), with "That company is in Mark Ridgeon, and changes only happen in the workspace you're in (Eclipse). Switch to Mark Ridgeon in the sidebar, then ask again." It runs when the call is proposed, in `runRounds` and in `applyCompanionResult` for Orbit Agent (where the reason is added to the reply), so no card is shown, and again in `runTool` when an action is approved. So `decide_workflow_approval` for a run in another workspace gets "That workflow run is in Mark Ridgeon, …", and `decideApproval` itself refuses a run outside the actor's workspace. The MCP server and the REST API don't use these tools and stay scoped to the token's workspace.
 
 ## Outside content
 
@@ -177,14 +190,14 @@ When a tool is merged into another, add its old name to `MERGED_TOOLS` in `tools
 | Tool | What it does | Approval | Outside | Notable limits |
 | --- | --- | --- | --- | --- |
 | `get_overview` | Today at a glance: overdue tasks, tasks due today, what needs attention, meetings in the next two days and the 25 quietest relationships. | No | Yes | Up to 100 overdue and 100 due today; quiet means no interaction in 21 days. |
-| `search_records` | Finds companies, people and opportunities by name, email, domain or company, to get ids. | No | No | 25 of each. |
+| `search_records` | Finds companies, people and opportunities by name, email, domain or company, to get ids. Takes `workspace` (see Workspaces). | No | No | 25 of each. |
 
 ### Companies
 
 | Tool | What it does | Approval | Outside | Notable limits |
 | --- | --- | --- | --- | --- |
-| `list_companies` | Lists companies with search, lifecycle, health, tag, owner and AI field filters (`ai`: yes or no, number ranges, text contains, any of the options, optionally with Unknown) and sorting (including `aiSort` by an AI field), with relationship, ICP fit (0 to 4), the workspace's AI fields and each company's answers by column name. | No | Yes | `limit` up to 100 (default 50), `offset` up to 10,000. |
-| `get_company` | Everything about one company: details, people, deals, open and done tasks, the activity timeline, call summaries, meetings, relationship, its Knowledge items and its AI field answers (likelihood, reason, sources, checked date, whether set by hand). | No | Yes | Up to 500 Knowledge items listed. |
+| `list_companies` | Lists companies with search, lifecycle, health, tag, owner and AI field filters (`ai`: yes or no, number ranges, text contains, any of the options, optionally with Unknown) and sorting (including `aiSort` by an AI field), with relationship, ICP fit (0 to 4), the workspace's AI fields and each company's answers by column name. Takes `workspace`. | No | Yes | `limit` up to 100 (default 50), `offset` up to 10,000. |
+| `get_company` | Everything about one company: details, people, deals, open and done tasks, the activity timeline, call summaries, meetings, relationship, its Knowledge items and its AI field answers (likelihood, reason, sources, checked date, whether set by hand). Takes `workspace`. | No | Yes | Up to 500 Knowledge items listed. |
 | `list_quiet_relationships` | Every company with no interaction in the last N days. | No | No | Default 21 days; up to 100 companies. |
 | `create_company` | Adds a company. | Yes | No | |
 | `update_company` | Changes one company's details by `companyId`; only the fields passed change. Health is set by hand only when the user asks, with a reason. With `companyIds` it makes the same change (owner, lifecycle, industry, size, source) to many companies. | Yes | No | `companyIds` up to 100 a call. |
@@ -195,8 +208,8 @@ When a tool is merged into another, add its old name to `MERGED_TOOLS` in `tools
 
 | Tool | What it does | Approval | Outside | Notable limits |
 | --- | --- | --- | --- | --- |
-| `list_contacts` | Lists people with search, company, tag and owner filters. | No | Yes | `limit` up to 100 (default 50). |
-| `get_contact` | Everything about one person: details, company, open and recently completed tasks, timeline with call summaries, meetings and the last email check. | No | Yes | The 100 most recent activities; completed tasks from the last 14 days, up to 50. |
+| `list_contacts` | Lists people with search, company, tag and owner filters. Takes `workspace`. | No | Yes | `limit` up to 100 (default 50). |
+| `get_contact` | Everything about one person: details, company, open and recently completed tasks, timeline with call summaries, meetings and the last email check. Takes `workspace`. | No | Yes | The 100 most recent activities; completed tasks from the last 14 days, up to 50. |
 | `create_contact` | Adds a person, optionally at a company. | Yes | No | Needs an email or a name. |
 | `update_contact` | Changes one person's details by `contactId` (including `location` and `salesNavigatorUrl`); only the fields passed change. With `contactIds` it makes the same change (owner, company, job title, source) to many people. | Yes | No | `contactIds` up to 100 a call. |
 | `merge_contacts` | Merges a duplicate person into the one to keep. The kept email stays; a different one goes into the notes. | Yes | No | Can't be undone. |
@@ -218,7 +231,7 @@ When a tool is merged into another, add its old name to `MERGED_TOOLS` in `tools
 
 | Tool | What it does | Approval | Outside | Notable limits |
 | --- | --- | --- | --- | --- |
-| `list_tasks` | Lists tasks by view (`all`, `overdue`, `today`, `upcoming`, `completed`), with due date, reminder, links and ClickUp status. `mine` limits it to the user's own and unassigned ones. | No | Yes | Default 100, up to 100. A member sees only tasks they own or created. |
+| `list_tasks` | Lists tasks by view (`all`, `overdue`, `today`, `upcoming`, `completed`), with due date, reminder, links and ClickUp status. `mine` limits it to the user's own and unassigned ones. Takes `workspace`. | No | Yes | Default 100, up to 100. A member sees only tasks they own or created. |
 | `create_task` | Creates a task, owned by the user unless `ownerId` is set, and sends it to the default ClickUp list unless `sendToClickUp` is false. | Yes | No | A reminder needs a due date. |
 | `update_task` | Changes a task's title, detail, due date, reminder, priority or assignee, marks it done (`completed: true`) or reopens it (`false`), and ClickUp. | Yes | No | |
 
@@ -226,7 +239,7 @@ When a tool is merged into another, add its old name to `MERGED_TOOLS` in `tools
 
 | Tool | What it does | Approval | Outside | Notable limits |
 | --- | --- | --- | --- | --- |
-| `list_activities` | Logged activity, newest first, with search and filters, plus call summaries for calls and meetings. | No | Yes | `limit` up to 100 (default 50). |
+| `list_activities` | Logged activity, newest first, with search and filters, plus call summaries for calls and meetings. Takes `workspace`. | No | Yes | `limit` up to 100 (default 50). |
 | `log_activity` | Logs a note, call or email (only one that happened outside Orbit) on a company or person. | Yes | No | Refuses an email already filed from the mailbox in the last six hours. |
 | `archive_activity` | Removes a wrong or duplicate activity from timelines, counts and relationship labels. It is archived and can be undone. | Yes | No | Only the person who logged it, or an owner or admin. |
 | `update_activity` | Edits a logged activity: type, title, text, when it happened, and its company, person and opportunity. The card shows the activity and each change from and to. It can be undone. | Yes | No | Only the person who logged it, or an owner or admin. Emails filed from Mail take only a new company or opportunity; calls and meetings from Teams, Granola or a transcript take only a new title, company, person or opportunity. Refuses a deleted activity. |
@@ -237,7 +250,7 @@ When a tool is merged into another, add its old name to `MERGED_TOOLS` in `tools
 | Tool | What it does | Approval | Outside | Notable limits |
 | --- | --- | --- | --- | --- |
 | `get_pipeline` | The sales pipeline: every stage with its deals, values, weighted values and totals, optionally only deals closing within N days. | No | No | Up to 2,000 deals; `closingWithinDays` up to 730. |
-| `list_opportunities` | Lists deals and board cards with search, company and status filters. | No | No | `limit` up to 100 (default 50). |
+| `list_opportunities` | Lists deals and board cards with search, company and status filters. Takes `workspace`. | No | No | `limit` up to 100 (default 50). |
 | `create_opportunity` | Adds a deal to the pipeline for a company. | Yes | No | |
 | `update_opportunity` | Moves a sales deal to another stage, marks it won or lost, or changes its value, close date, probability or owner. | Yes | No | Board cards use `move_card`. |
 | `get_deal_history` | Every stage a deal or card has been in, oldest first, with days in each and who moved it. | No | No | |
@@ -329,7 +342,7 @@ When a tool is merged into another, add its old name to `MERGED_TOOLS` in `tools
 
 | Tool | What it does | Approval | Outside | Notable limits |
 | --- | --- | --- | --- | --- |
-| `search_knowledge` | Searches Knowledge by meaning and keyword, for one company, Eclipse or everything, returning passages with item id and offset, and the user's Docs (their own and shared ones) in `docs`, each marked `type: "doc"` with its `docId`. `docs: false` leaves Docs out; scope `eclipse` never includes them. | No | Yes | Default 10 passages, up to 100; up to 50 docs. |
+| `search_knowledge` | Searches Knowledge by meaning and keyword, for one company, Eclipse or everything, returning passages with item id and offset, and the user's Docs (their own and shared ones) in `docs`, each marked `type: "doc"` with its `docId`. `docs: false` leaves Docs out; scope `eclipse` never includes them. Takes `workspace`. | No | Yes | Default 10 passages, up to 100; up to 50 docs. |
 | `read_knowledge` | Reads one Knowledge item (`itemId`) or one doc (`docId`, as Markdown) from an offset. A doc id passed as `itemId` also works. | No | Yes | 100,000 characters a call; follow `nextOffset`. |
 | `list_knowledge` | Lists items for a company, Eclipse or everything, with a short summary of each. | No | Yes | Up to 500 items. |
 | `map_website` | Lists a site's pages from its sitemaps or links, to choose which to add. | No | Yes | Up to 5,000 pages listed, 400 crawled, 75 seconds. |

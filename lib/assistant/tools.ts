@@ -123,6 +123,7 @@ import {
 } from "@/lib/crm/types";
 import { withActor } from "@/lib/crm/context";
 import { isUuid } from "@/lib/crm/mutate";
+import { workspaceActors } from "@/lib/crm/workspaces";
 import type { Scope } from "@/lib/crm/scopes";
 import { formatDateLabel, formatDateTimeLabel } from "@/lib/date-input";
 import { appTimeZone, dateTimeInputValue, parseDateTime, zonedParts } from "@/lib/time";
@@ -871,7 +872,157 @@ function blocksParam(description: string) {
 }
 
 
-export const ASSISTANT_TOOLS: AssistantTool[] = [
+export const WORKSPACE_READ_TOOLS: ReadonlySet<string> = new Set([
+  "get_overview",
+  "search_records",
+  "list_companies",
+  "get_company",
+  "list_contacts",
+  "get_contact",
+  "list_tasks",
+  "get_pipeline",
+  "get_deal_history",
+  "pipeline_report",
+  "stalled_deals",
+  "list_boards",
+  "get_board",
+  "list_opportunities",
+  "list_activities",
+  "list_quiet_relationships",
+  "list_tags",
+  "search_knowledge",
+]);
+
+const SINGLE_RECORD_TOOLS = new Set(["get_company", "get_contact", "get_board", "get_deal_history"]);
+
+function unsupportedWorkspace() {
+  return `Only these tools can read another workspace: ${[...WORKSPACE_READ_TOOLS].join(", ")}. Use one of them with workspace, or leave workspace out to use the current workspace.`;
+}
+
+const WORKSPACE_PARAM = {
+  type: "string",
+  description:
+    'Only when the user asks to look in another of their workspaces, or in all of them: "all", or the workspace\'s name. Leave it out to use the current workspace. Results are labelled with their workspace.',
+};
+
+function withWorkspaceParam(tool: AssistantTool): AssistantTool {
+  if (!WORKSPACE_READ_TOOLS.has(tool.name)) return tool;
+  const properties = (tool.parameters.properties ?? {}) as Record<string, unknown>;
+  return { ...tool, parameters: { ...tool.parameters, properties: { ...properties, workspace: WORKSPACE_PARAM } } };
+}
+
+export type WorkspaceLabel = { id: string; name: string };
+
+function workspaceList(actors: UserActor[]) {
+  return actors.map((item) => item.workspaceName).join(", ");
+}
+
+function matchWorkspace(actors: UserActor[], wanted: string) {
+  const plain = wanted.trim().toLowerCase();
+  const exact = actors.find((item) => item.workspaceId === wanted.trim() || item.workspaceName.trim().toLowerCase() === plain);
+  if (exact) return exact;
+  const partial = actors.filter((item) => item.workspaceName.toLowerCase().includes(plain));
+  return partial.length === 1 ? partial[0] : null;
+}
+
+export async function workspaceTargets(actor: UserActor, value: unknown): Promise<{ targets: UserActor[]; all: boolean } | null> {
+  const wanted = typeof value === "string" ? value.trim() : "";
+  if (!wanted) return null;
+  const actors = await workspaceActors(actor);
+  if (wanted.toLowerCase() === "all") return actors.length > 1 ? { targets: actors, all: true } : null;
+  const found = matchWorkspace(actors, wanted);
+  if (!found) {
+    throw new CrmError("forbidden", `You're not in a workspace called ${wanted.slice(0, 80)}. Your workspaces are ${workspaceList(actors)}.`, 403, { field: "workspace" });
+  }
+  return found.workspaceId === actor.workspaceId ? null : { targets: [found], all: false };
+}
+
+function otherWorkspaceNote(target: UserActor, current: UserActor) {
+  return `These results are from ${target.workspaceName}, not ${current.workspaceName}. Their links only open in ${target.workspaceName}, so tell the user to switch to ${target.workspaceName} in the sidebar to open them. Changes can only be made in ${current.workspaceName}.`;
+}
+
+function labelled(target: UserActor, current: UserActor, output: unknown) {
+  const workspace: WorkspaceLabel = { id: target.workspaceId, name: target.workspaceName };
+  const body = output && typeof output === "object" && !Array.isArray(output) ? (output as Record<string, unknown>) : { result: output };
+  if (target.workspaceId === current.workspaceId) return { workspace, current: true, ...body };
+  return { workspace, note: otherWorkspaceNote(target, current), ...body };
+}
+
+async function runAcross(tool: AssistantTool, actor: UserActor, scope: { targets: UserActor[]; all: boolean }, args: Args, context: ToolContext) {
+  const outcomes = await Promise.all(
+    scope.targets.map(async (target) => {
+      try {
+        return { target, output: await tool.run(target, args, context) };
+      } catch (error) {
+        return { target, error };
+      }
+    }),
+  );
+  if (!scope.all) {
+    const [only] = outcomes;
+    if ("error" in only) throw only.error;
+    return labelled(only.target, actor, only.output);
+  }
+  const single = SINGLE_RECORD_TOOLS.has(tool.name);
+  const missing = (error: unknown) => error instanceof CrmError && error.status === 404;
+  const found = outcomes.filter((item) => !("error" in item) || !(single && missing(item.error)));
+  if (found.length === 0 || found.every((item) => "error" in item)) {
+    const first = outcomes.find((item) => "error" in item && !missing(item.error)) ?? outcomes.find((item) => "error" in item);
+    if (first && "error" in first) throw first.error;
+  }
+  return {
+    workspaces: found.map((item) =>
+      "error" in item
+        ? { workspace: { id: item.target.workspaceId, name: item.target.workspaceName }, error: item.error instanceof CrmError ? item.error.message : "That did not work in this workspace." }
+        : labelled(item.target, actor, item.output),
+    ),
+  };
+}
+
+const CROSS_WORKSPACE_KINDS: [string, string][] = [
+  ["companies", "company"],
+  ["contacts", "person"],
+  ["tasks", "task"],
+  ["opportunities", "opportunity"],
+  ["activities", "activity"],
+  ["pipelines", "board"],
+  ["workflows", "workflow"],
+  ["workflow_runs", "workflow run"],
+];
+
+function switchMessage(name: string, current: UserActor, what: string) {
+  return `${what} is in ${name}, and changes only happen in the workspace you're in (${current.workspaceName}). Switch to ${name} in the sidebar, then ask again.`;
+}
+
+export async function crossWorkspaceRefusal(actor: UserActor, name: string, args: Args): Promise<string | null> {
+  const resolved = resolveTool(name, args);
+  if (!resolved?.tool.write) return null;
+  const wanted = typeof args.workspace === "string" ? args.workspace.trim() : "";
+  if (wanted) {
+    const actors = await workspaceActors(actor);
+    const found = wanted.toLowerCase() === "all" ? null : matchWorkspace(actors, wanted);
+    if (!found || found.workspaceId !== actor.workspaceId) {
+      return found
+        ? switchMessage(found.workspaceName, actor, "That change")
+        : `Changes only happen in the workspace you're in (${actor.workspaceName}), one workspace at a time. Switch workspace in the sidebar to change another one's records.`;
+    }
+  }
+  const ids = new Set<string>();
+  collectIds(resolved.args, ids);
+  if (ids.size === 0) return null;
+  const elsewhere = await withActor(actor, async (db) => {
+    const result = await db.query<{ workspace_id: string; kind: string }>(
+      CROSS_WORKSPACE_KINDS.map(([table, kind]) => `select workspace_id, '${kind}' as kind from crm.${table} where id = any($1::uuid[]) and workspace_id <> $2`).join(" union all ") + " limit 1",
+      [[...ids], actor.workspaceId],
+    );
+    return result.rows[0] ?? null;
+  });
+  if (!elsewhere) return null;
+  const owner = (await workspaceActors(actor)).find((item) => item.workspaceId === elsewhere.workspace_id);
+  return switchMessage(owner?.workspaceName ?? "another workspace", actor, `That ${elsewhere.kind}`);
+}
+
+const TOOL_LIST: AssistantTool[] = [
   {
     name: "get_overview",
     label: "Checking today",
@@ -4669,6 +4820,8 @@ export const ASSISTANT_TOOLS: AssistantTool[] = [
   },
 ];
 
+export const ASSISTANT_TOOLS: AssistantTool[] = TOOL_LIST.map(withWorkspaceParam);
+
 export const DRAFT_NOTE = "Saved to Drafts.";
 const DRAFT_FILES_NOTE = "The files stay in Orbit and are attached when Orbit sends it.";
 
@@ -5025,7 +5178,24 @@ export async function runTool(
   if (ECLIPSE_TOOL_NAMES.has(tool.name) && !(options.eclipseTools ?? (await brandOrEmpty(actor)).eclipseTools)) {
     return { error: "Eclipse tools are off in this workspace. An owner or admin can turn them on in Settings, Brand." };
   }
-  const cleaned = dropStrayNulls(resolved.args, tool.parameters) as Args;
+  const { workspace: requestedWorkspace, ...cleaned } = dropStrayNulls(resolved.args, tool.parameters) as Args;
+  let scope: { targets: UserActor[]; all: boolean } | null = null;
+  try {
+    if (tool.write) {
+      const refusal = await crossWorkspaceRefusal(actor, tool.name, resolved.args);
+      if (refusal) return { error: refusal, field: "workspace" };
+    } else if (WORKSPACE_READ_TOOLS.has(tool.name)) {
+      scope = await workspaceTargets(actor, requestedWorkspace);
+    } else if (typeof requestedWorkspace === "string" && requestedWorkspace.trim()) {
+      const wanted = requestedWorkspace.trim();
+      const actors = await workspaceActors(actor);
+      const current = wanted.toLowerCase() === "all" ? actors.length === 1 : matchWorkspace(actors, wanted)?.workspaceId === actor.workspaceId;
+      if (!current) return { error: unsupportedWorkspace(), field: "workspace" };
+    }
+  } catch (error) {
+    if (error instanceof CrmError) return { error: error.message, field: error.details?.field ?? null };
+    throw error;
+  }
   const limit = Math.max(5_000, Math.min(TOOL_TIMEOUT_MS, (options.deadline ?? Date.now() + TOOL_TIMEOUT_MS) - Date.now()));
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<{ error: string }>((resolve) => {
@@ -5037,15 +5207,16 @@ export async function runTool(
   });
   try {
     const output = await Promise.race([
-      withToolSource(options.source, () =>
-        tool.run(actor, cleaned, {
+      withToolSource(options.source, () => {
+        const context: ToolContext = {
           callId: options.callId,
           deadline: tool.write ? options.deadline : Date.now() + limit,
           defer: options.defer,
           unattended: options.unattended === true,
           approval: options.approval,
-        }),
-      ),
+        };
+        return scope ? runAcross(tool, actor, scope, cleaned, context) : tool.run(actor, cleaned, context);
+      }),
       late,
     ]);
     return marked(tool.name, output);

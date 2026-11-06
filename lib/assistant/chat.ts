@@ -4,7 +4,7 @@ import { chatFileNote, chatFilesFor, removeChatObjects, type ChatFile } from "@/
 import { connectedProviders } from "@/lib/ai-accounts/store";
 import { systemPrompt } from "@/lib/assistant/prompt";
 import { docLinkOf } from "@/lib/assistant/doc-link";
-import { ACTION_ALTERNATIVES, actionAlternative, assistantTools, describeAction, findTool, recordNames, runTool, toolDefinitions, toolDescription, toolJson } from "@/lib/assistant/tools";
+import { ACTION_ALTERNATIVES, actionAlternative, assistantTools, crossWorkspaceRefusal, describeAction, findTool, recordNames, runTool, toolDefinitions, toolDescription, toolJson } from "@/lib/assistant/tools";
 import { brandOrEmpty } from "@/lib/crm/brand";
 import { approvalFor, editsWithoutApproval, type DocApproval } from "@/lib/assistant/docs";
 import type { DocDiffLine } from "@/lib/docs/types";
@@ -29,6 +29,7 @@ import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { iso, isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
+import { workspaceActors } from "@/lib/crm/workspaces";
 import type { Db } from "@/lib/db/pool";
 
 export const MAX_ROUNDS = 40;
@@ -530,6 +531,15 @@ function companionTools(eclipseTools: boolean) {
   ];
 }
 
+async function refusedWrites(actor: UserActor, writes: ToolCall[]) {
+  const refused = new Map<string, string>();
+  for (const call of writes) {
+    const reason = await crossWorkspaceRefusal(actor, call.function.name, parseArgs(call.function.arguments)).catch(() => null);
+    if (reason) refused.set(call.id, reason);
+  }
+  return refused;
+}
+
 function toToolCall(call: { id: string; name: string; arguments: string }): ToolCall {
   return { id: call.id, type: "function", function: { name: call.name, arguments: call.arguments || "{}" } };
 }
@@ -546,6 +556,14 @@ export async function applyCompanionResult(actor: UserActor, conversationId: str
       (tool.write ? writes : reads).push(toToolCall(call));
     }
     if (step.text.trim() || reads.length > 0) entries.push({ content: step.text.trim(), reads });
+  }
+  const refused = await refusedWrites(actor, writes);
+  const proposed = writes.filter((call) => !refused.has(call.id));
+  if (refused.size > 0) {
+    const reasons = [...new Set(refused.values())].join("\n\n");
+    const last = entries.at(-1);
+    if (last) last.content = [last.content, reasons].filter(Boolean).join("\n\n");
+    else entries.push({ content: reasons, reads: [] });
   }
   if (entries.length === 0) entries.push({ content: writes.length > 0 ? "" : EMPTY_REPLY, reads: [] });
   const ids: string[] = [];
@@ -571,14 +589,23 @@ export async function applyCompanionResult(actor: UserActor, conversationId: str
         toolName: call.function.name,
       });
     }
+    if (!final) continue;
+    for (const call of writes.filter((entry) => refused.has(entry.id))) {
+      await insertMessage(actor, conversationId, {
+        role: "tool",
+        content: toolJson({ error: refused.get(call.id), field: "workspace" }),
+        toolCallId: call.id,
+        toolName: call.function.name,
+      });
+    }
   }
-  if (writes.length > 0 && last) {
+  if (proposed.length > 0 && last) {
     const names = await recordNames(
       actor,
-      writes.map((call) => parseArgs(call.function.arguments)),
-      writes.map((call) => call.function.name),
+      proposed.map((call) => parseArgs(call.function.arguments)),
+      proposed.map((call) => call.function.name),
     ).catch(() => new Map<string, string>());
-    const actions: AssistantAction[] = writes.map((call) => ({
+    const actions: AssistantAction[] = proposed.map((call) => ({
       id: call.id,
       name: call.function.name,
       ...describeAction(call.function.name, parseArgs(call.function.arguments), names),
@@ -602,7 +629,7 @@ export async function isBriefConversation(actor: UserActor, conversationId: stri
 }
 
 async function promptFor(actor: UserActor, conversation: ConversationRow) {
-  const [links, about, colleagues, brief, briefChat, focus, brand] = await Promise.all([
+  const [links, about, colleagues, brief, briefChat, focus, brand, workspaces] = await Promise.all([
     userLinks(actor).catch(() => null),
     getPersonalContext(actor).catch(() => null),
     getColleagues(actor).catch(() => []),
@@ -619,10 +646,13 @@ async function promptFor(actor: UserActor, conversation: ConversationRow) {
         .join("\n"),
     ).catch(() => ""),
     brandOrEmpty(actor),
+    workspaceActors(actor)
+      .then((list) => list.map((item) => ({ id: item.workspaceId, name: item.workspaceName })))
+      .catch(() => []),
   ]);
   const learned = await memoryBriefing(actor, { focus }).catch(() => "");
   return {
-    system: systemPrompt(actor, { webSearch: conversation.web_search, links, about: aboutYouSection(about, colleagues), briefReady: Boolean(brief) && !briefChat, brand }),
+    system: systemPrompt(actor, { webSearch: conversation.web_search, links, about: aboutYouSection(about, colleagues), briefReady: Boolean(brief) && !briefChat, brand, workspaces }),
     learned,
     eclipseTools: brand.eclipseTools,
   };
@@ -841,7 +871,7 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
     }
     emit({ type: "message", message: display(saved) });
     const reads = result.toolCalls.filter((call) => !findTool(call.function.name)?.write);
-    const writes = result.toolCalls.filter((call) => findTool(call.function.name)?.write);
+    let writes = result.toolCalls.filter((call) => findTool(call.function.name)?.write);
     await Promise.all(
       reads.map(async (call) => {
         const label = findTool(call.function.name)?.label ?? call.function.name;
@@ -857,6 +887,16 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
       }),
     );
     if (signal?.aborted) return;
+    const refused = await refusedWrites(actor, writes);
+    for (const call of writes.filter((entry) => refused.has(entry.id))) {
+      await insertMessage(actor, conversation.id, {
+        role: "tool",
+        content: toolJson({ error: refused.get(call.id), field: "workspace" }),
+        toolCallId: call.id,
+        toolName: call.function.name,
+      });
+    }
+    writes = writes.filter((call) => !refused.has(call.id));
     if (writes.length > 0) {
       const unattended = new Set<string>();
       for (const call of writes) {

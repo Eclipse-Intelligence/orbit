@@ -249,6 +249,7 @@ export default function CaptureScreen({
         <ImportItem
           key={item.id}
           item={item}
+          others={others}
           now={now}
           filing={filing === `import:${item.id}`}
           onFiling={(open) => setFiling(open ? `import:${item.id}` : null)}

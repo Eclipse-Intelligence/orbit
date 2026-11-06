@@ -8,6 +8,7 @@ import { aboutWriterNote, getPersonalContext } from "@/lib/crm/personal-context"
 import { assertScope } from "@/lib/crm/scopes";
 import { addWorkingDays, dayKeyAt, wallClockAt } from "@/lib/crm/task-due";
 import type { UserActor } from "@/lib/crm/types";
+import { workspaceActors } from "@/lib/crm/workspaces";
 import type { Db } from "@/lib/db/pool";
 import { completeJson } from "@/lib/llm";
 import { clean, today, voiceSamples } from "@/lib/mail/ai";
@@ -374,6 +375,22 @@ export async function followUpCalls(
     ).catch((error) => console.error("Follow-up alert failed", error instanceof Error ? error.message : error));
   }
   return report;
+}
+
+export async function followUpCallsAcross(
+  actor: UserActor,
+  options: { deadline: number; fetchImpl?: typeof fetch; now?: number; send?: PushSender; actors?: UserActor[] },
+): Promise<FollowUpReport> {
+  const actors = options.actors ?? (await workspaceActors(actor));
+  const total: FollowUpReport = { drafted: 0, failed: 0, settled: 0 };
+  for (const target of actors) {
+    if (options.deadline - Date.now() < STEP_MS) break;
+    const report = await followUpCalls(target, options);
+    total.drafted += report.drafted;
+    total.failed += report.failed;
+    total.settled += report.settled;
+  }
+  return total;
 }
 
 type SuggestionRow = {

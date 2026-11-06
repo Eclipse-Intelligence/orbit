@@ -6,6 +6,7 @@ import Button from "@/components/_ui/button";
 import { Input } from "@/components/_ui/input";
 import { NativeSelect } from "@/components/_ui/native-select";
 import { SettingsCard } from "@/components/crm/settings-ui";
+import WorkspaceTile from "@/components/workspaces/workspace-tile";
 import { runHeldAgentMailAction, saveAgentSendersAction, setUpAgentMailboxAction, type AgentMailboxActionState } from "@/app/(crm)/settings/actions";
 import type { AgentMailboxView } from "@/lib/agent-mail/mailbox";
 import { formatWhen } from "@/lib/companies";
@@ -75,6 +76,10 @@ export default function AgentMailboxSettings({ view }: { view: AgentMailboxView 
     <span className="flex flex-col gap-1.5">
       <span>Email Orbit to give it work. Replies come back in the thread.</span>
       <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span className="flex min-w-0 items-center gap-1.5">
+          <WorkspaceTile id={view.workspaceId} name={view.workspaceName} className="size-4 rounded-[5px] text-[9px]" />
+          <span className="min-w-0 wrap-anywhere">{`For ${view.workspaceName}`}</span>
+        </span>
         {!view.configured ? (
           <Status on={false}>MACHINE_MAIL_API_KEY isn&apos;t set</Status>
         ) : view.setUp ? (
@@ -191,6 +196,7 @@ export default function AgentMailboxSettings({ view }: { view: AgentMailboxView 
             type="email"
             autoComplete="off"
             spellCheck={false}
+            placeholder={view.placeholder}
             value={address}
             onChange={(event) => setAddress(event.target.value)}
             disabled={!view.configured}

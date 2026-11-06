@@ -1,7 +1,10 @@
 import type { Db } from "@/lib/db/pool";
 import { createActivityInDb } from "@/lib/crm/activities";
 import { withActor } from "@/lib/crm/context";
-import { attachTeamsTranscripts, summarisePendingImports } from "@/lib/crm/conversations";
+import { captureWorkspaceInDb } from "@/lib/crm/call-routing";
+import { attachTeamsTranscripts, summarisePendingAcross } from "@/lib/crm/conversations";
+import { settleTeamsTranscripts } from "@/lib/crm/teams-transcripts";
+import { workspaceActors } from "@/lib/crm/workspaces";
 import {
   currentToken,
   readSecret,
@@ -51,6 +54,7 @@ type CallSyncResult = {
 type ContactPhone = {
   id: string;
   name: string;
+  email: string | null;
   companyId: string | null;
 };
 
@@ -221,14 +225,17 @@ export async function syncCalls(
     }
     const watermark = fetched.complete ? to.toISOString() : null;
 
+    const actors = await workspaceActors(actor);
     const result: CallSyncResult = await withActor(actor, async (db) => {
       await lockCalls(db, stored.id);
       if (identity.refreshed)
         await storeToken(db, stored.id, identity.refreshed);
-      const phones = await contactPhones(db, actor.workspaceId);
-      const counts = await fileCalls(db, actor, stored.id, rows, phones);
-      counts.logged += await rematchCalls(db, actor, stored.id, phones);
-      const transcripts = await attachTeamsTranscripts(db, actor.workspaceId);
+      const phones = await contactPhonesAcross(db, actor, actors);
+      const captureId = await captureWorkspaceInDb(db, actor, actors, [], [stored.email]);
+      const counts = await fileCalls(db, actors, stored.id, rows, phones, captureId);
+      counts.logged += await rematchCalls(db, actors, stored.id, phones);
+      let transcripts = 0;
+      for (const item of actors) transcripts += await attachTeamsTranscripts(db, item.workspaceId);
       await db.query(
         `update crm.call_sync_state
          set tenant_id = $2,
@@ -245,9 +252,15 @@ export async function syncCalls(
         transcripts,
       };
     });
+    try {
+      const settled = await settleTeamsTranscripts(actor, Date.now(), actors);
+      result.transcripts = (result.transcripts ?? 0) + settled.attached;
+    } catch (error) {
+      console.error("Settling Teams transcripts failed", error);
+    }
     if (result.transcripts) {
       try {
-        await summarisePendingImports(actor, { fetchImpl, deadline: options.deadline });
+        await summarisePendingAcross(actor, { fetchImpl, deadline: options.deadline, actors });
       } catch (error) {
         console.error("Teams transcript summary failed", error);
       }
@@ -358,17 +371,40 @@ async function lockCalls(db: Db, connectionId: string) {
   ]);
 }
 
+type WorkspacePhone = ContactPhone & { workspaceId: string };
+
+async function contactPhonesAcross(db: Db, owner: UserActor, actors: UserActor[]) {
+  const workspaceIds = actors.map((item) => item.workspaceId);
+  const rules = await db.query<{ domain: string; workspace_ids: string[] }>(
+    "select domain, workspace_ids from crm.mail_domain_rules where user_id = $1",
+    [owner.userId],
+  );
+  const ruled = new Map(rules.rows.map((row) => [row.domain, row.workspace_ids]));
+  const phones = new Map<string, WorkspacePhone[]>();
+  for (const workspaceId of workspaceIds) {
+    for (const [number, contact] of await contactPhones(db, workspaceId)) {
+      const domain = contact.email?.split("@")[1]?.toLowerCase() ?? "";
+      const rule = domain ? ruled.get(domain) : undefined;
+      if (rule && !rule.includes(workspaceId)) continue;
+      phones.set(number, [...(phones.get(number) ?? []), { ...contact, workspaceId }]);
+    }
+  }
+  return phones;
+}
+
 async function contactPhones(db: Db, workspaceId: string) {
   const result = await db.query<{
     id: string;
     phone: string;
     name: string;
+    email: string | null;
     company_id: string | null;
   }>(
     `select
        id,
        phone,
        coalesce(nullif(trim(concat_ws(' ', first_name, last_name)), ''), email, phone) as name,
+       normalized_email as email,
        company_id
      from crm.contacts
      where workspace_id = $1 and archived_at is null and phone is not null
@@ -382,90 +418,104 @@ async function contactPhones(db: Db, workspaceId: string) {
     phones.set(number, {
       id: row.id,
       name: row.name,
+      email: row.email,
       companyId: row.company_id,
     });
   }
   return phones;
 }
 
+function workspaceActor(actors: UserActor[], workspaceId: string) {
+  return actors.find((item) => item.workspaceId === workspaceId) ?? null;
+}
+
 async function fileCalls(
   db: Db,
-  actor: UserActor,
+  actors: UserActor[],
   connectionId: string,
   rows: CallRow[],
-  phones: Map<string, ContactPhone>,
+  phones: Map<string, WorkspacePhone[]>,
+  captureId: string,
 ) {
   const counts = { logged: 0, unmatched: 0, skipped: 0 };
+  const workspaceIds = actors.map((item) => item.workspaceId);
   for (const call of rows) {
-    const existing = await db.query(
-      `select 1 from crm.call_records
-       where workspace_id = $1 and provider_call_id = $2`,
-      [actor.workspaceId, call.providerCallId],
+    const existing = await db.query<{ workspace_id: string }>(
+      `select workspace_id from crm.call_records
+       where connection_id = $1 and provider_call_id = $2 and workspace_id = any($3::uuid[])`,
+      [connectionId, call.providerCallId, workspaceIds],
     );
-    if ((existing.rowCount ?? 0) > 0) {
+    if (existing.rows.length > 0) {
       if (call.teamsCallId) {
-        await db.query(
-          `update crm.call_records set teams_call_id = $3
-           where workspace_id = $1 and provider_call_id = $2 and teams_call_id is null`,
-          [actor.workspaceId, call.providerCallId, call.teamsCallId],
-        );
-        const filed = await filedTranscript(db, actor, call.teamsCallId);
-        if (filed) {
+        for (const row of existing.rows) {
+          const actor = workspaceActor(actors, row.workspace_id);
+          if (!actor) continue;
           await db.query(
-            `update crm.call_records
-             set activity_id = $3, contact_id = $4, company_id = $5
-             where workspace_id = $1 and provider_call_id = $2
-               and activity_id is null and contact_id is null and company_id is null`,
-            [
-              actor.workspaceId,
-              call.providerCallId,
-              filed.activity_id,
-              filed.contact_id,
-              filed.company_id,
-            ],
+            `update crm.call_records set teams_call_id = $3
+             where workspace_id = $1 and provider_call_id = $2 and teams_call_id is null`,
+            [row.workspace_id, call.providerCallId, call.teamsCallId],
           );
+          const filed = await filedTranscript(db, actor, call.teamsCallId);
+          if (filed) {
+            await db.query(
+              `update crm.call_records
+               set activity_id = $3, contact_id = $4, company_id = $5
+               where workspace_id = $1 and provider_call_id = $2
+                 and activity_id is null and contact_id is null and company_id is null`,
+              [row.workspace_id, call.providerCallId, filed.activity_id, filed.contact_id, filed.company_id],
+            );
+          }
         }
       }
       counts.skipped += 1;
       continue;
     }
-    const filed = call.teamsCallId ? await filedTranscript(db, actor, call.teamsCallId) : null;
-    const contact = filed
-      ? { id: filed.contact_id, name: "", companyId: filed.company_id }
-      : call.counterpartNumber
-        ? (phones.get(call.counterpartNumber) ?? null)
-        : null;
-    const activityId = filed
-      ? filed.activity_id
-      : contact
-        ? await logCall(db, actor, call, contact)
-        : null;
-    const inserted = await db.query(
-      `insert into crm.call_records (
-         workspace_id, connection_id, provider_call_id, direction,
-         counterpart_number, started_at, duration_seconds,
-         contact_id, company_id, activity_id, teams_call_id
-       ) values ($1, $2, $3, $4, $5, $6::timestamptz, $7, $8, $9, $10, $11)
-       on conflict (workspace_id, provider_call_id) do nothing`,
-      [
-        actor.workspaceId,
-        connectionId,
-        call.providerCallId,
-        call.direction,
-        call.counterpartNumber,
-        call.startedAt,
-        call.durationSeconds,
-        contact?.id ?? null,
-        contact?.companyId ?? null,
-        activityId,
-        call.teamsCallId ?? null,
-      ],
-    );
-    if ((inserted.rowCount ?? 0) === 0) {
+    const targets = new Map<string, { contact: ContactPhone | null; activityId: string }>();
+    for (const actor of actors) {
+      const filed = call.teamsCallId ? await filedTranscript(db, actor, call.teamsCallId) : null;
+      if (filed) {
+        targets.set(actor.workspaceId, {
+          contact: { id: filed.contact_id, name: "", email: null, companyId: filed.company_id },
+          activityId: filed.activity_id,
+        });
+      }
+    }
+    for (const contact of call.counterpartNumber ? (phones.get(call.counterpartNumber) ?? []) : []) {
+      const actor = workspaceActor(actors, contact.workspaceId);
+      if (!actor || targets.has(contact.workspaceId)) continue;
+      targets.set(contact.workspaceId, { contact, activityId: await logCall(db, actor, call, contact) });
+    }
+    const writes = targets.size > 0 ? [...targets] : [[captureId, null] as const];
+    let inserted = 0;
+    for (const [workspaceId, target] of writes) {
+      const saved = await db.query(
+        `insert into crm.call_records (
+           workspace_id, connection_id, provider_call_id, direction,
+           counterpart_number, started_at, duration_seconds,
+           contact_id, company_id, activity_id, teams_call_id
+         ) values ($1, $2, $3, $4, $5, $6::timestamptz, $7, $8, $9, $10, $11)
+         on conflict (workspace_id, provider_call_id) do nothing`,
+        [
+          workspaceId,
+          connectionId,
+          call.providerCallId,
+          call.direction,
+          call.counterpartNumber,
+          call.startedAt,
+          call.durationSeconds,
+          target?.contact?.id ?? null,
+          target?.contact?.companyId ?? null,
+          target?.activityId ?? null,
+          call.teamsCallId ?? null,
+        ],
+      );
+      inserted += saved.rowCount ?? 0;
+    }
+    if (inserted === 0) {
       counts.skipped += 1;
       continue;
     }
-    if (activityId) counts.logged += 1;
+    if (targets.size > 0) counts.logged += 1;
     else counts.unmatched += 1;
   }
   return counts;
@@ -490,53 +540,86 @@ async function filedTranscript(db: Db, actor: UserActor, teamsCallId: string) {
 
 async function rematchCalls(
   db: Db,
-  actor: UserActor,
+  actors: UserActor[],
   connectionId: string,
-  phones: Map<string, ContactPhone>,
+  phones: Map<string, WorkspacePhone[]>,
 ) {
   if (phones.size === 0) return 0;
   const pending = await db.query<{
     id: string;
+    workspace_id: string;
     provider_call_id: string;
     direction: CallDirection;
     counterpart_number: string;
     started_at: Date | string | null;
     duration_seconds: number | null;
+    teams_call_id: string | null;
   }>(
-    `select id, provider_call_id, direction, counterpart_number, started_at, duration_seconds
+    `select id, workspace_id, provider_call_id, direction, counterpart_number, started_at, duration_seconds, teams_call_id
      from crm.call_records
      where connection_id = $1
-       and workspace_id = $2
+       and workspace_id = any($2::uuid[])
        and contact_id is null
        and company_id is null
        and activity_id is null
        and counterpart_number = any($3::text[])
      order by started_at asc nulls last
      limit ${REMATCH_LIMIT}`,
-    [connectionId, actor.workspaceId, [...phones.keys()]],
+    [connectionId, actors.map((item) => item.workspaceId), [...phones.keys()]],
   );
   let logged = 0;
   for (const row of pending.rows) {
-    const contact = phones.get(row.counterpart_number);
-    if (!contact) continue;
-    const activityId = await logCall(
-      db,
-      actor,
-      {
-        providerCallId: row.provider_call_id,
-        direction: row.direction,
-        counterpartNumber: row.counterpart_number,
-        startedAt: iso(row.started_at),
-        durationSeconds: row.duration_seconds,
-      },
-      contact,
+    const call: CallRow = {
+      providerCallId: row.provider_call_id,
+      direction: row.direction,
+      counterpartNumber: row.counterpart_number,
+      startedAt: iso(row.started_at),
+      durationSeconds: row.duration_seconds,
+    };
+    const present = await db.query<{ workspace_id: string }>(
+      "select workspace_id from crm.call_records where connection_id = $1 and provider_call_id = $2",
+      [connectionId, row.provider_call_id],
     );
-    await db.query(
-      `update crm.call_records
-       set contact_id = $2, company_id = $3, activity_id = $4
-       where id = $1`,
-      [row.id, contact.id, contact.companyId, activityId],
+    const matches = (phones.get(row.counterpart_number) ?? []).filter(
+      (contact) => contact.workspaceId === row.workspace_id || !present.rows.some((item) => item.workspace_id === contact.workspaceId),
     );
+    if (matches.length === 0) continue;
+    const here = matches.find((contact) => contact.workspaceId === row.workspace_id) ?? matches[0];
+    for (const contact of matches) {
+      const actor = workspaceActor(actors, contact.workspaceId);
+      if (!actor) continue;
+      const activityId = await logCall(db, actor, call, contact);
+      if (contact === here) {
+        await db.query(
+          `update crm.call_records
+           set workspace_id = $2, contact_id = $3, company_id = $4, activity_id = $5
+           where id = $1`,
+          [row.id, contact.workspaceId, contact.id, contact.companyId, activityId],
+        );
+      } else {
+        await db.query(
+          `insert into crm.call_records (
+             workspace_id, connection_id, provider_call_id, direction,
+             counterpart_number, started_at, duration_seconds,
+             contact_id, company_id, activity_id, teams_call_id
+           ) values ($1, $2, $3, $4, $5, $6::timestamptz, $7, $8, $9, $10, $11)
+           on conflict (workspace_id, provider_call_id) do nothing`,
+          [
+            contact.workspaceId,
+            connectionId,
+            row.provider_call_id,
+            row.direction,
+            row.counterpart_number,
+            iso(row.started_at),
+            row.duration_seconds,
+            contact.id,
+            contact.companyId,
+            activityId,
+            row.teams_call_id,
+          ],
+        );
+      }
+    }
     logged += 1;
   }
   return logged;
