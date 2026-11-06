@@ -162,7 +162,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: "calendar-week", label: "Week view", group: "Calendar", combos: [{ key: "w" }], target: "view-week", palette: true },
   { id: "calendar-panel", label: "Show or hide calendars", group: "Calendar", combos: [{ key: "\\" }], target: "calendars-panel", palette: true },
   { id: "event-join", label: "Join the meeting", group: "Calendar", combos: [{ key: "j" }], target: "join", inOverlay: true },
-  { id: "event-cancel", label: "Cancel the meeting", group: "Calendar", combos: [{ key: "Backspace" }, { key: "Delete" }], target: "cancel-meeting", inOverlay: true },
+  { id: "event-cancel", label: "Cancel or delete", group: "Calendar", combos: [{ key: "Backspace" }, { key: "Delete" }], target: "cancel-meeting", inOverlay: true },
 
   { id: "mail-reply", label: "Reply", group: "Mail", combos: [{ key: "r" }] },
   { id: "mail-reply-all", label: "Reply all", group: "Mail", combos: [{ key: "a" }] },

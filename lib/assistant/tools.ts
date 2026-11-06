@@ -75,7 +75,7 @@ import { BULK_LIMIT, runBulk } from "@/lib/crm/bulk";
 import { attachableFiles, discardAttachments } from "@/lib/crm/email-attachments";
 import { activitySummaries, archiveActivity, listActivities, readActivityState, updateActivity } from "@/lib/crm/activities";
 import { ACTIVITY_EDIT_FIELDS, ACTIVITY_FIELD_LABELS, EDITABLE_TYPES, type ActivityEdit, type ActivityEditField } from "@/lib/crm/activity-edit";
-import { getCalendarStatus, getMeetings, myAddresses, readPeople, readPerson, relinkCalendar } from "@/lib/crm/calendar";
+import { getCalendarStatus, getMeetings, isPersonalEvent, myAddresses, readPeople, readPerson, relinkCalendar } from "@/lib/crm/calendar";
 import { listCalendarItems } from "@/lib/crm/calendars";
 import { getInsightTranscript, getInsightsForActivities } from "@/lib/crm/call-insights";
 import { createTaskWithClickUp, getClickUpPicker, getClickUpState, pushClickUpTask } from "@/lib/crm/clickup";
@@ -96,7 +96,20 @@ import { getMailbox } from "@/lib/crm/inbox";
 import { listFollowUps } from "@/lib/crm/follow-ups";
 import { captureContext, listToFile, waitingHere } from "@/lib/crm/capture";
 import { listUnknownMail } from "@/lib/mail/filing";
-import { cancelInvite, createInvite, getInviteSetup, getMeetingLink, MEETING_RESPONSES, rescheduleInvite, resolveInviteFrom, respondToInvite } from "@/lib/crm/invites";
+import {
+  cancelInvite,
+  CONTACTS_NEED_GUESTS,
+  createInvite,
+  getInviteSetup,
+  getMeetingLink,
+  hasNoGuests,
+  MEETING_RESPONSES,
+  ownInviteAddresses,
+  rescheduleInvite,
+  resolveEventCalendar,
+  resolveInviteFrom,
+  respondToInvite,
+} from "@/lib/crm/invites";
 import { latestEmailCheck, verifyEmail } from "@/lib/enrichment/email-check";
 import { archiveOpportunity, createOpportunity, getOpportunity, listOpportunities, listPipeline, updateOpportunity } from "@/lib/crm/opportunities";
 import { pipelineReport, stageHistory, stalledDeals, STALLED_DAYS } from "@/lib/crm/pipeline-history";
@@ -1603,7 +1616,7 @@ const TOOL_LIST: AssistantTool[] = [
     name: "list_calendar_events",
     label: "Checking the calendar",
     description:
-      "Calendar events across the connected calendars between two dates (London), up to 62 days apart. Each has organisedByMe, myResponse (Outlook's: accepted, tentativelyAccepted, declined, notResponded, none or organizer), canCancel (move_meeting and cancel_meeting work) and canRespond (respond_to_meeting works).",
+      "Calendar events across the connected calendars between two dates (London), up to 62 days apart. Each has organisedByMe, myResponse (Outlook's: accepted, tentativelyAccepted, declined, notResponded, none or organizer), canCancel (move_meeting and cancel_meeting work), personal (an event Orbit added with no guests: moving it tells nobody and cancelling deletes it) and canRespond (respond_to_meeting works).",
     parameters: {
       type: "object",
       properties: {
@@ -2506,7 +2519,7 @@ const TOOL_LIST: AssistantTool[] = [
     name: "get_settings",
     label: "Checking settings",
     description:
-      "Your meeting link, your email addresses, the addresses that can send meeting invites (inviteSenders, with defaultInviteFrom for this workspace and a problem when one can't send), the booking page, the status of Microsoft mail and calendar, ClickUp and Granola, and the lifecycles companies can have (built in and the workspace's own, such as Consultant) with how many companies each has.",
+      "Your meeting link, your email addresses, the addresses that can send meeting invites (inviteSenders, with defaultInviteFrom for this workspace and a problem when one can't send), the Microsoft calendars a personal event can go in (eventCalendars, with defaultEventCalendar), the booking page, the status of Microsoft mail and calendar, ClickUp and Granola, and the lifecycles companies can have (built in and the workspace's own, such as Consultant) with how many companies each has.",
     parameters: { type: "object", properties: {} },
     run: async (actor) => {
       const [meetingLink, emails, booking, mailbox, calendar, clickup, picker, granola, lifecycles, invites] = await Promise.all([
@@ -2526,6 +2539,8 @@ const TOOL_LIST: AssistantTool[] = [
         myEmails: emails,
         inviteSenders: invites.senders.map((sender) => ({ address: sender.address, kind: sender.kind, main: sender.primary, problem: sender.problem })),
         defaultInviteFrom: invites.defaultFrom,
+        eventCalendars: invites.calendars.map((calendar) => ({ address: calendar.address, main: calendar.primary, problem: calendar.problem })),
+        defaultEventCalendar: invites.defaultCalendar,
         bookingPage: { ...booking, publicUrl: booking.exists ? bookingUrl(booking.slug) : null },
         microsoftMail: mailbox,
         calendar,
@@ -4311,51 +4326,68 @@ const TOOL_LIST: AssistantTool[] = [
   },
   {
     name: "create_meeting_invite",
-    label: "Sending an invite",
+    label: "Adding a calendar event",
     write: true,
     description:
-      "Create a meeting and send invites. Times are London time. from picks which of the user's addresses sends it (see get_settings); leave it out to use the default for this workspace: the address whose home is this workspace, else the last one used here, else the main Microsoft mailbox. Microsoft addresses send through Outlook; other addresses email a standard invite and hold the time in a Microsoft calendar.",
+      "Create a meeting and send invites, or with no attendees add a personal event to the user's own calendar (nobody is invited, no email goes out and nothing is logged on contacts). Times are London time. from picks which of the user's addresses sends it (see get_settings); leave it out to use the default for this workspace: the address whose home is this workspace, else the last one used here, else the main Microsoft mailbox. Microsoft addresses send through Outlook; other addresses email a standard invite and hold the time in a Microsoft calendar. For a personal event, from picks the Microsoft calendar (eventCalendars in get_settings; other addresses have no calendar) and the default follows the same rules, using the calendar last used for a personal event.",
     parameters: {
       type: "object",
       properties: {
-        from: { type: "string", description: "The address that sends the invite. Defaults to this workspace's invite address." },
+        from: {
+          type: "string",
+          description: "The address that sends the invite, or the Microsoft calendar for a personal event. Defaults to this workspace's address.",
+        },
         title: { type: "string" },
         startLocal: { type: "string", description: "YYYY-MM-DDTHH:mm London time." },
         durationMinutes: { type: "integer", minimum: 15, maximum: 480 },
         attendees: {
           type: "array",
+          description: "The guests. Leave empty to add a personal event with no guests.",
           items: { type: "object", properties: { email: { type: "string" }, name: { type: "string" } }, required: ["email"] },
         },
         contactIds: { type: "array", items: { type: "string" }, description: "Orbit contacts the meeting is with." },
         notes: { type: "string" },
-        includeMeetingLink: { type: "boolean", description: "Add your saved meeting link. Defaults to true." },
+        includeMeetingLink: { type: "boolean", description: "Add your saved meeting link. Defaults to true with guests and false without." },
       },
-      required: ["title", "startLocal", "durationMinutes", "attendees"],
+      required: ["title", "startLocal", "durationMinutes"],
     },
     details: async (actor, args) => {
+      const personal = hasNoGuests(args.attendees);
       try {
-        return { "invite:from": await resolveInviteFrom(actor, optionalStr(args.from)) };
+        return { "invite:from": await (personal ? resolveEventCalendar : resolveInviteFrom)(actor, optionalStr(args.from)) };
       } catch {
         return { "invite:from": optionalStr(args.from) ?? "" };
       }
     },
-    describe: (args, name) => ({
-      title: `Send invite: ${str(args.title)}`,
-      lines: [
-        `From: ${detail(name, "invite:from") || optionalStr(args.from) || "your default address"}`,
-        `When: ${formatDateTimeLabel(str(args.startLocal))} for ${args.durationMinutes} minutes`,
-        `Guests: ${(Array.isArray(args.attendees) ? args.attendees : [])
-          .map((guest) => (guest && typeof guest === "object" ? str((guest as Args).name) || str((guest as Args).email) : ""))
-          .filter(Boolean)
-          .join(", ")}`,
-        ...fieldLines(args, { notes: "Notes" }),
-      ],
-    }),
+    describe: (args, name) => {
+      const when = `${formatDateTimeLabel(str(args.startLocal))} for ${args.durationMinutes} minutes`;
+      if (hasNoGuests(args.attendees)) {
+        return {
+          title: `Add to calendar: ${str(args.title)}, ${when}, ${detail(name, "invite:from") || optionalStr(args.from) || "your default calendar"}`,
+          lines: [...fieldLines(args, { notes: "Notes" }), args.includeMeetingLink === true ? "Adds your meeting link." : "", "Nobody is invited."],
+        };
+      }
+      return {
+        title: `Send invite: ${str(args.title)}`,
+        lines: [
+          `From: ${detail(name, "invite:from") || optionalStr(args.from) || "your default address"}`,
+          `When: ${formatDateTimeLabel(str(args.startLocal))} for ${args.durationMinutes} minutes`,
+          `Guests: ${(Array.isArray(args.attendees) ? args.attendees : [])
+            .map((guest) => (guest && typeof guest === "object" ? str((guest as Args).name) || str((guest as Args).email) : ""))
+            .filter(Boolean)
+            .join(", ")}`,
+          ...fieldLines(args, { notes: "Notes" }),
+        ],
+      };
+    },
     run: async (actor, args) => {
+      const personal = hasNoGuests(args.attendees);
       const attendees = (Array.isArray(args.attendees) ? args.attendees : [])
         .filter((guest): guest is Args => Boolean(guest) && typeof guest === "object")
         .map((guest) => ({ email: str(guest.email), name: str(guest.name) || null }))
         .filter((guest) => guest.email);
+      if (!personal && attendees.length === 0) return { error: "Every guest needs an email address. Leave attendees empty for a personal event." };
+      if (personal && strings(args.contactIds).length > 0) return { error: CONTACTS_NEED_GUESTS };
       const result = await createInvite(actor, {
         title: str(args.title),
         startLocal: str(args.startLocal),
@@ -4363,10 +4395,10 @@ const TOOL_LIST: AssistantTool[] = [
         attendees,
         contactIds: strings(args.contactIds),
         notes: str(args.notes),
-        includeMeetingLink: args.includeMeetingLink !== false,
+        includeMeetingLink: personal ? args.includeMeetingLink === true : args.includeMeetingLink !== false,
         from: optionalStr(args.from),
       });
-      return { invite: result };
+      return personal ? { event: result } : { invite: result };
     },
   },
   {
@@ -4390,13 +4422,14 @@ const TOOL_LIST: AssistantTool[] = [
       const known = (key: string) => (name(`${id}:${key}`) === `${id}:${key}` ? "" : name(`${id}:${key}`));
       const minutes = typeof args.durationMinutes === "number" ? args.durationMinutes : Number(known("minutes")) || null;
       const from = known("when");
+      const personal = known("personal") === "yes";
       return {
-        title: `Move meeting: ${name(id)}`,
+        title: `${personal ? "Move event" : "Move meeting"}: ${name(id)}`,
         lines: [
           from ? `From: ${formatDateTimeLabel(from)}${known("minutes") ? ` for ${known("minutes")} minutes` : ""}` : "",
           `To: ${formatDateTimeLabel(str(args.startLocal))}${minutes ? ` for ${minutes} minutes` : ""}`,
-          known("guests") ? `Guests: ${known("guests")}` : "",
-          ...fieldLines(args, { message: "Message to guests" }),
+          known("guests") && !personal ? `Guests: ${known("guests")}` : "",
+          ...(personal ? [] : fieldLines(args, { message: "Message to guests" })),
         ],
       };
     },
@@ -4427,6 +4460,10 @@ const TOOL_LIST: AssistantTool[] = [
     describe: (args, name) => {
       const id = str(args.eventId);
       const guests = detail(name, `${id}:guests`);
+      if (detail(name, `${id}:personal`) === "yes") {
+        const when = detail(name, `${id}:when`);
+        return { title: `Delete from your calendar: ${name(id)}${when ? `, ${formatDateTimeLabel(when)}` : ""}. Nobody is told.`, lines: [] };
+      }
       return {
         title: `Cancel meeting: ${name(id) === "Unknown record" ? "a meeting Orbit can't find" : name(id)}`,
         lines: [
@@ -5219,13 +5256,26 @@ export async function recordNames(actor: UserActor, args: Args[], tools: string[
       [list, actor.workspaceId],
     );
     for (const row of emails.rows) names.set(`${row.id}:email`, row.email);
-    const events = await db.query<{ id: string; subject: string | null; starts_at: Date; ends_at: Date; organizer: unknown; attendees: unknown }>(
-      `select id, subject, starts_at, ends_at, organizer, attendees from crm.calendar_events
+    const events = await db.query<{
+      id: string;
+      subject: string | null;
+      starts_at: Date;
+      ends_at: Date;
+      organizer: unknown;
+      attendees: unknown;
+      created_by_orbit: boolean;
+      invite_identity_id: string | null;
+      invite_uid: string | null;
+      contact_ids: string[] | null;
+    }>(
+      `select id, subject, starts_at, ends_at, organizer, attendees, created_by_orbit, invite_identity_id, invite_uid, contact_ids
+       from crm.calendar_events
        where id = any($1::uuid[]) and user_id = $2`,
       [list, actor.userId],
     );
     if (events.rows.length === 0) return;
     const own = await myAddresses(db, actor);
+    const inviteOwn = await ownInviteAddresses(db, actor);
     for (const row of events.rows) {
       const guests = [...new Map([readPerson(row.organizer), ...readPeople(row.attendees)]
         .filter((person): person is NonNullable<typeof person> => Boolean(person) && !own.has(person!.email))
@@ -5236,6 +5286,7 @@ export async function recordNames(actor: UserActor, args: Args[], tools: string[
       const organizer = readPerson(row.organizer);
       if (organizer) names.set(`${row.id}:organizer`, organizer.name ? `${organizer.name} (${organizer.email})` : organizer.email);
       if (guests.length) names.set(`${row.id}:guests`, guests.join(", "));
+      if (isPersonalEvent(row, inviteOwn)) names.set(`${row.id}:personal`, "yes");
     }
   });
   return names;

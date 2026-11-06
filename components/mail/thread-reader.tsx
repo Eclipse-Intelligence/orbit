@@ -549,6 +549,15 @@ export default function ThreadReader({
   if (outsideDraft && openedOutside !== outsideDraft.id) editOutsideDraft(outsideDraft);
 
   const prepared = detail?.prepared && target && detail.prepared.messageId === target.id && !hiddenPrepared.has(detail.prepared.id) ? detail.prepared : null;
+  const [composerPrepared, setComposerPrepared] = useState<string | null>(null);
+  const openedPrepared = useRef<string | null>(null);
+  const autoPrepared = prepared && !active && !dismissed && !outsideDraft ? prepared : null;
+
+  useEffect(() => {
+    if (!autoPrepared || openedPrepared.current === autoPrepared.id) return;
+    openedPrepared.current = autoPrepared.id;
+    void takePrepared(autoPrepared);
+  });
   const followUp = detail?.followUp && detail.followUp.id !== cancelledFollowUp ? detail.followUp : null;
 
   async function preparedAction(id: string, action: "use" | "dismiss" | "cancel_reminder") {
@@ -566,6 +575,7 @@ export default function ThreadReader({
     const everyone = target.to.length + target.cc.length > 1;
     const fresh = item.times ? await preparedAction(item.id, "use") : null;
     startReply(everyone ? "reply_all" : "reply", fresh?.body ?? item.body);
+    setComposerPrepared(item.id);
     setHiddenPrepared((existing) => new Set(existing).add(item.id));
     if (!item.times) void preparedAction(item.id, "use");
   }
@@ -897,6 +907,9 @@ export default function ThreadReader({
                   variant="inline"
                   accounts={accounts}
                   onClose={closeComposer}
+                  onDiscard={() => {
+                    if (composerPrepared) void preparedAction(composerPrepared, "dismiss");
+                  }}
                   onSent={(body, to) => {
                     setEcho({ body, to, count: detail.messages.length });
                     closeComposer();

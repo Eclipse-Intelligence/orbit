@@ -13,6 +13,7 @@ import { grantsCalendarWrite, microsoftConfigured, refreshMicrosoftToken, type M
 
 export const INVITE_NOT_CONNECTED = "Connect Microsoft in Settings › Integrations to send invites.";
 export const INVITE_RECONNECT = CALENDAR_WRITE_RECONNECT;
+export const CALENDAR_NOT_CONNECTED = "Connect Microsoft in Settings › Integrations to add events to your calendar.";
 
 export type InviteSenderOption = {
   address: string;
@@ -352,7 +353,7 @@ export async function defaultInviteAddress(
   db: Db,
   actor: UserActor,
   senders: InviteSenderCandidate[],
-  options: { mainFirst?: boolean } = {},
+  options: { mainFirst?: boolean; lastUsed?: string | null } = {},
 ) {
   if (senders.length === 0) return null;
   const known = new Set(senders.map((sender) => sender.address));
@@ -360,6 +361,7 @@ export async function defaultInviteAddress(
   if (home) return home;
   const primary = senders.find((sender) => sender.primary);
   if (options.mainFirst && primary) return primary.address;
+  if (options.lastUsed && known.has(options.lastUsed)) return options.lastUsed;
   const last = await db.query<{ address: string }>(
     "select address from crm.invite_sender_choices where user_id = $1 and workspace_id = $2",
     [actor.userId, actor.workspaceId],
@@ -367,6 +369,57 @@ export async function defaultInviteAddress(
   const remembered = last.rows[0]?.address;
   if (remembered && known.has(remembered)) return remembered;
   return (primary ?? senders.find((sender) => !sender.problem) ?? senders[0]).address;
+}
+
+export function personalCalendars(senders: InviteSenderCandidate[]) {
+  return senders.filter((sender) => sender.kind === "microsoft");
+}
+
+async function lastPersonalCalendar(db: Db, actor: UserActor, calendars: InviteSenderCandidate[]) {
+  const last = await db.query<{ calendar_id: string; connection_id: string | null }>(
+    `select calendar_id, connection_id from crm.calendar_events
+     where user_id = $1 and created_by_orbit
+       and invite_identity_id is null and invite_uid is null and attendees = '[]'::jsonb
+     order by created_at desc, id
+     limit 1`,
+    [actor.userId],
+  );
+  const row = last.rows[0];
+  if (!row) return null;
+  const match =
+    calendars.find((calendar) => calendar.calendar?.id === row.calendar_id) ??
+    (row.connection_id ? calendars.find((calendar) => calendar.primary) : undefined);
+  return match?.address ?? null;
+}
+
+export async function defaultCalendarAddress(db: Db, actor: UserActor, senders: InviteSenderCandidate[]) {
+  const calendars = personalCalendars(senders);
+  if (calendars.length === 0) return null;
+  return defaultInviteAddress(db, actor, calendars, { lastUsed: await lastPersonalCalendar(db, actor, calendars) });
+}
+
+export function pickPersonalCalendar(senders: InviteSenderCandidate[], from: unknown, fallback: string | null) {
+  if (from !== undefined && from !== null && from !== "" && typeof from !== "string") {
+    throw new CrmError("invalid_input", "Choose a calendar.", 400, { field: "from" });
+  }
+  const calendars = personalCalendars(senders);
+  const wanted = typeof from === "string" && from.trim() ? canonicalEmail(from) ?? from.trim().toLowerCase() : null;
+  if (wanted) {
+    const found = calendars.find((calendar) => calendar.address === wanted);
+    if (found) return found;
+    const smtp = senders.some((sender) => sender.address === wanted);
+    throw new CrmError(
+      smtp ? "invalid_input" : "not_found",
+      smtp
+        ? `${wanted} has no calendar. Choose a Microsoft calendar, or add a guest to send an invite from it.`
+        : `${wanted} isn't one of your Microsoft calendars. Choose another calendar.`,
+      smtp ? 400 : 404,
+      { field: "from" },
+    );
+  }
+  const chosen = fallback ? calendars.find((calendar) => calendar.address === fallback) : null;
+  if (!chosen) throw new CrmError("not_connected", CALENDAR_NOT_CONNECTED, 400);
+  return chosen;
 }
 
 export function pickInviteSender(senders: InviteSenderCandidate[], from: unknown, fallback: string | null) {
