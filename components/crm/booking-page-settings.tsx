@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Button, { buttonVariants } from "@/components/_ui/button";
 import Field from "@/components/_ui/field";
 import { Input } from "@/components/_ui/input";
+import { NativeSelect } from "@/components/_ui/native-select";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/_ui/select";
 import { SettingsCard } from "@/components/crm/settings-ui";
 import Switch from "@/components/_ui/switch";
@@ -53,6 +54,7 @@ type Draft = {
   horizonDays: string;
   weeklyHours: WeeklyHours;
   videoUrl: string;
+  inviteSender: string;
 };
 
 type SlugState = { slug: string; state: "idle" | "checking" | "available" | "taken"; message: string | null };
@@ -73,6 +75,7 @@ function draftFrom(page: Settings): Draft {
     horizonDays: String(page.horizonDays),
     weeklyHours: page.weeklyHours,
     videoUrl: page.videoUrl ?? "",
+    inviteSender: page.inviteSender ?? "",
   };
 }
 
@@ -361,6 +364,7 @@ export default function BookingPageSettings({
       horizonDays: horizon,
       weeklyHours: draft.weeklyHours,
       videoUrl: draft.videoUrl,
+      inviteSender: draft.inviteSender,
     }).catch((error: unknown) => ({
       error: reloadIfStaleDeploy(error)
         ? "Orbit was just updated. Reloading…"
@@ -378,8 +382,24 @@ export default function BookingPageSettings({
   }
 
 
+  const mainSender = setup.senders.find((sender) => sender.primary) ?? null;
+  const inviteSender = draft.inviteSender
+    ? setup.senders.find((sender) => sender.address === draft.inviteSender) ?? null
+    : mainSender;
   const warnings: ReactNode[] = [];
-  if (!setup.connected) {
+  if (inviteSender && !inviteSender.primary) {
+    if (inviteSender.problem) {
+      warnings.push(
+        inviteSender.fixHref ? (
+          <a href={inviteSender.fixHref} className="underline underline-offset-2">
+            {inviteSender.problem}
+          </a>
+        ) : (
+          inviteSender.problem
+        ),
+      );
+    }
+  } else if (!setup.connected) {
     warnings.push(
       <>
         Microsoft isn&apos;t connected, so bookings can&apos;t create meetings.{" "}
@@ -508,6 +528,25 @@ export default function BookingPageSettings({
               </Button>
             )}
           </div>
+        )}
+        {setup.senders.length > 1 && (
+          <Field label="Invites from" htmlFor="booking-invite-sender" error={errors.inviteSender}>
+            <NativeSelect
+              id="booking-invite-sender"
+              value={draft.inviteSender || mainSender?.address || ""}
+              aria-invalid={errors.inviteSender ? true : undefined}
+              onChange={(event) => {
+                const chosen = setup.senders.find((sender) => sender.address === event.target.value);
+                update("inviteSender", chosen?.primary ? "" : event.target.value);
+              }}
+            >
+              {setup.senders.map((sender) => (
+                <option key={sender.address} value={sender.address}>
+                  {sender.address}
+                </option>
+              ))}
+            </NativeSelect>
+          </Field>
         )}
         {page.exists && slug !== page.slug && localSlug.ok && (
           <p className="caption-style text-subtle leading-[1.4]">

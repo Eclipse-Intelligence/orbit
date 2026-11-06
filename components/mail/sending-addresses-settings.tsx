@@ -4,7 +4,9 @@ import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { SettingsCard } from "@/components/crm/settings-ui";
+import type { HoldCalendar } from "@/lib/crm/invite-senders";
 import type { SendIdentity } from "@/lib/mail/identities";
+import { NativeSelect } from "@/components/_ui/native-select";
 import { cn } from "@/lib/utils";
 import { Radio } from "@/components/_ui/radio";
 
@@ -13,7 +15,17 @@ type Source = { id: string; email: string };
 const field =
   "bg-white/[0.06] text-foreground placeholder:text-subtle h-9 w-full rounded-lg px-3 text-[14px] outline-none focus-visible:ring-2 focus-visible:ring-ring/60";
 
-export default function SendingAddressesSettings({ identities, sources, suggestedSource }: { identities: SendIdentity[]; sources: Source[]; suggestedSource: string | null }) {
+export default function SendingAddressesSettings({
+  identities,
+  sources,
+  suggestedSource,
+  holdCalendars = [],
+}: {
+  identities: SendIdentity[];
+  sources: Source[];
+  suggestedSource: string | null;
+  holdCalendars?: HoldCalendar[];
+}) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [provider, setProvider] = useState<"neo" | "other">("neo");
@@ -42,6 +54,23 @@ export default function SendingAddressesSettings({ identities, sources, suggeste
     router.refresh();
   }
 
+  async function setHold(id: string, holdCalendarId: string) {
+    setBusy(true);
+    setError(null);
+    const response = await fetch("/api/mail/identities", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id, holdCalendarId }),
+    }).catch(() => null);
+    const body = (await response?.json().catch(() => ({}))) as { error?: string } | undefined;
+    setBusy(false);
+    if (!response?.ok) {
+      setError(body?.error ?? "That didn't save. Try again.");
+      return;
+    }
+    router.refresh();
+  }
+
   async function remove(id: string) {
     setBusy(true);
     await fetch(`/api/mail/identities?id=${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => null);
@@ -66,8 +95,8 @@ export default function SendingAddressesSettings({ identities, sources, suggeste
         {identities.length > 0 && (
           <ul className="flex flex-col gap-2">
             {identities.map((identity) => (
-              <li key={identity.id} className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.03] px-3 py-2">
-                <span className="flex min-w-0 flex-col">
+              <li key={identity.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-white/[0.03] px-3 py-2">
+                <span className="flex min-w-0 flex-1 flex-col">
                   <span className="text-foreground truncate text-[14px]">{identity.email}</span>
                   <span className={identity.lastError ? "caption-style text-danger" : "caption-style text-subtle"}>
                     {identity.lastError
@@ -75,6 +104,23 @@ export default function SendingAddressesSettings({ identities, sources, suggeste
                       : `Sends through ${identity.smtpHost}; mail arrives in ${sources.find((source) => source.id === identity.sourceId)?.email ?? "a connected mailbox"}`}
                   </span>
                 </span>
+                {holdCalendars.length > 0 && (
+                  <label className="caption-style text-subtle flex w-full flex-col gap-1 sm:w-auto sm:min-w-[16em]">
+                    Invites hold time in
+                    <NativeSelect
+                      value={identity.holdCalendarId && holdCalendars.some((item) => item.id === identity.holdCalendarId) ? identity.holdCalendarId : ""}
+                      disabled={busy}
+                      onChange={(event) => void setHold(identity.id, event.target.value)}
+                    >
+                      <option value="">Best match</option>
+                      {holdCalendars.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.label}
+                        </option>
+                      ))}
+                    </NativeSelect>
+                  </label>
+                )}
                 <Button variant="ghost" size="sm" disabled={busy} onClick={() => void remove(identity.id)}>
                   Remove
                 </Button>

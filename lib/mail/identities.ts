@@ -23,6 +23,7 @@ export type SendIdentity = {
   imapPort: number | null;
   lastError: string | null;
   verifiedAt: string | null;
+  holdCalendarId: string | null;
 };
 
 type IdentityRow = {
@@ -38,12 +39,13 @@ type IdentityRow = {
   imap_port: number | null;
   last_error: string | null;
   verified_at: Date | string | null;
+  hold_calendar_id: string | null;
 };
 
 export type SmtpSender = (identity: SendIdentity & { password: string }, message: { from: string; to: string[]; raw: string }) => Promise<void>;
 export type SentSaver = (identity: SendIdentity & { password: string }, raw: string) => Promise<void>;
 
-const COLUMNS = "id, source_id, email, display_name, smtp_host, smtp_port, username, password_cipher, imap_host, imap_port, last_error, verified_at";
+const COLUMNS = "id, source_id, email, display_name, smtp_host, smtp_port, username, password_cipher, imap_host, imap_port, last_error, verified_at, hold_calendar_id";
 
 function toIdentity(row: IdentityRow): SendIdentity {
   return {
@@ -58,6 +60,7 @@ function toIdentity(row: IdentityRow): SendIdentity {
     imapPort: row.imap_port,
     lastError: row.last_error,
     verifiedAt: row.verified_at ? new Date(row.verified_at).toISOString() : null,
+    holdCalendarId: row.hold_calendar_id,
   };
 }
 
@@ -169,6 +172,7 @@ export async function saveIdentity(
     imapPort,
     lastError: null,
     verifiedAt: null,
+    holdCalendarId: existing?.hold_calendar_id ?? null,
     password,
   };
   try {

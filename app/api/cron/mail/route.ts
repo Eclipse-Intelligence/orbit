@@ -2,6 +2,7 @@ import { backgroundTargets } from "@/lib/crm/conversations";
 import { followUpCallsAcross } from "@/lib/crm/follow-ups";
 import { cronAuthorization } from "@/lib/crm/scheduler";
 import { processDueMail } from "@/lib/mail/due";
+import { readInviteReplies } from "@/lib/mail/invite-replies";
 import { prepareMail } from "@/lib/mail/prepare";
 import { runWorkflowTick } from "@/lib/workflows/engine";
 import { syncMail, type MailSyncReport } from "@/lib/mail/sync";
@@ -32,6 +33,9 @@ async function handle(request: Request) {
       );
       await followUpCallsAcross(target.actor, { deadline: Math.min(deadline - 5_000, Date.now() + 30_000) }).catch((error) =>
         console.error("Call follow-ups failed", error),
+      );
+      await readInviteReplies(target.actor, { deadline: Math.min(deadline - 5_000, Date.now() + 20_000) }).catch((error) =>
+        console.error("Invite replies failed", error),
       );
       users.push({ userId: target.actor.userId, report });
     } catch (error) {

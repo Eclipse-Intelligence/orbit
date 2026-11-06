@@ -1,4 +1,5 @@
 import { mailResponse } from "@/app/api/mail/respond";
+import { setHoldCalendar } from "@/lib/crm/invite-senders";
 import { listIdentities, removeIdentity, saveIdentity } from "@/lib/mail/identities";
 
 export const dynamic = "force-dynamic";
@@ -18,5 +19,14 @@ export async function DELETE(request: Request) {
   return mailResponse(async (actor) => {
     await removeIdentity(actor, id);
     return { removed: true };
+  });
+}
+
+export async function PATCH(request: Request) {
+  const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+  return mailResponse(async (actor) => {
+    const calendarId = typeof body.holdCalendarId === "string" && body.holdCalendarId ? body.holdCalendarId : null;
+    await setHoldCalendar(actor, typeof body.id === "string" ? body.id : "", calendarId);
+    return { saved: true };
   });
 }

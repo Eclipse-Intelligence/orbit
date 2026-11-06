@@ -253,10 +253,10 @@ async function saveEvents(
          location = excluded.location,
          web_link = excluded.web_link,
          online_meeting_url = excluded.online_meeting_url,
-         organizer = excluded.organizer,
-         attendees = excluded.attendees,
+         organizer = case when crm.calendar_events.invite_identity_id is null then excluded.organizer else crm.calendar_events.organizer end,
+         attendees = case when crm.calendar_events.invite_identity_id is null then excluded.attendees else crm.calendar_events.attendees end,
          show_as = excluded.show_as,
-         response_status = excluded.response_status`,
+         response_status = case when crm.calendar_events.invite_identity_id is null then excluded.response_status else crm.calendar_events.response_status end`,
       [
         actor.workspaceId,
         calendarId,
@@ -457,7 +457,7 @@ export async function linkEvents(db: Db, actor: UserActor, only?: string[]) {
     `update crm.calendar_events e
      set contact_ids = '{}', company_ids = '{}'
      from crm.calendars c
-     where c.id = e.calendar_id and not c.use_for_crm
+     where c.id = e.calendar_id and not c.use_for_crm and not (e.created_by_orbit and e.connection_id is null)
        and e.user_id = $1 ${filter}
        and (cardinality(e.contact_ids) > 0 or cardinality(e.company_ids) > 0)`,
     values,
@@ -472,7 +472,7 @@ export async function linkEvents(db: Db, actor: UserActor, only?: string[]) {
   }>(
     `select e.id, e.workspace_id, e.organizer, e.attendees, e.contact_ids, e.company_ids
      from crm.calendar_events e
-     join crm.calendars c on c.id = e.calendar_id and c.use_for_crm
+     join crm.calendars c on c.id = e.calendar_id and (c.use_for_crm or (e.created_by_orbit and e.connection_id is null))
      where e.user_id = $1 ${filter}`,
     values,
   );

@@ -11,6 +11,7 @@ import {
   exchangeAuthorizationCode,
   fetchMicrosoftIdentity,
   grantsCalendar,
+  grantsCalendarWrite,
   grantsMailSend,
   MicrosoftTokenError,
   sanitizeMicrosoftError,
@@ -39,6 +40,7 @@ type StoredAccount = StoredTokens & {
   status: "connected" | "disconnected";
   scopeMissing: boolean;
   canSend: boolean;
+  calendarWrite: boolean | null;
   lastSyncedAt: string | null;
   lastAttemptAt: string | null;
   lastError: string | null;
@@ -58,6 +60,7 @@ type AccountRow = {
   status: "connected" | "disconnected";
   scope_missing: boolean;
   can_send: boolean;
+  calendar_write: boolean | null;
   refresh_token: string | null;
   access_token: string | null;
   access_token_expires_at: Date | string | null;
@@ -91,6 +94,7 @@ function mapAccount(row: AccountRow): StoredAccount {
     status: row.status,
     scopeMissing: row.scope_missing,
     canSend: row.can_send,
+    calendarWrite: row.calendar_write,
     lastSyncedAt: iso(row.last_synced_at),
     lastAttemptAt: iso(row.last_attempt_at),
     lastError: row.last_error,
@@ -102,7 +106,7 @@ function mapAccount(row: AccountRow): StoredAccount {
 
 export async function readAccounts(db: Db, actor: UserActor): Promise<StoredAccount[]> {
   const result = await db.query<AccountRow>(
-    `select id, provider, email, display_name, tenant_id, status, scope_missing, can_send, refresh_token, access_token,
+    `select id, provider, email, display_name, tenant_id, status, scope_missing, can_send, calendar_write, refresh_token, access_token,
             access_token_expires_at, last_synced_at, last_attempt_at, last_error,
             feed_url_cipher, feed_host, feed_etag, feed_last_modified, feed_fetched_at
      from crm.calendar_accounts
@@ -184,6 +188,7 @@ export async function connectCalendarAccount(
   }
   const scopeMissing = grantsCalendar(token.scope) === false;
   const canSend = purpose === "send_account" ? grantsMailSend(token.scope) !== false : null;
+  const calendarWrite = grantsCalendarWrite(token.scope);
   return withActor(actor, async (db) => {
     const primary = await readStored(db, actor);
     if (primary && canonicalEmail(primary.email) === email) {
@@ -192,8 +197,8 @@ export async function connectCalendarAccount(
     const saved = await db.query<{ id: string }>(
       `insert into crm.calendar_accounts (
          workspace_id, user_id, provider, email, display_name, tenant_id, status, scope_missing,
-         refresh_token, access_token, access_token_expires_at, last_error, can_send
-       ) values ($1, $2, 'microsoft', $3, $4, $5, 'connected', $6, $7, $8, $9, null, coalesce($10::boolean, false))
+         refresh_token, access_token, access_token_expires_at, last_error, can_send, calendar_write
+       ) values ($1, $2, 'microsoft', $3, $4, $5, 'connected', $6, $7, $8, $9, null, coalesce($10::boolean, false), $11::boolean)
        on conflict (user_id, provider, email) do update set
          display_name = coalesce(excluded.display_name, crm.calendar_accounts.display_name),
          tenant_id = coalesce(excluded.tenant_id, crm.calendar_accounts.tenant_id),
@@ -204,7 +209,8 @@ export async function connectCalendarAccount(
          access_token_expires_at = excluded.access_token_expires_at,
          last_attempt_at = null,
          last_error = null,
-         can_send = coalesce($10::boolean, crm.calendar_accounts.can_send)
+         can_send = coalesce($10::boolean, crm.calendar_accounts.can_send),
+         calendar_write = case when $11::boolean then true else coalesce(crm.calendar_accounts.calendar_write, $11::boolean) end
        returning id`,
       [
         actor.workspaceId,
@@ -217,6 +223,7 @@ export async function connectCalendarAccount(
         encryptSecret(token.accessToken),
         token.expiresAt,
         canSend,
+        calendarWrite,
       ],
     );
     return { id: saved.rows[0].id, email, scopeMissing, canSend };

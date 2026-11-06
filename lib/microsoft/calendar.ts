@@ -496,6 +496,33 @@ export function inviteDraft(input: {
   };
 }
 
+export function holdDraft(input: {
+  subject: string;
+  start: Date;
+  end: Date;
+  timeZone: string;
+  notes: string | null;
+  link: string | null;
+  sentFrom: string;
+  transactionId: string;
+}) {
+  const content = inviteBodyHtml(
+    [`Invite sent from ${input.sentFrom} by Orbit.`, input.notes].filter(Boolean).join("\n\n"),
+    input.link,
+  );
+  return {
+    subject: input.subject,
+    ...(content ? { body: { contentType: "HTML" as const, content } } : {}),
+    ...graphDateTimes(input.start, input.end, input.timeZone),
+    ...(input.link ? { location: { displayName: input.link } } : {}),
+    attendees: [],
+    showAs: "busy",
+    isReminderOn: true,
+    responseRequested: false,
+    transactionId: input.transactionId,
+  };
+}
+
 function eventsUrl(calendarId?: string | null) {
   return calendarId
     ? `https://graph.microsoft.com/v1.0/me/calendars/${encodeURIComponent(calendarId)}/events`
@@ -597,7 +624,7 @@ async function graphWrite(
 
 export async function createGraphEvent(
   accessToken: string,
-  draft: GraphEventDraft,
+  draft: GraphEventDraft | ReturnType<typeof holdDraft>,
   options: { calendarId?: string | null; fetchImpl?: typeof fetch } = {},
 ) {
   const response = await graphWrite(eventsUrl(options.calendarId), accessToken, draft, options.fetchImpl ?? fetch, true);
@@ -618,6 +645,16 @@ export async function cancelGraphEvent(
 
 function eventUrl(eventId: string) {
   return `https://graph.microsoft.com/v1.0/me/events/${encodeURIComponent(eventId)}`;
+}
+
+export async function deleteGraphEvent(accessToken: string, eventId: string, fetchImpl: typeof fetch = fetch) {
+  const response = await fetchImpl(eventUrl(eventId), {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(WRITE_TIMEOUT_MS),
+  });
+  if (!response.ok && response.status !== 404) throw await writeError(response, "cancel");
+  return response.status !== 404;
 }
 
 async function readEventBody(accessToken: string, eventId: string, fetchImpl: typeof fetch) {

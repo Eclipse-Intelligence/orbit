@@ -3,7 +3,7 @@ import { appSecret } from "@/lib/auth/config";
 
 export const MICROSOFT_SCOPES = "offline_access Mail.ReadWrite Mail.Send User.Read Calendars.ReadWrite";
 export const CALENDAR_ACCOUNT_SCOPES = "openid offline_access User.Read Calendars.Read";
-export const SEND_ACCOUNT_SCOPES = "openid offline_access User.Read Calendars.Read Mail.Send Mail.ReadWrite";
+export const SEND_ACCOUNT_SCOPES = "openid offline_access User.Read Calendars.ReadWrite Mail.Send Mail.ReadWrite";
 export const ORGANISATION_BLOCKED =
   "This Microsoft account's organisation doesn't allow Orbit yet. In Entra, set Orbit's Supported account types to include other organisations (and personal accounts if needed), or ask that organisation's admin to consent.";
 export const SIGN_IN_CANCELLED = "Microsoft sign-in was cancelled. Try again when you're ready.";

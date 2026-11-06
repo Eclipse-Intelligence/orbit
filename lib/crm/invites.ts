@@ -8,15 +8,30 @@ import {
   readGrantedScopes,
   readPeople,
   readPerson,
-  storeGrantedScopes,
 } from "@/lib/crm/calendar";
 import { withActor } from "@/lib/crm/context";
 import { createContactFromAttendeeInDb } from "@/lib/crm/conversations";
 import { CrmError } from "@/lib/crm/errors";
-import { currentToken, readStored, storeToken, type StoredConnection } from "@/lib/crm/inbox";
+import { readStored, type StoredConnection } from "@/lib/crm/inbox";
+import {
+  accountEmail,
+  assertSenderReady,
+  defaultInviteAddress,
+  graphSourceFor,
+  INVITE_NOT_CONNECTED,
+  INVITE_RECONNECT,
+  pickInviteSender,
+  readInviteSenders,
+  rememberInviteSender,
+  writableSourceToken,
+  type GraphSource,
+  type InviteSenderCandidate,
+  type InviteSenderOption,
+} from "@/lib/crm/invite-senders";
 import { isUuid } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
 import type { Provenance, UserActor } from "@/lib/crm/types";
+import { buildItipMime, inviteUid, type ItipEmail, type ItipEvent } from "@/lib/ical/itip";
 import {
   checkMeetingLink,
   guestEmail,
@@ -26,11 +41,21 @@ import {
   INVITE_TITLE_MAX,
 } from "@/lib/invite-rules";
 import {
-  CALENDAR_WRITE_RECONNECT,
+  defaultSentSaver,
+  defaultSmtpSender,
+  identityForSend,
+  noteIdentityError,
+  type SendIdentity,
+  type SentSaver,
+  type SmtpSender,
+} from "@/lib/mail/identities";
+import {
   CalendarWriteError,
   CalendarWriteScopeError,
   cancelGraphEvent,
   createGraphEvent,
+  deleteGraphEvent,
+  holdDraft,
   inviteDraft,
   moveGraphEvent,
   RESPOND_ORGANISER,
@@ -38,20 +63,19 @@ import {
   respondToGraphEvent,
   toCalendarEvent,
   type CalendarEvent,
+  type GraphEvent,
   type InviteGuest,
   type InviteResponse,
 } from "@/lib/microsoft/calendar";
 import {
   grantsCalendarWrite,
   microsoftConfigured,
-  refreshMicrosoftToken,
   sanitizeMicrosoftError,
   type MicrosoftToken,
 } from "@/lib/microsoft/oauth";
 import { appTimeZone, dateTimeInputValue, parseDateTime, zoneLabel } from "@/lib/time";
 
-export const INVITE_NOT_CONNECTED = "Connect Microsoft in Settings › Integrations to send invites.";
-export const INVITE_RECONNECT = CALENDAR_WRITE_RECONNECT;
+export { INVITE_NOT_CONNECTED, INVITE_RECONNECT };
 const LOCAL_START = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
 const MIN_DURATION = 5;
 const MAX_DURATION = 8 * 60;
@@ -64,6 +88,8 @@ export type InviteSetup = {
   canWriteCalendar: boolean;
   meetingLink: string | null;
   ownEmails: string[];
+  senders: InviteSenderOption[];
+  defaultFrom: string | null;
 };
 
 export type InviteInput = {
@@ -75,6 +101,7 @@ export type InviteInput = {
   includeMeetingLink?: unknown;
   contactIds?: unknown;
   transactionId?: unknown;
+  from?: unknown;
 };
 
 type InviteResult = {
@@ -84,13 +111,14 @@ type InviteResult = {
   startsAt: string;
   endsAt: string;
   guests: InviteGuest[];
+  from: string;
   loggedOn: number;
   warning: string | null;
 };
 
 type CancelResult = { warning: string | null; loggedOn: number };
 
-type InviteOptions = { fetchImpl?: typeof fetch; now?: number };
+type InviteOptions = { fetchImpl?: typeof fetch; now?: number; smtp?: SmtpSender; saveSent?: SentSaver };
 
 type ContactMatch = { id: string; email: string; name: string; companyId: string | null };
 
@@ -135,19 +163,40 @@ function isConnected(stored: StoredConnection | null): stored is StoredConnectio
   return Boolean(stored && stored.status === "connected" && stored.refreshTokenCipher);
 }
 
+async function ownInviteAddresses(db: Db, actor: UserActor) {
+  const own = await myAddresses(db, actor);
+  const identities = await db.query<{ email: string }>("select email from crm.send_identities where user_id = $1", [actor.userId]);
+  for (const row of identities.rows) own.add(row.email.toLowerCase());
+  return own;
+}
+
+function senderOption(sender: InviteSenderCandidate): InviteSenderOption {
+  return { address: sender.address, kind: sender.kind, primary: sender.primary, problem: sender.problem, fixHref: sender.fixHref };
+}
+
 export async function getInviteSetup(actor: UserActor): Promise<InviteSetup> {
   return withActor(actor, async (db) => {
     const stored = await readStored(db, actor);
     const meetingLink = await readMeetingLink(db, actor);
-    const own = await myAddresses(db, actor);
+    const own = await ownInviteAddresses(db, actor);
     const connected = microsoftConfigured() && isConnected(stored);
     const scopes = connected ? await readGrantedScopes(db, stored!.id) : null;
+    const senders = await readInviteSenders(db, actor);
     return {
       connected,
       canWriteCalendar: connected && grantsCalendarWrite(scopes) !== false,
       meetingLink,
       ownEmails: [...own],
+      senders: senders.map(senderOption),
+      defaultFrom: await defaultInviteAddress(db, actor, senders),
     };
+  });
+}
+
+export async function resolveInviteFrom(actor: UserActor, from?: unknown) {
+  return withActor(actor, async (db) => {
+    const senders = await readInviteSenders(db, actor);
+    return pickInviteSender(senders, from, await defaultInviteAddress(db, actor, senders)).address;
   });
 }
 
@@ -289,51 +338,19 @@ function writeFailure(error: unknown): CrmError {
   );
 }
 
-async function writableToken(
-  actor: UserActor,
-  stored: StoredConnection,
-  scopes: string | null,
-  fetchImpl: typeof fetch,
-): Promise<MicrosoftToken> {
-  if (grantsCalendarWrite(scopes) === false) throw new CrmError("scope_missing", INVITE_RECONNECT, 403);
-  let token: MicrosoftToken;
-  let refreshed: boolean;
-  try {
-    token = await currentToken(stored, fetchImpl);
-    refreshed = token.expiresAt !== stored.accessTokenExpiresAt;
-    if (!token.scope && scopes === null) {
-      token = await refreshMicrosoftToken(token.refreshToken, fetchImpl);
-      refreshed = true;
-    }
-  } catch (error) {
-    throw writeFailure(error);
-  }
-  if (refreshed) {
-    await withActor(actor, async (db) => {
-      await storeToken(db, stored.id, token);
-      if (token.scope) await storeGrantedScopes(db, actor, stored.id, token.scope);
-    });
-  }
-  if (grantsCalendarWrite(token.scope ?? scopes) === false) {
-    throw new CrmError("scope_missing", INVITE_RECONNECT, 403);
-  }
-  return token;
+function sourceToken(actor: UserActor, source: GraphSource, fetchImpl: typeof fetch) {
+  return writableSourceToken(actor, source, fetchImpl, writeFailure);
 }
 
-async function defaultCalendar(db: Db, connectionId: string) {
-  const result = await db.query<{ id: string; provider_calendar_id: string }>(
-    `select id, provider_calendar_id from crm.calendars
+async function ensureDefaultCalendar(db: Db, actor: UserActor, connectionId: string) {
+  const found = await db.query<{ id: string }>(
+    `select id from crm.calendars
      where connection_id = $1 and is_default
      order by (provider_calendar_id = $2) asc, id
      limit 1`,
     [connectionId, DEFAULT_CALENDAR_PLACEHOLDER],
   );
-  return result.rows[0] ?? null;
-}
-
-async function ensureDefaultCalendar(db: Db, actor: UserActor, connectionId: string) {
-  const found = await defaultCalendar(db, connectionId);
-  if (found) return found.id;
+  if (found.rows[0]) return found.rows[0].id;
   const created = await db.query<{ id: string }>(
     `insert into crm.calendars (
        workspace_id, user_id, connection_id, provider_calendar_id, name, color,
@@ -397,19 +414,24 @@ function fallbackEvent(
   };
 }
 
+type EmailInvite = { identityId: string; uid: string; sequence: number; notes: string | null };
+
 async function saveCreatedEvent(
   db: Db,
   actor: UserActor,
   calendarId: string,
-  connectionId: string,
+  source: Pick<GraphSource, "kind" | "id">,
   event: CalendarEvent,
+  email: EmailInvite | null = null,
 ) {
   const result = await db.query<{ id: string }>(
     `insert into crm.calendar_events (
-       workspace_id, calendar_id, connection_id, user_id, provider_event_id, ical_uid,
+       workspace_id, calendar_id, connection_id, account_id, user_id, provider_event_id, ical_uid,
        subject, starts_at, ends_at, is_all_day, is_cancelled, location, web_link,
-       online_meeting_url, organizer, attendees, show_as, response_status, created_by_orbit
-     ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16::jsonb, $17, $18, true)
+       online_meeting_url, organizer, attendees, show_as, response_status, created_by_orbit,
+       invite_identity_id, invite_uid, invite_sequence, invite_notes
+     ) values ($1, $2, $3::uuid, $4::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb, $17::jsonb, $18, $19, true,
+               $20::uuid, $21, $22, $23)
      on conflict (calendar_id, provider_event_id) do update set
        ical_uid = excluded.ical_uid,
        subject = excluded.subject,
@@ -422,12 +444,17 @@ async function saveCreatedEvent(
        attendees = excluded.attendees,
        show_as = excluded.show_as,
        response_status = excluded.response_status,
-       created_by_orbit = true
+       created_by_orbit = true,
+       invite_identity_id = excluded.invite_identity_id,
+       invite_uid = excluded.invite_uid,
+       invite_sequence = excluded.invite_sequence,
+       invite_notes = excluded.invite_notes
      returning id`,
     [
       actor.workspaceId,
       calendarId,
-      connectionId,
+      source.kind === "connection" ? source.id : null,
+      source.kind === "account" ? source.id : null,
       actor.userId,
       event.providerEventId,
       event.icalUid,
@@ -443,20 +470,25 @@ async function saveCreatedEvent(
       JSON.stringify(event.attendees),
       event.showAs,
       event.responseStatus ?? "organizer",
+      email?.identityId ?? null,
+      email?.uid ?? null,
+      email?.sequence ?? 0,
+      email?.notes ?? null,
     ],
   );
   return result.rows[0].id;
 }
 
+type ReadySender = InviteSenderCandidate & { source: GraphSource };
+
 type InviteSender = {
-  stored: StoredConnection;
+  sender: ReadySender;
   own: Set<string>;
   meetingLink: string | null;
-  scopes: string | null;
-  calendar: { id: string; provider_calendar_id: string } | null;
+  mainEmail: string | null;
 };
 
-type OpenInviteSender = InviteSender & { token: MicrosoftToken; calendarId: string | null };
+type OpenInviteSender = InviteSender & { token: MicrosoftToken; calendarId: string | null; address: string };
 
 type InviteActivity = (
   contact: { id: string; name: string; companyId: string | null },
@@ -471,7 +503,9 @@ type InviteActivity = (
   },
 ) => { title: string; body: string; metadata: Record<string, unknown> };
 
-type InviteSend = {
+type Delivery = { smtp?: SmtpSender; saveSent?: SentSaver };
+
+type InviteSend = Delivery & {
   subject: string;
   start: Date;
   end: Date;
@@ -485,39 +519,38 @@ type InviteSend = {
   activity?: InviteActivity;
   provenance?: Provenance;
   fetchImpl?: typeof fetch;
+  now?: number;
 };
 
-async function loadInviteSender(actor: UserActor): Promise<InviteSender> {
+async function loadInviteSender(actor: UserActor, from: unknown, fallback: "workspace" | "main" = "workspace"): Promise<InviteSender> {
   const prepared = await withActor(actor, async (db) => {
+    const senders = await readInviteSenders(db, actor);
+    const main = senders.find((sender) => sender.primary)?.address ?? null;
+    const sender = pickInviteSender(senders, from, fallback === "main" ? main : await defaultInviteAddress(db, actor, senders));
     const stored = await readStored(db, actor);
     return {
-      stored,
-      own: await myAddresses(db, actor),
+      sender,
+      own: await ownInviteAddresses(db, actor),
       meetingLink: await readMeetingLink(db, actor),
-      scopes: stored ? await readGrantedScopes(db, stored.id) : null,
-      calendar: stored ? await defaultCalendar(db, stored.id) : null,
+      mainEmail: isConnected(stored) ? stored.email : null,
     };
   });
-  const stored = prepared.stored;
-  if (!isConnected(stored)) throw new CrmError("not_connected", INVITE_NOT_CONNECTED, 400);
-  return { ...prepared, stored };
+  const sender = prepared.sender;
+  assertSenderReady(sender);
+  return { ...prepared, sender };
 }
 
-function providerCalendarId(calendar: InviteSender["calendar"]) {
-  return calendar && calendar.provider_calendar_id !== DEFAULT_CALENDAR_PLACEHOLDER
-    ? calendar.provider_calendar_id
-    : null;
+function opened(sender: InviteSender, token: MicrosoftToken): OpenInviteSender {
+  return { ...sender, token, calendarId: sender.sender.calendar?.providerCalendarId ?? null, address: sender.sender.address };
 }
 
 export async function openInviteSender(
   actor: UserActor,
-  options: { fetchImpl?: typeof fetch } = {},
+  options: { fetchImpl?: typeof fetch; from?: unknown; fallback?: "workspace" | "main" } = {},
 ): Promise<OpenInviteSender> {
   assertScope(actor.scopes, "activities:write");
-  if (!microsoftConfigured()) throw new CrmError("not_connected", INVITE_NOT_CONNECTED, 400);
-  const sender = await loadInviteSender(actor);
-  const token = await writableToken(actor, sender.stored, sender.scopes, options.fetchImpl ?? fetch);
-  return { ...sender, token, calendarId: providerCalendarId(sender.calendar) };
+  const sender = await loadInviteSender(actor, options.from, options.fallback);
+  return opened(sender, await sourceToken(actor, sender.sender.source, options.fetchImpl ?? fetch));
 }
 
 const defaultActivity: InviteActivity = (contact, details) => ({
@@ -550,6 +583,108 @@ async function ensureGuestContacts(db: Db, actor: UserActor, guests: InviteGuest
   return ids;
 }
 
+function organiserOf(identity: Pick<SendIdentity, "email" | "displayName">, actor: UserActor) {
+  return { email: identity.email.toLowerCase(), name: identity.displayName ?? actor.fullName ?? null };
+}
+
+async function deliverItip(
+  actor: UserActor,
+  identity: SendIdentity & { password: string },
+  event: ItipEvent,
+  email: ItipEmail,
+  delivery: Delivery,
+) {
+  const raw = await buildItipMime(event, email);
+  try {
+    await (delivery.smtp ?? defaultSmtpSender)(identity, { from: identity.email, to: event.guests.map((guest) => guest.email), raw });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    await noteIdentityError(actor, identity.id, reason).catch(() => undefined);
+    throw new CrmError("upstream_error", `${identity.email} couldn't send the invite: ${reason.slice(0, 200)}`, 502, { field: "from" });
+  }
+  await noteIdentityError(actor, identity.id, null).catch(() => undefined);
+  await (delivery.saveSent ?? defaultSentSaver)(identity, raw).catch((error) => console.error("Saving the invite to Sent failed", error));
+}
+
+async function emailIdentity(actor: UserActor, identityId: string) {
+  try {
+    return await identityForSend(actor, identityId);
+  } catch (error) {
+    if (error instanceof CrmError) throw new CrmError(error.code, error.message, error.status, { field: "from" });
+    throw error;
+  }
+}
+
+async function createEventFor(
+  actor: UserActor,
+  sender: OpenInviteSender,
+  input: InviteSend,
+  fetchImpl: typeof fetch,
+): Promise<{ created: GraphEvent; organizer: { name: string | null; email: string }; email: EmailInvite | null }> {
+  const { subject, guests, notes, link } = input;
+  if (sender.sender.kind !== "smtp" || !sender.sender.identityId) {
+    const draft = inviteDraft({
+      subject,
+      start: input.start,
+      end: input.end,
+      timeZone: input.timeZone,
+      guests,
+      notes,
+      link,
+      transactionId: input.transactionId,
+    });
+    try {
+      const created = await createGraphEvent(sender.token.accessToken, draft, { calendarId: sender.calendarId, fetchImpl });
+      return { created, organizer: { name: actor.fullName, email: sender.address }, email: null };
+    } catch (error) {
+      throw writeFailure(error);
+    }
+  }
+  const identity = await emailIdentity(actor, sender.sender.identityId);
+  const organizer = organiserOf(identity, actor);
+  let created: GraphEvent;
+  try {
+    created = await createGraphEvent(
+      sender.token.accessToken,
+      holdDraft({
+        subject,
+        start: input.start,
+        end: input.end,
+        timeZone: input.timeZone,
+        notes,
+        link,
+        sentFrom: identity.email,
+        transactionId: input.transactionId,
+      }),
+      { calendarId: sender.calendarId, fetchImpl },
+    );
+  } catch (error) {
+    throw writeFailure(error);
+  }
+  const uid = inviteUid(input.transactionId, identity.email);
+  const event: ItipEvent = {
+    method: "REQUEST",
+    uid,
+    sequence: 0,
+    organizer,
+    guests,
+    subject,
+    start: input.start,
+    end: input.end,
+    notes,
+    link,
+    stamp: new Date(input.now ?? Date.now()),
+  };
+  try {
+    await deliverItip(actor, identity, event, { kind: "invite", when: formatWhen(input.start, input.end, input.timeZone) }, input);
+  } catch (error) {
+    const holdId = created.id?.trim();
+    if (holdId) await deleteGraphEvent(sender.token.accessToken, holdId, fetchImpl).catch(() => undefined);
+    throw error;
+  }
+  return { created, organizer, email: { identityId: identity.id, uid, sequence: 0, notes } };
+}
+
 export async function sendInvite(
   actor: UserActor,
   sender: OpenInviteSender,
@@ -561,24 +696,9 @@ export async function sendInvite(
     assertScope(actor.scopes, "companies:write");
   }
   const fetchImpl = input.fetchImpl ?? fetch;
-  const { stored, token } = sender;
   const { subject, guests, notes, link } = input;
-  const draft = inviteDraft({
-    subject,
-    start: input.start,
-    end: input.end,
-    timeZone: input.timeZone,
-    guests,
-    notes,
-    link,
-    transactionId: input.transactionId,
-  });
-  let created: Awaited<ReturnType<typeof createGraphEvent>>;
-  try {
-    created = await createGraphEvent(token.accessToken, draft, { calendarId: sender.calendarId, fetchImpl });
-  } catch (error) {
-    throw writeFailure(error);
-  }
+  const source = sender.sender.source;
+  const { created, organizer, email } = await createEventFor(actor, sender, input, fetchImpl);
 
   const result: InviteResult = {
     eventId: null,
@@ -587,31 +707,36 @@ export async function sendInvite(
     startsAt: input.start.toISOString(),
     endsAt: input.end.toISOString(),
     guests,
+    from: sender.address,
     loggedOn: 0,
     warning: null,
   };
   const providerEventId = created.id?.trim();
   if (!providerEventId || providerEventId.length > 400) return { ...result, warning: SAVE_WARNING };
   const parsed = toCalendarEvent(created);
-  const event = parsed
+  const base = parsed
     ? { ...parsed, startsAt: input.start.toISOString(), endsAt: input.end.toISOString() }
-    : fallbackEvent(providerEventId, created, {
-      subject,
-      start: input.start,
-      end: input.end,
-      link,
-      organizer: { name: actor.fullName, email: stored.email },
-      guests,
-    });
+    : fallbackEvent(providerEventId, created, { subject, start: input.start, end: input.end, link, organizer, guests });
+  const event = email
+    ? {
+        ...base,
+        organizer,
+        attendees: guests.map((guest) => ({ ...guest, response: "none" })),
+        showAs: base.showAs ?? "busy",
+        responseStatus: "organizer",
+      }
+    : base;
   const when = formatWhen(new Date(event.startsAt), new Date(event.endsAt), input.timeZone);
   const activity = input.activity ?? defaultActivity;
   try {
     const saved = await withActor(actor, async (db) => {
-      const calendarRow = sender.calendar?.id ?? (await ensureDefaultCalendar(db, actor, stored.id));
-      const eventId = await saveCreatedEvent(db, actor, calendarRow, stored.id, event);
+      const calendarRow =
+        sender.sender.calendar?.id ?? (source.kind === "connection" ? await ensureDefaultCalendar(db, actor, source.id) : null);
+      if (!calendarRow) throw new Error("No calendar row for the invite.");
+      const eventId = await saveCreatedEvent(db, actor, calendarRow, source, event, email);
       const preferred = [...(input.contactIds ?? [])];
       if (input.createContacts) {
-        preferred.push(...(await ensureGuestContacts(db, actor, guests, [stored.email, ...sender.own])));
+        preferred.push(...(await ensureGuestContacts(db, actor, guests, [sender.address, ...sender.own])));
       }
       await linkEvents(db, actor, [eventId]);
       const contacts = await matchContacts(
@@ -639,9 +764,9 @@ export async function sendInvite(
             body: written.body,
             contactId: contact.id,
             companyId: contact.companyId,
-            metadata: written.metadata,
+            metadata: { ...written.metadata, from: sender.address },
           },
-          input.provenance ?? { operation: "send_invite", source: "microsoft" },
+          input.provenance ?? { operation: "send_invite", source: email ? "email" : "microsoft" },
         );
       }
       return { eventId, loggedOn: contacts.length };
@@ -669,41 +794,43 @@ export async function createInvite(
   if (input.includeMeetingLink !== undefined && typeof input.includeMeetingLink !== "boolean") {
     throw invalid("Choose whether to add the meeting link.", "includeMeetingLink");
   }
-  if (!microsoftConfigured()) throw new CrmError("not_connected", INVITE_NOT_CONNECTED, 400);
 
-  const sender = await loadInviteSender(actor);
+  const sender = await loadInviteSender(actor, input.from);
   const guests = cleanGuests(input.attendees, sender.own);
   if (input.includeMeetingLink === true && !sender.meetingLink) {
     throw invalid("Add your meeting link in Settings › General first.", "includeMeetingLink");
   }
   const link = input.includeMeetingLink === false ? null : sender.meetingLink;
-  const token = await writableToken(actor, sender.stored, sender.scopes, fetchImpl);
-  return sendInvite(
-    actor,
-    { ...sender, token, calendarId: providerCalendarId(sender.calendar) },
-    {
-      subject,
-      start: window.start,
-      end: window.end,
-      timeZone: window.timeZone,
-      guests,
-      notes,
-      link,
-      transactionId,
-      contactIds,
-      fetchImpl,
-    },
-  );
+  const token = await sourceToken(actor, sender.sender.source, fetchImpl);
+  const sent = await sendInvite(actor, opened(sender, token), {
+    subject,
+    start: window.start,
+    end: window.end,
+    timeZone: window.timeZone,
+    guests,
+    notes,
+    link,
+    transactionId,
+    contactIds,
+    fetchImpl,
+    smtp: options.smtp,
+    saveSent: options.saveSent,
+    now: options.now,
+  });
+  await rememberInviteSender(actor, sender.sender.address).catch((error) => console.error("Remembering the invite sender failed", error));
+  return sent;
 }
 
 type OrganisedRow = {
   id: string;
   provider_event_id: string;
   connection_id: string | null;
+  account_id: string | null;
   subject: string | null;
   starts_at: Date | string;
   ends_at: Date | string;
   is_all_day: boolean;
+  location: string | null;
   organizer: unknown;
   attendees: unknown;
   contact_ids: string[];
@@ -711,33 +838,73 @@ type OrganisedRow = {
   created_by_orbit: boolean;
   response_status: string | null;
   show_as: string | null;
+  invite_identity_id: string | null;
+  invite_uid: string | null;
+  invite_sequence: number;
+  invite_notes: string | null;
 };
 
 export const MEETING_GONE = "This meeting no longer exists in Outlook, so Orbit has taken it off your calendar.";
+export const HOLD_GONE =
+  "The hold for this meeting was deleted from Outlook, so Orbit has taken it off your calendar. Your guests still have the invite.";
 
 const ORGANISER_ONLY = {
   cancel: "Only the organiser can cancel this meeting. Decline it in Outlook instead.",
   move: "Only the organiser can move this meeting. Propose a new time in Outlook instead.",
 };
 
-async function readOwnEvent(actor: UserActor, eventId: string) {
+type EventVerb = "cancel" | "move" | "answer";
+
+const NOT_CONNECTED_FOR: Record<EventVerb, string> = {
+  cancel: INVITE_NOT_CONNECTED,
+  move: INVITE_NOT_CONNECTED,
+  answer: "Connect Microsoft in Settings › Integrations to answer invites.",
+};
+
+async function readOwnEvent(actor: UserActor, eventId: string, verb: EventVerb) {
   if (!isUuid(eventId)) throw new CrmError("not_found", "That meeting isn't in your calendar.", 404);
   return withActor(actor, async (db) => {
-    const stored = await readStored(db, actor);
     const event = await db.query<OrganisedRow>(
-      `select id, provider_event_id, connection_id, subject, starts_at, ends_at, is_all_day, organizer, attendees,
-              contact_ids, is_cancelled, created_by_orbit, response_status, show_as
+      `select id, provider_event_id, connection_id, account_id, subject, starts_at, ends_at, is_all_day, location,
+              organizer, attendees, contact_ids, is_cancelled, created_by_orbit, response_status, show_as,
+              invite_identity_id, invite_uid, invite_sequence, invite_notes
        from crm.calendar_events
        where id = $1 and user_id = $2`,
       [eventId, actor.userId],
     );
+    const row = event.rows[0] ?? null;
     return {
-      stored,
-      event: event.rows[0] ?? null,
-      own: await myAddresses(db, actor),
-      scopes: stored ? await readGrantedScopes(db, stored.id) : null,
+      event: row,
+      own: await ownInviteAddresses(db, actor),
+      source: row ? await eventSource(db, actor, row, verb) : null,
     };
   });
+}
+
+async function eventSource(db: Db, actor: UserActor, row: OrganisedRow, verb: EventVerb): Promise<GraphSource | CrmError> {
+  const source = await graphSourceFor(db, actor, row);
+  if (source) return source;
+  if (row.account_id) {
+    const account = await accountEmail(db, row.account_id);
+    if (account?.provider === "ics") {
+      return new CrmError("invalid_input", "This meeting comes from a calendar link, which Orbit can only read.", 400);
+    }
+    const email = account?.email ?? "that calendar account";
+    return new CrmError(
+      "not_connected",
+      `Reconnect ${email} in Settings › Calendars so Orbit can ${verb === "answer" ? "answer" : verb} meetings in its calendar.`,
+      400,
+    );
+  }
+  const stored = await readStored(db, actor);
+  if (!microsoftConfigured() || !isConnected(stored)) return new CrmError("not_connected", NOT_CONNECTED_FOR[verb], 400);
+  return new CrmError(
+    "invalid_input",
+    verb === "answer"
+      ? "Orbit can only answer invites in the calendars of your connected Microsoft accounts."
+      : `Orbit can only ${verb} meetings in the calendars of your connected Microsoft accounts.`,
+    400,
+  );
 }
 
 function organisedByUser(row: Pick<OrganisedRow, "created_by_orbit" | "response_status" | "organizer">, own: Set<string>) {
@@ -745,13 +912,19 @@ function organisedByUser(row: Pick<OrganisedRow, "created_by_orbit" | "response_
   return row.created_by_orbit || row.response_status === "organizer" || Boolean(organizer && own.has(organizer.email));
 }
 
-async function organisedEvent(
-  actor: UserActor,
-  eventId: string,
-  verb: "cancel" | "move",
-  now: number,
-) {
-  const found = await readOwnEvent(actor, eventId);
+type Organised = {
+  row: OrganisedRow;
+  guests: string[];
+  people: InviteGuest[];
+  startsAt: Date;
+  endsAt: Date;
+  source: GraphSource;
+  identityId: string | null;
+  token: (fetchImpl: typeof fetch) => Promise<MicrosoftToken>;
+};
+
+async function organisedEvent(actor: UserActor, eventId: string, verb: "cancel" | "move", now: number): Promise<Organised> {
+  const found = await readOwnEvent(actor, eventId, verb);
   const row = found.event;
   if (!row) throw new CrmError("not_found", "That meeting isn't in your calendar.", 404);
   if (row.is_cancelled) {
@@ -766,15 +939,15 @@ async function organisedEvent(
   if (startsAt.getTime() <= now) {
     throw new CrmError("invalid_input", `This meeting has already started, so Orbit can't ${verb} it.`, 400);
   }
-  const stored = found.stored;
-  if (!microsoftConfigured() || !isConnected(stored)) throw new CrmError("not_connected", INVITE_NOT_CONNECTED, 400);
-  if (row.connection_id !== stored.id) {
-    throw new CrmError(
-      "invalid_input",
-      `Orbit can only ${verb} meetings in the calendar of the mailbox connected in Settings › Integrations.`,
-      400,
-    );
+  const source = found.source;
+  if (!source) throw new CrmError("not_connected", INVITE_NOT_CONNECTED, 400);
+  if (source instanceof CrmError) throw source;
+  if (row.invite_identity_id && !row.invite_uid) {
+    throw new CrmError("invalid_input", `Orbit can't ${verb} this meeting because its invite details are missing.`, 400);
   }
+  const people = readPeople(row.attendees)
+    .filter((person) => !found.own.has(person.email))
+    .map((person) => ({ email: person.email, name: person.name }));
   const guests = [
     ...new Set(
       [organizer, ...readPeople(row.attendees)]
@@ -785,9 +958,35 @@ async function organisedEvent(
   return {
     row,
     guests,
+    people,
     startsAt,
     endsAt: new Date(row.ends_at),
-    token: (fetchImpl: typeof fetch) => writableToken(actor, stored, found.scopes, fetchImpl),
+    source,
+    identityId: row.invite_identity_id,
+    token: (fetchImpl: typeof fetch) => sourceToken(actor, source, fetchImpl),
+  };
+}
+
+function itipFor(
+  actor: UserActor,
+  identity: SendIdentity,
+  found: Organised,
+  method: ItipEvent["method"],
+  window: { start: Date; end: Date },
+  now: number,
+): ItipEvent {
+  return {
+    method,
+    uid: found.row.invite_uid!,
+    sequence: found.row.invite_sequence + 1,
+    organizer: organiserOf(identity, actor),
+    guests: found.people,
+    subject: found.row.subject ?? "Untitled event",
+    start: window.start,
+    end: window.end,
+    notes: found.row.invite_notes,
+    link: found.row.location,
+    stamp: new Date(now),
   };
 }
 
@@ -802,20 +1001,41 @@ export async function cancelInvite(
   const now = options.now ?? Date.now();
   if (!isUuid(eventId)) throw new CrmError("not_found", "That meeting isn't in your calendar.", 404);
   const message = cleanNotes(comment, INVITE_COMMENT_MAX, "comment");
-  const { row, guests, startsAt, endsAt, token: tokenFor } = await organisedEvent(actor, eventId, "cancel", now);
-  const token = await tokenFor(fetchImpl);
+  const found = await organisedEvent(actor, eventId, "cancel", now);
+  const { row, guests, startsAt, endsAt } = found;
+  const token = await found.token(fetchImpl);
   let warning: string | null = null;
-  try {
-    await cancelGraphEvent(token.accessToken, row.provider_event_id, message, fetchImpl);
-  } catch (error) {
-    if (!(error instanceof CalendarWriteError && error.status === 404)) throw writeFailure(error);
-    warning = "Outlook had already removed this meeting, so no cancellation was sent.";
+  if (found.identityId) {
+    const identity = await emailIdentity(actor, found.identityId);
+    const timeZone = appTimeZone();
+    await deliverItip(
+      actor,
+      identity,
+      itipFor(actor, identity, found, "CANCEL", { start: startsAt, end: endsAt }, now),
+      { kind: "cancel", when: formatWhen(startsAt, endsAt, timeZone), message },
+      options,
+    );
+    try {
+      await deleteGraphEvent(token.accessToken, row.provider_event_id, fetchImpl);
+    } catch {
+      warning = "Your guests were told, but Orbit couldn't remove the hold from your Outlook calendar. Delete it there.";
+    }
+  } else {
+    try {
+      await cancelGraphEvent(token.accessToken, row.provider_event_id, message, fetchImpl);
+    } catch (error) {
+      if (!(error instanceof CalendarWriteError && error.status === 404)) throw writeFailure(error);
+      warning = "Outlook had already removed this meeting, so no cancellation was sent.";
+    }
   }
   const subject = row.subject ?? "Untitled event";
   const when = formatWhen(startsAt, endsAt, appTimeZone());
   try {
     const loggedOn = await withActor(actor, async (db) => {
-      await db.query("update crm.calendar_events set is_cancelled = true where id = $1", [row.id]);
+      await db.query(
+        "update crm.calendar_events set is_cancelled = true, invite_sequence = invite_sequence + $2 where id = $1",
+        [row.id, found.identityId ? 1 : 0],
+      );
       const contacts = await matchContacts(db, actor, guests, row.contact_ids ?? []);
       for (const contact of contacts) {
         await createActivityInDb(
@@ -829,7 +1049,7 @@ export async function cancelInvite(
             companyId: contact.companyId,
             metadata: { source: "orbit", kind: "cancel", eventId: row.id, startsAt: startsAt.toISOString() },
           },
-          { operation: "cancel_invite", source: "microsoft" },
+          { operation: "cancel_invite", source: found.identityId ? "email" : "microsoft" },
         );
       }
       return contacts.length;
@@ -838,7 +1058,9 @@ export async function cancelInvite(
   } catch (error) {
     console.error("Meeting cancelled but not saved", error);
     return {
-      warning: "The meeting was cancelled in Outlook, but Orbit couldn't update it yet. It disappears after the next sync.",
+      warning: found.identityId
+        ? "The meeting was cancelled, but Orbit couldn't update it yet. It disappears after the next sync."
+        : "The meeting was cancelled in Outlook, but Orbit couldn't update it yet. It disappears after the next sync.",
       loggedOn: 0,
     };
   }
@@ -915,26 +1137,44 @@ export async function rescheduleInvite(
   if (!isUuid(eventId)) throw new CrmError("not_found", "That meeting isn't in your calendar.", 404);
   const message = cleanNotes(input.message, INVITE_COMMENT_MAX, "message");
   const timeZone = appTimeZone();
-  const { row, guests, startsAt, endsAt, token: tokenFor } = await organisedEvent(actor, eventId, "move", now);
+  const found = await organisedEvent(actor, eventId, "move", now);
+  const { row, guests, startsAt, endsAt, token: tokenFor } = found;
   const window = moveWindow(input, endsAt.getTime() - startsAt.getTime(), { timeZone, now });
   if (window.start.getTime() === startsAt.getTime() && window.end.getTime() === endsAt.getTime()) {
     throw invalid("That's when the meeting already is. Pick another time.", "startLocal");
   }
+  const identity = found.identityId ? await emailIdentity(actor, found.identityId) : null;
   const token = await tokenFor(fetchImpl);
   let updated: Awaited<ReturnType<typeof moveGraphEvent>>;
   try {
     updated = await moveGraphEvent(
       token.accessToken,
       row.provider_event_id,
-      { start: window.start, end: window.end, timeZone, message },
+      { start: window.start, end: window.end, timeZone, message: identity ? null : message },
       fetchImpl,
     );
   } catch (error) {
     if (error instanceof CalendarWriteError && error.status === 404) {
       await withActor(actor, (db) => db.query("update crm.calendar_events set is_cancelled = true where id = $1", [row.id]));
-      throw new CrmError("gone", MEETING_GONE, 410);
+      throw new CrmError("gone", identity ? HOLD_GONE : MEETING_GONE, 410);
     }
     throw writeFailure(error);
+  }
+  if (identity) {
+    try {
+      await deliverItip(
+        actor,
+        identity,
+        itipFor(actor, identity, found, "REQUEST", window, now),
+        { kind: "update", when: formatWhen(window.start, window.end, timeZone), previousWhen: formatWhen(startsAt, endsAt, timeZone), message },
+        options,
+      );
+    } catch (error) {
+      await moveGraphEvent(token.accessToken, row.provider_event_id, { start: startsAt, end: endsAt, timeZone, message: null }, fetchImpl).catch(
+        () => undefined,
+      );
+      throw error;
+    }
   }
   const subject = row.subject ?? "Untitled event";
   const result: RescheduleResult = {
@@ -948,16 +1188,16 @@ export async function rescheduleInvite(
     loggedOn: 0,
     warning: null,
   };
-  const parsed = toCalendarEvent(updated);
+  const parsed = identity ? null : toCalendarEvent(updated);
   const was = formatWhen(startsAt, endsAt, timeZone);
   const when = formatWhen(window.start, window.end, timeZone);
   try {
     const loggedOn = await withActor(actor, async (db) => {
       await db.query(
         `update crm.calendar_events
-         set starts_at = $2, ends_at = $3, attendees = coalesce($4::jsonb, attendees)
+         set starts_at = $2, ends_at = $3, attendees = coalesce($4::jsonb, attendees), invite_sequence = invite_sequence + $5
          where id = $1`,
-        [row.id, result.startsAt, result.endsAt, parsed ? JSON.stringify(parsed.attendees) : null],
+        [row.id, result.startsAt, result.endsAt, parsed ? JSON.stringify(parsed.attendees) : null, identity ? 1 : 0],
       );
       const contacts = await matchContacts(db, actor, guests, row.contact_ids ?? []);
       for (const contact of contacts) {
@@ -978,7 +1218,7 @@ export async function rescheduleInvite(
               previousStartsAt: result.previousStartsAt,
             },
           },
-          { operation: "reschedule_invite", source: "microsoft" },
+          { operation: "reschedule_invite", source: identity ? "email" : "microsoft" },
         );
       }
       return contacts.length;
@@ -993,7 +1233,7 @@ export async function rescheduleInvite(
   }
 }
 
-export const RESPOND_NOT_CONNECTED = "Connect Microsoft in Settings › Integrations to answer invites.";
+export const RESPOND_NOT_CONNECTED = NOT_CONNECTED_FOR.answer;
 
 export const MEETING_RESPONSES = ["accept", "tentative", "decline"] as const;
 
@@ -1064,7 +1304,7 @@ function proposalWindow(
 }
 
 async function invitedEvent(actor: UserActor, eventId: string, now: number) {
-  const found = await readOwnEvent(actor, eventId);
+  const found = await readOwnEvent(actor, eventId, "answer");
   const row = found.event;
   if (!row) throw new CrmError("not_found", "That meeting isn't in your calendar.", 404);
   if (row.is_cancelled) throw new CrmError("conflict", "This meeting is cancelled, so there's nothing to answer.", 409);
@@ -1073,21 +1313,15 @@ async function invitedEvent(actor: UserActor, eventId: string, now: number) {
   if (startsAt.getTime() <= now) {
     throw new CrmError("invalid_input", "This meeting has already started, so Orbit can't answer it. Reply in Outlook if you need to.", 400);
   }
-  const stored = found.stored;
-  if (!microsoftConfigured() || !isConnected(stored)) throw new CrmError("not_connected", RESPOND_NOT_CONNECTED, 400);
-  if (row.connection_id !== stored.id) {
-    throw new CrmError(
-      "invalid_input",
-      "Orbit can only answer invites in the calendar of the mailbox connected in Settings › Integrations.",
-      400,
-    );
-  }
+  const source = found.source;
+  if (!source) throw new CrmError("not_connected", RESPOND_NOT_CONNECTED, 400);
+  if (source instanceof CrmError) throw source;
   return {
     row,
     own: found.own,
     startsAt,
     endsAt: new Date(row.ends_at),
-    token: (fetchImpl: typeof fetch) => writableToken(actor, stored, found.scopes, fetchImpl),
+    token: (fetchImpl: typeof fetch) => sourceToken(actor, source, fetchImpl),
   };
 }
 
