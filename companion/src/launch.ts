@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { homedir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
+import { agentPackageUrl } from "./release";
 
 const LABEL = "co.geteclipse.orbit-agent";
 const PLIST = join(homedir(), "Library", "LaunchAgents", `${LABEL}.plist`);
@@ -26,7 +27,7 @@ export function launchPath(npx: string) {
 }
 
 export function launchPlist(input: { npx: string; url: string; path: string; log: string }) {
-  const args = [input.npx, "-y", `--package=${input.url}/downloads/orbit-agent.tgz`, "orbit-agent", "--url", input.url];
+  const args = [input.npx, "-y", `--package=${agentPackageUrl(input.url)}`, "orbit-agent", "--url", input.url];
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">

@@ -410,7 +410,7 @@ The flow:
 
 Mail the webhook missed is picked up by `pollAgentMailboxes` (`lib/agent-mail/poll.ts`) from `/api/cron/mail-due` within a 20 second deadline: it lists the last 48 hours of every set up mailbox (`private.agent_mailbox_poll_targets()`), skips messages already stored (`private.agent_mail_known`) and fetches and stores up to 10 new ones per mailbox, so a busy mailbox never starves another, starting from a different mailbox each minute so the same ones aren't always last when the deadline hits. Polled messages are stored under the event id `poll:<mailbox id>:<message id>`, so two mailboxes listing the same message id each keep it; a mailbox that fails is skipped (a refused key is noted on it) and the rest still run.
 
-`npm run build` runs `npm run companion:pack` (`scripts/pack-companion.mjs`), which bundles `companion/src/index.ts` with esbuild into `companion/dist/orbit-agent.mjs` (Node 20, ESM, with `@anthropic-ai/claude-agent-sdk` and `zod` left as dependencies) and packs it into `public/downloads/orbit-agent.tgz`. Both outputs are gitignored.
+`npm run build` runs `npm run companion:pack` (`scripts/pack-companion.mjs`), which bundles `companion/src/index.ts` with esbuild into `companion/dist/orbit-agent.mjs` (Node 20, ESM, with `@anthropic-ai/claude-agent-sdk` and `zod` left as dependencies) and packs it into `public/downloads/orbit-agent-<version>.tgz` (the version from `companion/package.json`, so npx never reuses an old copy) and `public/downloads/orbit-agent.tgz`. Both outputs are gitignored.
 
 ## Team
 

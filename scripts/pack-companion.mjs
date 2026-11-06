@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, renameSync, rmSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { build } from "esbuild";
 
 const output = "companion/dist/orbit-agent.mjs";
@@ -18,5 +18,7 @@ await build({
 chmodSync(output, 0o755);
 mkdirSync("public/downloads", { recursive: true });
 const packed = execFileSync("npm", ["pack", "./companion", "--pack-destination", "public/downloads", "--silent"], { encoding: "utf8" }).trim().split("\n").pop();
-renameSync(`public/downloads/${packed}`, "public/downloads/orbit-agent.tgz");
-console.log("Packed public/downloads/orbit-agent.tgz");
+const { version } = JSON.parse(readFileSync("companion/package.json", "utf8"));
+renameSync(`public/downloads/${packed}`, `public/downloads/orbit-agent-${version}.tgz`);
+copyFileSync(`public/downloads/orbit-agent-${version}.tgz`, "public/downloads/orbit-agent.tgz");
+console.log(`Packed public/downloads/orbit-agent-${version}.tgz and orbit-agent.tgz`);
