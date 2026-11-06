@@ -11,6 +11,7 @@ import {
   headlineParts,
   isPageMeta,
   looksLikeDateOrDuration,
+  looksLikeLocation,
   pageTitle,
   realValue,
   safeAll,
@@ -49,7 +50,12 @@ const SECTION_HEADING =
 
 const NOT_HEADLINE = /^(?:contact info|message|connect|follow|following|more|save|pending|view my services|open to)$|\bconnections?$|\bfollowers?$|mutual connections?|^\(?(?:he|she|they)\/\w+\)?$/i;
 
-const MORE_COMPANIES = /^(.+?)\s*\+\s*\d+\s+more$/i;
+const MORE_COMPANIES = /\+\s*\d+\s+more\b/i;
+
+function moreCompaniesLead(text: string) {
+  const first = text.split(/\s+[·•]\s+/)[0];
+  return /^(.+?)\s*\+\s*\d+\s+more$/i.exec(first)?.[1] ?? null;
+}
 
 function nameHeading(root: ParentNode, wanted: string | null): Element | null {
   const all = headings(root);
@@ -75,7 +81,7 @@ function topCardOf(root: ParentNode, heading: Element | null): ParentNode {
 }
 
 function headlineFrom(lines: Line[], name: string | null) {
-  const line = lines.find(({ text }) => text.length <= 300 && !sameText(text, name) && !NOT_HEADLINE.test(text) && !isPageMeta(text) && !MORE_COMPANIES.test(text));
+  const line = lines.find(({ text }) => text.length <= 300 && !sameText(text, name) && !NOT_HEADLINE.test(text) && !isPageMeta(text) && !looksLikeLocation(text) && !MORE_COMPANIES.test(text));
   return line ?? null;
 }
 
@@ -107,8 +113,8 @@ function topCardCompany(top: ParentNode, lines: Line[]) {
     if (match && realValue(match[1])) return clean(match[1]);
   }
   for (const { text } of lines) {
-    const match = MORE_COMPANIES.exec(text);
-    if (match && realValue(match[1])) return clean(match[1]);
+    const lead = moreCompaniesLead(text);
+    if (lead && realValue(lead)) return clean(lead);
   }
   return realValue(firstText(top, OLD_COMPANY));
 }
@@ -169,7 +175,7 @@ function readExperience(root: ParentNode, base: string): ExperienceRole {
   const companyLinkedinUrl = canonicalCompany(link, base);
   if (current.roles.length > 0) {
     const role = current.roles.find((item) => isCurrent(linesIn(item))) ?? current.roles[0];
-    const companyName = current.lines.map(companyFromLine).find(Boolean) ?? null;
+    const companyName = current.lines.filter((line) => !looksLikeLocation(line)).map(companyFromLine).find(Boolean) ?? null;
     return { jobTitle: roleFrom(linesIn(role)).jobTitle, companyName, companyLinkedinUrl };
   }
   return { ...roleFrom(current.lines), companyLinkedinUrl };

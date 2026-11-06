@@ -253,6 +253,133 @@ describe("LinkedIn page parsers", () => {
     assert.equal(person.companyLinkedinUrl, "https://www.linkedin.com/company/22");
   });
 
+  async function readHtml(html: string, url: string) {
+    await page.setContent(html);
+    await page.addScriptTag({ content: bundle });
+    return page.evaluate((address) => {
+      const parsers = (window as unknown as { OrbitParsers: { readPage: (root: ParentNode, url: string, what: string) => { person: PagePerson } } }).OrbitParsers;
+      return parsers.readPage(document, address, "profile").person;
+    }, url);
+  }
+
+  function profileHtml(name: string, top: string, experience: string) {
+    return `<html><head><title>${name} | LinkedIn</title></head><body><main>
+      <section><h2>${name}</h2>${top}</section>
+      <section><h2>Experience</h2>${experience}</section></main></body></html>`;
+  }
+
+  const LANGUAGES = [
+    {
+      language: "German",
+      employment: "Vollzeit",
+      current: "Okt. 2024 \u2013 Heute · 2 J. 2 Mon.",
+      past: "Jan. 2016 \u2013 Sept. 2024 · 8 J. 9 Mon.",
+      total: "13 J. 3 Mon.",
+      place: "Berlin, Deutschland · Hybrid",
+    },
+    {
+      language: "Spanish",
+      employment: "Jornada completa",
+      current: "oct. 2024 - actualidad · 2 años 2 meses",
+      past: "ene. 2016 - sept. 2024 · 8 años 9 meses",
+      total: "13 años 3 meses",
+      place: "Madrid, España · Híbrido",
+    },
+    {
+      language: "French",
+      employment: "Temps plein",
+      current: "oct. 2024 - aujourd’hui · 2 ans 2 mois",
+      past: "janv. 2016 - sept. 2024 · 8 ans 9 mois",
+      total: "13 ans 3 mois",
+      place: "Lyon, France · Hybride",
+    },
+  ];
+
+  for (const words of LANGUAGES) {
+    it(`reads the current role from ${words.language} flat Experience entries`, async () => {
+      const person = await readHtml(
+        profileHtml(
+          "Jo Bloggs",
+          "<p>Advisor</p>",
+          `<div componentkey="entity-collection-item-1"><a href="/company/11/"><p>Head of Sales</p><p>Old Co · ${words.employment}</p><p>${words.past}</p><p>${words.place}</p></a></div>
+           <div componentkey="entity-collection-item-2"><a href="/company/22/"><p>Managing Director</p><p>New Co · ${words.employment}</p><p>${words.current}</p><p>${words.place}</p></a></div>`,
+        ),
+        "https://www.linkedin.com/in/jo-bloggs",
+      );
+      assert.equal(person.jobTitle, "Managing Director");
+      assert.equal(person.companyName, "New Co");
+      assert.equal(person.companyLinkedinUrl, "https://www.linkedin.com/company/22");
+    });
+
+    it(`reads the current role from a ${words.language} grouped Experience entry`, async () => {
+      const person = await readHtml(
+        profileHtml(
+          "Jo Bloggs",
+          "<p>Advisor</p>",
+          `<div componentkey="entity-collection-item-1"><a href="/company/22/"><p>New Co</p><p>${words.employment} · ${words.total}</p><p>${words.place}</p></a>
+             <ul><li><a href="/company/22/"><p>Sales Director</p><p>${words.past}</p></a></li>
+             <li><a href="/company/22/"><p>Managing Director</p><p>${words.current}</p></a></li></ul></div>`,
+        ),
+        "https://www.linkedin.com/in/jo-bloggs",
+      );
+      assert.equal(person.jobTitle, "Managing Director");
+      assert.equal(person.companyName, "New Co");
+      assert.equal(person.companyLinkedinUrl, "https://www.linkedin.com/company/22");
+    });
+  }
+
+  it("keeps companies and titles that start with Greater or end in Area", async () => {
+    const flat = await readHtml(
+      profileHtml(
+        "Jo Bloggs",
+        "<p>Greater Manchester, England, United Kingdom</p><p>Greater London Area Manager at Greater Anglia</p><p>Greater Manchester, England, United Kingdom</p>",
+        `<div componentkey="entity-collection-item-1"><a href="/company/33/"><p>Greater London Area Manager</p><p>Greater Anglia · Full-time</p><p>Oct 2024 - Present · 2 yrs</p><p>Norwich Area, United Kingdom · Hybrid</p></a></div>`,
+      ),
+      "https://www.linkedin.com/in/jo-bloggs",
+    );
+    assert.equal(flat.headline, "Greater London Area Manager at Greater Anglia");
+    assert.equal(flat.jobTitle, "Greater London Area Manager");
+    assert.equal(flat.companyName, "Greater Anglia");
+    assert.equal(flat.location, "Greater Manchester, England, United Kingdom");
+
+    const grouped = await readHtml(
+      profileHtml(
+        "Jo Bloggs",
+        "<p>Inspector</p>",
+        `<div componentkey="entity-collection-item-1"><a href="/company/44/"><p>Greater Manchester Police</p><p>Full-time · 12 yrs</p><p>Manchester Area, United Kingdom</p></a>
+           <ul><li><a href="/company/44/"><p>Inspector</p><p>Jan 2020 - Present · 6 yrs</p></a></li></ul></div>
+         <div componentkey="entity-collection-item-2"><a href="/company/55/"><p>Greater London Authority</p><p>Full-time · 3 yrs</p></a>
+           <ul><li><a href="/company/55/"><p>Analyst</p><p>Jan 2016 - Dec 2019 · 4 yrs</p></a></li></ul></div>`,
+      ),
+      "https://www.linkedin.com/in/jo-bloggs",
+    );
+    assert.equal(grouped.jobTitle, "Inspector");
+    assert.equal(grouped.companyName, "Greater Manchester Police");
+
+    const headerless = await readHtml(
+      profileHtml(
+        "Jo Bloggs",
+        "<p>Inspector</p>",
+        `<div componentkey="entity-collection-item-1"><a href="/company/44/"><p>Manchester Area, United Kingdom</p><p>Full-time · 12 yrs</p></a>
+           <ul><li><a href="/company/44/"><p>Inspector</p><p>Jan 2020 - Present · 6 yrs</p></a></li></ul></div>`,
+      ),
+      "https://www.linkedin.com/in/jo-bloggs",
+    );
+    assert.equal(headerless.companyName, null);
+  });
+
+  it("never takes the top card's company line as a headline or title", async () => {
+    const person = await readHtml(
+      `<html><head><title>Jo Bloggs | LinkedIn</title></head><body><main><section><h2>Jo Bloggs</h2>
+        <p>NORTHWIND + 1 more · University of Eastbridge</p><p>Leeds Area, United Kingdom</p></section></main></body></html>`,
+      "https://www.linkedin.com/in/jo-bloggs",
+    );
+    assert.equal(person.headline, null);
+    assert.equal(person.jobTitle, null);
+    assert.equal(person.companyName, "NORTHWIND");
+    assert.equal(person.location, "Leeds Area, United Kingdom");
+  });
+
   it("returns nulls instead of throwing on an empty page", async () => {
     await page.setContent("<html><body><p>Loading</p></body></html>");
     await page.addScriptTag({ content: bundle });

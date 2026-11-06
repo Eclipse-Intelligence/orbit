@@ -19,6 +19,7 @@ import { LIFECYCLES, type Company, type Contact, type UserActor } from "@/lib/cr
 import type { Db } from "@/lib/db/pool";
 import {
   looksLikeDateOrDuration,
+  looksLikeEmploymentType,
   type CompanyBrief,
   type CompanyMatch,
   type CompanySummary,
@@ -271,7 +272,7 @@ function pageKind(url: string): PageKind {
 
 function cleanLookupText(value: string | undefined, max = 200) {
   const text = value?.replace(/\s+/g, " ").trim().slice(0, max);
-  return text && !looksLikeDateOrDuration(text) ? text : null;
+  return text && !looksLikeDateOrDuration(text) && !looksLikeEmploymentType(text) ? text : null;
 }
 
 async function contactIdsWhere(db: Db, workspaceId: string, column: "normalized_linkedin" | "sales_navigator_url", value: string) {

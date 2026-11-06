@@ -24,6 +24,7 @@ import {
   DIFF_FIELDS,
   EXTENSION_SOURCE,
   looksLikeDateOrDuration,
+  looksLikeEmploymentType,
   type CaptureResponse,
   type DiffField,
   type DiffResponse,
@@ -58,7 +59,7 @@ function text(value: unknown, max: number) {
 
 function readable(value: unknown, max: number) {
   const tidy = text(value, max);
-  return tidy && !looksLikeDateOrDuration(tidy) ? tidy : null;
+  return tidy && !looksLikeDateOrDuration(tidy) && !looksLikeEmploymentType(tidy) ? tidy : null;
 }
 
 function longText(value: unknown, max: number, field: string) {
@@ -167,8 +168,8 @@ function personInput(value: unknown) {
   if (linkedin && !linkedinUrl) throw new CrmError("invalid_input", "That LinkedIn profile link isn't valid.", 400, { field: "linkedinUrl" });
   if (salesNavigator && !salesNavigatorUrl) throw new CrmError("invalid_input", "That Sales Navigator link isn't valid.", 400, { field: "salesNavigatorUrl" });
   return {
-    firstName: text(person.firstName, 80),
-    lastName: text(person.lastName, 80),
+    firstName: readable(person.firstName, 80),
+    lastName: readable(person.lastName, 80),
     jobTitle: readable(person.jobTitle, 120),
     location: text(person.location, 200),
     linkedinUrl,

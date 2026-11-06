@@ -1,4 +1,4 @@
-import { dateRangeIn, looksLikeDateOrDuration } from "../../../lib/extension/protocol";
+import { dateRangeIn, looksLikeDateOrDuration, looksLikeEmploymentType } from "../../../lib/extension/protocol";
 
 export { dateRangeIn, looksLikeDateOrDuration };
 
@@ -50,6 +50,7 @@ export function firstText(root: ParentNode | null | undefined, selectors: string
 export function fold(value: string | null | undefined) {
   return (value ?? "")
     .normalize("NFKD")
+    .replace(/\p{M}+/gu, "")
     .toLowerCase()
     .replace(/[^\p{L}\p{N}]+/gu, " ")
     .trim();
@@ -127,20 +128,23 @@ export function after(anchor: Element | null, element: Element) {
   return Boolean(anchor.compareDocumentPosition(element) & 4);
 }
 
-const EMPLOYMENT =
-  /^(?:full[- ]time|part[- ]time|self[- ]employed|freelance|freelancer|contract|contractor|internship|apprenticeship|seasonal|permanent|temporary|volunteer|trainee)$/i;
-const WORKPLACE = /^(?:hybrid|remote|on[- ]site)$/i;
+const WORKPLACE = /^(?:hybrid|h[ií]brido|ibrido|hybride|remote|remoto|t[eé]l[eé]travail|on[- ]site|vor ort|presencial|sur site|in sede|op locatie)$/iu;
 const DEGREE = /^(?:1st|2nd|3rd\+?)(?:\s+degree(?:\s+connection)?)?$/i;
-const LOCATION = /(?:^greater\s\S|\sarea(?:,|$)|\smetropolitan area\b)/i;
+const LOCATION = /(?:^greater\s[^,]+,|\sarea(?:,|$)|\smetropolitan area\b)/i;
 const SEPARATOR = /^[\s·•|,.:;+\-]*$/;
 
 export function isPageMeta(value: string | null | undefined): boolean {
   const text = clean(value);
   if (!text) return true;
   if (SEPARATOR.test(text) || /^[·•,]/.test(text)) return true;
-  if (looksLikeDateOrDuration(text) || LOCATION.test(text)) return true;
+  if (looksLikeDateOrDuration(text) || looksLikeEmploymentType(text)) return true;
   const parts = text.split(/\s*[·•]\s*/).filter(Boolean);
-  return parts.some((part) => EMPLOYMENT.test(part) || WORKPLACE.test(part) || DEGREE.test(part));
+  return parts.some((part) => WORKPLACE.test(part) || DEGREE.test(part));
+}
+
+export function looksLikeLocation(value: string | null | undefined) {
+  const text = clean(value);
+  return Boolean(text && LOCATION.test(text.split(/\s+[·•]\s+/)[0]));
 }
 
 export function realValue(value: string | null | undefined): string | null {
