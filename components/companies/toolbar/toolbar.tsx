@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Button from "@/components/_ui/button";
 import FilterMenu from "@/components/_common/filter-menu";
 import MobileFilters from "./mobile-filters";
@@ -24,7 +24,7 @@ import ListSearch from "@/components/shortcuts/list-search";
 import type { BulkSelection } from "@/hooks/use-bulk-selection";
 import { downloadCsv } from "@/lib/csv";
 import type { CompanyListQuery, CompanyPresence, LifecycleCount, Member, TagCount } from "@/lib/crm/types";
-import ViewMenu from "@/components/ai-fields/view-menu";
+import ViewMenu, { useDropEditedView } from "@/components/ai-fields/view-menu";
 import { AiFilterChip } from "@/components/ai-fields/ai-filters";
 import { aiFilterValue, aiParamKey, type AiFilter } from "@/lib/ai-fields/params";
 import type { AiField, CompanyView } from "@/lib/ai-fields/types";
@@ -72,16 +72,24 @@ export default function CompaniesToolbar({
 }: ToolbarProps) {
   const router = useRouter();
   const [exporting, setExporting] = useState(false);
+  useDropEditedView(views, canManage);
+
+  const searchParams = useSearchParams();
+  const pending = useRef<string | null>(null);
+  useEffect(() => {
+    pending.current = null;
+  }, [searchParams]);
 
   const replaceParams = useCallback(
     (updates: Record<string, string | null>) => {
-      const params = new URLSearchParams(window.location.search);
+      const params = new URLSearchParams(pending.current ?? window.location.search);
       params.delete("page");
       for (const [key, value] of Object.entries(updates)) {
         if (!value) params.delete(key);
         else params.set(key, value);
       }
       const next = params.toString();
+      pending.current = next;
       router.replace(next ? `/?${next}` : "/", { scroll: false });
     },
     [router],

@@ -24,6 +24,8 @@ export const AI_FIELD_LABEL_MAX = 30;
 export const AI_FIELD_OPTION_MAX = 40;
 export const AI_FIELD_OPTIONS_MAX = 30;
 export const AI_FIELDS_MAX = 20;
+export const AI_FIELD_DECISION_QUESTIONS_MAX = 200;
+export const AI_NUMBER_MAX_LENGTH = 20;
 
 export type AiField = {
   id: string;
@@ -50,7 +52,11 @@ export type AiValue = boolean | number | string | string[] | null;
 
 export type AiCellState = "answered" | "unknown" | "checking" | "outside";
 
-export type AiCell = { state: AiCellState; value: AiValue; manual: boolean };
+export type AiCell = { state: AiCellState; value: AiValue; manual: boolean; manualByName?: string | null };
+
+export function setByText(name: string | null | undefined) {
+  return name ? `Set by ${name}` : "Set by hand";
+}
 
 export type AiSource = { title: string | null; url: string };
 

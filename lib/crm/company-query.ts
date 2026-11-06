@@ -27,6 +27,10 @@ function unanswered(field: string) {
 function aiFilterSql(filter: AiFilter, values: unknown[]) {
   values.push(filter.fieldId);
   const field = `$${values.length}::uuid`;
+  return `(not exists (select 1 from crm.ai_fields af where af.id = ${field} and af.workspace_id = c.workspace_id) or ${aiConditionSql(filter, field, values)})`;
+}
+
+function aiConditionSql(filter: AiFilter, field: string, values: unknown[]) {
   if (filter.op === "is") {
     if (filter.value === "unknown") return unanswered(field);
     return answered(field, `aa.value_bool = ${filter.value === "yes" ? "true" : "false"}`);
@@ -50,8 +54,11 @@ function aiFilterSql(filter: AiFilter, values: unknown[]) {
     return filter.unknown ? `(${matched} or ${unanswered(field)})` : matched;
   }
   const lowered = filter.options.map((option) => option.toLowerCase());
-  values.push(lowered);
-  const matched = lowered.length > 0 ? answered(field, `exists (select 1 from unnest(aa.value_options) o where lower(o) = any($${values.length}::text[]))`) : "false";
+  let matched = "false";
+  if (lowered.length > 0) {
+    values.push(lowered);
+    matched = answered(field, `exists (select 1 from unnest(aa.value_options) o where lower(o) = any($${values.length}::text[]))`);
+  }
   return filter.unknown ? `(${matched} or ${unanswered(field)})` : matched;
 }
 

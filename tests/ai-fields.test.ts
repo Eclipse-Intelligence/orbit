@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { before, describe, it } from "node:test";
-import { createCompany, getCompany, listCompanies } from "@/lib/crm/companies";
+import { createCompany, getCompaniesByIds, getCompany, listCompanies } from "@/lib/crm/companies";
 import { scopesForRole } from "@/lib/crm/scopes";
+import { CrmError } from "@/lib/crm/errors";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool } from "@/lib/db/pool";
 import { companiesCsvRows } from "@/lib/companies";
@@ -13,6 +14,7 @@ import { createTaskRun, getTaskResult, getTaskRun, taskJsonSchema } from "@/lib/
 import { aiFilterValue, aiFiltersFromParams, aiParamKey, aiSortValue, parseAiFilter } from "@/lib/ai-fields/params";
 import { costHint, looksLikeStaff, sizeForStaff } from "@/lib/ai-fields/types";
 import {
+  aiFieldEditImpact,
   aiFieldStats,
   checkFieldAgain,
   hiddenAiFields,
@@ -25,10 +27,12 @@ import {
   showRuleAsColumn,
   spendThisMonth,
 } from "@/lib/ai-fields/fields";
-import { getAnswer, getCompanyAnswers, revertToWebAnswer, setManualAnswer } from "@/lib/ai-fields/answers";
-import { bestExcerpt, decisionQuestions, readDecision, runAiFields } from "@/lib/ai-fields/runner";
+import { getAnswer, getCompanyAnswers, markCompanyDue, revertToWebAnswer, setManualAnswer } from "@/lib/ai-fields/answers";
+import { bestExcerpt, checkNowMessage, COMPANIES_PER_RUN, decisionBatches, decisionQuestions, looseNumber, readDecision, runAiFields } from "@/lib/ai-fields/runner";
 import { eventTriggerTypes } from "@/lib/workflows/definition";
-import { createUser, resetDatabase } from "./helpers";
+import { createAgent, createUser, queryAsUser, resetDatabase } from "./helpers";
+import { GET as listCompaniesRoute } from "@/app/api/v1/companies/route";
+import { listRecentChanges } from "@/lib/crm/undo";
 
 const ENV = { PARALLEL_API_KEY: "par_test" };
 
@@ -83,6 +87,13 @@ function noul(value: number) {
 
 const SOON = () => Date.now() + 30_000;
 
+function forbidden(error: unknown) {
+  assert.ok(error instanceof CrmError);
+  assert.equal(error.status, 403);
+  assert.match(error.message, /owners and admins/);
+  return true;
+}
+
 async function answerRow(fieldId: string, companyId: string) {
   return (
     await getAdminPool().query<{ state: string; value_bool: boolean | null; value_number: string | null; next_check_at: Date | null; checked_at: Date | null; manual: boolean; run_id: string | null }>(
@@ -123,16 +134,17 @@ describe("AI fields", () => {
   });
 
   it("only lets owners and admins manage fields and views", async () => {
-    await assert.rejects(saveAiField(member, { label: "Sells GEO", question: "Does this agency sell GEO work?", kind: "yes_no" }), /owners and admins/);
-    await assert.rejects(createCompanyView(member, { name: "Mine", params: "lifecycle=prospect" }), /owners and admins/);
+    await assert.rejects(saveAiField(member, { label: "Sells GEO", question: "Does this agency sell GEO work?", kind: "yes_no" }), forbidden);
+    await assert.rejects(createCompanyView(member, { name: "Mine", params: "lifecycle=prospect" }), forbidden);
     await assert.rejects(saveAiField(owner, { label: "Sells GEO", question: "GEO?", kind: "yes_no" }), /10 to 1,000/);
     await assert.rejects(saveAiField(owner, { label: "Agency type", question: "Which type of agency is this?", kind: "pick", options: ["SEO"] }), /two options/);
     await assert.rejects(saveAiField(owner, { label: "Agency type", question: "Which type of agency is this?", kind: "pick", options: ["SEO", "PR|Comms"] }), /\|/);
     const field = await saveAiField(owner, { label: "Sells GEO", question: "Does this agency sell GEO or AI search visibility work to its clients?", kind: "yes_no" });
     await assert.rejects(saveAiField(owner, { label: "sells geo", question: "Does it sell GEO work at all?", kind: "yes_no" }), /already a column called/);
-    await assert.rejects(removeAiField(member, field.id), /owners and admins/);
-    await assert.rejects(setAiFieldPaused(member, field.id, true), /owners and admins/);
-    await assert.rejects(setManualAnswer(member, field.id, northlight, "yes"), /owners and admins/);
+    await assert.rejects(removeAiField(member, field.id), forbidden);
+    await assert.rejects(setAiFieldPaused(member, field.id, true), forbidden);
+    await assert.rejects(setManualAnswer(member, field.id, northlight, "yes"), forbidden);
+    await assert.rejects(checkFieldAgain(member, field.id), forbidden);
     const memberView = await listAiFields(member);
     assert.deepEqual(memberView.map((item) => item.label), ["Sells GEO"]);
     const sneaky = await getAdminPool().query("select count(*)::int as total from crm.ai_fields");
@@ -359,8 +371,12 @@ describe("AI fields", () => {
     assert.equal(north.changes.before[key], null);
     assert.equal(north.changes.after[key], "Yes");
     assert.equal(north.source, "parallel");
-    const queued = await admin.query<{ trigger_types: string[] }>("select trigger_types from crm.workflow_events where entity_id = $1 and event_type = 'company.ai_field_changed'", [northlight]);
-    assert.ok(queued.rows.length === 0 || queued.rows[0].trigger_types.includes("field_changed"));
+    const queued = await admin.query<{ trigger_types: string[] }>(
+      "select trigger_types from crm.workflow_events where entity_id = $1 and event_type = 'company.ai_field_changed' and data->'aiField'->>'id' = $2",
+      [northlight, geo.id],
+    );
+    assert.equal(queued.rows.length, 1);
+    assert.ok(queued.rows[0].trigger_types.includes("field_changed"));
     const before = events.rows.length;
     await checkFieldAgain(owner, geo.id);
     await runAiFields(owner, { deadline: SOON(), fetchImpl: api.fetchImpl, env: ENV });
@@ -501,8 +517,8 @@ describe("AI fields", () => {
     await assert.rejects(createCompanyView(owner, { name: "All companies", params: "" }), /already a view/);
     const seen = await listCompanyViews(member);
     assert.ok(seen.some((item) => item.id === view.id));
-    await assert.rejects(updateCompanyView(member, view.id, { name: "Mine" }), /owners and admins/);
-    await assert.rejects(deleteCompanyView(member, view.id), /owners and admins/);
+    await assert.rejects(updateCompanyView(member, view.id, { name: "Mine" }), forbidden);
+    await assert.rejects(deleteCompanyView(member, view.id), forbidden);
     const renamed = await updateCompanyView(owner, view.id, { name: "GEO leads" });
     assert.equal(renamed.name, "GEO leads");
     assert.equal(renamed.params, view.params);
@@ -526,7 +542,7 @@ describe("AI fields", () => {
     assert.equal(column.question, rule.question);
     assert.equal(column.webCheckId, rule.id);
     assert.equal((await showRuleAsColumn(owner, rule.id)).id, column.id);
-    await assert.rejects(showRuleAsColumn(member, rule.id), /owners and admins/);
+    await assert.rejects(showRuleAsColumn(member, rule.id), forbidden);
     const rules = await getAdminPool().query("select count(*)::int as total from crm.web_checks where id = $1", [rule.id]);
     assert.equal(rules.rows[0].total, 1);
     await removeAiField(owner, column.id);
@@ -543,5 +559,300 @@ describe("AI fields", () => {
     const field = (await listAiFields(owner)).find((item) => item.id === geo.id)!;
     assert.equal(field.lastError, "Parallel rejected the key.");
     await removeAiField(owner, geo.id);
+  });
+});
+
+describe("AI fields: edits, costs and failures", () => {
+  let owner: UserActor;
+  let member: UserActor;
+  let alpha: string;
+  let beta: string;
+  let gamma: string;
+
+  const yesToAll = (body: { questions: Record<string, unknown> }) => ({ answers: Object.fromEntries(Object.keys(body.questions).map((key) => [key, noul(0.95)])), citations: [] });
+  const decisionsSent = (api: { sent: Sent[] }) => api.sent.filter((item) => item.url.endsWith("/decisions"));
+  const removeAll = async () => {
+    for (const field of await listAiFields(owner)) await removeAiField(owner, field.id);
+  };
+
+  before(async () => {
+    await resetDatabase();
+    owner = await createUser("owner@aifix.test", "Mark Ridgeon");
+    const sam = (await getAdminPool().query<{ id: string }>("select private.create_local_user('member@aifix.test', 'password-123', 'Sam Colleague') as id")).rows[0].id;
+    await getAdminPool().query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [owner.workspaceId, sam]);
+    member = { ...owner, userId: sam, email: "member@aifix.test", fullName: "Sam Colleague", role: "member", scopes: scopesForRole("member") };
+    alpha = (await createCompany(owner, { name: "Alpha Agency", domain: "alpha.test", lifecycle: "prospect" })).body.company.id;
+    beta = (await createCompany(owner, { name: "Beta Studio", domain: "beta.test" })).body.company.id;
+    gamma = (await createCompany(owner, { name: "Gamma Group", domain: "gamma.test" })).body.company.id;
+  });
+
+  it("edits a field's type, options and question, keeping hand-set answers that still fit", async () => {
+    const field = await saveAiField(owner, { label: "Agency type", question: "Which type of agency is this?", kind: "pick", options: ["SEO", "PR", "Content"] });
+    const api = fakeParallel({ decide: () => ({ answers: { q0: { type: "choice", choice: "o0", probabilities: { o0: 0.9 } } }, citations: [] }) });
+    await runAiFields(owner, { deadline: SOON(), fetchImpl: api.fetchImpl, env: ENV });
+    assert.equal((await answerRow(field.id, alpha)).state, "answered");
+    await setManualAnswer(owner, field.id, beta, "PR");
+    await setManualAnswer(owner, field.id, gamma, "Content");
+
+    const renamed = await saveAiField(owner, { id: field.id, label: "Agency type", question: "Which type of agency is this?", kind: "pick", options: ["seo", "pr", "Paid"] });
+    assert.deepEqual(renamed.options, ["seo", "pr", "Paid"]);
+    assert.equal(await answerRow(field.id, alpha), undefined);
+    const kept = await getAnswer(owner, field.id, beta);
+    assert.equal(kept.answer.manual, true);
+    assert.deepEqual(kept.answer.value, ["pr"]);
+    assert.equal(kept.answer.web, null);
+    assert.equal(await answerRow(field.id, gamma), undefined);
+
+    const again = fakeParallel({ decide: () => ({ answers: { q0: { type: "choice", choice: "o2", probabilities: { o2: 0.9 } } }, citations: [] }) });
+    await runAiFields(owner, { deadline: SOON(), fetchImpl: again.fetchImpl, env: ENV });
+    assert.deepEqual((await getAnswer(owner, field.id, alpha)).answer.value, ["Paid"]);
+    assert.ok(!decisionsSent(again).some((item) => (item.body as { state: { company: string } }).state.company === "Beta Studio"));
+
+    await setManualAnswer(owner, field.id, gamma, null);
+    const yesNo = await saveAiField(owner, { id: field.id, label: "Agency type", question: "Is this an SEO agency at heart?", kind: "yes_no" });
+    assert.equal(yesNo.kind, "yes_no");
+    assert.equal(await answerRow(field.id, beta), undefined);
+    assert.equal((await answerRow(field.id, gamma)).manual, true);
+    assert.equal(await answerRow(field.id, alpha), undefined);
+
+    await runAiFields(owner, { deadline: SOON(), fetchImpl: fakeParallel({ decide: yesToAll }).fetchImpl, env: ENV });
+    const checkedAt = (await answerRow(field.id, alpha)).checked_at;
+    assert.ok(checkedAt);
+    await saveAiField(owner, { id: field.id, label: "Agency type", question: "Is this mainly an SEO agency?", kind: "yes_no" });
+    const due = await answerRow(field.id, alpha);
+    assert.equal(due.value_bool, true);
+    assert.ok(due.next_check_at && new Date(due.next_check_at).getTime() <= Date.now());
+    assert.equal((await answerRow(field.id, gamma)).manual, true);
+    assert.deepEqual(await aiFieldEditImpact(owner, field.id), { web: 2, manual: 1 });
+
+    const deleted = await queryAsUser(member.userId, "delete from crm.ai_field_answers where field_id = $1 returning company_id", [field.id]);
+    assert.equal(deleted.length, 0);
+    await removeAll();
+  });
+
+  it("filters by Unknown alone in the UI, the URL, the REST API and a saved view", async () => {
+    const field = await saveAiField(owner, { label: "Agency type", question: "Which type of agency is this?", kind: "pick", options: ["SEO", "PR"] });
+    await setManualAnswer(owner, field.id, alpha, "SEO");
+    await setManualAnswer(owner, field.id, beta, null);
+    const names = (data: { name: string }[]) => data.map((company) => company.name).sort();
+
+    const ui = await listCompanies(owner, { ai: [{ fieldId: field.id, op: "any", options: [], unknown: true }] });
+    assert.deepEqual(names(ui.data), ["Beta Studio", "Gamma Group"]);
+
+    const params = new URLSearchParams(`${aiParamKey(field.id)}=any:?`);
+    const fromUrl = companyQueryFromSearchParams(params);
+    assert.deepEqual(fromUrl.ai, [{ fieldId: field.id, op: "any", options: [], unknown: true }]);
+    assert.deepEqual(names((await listCompanies(owner, fromUrl)).data), ["Beta Studio", "Gamma Group"]);
+
+    const { token } = await createAgent(owner.workspaceId, ["crm:read"]);
+    const response = await listCompaniesRoute(new Request(`http://crm.test/api/v1/companies?${aiParamKey(field.id)}=any:%3F`, { headers: { authorization: `Bearer ${token}` } }));
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as { data: { name: string }[]; total: number };
+    assert.equal(body.total, 2);
+    assert.deepEqual(names(body.data), ["Beta Studio", "Gamma Group"]);
+
+    const view = await createCompanyView(owner, { name: "Unknown type", params: `${aiParamKey(field.id)}=any:?` });
+    const scoped = await saveAiField(owner, { label: "Unknown check", question: "Is this company hiring right now?", kind: "yes_no", scope: "view", scopeViewId: view.id });
+    assert.equal((await scopeCounts(owner)).views[view.id], 2);
+    const api = fakeParallel({ decide: yesToAll });
+    await runAiFields(owner, { deadline: SOON(), fetchImpl: api.fetchImpl, env: ENV, fieldIds: [scoped.id] });
+    assert.deepEqual(decisionsSent(api).map((item) => (item.body as { state: { company: string } }).state.company).sort(), ["Beta Studio", "Gamma Group"]);
+
+    const stale = new URLSearchParams(`${aiParamKey("3f0e2c1a-0000-4000-8000-000000000000")}=is:unknown`);
+    assert.equal((await listCompanies(owner, companyQueryFromSearchParams(stale))).total, 3);
+    await removeAiField(owner, scoped.id);
+    await deleteCompanyView(owner, view.id);
+    await removeAll();
+  });
+
+  it("checks saved view filters when saving and treats an unreadable view as no companies", async () => {
+    await assert.rejects(createCompanyView(owner, { name: "Broken", params: "owner=not-a-person" }), /filter Orbit can't read/);
+    const view = await createCompanyView(owner, { name: "Prospects", params: "lifecycle=prospect" });
+    const field = await saveAiField(owner, { label: "Hiring", question: "Is this company hiring right now?", kind: "yes_no", scope: "view", scopeViewId: view.id });
+    await getAdminPool().query("update crm.company_views set params = 'owner=not-a-person' where id = $1", [view.id]);
+    const counts = await scopeCounts(owner);
+    assert.equal(counts.views[view.id], 0);
+    const api = fakeParallel({ decide: yesToAll });
+    const report = await runAiFields(owner, { deadline: SOON(), fetchImpl: api.fetchImpl, env: ENV });
+    assert.equal(report.error, undefined);
+    assert.equal(decisionsSent(api).length, 0);
+    assert.match((await listAiFields(owner))[0].lastError ?? "", /saved view has a filter/);
+    await removeAiField(owner, field.id);
+    await deleteCompanyView(owner, view.id);
+  });
+
+  it("never pays twice when passes overlap or Check all again is pressed during a pass", async () => {
+    const field = await saveAiField(owner, { label: "Hiring", question: "Is this company hiring right now?", kind: "yes_no" });
+    let releaseFirst: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let calls = 0;
+    const sent: string[] = [];
+    const fetchImpl = (async (_input: string | URL | Request, init: RequestInit = {}) => {
+      calls += 1;
+      const body = JSON.parse(String(init.body)) as { state: { company: string }; questions: Record<string, unknown> };
+      sent.push(body.state.company);
+      if (calls === 1) await held;
+      return Response.json(yesToAll(body));
+    }) as typeof fetch;
+    const first = runAiFields(owner, { deadline: SOON(), fetchImpl, env: ENV });
+    while (calls === 0) await new Promise((resolve) => setTimeout(resolve, 5));
+    await checkFieldAgain(owner, field.id);
+    const second = await runAiFields(owner, { deadline: SOON(), fetchImpl, env: ENV });
+    assert.equal(second.checked, 0);
+    releaseFirst();
+    await first;
+    assert.deepEqual(sent.sort(), ["Alpha Agency", "Beta Studio", "Gamma Group"]);
+    assert.equal((await spendThisMonth(owner)).decisions >= 3, true);
+
+    await checkFieldAgain(owner, field.id);
+    const counted = fakeParallel({ decide: yesToAll });
+    await Promise.all([
+      runAiFields(owner, { deadline: SOON(), fetchImpl: counted.fetchImpl, env: ENV }),
+      runAiFields(owner, { deadline: SOON(), fetchImpl: counted.fetchImpl, env: ENV }),
+    ]);
+    assert.equal(decisionsSent(counted).length, 3);
+    await removeAll();
+  });
+
+  it("counts a Task run once when it starts and collects it once when two passes overlap", async () => {
+    const staff = await saveAiField(owner, { label: "Staff", question: "How many people work at this agency?", kind: "number", fillsSize: false });
+    let status = "running";
+    const api = fakeParallel({ status: () => status, task: (input, schema) => ({ content: { [Object.keys(schema.properties)[0]]: input.company === "Alpha Agency" ? "about 1,200" : "~50" } }) });
+    const before = (await spendThisMonth(owner)).tasks;
+    const started = await runAiFields(owner, { deadline: SOON(), fetchImpl: api.fetchImpl, env: ENV });
+    assert.equal(started.started, 3);
+    assert.equal((await spendThisMonth(owner)).tasks, before + 3);
+    status = "completed";
+    const [a, b] = await Promise.all([
+      runAiFields(owner, { deadline: SOON(), fetchImpl: api.fetchImpl, env: ENV }),
+      runAiFields(owner, { deadline: SOON(), fetchImpl: api.fetchImpl, env: ENV }),
+    ]);
+    assert.equal(a.collected + b.collected, 3);
+    assert.equal(api.sent.filter((item) => item.url.includes("/result")).length, 3);
+    assert.equal((await spendThisMonth(owner)).tasks, before + 3);
+    assert.equal((await getAnswer(owner, staff.id, alpha)).answer.value, 1200);
+    assert.equal((await getAnswer(owner, staff.id, beta)).answer.value, 50);
+    await removeAll();
+  });
+
+  it("reads loose numbers from Task answers", () => {
+    assert.equal(looseNumber("about 1,200"), 1200);
+    assert.equal(looseNumber("~50"), 50);
+    assert.equal(looseNumber("1.2 million"), 1_200_000);
+    assert.equal(looseNumber("10-20 people"), 15);
+    assert.equal(looseNumber("14 members"), 14);
+    assert.equal(looseNumber("none listed"), null);
+    assert.equal(looseNumber(""), null);
+    assert.equal(looseNumber(64), 64);
+  });
+
+  it("stops on out of credit and rate limiting, and records a pass where every company failed", async () => {
+    const field = await saveAiField(owner, { label: "Hiring", question: "Is this company hiring right now?", kind: "yes_no" });
+    const credit = fakeParallel({ decide: () => new Response("no", { status: 402 }) });
+    const out = await runAiFields(owner, { deadline: SOON(), fetchImpl: credit.fetchImpl, env: ENV });
+    assert.equal(out.error, "Parallel is out of credit.");
+    assert.equal(decisionsSent(credit).length, 1);
+    assert.equal((await listAiFields(owner))[0].lastError, "Parallel is out of credit.");
+
+    await getAdminPool().query("update crm.ai_field_answers set next_check_at = now() - interval '1 minute' where field_id = $1", [field.id]);
+    const limited = fakeParallel({ decide: () => new Response("slow down", { status: 429 }) });
+    const slow = await runAiFields(owner, { deadline: SOON(), fetchImpl: limited.fetchImpl, env: ENV });
+    assert.equal(slow.error, "Parallel is rate limiting. Try again shortly.");
+    assert.equal(decisionsSent(limited).length, 2);
+
+    await getAdminPool().query("update crm.ai_field_answers set next_check_at = now() - interval '1 minute' where field_id = $1", [field.id]);
+    const broken = fakeParallel({ decide: () => new Response("oops", { status: 500 }) });
+    const failed = await runAiFields(owner, { deadline: SOON(), fetchImpl: broken.fetchImpl, env: ENV });
+    assert.equal(failed.error, undefined);
+    assert.equal(failed.failed, 3);
+    assert.equal(decisionsSent(broken).length, 6);
+    assert.equal((await listAiFields(owner))[0].lastError, "Parallel returned 500.");
+
+    await getAdminPool().query("update crm.ai_field_answers set next_check_at = now() - interval '1 minute' where field_id = $1", [field.id]);
+    await runAiFields(owner, { deadline: SOON(), fetchImpl: fakeParallel({ decide: yesToAll }).fetchImpl, env: ENV });
+    assert.equal((await listAiFields(owner))[0].lastError, null);
+
+    await getAdminPool().query("insert into crm.ai_field_spend (workspace_id, month, decisions, tasks) values ($1, date_trunc('month', now())::date, 100000, 0) on conflict (workspace_id, month) do update set decisions = 100000", [owner.workspaceId]);
+    await markCompanyDue(owner, alpha);
+    const capped = await runAiFields(owner, { deadline: SOON(), companyId: alpha, fetchImpl: broken.fetchImpl, env: ENV });
+    const capMessage = checkNowMessage(capped);
+    assert.ok("error" in capMessage && /reached \$100/.test(capMessage.error));
+    await getAdminPool().query("delete from crm.ai_field_spend where workspace_id = $1", [owner.workspaceId]);
+    const nothing = await runAiFields(owner, { deadline: SOON(), companyId: alpha, fieldIds: ["3f0e2c1a-0000-4000-8000-000000000000"], fetchImpl: broken.fetchImpl, env: ENV });
+    assert.deepEqual(checkNowMessage(nothing), { ok: true, message: "Nothing to check. Answers set by hand and companies outside a field's companies aren't checked." });
+    await removeAll();
+  });
+
+  it("asks more than 100 Decisions questions in more than one request and caps the total", async () => {
+    const options = Array.from({ length: 30 }, (_, index) => `Option ${index + 1}`);
+    const fields = [];
+    for (const index of [1, 2, 3, 4]) {
+      fields.push(await saveAiField(owner, { label: `Many ${index}`, question: `Which of these services does it offer, list ${index}?`, kind: "pick", options, multiple: true }));
+    }
+    const batches = decisionBatches(fields);
+    assert.deepEqual(batches.map((batch) => Object.keys(batch.questions).length), [90, 30]);
+    const api = fakeParallel({ decide: (body) => ({ answers: Object.fromEntries(Object.keys(body.questions).map((key) => [key, noul(key.endsWith("_o0") ? 0.9 : 0.1)])), citations: [] }) });
+    await runAiFields(owner, { deadline: SOON(), companyId: alpha, fetchImpl: api.fetchImpl, env: ENV });
+    assert.equal(decisionsSent(api).length, 2);
+    assert.ok(decisionsSent(api).every((item) => Object.keys((item.body as { questions: object }).questions).length <= 100));
+    const { answers } = await getCompanyAnswers(owner, alpha);
+    assert.deepEqual(answers.map((answer) => answer.value), fields.map(() => ["Option 1"]));
+    for (const index of [5, 6]) {
+      await saveAiField(owner, { label: `Many ${index}`, question: `Which of these services does it offer, list ${index}?`, kind: "pick", options, multiple: true });
+    }
+    await assert.rejects(
+      saveAiField(owner, { label: "Many 7", question: "Which of these services does it offer, list 7?", kind: "pick", options, multiple: true }),
+      /up to 200 questions/,
+    );
+    await removeAll();
+  });
+
+  it("runs for companies an agent adds, reading saved views and spend as the agent", async () => {
+    const view = await createCompanyView(owner, { name: "Everyone", params: "" });
+    const field = await saveAiField(owner, { label: "Hiring", question: "Is this company hiring right now?", kind: "yes_no", scope: "view", scopeViewId: view.id });
+    const { actor } = await createAgent(owner.workspaceId, ["crm:read", "companies:write"]);
+    const made = (await createCompany(actor, { name: "Delta Digital", domain: "delta.test" })).body.company.id;
+    assert.equal((await spendThisMonth(actor)).decisions >= 0, true);
+    const api = fakeParallel({ decide: yesToAll });
+    const report = await runAiFields(actor, { deadline: SOON(), companyId: made, fetchImpl: api.fetchImpl, env: ENV });
+    assert.equal(report.error, undefined);
+    assert.equal((await getAnswer(owner, field.id, made)).answer.value, true);
+    assert.equal((await listAiFields(owner))[0].lastError, null);
+    const [company] = await getCompaniesByIds(actor, [made], { aiFields: true });
+    assert.equal(company.aiFields?.[field.id].value, true);
+    await getAdminPool().query("update crm.companies set archived_at = now() where id = $1", [made]);
+    await removeAll();
+    await deleteCompanyView(owner, view.id);
+  });
+
+  it("keeps web answers out of only mine workflows and recent changes", async () => {
+    const field = await saveAiField(owner, { label: "Hiring", question: "Is this company hiring right now?", kind: "yes_no" });
+    await runAiFields(owner, { deadline: SOON(), fetchImpl: fakeParallel({ decide: yesToAll }).fetchImpl, env: ENV });
+    const events = await getAdminPool().query<{ actor_user_id: string | null; data: { automatic?: boolean } }>(
+      "select actor_user_id, data from crm.workflow_events where event_type = 'company.ai_field_changed' and data->'aiField'->>'id' = $1",
+      [field.id],
+    );
+    assert.equal(events.rows.length, 3);
+    assert.ok(events.rows.every((row) => row.actor_user_id === null && row.data.automatic === true));
+    await setManualAnswer(owner, field.id, alpha, "no");
+    const manual = await getAdminPool().query<{ actor_user_id: string | null }>(
+      "select actor_user_id from crm.workflow_events where event_type = 'company.ai_field_changed' and entity_id = $1 and data->'aiField'->>'id' = $2 and not (data ? 'automatic')",
+      [alpha, field.id],
+    );
+    assert.equal(manual.rows[0].actor_user_id, owner.userId);
+    assert.ok(!(await listRecentChanges(owner)).some((change) => change.type === "company.ai_field_changed"));
+    await removeAll();
+  });
+
+  it("checks at most 40 companies a pass", async () => {
+    for (let index = 0; index < 42; index += 1) await createCompany(owner, { name: `Bulk ${index}`, domain: `bulk${index}.test` });
+    await saveAiField(owner, { label: "Hiring", question: "Is this company hiring right now?", kind: "yes_no" });
+    const api = fakeParallel({ decide: yesToAll });
+    const report = await runAiFields(owner, { deadline: SOON(), fetchImpl: api.fetchImpl, env: ENV });
+    assert.equal(report.checked, COMPANIES_PER_RUN);
+    assert.equal(decisionsSent(api).length, COMPANIES_PER_RUN);
+    await removeAll();
   });
 });

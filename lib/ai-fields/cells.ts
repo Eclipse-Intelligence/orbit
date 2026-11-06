@@ -46,7 +46,7 @@ function iso(value: Date | string | null | undefined) {
 
 export function cellFor(field: StoredField, row: AnswerRow | undefined, inScope: boolean): AiCell {
   if (row && (row.state === "answered" || (row.state === "unknown" && (row.manual || inScope)))) {
-    return { state: row.state, value: rowValue(field, row), manual: row.manual };
+    return row.manual ? { state: row.state, value: rowValue(field, row), manual: true, manualByName: row.manual_by_name } : { state: row.state, value: rowValue(field, row), manual: false };
   }
   if (!inScope) return { state: "outside", value: null, manual: false };
   if (field.paused && !row?.run_id) return { state: "unknown", value: null, manual: false };

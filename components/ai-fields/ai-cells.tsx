@@ -1,7 +1,7 @@
 "use client";
 
 import { RecordTag } from "@/components/beautifui/record-marks";
-import { displayAiValue, type AiCell, type AiField, type AiSource } from "@/lib/ai-fields/types";
+import { displayAiValue, setByText, type AiCell, type AiField, type AiSource } from "@/lib/ai-fields/types";
 import { cn } from "@/lib/utils";
 import { appTimeZone } from "@/lib/time";
 import SparkleIcon from "@/public/assets/images/assistant/sparkle.svg";
@@ -26,11 +26,12 @@ export function AiMark({ className, label = "Answered by AI from the web" }: { c
   );
 }
 
-export function ManualMark() {
+export function ManualMark({ name }: { name?: string | null }) {
+  const text = setByText(name);
   return (
-    <span title="Set by you" className="text-subtle inline-flex">
+    <span title={text} className="text-subtle inline-flex">
       <EditIcon aria-hidden className="size-3" />
-      <span className="sr-only">, set by you</span>
+      <span className="sr-only">, {`${text[0].toLowerCase()}${text.slice(1)}`}</span>
     </span>
   );
 }
@@ -56,7 +57,7 @@ export function AiCellValue({ field, cell }: { field: AiField; cell: AiCell | un
     return (
       <span className="text-faint inline-flex items-center gap-1.5 text-[13px]">
         Unknown
-        {cell.manual && <ManualMark />}
+        {cell.manual && <ManualMark name={cell.manualByName} />}
       </span>
     );
   }
@@ -67,14 +68,14 @@ export function AiCellValue({ field, cell }: { field: AiField; cell: AiCell | un
         {options.map((option) => (
           <RecordTag key={option} label={option} base={pickColour(field, option)} />
         ))}
-        {cell.manual && <ManualMark />}
+        {cell.manual && <ManualMark name={cell.manualByName} />}
       </span>
     );
   }
   return (
     <span className={cn("inline-flex max-w-[220px] items-center gap-1.5 text-[13px] tabular-nums", field.kind === "yes_no" && cell.value === false && "text-subtle")}>
       <span className="truncate">{displayAiValue(field, cell.value)}</span>
-      {cell.manual && <ManualMark />}
+      {cell.manual && <ManualMark name={cell.manualByName} />}
     </span>
   );
 }
@@ -90,8 +91,8 @@ function host(url: string) {
 export function SourceList({ sources }: { sources: AiSource[] }) {
   return (
     <ul className="flex flex-col gap-0.5">
-      {sources.map((source) => (
-        <li key={source.url}>
+      {sources.map((source, index) => (
+        <li key={`${index}:${source.url}`}>
           <a
             href={source.url}
             target="_blank"

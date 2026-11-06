@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState, useTransition } from "react";
+import { useEffect, useId, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Button from "@/components/_ui/button";
 import ConfirmDialog from "@/components/_ui/confirm-dialog";
@@ -19,6 +19,7 @@ import Field from "@/components/_ui/field";
 import { Input } from "@/components/_ui/input";
 import { NativeSelect } from "@/components/_ui/native-select";
 import { createCompanyViewAction, deleteCompanyViewAction, updateCompanyViewAction } from "@/app/(crm)/ai-fields";
+import { normaliseViewParams } from "@/lib/ai-fields/params";
 import type { CompanyView } from "@/lib/ai-fields/types";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
 
@@ -27,7 +28,42 @@ const ALL = "all";
 export function useCurrentView(views: CompanyView[]) {
   const params = useSearchParams();
   const id = params.get("view");
-  return views.find((view) => view.id === id) ?? null;
+  const view = views.find((item) => item.id === id) ?? null;
+  const edited = view ? normaliseViewParams(new URLSearchParams(params.toString())) !== view.params : false;
+  return { view, edited };
+}
+
+export function useDropEditedView(views: CompanyView[], canManage: boolean) {
+  const router = useRouter();
+  const { view, edited } = useCurrentView(views);
+  useEffect(() => {
+    if (canManage || !view || !edited) return;
+    const params = new URLSearchParams(window.location.search);
+    params.delete("view");
+    const next = params.toString();
+    router.replace(next ? `/?${next}` : "/", { scroll: false });
+  }, [canManage, view, edited, router]);
+}
+
+function useUpdateView() {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
+  const update = (view: CompanyView) => {
+    setError(null);
+    setSaved(null);
+    start(async () => {
+      const result = await updateCompanyViewAction(view.id, { params: currentParams() });
+      if ("error" in result) {
+        setError(result.error);
+        return;
+      }
+      setSaved(`Updated ${result.view.name}.`);
+      router.refresh();
+    });
+  };
+  return { update, pending, error, saved };
 }
 
 export function useOpenView() {
@@ -120,8 +156,9 @@ export function SaveViewDialog({ open, onOpenChange, view }: { open: boolean; on
 
 export default function ViewMenu({ views, canManage }: { views: CompanyView[]; canManage: boolean }) {
   const router = useRouter();
-  const current = useCurrentView(views);
+  const { view: current, edited } = useCurrentView(views);
   const openView = useOpenView();
+  const updating = useUpdateView();
   const [saving, setSaving] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -149,6 +186,7 @@ export default function ViewMenu({ views, canManage }: { views: CompanyView[]; c
             <span aria-hidden className="h-full w-px bg-white/8" />
             <span className="flex items-center gap-1.5 px-[9px]">
               <span className="max-w-[12rem] truncate">{current?.name ?? "All companies"}</span>
+              {edited && <span className="text-subtle font-normal">Edited</span>}
               <ChevronDownIcon aria-hidden className="size-3 text-[#898b8d] transition-transform duration-200 ease-power3-out group-data-[state=open]:rotate-180" />
             </span>
           </Button>
@@ -166,7 +204,12 @@ export default function ViewMenu({ views, canManage }: { views: CompanyView[]; c
           {canManage && (
             <>
               <DropdownMenuSeparator />
-              <DropdownMenuItem onSelect={() => setSaving(true)}>Save current filters as a view…</DropdownMenuItem>
+              {current && edited && (
+                <DropdownMenuItem disabled={updating.pending} onSelect={() => updating.update(current)}>
+                  {updating.pending ? "Updating…" : `Update ${current.name}`}
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem onSelect={() => setSaving(true)}>{current && edited ? "Save as new view…" : "Save current filters as a view…"}</DropdownMenuItem>
               {current && (
                 <>
                   <DropdownMenuItem onSelect={() => setRenaming(true)}>Rename {current.name}…</DropdownMenuItem>
@@ -189,28 +232,47 @@ export default function ViewMenu({ views, canManage }: { views: CompanyView[]; c
           onConfirm={() => void remove()}
         />
       )}
-      {error && (
+      {(error || updating.error) && (
         <span role="alert" className="caption-style text-danger max-w-[20rem]">
-          {error}
+          {error ?? updating.error}
+        </span>
+      )}
+      {updating.saved && !edited && (
+        <span role="status" className="caption-style text-subtle">
+          {updating.saved}
         </span>
       )}
     </>
   );
 }
 
-export function ViewSelect({ views, id }: { views: CompanyView[]; id: string }) {
-  const current = useCurrentView(views);
+export function ViewSelect({ views, id, canManage = false }: { views: CompanyView[]; id: string; canManage?: boolean }) {
+  const { view: current, edited } = useCurrentView(views);
   const openView = useOpenView();
+  const updating = useUpdateView();
   return (
-    <Field label="View" htmlFor={id}>
-      <NativeSelect id={id} value={current?.id ?? ALL} onChange={(event) => openView(views.find((view) => view.id === event.target.value) ?? null)}>
-        <option value={ALL}>All companies</option>
-        {views.map((view) => (
-          <option key={view.id} value={view.id}>
-            {view.name}
-          </option>
-        ))}
-      </NativeSelect>
-    </Field>
+    <div className="flex flex-col gap-2">
+      <Field label="View" htmlFor={id}>
+        <NativeSelect id={id} value={current?.id ?? ALL} onChange={(event) => openView(views.find((view) => view.id === event.target.value) ?? null)}>
+          <option value={ALL}>All companies</option>
+          {views.map((view) => (
+            <option key={view.id} value={view.id}>
+              {view.name}
+              {view.id === current?.id && edited ? ", edited" : ""}
+            </option>
+          ))}
+        </NativeSelect>
+      </Field>
+      {current && edited && canManage && (
+        <Button variant="secondary" size="sm" className="w-fit" disabled={updating.pending} onClick={() => updating.update(current)}>
+          {updating.pending ? "Updating…" : `Update ${current.name}`}
+        </Button>
+      )}
+      {updating.error && (
+        <span role="alert" className="caption-style text-danger">
+          {updating.error}
+        </span>
+      )}
+    </div>
   );
 }

@@ -9,6 +9,7 @@ import { RecordTag } from "@/components/beautifui/record-marks";
 import { SettingsCard, SettingsPage } from "@/components/crm/settings-ui";
 import AiFieldDialog from "@/components/ai-fields/field-dialog";
 import { shortDate } from "@/components/ai-fields/ai-cells";
+import { useHeldChecking } from "@/components/ai-fields/column-menu";
 import { checkFieldAgainAction, removeAiFieldAction, setAiFieldPausedAction, showRuleAsColumnAction } from "@/app/(crm)/ai-fields";
 import { AI_FIELD_KIND_LABELS, AI_FIELD_REFRESH_LABELS, money, MONTHLY_LIMIT_USD, type AiField, type AiFieldStats, type CompanyView } from "@/lib/ai-fields/types";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
@@ -49,6 +50,7 @@ function FieldRow({
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
+  const [checking, setChecking] = useHeldChecking();
   const total = stats?.total ?? 0;
   const answered = stats?.answered ?? 0;
   const checked = stats?.checked ?? 0;
@@ -64,6 +66,12 @@ function FieldRow({
     setBusy(false);
     if ("error" in result) onError(result.error as string);
     else router.refresh();
+    return !("error" in result);
+  }
+
+  async function checkAll() {
+    setChecking(true);
+    if (!(await run(() => checkFieldAgainAction(field.id)))) setChecking(false);
   }
 
   return (
@@ -106,8 +114,8 @@ function FieldRow({
           <Button variant="secondary" size="sm" onClick={onEdit} disabled={busy}>
             Edit
           </Button>
-          <Button variant="ghost" size="sm" disabled={busy || running} onClick={() => void run(() => checkFieldAgainAction(field.id))}>
-            Check all again
+          <Button variant="ghost" size="sm" disabled={busy || running || checking} onClick={() => void checkAll()}>
+            {checking || running ? "Checking…" : "Check all again"}
           </Button>
           <span className="ml-auto">
             <HoldButton disabled={busy} onConfirm={() => void run(() => removeAiFieldAction(field.id))}>

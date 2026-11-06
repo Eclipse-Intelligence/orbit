@@ -2,9 +2,9 @@ import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import type { Actor } from "@/lib/crm/types";
+import { companyQueryFromSearchParams } from "@/lib/crm/validation";
+import { normaliseViewParams } from "@/lib/ai-fields/params";
 import type { CompanyView } from "@/lib/ai-fields/types";
-
-const VIEW_PARAMS_SKIPPED = new Set(["page", "view", "record", "limit", "offset"]);
 
 type ViewRow = { id: string; name: string; params: string; created_at: Date };
 
@@ -19,17 +19,14 @@ function assertViewAdmin(actor: Actor) {
 }
 
 export function cleanViewParams(value: unknown) {
-  const raw = typeof value === "string" ? value.replace(/^\?/, "") : "";
-  const params = new URLSearchParams(raw);
-  const kept = new URLSearchParams();
-  for (const [key, entry] of params.entries()) {
-    if (VIEW_PARAMS_SKIPPED.has(key) || !entry) continue;
-    if (key.length > 60 || entry.length > 500) continue;
-    kept.set(key, entry);
-  }
-  kept.sort();
-  const text = kept.toString();
+  const text = normaliseViewParams(typeof value === "string" ? value : "");
   if (text.length > 4000) throw new CrmError("invalid_input", "This view has too many filters to save.", 400);
+  try {
+    companyQueryFromSearchParams(new URLSearchParams(text));
+  } catch (error) {
+    const detail = error instanceof CrmError ? ` ${error.message}` : "";
+    throw new CrmError("invalid_input", `This view has a filter Orbit can't read.${detail}`, 400, { field: "params" });
+  }
   return text;
 }
 

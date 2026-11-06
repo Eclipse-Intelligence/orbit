@@ -9,7 +9,7 @@ import { assertFieldAdmin, readField, readFields, scopeMembership, type StoredFi
 import { displayAiValue, sizeForStaff, type AiAnswer, type AiValue } from "@/lib/ai-fields/types";
 
 export const AI_FIELD_EVENT = "company.ai_field_changed";
-export const BACKGROUND_PROVENANCE: Provenance = { operation: "ai_field", source: "parallel" };
+export const BACKGROUND_PROVENANCE: Provenance = { operation: "ai_field", source: "parallel", automatic: true };
 const MANUAL_PROVENANCE: Provenance = { operation: "ai_field_manual" };
 
 export type StoredValue = { state: string; bool: boolean | null; number: number | string | null; text: string | null; options: string[] | null } | null;
@@ -223,7 +223,7 @@ export async function markCompanyDue(actor: Actor, companyId: string, fieldIds?:
   const ids = (fieldIds ?? []).filter(isUuid);
   await withActor(actor, (db) =>
     db.query(
-      `update crm.ai_field_answers set next_check_at = now(), claimed_at = null
+      `update crm.ai_field_answers set next_check_at = now()
        where workspace_id = $1 and company_id = $2 and not manual and run_id is null and ($3::uuid[] is null or field_id = any($3::uuid[]))`,
       [actor.workspaceId, companyId, fieldIds ? ids : null],
     ),

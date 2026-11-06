@@ -127,6 +127,7 @@ export type Provenance = {
   workflowId?: string;
   depth?: number;
   catchUp?: boolean;
+  automatic?: boolean;
 };
 
 export type CompanyListQuery = {

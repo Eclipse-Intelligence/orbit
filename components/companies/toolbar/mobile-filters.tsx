@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { AiFilterEditor } from "@/components/ai-fields/ai-filters";
 import { SaveViewDialog, ViewSelect } from "@/components/ai-fields/view-menu";
-import { aiFilterValue, aiParamKey, aiSortValue } from "@/lib/ai-fields/params";
+import { AI_PARAM_PREFIX, aiFilterValue, aiParamKey, aiSortValue } from "@/lib/ai-fields/params";
 import type { AiField, CompanyView } from "@/lib/ai-fields/types";
 import Button from "@/components/_ui/button";
 import CountBadge from "@/components/_ui/count-badge";
@@ -44,6 +44,8 @@ import type { CompanyListQuery, Member } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
 import FilterIcon from "@/public/assets/images/_common/filter.svg";
 import XIcon from "@/public/assets/images/companies/detail/x.svg";
+
+const RESET_KEYS = ["q", "owner", "owner_id", "lifecycle", "health", "tag", "sort", "order", "has", "missing", "quiet", "view", "page"];
 
 type MobileFiltersProps = {
   className?: string;
@@ -85,31 +87,22 @@ export default function MobileFilters({
     onOpenChange?.(next);
   };
   const [query, setQuery] = useState(filters.query ?? "");
+  const [cleared, setCleared] = useState(0);
   const activeCount = activeFilterCount(filters);
 
   function applySearch() {
-    onChange({ q: query.trim() || null });
+    if ((query.trim() || null) !== (filters.query ?? null)) onChange({ q: query.trim() || null });
   }
 
   function reset() {
     setQuery("");
-    if (new URLSearchParams(window.location.search).has("view")) {
-      router.replace("/", { scroll: false });
-      return;
+    setCleared((count) => count + 1);
+    const params = new URLSearchParams(window.location.search);
+    for (const key of [...params.keys()]) {
+      if (key.startsWith(AI_PARAM_PREFIX) || RESET_KEYS.includes(key)) params.delete(key);
     }
-    onChange({
-      ...Object.fromEntries(aiFields.map((field) => [aiParamKey(field.id), null])),
-      q: null,
-      owner: null,
-      lifecycle: null,
-      health: null,
-      tag: null,
-      sort: null,
-      order: null,
-      has: null,
-      missing: null,
-      quiet: null,
-    });
+    const next = params.toString();
+    router.replace(next ? `/?${next}` : "/", { scroll: false });
   }
 
   return (
@@ -143,7 +136,7 @@ export default function MobileFilters({
 
         <ScrollArea viewportClassName="max-h-[calc(85dvh-118px)]">
           <div className="flex flex-col gap-4 p-4">
-            {(views.length > 0 || canManage) && <ViewSelect views={views} id="mobile-view" />}
+            {(views.length > 0 || canManage) && <ViewSelect views={views} id="mobile-view" canManage={canManage} />}
             <Field label="Search" htmlFor="mobile-search">
               <Input
                 id="mobile-search"
@@ -282,7 +275,7 @@ export default function MobileFilters({
                 <span className="eyebrow-style text-subtle px-2 py-1.5">AI fields</span>
                 {aiFields.map((field) => (
                   <AiFilterEditor
-                    key={`${field.id}:${filters.ai?.find((filter) => filter.fieldId === field.id) ? aiFilterValue(filters.ai.find((filter) => filter.fieldId === field.id)!) : ""}`}
+                    key={`${field.id}:${cleared}`}
                     compact
                     field={field}
                     filter={filters.ai?.find((filter) => filter.fieldId === field.id)}

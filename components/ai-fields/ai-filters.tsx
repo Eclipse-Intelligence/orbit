@@ -6,8 +6,8 @@ import { Checkbox } from "@/components/_ui/checkbox";
 import { Input } from "@/components/_ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popover";
 import { AiMark } from "@/components/ai-fields/ai-cells";
-import type { AiFilter } from "@/lib/ai-fields/params";
-import type { AiField } from "@/lib/ai-fields/types";
+import { aiFilterValue, type AiFilter } from "@/lib/ai-fields/params";
+import { AI_NUMBER_MAX_LENGTH, type AiField } from "@/lib/ai-fields/types";
 import { cn } from "@/lib/utils";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
 
@@ -96,8 +96,12 @@ function FieldLabel({ field, compact }: { field: AiField; compact: boolean }) {
   );
 }
 
-export function AiFilterEditor({ field, filter, onChange, compact = false }: { field: AiField; filter: AiFilter | undefined; onChange: (filter: AiFilter | null) => void; compact?: boolean }) {
+export function AiFilterEditor({ field, filter, onChange: send, compact = false }: { field: AiField; filter: AiFilter | undefined; onChange: (filter: AiFilter | null) => void; compact?: boolean }) {
   const id = useId();
+  const onChange = (next: AiFilter | null) => {
+    if ((next ? aiFilterValue(next) : null) === (filter ? aiFilterValue(filter) : null)) return;
+    send(next);
+  };
   const range = filter?.op === "range" ? filter : null;
   const [from, setFrom] = useState(range?.min === null || range?.min === undefined ? "" : String(range.min));
   const [to, setTo] = useState(range?.max === null || range?.max === undefined ? "" : String(range.max));
@@ -107,7 +111,7 @@ export function AiFilterEditor({ field, filter, onChange, compact = false }: { f
   if (field.kind === "yes_no") {
     const value = filter?.op === "is" ? filter.value : "any";
     return (
-      <div className={cn("flex items-center justify-between gap-3", compact && "px-2 py-1.5")}>
+      <div className={cn("flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5", compact && "px-2 py-1.5")}>
         <FieldLabel field={field} compact />
         <Segmented
           label={field.label}
@@ -141,6 +145,8 @@ export function AiFilterEditor({ field, filter, onChange, compact = false }: { f
           <Input
             id={`${id}-from`}
             inputMode="decimal"
+            maxLength={AI_NUMBER_MAX_LENGTH}
+            enterKeyHint="done"
             value={from}
             placeholder="From"
             onChange={(event) => setFrom(event.target.value)}
@@ -156,6 +162,8 @@ export function AiFilterEditor({ field, filter, onChange, compact = false }: { f
           <Input
             id={`${id}-to`}
             inputMode="decimal"
+            maxLength={AI_NUMBER_MAX_LENGTH}
+            enterKeyHint="done"
             value={to}
             placeholder="To"
             onChange={(event) => setTo(event.target.value)}
@@ -195,6 +203,7 @@ export function AiFilterEditor({ field, filter, onChange, compact = false }: { f
           id={`${id}-text`}
           value={text}
           maxLength={100}
+          enterKeyHint="done"
           onChange={(event) => setText(event.target.value)}
           onBlur={() => apply()}
           onKeyDown={(event) => {

@@ -52,6 +52,12 @@ export default async function CompaniesPage({
   ]);
 
   const available = enrichmentAvailability();
+  const known = new Set(aiFields.map((field) => field.id));
+  const shown = {
+    ...filters,
+    ai: filters.ai?.filter((filter) => known.has(filter.fieldId)),
+    aiSort: filters.aiSort && known.has(filters.aiSort) ? filters.aiSort : undefined,
+  };
 
   return (
     <Companies
@@ -59,7 +65,7 @@ export default async function CompaniesPage({
       total={listed.total}
       page={page}
       now={requestTime()}
-      filters={filters}
+      filters={shown}
       members={members}
       tags={tags}
       lifecycles={lifecycles}

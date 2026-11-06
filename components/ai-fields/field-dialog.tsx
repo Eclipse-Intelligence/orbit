@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Checkbox } from "@/components/_ui/checkbox";
@@ -10,7 +10,7 @@ import { Input } from "@/components/_ui/input";
 import { NativeSelect } from "@/components/_ui/native-select";
 import { Radio } from "@/components/_ui/radio";
 import { Textarea } from "@/components/_ui/textarea";
-import { aiFieldScopeCountsAction, saveAiFieldAction } from "@/app/(crm)/ai-fields";
+import { aiFieldEditImpactAction, aiFieldScopeCountsAction, saveAiFieldAction } from "@/app/(crm)/ai-fields";
 import {
   AI_FIELD_LABEL_MAX,
   AI_FIELD_OPTION_MAX,
@@ -18,7 +18,11 @@ import {
   AI_FIELD_REFRESH,
   AI_FIELD_REFRESH_LABELS,
   costHint,
+  DECISION_COST,
   looksLikeStaff,
+  money,
+  TASK_COST,
+  usesDecisions,
   type AiField,
   type AiFieldKind,
   type AiFieldRefresh,
@@ -47,10 +51,52 @@ type DialogProps = {
 
 type OptionRow = { key: number; value: string };
 
-function scopeValue(field: AiField | null | undefined) {
+const DELETED_VIEW = "view:deleted";
+
+function scopeValue(field: AiField | null | undefined, views: CompanyView[]) {
   if (!field) return "all";
-  if (field.scope === "view" && field.scopeViewId) return `view:${field.scopeViewId}`;
+  if (field.scope === "view") return field.scopeViewId && views.some((view) => view.id === field.scopeViewId) ? `view:${field.scopeViewId}` : DELETED_VIEW;
   return field.scope === "fit" ? "fit" : "all";
+}
+
+type Impact = { web: number; manual: number };
+
+function cleanedOptions(rows: OptionRow[]) {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const row of rows) {
+    const option = row.value.replace(/\s+/g, " ").trim();
+    if (!option || seen.has(option.toLowerCase())) continue;
+    seen.add(option.toLowerCase());
+    out.push(option);
+  }
+  return out;
+}
+
+function plural(count: number, one: string, many: string) {
+  return `${count.toLocaleString("en-GB")} ${count === 1 ? one : many}`;
+}
+
+export function editHint(
+  field: Pick<AiField, "kind" | "options" | "multiple" | "question">,
+  next: { kind: AiFieldKind; options: string[]; multiple: boolean; question: string },
+  impact: Impact,
+) {
+  const typeChanged = field.kind !== next.kind;
+  const optionsChanged = !typeChanged && next.kind === "pick" && (field.multiple !== next.multiple || field.options.join("\n") !== next.options.join("\n"));
+  const questionChanged = field.question.replace(/\s+/g, " ").trim() !== next.question.replace(/\s+/g, " ").trim();
+  const amount = impact.web * (usesDecisions(next.kind) ? DECISION_COST : TASK_COST);
+  const cost = amount > 0 && amount < 0.01 ? money(amount) : `about ${money(amount)}`;
+  const web = plural(impact.web, "web answer", "web answers");
+  const kept = impact.manual > 0 ? ` Your ${plural(impact.manual, "hand-set answer is", "hand-set answers are")} kept if ${impact.manual === 1 ? "it still fits" : "they still fit"}.` : "";
+  if (typeChanged || optionsChanged) {
+    const what = typeChanged ? "the answer type" : field.multiple !== next.multiple ? "whether more than one is allowed" : "the options";
+    if (impact.web === 0 && impact.manual === 0) return null;
+    const checks = impact.web > 0 ? `clears ${web} and checks them again (${cost}).` : "checks its companies again.";
+    return `Changing ${what} ${checks}${kept}`;
+  }
+  if (questionChanged && impact.web > 0) return `Changing the question checks the ${web} again (${cost}). Hand-set answers stay as they are.`;
+  return null;
 }
 
 function FieldForm({ field, views, onDone, onCancel }: { field: AiField | null; views: CompanyView[]; onDone: (field: AiField) => void; onCancel: () => void }) {
@@ -70,7 +116,10 @@ function FieldForm({ field, views, onDone, onCancel }: { field: AiField | null; 
   const [nextKey, setNextKey] = useState(() => Math.max(2, field?.options.length ?? 0));
   const [multiple, setMultiple] = useState(field?.multiple ?? false);
   const [label, setLabel] = useState(field?.label ?? "");
-  const [scope, setScope] = useState(() => scopeValue(field));
+  const [scope, setScope] = useState(() => scopeValue(field, views));
+  const [impact, setImpact] = useState<Impact | null>(null);
+  const optionRefs = useRef(new Map<number, HTMLInputElement>());
+  const focusKey = useRef<number | null>(null);
   const [refresh, setRefresh] = useState<AiFieldRefresh>(field?.refresh ?? "monthly");
   const [fillsSize, setFillsSize] = useState<boolean | null>(field ? field.fillsSize : null);
   const [counts, setCounts] = useState<Counts | null>(null);
@@ -79,16 +128,32 @@ function FieldForm({ field, views, onDone, onCancel }: { field: AiField | null; 
 
   useEffect(() => {
     let live = true;
-    void aiFieldScopeCountsAction().then((result) => {
-      if (live && !("error" in result)) setCounts(result);
-    });
+    void aiFieldScopeCountsAction()
+      .then((result) => {
+        if (live && !("error" in result)) setCounts(result);
+      })
+      .catch(() => undefined);
+    if (field) {
+      void aiFieldEditImpactAction(field.id)
+        .then((result) => {
+          if (live && !("error" in result)) setImpact(result);
+        })
+        .catch(() => undefined);
+    }
     return () => {
       live = false;
     };
-  }, []);
+  }, [field]);
+
+  useEffect(() => {
+    if (focusKey.current === null) return;
+    optionRefs.current.get(focusKey.current)?.focus();
+    focusKey.current = null;
+  }, [options]);
 
   const sizeTicked = fillsSize ?? looksLikeStaff(label, question);
   const scopeCount = !counts ? null : scope === "all" ? counts.all : scope === "fit" ? counts.fit : (counts.views[scope.slice(5)] ?? 0);
+  const changeHint = field && impact ? editHint(field, { kind, options: kind === "pick" ? cleanedOptions(options) : [], multiple: kind === "pick" && multiple, question }, impact) : null;
   const hint = scopeCount === null ? null : costHint(kind, scopeCount, refresh);
   const count = (value: number | undefined) => (value === undefined ? "" : ` (${value.toLocaleString("en-GB")})`);
 
@@ -96,15 +161,41 @@ function FieldForm({ field, views, onDone, onCancel }: { field: AiField | null; 
     setOptions((rows) => rows.map((row) => (row.key === key ? { ...row, value } : row)));
   }
 
-  function addOption() {
-    setOptions((rows) => [...rows, { key: nextKey, value: "" }]);
-    setNextKey((key) => key + 1);
+  function addOption(after?: number) {
+    const key = nextKey;
+    focusKey.current = key;
+    setOptions((rows) => {
+      const index = after === undefined ? rows.length : rows.findIndex((row) => row.key === after) + 1;
+      return [...rows.slice(0, index), { key, value: "" }, ...rows.slice(index)];
+    });
+    setNextKey((current) => current + 1);
+  }
+
+  function optionKeyDown(event: KeyboardEvent<HTMLInputElement>, key: number) {
+    if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+    event.preventDefault();
+    if (options.length < AI_FIELD_OPTIONS_MAX) addOption(key);
+  }
+
+  function refreshKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
+    const step = event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 0;
+    if (step === 0) return;
+    event.preventDefault();
+    const index = (AI_FIELD_REFRESH.indexOf(refresh) + step + AI_FIELD_REFRESH.length) % AI_FIELD_REFRESH.length;
+    setRefresh(AI_FIELD_REFRESH[index]);
+    const group = event.currentTarget.parentElement;
+    group?.querySelectorAll<HTMLButtonElement>("[role=radio]")[index]?.focus();
   }
 
   async function save() {
     setSaving(true);
     setError(null);
     const viewId = scope.startsWith("view:") ? scope.slice(5) : null;
+    if (scope === DELETED_VIEW) {
+      setSaving(false);
+      setError({ message: "The saved view was deleted. Choose other companies.", field: "scopeViewId" });
+      return;
+    }
     const result = await saveAiFieldAction({
       id: field?.id,
       label,
@@ -186,9 +277,15 @@ function FieldForm({ field, views, onDone, onCancel }: { field: AiField | null; 
                 </label>
                 <Input
                   id={`${ids.options}-${row.key}`}
+                  ref={(element) => {
+                    if (element) optionRefs.current.set(row.key, element);
+                    else optionRefs.current.delete(row.key);
+                  }}
                   value={row.value}
                   maxLength={AI_FIELD_OPTION_MAX}
+                  enterKeyHint="next"
                   onChange={(event) => updateOption(row.key, event.target.value)}
+                  onKeyDown={(event) => optionKeyDown(event, row.key)}
                   placeholder={`Option ${index + 1}`}
                 />
                 <Button
@@ -207,7 +304,7 @@ function FieldForm({ field, views, onDone, onCancel }: { field: AiField | null; 
                 <Checkbox id={ids.many} checked={multiple} onCheckedChange={(value) => setMultiple(value === true)} />
                 Allow more than one
               </label>
-              <Button variant="ghost" size="sm" onClick={addOption} disabled={options.length >= AI_FIELD_OPTIONS_MAX}>
+              <Button variant="ghost" size="sm" onClick={() => addOption()} disabled={options.length >= AI_FIELD_OPTIONS_MAX}>
                 <PlusIcon aria-hidden className="size-3" />
                 Add option
               </Button>
@@ -231,6 +328,11 @@ function FieldForm({ field, views, onDone, onCancel }: { field: AiField | null; 
           </Field>
           <Field label="Companies" htmlFor={ids.scope} error={fieldError("scopeViewId")}>
             <NativeSelect id={ids.scope} value={scope} onChange={(event) => setScope(event.target.value)}>
+              {scope === DELETED_VIEW && (
+                <option value={DELETED_VIEW} disabled>
+                  Deleted view, choose another
+                </option>
+              )}
               <option value="all">All with a website{count(counts?.all)}</option>
               <option value="fit">Fit Good or better{count(counts?.fit)}</option>
               {views.map((view) => (
@@ -251,7 +353,9 @@ function FieldForm({ field, views, onDone, onCancel }: { field: AiField | null; 
                 type="button"
                 role="radio"
                 aria-checked={option === refresh}
+                tabIndex={option === refresh ? 0 : -1}
                 onClick={() => setRefresh(option)}
+                onKeyDown={refreshKeyDown}
                 className={cn(
                   "caption-style cursor-pointer rounded-full px-3 py-1.5 whitespace-nowrap outline-none transition-colors duration-150 ease-power3-out focus-visible:ring-2 focus-visible:ring-ring/60",
                   option === refresh ? "bg-muted text-foreground shadow-[inset_0px_0px_0px_1px_rgba(255,255,255,0.06)]" : "text-subtle hover:text-foreground",
@@ -264,6 +368,7 @@ function FieldForm({ field, views, onDone, onCancel }: { field: AiField | null; 
           <span className="caption-style text-subtle">New companies are checked when they&apos;re added.</span>
         </fieldset>
         <div role="status" className="flex flex-col gap-1 rounded-lg bg-white/[0.04] px-3 py-2.5">
+          {changeHint && <span className="ui-style text-foreground">{changeHint}</span>}
           {hint ? (
             <>
               <span className="ui-style text-foreground">{hint.text}</span>

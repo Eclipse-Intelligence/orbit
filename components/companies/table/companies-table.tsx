@@ -85,8 +85,9 @@ export default function CompaniesTable({
   onFilterField?: (field: AiField) => void;
 }) {
   const replaceParams = useListParams();
-  const [columnError, setColumnError] = useState<string | null>(null);
-  const addColumn = canManage || hiddenFields.length > 0;
+  const [columnMessage, setColumnMessage] = useState<{ text: string; error: boolean } | null>(null);
+  const setColumnError = (text: string | null) => setColumnMessage(text ? { text, error: true } : null);
+  const addColumn = (canManage && aiFields.length > 0) || hiddenFields.length > 0;
   const columns = tableColumns(Boolean(enrichment.fit), aiFields, addColumn);
   const findDetails: BulkExtraAction = {
     key: "find-details",
@@ -117,13 +118,14 @@ export default function CompaniesTable({
       onEdit={() => onEditField?.(field)}
       onAdd={() => onAddField?.()}
       onError={setColumnError}
+      onNotice={(text) => setColumnMessage({ text, error: false })}
     />
   );
   return (
     <div className="border-border flex min-h-0 flex-1 flex-col border-t">
-      {columnError && (
-        <p role="alert" className="caption-style text-danger px-4 py-2">
-          {columnError}
+      {columnMessage && (
+        <p role={columnMessage.error ? "alert" : "status"} className={cn("caption-style px-4 py-2", columnMessage.error ? "text-danger" : "text-subtle")}>
+          {columnMessage.text}
         </p>
       )}
       <ScrollArea orientation="both" className="min-h-0 flex-1">

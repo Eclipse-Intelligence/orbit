@@ -77,6 +77,7 @@ create table if not exists crm.ai_field_answers (
   claimed_at timestamptz,
   run_id text,
   run_started_at timestamptz,
+  collect_claimed_at timestamptz,
   error text,
   manual boolean not null default false,
   manual_at timestamptz,
@@ -90,6 +91,8 @@ create table if not exists crm.ai_field_answers (
   constraint ai_field_answers_error_length check (error is null or char_length(error) <= 500),
   constraint ai_field_answers_run_id_length check (run_id is null or char_length(run_id) <= 200)
 );
+
+alter table crm.ai_field_answers add column if not exists collect_claimed_at timestamptz;
 
 create index if not exists ai_field_answers_company_idx on crm.ai_field_answers (company_id);
 create index if not exists ai_field_answers_workspace_idx on crm.ai_field_answers (workspace_id, field_id);
@@ -168,6 +171,9 @@ drop policy if exists ai_field_answers_admin_update on crm.ai_field_answers;
 create policy ai_field_answers_admin_update on crm.ai_field_answers for update to authenticated
   using (workspace_id in (select private.user_workspace_ids()) and private.is_workspace_admin(workspace_id))
   with check (workspace_id in (select private.user_workspace_ids()) and private.is_workspace_admin(workspace_id));
+drop policy if exists ai_field_answers_admin_delete on crm.ai_field_answers;
+create policy ai_field_answers_admin_delete on crm.ai_field_answers for delete to authenticated
+  using (workspace_id in (select private.user_workspace_ids()) and private.is_workspace_admin(workspace_id));
 drop policy if exists ai_field_answers_agent on crm.ai_field_answers;
 create policy ai_field_answers_agent on crm.ai_field_answers for select to crm_agent
   using (workspace_id = (select private.request_workspace_id()));
@@ -180,14 +186,21 @@ create policy ai_field_hidden_owner on crm.ai_field_hidden for all to authentica
 drop policy if exists ai_field_spend_read on crm.ai_field_spend;
 create policy ai_field_spend_read on crm.ai_field_spend for select to authenticated
   using (workspace_id in (select private.user_workspace_ids()));
+drop policy if exists ai_field_spend_agent on crm.ai_field_spend;
+create policy ai_field_spend_agent on crm.ai_field_spend for select to crm_agent
+  using (workspace_id = (select private.request_workspace_id()));
+
+drop policy if exists company_views_agent on crm.company_views;
+create policy company_views_agent on crm.company_views for select to crm_agent
+  using (workspace_id = (select private.request_workspace_id()));
 
 revoke all on crm.company_views, crm.ai_fields, crm.ai_field_answers, crm.ai_field_hidden, crm.ai_field_spend from anon, authenticated, crm_agent;
 grant select, insert, update, delete on crm.company_views to authenticated;
 grant select, insert, update, delete on crm.ai_fields to authenticated;
-grant select, insert, update on crm.ai_field_answers to authenticated;
+grant select, insert, update, delete on crm.ai_field_answers to authenticated;
 grant select, insert, delete on crm.ai_field_hidden to authenticated;
 grant select on crm.ai_field_spend to authenticated;
-grant select on crm.ai_fields, crm.ai_field_answers to crm_agent;
+grant select on crm.ai_fields, crm.ai_field_answers, crm.company_views, crm.ai_field_spend to crm_agent;
 
 create or replace function private.ai_field_claim(p_workspace uuid, p_field uuid, p_companies uuid[], p_claim_minutes integer)
 returns setof uuid
@@ -238,8 +251,11 @@ begin
     select array_agg(value) into v_options from jsonb_array_elements_text(p_answer -> 'options');
   end if;
   select * into v_before from crm.ai_field_answers a where a.field_id = p_field and a.company_id = p_company for update;
+  if found and p_answer ->> 'runId' is not null and v_before.run_id is distinct from p_answer ->> 'runId' then
+    return null;
+  end if;
   if found and v_before.manual then
-    update crm.ai_field_answers a set claimed_at = null, run_id = null, run_started_at = null
+    update crm.ai_field_answers a set claimed_at = null, run_id = null, run_started_at = null, collect_claimed_at = null
     where a.field_id = p_field and a.company_id = p_company;
     return null;
   end if;
@@ -276,6 +292,7 @@ begin
     claimed_at = null,
     run_id = null,
     run_started_at = null,
+    collect_claimed_at = null,
     error = null
   where not a.manual
   returning * into v_after;
@@ -308,6 +325,7 @@ begin
     claimed_at = null,
     run_id = null,
     run_started_at = null,
+    collect_claimed_at = null,
     error = left(p_error, 500),
     next_check_at = now() + make_interval(hours => p_retry_hours)
   where a.workspace_id = p_workspace and a.company_id = p_company and a.field_id = any(p_fields) and not a.manual;
@@ -324,8 +342,44 @@ begin
   if current_user not in ('crm_app', 'postgres') then
     raise exception 'forbidden' using errcode = '42501';
   end if;
-  update crm.ai_field_answers a set run_id = left(p_run_id, 200), run_started_at = now(), claimed_at = now()
+  insert into crm.ai_field_spend as s (workspace_id, month, decisions, tasks)
+  values (p_workspace, date_trunc('month', now())::date, 0, 1)
+  on conflict (workspace_id, month) do update set tasks = s.tasks + 1;
+  update crm.ai_field_answers a set run_id = left(p_run_id, 200), run_started_at = now(), claimed_at = now(), collect_claimed_at = null
   where a.workspace_id = p_workspace and a.company_id = p_company and a.field_id = any(p_fields) and not a.manual;
+end;
+$$;
+
+create or replace function private.ai_field_run_lease(p_workspace uuid, p_company uuid, p_run_id text, p_seconds integer)
+returns setof uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if current_user not in ('crm_app', 'postgres') then
+    raise exception 'forbidden' using errcode = '42501';
+  end if;
+  return query
+    update crm.ai_field_answers a set collect_claimed_at = now()
+    where a.workspace_id = p_workspace and a.company_id = p_company and a.run_id = p_run_id
+      and (a.collect_claimed_at is null or a.collect_claimed_at < now() - make_interval(secs => p_seconds))
+    returning a.field_id;
+end;
+$$;
+
+create or replace function private.ai_field_run_release(p_workspace uuid, p_company uuid, p_run_id text)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if current_user not in ('crm_app', 'postgres') then
+    raise exception 'forbidden' using errcode = '42501';
+  end if;
+  update crm.ai_field_answers a set collect_claimed_at = null
+  where a.workspace_id = p_workspace and a.company_id = p_company and a.run_id = p_run_id;
 end;
 $$;
 
@@ -369,11 +423,15 @@ revoke all on function private.ai_field_claim(uuid, uuid, uuid[], integer) from 
 revoke all on function private.ai_field_save(uuid, uuid, uuid, jsonb) from public;
 revoke all on function private.ai_field_fail(uuid, uuid[], uuid, text, integer) from public;
 revoke all on function private.ai_field_run_start(uuid, uuid[], uuid, text) from public;
+revoke all on function private.ai_field_run_lease(uuid, uuid, text, integer) from public;
+revoke all on function private.ai_field_run_release(uuid, uuid, text) from public;
 revoke all on function private.ai_field_note(uuid, uuid[], text) from public;
 revoke all on function private.ai_field_spend(uuid, integer, integer) from public;
 grant execute on function private.ai_field_claim(uuid, uuid, uuid[], integer) to crm_app;
 grant execute on function private.ai_field_save(uuid, uuid, uuid, jsonb) to crm_app;
 grant execute on function private.ai_field_fail(uuid, uuid[], uuid, text, integer) to crm_app;
 grant execute on function private.ai_field_run_start(uuid, uuid[], uuid, text) to crm_app;
+grant execute on function private.ai_field_run_lease(uuid, uuid, text, integer) to crm_app;
+grant execute on function private.ai_field_run_release(uuid, uuid, text) to crm_app;
 grant execute on function private.ai_field_note(uuid, uuid[], text) to crm_app;
 grant execute on function private.ai_field_spend(uuid, integer, integer) to crm_app;

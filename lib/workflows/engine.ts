@@ -198,7 +198,7 @@ async function buildContext(actor: UserActor, trigger: Trigger, event: RunEvent)
   let companyId: string | null = null;
   let contactId: string | null = null;
   let matches = true;
-  if ("mine" in trigger && trigger.mine && event.actorUserId && event.actorUserId !== actor.userId) {
+  if ("mine" in trigger && trigger.mine && (data.automatic === true || (event.actorUserId && event.actorUserId !== actor.userId))) {
     return { vars, matches: false };
   }
 

@@ -7,16 +7,20 @@ import { isUuid } from "@/lib/crm/mutate";
 import type { Actor, Company } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
 import { GAP_THRESHOLD, TAG_THRESHOLD } from "@/lib/enrichment/web-checks";
-import { createTaskRun, decide, getTaskResult, getTaskRun, parallelKey, ParallelError, type DecisionCitation, type DecisionQuestion, type TaskField, type TaskFieldBasis } from "@/lib/parallel";
+import { createTaskRun, decide, getTaskResult, getTaskRun, parallelKey, ParallelError, stopsParallel, type DecisionCitation, type DecisionQuestion, type TaskField, type TaskFieldBasis } from "@/lib/parallel";
 import { BACKGROUND_PROVENANCE, fillSizeFromStaff, recordAnswerChange, type StoredValue } from "@/lib/ai-fields/answers";
-import { readFields, scopeSql, spendThisMonth, type StoredField } from "@/lib/ai-fields/fields";
+import { readFields, scopeProblem, scopeSql, spendThisMonth, type StoredField } from "@/lib/ai-fields/fields";
 import { DECISION_COST, MONTHLY_LIMIT_USD, TASK_COST, usesDecisions, type AiSource } from "@/lib/ai-fields/types";
 
 export const YES_THRESHOLD = TAG_THRESHOLD;
 export const NO_THRESHOLD = 1 - TAG_THRESHOLD;
 export const PICK_THRESHOLD = GAP_THRESHOLD;
 export const CLAIM_MINUTES = 3;
-const COMPANIES_PER_RUN = 40;
+export const COMPANIES_PER_RUN = 40;
+const COLLECT_LEASE_SECONDS = 90;
+const TASK_START_MIN_MS = 6_000;
+const CHECK_NOW_MS = 15_000;
+const KICK_BUDGET_MS = 50_000;
 const TASKS_PER_RUN = 25;
 const RUNS_PER_COLLECT = 25;
 const CONCURRENCY = 5;
@@ -98,31 +102,47 @@ function sourcesOf(citations: DecisionCitation[]): AiSource[] {
   return out;
 }
 
+export function decisionQuestionCount(field: Pick<StoredField, "kind" | "multiple" | "options">) {
+  if (field.kind === "pick" && field.multiple) return field.options.length;
+  return usesDecisions(field.kind) ? 1 : 0;
+}
+
 export function decisionQuestions(fields: StoredField[]) {
   const questions: Record<string, DecisionQuestion> = {};
-  const used: StoredField[] = [];
   for (const [index, field] of fields.entries()) {
-    const entries: [string, DecisionQuestion][] = [];
-    if (field.kind === "yes_no") entries.push([`q${index}`, { type: "noul", instructions: field.question }]);
+    if (field.kind === "yes_no") questions[`q${index}`] = { type: "noul", instructions: field.question };
     else if (field.kind === "pick" && !field.multiple) {
-      entries.push([
-        `q${index}`,
-        {
-          type: "choice",
-          instructions: `${field.question} Select unknown when the evidence doesn't show which applies.`,
-          criteria: { ...Object.fromEntries(field.options.map((option, position) => [`o${position}`, option])), unknown: "The evidence doesn't show which of these applies." },
-        },
-      ]);
+      questions[`q${index}`] = {
+        type: "choice",
+        instructions: `${field.question} Select unknown when the evidence doesn't show which applies.`,
+        criteria: { ...Object.fromEntries(field.options.map((option, position) => [`o${position}`, option])), unknown: "The evidence doesn't show which of these applies." },
+      };
     } else if (field.kind === "pick") {
       field.options.forEach((option, position) => {
-        entries.push([`q${index}_o${position}`, { type: "noul", instructions: `${field.question} Does this apply to the company: ${option}?` }]);
+        questions[`q${index}_o${position}`] = { type: "noul", instructions: `${field.question} Does this apply to the company: ${option}?` };
       });
     }
-    if (Object.keys(questions).length + entries.length > QUESTIONS_MAX) break;
-    for (const [key, question] of entries) questions[key] = question;
-    used.push(field);
   }
-  return { questions, used };
+  return { questions, used: fields };
+}
+
+export function decisionBatches(fields: StoredField[]) {
+  const groups: StoredField[][] = [];
+  let current: StoredField[] = [];
+  let count = 0;
+  for (const field of fields) {
+    const size = decisionQuestionCount(field);
+    if (size === 0) continue;
+    if (current.length > 0 && count + size > QUESTIONS_MAX) {
+      groups.push(current);
+      current = [];
+      count = 0;
+    }
+    current.push(field);
+    count += size;
+  }
+  if (current.length > 0) groups.push(current);
+  return groups.map(decisionQuestions);
 }
 
 export function readDecision(field: StoredField, index: number, decision: { answers: Record<string, { type: string; noul?: number; choice?: string; probabilities?: Record<string, number> }>; citations: DecisionCitation[] }): Parsed {
@@ -160,6 +180,27 @@ export function readDecision(field: StoredField, index: number, decision: { answ
   };
 }
 
+const SCALES: Record<string, number> = { k: 1e3, thousand: 1e3, m: 1e6, million: 1e6, bn: 1e9, billion: 1e9 };
+const NUMBER_PART = "-?\\d+(?:\\.\\d+)?";
+const RANGE = new RegExp(`(${NUMBER_PART})\\s*(?:-|\u2013|to)\\s*(${NUMBER_PART})`, "i");
+const SINGLE = new RegExp(`(${NUMBER_PART})\\s*(k|thousand|m|million|bn|billion)?\\b`, "i");
+
+export function looseNumber(raw: unknown): number | null {
+  if (typeof raw === "number") return Number.isFinite(raw) ? raw : null;
+  if (typeof raw !== "string") return null;
+  const text = raw.replace(/(\d),(?=\d{3}(?!\d))/g, "$1");
+  const range = text.match(RANGE);
+  if (range) {
+    const low = Number(range[1]);
+    const high = Number(range[2]);
+    if (Number.isFinite(low) && Number.isFinite(high) && high >= low) return (low + high) / 2;
+  }
+  const single = text.match(SINGLE);
+  if (!single) return null;
+  const value = Number(single[1]) * (single[2] ? SCALES[single[2].toLowerCase()] : 1);
+  return Number.isFinite(value) ? value : null;
+}
+
 export function taskKeyFor(field: Pick<StoredField, "id">) {
   return `f_${field.id.replace(/-/g, "")}`;
 }
@@ -185,8 +226,8 @@ export function readTaskAnswer(field: StoredField, content: Record<string, unkno
   const raw = content[key];
   const reason = bestExcerpt(entry?.citations ?? [], `${field.question} ${String(raw ?? "")}`) ?? (entry?.reasoning ? entry.reasoning.replace(/\s+/g, " ").slice(0, 220) : null);
   if (field.kind === "number") {
-    const number = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw.replace(/[,\s]/g, "").replace(/[^0-9.-].*$/, "")) : NaN;
-    if (!Number.isFinite(number) || (typeof raw === "string" && !raw.trim())) return unknown;
+    const number = looseNumber(raw);
+    if (number === null) return unknown;
     return { state: "answered", number, likelihood: null, confidence, reason, sources };
   }
   const text = typeof raw === "string" ? raw.replace(/\s+/g, " ").trim().slice(0, 300) : typeof raw === "number" ? String(raw) : "";
@@ -194,7 +235,7 @@ export function readTaskAnswer(field: StoredField, content: Record<string, unkno
   return { state: "answered", text, likelihood: null, confidence, reason, sources };
 }
 
-async function saveParsed(actor: Actor, field: StoredField, companyId: string, parsed: Parsed) {
+async function saveParsed(actor: Actor, field: StoredField, companyId: string, parsed: Parsed, runId?: string) {
   const result = await query<{ change: { existed: boolean; before: StoredValue; after: StoredValue } | null }>("select private.ai_field_save($1, $2, $3, $4::jsonb) as change", [
     actor.workspaceId,
     field.id,
@@ -210,6 +251,7 @@ async function saveParsed(actor: Actor, field: StoredField, companyId: string, p
       reason: parsed.reason,
       sources: parsed.sources,
       nextCheckAt: nextCheck(field),
+      ...(runId ? { runId } : {}),
     }),
   ]);
   const change = result.rows[0]?.change;
@@ -220,7 +262,12 @@ async function saveParsed(actor: Actor, field: StoredField, companyId: string, p
 }
 
 async function fail(actor: Actor, fieldIds: string[], companyId: string, message: string | null, retryHours = RETRY_HOURS) {
+  if (fieldIds.length === 0) return;
   await query("select private.ai_field_fail($1, $2::uuid[], $3, $4, $5)", [actor.workspaceId, fieldIds, companyId, message, retryHours]);
+}
+
+async function release(actor: Actor, fieldIds: string[], companyId: string) {
+  await fail(actor, fieldIds, companyId, null, 0);
 }
 
 async function spend(actor: Actor, decisions: number, tasks: number) {
@@ -286,6 +333,7 @@ async function pendingRuns(actor: Actor, limit: number, companyId?: string) {
       `select run_id, company_id, array_agg(field_id) as field_ids, min(run_started_at) as started
        from crm.ai_field_answers
        where workspace_id = $1 and run_id is not null and ($3::uuid is null or company_id = $3)
+         and (collect_claimed_at is null or collect_claimed_at < now() - make_interval(secs => ${COLLECT_LEASE_SECONDS}))
        group by run_id, company_id
        order by min(run_started_at)
        limit $2`,
@@ -295,124 +343,200 @@ async function pendingRuns(actor: Actor, limit: number, companyId?: string) {
   });
 }
 
+async function leaseRun(actor: Actor, run: PendingRun) {
+  const result = await query<{ field_id: string }>("select private.ai_field_run_lease($1, $2, $3, $4) as field_id", [actor.workspaceId, run.company_id, run.run_id, COLLECT_LEASE_SECONDS]);
+  return result.rows.map((row) => row.field_id);
+}
+
+async function releaseRun(actor: Actor, run: PendingRun) {
+  await query("select private.ai_field_run_release($1, $2, $3)", [actor.workspaceId, run.company_id, run.run_id]);
+}
+
 class StopRun extends Error {}
 
-function stopsEverything(error: unknown) {
-  return error instanceof ParallelError && /key|rate|credit/i.test(error.message);
+type Outcome = { ok: boolean; error: string | null };
+
+type Pass = { report: AiFieldsReport; outcomes: Map<string, Outcome>; budget: { tasks: number } };
+
+function remember(pass: Pass, fieldIds: string[], error: string | null) {
+  for (const id of fieldIds) {
+    const current = pass.outcomes.get(id) ?? { ok: false, error: null };
+    pass.outcomes.set(id, error ? { ...current, error } : { ...current, ok: true });
+  }
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof ParallelError ? error.message : "The check failed.";
+}
+
+function remaining(options: RunOptions) {
+  return options.deadline - Date.now();
 }
 
 export async function collectTaskRuns(actor: Actor, fields: StoredField[], options: RunOptions, report: AiFieldsReport) {
   const byId = new Map(fields.map((field) => [field.id, field]));
   const runs = await pendingRuns(actor, RUNS_PER_COLLECT, options.companyId);
   for (const run of runs) {
-    if (options.deadline - Date.now() < 3_000) break;
-    const runFields = run.field_ids.map((id) => byId.get(id)).filter((field): field is StoredField => Boolean(field));
+    if (remaining(options) < 4_000) break;
+    const leased = await leaseRun(actor, run);
+    if (leased.length === 0) continue;
+    const runFields = leased.map((id) => byId.get(id)).filter((field): field is StoredField => Boolean(field));
+    const ask = { fetchImpl: options.fetchImpl, env: options.env, deadline: options.deadline - 1_000 };
     try {
-      const status = await getTaskRun(run.run_id, { fetchImpl: options.fetchImpl, env: options.env, timeoutMs: Math.min(10_000, options.deadline - Date.now()) });
-      if (!status) continue;
+      const status = await getTaskRun(run.run_id, { ...ask, timeoutMs: 10_000 });
+      if (!status) {
+        await releaseRun(actor, run);
+        continue;
+      }
       if (status.status === "completed") {
-        const result = await getTaskResult(run.run_id, { fetchImpl: options.fetchImpl, env: options.env, waitSeconds: 2 });
-        if (!result) continue;
+        const result = await getTaskResult(run.run_id, { ...ask, waitSeconds: 2 });
+        if (!result) {
+          await releaseRun(actor, run);
+          continue;
+        }
         if (result.run.status !== "completed") {
-          await fail(actor, run.field_ids, run.company_id, result.run.error ?? "The check failed.");
+          await fail(actor, leased, run.company_id, result.run.error ?? "The check failed.");
           report.failed += 1;
           continue;
         }
-        await spend(actor, 0, 1);
         report.collected += 1;
         for (const field of runFields) {
-          if (await saveParsed(actor, field, run.company_id, readTaskAnswer(field, result.content, result.basis))) report.answered += 1;
+          if (await saveParsed(actor, field, run.company_id, readTaskAnswer(field, result.content, result.basis), run.run_id)) report.answered += 1;
         }
-        const orphaned = run.field_ids.filter((id) => !byId.has(id));
+        const orphaned = leased.filter((id) => !byId.has(id));
         if (orphaned.length > 0) await fail(actor, orphaned, run.company_id, "The field changed.", 0);
       } else if (!status.active && status.status !== "action_required") {
-        await fail(actor, run.field_ids, run.company_id, status.error ?? "The check didn't finish.");
+        await fail(actor, leased, run.company_id, status.error ?? "The check didn't finish.");
         report.failed += 1;
       } else if (Date.now() - new Date(run.started).getTime() > RUN_GIVE_UP_HOURS * 3_600_000) {
-        await fail(actor, run.field_ids, run.company_id, "The check took too long.", 1);
+        await fail(actor, leased, run.company_id, "The check took too long.", 1);
         report.failed += 1;
+      } else {
+        await releaseRun(actor, run);
       }
     } catch (error) {
-      if (stopsEverything(error)) throw error;
+      await releaseRun(actor, run).catch(() => undefined);
+      if (stopsParallel(error)) throw error;
       if (!(error instanceof ParallelError)) console.error("Collecting an AI field check failed", error);
     }
   }
   return runs.length;
 }
 
-async function checkCompany(actor: Actor, companyId: string, fields: StoredField[], options: RunOptions, report: AiFieldsReport, budget: { tasks: number }) {
+async function checkCompany(actor: Actor, companyId: string, fields: StoredField[], options: RunOptions, pass: Pass) {
+  const ids = fields.map((field) => field.id);
   let company: Company;
   try {
     company = await getCompany(actor, companyId);
   } catch {
-    await fail(actor, fields.map((field) => field.id), companyId, "Company not found.", 24);
+    await fail(actor, ids, companyId, "Company not found.", 24);
     return;
   }
   if (!company.domain && !company.website) {
-    await fail(actor, fields.map((field) => field.id), companyId, "Add the company's website first.", 24);
+    await fail(actor, ids, companyId, "Add the company's website first.", 24);
     return;
   }
+  const { report } = pass;
   const decisionFields = fields.filter((field) => usesDecisions(field.kind));
   const taskOnes = fields.filter((field) => !usesDecisions(field.kind));
-  if (decisionFields.length > 0) {
-    const { questions, used } = decisionQuestions(decisionFields);
+  const batches = decisionBatches(decisionFields);
+  for (const [position, batch] of batches.entries()) {
+    const batchIds = batch.used.map((field) => field.id);
+    if (remaining(options) < 4_000) {
+      await release(actor, batchIds, companyId);
+      continue;
+    }
     try {
-      const decision = await decide(publicState(company), questions, { fetchImpl: options.fetchImpl, env: options.env });
+      const decision = await decide(publicState(company), batch.questions, { fetchImpl: options.fetchImpl, env: options.env, deadline: options.deadline - 1_000 });
       await spend(actor, 1, 0);
       report.checked += 1;
-      for (const [index, field] of used.entries()) {
+      for (const [index, field] of batch.used.entries()) {
         if (await saveParsed(actor, field, companyId, readDecision(field, index, decision))) report.answered += 1;
       }
+      remember(pass, batchIds, null);
     } catch (error) {
       report.failed += 1;
-      await fail(actor, used.map((field) => field.id), companyId, error instanceof ParallelError ? error.message : "The check failed.");
-      if (stopsEverything(error)) throw new StopRun(error instanceof Error ? error.message : "Parallel stopped.");
+      const message = errorMessage(error);
+      await fail(actor, batchIds, companyId, message);
+      remember(pass, batchIds, message);
+      if (stopsParallel(error)) {
+        const rest = [...batches.slice(position + 1).flatMap((item) => item.used), ...taskOnes].map((field) => field.id);
+        await release(actor, rest, companyId);
+        throw new StopRun(message);
+      }
       if (!(error instanceof ParallelError) && !(error instanceof CrmError)) console.error("AI field check failed", error);
     }
   }
-  if (taskOnes.length > 0) {
-    if (budget.tasks <= 0) return;
-    budget.tasks -= 1;
-    try {
-      const run = await createTaskRun(publicState(company), taskFields(taskOnes), { fetchImpl: options.fetchImpl, env: options.env, metadata: { orbit: "ai_fields" } });
-      await query("select private.ai_field_run_start($1, $2::uuid[], $3, $4)", [actor.workspaceId, taskOnes.map((field) => field.id), companyId, run.runId]);
-      report.started += 1;
-    } catch (error) {
-      report.failed += 1;
-      await fail(actor, taskOnes.map((field) => field.id), companyId, error instanceof ParallelError ? error.message : "The check failed.");
-      if (stopsEverything(error)) throw new StopRun(error instanceof Error ? error.message : "Parallel stopped.");
-      if (!(error instanceof ParallelError) && !(error instanceof CrmError)) console.error("AI field task failed", error);
-    }
+  if (taskOnes.length === 0) return;
+  const taskIds = taskOnes.map((field) => field.id);
+  if (pass.budget.tasks <= 0 || remaining(options) < TASK_START_MIN_MS) {
+    await release(actor, taskIds, companyId);
+    return;
   }
+  pass.budget.tasks -= 1;
+  try {
+    const run = await createTaskRun(publicState(company), taskFields(taskOnes), {
+      fetchImpl: options.fetchImpl,
+      env: options.env,
+      metadata: { orbit: "ai_fields" },
+      deadline: options.deadline - 1_000,
+    });
+    await query("select private.ai_field_run_start($1, $2::uuid[], $3, $4)", [actor.workspaceId, taskIds, companyId, run.runId]);
+    report.started += 1;
+    remember(pass, taskIds, null);
+  } catch (error) {
+    report.failed += 1;
+    const message = errorMessage(error);
+    await fail(actor, taskIds, companyId, message);
+    remember(pass, taskIds, message);
+    if (stopsParallel(error)) throw new StopRun(message);
+    if (!(error instanceof ParallelError) && !(error instanceof CrmError)) console.error("AI field task failed", error);
+  }
+}
+
+export const MONTHLY_LIMIT_MESSAGE = `Paused until next month: this month's checks reached $${MONTHLY_LIMIT_USD}.`;
+
+async function finish(actor: Actor, pass: Pass) {
+  const clean: string[] = [];
+  const failures = new Map<string, string[]>();
+  for (const [id, outcome] of pass.outcomes) {
+    if (outcome.ok || !outcome.error) clean.push(id);
+    else failures.set(outcome.error, [...(failures.get(outcome.error) ?? []), id]);
+  }
+  await note(actor, clean, null);
+  for (const [message, ids] of failures) await note(actor, ids, message);
 }
 
 export async function runAiFields(actor: Actor, options: RunOptions): Promise<AiFieldsReport> {
   const report: AiFieldsReport = { checked: 0, answered: 0, started: 0, collected: 0, failed: 0 };
   if (!parallelKey(options.env)) return { ...report, skipped: "No PARALLEL_API_KEY." };
   const all = await withActor(actor, (db) => readFields(db, actor.workspaceId));
-  const wanted = options.fieldIds?.filter(isUuid);
-  const fields = all.filter((field) => !field.paused && (!wanted || wanted.includes(field.id)));
   if (all.length === 0) return { ...report, skipped: "No AI fields." };
-  const touched = new Set<string>();
+  const wanted = options.fieldIds?.filter(isUuid);
+  const chosen = all.filter((field) => !field.paused && (!wanted || wanted.includes(field.id)));
+  const broken = chosen.filter((field) => scopeProblem(field));
+  const fields = chosen.filter((field) => !scopeProblem(field));
+  const pass: Pass = { report, outcomes: new Map(), budget: { tasks: 0 } };
   try {
+    for (const field of broken) await note(actor, [field.id], scopeProblem(field));
     await collectTaskRuns(actor, all, options, report);
-    const spent = await spendThisMonth(actor);
-    if (spent.amount >= MONTHLY_LIMIT_USD) {
-      await note(actor, fields.map((field) => field.id), `Paused until next month: this month's checks reached $${MONTHLY_LIMIT_USD}.`);
+    const spent = (await spendThisMonth(actor)).amount;
+    if (spent >= MONTHLY_LIMIT_USD) {
+      await note(actor, fields.map((field) => field.id), MONTHLY_LIMIT_MESSAGE);
       return { ...report, skipped: "Monthly limit reached." };
     }
-    let room = Math.max(0, Math.floor((MONTHLY_LIMIT_USD - spent.amount) / (DECISION_COST + TASK_COST)));
-    const budget = { tasks: Math.min(TASKS_PER_RUN, room) };
-    while (options.deadline - Date.now() > 5_000 && room > 0) {
+    let room = Math.min(COMPANIES_PER_RUN, Math.max(0, Math.floor((MONTHLY_LIMIT_USD - spent) / (DECISION_COST + TASK_COST))));
+    pass.budget.tasks = Math.min(TASKS_PER_RUN, room);
+    while (remaining(options) > 5_000 && room > 0) {
       const plan = new Map<string, StoredField[]>();
       for (const field of fields) {
-        if (plan.size >= COMPANIES_PER_RUN) break;
-        if (!usesDecisions(field.kind) && budget.tasks <= 0) continue;
-        const due = await dueCompanies(actor, field, Math.min(COMPANIES_PER_RUN, room), options.companyId);
-        const claimed = await claim(actor, field, due.slice(0, COMPANIES_PER_RUN));
+        if (plan.size >= room) break;
+        if (!usesDecisions(field.kind) && pass.budget.tasks <= 0) continue;
+        const due = await dueCompanies(actor, field, room, options.companyId);
+        const claimed = await claim(actor, field, due);
         for (const companyId of claimed) {
-          if (!plan.has(companyId) && plan.size >= COMPANIES_PER_RUN) {
-            await fail(actor, [field.id], companyId, null, 0);
+          if (!plan.has(companyId) && plan.size >= room) {
+            await release(actor, [field.id], companyId);
             continue;
           }
           plan.set(companyId, [...(plan.get(companyId) ?? []), field]);
@@ -423,14 +547,12 @@ export async function runAiFields(actor: Actor, options: RunOptions): Promise<Ai
       const entries = [...plan.entries()];
       let stopped: StopRun | null = null;
       await inBatches(entries, async ([companyId, companyFields]) => {
-        if (stopped) return;
-        if (options.deadline - Date.now() < 3_000) {
-          await fail(actor, companyFields.map((field) => field.id), companyId, null, 0);
+        if (stopped || remaining(options) < 4_000) {
+          await release(actor, companyFields.map((field) => field.id), companyId);
           return;
         }
-        for (const field of companyFields) touched.add(field.id);
         try {
-          await checkCompany(actor, companyId, companyFields, options, report, budget);
+          await checkCompany(actor, companyId, companyFields, options, pass);
         } catch (error) {
           if (error instanceof StopRun) stopped = error;
           else throw error;
@@ -440,28 +562,31 @@ export async function runAiFields(actor: Actor, options: RunOptions): Promise<Ai
       if (options.companyId) break;
     }
     if (options.waitForTasks) {
-      while (options.deadline - Date.now() > 8_000) {
+      while (remaining(options) > 8_000) {
         const pending = await pendingRuns(actor, 1, options.companyId);
         if (pending.length === 0) break;
         await new Promise((resolve) => setTimeout(resolve, options.pollPauseMs ?? POLL_PAUSE_MS));
         await collectTaskRuns(actor, all, options, report);
       }
     }
-    await note(actor, [...touched], null);
+    await finish(actor, pass);
     return report;
   } catch (error) {
     const message = error instanceof Error && (error instanceof StopRun || error instanceof ParallelError) ? error.message : "AI fields couldn't run.";
     if (!(error instanceof StopRun) && !(error instanceof ParallelError)) console.error("AI fields run failed", error);
-    await note(actor, [...(touched.size > 0 ? touched : new Set(fields.map((field) => field.id)))], message).catch(() => undefined);
+    const touched = [...pass.outcomes.keys()];
+    await note(actor, touched.length > 0 ? touched : fields.map((field) => field.id), message).catch(() => undefined);
     return { ...report, error: message };
   }
 }
 
 export function kickAiFields(actor: Actor, options: { companyId?: string; fieldIds?: string[]; budgetMs?: number } = {}) {
   if (!parallelKey()) return;
+  const budget = options.budgetMs ?? KICK_BUDGET_MS;
+  if (budget < 10_000) return;
   const run = async () => {
     try {
-      await runAiFields(actor, { deadline: Date.now() + (options.budgetMs ?? 50_000), companyId: options.companyId, fieldIds: options.fieldIds, waitForTasks: true });
+      await runAiFields(actor, { deadline: Date.now() + budget, companyId: options.companyId, fieldIds: options.fieldIds, waitForTasks: true });
     } catch (error) {
       console.error("AI fields run failed", error);
     }
@@ -474,9 +599,20 @@ export function kickAiFields(actor: Actor, options: { companyId?: string; fieldI
 }
 
 export async function checkCompanyNow(actor: Actor, companyId: string, options: { fieldIds?: string[]; fetchImpl?: typeof fetch; env?: Record<string, string | undefined> } = {}) {
-  const report = await runAiFields(actor, { deadline: Date.now() + 15_000, companyId, fieldIds: options.fieldIds, fetchImpl: options.fetchImpl, env: options.env });
-  if (report.started > 0) kickAiFields(actor, { companyId, budgetMs: 55_000 });
+  const started = Date.now();
+  const report = await runAiFields(actor, { deadline: started + CHECK_NOW_MS, companyId, fieldIds: options.fieldIds, fetchImpl: options.fetchImpl, env: options.env });
+  if (report.started > 0) kickAiFields(actor, { companyId, budgetMs: KICK_BUDGET_MS - (Date.now() - started) });
   return report;
+}
+
+export function checkNowMessage(report: AiFieldsReport): { ok: true; message: string } | { error: string } {
+  if (report.skipped === "No PARALLEL_API_KEY.") return { error: "Add PARALLEL_API_KEY in Vercel to check the web." };
+  if (report.skipped === "Monthly limit reached.") return { error: `This month's checks reached $${MONTHLY_LIMIT_USD}. Checks start again next month.` };
+  if (report.error) return { error: report.error };
+  if (report.started > 0) return { ok: true, message: "Checking. Numbers and short text take a minute or two." };
+  if (report.checked > 0) return { ok: true, message: "Checked." };
+  if (report.failed > 0) return { error: "The web check failed. Try again shortly." };
+  return { ok: true, message: "Nothing to check. Answers set by hand and companies outside a field's companies aren't checked." };
 }
 
 export async function autoAiFields(actor: Actor, companyId: string) {

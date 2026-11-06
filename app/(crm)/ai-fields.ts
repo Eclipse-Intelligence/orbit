@@ -7,6 +7,7 @@ import { createCompanyView, deleteCompanyView, updateCompanyView } from "@/lib/c
 import { companyHref } from "@/lib/crm/hrefs";
 import { getAnswer, markCompanyDue, setManualAnswer, revertToWebAnswer } from "@/lib/ai-fields/answers";
 import {
+  aiFieldEditImpact,
   checkFieldAgain,
   publicField,
   removeAiField,
@@ -17,7 +18,7 @@ import {
   showRuleAsColumn,
   type AiFieldInput,
 } from "@/lib/ai-fields/fields";
-import { checkCompanyNow, kickAiFields } from "@/lib/ai-fields/runner";
+import { checkCompanyNow, checkNowMessage, kickAiFields } from "@/lib/ai-fields/runner";
 import type { AiAnswer, AiField, CompanyView } from "@/lib/ai-fields/types";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
 
@@ -116,6 +117,14 @@ export async function aiFieldScopeCountsAction(): Promise<{ all: number; fit: nu
   }
 }
 
+export async function aiFieldEditImpactAction(fieldId: string): Promise<{ web: number; manual: number } | Failure> {
+  try {
+    return await aiFieldEditImpact(await signedIn(), fieldId);
+  } catch (error) {
+    return failure(error, "Couldn't count the answers.");
+  }
+}
+
 export async function getAnswerAction(fieldId: string, companyId: string): Promise<{ answer: AiAnswer } | Failure> {
   try {
     const { answer } = await getAnswer(await signedIn(), fieldId, companyId);
@@ -156,9 +165,7 @@ export async function checkCompanyAgainAction(companyId: string, fieldIds?: stri
     const report = await checkCompanyNow(user, companyId, { fieldIds });
     revalidatePath("/");
     revalidatePath(companyHref(companyId));
-    if (report.skipped === "No PARALLEL_API_KEY.") return { error: "Add PARALLEL_API_KEY in Vercel to check the web." };
-    if (report.error) return { error: report.error };
-    return { ok: true, message: report.started > 0 ? "Checking. Numbers and short text take a minute or two." : "Checked." };
+    return checkNowMessage(report);
   } catch (error) {
     return failure(error, "Couldn't check again. Try again.");
   }

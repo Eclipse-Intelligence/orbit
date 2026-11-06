@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Checkbox } from "@/components/_ui/checkbox";
@@ -10,7 +10,7 @@ import { RecordTag } from "@/components/beautifui/record-marks";
 import DetailSection from "@/components/companies/detail/detail-section";
 import { pickColour, shortDate, SourceList } from "@/components/ai-fields/ai-cells";
 import { checkCompanyAgainAction, restoreWebAnswerAction, setManualAnswerAction } from "@/app/(crm)/ai-fields";
-import { displayAiValue, likelihoodText, type AiAnswer, type AiField, type AiSource, type AiValue } from "@/lib/ai-fields/types";
+import { AI_NUMBER_MAX_LENGTH, displayAiValue, likelihoodText, setByText, type AiAnswer, type AiField, type AiSource, type AiValue } from "@/lib/ai-fields/types";
 import type { CompanyFit } from "@/lib/enrichment/web-checks";
 import RefreshIcon from "@/public/assets/images/mail/refresh.svg";
 
@@ -73,6 +73,18 @@ function Editor({ field, answer, companyId, onDone }: { field: AiField; answer: 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const summary = webSummary(field, answer);
+  const form = useRef<HTMLFormElement>(null);
+
+  useEffect(() => {
+    form.current?.querySelector<HTMLElement>("select, input, button[role=checkbox]")?.focus();
+  }, []);
+
+  function keyDown(event: KeyboardEvent<HTMLFormElement>) {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    onDone(null);
+  }
 
   async function save() {
     setSaving(true);
@@ -122,7 +134,7 @@ function Editor({ field, answer, companyId, onDone }: { field: AiField; answer: 
         id={id}
         value={value as string}
         inputMode={field.kind === "number" ? "decimal" : undefined}
-        maxLength={field.kind === "text" ? 300 : 30}
+        maxLength={field.kind === "text" ? 300 : AI_NUMBER_MAX_LENGTH}
         placeholder="Unknown"
         onChange={(event) => setValue(event.target.value)}
       />
@@ -130,7 +142,9 @@ function Editor({ field, answer, companyId, onDone }: { field: AiField; answer: 
 
   return (
     <form
+      ref={form}
       className="flex flex-col gap-2"
+      onKeyDown={keyDown}
       onSubmit={(event) => {
         event.preventDefault();
         void save();
@@ -169,6 +183,13 @@ function Answer({ field, answer, companyId, canEdit }: { field: AiField; answer:
   const [given, setGiven] = useState(answer);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const refocus = useRef(false);
+  useEffect(() => {
+    if (editing || !refocus.current) return;
+    refocus.current = false;
+    trigger.current?.focus();
+  }, [editing]);
   if (given !== answer) {
     setGiven(answer);
     setCurrent(answer);
@@ -182,6 +203,7 @@ function Answer({ field, answer, companyId, canEdit }: { field: AiField; answer:
         answer={shown}
         companyId={companyId}
         onDone={(saved) => {
+          refocus.current = true;
           setEditing(false);
           if (saved) {
             setCurrent(saved);
@@ -224,6 +246,7 @@ function Answer({ field, answer, companyId, canEdit }: { field: AiField; answer:
       <span className="flex flex-wrap items-baseline gap-x-2">
         {canEdit ? (
           <button
+            ref={trigger}
             type="button"
             onClick={() => setEditing(true)}
             aria-label={`${field.label}: ${shown.state === "answered" ? displayAiValue(field, shown.value) : shown.state === "checking" ? "Checking" : "Unknown"}. Edit answer`}
@@ -238,10 +261,10 @@ function Answer({ field, answer, companyId, canEdit }: { field: AiField; answer:
       </span>
       {shown.manual ? (
         <span className="caption-style text-subtle flex flex-wrap items-center gap-x-2">
-          Set by you{shown.manualAt ? ` on ${shortDate(shown.manualAt)}` : ""}, not checked again
+          {`${setByText(shown.manualByName)}${shown.manualAt ? ` on ${shortDate(shown.manualAt)}` : ""}, not checked again`}
           {canEdit && (
             <Button variant="link" size="none" className="caption-style text-subtle" disabled={busy} onClick={() => void restore()}>
-              Use web answer
+              {shown.web ? "Use web answer" : "Clear and check the web"}
             </Button>
           )}
         </span>

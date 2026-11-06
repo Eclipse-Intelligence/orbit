@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import {
@@ -27,6 +27,7 @@ export function AiColumnHeader({
   onEdit,
   onAdd,
   onError,
+  onNotice,
 }: {
   field: AiField;
   direction: "asc" | "desc" | null;
@@ -36,16 +37,19 @@ export function AiColumnHeader({
   onEdit: () => void;
   onAdd: () => void;
   onError: (message: string | null) => void;
+  onNotice: (message: string) => void;
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
+  const [checking, setChecking] = useHeldChecking();
   const [, start] = useTransition();
 
-  function run(action: () => Promise<{ ok: true } | { error: string }>) {
+  function run(action: () => Promise<{ ok: true } | { error: string }>, done?: () => void) {
     onError(null);
     start(async () => {
       const result = await action();
       if ("error" in result) onError(result.error);
+      else done?.();
       router.refresh();
     });
   }
@@ -55,7 +59,7 @@ export function AiColumnHeader({
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          aria-label={`${field.label}, AI field${direction ? `, sorted ${direction === "asc" ? "low to high" : "high to low"}` : ""}. Sort, filter or edit`}
+          aria-label={`${field.label}, AI field${direction ? `, sorted ${direction === "asc" ? "low to high" : "high to low"}` : ""}. ${canManage ? "Sort, filter or edit" : "Sort, filter or hide"}`}
           className={cn(
             "group/sort -mx-1 -my-0.5 inline-flex cursor-pointer items-center gap-1 rounded-md px-1 py-0.5 whitespace-nowrap transition-colors duration-150 ease-power3-out outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60",
             (direction || open) && "text-foreground",
@@ -84,10 +88,23 @@ export function AiColumnHeader({
         {canManage && (
           <>
             <DropdownMenuItem onSelect={onEdit}>Edit field</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => run(() => checkFieldAgainAction(field.id))}>Check all again</DropdownMenuItem>
+            <DropdownMenuItem
+              disabled={checking}
+              onSelect={() => {
+                setChecking(true);
+                run(
+                  () => checkFieldAgainAction(field.id),
+                  () => onNotice(`Checking ${field.label} for every company. Answers fill in over the next few minutes.`),
+                );
+              }}
+            >
+              {checking ? "Checking…" : "Check all again"}
+            </DropdownMenuItem>
           </>
         )}
-        <DropdownMenuItem onSelect={() => run(() => setAiFieldHiddenAction(field.id, true))}>Hide column</DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => run(() => setAiFieldHiddenAction(field.id, true), () => onNotice(`Hid ${field.label} for you. Bring it back with + at the end of the header.`))}>
+          Hide column
+        </DropdownMenuItem>
         {canManage && (
           <>
             <DropdownMenuSeparator />
@@ -100,6 +117,18 @@ export function AiColumnHeader({
       </DropdownMenuContent>
     </DropdownMenu>
   );
+}
+
+const HELD_MS = 90_000;
+
+export function useHeldChecking() {
+  const [held, setHeld] = useState(false);
+  useEffect(() => {
+    if (!held) return;
+    const timer = window.setTimeout(() => setHeld(false), HELD_MS);
+    return () => window.clearTimeout(timer);
+  }, [held]);
+  return [held, setHeld] as const;
 }
 
 export function AddColumnMenu({ canManage, hidden, onAdd, onError }: { canManage: boolean; hidden: AiField[]; onAdd: () => void; onError: (message: string | null) => void }) {

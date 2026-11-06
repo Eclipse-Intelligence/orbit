@@ -16,6 +16,7 @@ import { cn } from "@/lib/utils";
 const EVENT_CHOICES = [
   "company.created",
   "company.updated",
+  "company.ai_field_changed",
   "contact.created",
   "lead.created",
   "opportunity.created",

@@ -20,10 +20,25 @@ export type DecisionCitation = { url: string; title: string | null; excerpts: st
 export type Decision = { answers: Record<string, DecisionAnswer>; citations: DecisionCitation[]; id: string | null };
 
 export class ParallelError extends Error {
-  constructor(message: string) {
+  status: number | null;
+  constructor(message: string, status: number | null = null) {
     super(message);
     this.name = "ParallelError";
+    this.status = status;
   }
+}
+
+const STOPPING_STATUSES = new Set([401, 402, 403, 429]);
+
+export function stopsParallel(error: unknown) {
+  return error instanceof ParallelError && error.status !== null && STOPPING_STATUSES.has(error.status);
+}
+
+const MISSING_KEY = "Add PARALLEL_API_KEY in Vercel to run web checks.";
+
+function timeLeft(deadline: number | undefined, wanted: number) {
+  if (deadline === undefined) return wanted;
+  return Math.max(500, Math.min(wanted, deadline - Date.now()));
 }
 
 export function parallelKey(env: Record<string, string | undefined> = process.env) {
@@ -80,10 +95,10 @@ function retryable(status: number) {
 export async function decide(
   state: Record<string, unknown>,
   questions: Record<string, DecisionQuestion>,
-  options: { fetchImpl?: typeof fetch; env?: Record<string, string | undefined>; timeoutMs?: number; excerpts?: boolean; retryPauseMs?: number } = {},
+  options: { fetchImpl?: typeof fetch; env?: Record<string, string | undefined>; timeoutMs?: number; excerpts?: boolean; retryPauseMs?: number; deadline?: number } = {},
 ): Promise<Decision> {
   const key = parallelKey(options.env);
-  if (!key) throw new ParallelError("Add PARALLEL_API_KEY in Vercel to run web checks.");
+  if (!key) throw new ParallelError(MISSING_KEY, 401);
   if (Object.keys(questions).length === 0) return { answers: {}, citations: [], id: null };
   checkLimits(questions);
   const send = async () => {
@@ -92,27 +107,23 @@ export async function decide(
         method: "POST",
         headers: { "content-type": "application/json", "x-api-key": key },
         body: JSON.stringify({ state, questions, ...(options.excerpts === false ? { include_excerpts: false } : {}) }),
-        signal: AbortSignal.timeout(options.timeoutMs ?? TIMEOUT_MS),
+        signal: AbortSignal.timeout(timeLeft(options.deadline, options.timeoutMs ?? TIMEOUT_MS)),
       });
     } catch {
       return null;
     }
   };
+  const pause = options.retryPauseMs ?? RETRY_PAUSE_MS;
   let response = await send();
-  if (!response || retryable(response.status)) {
+  if ((!response || retryable(response.status)) && (options.deadline === undefined || options.deadline - Date.now() > pause + 3_000)) {
     await response?.body?.cancel().catch(() => undefined);
-    await new Promise((resolve) => setTimeout(resolve, options.retryPauseMs ?? RETRY_PAUSE_MS));
+    await new Promise((resolve) => setTimeout(resolve, pause));
     response = await send();
   }
   if (!response) throw new ParallelError("Parallel didn't respond. Try again.");
   if (!response.ok) {
-    throw new ParallelError(
-      response.status === 401 || response.status === 403
-        ? "Parallel rejected the key."
-        : response.status === 429
-          ? "Parallel is rate limiting. Try again shortly."
-          : `Parallel returned ${response.status}.`,
-    );
+    await response.body?.cancel().catch(() => undefined);
+    throw new ParallelError(taskFailure(response.status), response.status);
   }
   const body = record(await response.json().catch(() => null));
   const answers: Record<string, DecisionAnswer> = {};
@@ -137,11 +148,11 @@ export type TaskField = { type: "number" | "string"; description: string };
 
 const TASK_STATUSES: TaskStatus[] = ["queued", "action_required", "running", "completed", "failed", "cancelling", "cancelled"];
 
-type TaskOptions = { fetchImpl?: typeof fetch; env?: Record<string, string | undefined>; timeoutMs?: number };
+type TaskOptions = { fetchImpl?: typeof fetch; env?: Record<string, string | undefined>; timeoutMs?: number; deadline?: number };
 
 function taskKey(env: Record<string, string | undefined> | undefined) {
   const key = parallelKey(env);
-  if (!key) throw new ParallelError("Add PARALLEL_API_KEY in Vercel to run web checks.");
+  if (!key) throw new ParallelError(MISSING_KEY, 401);
   return key;
 }
 
@@ -158,7 +169,7 @@ function fatal(status: number) {
 
 async function taskRequest(url: string, init: RequestInit, options: TaskOptions) {
   try {
-    return await (options.fetchImpl ?? fetch)(url, { ...init, signal: AbortSignal.timeout(options.timeoutMs ?? TIMEOUT_MS) });
+    return await (options.fetchImpl ?? fetch)(url, { ...init, signal: AbortSignal.timeout(timeLeft(options.deadline, options.timeoutMs ?? TIMEOUT_MS)) });
   } catch {
     return null;
   }
@@ -224,7 +235,7 @@ export async function createTaskRun(
   if (!response) throw new ParallelError("Parallel didn't respond. Try again.");
   if (!response.ok) {
     await response.body?.cancel().catch(() => undefined);
-    throw new ParallelError(taskFailure(response.status));
+    throw new ParallelError(taskFailure(response.status), response.status);
   }
   const run = readTaskRun(await response.json().catch(() => null));
   if (!run) throw new ParallelError("Parallel didn't return a run.");
@@ -237,7 +248,7 @@ export async function getTaskRun(runId: string, options: TaskOptions = {}): Prom
   if (!response) return null;
   if (!response.ok) {
     await response.body?.cancel().catch(() => undefined);
-    if (fatal(response.status)) throw new ParallelError(taskFailure(response.status));
+    if (fatal(response.status)) throw new ParallelError(taskFailure(response.status), response.status);
     if (response.status === 404) return { runId, status: "failed", active: false, error: "Parallel no longer has this run." };
     return null;
   }
@@ -255,7 +266,7 @@ export async function getTaskResult(runId: string, options: TaskOptions & { wait
   if (!response) return null;
   if (!response.ok) {
     await response.body?.cancel().catch(() => undefined);
-    if (fatal(response.status)) throw new ParallelError(taskFailure(response.status));
+    if (fatal(response.status)) throw new ParallelError(taskFailure(response.status), response.status);
     if (response.status === 404) return { run: { runId, status: "failed", active: false, error: "The run failed." }, content: {}, basis: [] };
     return null;
   }

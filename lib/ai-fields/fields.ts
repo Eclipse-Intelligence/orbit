@@ -7,6 +7,7 @@ import { companyQueryFromSearchParams } from "@/lib/crm/validation";
 import type { Db } from "@/lib/db/pool";
 import { validOptionName } from "@/lib/ai-fields/params";
 import {
+  AI_FIELD_DECISION_QUESTIONS_MAX,
   AI_FIELD_KINDS,
   AI_FIELD_LABEL_MAX,
   AI_FIELD_OPTION_MAX,
@@ -115,14 +116,32 @@ export async function readField(db: Db, workspaceId: string, id: string) {
 
 const BASE_SCOPE = "c.archived_at is null and (c.domain is not null or c.website is not null)";
 
-export function scopeSql(field: Pick<StoredField, "scope" | "scopeViewId" | "scopeViewParams">, values: unknown[]) {
+type ScopeInput = Pick<StoredField, "scope" | "scopeViewId" | "scopeViewParams">;
+
+function viewQuery(field: ScopeInput) {
+  if (!field.scopeViewId || field.scopeViewParams === null) return null;
+  try {
+    return companyQueryFromSearchParams(new URLSearchParams(field.scopeViewParams));
+  } catch {
+    return null;
+  }
+}
+
+export function scopeProblem(field: ScopeInput) {
+  if (field.scope !== "view") return null;
+  if (!field.scopeViewId || field.scopeViewParams === null) return "Its saved view was deleted. Edit the field and choose other companies.";
+  if (!viewQuery(field)) return "Its saved view has a filter Orbit can't read. Save the view again or choose other companies.";
+  return null;
+}
+
+export function scopeSql(field: ScopeInput, values: unknown[]) {
   if (field.scope === "fit") {
     values.push(GOOD_FIT_MIN);
     return `(${BASE_SCOPE} and ${CURRENT_FIT} >= $${values.length})`;
   }
   if (field.scope === "view") {
-    if (!field.scopeViewId || field.scopeViewParams === null) return "false";
-    const query = companyQueryFromSearchParams(new URLSearchParams(field.scopeViewParams));
+    const query = viewQuery(field);
+    if (!query) return "false";
     return `(${BASE_SCOPE} and ${companyWhere({ ...query, includeArchived: false }, values, "c.workspace_id")})`;
   }
   return `(${BASE_SCOPE})`;
@@ -196,6 +215,19 @@ export async function saveAiField(actor: Actor, input: AiFieldInput, link: { web
   const fillsSize = kind === "number" && (typeof input.fillsSize === "boolean" ? input.fillsSize : looksLikeStaff(label, question));
   const editing = typeof input.id === "string" && isUuid(input.id) ? input.id : null;
   return withActor(actor, async (db) => {
+    if (kind === "yes_no" || kind === "pick") {
+      const others = await db.query<{ kind: AiFieldKind; multiple: boolean; options: string[] }>(
+        "select kind, multiple, options from crm.ai_fields where workspace_id = $1 and kind in ('yes_no', 'pick') and ($2::uuid is null or id <> $2)",
+        [actor.workspaceId, editing],
+      );
+      const total = [...others.rows, { kind, multiple, options }].reduce((sum, item) => sum + (item.kind === "pick" && item.multiple ? item.options.length : 1), 0);
+      if (total > AI_FIELD_DECISION_QUESTIONS_MAX) {
+        throw invalid(
+          `Yes or no and pick from list fields can ask up to ${AI_FIELD_DECISION_QUESTIONS_MAX} questions about a company between them, and this would make ${total}. Each option of a field that allows more than one is a question. Remove some options or fields.`,
+          "options",
+        );
+      }
+    }
     if (viewId) {
       const view = await db.query("select 1 from crm.company_views where id = $1 and workspace_id = $2", [viewId, actor.workspaceId]);
       if (!view.rows[0]) throw invalid("That view no longer exists.", "scopeViewId");
@@ -210,9 +242,12 @@ export async function saveAiField(actor: Actor, input: AiFieldInput, link: { web
           [editing, actor.workspaceId, label, question, kind, options, multiple, scope, viewId, refresh, fillsSize],
         );
         const reshaped = before.kind !== kind || (kind === "pick" && (before.multiple !== multiple || before.options.join("\n") !== options.join("\n")));
-        if (reshaped) await db.query("delete from crm.ai_field_answers where field_id = $1 and workspace_id = $2", [editing, actor.workspaceId]);
+        if (reshaped) await reshapeAnswers(db, actor.workspaceId, editing, { kind, options, multiple }, before);
         else if (before.question !== question) {
-          await db.query("update crm.ai_field_answers set next_check_at = now(), claimed_at = null where field_id = $1 and workspace_id = $2 and not manual", [editing, actor.workspaceId]);
+          await db.query(
+            "update crm.ai_field_answers set next_check_at = now(), run_id = null, run_started_at = null, collect_claimed_at = null where field_id = $1 and workspace_id = $2 and not manual",
+            [editing, actor.workspaceId],
+          );
         } else if (before.refresh !== refresh) {
           await db.query(
             `update crm.ai_field_answers set next_check_at = case $3::text when 'manual' then null when 'weekly' then checked_at + interval '7 days' else checked_at + interval '30 days' end
@@ -254,6 +289,53 @@ export async function saveAiField(actor: Actor, input: AiFieldInput, link: { web
   });
 }
 
+type Shape = Pick<StoredField, "kind" | "options" | "multiple">;
+
+type ManualRow = { company_id: string; state: string; value_options: string[] | null };
+
+export function fitsShape(shape: Shape, before: Pick<StoredField, "kind">, row: Pick<ManualRow, "state" | "value_options">): string[] | null | false {
+  if (row.state !== "answered") return null;
+  if (shape.kind !== before.kind) return false;
+  if (shape.kind !== "pick") return null;
+  const picked = row.value_options ?? [];
+  const matched = picked.map((option) => shape.options.find((item) => item.toLowerCase() === option.toLowerCase()));
+  if (matched.some((option) => option === undefined) || matched.length === 0) return false;
+  if (!shape.multiple && matched.length > 1) return false;
+  return matched as string[];
+}
+
+async function reshapeAnswers(db: Db, workspaceId: string, fieldId: string, shape: Shape, previous: Pick<StoredField, "kind">) {
+  const manual = await db.query<ManualRow>(
+    "select company_id, state, value_options from crm.ai_field_answers where field_id = $1 and workspace_id = $2 and manual for update",
+    [fieldId, workspaceId],
+  );
+  const dropped: string[] = [];
+  for (const row of manual.rows) {
+    const fit = fitsShape(shape, previous, row);
+    if (fit === false) dropped.push(row.company_id);
+    else {
+      await db.query("update crm.ai_field_answers set web_answer = null, value_options = coalesce($3::text[], value_options) where field_id = $1 and company_id = $2", [
+        fieldId,
+        row.company_id,
+        fit,
+      ]);
+    }
+  }
+  await db.query("delete from crm.ai_field_answers where field_id = $1 and workspace_id = $2 and (not manual or company_id = any($3::uuid[]))", [fieldId, workspaceId, dropped]);
+}
+
+export async function aiFieldEditImpact(actor: Actor, id: string) {
+  if (!isUuid(id)) return { web: 0, manual: 0 };
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ web: number; manual: number }>(
+      `select count(*) filter (where not manual and checked_at is not null)::int as web, count(*) filter (where manual)::int as manual
+       from crm.ai_field_answers where field_id = $1 and workspace_id = $2`,
+      [id, actor.workspaceId],
+    );
+    return { web: result.rows[0]?.web ?? 0, manual: result.rows[0]?.manual ?? 0 };
+  });
+}
+
 export async function removeAiField(actor: Actor, id: string) {
   assertFieldAdmin(actor);
   if (!isUuid(id)) throw new CrmError("not_found", "That AI field no longer exists.", 404);
@@ -283,10 +365,7 @@ export async function checkFieldAgain(actor: Actor, id: string) {
   return withActor(actor, async (db) => {
     const field = await readField(db, actor.workspaceId, id);
     if (!field) throw new CrmError("not_found", "That AI field no longer exists.", 404);
-    await db.query(
-      "update crm.ai_field_answers set next_check_at = now(), claimed_at = null where field_id = $1 and workspace_id = $2 and not manual and run_id is null",
-      [id, actor.workspaceId],
-    );
+    await db.query("update crm.ai_field_answers set next_check_at = now() where field_id = $1 and workspace_id = $2 and not manual and run_id is null", [id, actor.workspaceId]);
     return field;
   });
 }

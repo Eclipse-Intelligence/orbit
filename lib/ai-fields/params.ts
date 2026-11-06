@@ -83,3 +83,17 @@ export function aiFiltersFromParams(params: URLSearchParams) {
 export function validOptionName(option: string) {
   return option !== UNKNOWN_TOKEN && !option.includes(OPTION_SEPARATOR);
 }
+
+const VIEW_PARAMS_SKIPPED = new Set(["page", "view", "record", "limit", "offset"]);
+
+export function normaliseViewParams(value: string | URLSearchParams) {
+  const params = typeof value === "string" ? new URLSearchParams(value.replace(/^\?/, "")) : value;
+  const kept = new URLSearchParams();
+  for (const [key, entry] of params.entries()) {
+    if (VIEW_PARAMS_SKIPPED.has(key) || !entry) continue;
+    if (key.length > 60 || entry.length > 500) continue;
+    kept.set(key, entry);
+  }
+  kept.sort();
+  return kept.toString();
+}

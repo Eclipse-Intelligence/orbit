@@ -11,7 +11,7 @@ import { ScrollArea } from "@/components/_ui/scroll-area";
 import { Sheet, SheetClose, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/_ui/sheet";
 import { AiCellValue, AiMark, shortDate, SourceList } from "@/components/ai-fields/ai-cells";
 import { checkCompanyAgainAction, getAnswerAction, restoreWebAnswerAction, setManualAnswerAction } from "@/app/(crm)/ai-fields";
-import { displayAiValue, likelihoodText, type AiAnswer, type AiCell, type AiField, type AiValue } from "@/lib/ai-fields/types";
+import { AI_NUMBER_MAX_LENGTH, displayAiValue, likelihoodText, setByText, type AiAnswer, type AiCell, type AiField, type AiValue } from "@/lib/ai-fields/types";
 import { cn } from "@/lib/utils";
 import EditIcon from "@/public/assets/images/workflows/edit.svg";
 import RefreshIcon from "@/public/assets/images/mail/refresh.svg";
@@ -100,7 +100,7 @@ function AnswerEditor({ field, answer, onSaved, onCancel }: { field: AiField; an
           inputMode={field.kind === "number" ? "decimal" : undefined}
           value={typeof draft === "string" ? draft : ""}
           placeholder="Unknown"
-          maxLength={field.kind === "text" ? 300 : 20}
+          maxLength={field.kind === "text" ? 300 : AI_NUMBER_MAX_LENGTH}
           onChange={(event) => setDraft(event.target.value)}
         />
       )}
@@ -158,11 +158,15 @@ export function AnswerDetail({ field, companyId, canManage, showTitle = true }: 
 
   useEffect(() => {
     let live = true;
-    void getAnswerAction(field.id, companyId).then((result) => {
-      if (!live) return;
-      if ("error" in result) setError(result.error);
-      else setAnswer(result.answer);
-    });
+    void getAnswerAction(field.id, companyId)
+      .then((result) => {
+        if (!live) return;
+        if ("error" in result) setError(result.error);
+        else setAnswer(result.answer);
+      })
+      .catch(() => {
+        if (live) setError("Couldn't load the answer. Try again.");
+      });
     return () => {
       live = false;
     };
@@ -203,7 +207,7 @@ export function AnswerDetail({ field, companyId, canManage, showTitle = true }: 
   const checked = answer?.checkedAt ? `Checked ${shortDate(answer.checkedAt, true)}` : null;
   const next = answer?.nextCheckAt ? `Next check ${shortDate(answer.nextCheckAt)}` : null;
   const timing = answer?.manual
-    ? `Set by you${answer.manualAt ? ` on ${shortDate(answer.manualAt)}` : ""}, not checked again`
+    ? `${setByText(answer.manualByName)}${answer.manualAt ? ` on ${shortDate(answer.manualAt)}` : ""}, not checked again`
     : [checked, next].filter(Boolean).join(". ");
 
   return (
@@ -226,12 +230,12 @@ export function AnswerDetail({ field, companyId, canManage, showTitle = true }: 
         {answer && !editing && (
           <>
             <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-              <h3 className="leading-5">{answerText(field, answer)}</h3>
+              <span className="text-foreground text-[14px] leading-5 font-medium break-words">{answerText(field, answer)}</span>
               {likelihood && <span className="caption-style text-subtle">{likelihood}</span>}
             </div>
             {answer.state === "checking" && <p className="ui-style text-soft">Checking this company now.</p>}
             {answer.state === "outside" && <p className="ui-style text-soft">This company isn&apos;t in this field&apos;s companies.</p>}
-            {answer.reason && <p className="ui-style text-soft">“{answer.reason}”</p>}
+            {answer.reason && <p className="ui-style text-soft break-words">“{answer.reason}”</p>}
           </>
         )}
         {answer && editing && <AnswerEditor field={field} answer={answer} onSaved={changed} onCancel={() => setEditing(false)} />}
@@ -258,7 +262,7 @@ export function AnswerDetail({ field, companyId, canManage, showTitle = true }: 
             {timing ? `${timing}.` : null}
             {answer.manual && canManage && (
               <Button variant="link" size="none" className="caption-style text-subtle" onClick={restoreWeb} disabled={pending}>
-                Use web answer
+                {answer.web ? "Use web answer" : "Clear and check the web"}
               </Button>
             )}
           </span>
