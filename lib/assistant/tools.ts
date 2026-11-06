@@ -75,7 +75,7 @@ import { BULK_LIMIT, runBulk } from "@/lib/crm/bulk";
 import { attachableFiles, discardAttachments } from "@/lib/crm/email-attachments";
 import { activitySummaries, archiveActivity, listActivities, readActivityState, updateActivity } from "@/lib/crm/activities";
 import { ACTIVITY_EDIT_FIELDS, ACTIVITY_FIELD_LABELS, EDITABLE_TYPES, type ActivityEdit, type ActivityEditField } from "@/lib/crm/activity-edit";
-import { getCalendarStatus, getMeetings, myAddresses, readPeople, readPerson, relinkCalendar } from "@/lib/crm/calendar";
+import { getCalendarStatus, getMeetings, isPersonalEvent, myAddresses, readPeople, readPerson, relinkCalendar } from "@/lib/crm/calendar";
 import { listCalendarItems } from "@/lib/crm/calendars";
 import { getInsightTranscript, getInsightsForActivities } from "@/lib/crm/call-insights";
 import { createTaskWithClickUp, getClickUpPicker, getClickUpState, pushClickUpTask } from "@/lib/crm/clickup";
@@ -97,11 +97,13 @@ import { captureContext, listToFile, waitingHere } from "@/lib/crm/capture";
 import { listUnknownMail } from "@/lib/mail/filing";
 import {
   cancelInvite,
+  CONTACTS_NEED_GUESTS,
   createInvite,
   getInviteSetup,
   getMeetingLink,
   hasNoGuests,
   MEETING_RESPONSES,
+  ownInviteAddresses,
   rescheduleInvite,
   resolveEventCalendar,
   resolveInviteFrom,
@@ -4320,6 +4322,7 @@ const TOOL_LIST: AssistantTool[] = [
         .map((guest) => ({ email: str(guest.email), name: str(guest.name) || null }))
         .filter((guest) => guest.email);
       if (!personal && attendees.length === 0) return { error: "Every guest needs an email address. Leave attendees empty for a personal event." };
+      if (personal && strings(args.contactIds).length > 0) return { error: CONTACTS_NEED_GUESTS };
       const result = await createInvite(actor, {
         title: str(args.title),
         startLocal: str(args.startLocal),
@@ -4354,13 +4357,14 @@ const TOOL_LIST: AssistantTool[] = [
       const known = (key: string) => (name(`${id}:${key}`) === `${id}:${key}` ? "" : name(`${id}:${key}`));
       const minutes = typeof args.durationMinutes === "number" ? args.durationMinutes : Number(known("minutes")) || null;
       const from = known("when");
+      const personal = known("personal") === "yes";
       return {
-        title: `Move meeting: ${name(id)}`,
+        title: `${personal ? "Move event" : "Move meeting"}: ${name(id)}`,
         lines: [
           from ? `From: ${formatDateTimeLabel(from)}${known("minutes") ? ` for ${known("minutes")} minutes` : ""}` : "",
           `To: ${formatDateTimeLabel(str(args.startLocal))}${minutes ? ` for ${minutes} minutes` : ""}`,
-          known("guests") ? `Guests: ${known("guests")}` : "",
-          ...fieldLines(args, { message: "Message to guests" }),
+          known("guests") && !personal ? `Guests: ${known("guests")}` : "",
+          ...(personal ? [] : fieldLines(args, { message: "Message to guests" })),
         ],
       };
     },
@@ -4391,6 +4395,10 @@ const TOOL_LIST: AssistantTool[] = [
     describe: (args, name) => {
       const id = str(args.eventId);
       const guests = detail(name, `${id}:guests`);
+      if (detail(name, `${id}:personal`) === "yes") {
+        const when = detail(name, `${id}:when`);
+        return { title: `Delete from your calendar: ${name(id)}${when ? `, ${formatDateTimeLabel(when)}` : ""}. Nobody is told.`, lines: [] };
+      }
       return {
         title: `Cancel meeting: ${name(id) === "Unknown record" ? "a meeting Orbit can't find" : name(id)}`,
         lines: [
@@ -5178,13 +5186,26 @@ export async function recordNames(actor: UserActor, args: Args[], tools: string[
       [list, actor.workspaceId],
     );
     for (const row of emails.rows) names.set(`${row.id}:email`, row.email);
-    const events = await db.query<{ id: string; subject: string | null; starts_at: Date; ends_at: Date; organizer: unknown; attendees: unknown }>(
-      `select id, subject, starts_at, ends_at, organizer, attendees from crm.calendar_events
+    const events = await db.query<{
+      id: string;
+      subject: string | null;
+      starts_at: Date;
+      ends_at: Date;
+      organizer: unknown;
+      attendees: unknown;
+      created_by_orbit: boolean;
+      invite_identity_id: string | null;
+      invite_uid: string | null;
+      contact_ids: string[] | null;
+    }>(
+      `select id, subject, starts_at, ends_at, organizer, attendees, created_by_orbit, invite_identity_id, invite_uid, contact_ids
+       from crm.calendar_events
        where id = any($1::uuid[]) and user_id = $2`,
       [list, actor.userId],
     );
     if (events.rows.length === 0) return;
     const own = await myAddresses(db, actor);
+    const inviteOwn = await ownInviteAddresses(db, actor);
     for (const row of events.rows) {
       const guests = [...new Map([readPerson(row.organizer), ...readPeople(row.attendees)]
         .filter((person): person is NonNullable<typeof person> => Boolean(person) && !own.has(person!.email))
@@ -5195,6 +5216,7 @@ export async function recordNames(actor: UserActor, args: Args[], tools: string[
       const organizer = readPerson(row.organizer);
       if (organizer) names.set(`${row.id}:organizer`, organizer.name ? `${organizer.name} (${organizer.email})` : organizer.email);
       if (guests.length) names.set(`${row.id}:guests`, guests.join(", "));
+      if (isPersonalEvent(row, inviteOwn)) names.set(`${row.id}:personal`, "yes");
     }
   });
   return names;

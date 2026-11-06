@@ -1,6 +1,7 @@
 import { readAccounts, type CalendarProvider } from "@/lib/crm/calendar-accounts";
 import {
   createContactFromPerson,
+  isPersonalEvent,
   myAddresses,
   ownAddresses,
   readPeople,
@@ -327,12 +328,7 @@ export async function listCalendarItems(
       new Date(row.starts_at).getTime() > now &&
       readPerson(row.organizer) !== null &&
       !organised(row);
-    const personal = (row: ItemRow) =>
-      row.created_by_orbit &&
-      !row.invite_identity_id &&
-      !row.invite_uid &&
-      (row.contact_ids ?? []).length === 0 &&
-      !readPeople(row.attendees).some((person) => !own.has(person.email));
+    const personal = (row: ItemRow) => isPersonalEvent(row, own);
     const cancellable = (row: ItemRow) => {
       if (!canWrite(row) || new Date(row.starts_at).getTime() <= now) return false;
       if (personal(row)) return true;

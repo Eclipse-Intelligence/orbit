@@ -147,6 +147,11 @@ function InviteForm({
   const calendars = setup.calendars;
   const [calendarFrom, setCalendarFrom] = useState(() => setup.defaultCalendar ?? calendars[0]?.address ?? "");
   const personal = guests.length === 0;
+  const [shownMode, setShownMode] = useState(personal);
+  if (shownMode !== personal) {
+    setShownMode(personal);
+    setErrors((current) => ({ ...current, from: undefined }));
+  }
   const options = personal ? calendars : setup.senders;
   const chosen = personal ? calendarFrom : from;
   const sender = options.find((item) => item.address === chosen) ?? null;
@@ -157,6 +162,7 @@ function InviteForm({
   const own = new Set(setup.ownEmails);
   const blocked = sender ? Boolean(sender.problem) : personal || !setup.connected || !setup.canWriteCalendar;
   const field = (name: string) => `${ids}-${name}`;
+  const pickerId = field(personal ? "calendar" : "from");
 
   useEffect(() => {
     if (!trimmed) return;
@@ -330,12 +336,12 @@ function InviteForm({
       <div className="flex flex-col gap-4 px-6 py-5">
         <ConnectionNotice setup={setup} sender={sender} personal={personal} />
         {options.length > 1 && (
-          <Field label={personal ? "Calendar" : "From"} htmlFor={field("from")} error={errors.from}>
+          <Field label={personal ? "Calendar" : "From"} htmlFor={pickerId} error={errors.from}>
             <NativeSelect
-              id={field("from")}
+              id={pickerId}
               value={chosen}
               aria-invalid={errors.from ? true : undefined}
-              aria-describedby={errors.from ? `${field("from")}-error` : undefined}
+              aria-describedby={errors.from ? `${pickerId}-error` : undefined}
               onChange={(event) => {
                 if (personal) setCalendarFrom(event.target.value);
                 else setFrom(event.target.value);
@@ -583,7 +589,7 @@ function InviteForm({
           Cancel
         </Button>
         <Button variant="primary" size="sm" type="submit" disabled={pending || blocked}>
-          {pending ? (personal ? "Adding…" : "Sending…") : personal ? "Add to calendar" : "Send invite"}
+          {pending ? (personal ? "Adding…" : "Sending…") : personal ? "Add to calendar" : "Send invites"}
         </Button>
       </DialogFooter>
     </form>

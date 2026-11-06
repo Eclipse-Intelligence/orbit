@@ -3,6 +3,7 @@ import type { Db } from "@/lib/db/pool";
 import { createActivityInDb } from "@/lib/crm/activities";
 import {
   DEFAULT_CALENDAR_PLACEHOLDER,
+  isPersonalEvent,
   linkEvents,
   myAddresses,
   readGrantedScopes,
@@ -175,7 +176,9 @@ function isConnected(stored: StoredConnection | null): stored is StoredConnectio
   return Boolean(stored && stored.status === "connected" && stored.refreshTokenCipher);
 }
 
-async function ownInviteAddresses(db: Db, actor: UserActor) {
+export const CONTACTS_NEED_GUESTS = "Add each guest's email address, or leave contactIds empty for a personal event.";
+
+export async function ownInviteAddresses(db: Db, actor: UserActor) {
   const own = await myAddresses(db, actor);
   const identities = await db.query<{ email: string }>("select email from crm.send_identities where user_id = $1", [actor.userId]);
   for (const row of identities.rows) own.add(row.email.toLowerCase());
@@ -910,6 +913,7 @@ export async function createInvite(
     throw invalid("Choose whether to add the meeting link.", "includeMeetingLink");
   }
   if (hasNoGuests(input.attendees)) {
+    if (contactIds.length > 0) throw invalid(CONTACTS_NEED_GUESTS, "attendees");
     return createPersonalEvent(
       actor,
       { subject, window, notes, includeMeetingLink: input.includeMeetingLink === true, transactionId, from: input.from },
@@ -1041,6 +1045,7 @@ type Organised = {
   row: OrganisedRow;
   guests: string[];
   people: InviteGuest[];
+  own: Set<string>;
   startsAt: Date;
   endsAt: Date;
   source: GraphSource;
@@ -1091,6 +1096,7 @@ async function organisedEvent(actor: UserActor, eventId: string, verb: "cancel" 
     row,
     guests,
     people,
+    own: found.own,
     startsAt,
     endsAt: new Date(row.ends_at),
     source,
@@ -1100,7 +1106,7 @@ async function organisedEvent(actor: UserActor, eventId: string, verb: "cancel" 
 }
 
 function isPersonal(found: Organised) {
-  return !found.identityId && !found.row.invite_uid && found.people.length === 0 && (found.row.contact_ids ?? []).length === 0;
+  return isPersonalEvent(found.row, found.own);
 }
 
 function itipFor(
