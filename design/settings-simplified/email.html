@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Email · Settings mockup</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="app">
+<aside class="app-sidebar" aria-label="Orbit">
+  <div class="brand"><span class="logo">O</span><span><strong>Orbit</strong><small>Eclipse</small></span></div>
+  <div class="app-links"><span class="app-link">Mail</span><span class="app-link">Companies</span><span class="app-link">Contacts</span><span class="app-link">Capture</span><span class="app-link">Calendar</span><span class="app-link">Opportunities</span><span class="app-link">Proposals</span><span class="app-link">Tasks</span><span class="app-link">Workflows</span></div>
+  <div class="app-foot"><span class="app-link active">Settings</span><span class="app-link">Account</span></div>
+</aside>
+<div class="main">
+  <header class="topbar"><a class="back" href="nav.html">Settings</a><h1>Settings</h1></header>
+  <div class="settings">
+    <nav class="settings-nav" aria-label="Settings">
+  <h2 class="group">You</h2>
+  <p class="group-note">The same in every workspace</p>
+  <a class="nav-item" href="general.html">General</a><a class="nav-item active" href="email.html" aria-current="page">Email</a><a class="nav-item" href="#">Calendars</a><a class="nav-item" href="#">Booking page</a><a class="nav-item" href="#">Connections</a><a class="nav-item" href="#">Memory</a><a class="nav-item" href="#">API tokens</a>
+  <h2 class="group"><span class="tile">E</span>Eclipse</h2>
+  <p class="group-note">Only in Eclipse</p>
+  <a class="nav-item" href="about-you.html">About you</a><a class="nav-item" href="#">Brand</a><a class="nav-item" href="#">Knowledge</a><a class="nav-item" href="#">Team</a><a class="nav-item" href="#">Pipeline</a><a class="nav-item" href="#">Tags and lifecycles</a><a class="nav-item" href="#">AI fields</a><a class="nav-item" href="#">Email templates</a><a class="nav-item" href="#">Learning</a><a class="nav-item" href="#">Tools</a><a class="nav-item" href="#">Activity log</a>
+</nav>
+    <main class="content">
+      <div class="page-head"><h1>Email</h1><p class="lead">Your mailboxes, the addresses you send from, signatures and help with replies.</p></div><section class="card"><div class="card-head"><div><h3>Addresses</h3><p class="caption">Each address belongs to one workspace. It's the address you send from there, and email from people Orbit doesn't know waits in that workspace's Capture.</p></div></div><div class="card-body"><div class="address"><div class="address-main"><span class="dot"></span><div><span class="label">mark@geteclipse.co</span><p class="caption">Microsoft 365</p></div></div><label class="inline"><span class="caption">Workspace</span><select aria-label="Workspace for mark@geteclipse.co"><option selected>Eclipse</option><option>Mark Ridgeon</option></select></label></div><div class="address"><div class="address-main"><span class="dot"></span><div><span class="label">mark@cntent.ai</span><p class="caption">Microsoft 365</p></div></div><label class="inline"><span class="caption">Workspace</span><select aria-label="Workspace for mark@cntent.ai"><option selected>Eclipse</option><option>Mark Ridgeon</option></select></label></div><div class="address"><div class="address-main"><span class="dot"></span><div><span class="label">mark@ridgeon.me</span><p class="caption">Sending address</p></div></div><label class="inline"><span class="caption">Workspace</span><select aria-label="Workspace for mark@ridgeon.me"><option>Eclipse</option><option selected>Mark Ridgeon</option></select></label></div><div class="actions"><button class="btn secondary" type="button">Connect Microsoft 365</button><button class="btn secondary" type="button">Add a sending address</button></div></div></section><section class="card"><div class="card-head"><div><h3>Other addresses that are you</h3><p class="caption">Old or forwarding addresses. Mail from them is treated as yours.</p></div></div><div class="card-body"><label class="field"><span class="label">Addresses</span><textarea rows="2" placeholder="">mark@eclipse.ai</textarea><span class="caption">One per line.</span></label><div class="actions"><button class="btn primary" type="button">Save</button></div></div></section><section class="card"><div class="card-head"><div><h3>Signatures</h3><p class="caption">One per address.</p></div></div><div class="card-body"><label class="field"><span class="label">Address</span><select><option>mark@geteclipse.co</option><option>mark@cntent.ai</option><option selected>mark@ridgeon.me</option></select></label><label class="field"><span class="label">Signature</span><textarea rows="3" placeholder="">Mark Ridgeon
+Fractional COO
+ridgeon.me</textarea></label><div class="actions"><button class="btn primary" type="button">Save signature</button></div></div></section><section class="card"><div class="card-head"><div><h3>Prepared replies and reminders</h3><p class="caption">Orbit drafts replies for you to check, and nudges threads that go quiet.</p></div></div><div class="card-body"><div class="row"><div><span class="label">Prepare replies</span></div><span class="switch on" role="switch" aria-checked="true" aria-label="Prepare replies"></span></div><label class="field"><span class="label">Remind me when there's no reply after</span><select><option>Never</option><option>2 working days</option><option selected>3 working days</option><option>5 working days</option></select></label></div></section><section class="card"><div class="card-head"><div><h3>Read statuses</h3><p class="caption">Shows when someone opens your email.</p></div></div><div class="card-body"><div class="row"><div><span class="label">Track opens</span></div><span class="switch on" role="switch" aria-checked="true" aria-label="Track opens"></span></div></div></section>
+    </main>
+  </div>
+</div>
+</div>
+</body>
+</html>
