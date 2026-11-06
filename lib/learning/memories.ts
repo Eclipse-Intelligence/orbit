@@ -207,6 +207,23 @@ export async function listMemories(
   });
 }
 
+const WRITING_NOTE_LIMIT = 20;
+const EMAIL_WORDS = String.raw`\m(e-?mails?|mail|inbox|repl(y|ies|ied|ying)|drafts?|sign-?offs?|greetings?|subject lines?|follow-?ups?|nudges?)\M`;
+const OTHER_CHANNELS = String.raw`\m(linkedin|posts?|articles?|blogs?|tweets?|threads|docs?|slides?|decks?)\M`;
+
+export async function emailWritingNotes(db: Db, actor: UserActor) {
+  const result = await db.query<{ title: string; body: string }>(
+    `select title, body from crm.memories
+     where archived_at is null and scope = 'personal' and user_id = $2 and ${visibleMemorySql("$1", "$2")}
+       and kind in ('writing', 'preference', 'correction', 'instruction')
+       and ((title || ' ' || body) ~* $3 or kind = 'writing' and not (title || ' ' || body) ~* $4)
+     order by pinned desc, updated_at desc
+     limit $5`,
+    [actor.workspaceId, actor.userId, EMAIL_WORDS, OTHER_CHANNELS, WRITING_NOTE_LIMIT],
+  );
+  return result.rows.map((row) => (row.body.startsWith(row.title.replace(/…$/, "")) ? row.body : `${row.title}: ${row.body}`));
+}
+
 export async function rememberNote(
   actor: UserActor,
   input: { title?: unknown; body?: unknown; kind?: unknown; shared?: unknown; sources?: unknown; allWorkspaces?: unknown },

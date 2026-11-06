@@ -3,12 +3,14 @@ import { after, before, describe, it } from "node:test";
 import { withActor } from "@/lib/crm/context";
 import { createContact } from "@/lib/crm/contacts";
 import { saveMailbox } from "@/lib/crm/inbox";
+import { createWorkspace } from "@/lib/crm/workspaces";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { workingDaysLater } from "@/lib/mail/later";
 import { cancelFollowUp, mailHelpSettings, notePreparedSent, prepareMail, prepareNudge, setMailHelp, updatePrepared } from "@/lib/mail/prepare";
 import { syncMail } from "@/lib/mail/sync";
 import { getThread, listThreads } from "@/lib/mail/threads";
+import { spelledFigures } from "@/lib/writing-style";
 import { createUser, resetDatabase } from "./helpers";
 
 const GRAPH = "https://graph.microsoft.com/v1.0";
@@ -196,6 +198,82 @@ describe("prepared replies and automatic reminders", () => {
     assert.equal(detail.prepared?.messageId, proposal.latestId);
     await updatePrepared(owner, detail.prepared!.id, "dismiss");
     assert.equal((await getThread(owner, proposal.key)).prepared, null);
+  });
+
+  it("finds figures written as digits by the sender and spelled out in the reply", () => {
+    const james = "1. Time: 15-20 hrs per week\n2. Demo (for the first 2-4 prospects)\n3. Pipeline (10-20 deals)";
+    assert.deepEqual(spelledFigures("Fifteen to twenty hours a week, and a demo for two to four prospects.", james), ["Fifteen", "twenty", "two", "four"]);
+    assert.deepEqual(spelledFigures("Thanks for the three questions. 15-20 hrs is fine, one more thing to cover.", james), []);
+    assert.deepEqual(spelledFigures("Twenty-five deals and twenty five more.", "Aiming for 25 deals"), ["Twenty-five", "twenty five"]);
+    assert.deepEqual(spelledFigures("Fifteen hours", "No figures here"), []);
+  });
+
+  it("mirrors the sender, uses learned writing notes for this workspace and redrafts spelled out figures", async () => {
+    await setMailHelp(owner, { prepareReplies: true, autoRemindDays: null });
+    const elsewhere = await createWorkspace(owner, { name: "Mark Ridgeon", brandStart: "blank" });
+    const note = (workspaceId: string, kind: string, title: string, everywhere: boolean | null) =>
+      getAdminPool().query("insert into crm.memories (workspace_id, user_id, scope, kind, title, body, all_workspaces) values ($1, $2, 'personal', $3, $4, $4, $5)", [
+        workspaceId,
+        owner.userId,
+        kind,
+        title,
+        everywhere,
+      ]);
+    await note(owner.workspaceId, "writing", "Mark's real replies are shorter than the drafts he is offered", false);
+    await note(owner.workspaceId, "correction", "Mark replaces bracketed reply options with his own answer", false);
+    await note(owner.workspaceId, "preference", "Mark wants board reviews on a Monday", false);
+    await note(owner.workspaceId, "writing", "Mark's LinkedIn posts open with a question", false);
+    await note(elsewhere.id, "writing", "Mark signs Ridgeon emails with his full name", false);
+    await note(elsewhere.id, "instruction", "Mark never uses exclamation marks in emails", true);
+    await createContact(owner, { firstName: "James", lastName: "Hart", email: "james@hart.test" });
+    await syncMail(owner, {
+      budgetMs: 30_000,
+      fetchImpl: mailbox({
+        inbox: [
+          message("m-james", {
+            subject: "Commercial plan",
+            from: { emailAddress: { name: "James Hart", address: "james@hart.test" } },
+            body: {
+              contentType: "text",
+              content: "Hi Mark,\n\n1. Time: 15-20 hrs per week\n2. Demo (for the first 2-4 prospects)\n3. Pipeline (10-20 deals)\n\nHow would the equity vest?\n\nWe can sit down when you are free next week and talk this through. Let me know when works for you.\n\nJames",
+            },
+          }),
+        ],
+        sent: [],
+      }),
+    });
+    const { fetchImpl, prompts } = model([
+      { needsReply: true, meeting: false, body: "Hi James,\n\nFifteen to twenty hours a week works.\n\nMark" },
+      { needsReply: true, meeting: false, body: "Hi James,\n\nThanks for the detailed answers. 15-20 hrs works, let's cover equity when we speak.\n\nMark" },
+    ]);
+    const report = await prepareMail(owner, { deadline: soon(), fetchImpl });
+    assert.equal(report.prepared, 1);
+    assert.equal(prompts.length, 2);
+    const [system, user] = [prompts[0].system, prompts[0].user];
+    assert.match(system, /Mirror the sender of the latest email: their register and formality, their length or shorter, and their own terms and abbreviations\./);
+    assert.match(system, /in digits \(15-20 stays 15-20, hrs stays hrs\), and never spell numbers out as words/);
+    assert.match(system, /Don't restate their points back to them\./);
+    assert.match(system, /Be brief\. When they propose to talk or meet, thank them for what they sent, say Mark will go through it, leave the detail for the conversation/);
+    assert.match(system, /Only answer each point in writing when they ask for written answers before meeting\./);
+    assert.match(system, /Avoid \[square brackets\]\. Use one only when the reply can't be sent without a fact Mark must supply, and never more than two\./);
+    assert.match(user, /What Orbit has learned about how Mark writes email/);
+    assert.match(user, /- Mark's real replies are shorter than the drafts he is offered/);
+    assert.match(user, /- Mark replaces bracketed reply options with his own answer/);
+    assert.match(user, /- Mark never uses exclamation marks in emails/);
+    assert.doesNotMatch(user, /signs Ridgeon emails/);
+    assert.doesNotMatch(user, /board reviews/);
+    assert.doesNotMatch(user, /LinkedIn posts/);
+    assert.match(prompts[1].system, /An earlier draft wrote "Fifteen", "twenty" in words\. Write those figures in digits, exactly as the sender did\./);
+    const thread = (await listThreads(owner, { view: { role: "inbox" } })).threads.find((item) => item.subject === "Commercial plan")!;
+    assert.match((await getThread(owner, thread.key)).prepared?.body ?? "", /15-20 hrs works/);
+
+    const proposal = (await listThreads(owner, { view: { role: "sent" } })).threads.find((item) => item.subject === "Proposal")!;
+    const nudge = model([{ body: "Hi Priya, any thoughts on Friday? Mark" }]);
+    await prepareNudge(owner, proposal.sourceId, proposal.key.slice(proposal.sourceId.length + 1), { fetchImpl: nudge.fetchImpl });
+    assert.match(nudge.prompts[0].system, /Mirror the other person in the conversation/);
+    assert.match(nudge.prompts[0].system, /Never use \[square brackets\]\./);
+    assert.match(nudge.prompts[0].user, /- Mark's real replies are shorter than the drafts he is offered/);
+    assert.doesNotMatch(nudge.prompts[0].user, /signs Ridgeon emails/);
   });
 
   it("does nothing when switched off", async () => {
