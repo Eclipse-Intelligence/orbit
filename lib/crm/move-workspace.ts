@@ -13,7 +13,13 @@ import { workspaceActors, type WorkspaceRef } from "@/lib/crm/workspaces";
 
 export const MOVE_LIMIT = 100;
 
+export const MOVE_TOO_LONG = "That took too long. Move fewer records at a time.";
+
+const MOVE_TIMEOUT = "60s";
+
 const MOVE_SCOPES: Scope[] = ["companies:write", "contacts:write", "opportunities:write", "activities:write", "tasks:write"];
+
+type PlanDeal = { id: string; targetId: string; name: string; stage: string | null };
 
 type PlanRecord = {
   id: string;
@@ -23,6 +29,8 @@ type PlanRecord = {
   targetName: string | null;
   selected?: boolean;
   archived?: boolean;
+  deals?: PlanDeal[];
+  boardCards?: number;
 };
 
 type Plan = {
@@ -33,7 +41,6 @@ type Plan = {
   links: PlanRecord[];
   contacts: PlanRecord[];
   deals: number;
-  dealIds: string[];
   dealsAvailable: number;
   dealStages: string[];
   boardCards: number;
@@ -44,7 +51,10 @@ type Plan = {
   knowledge: number;
   pipelineId: string | null;
   pipelineName: string | null;
+  pipelineKind: string | null;
+  stageName: string | null;
   boardConflict: string | null;
+  canMove: boolean;
 };
 
 export type MoveRequest = {
@@ -87,7 +97,11 @@ export type MovePreview = {
   dealStages: string[];
   pipelines: MovePipeline[];
   pipelineId: string | null;
+  pipelineName: string | null;
+  pipelineKind: string | null;
+  stageName: string | null;
   boardConflict: string | null;
+  canMove: boolean;
 };
 
 export type MovedRecord = { id: string; name: string; targetId: string; merged: boolean };
@@ -155,7 +169,15 @@ export async function moveTargets(actor: Actor): Promise<WorkspaceRef[]> {
   return actors.filter((item) => item.workspaceId !== actor.workspaceId).map((item) => ({ id: item.workspaceId, name: item.workspaceName }));
 }
 
-async function moveActors(actor: Actor, workspace: unknown) {
+function canMoveOut(actor: UserActor) {
+  return actor.role === "owner" || actor.role === "admin";
+}
+
+export function moveNeedsAdmin(workspaceName: string) {
+  return `Only an owner or admin of ${workspaceName} can move records out of it. You can copy them instead.`;
+}
+
+async function moveActors(actor: Actor, workspace: unknown, options: { moving: boolean }) {
   if (actor.type !== "user") throw new CrmError("forbidden", "Only a person can move records between workspaces.", 403);
   const actors = await workspaceActors(actor);
   if (actors.length < 2) throw new CrmError("forbidden", "You're only in one workspace.", 403);
@@ -175,16 +197,25 @@ async function moveActors(actor: Actor, workspace: unknown) {
     assertScope(actor.scopes, scope);
     assertScope(target.scopes, scope);
   }
+  const current = actors.find((item) => item.workspaceId === actor.workspaceId) ?? actor;
+  if (options.moving && !canMoveOut(current)) throw new CrmError("forbidden", moveNeedsAdmin(actor.workspaceName), 403);
   return { source: actor, target };
 }
 
-function moveFailure(error: unknown): never {
+export function moveFailure(error: unknown, targetName: string): never {
   if (error instanceof CrmError) throw error;
   if (isPgError(error)) {
     if (error.code === "P0002") throw new CrmError("not_found", error.message, 404);
     if (error.code === "22023") throw new CrmError("invalid_input", error.message, 400);
     if (error.code === "42501") throw new CrmError("forbidden", error.message, 403);
-    if (error.code === "23505") throw new CrmError("conflict", "Something in the other workspace changed at the same time. Try again.", 409);
+    if (error.code === "57014" || error.code === "40P01") throw new CrmError("timeout", MOVE_TOO_LONG, 503);
+    if (error.code === "23505") {
+      throw new CrmError(
+        "conflict",
+        `${targetName} already has a record with the same domain, email, LinkedIn or name that Orbit didn't match. Merge or archive it in ${targetName}, then try again.`,
+        409,
+      );
+    }
   }
   throw error;
 }
@@ -196,20 +227,8 @@ async function runPlan(db: Db | null, source: UserActor, target: UserActor, inpu
     const result = db ? await db.query<{ plan: Plan }>(text, values) : await query<{ plan: Plan }>(text, values);
     return result.rows[0].plan;
   } catch (error) {
-    moveFailure(error);
+    moveFailure(error, target.workspaceName);
   }
-}
-
-async function visibleTasks(actor: UserActor, companyIds: string[], contactIds: string[]) {
-  if (companyIds.length + contactIds.length === 0) return 0;
-  return withActor(actor, async (db) => {
-    const result = await db.query<{ total: number }>(
-      `select count(*)::int as total from crm.tasks
-       where workspace_id = $1 and (company_id = any($2::uuid[]) or contact_id = any($3::uuid[]))`,
-      [actor.workspaceId, companyIds, contactIds],
-    );
-    return result.rows[0]?.total ?? 0;
-  });
 }
 
 async function aiFieldsLeftBehind(source: UserActor, target: UserActor, companyIds: string[]) {
@@ -249,16 +268,11 @@ function selectedNames(plan: Plan) {
 }
 
 export async function previewMoveToWorkspace(actor: Actor, request: MoveRequest): Promise<MovePreview> {
-  const { source, target } = await moveActors(actor, request.workspaceId);
+  const { source, target } = await moveActors(actor, request.workspaceId, { moving: false });
   const input = moveInput(request);
   const plan = await runPlan(null, source, target, input, true);
   const companyIds = plan.companies.map((item) => item.id);
-  const contactIds = plan.contacts.map((item) => item.id);
-  const [tasks, aiFields, pipelines] = await Promise.all([
-    plan.copy ? 0 : visibleTasks(source, companyIds, contactIds),
-    aiFieldsLeftBehind(source, target, companyIds),
-    targetPipelines(target),
-  ]);
+  const [aiFields, pipelines] = await Promise.all([aiFieldsLeftBehind(source, target, companyIds), targetPipelines(target)]);
   return {
     source: plan.source,
     target: plan.target,
@@ -268,11 +282,11 @@ export async function previewMoveToWorkspace(actor: Actor, request: MoveRequest)
     deals: plan.deals,
     dealsAvailable: plan.dealsAvailable,
     activities: plan.activities,
-    tasks,
+    tasks: plan.tasks,
     files: plan.documents + plan.knowledge,
     companiesAlong: plan.companies.filter((item) => !item.selected).map((item) => item.name),
     merges: [...plan.companies, ...plan.contacts]
-      .filter((item) => item.merged)
+      .filter((item) => item.merged && !item.archived)
       .map((item) => ({ name: item.name, into: item.targetName ?? item.name })),
     links: plan.links.map((item) => ({ name: item.name, into: item.targetName ?? item.name, matched: item.merged })),
     boards: plan.copy ? [] : plan.boards,
@@ -280,7 +294,11 @@ export async function previewMoveToWorkspace(actor: Actor, request: MoveRequest)
     dealStages: plan.dealStages,
     pipelines,
     pipelineId: plan.pipelineId,
+    pipelineName: plan.pipelineName,
+    pipelineKind: plan.pipelineKind,
+    stageName: plan.stageName,
     boardConflict: plan.boardConflict,
+    canMove: plan.canMove,
   };
 }
 
@@ -298,9 +316,50 @@ function resultMessage(plan: Plan) {
   return `${plan.copy ? "Copied" : "Moved"} ${what} to ${plan.target.name}.`;
 }
 
+type CopiedFrom = { workspaceId: string; workspaceName: string; id: string };
+
+function copiedFrom(plan: Plan, id: string): CopiedFrom {
+  return { workspaceId: plan.source.id, workspaceName: plan.source.name, id };
+}
+
+async function auditCreated(db: Db, target: UserActor, entity: "company" | "contact", id: string, from: CopiedFrom, provenance: Provenance) {
+  const created = entity === "company" ? await readCompanyInDb(db, id, target.workspaceId) : await readContactInDb(db, id, target.workspaceId);
+  await recordAudit(db, target, `${entity}.created`, entity, id, provenance, { after: created, copiedFrom: from });
+}
+
+async function auditFilled(db: Db, target: UserActor, entity: "company" | "contact", id: string, fill: GapFill | undefined, from: CopiedFrom, provenance: Provenance) {
+  if (!fill || (fill.filled.length === 0 && fill.tagsAdded.length === 0)) return;
+  await recordAudit(db, target, `${entity}.updated`, entity, id, provenance, {
+    fields: [...fill.filled, ...(fill.tagsAdded.length > 0 ? ["tags"] : [])],
+    before: fill.before,
+    after: fill.after,
+    copiedFrom: from,
+  });
+}
+
+async function auditLinks(db: Db, source: UserActor, target: UserActor, plan: Plan, fills: Map<string, GapFill>, provenance: Provenance) {
+  for (const link of plan.links) {
+    if (!link.targetId) continue;
+    const from = copiedFrom(plan, link.id);
+    if (link.merged) {
+      await auditFilled(db, target, "company", link.targetId, fills.get(link.id), from, provenance);
+      continue;
+    }
+    await auditCreated(db, target, "company", link.targetId, from, provenance);
+    await recordAudit(db, source, "company.copied", "company", link.id, provenance, {
+      name: link.name,
+      toWorkspace: plan.target,
+      targetId: link.targetId,
+      merged: false,
+    });
+  }
+}
+
+function dealDetails(record: PlanRecord) {
+  return record.deals ?? [];
+}
+
 async function auditMove(db: Db, source: UserActor, target: UserActor, plan: Plan, fills: Map<string, GapFill>, provenance: Provenance) {
-  const toWorkspace = plan.target;
-  const fromWorkspace = plan.source;
   for (const [entity, records] of [
     ["company", plan.companies],
     ["contact", plan.contacts],
@@ -308,69 +367,56 @@ async function auditMove(db: Db, source: UserActor, target: UserActor, plan: Pla
     for (const record of records) {
       if (!record.targetId) continue;
       const fill = fills.get(record.id);
+      const deals = entity === "company" ? { deals: dealDetails(record), boardCardsRemoved: record.boardCards ?? 0 } : {};
       await recordAudit(db, source, `${entity}.moved_out`, entity, record.id, provenance, {
         name: record.name,
-        toWorkspace,
+        toWorkspace: plan.target,
         targetId: record.targetId,
         mergedInto: record.merged ? record.targetId : null,
+        ...deals,
       });
       await recordAudit(db, target, `${entity}.moved_in`, entity, record.targetId, provenance, {
         name: record.merged ? (record.targetName ?? record.name) : record.name,
-        fromWorkspace,
+        fromWorkspace: plan.source,
         fromId: record.id,
         merged: record.merged,
+        ...deals,
         ...(fill ? { filled: fill.filled, tagsAdded: fill.tagsAdded, before: fill.before, after: fill.after } : {}),
       });
     }
   }
-  for (const link of plan.links) {
-    if (link.merged || !link.targetId) continue;
-    await recordAudit(db, target, "company.moved_in", "company", link.targetId, provenance, {
-      name: link.name,
-      fromWorkspace,
-      fromId: link.id,
-      merged: false,
-      copy: true,
-    });
-  }
+  await auditLinks(db, source, target, plan, fills, provenance);
 }
 
 async function auditCopy(db: Db, source: UserActor, target: UserActor, plan: Plan, fills: Map<string, GapFill>, provenance: Provenance) {
-  const copiedFrom = (id: string) => ({ workspaceId: plan.source.id, workspaceName: plan.source.name, id });
-  const companies = [...plan.companies, ...plan.links.filter((item) => !item.merged)];
   for (const [entity, records] of [
-    ["company", companies],
+    ["company", plan.companies],
     ["contact", plan.contacts],
   ] as const) {
     for (const record of records) {
       if (!record.targetId) continue;
-      const fill = fills.get(record.id);
-      if (record.merged) {
-        if (fill && (fill.filled.length > 0 || fill.tagsAdded.length > 0)) {
-          await recordAudit(db, target, `${entity}.updated`, entity, record.targetId, provenance, {
-            fields: [...fill.filled, ...(fill.tagsAdded.length > 0 ? ["tags"] : [])],
-            before: fill.before,
-            after: fill.after,
-            copiedFrom: copiedFrom(record.id),
-          });
-        }
-      } else {
-        const created = entity === "company" ? await readCompanyInDb(db, record.targetId, target.workspaceId) : await readContactInDb(db, record.targetId, target.workspaceId);
-        await recordAudit(db, target, `${entity}.created`, entity, record.targetId, provenance, { after: created, copiedFrom: copiedFrom(record.id) });
-      }
-      if (plan.companies.includes(record) || plan.contacts.includes(record)) {
-        await recordAudit(db, source, `${entity}.copied`, entity, record.id, provenance, {
-          name: record.name,
-          toWorkspace: plan.target,
-          targetId: record.targetId,
-          merged: record.merged,
-        });
-      }
+      const from = copiedFrom(plan, record.id);
+      if (record.merged) await auditFilled(db, target, entity, record.targetId, fills.get(record.id), from, provenance);
+      else await auditCreated(db, target, entity, record.targetId, from, provenance);
+      await recordAudit(db, source, `${entity}.copied`, entity, record.id, provenance, {
+        name: record.name,
+        toWorkspace: plan.target,
+        targetId: record.targetId,
+        merged: record.merged,
+        ...(entity === "company" ? { deals: dealDetails(record) } : {}),
+      });
     }
   }
-  for (const id of plan.dealIds) {
-    const opportunity = await readOpportunityInDb(db, id);
-    if (opportunity) await recordAudit(db, target, "opportunity.created", "opportunity", id, provenance, { after: opportunity, copied: true });
+  await auditLinks(db, source, target, plan, fills, provenance);
+  for (const company of plan.companies) {
+    for (const deal of dealDetails(company)) {
+      const opportunity = await readOpportunityInDb(db, deal.targetId);
+      if (!opportunity) continue;
+      await recordAudit(db, target, "opportunity.created", "opportunity", deal.targetId, provenance, {
+        after: opportunity,
+        copiedFrom: copiedFrom(plan, deal.id),
+      });
+    }
   }
 }
 
@@ -381,12 +427,13 @@ function moved(records: PlanRecord[]): MovedRecord[] {
 }
 
 export async function moveRecordsToWorkspace(actor: Actor, request: MoveRequest, provenance: Provenance): Promise<MoveResult> {
-  const { source, target } = await moveActors(actor, request.workspaceId);
+  const { source, target } = await moveActors(actor, request.workspaceId, { moving: request.copy !== true });
   const input = moveInput(request);
   let plan: Plan | null = null;
   return withActorAfterAppStep(
     source,
     async (db) => {
+      await db.query(`set local statement_timeout = '${MOVE_TIMEOUT}'`);
       for (const key of lockKeys(source.workspaceId, target.workspaceId)) {
         const [workspaceId, name] = key.split(":");
         await lockNamespace(db, workspaceId, name);
@@ -401,6 +448,10 @@ export async function moveRecordsToWorkspace(actor: Actor, request: MoveRequest,
       for (const company of done.companies) {
         if (!company.merged || !company.targetId) continue;
         fills.set(company.id, await fillCompanyGaps(db, target.workspaceId, company.targetId, company.id, { ...fromSource, skip: done.copy ? ["health"] : [] }));
+      }
+      for (const link of done.links) {
+        if (!link.merged || !link.targetId) continue;
+        fills.set(link.id, await fillCompanyGaps(db, target.workspaceId, link.targetId, link.id, { fromWorkspaceId: source.workspaceId, skip: ["health"] }));
       }
       for (const contact of done.contacts) {
         if (!contact.merged || !contact.targetId) continue;
@@ -420,5 +471,5 @@ export async function moveRecordsToWorkspace(actor: Actor, request: MoveRequest,
         message: resultMessage(done),
       };
     },
-  );
+  ).catch((error: unknown) => moveFailure(error, target.workspaceName));
 }

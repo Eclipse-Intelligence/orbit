@@ -72,29 +72,35 @@ language sql
 stable
 set search_path = ''
 as $$
-  select coalesce(
-    p_chosen,
-    (
-      select t.id from crm.pipeline_stages t
-      join crm.pipeline_stages s on s.id = p_stage
-      where t.pipeline_id = p_pipeline and lower(btrim(t.name)) = lower(btrim(s.name))
-      order by t.position
-      limit 1
-    ),
-    (
-      select t.id from crm.pipeline_stages t
-      where t.pipeline_id = p_pipeline
-        and ((p_status = 'won' and t.is_won) or (p_status = 'lost' and t.is_lost))
-      order by t.position
-      limit 1
-    ),
-    (
-      select t.id from crm.pipeline_stages t
-      where t.pipeline_id = p_pipeline
-      order by t.position
-      limit 1
+  with same_name as (
+    select t.id from crm.pipeline_stages t
+    join crm.pipeline_stages s on s.id = p_stage
+    where t.pipeline_id = p_pipeline and lower(btrim(t.name)) = lower(btrim(s.name))
+    order by t.position
+    limit 1
+  ),
+  closed as (
+    select t.id from crm.pipeline_stages t
+    where t.pipeline_id = p_pipeline
+      and ((p_status = 'won' and t.is_won) or (p_status = 'lost' and t.is_lost))
+    order by t.position
+    limit 1
+  ),
+  chosen as (
+    select t.id from crm.pipeline_stages t where t.id = p_chosen and t.pipeline_id = p_pipeline
+  ),
+  first_stage as (
+    select t.id from crm.pipeline_stages t
+    where t.pipeline_id = p_pipeline
+    order by t.position
+    limit 1
+  )
+  select case
+    when p_status in ('won', 'lost') then coalesce(
+      (select id from same_name), (select id from closed), (select id from chosen), (select id from first_stage)
     )
-  );
+    else coalesce((select id from chosen), (select id from same_name), (select id from first_stage))
+  end;
 $$;
 
 create or replace function private.move_records_to_workspace(
@@ -125,6 +131,8 @@ declare
   v_link record;
   v_match uuid;
   v_now timestamptz := now();
+  v_source_role text;
+  v_can_move boolean;
   v_result jsonb;
 begin
   select coalesce(array_agg(distinct value::uuid), '{}') into v_company_ids
@@ -135,7 +143,7 @@ begin
   if p_source = p_target then
     raise exception 'Pick another workspace.' using errcode = '22023';
   end if;
-  select w.name into v_source_name
+  select w.name, m.role into v_source_name, v_source_role
   from crm.workspaces w
   join crm.workspace_members m on m.workspace_id = w.id and m.user_id = p_user
   where w.id = p_source;
@@ -148,6 +156,10 @@ begin
   where w.id = p_target;
   if not found then
     raise exception 'You''re not in that workspace.' using errcode = '42501';
+  end if;
+  v_can_move := v_source_role in ('owner', 'admin');
+  if not v_copy and not v_can_move and not p_dry_run then
+    raise exception 'Only an owner or admin of % can move records out of it. You can copy them instead.', v_source_name using errcode = '42501';
   end if;
   if cardinality(v_company_ids) + cardinality(v_contact_ids) = 0 then
     raise exception 'Pick a company or contact to move.' using errcode = '22023';
@@ -278,6 +290,10 @@ begin
     ) then
       raise exception 'Pick a stage on %.', coalesce(v_pipeline_name, 'that board') using errcode = '22023';
     end if;
+    if exists (select 1 from pg_temp.orbit_move_map m where m.kind = 'deal')
+      and not exists (select 1 from crm.pipeline_stages s where s.pipeline_id = v_pipeline) then
+      raise exception '% has no stages.', v_pipeline_name using errcode = '22023';
+    end if;
   end if;
 
   update pg_temp.orbit_move_map m
@@ -329,7 +345,20 @@ begin
     select 'document', d.id, d.id
     from crm.documents d
     where d.workspace_id = p_source
-      and d.company_id in (select item.old_id from pg_temp.orbit_move_map item where item.kind = 'company');
+      and (
+        d.company_id in (select item.old_id from pg_temp.orbit_move_map item where item.kind = 'company')
+        or (
+          d.contact_id in (select item.old_id from pg_temp.orbit_move_map item where item.kind = 'contact')
+          and (
+            d.company_id in (select item.old_id from pg_temp.orbit_move_map item where item.kind in ('company', 'company_link'))
+            or exists (
+              select 1 from crm.contacts p
+              join pg_temp.orbit_move_map item on item.kind in ('company', 'company_link') and item.old_id = p.company_id
+              where p.id = d.contact_id
+            )
+          )
+        )
+      );
     insert into pg_temp.orbit_move_map (kind, old_id, new_id)
     select 'knowledge', k.id, k.id
     from crm.knowledge_items k
@@ -344,7 +373,19 @@ begin
     'companies', coalesce((
       select jsonb_agg(jsonb_build_object(
         'id', m.old_id, 'name', c.name, 'targetId', m.new_id, 'merged', m.merged,
-        'targetName', t.name, 'selected', m.old_id = any(v_company_ids)
+        'targetName', t.name, 'selected', m.old_id = any(v_company_ids),
+        'deals', coalesce((
+          select jsonb_agg(jsonb_build_object('id', o.id, 'targetId', d.new_id, 'name', o.name, 'stage', st.name) order by o.name)
+          from pg_temp.orbit_move_map d
+          join crm.opportunities o on o.id = d.old_id
+          left join crm.pipeline_stages st on st.id = d.stage_id
+          where d.kind = 'deal' and o.company_id = m.old_id
+        ), '[]'::jsonb),
+        'boardCards', (
+          select count(*) from pg_temp.orbit_move_map d
+          join crm.opportunities o on o.id = d.old_id
+          where d.kind = 'board_card' and o.company_id = m.old_id
+        )
       ) order by c.name)
       from pg_temp.orbit_move_map m
       join crm.companies c on c.id = m.old_id
@@ -375,7 +416,6 @@ begin
       where m.kind = 'contact'
     ), '[]'::jsonb),
     'deals', (select count(*) from pg_temp.orbit_move_map m where m.kind = 'deal'),
-    'dealIds', coalesce((select jsonb_agg(m.new_id) from pg_temp.orbit_move_map m where m.kind = 'deal'), '[]'::jsonb),
     'dealsAvailable', (
       select count(*) from crm.opportunities o
       left join crm.pipelines p on p.id = o.pipeline_id
@@ -404,6 +444,9 @@ begin
     'knowledge', (select count(*) from pg_temp.orbit_move_map m where m.kind = 'knowledge'),
     'pipelineId', v_pipeline,
     'pipelineName', v_pipeline_name,
+    'pipelineKind', v_pipeline_kind,
+    'stageName', (select s.name from crm.pipeline_stages s where s.id = v_stage),
+    'canMove', v_can_move,
     'boardConflict', v_conflict
   );
 
@@ -425,12 +468,12 @@ begin
   insert into crm.companies (
     id, workspace_id, name, normalized_name, domain, website, description, industry, size_category,
     lifecycle, owner_id, source, source_reference, created_by_user_id, tags, linkedin_url, phone,
-    address, logo_url, enriched_at, brand
+    address, logo_url, enriched_at, brand, archived_at
   )
   select
     m.new_id, p_target, c.name, c.normalized_name, c.domain, c.website, c.description, c.industry, c.size_category,
     c.lifecycle, private.move_owner(c.owner_id, p_target, p_user), c.source, c.source_reference, p_user, c.tags,
-    c.linkedin_url, c.phone, c.address, c.logo_url, c.enriched_at, c.brand
+    c.linkedin_url, c.phone, c.address, c.logo_url, c.enriched_at, c.brand, c.archived_at
   from pg_temp.orbit_move_map m
   join crm.companies c on c.id = m.old_id
   where not m.merged and (m.kind = 'company_link' or (v_copy and m.kind = 'company'));
@@ -507,6 +550,8 @@ begin
     set workspace_id = p_target,
         company_id = coalesce(
           (select mc.new_id from pg_temp.orbit_move_map mc where mc.kind in ('company', 'company_link') and mc.old_id = t.company_id),
+          (select mc.new_id from crm.opportunities o join pg_temp.orbit_move_map mc on mc.kind = 'company' and mc.old_id = o.company_id
+           where o.id = t.opportunity_id),
           (select mc.new_id from crm.contacts p join pg_temp.orbit_move_map mc on mc.kind in ('company', 'company_link') and mc.old_id = p.company_id
            where p.id = t.contact_id and t.company_id is not null)
         ),
@@ -644,8 +689,12 @@ begin
 
     update crm.documents d
     set workspace_id = p_target,
-        company_id = (select mc.new_id from pg_temp.orbit_move_map mc where mc.kind = 'company' and mc.old_id = d.company_id),
-        contact_id = (select mp.new_id from pg_temp.orbit_move_map mp where mp.kind = 'contact' and mp.old_id = d.contact_id),
+        company_id = coalesce(
+          (select mc.new_id from pg_temp.orbit_move_map mc where mc.kind in ('company', 'company_link') and mc.old_id = d.company_id),
+          (select mc.new_id from crm.contacts p join pg_temp.orbit_move_map mc on mc.kind in ('company', 'company_link') and mc.old_id = p.company_id
+           where p.id = d.contact_id)
+        ),
+        contact_id = coalesce((select mp.new_id from pg_temp.orbit_move_map mp where mp.kind = 'contact' and mp.old_id = d.contact_id), d.contact_id),
         opportunity_id = (select md.new_id from pg_temp.orbit_move_map md where md.kind = 'deal' and md.old_id = d.opportunity_id),
         template_id = case
           when exists (select 1 from crm.document_templates t where t.id = d.template_id and t.workspace_id = p_target) then d.template_id
@@ -666,11 +715,6 @@ begin
     from pg_temp.orbit_move_map m where m.kind = 'document' and m.old_id = x.document_id;
     update crm.document_steps x set workspace_id = p_target
     from pg_temp.orbit_move_map m where m.kind = 'document' and m.old_id = x.document_id;
-    update crm.documents d
-    set contact_id = null
-    where d.workspace_id = p_source
-      and d.contact_id in (select m.old_id from pg_temp.orbit_move_map m where m.kind = 'contact');
-
     update crm.knowledge_items k
     set workspace_id = p_target,
         company_id = (select mc.new_id from pg_temp.orbit_move_map mc where mc.kind = 'company' and mc.old_id = k.company_id),
@@ -727,6 +771,11 @@ begin
 
     delete from crm.company_web_state x
     where x.company_id in (select m.old_id from pg_temp.orbit_move_map m where m.kind = 'company');
+    delete from crm.company_signals x
+    where x.company_id in (select m.old_id from pg_temp.orbit_move_map m where m.kind = 'company');
+    delete from crm.ai_field_answers x
+    where x.workspace_id = p_source
+      and x.company_id in (select m.old_id from pg_temp.orbit_move_map m where m.kind = 'company');
 
     update crm.opportunities o
     set primary_contact_id = null

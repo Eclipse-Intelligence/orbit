@@ -14,6 +14,10 @@ export type MoveKind = "company" | "contact";
 
 const MATCHING = "";
 
+const PREVIEW_FAILED = "Couldn't check what moves.";
+
+const MOVE_FAILED = "That didn't move. Try again.";
+
 function counted(value: number, one: string, many: string) {
   return value > 0 ? `${value} ${value === 1 ? one : many}` : null;
 }
@@ -49,7 +53,7 @@ function summaryLines(preview: MovePreview, copy: boolean, copyDeals: boolean) {
   }
   for (const merge of preview.merges) lines.push(`${merge.name} merges into ${merge.into}.`);
   if (!copy && preview.boards.length > 0) lines.push(`Comes off ${listed(preview.boards)}.`);
-  if (preview.aiFields.length > 0) lines.push(`Stays behind: AI fields ${listed(preview.aiFields)}.`);
+  if (preview.aiFields.length > 0) lines.push(`Not carried over: AI fields ${listed(preview.aiFields)}.`);
   return lines;
 }
 
@@ -96,8 +100,9 @@ function MoveBody({
   const [stageId, setStageId] = useState(MATCHING);
   const [loaded, setLoaded] = useState<{ key: string; preview: MovePreview | null; error: string | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
   const idsKey = ids.join(",");
-  const requestKey = JSON.stringify([idsKey, workspaceId, copy, copyDeals, pipelineId]);
+  const requestKey = JSON.stringify([idsKey, workspaceId, copy, copyDeals, pipelineId, attempt]);
 
   useEffect(() => {
     if (!workspaceId || !idsKey) return;
@@ -108,15 +113,20 @@ function MoveBody({
       copy,
       copyDeals,
       pipelineId: pipelineId || null,
-    }).then((result) => {
-      if (!live) return;
-      const next = result.preview ?? null;
-      setLoaded({ key: requestKey, preview: next, error: next ? null : (result.error ?? "Couldn't check what moves. Try again.") });
-      if (next && !pipelineId && next.pipelineId) {
-        setPipelineId(next.pipelineId);
-        setStageId(defaultStage(next.pipelines.find((item) => item.id === next.pipelineId), next.dealStages));
-      }
-    });
+    })
+      .then((result) => {
+        if (!live) return;
+        const next = result.preview ?? null;
+        setLoaded({ key: requestKey, preview: next, error: next ? null : (result.error ?? PREVIEW_FAILED) });
+        if (next && !next.canMove && !copy) setCopy(true);
+        if (next && !pipelineId && next.pipelineId) {
+          setPipelineId(next.pipelineId);
+          setStageId(defaultStage(next.pipelines.find((item) => item.id === next.pipelineId), next.dealStages));
+        }
+      })
+      .catch(() => {
+        if (live) setLoaded({ key: requestKey, preview: null, error: PREVIEW_FAILED });
+      });
     return () => {
       live = false;
     };
@@ -131,35 +141,43 @@ function MoveBody({
   const showDeals = hasDeals && (!copy || copyDeals) && pipelines.length > 0;
   const lines = preview ? summaryLines(preview, copy, copyDeals) : [];
   const blocked = Boolean(showDeals && preview?.boardConflict && pipeline?.kind === "board");
-  const shownError = error ?? (loading ? null : (loaded?.error ?? null));
+  const previewError = loading ? null : (loaded?.error ?? null);
+  const mustCopy = preview?.canMove === false;
 
   async function run() {
     if (!workspaceId) return;
     setBusy(true);
     setError(null);
-    const result = await moveRecordsAction({
-      [kind === "company" ? "companyIds" : "contactIds"]: ids,
-      workspaceId,
-      copy,
-      copyDeals: copy && copyDeals,
-      pipelineId: showDeals ? pipelineId || null : null,
-      stageId: showDeals ? stageId || null : null,
-    });
-    setBusy(false);
-    if (result.error || !result.message) {
-      setError(result.error ?? "That didn't move. Try again.");
-      return;
+    try {
+      const result = await moveRecordsAction({
+        [kind === "company" ? "companyIds" : "contactIds"]: ids,
+        workspaceId,
+        copy,
+        copyDeals: copy && copyDeals,
+        pipelineId: showDeals ? pipelineId || null : null,
+        stageId: showDeals ? stageId || null : null,
+      });
+      if (result.error || !result.message) {
+        setError(result.error ?? MOVE_FAILED);
+        return;
+      }
+      close();
+      onDone({ message: result.message, copy: result.copy === true });
+    } catch {
+      setError(MOVE_FAILED);
+    } finally {
+      setBusy(false);
     }
-    close();
-    onDone({ message: result.message, copy: result.copy === true });
   }
 
   return (
     <>
       <DialogHeader className="pr-12">
-        <DialogTitle>{`${copy ? "Copy" : "Move"} ${subject}`}</DialogTitle>
+        <DialogTitle>{copy ? "Copy to workspace" : "Move to workspace"}</DialogTitle>
         <DialogDescription>
-          {copy ? `${currentWorkspace} keeps it, and ${target?.name ?? "the other workspace"} gets a copy.` : `It leaves ${currentWorkspace}.`}
+          {copy
+            ? `${currentWorkspace} keeps ${subject}, and ${target?.name ?? "the other workspace"} gets a copy.`
+            : `${subject} leaves ${currentWorkspace}.`}
         </DialogDescription>
       </DialogHeader>
       <div className="flex flex-col gap-4 px-6 py-5">
@@ -184,9 +202,10 @@ function MoveBody({
           </NativeSelect>
         </div>
         <label htmlFor={fieldIds.keep} className="caption-style text-soft flex cursor-pointer items-center gap-2">
-          <Checkbox id={fieldIds.keep} checked={copy} disabled={busy} onCheckedChange={(value) => setCopy(value === true)} />
+          <Checkbox id={fieldIds.keep} checked={copy || mustCopy} disabled={busy || mustCopy} onCheckedChange={(value) => setCopy(value === true)} />
           Also keep in {currentWorkspace}
         </label>
+        {mustCopy && <p className="caption-style text-subtle -mt-2">Only owners and admins of {currentWorkspace} can move records out, so this copies them.</p>}
         {copy && hasDeals && (
           <label htmlFor={fieldIds.deals} className="caption-style text-soft flex cursor-pointer items-center gap-2">
             <Checkbox id={fieldIds.deals} checked={copyDeals} disabled={busy} onCheckedChange={(value) => setCopyDeals(value === true)} />
@@ -235,9 +254,17 @@ function MoveBody({
             {preview?.boardConflict} would have more than one card on {pipeline?.name}. Put the deals on the pipeline.
           </p>
         )}
-        {shownError && (
+        {previewError && !error && (
+          <div role="alert" className="caption-style text-danger flex flex-wrap items-center gap-2">
+            <span>{previewError}</span>
+            <Button variant="secondary" size="sm" onClick={() => setAttempt((value) => value + 1)}>
+              Retry
+            </Button>
+          </div>
+        )}
+        {error && (
           <p role="alert" className="caption-style text-danger">
-            {shownError}
+            {error}
           </p>
         )}
       </div>

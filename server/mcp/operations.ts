@@ -6,7 +6,7 @@ import { archiveContact } from "@/lib/crm/contacts";
 import { CrmError } from "@/lib/crm/errors";
 import { bulkIngestLeads } from "@/lib/crm/leads";
 import { mergeCompanies, mergeContacts } from "@/lib/crm/merge";
-import { moveRecordsToWorkspace } from "@/lib/crm/move-workspace";
+import { moveRecordsToWorkspace, previewMoveToWorkspace } from "@/lib/crm/move-workspace";
 import { archiveOpportunity, listOpportunities } from "@/lib/crm/opportunities";
 import { savePipelineStages } from "@/lib/crm/pipeline";
 import { archiveTask, updateTask } from "@/lib/crm/tasks";
@@ -328,7 +328,7 @@ export function registerMoveTool(server: McpServer, actor: Actor, workspaces: { 
   server.registerTool(
     "move_records_to_workspace",
     {
-      description: `Move companies or contacts from this workspace to another of your workspaces (${others.map((item) => item.name).join(", ")}), or copy them there with copy. A company takes its contacts, deals, tasks, activity, emails, proposals and knowledge, and comes off this workspace's boards. A contact moved on their own brings their company, unless the other workspace already has it (they are linked to it) or colleagues stay behind (the company is copied). Records the other workspace already has (same domain or LinkedIn, or same email, LinkedIn or Sales Navigator) are merged into, filling only empty fields. Deals go on the other workspace's pipeline, in the stage with the same name, unless pipeline_id and stage_id say otherwise. A copy keeps everything here, copies activity, and copies deals only with copy_deals. AI field answers stay behind. A move records moved_out and moved_in audit events, never created ones; a copy records created events in the other workspace.`,
+      description: `Move companies or contacts from this workspace to another of your workspaces (${others.map((item) => item.name).join(", ")}), or copy them there with copy. A company takes its contacts, deals, tasks, activity, emails, proposals and knowledge, and comes off this workspace's boards. A contact moved on their own brings their company, unless the other workspace already has it (they are linked to it) or colleagues stay behind (the company is copied). Records the other workspace already has (same domain or LinkedIn, or same email, LinkedIn or Sales Navigator) are merged into, filling only empty fields. Deals go on the other workspace's pipeline, in the stage with the same name, unless pipeline_id and stage_id say otherwise. A copy keeps everything here, copies activity, and copies deals only with copy_deals. AI field answers and web signals don't travel, so the other workspace's AI fields fill in on their own schedule. Moving needs owner or admin here; any member of both workspaces can copy. A move records moved_out and moved_in audit events, never created ones; a copy records created events in the other workspace.`,
       inputSchema: {
         to_workspace: z.string().min(1).describe("The other workspace's name or id."),
         company_ids: z.array(z.uuid()).max(100).optional(),
@@ -337,24 +337,24 @@ export function registerMoveTool(server: McpServer, actor: Actor, workspaces: { 
         copy_deals: z.boolean().optional(),
         pipeline_id: z.uuid().optional().describe("Pipeline or board in the other workspace for the deals."),
         stage_id: z.uuid().optional().describe("Stage on that pipeline or board."),
+        dry_run: z.boolean().optional().describe("Return what would move, merge and stay behind, without changing anything."),
         ...provenanceFields,
       },
     },
     async (args) =>
-      run(() =>
-        moveRecordsToWorkspace(
-          actor,
-          {
-            workspaceId: args.to_workspace,
-            companyIds: args.company_ids ?? [],
-            contactIds: args.contact_ids ?? [],
-            copy: args.copy === true,
-            copyDeals: args.copy_deals === true,
-            pipelineId: args.pipeline_id ?? null,
-            stageId: args.stage_id ?? null,
-          },
-          provenance(args, "move_records_to_workspace"),
-        ),
-      ),
+      run(() => {
+        const request = {
+          workspaceId: args.to_workspace,
+          companyIds: args.company_ids ?? [],
+          contactIds: args.contact_ids ?? [],
+          copy: args.copy === true,
+          copyDeals: args.copy_deals === true,
+          pipelineId: args.pipeline_id ?? null,
+          stageId: args.stage_id ?? null,
+        };
+        return args.dry_run === true
+          ? previewMoveToWorkspace(actor, request)
+          : moveRecordsToWorkspace(actor, request, provenance(args, "move_records_to_workspace"));
+      }),
   );
 }
