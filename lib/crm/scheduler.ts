@@ -5,10 +5,10 @@ import {
   backgroundTargets,
   errorText,
   safeEqual,
-  summarisePendingImports,
+  summarisePendingAcross,
   type BackgroundTarget,
 } from "@/lib/crm/conversations";
-import { followUpCalls } from "@/lib/crm/follow-ups";
+import { followUpCallsAcross } from "@/lib/crm/follow-ups";
 import { resolveGranolaActor, syncGranola } from "@/lib/crm/granola";
 import { syncMailbox } from "@/lib/crm/inbox";
 import { syncMail } from "@/lib/mail/sync";
@@ -145,7 +145,7 @@ export const DEFAULT_STEPS: SyncStep[] = [
     name: "summaries",
     applies: (target) => target.mailbox || Boolean(target.granola) || Boolean(target.personalGranola),
     run: async (target, context) => ({
-      summarised: await summarisePendingImports(target.actor, {
+      summarised: await summarisePendingAcross(target.actor, {
         fetchImpl: context.fetchImpl,
         deadline: context.deadline,
       }),
@@ -156,7 +156,7 @@ export const DEFAULT_STEPS: SyncStep[] = [
     minMs: 25_000,
     applies: (target) => (Boolean(target.granola) || Boolean(target.personalGranola)) && !microsoftStep(target),
     run: (target, context) =>
-      followUpCalls(target.personalGranola ? target.actor : (target.granola ?? target.actor), {
+      followUpCallsAcross(target.personalGranola ? target.actor : (target.granola ?? target.actor), {
         fetchImpl: context.fetchImpl,
         deadline: Math.min(context.deadline, Date.now() + 30_000),
       }),

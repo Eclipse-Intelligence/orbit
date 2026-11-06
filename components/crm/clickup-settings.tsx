@@ -6,6 +6,7 @@ import Button from "@/components/_ui/button";
 import { ClickUpListOptions, listGroups } from "@/components/crm/clickup";
 import { recordSelectClass } from "@/components/crm/record-form";
 import { SettingsCard, SettingsDisclosure } from "@/components/crm/settings-ui";
+import WorkspaceTile from "@/components/workspaces/workspace-tile";
 import {
   disableClickUpWebhookAction,
   enableClickUpWebhookAction,
@@ -57,6 +58,10 @@ export default function ClickUpSettings({
       title="ClickUp"
       description={
         <span className="flex flex-col gap-1.5">
+          <span className="flex min-w-0 items-center gap-1.5">
+            <WorkspaceTile id={view.workspaceId} name={view.workspaceName} className="size-4 rounded-[5px] text-[9px]" />
+            <span className="min-w-0 wrap-anywhere">{`Lists for ${view.workspaceName}`}</span>
+          </span>
           <span>
             {view.user
               ? `Connected as ${view.user.username ?? view.user.email ?? "ClickUp user"}`
@@ -69,6 +74,11 @@ export default function ClickUpSettings({
               ? " · Instant sync on"
               : " · Checked every 10 minutes"}
           </span>
+          {view.shared.map((item) => (
+            <span key={item.workspaceId} className="text-subtle">
+              {`${item.workspaceName} also uses ${item.listNames.join(", ")}. Tasks in a list both workspaces watch sync into both.`}
+            </span>
+          ))}
           {(view.error || view.lastError) && (
             <span className="text-danger" role="alert">
               {view.error ?? view.lastError}
@@ -133,7 +143,7 @@ export default function ClickUpSettings({
         <>
           {view.teams.length > 1 && (
             <label className="flex flex-col gap-2" htmlFor="clickup-team">
-              <span className="caption-style text-subtle">Workspace</span>
+              <span className="caption-style text-subtle">ClickUp workspace</span>
               <select
                 id="clickup-team"
                 value={teamId}

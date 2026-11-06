@@ -624,12 +624,14 @@ function Summary({ id, text, source }: { id: string; text: string; source: strin
 
 export function ImportItem({
   item,
+  others,
   now,
   filing,
   onFiling,
   clearId,
 }: {
   item: UnfiledImport;
+  others: WorkspaceChoiceRef[];
   now: number;
   filing: boolean;
   onFiling: (open: boolean) => void;
@@ -637,6 +639,8 @@ export function ImportItem({
 }) {
   const onClear = useClear(clearId);
   const ignore = () => onClear("Ignored", { kind: "import-ignore", id: item.id });
+  const move = (target: WorkspaceChoiceRef) =>
+    onClear(`Moved to ${target.name}`, { kind: "import-move", id: item.id, workspaceId: target.id });
   const people = participants(item);
   const summary = item.sourceSummary ? plainSummary(item.sourceSummary) : "";
   const create = (person: { email: string; name: string | null }) =>
@@ -664,8 +668,17 @@ export function ImportItem({
       phoneMore: item.newPeople.length > 0,
       run: () => onFiling(true),
     },
-    { id: "ignore", label: "Ignore", variant: "ghost", key: "i", hint: "I", run: ignore },
   );
+  if (others.length > 0) {
+    actions.push({
+      id: "move",
+      label: "Move to",
+      variant: "secondary",
+      phoneMore: true,
+      render: () => <MoveMenu others={others} onMove={move} />,
+    });
+  }
+  actions.push({ id: "ignore", label: "Ignore", variant: "ghost", key: "i", hint: "I", run: ignore });
   return (
     <CaptureRow
       rowId={clearId}
@@ -675,6 +688,11 @@ export function ImportItem({
       meta={`${SOURCE[item.source]} · ${people ? `${people}, no contact matched` : "No contact matched"}`}
       detail={summary ? <Summary id={item.id} text={summary} source={SOURCE[item.source]} /> : null}
       actions={actions}
+      more={others.map((target) => ({
+        id: `move-${target.id}`,
+        label: `Move to ${target.name}`,
+        run: () => move(target),
+      }))}
       swipe={{ left: { label: "Ignore", run: ignore } }}
       below={
         filing ? (

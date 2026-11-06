@@ -6,6 +6,7 @@ import { createActivityInDb } from "@/lib/crm/activities";
 import {
   PENDING_STALE_MS,
   summariseCall,
+  type ReusedSummary,
   transcriptToText,
   TRANSCRIPT_MAX_LENGTH,
 } from "@/lib/crm/call-insights";
@@ -19,6 +20,7 @@ import { readStored } from "@/lib/crm/inbox";
 import { iso, isUuid } from "@/lib/crm/mutate";
 import { canonicalEmail } from "@/lib/crm/normalize";
 import { assertScope, scopesForRole } from "@/lib/crm/scopes";
+import { workspaceActors } from "@/lib/crm/workspaces";
 import type {
   ActivityWrite,
   ContactWrite,
@@ -405,6 +407,55 @@ export async function knownImports(
   return new Set(result.rows.map((row) => row.external_id));
 }
 
+export type KnownImport = { workspaces: Set<string>; mine: boolean };
+
+export async function knownImportsFor(
+  db: Db,
+  workspaceIds: string[],
+  source: ConversationSource,
+  externalIds: string[],
+  userId: string,
+) {
+  const known = new Map<string, KnownImport>();
+  if (externalIds.length === 0 || workspaceIds.length === 0) return known;
+  const result = await db.query<{ external_id: string; workspace_id: string; mine: boolean }>(
+    `select external_id, workspace_id, bool_or(user_id = $4) as mine from crm.conversation_imports
+     where workspace_id = any($1::uuid[]) and source = $2 and external_id = any($3::text[])
+       and (user_id = $4 or source = 'granola' or status = 'filed')
+       and not ${RETRYABLE}
+     group by external_id, workspace_id`,
+    [workspaceIds, source, externalIds, userId],
+  );
+  for (const row of result.rows) {
+    const entry = known.get(row.external_id) ?? { workspaces: new Set<string>(), mine: false };
+    entry.workspaces.add(row.workspace_id);
+    entry.mine ||= row.mine;
+    known.set(row.external_id, entry);
+  }
+  return known;
+}
+
+export function importSettled(known: KnownImport | undefined, workspaceIds: string[]) {
+  if (!known) return false;
+  return known.mine || workspaceIds.every((id) => known.workspaces.has(id));
+}
+
+export async function importPlaceholder(db: Db, workspaceIds: string[], source: ConversationSource, externalId: string, userId: string) {
+  const result = await db.query<{ id: string; workspace_id: string }>(
+    `select id, workspace_id from crm.conversation_imports
+     where workspace_id = any($1::uuid[]) and source = $2 and external_id = $3 and user_id = $4 and ${RETRYABLE}
+     order by created_at
+     limit 1`,
+    [workspaceIds, source, externalId, userId],
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function dropPlaceholder(db: Db, importId: string) {
+  await db.query("delete from crm.conversation_imports where id = $1 and status = 'pending' and activity_id is null", [importId]);
+  await db.query("update crm.conversation_imports set error = null, attempts = 0 where id = $1", [importId]);
+}
+
 export async function retryableImports(actor: UserActor, source: ConversationSource, limit = 20) {
   return withActor(actor, async (db) => {
     const result = await db.query<{ external_id: string; call_id: string | null }>(
@@ -421,7 +472,7 @@ export async function retryableImports(actor: UserActor, source: ConversationSou
 export function importConflict(source: ConversationSource) {
   return source === "granola"
     ? "(workspace_id, external_id) where source = 'granola'"
-    : "(user_id, external_id) where source = 'teams'";
+    : "(workspace_id, user_id, external_id) where source = 'teams'";
 }
 
 export async function recordImportFailure(
@@ -494,9 +545,9 @@ export async function internalAddresses(db: Db, workspaceId: string, extra: (str
   };
 }
 
-export async function lockImportKey(db: Db, workspaceId: string, source: ConversationSource, externalId: string) {
+export async function lockImportKey(db: Db, scope: string, source: ConversationSource, externalId: string) {
   await db.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [
-    `import:${workspaceId}:${source}:${externalId}`,
+    `import:${scope}:${source}:${externalId}`,
   ]);
 }
 
@@ -900,15 +951,25 @@ export async function summariseImport(
   options: { fetchImpl?: typeof fetch; deadline?: number } = {},
 ) {
   const claimed = await withActor(actor, async (db) => {
+    const key = await db.query<{ source: ConversationSource; external_id: string; user_id: string | null }>(
+      "select source, external_id, user_id from crm.conversation_imports where id = $1 and workspace_id = $2",
+      [importId, actor.workspaceId],
+    );
+    if (!key.rows[0]) return null;
+    await db.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [
+      `summary:${key.rows[0].source}:${key.rows[0].external_id}:${key.rows[0].user_id ?? ""}`,
+    ]);
     const row = await lockImport(db, actor, importId);
     if (!row || row.status !== "filed" || !row.activity_id || !row.transcript?.trim()) return null;
+    const sibling = await siblingSummary(db, row.id);
     const blocking = await db.query(BLOCKING_INSIGHT, [row.activity_id, PENDING_STALE_MS / 1000]);
     if ((blocking.rowCount ?? 0) > 0) return null;
+    if (!sibling && (await siblingSummarising(db, row.id))) return null;
     const existing = await db.query("select 1 from crm.call_insights where activity_id = $1", [
       row.activity_id,
     ]);
     await db.query(
-      "update crm.conversation_imports set attempts = attempts + 1 where id = $1",
+      "update crm.conversation_imports set attempts = attempts + 1, summary_claimed_at = now() where id = $1",
       [row.id],
     );
     return {
@@ -916,6 +977,7 @@ export async function summariseImport(
       transcript: row.transcript,
       source: row.source,
       hasInsight: (existing.rowCount ?? 0) > 0,
+      sibling,
     };
   });
   if (!claimed) return null;
@@ -929,6 +991,7 @@ export async function summariseImport(
         source: claimed.source === "granola" ? "granola" : "teams",
         fetchImpl: options.fetchImpl,
         deadline: options.deadline,
+        reuse: claimed.sibling,
       },
     );
     if (insight.status === "failed") error = insight.error ?? "Could not summarise the conversation.";
@@ -949,6 +1012,70 @@ export async function summariseImport(
     });
     return null;
   }
+}
+
+async function siblingSummarising(db: Db, importId: string) {
+  const result = await db.query(
+    `select 1
+     from crm.conversation_imports me
+     join crm.conversation_imports sib
+       on sib.source = me.source and sib.external_id = me.external_id and sib.id <> me.id
+      and sib.user_id is not distinct from me.user_id
+     where me.id = $1
+       and sib.summary_claimed_at > now() - make_interval(secs => $2::double precision)
+       and not exists (
+         select 1 from crm.call_insights ci
+         where ci.activity_id = sib.activity_id and ci.status in ('ready', 'failed')
+       )
+     limit 1`,
+    [importId, PENDING_STALE_MS / 1000],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+async function siblingSummary(db: Db, importId: string): Promise<ReusedSummary | null> {
+  const result = await db.query<{
+    summary: string | null;
+    key_points: unknown;
+    action_items: unknown;
+    model: string | null;
+    sentiment: ReusedSummary["sentiment"];
+    sentiment_reason: string | null;
+  }>(
+    `select ci.summary, ci.key_points, ci.action_items, ci.model, ci.sentiment, ci.sentiment_reason
+     from crm.conversation_imports me
+     join crm.conversation_imports sib
+       on sib.source = me.source and sib.external_id = me.external_id and sib.id <> me.id
+      and sib.user_id is not distinct from me.user_id and sib.activity_id is not null
+     join crm.call_insights ci on ci.activity_id = sib.activity_id and ci.status = 'ready'
+     where me.id = $1
+     order by ci.updated_at desc
+     limit 1`,
+    [importId],
+  );
+  const row = result.rows[0];
+  if (!row?.summary) return null;
+  return {
+    summary: row.summary,
+    keyPoints: Array.isArray(row.key_points) ? row.key_points.filter((item): item is string => typeof item === "string") : [],
+    actionItems: Array.isArray(row.action_items) ? (row.action_items as ReusedSummary["actionItems"]) : [],
+    model: row.model,
+    sentiment: row.sentiment,
+    sentimentReason: row.sentiment_reason,
+  };
+}
+
+export async function summarisePendingAcross(
+  actor: UserActor,
+  options: { fetchImpl?: typeof fetch; deadline?: number; limit?: number; actors?: UserActor[] } = {},
+) {
+  const actors = options.actors ?? (await workspaceActors(actor));
+  let summarised = 0;
+  for (const target of actors) {
+    if (!timeLeft(options.deadline, SUMMARY_RESERVE_MS)) break;
+    summarised += await summarisePendingImports(target, options);
+  }
+  return summarised;
 }
 
 export async function summarisePendingImports(

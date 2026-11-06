@@ -98,12 +98,25 @@ function receivedAt(value: unknown) {
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
+function inboxOf(raw: string) {
+  try {
+    const envelope = record(JSON.parse(raw));
+    const message = record(record(envelope?.data)?.message) ?? record(envelope?.message);
+    return typeof message?.inbox_id === "string" ? message.inbox_id.trim().toLowerCase() : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function receiveAgentMail(headers: Headers, raw: string, options: { now?: number } = {}): Promise<ReceiveResult> {
   if (Buffer.byteLength(raw) > WEBHOOK_MAX_BYTES) return { status: 413, body: { error: "Too large." } };
   const signature = headers.get("x-machinemail-signature");
   if (!signature) return { status: 401, body: { error: "Missing signature." } };
   const now = options.now ?? Date.now();
-  const target = (await mailboxTargets()).find((candidate) => verifySignature(candidate.secret, signature, raw, now));
+  const targets = await mailboxTargets();
+  const inbox = inboxOf(raw);
+  const addressed = inbox ? targets.filter((candidate) => candidate.address === inbox) : [];
+  const target = (addressed.length > 0 ? addressed : targets).find((candidate) => verifySignature(candidate.secret, signature, raw, now));
   if (!target) return { status: 401, body: { error: "Bad signature." } };
   let envelope: Record<string, unknown> | null;
   try {

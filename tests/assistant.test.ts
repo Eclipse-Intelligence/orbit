@@ -432,7 +432,7 @@ describe("assistant conversations", () => {
 describe("gemini tool definitions", () => {
   it("drops numeric option lists, number limits and empty parameter blocks", () => {
     const tools = toolDefinitions().map(geminiTool) as { function: { name: string; parameters?: Record<string, unknown> } }[];
-    const overview = tools.find((tool) => tool.function.name === "get_overview")!;
+    const overview = tools.find((tool) => tool.function.name === "list_email_senders")!;
     assert.equal(overview.function.parameters, undefined);
     const create = tools.find((tool) => tool.function.name === "create_task")!;
     const remind = (create.function.parameters!.properties as Record<string, Record<string, unknown>>).remindMinutes;

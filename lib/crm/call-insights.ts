@@ -548,6 +548,58 @@ function failureMessage(error: unknown) {
   return "Could not summarise the call.";
 }
 
+export type ReusedSummary = {
+  summary: string;
+  keyPoints: string[];
+  actionItems: CallActionItem[];
+  model: string | null;
+  sentiment: AccountHealth | null;
+  sentimentReason: string | null;
+};
+
+function reusedOutcome(reuse: ReusedSummary) {
+  return {
+    status: "ready" as const,
+    summary: reuse.summary,
+    keyPoints: reuse.keyPoints,
+    actionItems: reuse.actionItems
+      .filter((item) => item && typeof item.title === "string" && item.title.trim())
+      .slice(0, 10)
+      .map((item) => ({ ...item, id: randomUUID(), status: "suggested" as const, taskId: null })),
+    model: reuse.model,
+    sentiment: reuse.sentiment,
+    sentimentReason: reuse.sentimentReason,
+    error: null,
+  };
+}
+
+async function summaryOutcome(
+  actor: Actor,
+  call: Parameters<typeof buildPrompt>[0],
+  transcript: string,
+  occurredAt: string,
+  options: { fetchImpl?: typeof fetch; deadline?: number },
+): Promise<Parameters<typeof finishInsight>[2]> {
+  try {
+    const result = await completeJson({
+      system: SYSTEM_PROMPT,
+      user: buildPrompt(call, transcript, actorName(actor)),
+      schema: llmSchema,
+      maxTokens: 4000,
+      fetchImpl: options.fetchImpl,
+      deadline: options.deadline,
+    });
+    return {
+      status: "ready",
+      ...cleanSummary(result.data, occurredAt),
+      model: result.model.slice(0, 200),
+      error: null,
+    };
+  } catch (error) {
+    return { status: "failed", error: failureMessage(error) };
+  }
+}
+
 export async function summariseCall(
   actor: Actor,
   activityId: string,
@@ -557,6 +609,7 @@ export async function summariseCall(
     fetchImpl?: typeof fetch;
     deadline?: number;
     autoAccept?: boolean;
+    reuse?: ReusedSummary | null;
   } = {},
 ): Promise<CallInsight> {
   assertScope(actor.scopes, "activities:write");
@@ -623,25 +676,7 @@ export async function summariseCall(
   if (!prepared.run) return prepared.insight;
 
   const occurredAt = iso(prepared.call.occurred_at) ?? new Date().toISOString();
-  let outcome: Parameters<typeof finishInsight>[2];
-  try {
-    const result = await completeJson({
-      system: SYSTEM_PROMPT,
-      user: buildPrompt(prepared.call, prepared.transcript, actorName(actor)),
-      schema: llmSchema,
-      maxTokens: 4000,
-      fetchImpl: options.fetchImpl,
-      deadline: options.deadline,
-    });
-    outcome = {
-      status: "ready",
-      ...cleanSummary(result.data, occurredAt),
-      model: result.model.slice(0, 200),
-      error: null,
-    };
-  } catch (error) {
-    outcome = { status: "failed", error: failureMessage(error) };
-  }
+  const outcome = options.reuse ? reusedOutcome(options.reuse) : await summaryOutcome(actor, prepared.call, prepared.transcript, occurredAt, options);
   const finished = await withActor(actor, async (db) => {
     const saved = await finishInsight(db, prepared.insight.id, outcome);
     if (saved.status === "ready") {

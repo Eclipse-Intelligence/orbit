@@ -7,22 +7,23 @@ import {
   claimIntegration,
   clip,
   configuredSiteOrigin,
+  dropPlaceholder,
   ensureIntegration,
   errorText,
   finishIntegration,
   getIntegrationStatus,
   importActivityInput,
   importConflict,
-  internalAddresses,
-  knownImports,
+  importPlaceholder,
+  importSettled,
+  knownImportsFor,
   lockImportKey,
-  matchEmails,
   memberActor,
   readIntegration,
   recordImportFailure,
   recordIntegrationError,
   retryableImports,
-  summarisePendingImports,
+  summarisePendingAcross,
   timeLeft,
   validTime,
   type BackgroundTarget,
@@ -30,10 +31,12 @@ import {
   type IntegrationStatus,
   type Participant,
 } from "@/lib/crm/conversations";
+import { captureWorkspaceInDb, ownCallAddresses, routeCallInDb } from "@/lib/crm/call-routing";
 import { CrmError } from "@/lib/crm/errors";
-import { matchParties } from "@/lib/crm/inbox";
 import { canonicalEmail } from "@/lib/crm/normalize";
-import { assertScope } from "@/lib/crm/scopes";
+import { assertScope, hasScope } from "@/lib/crm/scopes";
+import { workspaceActors } from "@/lib/crm/workspaces";
+import { contactElsewhere, ensureContactInDb } from "@/lib/mail/routing";
 import type { UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { decryptSecret, encryptSecret } from "@/lib/crypto/secret";
 import {
@@ -227,9 +230,11 @@ export async function syncGranolaOnVisit(actor: UserActor) {
   return null;
 }
 
-async function fileGranolaNote(actor: UserActor, note: GranolaNote): Promise<ImportOutcome> {
+export async function fileGranolaNote(owner: UserActor, note: GranolaNote, everyone?: UserActor[]): Promise<ImportOutcome> {
+  const actors = everyone ?? (await workspaceActors(owner));
+  const workspaceIds = actors.map((item) => item.workspaceId);
   const participants = granolaParticipants(note);
-  const transcript = granolaTranscriptText(note.transcript, note.owner?.name ?? actor.fullName);
+  const transcript = granolaTranscriptText(note.transcript, note.owner?.name ?? owner.fullName);
   const title = clip(note.title, 500) ?? clip(note.calendar_event?.event_title, 500);
   const occurredAt =
     validTime(note.calendar_event?.scheduled_start_time) ?? validTime(note.created_at);
@@ -237,82 +242,103 @@ async function fileGranolaNote(actor: UserActor, note: GranolaNote): Promise<Imp
   const endedAt =
     validTime(note.calendar_event?.scheduled_end_time) ?? validTime(lastLine?.end_time);
   const externalUrl = clip(note.web_url, 2000);
-  return withActor(actor, async (db) => {
-    await lockImportKey(db, actor.workspaceId, "granola", note.id);
-    const known = await knownImports(db, actor.workspaceId, "granola", [note.id]);
-    if (known.has(note.id)) return "skipped";
-    const internal = await internalAddresses(db, actor.workspaceId, [note.owner?.email, actor.email]);
-    const emails = matchEmails(participants, [note.owner?.email, actor.email]).filter(
-      (email) => !internal.isInternal(email),
-    );
-    const match = await matchParties(db, actor.workspaceId, emails);
-    let activityId: string | null = null;
-    if (match.contactId || match.companyId) {
-      const activity = await createActivityInDb(
-        db,
-        actor,
-        importActivityInput(
-          {
-            source: "granola",
-            kind: "meeting",
-            external_id: note.id,
-            call_id: null,
-            title,
-            occurred_at: occurredAt,
-            participants,
-            external_url: externalUrl,
-          },
-          {
-            contactId: match.contactId,
-            companyId: match.companyId,
-            contactName: match.contactName,
-          },
-        ),
-        { operation: "import_granola", source: "granola" },
-      );
-      activityId = activity.id;
+  return withActor(owner, async (db) => {
+    for (const workspaceId of workspaceIds) await lockImportKey(db, workspaceId, "granola", note.id);
+    const known = (await knownImportsFor(db, workspaceIds, "granola", [note.id], owner.userId)).get(note.id);
+    if (importSettled(known, workspaceIds)) return "skipped";
+    const open = actors.filter((item) => !known?.workspaces.has(item.workspaceId));
+    const placeholder = await importPlaceholder(db, workspaceIds, "granola", note.id, owner.userId);
+    const own = await ownCallAddresses(db, owner, [note.owner?.email]);
+    let route = await routeCallInDb(db, owner, open, participants, { own, occurredAt });
+    let added = 0;
+    for (const person of route.ruled) {
+      const target = open.find((item) => item.workspaceId === person.workspaceId);
+      if (!target || !hasScope(target.scopes, "contacts:write") || !hasScope(target.scopes, "companies:write")) continue;
+      const copy = await contactElsewhere(db, person.email, workspaceIds, target.workspaceId);
+      await ensureContactInDb(db, target, person, copy, { operation: "call_domain_rule", source: "granola" });
+      added += 1;
     }
-    await db.query(
-      `insert into crm.conversation_imports (
-         workspace_id, user_id, source, external_id, kind, title, occurred_at, ended_at,
-         participants, external_url, transcript, source_summary, status,
-         activity_id, contact_id, company_id
-       ) values (
-         $1, $2, 'granola', $3, 'meeting', $4, $5::timestamptz, $6::timestamptz,
-         $7::jsonb, $8, $9, $10, $11, $12, $13, $14
-       )
-       on conflict ${importConflict("granola")} do update
-         set title = excluded.title,
-             occurred_at = excluded.occurred_at,
-             ended_at = excluded.ended_at,
-             participants = excluded.participants,
-             external_url = excluded.external_url,
-             transcript = excluded.transcript,
-             source_summary = excluded.source_summary,
-             status = excluded.status,
-             activity_id = excluded.activity_id,
-             contact_id = excluded.contact_id,
-             company_id = excluded.company_id,
-             error = null,
-             attempts = 0`,
-      [
-        actor.workspaceId,
-        actor.userId,
-        note.id,
-        title,
-        occurredAt,
-        endedAt,
-        JSON.stringify(participants),
-        externalUrl,
-        transcript ? transcript.slice(0, 1_000_000) : null,
-        clip(note.summary_markdown ?? note.summary_text, 100_000),
-        activityId ? "filed" : "unfiled",
-        activityId,
-        activityId ? match.contactId : null,
-        activityId ? match.companyId : null,
-      ],
-    );
-    return activityId ? "filed" : "unfiled";
+    if (added > 0) route = await routeCallInDb(db, owner, open, participants, { own, occurredAt });
+    if (route.targets.length === 0 && known) {
+      if (placeholder) await dropPlaceholder(db, placeholder.id);
+      return "skipped";
+    }
+    const captureId = await captureWorkspaceInDb(db, owner, open, participants, [note.owner?.email, owner.email]);
+    const writes = route.targets.length > 0
+      ? route.targets
+      : [{ actor: open.find((item) => item.workspaceId === captureId) ?? owner, match: null }];
+    for (const write of writes) {
+      let activityId: string | null = null;
+      if (write.match) {
+        const activity = await createActivityInDb(
+          db,
+          write.actor,
+          importActivityInput(
+            {
+              source: "granola",
+              kind: "meeting",
+              external_id: note.id,
+              call_id: null,
+              title,
+              occurred_at: occurredAt,
+              participants,
+              external_url: externalUrl,
+            },
+            {
+              contactId: write.match.contactId,
+              companyId: write.match.companyId,
+              contactName: write.match.contactName,
+            },
+          ),
+          { operation: "import_granola", source: "granola" },
+        );
+        activityId = activity.id;
+      }
+      await db.query(
+        `insert into crm.conversation_imports (
+           workspace_id, user_id, source, external_id, kind, title, occurred_at, ended_at,
+           participants, external_url, transcript, source_summary, status,
+           activity_id, contact_id, company_id
+         ) values (
+           $1, $2, 'granola', $3, 'meeting', $4, $5::timestamptz, $6::timestamptz,
+           $7::jsonb, $8, $9, $10, $11, $12, $13, $14
+         )
+         on conflict ${importConflict("granola")} do update
+           set title = excluded.title,
+               occurred_at = excluded.occurred_at,
+               ended_at = excluded.ended_at,
+               participants = excluded.participants,
+               external_url = excluded.external_url,
+               transcript = excluded.transcript,
+               source_summary = excluded.source_summary,
+               status = excluded.status,
+               activity_id = excluded.activity_id,
+               contact_id = excluded.contact_id,
+               company_id = excluded.company_id,
+               error = null,
+               attempts = 0`,
+        [
+          write.actor.workspaceId,
+          owner.userId,
+          note.id,
+          title,
+          occurredAt,
+          endedAt,
+          JSON.stringify(participants),
+          externalUrl,
+          transcript ? transcript.slice(0, 1_000_000) : null,
+          clip(note.summary_markdown ?? note.summary_text, 100_000),
+          activityId ? "filed" : "unfiled",
+          activityId,
+          activityId ? write.match?.contactId ?? null : null,
+          activityId ? write.match?.companyId ?? null : null,
+        ],
+      );
+    }
+    if (placeholder && !writes.some((write) => write.actor.workspaceId === placeholder.workspace_id)) {
+      await dropPlaceholder(db, placeholder.id);
+    }
+    return route.targets.length > 0 ? "filed" : "unfiled";
   });
 }
 
@@ -320,14 +346,15 @@ async function importGranolaNote(
   actor: UserActor,
   api: GranolaClient,
   noteId: string,
+  everyone?: UserActor[],
 ): Promise<ImportOutcome> {
-  const known = await withActor(actor, (db) =>
-    knownImports(db, actor.workspaceId, "granola", [noteId]),
-  );
-  if (known.has(noteId)) return "skipped";
+  const actors = everyone ?? (await workspaceActors(actor));
+  const workspaceIds = actors.map((item) => item.workspaceId);
+  const known = await withActor(actor, (db) => knownImportsFor(db, workspaceIds, "granola", [noteId], actor.userId));
+  if (importSettled(known.get(noteId), workspaceIds)) return "skipped";
   const note = await api.getNote(noteId);
   if (!note || note.deleted_at) return "missing";
-  return fileGranolaNote(actor, note);
+  return fileGranolaNote(actor, note, actors);
 }
 
 async function inPool<T>(items: T[], size: number, run: (item: T) => Promise<void>) {
@@ -394,18 +421,19 @@ export async function syncGranola(
       if (!body.hasMore || !body.cursor) break;
       cursor = body.cursor;
     }
-    const known = await withActor(owner, (db) =>
-      knownImports(db, owner.workspaceId, "granola", ids),
-    );
+    const everyone = await workspaceActors(owner);
+    const everyoneIds = everyone.map((item) => item.workspaceId);
+    const known = await withActor(owner, (db) => knownImportsFor(db, everyoneIds, "granola", ids, owner.userId));
+    const unsettled = ids.filter((id) => !importSettled(known.get(id), everyoneIds));
     const retries = (await retryableImports(owner, "granola"))
       .map((item) => item.externalId)
       .filter((id) => !ids.includes(id));
-    const fresh = [...ids.filter((id) => !known.has(id)), ...retries];
+    const fresh = [...unsettled, ...retries];
     const result: GranolaSyncResult = {
       ...idle,
       ran: true,
       fetched: ids.length,
-      skipped: ids.length - ids.filter((id) => !known.has(id)).length,
+      skipped: ids.length - unsettled.length,
     };
     let firstError: string | null = null;
     await inPool(fresh, CONCURRENCY, async (id) => {
@@ -414,7 +442,7 @@ export async function syncGranola(
         return;
       }
       try {
-        const outcome = await importGranolaNote(owner, api, id);
+        const outcome = await importGranolaNote(owner, api, id, everyone);
         if (outcome === "missing" && retries.includes(id)) {
           throw new Error("Granola no longer returns this note.");
         }
@@ -440,9 +468,10 @@ export async function syncGranola(
     );
     result.complete = complete;
     if (firstError) result.error = firstError;
-    result.summarised = await summarisePendingImports(owner, {
+    result.summarised = await summarisePendingAcross(owner, {
       fetchImpl: options.fetchImpl,
       deadline: options.deadline,
+      actors: everyone,
     });
     return result;
   } catch (error) {
@@ -598,7 +627,7 @@ export async function processGranolaWebhook(
     await recordIntegrationError(actor, granolaKey(actor), message);
     return;
   }
-  await summarisePendingImports(actor, { fetchImpl: options.fetchImpl, deadline: options.deadline });
+  await summarisePendingAcross(actor, { fetchImpl: options.fetchImpl, deadline: options.deadline });
 }
 
 function background(task: () => Promise<unknown>) {

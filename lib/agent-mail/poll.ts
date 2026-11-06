@@ -5,7 +5,7 @@ import { query } from "@/lib/db/pool";
 import { MachineMailError, getMessage, listRecentMessages, machineMailConfigured } from "@/lib/machinemail";
 
 export const POLL_LOOKBACK_MS = 48 * 60 * 60 * 1000;
-const FETCHES_PER_RUN = 10;
+export const FETCHES_PER_MAILBOX = 10;
 
 const LABEL_EVENTS: [string, string][] = [
   ["QUARANTINE", "message.received.quarantined"],
@@ -21,6 +21,16 @@ export function eventTypeFor(labels: string[] | undefined) {
 
 type PollTarget = { mailbox_id: string; workspace_id: string; address: string; set_up_at: Date | string };
 
+export function pollEventId(mailboxId: string, messageId: string) {
+  return `poll:${mailboxId}:${messageId}`.slice(0, 200);
+}
+
+export function rotated<T>(items: T[], now: number) {
+  if (items.length < 2) return items;
+  const offset = Math.floor(now / 60_000) % items.length;
+  return [...items.slice(offset), ...items.slice(0, offset)];
+}
+
 export type PollReport = { checked: number; stored: number; started: number; failed: number };
 
 export async function pollAgentMailboxes(options: { fetchImpl?: typeof fetch; now?: number; deadline?: number; start?: typeof startAgentMailJob } = {}): Promise<PollReport> {
@@ -29,10 +39,10 @@ export async function pollAgentMailboxes(options: { fetchImpl?: typeof fetch; no
   const now = options.now ?? Date.now();
   const deadline = options.deadline ?? now + 30_000;
   const start = options.start ?? startAgentMailJob;
-  const targets = (await query<PollTarget>("select * from private.agent_mailbox_poll_targets()")).rows;
-  let budget = FETCHES_PER_RUN;
+  const targets = rotated((await query<PollTarget>("select * from private.agent_mailbox_poll_targets()")).rows, now);
   for (const target of targets) {
-    if (Date.now() > deadline || budget <= 0) break;
+    if (Date.now() > deadline) break;
+    let budget = FETCHES_PER_MAILBOX;
     try {
       const after = new Date(now - POLL_LOOKBACK_MS);
       const listed = (await listRecentMessages(target.address, after, options.fetchImpl)).filter(
@@ -52,7 +62,7 @@ export async function pollAgentMailboxes(options: { fetchImpl?: typeof fetch; no
         const message = (await getMessage(target.address, item.message_id, options.fetchImpl)) as RawMessage;
         if (typeof message.inbox_id !== "string") message.inbox_id = target.address;
         const labels = Array.isArray(message.labels) ? (message.labels as string[]) : item.labels;
-        const result = await storeAgentMessage(target, `poll:${item.message_id}`.slice(0, 200), eventTypeFor(labels), message);
+        const result = await storeAgentMessage(target, pollEventId(target.mailbox_id, item.message_id), eventTypeFor(labels), message);
         if (result.body.stored) report.stored += 1;
         if (result.job) {
           await start(result.job);

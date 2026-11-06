@@ -627,14 +627,14 @@ describe("receiving agent mail", () => {
     assert.equal(first.stored, 2);
     assert.equal(started.length, 1);
     const rows = (
-      await getAdminPool().query<{ message_id: string; status: string; status_reason: string | null; event_id: string }>(
-        "select message_id, status, status_reason, event_id from crm.agent_mail_messages where inbox_id = $1 and message_id = any($2::text[])",
+      await getAdminPool().query<{ message_id: string; status: string; status_reason: string | null; event_id: string; mailbox_id: string }>(
+        "select message_id, status, status_reason, event_id, mailbox_id from crm.agent_mail_messages where inbox_id = $1 and message_id = any($2::text[])",
         [inbox, [missed.message_id, quarantined.message_id]],
       )
     ).rows;
     const byId = new Map(rows.map((row) => [row.message_id, row]));
     assert.equal(byId.get(missed.message_id)?.status, "received");
-    assert.equal(byId.get(missed.message_id)?.event_id, `poll:${missed.message_id}`);
+    assert.equal(byId.get(missed.message_id)?.event_id, `poll:${byId.get(missed.message_id)?.mailbox_id}:${missed.message_id}`);
     assert.equal(byId.get(quarantined.message_id)?.status, "refused");
     assert.equal(byId.get(quarantined.message_id)?.status_reason, "MachineMail quarantined it.");
     fetched.length = 0;

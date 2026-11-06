@@ -1,6 +1,8 @@
 import { snoozeTask } from "@/lib/crm/action-needed";
 import { createContactFromMeeting, hideAttendee } from "@/lib/crm/calendar";
+import { moveImport } from "@/lib/crm/call-routing";
 import { createContactAndFile, fileImport, ignoreImport } from "@/lib/crm/conversations";
+import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { closeFollowUp } from "@/lib/crm/follow-ups";
 import { isUuid } from "@/lib/crm/mutate";
@@ -31,6 +33,7 @@ export type CaptureAction =
   | { kind: "import-create"; id: string; email: string }
   | { kind: "import-file"; id: string; contactId: string }
   | { kind: "import-ignore"; id: string }
+  | { kind: "import-move"; id: string; workspaceId: string }
   | { kind: "person-create"; email: string }
   | { kind: "person-hide"; email: string };
 
@@ -88,6 +91,8 @@ export function readCaptureAction(body: unknown): CaptureAction {
       return { kind: "import-create", id: id(input.id), email: required(input.email, 320) };
     case "import-file":
       return { kind: "import-file", id: id(input.id), contactId: id(input.contactId) };
+    case "import-move":
+      return { kind: "import-move", id: id(input.id), workspaceId: id(input.workspaceId) };
     case "person-create":
     case "person-hide":
       return { kind: input.kind, email: required(input.email, 320) };
@@ -103,13 +108,22 @@ export async function captureActor(signedIn: UserActor, workspaceId: unknown) {
   return found;
 }
 
+async function approvalActor(actor: UserActor, runId: string) {
+  const run = await withActor(actor, async (db) => {
+    const result = await db.query<{ workspace_id: string }>("select workspace_id from crm.workflow_runs where id = $1 and owner_id = $2", [runId, actor.userId]);
+    return result.rows[0] ?? null;
+  });
+  if (!run || run.workspace_id === actor.workspaceId) return actor;
+  return (await workspaceActors(actor)).find((item) => item.workspaceId === run.workspace_id) ?? actor;
+}
+
 export async function runCaptureAction(actor: UserActor, action: CaptureAction, options: { fetchImpl?: typeof fetch } = {}): Promise<CaptureOutcome> {
   switch (action.kind) {
     case "approve":
-      await decideApproval(actor, action.runId, { approved: true }, options);
+      await decideApproval(await approvalActor(actor, action.runId), action.runId, { approved: true }, options);
       return { ok: true };
     case "reject":
-      await decideApproval(actor, action.runId, { approved: false, note: action.note }, options);
+      await decideApproval(await approvalActor(actor, action.runId), action.runId, { approved: false, note: action.note }, options);
       return { ok: true };
     case "nudge-dismiss":
       await updatePrepared(actor, action.id, "dismiss");
@@ -158,6 +172,9 @@ export async function runCaptureAction(actor: UserActor, action: CaptureAction, 
       return { ok: true, importId: action.id };
     case "import-ignore":
       await ignoreImport(actor, action.id);
+      return { ok: true };
+    case "import-move":
+      await moveImport(actor, action.id, action.workspaceId);
       return { ok: true };
     case "person-create": {
       const created = await createContactFromMeeting(actor, action.email);
