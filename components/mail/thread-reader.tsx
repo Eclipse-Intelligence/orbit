@@ -543,6 +543,11 @@ export default function ThreadReader({
         }
       : null);
 
+  const outsideDraft =
+    !dismissed && !active && target ? (detail?.messages.filter((message) => message.isDraft && message.folderRole === "drafts" && !removedDrafts.has(message.id)).at(-1) ?? null) : null;
+  const [openedOutside, setOpenedOutside] = useState<string | null>(null);
+  if (outsideDraft && openedOutside !== outsideDraft.id) editOutsideDraft(outsideDraft);
+
   const prepared = detail?.prepared && target && detail.prepared.messageId === target.id && !hiddenPrepared.has(detail.prepared.id) ? detail.prepared : null;
   const followUp = detail?.followUp && detail.followUp.id !== cancelledFollowUp ? detail.followUp : null;
 
@@ -637,7 +642,7 @@ export default function ThreadReader({
     const mode: DraftMode = message.to.length + message.cc.length > 1 ? "reply_all" : "reply";
     const subject = detail.subject ?? "";
     const body = stripQuoted(message.text ?? message.snippet ?? "").replace(/\s*[\u2013\u2014]\s*/g, ", ");
-    setRemovedDrafts((existing) => new Set(existing).add(message.id));
+    setOpenedOutside(message.id);
     setComposer({
       mode,
       messageId: target.id,
@@ -858,7 +863,7 @@ export default function ThreadReader({
             <>
               <Thread
                 key={detail.key + detail.messages.length}
-                detail={{ ...detail, messages: detail.messages.filter((message) => !removedDrafts.has(message.id)) }}
+                detail={{ ...detail, messages: detail.messages.filter((message) => !removedDrafts.has(message.id) && message.id !== active?.replaces) }}
                 workspaceName={workspaceName}
                 own={own}
                 swipe={swipe}
