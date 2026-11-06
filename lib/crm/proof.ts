@@ -4,7 +4,7 @@ import { CrmError } from "@/lib/crm/errors";
 import { iso, isUuid, recordAudit } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
 import type { Provenance, UserActor } from "@/lib/crm/types";
-import { PROOF_LIMITS, PROOF_PERMISSIONS, PROOF_PRODUCTS, type ProofEntry, type ProofPermission, type ProofProduct } from "@/lib/crm/proof-rules";
+import { PROOF_LIMITS, PROOF_PERMISSIONS, type ProofEntry, type ProofPermission } from "@/lib/crm/proof-rules";
 
 export type { ProofEntry, ProofWrite } from "@/lib/crm/proof-rules";
 
@@ -12,7 +12,7 @@ type ProofRow = {
   id: string;
   client: string;
   description: string;
-  product: ProofProduct;
+  product: string;
   used_for: string;
   result: string;
   measured: string;
@@ -31,6 +31,7 @@ const LIMITS = PROOF_LIMITS;
 const FIELD_NAMES: Record<keyof typeof LIMITS, string> = {
   client: "The client",
   description: "The description",
+  product: "The product",
   usedFor: "What they used it for",
   result: "The result",
   measured: "How it was measured",
@@ -84,13 +85,11 @@ function reviewDate(value: unknown) {
 function cleanWrite(input: unknown) {
   if (!input || typeof input !== "object") invalid("Send the proof details.", "client");
   const source = input as Record<string, unknown>;
-  const product = source.product ?? "eclipse";
-  if (!PROOF_PRODUCTS.includes(product as ProofProduct)) invalid("Choose Eclipse or Cntent.", "product");
   if (!PROOF_PERMISSIONS.includes(source.permission as ProofPermission)) invalid("Choose whether they can be named.", "permission");
   const values = {
     client: text(source, "client", true),
     description: text(source, "description"),
-    product: product as ProofProduct,
+    product: text(source, "product"),
     usedFor: text(source, "usedFor"),
     result: text(source, "result", true),
     measured: text(source, "measured"),

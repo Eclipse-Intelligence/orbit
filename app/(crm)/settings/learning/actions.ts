@@ -31,11 +31,11 @@ async function act<T>(fallback: string, work: (user: Awaited<ReturnType<typeof r
   }
 }
 
-export async function addMemoryAction(input: { title: string; body: string; shared: boolean }) {
+export async function addMemoryAction(input: { title: string; body: string; shared: boolean; allWorkspaces?: boolean }) {
   return act("Could not save the note.", (user) => rememberNote(user, input, "manual"));
 }
 
-export async function updateMemoryAction(id: string, patch: { title?: string; body?: string; pinned?: boolean }) {
+export async function updateMemoryAction(id: string, patch: { title?: string; body?: string; pinned?: boolean; allWorkspaces?: boolean }) {
   return act("Could not update the note.", (user) => updateMemory(user, id, patch));
 }
 

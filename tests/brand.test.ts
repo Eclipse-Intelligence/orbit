@@ -240,7 +240,7 @@ describe("cold email per workspace", () => {
 describe("copying a brand into a new workspace", () => {
   it("copies the website, offer, ideal customer, tone and playbook, and leaves proof, Knowledge and Eclipse tools behind", async () => {
     const admin = getAdminPool();
-    await createProof(eclipse, { client: "Northwind", product: "eclipse", result: "Two articles a month to eight.", permission: "named" }, WEB);
+    await createProof(eclipse, { client: "Northwind", product: "Eclipse", result: "Two articles a month to eight.", permission: "named" }, WEB);
     await saveBrandProfile(eclipse, { website: "geteclipse.co", whatYouSell: ECLIPSE_CONTEXT, whoItsFor: ECLIPSE_IDEAL_CUSTOMER, tone: "Direct." }, WEB);
     const created = await admin.query<{ id: string }>("insert into crm.workspaces (name, slug) values ('Copy test', 'copy-test') returning id");
     const target = created.rows[0].id;

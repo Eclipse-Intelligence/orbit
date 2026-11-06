@@ -25,12 +25,15 @@ export async function issueMarketAgentToken(actor: UserActor) {
   return { token };
 }
 
-export function grokRoutine(mcpUrl: string) {
-  return `Every night at 1am UK time, research the market for Eclipse and send what you find to Orbit.
+export function grokRoutine(mcpUrl: string, business: string, eclipseTopics: boolean) {
+  const name = business.trim() || "the business";
+  const topics = eclipseTopics ? ", plus AI visibility, generative engine optimisation (GEO), AI search, content operations and agencies" : "";
+  const skip = eclipseTopics ? "AI search, content or the watchlist" : `${name}'s market or the watchlist`;
+  return `Every night at 1am UK time, research the market for ${name} and send what you find to Orbit.
 
 1. Call get_watchlist on the Orbit plugin (${mcpUrl}). It lists the topics, competitors, people, target accounts and sources to watch.
-2. Search X and my news sources for the last 24 hours on everything in the watchlist, plus AI visibility, generative engine optimisation (GEO), AI search, content operations and agencies.
-3. Keep only what matters to Eclipse's sales and positioning: competitor launches and moves, funding, hires and leadership changes, product news, notable posts by the people on the list, data or research worth quoting, and anything a target account posts or announces that is a reason to contact them now. Skip anything that doesn't touch AI search, content or the watchlist.
+2. Search X and my news sources for the last 24 hours on everything in the watchlist${topics}.
+3. Keep only what matters to ${name}'s sales and positioning: competitor launches and moves, funding, hires and leadership changes, product news, notable posts by the people on the list, data or research worth quoting, and anything a target account posts or announces that is a reason to contact them now. Skip anything that doesn't touch ${skip}.
 4. Prefer the original source (the study, the company's own announcement, the author's post) over reposts and roundups, and skip press-release wire sites unless the company is on the watchlist.
 5. Call add_market_notes once with up to 30 notes. Each note has:
    - kind: news, post, launch, hire, funding, research, or signal. Use signal only when a target account, competitor or person on the watchlist did something that is a reason to contact them now; general statistics are research.

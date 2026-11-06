@@ -1165,6 +1165,7 @@ export default function MailScreen({
             detail={detail}
             error={cursor ? (detailErrors[cursor] ?? null) : null}
             own={own}
+            workspaceName={viewer.workspaceName}
             view={viewParam}
             accounts={accounts}
             compose={initialCompose && cursor === initialThread?.key ? initialCompose : null}

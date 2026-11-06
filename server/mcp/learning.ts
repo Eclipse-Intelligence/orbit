@@ -25,7 +25,7 @@ export function registerLearningTools(server: McpServer, actor: Actor) {
   server.registerTool(
     "get_watchlist",
     {
-      description: "The topics, competitors, people, target accounts and sources Eclipse wants watched. Research these, then send findings with add_market_notes.",
+      description: "The topics, competitors, people, target accounts and sources this workspace wants watched. Research these, then send findings with add_market_notes.",
       inputSchema: {},
     },
     async () => run(async () => ({ watchlist: (await listWatchlist(actor)).map((item) => ({ kind: item.kind, label: item.label, url: item.url, notes: item.notes })) })),

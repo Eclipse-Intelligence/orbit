@@ -2149,7 +2149,7 @@ const TOOL_LIST: AssistantTool[] = [
     name: "map_website",
     label: "Mapping a website",
     description: "List the pages of a website from its sitemap, or by following its links, so the user can choose which to add to Knowledge with add_to_knowledge.",
-    parameters: { type: "object", properties: { url: { type: "string", description: "The site's address, such as geteclipse.co." } }, required: ["url"] },
+    parameters: { type: "object", properties: { url: { type: "string", description: "The site's address, such as example.com." } }, required: ["url"] },
     run: async (_actor, args) => {
       try {
         const map = await mapSite(args.url, { deadline: Date.now() + 75_000 });
@@ -4716,7 +4716,7 @@ const TOOL_LIST: AssistantTool[] = [
     label: "Remembering",
     write: true,
     description:
-      "Save a lasting note to Orbit's memory: a preference, correction or standing instruction from the user (private to them), or with shared true a fact about the business that the whole team's assistants should know. To forget a note Orbit learned, when the user says it's wrong or out of date, pass forgetId with its id from recall or the briefing (and its title for the card) instead of a body.",
+      "Save a lasting note to Orbit's memory: a preference, correction or standing instruction from the user (private to them), or with shared true a fact about the business that the whole team's assistants should know. A note for the user stays in this workspace unless allWorkspaces is true, which is only for how they work, write or want the assistant to behave everywhere, never for anything about this business, its products, pitch, clients, partners, people, boards or deals. To forget a note Orbit learned, when the user says it's wrong or out of date, pass forgetId with its id from recall or the briefing (and its title for the card) instead of a body.",
     parameters: {
       type: "object",
       properties: {
@@ -4724,6 +4724,7 @@ const TOOL_LIST: AssistantTool[] = [
         body: { type: "string", description: "The note, at most 70 words, written as a fact." },
         kind: { type: "string", enum: ["preference", "correction", "instruction", "person", "goal", "writing", "icp", "objection", "competitor", "messaging", "fact"] },
         shared: { type: "boolean", description: "True for business knowledge the whole workspace should share." },
+        allWorkspaces: { type: "boolean", description: "For a note about the user, true when it applies in every workspace they work in. Leave out to keep it to this workspace." },
         forgetId: { type: "string", description: "Id of a learned note to forget instead of saving one." },
       },
     },
@@ -4732,7 +4733,7 @@ const TOOL_LIST: AssistantTool[] = [
         ? { title: "Forget a note", lines: [str(args.title) || "The note you chose"] }
         : {
             title: args.shared === true ? "Remember for the whole team" : "Remember for you",
-            lines: [str(args.title), str(args.body)].filter(Boolean),
+            lines: [str(args.title), str(args.body), args.shared !== true && args.allWorkspaces === true ? "All workspaces" : ""].filter(Boolean),
           },
     run: async (actor, args) => {
       const forgetId = str(args.forgetId);

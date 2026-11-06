@@ -64,6 +64,7 @@ export type InviteSetup = {
   canWriteCalendar: boolean;
   meetingLink: string | null;
   ownEmails: string[];
+  workspaceName: string;
 };
 
 export type InviteInput = {
@@ -147,6 +148,7 @@ export async function getInviteSetup(actor: UserActor): Promise<InviteSetup> {
       canWriteCalendar: connected && grantsCalendarWrite(scopes) !== false,
       meetingLink,
       ownEmails: [...own],
+      workspaceName: actor.workspaceName,
     };
   });
 }

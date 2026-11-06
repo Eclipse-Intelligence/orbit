@@ -329,7 +329,7 @@ describe("nightly learning", () => {
 
   it("chooses briefing notes by confidence, freshness and kind, and adds notes related to the conversation", async () => {
     const now = Date.now();
-    const note = (id: string, extra: Partial<Memory>): Memory => ({ id, scope: "business", kind: "fact", title: id, body: id, sources: [], confidence: "medium", pinned: false, companyId: null, origin: "learning", observedAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString(), ...extra });
+    const note = (id: string, extra: Partial<Memory>): Memory => ({ id, scope: "business", kind: "fact", title: id, body: id, sources: [], confidence: "medium", pinned: false, companyId: null, origin: "learning", workspaceId: "w", workspaceName: "Eclipse", allWorkspaces: null, observedAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString(), ...extra });
     const picked = pickForBriefing(
       [
         note("old-low", { confidence: "low", updatedAt: new Date(now - 200 * 86_400_000).toISOString() }),
