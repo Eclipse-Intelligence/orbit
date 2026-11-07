@@ -81,9 +81,10 @@ describe("assistant tools for docs", () => {
     assert.equal(findTool("save_doc")?.write, true);
     assert.ok(toolDefinitions().some((tool) => tool.function.name === "save_doc" && /Needs the user's approval/.test(tool.function.description)));
     const saved = (await runTool(mark, "remember", { body: "Mark prefers short notes." })) as { memory: { id: string } };
-    assert.deepEqual(describeAction("forget", { memoryId: saved.memory.id, title: "Short notes" }), { title: "Forget a note", lines: ["Short notes"] });
+    const forget = { memoryId: saved.memory.id, title: "Short notes" };
+    assert.deepEqual(describeAction("forget", forget, await recordNames(mark, [forget], ["forget"])), { title: "Forget a note", lines: ["Mark prefers short notes.", "Your note"] });
     assert.deepEqual(await runTool(mark, "forget", { memoryId: saved.memory.id }), { forgotten: "Mark prefers short notes." });
-    assert.deepEqual(await runTool(mark, "remember", { forgetId: saved.memory.id }), { error: "That memory doesn't exist or was already forgotten.", field: null });
+    assert.deepEqual(await runTool(mark, "remember", { forgetId: saved.memory.id }), { error: "That note isn't in Orbit's memory, or it was already forgotten." });
   });
 
   it("finds docs in search_knowledge and reads them with read_knowledge", async () => {

@@ -5,7 +5,7 @@ import { saveMailbox } from "@/lib/crm/inbox";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { applyMailAction } from "@/lib/mail/actions";
-import { listScheduledDrafts, readDraftInput, saveMailDraft, scheduleMailDraft, sendMailDraft } from "@/lib/mail/compose";
+import { ALREADY_SENDING, claimDueDrafts, listScheduledDrafts, readDraftInput, saveMailDraft, scheduleMailDraft, sendMailDraft } from "@/lib/mail/compose";
 import { processDueMail } from "@/lib/mail/due";
 import { laterOptions } from "@/lib/mail/later";
 import { syncMail } from "@/lib/mail/sync";
@@ -238,6 +238,40 @@ describe("remind me, send later and follow-ups", () => {
     assert.equal(left[0].sendAt, null);
     assert.equal(left[0].sendError, "Mailbox is full.");
     assert.ok((await listNotifications(owner, 10)).some((note) => note.title === "Scheduled email didn't send: Will fail"));
+  });
+
+  it("sends a scheduled email once when Send now and the scheduler reach it together", async () => {
+    const admin = getAdminPool();
+    const sourceId = (await mailNav(owner)).accounts[0].id;
+    const input = readDraftInput({ mode: "new", sourceId, to: ["sam@acme.test"], subject: "Only once", body: "Just the one" });
+    const schedule = async (subject: string) => {
+      const draft = await scheduleMailDraft(owner, { ...input, subject, sendAt: new Date(Date.now() + 3_600_000).toISOString() }, { storedFiles: "replace", origin: ORIGIN, fetchImpl: outlook(state).fetchImpl });
+      await admin.query("update crm.mail_drafts set send_at = now() - interval '1 minute' where id = $1", [draft.id]);
+      const provider = (await admin.query<{ provider_draft_id: string }>("select provider_draft_id from crm.mail_drafts where id = $1", [draft.id])).rows[0].provider_draft_id;
+      return { id: draft.id, sends: (calls: Call[]) => calls.filter((call) => call.url === `${GRAPH}/me/messages/${provider}/send`).length };
+    };
+    const sendNow = (id: string, fetchImpl: typeof fetch) =>
+      sendMailDraft(owner, { ...input, id, subject: "Only once" }, { storedFiles: "keep", origin: ORIGIN, fetchImpl, scheduled: true });
+
+    const racing = await schedule("Only once");
+    const { fetchImpl, calls } = outlook(state);
+    const [now, due] = await Promise.allSettled([sendNow(racing.id, fetchImpl), processDueMail(owner, { fetchImpl, origin: ORIGIN })]);
+    assert.equal(racing.sends(calls), 1);
+    assert.equal(due.status, "fulfilled");
+    if (now.status === "rejected") {
+      assert.equal(now.reason.message, ALREADY_SENDING);
+      assert.equal(due.value.sent, 1);
+    } else {
+      assert.equal(due.value.sent, 0);
+    }
+
+    const inFlight = await schedule("Only once");
+    const [claimed] = await claimDueDrafts(owner, 1);
+    assert.equal(claimed.id, inFlight.id);
+    const late = outlook(state);
+    await assert.rejects(() => sendNow(inFlight.id, late.fetchImpl), { message: ALREADY_SENDING });
+    assert.equal(inFlight.sends(late.calls), 0);
+    await admin.query("delete from crm.mail_drafts where id = $1", [inFlight.id]);
   });
 
   it("skips the Outlook update when a draft hasn't changed", async () => {

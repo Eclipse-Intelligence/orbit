@@ -1,7 +1,7 @@
 import type { Db } from "@/lib/db/pool";
 import { decryptSecret, encryptSecret } from "@/lib/crypto/secret";
 import { withActor } from "@/lib/crm/context";
-import { createActivityInDb } from "@/lib/crm/activities";
+import { createActivityInDb, createEmailActivityOnce } from "@/lib/crm/activities";
 import { discardAttachments, loadAttachments } from "@/lib/crm/email-attachments";
 import {
   FREE_MAIL_DOMAINS,
@@ -683,16 +683,8 @@ async function fileActivity(
   >,
   match: PartyMatch,
 ) {
-  if (message.internetMessageId) {
-    const existing = await db.query<{ id: string }>(
-      `select id from crm.activities
-       where workspace_id = $1 and type = 'email' and metadata->>'internetMessageId' = $2
-         and contact_id is not distinct from $3 limit 1`,
-      [actor.workspaceId, message.internetMessageId, match.contactId],
-    );
-    if (existing.rows[0]) return existing.rows[0].id;
-  }
-  const activity = await createActivityInDb(
+  const internetMessageId = message.internetMessageId || null;
+  const saved = await createEmailActivityOnce(
     db,
     actor,
     {
@@ -705,13 +697,14 @@ async function fileActivity(
       metadata: {
         source: "microsoft",
         providerMessageId: message.providerMessageId,
-        ...(message.internetMessageId ? { internetMessageId: message.internetMessageId } : {}),
+        ...(internetMessageId ? { internetMessageId } : {}),
         from: canonicalEmail(message.fromEmail ?? "") ?? null,
       },
     },
+    { internetMessageId, providerMessageId: message.providerMessageId },
     { operation: "sync_inbox", source: "microsoft" },
   );
-  return activity.id;
+  return saved.id;
 }
 
 async function attachUnmatched(
@@ -727,8 +720,9 @@ async function attachUnmatched(
     from_email: string;
     received_at: Date | string | null;
     conversation_id: string | null;
+    internet_message_id: string | null;
   }>(
-    `select m.id, m.provider_message_id, m.subject, m.preview, m.from_email, m.received_at, m.conversation_id
+    `select m.id, m.provider_message_id, m.subject, m.preview, m.from_email, m.received_at, m.conversation_id, m.internet_message_id
      from crm.email_messages m
      where m.connection_id = $1
        and m.workspace_id = $2
@@ -781,6 +775,7 @@ async function attachUnmatched(
         preview: row.preview,
         fromEmail: row.from_email,
         receivedAt: iso(row.received_at),
+        internetMessageId: row.internet_message_id,
       },
       match,
     );

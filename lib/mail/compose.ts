@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { createActivityInDb } from "@/lib/crm/activities";
+import { createEmailActivityOnce } from "@/lib/crm/activities";
 import { withActor } from "@/lib/crm/context";
 import { attachmentSummary, discardAttachments, loadAttachments } from "@/lib/crm/email-attachments";
 import { CrmError } from "@/lib/crm/errors";
@@ -19,6 +19,7 @@ import {
   updateMicrosoftDraft,
   type DraftMode,
 } from "@/lib/mail/microsoft";
+import { threadFiledWorkspaces } from "@/lib/mail/filing";
 import { notePreparedSent } from "@/lib/mail/prepare";
 import { addressHomesInDb } from "@/lib/mail/routing";
 import { mailSourceToken } from "@/lib/mail/sync";
@@ -385,39 +386,57 @@ export async function saveMailDraft(
   });
 }
 
-async function logReply(actor: UserActor, input: DraftInput, subject: string, from: string, attachments: { name: string }[]) {
+type SentReply = { replyTo: string | null; internetMessageId: string | null };
+
+async function replyWorkspaces(actor: UserActor, input: DraftInput, sent: SentReply) {
+  if (input.mode === "new" || !sent.replyTo) return [actor];
+  const thread = await withActor(actor, async (db) => {
+    const result = await db.query<{ source_id: string; tk: string }>(
+      "select source_id, coalesce(thread_key, 'm:' || id::text) as tk from crm.mail_messages where id = $1 and user_id = $2",
+      [sent.replyTo, actor.userId],
+    );
+    return result.rows[0] ?? null;
+  });
+  return thread ? threadFiledWorkspaces(actor, thread.source_id, thread.tk) : [];
+}
+
+async function logReply(actor: UserActor, input: DraftInput, subject: string, from: string, attachments: { name: string }[], sent: SentReply) {
   const addresses = [...input.to, ...input.cc].map((item) => item.address);
   if (addresses.length === 0) return;
-  await withActor(actor, async (db) => {
-    const contacts = await db.query<{ id: string; company_id: string | null; normalized_email: string }>(
-      `select id, company_id, normalized_email from crm.contacts
-       where workspace_id = $1 and archived_at is null and normalized_email = any($2::text[])
-       limit 10`,
-      [actor.workspaceId, addresses],
-    );
-    for (const contact of contacts.rows) {
-      await createActivityInDb(
-        db,
-        actor,
-        {
-          type: "email",
-          title: subject.slice(0, 200) || "(no subject)",
-          body: input.body.trim().slice(0, 8000) || null,
-          companyId: contact.company_id,
-          contactId: contact.id,
-          metadata: {
-            source: "microsoft",
-            direction: "outbound",
-            to: contact.normalized_email,
-            from,
-            mode: input.mode,
-            ...(attachments.length ? { attachments } : {}),
-          },
-        },
-        { operation: "send_email", source: "microsoft" },
+  for (const target of await replyWorkspaces(actor, input, sent)) {
+    await withActor(target, async (db) => {
+      const contacts = await db.query<{ id: string; company_id: string | null; normalized_email: string }>(
+        `select id, company_id, normalized_email from crm.contacts
+         where workspace_id = $1 and archived_at is null and normalized_email = any($2::text[])
+         limit 10`,
+        [target.workspaceId, addresses],
       );
-    }
-  });
+      for (const contact of contacts.rows) {
+        await createEmailActivityOnce(
+          db,
+          target,
+          {
+            type: "email",
+            title: subject.slice(0, 200) || "(no subject)",
+            body: input.body.trim().slice(0, 8000) || null,
+            companyId: contact.company_id,
+            contactId: contact.id,
+            metadata: {
+              source: "microsoft",
+              direction: "outbound",
+              to: contact.normalized_email,
+              from,
+              mode: input.mode,
+              ...(sent.internetMessageId ? { internetMessageId: sent.internetMessageId } : {}),
+              ...(attachments.length ? { attachments } : {}),
+            },
+          },
+          { internetMessageId: sent.internetMessageId },
+          { operation: "send_email", source: "microsoft" },
+        );
+      }
+    });
+  }
 }
 
 function checkSendable(input: DraftInput) {
@@ -495,20 +514,44 @@ function mimeMessageId(raw: string) {
   return /^message-id:[ \t]*(<[^>\r\n]+>)/im.exec(headers)?.[1]?.slice(0, 1000) ?? null;
 }
 
+type SendOptions = {
+  origin: string | null;
+  fetchImpl?: typeof fetch;
+  smtp?: SmtpSender;
+  saveSent?: SentSaver;
+  onDraftRow?: (id: string) => void;
+  storedFiles: StoredFiles;
+  logOnTimeline?: boolean;
+  scheduled?: boolean;
+};
+
+export const ALREADY_SENDING = "This email was already sending as scheduled, so Orbit didn't send it again. Check Sent in Mail.";
+
 export async function sendMailDraft(
   actor: UserActor,
   input: DraftInput & { attachments?: string[] },
-  options: {
-    origin: string | null;
-    fetchImpl?: typeof fetch;
-    smtp?: SmtpSender;
-    saveSent?: SentSaver;
-    onDraftRow?: (id: string) => void;
-    storedFiles: StoredFiles;
-    logOnTimeline?: boolean;
-  },
+  options: SendOptions,
 ): Promise<{ warning: string | null }> {
   checkSendable(input);
+  const claimed = input.id ? await claimScheduledDraft(actor, input.id) : false;
+  if (options.scheduled && !claimed) throw new CrmError("conflict", ALREADY_SENDING, 409);
+  if (!claimed) return deliverDraft(actor, input, options);
+  let current = input.id!;
+  try {
+    return await deliverDraft(actor, input, {
+      ...options,
+      onDraftRow: (id) => {
+        current = id;
+        options.onDraftRow?.(id);
+      },
+    });
+  } catch (error) {
+    await failDueDraft(actor, current, error instanceof Error ? error.message : "The email didn't send.").catch(() => undefined);
+    throw error;
+  }
+}
+
+async function deliverDraft(actor: UserActor, input: DraftInput & { attachments?: string[] }, options: SendOptions): Promise<{ warning: string | null }> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const ids = await draftFileList(actor, input, options.storedFiles);
   const inline = await inlineImages(actor, input.body, ids);
@@ -530,7 +573,7 @@ export async function sendMailDraft(
       await attachToDraft(token, draftUrl, attached.files.map((file) => (inline[file.name] ? { ...file, contentId: inline[file.name] } : file)), fetchImpl);
     }
     if (!identity) {
-      if (input.followUpDays) originalId = await fetchInternetMessageId(token, draft.provider_draft_id, fetchImpl).catch(() => null);
+      originalId = await fetchInternetMessageId(token, draft.provider_draft_id, fetchImpl).catch(() => null);
       await sendMicrosoftDraft(token, draft.provider_draft_id, fetchImpl);
       return;
     }
@@ -598,7 +641,10 @@ export async function sendMailDraft(
     attached.summary.length ? discardAttachments(actor, ids, fetchImpl).catch(() => undefined) : Promise.resolve(),
     options.logOnTimeline === false
       ? Promise.resolve(true)
-      : logReply(actor, input, row.subject ?? "", identity?.email ?? target.email, attached.summary).then(
+      : logReply(actor, input, row.subject ?? "", identity?.email ?? target.email, attached.summary, {
+          replyTo: row.reply_to,
+          internetMessageId: originalId,
+        }).then(
           () => true,
           () => false,
         ),
@@ -1015,9 +1061,11 @@ function mergeRecipients(to: MailAddress[], cc: MailAddress[], bcc: MailAddress[
 }
 
 async function claimScheduledDraft(actor: UserActor, id: string) {
+  if (!isUuid(id)) return false;
   return withActor(actor, async (db) => {
     const result = await db.query(
-      "update crm.mail_drafts set send_at = null, send_error = null where id = $1 and user_id = $2 and send_at is not null returning id",
+      `update crm.mail_drafts set send_at = null, send_error = null
+       where id = $1 and user_id = $2 and (send_at is not null or send_error is not null) returning id`,
       [id, actor.userId],
     );
     return (result.rowCount ?? 0) > 0;
@@ -1134,18 +1182,49 @@ export async function sendForAgent(
     const scheduled = await scheduleMailDraft(actor, { ...draft, attachments, sendAt: input.sendAt }, { ...options, storedFiles: "keep" });
     return { ...summary, followUp, warning: null, scheduled: true, sendAt: scheduled.sendAt, draftId: scheduled.id, href: threadHref ?? "/mail?view=scheduled" };
   }
-  const wasScheduled = Boolean(stored?.send_at || stored?.send_error);
-  if (stored?.send_at && !(await claimScheduledDraft(actor, stored.id))) {
-    throw new CrmError("conflict", "That draft is already sending as scheduled. Check Sent in Mail.", 409);
+  const result = await sendMailDraft(actor, { ...draft, attachments }, { ...options, storedFiles: "keep", scheduled: Boolean(stored?.send_at || stored?.send_error) });
+  return { ...summary, followUp, warning: result.warning, scheduled: false, sendAt: null, draftId: null, href: threadHref ?? "/mail?view=sent" };
+}
+
+export async function plannedRecipients(
+  actor: UserActor,
+  input: { draftId?: string | null; replyTo?: string | null; replyAll?: boolean; to: string[]; cc?: string[] },
+) {
+  const stored = input.draftId ? await storedDraft(actor, input.draftId) : null;
+  if (input.draftId && !stored) return null;
+  const replyTo = input.replyTo ?? stored?.reply_to ?? null;
+  const replying = Boolean(replyTo);
+  const kept = stored && (stored.to_recipients ?? []).length + (stored.cc_recipients ?? []).length + (stored.bcc_recipients ?? []).length > 0 ? stored : null;
+  let defaults = { to: [] as MailAddress[], cc: [] as MailAddress[] };
+  if (!kept && replying) {
+    const original = await withActor(actor, async (db) => {
+      if (!isUuid(replyTo!)) return null;
+      const result = await db.query<{ subject: string | null; from_email: string | null; from_name: string | null; to_recipients: MailAddress[]; cc_recipients: MailAddress[] }>(
+        "select subject, from_email, from_name, to_recipients, cc_recipients from crm.mail_messages where id = $1 and user_id = $2",
+        [replyTo, actor.userId],
+      );
+      return result.rows[0] ?? null;
+    });
+    if (!original) return null;
+    const accounts = await composeAccounts(actor);
+    const mode: DraftMode = stored?.mode === "forward" && !input.replyTo ? "forward" : input.replyAll ? "reply_all" : "reply";
+    defaults = replyDefaults(
+      mode,
+      { from: original.from_email ? { address: original.from_email, name: original.from_name } : null, to: original.to_recipients ?? [], cc: original.cc_recipients ?? [] },
+      original.subject,
+      [actor.email, ...accounts.map((item) => item.email)],
+    );
   }
-  let current: string | null = stored?.id ?? null;
-  try {
-    const result = await sendMailDraft(actor, { ...draft, attachments }, { ...options, storedFiles: "keep", onDraftRow: (id) => (current = id) });
-    return { ...summary, followUp, warning: result.warning, scheduled: false, sendAt: null, draftId: null, href: threadHref ?? "/mail?view=sent" };
-  } catch (error) {
-    if (wasScheduled && current) {
-      await failDueDraft(actor, current, error instanceof Error ? error.message : "The email didn't send.").catch(() => undefined);
-    }
-    throw error;
-  }
+  const recipients = mergeRecipients(
+    kept ? kept.to_recipients ?? [] : defaults.to,
+    kept ? kept.cc_recipients ?? [] : defaults.cc,
+    kept ? kept.bcc_recipients ?? [] : [],
+    input.to,
+    input.cc ?? [],
+  );
+  return {
+    to: recipients.to.map((item) => item.address),
+    cc: recipients.cc.map((item) => item.address),
+    bcc: recipients.bcc.map((item) => item.address),
+  };
 }
