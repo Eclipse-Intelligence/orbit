@@ -4391,7 +4391,7 @@ const TOOL_LIST: AssistantTool[] = [
       const draftSubject = draftId ? detail(name, `${draftId}:subject`) : "";
       const onDraft = draftId ? draftRecipients(args, name, draftId) : null;
       const people = [contactRecipient(args.contactId, name), ...strings(args.to)].filter(Boolean);
-      const replying = Boolean(str(args.replyToEmailId));
+      const replying = Boolean(str(args.replyToEmailId)) || (draftId !== "" && ["reply", "reply_all"].includes(detail(name, `${draftId}:mode`)));
       const senderKey = `${str(args.replyToEmailId)}:from`;
       const sender = name(senderKey) !== senderKey ? name(senderKey) : "the sender";
       const later = Boolean(str(args.sendAt));
@@ -5530,8 +5530,9 @@ export async function recordNames(actor: UserActor, args: Args[], tools: string[
       follow_up_days: number | null;
       follow_up_body: string | null;
       send_at: Date | null;
+      mode: string;
     }>(
-      "select id, subject, to_recipients, cc_recipients, bcc_recipients, remind_hours, follow_up_days, follow_up_body, send_at from crm.mail_drafts where id = any($1::uuid[]) and user_id = $2",
+      "select id, subject, to_recipients, cc_recipients, bcc_recipients, remind_hours, follow_up_days, follow_up_body, send_at, mode from crm.mail_drafts where id = any($1::uuid[]) and user_id = $2",
       [list, actor.userId],
     );
     for (const row of drafts.rows) {
@@ -5540,6 +5541,7 @@ export async function recordNames(actor: UserActor, args: Args[], tools: string[
       if (row.follow_up_days && row.follow_up_body?.trim()) names.set(`${row.id}:follow_up_body`, row.follow_up_body.trim());
       if (row.remind_hours) names.set(`${row.id}:remind_hours`, String(row.remind_hours));
       if (row.send_at) names.set(`${row.id}:send_at`, new Date(row.send_at).toISOString());
+      names.set(`${row.id}:mode`, row.mode);
       for (const [key, people] of [["to", row.to_recipients], ["cc", row.cc_recipients], ["bcc", row.bcc_recipients]] as const) {
         if (people?.length) names.set(`${row.id}:${key}`, people.map((person) => person.address).join(", "));
       }

@@ -42,7 +42,6 @@ export type SendPayload = {
   files: DraftFile[];
   replaces?: string | null;
   identityId?: string | null;
-  scheduled?: boolean;
 };
 
 export type ComposerStart = {
@@ -309,8 +308,7 @@ export default function MailComposer({
   function send(event?: FormEvent) {
     event?.preventDefault();
     if (!ready()) return;
-    const scheduled = Boolean(scheduledFor);
-    queueSend(handOver().then((payload) => ({ ...payload, scheduled })), { onDelivered, onUndone });
+    queueSend(handOver(), { onDelivered, onUndone });
     onSent(body, [...to, ...cc]);
   }
 

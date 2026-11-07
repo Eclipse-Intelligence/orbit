@@ -122,7 +122,44 @@ describe("assistant approval cards", () => {
     const asked = { draftId, body: "Hi Jane", remindAfterDays: 5 };
     const askedCard = describeAction("send_email", asked, await recordNames(owner, [asked], ["send_email"]));
     assert.ok(askedCard.lines.includes("Reminder: if nobody replies within 5 days"), askedCard.lines.join("\n"));
-    await admin.query("delete from crm.mail_drafts where id = $1", [draftId]);
+
+    const original = globalThis.fetch;
+    const { fetchImpl, calls } = outlook();
+    globalThis.fetch = fetchImpl;
+    try {
+      const sent = (await runTool(owner, "send_email", args)) as Record<string, unknown>;
+      assert.equal(sent.error, undefined, String(sent.error));
+    } finally {
+      globalThis.fetch = original;
+    }
+    assert.deepEqual(recipientsOf(calls), { to: ["jane@acme.test"], cc: [], bcc: ["boss@acme.test"] });
+    assert.ok(calls.some((call) => call.method === "POST" && call.url === "/me/messages/stored-draft/send"));
+
+    const withFollowUp = (
+      await admin.query<{ id: string }>(
+        `insert into crm.mail_drafts (workspace_id, user_id, source_id, provider_draft_id, mode, subject, to_recipients, cc_recipients, bcc_recipients,
+           follow_up_days, follow_up_body)
+         values ($1, $2, $3, 'stored-follow-up', 'new', 'Stored', $4::jsonb, '[]'::jsonb, '[]'::jsonb, 3, 'Just checking this landed.') returning id`,
+        [owner.workspaceId, owner.userId, sourceId, JSON.stringify([{ address: "jane@acme.test", name: null }])],
+      )
+    ).rows[0].id;
+    const followUpArgs = { draftId: withFollowUp, body: "Hi Jane" };
+    const followUpCard = describeAction("send_email", followUpArgs, await recordNames(owner, [followUpArgs], ["send_email"]));
+    assert.ok(followUpCard.lines.includes("Follow-up: sent in the same thread at 09:00 after 3 working days if nobody replies:"), followUpCard.lines.join("\n"));
+    assert.ok(followUpCard.lines.includes("Just checking this landed."), followUpCard.lines.join("\n"));
+    assert.ok(!followUpCard.lines.some((line) => line.startsWith("Reminder:")), followUpCard.lines.join("\n"));
+    await admin.query("delete from crm.mail_drafts where id = $1", [withFollowUp]);
+
+    const storedReply = (
+      await admin.query<{ id: string }>(
+        `insert into crm.mail_drafts (workspace_id, user_id, source_id, provider_draft_id, mode, reply_to, subject, to_recipients, cc_recipients, bcc_recipients)
+         values ($1, $2, $3, 'stored-reply', 'reply', $4, 'RE: Pilot', $5::jsonb, '[]'::jsonb, '[]'::jsonb) returning id`,
+        [owner.workspaceId, owner.userId, sourceId, messageId, JSON.stringify([{ address: "andrew@pulse.test", name: null }])],
+      )
+    ).rows[0].id;
+    const replyArgs = { draftId: storedReply, body: "Monday works." };
+    assert.equal(describeAction("send_email", replyArgs, await recordNames(owner, [replyArgs], ["send_email"])).title, "Send reply: RE: Pilot");
+    await admin.query("delete from crm.mail_drafts where id = $1", [storedReply]);
   });
 
   it("sends only what the draft card showed when the user chooses Confirm and send", async () => {

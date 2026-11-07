@@ -318,7 +318,7 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
             if (result.warning) showToast({ message: result.warning, tone: "alert" });
           })
           .catch((error: Error & { status?: number }) => {
-            if (error.status === 409 && payload.scheduled) {
+            if (error.status === 409) {
               item.onDelivered?.();
               showToast({ message: error.message, tone: "alert" });
               return;

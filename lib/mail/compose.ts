@@ -389,7 +389,7 @@ export async function saveMailDraft(
 type SentReply = { replyTo: string | null; internetMessageId: string | null };
 
 async function replyWorkspaces(actor: UserActor, input: DraftInput, sent: SentReply) {
-  if (input.mode === "new" || !sent.replyTo) return [actor];
+  if (input.mode === "new" || input.mode === "forward" || !sent.replyTo) return [actor];
   const thread = await withActor(actor, async (db) => {
     const result = await db.query<{ source_id: string; tk: string }>(
       "select source_id, coalesce(thread_key, 'm:' || id::text) as tk from crm.mail_messages where id = $1 and user_id = $2",
@@ -522,10 +522,11 @@ type SendOptions = {
   onDraftRow?: (id: string) => void;
   storedFiles: StoredFiles;
   logOnTimeline?: boolean;
-  scheduled?: boolean;
+  claimed?: boolean;
 };
 
-export const ALREADY_SENDING = "This email was already sending as scheduled, so Orbit didn't send it again. Check Sent in Mail.";
+export const ALREADY_SENDING = "This email was already sending, so Orbit didn't send it again. Check Sent in Mail.";
+export const DRAFT_GONE = "This draft was already sent or deleted.";
 
 export async function sendMailDraft(
   actor: UserActor,
@@ -533,10 +534,11 @@ export async function sendMailDraft(
   options: SendOptions,
 ): Promise<{ warning: string | null }> {
   checkSendable(input);
-  const claimed = input.id ? await claimScheduledDraft(actor, input.id) : false;
-  if (options.scheduled && !claimed) throw new CrmError("conflict", ALREADY_SENDING, 409);
-  if (!claimed) return deliverDraft(actor, input, options);
-  let current = input.id!;
+  if (!input.id || options.claimed) return deliverDraft(actor, input, options);
+  const claim = await claimScheduledDraft(actor, input.id);
+  if (claim === "gone") throw new CrmError("conflict", DRAFT_GONE, 409);
+  if (claim === "sending") throw new CrmError("conflict", ALREADY_SENDING, 409);
+  let current = input.id;
   try {
     return await deliverDraft(actor, input, {
       ...options,
@@ -546,7 +548,11 @@ export async function sendMailDraft(
       },
     });
   } catch (error) {
-    await failDueDraft(actor, current, error instanceof Error ? error.message : "The email didn't send.").catch(() => undefined);
+    const settle =
+      claim === "scheduled"
+        ? failDueDraft(actor, current, error instanceof Error ? error.message : "The email didn't send.")
+        : withActor(actor, (db) => db.query("update crm.mail_drafts set sending_at = null where id = $1 and user_id = $2", [current, actor.userId]));
+    await settle.catch(() => undefined);
     throw error;
   }
 }
@@ -802,10 +808,10 @@ export async function claimDueDrafts(actor: UserActor, limit = 5): Promise<DueDr
     const result = await db.query<DueDraft>(
       `with picked as materialized (
          select id from crm.mail_drafts
-         where user_id = $1 and send_at <= now()
+         where user_id = $1 and send_at <= now() and (sending_at is null or sending_at < now() - ${SENDING_FRESH})
          order by send_at, id limit $2 for update skip locked
        )
-       update crm.mail_drafts d set send_at = null
+       update crm.mail_drafts d set send_at = null, sending_at = now()
        from picked where d.id = picked.id
        returning ${DRAFT_COLUMNS.split(",").map((column) => `d.${column.trim()}`).join(", ")}, d.signature`,
       [actor.userId, limit],
@@ -835,7 +841,7 @@ export function dueDraftInput(row: DueDraft): DraftInput & { attachments: string
 }
 
 export async function failDueDraft(actor: UserActor, id: string, message: string) {
-  await withActor(actor, (db) => db.query("update crm.mail_drafts set send_error = $2 where id = $1", [id, message.slice(0, 500)]));
+  await withActor(actor, (db) => db.query("update crm.mail_drafts set send_error = $2, sending_at = null where id = $1", [id, message.slice(0, 500)]));
 }
 
 export async function discardMailDraft(actor: UserActor, id: string, fetchImpl: typeof fetch = fetch) {
@@ -1060,15 +1066,21 @@ function mergeRecipients(to: MailAddress[], cc: MailAddress[], bcc: MailAddress[
   return { to: nextTo, cc: nextCc, bcc: pick(bcc, "Bcc") };
 }
 
-async function claimScheduledDraft(actor: UserActor, id: string) {
-  if (!isUuid(id)) return false;
+const SENDING_FRESH = "interval '10 minutes'";
+
+async function claimScheduledDraft(actor: UserActor, id: string): Promise<"gone" | "sending" | "scheduled" | "draft"> {
+  if (!isUuid(id)) return "gone";
   return withActor(actor, async (db) => {
-    const result = await db.query(
-      `update crm.mail_drafts set send_at = null, send_error = null
-       where id = $1 and user_id = $2 and (send_at is not null or send_error is not null) returning id`,
+    const found = await db.query<{ scheduled: boolean; busy: boolean }>(
+      `select (send_at is not null or send_error is not null) as scheduled, coalesce(sending_at > now() - ${SENDING_FRESH}, false) as busy
+       from crm.mail_drafts where id = $1 and user_id = $2 for update`,
       [id, actor.userId],
     );
-    return (result.rowCount ?? 0) > 0;
+    const row = found.rows[0];
+    if (!row) return "gone";
+    if (row.busy) return "sending";
+    await db.query("update crm.mail_drafts set send_at = null, send_error = null, sending_at = now() where id = $1", [id]);
+    return row.scheduled ? "scheduled" : "draft";
   });
 }
 
@@ -1182,7 +1194,7 @@ export async function sendForAgent(
     const scheduled = await scheduleMailDraft(actor, { ...draft, attachments, sendAt: input.sendAt }, { ...options, storedFiles: "keep" });
     return { ...summary, followUp, warning: null, scheduled: true, sendAt: scheduled.sendAt, draftId: scheduled.id, href: threadHref ?? "/mail?view=scheduled" };
   }
-  const result = await sendMailDraft(actor, { ...draft, attachments }, { ...options, storedFiles: "keep", scheduled: Boolean(stored?.send_at || stored?.send_error) });
+  const result = await sendMailDraft(actor, { ...draft, attachments }, { ...options, storedFiles: "keep" });
   return { ...summary, followUp, warning: result.warning, scheduled: false, sendAt: null, draftId: null, href: threadHref ?? "/mail?view=sent" };
 }
 
