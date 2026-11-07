@@ -1,19 +1,38 @@
 import assert from "node:assert/strict";
-import { afterEach, beforeEach, describe, it } from "node:test";
+import { after, afterEach, before, beforeEach, describe, it } from "node:test";
 import { z } from "zod";
 import { shapeFor } from "@/companion/src/schema";
+import { sendMessage } from "@/lib/assistant/chat";
+import { ECLIPSE_UNAVAILABLE, eclipseScopeFor } from "@/lib/assistant/eclipse-scope";
 import { systemPrompt, UNBRANDED } from "@/lib/assistant/prompt";
 import { describeAction, runTool, toolDefinitions } from "@/lib/assistant/tools";
+import { scopesForRole } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
-import { callEclipseTool, clearEclipseToolCache, eclipseGuide, findEclipseTools } from "@/lib/eclipse-mcp";
+import { createWorkspace } from "@/lib/crm/workspaces";
+import { getAdminPool, getPool } from "@/lib/db/pool";
+import { callEclipseTool, clearEclipseToolCache, eclipseGuide, findEclipseTools, OUT_OF_SCOPE } from "@/lib/eclipse-mcp";
+import { createUser, resetDatabase } from "./helpers";
 
-const actor = { type: "user", userId: "u", workspaceId: "w", email: "mark@eclipse.test", fullName: "Mark", role: "owner", scopes: [] } as unknown as UserActor;
+let actor: UserActor;
+let ridgeon: UserActor;
+let globex: UserActor;
+let initech: UserActor;
+
+const CLIENTS = [
+  { id: 1, name: "Eclipse", website: "geteclipse.co" },
+  { id: 2, name: "mark ridgeon ", website: "markridgeon.com" },
+  { id: 3, name: "Acme Agency Client", website: "acme.test" },
+  { id: 4, name: "Globex", website: "globex.test" },
+];
+let clients: { id: number; name: string; website: string }[] = CLIENTS;
 
 const TOOLS = [
   { name: "list_clients", description: "List the clients. This read is free and changes nothing.", inputSchema: { type: "object", properties: {} } },
-  { name: "geo_trends", description: "AI visibility trends for a GEO profile over time.", inputSchema: { type: "object", properties: { profileId: { type: "number" } } } },
-  { name: "update_client_details", description: "Update the client's details.", inputSchema: { type: "object", properties: { website: { type: "string" } } } },
-  { name: "start_deep_research", description: "Start deep research. This is a paid tool.", inputSchema: { type: "object", properties: { question: { type: "string" }, confirm: { type: "boolean" }, idempotencyKey: { type: "string" } } } },
+  { name: "geo_trends", description: "AI visibility trends for a GEO profile over time.", inputSchema: { type: "object", properties: { clientId: { type: "number" }, profileId: { type: "number" } } } },
+  { name: "update_client_details", description: "Update the client's details.", inputSchema: { type: "object", properties: { clientId: { type: "number" }, website: { type: "string" } } } },
+  { name: "start_deep_research", description: "Start deep research. This is a paid tool.", inputSchema: { type: "object", properties: { client_id: { type: "number" }, question: { type: "string" }, confirm: { type: "boolean" }, idempotencyKey: { type: "string" } } } },
+  { name: "get_operation", description: "Check a long-running operation. This read is free and changes nothing.", inputSchema: { type: "object", properties: { operationId: { type: "string" } } } },
+  { name: "list_transactions", description: "List the account's transactions. This read is free and changes nothing.", inputSchema: { type: "object", properties: {} } },
 ];
 
 type Sent = { method: string; params: { name?: string; arguments?: Record<string, unknown> }; auth: string | null };
@@ -26,6 +45,7 @@ function server(options: { sse?: boolean; big?: boolean } = {}) {
     let result: unknown;
     if (body.method === "initialize") result = { instructions: "You are connected to Eclipse. Start with list_clients." };
     else if (body.method === "tools/list") result = { tools: TOOLS };
+    else if (body.params.name === "list_clients" && !options.big) result = { content: [{ type: "text", text: JSON.stringify({ clients, total: clients.length }) }] };
     else result = { content: [{ type: "text", text: options.big ? "x".repeat(250_000) : JSON.stringify({ called: body.params.name, args: body.params.arguments }) }] };
     const json = JSON.stringify({ jsonrpc: "2.0", id: body.id, result });
     return options.sse
@@ -36,8 +56,31 @@ function server(options: { sse?: boolean; big?: boolean } = {}) {
 }
 
 describe("Eclipse MCP", () => {
+  before(async () => {
+    await resetDatabase();
+    const admin = getAdminPool();
+    const mark = await createUser("mark@eclipse.test", "Mark Ridgeon");
+    await admin.query("update crm.workspaces set name = 'Eclipse' where id = $1", [mark.workspaceId]);
+    await admin.query("insert into crm.workspace_brands (workspace_id, eclipse_tools) values ($1, true) on conflict (workspace_id) do update set eclipse_tools = true", [mark.workspaceId]);
+    actor = { ...mark, workspaceName: "Eclipse" };
+    const created = await createWorkspace(actor, { name: "Mark Ridgeon" });
+    ridgeon = { ...actor, workspaceId: created.id, workspaceName: "Mark Ridgeon", role: "owner", scopes: scopesForRole("owner") };
+    const sam = await createUser("sam@globex.test", "Sam Lee");
+    await admin.query("update crm.workspaces set name = 'Globex' where id = $1", [sam.workspaceId]);
+    globex = { ...sam, workspaceName: "Globex" };
+    const pat = await createUser("pat@initech.test", "Pat Kim");
+    await admin.query("update crm.workspaces set name = 'Initech' where id = $1", [pat.workspaceId]);
+    initech = { ...pat, workspaceName: "Initech" };
+  });
+
+  after(async () => {
+    await getPool().end();
+    await getAdminPool().end();
+  });
+
   beforeEach(() => {
     process.env.ECLIPSE_MCP_TOKEN = "ecl_pat_test";
+    clients = CLIENTS;
     clearEclipseToolCache();
   });
 
@@ -49,7 +92,7 @@ describe("Eclipse MCP", () => {
     const { fetchImpl, sent } = server();
     assert.match(await eclipseGuide({ fetchImpl }), /Start with list_clients/);
     const found = await findEclipseTools("geo trends", { fetchImpl });
-    assert.equal(found.total, 4);
+    assert.equal(found.total, 6);
     assert.equal(found.tools[0].name, "geo_trends");
     assert.equal(found.tools[0].kind, "read");
     const all = await findEclipseTools("client research", { fetchImpl, limit: 10 });
@@ -68,7 +111,7 @@ describe("Eclipse MCP", () => {
   it("runs reads, previews paid tools without confirming, and confirms only after approval", async () => {
     const { fetchImpl, sent } = server({ sse: true });
     const read = await callEclipseTool("list_clients", {}, "read", { fetchImpl });
-    assert.match(read.result, /"called":"list_clients"/);
+    assert.match(read.result, /"name":"Acme Agency Client"/);
     await assert.rejects(callEclipseTool("update_client_details", { website: "x" }, "read", { fetchImpl }), /needs the user's approval\. Use eclipse_action/);
     const preview = await callEclipseTool("start_deep_research", { question: "Who leads AI search?", confirm: true, idempotencyKey: "mine" }, "read", { fetchImpl });
     assert.match(preview.preview!, /preview only/);
@@ -98,7 +141,7 @@ describe("Eclipse MCP", () => {
     try {
       const read = (await runTool(actor, "eclipse_read", { tool: "geo_trends", argumentsJson: '{"profileId": 7}' })) as { result: string };
       assert.match(read.result, /"profileId":7/);
-      assert.deepEqual(sent.at(-1)!.params.arguments, { profileId: 7 });
+      assert.deepEqual(sent.at(-1)!.params.arguments, { profileId: 7, clientId: 1 });
       const bad = (await runTool(actor, "eclipse_read", { tool: "geo_trends", argumentsJson: "{profileId: 7" })) as { error: string };
       assert.match(bad.error, /isn't valid JSON/);
     } finally {
@@ -119,7 +162,7 @@ describe("Eclipse MCP", () => {
     globalThis.fetch = (async (input, init) => {
       const body = JSON.parse(String(init?.body));
       if (body.method === "tools/call" && body.params.name === "geo_trends") return new Promise<Response>(() => undefined);
-      if (body.method === "tools/call") {
+      if (body.method === "tools/call" && body.params.name !== "list_clients") {
         keys.push(body.params.arguments.idempotencyKey);
         await new Promise((resolve) => setTimeout(resolve, pause));
       }
@@ -159,6 +202,7 @@ describe("Eclipse MCP", () => {
       const admin = { ...actor, role: "admin" } as UserActor;
       const allowed = (await runTool(admin, "eclipse_action", { tool: "update_client_details", summary: "Update", argumentsJson: '{"website": "https://x.test"}' })) as { error?: string };
       assert.equal(allowed.error, undefined);
+      assert.deepEqual(sent.at(-1)!.params.arguments, { website: "https://x.test", clientId: 1 });
     } finally {
       globalThis.fetch = original;
     }
@@ -188,5 +232,128 @@ describe("Eclipse MCP", () => {
     const card = describeAction("eclipse_action", { tool: "start_deep_research", summary: "Starts deep research on AI search leaders, costing about £0.28.", argumentsJson: '{"question": "Who leads?", "confirm": true}' });
     assert.equal(card.title, "Eclipse: start_deep_research");
     assert.deepEqual(card.lines, ["Starts deep research on AI search leaders, costing about £0.28.", "question: Who leads?", "Runs through Orbit's shared Eclipse connection. Anything it costs comes from Eclipse's own account."]);
+  });
+
+  it("finds each workspace's own client by its exact name, ignoring case, and hides Eclipse where there is none", async () => {
+    const original = globalThis.fetch;
+    globalThis.fetch = server().fetchImpl;
+    try {
+      assert.deepEqual(await eclipseScopeFor(actor), { clientId: 1, only: false, refused: new Set(["2", "4"]) });
+      assert.deepEqual(await eclipseScopeFor(ridgeon), { clientId: 2, only: true, refused: new Set() });
+      assert.deepEqual(await eclipseScopeFor(globex), { clientId: 4, only: true, refused: new Set() });
+      assert.equal(await eclipseScopeFor(initech), null);
+      for (const name of ["eclipse_guide", "eclipse_tools", "eclipse_read", "eclipse_action"]) {
+        assert.deepEqual(await runTool(initech, name, { query: "clients", tool: "list_clients", argumentsJson: "{}", summary: "x" }), { error: ECLIPSE_UNAVAILABLE }, name);
+      }
+      const hidden = toolDefinitions({ eclipse: false }).map((tool) => tool.function.name);
+      for (const name of ["eclipse_guide", "eclipse_tools", "eclipse_read", "eclipse_action"]) assert.ok(!hidden.includes(name), name);
+      assert.ok(hidden.includes("eclipse_docs"));
+      delete process.env.ECLIPSE_MCP_TOKEN;
+      assert.equal(await eclipseScopeFor(actor), null);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  it("puts the workspace's client on every call in a brand workspace and refuses any other client", async () => {
+    const original = globalThis.fetch;
+    const { fetchImpl, sent } = server();
+    globalThis.fetch = fetchImpl;
+    try {
+      await runTool(ridgeon, "eclipse_read", { tool: "geo_trends", argumentsJson: '{"profileId": 7}' });
+      assert.deepEqual(sent.at(-1)!.params.arguments, { profileId: 7, clientId: 2 });
+      await runTool(ridgeon, "eclipse_read", { tool: "geo_trends", argumentsJson: '{"profileId": 7, "clientId": "2"}' });
+      assert.deepEqual(sent.at(-1)!.params.arguments, { profileId: 7, clientId: "2" });
+      const calls = () => sent.filter((call) => call.method === "tools/call" && call.params.name !== "list_clients").length;
+      const before = calls();
+      for (const argumentsJson of ['{"clientId": 1}', '{"client_id": 3}', '{"clientIds": [2, 3]}', '{"profileId": 7, "clientId": 4}']) {
+        assert.deepEqual(await runTool(ridgeon, "eclipse_read", { tool: "geo_trends", argumentsJson }), { error: OUT_OF_SCOPE }, argumentsJson);
+      }
+      assert.match(((await runTool(ridgeon, "eclipse_read", { tool: "list_transactions", argumentsJson: "{}" })) as { error: string }).error, /isn't tied to one client/);
+      assert.equal(calls(), before);
+      await runTool(ridgeon, "eclipse_read", { tool: "start_deep_research", argumentsJson: '{"question": "Who leads?"}' });
+      assert.deepEqual(sent.at(-1)!.params.arguments, { question: "Who leads?", client_id: 2 });
+      const operation = (await runTool(ridgeon, "eclipse_read", { tool: "get_operation", argumentsJson: '{"operationId": "op_1"}' })) as { error?: string };
+      assert.equal(operation.error, undefined);
+      const listed = (await runTool(ridgeon, "eclipse_read", { tool: "list_clients", argumentsJson: "{}" })) as { result: string };
+      assert.deepEqual(JSON.parse(listed.result).clients.map((client: { id: number }) => client.id), [2]);
+      const action = (await runTool(ridgeon, "eclipse_action", { tool: "update_client_details", summary: "Update", argumentsJson: '{"clientId": 1, "website": "https://x.test"}' })) as { error: string };
+      assert.equal(action.error, OUT_OF_SCOPE);
+      assert.ok(!sent.some((call) => call.params.name === "update_client_details"));
+      const member = { ...ridgeon, role: "member" as const };
+      assert.match(((await runTool(member, "eclipse_action", { tool: "update_client_details", summary: "Update", argumentsJson: "{}" })) as { error: string }).error, /Only workspace owners and admins/);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  it("lets the workspace that owns Eclipse use its customers' clients, but never another workspace's client", async () => {
+    const original = globalThis.fetch;
+    const { fetchImpl, sent } = server();
+    globalThis.fetch = fetchImpl;
+    try {
+      await runTool(actor, "eclipse_read", { tool: "geo_trends", argumentsJson: '{"clientId": 3}' });
+      assert.deepEqual(sent.at(-1)!.params.arguments, { clientId: 3 });
+      await runTool(actor, "eclipse_read", { tool: "geo_trends", argumentsJson: "{}" });
+      assert.deepEqual(sent.at(-1)!.params.arguments, { clientId: 1 });
+      assert.deepEqual(await runTool(actor, "eclipse_read", { tool: "geo_trends", argumentsJson: '{"clientId": 2}' }), { error: OUT_OF_SCOPE });
+      assert.deepEqual(await runTool(actor, "eclipse_read", { tool: "geo_trends", argumentsJson: '{"clientId": 4}' }), { error: OUT_OF_SCOPE });
+      const transactions = (await runTool(actor, "eclipse_read", { tool: "list_transactions", argumentsJson: "{}" })) as { error?: string };
+      assert.equal(transactions.error, undefined);
+      const listed = (await runTool(actor, "eclipse_read", { tool: "list_clients", argumentsJson: "{}" })) as { result: string };
+      assert.deepEqual(JSON.parse(listed.result).clients.map((client: { name: string }) => client.name), ["Eclipse", "Acme Agency Client"]);
+      assert.deepEqual(await runTool(actor, "eclipse_action", { tool: "update_client_details", summary: "Update", argumentsJson: '{"clientId": 2}' }), { error: OUT_OF_SCOPE });
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  it("checks the client again when an approved action runs, using a fresh client list", async () => {
+    const original = globalThis.fetch;
+    const { fetchImpl, sent } = server();
+    globalThis.fetch = fetchImpl;
+    try {
+      const args = { tool: "update_client_details", summary: "Update", argumentsJson: '{"website": "https://x.test"}' };
+      assert.equal(((await runTool(ridgeon, "eclipse_action", args, { callId: "call_a" })) as { error?: string }).error, undefined);
+      clients = CLIENTS.map((client) => (client.id === 2 ? { ...client, name: "Someone else" } : client));
+      clearEclipseToolCache();
+      const sentBefore = sent.filter((call) => call.params.name === "update_client_details").length;
+      assert.deepEqual(await runTool(ridgeon, "eclipse_action", args, { callId: "call_b" }), { error: ECLIPSE_UNAVAILABLE });
+      assert.equal(sent.filter((call) => call.params.name === "update_client_details").length, sentBefore);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  it("refuses rather than guessing when the client list can't be read", async () => {
+    const original = globalThis.fetch;
+    globalThis.fetch = server({ big: true }).fetchImpl;
+    try {
+      assert.deepEqual(await runTool(ridgeon, "eclipse_read", { tool: "geo_trends", argumentsJson: "{}" }), { error: "Couldn't read Eclipse's client list." });
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  it("offers the Eclipse tools to the model only where the workspace has a client", async () => {
+    process.env.LLM_API_KEY = "llm-test";
+    const original = globalThis.fetch;
+    globalThis.fetch = server().fetchImpl;
+    const seen: string[][] = [];
+    const model: typeof fetch = async (_input, init) => {
+      seen.push((JSON.parse(String(init?.body)).tools ?? []).map((tool: { function?: { name: string }; name?: string }) => tool.function?.name ?? tool.name));
+      return Response.json({ model: "claude-sonnet-5-5", choices: [{ message: { role: "assistant", content: "Hi." } }], usage: {} });
+    };
+    try {
+      for (const who of [ridgeon, initech]) {
+        await sendMessage(who, { message: "Hi", model: "claude-sonnet-5-5", reasoning: "low", webSearch: false }, () => undefined, { deadline: Date.now() + 60_000, fetchImpl: model });
+      }
+      assert.ok(seen[0].includes("eclipse_read") && seen[0].includes("eclipse_action"));
+      assert.ok(!seen[1].includes("eclipse_read") && !seen[1].includes("eclipse_guide"));
+      assert.ok(seen[1].includes("eclipse_docs"));
+    } finally {
+      globalThis.fetch = original;
+      delete process.env.LLM_API_KEY;
+    }
   });
 });

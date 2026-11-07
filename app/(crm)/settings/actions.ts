@@ -22,6 +22,7 @@ import {
   syncClickUpFor,
 } from "@/lib/crm/clickup";
 import { CrmError } from "@/lib/crm/errors";
+import { connectLinear, disconnectLinear } from "@/lib/crm/linear-connection";
 import { removeGranolaKey, saveGranolaKey } from "@/lib/crm/granola";
 import { saveMeetingLink } from "@/lib/crm/invites";
 import { savePipelineStages, type StageDraft } from "@/lib/crm/pipeline";
@@ -374,5 +375,27 @@ export async function removeGranolaKeyAction(): Promise<{ error?: string }> {
     return {};
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Couldn't remove the Granola key." };
+  }
+}
+
+export async function connectLinearAction(): Promise<{ error?: string }> {
+  const user = await requireUser();
+  try {
+    await connectLinear(user);
+    revalidatePath(SETTINGS_PATHS.tools);
+    return {};
+  } catch (error) {
+    return { error: error instanceof CrmError ? error.message : "Couldn't connect Linear." };
+  }
+}
+
+export async function disconnectLinearAction(): Promise<{ error?: string }> {
+  const user = await requireUser();
+  try {
+    await disconnectLinear(user);
+    revalidatePath(SETTINGS_PATHS.tools);
+    return {};
+  } catch (error) {
+    return { error: error instanceof CrmError ? error.message : "Couldn't disconnect Linear." };
   }
 }

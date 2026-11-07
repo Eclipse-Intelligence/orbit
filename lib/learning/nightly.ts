@@ -7,7 +7,7 @@ import type { UserActor } from "@/lib/crm/types";
 import { workspaceActors } from "@/lib/crm/workspaces";
 import { query, type Db } from "@/lib/db/pool";
 import { completeJson } from "@/lib/llm";
-import { businessNamesInDb, insertMemory, mayApplyEverywhere, reviseMemory, searchTerms, visibleMemorySql, type Memory, type MemoryScope } from "@/lib/learning/memories";
+import { businessNamesInDb, insertMemory, mayApplyEverywhere, reviseMemory, searchTerms, visibleMemorySql, type Memory, type MemoryScope, type NoteOrigin } from "@/lib/learning/memories";
 import { mapNote, NOTE_SELECT } from "@/lib/learning/market";
 import { stalledDealsInDb } from "@/lib/crm/pipeline-history";
 import { researchMail } from "@/lib/mail/subscriptions";
@@ -18,6 +18,7 @@ export type UnitResult = {
   added?: number;
   updated?: number;
   archived?: number;
+  heldBack?: number;
   skipped?: string;
   brief?: boolean;
   tidied?: { merged: number; retired: number };
@@ -70,6 +71,7 @@ const OPS = z.object({
         sources: z.array(SOURCE).nullish(),
         companyId: z.string().nullish(),
         allWorkspaces: z.boolean().nullish(),
+        evidence: z.array(z.string()).nullish(),
       }),
     )
     .nullish(),
@@ -82,6 +84,7 @@ const OPS = z.object({
         confidence: CONFIDENCE.nullish(),
         sources: z.array(SOURCE).nullish(),
         allWorkspaces: z.boolean().nullish(),
+        evidence: z.array(z.string()).nullish(),
       }),
     )
     .nullish(),
@@ -144,17 +147,43 @@ async function askForOps(actor: UserActor, system: string, material: string, opt
   return result.data;
 }
 
-async function applyOps(actor: UserActor, scope: MemoryScope, ops: Ops, existing: Existing[], companyIds: Set<string>): Promise<UnitResult> {
+type Basis = (evidence: string[] | null | undefined) => NoteOrigin | null;
+
+const REF = /^\[?([a-z])(\d+)\]?$/i;
+const REF_ORIGIN: Record<string, NoteOrigin> = { d: "crm", w: "crm", n: "crm", c: "call", m: "call", e: "email", r: "web" };
+const OUTSIDE_ORDER: NoteOrigin[] = ["email", "call", "web"];
+
+export function businessBasis(refs: Set<string>): Basis {
+  return (evidence) => {
+    const origins = new Set(
+      (evidence ?? [])
+        .map((ref) => REF.exec(ref.trim()))
+        .filter((match): match is RegExpExecArray => Boolean(match) && refs.has(`${match![1].toLowerCase()}${match![2]}`))
+        .map((match) => REF_ORIGIN[match[1].toLowerCase()])
+        .filter(Boolean),
+    );
+    if (!origins.has("crm")) return null;
+    return OUTSIDE_ORDER.find((origin) => origins.has(origin)) ?? "crm";
+  };
+}
+
+async function applyOps(actor: UserActor, scope: MemoryScope, ops: Ops, existing: Existing[], companyIds: Set<string>, basis?: Basis): Promise<UnitResult> {
   const known = new Map(existing.map((item) => [item.id, item]));
   const personal = scope === "personal";
   return withActor(actor, async (db) => {
     let added = 0;
     let updated = 0;
     let archived = 0;
+    let heldBack = 0;
     const names = personal ? await businessNamesInDb(db, actor) : [];
     const everywhere = (kind: string, text: string, wanted: boolean | null | undefined) => (wanted === true ? mayApplyEverywhere(kind, text, names) : wanted);
     for (const item of (ops.add ?? []).slice(0, 8)) {
       if (!item.title.trim() || !item.body.trim()) continue;
+      const source = basis ? basis(item.evidence) : undefined;
+      if (source === null) {
+        heldBack += 1;
+        continue;
+      }
       await insertMemory(
         db,
         actor,
@@ -169,12 +198,18 @@ async function applyOps(actor: UserActor, scope: MemoryScope, ops: Ops, existing
           allWorkspaces: personal && everywhere(item.kind, `${item.title} ${item.body}`, item.allWorkspaces) === true,
         },
         "learning",
+        source,
       );
       added += 1;
     }
     for (const item of (ops.update ?? []).slice(0, 10)) {
       const current = known.get(item.id);
       if (!current || current.pinned || current.origin !== "learning") continue;
+      const source = basis ? basis(item.evidence) : undefined;
+      if (source === null) {
+        heldBack += 1;
+        continue;
+      }
       const learnedElsewhere = personal && current.workspace_id !== actor.workspaceId;
       if (learnedElsewhere && item.allWorkspaces === false) {
         await insertMemory(
@@ -194,6 +229,7 @@ async function applyOps(actor: UserActor, scope: MemoryScope, ops: Ops, existing
         body: item.body ?? undefined,
         confidence: item.confidence ?? undefined,
         sources: item.sources ?? undefined,
+        source,
         allWorkspaces:
           personal && !learnedElsewhere
             ? (everywhere(current.kind, `${item.title ?? current.title} ${item.body ?? current.body}`, item.allWorkspaces) ?? undefined)
@@ -207,7 +243,7 @@ async function applyOps(actor: UserActor, scope: MemoryScope, ops: Ops, existing
       await db.query("update crm.memories set archived_at = now() where id = $1 and archived_at is null", [item.id]);
       archived += 1;
     }
-    return { added, updated, archived };
+    return { added, updated, archived, ...(heldBack ? { heldBack } : {}) };
   });
 }
 
@@ -322,18 +358,27 @@ async function learnBusiness(actor: UserActor, since: Date, options: Options): P
     companyIds.add(id);
     return `${name} [company ${id}, link /companies/${id}]`;
   };
+  const refs = new Set<string>();
+  const counters = new Map<string, number>();
+  const ref = (letter: string) => {
+    const next = (counters.get(letter) ?? 0) + 1;
+    counters.set(letter, next);
+    refs.add(`${letter}${next}`);
+    return `[${letter}${next}]`;
+  };
+  const noteLetter = (type: string) => (type === "meeting" ? "m" : type === "research" ? "r" : "n");
   const found = [
     gathered.stages.length
-      ? `Deal stage changes:\n${gathered.stages.map((row) => `- ${shortDate(row.created_at)}: ${row.name} (${company(row.company_id, row.company)}${row.value ? `, ${row.currency ?? ""} ${row.value}` : ""}) moved from ${row.changes.before?.stageName ?? row.changes.before?.status ?? "?"} to ${row.changes.after?.stageName ?? row.changes.after?.status ?? "?"}`).join("\n")}`
+      ? `Deal stage changes:\n${gathered.stages.map((row) => `- ${ref("d")} ${shortDate(row.created_at)}: ${row.name} (${company(row.company_id, row.company)}${row.value ? `, ${row.currency ?? ""} ${row.value}` : ""}) moved from ${row.changes.before?.stageName ?? row.changes.before?.status ?? "?"} to ${row.changes.after?.stageName ?? row.changes.after?.status ?? "?"}`).join("\n")}`
       : "",
     gathered.outcomes.length
-      ? `Won and lost deals so far (for the ideal customer profile):\n${gathered.outcomes.map((row) => `- ${row.status.toUpperCase()}: ${row.name}, ${company(row.company_id, row.company)}${row.industry ? `, ${row.industry}` : ""}${row.size ? `, ${row.size}` : ""}${row.value ? `, ${row.currency ?? ""} ${row.value}` : ""}${row.description ? `. ${clip(row.description, 160)}` : ""}`).join("\n")}`
+      ? `Won and lost deals so far (for the ideal customer profile):\n${gathered.outcomes.map((row) => `- ${ref("w")} ${row.status.toUpperCase()}: ${row.name}, ${company(row.company_id, row.company)}${row.industry ? `, ${row.industry}` : ""}${row.size ? `, ${row.size}` : ""}${row.value ? `, ${row.currency ?? ""} ${row.value}` : ""}${row.description ? `. ${clip(row.description, 160)}` : ""}`).join("\n")}`
       : "",
     gathered.calls.length
-      ? `Call summaries:\n${gathered.calls.map((row) => `- ${shortDate(row.updated_at)}, ${company(row.company_id, row.company)}: ${clip(row.summary, 1_000)}${Array.isArray(row.key_points) && row.key_points.length ? ` Key points: ${row.key_points.slice(0, 6).map((point) => clip(typeof point === "string" ? point : JSON.stringify(point), 160)).join("; ")}` : ""}${row.sentiment_reason ? ` Health: ${clip(row.sentiment_reason, 200)}` : ""}`).join("\n")}`
+      ? `Call summaries:\n${gathered.calls.map((row) => `- ${ref("c")} ${shortDate(row.updated_at)}, ${company(row.company_id, row.company)}: ${clip(row.summary, 1_000)}${Array.isArray(row.key_points) && row.key_points.length ? ` Key points: ${row.key_points.slice(0, 6).map((point) => clip(typeof point === "string" ? point : JSON.stringify(point), 160)).join("; ")}` : ""}${row.sentiment_reason ? ` Health: ${clip(row.sentiment_reason, 200)}` : ""}`).join("\n")}`
       : "",
-    gathered.tones.length ? `Tone of emails received:\n${gathered.tones.map((row) => `- ${shortDate(row.created_at)}, ${company(row.company_id, row.company)}: ${row.tone}${row.reason ? `, ${clip(row.reason, 200)}` : ""}${row.title ? ` ("${clip(row.title, 80)}")` : ""}`).join("\n")}` : "",
-    gathered.notes.length ? `Notes and meetings logged:\n${gathered.notes.map((row) => `- ${shortDate(row.occurred_at)}, ${row.type}, ${company(row.company_id, row.company)}: ${clip(row.title, 120)} ${clip(row.body, 500)}`).join("\n")}` : "",
+    gathered.tones.length ? `Tone of emails received:\n${gathered.tones.map((row) => `- ${ref("e")} ${shortDate(row.created_at)}, ${company(row.company_id, row.company)}: ${row.tone}${row.reason ? `, ${clip(row.reason, 200)}` : ""}${row.title ? ` ("${clip(row.title, 80)}")` : ""}`).join("\n")}` : "",
+    gathered.notes.length ? `Notes and meetings logged:\n${gathered.notes.map((row) => `- ${ref(noteLetter(row.type))} ${shortDate(row.occurred_at)}, ${row.type}, ${company(row.company_id, row.company)}: ${clip(row.title, 120)} ${clip(row.body, 500)}`).join("\n")}` : "",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -343,11 +388,12 @@ async function learnBusiness(actor: UserActor, since: Date, options: Options): P
   const ops = await askForOps(
     actor,
     `You keep the shared business memory for ${business}'s CRM, which every member's assistant reads. From the material, learn what helps the team sell and keep customers: the ideal customer profile and audience (who buys, who stalls, who churns), buying triggers, objections and the answers that worked, competitors mentioned and how ${business} compares, pricing reactions, messaging and approaches that get replies or move deals, and patterns behind wins and losses. ` +
-      "Only conclude a pattern when the material supports it, and say how many examples back it. Set companyId only to a company id that appears in the material. Kinds: icp, audience, trigger, objection, competitor, pricing, messaging, win_pattern, loss_pattern, fact.",
+      "Only conclude a pattern when the material supports it, and say how many examples back it. Set companyId only to a company id that appears in the material. Kinds: icp, audience, trigger, objection, competitor, pricing, messaging, win_pattern, loss_pattern, fact. " +
+      'Each line of material starts with a reference such as [d1] or [c2]. Give every note you add or update "evidence": the references of all the lines that support it.',
     material,
     options,
   );
-  return applyOps(actor, "business", ops, existing, companyIds);
+  return applyOps(actor, "business", ops, existing, companyIds, businessBasis(refs));
 }
 
 async function learnMarket(actor: UserActor, options: Options): Promise<UnitResult> {

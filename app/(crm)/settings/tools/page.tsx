@@ -15,6 +15,7 @@ import { listWebhookDeliveries, listWebhooks } from "@/lib/crm/webhooks";
 import { unenrichedCompanyCount } from "@/lib/enrichment/companies";
 import { enrichmentAvailability, getEnrichmentSettings, providerStatuses } from "@/lib/enrichment/settings";
 import { linearStatus } from "@/lib/linear";
+import { linearConnection } from "@/lib/crm/linear-connection";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -22,12 +23,13 @@ export const maxDuration = 60;
 export default async function ToolsSettingsPage() {
   const user = await getUserActor();
   if (!user) redirect("/login");
+  const linearHere = await linearConnection(user);
   const [clickup, enrichment, unenriched, agentMailbox, linear, endpoints, deliveries, headerStore] = await Promise.all([
     getClickUpSettings(user),
     getEnrichmentSettings(user),
     unenrichedCompanyCount(user),
     agentMailboxView(user),
-    linearStatus(),
+    linearHere.here ? linearStatus() : Promise.resolve({ configured: false, team: null, error: null }),
     listWebhooks(user),
     listWebhookDeliveries(user, 20),
     headers(),
@@ -46,7 +48,7 @@ export default async function ToolsSettingsPage() {
         logoLinkReady={Boolean(enrichmentAvailability().logoClientId)}
       />
       <AgentMailboxSettings view={agentMailbox} />
-      <LinearSettings linear={linear} />
+      <LinearSettings linear={linear} connection={linearHere} workspaceName={user.workspaceName} canAdmin={canAdmin} />
       <ApiSettings origin={origin} scopes={[...SCOPES]} />
       <WebhooksSettings endpoints={endpoints} deliveries={deliveries} canAdmin={canAdmin} />
     </SettingsPage>

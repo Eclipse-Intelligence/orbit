@@ -23,7 +23,9 @@ import { PROVIDER_BY_ID, type ContactField } from "@/lib/enrichment/providers";
 import { scheduleIndexing } from "@/lib/knowledge/background";
 import { mapSite } from "@/lib/knowledge/site";
 import { MindcaseError } from "@/lib/mindcase";
-import { callEclipseTool, EclipseMcpError, eclipseGuide, findEclipseTools } from "@/lib/eclipse-mcp";
+import { callEclipseTool, EclipseMcpError, eclipseGuide, findEclipseTools, type EclipseScope } from "@/lib/eclipse-mcp";
+import { ECLIPSE_SCOPED_TOOLS, ECLIPSE_UNAVAILABLE, eclipseScopeFor } from "@/lib/assistant/eclipse-scope";
+import { assertLinearHere } from "@/lib/crm/linear-connection";
 import { checkColdEmail, evidenceFrom, playbookFor, proofListFor, senderFirstName, withProofList } from "@/lib/assistant/cold-email";
 import { brandOrEmpty } from "@/lib/crm/brand";
 import { listProof } from "@/lib/crm/proof";
@@ -244,6 +246,17 @@ function eclipseArguments(args: Args): Record<string, unknown> {
     return parsed as Record<string, unknown>;
   }
   return args.arguments && typeof args.arguments === "object" && !Array.isArray(args.arguments) ? (args.arguments as Record<string, unknown>) : {};
+}
+
+async function withEclipseScope<T>(actor: UserActor, run: (scope: EclipseScope) => Promise<T>): Promise<T | { error: string }> {
+  let scope: EclipseScope | null;
+  try {
+    scope = await eclipseScopeFor(actor);
+  } catch (error) {
+    return { error: error instanceof EclipseMcpError ? error.message : "Eclipse didn't answer." };
+  }
+  if (!scope) return { error: ECLIPSE_UNAVAILABLE };
+  return run(scope);
 }
 
 function withCompany(company: Company) {
@@ -1141,7 +1154,7 @@ function workspaceList(actors: UserActor[]) {
   return actors.map((item) => item.workspaceName).join(", ");
 }
 
-function matchWorkspace(actors: UserActor[], wanted: string) {
+export function matchWorkspace(actors: UserActor[], wanted: string) {
   const plain = wanted.trim().toLowerCase();
   const exact = actors.find((item) => item.workspaceId === wanted.trim() || item.workspaceName.trim().toLowerCase() === plain);
   if (exact) return exact;
@@ -2548,7 +2561,8 @@ const TOOL_LIST: AssistantTool[] = [
     description:
       "How the Eclipse app works for agents: clients and clientId, which tools are reads and which need confirmation, previews and costs, long-running operations, canvases, images, integrations, uploads, limits and error codes. Read it once in a conversation before working in Eclipse.",
     parameters: { type: "object", properties: {} },
-    run: async () => ({ guide: await eclipseGuide().catch((error: Error) => (error instanceof EclipseMcpError ? error.message : "Eclipse didn't answer.")) }),
+    run: async (actor) =>
+      withEclipseScope(actor, async () => ({ guide: await eclipseGuide().catch((error: Error) => (error instanceof EclipseMcpError ? error.message : "Eclipse didn't answer.")) })),
   },
   {
     name: "eclipse_tools",
@@ -2556,10 +2570,12 @@ const TOOL_LIST: AssistantTool[] = [
     description:
       "Search the Eclipse app's own tools (over 300, through its MCP server) by what you want to do, for example 'list clients', 'article status', 'geo visibility trends', 'keyword rankings' or 'create canvas'. Returns matching tool names, whether each is a read or needs approval, their descriptions and exact inputs. Always find a tool here before calling it.",
     parameters: { type: "object", properties: { query: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 20 } }, required: ["query"] },
-    run: async (_actor, args) =>
-      findEclipseTools(required(args.query, "What to look for"), { limit: typeof args.limit === "number" ? args.limit : 8 }).catch((error: Error) => ({
-        error: error instanceof EclipseMcpError ? error.message : "Eclipse didn't answer.",
-      })),
+    run: async (actor, args) =>
+      withEclipseScope(actor, () =>
+        findEclipseTools(required(args.query, "What to look for"), { limit: typeof args.limit === "number" ? args.limit : 8 }).catch((error: Error) => ({
+          error: error instanceof EclipseMcpError ? error.message : "Eclipse didn't answer.",
+        })),
+      ),
   },
   {
     name: "eclipse_read",
@@ -2574,9 +2590,11 @@ const TOOL_LIST: AssistantTool[] = [
       },
       required: ["tool", "argumentsJson"],
     },
-    run: async (_actor, args) =>
-      callEclipseTool(required(args.tool, "A tool name"), eclipseArguments(args), "read").catch(
-        (error: Error) => ({ error: error instanceof EclipseMcpError ? error.message : "Eclipse didn't answer." }),
+    run: async (actor, args) =>
+      withEclipseScope(actor, (scope) =>
+        callEclipseTool(required(args.tool, "A tool name"), eclipseArguments(args), "read", { scope }).catch((error: Error) => ({
+          error: error instanceof EclipseMcpError ? error.message : "Eclipse didn't answer.",
+        })),
       ),
   },
   {
@@ -2609,8 +2627,10 @@ const TOOL_LIST: AssistantTool[] = [
       if (actor.role !== "owner" && actor.role !== "admin") {
         return { error: "Only workspace owners and admins can run Eclipse actions, because they use Orbit's shared Eclipse account. Ask an owner or admin to do it." };
       }
-      return callEclipseTool(required(args.tool, "A tool name"), eclipseArguments(args), "action", { idempotencyKey: context.callId ? keyFor(context.callId) : undefined }).catch(
-        (error: Error) => ({ error: error instanceof EclipseMcpError ? error.message : "Eclipse didn't answer." }),
+      return withEclipseScope(actor, (scope) =>
+        callEclipseTool(required(args.tool, "A tool name"), eclipseArguments(args), "action", { scope, idempotencyKey: context.callId ? keyFor(context.callId) : undefined }).catch(
+          (error: Error) => ({ error: error instanceof EclipseMcpError ? error.message : "Eclipse didn't answer." }),
+        ),
       );
     },
   },
@@ -4792,8 +4812,8 @@ const TOOL_LIST: AssistantTool[] = [
         limit: { type: "integer", minimum: 1, maximum: 50 },
       },
     },
-    run: async (_actor, args) => ({
-      issues: await searchLinearIssues({ query: optionalStr(args.query), includeDone: args.includeDone === true, limit: int(args.limit, 20, 1, 50) }),
+    run: async (actor, args) => ({
+      issues: await assertLinearHere(actor).then(() => searchLinearIssues({ query: optionalStr(args.query), includeDone: args.includeDone === true, limit: int(args.limit, 20, 1, 50) })),
     }),
   },
   {
@@ -4805,7 +4825,10 @@ const TOOL_LIST: AssistantTool[] = [
       properties: { issue: { type: "string", description: `Identifier like ${linearTeamKey()}-123, or the issue id.` } },
       required: ["issue"],
     },
-    run: async (_actor, args) => ({ issue: await getLinearIssue(required(args.issue, "An issue")) }),
+    run: async (actor, args) => {
+      await assertLinearHere(actor);
+      return { issue: await getLinearIssue(required(args.issue, "An issue")) };
+    },
   },
   {
     name: "linear_create_issue",
@@ -4836,6 +4859,7 @@ const TOOL_LIST: AssistantTool[] = [
       ],
     }),
     run: async (actor, args) => {
+      await assertLinearHere(actor);
       let description = str(args.description);
       const companyId = optionalStr(args.companyId);
       if (companyId && isUuid(companyId)) {
@@ -4882,7 +4906,8 @@ const TOOL_LIST: AssistantTool[] = [
         lines: [...changes, comment ? `Comment: ${comment.slice(0, 280)}${comment.length > 280 ? "…" : ""}` : ""],
       };
     },
-    run: async (_actor, args) => {
+    run: async (actor, args) => {
+      await assertLinearHere(actor);
       const issue = required(args.issue, "An issue");
       const changes = { title: optionalStr(args.title), status: optionalStr(args.status), priority: optionalStr(args.priority) };
       const comment = optionalStr(args.comment);
@@ -5133,7 +5158,7 @@ const TOOL_LIST: AssistantTool[] = [
         if (refusal) return { error: refusal };
         return forgetMemory(actor, forgetId);
       }
-      const memory = await rememberNote(actor, args, "assistant");
+      const memory = await rememberNote(actor, args, "assistant", toolSource() === "email" ? "email" : "chat");
       const downgraded = args.shared !== true && args.allWorkspaces === true && memory.allWorkspaces !== true;
       return {
         memory,
@@ -5320,10 +5345,17 @@ export function toolLabel(name: string) {
   return findTool(name)?.label ?? (Object.hasOwn(RETIRED_TOOLS, name) ? RETIRED_TOOLS[name].label : name);
 }
 
-export type ToolOptions = { multiWorkspace?: boolean };
+export type ToolOptions = { multiWorkspace?: boolean; eclipse?: boolean; linear?: boolean };
+
+export const LINEAR_TOOLS: ReadonlySet<string> = new Set(["linear_search_issues", "linear_get_issue", "linear_create_issue", "linear_update_issue"]);
 
 export function assistantTools(options: ToolOptions = {}) {
-  return ASSISTANT_TOOLS.filter((tool) => !(options.multiWorkspace !== true && MULTI_WORKSPACE_TOOLS.has(tool.name)));
+  return ASSISTANT_TOOLS.filter(
+    (tool) =>
+      !(options.multiWorkspace !== true && MULTI_WORKSPACE_TOOLS.has(tool.name)) &&
+      !(options.eclipse === false && ECLIPSE_SCOPED_TOOLS.has(tool.name)) &&
+      !(options.linear === false && LINEAR_TOOLS.has(tool.name)),
+  );
 }
 
 export function toolDefinitions(options: ToolOptions = {}) {
@@ -5396,6 +5428,10 @@ export function dropStrayNulls(value: unknown, schema: unknown): unknown {
     out[key] = property ? dropStrayNulls(item, property) : item;
   }
   return out;
+}
+
+export function isExternalTool(name: string) {
+  return EXTERNAL_TOOLS.has(resolveTool(name)?.tool.name ?? name);
 }
 
 function marked(name: string, output: unknown) {

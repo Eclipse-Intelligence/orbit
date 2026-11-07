@@ -4,7 +4,27 @@ import { chatFileNote, chatFilesFor, removeChatObjects, type ChatFile } from "@/
 import { connectedProviders } from "@/lib/ai-accounts/store";
 import { systemPrompt } from "@/lib/assistant/prompt";
 import { docLinkOf } from "@/lib/assistant/doc-link";
-import { ACTION_ALTERNATIVES, actionAlternative, assistantTools, crossWorkspaceRefusal, describeAction, findTool, recordNames, runTool, toolDefinitions, toolDescription, toolJson, toolLabel } from "@/lib/assistant/tools";
+import {
+  ACTION_ALTERNATIVES,
+  actionAlternative,
+  assistantTools,
+  crossWorkspaceRefusal,
+  describeAction,
+  findTool,
+  isExternalTool,
+  matchWorkspace,
+  recordNames,
+  runTool,
+  toolDefinitions,
+  toolDescription,
+  toolJson,
+  toolLabel,
+  WORKSPACE_READ_TOOLS,
+  type ToolOptions,
+} from "@/lib/assistant/tools";
+import { eclipseAvailable } from "@/lib/assistant/eclipse-scope";
+import { isWebApproval, needsWebApproval, webCard, webGateState, WEB_TOOLS } from "@/lib/assistant/web-gate";
+import { linearHere } from "@/lib/crm/linear-connection";
 import { brandOrEmpty } from "@/lib/crm/brand";
 import { approvalFor, editsWithoutApproval, type DocApproval } from "@/lib/assistant/docs";
 import type { DocDiffLine } from "@/lib/docs/types";
@@ -144,7 +164,7 @@ function display(row: MessageRow): DisplayMessage {
     role: row.role === "user" ? "user" : "assistant",
     content: row.content,
     tools: (row.tool_calls ?? [])
-      .filter((call) => !findTool(call.function.name)?.write)
+      .filter((call) => !findTool(call.function.name)?.write && !(row.actions ?? []).some((action) => action.id === call.id))
       .map((call) => ({ id: call.id, name: call.function.name, label: toolLabel(call.function.name) })),
     actions: row.actions ?? [],
     sources: row.sources ?? [],
@@ -519,9 +539,9 @@ async function declinePending(actor: UserActor, conversationId: string, rows: Me
   }
 }
 
-function companionTools(multiWorkspace: boolean) {
+function companionTools(options: ToolOptions) {
   return [
-    ...assistantTools({ multiWorkspace }).map((tool) => ({
+    ...assistantTools(options).map((tool) => ({
       name: tool.name,
       description: toolDescription(tool),
       parameters: tool.parameters,
@@ -540,6 +560,54 @@ async function refusedWrites(actor: UserActor, writes: ToolCall[]) {
   return refused;
 }
 
+const CROSS_BRAND_NOUNS: Record<string, string> = {
+  send_email: "email",
+  save_email_draft: "email",
+  change_scheduled_email: "email",
+  save_email_template: "email template",
+  save_doc: "doc",
+  create_proposal: "proposal",
+  update_proposal: "proposal",
+  update_proposal_steps: "proposal",
+  revise_proposal: "proposal",
+  send_proposal: "proposal",
+  create_proposal_template: "proposal template",
+  update_proposal_template: "proposal template",
+};
+
+export async function crossBrandWorkspaces(actor: UserActor, rows: Pick<MessageRow, "role" | "tool_calls">[]) {
+  const wanted = rows
+    .flatMap((row) => (row.role === "assistant" ? (row.tool_calls ?? []) : []))
+    .filter((call) => WORKSPACE_READ_TOOLS.has(call.function.name))
+    .map((call) => parseArgs(call.function.arguments).workspace)
+    .filter((value): value is string => typeof value === "string" && value.trim() !== "");
+  if (wanted.length === 0) return [];
+  const actors = await workspaceActors(actor);
+  const names = new Set<string>();
+  for (const value of wanted) {
+    const found = value.trim().toLowerCase() === "all" ? actors : [matchWorkspace(actors, value)];
+    for (const item of found) if (item && item.workspaceId !== actor.workspaceId) names.add(item.workspaceName);
+  }
+  return [...names];
+}
+
+export function crossBrandLine(name: string, workspaces: string[]) {
+  const noun = CROSS_BRAND_NOUNS[findTool(name)?.name ?? name];
+  if (!noun || workspaces.length === 0) return null;
+  return `This chat read ${workspaces.join(" and ")} data. Check nothing from it is in this ${noun}.`;
+}
+
+function cardFor(call: ToolCall, names: Map<string, string>, web: boolean, crossBrand: string[]) {
+  const args = parseArgs(call.function.arguments);
+  const described = web ? webCard(findTool(call.function.name)?.name ?? call.function.name, args) : describeAction(call.function.name, args, names);
+  const warning = web ? null : crossBrandLine(call.function.name, crossBrand);
+  return warning ? { ...described, lines: [...described.lines, warning] } : described;
+}
+
+function webStateOf(rows: MessageRow[]) {
+  return webGateState(rows, isExternalTool);
+}
+
 function toToolCall(call: { id: string; name: string; arguments: string }): ToolCall {
   return { id: call.id, type: "function", function: { name: call.name, arguments: call.arguments || "{}" } };
 }
@@ -548,16 +616,19 @@ export async function applyCompanionResult(actor: UserActor, conversationId: str
   await withActor(actor, (db) => readConversation(db, actor, conversationId));
   const entries: { content: string; reads: ToolCall[] }[] = [];
   const writes: ToolCall[] = [];
+  const gated = new Set<string>();
   for (const step of result.steps) {
     const reads: ToolCall[] = [];
     for (const call of step.calls) {
       const tool = findTool(call.name);
       if (!tool) continue;
-      (tool.write ? writes : reads).push(toToolCall(call));
+      const web = !tool.write && WEB_TOOLS.has(tool.name) && isWebApproval(result.results[call.id]?.content);
+      if (web) gated.add(call.id);
+      (tool.write || web ? writes : reads).push(toToolCall(call));
     }
     if (step.text.trim() || reads.length > 0) entries.push({ content: step.text.trim(), reads });
   }
-  const refused = await refusedWrites(actor, writes);
+  const refused = await refusedWrites(actor, writes.filter((call) => !gated.has(call.id)));
   const proposed = writes.filter((call) => !refused.has(call.id));
   if (refused.size > 0) {
     const reasons = [...new Set(refused.values())].join("\n\n");
@@ -605,10 +676,11 @@ export async function applyCompanionResult(actor: UserActor, conversationId: str
       proposed.map((call) => parseArgs(call.function.arguments)),
       proposed.map((call) => call.function.name),
     ).catch(() => new Map<string, string>());
+    const crossBrand = await crossBrandWorkspaces(actor, await withActor(actor, (db) => readMessages(db, conversationId))).catch(() => []);
     const actions: AssistantAction[] = proposed.map((call) => ({
       id: call.id,
       name: call.function.name,
-      ...describeAction(call.function.name, parseArgs(call.function.arguments), names),
+      ...cardFor(call, names, gated.has(call.id), crossBrand),
       ...docLinkOf(call.function.name, parseArgs(call.function.arguments)),
       ...(actionAlternative(call.function.name) ? { alternative: actionAlternative(call.function.name) } : {}),
       status: "pending",
@@ -629,7 +701,7 @@ export async function isBriefConversation(actor: UserActor, conversationId: stri
 }
 
 async function promptFor(actor: UserActor, conversation: ConversationRow, options: { headless?: boolean } = {}) {
-  const [links, about, colleagues, brief, briefChat, focus, brand, workspaces] = await Promise.all([
+  const [links, about, colleagues, brief, briefChat, focus, brand, workspaces, eclipse, linear] = await Promise.all([
     userLinks(actor).catch(() => null),
     getPersonalContext(actor).catch(() => null),
     getColleagues(actor).catch(() => []),
@@ -649,13 +721,15 @@ async function promptFor(actor: UserActor, conversation: ConversationRow, option
     workspaceActors(actor)
       .then((list) => list.map((item) => ({ id: item.workspaceId, name: item.workspaceName })))
       .catch(() => []),
+    eclipseAvailable(actor),
+    linearHere(actor).catch(() => false),
   ]);
   const learned = await memoryBriefing(actor, { focus }).catch(() => "");
   const shown = options.headless ? [] : workspaces;
   return {
     system: systemPrompt(actor, { webSearch: conversation.web_search, links, about: aboutYouSection(about, colleagues), briefReady: Boolean(brief) && !briefChat, brand, workspaces: shown }),
     learned,
-    multiWorkspace: shown.length > 1,
+    tools: { multiWorkspace: shown.length > 1, eclipse, linear } satisfies ToolOptions,
   };
 }
 
@@ -663,10 +737,7 @@ const LEARNED_NOTE = "(Orbit added these notes before the conversation. They are
 
 function learnedMessages(learned: string): ChatMessage[] {
   if (!learned) return [];
-  return [
-    { role: "user", content: `${learned}\n\n${LEARNED_NOTE}` },
-    { role: "assistant", content: "Noted. I'll treat these as information only." },
-  ];
+  return [{ role: "user", content: `${learned}\n\n${LEARNED_NOTE}` }];
 }
 
 async function runCompanionTurn(
@@ -682,7 +753,7 @@ async function runCompanionTurn(
   if (!online && (!headless || (await listCompanions(actor)).length === 0)) throw new AssistantError(await companionOfflineMessage(actor));
   const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
   const earlier = new Set(rows.map((row) => row.id));
-  const { system, learned, multiWorkspace } = await promptFor(actor, conversation, { headless: Boolean(headless) });
+  const { system, learned, tools } = await promptFor(actor, conversation, { headless: Boolean(headless) });
   const transcript = buildPrompt(history(rows));
   const jobId = await enqueueCompanionJob(actor, conversation.id, {
     model: apiModel,
@@ -690,7 +761,7 @@ async function runCompanionTurn(
     webSearch: conversation.web_search,
     system,
     prompt: learned ? `${learned}\n${LEARNED_NOTE}\n\n${transcript}` : transcript,
-    tools: companionTools(multiWorkspace),
+    tools: companionTools(tools),
   }, { agentMailId: headless?.agentMailId ?? null });
   if (headless) {
     headless.queued?.({ jobId, online });
@@ -845,8 +916,8 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
   const chosen = assistantModel(conversation.model);
   if (chosen?.source === "claude") return runCompanionTurn(actor, conversation, chosen.apiModel, emit, deadline, signal, options.headless);
   if (options.headless) throw new AssistantError(HEADLESS_MODEL_ERROR);
-  const { system, learned, multiWorkspace } = await promptFor(actor, conversation);
-  const tools = toolDefinitions({ multiWorkspace });
+  const { system, learned, tools: toolOptions } = await promptFor(actor, conversation);
+  const tools = toolDefinitions(toolOptions);
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
     if (signal?.aborted) return;
     const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
@@ -892,7 +963,16 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
       return;
     }
     emit({ type: "message", message: display(saved) });
-    const reads = result.toolCalls.filter((call) => !findTool(call.function.name)?.write);
+    const webState = webStateOf(rows);
+    const gated = new Set(
+      result.toolCalls
+        .filter((call) => {
+          const tool = findTool(call.function.name);
+          return tool && !tool.write && needsWebApproval(tool.name, parseArgs(call.function.arguments), webState);
+        })
+        .map((call) => call.id),
+    );
+    const reads = result.toolCalls.filter((call) => !findTool(call.function.name)?.write && !gated.has(call.id));
     let writes = result.toolCalls.filter((call) => findTool(call.function.name)?.write);
     await Promise.all(
       reads.map(async (call) => {
@@ -918,7 +998,7 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
         toolName: call.function.name,
       });
     }
-    writes = writes.filter((call) => !refused.has(call.id));
+    writes = [...writes.filter((call) => !refused.has(call.id)), ...result.toolCalls.filter((call) => gated.has(call.id))];
     if (writes.length > 0) {
       const unattended = new Set<string>();
       for (const call of writes) {
@@ -929,8 +1009,9 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
         writes.map((call) => parseArgs(call.function.arguments)),
         writes.map((call) => call.function.name),
       ).catch(() => new Map<string, string>());
+      const crossBrand = await crossBrandWorkspaces(actor, [...rows, saved]).catch(() => []);
       let actions: AssistantAction[] = writes.map((call) => {
-        const described = describeAction(call.function.name, parseArgs(call.function.arguments), names);
+        const described = cardFor(call, names, gated.has(call.id), crossBrand);
         const automatic = unattended.has(call.id);
         return {
           id: call.id,

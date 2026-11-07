@@ -1,5 +1,6 @@
 import type { CompanionCall, CompanionJob, CompanionRequest, CompanionResult } from "@/companion/src/protocol";
-import { EXTERNAL_NOTICE, findTool, runTool, toolJson } from "@/lib/assistant/tools";
+import { EXTERNAL_NOTICE, findTool, isExternalTool, runTool, toolJson } from "@/lib/assistant/tools";
+import { needsWebApproval, seenTargets, WEB_APPROVAL_MARK, WEB_APPROVAL_RESULT, WEB_TOOLS, webGateState } from "@/lib/assistant/web-gate";
 import { actorFor, type AuthenticatedCompanion } from "@/lib/companion/pairing";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
@@ -307,15 +308,42 @@ async function continueResult(auth: AuthenticatedCompanion, jobId: string, raw: 
   return { content: piece(resultId, stored, offset), isError: false };
 }
 
+async function companionWebState(auth: AuthenticatedCompanion, jobId: string, conversationId: string) {
+  return withActor(auth.actor, async (db) => {
+    const job = await db.query<{ outside_read: boolean; seen_urls: string[] }>("select outside_read, seen_urls from crm.ai_companion_jobs where id = $1", [jobId]);
+    const rows = await db.query<{ role: string; content: string; tool_name: string | null }>(
+      "select role, content, tool_name from crm.assistant_messages where conversation_id = $1 order by seq",
+      [conversationId],
+    );
+    return webGateState(rows.rows, isExternalTool, { outside: job.rows[0]?.outside_read, seen: job.rows[0]?.seen_urls });
+  });
+}
+
+async function noteRead(auth: AuthenticatedCompanion, jobId: string, name: string, content: string) {
+  await withActor(auth.actor, (db) =>
+    db.query(
+      `update crm.ai_companion_jobs set outside_read = outside_read or $2,
+         seen_urls = (select coalesce(array_agg(item), '{}') from (select distinct item from unnest(seen_urls || $3::text[]) as seen(item) limit 5000) as kept)
+       where id = $1 and user_id = $4`,
+      [jobId, isExternalTool(name), [...seenTargets(content)].slice(0, 2_000), auth.actor.userId],
+    ),
+  );
+}
+
 export async function runCompanionTool(auth: AuthenticatedCompanion, jobId: string, call: CompanionCall) {
-  await runningJob(auth, jobId);
+  const job = await runningJob(auth, jobId);
   if (call.name === CONTINUE_RESULT_TOOL.name) return continueResult(auth, jobId, call.arguments);
   const tool = findTool(call.name);
   if (!tool) return { content: toolJson({ error: `There is no tool called ${call.name}.` }), isError: true };
   if (tool.write) return { content: toolJson({ error: "Changes need the user's approval in Orbit." }), isError: true };
+  const args = parseArgs(call.arguments);
+  if (WEB_TOOLS.has(tool.name) && needsWebApproval(tool.name, args, await companionWebState(auth, jobId, job.conversation_id))) {
+    return { content: toolJson({ approvalNeeded: WEB_APPROVAL_MARK, message: WEB_APPROVAL_RESULT }), isError: false };
+  }
   const id = String(call.id || `${call.name}-${Date.now()}`).slice(0, 120);
   await addEvent(auth, jobId, { type: "tool", id, name: tool.name, label: tool.label, status: "running" });
-  const output = (await runTool(auth.actor, call.name, parseArgs(call.arguments))) as Record<string, unknown> | null;
+  const output = (await runTool(auth.actor, call.name, args)) as Record<string, unknown> | null;
+  await noteRead(auth, jobId, tool.name, toolJson(output));
   await addEvent(auth, jobId, { type: "tool", id, name: tool.name, label: tool.label, status: "done" });
   return sendResult(auth, jobId, id, toolJson(output), Boolean(output && typeof output === "object" && "error" in output));
 }

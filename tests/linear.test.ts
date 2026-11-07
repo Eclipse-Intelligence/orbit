@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { after, afterEach, before, describe, it } from "node:test";
-import { TOOL_BY_NAME, describeAction, findTool, runTool } from "@/lib/assistant/tools";
+import { readFileSync } from "node:fs";
+import { TOOL_BY_NAME, describeAction, findTool, runTool, toolDefinitions } from "@/lib/assistant/tools";
+import { connectLinear, disconnectLinear, linearConnection } from "@/lib/crm/linear-connection";
 import { createCompany } from "@/lib/crm/companies";
 import type { UserActor } from "@/lib/crm/types";
-import { getPool } from "@/lib/db/pool";
+import { getAdminPool, getPool } from "@/lib/db/pool";
 import {
   commentOnLinearIssue,
   createLinearIssue,
@@ -175,6 +177,7 @@ describe("linear in the assistant", () => {
     await resetDatabase();
     owner = await createUser("linear@orbit.test", "Mark Ridgeon");
     companyId = (await createCompany(owner, { name: "Acme Linear", domain: "acme-linear.test" })).body.company.id;
+    await connectLinear(owner);
   });
 
   afterEach(() => {
@@ -186,6 +189,7 @@ describe("linear in the assistant", () => {
 
   after(async () => {
     await getPool().end();
+    await getAdminPool().end();
   });
 
   it("only writes to Linear through approved actions", () => {
@@ -269,5 +273,60 @@ describe("linear in the assistant", () => {
     const old = (await runTool(owner, "linear_comment", { issue: "CNT-7", body: "Old card" })) as { comment: { issue: string } };
     assert.equal(old.comment.issue, "CNT-7");
     assert.deepEqual(fake.calls.at(-1)?.variables, { input: { issueId: "uuid-CNT-7", body: "Old card" } });
+  });
+
+  it("belongs to the workspace it's connected in, and refuses everywhere else without saying where", async () => {
+    process.env.LINEAR_API_KEY = "lin_api_test";
+    const fake = fakeLinear();
+    globalThis.fetch = fake.fetchImpl;
+    const other = await createUser("linear-other@orbit.test", "Sam Lee");
+    assert.deepEqual(await linearConnection(owner), { here: true, claimable: false });
+    assert.deepEqual(await linearConnection(other), { here: false, claimable: false });
+    for (const [name, args] of [
+      ["linear_search_issues", { query: "x" }],
+      ["linear_get_issue", { issue: "CNT-7" }],
+      ["linear_create_issue", { title: "Leak" }],
+      ["linear_update_issue", { issue: "CNT-7", comment: "Leak" }],
+    ] as const) {
+      assert.deepEqual(await runTool(other, name, { ...args }), { error: "Linear isn't connected in this workspace.", field: null }, name);
+    }
+    assert.equal(fake.calls.length, 0);
+    const hidden = toolDefinitions({ linear: false }).map((tool) => tool.function.name);
+    assert.ok(!hidden.some((name) => name.startsWith("linear_")));
+    assert.ok(toolDefinitions({ linear: true }).some((tool) => tool.function.name === "linear_create_issue"));
+    await assert.rejects(connectLinear(other), /can't be connected here/);
+    const member = { ...owner, role: "member" as const };
+    await assert.rejects(disconnectLinear(member), /Only workspace owners and admins/);
+
+    await disconnectLinear(owner);
+    assert.deepEqual(await linearConnection(other), { here: false, claimable: true });
+    await connectLinear(other);
+    assert.deepEqual(await linearConnection(owner), { here: false, claimable: false });
+    assert.ok(Array.isArray(((await runTool(other, "linear_search_issues", { query: "x" })) as { issues: unknown[] }).issues));
+    await disconnectLinear(other);
+    await connectLinear(owner);
+  });
+
+  it("connects Linear to the workspace that owns the Eclipse brand when the migration first runs, and the migration runs twice", async () => {
+    const admin = getAdminPool();
+    await admin.query("drop table crm.integration_settings cascade");
+    await admin.query(
+      "insert into crm.workspace_brands (workspace_id, eclipse_tools) values ($1, true) on conflict (workspace_id) do update set eclipse_tools = true",
+      [owner.workspaceId],
+    );
+    const sql = readFileSync("supabase/migrations/20270112300000_assistant_isolation.sql", "utf8");
+    await admin.query(sql);
+    await admin.query(sql);
+    const rows = await admin.query<{ integration: string; workspace_id: string }>("select integration, workspace_id from crm.integration_settings");
+    assert.deepEqual(rows.rows, [{ integration: "linear", workspace_id: owner.workspaceId }]);
+    assert.deepEqual(await linearConnection(owner), { here: true, claimable: false });
+    const client = await admin.connect();
+    try {
+      await client.query("set role authenticated");
+      await assert.rejects(client.query("update crm.workspace_brands set eclipse_tools = true"), /permission denied/);
+    } finally {
+      await client.query("reset role");
+      client.release();
+    }
   });
 });
