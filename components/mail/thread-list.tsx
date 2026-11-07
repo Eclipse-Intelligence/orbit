@@ -410,7 +410,7 @@ export default function ThreadList({
     if (list.current?.contains(document.activeElement) && document.activeElement !== row) row.focus({ preventScroll: true });
   }, [cursor]);
 
-  if (threads.length === 0) {
+  if (shown.length === 0) {
     return (
       <div className="flex flex-1 items-center justify-center px-6 py-16">
         {loading ? (
@@ -434,10 +434,10 @@ export default function ThreadList({
     );
   }
 
-  const focusKey = threads.some((thread) => thread.key === cursor) ? cursor : threads[0].key;
+  const focusKey = threads.some((thread) => thread.key === cursor) ? cursor : (threads[0]?.key ?? null);
 
   return (
-    <div className="flex flex-col pb-[var(--floating-clearance)]">
+    <div className="flex flex-col pb-24 max-md:pb-[var(--floating-clearance)]">
       <ul
         ref={list}
         role="listbox"

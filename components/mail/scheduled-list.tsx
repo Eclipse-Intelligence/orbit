@@ -36,7 +36,7 @@ export default function ScheduledList({
     );
   }
   return (
-    <ul aria-label="Scheduled email" className="flex flex-col gap-px px-2 pb-[var(--floating-clearance)]">
+    <ul aria-label="Scheduled email" className="flex flex-col gap-px px-2 pb-24 max-md:pb-[var(--floating-clearance)]">
       {drafts.map((draft) => (
         <li key={draft.id}>
           <Button

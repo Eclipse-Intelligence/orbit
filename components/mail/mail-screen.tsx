@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type FormEvent } from "react";
+import { createPortal } from "react-dom";
 import Button from "@/components/_ui/button";
 import FilterChip from "@/components/_ui/filter-chip";
 import { Kbd } from "@/components/_ui/command";
@@ -47,7 +48,6 @@ import ThreadReader, { type ReaderAction } from "@/components/mail/thread-reader
 import UnsubscribeDialog, { unsubscribeToast, type UnsubscribeDone, type UnsubscribeRequest } from "@/components/mail/unsubscribe-dialog";
 import { useComposer } from "@/components/mail/compose-dock";
 import { watchEdgeSwipe, type EdgeHandlers } from "@/components/mail/swipe";
-import { useScreenState } from "@/components/crm/quick-add";
 import { useShortcut } from "@/components/shortcuts/shortcuts-provider";
 import { laterOptions } from "@/lib/mail/later";
 import { MAIL_SPLITS, SPLIT_LABELS, type MailSplit, type ComposeAccount, type ComposeIntent, type MailDraft, type MailNav, type ThreadDetail, type ThreadSummary } from "@/lib/mail/view";
@@ -122,22 +122,24 @@ function MailOverscroll() {
   return null;
 }
 
+const QUICK_ADD_SLOT = "[data-quick-add-slot]";
+
+function watchSlot(notify: () => void) {
+  const frame = window.requestAnimationFrame(notify);
+  return () => window.cancelAnimationFrame(frame);
+}
+
 function ComposeButton({ onCompose }: { onCompose: () => void }) {
-  const { covered, lift } = useScreenState();
-  return (
-    <div
-      data-compose-fab=""
-      style={{ "--compose-lift": `${lift}px` } as CSSProperties}
-      className={cn(
-        "ease-power3-out pointer-events-none fixed right-[calc(env(safe-area-inset-right)+1rem)] bottom-[calc(max(calc(env(safe-area-inset-bottom)+1rem),var(--compose-lift))+3.75rem)] z-40 transition-[bottom] duration-200 md:hidden",
-        covered && "invisible",
-      )}
-    >
-      <Button variant="primary" size="md" onClick={onCompose} title="Write an email" className="pointer-events-auto h-12 gap-2 px-5 text-[14px] shadow-[0px_8px_24px_0px_rgba(0,0,0,0.45),0px_0px_0px_1px_#0e0e0e,inset_0px_4px_6px_0px_rgba(255,255,255,0.2),inset_0px_0px_0px_1px_rgba(255,255,255,0.15),inset_0px_-8px_14px_0px_rgba(0,0,0,0.15)]">
+  const slot = useSyncExternalStore(watchSlot, () => document.querySelector<HTMLElement>(QUICK_ADD_SLOT), () => null);
+  if (!slot) return null;
+  return createPortal(
+    <span data-compose-fab="" className="contents md:hidden">
+      <Button variant="primary" size="md" onClick={onCompose} title="Write an email" className="pointer-events-auto h-12 gap-2 px-5 text-[14px] shadow-[0px_8px_24px_0px_rgba(0,0,0,0.45),0px_0px_0px_1px_#0e0e0e,inset_0px_4px_6px_0px_rgba(255,255,255,0.2),inset_0px_0px_0px_1px_rgba(255,255,255,0.15),inset_0px_-8px_14px_0px_rgba(0,0,0,0.15)] md:hidden">
         <ComposeIcon aria-hidden className="size-4" />
         Compose
       </Button>
-    </div>
+    </span>,
+    slot,
   );
 }
 
@@ -318,8 +320,8 @@ export default function MailScreen({
     if (show && key) {
       latest.current = { ...latest.current, open: true };
       setOpen(true);
-      if (opening) setMotion("open");
     }
+    setMotion(opening ? "open" : null);
     if (opening && narrow()) window.history.pushState({ ...window.history.state, mailThread: key }, "", mailUrl(latest.current.query, key));
     else writeUrl(latest.current.query, key);
     if (!key) return;
@@ -853,6 +855,8 @@ export default function MailScreen({
     closeReader();
   });
   const selectedThreads = threads.filter((thread) => selected.has(thread.key));
+  const selectionLabel =
+    selectedThreads.length === 0 ? "" : selectedThreads.length === threads.length && threads.length > 1 ? `All ${selectedThreads.length} selected` : `${selectedThreads.length} selected`;
 
   function bulk(action: "archive" | "trash" | "read" | "flag" | "snooze") {
     const keys = selectedThreads.map((thread) => thread.key);
@@ -1097,12 +1101,10 @@ export default function MailScreen({
             <Button
               variant="secondary"
               size="icon"
-              aria-label={syncing ? "Checking for new mail" : "Check for new mail"}
-              aria-disabled={syncing || undefined}
+              aria-label="Check for new mail"
               title="Check for new mail (Shift R)"
-              onClick={() => {
-                if (!syncing) refresh(true);
-              }}
+              onClick={() => refresh(true)}
+              disabled={syncing}
             >
               <RefreshIcon aria-hidden className={cn("size-3.5", syncing && "animate-spin [animation-direction:reverse]")} />
             </Button>
@@ -1141,7 +1143,10 @@ export default function MailScreen({
             <PushPrompt />
             <div className="lg:hidden">{searchForm("list")}</div>
             <div className="relative">
-              <nav aria-label="Mail folders" className="-mx-1 flex items-center gap-1">
+              <p role="status" className="sr-only">
+                {selectionLabel}
+              </p>
+              <nav aria-label="Mail folders" inert={selectedThreads.length > 0} className="-mx-1 flex items-center gap-1">
                 <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto px-1 pr-5 [mask-image:linear-gradient(to_right,black_calc(100%-1.25rem),transparent)] [scrollbar-width:none]">
                   {splitTabs.map((tab) => {
                     const active = !query.query && query.view === tab.id;
@@ -1214,8 +1219,8 @@ export default function MailScreen({
                   aria-label="Selected conversations"
                   className="animate-in fade-in-0 zoom-in-[0.98] ease-power3-out absolute inset-x-0 top-1/2 z-10 flex h-11 -translate-y-1/2 items-center gap-0.5 rounded-xl border border-line-subtle bg-[color-mix(in_srgb,var(--primary)_14%,var(--popover))] pr-1 pl-3 shadow-overlay duration-150 md:h-10"
                 >
-                  <span role="status" className="ui-style text-foreground mr-auto min-w-0 truncate tabular-nums">
-                    {selectedThreads.length === threads.length && threads.length > 1 ? `All ${selectedThreads.length} selected` : `${selectedThreads.length} selected`}
+                  <span aria-hidden className="ui-style text-foreground mr-auto min-w-0 truncate tabular-nums">
+                    {selectionLabel}
                   </span>
                   {[
                     primaryMove() === "inbox"
