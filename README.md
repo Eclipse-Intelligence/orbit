@@ -334,6 +334,7 @@ Environment:
 | `BROWSERBASE_API_KEY`, `BROWSERBASE_PROJECT_ID` | Optional. Lets the assistant open pages that need JavaScript or block plain requests in a Browserbase browser. |
 | `SUPADATA_API_KEY` | Optional. Reads YouTube transcripts through Supadata when YouTube won't share a video's captions with Orbit directly, and transcribes episodes Orbit can't split. |
 | `SITE_URL` | Production origin, for example `https://orbit.geteclipse.co`. Teams subscriptions are only created when it is set and uses https, and the Granola webhook is registered on it. |
+| `WEBHOOKS_ALLOW_PRIVATE_TARGETS` | Optional, development only. Set to `1` to let outbound webhooks use `http` and private or local addresses such as `127.0.0.1`. Ignored when `NODE_ENV` is `production`. |
 
 ### Granola
 
@@ -796,9 +797,9 @@ Boards sit under Opportunities in the side menu and track clients through stages
 
 Adding happens in place, with no pop-up. On a board, Add company at the foot of a stage (or a click on a stage's empty space) opens a card there: type to find a company, or add a new one, then pick a contact at it or add a new person, and press Enter. The card stays open for the next one, and Esc closes it. The list view has the same row under the list, with a stage picker; Opportunities works the same way and also takes a name (the company's, if left blank) and a value. Contacts and Companies have an add row at the end of the list (name, then email and company, or name and website), and the Add button in the header jumps to it.
 
-A card is a company, at most once per board, with a main contact and a due date. The main contact (and an opportunity's primary contact) must work at that company: the contact search only lists the chosen company's people, picking a contact first fills in their company, and changing the company clears a contact who doesn't work there. Cards drag between stages like opportunities, and there is a list view too. Opening a card shows the activity pad, the company's recent activity and open tasks, and Remove from board. The company page lists the boards it is on.
+A card is a company, at most once per board, with a main contact and a due date. Changing a card's company to one already on the board is refused, and merging two companies that are both on a board keeps the kept company's card, moves the other card's activities, tasks and proposals to it and archives it. Deleting a board archives its cards one by one (up to 500), so each card's archive reaches webhooks and workflows. The main contact (and an opportunity's primary contact) must work at that company: the contact search only lists the chosen company's people, picking a contact first fills in their company, and changing the company clears a contact who doesn't work there. Cards drag between stages like opportunities, and there is a list view too. Opening a card shows the activity pad, the company's recent activity and open tasks, and Remove from board. The company page lists the boards it is on.
 
-When an opportunity is marked won, its company becomes a Customer, and every board with Add companies when a deal is won gets a card for it in its first stage. The assistant can create, rename and delete boards, change their stages and auto-add setting, add companies, and move or remove cards.
+When an opportunity is marked won, its company becomes a Customer, and every board with Add companies when a deal is won gets a card for it in its first stage. Changing which stage is Won or Lost on a pipeline updates each affected deal the same way (stage change event, webhooks, workflow triggers, and the Customer and board steps for newly won deals), up to 250 deals at a time. The assistant can create, rename and delete boards, change their stages and auto-add setting, add companies, and move or remove cards.
 
 ## Proposals and NDAs
 

@@ -59,6 +59,7 @@ type Plan = {
   pipelineKind: string | null;
   stageName: string | null;
   boardConflict: string | null;
+  proposalConflict?: string | null;
   canMove: boolean;
   contactCompanies?: PlanCompanyChoice[];
   companyContacts?: number;
@@ -116,6 +117,7 @@ export type MovePreview = {
   pipelineKind: string | null;
   stageName: string | null;
   boardConflict: string | null;
+  proposalConflict: string | null;
   canMove: boolean;
   contactCompanies: { name: string; others: number }[];
   companyContacts: number;
@@ -322,6 +324,7 @@ export async function previewMoveToWorkspace(actor: Actor, request: MoveRequest)
     pipelineKind: plan.pipelineKind,
     stageName: plan.stageName,
     boardConflict: plan.boardConflict,
+    proposalConflict: plan.proposalConflict ?? null,
     canMove: plan.canMove,
     contactCompanies: (plan.contactCompanies ?? []).map((item) => ({ name: item.name, others: item.others })),
     companyContacts: plan.companyContacts ?? 0,

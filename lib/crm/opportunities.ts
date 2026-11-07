@@ -275,6 +275,21 @@ async function stagePipeline(db: Db, workspaceId: string, stageId: string) {
   return row.pipeline_id;
 }
 
+async function assertBoardFree(db: Db, pipelineId: string, companyId: string, exceptId: string | null) {
+  const existing = await db.query<{ board: string; company: string }>(
+    `select p.name as board, co.name as company
+     from crm.opportunities o
+     join crm.pipelines p on p.id = o.pipeline_id
+     join crm.companies co on co.id = o.company_id
+     where o.pipeline_id = $1 and o.company_id = $2 and o.archived_at is null and p.kind = 'board'
+       and ($3::uuid is null or o.id <> $3::uuid)
+     limit 1`,
+    [pipelineId, companyId, exceptId],
+  );
+  const row = existing.rows[0];
+  if (row) throw new CrmError("conflict", `${row.company} is already on ${row.board}.`, 409, { field: "companyId" });
+}
+
 async function afterWon(db: Db, actor: Actor, opportunity: Opportunity, provenance: Provenance | undefined) {
   const company = await db.query<{ lifecycle: string }>(
     "select lifecycle from crm.companies where id = $1 and workspace_id = $2",
@@ -393,16 +408,7 @@ async function insertOpportunity(
   const board = stage.kind === "board";
   const name = write.name ?? cleanText(fallbackName, 200, "name") ?? (board ? company.name : null);
   if (!name) throw new CrmError("invalid_input", "Enter an opportunity name.", 400, { field: "name" });
-  if (board) {
-    const existing = await db.query<{ name: string }>(
-      `select p.name from crm.opportunities o join crm.pipelines p on p.id = o.pipeline_id
-       where o.pipeline_id = $1 and o.company_id = $2 and o.archived_at is null limit 1`,
-      [stage.pipeline_id, write.companyId],
-    );
-    if (existing.rows[0]) {
-      throw new CrmError("conflict", `${company.name} is already on ${existing.rows[0].name}.`, 409, { field: "companyId" });
-    }
-  }
+  if (board) await assertBoardFree(db, stage.pipeline_id, write.companyId, null);
   const status = write.status ?? statusFor(stage);
   const actorRef = actorIds(actor);
   try {
@@ -466,6 +472,9 @@ async function applyOpportunity(
     write.primaryContactId === undefined ? current.primary_contact_id : write.primaryContactId;
   if (companyId !== current.company_id || contactId !== current.primary_contact_id) {
     await assertContactCompany(db, actor.workspaceId, contactId, companyId);
+  }
+  if (companyId !== current.company_id && current.pipeline_kind === "board" && current.pipeline_id && !current.archived_at) {
+    await assertBoardFree(db, current.pipeline_id, companyId, current.id);
   }
 
   let stage: StageRow | null = null;
@@ -727,6 +736,9 @@ export async function unarchiveOpportunityInDb(db: Db, actor: Actor, id: string,
   const current = await readOpportunity(db, id);
   if (!current) throw new CrmError("not_found", "Opportunity not found.", 404);
   if (!current.archived_at) return { opportunity: mapOpportunity(current) };
+  if (current.pipeline_kind === "board" && current.pipeline_id) {
+    await assertBoardFree(db, current.pipeline_id, current.company_id, current.id);
+  }
   try {
     await db.query("update crm.opportunities set archived_at = null where id = $1", [id]);
   } catch (error) {
@@ -760,6 +772,45 @@ export async function updateOpportunityInDb(
   const current = await readOpportunity(db, id);
   if (!current) throw new CrmError("not_found", "Opportunity not found.", 404);
   return applyOpportunity(db, actor, current, prepareOpportunity(input, "patch"), provenance, options);
+}
+
+export const STAGE_STATUS_CHANGE_LIMIT = 250;
+
+export async function applyStageStatusesInDb(db: Db, actor: Actor, pipelineId: string, provenance: Provenance) {
+  const pending = await db.query<{ id: string }>(
+    `select o.id
+     from crm.opportunities o
+     join crm.pipeline_stages s on s.id = o.stage_id
+     where s.pipeline_id = $1
+       and o.status <> case when s.is_won then 'won' when s.is_lost then 'lost' else 'open' end
+     order by o.created_at asc, o.id asc
+     limit $2`,
+    [pipelineId, STAGE_STATUS_CHANGE_LIMIT + 1],
+  );
+  if (pending.rows.length > STAGE_STATUS_CHANGE_LIMIT) {
+    throw new CrmError(
+      "invalid_input",
+      `This change would move more than ${STAGE_STATUS_CHANGE_LIMIT} deals between open, won and lost at once. Move some of them to another stage first, then save again.`,
+      400,
+    );
+  }
+  if (pending.rows.length === 0) return 0;
+  await lockNamespace(db, actor.workspaceId, "opportunities");
+  let changed = 0;
+  for (const row of pending.rows) {
+    const current = await readOpportunity(db, row.id);
+    if (!current?.stage_id) continue;
+    const result = await applyOpportunity(
+      db,
+      actor,
+      current,
+      prepareOpportunity({ stageId: current.stage_id }, "patch"),
+      provenance,
+      { wonEffects: !current.archived_at },
+    );
+    if (result.changed) changed += 1;
+  }
+  return changed;
 }
 
 export async function moveToProposalStageInDb(

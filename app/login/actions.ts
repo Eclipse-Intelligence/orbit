@@ -8,6 +8,7 @@ import {
   sessionCookieOptions,
   supabaseConfigured,
 } from "@/lib/auth/config";
+import { signInCredentials } from "@/lib/auth/credentials";
 import { signSession } from "@/lib/auth/session";
 import { createSupabaseServer } from "@/lib/auth/supabase";
 import { safeNextPath } from "@/lib/auth/next-path";
@@ -31,8 +32,7 @@ export async function signInAction(
   _state: AuthState,
   formData: FormData,
 ): Promise<AuthState> {
-  const email = text(formData, "email");
-  const password = text(formData, "password");
+  const { email, password } = signInCredentials(formData);
   const kept = { email };
 
   if (!email || !password) {

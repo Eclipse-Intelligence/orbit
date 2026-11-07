@@ -1,4 +1,5 @@
 import { withActor } from "@/lib/crm/context";
+import { query } from "@/lib/db/pool";
 import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import { cleanText } from "@/lib/crm/normalize";
@@ -421,7 +422,10 @@ function mapRun(row: RunRow): RunSummary {
 
 export async function listRuns(actor: UserActor, workflowId: string, limit = 25): Promise<RunSummary[]> {
   return withActor(actor, async (db) => {
-    const result = await db.query<RunRow>(`${RUN_SQL} where r.workflow_id = $1 order by r.created_at desc limit $2`, [workflowId, limit]);
+    const result = await db.query<RunRow>(
+      `${RUN_SQL} where r.workflow_id = $1 and r.owner_id = $3 order by r.created_at desc limit $2`,
+      [workflowId, limit, actor.userId],
+    );
     return result.rows.map(mapRun);
   });
 }
@@ -429,7 +433,7 @@ export async function listRuns(actor: UserActor, workflowId: string, limit = 25)
 export async function getRunSteps(actor: UserActor, runId: string): Promise<{ run: RunSummary; steps: RunStepLog[] }> {
   if (!isUuid(runId)) throw new CrmError("not_found", "Run not found.", 404);
   return withActor(actor, async (db) => {
-    const run = await db.query<RunRow>(`${RUN_SQL} where r.id = $1`, [runId]);
+    const run = await db.query<RunRow>(`${RUN_SQL} where r.id = $1 and r.owner_id = $2`, [runId, actor.userId]);
     if (!run.rows[0]) throw new CrmError("not_found", "Run not found.", 404);
     const steps = await db.query<{
       id: string;
@@ -442,7 +446,7 @@ export async function getRunSteps(actor: UserActor, runId: string): Promise<{ ru
       error: string | null;
       started_at: Date;
       finished_at: Date | null;
-    }>("select * from crm.workflow_run_steps where run_id = $1 order by started_at, finished_at", [runId]);
+    }>("select * from crm.workflow_run_steps where run_id = $1 and owner_id = $2 order by started_at, finished_at", [runId, actor.userId]);
     return {
       run: mapRun(run.rows[0]),
       steps: steps.rows.map((row) => ({
@@ -555,7 +559,15 @@ export async function decideApproval(
     );
     return true;
   });
-  if (!claimed) throw new CrmError("conflict", "This approval has already been dealt with.", 409);
+  if (!claimed) {
+    const others = await query<{ id: string }>("select id from private.waiting_approvals_of_others($1, $2) where id = $3", [
+      actor.userId,
+      actor.workspaceId,
+      runId,
+    ]);
+    if (others.rows[0]) throw new CrmError("forbidden", "Only the person this approval is waiting on can decide it.", 403);
+    throw new CrmError("conflict", "This approval has already been dealt with.", 409);
+  }
   return executeRun(runId, actor.userId, actor.workspaceId, { deadline: Date.now() + 50_000, fetchImpl: options.fetchImpl });
 }
 

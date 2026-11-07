@@ -177,17 +177,40 @@ export async function updateBoard(
   });
 }
 
+export const BOARD_ARCHIVE_CARD_LIMIT = 500;
+
 export async function archiveBoard(actor: Actor, id: string): Promise<{ archived: number }> {
   assertScope(actor.scopes, "opportunities:write");
   return withActor(actor, async (db) => {
     const current = await readBoard(db, actor.workspaceId, id);
     if (!current) throw new CrmError("not_found", "Board not found.", 404);
-    const cards = await db.query(
-      "update crm.opportunities set archived_at = now() where pipeline_id = $1 and archived_at is null",
+    const provenance = { operation: "archive_board" };
+    const open = await db.query<{ total: number }>(
+      "select count(*)::int as total from crm.opportunities where pipeline_id = $1 and archived_at is null",
       [current.id],
     );
+    if ((open.rows[0]?.total ?? 0) > BOARD_ARCHIVE_CARD_LIMIT) {
+      throw new CrmError(
+        "invalid_input",
+        `${current.name} has more than ${BOARD_ARCHIVE_CARD_LIMIT} cards. Archive some of them first, then delete the board.`,
+        400,
+      );
+    }
+    const cards = await db.query<{ id: string; archived_at: Date }>(
+      `update crm.opportunities set archived_at = now()
+       where pipeline_id = $1 and archived_at is null
+       returning id, archived_at`,
+      [current.id],
+    );
+    for (const card of cards.rows) {
+      await recordAudit(db, actor, "opportunity.archived", "opportunity", card.id, provenance, {
+        boardArchived: current.id,
+        before: { archivedAt: null },
+        after: { archivedAt: new Date(card.archived_at).toISOString() },
+      });
+    }
     await db.query("update crm.pipelines set archived_at = now() where id = $1", [current.id]);
-    await recordAudit(db, actor, "board.archived", "pipeline", current.id, { operation: "archive_board" }, {
+    await recordAudit(db, actor, "board.archived", "pipeline", current.id, provenance, {
       before: { name: current.name, cards: current.count },
       after: { archivedAt: new Date().toISOString() },
     });

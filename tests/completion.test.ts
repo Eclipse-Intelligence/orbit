@@ -315,6 +315,7 @@ describe("imports, pipeline, communications, and webhooks", () => {
   });
 
   it("signs a webhook and retries a failed delivery", async () => {
+    process.env.WEBHOOKS_ALLOW_PRIVATE_TARGETS = "1";
     const owner = await createUser("hooks@example.com", "Hooks");
     const hits: { signature: string | null; timestamp: string | null; body: string; event: string | null }[] = [];
     let failOnce = true;
@@ -387,6 +388,7 @@ describe("imports, pipeline, communications, and webhooks", () => {
         (error: unknown) => error instanceof CrmError && error.status === 404,
       );
     } finally {
+      delete process.env.WEBHOOKS_ALLOW_PRIVATE_TARGETS;
       await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
     }
   });
