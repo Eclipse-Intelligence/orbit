@@ -7,7 +7,7 @@ import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool, query } from "@/lib/db/pool";
 import { setMailNotifications } from "@/lib/mail/notify";
 import { syncMail } from "@/lib/mail/sync";
-import { pushKeys, pushToUser, savePushSubscription, type PushSender } from "@/lib/push";
+import { isPushEndpoint, pushKeys, pushToUser, savePushSubscription, type PushSender } from "@/lib/push";
 import { createUser, resetDatabase } from "./helpers";
 
 const GRAPH = "https://graph.microsoft.com/v1.0";
@@ -74,7 +74,7 @@ describe("notifications", () => {
     owner = await createUser("push@orbit.test", "Mark Ridgeon");
     await saveMailbox(owner, { email: "mark@eclipse.test", refreshToken: "refresh", accessToken: "access", expiresAt: new Date(Date.now() + 3_600_000).toISOString() });
     await createContact(owner, { firstName: "Jane", lastName: "Doe", email: "jane@acme.test" });
-    await savePushSubscription(owner, { endpoint: "https://push.example/device-1", keys: { p256dh: "BKey", auth: "auth" } }, "iPhone");
+    await savePushSubscription(owner, { endpoint: "https://fcm.googleapis.com/fcm/send/device-1", keys: { p256dh: "BKey", auth: "auth" } }, "iPhone");
   });
 
   after(async () => {
@@ -92,6 +92,50 @@ describe("notifications", () => {
 
   it("checks a device before saving it", async () => {
     await assert.rejects(() => savePushSubscription(owner, { endpoint: "http://insecure", keys: { p256dh: "x", auth: "y" } }, null), /couldn't set up/);
+  });
+
+  it("only accepts and sends to the known push services", async () => {
+    for (const endpoint of [
+      "https://fcm.googleapis.com/fcm/send/abc",
+      "https://jmt17.google.com/fcm/send/abc",
+      "https://updates.push.services.mozilla.com/wpush/v2/abc",
+      "https://web.push.apple.com/abc",
+      "https://api.push.apple.com/abc",
+      "https://wns2-par02p.notify.windows.com/w/?token=abc",
+    ]) {
+      assert.equal(isPushEndpoint(endpoint), true, endpoint);
+    }
+    for (const endpoint of [
+      "http://fcm.googleapis.com/fcm/send/abc",
+      "https://fcm.googleapis.com:6379/fcm/send/abc",
+      "https://user@fcm.googleapis.com/fcm/send/abc",
+      "https://127.0.0.1/abc",
+      "https://localhost:5432/abc",
+      "https://169.254.169.254/latest/meta-data",
+      "https://push.apple.com.evil.test/abc",
+      "https://evilpush.apple.com/abc",
+      "https://notify.windows.com.evil.test/abc",
+      "https://google.com/fcm/send/abc",
+      "https://web.push.apple.com./abc",
+      "not a url",
+    ]) {
+      assert.equal(isPushEndpoint(endpoint), false, endpoint);
+    }
+    await assert.rejects(
+      () => savePushSubscription(owner, { endpoint: "https://127.0.0.1:6379/", keys: { p256dh: "x", auth: "y" } }, null),
+      /push service isn't one Orbit sends to/,
+    );
+    await getAdminPool().query(
+      `insert into crm.push_subscriptions (workspace_id, user_id, endpoint, p256dh, auth)
+       values ($1, $2, 'https://internal.test:8080/probe', 'BKey', 'auth')`,
+      [owner.workspaceId, owner.userId],
+    );
+    const probe = pusher();
+    const result = await pushToUser(owner, { title: "Orbit", body: "Test", url: "/mail" }, { send: probe.send, endpoint: "https://internal.test:8080/probe" });
+    assert.equal(probe.sent.length, 0);
+    assert.equal(result.sent, 0);
+    assert.match(result.failures[0].reason, /isn't one Orbit sends to/);
+    await getAdminPool().query("delete from crm.push_subscriptions where endpoint = 'https://internal.test:8080/probe'");
   });
 
   it("stays quiet on the first sync, then alerts about new important mail within the same sync", async () => {

@@ -5,6 +5,7 @@ import { cleanLifecycle } from "@/lib/companies";
 import { aiFiltersFromParams, aiSortField } from "@/lib/ai-fields/params";
 import { normalizeTag } from "@/lib/crm/normalize";
 import { appTimeZone, readDateTime, startOfDay } from "@/lib/time";
+import { parseDateValue } from "@/lib/date-input";
 import {
   ACTIVITY_TYPES,
   COMPANY_PRESENCE,
@@ -26,6 +27,27 @@ import {
 } from "@/lib/crm/types";
 
 const nullableText = z.string().nullable().optional();
+
+const LEADING_DATE = /^\s*(\d{4}-\d{2}-\d{2})(?![\d])/;
+
+export function hasImpossibleDate(value: string) {
+  const match = LEADING_DATE.exec(value);
+  return Boolean(match && !parseDateValue(match[1]));
+}
+
+export function assertCalendarDate(value: string | null | undefined, field: string) {
+  if (typeof value === "string" && hasImpossibleDate(value)) {
+    throw new CrmError("invalid_input", `${field}: enter a real calendar date, such as 2026-11-03.`, 400, { field });
+  }
+}
+
+const nullableDate = z
+  .string()
+  .nullable()
+  .optional()
+  .refine((value) => typeof value !== "string" || !hasImpossibleDate(value), {
+    message: "Enter a real calendar date, such as 2026-11-03.",
+  });
 const tagList = z.array(z.string().max(200)).max(100).nullable().optional();
 
 const companyWriteSchema = z
@@ -68,14 +90,28 @@ export const bulkCompanySchema = z
 export function parseInput<T>(schema: z.ZodType<T>, value: unknown): T {
   const result = schema.safeParse(value);
   if (!result.success) {
-    throw new CrmError("invalid_input", "The request body is invalid.", 400, {
-      issues: result.error.issues.map((issue) => ({
-        path: issue.path.join("."),
-        message: issue.message,
-      })),
-    });
+    const issues = result.error.issues.map((issue) => ({
+      path: issue.path.join("."),
+      message: issue.message,
+    }));
+    const first = issues[0];
+    throw new CrmError(
+      "invalid_input",
+      first?.path ? `The request body is invalid: ${first.path}. ${first.message}` : "The request body is invalid.",
+      400,
+      { issues, ...(first?.path ? { field: first.path } : {}) },
+    );
   }
   return result.data;
+}
+
+export function integerParam(params: URLSearchParams, name: string) {
+  const value = params.get(name)?.trim();
+  if (!value) return undefined;
+  if (!/^-?\d{1,9}$/.test(value)) {
+    throw new CrmError("invalid_input", `${name} must be a whole number.`, 400, { field: name });
+  }
+  return Number(value);
 }
 
 export function splitProvenance(input: {
@@ -125,8 +161,8 @@ export function companyQueryFromSearchParams(
   const sort = params.get("sort") ?? undefined;
   const order = params.get("order") ?? undefined;
   const owner = ownerParam(params);
-  const limit = params.get("limit");
-  const offset = params.get("offset");
+  const limit = integerParam(params, "limit");
+  const offset = integerParam(params, "offset");
   const query: CompanyListQuery = {};
 
   const text = params.get("q")?.trim();
@@ -154,8 +190,8 @@ export function companyQueryFromSearchParams(
   if (tag) query.tag = tag;
   if (params.get("quiet") === "true") query.quiet = true;
   if (params.get("include_archived") === "true") query.includeArchived = true;
-  if (limit && Number.isFinite(Number(limit))) query.limit = Number(limit);
-  if (offset && Number.isFinite(Number(offset))) query.offset = Number(offset);
+  if (limit !== undefined) query.limit = limit;
+  if (offset !== undefined) query.offset = offset;
   return query;
 }
 
@@ -188,7 +224,7 @@ const opportunityWriteSchema = z
     value: z.union([z.string(), z.number()]).nullable().optional(),
     currency: nullableText,
     probability: z.number().int().nullable().optional(),
-    expectedCloseDate: nullableText,
+    expectedCloseDate: nullableDate,
     ownerId: z.uuid().nullable().optional(),
     status: z.enum(OPPORTUNITY_STATUSES).optional(),
     source: nullableText,
@@ -200,7 +236,7 @@ const activityWriteSchema = z
     type: z.enum(ACTIVITY_TYPES).optional(),
     title: nullableText,
     body: nullableText,
-    occurredAt: nullableText,
+    occurredAt: nullableDate,
     companyId: z.uuid().nullable().optional(),
     contactId: z.uuid().nullable().optional(),
     opportunityId: z.uuid().nullable().optional(),
@@ -212,7 +248,7 @@ const taskWriteSchema = z
   .object({
     title: z.string().optional(),
     description: nullableText,
-    dueAt: nullableText,
+    dueAt: nullableDate,
     remindMinutes: z.number().int().nullable().optional(),
     priority: z.enum(TASK_PRIORITIES).optional(),
     ownerId: z.uuid().nullable().optional(),
@@ -253,7 +289,16 @@ export const leadSchema = z
 
 export const bulkLeadSchema = z
   .object({
-    leads: z.array(leadSchema.omit({ provenance: true })).min(1).max(50),
+    leads: z
+      .array(
+        leadSchema.omit({ provenance: true }).extend({
+          activity: activityWriteSchema.extend({ occurredAt: nullableText }).optional(),
+          opportunity: opportunityWriteSchema.extend({ expectedCloseDate: nullableText }).optional(),
+          task: taskWriteSchema.extend({ dueAt: nullableText }).optional(),
+        }),
+      )
+      .min(1)
+      .max(50),
     provenance: provenanceSchema.optional(),
   })
   .strict();
@@ -263,7 +308,7 @@ export const communicationSchema = z
     kind: z.enum(["email", "meeting"]),
     title: nullableText,
     body: nullableText,
-    occurredAt: nullableText,
+    occurredAt: nullableDate,
     participantEmails: z.array(z.string().max(200)).max(20).optional(),
     companyId: z.uuid().nullable().optional(),
     contactId: z.uuid().nullable().optional(),
@@ -313,11 +358,9 @@ export function takeProvenance<T extends { provenance?: { source?: string | null
 }
 
 function paging(params: URLSearchParams) {
-  const limit = params.get("limit");
-  const offset = params.get("offset");
   return {
-    limit: limit && Number.isFinite(Number(limit)) ? Number(limit) : undefined,
-    offset: offset && Number.isFinite(Number(offset)) ? Number(offset) : undefined,
+    limit: integerParam(params, "limit"),
+    offset: integerParam(params, "offset"),
   };
 }
 

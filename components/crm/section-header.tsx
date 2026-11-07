@@ -83,7 +83,7 @@ export default function SectionHeader({
           >
             <SearchIcon aria-hidden className="size-3.5" />
           </Button>
-          <Notifications />
+          <Notifications workspaceId={viewer.workspaceId} />
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button

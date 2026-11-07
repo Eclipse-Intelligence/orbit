@@ -3,7 +3,7 @@ import { after } from "next/server";
 
 import type { Db } from "@/lib/db/pool";
 import { withActor } from "@/lib/crm/context";
-import { CrmError, isPgError } from "@/lib/crm/errors";
+import { CrmError, isPgError, itemFailure } from "@/lib/crm/errors";
 import {
   assertOwner,
   iso,
@@ -892,15 +892,9 @@ export async function bulkUpsertCompanies(
         } catch (error) {
           await db.query("rollback to savepoint bulk_item");
           await db.query("release savepoint bulk_item");
-          if (error instanceof CrmError) {
-            results.push({
-              index,
-              status: "error",
-              error: { code: error.code, message: error.message },
-            });
-            continue;
-          }
-          throw error;
+          const failure = itemFailure(error);
+          if (!failure) throw error;
+          results.push({ index, status: "error", error: failure });
         }
       }
       return { results };

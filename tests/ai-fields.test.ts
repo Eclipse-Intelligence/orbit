@@ -27,7 +27,8 @@ import {
   showRuleAsColumn,
   spendThisMonth,
 } from "@/lib/ai-fields/fields";
-import { getAnswer, getCompanyAnswers, markCompanyDue, revertToWebAnswer, setManualAnswer } from "@/lib/ai-fields/answers";
+import { cleanManualValue, getAnswer, getCompanyAnswers, markCompanyDue, revertToWebAnswer, setManualAnswer } from "@/lib/ai-fields/answers";
+import { storedNumber } from "@/lib/ai-fields/cells";
 import { bestExcerpt, checkNowMessage, COMPANIES_PER_RUN, decisionBatches, decisionQuestions, looseNumber, readDecision, runAiFields } from "@/lib/ai-fields/runner";
 import { eventTriggerTypes } from "@/lib/workflows/definition";
 import { createAgent, createUser, queryAsUser, resetDatabase } from "./helpers";
@@ -353,6 +354,41 @@ describe("AI fields", () => {
     assert.equal(restored.answer.manual, false);
     assert.equal(restored.answer.likelihood, 0.95);
     await removeAiField(owner, geo.id);
+  });
+
+  it("saves a blank number answer as Unknown and keeps a real 0", async () => {
+    const field = { kind: "number" as const, options: [], multiple: false };
+    for (const blank of [null, undefined, "", "   ", "\t\n"]) {
+      assert.deepEqual(cleanManualValue(field, blank), { state: "unknown", bool: null, number: null, text: null, options: null }, JSON.stringify(blank));
+    }
+    assert.equal(cleanManualValue(field, 0).number, 0);
+    assert.equal(cleanManualValue(field, "0").number, 0);
+    assert.equal(cleanManualValue(field, " 1,200 ").number, 1200);
+    for (const wrong of [",", true, [], {}, "abc"]) {
+      assert.throws(() => cleanManualValue(field, wrong), /Enter a number/, JSON.stringify(wrong));
+    }
+    assert.equal(cleanManualValue({ kind: "yes_no", options: [], multiple: false }, "  ").state, "unknown");
+    assert.equal(storedNumber(""), null);
+    assert.equal(storedNumber("  "), null);
+    assert.equal(storedNumber(null), null);
+    assert.equal(storedNumber("0"), 0);
+    assert.equal(storedNumber(0), 0);
+    for (const raw of [null, "", "   ", "unknown"]) assert.equal(looseNumber(raw), null, JSON.stringify(raw));
+    assert.equal(looseNumber(0), 0);
+    assert.equal(looseNumber("0"), 0);
+
+    const staff = await saveAiField(owner, { label: "Writers", question: "How many writers does it employ?", kind: "number", fillsSize: false });
+    const blank = await setManualAnswer(owner, staff.id, northlight, "   ");
+    assert.equal(blank.answer.state, "unknown");
+    assert.equal(blank.answer.value, null);
+    assert.equal((await answerRow(staff.id, northlight)).value_number, null);
+    const zero = await setManualAnswer(owner, staff.id, northlight, "0");
+    assert.equal(zero.answer.state, "answered");
+    assert.equal(zero.answer.value, 0);
+    const cleared = await setManualAnswer(owner, staff.id, northlight, null);
+    assert.equal(cleared.answer.state, "unknown");
+    assert.equal(cleared.answer.value, null);
+    await removeAiField(owner, staff.id);
   });
 
   it("records answer changes as audit events that start field changed workflows", async () => {

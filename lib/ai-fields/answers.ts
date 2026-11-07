@@ -4,7 +4,7 @@ import { CrmError } from "@/lib/crm/errors";
 import { isUuid, recordAudit } from "@/lib/crm/mutate";
 import type { Actor, Provenance } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
-import { ANSWER_SQL, answerFor, rowValue, type AnswerRow } from "@/lib/ai-fields/cells";
+import { ANSWER_SQL, answerFor, rowValue, storedNumber, type AnswerRow } from "@/lib/ai-fields/cells";
 import { assertFieldAdmin, readField, readFields, scopeMembership, type StoredField } from "@/lib/ai-fields/fields";
 import { displayAiValue, sizeForStaff, type AiAnswer, type AiValue } from "@/lib/ai-fields/types";
 
@@ -87,14 +87,15 @@ type ManualValue = { state: "answered" | "unknown"; bool: boolean | null; number
 
 export function cleanManualValue(field: Pick<StoredField, "kind" | "options" | "multiple">, value: unknown): ManualValue {
   const unknown: ManualValue = { state: "unknown", bool: null, number: null, text: null, options: null };
-  if (value === null || value === undefined || value === "") return unknown;
+  if (value === null || value === undefined || (typeof value === "string" && value.trim() === "")) return unknown;
   if (field.kind === "yes_no") {
     if (value === true || value === "yes") return { ...unknown, state: "answered", bool: true };
     if (value === false || value === "no") return { ...unknown, state: "answered", bool: false };
     throw new CrmError("invalid_input", "Choose Yes, No or Unknown.", 400, { field: "value" });
   }
   if (field.kind === "number") {
-    const number = typeof value === "number" ? value : Number(String(value).replace(/[,\s]/g, ""));
+    const digits = typeof value === "string" ? value.replace(/[,\s]/g, "") : "";
+    const number = typeof value === "number" ? value : digits ? Number(digits) : Number.NaN;
     if (!Number.isFinite(number) || Math.abs(number) > 1e12) throw new CrmError("invalid_input", "Enter a number.", 400, { field: "value" });
     return { ...unknown, state: "answered", number };
   }
@@ -134,7 +135,7 @@ export async function setManualAnswer(actor: Actor, fieldId: string, companyId: 
           ? {
               state: current.state,
               bool: current.value_bool,
-              number: current.value_number === null ? null : Number(current.value_number),
+              number: storedNumber(current.value_number),
               text: current.value_text,
               options: current.value_options,
               likelihood: current.likelihood,

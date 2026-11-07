@@ -110,6 +110,15 @@ describe("workflow variables", () => {
     assert.equal(check({ left: "{{steps.ai_1.nothing}}", op: "is_empty" }, vars), true);
   });
 
+  it("never reads tokens from the object prototype", () => {
+    const vars = { company: { name: "Acme" }, steps: { ai_1: { risks: ["A"] } } };
+    for (const token of ["constructor", "__proto__", "toString", "hasOwnProperty", "company.constructor", "company.__proto__", "company.toString", "company.hasOwnProperty", "constructor.name", "steps.ai_1.risks.constructor", "company.name.constructor"]) {
+      assert.equal(render(`[{{${token}}}]`, vars), "[]", token);
+      assert.equal(check({ left: `{{${token}}}`, op: "is_empty" }, vars), true, token);
+    }
+    assert.equal(render("{{company.name}}", vars), "Acme");
+  });
+
   it("works out the next scheduled run in London time", () => {
     const next = nextScheduleRun({ type: "schedule", frequency: "weekly", weekday: 1, time: "09:00" }, new Date("2026-10-19T10:00:00Z"), "Europe/London");
     assert.equal(next.toISOString(), "2026-10-26T09:00:00.000Z");

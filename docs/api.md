@@ -63,7 +63,7 @@ Optional `Idempotency-Key` header (printable ASCII, up to 200 characters). Reuse
 | `POST` | `/docs` | Create a doc: `title`, `content` (Markdown), `folderId`, `shared`, `provenance`. Always shared with the workspace. 201 | `docs:write` |
 | `GET` | `/docs/folders` | Shared folders, with parent and position | `docs:read` |
 | `GET` | `/docs/:id` | One doc with its links, mentions and folder path, and its text from `offset` (100,000 characters, with `nextOffset`) | `docs:read` |
-| `PATCH` | `/docs/:id` | Any of `title` (rename, rewriting links to it), `content` (replace), `append`, `find` with `replace` (and `all`), `folderId` (null for no folder; with `allowVisibilityChange` when the move changes who sees it), `shared`, `baseRevision` (409 if the doc changed before any of the changes), applied in that order in one transaction, so a refused change leaves the doc as it was | `docs:write` |
+| `PATCH` | `/docs/:id` | Any of `title` (rename, rewriting links to it), `content` (replace), `find` with `replace` (and `all`, matched against the text before anything is appended), `append`, `folderId` (null for no folder; with `allowVisibilityChange` when the move changes who sees it), `shared`, `baseRevision` (409 if the doc changed before any of the changes), applied in that order in one transaction, so a refused change leaves the doc as it was | `docs:write` |
 | `DELETE` | `/docs/:id` | Archive | `docs:write` |
 | `GET` | `/activities` | List activity | `crm:read` |
 | `POST` | `/activities` | Append an activity | `activities:write` |
@@ -85,7 +85,7 @@ Optional `Idempotency-Key` header (printable ASCII, up to 200 characters). Reuse
 | `DELETE` | `/webhooks/:id` | Archive an endpoint | `admin` |
 | `GET` | `/webhooks/deliveries` | The 50 most recent delivery attempts | `crm:read` |
 
-`GET /companies`, `/contacts`, `/opportunities`, `/activities` and `/tasks` take `limit` (1 to 100, default 50) and `offset` (up to 10,000). `owner` (or `owner_id`) takes a member id, `unassigned`, or `all` for no filter.
+`GET /companies`, `/contacts`, `/opportunities`, `/activities` and `/tasks` take `limit` (1 to 100, default 50) and `offset` (up to 10,000). `limit` and `offset` must be whole numbers, and dates must be real calendar dates (no 30 February); anything else is a 400 `invalid_input` that usually names the field in `details.field`. `owner` (or `owner_id`) takes a member id, `unassigned`, or `all` for no filter.
 
 ## Companies
 
@@ -199,7 +199,7 @@ Agent tokens see every task in the workspace; people in the app only see tasks t
 
 `GET /api/v1/companies/:id/context` returns the company, its contacts, opportunities, recent activities, open tasks, `lastInteraction`, `openTaskCount`, `relationshipStatus` (`new`, `active`, `quiet`, or `needs_action`), and `timeline`: the company's activities plus those of its current contacts, newest first. `insights` maps the id of each call in the timeline that has a summary to its summary, key points, suggested actions, status, and `sentiment` (`healthy`, `watch`, `at_risk` or null) with `sentimentReason` (the transcript is not included). The company carries `health`, `healthReason`, `healthAt` and `healthActivityId`.
 
-`GET /api/v1/relationships/stale` lists companies with no interaction in the last 21 days. `days` and `limit` are optional.
+`GET /api/v1/relationships/stale` lists companies with no interaction in the last 21 days. `days` and `limit` are optional whole numbers; anything else is a 400 `invalid_input`.
 
 ## Import and export
 

@@ -58,7 +58,7 @@ describe("alerts", () => {
     await resetDatabase();
     owner = await createUser("alerts@orbit.test", "Mark Ridgeon");
     await saveMailbox(owner, { email: "mark@eclipse.test", refreshToken: "refresh", accessToken: "access", expiresAt: new Date(Date.now() + 3_600_000).toISOString() });
-    await savePushSubscription(owner, { endpoint: "https://push.example/phone", keys: { p256dh: "BKey", auth: "auth" } }, "iPhone");
+    await savePushSubscription(owner, { endpoint: "https://web.push.apple.com/phone", keys: { p256dh: "BKey", auth: "auth" } }, "iPhone");
     const admin = getAdminPool();
     connectionId = (await admin.query<{ id: string }>("select id from crm.mailbox_connections where user_id = $1", [owner.userId])).rows[0].id;
     calendarId = (
