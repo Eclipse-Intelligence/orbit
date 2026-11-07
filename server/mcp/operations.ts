@@ -328,16 +328,18 @@ export function registerMoveTool(server: McpServer, actor: Actor, workspaces: { 
   server.registerTool(
     "move_records_to_workspace",
     {
-      description: `Move companies or contacts from this workspace to another of your workspaces (${others.map((item) => item.name).join(", ")}), or copy them there with copy. A company takes its contacts, deals, tasks, activity, emails, proposals and knowledge, and comes off this workspace's boards. A contact moved on their own brings their company, unless the other workspace already has it (they are linked to it) or colleagues stay behind (the company is copied). Records the other workspace already has (same domain or LinkedIn, or same email, LinkedIn or Sales Navigator) are merged into, filling only empty fields. Deals go on the other workspace's pipeline, in the stage with the same name, unless pipeline_id and stage_id say otherwise. A copy keeps everything here, copies activity, and copies deals only with copy_deals. AI field answers and web signals don't travel, so the other workspace's AI fields fill in on their own schedule. Moving needs owner or admin here; any member of both workspaces can copy. A move records moved_out and moved_in audit events, never created ones; a copy records created events in the other workspace.`,
+      description: `Move companies or contacts from this workspace to another of your workspaces (${others.map((item) => item.name).join(", ")}), or copy them there with copy. A company takes its contacts, deals, tasks, activity, emails, proposals and knowledge, and comes off this workspace's boards. With include_contacts false a company moves without its contacts, who stay here without a company with their own activity and tasks; its deals still go and lose a primary contact who stays. A contact brings their company and its other contacts (include_company, true by default); with include_company false a contact moves alone and brings their company only when nobody else works there, is linked to the company the other workspace already has, or gets a copy of it when colleagues stay behind. Records the other workspace already has (same domain or LinkedIn, or same email, LinkedIn or Sales Navigator) are merged into, filling only empty fields. Deals go on the other workspace's pipeline, in the stage with the same name, unless pipeline_id and stage_id say otherwise. A copy keeps everything here, copies activity, and copies deals only with copy_deals. AI field answers and web signals don't travel, so the other workspace's AI fields fill in on their own schedule. Moving needs owner or admin here; any member of both workspaces can copy. A move records moved_out and moved_in audit events, never created ones; a copy records created events in the other workspace.`,
       inputSchema: {
         to_workspace: z.string().min(1).describe("The other workspace's name or id."),
         company_ids: z.array(z.uuid()).max(100).optional(),
         contact_ids: z.array(z.uuid()).max(100).optional(),
         copy: z.boolean().optional(),
         copy_deals: z.boolean().optional(),
+        include_company: z.boolean().optional().describe("For contacts: also move their company and its other contacts. Defaults to true."),
+        include_contacts: z.boolean().optional().describe("For companies: also move their contacts. Defaults to true; false leaves them here without a company."),
         pipeline_id: z.uuid().optional().describe("Pipeline or board in the other workspace for the deals."),
         stage_id: z.uuid().optional().describe("Stage on that pipeline or board."),
-        dry_run: z.boolean().optional().describe("Return what would move, merge and stay behind, without changing anything."),
+        dry_run: z.boolean().optional().describe("Return what would move, merge and stay behind (leftBehind), without changing anything."),
         ...provenanceFields,
       },
     },
@@ -349,6 +351,8 @@ export function registerMoveTool(server: McpServer, actor: Actor, workspaces: { 
           contactIds: args.contact_ids ?? [],
           copy: args.copy === true,
           copyDeals: args.copy_deals === true,
+          includeCompany: args.include_company !== false,
+          includeContacts: args.include_contacts !== false,
           pipelineId: args.pipeline_id ?? null,
           stageId: args.stage_id ?? null,
         };

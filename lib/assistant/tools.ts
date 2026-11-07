@@ -929,7 +929,15 @@ const MULTI_WORKSPACE_TOOLS: ReadonlySet<string> = new Set([MOVE_TOOL]);
 const CROSS_WORKSPACE_ARGS: Record<string, string[]> = { [MOVE_TOOL]: ["companyIds", "contactIds"] };
 
 function moveCardKey(args: Args) {
-  return ["move", str(args.toWorkspace), ...strings(args.companyIds), ...strings(args.contactIds), args.copy === true ? "copy" : "move"].join("|");
+  return [
+    "move",
+    str(args.toWorkspace),
+    ...strings(args.companyIds),
+    ...strings(args.contactIds),
+    args.copy === true ? "copy" : "move",
+    args.includeCompany === false ? "alone" : "with-company",
+    args.includeContacts === false ? "without-contacts" : "with-contacts",
+  ].join("|");
 }
 
 function countedParts(parts: [number, string, string][]) {
@@ -950,6 +958,7 @@ function moveCardDetails(key: string, preview: MovePreview, copy: boolean, copyD
     ...preview.links.map((link) => (link.matched ? `Linked to existing ${link.into}` : `${link.name} stays here, and a copy goes over`)),
   ];
   const where = preview.pipelineKind === "board" ? preview.pipelineName : "the pipeline";
+  const staying = preview.leftBehind.join(", ");
   return {
     [`${key}:goes`]: goes.length > 0 ? `${copy ? "Copies" : "Goes with them"}: ${goes.join(", ")}` : copy ? "Copies the details only" : "Nothing else goes with them",
     [`${key}:along`]: along.join("; "),
@@ -957,6 +966,12 @@ function moveCardDetails(key: string, preview: MovePreview, copy: boolean, copyD
     [`${key}:deals`]: deals > 0 ? `Deals go to ${where ?? "the pipeline"}, ${preview.stageName ?? "the stage with the same name"}` : "",
     [`${key}:boards`]: !copy && preview.boards.length > 0 ? `Comes off ${preview.boards.join(", ")}` : "",
     [`${key}:behind`]: preview.aiFields.length > 0 ? `Not carried over: AI fields ${preview.aiFields.join(", ")}` : "",
+    [`${key}:proposals`]: preview.proposalContacts.length > 0 ? `Goes too, named on a proposal: ${preview.proposalContacts.join(", ")}` : "",
+    [`${key}:stays`]: staying ? (copy ? `Not copied: ${staying}` : `Stay here without a company: ${staying}`) : "",
+    [`${key}:primary`]:
+      !copy && preview.dealsLosingContact > 0
+        ? `${preview.dealsLosingContact === 1 ? "1 deal loses its" : `${preview.dealsLosingContact} deals lose their`} main contact`
+        : "",
   };
 }
 
@@ -3133,7 +3148,7 @@ const TOOL_LIST: AssistantTool[] = [
     name: MOVE_TOOL,
     label: "Moving to another workspace",
     write: true,
-    description: `Move companies or people from this workspace to another of the user's workspaces, or copy them there with copy (up to ${MOVE_LIMIT}). A company takes its people, deals, tasks, activity, emails, proposals and Knowledge, and comes off this workspace's boards. A person moved on their own brings their company, unless toWorkspace already has it (they are linked to it) or colleagues stay behind (the company is copied). A company or person toWorkspace already has (same domain or LinkedIn, or same email, LinkedIn or Sales Navigator) is merged into it, filling only empty fields. Deals go on pipelineId and stageId from toWorkspace (from get_pipeline or list_boards with workspace), by default its pipeline and the stage with the same name. A copy keeps everything here, copies activity, and copies deals only with copyDeals. AI field answers don't travel. Moving needs owner or admin in this workspace; any member of both can copy.`,
+    description: `Move companies or people from this workspace to another of the user's workspaces, or copy them there with copy (up to ${MOVE_LIMIT}). A company takes its people, deals, tasks, activity, emails, proposals and Knowledge, and comes off this workspace's boards; with includeContacts false its people stay here without a company, keeping their own activity and tasks. A person brings their company and its other people (includeCompany, on by default); with includeCompany false a person moves alone and brings their company only when nobody else works there, is linked to the company toWorkspace already has, or gets a copy of it when colleagues stay behind. A company or person toWorkspace already has (same domain or LinkedIn, or same email, LinkedIn or Sales Navigator) is merged into it, filling only empty fields. Deals go on pipelineId and stageId from toWorkspace (from get_pipeline or list_boards with workspace), by default its pipeline and the stage with the same name. A copy keeps everything here, copies activity, and copies deals only with copyDeals. AI field answers don't travel. Moving needs owner or admin in this workspace; any member of both can copy.`,
     parameters: {
       type: "object",
       properties: {
@@ -3142,6 +3157,14 @@ const TOOL_LIST: AssistantTool[] = [
         contactIds: { type: "array", items: { type: "string" }, description: "People to move." },
         copy: { type: "boolean", description: "Keep them in this workspace too and copy them over." },
         copyDeals: { type: "boolean", description: "With copy, copy their deals too." },
+        includeCompany: {
+          type: "boolean",
+          description: "For people: also move (or copy) their company, which takes all its people, deals and activity. Defaults to true. False moves only the people, linking them to their company as described above.",
+        },
+        includeContacts: {
+          type: "boolean",
+          description: "For companies: also move (or copy) their people. Defaults to true. False leaves the people here without a company, with their own activity and tasks; deals still go with the company and lose a main contact who stays.",
+        },
         pipelineId: idParam("Pipeline or board in toWorkspace for the deals."),
         stageId: idParam("Stage on that pipeline or board. Leave it out to match each deal's stage by name."),
       },
@@ -3158,6 +3181,8 @@ const TOOL_LIST: AssistantTool[] = [
           contactIds: strings(args.contactIds),
           copy: args.copy === true,
           copyDeals: args.copyDeals === true,
+          includeCompany: args.includeCompany !== false,
+          includeContacts: args.includeContacts !== false,
           pipelineId: str(args.pipelineId) || null,
           stageId: str(args.stageId) || null,
         });
@@ -3187,6 +3212,9 @@ const TOOL_LIST: AssistantTool[] = [
           detail("merges"),
           detail("deals"),
           detail("boards"),
+          detail("proposals"),
+          detail("stays"),
+          detail("primary"),
           detail("behind"),
           detail("error") ? `Check first: ${detail("error")}` : "",
         ],
@@ -3201,6 +3229,8 @@ const TOOL_LIST: AssistantTool[] = [
           contactIds: strings(args.contactIds),
           copy: args.copy === true,
           copyDeals: args.copyDeals === true,
+          includeCompany: args.includeCompany !== false,
+          includeContacts: args.includeContacts !== false,
           pipelineId: str(args.pipelineId) || null,
           stageId: str(args.stageId) || null,
         },

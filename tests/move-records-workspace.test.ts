@@ -15,6 +15,7 @@ import { listTags } from "@/lib/crm/tags";
 import { createTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { createWebhook } from "@/lib/crm/webhooks";
+import { describeUndo } from "@/lib/crm/undo";
 import { createWorkspace } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { createCrmMcpServer } from "@/server/mcp/server";
@@ -62,6 +63,28 @@ function refused(code: string, pattern?: RegExp) {
     if (pattern) assert.match(error.message, pattern);
     return true;
   };
+}
+
+async function crossWorkspaceLinks() {
+  return admin<{ link: string; id: string }>(
+    `select 'contact.company' as link, x.id from crm.contacts x join crm.companies r on r.id = x.company_id where r.workspace_id <> x.workspace_id
+     union all select 'deal.company', x.id from crm.opportunities x join crm.companies r on r.id = x.company_id where r.workspace_id <> x.workspace_id
+     union all select 'deal.primary_contact', x.id from crm.opportunities x join crm.contacts r on r.id = x.primary_contact_id where r.workspace_id <> x.workspace_id
+     union all select 'activity.company', x.id from crm.activities x join crm.companies r on r.id = x.company_id where r.workspace_id <> x.workspace_id
+     union all select 'activity.contact', x.id from crm.activities x join crm.contacts r on r.id = x.contact_id where r.workspace_id <> x.workspace_id
+     union all select 'activity.deal', x.id from crm.activities x join crm.opportunities r on r.id = x.opportunity_id where r.workspace_id <> x.workspace_id
+     union all select 'task.company', x.id from crm.tasks x join crm.companies r on r.id = x.company_id where r.workspace_id <> x.workspace_id
+     union all select 'task.contact', x.id from crm.tasks x join crm.contacts r on r.id = x.contact_id where r.workspace_id <> x.workspace_id
+     union all select 'task.deal', x.id from crm.tasks x join crm.opportunities r on r.id = x.opportunity_id where r.workspace_id <> x.workspace_id
+     union all select 'document.company', x.id from crm.documents x join crm.companies r on r.id = x.company_id where r.workspace_id <> x.workspace_id
+     union all select 'document.contact', x.id from crm.documents x join crm.contacts r on r.id = x.contact_id where r.workspace_id <> x.workspace_id
+     union all select 'document.deal', x.id from crm.documents x join crm.opportunities r on r.id = x.opportunity_id where r.workspace_id <> x.workspace_id
+     union all select 'company.health_activity', x.id from crm.companies x join crm.activities r on r.id = x.health_activity_id where r.workspace_id <> x.workspace_id
+     union all select 'call_insight.company', x.id from crm.call_insights x join crm.companies r on r.id = x.company_id where r.workspace_id <> x.workspace_id
+     union all select 'call_insight.contact', x.id from crm.call_insights x join crm.contacts r on r.id = x.contact_id where r.workspace_id <> x.workspace_id
+     union all select 'follow_up.company', x.id from crm.follow_up_suggestions x join crm.companies r on r.id = x.company_id where r.workspace_id <> x.workspace_id
+     union all select 'follow_up.contact', x.id from crm.follow_up_suggestions x join crm.contacts r on r.id = x.contact_id where r.workspace_id <> x.workspace_id`,
+  );
 }
 
 before(async () => {
@@ -187,10 +210,10 @@ describe("moving records to another workspace", () => {
     await logActivity(eclipse, { companyId: source.id, contactId: ann.id }, "note", "", "Ann wants a demo");
     const there = await company(ridgeon, "Northwind Trading", { domain: "northwind-move.test" });
 
-    const preview = await previewMoveToWorkspace(eclipse, { contactIds: [ann.id], workspaceId: ridgeon.workspaceId });
+    const preview = await previewMoveToWorkspace(eclipse, { contactIds: [ann.id], workspaceId: ridgeon.workspaceId, includeCompany: false });
     assert.deepEqual(preview.links, [{ name: "Northwind", into: "Northwind Trading", matched: true }]);
 
-    await moveRecordsToWorkspace(eclipse, { contactIds: [ann.id], workspaceId: ridgeon.workspaceId }, PROVENANCE);
+    await moveRecordsToWorkspace(eclipse, { contactIds: [ann.id], workspaceId: ridgeon.workspaceId, includeCompany: false }, PROVENANCE);
     const moved = await admin<{ workspace_id: string; company_id: string }>("select workspace_id, company_id from crm.contacts where id = $1", [ann.id]);
     assert.deepEqual(moved[0], { workspace_id: ridgeon.workspaceId, company_id: there.id });
     const stayed = await admin<{ workspace_id: string }>(
@@ -208,9 +231,9 @@ describe("moving records to another workspace", () => {
   it("brings a contact's company along when nobody else works there", async () => {
     const solo = await company(eclipse, "Solo Studio", { domain: "solo-move.test" });
     const zoe = await contact(eclipse, { firstName: "Zoe", lastName: "King", companyId: solo.id });
-    const preview = await previewMoveToWorkspace(eclipse, { contactIds: [zoe.id], workspaceId: ridgeon.workspaceId });
+    const preview = await previewMoveToWorkspace(eclipse, { contactIds: [zoe.id], workspaceId: ridgeon.workspaceId, includeCompany: false });
     assert.deepEqual(preview.companiesAlong, ["Solo Studio"]);
-    await moveRecordsToWorkspace(eclipse, { contactIds: [zoe.id], workspaceId: ridgeon.workspaceId }, PROVENANCE);
+    await moveRecordsToWorkspace(eclipse, { contactIds: [zoe.id], workspaceId: ridgeon.workspaceId, includeCompany: false }, PROVENANCE);
     const rows = await admin<{ workspace_id: string }>(
       "select workspace_id from crm.companies where id = $1 union all select workspace_id from crm.contacts where id = $2",
       [solo.id, zoe.id],
@@ -224,7 +247,7 @@ describe("moving records to another workspace", () => {
     const kim = await contact(eclipse, { firstName: "Kim", lastName: "Ward", companyId: shared.id });
     const ianProposal = await proposal(eclipse, shared.id, ian.id, "Proposal for Ian");
     const kimProposal = await proposal(eclipse, shared.id, kim.id, "Proposal for Kim");
-    await moveRecordsToWorkspace(eclipse, { contactIds: [ian.id], workspaceId: ridgeon.workspaceId }, PROVENANCE);
+    await moveRecordsToWorkspace(eclipse, { contactIds: [ian.id], workspaceId: ridgeon.workspaceId, includeCompany: false }, PROVENANCE);
     const copy = await admin<{ id: string; industry: string }>(
       "select id, industry from crm.companies where workspace_id = $1 and domain = 'shared-move.test'",
       [ridgeon.workspaceId],
@@ -260,7 +283,7 @@ describe("moving records to another workspace", () => {
     await contact(eclipse, { firstName: "Leo", lastName: "Park", companyId: source.id });
     const document = await proposal(eclipse, source.id, lena.id, "Proposal for Lena");
     const there = await company(ridgeon, "Linked Company", { domain: "linked-move.test" });
-    await moveRecordsToWorkspace(eclipse, { contactIds: [lena.id], workspaceId: ridgeon.workspaceId }, PROVENANCE);
+    await moveRecordsToWorkspace(eclipse, { contactIds: [lena.id], workspaceId: ridgeon.workspaceId, includeCompany: false }, PROVENANCE);
     const row = await admin<{ workspace_id: string; company_id: string; contact_id: string }>(
       "select workspace_id, company_id, contact_id from crm.documents where id = $1",
       [document],
@@ -277,7 +300,7 @@ describe("moving records to another workspace", () => {
     const gail = await contact(eclipse, { firstName: "Gail", lastName: "Gone", companyId: gone.id });
     await contact(eclipse, { firstName: "Gus", lastName: "Gone", companyId: gone.id });
     await admin("update crm.companies set archived_at = now() where id = $1", [gone.id]);
-    await moveRecordsToWorkspace(eclipse, { contactIds: [gail.id], workspaceId: ridgeon.workspaceId }, PROVENANCE);
+    await moveRecordsToWorkspace(eclipse, { contactIds: [gail.id], workspaceId: ridgeon.workspaceId, includeCompany: false }, PROVENANCE);
     const copy = await admin<{ archived: boolean }>(
       "select archived_at is not null as archived from crm.companies where workspace_id = $1 and domain = 'gone-move.test'",
       [ridgeon.workspaceId],
@@ -665,6 +688,316 @@ describe("moving records to another workspace", () => {
       [carded.id],
     );
     assert.equal(event[0].changes.boardCardsRemoved, 1);
+  });
+
+  it("moves a contact with their company and its other contacts by default", async () => {
+    const tandem = await company(eclipse, "Tandem", { domain: "tandem-move.test" });
+    const tia = await contact(eclipse, { firstName: "Tia", lastName: "Tandem", companyId: tandem.id });
+    const tom = await contact(eclipse, { firstName: "Tom", lastName: "Tandem", companyId: tandem.id });
+    const deal = (await createOpportunity(eclipse, { companyId: tandem.id, name: "Tandem deal", primaryContactId: tom.id }, { provenance: PROVENANCE })).body.opportunity;
+    await logActivity(eclipse, { companyId: tandem.id, contactId: tom.id }, "note", "", "Tom liked the demo");
+
+    const preview = await previewMoveToWorkspace(eclipse, { contactIds: [tia.id], workspaceId: ridgeon.workspaceId });
+    assert.deepEqual(preview.contactCompanies, [{ name: "Tandem", others: 1 }]);
+    assert.deepEqual(preview.names, ["Tia Tandem"]);
+    assert.deepEqual(preview.companiesAlong, ["Tandem"]);
+    assert.equal(preview.contacts, 1);
+    assert.equal(preview.deals, 1);
+    assert.equal(preview.activities, 1);
+    assert.deepEqual(preview.links, []);
+
+    const alone = await previewMoveToWorkspace(eclipse, { contactIds: [tia.id], workspaceId: ridgeon.workspaceId, includeCompany: false });
+    assert.deepEqual(alone.contactCompanies, [{ name: "Tandem", others: 1 }]);
+    assert.deepEqual(alone.companiesAlong, []);
+    assert.deepEqual(alone.links, [{ name: "Tandem", into: "Tandem", matched: false }]);
+    assert.equal(alone.contacts, 0);
+    assert.equal(alone.deals, 0);
+
+    const result = await moveRecordsToWorkspace(eclipse, { contactIds: [tia.id], workspaceId: ridgeon.workspaceId }, PROVENANCE);
+    assert.equal(result.message, "Moved Tia Tandem to Mark Ridgeon.");
+    const rows = await admin<{ workspace_id: string }>(
+      `select workspace_id from crm.companies where id = $1
+       union all select workspace_id from crm.contacts where id = any($2::uuid[])
+       union all select workspace_id from crm.opportunities where id = $3
+       union all select workspace_id from crm.activities where contact_id = $4`,
+      [tandem.id, [tia.id, tom.id], deal.id, tom.id],
+    );
+    assert.equal(rows.length, 5);
+    assert.ok(rows.every((row) => row.workspace_id === ridgeon.workspaceId), JSON.stringify(rows));
+    const copies = await admin("select 1 from crm.companies where domain = 'tandem-move.test'");
+    assert.equal(copies.length, 1);
+    assert.deepEqual(await crossWorkspaceLinks(), []);
+  });
+
+  it("merges the company into the one the target has when a contact moves with it", async () => {
+    const source = await company(eclipse, "Halcyon", { domain: "halcyon-move.test", industry: "Travel" });
+    const hal = await contact(eclipse, { firstName: "Hal", lastName: "Cyon", companyId: source.id });
+    const hana = await contact(eclipse, { firstName: "Hana", lastName: "Cyon", companyId: source.id });
+    const there = await company(ridgeon, "Halcyon Group", { domain: "halcyon-move.test" });
+    const preview = await previewMoveToWorkspace(eclipse, { contactIds: [hal.id], workspaceId: ridgeon.workspaceId });
+    assert.deepEqual(preview.merges, [{ name: "Halcyon", into: "Halcyon Group" }]);
+    await moveRecordsToWorkspace(eclipse, { contactIds: [hal.id], workspaceId: ridgeon.workspaceId }, PROVENANCE);
+    const people = await admin<{ workspace_id: string; company_id: string }>(
+      "select workspace_id, company_id from crm.contacts where id = any($1::uuid[]) order by first_name",
+      [[hal.id, hana.id]],
+    );
+    assert.deepEqual(people, [
+      { workspace_id: ridgeon.workspaceId, company_id: there.id },
+      { workspace_id: ridgeon.workspaceId, company_id: there.id },
+    ]);
+    const filled = await admin<{ industry: string }>("select industry from crm.companies where id = $1", [there.id]);
+    assert.equal(filled[0].industry, "Travel");
+    assert.deepEqual(await crossWorkspaceLinks(), []);
+  });
+
+  it("moves a company without its contacts, leaving them unlinked with their own activity and tasks", async () => {
+    const keystone = await company(eclipse, "Keystone", { domain: "keystone-move.test" });
+    const kay = await contact(eclipse, { firstName: "Kay", lastName: "Stone", email: "kay@keystone-move.test", companyId: keystone.id });
+    const ken = await contact(eclipse, { firstName: "Ken", lastName: "Stone", companyId: keystone.id });
+    const deal = (await createOpportunity(eclipse, { companyId: keystone.id, name: "Keystone deal", primaryContactId: kay.id }, { provenance: PROVENANCE })).body.opportunity;
+    const board = await createBoard(eclipse, { name: "Keystone board" });
+    const card = (await createOpportunity(eclipse, { companyId: keystone.id, name: "Keystone", pipelineId: board.id }, { provenance: PROVENANCE })).body.opportunity;
+    const kayTask = (await createTask(eclipse, { title: "Call Kay", companyId: keystone.id, contactId: kay.id }, { provenance: PROVENANCE })).body.task;
+    const companyTask = (await createTask(eclipse, { title: "Send the contract", companyId: keystone.id }, { provenance: PROVENANCE })).body.task;
+    await logActivity(eclipse, { companyId: keystone.id, contactId: kay.id }, "note", "", "Kay wants a call");
+    await logActivity(eclipse, { companyId: keystone.id }, "note", "", "Keystone raised a round");
+    const onDeal = await admin<{ id: string }>(
+      "insert into crm.activities (workspace_id, type, title, body, company_id, contact_id, opportunity_id) values ($1, 'note', '', 'Kay on the deal', $2, $3, $4) returning id",
+      [eclipse.workspaceId, keystone.id, kay.id, deal.id],
+    );
+    const onCard = await admin<{ id: string }>(
+      "insert into crm.activities (workspace_id, type, title, body, contact_id, opportunity_id) values ($1, 'note', '', 'Ken on the card', $2, $3) returning id",
+      [eclipse.workspaceId, ken.id, card.id],
+    );
+    await admin("update crm.companies set health_activity_id = $1 where id = $2", [onDeal[0].id, keystone.id]);
+    const pat = await contact(eclipse, { firstName: "Pat", lastName: "Stone", companyId: keystone.id });
+    const document = await proposal(eclipse, keystone.id, pat.id, "Proposal for Pat");
+
+    const together = await previewMoveToWorkspace(eclipse, { companyIds: [keystone.id], workspaceId: ridgeon.workspaceId });
+    assert.equal(together.companyContacts, 3);
+    assert.equal(together.contacts, 3);
+    assert.deepEqual(together.leftBehind, []);
+
+    const preview = await previewMoveToWorkspace(eclipse, { companyIds: [keystone.id], workspaceId: ridgeon.workspaceId, includeContacts: false });
+    assert.equal(preview.companyContacts, 3);
+    assert.equal(preview.contacts, 1);
+    assert.deepEqual(preview.leftBehind, ["Kay Stone", "Ken Stone"]);
+    assert.deepEqual(preview.proposalContacts, ["Pat Stone"]);
+    assert.equal(preview.deals, 1);
+    assert.equal(preview.dealsLosingContact, 1);
+    assert.equal(preview.activities, 1);
+    assert.equal(preview.tasks, 1);
+    assert.equal(preview.files, 1);
+
+    const result = await moveRecordsToWorkspace(eclipse, { companyIds: [keystone.id], workspaceId: ridgeon.workspaceId, includeContacts: false }, PROVENANCE);
+    assert.deepEqual(result.contacts.map((item) => item.name), ["Pat Stone"]);
+    assert.deepEqual(result.leftBehind.map((item) => item.name), ["Kay Stone", "Ken Stone"]);
+
+    const moved = await admin<{ workspace_id: string; health_activity_id: string | null }>(
+      "select workspace_id, health_activity_id from crm.companies where id = $1",
+      [keystone.id],
+    );
+    assert.deepEqual(moved[0], { workspace_id: ridgeon.workspaceId, health_activity_id: null });
+    const people = await admin<{ workspace_id: string; company_id: string | null }>(
+      "select workspace_id, company_id from crm.contacts where id = any($1::uuid[])",
+      [[kay.id, ken.id]],
+    );
+    assert.deepEqual(people, [
+      { workspace_id: eclipse.workspaceId, company_id: null },
+      { workspace_id: eclipse.workspaceId, company_id: null },
+    ]);
+    const movedDeal = await admin<{ workspace_id: string; primary_contact_id: string | null }>(
+      "select workspace_id, primary_contact_id from crm.opportunities where id = $1",
+      [deal.id],
+    );
+    assert.deepEqual(movedDeal[0], { workspace_id: ridgeon.workspaceId, primary_contact_id: null });
+    assert.equal((await admin("select 1 from crm.opportunities where id = $1", [card.id])).length, 0);
+    const activities = await admin<{ body: string; workspace_id: string; company_id: string | null; contact_id: string | null; opportunity_id: string | null }>(
+      "select body, workspace_id, company_id, contact_id, opportunity_id from crm.activities where id = any($1::uuid[]) or body in ('Kay wants a call', 'Keystone raised a round') order by body",
+      [[onDeal[0].id, onCard[0].id]],
+    );
+    assert.deepEqual(activities, [
+      { body: "Kay on the deal", workspace_id: eclipse.workspaceId, company_id: null, contact_id: kay.id, opportunity_id: null },
+      { body: "Kay wants a call", workspace_id: eclipse.workspaceId, company_id: null, contact_id: kay.id, opportunity_id: null },
+      { body: "Ken on the card", workspace_id: eclipse.workspaceId, company_id: null, contact_id: ken.id, opportunity_id: null },
+      { body: "Keystone raised a round", workspace_id: ridgeon.workspaceId, company_id: keystone.id, contact_id: null, opportunity_id: null },
+    ]);
+    const tasks = await admin<{ title: string; workspace_id: string; company_id: string | null; contact_id: string | null }>(
+      "select title, workspace_id, company_id, contact_id from crm.tasks where id = any($1::uuid[]) order by title",
+      [[kayTask.id, companyTask.id]],
+    );
+    assert.deepEqual(tasks, [
+      { title: "Call Kay", workspace_id: eclipse.workspaceId, company_id: null, contact_id: kay.id },
+      { title: "Send the contract", workspace_id: ridgeon.workspaceId, company_id: keystone.id, contact_id: null },
+    ]);
+    const proposalRow = await admin<{ workspace_id: string; contact_id: string }>("select workspace_id, contact_id from crm.documents where id = $1", [document]);
+    assert.deepEqual(proposalRow[0], { workspace_id: ridgeon.workspaceId, contact_id: pat.id });
+    const patRow = await admin<{ workspace_id: string; company_id: string }>("select workspace_id, company_id from crm.contacts where id = $1", [pat.id]);
+    assert.deepEqual(patRow[0], { workspace_id: ridgeon.workspaceId, company_id: keystone.id });
+    assert.deepEqual(await crossWorkspaceLinks(), []);
+
+    const events = await admin<{ id: string; entity_id: string; workspace_id: string; changes: { fields: string[]; before: { companyId: string }; after: { companyId: null } } }>(
+      "select id, entity_id, workspace_id, changes from crm.audit_events where event_type = 'contact.updated' and entity_id = any($1::uuid[]) and changes ? 'companyMovedTo'",
+      [[kay.id, ken.id]],
+    );
+    assert.equal(events.length, 2);
+    for (const event of events) {
+      assert.equal(event.workspace_id, eclipse.workspaceId);
+      assert.deepEqual(event.changes.fields, ["companyId"]);
+      assert.equal(event.changes.before.companyId, keystone.id);
+      assert.equal(event.changes.after.companyId, null);
+    }
+    const undo = await describeUndo(eclipse, events[0].id);
+    assert.equal(undo.canUndo, false);
+    const movedOut = await admin("select 1 from crm.audit_events where event_type = 'contact.moved_out' and entity_id = any($1::uuid[])", [[kay.id, ken.id]]);
+    assert.equal(movedOut.length, 0);
+  });
+
+  it("applies the same choices to copies", async () => {
+    const vertex = await company(eclipse, "Vertex", { domain: "vertex-move.test" });
+    const val = await contact(eclipse, { firstName: "Val", lastName: "Vertex", companyId: vertex.id });
+    const vic = await contact(eclipse, { firstName: "Vic", lastName: "Vertex", companyId: vertex.id });
+    await logActivity(eclipse, { companyId: vertex.id, contactId: val.id }, "note", "", "Val note");
+    await logActivity(eclipse, { companyId: vertex.id }, "note", "", "Vertex note");
+
+    const preview = await previewMoveToWorkspace(eclipse, { companyIds: [vertex.id], workspaceId: ridgeon.workspaceId, copy: true, includeContacts: false });
+    assert.equal(preview.contacts, 0);
+    assert.deepEqual(preview.leftBehind, ["Val Vertex", "Vic Vertex"]);
+    assert.equal(preview.activities, 1);
+    const alone = await moveRecordsToWorkspace(eclipse, { companyIds: [vertex.id], workspaceId: ridgeon.workspaceId, copy: true, includeContacts: false }, PROVENANCE);
+    const copyId = alone.companies[0].targetId;
+    const copied = await admin<{ contacts: number; activities: number }>(
+      `select (select count(*)::int from crm.contacts where company_id = $1) as contacts,
+              (select count(*)::int from crm.activities where company_id = $1) as activities`,
+      [copyId],
+    );
+    assert.deepEqual(copied[0], { contacts: 0, activities: 1 });
+    const source = await admin<{ workspace_id: string; company_id: string }>("select workspace_id, company_id from crm.contacts where id = any($1::uuid[])", [[val.id, vic.id]]);
+    assert.ok(source.every((row) => row.workspace_id === eclipse.workspaceId && row.company_id === vertex.id));
+    assert.equal((await admin("select 1 from crm.audit_events where event_type = 'contact.updated' and entity_id = any($1::uuid[])", [[val.id, vic.id]])).length, 0);
+
+    const apex = await company(eclipse, "Apex Copy", { domain: "apex-copy-move.test" });
+    const amy = await contact(eclipse, { firstName: "Amy", lastName: "Apex", email: "amy@apex-copy-move.test", companyId: apex.id });
+    const art = await contact(eclipse, { firstName: "Art", lastName: "Apex", email: "art@apex-copy-move.test", companyId: apex.id });
+    const withCompany = await moveRecordsToWorkspace(eclipse, { contactIds: [amy.id], workspaceId: ridgeon.workspaceId, copy: true }, PROVENANCE);
+    assert.equal(withCompany.message, "Copied Amy Apex to Mark Ridgeon.");
+    const there = await admin<{ email: string; company_domain: string }>(
+      `select p.email, c.domain as company_domain from crm.contacts p join crm.companies c on c.id = p.company_id
+       where p.workspace_id = $1 and p.email in ('amy@apex-copy-move.test', 'art@apex-copy-move.test') order by p.email`,
+      [ridgeon.workspaceId],
+    );
+    assert.deepEqual(there, [
+      { email: "amy@apex-copy-move.test", company_domain: "apex-copy-move.test" },
+      { email: "art@apex-copy-move.test", company_domain: "apex-copy-move.test" },
+    ]);
+    const kept = await admin<{ workspace_id: string }>("select workspace_id from crm.contacts where id = any($1::uuid[])", [[amy.id, art.id]]);
+    assert.ok(kept.every((row) => row.workspace_id === eclipse.workspaceId));
+    assert.deepEqual(await crossWorkspaceLinks(), []);
+  });
+
+  it("applies the choices once to a bulk move, with combined counts", async () => {
+    const north = await company(eclipse, "Bulk North", { domain: "bulk-north-move.test" });
+    const south = await company(eclipse, "Bulk South", { domain: "bulk-south-move.test" });
+    const nia = await contact(eclipse, { firstName: "Nia", lastName: "North", companyId: north.id });
+    const ned = await contact(eclipse, { firstName: "Ned", lastName: "North", companyId: north.id });
+    const nat = await contact(eclipse, { firstName: "Nat", lastName: "North", companyId: north.id });
+    const sue = await contact(eclipse, { firstName: "Sue", lastName: "South", companyId: south.id });
+    const sid = await contact(eclipse, { firstName: "Sid", lastName: "South", companyId: south.id });
+
+    const people = await previewMoveToWorkspace(eclipse, { contactIds: [nia.id, sue.id], workspaceId: ridgeon.workspaceId });
+    assert.deepEqual(people.contactCompanies, [
+      { name: "Bulk North", others: 2 },
+      { name: "Bulk South", others: 1 },
+    ]);
+    assert.deepEqual(people.companiesAlong, ["Bulk North", "Bulk South"]);
+    assert.equal(people.contacts, 3);
+
+    const companies = await previewMoveToWorkspace(eclipse, { companyIds: [north.id, south.id], workspaceId: ridgeon.workspaceId, includeContacts: false });
+    assert.equal(companies.companyContacts, 5);
+    assert.deepEqual(companies.leftBehind, ["Nat North", "Ned North", "Nia North", "Sid South", "Sue South"]);
+
+    const result = await moveRecordsToWorkspace(eclipse, { companyIds: [north.id, south.id], workspaceId: ridgeon.workspaceId, includeContacts: false }, PROVENANCE);
+    assert.equal(result.message, "Moved 2 records to Mark Ridgeon.");
+    const rows = await admin<{ workspace_id: string; company_id: string | null }>(
+      "select workspace_id, company_id from crm.contacts where id = any($1::uuid[])",
+      [[nia.id, ned.id, nat.id, sue.id, sid.id]],
+    );
+    assert.equal(rows.length, 5);
+    assert.ok(rows.every((row) => row.workspace_id === eclipse.workspaceId && row.company_id === null));
+    const moved = await admin<{ workspace_id: string }>("select workspace_id from crm.companies where id = any($1::uuid[])", [[north.id, south.id]]);
+    assert.ok(moved.every((row) => row.workspace_id === ridgeon.workspaceId));
+    assert.deepEqual(await crossWorkspaceLinks(), []);
+  });
+
+  it("keeps today's behaviour for callers that don't send the new options", async () => {
+    const legacy = await company(eclipse, "Legacy Co", { domain: "legacy-move.test" });
+    const lou = await contact(eclipse, { firstName: "Lou", lastName: "Legacy", companyId: legacy.id });
+    const lyn = await contact(eclipse, { firstName: "Lyn", lastName: "Legacy", companyId: legacy.id });
+    const person = await getAdminPool().query<{ plan: { links: { id: string }[]; companies: unknown[]; includeCompany: boolean; includeContacts: boolean } }>(
+      "select private.move_records_to_workspace($1, $2, $3, $4::jsonb, true) as plan",
+      [eclipse.userId, eclipse.workspaceId, ridgeon.workspaceId, JSON.stringify({ contactIds: [lou.id] })],
+    );
+    const plan = person.rows[0].plan;
+    assert.equal(plan.includeCompany, false);
+    assert.equal(plan.includeContacts, true);
+    assert.deepEqual(plan.links.map((item) => item.id), [legacy.id]);
+    assert.deepEqual(plan.companies, []);
+    const whole = await getAdminPool().query<{ plan: { contacts: { id: string }[] } }>(
+      "select private.move_records_to_workspace($1, $2, $3, $4::jsonb, true) as plan",
+      [eclipse.userId, eclipse.workspaceId, ridgeon.workspaceId, JSON.stringify({ companyIds: [legacy.id] })],
+    );
+    assert.deepEqual(whole.rows[0].plan.contacts.map((item) => item.id).sort(), [lou.id, lyn.id].sort());
+  });
+
+  it("shows what moves and what stays on the assistant card and the MCP dry run", async () => {
+    const tool = toolDefinitions({ multiWorkspace: true }).find((item) => item.function.name === "move_records_to_workspace");
+    const properties = (tool?.function.parameters as { properties: Record<string, unknown> }).properties;
+    assert.ok("includeCompany" in properties && "includeContacts" in properties);
+
+    const orion = await company(eclipse, "Orion", { domain: "orion-move.test" });
+    const ola = await contact(eclipse, { firstName: "Ola", lastName: "Orion", companyId: orion.id });
+    await contact(eclipse, { firstName: "Oli", lastName: "Orion", companyId: orion.id });
+    await createOpportunity(eclipse, { companyId: orion.id, name: "Orion deal", primaryContactId: ola.id }, { provenance: PROVENANCE });
+
+    const apart = { toWorkspace: "Mark Ridgeon", companyIds: [orion.id], includeContacts: false };
+    const card = describeAction("move_records_to_workspace", apart, await recordNames(eclipse, [apart], ["move_records_to_workspace"]));
+    assert.ok(card.lines.includes("Goes with them: 1 deal"), card.lines.join(" / "));
+    assert.ok(card.lines.includes("Stay here without a company: Ola Orion, Oli Orion"), card.lines.join(" / "));
+    assert.ok(card.lines.includes("1 deal loses its main contact"), card.lines.join(" / "));
+    const copyArgs = { ...apart, copy: true };
+    const copyCard = describeAction("move_records_to_workspace", copyArgs, await recordNames(eclipse, [copyArgs], ["move_records_to_workspace"]));
+    assert.ok(copyCard.lines.includes("Not copied: Ola Orion, Oli Orion"), copyCard.lines.join(" / "));
+
+    const person = { toWorkspace: "Mark Ridgeon", contactIds: [ola.id] };
+    const personCard = describeAction("move_records_to_workspace", person, await recordNames(eclipse, [person], ["move_records_to_workspace"]));
+    assert.ok(personCard.lines.includes("Goes with them: 1 contact, 1 deal"), personCard.lines.join(" / "));
+    assert.ok(personCard.lines.includes("Orion comes too"), personCard.lines.join(" / "));
+    const aloneArgs = { ...person, includeCompany: false };
+    const aloneCard = describeAction("move_records_to_workspace", aloneArgs, await recordNames(eclipse, [aloneArgs], ["move_records_to_workspace"]));
+    assert.ok(aloneCard.lines.includes("Orion stays here, and a copy goes over"), aloneCard.lines.join(" / "));
+
+    const server = createCrmMcpServer(eclipse, { workspaces: await moveTargets(eclipse) });
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverSide);
+    const client = new Client({ name: "move-together-test", version: "1.0.0" });
+    await client.connect(clientSide);
+    const dry = (await client.callTool({
+      name: "move_records_to_workspace",
+      arguments: { to_workspace: "Mark Ridgeon", company_ids: [orion.id], include_contacts: false, dry_run: true },
+    })) as { content: { text: string }[]; isError?: boolean };
+    assert.ok(!dry.isError, dry.content[0].text);
+    const parsed = JSON.parse(dry.content[0].text) as { leftBehind: string[]; contacts: number; companyContacts: number };
+    assert.deepEqual(parsed.leftBehind, ["Ola Orion", "Oli Orion"]);
+    assert.equal(parsed.contacts, 0);
+    assert.equal(parsed.companyContacts, 2);
+    await client.close();
+
+    const output = (await runTool(eclipse, "move_records_to_workspace", apart)) as { message?: string; error?: string; leftBehind?: { name: string }[] };
+    assert.equal(output.error, undefined);
+    assert.deepEqual(output.leftBehind?.map((item) => item.name), ["Ola Orion", "Oli Orion"]);
+    const stayed = await admin<{ workspace_id: string; company_id: string | null }>("select workspace_id, company_id from crm.contacts where id = $1", [ola.id]);
+    assert.deepEqual(stayed[0], { workspace_id: eclipse.workspaceId, company_id: null });
+    assert.deepEqual(await crossWorkspaceLinks(), []);
   });
 
   it("turns timeouts, deadlocks and missed matches into messages a person can act on", () => {

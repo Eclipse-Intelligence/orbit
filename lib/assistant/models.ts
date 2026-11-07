@@ -80,3 +80,15 @@ export function settingsFor(model: unknown, reasoning: unknown, connected?: read
     [...chosen.reasoning].reverse().find((option) => REASONING_LEVELS.indexOf(option) <= wanted) ?? chosen.reasoning[0];
   return { model: chosen.id, reasoning: level };
 }
+
+export type ChatSettingsChoice = { model?: unknown; reasoning?: unknown } | null | undefined;
+
+export function modelUsable(model: unknown, connected?: readonly ModelSource[]) {
+  const known = assistantModel(model);
+  return Boolean(known && (!connected || known.source === "orbit" || connected.includes(known.source)));
+}
+
+export function startingSettings(choices: ChatSettingsChoice[], connected?: readonly ModelSource[]) {
+  const found = choices.find((choice) => choice && modelUsable(choice.model, connected));
+  return found ? settingsFor(found.model, found.reasoning, connected) : settingsFor(DEFAULT_MODEL, DEFAULT_REASONING, connected);
+}

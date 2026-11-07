@@ -33,6 +33,10 @@ type PlanRecord = {
   boardCards?: number;
 };
 
+type PlanCompanyChoice = { id: string; name: string; others: number };
+
+type PlanLeftBehind = { id: string; name: string; companyId: string | null; archived: boolean };
+
 type Plan = {
   source: WorkspaceRef;
   target: WorkspaceRef;
@@ -55,6 +59,11 @@ type Plan = {
   stageName: string | null;
   boardConflict: string | null;
   canMove: boolean;
+  contactCompanies?: PlanCompanyChoice[];
+  companyContacts?: number;
+  leftBehind?: PlanLeftBehind[];
+  proposalContacts?: string[];
+  dealsLosingContact?: number;
 };
 
 export type MoveRequest = {
@@ -63,6 +72,8 @@ export type MoveRequest = {
   workspaceId?: unknown;
   copy?: unknown;
   copyDeals?: unknown;
+  includeCompany?: unknown;
+  includeContacts?: unknown;
   pipelineId?: unknown;
   stageId?: unknown;
 };
@@ -72,6 +83,8 @@ type MoveInput = {
   contactIds: string[];
   copy: boolean;
   copyDeals: boolean;
+  includeCompany: boolean;
+  includeContacts: boolean;
   pipelineId: string | null;
   stageId: string | null;
 };
@@ -102,6 +115,11 @@ export type MovePreview = {
   stageName: string | null;
   boardConflict: string | null;
   canMove: boolean;
+  contactCompanies: { name: string; others: number }[];
+  companyContacts: number;
+  leftBehind: string[];
+  proposalContacts: string[];
+  dealsLosingContact: number;
 };
 
 export type MovedRecord = { id: string; name: string; targetId: string; merged: boolean };
@@ -115,6 +133,7 @@ export type MoveResult = {
   deals: number;
   activities: number;
   tasks: number;
+  leftBehind: { id: string; name: string }[];
   message: string;
 };
 
@@ -142,6 +161,8 @@ function moveInput(request: MoveRequest): MoveInput {
     contactIds,
     copy: request.copy === true,
     copyDeals: request.copyDeals === true,
+    includeCompany: request.includeCompany !== false,
+    includeContacts: request.includeContacts !== false,
     pipelineId: optionalId(request.pipelineId, "pipelineId"),
     stageId: optionalId(request.stageId, "stageId"),
   };
@@ -299,6 +320,11 @@ export async function previewMoveToWorkspace(actor: Actor, request: MoveRequest)
     stageName: plan.stageName,
     boardConflict: plan.boardConflict,
     canMove: plan.canMove,
+    contactCompanies: (plan.contactCompanies ?? []).map((item) => ({ name: item.name, others: item.others })),
+    companyContacts: plan.companyContacts ?? 0,
+    leftBehind: (plan.leftBehind ?? []).filter((item) => !item.archived).map((item) => item.name),
+    proposalContacts: plan.proposalContacts ?? [],
+    dealsLosingContact: plan.dealsLosingContact ?? 0,
   };
 }
 
@@ -386,6 +412,14 @@ async function auditMove(db: Db, source: UserActor, target: UserActor, plan: Pla
     }
   }
   await auditLinks(db, source, target, plan, fills, provenance);
+  for (const contact of plan.leftBehind ?? []) {
+    await recordAudit(db, source, "contact.updated", "contact", contact.id, provenance, {
+      fields: ["companyId"],
+      before: { companyId: contact.companyId },
+      after: { companyId: null },
+      companyMovedTo: plan.target,
+    });
+  }
 }
 
 async function auditCopy(db: Db, source: UserActor, target: UserActor, plan: Plan, fills: Map<string, GapFill>, provenance: Provenance) {
@@ -468,6 +502,7 @@ export async function moveRecordsToWorkspace(actor: Actor, request: MoveRequest,
         deals: done.deals,
         activities: done.activities,
         tasks: done.tasks,
+        leftBehind: (done.leftBehind ?? []).map((item) => ({ id: item.id, name: item.name })),
         message: resultMessage(done),
       };
     },
