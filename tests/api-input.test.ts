@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
-import { GET as listActivities } from "@/app/api/v1/activities/route";
+import { GET as listActivities, POST as createActivity } from "@/app/api/v1/activities/route";
 import { GET as listCompanies } from "@/app/api/v1/companies/route";
 import { GET as listContacts } from "@/app/api/v1/contacts/route";
 import { POST as bulkLeads } from "@/app/api/v1/leads/bulk/route";
 import { POST as createLead } from "@/app/api/v1/leads/route";
 import { POST as createOpportunity } from "@/app/api/v1/opportunities/route";
 import { GET as staleRelationships } from "@/app/api/v1/relationships/stale/route";
-import { createCompany } from "@/lib/crm/companies";
+import { bulkUpsertCompanies, createCompany } from "@/lib/crm/companies";
+import { bulkIngestLeads } from "@/lib/crm/leads";
 import { CrmError, itemFailure } from "@/lib/crm/errors";
 import { SCOPES } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
@@ -60,6 +61,15 @@ describe("API input checks", () => {
     assert.equal(fine.status, 200);
     assert.equal(((await fine.json()) as { limit: number }).limit, 5);
     assert.equal((await listCompanies(request("/companies?limit=500"))).status, 200);
+    const paging = async (path: string) => {
+      const response = await listCompanies(request(path));
+      assert.equal(response.status, 200, path);
+      const body = (await response.json()) as { limit: number; offset: number };
+      return [body.limit, body.offset];
+    };
+    assert.deepEqual(await paging("/companies?limit="), [50, 0]);
+    assert.deepEqual(await paging("/companies?limit=-5"), [1, 0]);
+    assert.deepEqual(await paging("/companies?offset=20000"), [50, 10000]);
   });
 
   it("refuses dates that aren't on the calendar", async () => {
@@ -107,6 +117,41 @@ describe("API input checks", () => {
       [owner.workspaceId],
     );
     assert.deepEqual(saved.rows.map((row) => row.domain), ["bulk-four.example", "bulk-one.example"]);
+  });
+
+  it("answers a value the database refuses with a 400, not a 500", async () => {
+    const hour = await createActivity(request("/activities", "POST", { type: "note", body: "Late", companyId, occurredAt: "2026-11-03T25:00:00Z" }));
+    assert.equal(hour.status, 400);
+    assert.equal(((await hour.json()) as ErrorBody).error.code, "invalid_input");
+    const refused = await createActivity(request("/activities", "POST", { type: "note", title: "Null\u0000byte", body: "Note", companyId }));
+    assert.equal(refused.status, 400);
+    const body = (await refused.json()) as ErrorBody;
+    assert.equal(body.error.code, "invalid_input");
+    assert.match(body.error.message, /A value in the request is invalid/);
+  });
+
+  it("commits the good items when one item hits a database error", async () => {
+    const companies = await bulkUpsertCompanies(owner, [
+      { name: "Good One", domain: "good-one.example" },
+      { name: "Bad\u0000Co", domain: "bad-null.example" },
+      { name: "Good Two", domain: "good-two.example" },
+    ]);
+    assert.deepEqual(companies.body.results.map((result) => result.status), ["created", "error", "created"]);
+    assert.match(companies.body.results[1].error?.message ?? "", /A value in this item is invalid/);
+    const leads = await bulkIngestLeads(owner, [
+      { company: { name: "Lead Good", domain: "lead-good.example" } },
+      { company: { name: "Lead\u0000Bad", domain: "lead-bad.example" } },
+      { company: { name: "Lead Fine", domain: "lead-fine.example" }, task: { title: "Call", dueAt: "2026-11-30T09:00" } },
+    ]);
+    assert.deepEqual(leads.body.results.map((result) => result.status), ["created", "error", "created"]);
+    assert.match(leads.body.results[1].error?.message ?? "", /A value in this item is invalid/);
+    const saved = await getAdminPool().query<{ domain: string }>(
+      "select domain from crm.companies where workspace_id = $1 and domain = any($2::text[]) order by domain",
+      [owner.workspaceId, ["good-one.example", "bad-null.example", "good-two.example", "lead-good.example", "lead-bad.example", "lead-fine.example"]],
+    );
+    assert.deepEqual(saved.rows.map((row) => row.domain), ["good-one.example", "good-two.example", "lead-fine.example", "lead-good.example"]);
+    const task = await getAdminPool().query("select 1 from crm.tasks where workspace_id = $1 and title = 'Call'", [owner.workspaceId]);
+    assert.equal(task.rowCount, 1);
   });
 
   it("treats a database data error in one item as that item's error", () => {

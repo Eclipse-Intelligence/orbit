@@ -83,7 +83,7 @@ Optional `Idempotency-Key` header (printable ASCII, up to 200 characters). Reuse
 | `DELETE` | `/webhooks/:id` | Archive an endpoint | `admin` |
 | `GET` | `/webhooks/deliveries` | The 50 most recent delivery attempts | `crm:read` |
 
-`GET /companies`, `/contacts`, `/opportunities`, `/activities` and `/tasks` take `limit` (1 to 100, default 50) and `offset` (up to 10,000). `limit`, `offset` and `days` must be whole numbers, and dates must be real calendar dates (no 30 February); anything else is a 400 `invalid_input` naming the field in `details.field`. `owner` (or `owner_id`) takes a member id, `unassigned`, or `all` for no filter.
+`GET /companies`, `/contacts`, `/opportunities`, `/activities` and `/tasks` take `limit` (1 to 100, default 50) and `offset` (up to 10,000). `limit` and `offset` must be whole numbers, and dates must be real calendar dates (no 30 February); anything else is a 400 `invalid_input` that usually names the field in `details.field`. `owner` (or `owner_id`) takes a member id, `unassigned`, or `all` for no filter.
 
 ## Companies
 
@@ -197,7 +197,7 @@ Agent tokens see every task in the workspace; people in the app only see tasks t
 
 `GET /api/v1/companies/:id/context` returns the company, its contacts, opportunities, recent activities, open tasks, `lastInteraction`, `openTaskCount`, `relationshipStatus` (`new`, `active`, `quiet`, or `needs_action`), and `timeline`: the company's activities plus those of its current contacts, newest first. `insights` maps the id of each call in the timeline that has a summary to its summary, key points, suggested actions, status, and `sentiment` (`healthy`, `watch`, `at_risk` or null) with `sentimentReason` (the transcript is not included). The company carries `health`, `healthReason`, `healthAt` and `healthActivityId`.
 
-`GET /api/v1/relationships/stale` lists companies with no interaction in the last 21 days. `days` and `limit` are optional.
+`GET /api/v1/relationships/stale` lists companies with no interaction in the last 21 days. `days` and `limit` are optional whole numbers; anything else is a 400 `invalid_input`.
 
 ## Import and export
 

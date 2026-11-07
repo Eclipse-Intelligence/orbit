@@ -9,6 +9,7 @@ const OPEN_SECTIONS = new Set([
   "mail",
   "opportunities",
   "proposals",
+  "settings",
   "tasks",
   "workflows",
 ]);

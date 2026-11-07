@@ -16,6 +16,8 @@ describe("open links", () => {
     for (const path of [COMPANY, "/contacts/abc", "/mail?thread=a%7Cb", "/mail?view=scheduled", "/capture", "/calendar", "/tasks", "/workflows?approve=1", "/workflows/1?run=2", "/proposals/1", "/opportunities?deal=1", "/?chat=1", "/"]) {
       assert.equal(safeOpenTarget(path), path, path);
     }
+    assert.equal(safeOpenTarget("/mail/../companies/1"), "/companies/1");
+    assert.equal(safeOpenTarget("/settings/notifications"), "/settings/notifications");
     for (const path of [
       "https://evil.test/companies/1",
       "//evil.test/companies/1",
@@ -28,6 +30,7 @@ describe("open links", () => {
       "/api/v1/companies",
       "/login?next=https://evil.test",
       "/open?to=/companies/1",
+      "/companies/../x",
       "",
       null,
     ]) {

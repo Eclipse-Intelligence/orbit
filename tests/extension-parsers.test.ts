@@ -7,7 +7,6 @@ import { orbitHref } from "@/extension/src/config";
 import { dueDate } from "@/extension/src/panel/state";
 import { canonicalCompany, canonicalProfile, classifyUrl, domainFrom, onLinkedin, targetFromPath } from "@/extension/src/urls";
 import type { PageCompany, PagePerson } from "@/lib/extension/protocol";
-import { canonicalLinkedin } from "@/lib/crm/normalize";
 import type { PageThread } from "@/extension/src/parsers";
 
 const CHROMIUM = process.env.PLAYWRIGHT_CHROMIUM ?? "/home/vercel-sandbox/.cache/ms-playwright/chromium-1217/chrome-linux64/chrome";
@@ -50,7 +49,7 @@ describe("LinkedIn URL classification", () => {
     assert.equal(canonicalProfile("/company/acme", LINKEDIN), null);
     assert.equal(canonicalCompany("https://www.linkedin.com/company/fernhill-digital/", LINKEDIN), "https://www.linkedin.com/company/fernhill-digital");
     assert.equal(targetFromPath("/in/x").kind, "other");
-    assert.equal(canonicalProfile("/in/jos%C3%A9-garc%C3%ADa/", LINKEDIN), canonicalLinkedin("https://www.linkedin.com/in/josé-garcía"));
+    assert.equal(canonicalProfile("/in/jos%C3%A9-garc%C3%ADa/", LINKEDIN), "https://www.linkedin.com/in/josé-garcía");
     assert.equal(classifyUrl("https://www.linkedin.com/in/JOS%C3%89-GARC%C3%8DA", LINKEDIN).canonical, "https://www.linkedin.com/in/josé-garcía");
     assert.equal(onLinkedin("https://www.linkedin.com/in/josé-garcía", LINKEDIN), "https://www.linkedin.com/in/jos%C3%A9-garc%C3%ADa");
     assert.equal(domainFrom("https://www.Northlightseo.co.uk/?utm_source=linkedin"), "northlightseo.co.uk");
