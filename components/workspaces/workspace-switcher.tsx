@@ -33,6 +33,8 @@ export default function WorkspaceSwitcher({
   viewerName: string;
 }) {
   const pathname = usePathname();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [touchOpen, setTouchOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -54,8 +56,18 @@ export default function WorkspaceSwitcher({
 
   return (
     <div className="flex min-w-0 flex-1 flex-col max-lg:mr-7">
-      <DropdownMenu modal={false}>
-        <DropdownMenuTrigger asChild>
+      <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen} modal={touchOpen}>
+        <DropdownMenuTrigger
+          asChild
+          onPointerDown={(event) => {
+            const touch = event.pointerType !== "mouse";
+            setTouchOpen(touch);
+            if (touch) event.preventDefault();
+          }}
+          onClick={() => {
+            if (touchOpen && !pending) setMenuOpen((open) => !open);
+          }}
+        >
           <Button
             variant="ghost"
             size="none"
