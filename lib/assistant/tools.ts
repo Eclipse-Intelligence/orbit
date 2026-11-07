@@ -31,7 +31,7 @@ import { socialLookup } from "@/lib/social-lookup";
 import { getBookingPage } from "@/lib/booking/pages";
 import { listLifecycles } from "@/lib/crm/lifecycles";
 import { getMailThread, mailSyncStatus, searchMail } from "@/lib/mail/store";
-import { cancelScheduledDraft, changeScheduledDraft, composeAccounts, defaultSender, getScheduledDraft, plannedSender, listScheduledDrafts, saveDraftForAgent, sendForAgent } from "@/lib/mail/compose";
+import { cancelScheduledDraft, changeScheduledDraft, composeAccounts, defaultSender, getScheduledDraft, plannedRecipients, plannedSender, listScheduledDrafts, saveDraftForAgent, sendForAgent } from "@/lib/mail/compose";
 import { createProduct, createTemplate, getTemplate, listProducts, listTemplates, updateProduct, updateTemplate } from "@/lib/proposals/catalogue";
 import { createDocument, getDocument, listDocuments, reviseDocument, sendDocument, updateDocument, withdrawDocument, type DocumentDetail } from "@/lib/proposals/documents";
 import { STATUS_LABELS } from "@/lib/proposals/model";
@@ -99,6 +99,7 @@ import { captureContext, listToFile, waitingHere } from "@/lib/crm/capture";
 import { listUnknownMail } from "@/lib/mail/filing";
 import {
   cancelInvite,
+  cleanGuests,
   CONTACTS_NEED_GUESTS,
   createInvite,
   getInviteSetup,
@@ -586,13 +587,154 @@ function storedFollowUp(args: Args, name: Names) {
   return { afterDays: days, body: detail(name, `${draftId}:follow_up_body`) || null };
 }
 
-function storedReminderLine(args: Args, name: Names) {
+function chosenFollowUp(args: Args, name: Names) {
+  return args.followUp !== undefined ? followUpArg(args.followUp) : storedFollowUp(args, name);
+}
+
+function reminderLine(args: Args, name: Names) {
+  if (chosenFollowUp(args, name)) return "";
   const draftId = str(args.draftId);
-  if (!draftId || args.remindAfterDays !== undefined || args.followUp !== undefined) return "";
-  const hours = Number(detail(name, `${draftId}:remind_hours`));
-  if (!Number.isInteger(hours) || hours < 1 || storedFollowUp(args, name)) return "";
+  const hours =
+    typeof args.remindAfterDays === "number" ? int(args.remindAfterDays, 3, 1, 90) * 24 : draftId ? Number(detail(name, `${draftId}:remind_hours`)) : 0;
+  if (!Number.isInteger(hours) || hours < 1) return "";
   const days = Math.max(1, Math.round(hours / 24));
   return `Reminder: if nobody replies within ${days} ${days === 1 ? "day" : "days"}`;
+}
+
+function storedScheduleLine(args: Args, name: Names) {
+  const draftId = str(args.draftId);
+  const due = draftId ? detail(name, `${draftId}:send_at`) : "";
+  if (!due || str(args.sendAt)) return "";
+  return `It was scheduled for ${londonLabel(new Date(due))} (London time). Approving sends it now instead.`;
+}
+
+function onlyParameters(toolName: string, args: Args) {
+  const tool = TOOL_LIST.find((item) => item.name === toolName);
+  const keys = new Set(Object.keys((tool?.parameters.properties ?? {}) as Record<string, unknown>));
+  return Object.fromEntries(Object.entries(args).filter(([key]) => keys.has(key)));
+}
+
+function recipientsKey(args: Args) {
+  const parts = [str(args.draftId), str(args.replyToEmailId), args.replyAll === true ? "all" : "", str(args.contactId), strings(args.to).join(","), strings(args.cc).join(",")];
+  return `recipients:${parts.join("|")}`;
+}
+
+async function emailCardDetails(actor: UserActor, args: Args): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  const from = str(args.from);
+  const draftId = optionalStr(args.draftId) ?? null;
+  const replyTo = optionalStr(args.replyToEmailId) ?? null;
+  if (!from) {
+    const sender = await plannedSender(actor, { draftId, replyTo }).catch(() => null);
+    if (sender) out[sendFromKey(args)] = sender;
+  }
+  if (from === AGENT_MAILBOX) return out;
+  const contactId = optionalStr(args.contactId);
+  const contact = contactId ? await getContact(actor, contactId).catch(() => null) : null;
+  if (contactId && !contact?.email) return out;
+  const planned = await plannedRecipients(actor, {
+    draftId,
+    replyTo,
+    replyAll: args.replyAll === true,
+    to: [...(contact?.email ? [contact.email] : []), ...strings(args.to)],
+    cc: strings(args.cc),
+  }).catch(() => null);
+  if (planned) out[recipientsKey(args)] = JSON.stringify(planned);
+  return out;
+}
+
+function plannedRecipientLines(args: Args, name: Names) {
+  const stored = detail(name, recipientsKey(args));
+  if (!stored) return null;
+  const planned = JSON.parse(stored) as { to: string[]; cc: string[]; bcc: string[] };
+  const contactId = str(args.contactId);
+  const contactEmail = contactId ? detail(name, `${contactId}:email`).toLowerCase() : "";
+  const shown = (address: string) => (contactEmail && address === contactEmail ? `${name(contactId)} <${address}>` : address);
+  const lines: [string, string[]][] = [
+    ["To", planned.to],
+    ["Cc", planned.cc],
+    ["Bcc", planned.bcc],
+  ];
+  return lines.filter(([, list]) => list.length).map(([label, list]) => `${label}: ${list.map(shown).join(", ")}`);
+}
+
+function inviteAttendees(args: Args) {
+  return (Array.isArray(args.attendees) ? args.attendees : [])
+    .filter((guest): guest is Args => Boolean(guest) && typeof guest === "object")
+    .map((guest) => ({ email: str(guest.email), name: str(guest.name) || null }))
+    .filter((guest) => guest.email);
+}
+
+function inviteGuestsKey(args: Args) {
+  return `invite:guests:${inviteAttendees(args)
+    .map((guest) => `${guest.name ?? ""}<${guest.email}>`)
+    .join(",")}`;
+}
+
+async function inviteGuestDetails(actor: UserActor, args: Args): Promise<Record<string, string>> {
+  const key = inviteGuestsKey(args);
+  const own = await withActor(actor, (db) => ownInviteAddresses(db, actor));
+  try {
+    const guests = cleanGuests(inviteAttendees(args), own);
+    return { [key]: JSON.stringify(guests.map((guest) => (guest.name ? `${guest.name} <${guest.email}>` : guest.email))) };
+  } catch (error) {
+    return { [`${key}:problem`]: error instanceof Error ? error.message : "These guests can't be invited." };
+  }
+}
+
+function inviteGuestLines(args: Args, name: Names) {
+  const key = inviteGuestsKey(args);
+  const problem = detail(name, `${key}:problem`);
+  if (problem) return [`Guests: ${problem}`];
+  const stored = detail(name, key);
+  const guests: string[] = stored
+    ? (JSON.parse(stored) as string[])
+    : inviteAttendees(args).map((guest) => (guest.name ? `${guest.name} <${guest.email}>` : guest.email));
+  const invited = new Set(guests.map((guest) => (/<([^>]+)>$/.exec(guest)?.[1] ?? guest).toLowerCase()));
+  const left = strings(args.contactIds).flatMap((id) => {
+    const email = detail(name, `${id}:email`).toLowerCase();
+    if (email && invited.has(email)) return [];
+    return [email ? `${name(id)} <${email}>` : `${name(id)} (no email address in Orbit)`];
+  });
+  return [`Guests: ${guests.join(", ")}`, left.length ? `Not invited, because their address isn't in the guests: ${left.join(", ")}` : ""];
+}
+
+type NoteToForget = { title: string; scope: string; workspaceId: string; workspaceName: string };
+
+async function noteToForget(actor: UserActor, id: string): Promise<NoteToForget | null> {
+  if (!isUuid(id)) return null;
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ title: string; scope: string; workspace_id: string; workspace_name: string | null }>(
+      `select m.title, m.scope, m.workspace_id, w.name as workspace_name
+       from crm.memories m left join crm.workspaces w on w.id = m.workspace_id
+       where m.id = $1 and m.archived_at is null`,
+      [id],
+    );
+    const row = result.rows[0];
+    return row ? { title: row.title, scope: row.scope, workspaceId: row.workspace_id, workspaceName: row.workspace_name ?? "another workspace" } : null;
+  });
+}
+
+function storedNote(id: string, name: Names) {
+  const stored = detail(name, `${id}:memory`);
+  return stored ? (JSON.parse(stored) as NoteToForget & { refusal: string | null }) : null;
+}
+
+const TEAM_NOTE_WARNING = "This is a team note. Archiving it removes it for everyone.";
+const NOTE_GONE = "That note isn't in Orbit's memory, or it was already forgotten.";
+
+function forgetRefusal(actor: UserActor, note: NoteToForget | null) {
+  if (!note) return NOTE_GONE;
+  if (note.scope !== "personal" && note.workspaceId !== actor.workspaceId) {
+    return `That team note belongs to ${note.workspaceName}. Switch to ${note.workspaceName} to forget it.`;
+  }
+  return null;
+}
+
+function forgetLines(note: (NoteToForget & { refusal: string | null }) | null) {
+  if (!note) return [`${NOTE_GONE} This will be refused.`];
+  if (note.scope === "personal") return [note.title, "Your note"];
+  return [note.title, "Team note", note.refusal ? `${note.refusal} This will be refused.` : TEAM_NOTE_WARNING];
 }
 
 function followUpLines(value: unknown) {
@@ -4152,21 +4294,28 @@ const TOOL_LIST: AssistantTool[] = [
       },
       required: ["body"],
     },
-    describe: (args, name) => ({
-      title: `Save draft: ${str(args.subject) || "reply"}`,
-      lines: [
-        [contactRecipient(args.contactId, name), ...strings(args.to)].filter(Boolean).length
-          ? `To: ${[contactRecipient(args.contactId, name), ...strings(args.to)].filter(Boolean).join(", ")}`
-          : str(args.replyToEmailId)
-            ? `Reply${args.replyAll ? " all" : ""} in the conversation`
-            : "",
-        str(args.from) ? `From: ${str(args.from)}` : "",
-        attachmentLine(args, name),
-        strings(args.attachmentIds).length ? DRAFT_FILES_NOTE : "",
-        DRAFT_NOTE,
-        str(args.body),
-      ].filter(Boolean),
-    }),
+    details: (actor, args) => emailCardDetails(actor, onlyParameters("save_email_draft", args)),
+    describe: (raw, name) => {
+      const args = onlyParameters("save_email_draft", raw);
+      return {
+        title: `Save draft: ${str(args.subject) || "reply"}`,
+        lines: [
+          ...(plannedRecipientLines(args, name) ?? [
+            [contactRecipient(args.contactId, name), ...strings(args.to)].filter(Boolean).length
+              ? `To: ${[contactRecipient(args.contactId, name), ...strings(args.to)].filter(Boolean).join(", ")}`
+              : str(args.replyToEmailId)
+                ? `Reply${args.replyAll ? " all" : ""} in the conversation`
+                : "",
+            strings(args.cc).length ? `Cc: ${strings(args.cc).join(", ")}` : "",
+          ]),
+          str(args.from) ? `From: ${str(args.from)}` : detail(name, sendFromKey(args)) ? `From: ${detail(name, sendFromKey(args))}` : "",
+          attachmentLine(args, name),
+          strings(args.attachmentIds).length ? DRAFT_FILES_NOTE : "",
+          DRAFT_NOTE,
+          str(args.body),
+        ].filter(Boolean),
+      };
+    },
     run: async (actor, args) => {
       const contactId = optionalStr(args.contactId);
       const contact = contactId ? await getContact(actor, contactId) : null;
@@ -4236,27 +4385,24 @@ const TOOL_LIST: AssistantTool[] = [
       },
       required: ["body"],
     },
-    details: async (actor, args): Promise<Record<string, string>> => {
-      if (str(args.from)) return {};
-      const from = await plannedSender(actor, { draftId: optionalStr(args.draftId) ?? null, replyTo: optionalStr(args.replyToEmailId) ?? null });
-      return from ? { [sendFromKey(args)]: from } : {};
-    },
+    details: (actor, args) => emailCardDetails(actor, args),
     describe: (args, name) => {
       const draftId = str(args.draftId);
       const draftSubject = draftId ? detail(name, `${draftId}:subject`) : "";
       const onDraft = draftId ? draftRecipients(args, name, draftId) : null;
       const people = [contactRecipient(args.contactId, name), ...strings(args.to)].filter(Boolean);
-      const replying = Boolean(str(args.replyToEmailId));
+      const replying = Boolean(str(args.replyToEmailId)) || (draftId !== "" && ["reply", "reply_all"].includes(detail(name, `${draftId}:mode`)));
       const senderKey = `${str(args.replyToEmailId)}:from`;
       const sender = name(senderKey) !== senderKey ? name(senderKey) : "the sender";
       const later = Boolean(str(args.sendAt));
       return {
         title: `${later ? (replying ? "Schedule reply" : "Schedule email") : replying ? "Send reply" : "Send email"}: ${str(args.subject) || draftSubject || "in the conversation"}`,
         lines: [
-          ...(onDraft ?? [
-            replying ? `To: ${args.replyAll ? `everyone on the email from ${sender}` : sender}${people.length ? `, plus ${people.join(", ")}` : ""}` : people.length ? `To: ${people.join(", ")}` : "",
-            strings(args.cc).length ? `Cc: ${strings(args.cc).join(", ")}` : "",
-          ]),
+          ...((str(args.from) === AGENT_MAILBOX ? null : plannedRecipientLines(args, name)) ??
+            onDraft ?? [
+              replying ? `To: ${args.replyAll ? `everyone on the email from ${sender}` : sender}${people.length ? `, plus ${people.join(", ")}` : ""}` : people.length ? `To: ${people.join(", ")}` : "",
+              strings(args.cc).length ? `Cc: ${strings(args.cc).join(", ")}` : "",
+            ]),
           str(args.from) === AGENT_MAILBOX
             ? "From: the agent mailbox"
             : str(args.from)
@@ -4265,11 +4411,12 @@ const TOOL_LIST: AssistantTool[] = [
                 ? `From: ${detail(name, sendFromKey(args))}`
                 : "",
           sendAtLine(args.sendAt),
+          str(args.from) === AGENT_MAILBOX ? "" : storedScheduleLine(args, name),
           attachmentLine(args, name),
           str(args.from) === AGENT_MAILBOX ? "Sends from the agent mailbox when you approve." : later ? "Scheduled in Orbit Mail when you approve." : "Sends from Orbit Mail when you approve.",
           str(args.body),
-          ...(str(args.from) === AGENT_MAILBOX ? [] : followUpLines(storedFollowUp(args, name) ?? args.followUp)),
-          str(args.from) === AGENT_MAILBOX ? "" : storedReminderLine(args, name),
+          ...(str(args.from) === AGENT_MAILBOX ? [] : followUpLines(chosenFollowUp(args, name))),
+          str(args.from) === AGENT_MAILBOX ? "" : reminderLine(args, name),
         ].filter(Boolean),
       };
     },
@@ -4467,11 +4614,8 @@ const TOOL_LIST: AssistantTool[] = [
     },
     details: async (actor, args) => {
       const personal = hasNoGuests(args.attendees);
-      try {
-        return { "invite:from": await (personal ? resolveEventCalendar : resolveInviteFrom)(actor, optionalStr(args.from)) };
-      } catch {
-        return { "invite:from": optionalStr(args.from) ?? "" };
-      }
+      const from = await (personal ? resolveEventCalendar : resolveInviteFrom)(actor, optionalStr(args.from)).catch(() => optionalStr(args.from) ?? "");
+      return { "invite:from": from, ...(personal ? {} : await inviteGuestDetails(actor, args)) };
     },
     describe: (args, name) => {
       const when = `${formatDateTimeLabel(str(args.startLocal))} for ${args.durationMinutes} minutes`;
@@ -4486,20 +4630,14 @@ const TOOL_LIST: AssistantTool[] = [
         lines: [
           `From: ${detail(name, "invite:from") || optionalStr(args.from) || "your default address"}`,
           `When: ${formatDateTimeLabel(str(args.startLocal))} for ${args.durationMinutes} minutes`,
-          `Guests: ${(Array.isArray(args.attendees) ? args.attendees : [])
-            .map((guest) => (guest && typeof guest === "object" ? str((guest as Args).name) || str((guest as Args).email) : ""))
-            .filter(Boolean)
-            .join(", ")}`,
+          ...inviteGuestLines(args, name),
           ...fieldLines(args, { notes: "Notes" }),
         ],
       };
     },
     run: async (actor, args) => {
       const personal = hasNoGuests(args.attendees);
-      const attendees = (Array.isArray(args.attendees) ? args.attendees : [])
-        .filter((guest): guest is Args => Boolean(guest) && typeof guest === "object")
-        .map((guest) => ({ email: str(guest.email), name: str(guest.name) || null }))
-        .filter((guest) => guest.email);
+      const attendees = inviteAttendees(args);
       if (!personal && attendees.length === 0) return { error: "Every guest needs an email address. Leave attendees empty for a personal event." };
       if (personal && strings(args.contactIds).length > 0) return { error: CONTACTS_NEED_GUESTS };
       const result = await createInvite(actor, {
@@ -4956,11 +5094,11 @@ const TOOL_LIST: AssistantTool[] = [
     label: "Remembering",
     write: true,
     description:
-      "Save a lasting note to Orbit's memory: a preference, correction or standing instruction from the user (private to them), or with shared true a fact about the business that the whole team's assistants should know. A note for the user stays in this workspace unless allWorkspaces is true, which is only for how they work, write or want the assistant to behave everywhere, never for anything about this business, its products, pitch, clients, partners, people, boards or deals. To forget a note Orbit learned, when the user says it's wrong or out of date, pass forgetId with its id from recall or the briefing (and its title for the card) instead of a body.",
+      "Save a lasting note to Orbit's memory: a preference, correction or standing instruction from the user (private to them), or with shared true a fact about the business that the whole team's assistants should know. A note for the user stays in this workspace unless allWorkspaces is true, which is only for how they work, write or want the assistant to behave everywhere, never for anything about this business, its products, pitch, clients, partners, people, boards or deals. To forget a note Orbit learned, when the user says it's wrong or out of date, pass forgetId with its id from recall or the briefing instead of a body. A team note can only be forgotten from its own workspace, and forgetting it removes it for everyone.",
     parameters: {
       type: "object",
       properties: {
-        title: { type: "string", description: "At most 12 words. With forgetId, the note's title, for the approval card." },
+        title: { type: "string", description: "At most 12 words. Not needed with forgetId: the card shows the note's own title." },
         body: { type: "string", description: "The note, at most 70 words, written as a fact." },
         kind: { type: "string", enum: ["preference", "correction", "instruction", "person", "goal", "writing", "icp", "objection", "competitor", "messaging", "fact"] },
         shared: { type: "boolean", description: "True for business knowledge the whole workspace should share." },
@@ -4969,13 +5107,17 @@ const TOOL_LIST: AssistantTool[] = [
       },
     },
     details: async (actor, args): Promise<Record<string, string>> => {
-      if (str(args.forgetId) || args.shared === true || args.allWorkspaces !== true) return {};
+      if (str(args.forgetId)) {
+        const note = await noteToForget(actor, str(args.forgetId));
+        return note ? { [`${str(args.forgetId)}:memory`]: JSON.stringify({ ...note, refusal: forgetRefusal(actor, note) }) } : {};
+      }
+      if (args.shared === true || args.allWorkspaces !== true) return {};
       const allowed = await everywhereAllowed(actor, str(args.kind) || "note", `${str(args.title)} ${str(args.body)}`);
       return allowed ? {} : { [REMEMBER_HERE_KEY]: "yes" };
     },
     describe: (args, name) =>
       str(args.forgetId)
-        ? { title: "Forget a note", lines: [str(args.title) || "The note you chose"] }
+        ? { title: "Forget a note", lines: forgetLines(storedNote(str(args.forgetId), name)) }
         : {
             title: args.shared === true ? "Remember for the whole team" : "Remember for you",
             lines: [
@@ -4986,7 +5128,11 @@ const TOOL_LIST: AssistantTool[] = [
           },
     run: async (actor, args) => {
       const forgetId = str(args.forgetId);
-      if (forgetId) return forgetMemory(actor, forgetId);
+      if (forgetId) {
+        const refusal = forgetRefusal(actor, await noteToForget(actor, forgetId));
+        if (refusal) return { error: refusal };
+        return forgetMemory(actor, forgetId);
+      }
       const memory = await rememberNote(actor, args, "assistant");
       const downgraded = args.shared !== true && args.allWorkspaces === true && memory.allWorkspaces !== true;
       return {
@@ -5080,13 +5226,21 @@ export const ASSISTANT_TOOLS: AssistantTool[] = TOOL_LIST.map(withWorkspaceParam
 export const DRAFT_NOTE = "Saved to Drafts.";
 const DRAFT_FILES_NOTE = "The files stay in Orbit and are attached when Orbit sends it.";
 
-export type ActionAlternative = { key: "send"; label: string; tool: string; title: (title: string) => string; lines: (lines: string[]) => string[] };
+export type ActionAlternative = {
+  key: "send";
+  label: string;
+  tool: string;
+  args: (args: Args) => Args;
+  title: (title: string) => string;
+  lines: (lines: string[]) => string[];
+};
 
 export const ACTION_ALTERNATIVES: Record<string, ActionAlternative> = {
   save_email_draft: {
     key: "send",
     label: "Confirm and send",
     tool: "send_email",
+    args: (args) => onlyParameters("save_email_draft", args),
     title: (title) => title.replace(/^Save draft: /, "Sent: "),
     lines: (lines) => lines.filter((line) => line !== DRAFT_FILES_NOTE).map((line) => (line === DRAFT_NOTE ? "Sent." : line)),
   },
@@ -5375,8 +5529,10 @@ export async function recordNames(actor: UserActor, args: Args[], tools: string[
       remind_hours: number | null;
       follow_up_days: number | null;
       follow_up_body: string | null;
+      send_at: Date | null;
+      mode: string;
     }>(
-      "select id, subject, to_recipients, cc_recipients, bcc_recipients, remind_hours, follow_up_days, follow_up_body from crm.mail_drafts where id = any($1::uuid[]) and user_id = $2",
+      "select id, subject, to_recipients, cc_recipients, bcc_recipients, remind_hours, follow_up_days, follow_up_body, send_at, mode from crm.mail_drafts where id = any($1::uuid[]) and user_id = $2",
       [list, actor.userId],
     );
     for (const row of drafts.rows) {
@@ -5384,6 +5540,8 @@ export async function recordNames(actor: UserActor, args: Args[], tools: string[
       if (row.follow_up_days) names.set(`${row.id}:follow_up_days`, String(row.follow_up_days));
       if (row.follow_up_days && row.follow_up_body?.trim()) names.set(`${row.id}:follow_up_body`, row.follow_up_body.trim());
       if (row.remind_hours) names.set(`${row.id}:remind_hours`, String(row.remind_hours));
+      if (row.send_at) names.set(`${row.id}:send_at`, new Date(row.send_at).toISOString());
+      names.set(`${row.id}:mode`, row.mode);
       for (const [key, people] of [["to", row.to_recipients], ["cc", row.cc_recipients], ["bcc", row.bcc_recipients]] as const) {
         if (people?.length) names.set(`${row.id}:${key}`, people.map((person) => person.address).join(", "));
       }

@@ -51,7 +51,7 @@ type ComposerContextValue = {
 async function postJson<T>(url: string, body: unknown, keepalive = false): Promise<T> {
   const response = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), keepalive });
   const json = (await response.json().catch(() => ({}))) as T & { error?: string };
-  if (!response.ok) throw new Error(json.error ?? "Outlook didn't take the email. Try again.");
+  if (!response.ok) throw Object.assign(new Error(json.error ?? "Outlook didn't take the email. Try again."), { status: response.status });
   return json;
 }
 
@@ -317,7 +317,12 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
             setSent((count) => count + 1);
             if (result.warning) showToast({ message: result.warning, tone: "alert" });
           })
-          .catch((error: Error) => {
+          .catch((error: Error & { status?: number }) => {
+            if (error.status === 409) {
+              item.onDelivered?.();
+              showToast({ message: error.message, tone: "alert" });
+              return;
+            }
             item.onUndone?.();
             showToast({
               message: `“${payload.subject || "Your email"}” didn't send. ${error.message}`,

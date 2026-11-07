@@ -261,6 +261,43 @@ export async function createActivityInDb(
   }
 }
 
+export type EmailMessageIds = {
+  internetMessageId?: string | null;
+  mailMessageId?: string | null;
+  providerMessageId?: string | null;
+};
+
+export async function emailActivityFor(db: Db, workspaceId: string, ids: EmailMessageIds, contactId: string | null) {
+  if (!ids.internetMessageId && !ids.mailMessageId && !ids.providerMessageId) return null;
+  const found = await db.query<{ id: string }>(
+    `select id from crm.activities
+     where workspace_id = $1 and type = 'email'
+       and (metadata->>'internetMessageId' = $2 or metadata->>'mailMessageId' = $3 or metadata->>'providerMessageId' = $4)
+       and ($5::uuid is null or contact_id = $5)
+     order by created_at
+     limit 1`,
+    [workspaceId, ids.internetMessageId ?? null, ids.mailMessageId ?? null, ids.providerMessageId ?? null, contactId],
+  );
+  return found.rows[0]?.id ?? null;
+}
+
+export async function createEmailActivityOnce(
+  db: Db,
+  actor: Actor,
+  input: ActivityWrite,
+  ids: EmailMessageIds,
+  provenance?: Provenance,
+): Promise<{ id: string; created: boolean }> {
+  const key = ids.internetMessageId || ids.mailMessageId || ids.providerMessageId;
+  if (key) {
+    await db.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [`email-activity|${actor.workspaceId}|${key}`]);
+    const existing = await emailActivityFor(db, actor.workspaceId, ids, input.contactId ?? null);
+    if (existing) return { id: existing, created: false };
+  }
+  const activity = await createActivityInDb(db, actor, input, provenance);
+  return { id: activity.id, created: true };
+}
+
 export async function listActivities(
   actor: Actor,
   query: ActivityListQuery = {},

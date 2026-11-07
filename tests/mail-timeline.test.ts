@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
-import { createActivity, listActivities } from "@/lib/crm/activities";
+import { createActivity, createEmailActivityOnce, listActivities } from "@/lib/crm/activities";
 import { createCompany } from "@/lib/crm/companies";
 import { archiveContact, createContact } from "@/lib/crm/contacts";
+import { withActor } from "@/lib/crm/context";
 import { saveMailbox } from "@/lib/crm/inbox";
 import type { UserActor } from "@/lib/crm/types";
-import { getAdminPool, getPool } from "@/lib/db/pool";
+import { getAdminPool, getPool, type Db } from "@/lib/db/pool";
 import { fileMailOnTimeline } from "@/lib/mail/timeline";
 import { createUser, resetDatabase } from "./helpers";
 
@@ -148,5 +149,40 @@ describe("mail on the contact timeline", () => {
     assert.equal((await fileMailOnTimeline(owner, { now: NOW })).filed, 0);
     assert.deepEqual((await filedOn()).map((row) => row.contact_id), [again.id]);
     assert.equal(await created(), before);
+  });
+
+  it("files an email once, with one audit event, when several filers run at the same time", async () => {
+    const admin = getAdminPool();
+    await addMessage("inbox", { id: "race-1", subject: "Contract", from: "jane@acme.test", to: ["mark@other.test"], at: hoursAgo(1), body: "Signed copy attached." });
+    const runs = await Promise.all([1, 2, 3, 4].map(() => fileMailOnTimeline(owner, { now: NOW })));
+    assert.equal(runs.reduce((total, run) => total + run.filed, 0), 1);
+    const filed = await admin.query<{ id: string }>("select id from crm.activities where type = 'email' and metadata->>'internetMessageId' = '<race-1@mail.test>'");
+    assert.equal(filed.rows.length, 1);
+    const audits = await admin.query("select 1 from crm.audit_events where event_type = 'activity.created' and entity_id = $1", [filed.rows[0].id]);
+    assert.equal(audits.rowCount, 1);
+  });
+
+  it("lets only the first of two overlapping filings of the same email write it and its audit event", async () => {
+    const admin = getAdminPool();
+    const write = (db: Db) =>
+      createEmailActivityOnce(
+        db,
+        owner,
+        { type: "email", title: "Overlap", contactId: janeId, metadata: { source: "microsoft", direction: "inbound", internetMessageId: "<overlap-1@mail.test>" } },
+        { internetMessageId: "<overlap-1@mail.test>" },
+        { operation: "file_mail", source: "microsoft" },
+      );
+    let second: Promise<{ id: string; created: boolean }> | null = null;
+    const first = await withActor(owner, async (db) => {
+      const saved = await write(db);
+      second = withActor(owner, write);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      return saved;
+    });
+    const later = await second!;
+    assert.equal(first.created, true);
+    assert.deepEqual(later, { id: first.id, created: false });
+    const audits = await admin.query("select 1 from crm.audit_events where event_type = 'activity.created' and entity_id = $1", [first.id]);
+    assert.equal(audits.rowCount, 1);
   });
 });

@@ -147,6 +147,23 @@ export async function threadWorkspace(actor: UserActor, sourceId: string, key: s
   return target ? { actor: target, resolved: true } : { actor, resolved: false };
 }
 
+export async function threadFiledWorkspaces(actor: UserActor, sourceId: string, key: string, known?: UserActor[]): Promise<UserActor[]> {
+  const actors = known ?? (await workspaceActors(actor));
+  const filedIn = await withActor(actor, async (db): Promise<string[]> => {
+    const route = await threadRoute(db, actor, sourceId, key);
+    if (route?.ignored_at) return [];
+    if (actors.length < 2) return [actor.workspaceId];
+    const info = await threadInfo(db, actor, sourceId, key);
+    const effective = await effectiveFilingInDb(db, actor, actors, sourceId, key, { latestId: info.latestId, counterpart: info.counterpart?.email ?? null, own: info.own });
+    return effective.basis === "capture" ? [] : effective.filedIn;
+  }).catch((error): string[] => {
+    if (error instanceof CrmError && error.code === "not_found") return [];
+    throw error;
+  });
+  if (actors.length < 2) return filedIn.length ? [actor] : [];
+  return actors.filter((item) => filedIn.includes(item.workspaceId));
+}
+
 export async function threadBrand(actor: UserActor, sourceId: string, key: string): Promise<BrandProfile | null> {
   const found = await threadWorkspace(actor, sourceId, key);
   return found.resolved ? brandOrEmpty(found.actor) : null;

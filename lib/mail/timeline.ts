@@ -1,4 +1,4 @@
-import { createActivityInDb } from "@/lib/crm/activities";
+import { createEmailActivityOnce } from "@/lib/crm/activities";
 import { isRecent } from "@/lib/crm/communications";
 import { withActor } from "@/lib/crm/context";
 import { recordAudit } from "@/lib/crm/mutate";
@@ -229,8 +229,8 @@ export async function fileMailOnTimeline(
       continue;
     }
     try {
-      const taskId = await withActor(target, async (db) => {
-        await createActivityInDb(
+      const outcome = await withActor(target, async (db) => {
+        const saved = await createEmailActivityOnce(
           db,
           target,
           {
@@ -250,12 +250,14 @@ export async function fileMailOnTimeline(
               ...(row.attachments ? { hasAttachments: true } : {}),
             },
           },
+          { mailMessageId: row.message_id, internetMessageId: row.internet_message_id },
           { operation: "file_mail", source: "microsoft", catchUp: now - at.getTime() > FRESH_MS },
         );
-        return suggestFollowUp(db, target, row, at);
+        return { created: saved.created, taskId: saved.created ? await suggestFollowUp(db, target, row, at) : null };
       });
+      if (!outcome.created) continue;
       filed += 1;
-      if (taskId) followUps.set(target.workspaceId, [...(followUps.get(target.workspaceId) ?? []), taskId]);
+      if (outcome.taskId) followUps.set(target.workspaceId, [...(followUps.get(target.workspaceId) ?? []), outcome.taskId]);
     } catch (error) {
       console.error("Filing an email on the timeline failed", error);
     }
