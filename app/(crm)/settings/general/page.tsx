@@ -1,19 +1,15 @@
 import { redirect } from "next/navigation";
-import AboutYouSettings from "@/components/crm/about-you-settings";
+import { YouSettings } from "@/components/crm/about-you-settings";
 import AccountSettings from "@/components/crm/account-settings";
 import MeetingLinkSettings from "@/components/crm/meeting-link-settings";
-import MyEmailsSettings from "@/components/crm/my-emails-settings";
 import ShortcutSettings from "@/components/crm/shortcut-settings";
 import NotificationSettings from "@/components/push/notification-settings";
 import { notificationSettings } from "@/lib/mail/notify";
-import SettingsHashRedirect from "@/components/crm/settings-hash-redirect";
 import { SettingsPage } from "@/components/crm/settings-ui";
 import { supabaseConfigured } from "@/lib/auth/config";
-import { getUserActor } from "@/lib/auth/user";
+import { getUserActor, getWorkspaceChoices } from "@/lib/auth/user";
 import { getMeetingLink } from "@/lib/crm/invites";
 import { getPersonalContext } from "@/lib/crm/personal-context";
-import { getMyEmails } from "@/lib/crm/profile";
-import { workspaceActors } from "@/lib/crm/workspaces";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -21,19 +17,14 @@ export const maxDuration = 120;
 export default async function GeneralSettingsPage() {
   const user = await getUserActor();
   if (!user) redirect("/login");
-  const [myEmails, meetingLink, notifications, about, workspaces] = await Promise.all([
-    getMyEmails(user),
+  const [meetingLink, notifications, about, workspaces] = await Promise.all([
     getMeetingLink(user),
     notificationSettings(user),
     getPersonalContext(user),
-    workspaceActors(user).catch(() => [user]),
+    getWorkspaceChoices(),
   ]);
   return (
-    <SettingsPage
-      title="General"
-      description="Your account, what the assistant knows about you, the addresses Orbit treats as you, notifications, your meeting link and keyboard shortcuts."
-    >
-      <SettingsHashRedirect />
+    <SettingsPage title="General" description="Your account and what Orbit knows about you.">
       <AccountSettings
         name={user.fullName || user.email}
         email={user.email}
@@ -41,13 +32,7 @@ export default async function GeneralSettingsPage() {
         workspaceName={user.workspaceName}
         passwords={supabaseConfigured()}
       />
-      <AboutYouSettings
-        about={{ jobTitle: about.jobTitle, about: about.about }}
-        you={{ linkedinUrl: about.linkedinUrl, interests: about.interests, writing: about.writing }}
-        website={about.website}
-        workspaceName={workspaces.length > 1 ? user.workspaceName : null}
-      />
-      <MyEmailsSettings emails={myEmails} />
+      <YouSettings you={{ linkedinUrl: about.linkedinUrl, interests: about.interests, writing: about.writing }} multi={workspaces.length > 1} />
       <NotificationSettings
         initialMail={notifications.mail}
         initialCalendarMinutes={notifications.calendarMinutes}

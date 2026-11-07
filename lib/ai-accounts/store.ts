@@ -162,7 +162,7 @@ export async function aiAccess(
   const outcome = await withActor(actor, async (db): Promise<AiAccess | { error: string }> => {
     const row = await readRow(db, actor, which, true);
     if (!row || row.status !== "connected" || !row.access_token) {
-      return { error: `Connect your ${PROVIDER_NAMES[which]} account in Settings › Integrations first.` };
+      return { error: `Connect your ${PROVIDER_NAMES[which]} account in Settings › Connections first.` };
     }
     const expires = row.expires_at ? new Date(row.expires_at).getTime() : 0;
     if (!options.force && expires - Date.now() > REFRESH_EARLY_MS) {

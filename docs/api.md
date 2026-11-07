@@ -219,7 +219,7 @@ Agent tokens see every task in the workspace; people in the app only see tasks t
 
 ## Quick capture
 
-`POST /api/quick` adds to the token owner's daily note or makes them a task. It's built for an iPhone Shortcut (setup steps are in Settings, API and webhooks). Authentication is `Authorization: Bearer <personal token>` (`orbit_…`); agent tokens are refused, because daily notes are private. The body is JSON `{ "text", "to" }`, form fields with the same names, or plain text. `to` is `daily` (the default; also `note`, `journal` or `jot`) or `task` (also `todo`). Text is up to 4,000 characters.
+`POST /api/quick` adds to the token owner's daily note or makes them a task. It's built for an iPhone Shortcut (setup steps are in Settings, API tokens). Authentication is `Authorization: Bearer <personal token>` (`orbit_…`); agent tokens are refused, because daily notes are private. The body is JSON `{ "text", "to" }`, form fields with the same names, or plain text. `to` is `daily` (the default; also `note`, `journal` or `jot`) or `task` (also `todo`). Text is up to 4,000 characters.
 
 - `daily` appends a timed entry to today's daily note (London time), creating the note if needed, and live editors see it straight away.
 - `task` makes a task owned by the token's owner. The first line is the title (up to 200 characters) and the rest is the description.
@@ -265,7 +265,7 @@ Every call except `pair`, `pair/redeem`, `me`, `lookup` and `revoke` names its w
 
 ## Agent mailbox webhook
 
-`POST /api/machinemail/webhook` receives MachineMail events for the agent mailbox. It isn't part of the agent API and takes no Orbit token: Settings › Integrations, Agent mailbox registers it with MachineMail for `message.received` on the mailbox's inbox, and MachineMail signs every delivery.
+`POST /api/machinemail/webhook` receives MachineMail events for the agent mailbox. It isn't part of the agent API and takes no Orbit token: Settings › Tools, Agent mailbox registers it with MachineMail for `message.received` on the mailbox's inbox, and MachineMail signs every delivery.
 
 - `X-MachineMail-Signature: t=<unix seconds>,v1=<hex>` must be HMAC SHA-256 of `{t}.{raw body}` with the webhook's secret, compared in constant time, and `t` within 300 seconds of Orbit's clock. Otherwise the answer is `401` and nothing is stored.
 - `X-MachineMail-Event-Id` must match the body's `event_id` (`400` if not). An event id already handled answers `200` with `{ "duplicate": true }`.

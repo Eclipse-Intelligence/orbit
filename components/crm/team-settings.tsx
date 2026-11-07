@@ -180,7 +180,7 @@ export default function TeamSettings({
             </div>
             <label className="caption-style text-subtle flex items-center gap-2">
               <Checkbox checked={send && mailboxConnected} disabled={!mailboxConnected} onCheckedChange={(value) => setSend(value === true)} />
-              {mailboxConnected ? `Email the invite from ${mailboxEmail ?? "my Outlook"}` : "Connect Microsoft in Settings › Integrations to email invites from Outlook. Until then, copy the link."}
+              {mailboxConnected ? `Email the invite from ${mailboxEmail ?? "my Outlook"}` : "Connect Microsoft in Settings › Email to email invites from Outlook. Until then, copy the link."}
             </label>
           </form>
           {sent && (

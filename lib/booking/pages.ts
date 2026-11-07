@@ -4,7 +4,6 @@ import { CrmError, isPgError } from "@/lib/crm/errors";
 import { getInviteSetup } from "@/lib/crm/invites";
 import { defaultInviteAddress, readInviteSenders, type InviteSenderOption } from "@/lib/crm/invite-senders";
 import { canonicalEmail } from "@/lib/crm/normalize";
-import { workspaceActors } from "@/lib/crm/workspaces";
 import type { UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
 import {
@@ -208,23 +207,6 @@ export async function getBookingPage(actor: UserActor): Promise<BookingPageSetti
       [actor.userId, actor.workspaceId],
     );
     return result.rows[0] ? mapSettings(actor, result.rows[0]) : defaults(actor);
-  });
-}
-
-export type OtherBookingPage = { workspaceName: string; page: BookingPageSettings };
-
-export async function otherBookingPages(actor: UserActor): Promise<OtherBookingPage[]> {
-  const actors = await workspaceActors(actor);
-  if (actors.length < 2) return [];
-  const names = new Map(actors.map((item) => [item.workspaceId, item.workspaceName]));
-  return withActor(actor, async (db) => {
-    const result = await db.query<PageRow & { workspace_id: string }>(
-      `select workspace_id, ${PAGE_COLUMNS} from crm.booking_pages where user_id = $1 and workspace_id <> $2 order by created_at`,
-      [actor.userId, actor.workspaceId],
-    );
-    return result.rows
-      .filter((row) => names.has(row.workspace_id))
-      .map((row) => ({ workspaceName: names.get(row.workspace_id)!, page: mapSettings(actor, row) }));
   });
 }
 

@@ -17,8 +17,7 @@ export default async function LearningSettingsPage() {
   const user = await getUserActor();
   if (!user) redirect("/login");
   const canAdmin = user.role === "owner" || user.role === "admin";
-  const [personal, business, market, watchlist, notes, statuses, grok, headerStore, workspaces, brand] = await Promise.all([
-    listMemories(user, { scope: "personal", limit: 200 }),
+  const [business, market, watchlist, notes, statuses, grok, headerStore, workspaces, brand] = await Promise.all([
     listMemories(user, { scope: "business", limit: 200 }),
     listMemories(user, { scope: "market", limit: 200 }),
     listWatchlist(user),
@@ -34,10 +33,17 @@ export default async function LearningSettingsPage() {
   return (
     <SettingsPage
       title="Learning"
-      description="What Orbit's assistant has learned about you, the business and the market, the watchlist Grok Bot researches, and the market notes it sends."
+      description="What Orbit's assistant has learned about the business and the market, the watchlist Grok Bot researches, and the market notes it sends."
     >
       <LearningStatusCard statuses={statuses} canRunShared={canAdmin} />
-      <MemoriesCard memories={{ personal, business, market }} workspaceName={user.workspaceName} manyWorkspaces={workspaces.length > 1} />
+      <MemoriesCard
+        id="notes"
+        heading="What Orbit has learned"
+        scopes={["business", "market"]}
+        memories={{ business, market }}
+        workspaceName={user.workspaceName}
+        manyWorkspaces={workspaces.length > 1}
+      />
       <WatchlistCard items={watchlist} />
       <MarketNotesCard notes={notes} />
       <GrokCard status={grok} mcpUrl={mcpUrl} routine={grokRoutine(mcpUrl, user.workspaceName, brand.eclipseTools)} canConnect={canAdmin} />

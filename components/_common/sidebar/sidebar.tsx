@@ -13,6 +13,7 @@ import SidebarResizer from "./sidebar-resizer";
 import type { CaptureStatus } from "@/lib/crm/capture";
 import type { WorkspaceChoice } from "@/lib/auth/user";
 import type { BoardSummary } from "@/lib/crm/types";
+import { SETTINGS_PATHS } from "@/lib/settings-nav";
 import { CAPTURE_SECTIONS, NO_CAPTURE_COUNTS, useCompaniesStore, type CaptureCounts } from "@/stores/companies-store";
 
 export type SidebarWorkspace = { id: string; name: string; viewerName: string; choices: WorkspaceChoice[] };
@@ -55,6 +56,7 @@ export default function Sidebar({ boards, companyCount, openActionCount, mailUnr
           mailUnread={mailUnread}
           capture={capture}
           workspace={workspace}
+          settingsHref={SETTINGS_PATHS.general}
         />
         <SidebarResizer />
       </aside>

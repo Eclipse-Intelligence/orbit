@@ -150,7 +150,7 @@ export function aboutYouSection(context: PersonalContext | null, colleagues: Col
     : "";
   const body = lines.length
     ? `${lines.join("\n\n")}\n\nUse this so your suggestions fit their role and priorities, and so anything you write for them sounds like them and reflects their views. Don't recite it back to them, and never present their views as facts about the world.`
-    : "They haven't filled in About you yet (Settings, General). If knowing their role, views or writing style would clearly help, suggest it once, briefly.";
+    : "They haven't filled in About you yet (Settings, About you, and how they write in Settings, General). If knowing their role, views or writing style would clearly help, suggest it once, briefly.";
   return `\n\n# Who you're helping\n${body}${team}`;
 }
 

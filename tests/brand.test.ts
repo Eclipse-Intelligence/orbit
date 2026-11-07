@@ -6,12 +6,11 @@ import { COLD_EMAIL_PLAYBOOK, ECLIPSE_OUTREACH_BRIEF, playbookFor } from "@/lib/
 import { ECLIPSE_CONTEXT, ECLIPSE_IDEAL_CUSTOMER, ECLIPSE_WEBSITE } from "@/lib/assistant/eclipse";
 import { systemPrompt, UNBRANDED } from "@/lib/assistant/prompt";
 import { runTool, toolDefinitions } from "@/lib/assistant/tools";
-import { brandOrEmpty, copyBrandProfile, draftBrandFromWebsite, getBrand, saveBrandPlaybook, saveBrandProfile, setEclipseTools } from "@/lib/crm/brand";
+import { brandOrEmpty, draftBrandFromWebsite, getBrand, saveBrandPlaybook, saveBrandProfile, setEclipseTools } from "@/lib/crm/brand";
 import { CrmError } from "@/lib/crm/errors";
-import { createProof } from "@/lib/crm/proof";
 import { scopesForRole } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
-import { BRAND_COPY_FAILED, createWorkspace } from "@/lib/crm/workspaces";
+import { createWorkspace } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { getEnrichmentSettings, icpHashOf } from "@/lib/enrichment/settings";
 import { createUser, queryAsUser, resetDatabase } from "./helpers";
@@ -237,37 +236,20 @@ describe("cold email per workspace", () => {
   });
 });
 
-describe("copying a brand into a new workspace", () => {
-  it("copies the website, offer, ideal customer, tone and playbook, and leaves proof, Knowledge and Eclipse tools behind", async () => {
+describe("a new workspace", () => {
+  it("starts with a blank brand profile, with nothing copied from the workspace it was made in", async () => {
     const admin = getAdminPool();
-    await createProof(eclipse, { client: "Northwind", product: "Eclipse", result: "Two articles a month to eight.", permission: "named" }, WEB);
     await saveBrandProfile(eclipse, { website: "geteclipse.co", whatYouSell: ECLIPSE_CONTEXT, whoItsFor: ECLIPSE_IDEAL_CUSTOMER, tone: "Direct." }, WEB);
-    const created = await admin.query<{ id: string }>("insert into crm.workspaces (name, slug) values ('Copy test', 'copy-test') returning id");
-    const target = created.rows[0].id;
-    await admin.query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'owner')", [target, eclipse.userId]);
-
-    await assert.rejects(copyBrandProfile(member, eclipse.workspaceId, target), /isn't one of yours/);
-    await admin.query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [target, member.userId]);
-    await assert.rejects(copyBrandProfile(member, eclipse.workspaceId, target), forbidden);
-
-    const copied = await copyBrandProfile(eclipse, eclipse.workspaceId, target);
-    const owner: UserActor = { ...eclipse, workspaceId: target, workspaceName: "Copy test" };
+    const created = await createWorkspace(eclipse, { name: "Blank start" });
+    const owner: UserActor = { ...eclipse, workspaceId: created.id, workspaceName: "Blank start" };
     const brand = await getBrand(owner);
-    assert.equal(copied.website, "https://geteclipse.co");
-    assert.equal(brand.whatYouSell, ECLIPSE_CONTEXT);
-    assert.equal(brand.whoItsFor, ECLIPSE_IDEAL_CUSTOMER);
-    assert.equal(brand.tone, "Direct.");
-    assert.equal(brand.playbook, COLD_EMAIL_PLAYBOOK);
-    assert.equal(brand.outreachBrief, ECLIPSE_OUTREACH_BRIEF);
+    assert.equal(brand.website, "");
+    assert.equal(brand.whatYouSell, "");
+    assert.equal(brand.whoItsFor, "");
+    assert.equal(brand.tone, "");
     assert.equal(brand.eclipseTools, false);
-    assert.ok(brand.playbookUpdatedAt);
-    const counts = await admin.query<{ proof: number; knowledge: number }>(
-      "select (select count(*)::int from crm.proof_entries where workspace_id = $1) as proof, (select count(*)::int from crm.knowledge_items where workspace_id = $1) as knowledge",
-      [target],
-    );
-    assert.deepEqual(counts.rows[0], { proof: 0, knowledge: 0 });
-    const audit = await admin.query<{ changes: { copiedFrom: string } }>("select changes from crm.audit_events where workspace_id = $1 and entity_type = 'workspace_brand'", [target]);
-    assert.equal(audit.rows[0].changes.copiedFrom, eclipse.workspaceId);
+    const audit = await admin.query("select 1 from crm.audit_events where workspace_id = $1 and entity_type = 'workspace_brand'", [created.id]);
+    assert.equal(audit.rowCount, 0);
   });
 });
 
@@ -305,30 +287,7 @@ describe("drafting from the website", () => {
   });
 });
 
-describe("when the brand profile can't be copied or read", () => {
-  it("creates the workspace and warns when the brand profile couldn't be copied", async () => {
-    const pool = getAdminPool();
-    await pool.query(`
-      create or replace function public.refuse_brand_copy() returns trigger language plpgsql as $$
-      begin
-        if current_user = 'authenticated' then raise exception 'copy refused'; end if;
-        return new;
-      end $$;
-      drop trigger if exists refuse_brand_copy on crm.workspace_brands;
-      create trigger refuse_brand_copy before insert or update on crm.workspace_brands for each row execute function public.refuse_brand_copy();
-    `);
-    try {
-      const created = await createWorkspace(eclipse, { name: "Broken copy", brandStart: "copy" });
-      assert.equal(created.warning, BRAND_COPY_FAILED);
-      const stored = await pool.query("select 1 from crm.workspace_members where workspace_id = $1 and user_id = $2", [created.id, eclipse.userId]);
-      assert.equal(stored.rowCount, 1);
-    } finally {
-      await pool.query("drop trigger if exists refuse_brand_copy on crm.workspace_brands; drop function if exists public.refuse_brand_copy()");
-    }
-    const fine = await createWorkspace(eclipse, { name: "Fine copy", brandStart: "copy" });
-    assert.equal(fine.warning, null);
-  });
-
+describe("when the brand profile can't be read", () => {
   it("keeps Eclipse tools off and doesn't claim the business hasn't said what it sells when the profile can't be read", async () => {
     const broken: UserActor = { ...eclipse, workspaceId: "not-a-workspace" };
     const brand = await brandOrEmpty(broken);

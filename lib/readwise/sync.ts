@@ -18,6 +18,7 @@ import {
   type ReaderDocument,
 } from "@/lib/readwise";
 import { decryptToken, READWISE_NOT_CONNECTED, readReadwiseKey, type ReadwiseKeyRow } from "@/lib/readwise/keys";
+import { actorForWorkspace } from "@/lib/crm/workspaces";
 
 const ORBIT_TAG = "orbit";
 const FULL_EVERY_MS = 24 * 60 * 60 * 1000;
@@ -456,10 +457,11 @@ async function scanHighlights(
   return { done: true, cursor: null, seen: seenCount };
 }
 
-export async function syncReaderToKnowledge(actor: UserActor, options: ReaderSyncOptions = {}): Promise<ReaderSyncResult> {
+export async function syncReaderToKnowledge(viewer: UserActor, options: ReaderSyncOptions = {}): Promise<ReaderSyncResult> {
   const result: ReaderSyncResult = { ran: false, documents: 0, added: 0, updated: 0, archived: 0, highlights: 0, complete: false };
-  const key = await readReadwiseKey(actor);
+  const key = await readReadwiseKey(viewer);
   if (!key) return { ...result, error: READWISE_NOT_CONNECTED };
+  const actor = await actorForWorkspace(viewer, key.workspace_id);
   const token = decryptToken(key);
   if (!token) {
     const message = "Orbit couldn't read the saved Readwise token. Connect Readwise Reader again.";

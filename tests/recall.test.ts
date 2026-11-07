@@ -480,7 +480,7 @@ describe("recall", () => {
       const before = recall.requests.length;
       for (const name of ["recall_search", "recall_read"]) {
         const refused = (await runTool(outsider, name, { query: ["x"], cardId: "card-video" })) as { error?: string };
-        assert.equal(refused.error, "Recall isn't connected. Add your Recall API key in Settings, Integrations.");
+        assert.equal(refused.error, "Recall isn't connected. Add your Recall API key in Settings, Connections.");
       }
       assert.equal(recall.requests.length, before);
     } finally {

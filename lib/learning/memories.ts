@@ -188,14 +188,15 @@ export async function reviseMemory(db: Db, id: string, patch: { title?: string; 
 
 export async function listMemories(
   actor: UserActor,
-  options: { scope?: MemoryScope; query?: string; limit?: number; since?: string } = {},
+  options: { scope?: MemoryScope; query?: string; limit?: number; since?: string; allWorkspaces?: boolean } = {},
 ): Promise<Memory[]> {
   const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
   const query = options.query?.trim();
+  const visible = options.allWorkspaces ? "scope = 'personal' and user_id = $6 and $1::uuid is not null" : visibleMemorySql("$1", "$6");
   return withActor(actor, async (db) => {
     const result = await db.query<Row>(
       `select ${COLUMNS} from crm.memories
-       where archived_at is null and ${visibleMemorySql("$1", "$6")}
+       where archived_at is null and ${visible}
          and ($2::text is null or scope = $2)
          and ($3::text is null or search @@ websearch_to_tsquery('english', $3) or title ilike '%' || $3 || '%')
          and ($5::timestamptz is null or updated_at >= $5)

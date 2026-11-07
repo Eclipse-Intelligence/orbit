@@ -100,7 +100,7 @@ export function mailboxOrigin(mailbox: Pick<AgentMailboxRow, "webhook_url">) {
 export async function requireAgentMailAccess(actor: UserActor) {
   const mailbox = await agentMailbox(actor);
   if (!mailbox?.set_up_at) {
-    throw new CrmError("not_found", "The agent mailbox isn't set up. An owner or admin can set it up in Settings › Integrations.", 404);
+    throw new CrmError("not_found", "The agent mailbox isn't set up. An owner or admin can set it up in Settings › Tools.", 404);
   }
   if (isWorkspaceAdmin(actor)) return mailbox;
   const mapped = await withActor(actor, async (db) => {

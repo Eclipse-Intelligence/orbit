@@ -52,23 +52,19 @@ describe("workspaces", () => {
     await admin.query("delete from crm.workspace_members where user_id = $1 and workspace_id <> $2", [priya.userId, mark.workspaceId]);
     const member = inWorkspace(priya, mark.workspaceId, "Eclipse", "member");
     await assert.rejects(
-      createWorkspace(member, { name: "Side project", brandStart: "blank" }),
+      createWorkspace(member, { name: "Side project" }),
       (error: unknown) => error instanceof CrmError && error.status === 403,
     );
-    await assert.rejects(createWorkspace(mark, { name: "  ", brandStart: "blank" }), /name/);
+    await assert.rejects(createWorkspace(mark, { name: "  " }), /name/);
 
     await admin.query(
       `insert into crm.workspace_brands (workspace_id, what_you_sell, tone, playbook) values ($1, 'AI visibility for agencies', 'Plain and direct', 'One idea per email')
        on conflict (workspace_id) do update set what_you_sell = excluded.what_you_sell, tone = excluded.tone, playbook = excluded.playbook`,
       [mark.workspaceId],
     );
-    const created = await createWorkspace(mark, { name: "Mark Ridgeon", brandStart: "copy" });
-    const copied = await admin.query<{ what_you_sell: string; tone: string; playbook: string; eclipse_tools: boolean }>(
-      "select what_you_sell, tone, playbook, eclipse_tools from crm.workspace_brands where workspace_id = $1",
-      [created.id],
-    );
-    assert.deepEqual(copied.rows[0], { what_you_sell: "AI visibility for agencies", tone: "Plain and direct", playbook: "One idea per email", eclipse_tools: false });
-    assert.equal(created.brandSourceId, mark.workspaceId);
+    const created = await createWorkspace(mark, { name: "Mark Ridgeon" });
+    const brand = await admin.query("select 1 from crm.workspace_brands where workspace_id = $1 and (what_you_sell <> '' or tone <> '' or playbook <> '')", [created.id]);
+    assert.equal(brand.rowCount, 0);
     ridgeon = inWorkspace(mark, created.id, "Mark Ridgeon");
 
     const stored = await admin.query<{ name: string; brand_source_id: string | null; role: string }>(
@@ -76,12 +72,8 @@ describe("workspaces", () => {
        join crm.workspace_members m on m.workspace_id = w.id and m.user_id = $2 where w.id = $1`,
       [created.id, mark.userId],
     );
-    assert.deepEqual(stored.rows[0], { name: "Mark Ridgeon", brand_source_id: mark.workspaceId, role: "owner" });
-
-    const blank = await createWorkspace(mark, { name: "Blank one", brandStart: "blank" });
-    assert.equal(blank.brandSourceId, null);
-    const blankBrand = await admin.query("select 1 from crm.workspace_brands where workspace_id = $1 and what_you_sell <> ''", [blank.id]);
-    assert.equal(blankBrand.rowCount, 0);
+    assert.deepEqual(stored.rows[0], { name: "Mark Ridgeon", brand_source_id: null, role: "owner" });
+    await createWorkspace(mark, { name: "Blank one" });
 
     const pipeline = await listPipeline(ridgeon);
     assert.deepEqual(

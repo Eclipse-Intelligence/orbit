@@ -414,7 +414,7 @@ export type MailAttachment = { name: string; contentType: string; bytes: Uint8Ar
 const INLINE_ATTACHMENT_LIMIT = 3 * 1024 * 1024;
 const UPLOAD_CHUNK = 320 * 1024 * 10;
 export const LARGE_ATTACHMENT_RECONNECT =
-  "Attachments over 3 MB need permission to create drafts. Reconnect Microsoft in Settings › Integrations, then send again.";
+  "Attachments over 3 MB need permission to create drafts. Reconnect Microsoft in Settings › Email, then send again.";
 
 function recipients(message: { to: string; toName?: string | null }) {
   return [{ emailAddress: { address: message.to, ...(message.toName ? { name: message.toName } : {}) } }];

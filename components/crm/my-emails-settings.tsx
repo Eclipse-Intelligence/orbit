@@ -68,8 +68,8 @@ export default function MyEmailsSettings({ emails }: { emails: MyEmails }) {
   return (
     <SettingsCard
       id="my-emails"
-      title="My email addresses"
-      description="Orbit treats these as you: they’re never filed as contacts or companies."
+      title="Other addresses that are you"
+      description="Old or forwarding addresses. Mail from them is treated as yours, and they're never filed as contacts or companies."
     >
       <ul className="flex flex-col">
         <li className="border-border flex items-center justify-between gap-3 border-b py-2">

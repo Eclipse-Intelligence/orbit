@@ -10,9 +10,11 @@ import { query } from "@/lib/db/pool";
 const PERSONAL_PREFIX = "orbit_";
 const TOKENS_MAX = 10;
 
-export type PersonalToken = { id: string; name: string; prefix: string; createdAt: string; lastUsedAt: string | null };
+export type PersonalToken = { id: string; name: string; prefix: string; createdAt: string; lastUsedAt: string | null; workspaceName: string };
 
-type TokenRow = { id: string; name: string; prefix: string; created_at: Date | string; last_used_at: Date | string | null };
+type TokenRow = { id: string; name: string; prefix: string; created_at: Date | string; last_used_at: Date | string | null; workspace_name: string | null };
+
+const TOKEN_COLUMNS = "id, name, prefix, created_at, last_used_at, (select w.name from crm.workspaces w where w.id = crm.personal_tokens.workspace_id) as workspace_name";
 
 function toToken(row: TokenRow): PersonalToken {
   return {
@@ -21,6 +23,7 @@ function toToken(row: TokenRow): PersonalToken {
     prefix: row.prefix,
     createdAt: new Date(row.created_at).toISOString(),
     lastUsedAt: row.last_used_at ? new Date(row.last_used_at).toISOString() : null,
+    workspaceName: row.workspace_name ?? "",
   };
 }
 
@@ -31,7 +34,7 @@ export function isPersonalToken(token: string) {
 export async function listPersonalTokens(actor: UserActor) {
   return withActor(actor, async (db) => {
     const result = await db.query<TokenRow>(
-      "select id, name, prefix, created_at, last_used_at from crm.personal_tokens where user_id = $1 and revoked_at is null order by created_at desc",
+      `select ${TOKEN_COLUMNS} from crm.personal_tokens where user_id = $1 and revoked_at is null order by created_at desc`,
       [actor.userId],
     );
     return result.rows.map(toToken);
@@ -48,7 +51,7 @@ export async function createPersonalToken(actor: UserActor, rawName: unknown) {
     if ((count.rows[0]?.count ?? 0) >= TOKENS_MAX) throw new CrmError("invalid_input", `You can have up to ${TOKENS_MAX} tokens. Revoke one first.`, 400);
     const result = await db.query<TokenRow>(
       `insert into crm.personal_tokens (workspace_id, user_id, name, prefix, token_hash) values ($1, $2, $3, $4, $5)
-       returning id, name, prefix, created_at, last_used_at`,
+       returning ${TOKEN_COLUMNS}`,
       [actor.workspaceId, actor.userId, name, prefix, hashToken(token)],
     );
     return result.rows[0];

@@ -35,7 +35,7 @@ export default function MailRoutingSettings({ homes, rules, workspaces }: { home
       setError(result.error);
       return;
     }
-    setNotice(`Email to ${home.address} from new people now goes to ${names([workspaceId], workspaces)}.`);
+    setNotice(`${home.address} now belongs to ${names([workspaceId], workspaces)}.`);
   }
 
   async function remove(rule: DomainRule) {
@@ -53,9 +53,9 @@ export default function MailRoutingSettings({ homes, rules, workspaces }: { home
 
   return (
     <SettingsCard
-      id="new-people"
-      title="Email from new people"
-      description="Email from people none of your workspaces knows waits in Capture in the workspace you choose for the address it was sent to. Only you see these choices."
+      id="addresses"
+      title="Addresses"
+      description="Each address belongs to one workspace. It's the address you send from there, and email from people Orbit doesn't know waits in that workspace's Capture."
     >
       <div className="flex flex-col gap-4">
         <ul className="flex flex-col gap-2">
@@ -63,33 +63,39 @@ export default function MailRoutingSettings({ homes, rules, workspaces }: { home
             const fieldId = `home-${home.address}`;
             return (
               <li key={home.address} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-lg bg-white/[0.03] px-3 py-2">
-                <label htmlFor={fieldId} className="flex min-w-0 flex-1 basis-56 items-center gap-2">
+                <span className="flex min-w-0 flex-1 basis-56 items-center gap-2">
                   <span aria-hidden className="size-1.5 shrink-0 rounded-full" style={{ background: tagBase(home.address) }} />
                   <span className="flex min-w-0 flex-col">
                     <span className="text-foreground truncate text-[14px]">{home.address}</span>
-                    <span className="caption-style text-subtle">{home.kind === "mailbox" ? "Mailbox" : "Sending address"}</span>
+                    <span className="caption-style text-subtle">{home.kind === "mailbox" ? "Microsoft 365" : "Sending address"}</span>
                   </span>
-                </label>
-                <NativeSelect
-                  id={fieldId}
-                  value={chosen[home.address]}
-                  disabled={busy === home.address}
-                  onChange={(event) => void choose(home, event.target.value)}
-                  className="w-auto min-w-[11rem] max-sm:w-full"
-                >
-                  {workspaces.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.name}
-                    </option>
-                  ))}
-                </NativeSelect>
+                </span>
+                <span className="flex items-center gap-2 max-sm:w-full">
+                  <label htmlFor={fieldId} className="caption-style text-subtle shrink-0">
+                    Workspace
+                  </label>
+                  <NativeSelect
+                    id={fieldId}
+                    aria-label={`Workspace for ${home.address}`}
+                    value={chosen[home.address]}
+                    disabled={busy === home.address}
+                    onChange={(event) => void choose(home, event.target.value)}
+                    className="w-auto min-w-[11rem] max-sm:min-w-0 max-sm:flex-1"
+                  >
+                    {workspaces.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name}
+                      </option>
+                    ))}
+                  </NativeSelect>
+                </span>
               </li>
             );
           })}
         </ul>
         {rules.length > 0 && (
           <div className="flex flex-col gap-2">
-            <h4 className="ui-style text-soft">Domains</h4>
+            <h4 className="ui-style text-soft">Domain rules</h4>
             <ul className="flex flex-col gap-2">
               {rules.map((rule) => (
                 <li key={rule.domain} className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-white/[0.03] px-3 py-2">

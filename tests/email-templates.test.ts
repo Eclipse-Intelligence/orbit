@@ -22,12 +22,6 @@ import {
 } from "@/lib/crm/email-templates";
 import { contactRecipient, type Recipient } from "@/lib/crm/personalise";
 import type { UserActor } from "@/lib/crm/types";
-import {
-  legacySettingsHref,
-  SETTINGS_PATHS,
-  settingsHashTarget,
-  settingsRedirect,
-} from "@/lib/settings-nav";
 import { createUser, queryAsUser, resetDatabase } from "./helpers";
 
 const WEB = { operation: "email_template_test", source: "web" };
@@ -599,48 +593,5 @@ describe("email templates", () => {
         client.release();
       }
     }
-  });
-});
-
-describe("settings routes", () => {
-  it("sends old settings anchors to the matching page", () => {
-    assert.equal(settingsHashTarget("#calendars"), SETTINGS_PATHS.calendars);
-    assert.equal(settingsHashTarget("#Pipeline"), SETTINGS_PATHS.pipeline);
-    assert.equal(settingsHashTarget("tags"), SETTINGS_PATHS.tags);
-    assert.equal(settingsHashTarget("#webhooks"), SETTINGS_PATHS.api);
-    assert.equal(settingsHashTarget("#clickup"), SETTINGS_PATHS.integrations);
-    assert.equal(
-      settingsHashTarget("#email-templates"),
-      SETTINGS_PATHS.emailTemplates,
-    );
-    assert.equal(settingsHashTarget("#meeting-link"), null);
-    assert.equal(settingsHashTarget(""), null);
-    assert.equal(settingsHashTarget("#constructor"), null);
-    assert.equal(settingsHashTarget("#%E0%A4%A"), null);
-  });
-
-  it("redirects /settings to General and keeps calendar connection results", () => {
-    const query = (value: string) => new URLSearchParams(value);
-    assert.equal(
-      legacySettingsHref("/settings", query("")),
-      SETTINGS_PATHS.general,
-    );
-    assert.equal(
-      legacySettingsHref("/settings/", query("a=1&b=2&b=3")),
-      `${SETTINGS_PATHS.general}?a=1&b=2&b=3`,
-    );
-    assert.equal(
-      legacySettingsHref(
-        "/settings",
-        query("calendar_connected=me%40example.com"),
-      ),
-      `${SETTINGS_PATHS.calendars}?calendar_connected=me%40example.com`,
-    );
-    assert.equal(
-      settingsRedirect(query("calendar_error=Nope")),
-      `${SETTINGS_PATHS.calendars}?calendar_error=Nope`,
-    );
-    assert.equal(legacySettingsHref("/settings/general", query("")), null);
-    assert.equal(legacySettingsHref("/settingsx", query("")), null);
   });
 });

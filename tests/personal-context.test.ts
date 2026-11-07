@@ -176,8 +176,8 @@ describe("About you", () => {
   it("moves the old shared About you and role into the home workspace when migrating, and copies workspace rows as they are", async () => {
     const admin = getAdminPool();
     const lee = await createUser("lee@about.test", "Lee Two");
-    const second = await createWorkspace(lee, { name: "Lee Consulting", brandStart: "blank" });
-    const third = await createWorkspace(lee, { name: "Lee Labs", brandStart: "blank" });
+    const second = await createWorkspace(lee, { name: "Lee Consulting" });
+    const third = await createWorkspace(lee, { name: "Lee Labs" });
     const legacy = await createUser("old@about.test", "Old Setup");
     await admin.query("update crm.profiles set job_title = 'Founder, Lee Co' where id = $1", [lee.userId]);
     await admin.query("insert into crm.personal_context (user_id, about, writing) values ($1, 'SHARED ABOUT I run Lee Co and Lee Consulting.', 'Short.')", [lee.userId]);

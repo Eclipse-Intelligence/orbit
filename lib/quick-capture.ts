@@ -24,7 +24,7 @@ export function readQuickCapture(input: unknown): QuickCapture {
 
 export async function quickActor(request: Request) {
   const bearer = /^Bearer\s+(\S+)$/i.exec(request.headers.get("authorization") ?? "")?.[1] ?? "";
-  if (!isPersonalToken(bearer)) throw new CrmError("unauthorized", "Add your Orbit personal token as the Authorization header (Bearer orbit_…). Create one in Settings, API and webhooks.", 401);
+  if (!isPersonalToken(bearer)) throw new CrmError("unauthorized", "Add your Orbit personal token as the Authorization header (Bearer orbit_…). Create one in Settings, API tokens.", 401);
   const found = await authenticatePersonal(bearer);
   await consumePersonalRateLimit(found.tokenId);
   return found.actor;

@@ -69,7 +69,7 @@ before(async () => {
   const mark = await createUser("mark@eclipse-move.test", "Mark Ridgeon");
   await admin("update crm.workspaces set name = 'Eclipse' where id = $1", [mark.workspaceId]);
   eclipse = { ...mark, workspaceName: "Eclipse" };
-  const created = await createWorkspace(eclipse, { name: "Mark Ridgeon", brandStart: "blank" });
+  const created = await createWorkspace(eclipse, { name: "Mark Ridgeon" });
   ridgeon = { ...eclipse, workspaceId: created.id, workspaceName: "Mark Ridgeon", role: "owner", scopes: scopesForRole("owner") };
   const second = await createUser("priya@eclipse-move.test", "Priya Shah");
   await admin("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [eclipse.workspaceId, second.userId]);

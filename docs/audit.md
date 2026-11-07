@@ -19,7 +19,7 @@ The starting point was a Next.js 16 company table. The screens were useful. The 
 
 ## Now recorded
 
-Contacts, opportunities, activities, and tasks are real records. The notifications bell lists workflow updates (approvals, failed runs, Notify someone steps) and other alerts, such as bookings, above due and overdue tasks. The Gone quiet filter on Companies lists companies with no recent interaction. CSV import and export cover the core records. Webhooks deliver the audit events. The Microsoft mailbox connected in Settings › Integrations files received mail and is mirrored in Mail, and Outlook calendars sync through the same Entra app once its credentials are set. Other calendars are added by iCal link with no OAuth app. Gmail is not connected.
+Contacts, opportunities, activities, and tasks are real records. The notifications bell lists workflow updates (approvals, failed runs, Notify someone steps) and other alerts, such as bookings, above due and overdue tasks. The Gone quiet filter on Companies lists companies with no recent interaction. CSV import and export cover the core records. Webhooks deliver the audit events. The Microsoft mailbox connected in Settings › Email files received mail and is mirrored in Mail, and Outlook calendars sync through the same Entra app once its credentials are set. Other calendars are added by iCal link with no OAuth app. Gmail is not connected.
 
 ## Security notes from the prototype
 

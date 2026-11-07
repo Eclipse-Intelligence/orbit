@@ -15,7 +15,7 @@ const LIST_MAX = 200;
 export const SEARCH_NOTE =
   "These are the passages Recall matched, not whole cards. Read more of a card with recall_read, or its original with recall_read full: true.";
 export const TAG_IDS_ONLY =
-  "Recall's API filters by tag id, not by name, and has no way for Orbit to look tag names up. Ask the user for the tag id (Settings, Integrations, Recall says where to find it), or search without tags.";
+  "Recall's API filters by tag id, not by name, and has no way for Orbit to look tag names up. Ask the user for the tag id (Settings, Connections, Recall says where to find it), or search without tags.";
 
 export type RecallLiveOptions = {
   fetchImpl?: typeof fetch;

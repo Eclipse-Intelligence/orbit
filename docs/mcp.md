@@ -39,7 +39,7 @@ Three kinds of token reach the server. They see different tools.
 | --- | --- | --- | --- |
 | Workspace agent token | `npm run agent:create -- --name "Research" --scopes crm:read,companies:write` (printed once) | The agent (`crm_agent` role), with the scopes it was issued. Sees every task in the workspace, and only shared docs. | Every tool except the mail, Reader and daily note tools |
 | Market-only agent token | Settings › Learning, Grok Bot (scopes exactly `market:write`) | The agent | Only `get_watchlist` and `add_market_notes`, with their own short instructions |
-| Personal token (`orbit_…`) | Settings › API and webhooks › Your mail in Claude | That person (`authenticated` role), with their role's scopes: everything for owners and admins, everything but `admin` for members. Sees only tasks they own or created unless they are an owner or admin, and their own private docs plus shared docs. | Every tool, including the mail, Reader and daily note tools |
+| Personal token (`orbit_…`) | Settings › API tokens › Your mail in Claude | That person (`authenticated` role), with their role's scopes: everything for owners and admins, everything but `admin` for members. Sees only tasks they own or created unless they are an owner or admin, and their own private docs plus shared docs. | Every tool, including the mail, Reader and daily note tools |
 
 Every tool is listed for every non-market token whatever its scopes. A call without the scope it needs returns `forbidden: Missing scope <scope>.` with `isError: true`. Other failures return `<code>: <message>` the same way.
 
@@ -206,7 +206,7 @@ These read and write only the token owner's own mailboxes. None of them sends em
 
 ### Readwise Reader (personal tokens only)
 
-For a person who has connected Reader in Settings › Integrations. They use only that person's access token, call Reader live, and never change anything in Reader. Without a token they return an error saying so.
+For a person who has connected Reader in Settings › Connections. They use only that person's access token, call Reader live, and never change anything in Reader. Without a token they return an error saying so.
 
 | Tool | What it does | Main parameters | Scope | Changes | Tokens |
 | --- | --- | --- | --- | --- | --- |

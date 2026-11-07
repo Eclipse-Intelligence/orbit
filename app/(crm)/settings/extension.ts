@@ -23,7 +23,7 @@ export async function revokeBrowserAction(id: string): Promise<{ error?: string 
   const user = await requireUser();
   try {
     await revokeBrowser(user, id);
-    revalidatePath(SETTINGS_PATHS.integrations);
+    revalidatePath(SETTINGS_PATHS.connections);
     return {};
   } catch (error) {
     return failed(error, "Couldn't revoke that browser. Try again.");
@@ -34,7 +34,7 @@ export async function setBrowserWorkspacesAction(id: string, workspaceIds: strin
   const user = await requireUser();
   try {
     await setBrowserWorkspaces(user, id, workspaceIds);
-    revalidatePath(SETTINGS_PATHS.integrations);
+    revalidatePath(SETTINGS_PATHS.connections);
     return {};
   } catch (error) {
     return failed(error, "Couldn't change its workspaces. Try again.");

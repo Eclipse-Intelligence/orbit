@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { userLinks } from "@/lib/assistant/links";
 import { describeAction, recordNames, runTool } from "@/lib/assistant/tools";
-import { checkSlugAvailable, getBookingPage, otherBookingPages, saveBookingPage } from "@/lib/booking/pages";
+import { checkSlugAvailable, getBookingPage, saveBookingPage } from "@/lib/booking/pages";
 import { DEFAULT_WEEKLY_HOURS } from "@/lib/booking/rules";
 import { logActivity } from "@/lib/crm/activities";
 import { saveBrandProfile } from "@/lib/crm/brand";
@@ -99,7 +99,7 @@ describe("brand isolation between workspaces", () => {
     const owner = await createUser("mark@orbit-isolation.test", "Mark Ridgeon");
     await admin.query("update crm.workspaces set name = 'Eclipse' where id = $1", [owner.workspaceId]);
     eclipse = { ...owner, workspaceName: "Eclipse" };
-    const created = await createWorkspace(eclipse, { name: "Mark Ridgeon", brandStart: "blank" });
+    const created = await createWorkspace(eclipse, { name: "Mark Ridgeon" });
     ridgeon = { ...eclipse, workspaceId: created.id, workspaceName: "Mark Ridgeon" };
 
     await saveMailbox(eclipse, { email: MAIN, refreshToken: "refresh", accessToken: "access", expiresAt: new Date(Date.now() + 3_600_000).toISOString() });
@@ -281,8 +281,6 @@ describe("brand isolation between workspaces", () => {
     assert.equal((await getBookingPage(ridgeon)).exists, false);
     assert.equal((await userLinks(ridgeon)).booking, null);
     assert.match((await userLinks(eclipse)).booking!.url, /\/book\/mark$/);
-    const copies = await otherBookingPages(ridgeon);
-    assert.deepEqual(copies.map((copy) => [copy.workspaceName, copy.page.slug]), [["Eclipse", "mark"]]);
     assert.equal((await checkSlugAvailable(ridgeon, "mark")).available, false);
     assert.equal((await checkSlugAvailable(eclipse, "mark")).available, true);
     await saveBookingPage(ridgeon, { slug: "mark-ridgeon", enabled: true, durationMinutes: 45, bufferMinutes: 10, minNoticeMinutes: 240, horizonDays: 21, weeklyHours: DEFAULT_WEEKLY_HOURS });

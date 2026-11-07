@@ -59,7 +59,7 @@ describe("assistant across workspaces", () => {
     const mark = await createUser("mark@ws-assistant.test", "Mark Ridgeon");
     await admin.query("update crm.workspaces set name = 'Eclipse' where id = $1", [mark.workspaceId]);
     eclipse = { ...mark, workspaceName: "Eclipse" };
-    const created = await createWorkspace(eclipse, { name: "Mark Ridgeon", brandStart: "blank" });
+    const created = await createWorkspace(eclipse, { name: "Mark Ridgeon" });
     ridgeon = inWorkspace(eclipse, created.id, "Mark Ridgeon");
     const person = await createUser("priya@ws-assistant.test", "Priya Shah");
     await admin.query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [eclipse.workspaceId, person.userId]);

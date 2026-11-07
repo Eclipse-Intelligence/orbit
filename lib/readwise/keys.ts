@@ -1,10 +1,11 @@
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import type { UserActor } from "@/lib/crm/types";
+import { homeWorkspaceId } from "@/lib/crm/workspaces";
 import { decryptSecret, encryptSecret } from "@/lib/crypto/secret";
 import { ReadwiseError, validateReadwiseToken } from "@/lib/readwise";
 
-export const READWISE_NOT_CONNECTED = "Readwise Reader isn't connected. Add your access token in Settings, Integrations.";
+export const READWISE_NOT_CONNECTED = "Readwise Reader isn't connected. Add your access token in Settings, Connections.";
 
 export type ReadwiseStatus = {
   connected: boolean;
@@ -14,10 +15,12 @@ export type ReadwiseStatus = {
   lastError: string | null;
   lastErrorAt: string | null;
   documents: number;
+  workspaceName: string | null;
 };
 
 export type ReadwiseKeyRow = {
   id: string;
+  workspace_id: string;
   token_cipher: string;
   token_hint: string | null;
   connected_at: Date;
@@ -38,10 +41,10 @@ export type ReadwiseKeyRow = {
 export async function readReadwiseKey(actor: UserActor) {
   return withActor(actor, async (db) => {
     const result = await db.query<ReadwiseKeyRow>(
-      `select id, token_cipher, token_hint, connected_at, last_sync_at, last_error, last_error_at,
+      `select id, workspace_id, token_cipher, token_hint, connected_at, last_sync_at, last_error, last_error_at,
          updated_after, full_sync_at, scan_cursor, scan_since, scan_started_at, scan_full, list_cursor, list_full, list_done
-       from crm.readwise_keys where workspace_id = $1 and user_id = $2`,
-      [actor.workspaceId, actor.userId],
+       from crm.readwise_keys where user_id = $1`,
+      [actor.userId],
     );
     return result.rows[0] ?? null;
   });
@@ -81,23 +84,24 @@ export async function saveReadwiseToken(actor: UserActor, token: string, options
   if (!valid) {
     throw new CrmError("invalid_input", "Readwise didn't accept that token. Copy it again from readwise.io/access_token.", 400, { field: "token" });
   }
+  const home = await homeWorkspaceId(actor);
   await withActor(actor, (db) =>
     db.query(
       `insert into crm.readwise_keys (workspace_id, user_id, token_cipher, token_hint)
        values ($1, $2, $3, $4)
-       on conflict (workspace_id, user_id)
+       on conflict (user_id)
        do update set token_cipher = excluded.token_cipher, token_hint = excluded.token_hint, connected_at = now(),
          last_error = null, last_error_at = null, updated_after = null, full_sync_at = null,
          scan_cursor = null, scan_since = null, scan_started_at = null, scan_full = false,
          list_cursor = null, list_full = false, list_done = false`,
-      [actor.workspaceId, actor.userId, encryptSecret(trimmed), trimmed.slice(-4)],
+      [home, actor.userId, encryptSecret(trimmed), trimmed.slice(-4)],
     ),
   );
 }
 
 export async function removeReadwiseToken(actor: UserActor) {
   await withActor(actor, (db) =>
-    db.query("delete from crm.readwise_keys where workspace_id = $1 and user_id = $2", [actor.workspaceId, actor.userId]),
+    db.query("delete from crm.readwise_keys where user_id = $1", [actor.userId]),
   );
 }
 
@@ -110,18 +114,20 @@ export async function readwiseStatus(actor: UserActor): Promise<ReadwiseStatus> 
       last_error: string | null;
       last_error_at: Date | null;
       documents: number;
+      workspace_name: string | null;
     }>(
       `select k.token_hint, k.connected_at, k.last_sync_at, k.last_error, k.last_error_at,
          (select count(*)::int from crm.readwise_documents d
             join crm.knowledge_items i on i.id = d.knowledge_item_id and i.archived_at is null
-            where d.key_id = k.id) as documents
+            where d.key_id = k.id) as documents,
+         (select w.name from crm.workspaces w where w.id = k.workspace_id) as workspace_name
        from crm.readwise_keys k
-       where k.workspace_id = $1 and k.user_id = $2`,
-      [actor.workspaceId, actor.userId],
+       where k.user_id = $1`,
+      [actor.userId],
     );
     const row = result.rows[0];
     if (!row) {
-      return { connected: false, hint: null, connectedAt: null, lastSyncedAt: null, lastError: null, lastErrorAt: null, documents: 0 };
+      return { connected: false, hint: null, connectedAt: null, lastSyncedAt: null, lastError: null, lastErrorAt: null, documents: 0, workspaceName: null };
     }
     return {
       connected: true,
@@ -131,6 +137,7 @@ export async function readwiseStatus(actor: UserActor): Promise<ReadwiseStatus> 
       lastError: row.last_error,
       lastErrorAt: row.last_error_at?.toISOString() ?? null,
       documents: row.documents,
+      workspaceName: row.workspace_name,
     };
   });
 }

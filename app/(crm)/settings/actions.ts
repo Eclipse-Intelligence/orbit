@@ -244,7 +244,7 @@ export async function saveGranolaKeyAction(key: string): Promise<{ error?: strin
   const user = await requireUser();
   try {
     await saveGranolaKey(user, key);
-    revalidatePath(SETTINGS_PATHS.integrations);
+    revalidatePath(SETTINGS_PATHS.connections);
     return {};
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Couldn't save the Granola key." };
@@ -255,7 +255,7 @@ export async function saveReadwiseTokenAction(token: string): Promise<{ error?: 
   const user = await requireUser();
   try {
     await saveReadwiseToken(user, token);
-    revalidatePath(SETTINGS_PATHS.integrations);
+    revalidatePath(SETTINGS_PATHS.connections);
     return {};
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Couldn't save the Readwise token." };
@@ -266,7 +266,7 @@ export async function removeReadwiseTokenAction(): Promise<{ error?: string }> {
   const user = await requireUser();
   try {
     await removeReadwiseToken(user);
-    revalidatePath(SETTINGS_PATHS.integrations);
+    revalidatePath(SETTINGS_PATHS.connections);
     return {};
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Couldn't disconnect Readwise Reader." };
@@ -277,7 +277,7 @@ export async function saveRecallKeyAction(key: string): Promise<{ error?: string
   const user = await requireUser();
   try {
     await saveRecallKey(user, key);
-    revalidatePath(SETTINGS_PATHS.integrations);
+    revalidatePath(SETTINGS_PATHS.connections);
     return {};
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Couldn't save the Recall key." };
@@ -288,7 +288,7 @@ export async function removeRecallKeyAction(): Promise<{ error?: string }> {
   const user = await requireUser();
   try {
     await removeRecallKey(user);
-    revalidatePath(SETTINGS_PATHS.integrations);
+    revalidatePath(SETTINGS_PATHS.connections);
     return {};
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Couldn't disconnect Recall." };
@@ -299,7 +299,7 @@ export async function syncReadwiseAction(): Promise<{ error?: string; message?: 
   const user = await requireUser();
   try {
     const result = await syncReaderToKnowledge(user, { full: true, deadline: Date.now() + 50_000 });
-    revalidatePath(SETTINGS_PATHS.integrations);
+    revalidatePath(SETTINGS_PATHS.connections);
     if (result.error) return { error: result.error };
     if (!result.ran) return { message: "A sync is already running." };
     const changed = result.added + result.updated;
@@ -320,7 +320,7 @@ export async function setUpAgentMailboxAction(address: string): Promise<AgentMai
   const user = await requireUser();
   try {
     const result = await setUpAgentMailbox(user, { address });
-    revalidatePath(SETTINGS_PATHS.integrations);
+    revalidatePath(SETTINGS_PATHS.tools);
     return { message: result.message };
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Couldn't set up the agent mailbox." };
@@ -331,7 +331,7 @@ export async function saveAgentSendersAction(senders: { address: string; userId:
   const user = await requireUser();
   try {
     const result = await saveAgentSenders(user, senders);
-    revalidatePath(SETTINGS_PATHS.integrations);
+    revalidatePath(SETTINGS_PATHS.tools);
     return { message: result.message };
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Couldn't save who can give it work." };
@@ -348,7 +348,7 @@ export async function runHeldAgentMailAction(id: string): Promise<AgentMailboxAc
     } catch {
       void work();
     }
-    revalidatePath(SETTINGS_PATHS.integrations);
+    revalidatePath(SETTINGS_PATHS.tools);
     return { message: "Orbit is working on it. The reply comes back in the same thread." };
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Couldn't run that email." };
@@ -359,7 +359,7 @@ export async function removeGranolaKeyAction(): Promise<{ error?: string }> {
   const user = await requireUser();
   try {
     await removeGranolaKey(user);
-    revalidatePath(SETTINGS_PATHS.integrations);
+    revalidatePath(SETTINGS_PATHS.connections);
     return {};
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Couldn't remove the Granola key." };

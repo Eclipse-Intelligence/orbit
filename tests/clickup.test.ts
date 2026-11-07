@@ -835,7 +835,7 @@ describe("clickup per workspace", () => {
     eclipse = await createUser("mark@perworkspace.test", "Mark Ridgeon");
     await getAdminPool().query("update crm.workspaces set name = 'Eclipse' where id = $1", [eclipse.workspaceId]);
     eclipse = { ...eclipse, workspaceName: "Eclipse" };
-    const created = await createWorkspace(eclipse, { name: "Mark Ridgeon", brandStart: "blank" });
+    const created = await createWorkspace(eclipse, { name: "Mark Ridgeon" });
     ridgeon = { ...eclipse, workspaceId: created.id, workspaceName: "Mark Ridgeon", role: "owner", scopes: scopesForRole("owner") };
     fake = makeFake();
     fetchImpl = clickup(fake);

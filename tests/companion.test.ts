@@ -209,7 +209,7 @@ describe("Orbit Agent turns", () => {
     const lonely = await createUser("agent-none@orbit.test", "Mark Ridgeon");
     await assert.rejects(
       sendMessage(lonely, { message: "Hi", model: "claude/claude-opus-5-5", reasoning: "medium", webSearch: false }, () => undefined, { deadline: deadline() }),
-      /To use your Claude account, pair your Mac in Settings › Integrations/,
+      /To use your Claude account, pair your Mac in Settings › Connections/,
     );
     assert.equal((await listConversations(lonely)).length, 0);
 

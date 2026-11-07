@@ -13,6 +13,7 @@ import { CollapseSidebarButton } from "./sidebar-toggle";
 import { captureHasNew, captureLeft, useCompaniesStore } from "@/stores/companies-store";
 import type { CaptureStatus } from "@/lib/crm/capture";
 import { TASKS_PATH } from "@/lib/crm/task-views";
+import { SETTINGS_ROOT } from "@/lib/settings-nav";
 import type { BoardSummary } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
 import WorkspaceSwitcher from "@/components/workspaces/workspace-switcher";
@@ -36,6 +37,7 @@ type SidebarContentProps = {
   mailUnread: number;
   capture: CaptureStatus | null;
   workspace: SidebarWorkspace;
+  settingsHref?: string;
 };
 
 export default function SidebarContent({
@@ -45,6 +47,7 @@ export default function SidebarContent({
   mailUnread,
   capture,
   workspace,
+  settingsHref = SETTINGS_ROOT,
 }: SidebarContentProps) {
   const pathname = usePathname();
   const openProfile = useCompaniesStore((state) => state.openProfile);
@@ -161,10 +164,10 @@ export default function SidebarContent({
 
       <SidebarSection className="border-sidebar-border shrink-0 border-t">
         <SidebarNavItem
-          href="/settings"
+          href={settingsHref}
           icon={MessageIcon}
           label="Settings"
-          active={current("/settings")}
+          active={current(SETTINGS_ROOT)}
         />
         <SidebarShortcuts />
         <Button

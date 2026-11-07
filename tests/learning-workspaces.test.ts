@@ -46,7 +46,7 @@ describe("personal learning across workspaces", () => {
     eclipse = await createUser("mark@wlp.test", "Mark Ridgeon");
     await getAdminPool().query("update crm.workspaces set name = 'Eclipse' where id = $1", [eclipse.workspaceId]);
     eclipse = { ...eclipse, workspaceName: "Eclipse" };
-    const created = await createWorkspace(eclipse, { name: "Mark Ridgeon", brandStart: "blank" });
+    const created = await createWorkspace(eclipse, { name: "Mark Ridgeon" });
     ridgeon = { ...eclipse, workspaceId: created.id, workspaceName: "Mark Ridgeon", role: "owner", scopes: scopesForRole("owner") };
   });
 

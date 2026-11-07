@@ -214,10 +214,10 @@ async function liveBusy(
 function unavailable(error: unknown) {
   if (error instanceof CrmError) {
     if (error.code === "not_connected" && error.message === INVITE_NOT_CONNECTED) {
-      return "Microsoft isn't connected, so the booking page can't create meetings. Connect Microsoft in Settings › Integrations.";
+      return "Microsoft isn't connected, so the booking page can't create meetings. Connect Microsoft in Settings › Email.";
     }
     if (error.code === "scope_missing" && error.message === INVITE_RECONNECT) {
-      return "Microsoft hasn't allowed Orbit to create meetings. Reconnect Microsoft in Settings › Integrations.";
+      return "Microsoft hasn't allowed Orbit to create meetings. Reconnect Microsoft in Settings › Email.";
     }
     if (error.details?.field === "from") return error.message;
     return `Microsoft couldn't create the meeting: ${error.message}`;
