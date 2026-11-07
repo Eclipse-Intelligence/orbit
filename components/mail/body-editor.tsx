@@ -57,6 +57,7 @@ export default function BodyEditor({
           bodyEditorExtensions({
             placeholder: initial.current.placeholder,
             label: initial.current.label,
+            touch: window.matchMedia("(pointer: coarse)").matches,
             handlers: { files: (files) => latest.current.onFiles(files), fileLink: () => latest.current.onFileLink() },
           }),
           EditorView.updateListener.of((update) => {

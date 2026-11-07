@@ -1,5 +1,5 @@
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
-import { Annotation, EditorSelection, type EditorState, type Extension, type Range, type SelectionRange } from "@codemirror/state";
+import { Annotation, EditorSelection, Facet, type EditorState, type Extension, type Range, type SelectionRange } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin, keymap, placeholder, type DecorationSet, type ViewUpdate } from "@codemirror/view";
 import { formatSpans, headingMarker, type FormatSpan } from "@/lib/mail/inline-format";
 
@@ -11,6 +11,8 @@ export type BodyEditorHandlers = {
 };
 
 export const fromProps = Annotation.define<boolean>();
+
+export const steadyMarkers = Facet.define<boolean, boolean>({ combine: (values) => values.some(Boolean) });
 
 const APP_KEYS = new Set(["Escape", "Mod-Enter", "Mod-/", "Mod-i", "Mod-[", "Mod-]", "Mod-Alt-\\", "Shift-Mod-k", "Shift-Mod-\\", "Alt-A"]);
 
@@ -45,11 +47,12 @@ function addSpans(ranges: Range<Decoration>[], spans: FormatSpan[], show: boolea
 
 export function formatDecorations(view: EditorView): DecorationSet {
   const ranges: Range<Decoration>[] = [];
-  const active = activeLines(view);
+  const steady = view.state.facet(steadyMarkers);
+  const active = steady ? null : activeLines(view);
   for (const visible of view.visibleRanges) {
     for (let pos = visible.from; pos <= visible.to; ) {
       const line = view.state.doc.lineAt(pos);
-      const show = active.has(line.number);
+      const show = active ? active.has(line.number) : true;
       const marker = headingMarker(line.text);
       if (marker) {
         ranges.push(heading.range(line.from));
@@ -69,7 +72,8 @@ const livePreview = ViewPlugin.fromClass(
       this.decorations = formatDecorations(view);
     }
     update(update: ViewUpdate) {
-      if (update.docChanged || update.viewportChanged || update.selectionSet || update.focusChanged) this.decorations = formatDecorations(update.view);
+      const moved = !update.state.facet(steadyMarkers) && (update.selectionSet || update.focusChanged);
+      if (update.docChanged || update.viewportChanged || moved) this.decorations = formatDecorations(update.view);
     }
   },
   { decorations: (plugin) => plugin.decorations },
@@ -159,8 +163,9 @@ function isFileLink(transfer: DataTransfer) {
   return /^file:/i.test(transfer.getData("text/uri-list") || transfer.getData("text/plain"));
 }
 
-export function bodyEditorExtensions(options: { placeholder: string; label: string; handlers: BodyEditorHandlers }): Extension[] {
+export function bodyEditorExtensions(options: { placeholder: string; label: string; handlers: BodyEditorHandlers; touch?: boolean }): Extension[] {
   return [
+    steadyMarkers.of(Boolean(options.touch)),
     history(),
     EditorView.lineWrapping,
     keymap.of([

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { EditorSelection, EditorState, type TransactionSpec } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
-import { activeFormats, insertBlock, toggleFormat } from "@/lib/mail/body-editor";
+import { activeFormats, formatDecorations, insertBlock, steadyMarkers, toggleFormat } from "@/lib/mail/body-editor";
 import { formatSpans, headingMarker } from "@/lib/mail/inline-format";
 
 function fakeView(doc: string, from: number, to = from) {
@@ -13,6 +13,20 @@ function fakeView(doc: string, from: number, to = from) {
     },
   };
   return view as unknown as EditorView & { state: EditorState };
+}
+
+function markers(doc: string, options: { from: number; to: number; focused: boolean; steady: boolean }) {
+  const state = EditorState.create({ doc, selection: EditorSelection.single(options.from, options.to), extensions: steadyMarkers.of(options.steady) });
+  const view = { state, hasFocus: options.focused, visibleRanges: [{ from: 0, to: doc.length }] } as unknown as EditorView;
+  const shown: string[] = [];
+  const hidden: string[] = [];
+  const cursor = formatDecorations(view).iter();
+  for (; cursor.value; cursor.next()) {
+    const text = doc.slice(cursor.from, cursor.to);
+    if (cursor.value.point) hidden.push(text);
+    else if (cursor.value.spec.class === "mail-syntax") shown.push(text);
+  }
+  return { shown, hidden };
 }
 
 describe("composer formatting", () => {
@@ -114,5 +128,14 @@ describe("composer formatting", () => {
     const view = fakeView("Here it is:more", 11);
     insertBlock(view, "[Image: shot.png]");
     assert.equal(view.state.doc.toString(), "Here it is:\n[Image: shot.png]\nmore");
+  });
+
+  it("shows markers only on the lines being edited with a mouse, and always on touch so text never moves under a finger", () => {
+    const doc = "Say **hi** now\nand *bye*";
+    assert.deepEqual(markers(doc, { from: 5, to: 5, focused: true, steady: false }), { shown: ["**", "**"], hidden: ["*", "*"] });
+    assert.deepEqual(markers(doc, { from: 5, to: 5, focused: false, steady: false }), { shown: [], hidden: ["**", "**", "*", "*"] });
+    const resting = markers(doc, { from: 0, to: 0, focused: false, steady: true });
+    assert.deepEqual(resting, { shown: ["**", "**", "*", "*"], hidden: [] });
+    assert.deepEqual(markers(doc, { from: 2, to: 20, focused: true, steady: true }), resting);
   });
 });
