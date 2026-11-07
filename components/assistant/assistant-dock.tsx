@@ -538,7 +538,7 @@ function Message({
           </ul>
         )}
         {message.content && (
-          <div className="text-foreground max-w-[85%] rounded-2xl rounded-br-md bg-white/[0.07] px-3.5 py-2 text-[14px] leading-6 whitespace-pre-wrap">
+          <div className="text-foreground max-w-[85%] min-w-0 rounded-2xl rounded-br-md bg-white/[0.07] px-3.5 py-2 text-[14px] leading-6 whitespace-pre-wrap [overflow-wrap:anywhere]">
             {splitMentions(message.content).map((piece, index) =>
               "mention" in piece ? <MentionChip key={index} mention={piece.mention} /> : <span key={index}>{piece.text}</span>,
             )}
