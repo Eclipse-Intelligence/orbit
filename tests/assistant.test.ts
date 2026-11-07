@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, beforeEach, describe, it } from "node:test";
-import { decideActions, getConversation, listConversations, MESSAGE_MAX, sendMessage, type AssistantEvent } from "@/lib/assistant/chat";
-import { settingsFor } from "@/lib/assistant/models";
+import { chatDefaults, decideActions, getConversation, lastChatSettings, listConversations, MESSAGE_MAX, openBrief, sendMessage, type AssistantEvent } from "@/lib/assistant/chat";
+import { DEFAULT_MODEL, settingsFor, startingSettings } from "@/lib/assistant/models";
 import { ECLIPSE_CONTEXT, ECLIPSE_IDEAL_CUSTOMER, ECLIPSE_WEBSITE } from "@/lib/assistant/eclipse";
 import { stablePrompt, systemPrompt } from "@/lib/assistant/prompt";
 import { geminiTool } from "@/lib/assistant/gateway";
@@ -426,6 +426,78 @@ describe("assistant conversations", () => {
     assert.deepEqual(settingsFor("grok-4.7", "max"), { model: "grok-4.7", reasoning: "xhigh" });
     assert.deepEqual(settingsFor("gpt-6-astra", "nonsense"), { model: "gpt-6-astra", reasoning: "medium" });
     assert.deepEqual(settingsFor("gemini-4-argon", "high"), { model: "gemini-4-argon", reasoning: "high" });
+  });
+
+  it("starts new chats on the model and reasoning of the person's last chat", async () => {
+    const starter = await createUser("starter@orbit.test", "Starter Person");
+    const admin = getAdminPool();
+    const fresh = await chatDefaults(starter);
+    assert.equal(fresh.last, null);
+    assert.deepEqual(fresh.settings, { model: DEFAULT_MODEL, reasoning: "medium" });
+
+    async function chat(model: string, reasoning: string, roles: string[], minutesAgo: number) {
+      const id = (await admin.query<{ id: string }>(
+        "insert into crm.assistant_conversations (workspace_id, user_id, title, model, reasoning, web_search, updated_at) values ($1, $2, 'Chat', $3, $4, false, now() - make_interval(mins => $5)) returning id",
+        [starter.workspaceId, starter.userId, model, reasoning, minutesAgo],
+      )).rows[0].id;
+      for (const role of roles) {
+        await admin.query(
+          "insert into crm.assistant_messages (conversation_id, workspace_id, user_id, role, content, created_at) values ($1, $2, $3, $4, 'Hello', now() - make_interval(mins => $5))",
+          [id, starter.workspaceId, starter.userId, role, minutesAgo],
+        );
+      }
+      return id;
+    }
+    await chat("gpt-6-astra", "low", ["user", "assistant"], 60);
+    await chat("claude/claude-opus-5-5", "high", ["user", "assistant"], 30);
+    await chat("claude-sonnet-5-5", "medium", ["assistant"], 10);
+    const emailed = await chat("claude/claude-fable-5-1", "medium", ["user", "assistant"], 5);
+    const mailbox = (await admin.query<{ id: string }>(
+      "insert into crm.agent_mailboxes (workspace_id, address) values ($1, 'starter-agent@orbit.test') returning id",
+      [starter.workspaceId],
+    )).rows[0].id;
+    await admin.query("insert into crm.agent_mail_threads (workspace_id, mailbox_id, thread_id, user_id, conversation_id) values ($1, $2, 'thd_starter', $3, $4)", [
+      starter.workspaceId,
+      mailbox,
+      starter.userId,
+      emailed,
+    ]);
+
+    assert.deepEqual(await lastChatSettings(starter), { model: "claude/claude-opus-5-5", reasoning: "high" });
+    const theirs = (await admin.query<{ id: string }>(
+      "insert into crm.assistant_conversations (workspace_id, user_id, title, model, reasoning, web_search) values ($1, $2, 'Theirs', 'grok-4.7', 'low', false) returning id",
+      [owner.workspaceId, owner.userId],
+    )).rows[0].id;
+    await admin.query("insert into crm.assistant_messages (conversation_id, workspace_id, user_id, role, content) values ($1, $2, $3, 'user', 'Newer')", [
+      theirs,
+      owner.workspaceId,
+      owner.userId,
+    ]);
+    assert.deepEqual(await lastChatSettings(starter), { model: "claude/claude-opus-5-5", reasoning: "high" });
+    assert.deepEqual(await lastChatSettings(owner), { model: "grok-4.7", reasoning: "low" });
+    const disconnected = await chatDefaults(starter);
+    assert.deepEqual(disconnected.connected, []);
+    assert.deepEqual(disconnected.settings, { model: DEFAULT_MODEL, reasoning: "medium" });
+
+    await admin.query("insert into crm.ai_companions (workspace_id, user_id, name, token_hash) values ($1, $2, 'Mac', 'starter-hash')", [starter.workspaceId, starter.userId]);
+    const paired = await chatDefaults(starter);
+    assert.deepEqual(paired.connected, ["claude"]);
+    assert.deepEqual(paired.settings, { model: "claude/claude-opus-5-5", reasoning: "high" });
+
+    assert.deepEqual(startingSettings([{ model: "claude/claude-opus-5-5", reasoning: "high" }, { model: "gpt-6-astra", reasoning: "low" }], []), {
+      model: "gpt-6-astra",
+      reasoning: "low",
+    });
+    assert.deepEqual(startingSettings([null, { model: "made-up" }], []), { model: DEFAULT_MODEL, reasoning: "medium" });
+    assert.deepEqual(startingSettings([{ model: "claude/claude-opus-5-5", reasoning: "max" }], ["claude"]), { model: "claude/claude-opus-5-5", reasoning: "max" });
+
+    const brief = (await admin.query<{ id: string }>(
+      "insert into crm.daily_briefs (workspace_id, user_id, day, body) values ($1, $2, current_date, 'Morning.') returning id",
+      [starter.workspaceId, starter.userId],
+    )).rows[0].id;
+    const opened = await openBrief(starter, brief, { webSearch: false });
+    assert.equal(opened.conversation.model, "claude/claude-opus-5-5");
+    assert.equal(opened.conversation.reasoning, "high");
   });
 });
 

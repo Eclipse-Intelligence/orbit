@@ -434,6 +434,9 @@ async function describeEvent(
   const changes = record(event.changes);
   const before = record(changes?.before);
   const after = record(changes?.after);
+  if (event.event_type === "contact.updated" && record(changes?.companyMovedTo)) {
+    return refuse(`Took ${entityName} off their company`, "This can't be undone because the company moved to another workspace.");
+  }
   const updateEntity = UPDATE_EVENTS[event.event_type];
   const fields = updateEntity ? fieldList(changes) : null;
   let summary = fallback;

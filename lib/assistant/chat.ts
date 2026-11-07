@@ -1,5 +1,5 @@
 import { AssistantError, StoppedError, complete, type ChatMessage, type ProviderState, type Source, type ToolCall } from "@/lib/assistant/gateway";
-import { assistantModel, settingsFor, type ModelSource, type ReasoningLevel } from "@/lib/assistant/models";
+import { assistantModel, settingsFor, startingSettings, type ModelSource, type ReasoningLevel } from "@/lib/assistant/models";
 import { chatFileNote, chatFilesFor, removeChatObjects, type ChatFile } from "@/lib/assistant/files";
 import { connectedProviders } from "@/lib/ai-accounts/store";
 import { systemPrompt } from "@/lib/assistant/prompt";
@@ -463,7 +463,7 @@ export async function openBrief(
   input: { model?: unknown; reasoning?: unknown; webSearch?: unknown } = {},
 ) {
   if (!isUuid(id)) throw new CrmError("not_found", "That brief doesn't exist.", 404);
-  const settings = settingsFor(input.model, input.reasoning);
+  const settings = input.model === undefined ? (await chatDefaults(actor)).settings : settingsFor(input.model, input.reasoning);
   const conversationId = await withActor(actor, async (db) => {
     const found = await db.query<{ day: string; body: string; conversation_id: string | null }>(
       `select day::text, body, conversation_id from crm.daily_briefs
@@ -764,6 +764,27 @@ async function turnMarker(actor: UserActor, conversationId: string) {
 export async function connectedSources(actor: UserActor): Promise<ModelSource[]> {
   const [providers, companions] = await Promise.all([connectedProviders(actor), listCompanions(actor)]);
   return [...providers, ...(companions.length > 0 ? (["claude"] as const) : [])];
+}
+
+export async function lastChatSettings(actor: UserActor): Promise<{ model: string; reasoning: string } | null> {
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ model: string; reasoning: string }>(
+      `select c.model, c.reasoning
+       from crm.assistant_messages m
+       join crm.assistant_conversations c on c.id = m.conversation_id
+       where m.user_id = $1 and m.role = 'user' and c.user_id = $1
+         and not exists (select 1 from crm.agent_mail_threads t where t.conversation_id = c.id)
+       order by m.created_at desc
+       limit 1`,
+      [actor.userId],
+    );
+    return result.rows[0] ?? null;
+  });
+}
+
+export async function chatDefaults(actor: UserActor) {
+  const [last, connected] = await Promise.all([lastChatSettings(actor).catch(() => null), connectedSources(actor).catch(() => null)]);
+  return { connected, last, settings: startingSettings([last], connected ?? []) };
 }
 
 export async function stopConversation(actor: UserActor, id: string) {

@@ -31,7 +31,12 @@ type PlanRecord = {
   archived?: boolean;
   deals?: PlanDeal[];
   boardCards?: number;
+  companyId?: string | null;
 };
+
+type PlanCompanyChoice = { id: string; name: string; others: number };
+
+type PlanLeftBehind = { id: string; name: string; companyId: string | null; archived: boolean };
 
 type Plan = {
   source: WorkspaceRef;
@@ -55,6 +60,12 @@ type Plan = {
   stageName: string | null;
   boardConflict: string | null;
   canMove: boolean;
+  contactCompanies?: PlanCompanyChoice[];
+  companyContacts?: number;
+  leftBehind?: PlanLeftBehind[];
+  notCopied?: string[];
+  proposalContacts?: string[];
+  dealsLosingContact?: number;
 };
 
 export type MoveRequest = {
@@ -63,6 +74,8 @@ export type MoveRequest = {
   workspaceId?: unknown;
   copy?: unknown;
   copyDeals?: unknown;
+  includeCompany?: unknown;
+  includeContacts?: unknown;
   pipelineId?: unknown;
   stageId?: unknown;
 };
@@ -72,6 +85,8 @@ type MoveInput = {
   contactIds: string[];
   copy: boolean;
   copyDeals: boolean;
+  includeCompany: boolean;
+  includeContacts: boolean;
   pipelineId: string | null;
   stageId: string | null;
 };
@@ -102,6 +117,12 @@ export type MovePreview = {
   stageName: string | null;
   boardConflict: string | null;
   canMove: boolean;
+  contactCompanies: { name: string; others: number }[];
+  companyContacts: number;
+  leftBehind: string[];
+  notCopied: string[];
+  proposalContacts: string[];
+  dealsLosingContact: number;
 };
 
 export type MovedRecord = { id: string; name: string; targetId: string; merged: boolean };
@@ -115,6 +136,7 @@ export type MoveResult = {
   deals: number;
   activities: number;
   tasks: number;
+  leftBehind: { id: string; name: string }[];
   message: string;
 };
 
@@ -142,6 +164,8 @@ function moveInput(request: MoveRequest): MoveInput {
     contactIds,
     copy: request.copy === true,
     copyDeals: request.copyDeals === true,
+    includeCompany: request.includeCompany !== false,
+    includeContacts: request.includeContacts !== false,
     pipelineId: optionalId(request.pipelineId, "pipelineId"),
     stageId: optionalId(request.stageId, "stageId"),
   };
@@ -278,7 +302,7 @@ export async function previewMoveToWorkspace(actor: Actor, request: MoveRequest)
     target: plan.target,
     copy: plan.copy,
     names: selectedNames(plan),
-    contacts: plan.contacts.filter((item) => !item.selected && !item.archived).length,
+    contacts: plan.contacts.filter((item) => !item.selected).length,
     deals: plan.deals,
     dealsAvailable: plan.dealsAvailable,
     activities: plan.activities,
@@ -299,6 +323,12 @@ export async function previewMoveToWorkspace(actor: Actor, request: MoveRequest)
     stageName: plan.stageName,
     boardConflict: plan.boardConflict,
     canMove: plan.canMove,
+    contactCompanies: (plan.contactCompanies ?? []).map((item) => ({ name: item.name, others: item.others })),
+    companyContacts: plan.companyContacts ?? 0,
+    leftBehind: (plan.leftBehind ?? []).map((item) => item.name),
+    notCopied: plan.notCopied ?? [],
+    proposalContacts: plan.proposalContacts ?? [],
+    dealsLosingContact: plan.dealsLosingContact ?? 0,
   };
 }
 
@@ -310,10 +340,21 @@ function counted(value: number, one: string, many: string) {
   return `${value} ${value === 1 ? one : many}`;
 }
 
+function alongPhrase(plan: Plan) {
+  const along = plan.companies.filter((item) => !item.selected);
+  if (along.length === 0) return "";
+  const ids = new Set(along.map((item) => item.id));
+  const others = plan.contacts.filter((item) => !item.selected && item.companyId && ids.has(item.companyId)).length;
+  const one = along.length === 1;
+  const what = one ? along[0].name : `${along.length} companies`;
+  const people = others > 0 ? ` and ${one ? "its" : "their"} ${counted(others, "other contact", "other contacts")}` : "";
+  return `, with ${what}${people},`;
+}
+
 function resultMessage(plan: Plan) {
   const names = selectedNames(plan);
   const what = names.length === 1 ? names[0] : counted(names.length, "record", "records");
-  return `${plan.copy ? "Copied" : "Moved"} ${what} to ${plan.target.name}.`;
+  return `${plan.copy ? "Copied" : "Moved"} ${what}${alongPhrase(plan)} to ${plan.target.name}.`;
 }
 
 type CopiedFrom = { workspaceId: string; workspaceName: string; id: string };
@@ -386,6 +427,14 @@ async function auditMove(db: Db, source: UserActor, target: UserActor, plan: Pla
     }
   }
   await auditLinks(db, source, target, plan, fills, provenance);
+  for (const contact of plan.leftBehind ?? []) {
+    await recordAudit(db, source, "contact.updated", "contact", contact.id, provenance, {
+      fields: ["companyId"],
+      before: { companyId: contact.companyId },
+      after: { companyId: null },
+      companyMovedTo: plan.target,
+    });
+  }
 }
 
 async function auditCopy(db: Db, source: UserActor, target: UserActor, plan: Plan, fills: Map<string, GapFill>, provenance: Provenance) {
@@ -468,6 +517,7 @@ export async function moveRecordsToWorkspace(actor: Actor, request: MoveRequest,
         deals: done.deals,
         activities: done.activities,
         tasks: done.tasks,
+        leftBehind: (done.leftBehind ?? []).map((item) => ({ id: item.id, name: item.name })),
         message: resultMessage(done),
       };
     },

@@ -13,7 +13,7 @@ import { AttachButton, AttachmentList, fileSize, useEmailAttachments } from "@/c
 import { useScreenState } from "@/components/crm/quick-add";
 import { useShortcut, useShortcuts } from "@/components/shortcuts/shortcuts-provider";
 import {
-  connectedSourcesAction,
+  chatDefaultsAction,
   deleteConversationAction,
   discardChatFilesAction,
   getConversationAction,
@@ -32,6 +32,7 @@ import {
   assistantModel,
   availableModels,
   settingsFor,
+  startingSettings,
   type ModelSource,
   type ReasoningLevel,
 } from "@/lib/assistant/models";
@@ -85,9 +86,9 @@ function readSettings() {
   try {
     const parsed = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? "{}") as Record<string, unknown>;
     const settings = settingsFor(parsed.model, parsed.reasoning);
-    return { ...settings, webSearch: parsed.webSearch === true };
+    return { ...settings, webSearch: parsed.webSearch === true, saved: { model: parsed.model, reasoning: parsed.reasoning } };
   } catch {
-    return { model: DEFAULT_MODEL, reasoning: DEFAULT_REASONING, webSearch: false };
+    return { model: DEFAULT_MODEL, reasoning: DEFAULT_REASONING, webSearch: false, saved: null };
   }
 }
 
@@ -633,6 +634,9 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
   const abort = useRef<AbortController | null>(null);
   const changed = useRef(false);
   const conversationId = useRef<string | null>(null);
+  const modelChosen = useRef(false);
+  const defaultsLoaded = useRef(false);
+  const settingsRead = useRef(false);
   const pinned = useRef(true);
   const waiting = useRef(false);
   const recovering = useRef(0);
@@ -641,18 +645,16 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
   const [dragging, setDragging] = useState(false);
   const files = useEmailAttachments([], CHAT_UPLOADS);
 
-  useEffect(() => {
-    if (!open) return;
-    let live = true;
-    void connectedSourcesAction()
-      .then((sources) => {
-        if (live && sources) setConnected(sources);
-      })
-      .catch(() => undefined);
-    return () => {
-      live = false;
-    };
-  }, [open]);
+  const applyDefaults = useCallback(async () => {
+    const saved = readSettings().saved;
+    const defaults = await chatDefaultsAction().catch(() => null);
+    defaultsLoaded.current = true;
+    if (defaults?.connected) setConnected(defaults.connected);
+    if (modelChosen.current) return;
+    const next = startingSettings([defaults?.last, saved], defaults?.connected ?? undefined);
+    setModel(next.model);
+    setReasoning(next.reasoning);
+  }, []);
 
   const follow = useCallback(
     async (id: string) => {
@@ -678,6 +680,7 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
   useEffect(() => {
     const timer = window.setTimeout(() => {
       const saved = readSettings();
+      settingsRead.current = true;
       setModel(saved.model);
       setReasoning(saved.reasoning);
       setWebSearch(saved.webSearch);
@@ -687,6 +690,8 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
         url.searchParams.delete(CHAT_PARAM);
         window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
       }
+      if (linked) modelChosen.current = true;
+      void applyDefaults();
       const last = linked ?? sessionStorage.getItem(CONVERSATION_KEY);
       if (last) {
         const mine = view.current;
@@ -714,9 +719,10 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
       }
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [follow]);
+  }, [follow, applyDefaults]);
 
   useEffect(() => {
+    if (!settingsRead.current) return;
     try {
       localStorage.setItem(SETTINGS_KEY, JSON.stringify({ model, reasoning, webSearch }));
     } catch {}
@@ -934,6 +940,10 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
 
   function newChat() {
     detach();
+    if (conversation) {
+      modelChosen.current = false;
+      void applyDefaults();
+    }
     setWorking(null);
     setConversation(null);
     setMessages([]);
@@ -965,6 +975,7 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
     if (result.working) void follow(result.conversation.id);
     else recovering.current += 1;
     const settings = settingsFor(result.conversation.model, result.conversation.reasoning);
+    modelChosen.current = true;
     setModel(settings.model);
     setReasoning(settings.reasoning);
     setWebSearch(result.conversation.webSearch);
@@ -985,13 +996,18 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
     setHistoryOpen(false);
     pinned.current = true;
     const mine = detach();
-    const result = await openBriefAction(next.id, { model: active.model, reasoning: active.reasoning, webSearch });
+    const chosen = defaultsLoaded.current || modelChosen.current ? { model: active.model, reasoning: active.reasoning } : {};
+    const result = await openBriefAction(next.id, { ...chosen, webSearch });
     if (view.current !== mine) return;
     if (!result.opened) {
       setHandledBrief(null);
       setError(result.error ?? "Couldn't open your brief. Try again.");
       return;
     }
+    const settings = settingsFor(result.opened.conversation.model, result.opened.conversation.reasoning);
+    modelChosen.current = true;
+    setModel(settings.model);
+    setReasoning(settings.reasoning);
     setConversation(result.opened.conversation);
     setMessages(result.opened.messages);
     setWorking(null);
@@ -1229,6 +1245,7 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
               <Select
                 value={active.model}
                 onValueChange={(next) => {
+                  modelChosen.current = true;
                   setModel(next);
                   setReasoning(settingsFor(next, reasoning).reasoning);
                 }}
@@ -1260,7 +1277,13 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
                       ))}
                 </SelectContent>
               </Select>
-              <Select value={active.reasoning} onValueChange={(next) => setReasoning(next as ReasoningLevel)}>
+              <Select
+                value={active.reasoning}
+                onValueChange={(next) => {
+                  modelChosen.current = true;
+                  setReasoning(next as ReasoningLevel);
+                }}
+              >
                 <SelectTrigger aria-label="Reasoning" className="h-7 w-auto gap-1.5 rounded-full border-transparent bg-transparent px-2.5 text-[12.5px] whitespace-nowrap hover:bg-white/5">
                   <SelectValue>{REASONING_LABELS[active.reasoning]}</SelectValue>
                 </SelectTrigger>

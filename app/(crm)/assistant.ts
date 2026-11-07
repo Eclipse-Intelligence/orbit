@@ -1,7 +1,7 @@
 "use server";
 
 import type { ModelSource } from "@/lib/assistant/models";
-import { connectedSources, deleteConversation, getConversation, listConversations, openBrief, stopConversation } from "@/lib/assistant/chat";
+import { chatDefaults, deleteConversation, getConversation, listConversations, openBrief, stopConversation } from "@/lib/assistant/chat";
 import { discardChatFiles, prepareChatFile, type PreparedChatFile } from "@/lib/assistant/files";
 import { getUserActor } from "@/lib/auth/user";
 import { CrmError } from "@/lib/crm/errors";
@@ -23,7 +23,7 @@ export async function getConversationAction(id: string) {
   }
 }
 
-export async function openBriefAction(id: string, settings: { model: string; reasoning: string; webSearch: boolean }) {
+export async function openBriefAction(id: string, settings: { model?: string; reasoning?: string; webSearch: boolean }) {
   const user = await getUserActor();
   if (!user) return { error: "Sign in again." };
   try {
@@ -55,17 +55,6 @@ export async function stopConversationAction(id: string) {
   }
 }
 
-export async function connectedSourcesAction(): Promise<ModelSource[] | null> {
-  const user = await getUserActor();
-  if (!user) return null;
-  try {
-    return await connectedSources(user);
-  } catch (error) {
-    console.error("Could not read AI accounts", error);
-    return null;
-  }
-}
-
 export async function prepareChatFileAction(file: { name: string; size: number; contentType: string }): Promise<{ attachment?: PreparedChatFile; error?: string }> {
   const user = await getUserActor();
   if (!user) return { error: "Sign in to attach files." };
@@ -82,4 +71,16 @@ export async function discardChatFilesAction(ids: string[]) {
   const user = await getUserActor();
   if (!user) return;
   await discardChatFiles(user, ids).catch(() => undefined);
+}
+
+export async function chatDefaultsAction(): Promise<{ connected: ModelSource[] | null; last: { model: string; reasoning: string } | null } | null> {
+  const user = await getUserActor();
+  if (!user) return null;
+  try {
+    const { connected, last } = await chatDefaults(user);
+    return { connected, last };
+  } catch (error) {
+    console.error("Could not read the last chat settings", error);
+    return null;
+  }
 }

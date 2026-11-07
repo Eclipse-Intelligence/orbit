@@ -52,9 +52,36 @@ function summaryLines(preview: MovePreview, copy: boolean, copyDeals: boolean) {
     lines.push(link.matched ? `Linked to ${link.into} in ${target}.` : `${link.name} stays here, and a copy goes to ${target}.`);
   }
   for (const merge of preview.merges) lines.push(`${merge.name} merges into ${merge.into}.`);
+  if (preview.proposalContacts.length > 0) {
+    lines.push(`${listed(preview.proposalContacts)} ${preview.proposalContacts.length === 1 ? "goes" : "go"} too, named on a proposal.`);
+  }
+  if (!copy && preview.dealsLosingContact > 0) {
+    lines.push(preview.dealsLosingContact === 1 ? "1 deal loses its main contact." : `${preview.dealsLosingContact} deals lose their main contact.`);
+  }
   if (!copy && preview.boards.length > 0) lines.push(`Comes off ${listed(preview.boards)}.`);
   if (preview.aiFields.length > 0) lines.push(`Not carried over: AI fields ${listed(preview.aiFields)}.`);
   return lines;
+}
+
+function contactsPhrase(count: number, owner: "its" | "their", other: boolean) {
+  const kind = other ? "other contact" : "contact";
+  return count === 1 ? `${owner} ${kind}` : `${owner} ${count} ${kind}s`;
+}
+
+function companyChoiceLabel(companies: MovePreview["contactCompanies"], copy: boolean) {
+  const verb = copy ? "Also copy" : "Also move";
+  const others = companies.reduce((total, item) => total + item.others, 0);
+  const one = companies.length === 1;
+  const what = one ? companies[0].name : `their ${companies.length} companies`;
+  return others > 0 ? `${verb} ${what} and ${contactsPhrase(others, one ? "its" : "their", true)}` : `${verb} ${what}`;
+}
+
+function contactsChoiceLabel(count: number, single: boolean, copy: boolean) {
+  return `${copy ? "Copy" : "Move"} ${contactsPhrase(count, single ? "its" : "their", false)} too`;
+}
+
+function togetherFor(kind: MoveKind, together: boolean) {
+  return kind === "company" ? { includeContacts: together } : { includeCompany: together };
 }
 
 type MoveDialogProps = {
@@ -92,17 +119,18 @@ function MoveBody({
   setBusy,
   close,
 }: MoveDialogProps & { busy: boolean; setBusy: (busy: boolean) => void; close: () => void }) {
-  const fieldIds = { workspace: useId(), pipeline: useId(), stage: useId(), keep: useId(), deals: useId() };
+  const fieldIds = { workspace: useId(), pipeline: useId(), stage: useId(), keep: useId(), deals: useId(), together: useId(), stayNote: useId() };
   const [workspaceId, setWorkspaceId] = useState(workspaces[0]?.id ?? "");
   const [copy, setCopy] = useState(false);
   const [copyDeals, setCopyDeals] = useState(false);
+  const [together, setTogether] = useState(true);
   const [pipelineId, setPipelineId] = useState("");
   const [stageId, setStageId] = useState(MATCHING);
   const [loaded, setLoaded] = useState<{ key: string; preview: MovePreview | null; error: string | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const idsKey = ids.join(",");
-  const requestKey = JSON.stringify([idsKey, workspaceId, copy, copyDeals, pipelineId, attempt]);
+  const requestKey = JSON.stringify([idsKey, workspaceId, copy, copyDeals, together, pipelineId, attempt]);
 
   useEffect(() => {
     if (!workspaceId || !idsKey) return;
@@ -112,6 +140,7 @@ function MoveBody({
       workspaceId,
       copy,
       copyDeals,
+      ...togetherFor(kind, together),
       pipelineId: pipelineId || null,
     })
       .then((result) => {
@@ -130,7 +159,7 @@ function MoveBody({
     return () => {
       live = false;
     };
-  }, [requestKey, idsKey, kind, workspaceId, copy, copyDeals, pipelineId]);
+  }, [requestKey, idsKey, kind, workspaceId, copy, copyDeals, together, pipelineId]);
 
   const preview = loaded?.preview ?? null;
   const loading = loaded?.key !== requestKey;
@@ -143,6 +172,16 @@ function MoveBody({
   const blocked = Boolean(showDeals && preview?.boardConflict && pipeline?.kind === "board");
   const previewError = loading ? null : (loaded?.error ?? null);
   const mustCopy = preview?.canMove === false;
+  const copying = copy || mustCopy;
+  const companyChoices = kind === "contact" ? (preview?.contactCompanies ?? []) : [];
+  const companyContacts = kind === "company" ? (preview?.companyContacts ?? 0) : 0;
+  const togetherLabel =
+    companyChoices.length > 0
+      ? companyChoiceLabel(companyChoices, copying)
+      : companyContacts > 0
+        ? contactsChoiceLabel(companyContacts, ids.length === 1, copying)
+        : null;
+  const leavesContacts = kind === "company" && companyContacts > 0 && !together && !copying;
 
   async function run() {
     if (!workspaceId) return;
@@ -154,6 +193,7 @@ function MoveBody({
         workspaceId,
         copy,
         copyDeals: copy && copyDeals,
+        ...togetherFor(kind, together),
         pipelineId: showDeals ? pipelineId || null : null,
         stageId: showDeals ? stageId || null : null,
       });
@@ -206,6 +246,24 @@ function MoveBody({
           Also keep in {currentWorkspace}
         </label>
         {mustCopy && <p className="caption-style text-subtle -mt-2">Only owners and admins of {currentWorkspace} can move records out, so this copies them.</p>}
+        {togetherLabel && (
+          <label htmlFor={fieldIds.together} className="caption-style text-soft flex cursor-pointer items-start gap-2">
+            <Checkbox
+              id={fieldIds.together}
+              className="mt-px"
+              checked={together}
+              disabled={busy}
+              aria-describedby={leavesContacts ? fieldIds.stayNote : undefined}
+              onCheckedChange={(value) => setTogether(value === true)}
+            />
+            <span className="min-w-0 break-words">{togetherLabel}</span>
+          </label>
+        )}
+        {leavesContacts && (
+          <p id={fieldIds.stayNote} className="caption-style text-subtle -mt-2">
+            They&apos;ll stay in {currentWorkspace} without a company.
+          </p>
+        )}
         {copy && hasDeals && (
           <label htmlFor={fieldIds.deals} className="caption-style text-soft flex cursor-pointer items-center gap-2">
             <Checkbox id={fieldIds.deals} checked={copyDeals} disabled={busy} onCheckedChange={(value) => setCopyDeals(value === true)} />
