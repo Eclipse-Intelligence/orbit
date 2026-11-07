@@ -7,7 +7,7 @@ import { addWatchItems, listWatchlist, removeWatchItems, WATCH_KINDS } from "@/l
 import { latestBrief, learningKinds, learnNow, LEARNING_KINDS, type LearningKind } from "@/lib/learning/nightly";
 import { bookingUrl } from "@/lib/assistant/links";
 import { DOCS_URL, eclipseDocsIndex, readEclipsePage } from "@/lib/eclipse-sources";
-import { readWebPage, WebPageError } from "@/lib/web-page";
+import { readWebPage, WebPageError, type Lookup } from "@/lib/web-page";
 import { checkWeb } from "@/lib/assistant/check-web";
 import { searchKnowledge } from "@/lib/knowledge/search";
 import { addKnowledgePages, archiveKnowledge, CONTENT_LIMIT, listKnowledge, readKnowledge, targetFrom, type KnowledgeItem } from "@/lib/knowledge/store";
@@ -178,7 +178,9 @@ type Names = (id: unknown) => string;
 
 type Defer = (work: () => Promise<unknown>) => void;
 
-type ToolContext = { callId?: string; deadline?: number; defer?: Defer; unattended?: boolean; approval?: DocApproval };
+export type OutsideWeb = { fetchImpl: typeof fetch; lookup: Lookup };
+
+type ToolContext = { callId?: string; deadline?: number; defer?: Defer; unattended?: boolean; approval?: DocApproval; web?: OutsideWeb };
 
 function afterResponse(work: () => Promise<unknown>) {
   try {
@@ -2277,9 +2279,9 @@ const TOOL_LIST: AssistantTool[] = [
       properties: { url: { type: "string", description: "The full web address, for example https://acme.com/about." } },
       required: ["url"],
     },
-    run: async (_actor, args) => {
+    run: async (_actor, args, context) => {
       const raw = required(args.url, "A web address");
-      return readWebPage(/^[a-z]+:\/\//i.test(raw) ? raw : `https://${raw}`).catch((error: Error) => ({
+      return readWebPage(/^[a-z]+:\/\//i.test(raw) ? raw : `https://${raw}`, context.web ? { ...context.web, render: null } : {}).catch((error: Error) => ({
         error: error instanceof WebPageError ? error.message : "That page couldn't be read.",
       }));
     },
@@ -5608,7 +5610,7 @@ export async function runTool(
   actor: UserActor,
   name: string,
   args: Args,
-  options: { deadline?: number; callId?: string; defer?: Defer; unattended?: boolean; approval?: DocApproval; source?: AssistantSource } = {},
+  options: { deadline?: number; callId?: string; defer?: Defer; unattended?: boolean; approval?: DocApproval; source?: AssistantSource; web?: OutsideWeb } = {},
 ) {
   if (options.unattended && name !== "save_doc") return { error: "Only doc edits can run without approval. Propose this for approval instead." };
   const resolved = resolveTool(name, args);
@@ -5650,6 +5652,7 @@ export async function runTool(
           defer: options.defer,
           unattended: options.unattended === true,
           approval: options.approval,
+          web: options.web,
         };
         return scope ? runAcross(tool, actor, scope, cleaned, context) : tool.run(actor, cleaned, context);
       }),

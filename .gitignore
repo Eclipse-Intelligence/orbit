@@ -44,3 +44,5 @@ next-env.d.ts
 /companion/dist
 /extension/dist
 /public/downloads
+
+/evals/results/

@@ -11,6 +11,7 @@
     "db:setup": "tsx scripts/setup-db.ts",
     "db:reset": "tsx scripts/setup-db.ts --reset",
     "agent:create": "tsx scripts/create-agent.ts",
+    "eval": "tsx scripts/eval.ts",
     "mcp": "tsx scripts/mcp-stdio.ts",
     "companion:pack": "node scripts/pack-companion.mjs",
     "extension:build": "node scripts/build-extension.mjs",

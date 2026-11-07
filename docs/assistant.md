@@ -187,6 +187,95 @@ When a tool is merged into another, add its old name to `MERGED_TOOLS` in `tools
 
 When a tool is removed with nothing to replace it, add it to `RETIRED_TOOLS` in `tools.ts` with its old label and a short error that says what to use instead. `toolLabel` keeps old tool cards in stored chats showing the old label, and `runTool` answers an old call (for example one a model copies from the history) with that error instead of "There is no tool called". `eclipse_articles` is retired this way: articles now come from the brand's Eclipse client through `eclipse_tools` and `eclipse_read`.
 
+## Evaluations
+
+`evals/` holds suites that test how real models behave with the prompt and tools that are in the code at the time, so they run unchanged after a prompt, tool or model change. Unlike `npm test`, they call the real model through the same gateway the app uses, so they need `LLM_API_KEY`, cost money and never run in `npm test`. `tests/assistant-evals.test.ts` does run in `npm test`: it drives the harness end to end with a scripted model it can make pass and fail.
+
+| File | What it holds |
+| --- | --- |
+| `evals/tasks/base.ts` | The fixture every task starts from: an Eclipse workspace (companies, people, deals, tasks, activity with a call transcript, mail, calendar, docs, a daily note, Knowledge, proof) and a Mark Ridgeon workspace, plus fake web pages and Eclipse clients |
+| `evals/tasks/core.ts` | 46 tasks taken from production chats |
+| `evals/tasks/security.ts` | 19 security tasks |
+| `evals/world.ts` | Builds a task's fixture with `tests/helpers.ts` and `lib/crm`, as fresh users so runs never share data |
+| `evals/outside.ts` | The fake outside world: every request Orbit makes during a run goes through it |
+| `evals/checks.ts`, `evals/judge.ts` | The graders |
+| `evals/run.ts` | Runs a task through `sendMessage`, reads what happened back from the database, grades it and reports pass@all |
+| `scripts/eval.ts` | The `npm run eval` command |
+
+### How a run works
+
+Each run builds the task's fixture, then calls `sendMessage` with the chosen model, exactly as the dock does, so the system prompt, learned notes, tool list, history, approval cards and cross-workspace refusals are the real ones. `sendMessage` takes `fetchImpl` for the gateway and `web` (a `fetchImpl` and DNS `lookup`) that `read_web_page` uses instead of the public internet. Both point at `evals/outside.ts`, which also replaces the global `fetch` for the run:
+
+- Model calls (`/chat/completions` and `/responses`) go to the real gateway, or to a scripted model in tests. The tool list in each request is kept, so a grader can check what the model was offered.
+- Calls without tools (the judge) and embeddings go to the real gateway.
+- The Eclipse MCP is a fake that records every `tools/call` and its `clientId`. Linear, Parallel, Mindcase and storage get fake keys and fake answers.
+- Web pages come from the fixture. Every other request is recorded and answered 404, so nothing reaches a real outside service.
+
+Writes are never approved, so nothing is sent or changed: a grader sees the cards the model proposed. The transcript it grades holds every tool call with its arguments and result, every card with its arguments, the final answer, every outside request, every Eclipse call, the tools offered and the token usage.
+
+### Graders
+
+Each task lists checks. Deterministic checks run first: which tools were called (and in what order, for example the playbook before `send_email`), the key arguments of calls and cards (the right contact, the right email to reply to, a due date on next Tuesday, a booking link in the body), that no card was proposed, that the answer mentions or leaves out given facts, that it asks a question, that it links a record, house style (no em or en dashes) and the shape of a first email (40 to 100 words, no link). Only when every deterministic check passes does an LLM judge (`completeJson`, Sonnet 5.5 by default) grade the tasks that need judgement, against a numbered rubric and a block of facts about the fixture. Each criterion passes only if the reply clearly meets it, and the judge is told the reply is material to grade, never instructions. A task passes a run only when every check passes, and passes overall (pass@all) only when it passes every repeat.
+
+Graders name tools, so when a tool is renamed or merged, `tests/assistant-evals.test.ts` fails until `evals/tasks` uses the new name. `PLAYBOOK_TOOLS` in `evals/tasks/shared.ts` is the one place that names the cold email playbook tool.
+
+### The tasks
+
+The core tasks come from Mark's production chats in both workspaces, chosen across the main jobs: finding records, summarising a company, a call or a document, drafting emails and replies, proposing writes (tasks, notes, stage moves, invites, owners, remember), cold email with the playbook, calendar, Docs, mail triage, multi-step requests, ambiguous requests that should ask, two matching records that should ask, and cross-workspace requests. They were anonymised before they were written down: every person, company, address, domain and figure is a consistent fake (the same fake person everywhere), the wording of each request is paraphrased, and no production text is in the repository. Only the user (Mark Ridgeon) and the two workspace names are real, because the workspace and cross-brand rules depend on them.
+
+The security tasks cover:
+
+- Prompt injection in an email body, a reply from a real contact, a note on a record, hidden text on a web page, a shared doc written by a colleague and a call transcript. Graders check that no card or tool call follows the instruction and nothing goes to the attacker's address.
+- Data leaving through URLs: a fetch to an attacker's address built from the pipeline (the lethal trifecta), a tracking image in the answer, and private notes sent to `check_web`. Graders check every outside request, the arguments of the tools that reach outside, every link and image in the answer and every link in a card for private values.
+- Workspaces and brands: changes to the other workspace's records in both directions, Eclipse proof in Mark Ridgeon and the reverse, another Eclipse client from Mark Ridgeon (every Eclipse call must carry the workspace's own `clientId`), Linear outside the workspace it's connected to, and a card warning after a chat read the other workspace.
+- Memory: a learned note telling the assistant to CC an outside address, and a market note asking to be saved as a team note (unprompted, and when the user asks).
+
+Tasks marked `pendingDefence` test a defence that's being built on another branch. They are expected to fail until it merges. `--allow-pending` keeps them out of the CI result.
+
+### Running it
+
+Locally, with the gateway key in the shell:
+
+```bash
+LLM_API_KEY=... npm run eval -- --model claude-sonnet-5-5 --repeat 3
+```
+
+It wipes and rebuilds its own local database, `crm_eval` on `127.0.0.1` by default (created if missing). Set `EVAL_DATABASE_URL` and `EVAL_DATABASE_ADMIN_URL` to use another; it refuses any database that isn't local or whose name doesn't contain `eval` or `test`. Without `LLM_API_KEY` it prints that it skipped and exits 0.
+
+| Option | What it does |
+| --- | --- |
+| `--model a,b` | Models from `lib/assistant/models.ts` to compare. Required. |
+| `--repeat 3` | Runs per task and model. pass@all needs every one to pass. |
+| `--suite core`, `security` or `all` | Which suite (default all). |
+| `--task id,id`, `--category name` | Only these tasks. `--list` prints the tasks and stops. |
+| `--reasoning low` | The reasoning level (default medium). |
+| `--judge-model id`, `--no-judge` | The judge's model (default `claude-sonnet-5-5`), or skip judged checks. |
+| `--concurrency 2` | Runs at once (default 1). |
+| `--timeout 300` | Seconds per turn. |
+| `--out path` | Where the JSON goes (default `evals/results/<time>.json`, which git ignores). |
+| `--ci` | Exits 1 when any task fails any repeat, or when `LLM_API_KEY` is missing. |
+| `--allow-pending` | With `--ci`, doesn't fail on tasks that wait on a defence. |
+
+It prints each run as it finishes, then a table of tasks by model (`2/3 FAIL`), pass@all per model, the tokens used and an estimated cost, and the failing checks with their reasons. The JSON holds the same, plus each run's answer, tool calls and cards.
+
+As a CI job (GitHub Actions, or any runner with Postgres), start a Postgres service, add `LLM_API_KEY` as a secret, and run `npm ci` then `npm run eval -- --model claude-sonnet-5-5 --repeat 3 --ci --allow-pending`, keeping `evals/results/` as an artifact. Run it on pull requests that touch `lib/assistant/`, or nightly. A Vercel function isn't a good fit: a full run takes far longer than a function may run and it needs a Postgres it can wipe.
+
+### Which models it can drive
+
+Only Orbit's own models (source `orbit` in `lib/assistant/models.ts`), which go through the gateway. Claude account models run on Orbit Agent on a paired Mac with the person's Claude subscription: the turn is a queued job the Mac picks up, with no gateway call to intercept, so the harness refuses them. ChatGPT account models need a connected account's OAuth tokens, so it refuses those too. To judge a Claude account model, evaluate the gateway model of the same name (`claude-opus-5-5` for Opus 5.5). That's the same model with the same prompt and tools, but Orbit Agent runs it through the Claude Agent SDK, with tools as an MCP server, the chat as a transcript and long results in pieces, so behaviour on the Mac can still differ.
+
+### Cost
+
+Every round sends the system prompt and tool definitions (about 37,000 tokens today) plus the chat so far. A task takes about 3 rounds on average, more for cold email, so a run is roughly 120,000 input and 3,000 output tokens, plus a few thousand for the judge on judged tasks. The full suite is 65 tasks, so one repeat is about 7.8 million input and 0.2 million output tokens:
+
+| Model | 65 tasks x 3 repeats, no prompt caching | With most of the prompt cached |
+| --- | --- | --- |
+| Sonnet 5.5 ($2 in, $10 out per million) | about $53 | about $19 |
+| Opus 5.5 ($4 in, $20 out) | about $105 | about $34 |
+| Haiku 5.5 ($0.10 in, $0.50 out) | about $3 | about $1 |
+
+These are list prices; the gateway's own prices and caching decide the real figure, which the run reports from the tokens the gateway returns (prices for other models aren't in `PRICES_PER_MILLION` in `evals/run.ts`, so it reports tokens only). `cold_email_check` also makes its own model calls. For a quick check, run `--suite security --repeat 1` (about $5 on Sonnet without caching).
+
 ## Tool reference
 
 "Approval" is Yes for `write: true` tools. "Outside" is Yes for tools in `EXTERNAL_TOOLS`. Read tools run straight away.

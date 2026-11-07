@@ -4,7 +4,7 @@ import { chatFileNote, chatFilesFor, removeChatObjects, type ChatFile } from "@/
 import { connectedProviders } from "@/lib/ai-accounts/store";
 import { systemPrompt } from "@/lib/assistant/prompt";
 import { docLinkOf } from "@/lib/assistant/doc-link";
-import { ACTION_ALTERNATIVES, actionAlternative, assistantTools, crossWorkspaceRefusal, describeAction, findTool, recordNames, runTool, toolDefinitions, toolDescription, toolJson, toolLabel } from "@/lib/assistant/tools";
+import { ACTION_ALTERNATIVES, actionAlternative, assistantTools, crossWorkspaceRefusal, describeAction, findTool, recordNames, runTool, toolDefinitions, toolDescription, toolJson, toolLabel, type OutsideWeb } from "@/lib/assistant/tools";
 import { brandOrEmpty } from "@/lib/crm/brand";
 import { approvalFor, editsWithoutApproval, type DocApproval } from "@/lib/assistant/docs";
 import type { DocDiffLine } from "@/lib/docs/types";
@@ -744,7 +744,7 @@ async function runCompanionTurn(
 
 export type HeadlessTurn = { agentMailId: string; queued?: (job: { jobId: string; online: boolean }) => void };
 
-type TurnOptions = { deadline: number; fetchImpl?: typeof fetch; signal?: AbortSignal; headless?: HeadlessTurn };
+type TurnOptions = { deadline: number; fetchImpl?: typeof fetch; signal?: AbortSignal; headless?: HeadlessTurn; web?: OutsideWeb };
 
 export const HEADLESS_MODEL_ERROR = "Email jobs only run on Orbit Agent, so they need a Claude account model.";
 
@@ -898,7 +898,7 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
       reads.map(async (call) => {
         const label = toolLabel(call.function.name);
         emit({ type: "tool", id: call.id, name: call.function.name, label, status: "running" });
-        const output = await runTool(actor, call.function.name, parseArgs(call.function.arguments), { deadline: deadline - 20_000 });
+        const output = await runTool(actor, call.function.name, parseArgs(call.function.arguments), { deadline: deadline - 20_000, web: options.web });
         await insertMessage(actor, conversation.id, {
           role: "tool",
           content: toolJson(output),
