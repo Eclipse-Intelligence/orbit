@@ -6,7 +6,7 @@ import { SettingsCard } from "@/components/crm/settings-ui";
 import { saveSignatureAction } from "@/app/(crm)/capture/actions";
 import type { Sender } from "@/lib/crm/inbox";
 import { textareaClass } from "@/components/_ui/field-styles";
-import { cn } from "@/lib/utils";
+import { cn, GENERIC_ERROR } from "@/lib/utils";
 
 function SignatureEditor({ sender }: { sender: Sender }) {
   const [value, setValue] = useState(sender.signature ?? "");
@@ -18,7 +18,7 @@ function SignatureEditor({ sender }: { sender: Sender }) {
   async function save() {
     setPending(true);
     setMessage(null);
-    const result = await saveSignatureAction(sender.email, value).catch(() => ({ error: "Something went wrong. Try again.", signature: undefined }));
+    const result = await saveSignatureAction(sender.email, value).catch(() => ({ error: GENERIC_ERROR, signature: undefined }));
     setPending(false);
     if (result.error) {
       setMessage({ text: result.error, error: true });

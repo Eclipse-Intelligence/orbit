@@ -16,7 +16,7 @@ import { relativeWhen } from "@/lib/companies";
 import type { Product, Template } from "@/lib/proposals/catalogue";
 import type { DocumentSummary } from "@/lib/proposals/documents";
 import { BILLING_LABELS, BILLINGS, formatMoney, KIND_LABELS, type Billing } from "@/lib/proposals/model";
-import { cn } from "@/lib/utils";
+import { cn, GENERIC_ERROR } from "@/lib/utils";
 import PlusIcon from "@/public/assets/images/_common/plus.svg";
 
 type Tab = "proposals" | "templates" | "products";
@@ -72,7 +72,7 @@ export default function ProposalsScreen({
   async function newTemplate(starter: string) {
     setBusy(starter);
     setError(null);
-    const result = await createTemplateAction({ starter }).catch(() => ({ error: "Something went wrong. Try again.", data: undefined }));
+    const result = await createTemplateAction({ starter }).catch(() => ({ error: GENERIC_ERROR, data: undefined }));
     setBusy(null);
     if (!result.data) {
       setError(result.error ?? "Couldn't create the template.");
@@ -274,7 +274,7 @@ function ProductEditor({ product, onDone, onCancel }: { product?: Product; onDon
       priceGbp: String(values.get("priceGbp") ?? ""),
       priceUsd: String(values.get("priceUsd") ?? ""),
       billing: String(values.get("billing") ?? "one_off"),
-    }).catch(() => ({ error: "Something went wrong. Try again." }));
+    }).catch(() => ({ error: GENERIC_ERROR }));
     setBusy(false);
     if (result.error) {
       setError(result.error);
@@ -291,7 +291,7 @@ function ProductEditor({ product, onDone, onCancel }: { product?: Product; onDon
   async function archive(archived: boolean) {
     if (!product) return;
     setBusy(true);
-    const result = await saveProductAction(product.id, { archived }).catch(() => ({ error: "Something went wrong. Try again." }));
+    const result = await saveProductAction(product.id, { archived }).catch(() => ({ error: GENERIC_ERROR }));
     setBusy(false);
     if (result.error) setError(result.error);
     else onDone();

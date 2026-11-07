@@ -15,7 +15,7 @@ import {
 import type { AiAccountSummary } from "@/lib/ai-accounts/store";
 import type { CompanionSummary } from "@/lib/companion/pairing";
 import { formatWhen } from "@/lib/companies";
-import { cn } from "@/lib/utils";
+import { cn, GENERIC_ERROR } from "@/lib/utils";
 import { agentPackageUrl } from "@/companion/src/release";
 
 const PRODUCTION_URL = "https://orbit.geteclipse.co";
@@ -99,7 +99,7 @@ function ChatGptRow({ account }: { account: AiAccountSummary }) {
   async function start() {
     setBusy(true);
     setError(null);
-    const result = await startChatGptAction().catch(() => ({ error: "Something went wrong. Try again." }));
+    const result = await startChatGptAction().catch(() => ({ error: GENERIC_ERROR }));
     setBusy(false);
     if ("error" in result) setError(result.error);
     else setCode(result);
@@ -107,7 +107,7 @@ function ChatGptRow({ account }: { account: AiAccountSummary }) {
 
   async function disconnect() {
     setBusy(true);
-    const result = await disconnectAiAccountAction("chatgpt").catch(() => ({ error: "Something went wrong. Try again." }));
+    const result = await disconnectAiAccountAction("chatgpt").catch(() => ({ error: GENERIC_ERROR }));
     setBusy(false);
     if (result.error) setError(result.error);
     else router.refresh();
@@ -236,7 +236,7 @@ function AgentRow({ companions }: { companions: CompanionSummary[] }) {
   async function start() {
     setBusy(true);
     setError(null);
-    const result = await createPairingCodeAction().catch(() => ({ error: "Something went wrong. Try again." }));
+    const result = await createPairingCodeAction().catch(() => ({ error: GENERIC_ERROR }));
     setBusy(false);
     if ("error" in result) {
       setError(result.error);
@@ -248,7 +248,7 @@ function AgentRow({ companions }: { companions: CompanionSummary[] }) {
 
   async function remove(id: string) {
     setBusy(true);
-    const result = await revokeCompanionAction(id).catch(() => ({ error: "Something went wrong. Try again." }));
+    const result = await revokeCompanionAction(id).catch(() => ({ error: GENERIC_ERROR }));
     setBusy(false);
     if (result.error) setError(result.error);
     else router.refresh();

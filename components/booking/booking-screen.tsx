@@ -19,7 +19,7 @@ import { allZones, browserZone, dayTitle, fullWhen, timeOf, todayKey, zoneLabel 
 import type { PublicBookingPage } from "@/lib/booking/pages";
 import { BOOKING_NAME_MAX, BOOKING_NOTE_MAX, durationLabel, initials } from "@/lib/booking/rules";
 import { shiftMonth } from "@/lib/booking/slots";
-import { cn } from "@/lib/utils";
+import { cn, GENERIC_ERROR } from "@/lib/utils";
 import CheckIcon from "@/public/assets/images/booking/check.svg";
 import ClockIcon from "@/public/assets/images/booking/clock.svg";
 import GlobeIcon from "@/public/assets/images/booking/globe.svg";
@@ -283,7 +283,7 @@ export function BookingPanel({
         else window.scrollTo({ top: 0 });
         return;
       }
-      const message = body?.error?.message ?? "Something went wrong. Try again.";
+      const message = body?.error?.message ?? GENERIC_ERROR;
       const field = body?.error?.details?.field;
       if (response.status === 409) {
         setSlot(null);

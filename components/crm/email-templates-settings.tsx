@@ -47,14 +47,14 @@ import {
   type EmailTemplate,
 } from "@/lib/crm/email-template-rules";
 import type { Recipient } from "@/lib/crm/personalise";
-import { cn } from "@/lib/utils";
+import { cn, GENERIC_ERROR } from "@/lib/utils";
 import PlusIcon from "@/public/assets/images/_common/plus.svg";
 import SearchIcon from "@/public/assets/images/_common/search.svg";
 
 const NEW = "new";
 
 function failed(): { error: string } {
-  return { error: "Something went wrong. Try again." };
+  return { error: GENERIC_ERROR };
 }
 
 type Draft = { name: string; subject: string; body: string; tags: string[] };

@@ -22,7 +22,7 @@ import type { MarketAgentStatus } from "@/lib/learning/grok";
 import type { MarketNote, WatchItem, WatchKind } from "@/lib/learning/market";
 import type { Memory, MemoryScope } from "@/lib/learning/memories";
 import type { LearningKind, LearningStatus } from "@/lib/learning/nightly";
-import { cn } from "@/lib/utils";
+import { cn, GENERIC_ERROR } from "@/lib/utils";
 import { selectClass, textareaClass } from "@/components/_ui/field-styles";
 
 const AREA = textareaClass;
@@ -173,7 +173,7 @@ function MemoryRow({ memory, showPlace }: { memory: Memory; showPlace: boolean }
   async function run(work: () => Promise<{ error?: string }>) {
     setBusy(true);
     setError(null);
-    const result = await work().catch(() => ({ error: "Something went wrong. Try again." }));
+    const result = await work().catch(() => ({ error: GENERIC_ERROR }));
     setBusy(false);
     if (result.error) {
       setError(result.error);

@@ -6,6 +6,7 @@ import Button from "@/components/_ui/button";
 import HoldButton from "@/components/_ui/hold-button";
 import { Input } from "@/components/_ui/input";
 import { removeRecallKeyAction, saveRecallKeyAction } from "@/app/(crm)/settings/actions";
+import { GENERIC_ERROR } from "@/lib/utils";
 
 export default function RecallKey({ connected, children }: { connected: boolean; children: ReactNode }) {
   const router = useRouter();
@@ -16,7 +17,7 @@ export default function RecallKey({ connected, children }: { connected: boolean;
   async function run(action: () => Promise<{ error?: string }>) {
     setPending(true);
     setError(null);
-    const result = await action().catch(() => ({ error: "Something went wrong. Try again." }));
+    const result = await action().catch(() => ({ error: GENERIC_ERROR }));
     setPending(false);
     if (result.error) {
       setError(result.error);

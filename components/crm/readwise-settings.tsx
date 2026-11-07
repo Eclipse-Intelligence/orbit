@@ -7,7 +7,7 @@ import HoldButton from "@/components/_ui/hold-button";
 import { Input } from "@/components/_ui/input";
 import { NativeSelect } from "@/components/_ui/native-select";
 import { removeReadwiseTokenAction, saveReadwiseTokenAction, setReadwiseWorkspaceAction, syncReadwiseAction } from "@/app/(crm)/settings/actions";
-import { cn } from "@/lib/utils";
+import { cn, GENERIC_ERROR } from "@/lib/utils";
 
 export function ReadwiseSync({ lastError, children }: { lastError: string | null; children: ReactNode }) {
   const router = useRouter();
@@ -17,7 +17,7 @@ export function ReadwiseSync({ lastError, children }: { lastError: string | null
   async function sync() {
     setPending(true);
     setNote(null);
-    const result = await syncReadwiseAction().catch(() => ({ error: "Something went wrong. Try again.", message: undefined }));
+    const result = await syncReadwiseAction().catch(() => ({ error: GENERIC_ERROR, message: undefined }));
     setPending(false);
     setNote(result.error ? { error: true, text: result.error } : result.message ? { error: false, text: result.message } : null);
     router.refresh();
@@ -51,7 +51,7 @@ export function ReadwiseWorkspace({ current, workspaces }: { current: string; wo
     setChosen(workspaceId);
     setPending(true);
     setNote(null);
-    const result = await setReadwiseWorkspaceAction(workspaceId).catch(() => ({ error: "Something went wrong. Try again." }));
+    const result = await setReadwiseWorkspaceAction(workspaceId).catch(() => ({ error: GENERIC_ERROR }));
     setPending(false);
     if (result.error) {
       setChosen(previous);
@@ -99,7 +99,7 @@ export function ReadwiseToken({ connected, hint }: { connected: boolean; hint: s
   async function run(action: () => Promise<{ error?: string }>) {
     setPending(true);
     setError(null);
-    const result = await action().catch(() => ({ error: "Something went wrong. Try again." }));
+    const result = await action().catch(() => ({ error: GENERIC_ERROR }));
     setPending(false);
     if (result.error) {
       setError(result.error);

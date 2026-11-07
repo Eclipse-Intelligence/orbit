@@ -16,6 +16,7 @@ import {
 } from "@/app/(crm)/settings/actions";
 import { formatWhen } from "@/lib/companies";
 import type { ClickUpSettingsView } from "@/lib/crm/clickup";
+import { GENERIC_ERROR } from "@/lib/utils";
 
 export default function ClickUpSettings({
   view,
@@ -44,7 +45,7 @@ export default function ClickUpSettings({
   async function run(action: () => Promise<ClickUpActionState>) {
     setPending(true);
     setOutcome({});
-    const result = await action().catch((): ClickUpActionState => ({ error: "Something went wrong. Try again." }));
+    const result = await action().catch((): ClickUpActionState => ({ error: GENERIC_ERROR }));
     setPending(false);
     setOutcome(result);
     router.refresh();

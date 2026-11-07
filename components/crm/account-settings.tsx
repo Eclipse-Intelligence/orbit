@@ -8,6 +8,7 @@ import InlineField from "@/components/crm/inline-field";
 import { Detail, DetailList } from "@/components/crm/record-form";
 import { SettingsCard } from "@/components/crm/settings-ui";
 import { changePasswordAction, signOutAction, updateNameAction } from "@/app/(crm)/actions";
+import { GENERIC_ERROR } from "@/lib/utils";
 
 const ROLE_LABELS: Record<string, string> = {
   owner: "Owner",
@@ -37,7 +38,7 @@ export default function AccountSettings({
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     setPending(true);
-    const result = await changePasswordAction(String(form.get("password") ?? ""), String(form.get("confirm") ?? "")).catch(() => ({ error: "Something went wrong. Try again." }));
+    const result = await changePasswordAction(String(form.get("password") ?? ""), String(form.get("confirm") ?? "")).catch(() => ({ error: GENERIC_ERROR }));
     setPending(false);
     if (result.error) {
       setMessage({ text: result.error, tone: "alert" });
@@ -65,7 +66,7 @@ export default function AccountSettings({
           label="Name"
           value={name}
           onSave={async (value) => {
-            const result = await updateNameAction(value).catch(() => ({ error: "Something went wrong. Try again." }));
+            const result = await updateNameAction(value).catch(() => ({ error: GENERIC_ERROR }));
             if (result.error) return result.error;
             router.refresh();
             return null;

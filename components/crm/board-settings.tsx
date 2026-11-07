@@ -11,6 +11,7 @@ import { saveStagesAction } from "@/app/(crm)/settings/actions";
 import type { Board } from "@/lib/crm/types";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
 import HoldButton from "@/components/_ui/hold-button";
+import { GENERIC_ERROR } from "@/lib/utils";
 
 type StageRow = { key: string; id?: string; name: string };
 
@@ -45,7 +46,7 @@ export default function BoardSettings({
   async function save() {
     setPending(true);
     setError(null);
-    const updated = await updateBoardAction(board.id, { name, addOnWon }).catch(() => ({ error: "Something went wrong. Try again." }));
+    const updated = await updateBoardAction(board.id, { name, addOnWon }).catch(() => ({ error: GENERIC_ERROR }));
     if (updated.error) {
       setPending(false);
       setError(updated.error);
@@ -54,7 +55,7 @@ export default function BoardSettings({
     const saved = await saveStagesAction(
       stages.map((stage) => ({ id: stage.id, name: stage.name })),
       board.id,
-    ).catch(() => ({ error: "Something went wrong. Try again." }));
+    ).catch(() => ({ error: GENERIC_ERROR }));
     setPending(false);
     if (saved.error) {
       setError(saved.error);
@@ -66,7 +67,7 @@ export default function BoardSettings({
 
   async function remove() {
     setPending(true);
-    const result = await archiveBoardAction(board.id).catch(() => ({ error: "Something went wrong. Try again." }));
+    const result = await archiveBoardAction(board.id).catch(() => ({ error: GENERIC_ERROR }));
     setPending(false);
     if (result.error) {
       setError(result.error);

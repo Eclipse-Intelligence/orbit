@@ -10,7 +10,7 @@ import WorkspaceTile from "@/components/workspaces/workspace-tile";
 import { runHeldAgentMailAction, saveAgentSendersAction, setUpAgentMailboxAction, type AgentMailboxActionState } from "@/app/(crm)/settings/actions";
 import type { AgentMailboxView } from "@/lib/agent-mail/mailbox";
 import { formatWhen } from "@/lib/companies";
-import { cn } from "@/lib/utils";
+import { cn, GENERIC_ERROR } from "@/lib/utils";
 
 const STATUS_LABELS: Record<string, string> = {
   received: "Received",
@@ -43,15 +43,13 @@ export default function AgentMailboxSettings({ view }: { view: AgentMailboxView 
   const [address, setAddress] = useState(view.address);
   const [senders, setSenders] = useState<SenderDraft[]>(() => draftsFrom(view));
   const [nextKey, setNextKey] = useState(view.senders.length);
-  const [shown, setShown] = useState(view);
-  const [keepDrafts, setKeepDrafts] = useState(false);
-  if (shown !== view) {
-    setShown(view);
-    if (!keepDrafts) {
-      setAddress(view.address);
-      setSenders(draftsFrom(view));
-      setNextKey(view.senders.length);
-    }
+  const saved = JSON.stringify([view.address, view.senders.map((sender) => [sender.address, sender.userId])]);
+  const [shownSaved, setShownSaved] = useState(saved);
+  if (shownSaved !== saved) {
+    setShownSaved(saved);
+    setAddress(view.address);
+    setSenders(draftsFrom(view));
+    setNextKey(view.senders.length);
   }
   const [pending, setPending] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<AgentMailboxActionState>({});
@@ -59,9 +57,8 @@ export default function AgentMailboxSettings({ view }: { view: AgentMailboxView 
   async function run(kind: string, action: () => Promise<AgentMailboxActionState>) {
     setPending(kind);
     setOutcome({});
-    const result = await action().catch((): AgentMailboxActionState => ({ error: "Something went wrong. Try again." }));
+    const result = await action().catch((): AgentMailboxActionState => ({ error: GENERIC_ERROR }));
     setPending(null);
-    setKeepDrafts(Boolean(result.error));
     setOutcome(result);
     router.refresh();
   }

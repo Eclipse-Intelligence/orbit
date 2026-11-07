@@ -9,7 +9,7 @@ import { saveEnrichmentSettingsAction } from "@/app/(crm)/enrichment";
 import { enrichCompaniesRequest } from "@/components/companies/company-enrich";
 import type { ContactField, ProviderId } from "@/lib/enrichment/providers";
 import type { EnrichmentSettings, ProviderStatus } from "@/lib/enrichment/settings";
-import { cn } from "@/lib/utils";
+import { cn, GENERIC_ERROR } from "@/lib/utils";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
 
 function Status({ on, children }: { on: boolean; children: string }) {
@@ -153,7 +153,7 @@ export default function EnrichmentSettingsCard({
     setCurrent(next);
     setBusy(true);
     setError(null);
-    const result = await saveEnrichmentSettingsAction({ emailOrder: next.emailOrder, linkedinOrder: next.linkedinOrder, autoCompanies: next.autoCompanies }).catch(() => ({ error: "Something went wrong. Try again." }));
+    const result = await saveEnrichmentSettingsAction({ emailOrder: next.emailOrder, linkedinOrder: next.linkedinOrder, autoCompanies: next.autoCompanies }).catch(() => ({ error: GENERIC_ERROR }));
     setBusy(false);
     if ("error" in result) {
       setCurrent(previous);

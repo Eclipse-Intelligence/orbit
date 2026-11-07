@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -172,9 +173,9 @@ export default function CalendarGrid({
   const scrolled = useRef(false);
   const openPopovers = useRef(0);
   const dismissing = useRef(false);
-  const trackPopover = (open: boolean) => {
+  const trackPopover = useCallback((open: boolean) => {
     openPopovers.current = Math.max(0, openPopovers.current + (open ? 1 : -1));
-  };
+  }, []);
   const [current, setCurrent] = useState(now);
   const [hourHeight, setHourHeight] = useState(MIN_HOUR_HEIGHT);
   const perMinute = hourHeight / 60;

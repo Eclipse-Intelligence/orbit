@@ -7,6 +7,7 @@ import { Input } from "@/components/_ui/input";
 import { SettingsCard } from "@/components/crm/settings-ui";
 import { saveMeetingLinkAction } from "@/app/(crm)/settings/actions";
 import { checkMeetingLink, MEETING_LINK_MAX } from "@/lib/invite-rules";
+import { GENERIC_ERROR } from "@/lib/utils";
 
 export default function MeetingLinkSettings({ meetingLink }: { meetingLink: string | null }) {
   const router = useRouter();
@@ -31,7 +32,7 @@ export default function MeetingLinkSettings({ meetingLink }: { meetingLink: stri
     }
     setError(null);
     setPending(true);
-    const result = await saveMeetingLinkAction(checked.link ?? "").catch(() => ({ error: "Something went wrong. Try again.", meetingLink: undefined }));
+    const result = await saveMeetingLinkAction(checked.link ?? "").catch(() => ({ error: GENERIC_ERROR, meetingLink: undefined }));
     setPending(false);
     if (result.error) {
       setError(result.error);

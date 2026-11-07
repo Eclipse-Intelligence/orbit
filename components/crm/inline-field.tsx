@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { inputClass, selectClass } from "@/components/_ui/field-styles";
-import { cn } from "@/lib/utils";
+import { cn, GENERIC_ERROR } from "@/lib/utils";
 
 export type InlineOption = { value: string; label: string };
 
@@ -60,7 +60,7 @@ export default function InlineField({
     if (next === current) return;
     setShown(next);
     setSaving(true);
-    const problem = await onSave(next).catch(() => "Something went wrong. Try again.");
+    const problem = await onSave(next).catch(() => GENERIC_ERROR);
     setSaving(false);
     if (problem) {
       setShown(null);
