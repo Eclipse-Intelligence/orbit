@@ -942,7 +942,7 @@ async function runStepAction(ctx: Ctx, step: Step): Promise<StepResult> {
       const subject = render(config.subject, ctx.vars).replace(/\s+/g, " ").trim();
       const body = workflowEmailBody(config, ctx.vars, ctx.actor);
       if (!subject || !body) throw new CrmError("invalid_input", "The email needs a subject and a body.", 400);
-      const sent = await sendContactEmail(ctx.actor, contactId, { subject, body }, ctx.fetchImpl);
+      const sent = await sendContactEmail(ctx.actor, contactId, { subject, body, provenance: provenance(ctx, step) }, ctx.fetchImpl);
       return { kind: "next", output: { subject, warning: sent.warning, automated: config.automated === true } };
     }
     case "find_records": {
@@ -1278,10 +1278,15 @@ async function startSchedules() {
   return claimed.rows.length;
 }
 
-export async function runWorkflowTick(options: TickOptions = {}) {
-  const deadline = Date.now() + (options.budgetMs ?? DEFAULT_BUDGET_MS);
+export async function queueWorkflowWork() {
   const dispatched = (await query<{ count: number }>("select private.dispatch_workflow_events($1) as count", [200])).rows[0]?.count ?? 0;
   const scheduled = await startSchedules();
+  return { dispatched, scheduled };
+}
+
+export async function runWorkflowTick(options: TickOptions = {}) {
+  const deadline = Date.now() + (options.budgetMs ?? DEFAULT_BUDGET_MS);
+  const { dispatched, scheduled } = await queueWorkflowWork();
   let processed = 0;
   while (Date.now() < deadline - STEP_RESERVE_MS) {
     const claimed = await query<{ run_id: string; workspace_id: string; owner_id: string }>("select * from private.claim_workflow_runs($1)", [

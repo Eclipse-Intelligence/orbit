@@ -265,6 +265,30 @@ describe("microsoft inbox", () => {
     });
     assert.equal(activities.data[0]?.type, "email");
     assert.equal(activities.data[0]?.title, "Hello Cara");
+    const workflowId = (
+      await getAdminPool().query<{ id: string }>(
+        `insert into crm.workflows (workspace_id, owner_id, name, definition) values ($1, $2, 'Follow up', '{}'::jsonb) returning id`,
+        [owner.workspaceId, owner.userId],
+      )
+    ).rows[0].id;
+    await sendContactEmail(
+      owner,
+      contact.body.contact.id,
+      {
+        subject: "Workflow hello",
+        body: "Sent by a workflow.",
+        provenance: { operation: "workflow_send_email", source: "workflow", sourceUrl: `/workflows/${workflowId}`, workflowId, depth: 2 },
+      },
+      fetchImpl,
+    );
+    const audit = await getAdminPool().query<{ source: string; operation: string }>(
+      "select source, operation from crm.audit_events where event_type = 'activity.created' order by created_at desc limit 1",
+    );
+    assert.deepEqual(audit.rows[0], { source: "workflow", operation: "workflow_send_email" });
+    const queued = await getAdminPool().query<{ source_workflow_id: string; depth: number }>(
+      "select source_workflow_id, depth from crm.workflow_events where event_type = 'activity.created' order by created_at desc limit 1",
+    );
+    assert.deepEqual(queued.rows[0], { source_workflow_id: workflowId, depth: 2 });
   });
 
   it("tells the user to grant Mail.Send when Microsoft refuses the send", async () => {

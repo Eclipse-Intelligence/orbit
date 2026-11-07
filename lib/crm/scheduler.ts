@@ -336,8 +336,8 @@ export async function handleCronRequest(
     console.error("Call health backfill failed", error);
   }
   try {
-    const { runWorkflowTick } = await import("@/lib/workflows/engine");
-    await runWorkflowTick({ budgetMs: 8_000 });
+    const { queueWorkflowWork } = await import("@/lib/workflows/engine");
+    await queueWorkflowWork();
   } catch (error) {
     console.error("Workflow tick failed", error);
   }

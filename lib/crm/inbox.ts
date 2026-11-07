@@ -14,7 +14,7 @@ import { canonicalDomain, canonicalEmail } from "@/lib/crm/normalize";
 import { hasScope } from "@/lib/crm/scopes";
 import { createTaskInDb } from "@/lib/crm/tasks";
 import { scheduleTaskDue, withDueNote } from "@/lib/crm/task-due";
-import type { UserActor } from "@/lib/crm/types";
+import type { Provenance, UserActor } from "@/lib/crm/types";
 import { routedAway } from "@/lib/mail/routing";
 import {
   fetchInboxMessages,
@@ -384,6 +384,7 @@ export async function sendContactEmail(
     keepAttachments?: boolean;
     from?: string | null;
     signature?: boolean;
+    provenance?: Provenance;
   },
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ warning: string | null }> {
@@ -503,7 +504,7 @@ export async function sendContactEmail(
             ...(attached.summary.length ? { attachments: attached.summary } : {}),
           },
         },
-        { operation: "send_email", source: "microsoft" },
+        input.provenance ?? { operation: "send_email", source: "microsoft" },
       );
     });
   } catch {
