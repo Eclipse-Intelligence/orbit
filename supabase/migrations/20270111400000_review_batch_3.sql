@@ -24,6 +24,8 @@ declare
   follow_ups integer;
   links_dropped integer;
   links_moved integer;
+  card record;
+  combined jsonb := '[]'::jsonb;
 begin
   perform private.merge_actor_check(p_workspace, p_user, p_agent);
   if p_keep = p_merge then
@@ -49,6 +51,32 @@ begin
   end if;
 
   perform set_config('orbit.merging', 'on', true);
+
+  for card in
+    select dup.id as dup_id, kept.id as kept_id, dup.pipeline_id
+    from crm.opportunities dup
+    join crm.pipelines p on p.id = dup.pipeline_id and p.kind = 'board'
+    join lateral (
+      select k.id from crm.opportunities k
+      where k.workspace_id = p_workspace and k.pipeline_id = dup.pipeline_id
+        and k.company_id = p_keep and k.archived_at is null
+      order by k.created_at, k.id
+      limit 1
+    ) kept on true
+    where dup.workspace_id = p_workspace and dup.company_id = p_merge and dup.archived_at is null
+    order by dup.created_at, dup.id
+  loop
+    update crm.activities set opportunity_id = card.kept_id
+      where workspace_id = p_workspace and opportunity_id = card.dup_id;
+    update crm.tasks set opportunity_id = card.kept_id
+      where workspace_id = p_workspace and opportunity_id = card.dup_id;
+    update crm.documents set opportunity_id = card.kept_id
+      where workspace_id = p_workspace and opportunity_id = card.dup_id;
+    update crm.opportunities set archived_at = now() where id = card.dup_id;
+    combined := combined || jsonb_build_array(jsonb_build_object(
+      'id', card.dup_id, 'keptId', card.kept_id, 'pipelineId', card.pipeline_id
+    ));
+  end loop;
 
   foreach target in array array[
     'contacts', 'opportunities', 'tasks', 'activities', 'email_messages', 'call_records',
@@ -133,7 +161,8 @@ begin
     'company_web_state', web_state,
     'ai_field_answers', ai_moved,
     'follow_up_suggestions', follow_ups,
-    'page_links', links_dropped + links_moved
+    'page_links', links_dropped + links_moved,
+    'combined_cards', combined
   );
 end;
 $$;

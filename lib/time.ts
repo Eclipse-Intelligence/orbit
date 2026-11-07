@@ -192,6 +192,11 @@ function zonedInstant(text: string) {
   if (zoned) {
     const zone = zoned[3].toUpperCase();
     const offset = zone === "Z" || zone === "UTC" || zone === "GMT" ? "Z" : zone.length === 3 ? `${zone}:00` : zone.includes(":") ? zone : `${zone.slice(0, 3)}:${zone.slice(3)}`;
+    const [year, month, day] = zoned[1].split("-").map(Number);
+    const calendar = new Date(Date.UTC(year, month - 1, day));
+    if (calendar.getUTCFullYear() !== year || calendar.getUTCMonth() !== month - 1 || calendar.getUTCDate() !== day) {
+      return `${text} isn't a real date and time.`;
+    }
     const date = new Date(`${zoned[1]}T${zoned[2]}${offset}`);
     return Number.isNaN(date.getTime()) ? null : date;
   }
@@ -210,6 +215,7 @@ function readInstant(value: string, timeZone: string, strict: boolean): DateTime
   const text = value.trim();
   if (!text) return { ok: false, error: FORMAT_HINT };
   const zoned = zonedInstant(text);
+  if (typeof zoned === "string") return { ok: false, error: zoned };
   if (zoned) return { ok: true, date: zoned, dateOnly: false };
   const wall = readWall(text);
   if (wall === null) return { ok: false, error: FORMAT_HINT };

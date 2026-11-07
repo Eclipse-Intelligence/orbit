@@ -92,6 +92,8 @@ describe("reading dates people and agents type", () => {
     refused("next Tuesday-ish", /Enter a valid date and time/);
     refused("31/02/2026", /isn't a real date/);
     refused("2026-02-30T09:00", /isn't a real date and time/);
+    refused("2026-02-30T10:00:00Z", /isn't a real date and time/);
+    refused("2026-04-31T09:00:00+01:00", /isn't a real date and time/);
     refused("2026-03-29T01:30", /doesn't exist in London because the clocks go forward/);
     refused("2026-10-25T01:30", /happens twice in London because the clocks go back/);
     assert.equal(iso("2026-10-25T01:30+01:00"), "2026-10-25T00:30:00.000Z");

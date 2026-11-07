@@ -117,7 +117,7 @@ describe("mail sync across many pages", () => {
     await resetDatabase();
     owner = await createUser("paging@orbit.test", "Mark Ridgeon");
     await saveMailbox(owner, { email: "mark@eclipse.test", refreshToken: "refresh", accessToken: "access", expiresAt: new Date(Date.now() + 3_600_000).toISOString() });
-    await savePushSubscription(owner, { endpoint: "https://push.example/phone", keys: { p256dh: "BKey", auth: "auth" } }, "iPhone");
+    await savePushSubscription(owner, { endpoint: "https://web.push.apple.com/phone", keys: { p256dh: "BKey", auth: "auth" } }, "iPhone");
     const admin = getAdminPool();
     await admin.query("insert into crm.mail_preferences (workspace_id, user_id, notify_mail) values ($1, $2, 'all')", [owner.workspaceId, owner.userId]);
     await admin.query(
