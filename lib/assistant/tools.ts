@@ -16,6 +16,7 @@ import { addChatFileToKnowledge, readChatFile } from "@/lib/assistant/files";
 import { docCardDetails, describeDocAction, readDocForAssistant, runDocAction, SAVE_DOC_ACTIONS, searchDocsForAssistant, type DocApproval } from "@/lib/assistant/docs";
 import type { DocDiffLine } from "@/lib/docs/types";
 import { listMailAttachments } from "@/lib/mail/attachments";
+import { readEmailAttachment } from "@/lib/mail/attachment-context";
 import { enrichContacts } from "@/lib/enrichment/contacts";
 import { enrichmentAllowed } from "@/lib/enrichment/limits";
 import { PROVIDER_BY_ID, type ContactField } from "@/lib/enrichment/providers";
@@ -1919,16 +1920,41 @@ const TOOL_LIST: AssistantTool[] = [
   {
     name: "list_email_attachments",
     label: "Checking attachments",
-    description: "The files attached to an email (name, type and size), with ids for add_to_knowledge.",
-    parameters: { type: "object", properties: { emailId: idParam("Email id from search_email or get_email_thread.") }, required: ["emailId"] },
-    run: async (actor, args) => ({
-      attachments: (await listMailAttachments(actor, required(args.emailId, "An email id"))).map((item) => ({
-        id: item.id,
-        name: item.name,
-        type: item.contentType,
-        size: item.size,
-      })),
-    }),
+    description:
+      "The files attached to an email (name, type and size). Pass read true to read their text (PDF, Word, PowerPoint, Excel and text files), or attachment to read just one. Reading never adds anything to Knowledge; only use add_to_knowledge when the user asks to keep a file there.",
+    parameters: {
+      type: "object",
+      properties: {
+        emailId: idParam("Email id from search_email or get_email_thread."),
+        read: { type: "boolean", description: "Read the text of the attachments." },
+        attachment: { type: "string", description: "Read only this file: its name or id from an earlier call." },
+      },
+      required: ["emailId"],
+    },
+    run: async (actor, args, context) => {
+      const emailId = required(args.emailId, "An email id");
+      const attachment = optionalStr(args.attachment) ?? null;
+      if (args.read !== true && !attachment) {
+        return {
+          attachments: (await listMailAttachments(actor, emailId)).map((item) => ({
+            id: item.id,
+            name: item.name,
+            type: item.contentType,
+            size: item.size,
+          })),
+        };
+      }
+      const files = await readEmailAttachment(actor, emailId, attachment, { deadline: context.deadline });
+      if (files.length === 0) return { error: attachment ? `That email has no attachment called ${attachment}.` : "That email has no attachments Orbit can read." };
+      return {
+        attachments: files.map((file) => ({
+          name: file.name,
+          ...(file.text
+            ? { text: file.text }
+            : { note: file.state === "too_large" ? "Too large to read." : file.state === "unreadable" ? "Orbit can't read this kind of file." : "Couldn't read it this time. Try again." }),
+        })),
+      };
+    },
   },
   {
     name: "mail_action",
@@ -2237,7 +2263,7 @@ const TOOL_LIST: AssistantTool[] = [
     label: "Adding to Knowledge",
     write: true,
     description:
-      "Add to Knowledge for a company, or for the business itself (business true, the workspace's own material). Pass one source per call: urls for links (web pages, files by link such as PDF, Word, PowerPoint or Excel, YouTube videos and podcast episodes), emailId for a file attached to one of the user's emails (find it with list_email_attachments), or chatFileId for a file the user attached in this chat (Knowledge is shared with the whole workspace, so only add a chat file when the user asks). Orbit reads and indexes it in the background (recordings are transcribed), and a file can then be attached to emails from Knowledge. For a whole website, list its pages with map_website and pass the ones the user wants.",
+      "Add to Knowledge for a company, or for the business itself (business true, the workspace's own material). Pass one source per call: urls for links (web pages, files by link such as PDF, Word, PowerPoint or Excel, YouTube videos and podcast episodes), emailId for a file attached to one of the user's emails (find it with list_email_attachments; to just read it, use list_email_attachments with read instead), or chatFileId for a file the user attached in this chat (Knowledge is shared with the whole workspace, so only add a chat file when the user asks). Orbit reads and indexes it in the background (recordings are transcribed), and a file can then be attached to emails from Knowledge. For a whole website, list its pages with map_website and pass the ones the user wants.",
     parameters: {
       type: "object",
       properties: {

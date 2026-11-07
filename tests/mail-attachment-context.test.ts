@@ -5,7 +5,7 @@ import { saveMailbox } from "@/lib/crm/inbox";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { askMail, draftWithAi } from "@/lib/mail/ai";
-import { attachmentNotes } from "@/lib/mail/attachment-context";
+import { attachmentNotes, readEmailAttachment } from "@/lib/mail/attachment-context";
 import { attachmentKind, readAttachmentText } from "@/lib/mail/attachment-text";
 import { syncMail } from "@/lib/mail/sync";
 import { listThreads } from "@/lib/mail/threads";
@@ -157,6 +157,24 @@ describe("attachments as AI context", () => {
     const again = outlook();
     await attachmentNotes(owner, [messageId], { budget: 8_000, fetchImpl: again.fetchImpl });
     assert.deepEqual(again.downloads, []);
+  });
+
+  it("reads one attachment for the assistant without adding it to Knowledge", async () => {
+    const files = await readEmailAttachment(owner, messageId, "acme msa.pdf", { fetchImpl: outlook().fetchImpl });
+    assert.equal(files.length, 1);
+    assert.equal(files[0].name, "Acme MSA.pdf");
+    assert.match(files[0].text ?? "", /Fee: GBP 12,000 a year/);
+    const all = await readEmailAttachment(owner, messageId, null, { fetchImpl: outlook().fetchImpl });
+    assert.deepEqual(
+      all.map((file) => [file.name, file.state]),
+      [
+        ["Acme MSA.pdf", "read"],
+        ["archive.zip", "unreadable"],
+      ],
+    );
+    assert.deepEqual(await readEmailAttachment(owner, messageId, "missing.pdf", { fetchImpl: outlook().fetchImpl }), []);
+    const knowledge = await getAdminPool().query("select 1 from crm.knowledge_items");
+    assert.equal(knowledge.rowCount, 0);
   });
 
   it("gives Write with AI the attachment text", async () => {
