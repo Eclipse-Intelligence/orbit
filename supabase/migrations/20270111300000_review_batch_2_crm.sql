@@ -705,8 +705,9 @@ begin
         )
       );
     select format(
-      '%s is named on %s''s %s ''%s''. Move %s too, or change the %s''s contact first.',
+      '%s is named on the %s%s %s ''%s''. Move %s too, or change the %s''s contact first.',
       coalesce(nullif(btrim(concat_ws(' ', c.first_name, c.last_name)), ''), c.email, 'Someone'),
+      case when d.archived_at is not null then 'archived ' else '' end,
       co.name,
       case when d.kind = 'nda' then 'NDA' else 'proposal' end,
       d.title,

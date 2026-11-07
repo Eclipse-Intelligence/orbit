@@ -97,6 +97,10 @@ export type WebhookNetwork = { lookup?: WebhookLookup; fetchImpl?: typeof fetch 
 
 export class WebhookTargetError extends Error {}
 
+export class WebhookLookupError extends Error {}
+
+const NOT_FOUND_CODES = new Set(["ENOTFOUND", "ENODATA"]);
+
 export function privateWebhookTargetsAllowed() {
   return process.env.NODE_ENV !== "production" && process.env.WEBHOOKS_ALLOW_PRIVATE_TARGETS === "1";
 }
@@ -119,8 +123,12 @@ export async function assertPublicWebhookTarget(url: URL, lookup: WebhookLookup 
   let addresses: string[];
   try {
     addresses = await lookup(host);
-  } catch {
-    throw new WebhookTargetError(`${host} couldn't be found. Check the webhook URL.`);
+  } catch (error) {
+    const code = (error as { code?: unknown } | null)?.code;
+    if (typeof code === "string" && NOT_FOUND_CODES.has(code)) {
+      throw new WebhookTargetError(`${host} couldn't be found. Check the webhook URL.`);
+    }
+    throw new WebhookLookupError(`${host} couldn't be looked up just now. Try again in a minute.`);
   }
   if (addresses.length === 0) throw new WebhookTargetError(`${host} couldn't be found. Check the webhook URL.`);
   if (addresses.some(privateAddress)) throw privateTarget(host);
@@ -144,7 +152,9 @@ async function assertWebhookUrl(value: string, lookup?: WebhookLookup) {
     try {
       await assertPublicWebhookTarget(url, lookup);
     } catch (error) {
-      if (error instanceof WebhookTargetError) throw new CrmError("invalid_input", error.message, 400, { field: "url" });
+      if (error instanceof WebhookTargetError || error instanceof WebhookLookupError) {
+        throw new CrmError("invalid_input", error.message, 400, { field: "url" });
+      }
       throw error;
     }
   }

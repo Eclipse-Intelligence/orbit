@@ -79,7 +79,9 @@ export function privateAddress(address: string) {
   if (parts[0] === 0x64 && parts[1] === 0xff9b && parts.slice(2, 6).every((part) => part === 0)) return privateV4(embeddedV4(parts[6], parts[7]));
   if (parts[0] === 0x2002) return privateV4(embeddedV4(parts[1], parts[2]));
   const first = parts[0];
-  return (first & 0xfe00) === 0xfc00 || (first & 0xffc0) === 0xfe80 || (first & 0xff00) === 0xff00;
+  if (first === 0x0100 && parts.slice(1, 4).every((part) => part === 0)) return true;
+  if (first === 0x2001 && parts[1] === 0x0db8) return true;
+  return (first & 0xfe00) === 0xfc00 || (first & 0xffc0) === 0xfe80 || (first & 0xffc0) === 0xfec0 || (first & 0xff00) === 0xff00;
 }
 
 const publicOnlyLookup: LookupFunction = (hostname, options, callback) => {

@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { createCompany, getCompany } from "@/lib/crm/companies";
-import { archiveOpportunity, createOpportunity, getOpportunity, listPipeline } from "@/lib/crm/opportunities";
+import {
+  archiveOpportunity,
+  createOpportunity,
+  getOpportunity,
+  listPipeline,
+  STAGE_STATUS_CHANGE_LIMIT,
+} from "@/lib/crm/opportunities";
 import { savePipelineStages } from "@/lib/crm/pipeline";
 import { createUser, resetDatabase } from "./helpers";
 
@@ -106,5 +112,41 @@ describe("changing which stage is won or lost", () => {
       [endpoint.rows[0].id],
     );
     assert.ok(deliveries.rows.some((row) => row.entity === deal.body.opportunity.id));
+  });
+
+  it("refuses a change that would move more than 250 deals and leaves everything as it was", async () => {
+    const owner = await createUser("stage-flags-many@example.com", "Many");
+    const company = await createCompany(owner, { name: "Many Co", domain: "many-co.example" });
+    const current = await listPipeline(owner);
+    const proposal = current.stages.find((stage) => stage.name === "Proposal")!;
+    const admin = getAdminPool();
+    await admin.query(
+      `insert into crm.opportunities (workspace_id, company_id, pipeline_id, stage_id, name, status, currency)
+       select $1, $2, $3, $4, 'Deal ' || n, 'open', 'GBP' from generate_series(1, ${STAGE_STATUS_CHANGE_LIMIT + 1}) as n`,
+      [owner.workspaceId, company.body.company.id, current.id, proposal.id],
+    );
+    const since = (await admin.query<{ now: Date }>("select now()")).rows[0].now;
+    await assert.rejects(
+      savePipelineStages(
+        owner,
+        current.stages.map((stage) => ({
+          id: stage.id,
+          name: stage.name,
+          probability: stage.probability,
+          isWon: stage.id === proposal.id,
+          isLost: stage.isLost,
+        })),
+      ),
+      /more than 250 deals between open, won and lost at once/,
+    );
+    const statuses = await admin.query<{ status: string; total: number }>(
+      "select status, count(*)::int as total from crm.opportunities where stage_id = $1 group by status",
+      [proposal.id],
+    );
+    assert.deepEqual(statuses.rows, [{ status: "open", total: STAGE_STATUS_CHANGE_LIMIT + 1 }]);
+    const after = await listPipeline(owner);
+    assert.equal(after.stages.find((stage) => stage.id === proposal.id)?.isWon, false);
+    const events = await admin.query("select 1 from crm.audit_events where workspace_id = $1 and created_at >= $2", [owner.workspaceId, since]);
+    assert.equal(events.rowCount, 0);
   });
 });

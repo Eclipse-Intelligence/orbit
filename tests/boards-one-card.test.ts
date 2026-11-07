@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
-import { archiveBoard, createBoard } from "@/lib/crm/boards";
+import { archiveBoard, BOARD_ARCHIVE_CARD_LIMIT, createBoard, getBoard } from "@/lib/crm/boards";
 import { createCompany } from "@/lib/crm/companies";
+import { CrmError } from "@/lib/crm/errors";
+import { constraintError } from "@/lib/crm/mutate";
 import { mergeCompanies } from "@/lib/crm/merge";
 import { archiveOpportunity, createOpportunity, unarchiveOpportunityInDb, updateOpportunity } from "@/lib/crm/opportunities";
 import { createTask } from "@/lib/crm/tasks";
@@ -117,5 +119,54 @@ describe("one card per company on a board", () => {
       [ids],
     );
     assert.equal(deliveries.rowCount, 2);
+  });
+
+  it("turns a card clash during a merge or a race into a message a person can act on", async () => {
+    const board = await createBoard(owner, { name: "Clash" });
+    const keep = await company("Clash Keep");
+    const dupe = await company("Clash Dupe");
+    await card(dupe, board.id);
+    const admin = getAdminPool();
+    await admin.query("alter table crm.opportunities disable trigger opportunities_one_card_per_board");
+    try {
+      await admin.query(
+        "insert into crm.opportunities (workspace_id, company_id, pipeline_id, stage_id, name, status, currency) select workspace_id, company_id, pipeline_id, stage_id, 'Second', status, currency from crm.opportunities where company_id = $1",
+        [dupe],
+      );
+    } finally {
+      await admin.query("alter table crm.opportunities enable trigger opportunities_one_card_per_board");
+    }
+    await assert.rejects(
+      mergeCompanies(owner, keep, dupe, PROVENANCE),
+      (error: unknown) => error instanceof CrmError && error.status === 409 && /Clash Keep is already on Clash\./.test(error.message),
+    );
+    assert.throws(
+      () => constraintError({ code: "23505", message: "Acme is already on Delivery." }, "duplicate_opportunity", "A matching opportunity already exists."),
+      (error: unknown) => error instanceof CrmError && error.message === "Acme is already on Delivery.",
+    );
+    assert.throws(
+      () => constraintError({ code: "23505", constraint: "opportunities_pkey", message: "duplicate key" }, "duplicate_opportunity", "A matching opportunity already exists."),
+      (error: unknown) => error instanceof CrmError && error.message === "A matching opportunity already exists.",
+    );
+  });
+
+  it("refuses to delete a board with more than 500 cards and leaves it as it was", async () => {
+    const board = await createBoard(owner, { name: "Crowded" });
+    const first = (await getBoard(owner, board.id)).stages[0];
+    const admin = getAdminPool();
+    await admin.query(
+      `with made as (
+         insert into crm.companies (workspace_id, name, normalized_name)
+         select $1, 'Crowd ' || n, 'crowd ' || n from generate_series(1, ${BOARD_ARCHIVE_CARD_LIMIT + 1}) as n
+         returning id, name
+       )
+       insert into crm.opportunities (workspace_id, company_id, pipeline_id, stage_id, name, status, currency)
+       select $1, made.id, $2, $3, made.name, 'open', 'GBP' from made`,
+      [owner.workspaceId, board.id, first.id],
+    );
+    await assert.rejects(archiveBoard(owner, board.id), /Crowded has more than 500 cards\. Archive some of them first/);
+    const open = await admin.query("select 1 from crm.opportunities where pipeline_id = $1 and archived_at is null", [board.id]);
+    assert.equal(open.rowCount, BOARD_ARCHIVE_CARD_LIMIT + 1);
+    assert.equal((await getBoard(owner, board.id)).name, "Crowded");
   });
 });

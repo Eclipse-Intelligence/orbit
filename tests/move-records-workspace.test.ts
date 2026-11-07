@@ -1037,7 +1037,7 @@ describe("moving records to another workspace", () => {
     const tandem = await company(eclipse, "Tandem Partners", { domain: "tandem-partners-move.test" });
     const tod = await contact(eclipse, { firstName: "Tod", lastName: "Partner", companyId: tandem.id });
     const document = await proposal(eclipse, tandem.id, kay.id, "Q1 plan");
-    const message = /Kay Lane is named on Tandem Partners's proposal 'Q1 plan'\. Move Tandem Partners too, or change the proposal's contact first\./;
+    const message = /^Kay Lane is named on the Tandem Partners proposal 'Q1 plan'\. Move Tandem Partners too, or change the proposal's contact first\.$/;
 
     for (const includeCompany of [false, true]) {
       const preview = await previewMoveToWorkspace(eclipse, { contactIds: [kay.id], workspaceId: ridgeon.workspaceId, includeCompany });
@@ -1047,6 +1047,13 @@ describe("moving records to another workspace", () => {
         refused("invalid_input", message),
       );
     }
+    await admin("update crm.documents set archived_at = now() where id = $1", [document]);
+    const archived = await previewMoveToWorkspace(eclipse, { contactIds: [kay.id], workspaceId: ridgeon.workspaceId });
+    assert.equal(
+      archived.proposalConflict,
+      "Kay Lane is named on the archived Tandem Partners proposal 'Q1 plan'. Move Tandem Partners too, or change the proposal's contact first.",
+    );
+    await admin("update crm.documents set archived_at = null where id = $1", [document]);
     const copying = await previewMoveToWorkspace(eclipse, { contactIds: [kay.id], workspaceId: ridgeon.workspaceId, copy: true });
     assert.equal(copying.proposalConflict, null);
     const stayed = await admin<{ workspace_id: string }>("select workspace_id from crm.contacts where id = $1", [kay.id]);

@@ -20,7 +20,7 @@ after(async () => {
 function resolver(map: Record<string, string[]>) {
   return async (hostname: string) => {
     const found = map[hostname];
-    if (!found) throw new Error("ENOTFOUND");
+    if (!found) throw Object.assign(new Error(`getaddrinfo ENOTFOUND ${hostname}`), { code: "ENOTFOUND" });
     return found;
   };
 }
@@ -99,7 +99,8 @@ describe("webhook targets", () => {
       env.NODE_ENV = "production";
       assert.equal(privateWebhookTargetsAllowed(), false);
     } finally {
-      env.NODE_ENV = original;
+      if (original === undefined) delete env.NODE_ENV;
+      else env.NODE_ENV = original;
       delete env.WEBHOOKS_ALLOW_PRIVATE_TARGETS;
     }
   });
@@ -117,6 +118,37 @@ describe("webhook targets", () => {
     const row = await readDelivery(id);
     assert.equal(row.status, "failed");
     assert.match(row.last_error ?? "", /private or local address/);
+  });
+
+  it("retries later when the address can't be looked up just now", async () => {
+    const owner = await createUser("hook-dns@example.com", "Dns");
+    const id = await queueDelivery(owner.workspaceId, "https://flaky.example/hook");
+    let called = 0;
+    const fetchImpl = (async () => {
+      called += 1;
+      return new Response("ok");
+    }) as typeof fetch;
+    const lookup = async (): Promise<string[]> => {
+      throw Object.assign(new Error("getaddrinfo EAI_AGAIN flaky.example"), { code: "EAI_AGAIN" });
+    };
+    await deliverDueWebhooks(20, { lookup, fetchImpl });
+    assert.equal(called, 0);
+    const row = await readDelivery(id);
+    assert.equal(row.status, "pending");
+    assert.match(row.last_error ?? "", /couldn't be looked up just now/);
+    await assert.rejects(
+      createWebhook(owner, { url: "https://flaky.example/hook", events: ["*"] }, { lookup }),
+      (error: unknown) => error instanceof CrmError && error.status === 400 && /Try again in a minute/.test(error.message),
+    );
+  });
+
+  it("fails a delivery for good when the host doesn't exist", async () => {
+    const owner = await createUser("hook-gone@example.com", "Gone");
+    const id = await queueDelivery(owner.workspaceId, "https://gone.example/hook");
+    await deliverDueWebhooks(20, { lookup: resolver({}), fetchImpl: (async () => new Response("ok")) as typeof fetch });
+    const row = await readDelivery(id);
+    assert.equal(row.status, "failed");
+    assert.match(row.last_error ?? "", /couldn't be found/);
   });
 
   it("does not follow redirects and records a redirect as a failed attempt", async () => {

@@ -165,7 +165,7 @@ export function constraintError(
 ): never {
   if (error instanceof CrmError) throw error;
   if (isPgError(error) && error.code === "23505") {
-    throw new CrmError(duplicateCode, duplicateMessage, 409);
+    throw new CrmError(duplicateCode, error.constraint ? duplicateMessage : error.message, 409);
   }
   if (isPgError(error) && (error.code === "23514" || error.code === "23503")) {
     const line = error.message.split("\n")[0] ?? "";

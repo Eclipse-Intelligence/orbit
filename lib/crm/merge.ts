@@ -99,6 +99,9 @@ function mergeFailure(error: unknown): never {
     if (error.code === "P0002") throw new CrmError("not_found", error.message, 404);
     if (error.code === "22023") throw new CrmError("invalid_input", error.message, 400);
     if (error.code === "42501") throw new CrmError("forbidden", error.message, 403);
+    if (error.code === "23505") {
+      throw new CrmError("conflict", error.constraint ? "These records clash with another record. Merge or archive it first." : error.message, 409);
+    }
   }
   throw error;
 }
