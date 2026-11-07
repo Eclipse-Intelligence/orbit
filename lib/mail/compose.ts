@@ -948,32 +948,49 @@ export async function saveDraftForAgent(actor: UserActor, input: ToolDraftInput,
   const thread = replying
     ? await withActor(actor, async (db) => {
         if (!isUuid(input.replyTo!)) return null;
-        const result = await db.query<{ source_id: string; tk: string; to_recipients: MailAddress[] | null; cc_recipients: MailAddress[] | null }>(
-          "select source_id, coalesce(thread_key, 'm:' || id::text) as tk, to_recipients, cc_recipients from crm.mail_messages where id = $1 and user_id = $2",
+        const result = await db.query<{
+          source_id: string;
+          tk: string;
+          subject: string | null;
+          from_email: string | null;
+          from_name: string | null;
+          to_recipients: MailAddress[] | null;
+          cc_recipients: MailAddress[] | null;
+        }>(
+          "select source_id, coalesce(thread_key, 'm:' || id::text) as tk, subject, from_email, from_name, to_recipients, cc_recipients from crm.mail_messages where id = $1 and user_id = $2",
           [input.replyTo, actor.userId],
         );
         return result.rows[0] ?? null;
       })
     : null;
   if (replying && !thread) throw new CrmError("not_found", "That email isn't in Orbit Mail. Search for it again.", 404);
-  const account =
-    chosen ??
-    (thread ? receivingIdentity(await composeAccounts(actor), thread.source_id, [...(thread.to_recipients ?? []), ...(thread.cc_recipients ?? [])]) : null);
+  const accounts = await composeAccounts(actor);
+  const account = chosen ?? (thread ? receivingIdentity(accounts, thread.source_id, [...(thread.to_recipients ?? []), ...(thread.cc_recipients ?? [])]) : null);
   if (!replying && !input.subject?.trim()) throw new CrmError("invalid_input", "Add a subject.", 400, { field: "subject" });
+  const mode: DraftMode = replying ? (input.replyAll ? "reply_all" : "reply") : "new";
+  const defaults = thread
+    ? replyDefaults(
+        mode,
+        { from: thread.from_email ? { address: thread.from_email, name: thread.from_name } : null, to: thread.to_recipients ?? [], cc: thread.cc_recipients ?? [] },
+        thread.subject,
+        [actor.email, ...accounts.map((item) => item.email)],
+      )
+    : { to: [] as MailAddress[], cc: [] as MailAddress[], subject: input.subject ?? "" };
+  const recipients = mergeRecipients(defaults.to, defaults.cc, [], input.to, input.cc ?? []);
   const ids = readAttachmentIds(input.attachments);
   const attachments = await attachmentSummary(actor, ids);
   const draft = await saveMailDraft(
     actor,
     {
       ...readDraftInput({
-      mode: replying ? (input.replyAll ? "reply_all" : "reply") : "new",
+      mode,
       messageId: input.replyTo ?? null,
       sourceId: account?.sourceId ?? thread?.source_id ?? null,
       identityId: account?.identityId ?? null,
-      to: input.to,
-      cc: input.cc ?? [],
+      to: recipients.to,
+      cc: recipients.cc,
       bcc: [],
-      subject: input.subject ?? "",
+      subject: input.subject?.trim() || defaults.subject,
       body: input.body,
       }),
       attachments: ids,

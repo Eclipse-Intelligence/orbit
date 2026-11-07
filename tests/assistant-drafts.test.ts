@@ -77,15 +77,19 @@ describe("assistant drafts", () => {
   it("saves a reply in the conversation and a new email, and sends neither", async () => {
     const messageId = (await getAdminPool().query<{ id: string }>("select id from crm.mail_messages where provider_message_id = 'm-1'")).rows[0].id;
     const { fetchImpl, calls } = outlook();
-    const reply = await saveDraftForAgent(owner, { replyTo: messageId, to: ["andrew@pulse.test"], body: "Hi Andrew,\n\nShall I run it?\n\nMark" }, { origin: null, fetchImpl });
+    const reply = await saveDraftForAgent(owner, { replyTo: messageId, to: [], body: "Hi Andrew,\n\nShall I run it?\n\nMark" }, { origin: null, fetchImpl });
     assert.match(reply.href, /^\/mail\?thread=/);
     assert.equal(reply.draft.mode, "reply");
+    assert.deepEqual(reply.draft.to.map((item) => item.address), ["andrew@pulse.test"]);
+    assert.match(reply.draft.subject, /^RE: /);
+    const named = await saveDraftForAgent(owner, { replyTo: messageId, to: ["andrew@pulse.test", "extra@pulse.test"], body: "Hi" }, { origin: null, fetchImpl });
+    assert.deepEqual(named.draft.to.map((item) => item.address), ["andrew@pulse.test", "extra@pulse.test"]);
     const fresh = await saveDraftForAgent(owner, { to: ["andrew@pulse.test"], subject: "Pulse in ChatGPT", body: "Hi Andrew" }, { origin: null, fetchImpl });
     assert.equal(fresh.href, "/mail?view=drafts");
     assert.equal(fresh.draft.subject, "Pulse in ChatGPT");
     assert.ok(!calls.some((call) => call.url.endsWith("/send")));
     const stored = await getAdminPool().query<{ count: number }>("select count(*)::int as count from crm.mail_drafts");
-    assert.equal(stored.rows[0].count, 2);
+    assert.equal(stored.rows[0].count, 3);
     await assert.rejects(() => saveDraftForAgent(owner, { from: "someone@else.test", to: ["andrew@pulse.test"], subject: "x", body: "y" }, { origin: null, fetchImpl }), /You can't send from someone@else.test/);
   });
 
