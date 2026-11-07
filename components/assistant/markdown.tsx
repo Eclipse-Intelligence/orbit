@@ -168,7 +168,7 @@ function withBreaks(text: string, key: string) {
 
 export default function Markdown({ text }: { text: string }) {
   return (
-    <div className="text-soft flex flex-col gap-3 text-[14px] leading-6">
+    <div className="text-soft flex min-w-0 flex-col gap-3 text-[14px] leading-6 [overflow-wrap:anywhere]">
       {parseBlocks(text).map((block, index) => {
         const key = `b${index}`;
         if (block.kind === "heading") {
