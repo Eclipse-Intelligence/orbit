@@ -23,10 +23,10 @@ const STATUS_LABELS: Record<string, string> = {
   sent: "Sent",
 };
 
-type SenderDraft = { key: number; address: string; userId: string };
+type SenderDraft = { key: number; address: string; userId: string; problem: string | null };
 
 function draftsFrom(view: AgentMailboxView): SenderDraft[] {
-  return view.senders.map((sender, index) => ({ key: index, address: sender.address, userId: sender.userId }));
+  return view.senders.map((sender, index) => ({ key: index, address: sender.address, userId: sender.userId, problem: sender.problem }));
 }
 
 function Status({ on, children }: { on: boolean; children: ReactNode }) {
@@ -63,11 +63,11 @@ export default function AgentMailboxSettings({ view }: { view: AgentMailboxView 
   }
 
   function update(key: number, patch: Partial<SenderDraft>) {
-    setSenders((current) => current.map((sender) => (sender.key === key ? { ...sender, ...patch } : sender)));
+    setSenders((current) => current.map((sender) => (sender.key === key ? { ...sender, ...patch, problem: null } : sender)));
   }
 
   function add() {
-    setSenders((current) => [...current, { key: nextKey, address: "", userId: view.members[0]?.id ?? "" }]);
+    setSenders((current) => [...current, { key: nextKey, address: "", userId: view.members[0]?.id ?? "", problem: null }]);
     setNextKey((key) => key + 1);
   }
 
@@ -218,41 +218,50 @@ export default function AgentMailboxSettings({ view }: { view: AgentMailboxView 
           {senders.length === 0 && <p className="caption-style text-subtle">Nobody yet.</p>}
           <ul className="flex flex-col gap-4 sm:gap-2">
             {senders.map((sender, index) => (
-              <li key={sender.key} className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                <Input
-                  type="text"
-                  inputMode="email"
-                  autoComplete="off"
-                  spellCheck={false}
-                  aria-label={`Sender address ${index + 1}`}
-                  placeholder="name@example.com"
-                  value={sender.address}
-                  onChange={(event) => update(sender.key, { address: event.target.value })}
-                  className="min-w-0 sm:flex-1"
-                />
-                <div className="flex items-center gap-2">
-                  <NativeSelect
-                    aria-label={`Who owns work from sender ${index + 1}`}
-                    value={sender.userId}
-                    onChange={(event) => update(sender.key, { userId: event.target.value })}
-                    className="min-w-0 flex-1 sm:w-48 sm:flex-none"
-                  >
-                    {view.members.map((member) => (
-                      <option key={member.id} value={member.id}>
-                        {member.name}
-                      </option>
-                    ))}
-                  </NativeSelect>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    type="button"
-                    aria-label={`Remove sender ${index + 1}`}
-                    onClick={() => setSenders((current) => current.filter((entry) => entry.key !== sender.key))}
-                  >
-                    Remove
-                  </Button>
+              <li key={sender.key} className="flex flex-col gap-2">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <Input
+                    type="text"
+                    inputMode="email"
+                    autoComplete="off"
+                    spellCheck={false}
+                    aria-label={`Sender address ${index + 1}`}
+                    aria-invalid={sender.problem ? true : undefined}
+                    aria-describedby={sender.problem ? `agent-sender-problem-${sender.key}` : undefined}
+                    placeholder="name@example.com"
+                    value={sender.address}
+                    onChange={(event) => update(sender.key, { address: event.target.value })}
+                    className="min-w-0 sm:flex-1"
+                  />
+                  <div className="flex items-center gap-2">
+                    <NativeSelect
+                      aria-label={`Who owns work from sender ${index + 1}`}
+                      value={sender.userId}
+                      onChange={(event) => update(sender.key, { userId: event.target.value })}
+                      className="min-w-0 flex-1 sm:w-48 sm:flex-none"
+                    >
+                      {view.members.map((member) => (
+                        <option key={member.id} value={member.id}>
+                          {member.name}
+                        </option>
+                      ))}
+                    </NativeSelect>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      type="button"
+                      aria-label={`Remove sender ${index + 1}`}
+                      onClick={() => setSenders((current) => current.filter((entry) => entry.key !== sender.key))}
+                    >
+                      Remove
+                    </Button>
+                  </div>
                 </div>
+                {sender.problem && (
+                  <p id={`agent-sender-problem-${sender.key}`} className="caption-style text-danger">
+                    {sender.problem}
+                  </p>
+                )}
               </li>
             ))}
           </ul>

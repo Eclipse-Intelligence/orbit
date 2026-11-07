@@ -3,6 +3,7 @@ import { after, before, describe, it } from "node:test";
 import { saveMailbox } from "@/lib/crm/inbox";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
+import { retryWaitMs } from "@/lib/mail/microsoft";
 import { syncMail } from "@/lib/mail/sync";
 import { savePushSubscription, type PushSender } from "@/lib/push";
 import { createUser, resetDatabase } from "./helpers";
@@ -45,7 +46,9 @@ function skip(folder: string, token: string) {
   return `${GRAPH}/me/mailFolders/${folder}/messages/delta?$skiptoken=${token}`;
 }
 
-function outlook(pages: Record<string, Page | (() => Response | Promise<Response>)>, locations = new Map<string, string>()) {
+type Hooks = { throttled?: Set<string>; onLookup?: () => void };
+
+function outlook(pages: Record<string, Page | (() => Response | Promise<Response>)>, locations = new Map<string, string>(), hooks: Hooks = {}) {
   const calls: string[] = [];
   const fetchImpl: typeof fetch = async (input, init) => {
     const url = String(input);
@@ -71,6 +74,10 @@ function outlook(pages: Record<string, Page | (() => Response | Promise<Response
     }
     const lookup = url.match(/\/me\/messages\/([^/?]+)\?\$select=id,parentFolderId$/);
     if (lookup) {
+      hooks.onLookup?.();
+      if (hooks.throttled?.delete(decodeURIComponent(lookup[1]))) {
+        return Response.json({ error: { code: "TooManyRequests", message: "Slow down." } }, { status: 429, headers: { "retry-after": "0" } });
+      }
       const folder = locations.get(decodeURIComponent(lookup[1]));
       return folder ? Response.json({ id: decodeURIComponent(lookup[1]), parentFolderId: folder }) : Response.json({ error: { code: "ErrorItemNotFound" } }, { status: 404 });
     }
@@ -126,6 +133,15 @@ describe("mail sync across many pages", () => {
 
   after(async () => {
     await getPool().end();
+  });
+
+  it("waits as long as Outlook asks before trying again, and gives up on long waits", () => {
+    const after = (value: string | null) => ({ headers: new Headers(value === null ? {} : { "retry-after": value }) });
+    assert.equal(retryWaitMs(after("2"), 0), 2000);
+    assert.equal(retryWaitMs(after("0"), 1), 0);
+    assert.equal(retryWaitMs(after(null), 0), 1000);
+    assert.equal(retryWaitMs(after(null), 1), 2000);
+    assert.equal(retryWaitMs(after("120"), 0), null);
   });
 
   it("notifies, routes and queues workflows for every new email on every page", async () => {
@@ -221,10 +237,14 @@ describe("mail sync across many pages", () => {
         [delta("f-archive", "a1")]: { value: [message("e-000", { isRead: true })], "@odata.deltaLink": delta("f-archive", "a2") },
       },
       new Map([["e-000", "f-archive"]]),
+      { throttled: new Set(["e-000"]) },
     );
     const report = await syncMail(owner, { budgetMs: 30_000, fetchImpl: box.fetchImpl, backfill: false });
     assert.deepEqual(report.errors, []);
     assert.equal(report.arrived.length, 0);
+    assert.equal(report.moved, 1);
+    assert.equal(report.removed, 1);
+    assert.equal(box.calls.filter((call) => call.includes("/me/messages/e-000?$select=id,parentFolderId")).length, 2, "a throttled lookup is tried again");
     const kept = await admin.query<{ id: string; role: string; is_read: boolean }>(
       "select m.id, f.role, m.is_read from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id where m.provider_message_id = 'e-000'",
     );
@@ -235,5 +255,42 @@ describe("mail sync across many pages", () => {
     assert.deepEqual(texts.rows, [{ text: "The brief" }]);
     const deleted = await admin.query("select 1 from crm.mail_messages where provider_message_id = 'e-001'");
     assert.equal(deleted.rowCount, 0, "an email deleted for good leaves Orbit too");
+  });
+
+  it("stops looking up removed emails at the deadline and leaves the page for the next sync", async () => {
+    const admin = getAdminPool();
+    const gone = Array.from({ length: 10 }, (_, index) => `e-${String(index + 2).padStart(3, "0")}`);
+    const page = {
+      value: [...gone.map((id) => ({ id, "@removed": { reason: "deleted" } })), message("f-001")],
+      "@odata.deltaLink": delta("f-inbox", "t5"),
+    };
+    const realNow = Date.now;
+    let lookups = 0;
+    const slow = outlook({ [delta("f-inbox", "t4")]: page }, new Map(), {
+      onLookup: () => {
+        lookups += 1;
+        Date.now = () => realNow() + 10 * 60_000;
+      },
+    });
+    let stopped;
+    try {
+      stopped = await syncMail(owner, { budgetMs: 30_000, fetchImpl: slow.fetchImpl, backfill: false });
+    } finally {
+      Date.now = realNow;
+    }
+    assert.deepEqual(stopped.errors, []);
+    assert.equal(lookups, 4, "one batch of four, then it stops");
+    assert.equal(stopped.removed, 0);
+    const held = await admin.query("select 1 from crm.mail_messages where provider_message_id = any($1::text[])", [gone]);
+    assert.equal(held.rowCount, 10);
+    assert.equal((await admin.query("select 1 from crm.mail_messages where provider_message_id = 'f-001'")).rowCount, 0);
+    const folder = await admin.query<{ sync_link: string }>("select sync_link from crm.mail_folders where provider_folder_id = 'f-inbox'");
+    assert.equal(folder.rows[0].sync_link, delta("f-inbox", "t4"), "the cursor stays on the unfinished page");
+
+    const finished = await syncMail(owner, { budgetMs: 30_000, fetchImpl: outlook({ [delta("f-inbox", "t4")]: page }).fetchImpl, backfill: false });
+    assert.deepEqual(finished.errors, []);
+    assert.equal(finished.removed, 10);
+    assert.equal(finished.stored, 1);
+    assert.equal((await admin.query("select 1 from crm.mail_messages where provider_message_id = any($1::text[])", [gone])).rowCount, 0);
   });
 });

@@ -83,6 +83,16 @@ export class GraphMailError extends Error {
   }
 }
 
+const GRAPH_RETRIES = 2;
+const RETRY_WAIT_MAX_MS = 5_000;
+
+export function retryWaitMs(response: Pick<Response, "headers">, attempt: number) {
+  const header = response.headers.get("retry-after");
+  const seconds = header === null || header.trim() === "" ? Number.NaN : Number(header);
+  const wanted = Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : 1000 * 2 ** attempt;
+  return wanted <= RETRY_WAIT_MAX_MS ? wanted : null;
+}
+
 function graphUrl(url: string) {
   const parsed = new URL(url);
   if (parsed.protocol !== "https:" || parsed.hostname !== "graph.microsoft.com") {
@@ -98,16 +108,24 @@ async function graphJson<T>(
   prefer?: string,
   write?: { method: "PATCH" | "POST" | "DELETE"; body?: unknown },
 ): Promise<T> {
-  const response = await fetchImpl(graphUrl(url), {
-    method: write?.method ?? "GET",
-    headers: {
-      authorization: `Bearer ${token}`,
-      prefer: [prefer, 'IdType="ImmutableId"'].filter(Boolean).join(", "),
-      ...(write ? { "content-type": "application/json" } : {}),
-    },
-    body: write && write.body !== undefined ? JSON.stringify(write.body) : undefined,
-    signal: AbortSignal.timeout(30_000),
-  });
+  let response: Response;
+  for (let attempt = 0; ; attempt += 1) {
+    response = await fetchImpl(graphUrl(url), {
+      method: write?.method ?? "GET",
+      headers: {
+        authorization: `Bearer ${token}`,
+        prefer: [prefer, 'IdType="ImmutableId"'].filter(Boolean).join(", "),
+        ...(write ? { "content-type": "application/json" } : {}),
+      },
+      body: write && write.body !== undefined ? JSON.stringify(write.body) : undefined,
+      signal: AbortSignal.timeout(30_000),
+    });
+    const throttled = response.status === 429 || (response.status === 503 && !write);
+    const wait = throttled && attempt < GRAPH_RETRIES ? retryWaitMs(response, attempt) : null;
+    if (wait === null) break;
+    await response.body?.cancel().catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, wait));
+  }
   if (response.ok) {
     const text = await response.text();
     return (text ? JSON.parse(text) : {}) as T;

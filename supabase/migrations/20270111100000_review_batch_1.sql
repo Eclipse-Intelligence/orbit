@@ -27,6 +27,31 @@ $$;
 revoke all on function private.member_known_address(uuid, text) from public;
 grant execute on function private.member_known_address(uuid, text) to crm_app;
 
+create or replace function private.agent_sender_refusal(p_user uuid, p_address text, p_saved boolean default false)
+returns text
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  v_name text;
+begin
+  if private.member_known_address(p_user, p_address) then
+    return null;
+  end if;
+  select coalesce(nullif(btrim(p.full_name), ''), nullif(btrim(p.email), '')) into v_name from crm.profiles p where p.id = p_user;
+  v_name := coalesce(v_name, 'That member');
+  if p_saved then
+    return format('%s is no longer one of %s''s addresses. Remove it from the list, or %s can add it again in Settings › Email.', lower(btrim(p_address)), v_name, v_name);
+  end if;
+  return format('%s isn''t one of %s''s addresses. %s can add it in Settings › Email.', lower(btrim(p_address)), v_name, v_name);
+end;
+$$;
+
+revoke all on function private.agent_sender_refusal(uuid, text, boolean) from public;
+grant execute on function private.agent_sender_refusal(uuid, text, boolean) to crm_app;
+
 create or replace function private.agent_mailbox_sender_owned()
 returns trigger
 language plpgsql
@@ -34,15 +59,13 @@ security definer
 set search_path = ''
 as $$
 declare
-  v_name text;
+  v_refusal text;
 begin
-  if private.member_known_address(new.user_id, new.address) then
+  v_refusal := private.agent_sender_refusal(new.user_id, new.address, false);
+  if v_refusal is null then
     return new;
   end if;
-  select coalesce(nullif(btrim(p.full_name), ''), p.email) into v_name from crm.profiles p where p.id = new.user_id;
-  v_name := coalesce(v_name, 'That member');
-  raise exception '% isn''t one of %''s addresses. % can add it in Settings › Email.', new.address, v_name, v_name
-    using errcode = '23514', constraint = 'agent_mailbox_senders_owned';
+  raise exception '%', v_refusal using errcode = '23514', constraint = 'agent_mailbox_senders_owned';
 end;
 $$;
 

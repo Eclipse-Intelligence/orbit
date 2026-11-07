@@ -29,7 +29,7 @@ import type { MicrosoftToken } from "@/lib/microsoft/oauth";
 
 const FOLDER_REFRESH_MS = 6 * 60 * 60 * 1000;
 const LOCK_GRACE_SECONDS = 60;
-const LOOKUP_BATCH = 5;
+const LOOKUP_BATCH = 4;
 const SKIPPED_ROLES: MailRole[] = ["outbox"];
 const ROLE_ORDER: MailRole[] = ["inbox", "sent", "drafts", "snoozed", "archive", "other", "trash", "junk"];
 const DEFAULT_STORAGE_LIMIT_MB = 400;
@@ -64,6 +64,7 @@ export type MailSyncReport = {
   sources: number;
   stored: number;
   removed: number;
+  moved: number;
   backfilling: number;
   paused: boolean;
   errors: string[];
@@ -387,7 +388,8 @@ async function placeRemoved(
   token: string,
   places: Places,
   fetchImpl: typeof fetch,
-): Promise<Removals> {
+  deadline: number,
+): Promise<Removals | null> {
   if (removed.length === 0) return { deleted: [], moved: [] };
   const held = await withActor(actor, async (db) => {
     const result = await db.query<{ provider_message_id: string }>(
@@ -398,6 +400,7 @@ async function placeRemoved(
   });
   const parents = new Map<string, string | null>();
   for (let index = 0; index < held.length; index += LOOKUP_BATCH) {
+    if (Date.now() >= deadline) return null;
     const batch = held.slice(index, index + LOOKUP_BATCH);
     const found = await Promise.all(batch.map((id) => fetchMicrosoftMessageFolder(token, id, fetchImpl)));
     batch.forEach((id, position) => parents.set(id, found[position]));
@@ -450,11 +453,13 @@ async function syncFolder(
       }
       throw error;
     }
-    const removals = await placeRemoved(actor, source, folder, page.removed, token, options.places, options.fetchImpl);
+    const removals = await placeRemoved(actor, source, folder, page.removed, token, options.places, options.fetchImpl, options.deadline);
+    if (!removals) break;
     const full = await withActor(actor, async (db) => {
       const stored = await storePage(db, actor, source, folder, page.messages, removals, live && folder.role === "inbox");
       report.stored += stored.stored;
-      report.removed += page.removed.length;
+      report.removed += removals.deleted.length;
+      report.moved += removals.moved.length;
       const next = page.deltaLink ?? page.nextLink;
       const state = live || page.deltaLink ? "live" : "backfill";
       await db.query(
@@ -547,7 +552,7 @@ export async function syncMail(
 ): Promise<MailSyncReport> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const deadline = options.deadline ?? Date.now() + (options.budgetMs ?? 20_000);
-  const report: MailSyncReport = { sources: 0, stored: 0, removed: 0, backfilling: 0, paused: false, errors: [], arrived: [], routed: 0, workflowEvents: 0, filed: 0 };
+  const report: MailSyncReport = { sources: 0, stored: 0, removed: 0, moved: 0, backfilling: 0, paused: false, errors: [], arrived: [], routed: 0, workflowEvents: 0, filed: 0 };
   const sources = await loadSources(actor);
   const hardStop = await withActor(actor, async (db) => (await databaseBytes(db)) >= mailHardStopBytes());
   if (hardStop) {

@@ -850,6 +850,40 @@ describe("agent mail data and row-level security", () => {
     assert.equal((await agentMailboxView(owner)).senders.length, 6, "a refused save leaves the list as it was");
   });
 
+  it("points out a saved address that is no longer the member's, with the same wording as the database", async () => {
+    const admin = getAdminPool();
+    await admin.query("update crm.profiles set other_emails = '{}' where id = $1", [colleague.userId]);
+    const view = await agentMailboxView(owner);
+    const stale = view.senders.find((sender) => sender.address === "jane@geteclipse.co");
+    const stillTheirs = view.senders.find((sender) => sender.address === "jane@sending.test");
+    const expected = "jane@geteclipse.co is no longer one of Jane Doe's addresses. Remove it from the list, or Jane Doe can add it again in Settings › Email.";
+    assert.equal(stale?.problem, expected);
+    assert.equal(stillTheirs?.problem, null);
+    assert.equal((await agentMailboxView(colleague)).senders.every((sender) => sender.problem === null), true, "only admins see the check");
+    const kept = view.senders.map((sender) => ({ address: sender.address, userId: sender.userId }));
+    await assert.rejects(
+      saveAgentSenders(owner, kept),
+      (error: unknown) => error instanceof CrmError && error.message === expected,
+    );
+    await saveAgentSenders(owner, kept.filter((sender) => sender.address !== "jane@geteclipse.co"));
+    assert.deepEqual((await agentMailboxView(owner)).senders.map((sender) => sender.problem), [null, null, null, null, null]);
+
+    const fromApp = await saveAgentSenders(owner, [...kept.filter((sender) => sender.address !== "jane@geteclipse.co"), { address: "jane@geteclipse.co", userId: colleague.userId }]).catch(
+      (error: Error) => error.message,
+    );
+    const fromDatabase = await admin
+      .query("insert into crm.agent_mailbox_senders (workspace_id, mailbox_id, address, user_id) select workspace_id, id, 'jane@geteclipse.co', $1 from crm.agent_mailboxes where workspace_id = $2", [
+        colleague.userId,
+        owner.workspaceId,
+      ])
+      .catch((error: Error) => error.message);
+    assert.equal(fromApp, "jane@geteclipse.co isn't one of Jane Doe's addresses. Jane Doe can add it in Settings › Email.");
+    assert.equal(fromDatabase, fromApp);
+
+    await admin.query("update crm.profiles set other_emails = $2 where id = $1", [colleague.userId, ["jane@geteclipse.co"]]);
+    await saveAgentSenders(owner, kept);
+  });
+
   it("won't point a message at another member's conversation or show their threads", async () => {
     const jane = await receiveOnly(services, inbox, { from: "jane@geteclipse.co" });
     const theirs = (await getAdminPool().query<{ id: string }>(
