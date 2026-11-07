@@ -169,11 +169,17 @@ describe("workflows", () => {
     await setWorkflowStatus(owner, risk.id, "active");
     await setWorkflowStatus(owner, requests.id, "active");
 
+    await getAdminPool().query(
+      "insert into crm.workspace_brands (workspace_id, tone) values ($1, 'Short, warm sentences.') on conflict (workspace_id) do update set tone = excluded.tone",
+      [owner.workspaceId],
+    );
     const llm = fakes([AT_RISK]);
     await summariseCall(owner, await call("Rollout check-in"), VTT, { source: "manual", fetchImpl: llm.fetchImpl, autoAccept: false });
     const tick = await runWorkflowTick({ fetchImpl: llm.fetchImpl, budgetMs: 30_000 });
     assert.equal(tick.processed, 2);
     assert.equal(llm.ai.length, 1);
+    assert.ok(llm.ai[0].system.includes(`How ${owner.workspaceName} writes, for anything written on its behalf: Short, warm sentences.`), llm.ai[0].system);
+    await getAdminPool().query("update crm.workspace_brands set tone = '' where workspace_id = $1", [owner.workspaceId]);
     assert.match(llm.ai[0].user, /Acme Flows/);
     assert.match(llm.ai[0].user, /needs SSO and CSV export/);
 

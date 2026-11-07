@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { brandOrEmpty } from "@/lib/crm/brand";
+import { brandOrEmpty, brandToneNote } from "@/lib/crm/brand";
 import { withActor } from "@/lib/crm/context";
 import { memberActor } from "@/lib/crm/conversations";
 import { CrmError } from "@/lib/crm/errors";
@@ -440,7 +440,7 @@ async function writeBrief(actor: UserActor, since: Date, options: Options & { da
   const result = await completeJson({
     system:
       `Write ${name}'s morning brief in Orbit, ${businessName(actor)}'s CRM. Reply with JSON only: {"brief": string}. The brief is markdown of at most 220 words with up to four short sections, each a heading line starting "### " and two to four bullets: "In your market" (market notes and research mail), "Accounts to act on" (buying signals and why now, with the company link given), "Deals gone quiet" (the stalled deals most worth a nudge, with the deal link given and a suggested next step), and "What Orbit learned" (the most useful new or changed notes). ` +
-      `Leave out a section with nothing worth saying. Lead with what ${name} should act on today. Link sources with markdown links using the links given. Plain and direct, UK English. ${writingStyle()} ${UNTRUSTED}`,
+      `Leave out a section with nothing worth saying. Lead with what ${name} should act on today. Link sources with markdown links using the links given. Plain and direct, UK English. ${writingStyle()} ${brandToneNote(await brandOrEmpty(actor))} ${UNTRUSTED}`,
     user: material,
     schema: BRIEF,
     maxTokens: AI_TOKENS,

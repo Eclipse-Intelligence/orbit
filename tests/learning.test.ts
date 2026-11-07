@@ -157,6 +157,10 @@ describe("nightly learning", () => {
 
   it("learns about each person, the business and the market overnight, then writes each member a brief", async () => {
     const { fetchImpl, calls } = gateway(() => pulseId);
+    await getAdminPool().query(
+      "insert into crm.workspace_brands (workspace_id, tone) values ($1, 'Short, warm sentences.') on conflict (workspace_id) do update set tone = excluded.tone",
+      [owner.workspaceId],
+    );
     const now = new Date();
     const first = await runNightlyLearning({ deadline: Date.now() + 600_000, fetchImpl, now });
     assert.equal(first.day, londonDay(now));
@@ -166,6 +170,8 @@ describe("nightly learning", () => {
     );
     assert.equal(first.report.find((item) => item.kind === "personal" && item.userId === sam.userId)!.result.skipped, "Nothing new to learn from.");
     assert.deepEqual(calls.map((call) => call.kind).sort(), ["brief", "brief", "business", "market", "personal"]);
+    for (const brief of calls.filter((call) => call.kind === "brief")) assert.match(brief.system, /writes, for anything written on its behalf: Short, warm sentences\./);
+    await getAdminPool().query("update crm.workspace_brands set tone = '' where workspace_id = $1", [owner.workspaceId]);
 
     const personalPrompt = calls.find((call) => call.kind === "personal")!;
     assert.match(personalPrompt.user, /Never send a first email over 100 words/);

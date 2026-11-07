@@ -2490,7 +2490,7 @@ const TOOL_LIST: AssistantTool[] = [
         evidence: withProofList(evidenceFrom(args.evidence), await listProof(actor), { subject: str(args.subject), body }),
         firstTouch: args.firstTouch !== false,
         theirOffer: optionalStr(args.theirOffer),
-        brand: { name: actor.workspaceName, claims: brand.outreachBrief || brand.whatYouSell, playbook: brand.playbook, tone: brand.tone },
+        brand: { name: actor.workspaceName, claims: brand.outreachBrief || brand.whatYouSell, formerNames: brand.formerNames, playbook: brand.playbook, tone: brand.tone },
       }, { deadline: context.deadline });
     },
   },

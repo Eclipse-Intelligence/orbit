@@ -241,7 +241,7 @@ Don't claim:
 
 export { PROOF_PERMISSIONS, type ProofPermission };
 
-export type ColdEmailBrand = { name: string; claims: string; playbook?: string; tone?: string };
+export type ColdEmailBrand = { name: string; claims: string; formerNames?: string[]; playbook?: string; tone?: string };
 
 const NO_CLAIMS = "No product claims are written down for this business yet. Only facts in prospect_evidence and client proof from the proof list may be stated.";
 
@@ -400,9 +400,14 @@ function hasBrandRules(brand?: ColdEmailBrand) {
   return Boolean(playbookOf(brand) || toneOf(brand));
 }
 
+function namePattern(name: string) {
+  return name.trim().toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
+}
+
 function claimPatterns(brand?: ColdEmailBrand) {
-  const name = brand?.name.trim().toLowerCase() ?? "";
-  const named = name ? name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+") : "";
+  const current = brand?.name.trim() ? namePattern(brand.name) : "";
+  const former = [...new Set((brand?.formerNames ?? []).map(namePattern).filter((name) => name && name !== current))];
+  const named = [current, ...former].filter(Boolean).join("|");
   const own = named ? `|${named}` : "";
   return {
     promise: new RegExp(
@@ -415,6 +420,7 @@ function claimPatterns(brand?: ColdEmailBrand) {
       new RegExp(`\\b(clients?|customers?) of (ours${own})\\b`, "i"),
       /\bteams? like yours\b/i,
       ...(named ? [new RegExp(`\\b(moved|switched|brought|put|started|began|adopted|since)\\b[^.?!]{0,80}\\b(${named})\\b`, "i")] : []),
+      ...(former.length ? [new RegExp(`\\bwhen\\s+(${current || "we"}|we|it|they)\\s+(was|were)\\s+(still\\s+)?(called|named|known as)\\s+(${former.join("|")})\\b`, "i")] : []),
       /\ban? (\d+|[a-z]+)-(person|people|strong)\b/i,
     ],
     finding: new RegExp(

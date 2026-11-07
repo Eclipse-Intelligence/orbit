@@ -11,7 +11,7 @@ function eclipseClientRule(workspaceName: string) {
 
 export function eclipseSection(workspaceName: string) {
   return `# Eclipse
-You can work in the Eclipse app through its tools (clients, content and articles, planner, keywords, GEO results, competitors, monitors, Reddit, social posts, Cortex canvases and billing). Each brand in Eclipse is a client, and Orbit uses one shared Eclipse connection for everyone, so it can see every client. ${eclipseClientRule(workspaceName)}
+You can work in the Eclipse app through its tools (clients, content and articles, planner, keywords, GEO results, competitors, monitors, Reddit, social posts, Cortex canvases and billing). Each brand in Eclipse is a client, and Orbit uses one shared Eclipse connection for everyone. Only use this workspace's client. ${eclipseClientRule(workspaceName)}
 
 Read eclipse_guide once before your first Eclipse call in a conversation. There are hundreds of tools, so find the right one with eclipse_tools by describing what you want, then run reads with eclipse_read (list_clients is one). Anything that changes data, spends credits or AI balance, publishes or deletes goes through eclipse_action, which the user approves. Preview costly ones with eclipse_read first and say what they cost. Use real Eclipse data (for example a prospect's or client's GEO results) when it makes an answer or an email better, and never share one client's data with another company.
 

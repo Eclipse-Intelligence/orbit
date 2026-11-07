@@ -38,7 +38,7 @@ export function grokRoutine(mcpUrl: string, business: string) {
    - headline: one line.
    - summary: two or three factual sentences, no opinion.
    - url: the original post or article.
-   - about: the specific company or person it concerns (for example "Semrush" or "Ross Simmonds"), spelled as in the watchlist when they're on it, not the topic.
+   - about: the specific company or person it concerns (for example "Acme" or "Jane Smith"), spelled as in the watchlist when they're on it, not the topic.
    - publishedAt: ISO date.
 6. Never invent a link or a figure. Skip anything you can't link to. If nothing qualifies, send nothing.`;
 }

@@ -20,8 +20,7 @@ const SWITCH_MIGRATION = "supabase/migrations/20270109100000_remove_eclipse_swit
 const OLD_RESEARCH = "Find an article with eclipse_articles and read it in full.";
 const NEW_RESEARCH = "Find a published article in the Eclipse client named Eclipse with eclipse_tools and eclipse_read, and read it in full.";
 const SEEDED_PLAYBOOK = COLD_EMAIL_PLAYBOOK.replace(NEW_RESEARCH, OLD_RESEARCH);
-const ECLIPSE_CHECKS = `## Eclipse checks\n- Cntent is Eclipse's former name. A client result tied to Cntent, such as "when Eclipse was still called Cntent", is client proof, so it must come from the proof list.`;
-const ECLIPSE_PLAYBOOK = `${COLD_EMAIL_PLAYBOOK}\n\n${ECLIPSE_CHECKS}`;
+const ECLIPSE_PLAYBOOK = COLD_EMAIL_PLAYBOOK;
 const PIECE_TONE = 'Never call an article a "piece". Say "article".';
 const ECLIPSE_TOPICS = ["AI search", "AI visibility", "Content agencies", "Content operations", "Generative engine optimisation (GEO)"];
 const WEB = { operation: "brand_test", source: "web" };
@@ -108,11 +107,13 @@ describe("brand profile seed", () => {
     assert.equal(seeded.tone, PIECE_TONE);
     assert.equal(seeded.playbook, ECLIPSE_PLAYBOOK);
     assert.equal(seeded.outreachBrief, ECLIPSE_OUTREACH_BRIEF);
+    assert.deepEqual(seeded.formerNames, ["Cntent"]);
+    assert.ok(seeded.playbookUpdatedAt);
     assert.equal((await getEnrichmentSettings(eclipse)).icpHash, icpHashOf(ECLIPSE_IDEAL_CUSTOMER));
     const fresh = await getBrand(ridgeon);
     assert.deepEqual(
-      [fresh.website, fresh.whatYouSell, fresh.whoItsFor, fresh.tone, fresh.playbook, fresh.outreachBrief],
-      ["", "", "", "", "", ""],
+      [fresh.website, fresh.whatYouSell, fresh.whoItsFor, fresh.tone, fresh.playbook, fresh.outreachBrief, fresh.formerNames, fresh.playbookUpdatedAt],
+      ["", "", "", "", "", "", [], null],
     );
   });
 });
@@ -123,29 +124,48 @@ describe("moving Eclipse's rules into its brand profile", () => {
     return result.rows.map((row) => row.label);
   }
 
-  it("adds the checks, the piece rule and the market topics to Eclipse only, once, and keeps the column for the old code", async () => {
+  it("adds the former name, the piece rule and the market topics to Eclipse only, once, and keeps the column for the old code", async () => {
     const pool = getAdminPool();
     assert.deepEqual(await topics(eclipse.workspaceId), ECLIPSE_TOPICS);
     assert.deepEqual(await topics(ridgeon.workspaceId), []);
     const column = await pool.query("select 1 from information_schema.columns where table_schema = 'crm' and table_name = 'workspace_brands' and column_name = 'eclipse_tools'");
     assert.equal(column.rowCount, 1);
 
-    await pool.query("update crm.workspace_brands set playbook = $2, tone = 'Short and plain.' where workspace_id = $1", [eclipse.workspaceId, SEEDED_PLAYBOOK.replaceAll("\n", "\r\n")]);
+    await pool.query("update crm.workspace_brands set playbook = $2, playbook_updated_at = null, tone = $3, former_names = '{}' where workspace_id = $1", [
+      eclipse.workspaceId,
+      SEEDED_PLAYBOOK.replaceAll("\n", "\r\n"),
+      "Short and plain.\r\n ",
+    ]);
     await pool.query("delete from crm.watchlist where workspace_id = $1", [eclipse.workspaceId]);
     await pool.query("insert into crm.watchlist (workspace_id, kind, label) values ($1, 'topic', 'Content Agencies'), ($1, 'topic', 'ai search')", [eclipse.workspaceId]);
     await pool.query(readFileSync(SWITCH_MIGRATION, "utf8"));
     await pool.query(readFileSync(SWITCH_MIGRATION, "utf8"));
     const moved = await getBrand(eclipse);
     assert.equal(moved.playbook, ECLIPSE_PLAYBOOK.replaceAll("\n", "\r\n"));
-    assert.equal(moved.playbook.split("Cntent is Eclipse's former name").length, 2);
+    assert.ok(moved.playbookUpdatedAt);
+    assert.deepEqual(moved.formerNames, ["Cntent"]);
     assert.doesNotMatch(moved.playbook, /eclipse_articles/);
     assert.equal(moved.tone, `Short and plain. ${PIECE_TONE}`);
     assert.ok(systemPrompt(eclipse, { webSearch: false, brand: moved }).includes(`How Eclipse writes:\nShort and plain. ${PIECE_TONE}`));
     assert.deepEqual(await topics(eclipse.workspaceId), ["ai search", "AI visibility", "Content Agencies", "Content operations", "Generative engine optimisation (GEO)"]);
     const untouched = await getBrand(ridgeon);
-    assert.deepEqual([untouched.playbook, untouched.tone], ["", ""]);
+    assert.deepEqual([untouched.playbook, untouched.tone, untouched.formerNames, untouched.playbookUpdatedAt], ["", "", [], null]);
 
-    await pool.query("update crm.workspace_brands set playbook = $2, tone = $3 where workspace_id = $1", [eclipse.workspaceId, ECLIPSE_PLAYBOOK, PIECE_TONE]);
+    await pool.query("update crm.workspace_brands set playbook = $2, tone = $3, former_names = '{cntent}' where workspace_id = $1", [eclipse.workspaceId, ECLIPSE_PLAYBOOK, PIECE_TONE]);
+    await pool.query(readFileSync(SWITCH_MIGRATION, "utf8"));
+    assert.deepEqual((await getBrand(eclipse)).formerNames, ["cntent"]);
+    await pool.query("update crm.workspace_brands set former_names = '{Cntent}' where workspace_id = $1", [eclipse.workspaceId]);
+  });
+
+  it("saves former names from the brand profile and keeps them when a save leaves them out", async () => {
+    const profile = { website: "", whatYouSell: "Positioning sprints.", whoItsFor: "", tone: "" };
+    const saved = await saveBrandProfile(ridgeon, { ...profile, formerNames: " Ridgeon Partners, ridgeon partners ,\nMR Advisory " }, WEB);
+    assert.deepEqual(saved.formerNames, ["Ridgeon Partners", "MR Advisory"]);
+    assert.deepEqual((await saveBrandProfile(ridgeon, profile, WEB)).formerNames, ["Ridgeon Partners", "MR Advisory"]);
+    await assert.rejects(saveBrandProfile(ridgeon, { ...profile, formerNames: Array.from({ length: 11 }, (_, index) => `Name ${index}`) }, WEB), /Add up to 10 former names/);
+    await assert.rejects(saveBrandProfile(ridgeon, { ...profile, formerNames: 5 }, WEB), /Former names must be text/);
+    await assert.rejects(saveBrandProfile(member, { ...profile, formerNames: "Old" }, WEB), forbidden);
+    assert.deepEqual((await saveBrandProfile(ridgeon, { ...profile, formerNames: "" }, WEB)).formerNames, []);
   });
 });
 
@@ -266,7 +286,7 @@ describe("cold email per workspace", () => {
   it("reads the playbook and what may be said from the workspace", async () => {
     const seeded = (await runTool(eclipse, "cold_email_playbook", {})) as { playbook: string; outreachBrief: string; proofList: unknown[] };
     assert.equal(seeded.playbook, playbookFor({ firstName: "Mark", bookingUrl: null }, ECLIPSE_PLAYBOOK));
-    assert.match(seeded.playbook, /Cntent is Eclipse's former name/);
+    assert.doesNotMatch(seeded.playbook, /eclipse_articles/);
     assert.equal(seeded.outreachBrief, ECLIPSE_OUTREACH_BRIEF);
 
     await saveBrandProfile(ridgeon, { website: "", whatYouSell: "Positioning sprints for B2B firms.", whoItsFor: "", tone: "" }, WEB);
@@ -298,9 +318,16 @@ describe("cold email per workspace", () => {
       sent.length = 0;
       await runTool(eclipse, "cold_email_check", { subject: "client content", body: "Hi Jo,\n\nSaw the hire.\n\nHow do you plan content now?\n\nMark" });
       assert.equal(sent[0].state.approved_product_claims, ECLIPSE_OUTREACH_BRIEF);
-      assert.match(sent[0].state.sender_playbook!, /Cntent is Eclipse's former name/);
+      assert.doesNotMatch(sent[0].state.sender_playbook!, /eclipse_articles/);
       assert.equal(sent[0].state.sender_tone, "Direct and specific.");
       assert.ok(sent[0].questions.follows_sender_playbook);
+      const claim = "Hi Jo,\n\nSaw the hire. When Eclipse was still called Cntent, a 12 person agency doubled its output.\n\nHow do you plan content now?\n\nMark";
+      const eclipseCheck = (await runTool(eclipse, "cold_email_check", { subject: "client content", body: claim })) as { checks: { id: string; pass: boolean }[] };
+      assert.equal(eclipseCheck.checks.find((check) => check.id === "proof_approved")!.pass, false);
+      const ridgeonCheck = (await runTool(ridgeon, "cold_email_check", { subject: "client content", body: claim.replace("a 12 person agency doubled its output", "agencies wrote more") })) as {
+        checks: { id: string; pass: boolean }[];
+      };
+      assert.equal(ridgeonCheck.checks.find((check) => check.id === "proof_approved")!.pass, true);
     } finally {
       globalThis.fetch = original;
     }

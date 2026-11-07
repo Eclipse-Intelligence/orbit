@@ -8,22 +8,24 @@ import { Input } from "@/components/_ui/input";
 import { Textarea } from "@/components/_ui/textarea";
 import { SettingsCard } from "@/components/crm/settings-ui";
 import { draftBrandAction, saveBrandProfileAction } from "@/app/(crm)/settings/brand/actions";
-import { BRAND_LIMITS, type BrandProfile, type BrandProfileInput } from "@/lib/crm/brand-rules";
+import { BRAND_LIMITS, FORMER_NAME_LIMITS, type BrandProfile, type BrandProfileInput } from "@/lib/crm/brand-rules";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
 import { reloadIfStaleDeploy } from "@/lib/stale-deploy";
 import { cn } from "@/lib/utils";
 import ChevronRightIcon from "@/public/assets/images/_common/chevron-right.svg";
 
-type Key = keyof BrandProfileInput;
-type Drafted = Partial<Record<Exclude<Key, "website">, string>>;
+type FormValues = BrandProfileInput & { formerNames: string };
+type Key = keyof FormValues;
+type DraftKey = Exclude<keyof BrandProfileInput, "website">;
+type Drafted = Partial<Record<DraftKey, string>>;
 
-const LABELS: Record<Exclude<Key, "website">, string> = { whatYouSell: "What you sell", whoItsFor: "Who it's for", tone: "How you write" };
+const LABELS: Record<DraftKey, string> = { whatYouSell: "What you sell", whoItsFor: "Who it's for", tone: "How you write" };
 
-function profileOf(brand: BrandProfile): BrandProfileInput {
-  return { website: brand.website, whatYouSell: brand.whatYouSell, whoItsFor: brand.whoItsFor, tone: brand.tone };
+function profileOf(brand: BrandProfile): FormValues {
+  return { website: brand.website, whatYouSell: brand.whatYouSell, whoItsFor: brand.whoItsFor, tone: brand.tone, formerNames: brand.formerNames.join(", ") };
 }
 
-function same(left: BrandProfileInput, right: BrandProfileInput) {
+function same(left: FormValues, right: FormValues) {
   return (Object.keys(left) as Key[]).every((key) => left[key].trim() === right[key].trim());
 }
 
@@ -266,6 +268,23 @@ export default function BrandSettings({
               aria-describedby={errors.tone ? "brand-tone-error" : "brand-tone-hint"}
               onChange={(event) => update("tone", event.target.value)}
               className="field-sizing-content max-h-[24em]"
+            />
+          </Field>
+          <Field
+            label="Former names"
+            htmlFor="brand-former"
+            error={errors.formerNames}
+            hint="Names the business used before, separated by commas. Cold email checks treat them as its own name."
+          >
+            <Input
+              id="brand-former"
+              spellCheck={false}
+              maxLength={FORMER_NAME_LIMITS.count * (FORMER_NAME_LIMITS.length + 2)}
+              value={values.formerNames}
+              readOnly={!canEdit || pending === "draft"}
+              aria-invalid={errors.formerNames ? true : undefined}
+              aria-describedby={errors.formerNames ? "brand-former-error" : "brand-former-hint"}
+              onChange={(event) => update("formerNames", event.target.value)}
             />
           </Field>
           {error && (

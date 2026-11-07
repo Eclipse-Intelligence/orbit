@@ -193,13 +193,19 @@ describe("cold email client proof", () => {
     );
   });
 
-  it("looks for client claims in the workspace's own name only", () => {
+  it("looks for client claims in the workspace's own name and its former names", () => {
     const claim = (who: string) => ({ ...FINDING, body: FINDING.body.replace("next time.", `next time. ${who} has helped three firms with this.`), evidence: EVIDENCE });
     const ridgeon = { name: "Mark Ridgeon", claims: "" };
     assert.match(noteOf(lintColdEmail({ ...claim("Mark Ridgeon"), brand: ridgeon }), "proof_approved"), /no proof list entry behind it/);
     assert.equal(noteOf(lintColdEmail({ ...claim("Eclipse"), brand: ridgeon }), "proof_approved"), "No client proof.");
     assert.match(noteOf(eclipseLint(claim("Eclipse")), "proof_approved"), /no proof list entry behind it/);
     assert.equal(noteOf(eclipseLint(claim("Cntent")), "proof_approved"), "No client proof.");
+    const renamed = { ...ECLIPSE_BRAND, formerNames: ["Cntent"] };
+    assert.match(noteOf(eclipseLint({ ...claim("Cntent"), brand: renamed }), "proof_approved"), /no proof list entry behind it/);
+    const whenCalled = { ...FINDING, body: FINDING.body.replace("next time.", "next time. That was when Eclipse was still called Cntent."), evidence: EVIDENCE };
+    assert.match(noteOf(eclipseLint({ ...whenCalled, brand: renamed }), "proof_approved"), /no proof list entry behind it/);
+    assert.equal(noteOf(eclipseLint(whenCalled), "proof_approved"), "No client proof.");
+    assert.equal(noteOf(lintColdEmail({ ...claim("Cntent"), brand: { name: "Mark Ridgeon", claims: "", formerNames: [] } }), "proof_approved"), "No client proof.");
   });
 
   it("applies the same generic rubric in every workspace, whatever its playbook says", () => {
