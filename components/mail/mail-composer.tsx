@@ -184,11 +184,11 @@ export default function MailComposer({
     onSubject?.(subject);
   }, [subject, onSubject]);
 
+  const opening = useRef({ card, recipientsFirst: !draft && (start.mode === "forward" || (start.mode === "new" && start.to.length === 0)) });
   useEffect(() => {
-    if (!card) editor.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-    const recipientsFirst = !draft && (start.mode === "forward" || (start.mode === "new" && start.to.length === 0));
-    if (!recipientsFirst) editor.current?.focus();
-  }, [card, draft, start.mode, start.to.length]);
+    if (!opening.current.card) editor.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    if (!opening.current.recipientsFirst) editor.current?.focus();
+  }, []);
 
   function saveNow() {
     const run = chain.current.then(async () => {

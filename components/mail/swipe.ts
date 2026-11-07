@@ -55,6 +55,14 @@ export function lockAxis(dx: number, dy: number): "x" | "y" | null {
   return Math.abs(dx) >= Math.abs(dy) * LOCK_RATIO ? "x" : "y";
 }
 
+const EDITABLE = "input, textarea, select, [contenteditable]:not([contenteditable='false']), .cm-editor";
+
+export function startsInEditable(target: EventTarget | null) {
+  const node = target as Node | null;
+  const element = node && node.nodeType === 1 ? (node as Element) : (node?.parentElement ?? null);
+  return Boolean(element?.closest(EDITABLE));
+}
+
 function glide(element: HTMLElement, speed: number) {
   let velocity = speed * 16;
   const step = () => {
@@ -80,7 +88,7 @@ export function watchSwipe(target: Document | HTMLElement, handlers: () => Swipe
 
   function down(event: TouchEvent) {
     const root = "documentElement" in target ? target.documentElement : target;
-    if (event.touches.length !== 1 || root.dataset.orbitZoomed === "true") {
+    if (event.touches.length !== 1 || root.dataset.orbitZoomed === "true" || startsInEditable(event.target)) {
       if (gesture?.lock === "x") release(null, 0);
       gesture = null;
       return;

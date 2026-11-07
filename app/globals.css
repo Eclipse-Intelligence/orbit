@@ -438,8 +438,7 @@ html[data-sidebar-resizing] * {
 @media (pointer: coarse) {
   input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"]),
   textarea,
-  select,
-  .mail-body-editor {
+  select {
     font-size: 16px;
   }
 }
@@ -502,6 +501,23 @@ html[data-sidebar-resizing] * {
 
 .mail-body-fill .mail-body-editor .cm-scroller {
   max-height: none;
+}
+
+@media (pointer: coarse) {
+  .mail-body-editor {
+    font-size: 16px;
+  }
+
+  .mail-body-editor .cm-scroller {
+    max-height: none;
+    overflow: visible;
+  }
+
+  .mail-body-fill,
+  .mail-body-fill .mail-body-editor {
+    flex: 1 0 auto;
+    min-height: auto;
+  }
 }
 
 .mail-body-editor .cm-content {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { lockAxis, resisted, swipeCommit, velocityOf } from "@/components/mail/swipe";
+import { lockAxis, resisted, startsInEditable, swipeCommit, velocityOf } from "@/components/mail/swipe";
 
 describe("mail swipes", () => {
   it("decides the direction on the first movement, favouring sideways for thumb arcs", () => {
@@ -31,5 +31,15 @@ describe("mail swipes", () => {
     assert.equal(resisted(-100, true), -100);
     assert.equal(resisted(-100, false), -12);
     assert.equal(resisted(1000, false), 48);
+  });
+
+  it("leaves touches that start in a text field or the composer to the browser", () => {
+    const element = (editable: boolean) => ({ nodeType: 1, closest: () => (editable ? {} : null) });
+    const text = (parent: unknown) => ({ nodeType: 3, parentElement: parent });
+    assert.equal(startsInEditable(element(true) as unknown as EventTarget), true);
+    assert.equal(startsInEditable(text(element(true)) as unknown as EventTarget), true);
+    assert.equal(startsInEditable(element(false) as unknown as EventTarget), false);
+    assert.equal(startsInEditable(text(null) as unknown as EventTarget), false);
+    assert.equal(startsInEditable(null), false);
   });
 });
