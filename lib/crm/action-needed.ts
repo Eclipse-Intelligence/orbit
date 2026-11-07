@@ -8,7 +8,7 @@ import { onWorkingDay } from "@/lib/crm/task-snooze";
 import { updateTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { addWorkingDays, dayKeyAt, nextWorkingDay, nonWorkingReason, wallClockAt } from "@/lib/crm/working-days";
-import type { Db } from "@/lib/db/pool";
+import { query, type Db } from "@/lib/db/pool";
 import { waitingMail, workingDaysSince, type WaitingNudge, type WaitingReminder, type WaitingReply } from "@/lib/mail/waiting";
 import { appTimeZone, startOfDay, zonedParts } from "@/lib/time";
 import { approvalEmail } from "@/lib/workflows/store";
@@ -242,36 +242,25 @@ export function waitingIn(waiting: Waiting, workspaceId: string, toFile: Iterabl
 
 export async function listWaitingOnOthers(actor: UserActor, now = new Date()): Promise<OthersApproval[]> {
   if (actor.role !== "owner" && actor.role !== "admin") return [];
-  return withActor(actor, async (db) => {
-    const result = await db.query<{
-      id: string;
-      workflow_id: string;
-      workflow_name: string;
-      state: RunState;
-      owner_name: string | null;
-      updated_at: Date;
-    }>(
-      `select r.id, r.workflow_id, w.name as workflow_name, r.state, coalesce(nullif(p.full_name, ''), p.email) as owner_name, r.updated_at
-       from crm.workflow_runs r
-       join crm.workflows w on w.id = r.workflow_id
-       left join crm.profiles p on p.id = r.owner_id
-       where r.workspace_id = $1 and r.owner_id <> $2 and r.status = 'waiting' and r.waiting_for = 'approval'
-       order by r.updated_at
-       limit 50`,
-      [actor.workspaceId, actor.userId],
-    );
-    return result.rows
-      .filter((row) => pastOneWorkingDay(row.updated_at, now))
-      .map((row) => ({
-        id: row.id,
-        workflowId: row.workflow_id,
-        workflowName: row.workflow_name,
-        title: row.state.approval?.title ?? "Approve this step",
-        ownerName: row.owner_name ?? "Someone",
-        createdAt: iso(row.updated_at) ?? new Date(0).toISOString(),
-        waitingDays: Math.max(1, workingDaysSince(row.updated_at, now)),
-      }));
-  });
+  const result = await query<{
+    id: string;
+    workflow_id: string;
+    workflow_name: string;
+    title: string | null;
+    owner_name: string | null;
+    updated_at: Date;
+  }>("select * from private.waiting_approvals_of_others($1, $2)", [actor.userId, actor.workspaceId]);
+  return result.rows
+    .filter((row) => pastOneWorkingDay(row.updated_at, now))
+    .map((row) => ({
+      id: row.id,
+      workflowId: row.workflow_id,
+      workflowName: row.workflow_name,
+      title: row.title ?? "Approve this step",
+      ownerName: row.owner_name ?? "Someone",
+      createdAt: iso(row.updated_at) ?? new Date(0).toISOString(),
+      waitingDays: Math.max(1, workingDaysSince(row.updated_at, now)),
+    }));
 }
 
 export async function snoozeTask(actor: UserActor, id: string, dueAt: string, now = Date.now()) {
