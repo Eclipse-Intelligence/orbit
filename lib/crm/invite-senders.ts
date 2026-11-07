@@ -11,9 +11,9 @@ import { CALENDAR_WRITE_RECONNECT } from "@/lib/microsoft/calendar";
 import { addressHomesInDb } from "@/lib/mail/routing";
 import { grantsCalendarWrite, microsoftConfigured, refreshMicrosoftToken, type MicrosoftToken } from "@/lib/microsoft/oauth";
 
-export const INVITE_NOT_CONNECTED = "Connect Microsoft in Settings › Integrations to send invites.";
+export const INVITE_NOT_CONNECTED = "Connect Microsoft in Settings › Email to send invites.";
 export const INVITE_RECONNECT = CALENDAR_WRITE_RECONNECT;
-export const CALENDAR_NOT_CONNECTED = "Connect Microsoft in Settings › Integrations to add events to your calendar.";
+export const CALENDAR_NOT_CONNECTED = "Connect Microsoft in Settings › Email to add events to your calendar.";
 
 export type InviteSenderOption = {
   address: string;
@@ -65,8 +65,8 @@ type AccountRow = {
 type IdentityRow = { id: string; email: string; hold_calendar_id: string | null };
 
 const CALENDARS_HREF = "/settings/calendars";
-const INTEGRATIONS_HREF = "/settings/integrations";
-const HOLDS_HREF = "/settings/email-templates#sending-addresses";
+const MAILBOX_HREF = "/settings/email";
+const HOLDS_HREF = "/settings/email#sending-addresses";
 
 function iso(value: Date | string | null) {
   return value ? new Date(value).toISOString() : null;
@@ -81,7 +81,7 @@ export function allowInvitesProblem(email: string) {
 }
 
 export function chooseHoldProblem(email: string) {
-  return `Choose a calendar for invite holds from ${email} in Settings › Templates and signatures.`;
+  return `Choose a calendar for invite holds from ${email} in Settings › Email.`;
 }
 
 function reconnectAccountProblem(email: string) {
@@ -206,7 +206,7 @@ export async function readInviteSenders(db: Db, actor: UserActor): Promise<Invit
       kind: "microsoft",
       primary: true,
       problem,
-      fixHref: problem ? INTEGRATIONS_HREF : null,
+      fixHref: problem ? MAILBOX_HREF : null,
       source: mainSource,
       calendar: mainCalendar ? graphCalendar(mainCalendar) : null,
       identityId: null,
@@ -304,7 +304,7 @@ function pickHold(holds: HoldOption[], address: string, chosen: string | null) {
 
 function holdWriteProblem(hold: HoldOption) {
   const write = grantsCalendarWrite(hold.source.scopes);
-  if (hold.source.kind === "connection") return write === false ? { problem: INVITE_RECONNECT, fixHref: INTEGRATIONS_HREF } : null;
+  if (hold.source.kind === "connection") return write === false ? { problem: INVITE_RECONNECT, fixHref: MAILBOX_HREF } : null;
   return write === true ? null : { problem: allowInvitesProblem(hold.source.email), fixHref: allowInvitesHref(hold.source.email) };
 }
 

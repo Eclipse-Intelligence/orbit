@@ -5,6 +5,7 @@ import { after } from "next/server";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { getUserActor } from "@/lib/auth/user";
+import { workspaceActors } from "@/lib/crm/workspaces";
 import { runHeldAgentMail } from "@/lib/agent-mail/held";
 import { startAgentMailJob } from "@/lib/agent-mail/jobs";
 import { saveAgentSenders, setUpAgentMailbox } from "@/lib/agent-mail/mailbox";
@@ -24,11 +25,11 @@ import { CrmError } from "@/lib/crm/errors";
 import { removeGranolaKey, saveGranolaKey } from "@/lib/crm/granola";
 import { saveMeetingLink } from "@/lib/crm/invites";
 import { savePipelineStages, type StageDraft } from "@/lib/crm/pipeline";
-import { draftPersonalContext, savePersonalContext, type PersonalContext, type PersonalDraft } from "@/lib/crm/personal-context";
+import { draftPersonalContext, saveAboutYou, saveYou, type PersonalContext, type PersonalDraft } from "@/lib/crm/personal-context";
 import { saveOtherEmails, type MyEmails } from "@/lib/crm/profile";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import type { PipelineStage } from "@/lib/crm/types";
-import { removeReadwiseToken, saveReadwiseToken } from "@/lib/readwise/keys";
+import { removeReadwiseToken, saveReadwiseToken, setReadwiseWorkspace } from "@/lib/readwise/keys";
 import { removeRecallKey, saveRecallKey } from "@/lib/recall/keys";
 import { syncReaderToKnowledge } from "@/lib/readwise/sync";
 import { archiveWebhook, createWebhook } from "@/lib/crm/webhooks";
@@ -95,7 +96,7 @@ export async function saveOtherEmailsAction(
 export async function saveAboutYouAction(input: unknown): Promise<{ error?: string; field?: string; saved?: PersonalContext }> {
   const user = await requireUser();
   try {
-    const saved = await savePersonalContext(user, input);
+    const saved = await saveAboutYou(user, input);
     revalidatePath(SETTINGS_ROOT, "layout");
     return { saved };
   } catch (error) {
@@ -104,10 +105,23 @@ export async function saveAboutYouAction(input: unknown): Promise<{ error?: stri
   }
 }
 
+export async function saveYouAction(input: unknown): Promise<{ error?: string; field?: string; saved?: PersonalContext }> {
+  const user = await requireUser();
+  try {
+    const saved = await saveYou(user, input);
+    revalidatePath(SETTINGS_ROOT, "layout");
+    return { saved };
+  } catch (error) {
+    if (error instanceof CrmError) return { error: error.message, field: typeof error.details?.field === "string" ? error.details.field : undefined };
+    return { error: "Could not save." };
+  }
+}
+
 export async function draftAboutYouAction(input: { linkedinUrl: string; websiteUrl: string }): Promise<{ error?: string; field?: string; draft?: PersonalDraft }> {
   const user = await requireUser();
   try {
-    return { draft: await draftPersonalContext(user, input, { deadline: Date.now() + 100_000 }) };
+    const multiWorkspace = (await workspaceActors(user).catch(() => [user])).length > 1;
+    return { draft: await draftPersonalContext(user, input, { deadline: Date.now() + 100_000, multiWorkspace }) };
   } catch (error) {
     if (error instanceof CrmError) return { error: error.message, field: typeof error.details?.field === "string" ? error.details.field : undefined };
     return { error: "Could not draft About you. Try again, or fill it in yourself." };
@@ -230,7 +244,7 @@ export async function saveGranolaKeyAction(key: string): Promise<{ error?: strin
   const user = await requireUser();
   try {
     await saveGranolaKey(user, key);
-    revalidatePath(SETTINGS_PATHS.integrations);
+    revalidatePath(SETTINGS_PATHS.connections);
     return {};
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Couldn't save the Granola key." };
@@ -241,7 +255,7 @@ export async function saveReadwiseTokenAction(token: string): Promise<{ error?: 
   const user = await requireUser();
   try {
     await saveReadwiseToken(user, token);
-    revalidatePath(SETTINGS_PATHS.integrations);
+    revalidatePath(SETTINGS_PATHS.connections);
     return {};
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Couldn't save the Readwise token." };
@@ -252,10 +266,21 @@ export async function removeReadwiseTokenAction(): Promise<{ error?: string }> {
   const user = await requireUser();
   try {
     await removeReadwiseToken(user);
-    revalidatePath(SETTINGS_PATHS.integrations);
+    revalidatePath(SETTINGS_PATHS.connections);
     return {};
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Couldn't disconnect Readwise Reader." };
+  }
+}
+
+export async function setReadwiseWorkspaceAction(workspaceId: string): Promise<{ error?: string }> {
+  const user = await requireUser();
+  try {
+    await setReadwiseWorkspace(user, workspaceId);
+    revalidatePath(SETTINGS_PATHS.connections);
+    return {};
+  } catch (error) {
+    return { error: error instanceof CrmError ? error.message : "Couldn't change where Readwise documents go." };
   }
 }
 
@@ -263,7 +288,7 @@ export async function saveRecallKeyAction(key: string): Promise<{ error?: string
   const user = await requireUser();
   try {
     await saveRecallKey(user, key);
-    revalidatePath(SETTINGS_PATHS.integrations);
+    revalidatePath(SETTINGS_PATHS.connections);
     return {};
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Couldn't save the Recall key." };
@@ -274,7 +299,7 @@ export async function removeRecallKeyAction(): Promise<{ error?: string }> {
   const user = await requireUser();
   try {
     await removeRecallKey(user);
-    revalidatePath(SETTINGS_PATHS.integrations);
+    revalidatePath(SETTINGS_PATHS.connections);
     return {};
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Couldn't disconnect Recall." };
@@ -285,7 +310,7 @@ export async function syncReadwiseAction(): Promise<{ error?: string; message?: 
   const user = await requireUser();
   try {
     const result = await syncReaderToKnowledge(user, { full: true, deadline: Date.now() + 50_000 });
-    revalidatePath(SETTINGS_PATHS.integrations);
+    revalidatePath(SETTINGS_PATHS.connections);
     if (result.error) return { error: result.error };
     if (!result.ran) return { message: "A sync is already running." };
     const changed = result.added + result.updated;
@@ -306,7 +331,7 @@ export async function setUpAgentMailboxAction(address: string): Promise<AgentMai
   const user = await requireUser();
   try {
     const result = await setUpAgentMailbox(user, { address });
-    revalidatePath(SETTINGS_PATHS.integrations);
+    revalidatePath(SETTINGS_PATHS.tools);
     return { message: result.message };
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Couldn't set up the agent mailbox." };
@@ -317,7 +342,7 @@ export async function saveAgentSendersAction(senders: { address: string; userId:
   const user = await requireUser();
   try {
     const result = await saveAgentSenders(user, senders);
-    revalidatePath(SETTINGS_PATHS.integrations);
+    revalidatePath(SETTINGS_PATHS.tools);
     return { message: result.message };
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Couldn't save who can give it work." };
@@ -334,7 +359,7 @@ export async function runHeldAgentMailAction(id: string): Promise<AgentMailboxAc
     } catch {
       void work();
     }
-    revalidatePath(SETTINGS_PATHS.integrations);
+    revalidatePath(SETTINGS_PATHS.tools);
     return { message: "Orbit is working on it. The reply comes back in the same thread." };
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Couldn't run that email." };
@@ -345,7 +370,7 @@ export async function removeGranolaKeyAction(): Promise<{ error?: string }> {
   const user = await requireUser();
   try {
     await removeGranolaKey(user);
-    revalidatePath(SETTINGS_PATHS.integrations);
+    revalidatePath(SETTINGS_PATHS.connections);
     return {};
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Couldn't remove the Granola key." };

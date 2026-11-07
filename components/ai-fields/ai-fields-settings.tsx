@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import HoldButton from "@/components/_ui/hold-button";
@@ -12,7 +12,6 @@ import { shortDate } from "@/components/ai-fields/ai-cells";
 import { useHeldChecking } from "@/components/ai-fields/column-menu";
 import { checkFieldAgainAction, removeAiFieldAction, setAiFieldPausedAction, showRuleAsColumnAction } from "@/app/(crm)/ai-fields";
 import { AI_FIELD_KIND_LABELS, AI_FIELD_REFRESH_LABELS, money, MONTHLY_LIMIT_USD, type AiField, type AiFieldStats, type CompanyView } from "@/lib/ai-fields/types";
-import { SETTINGS_PATHS } from "@/lib/settings-nav";
 import { cn } from "@/lib/utils";
 import PlusIcon from "@/public/assets/images/_common/plus.svg";
 
@@ -135,9 +134,9 @@ function FitRow() {
         <span className="text-foreground text-[13.5px] leading-5">
           Fit<span className="text-subtle"> · Score 0 to 4 · Built in</span>
         </span>
-        <span className="caption-style text-subtle leading-[1.4]">How well each company matches your ideal customer. Set up in Integrations, Web checks.</span>
+        <span className="caption-style text-subtle leading-[1.4]">How well each company matches your ideal customer. Set up in Web checks below.</span>
       </span>
-      <Button variant="ghost" size="sm" href={`${SETTINGS_PATHS.integrations}#web-checks`}>
+      <Button variant="ghost" size="sm" href="#web-checks">
         Open
       </Button>
     </li>
@@ -187,6 +186,7 @@ export default function AiFieldsSettings({
   fit,
   configured,
   canAdmin,
+  children,
 }: {
   fields: AiField[];
   stats: AiFieldStats[];
@@ -196,6 +196,7 @@ export default function AiFieldsSettings({
   fit: boolean;
   configured: boolean;
   canAdmin: boolean;
+  children?: ReactNode;
 }) {
   const [dialog, setDialog] = useState<{ open: boolean; field: AiField | null }>({ open: false, field: null });
   const [error, setError] = useState<string | null>(null);
@@ -245,7 +246,7 @@ export default function AiFieldsSettings({
       {rules.length > 0 && (
         <SettingsCard
           title="Tag rules"
-          description="Your tag rules in Integrations, Web checks still tag new companies. Show one as a column to see Yes, No or Unknown for every company, with sources. The rule keeps tagging."
+          description="Your tag rules in Web checks below still tag new companies. Show one as a column to see Yes, No or Unknown for every company, with sources. The rule keeps tagging."
         >
           <ul className="flex flex-col">
             {rules.map((rule) => (
@@ -254,6 +255,7 @@ export default function AiFieldsSettings({
           </ul>
         </SettingsCard>
       )}
+      {children}
       {canAdmin && <AiFieldDialog open={dialog.open} field={dialog.field} views={views} onOpenChange={(open) => setDialog((current) => ({ ...current, open }))} />}
     </SettingsPage>
   );

@@ -35,7 +35,7 @@ import { captureWorkspaceInDb, ownCallAddresses, routeCallInDb } from "@/lib/crm
 import { CrmError } from "@/lib/crm/errors";
 import { canonicalEmail } from "@/lib/crm/normalize";
 import { assertScope, hasScope } from "@/lib/crm/scopes";
-import { workspaceActors } from "@/lib/crm/workspaces";
+import { actorForWorkspace, homeWorkspaceId, workspaceActors } from "@/lib/crm/workspaces";
 import { contactElsewhere, ensureContactInDb } from "@/lib/mail/routing";
 import type { UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { decryptSecret, encryptSecret } from "@/lib/crypto/secret";
@@ -162,22 +162,25 @@ async function workspaceActor(actor: UserActor, api: GranolaClient, apiKey: stri
 
 async function readPersonalKey(actor: UserActor) {
   return withActor(actor, async (db) => {
-    const result = await db.query<{ key_cipher: string; key_hint: string | null }>(
-      "select key_cipher, key_hint from crm.granola_keys where workspace_id = $1 and user_id = $2",
-      [actor.workspaceId, actor.userId],
+    const result = await db.query<{ key_cipher: string; key_hint: string | null; workspace_id: string }>(
+      "select key_cipher, key_hint, workspace_id from crm.granola_keys where user_id = $1 order by updated_at desc limit 1",
+      [actor.userId],
     );
     return result.rows[0] ?? null;
   });
 }
 
-export async function personalGranolaKey(actor: UserActor) {
-  const row = await readPersonalKey(actor);
-  if (!row) return null;
+function decryptKey(cipher: string) {
   try {
-    return decryptSecret(row.key_cipher);
+    return decryptSecret(cipher);
   } catch {
     return null;
   }
+}
+
+export async function personalGranolaKey(actor: UserActor) {
+  const row = await readPersonalKey(actor);
+  return row ? decryptKey(row.key_cipher) : null;
 }
 
 export async function saveGranolaKey(actor: UserActor, key: string, options: GranolaOptions = {}) {
@@ -197,25 +200,26 @@ export async function saveGranolaKey(actor: UserActor, key: string, options: Gra
       { field: "key" },
     );
   }
+  const home = await homeWorkspaceId(actor);
   await withActor(actor, (db) =>
     db.query(
       `insert into crm.granola_keys (workspace_id, user_id, key_cipher, key_hint)
        values ($1, $2, $3, $4)
-       on conflict (workspace_id, user_id)
+       on conflict on constraint granola_keys_user
        do update set key_cipher = excluded.key_cipher, key_hint = excluded.key_hint, updated_at = now()`,
-      [actor.workspaceId, actor.userId, encryptSecret(trimmed), trimmed.slice(-4)],
+      [home, actor.userId, encryptSecret(trimmed), trimmed.slice(-4)],
     ),
   );
 }
 
 export async function removeGranolaKey(actor: UserActor) {
-  await withActor(actor, (db) =>
-    db.query("delete from crm.granola_keys where workspace_id = $1 and user_id = $2", [actor.workspaceId, actor.userId]),
-  );
+  await withActor(actor, (db) => db.query("delete from crm.granola_keys where user_id = $1", [actor.userId]));
 }
 
 export async function getGranolaStatus(actor: UserActor): Promise<GranolaStatus> {
-  const [status, personal] = await Promise.all([getIntegrationStatus(actor, granolaKey(actor)), readPersonalKey(actor)]);
+  const personal = await readPersonalKey(actor);
+  const owner = personal ? await actorForWorkspace(actor, personal.workspace_id) : actor;
+  const status = await getIntegrationStatus(owner, granolaKey(owner));
   return {
     ...status,
     configured: Boolean(granolaApiKey()) || Boolean(personal),
@@ -382,11 +386,12 @@ export async function syncGranola(
     summarised: 0,
     complete: false,
   };
-  const personal = options.actor ? await personalGranolaKey(options.actor).catch(() => null) : null;
+  const personalRow = options.actor ? await readPersonalKey(options.actor).catch(() => null) : null;
+  const personal = personalRow ? decryptKey(personalRow.key_cipher) : null;
   const apiKey = personal ?? granolaApiKey();
   if (!apiKey) return { ...idle, error: GRANOLA_NOT_CONFIGURED };
   const api = client(apiKey, options);
-  let actor = options.actor ?? null;
+  let actor = options.actor && personalRow && personal ? await actorForWorkspace(options.actor, personalRow.workspace_id) : (options.actor ?? null);
   if (!actor) {
     try {
       actor = await resolveGranolaActor(api, apiKey, options.targets);

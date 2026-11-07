@@ -88,7 +88,7 @@ export async function setAddressHomeAction(address: string, workspaceId: string)
   if (!user) return { error: "Sign in again." };
   try {
     await setAddressHome(user, address, workspaceId);
-    revalidatePath(SETTINGS_PATHS.integrations);
+    revalidatePath(SETTINGS_PATHS.email);
     revalidatePath("/capture");
     return {};
   } catch (error) {
@@ -101,7 +101,7 @@ export async function removeDomainRuleAction(domain: string): Promise<{ error?: 
   if (!user) return { error: "Sign in again." };
   try {
     await removeDomainRule(user, domain);
-    revalidatePath(SETTINGS_PATHS.integrations);
+    revalidatePath(SETTINGS_PATHS.email);
     return {};
   } catch {
     return { error: "That didn't save. Try again." };

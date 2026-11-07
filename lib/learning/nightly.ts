@@ -240,9 +240,9 @@ async function learnPersonal(actor: UserActor, since: Date, options: Options): P
       [actor.userId, since, actor.workspaceId],
     );
     const about = await db.query<{ about: string | null; writing: string | null }>(
-      `select coalesce(nullif(btrim(w.about), ''), c.about) as about, c.writing from crm.personal_context c
-       left join crm.personal_context_workspaces w on w.user_id = c.user_id and w.workspace_id = $2
-       where c.user_id = $1`,
+      `select w.about, c.writing from (select $1::uuid as user_id) u
+       left join crm.personal_context c on c.user_id = u.user_id
+       left join crm.personal_context_workspaces w on w.user_id = u.user_id and w.workspace_id = $2`,
       [actor.userId, actor.workspaceId],
     );
     const others = await db.query<{ name: string }>("select name from crm.workspaces where id <> $1 order by name limit 20", [actor.workspaceId]);

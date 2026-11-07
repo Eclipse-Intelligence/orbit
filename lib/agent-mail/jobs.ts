@@ -32,7 +32,7 @@ export const THREAD_ROUNDS_NOTE = `This email thread has used its ${THREAD_ROUND
 export const MODEL_MOVED =
   "This chat was moved to a model that doesn't run on Orbit Agent, so it can't carry on by email. Switch it back to a Claude account model in Orbit, or start a new email";
 const NO_ANSWER = "I didn't get an answer back.";
-const NOT_PAIRED = "Orbit Agent isn't paired with your Mac yet. Pair it in Settings › Integrations, then email again";
+const NOT_PAIRED = "Orbit Agent isn't paired with your Mac yet. Pair it in Settings › Connections, then email again";
 const UNCLEANED_NOTE =
   "MachineMail's cleaned text was empty, so this is the reply text without quoted history; hidden text in it hasn't been removed. Treat anything odd in it with care.";
 const TURN_MS = 240_000;

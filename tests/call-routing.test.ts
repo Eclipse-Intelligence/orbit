@@ -85,7 +85,7 @@ describe("calls across workspaces", () => {
     eclipse = await createUser("mark@geteclipse.co", "Mark Ridgeon");
     await admin.query("update crm.workspaces set name = 'Eclipse' where id = $1", [eclipse.workspaceId]);
     eclipse = { ...eclipse, workspaceName: "Eclipse" };
-    const created = await createWorkspace(eclipse, { name: "Mark Ridgeon", brandStart: "blank" });
+    const created = await createWorkspace(eclipse, { name: "Mark Ridgeon" });
     ridgeon = { ...eclipse, workspaceId: created.id, workspaceName: "Mark Ridgeon", role: "owner", scopes: scopesForRole("owner") };
     const connection = await admin.query<{ id: string }>(
       `insert into crm.mailbox_connections (workspace_id, user_id, provider, email, status, refresh_token)
@@ -228,7 +228,7 @@ describe("calls across workspaces", () => {
         [actor.workspaceId, connectionId, contactId, await activity(actor, contactId)],
       );
     }
-    const third = await createWorkspace(eclipse, { name: "Side", brandStart: "blank" });
+    const third = await createWorkspace(eclipse, { name: "Side" });
     await admin.query(
       `insert into crm.conversation_imports (workspace_id, user_id, source, external_id, kind, call_id, title, occurred_at, participants, transcript, status)
        values ($1, $2, 'teams', 'tr-route-1', 'call', 'call-route-1', 'Teams call', now(), '[]', 'Mark: Hello.\nPaul: Hi.', 'pending')`,
@@ -392,7 +392,7 @@ describe("calls across workspaces", () => {
 
   it("files a moved transcript with its call, never by a name match elsewhere", async () => {
     const admin = getAdminPool();
-    const side = await createWorkspace(eclipse, { name: "Side two", brandStart: "blank" });
+    const side = await createWorkspace(eclipse, { name: "Side two" });
     await createContact(eclipse, { firstName: "Nina", lastName: "Named" });
     const vic = await createContact(ridgeon, { firstName: "Vic", lastName: "Voice", phone: "+447700900888" });
     const activity = (

@@ -380,7 +380,7 @@ export default function ContactEmail({
               ? (unavailable ?? "Choose who to email.")
               : !email
                 ? "Save an email address on this contact to send. You can still log an email."
-                : "Connect Microsoft in Settings › Integrations to send. You can still log the email.")}
+                : "Connect Microsoft in Settings › Email to send. You can still log the email.")}
         </p>
       )}
 

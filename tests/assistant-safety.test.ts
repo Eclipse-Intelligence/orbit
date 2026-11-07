@@ -413,7 +413,7 @@ describe("assistant safety and limits", () => {
     const fresh = await createUser("safety-unconnected@orbit.test", "Sam Lee");
     await assert.rejects(
       sendMessage(fresh, { message: "Hi", model: "chatgpt/gpt-6.1-sol", reasoning: "low", webSearch: false }, () => undefined, { deadline: Date.now() + 60_000 }),
-      /To use your ChatGPT account, connect it in Settings › Integrations/,
+      /To use your ChatGPT account, connect it in Settings › Connections/,
     );
     assert.equal((await listConversations(fresh)).length, 0);
   });

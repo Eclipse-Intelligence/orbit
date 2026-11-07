@@ -48,19 +48,23 @@ const NAV: [string, string, string, string?][] = [
   ["t", "Tasks", "/tasks", "to do"],
   ["i", "Capture", "/capture", "inbox filing to file unfiled people met"],
   ["l", "Calendar", "/calendar", "meetings events"],
-  ["s", "Settings", "/settings", "preferences"],
+  ["s", "Settings", "/settings/general", "preferences"],
 ];
 
 const SETTINGS_SECTIONS: [string, string, string][] = [
-  ["General", "/settings/general", "email addresses meeting link account"],
-  ["Templates and signatures", "/settings/email-templates", "email templates signatures read statuses tracking"],
+  ["General", "/settings/general", "account password linkedin how you write notifications meeting link shortcuts"],
+  ["Email", "/settings/email", "microsoft mailbox outlook addresses sending signatures prepared replies read statuses workspace"],
   ["Calendars", "/settings/calendars", "outlook ics gmail accounts allow sending"],
+  ["Connections", "/settings/connections", "granola readwise recall teams calls linkedin capture ai accounts chatgpt claude orbit agent"],
+  ["Memory", "/settings/memory", "notes learned about you"],
+  ["API tokens", "/settings/api-tokens", "personal tokens mcp claude iphone shortcut"],
+  ["About you", "/settings/about-you", "role about"],
+  ["Email templates", "/settings/email-templates", "email templates"],
   ["Booking page", "/settings/booking-page", "booking scheduling"],
-  ["Integrations", "/settings/integrations", "clickup granola microsoft mailbox connect calls teams"],
+  ["Tools", "/settings/tools", "clickup linear enrichment agent mailbox webhooks agents"],
   ["Activity log", "/settings/activity", "activities audit timeline notes calls who did what"],
   ["Pipeline", "/settings/pipeline", "stages"],
   ["Tags and lifecycles", "/settings/tags", "labels lifecycles"],
-  ["API and webhooks", "/settings/api", "tokens webhooks"],
 ];
 
 export const SHORTCUTS: ShortcutDef[] = [
@@ -68,7 +72,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: "assistant", label: "Ask Orbit", group: "General", combos: [{ key: "o" }], palette: true, keywords: "ai assistant chat ask question" },
   { id: "search-list", label: "Search this list", group: "General", combos: [{ key: "/" }], target: "list-search" },
   { id: "help", label: "Keyboard shortcuts", group: "General", combos: [{ key: "?", shift: true }], palette: true, keywords: "help keys" },
-  { id: "settings", label: "Settings", group: "General", combos: [{ key: ",", mod: true }], href: "/settings", whileTyping: true, palette: true },
+  { id: "settings", label: "Settings", group: "General", combos: [{ key: ",", mod: true }], href: "/settings/general", whileTyping: true, palette: true },
   { id: "sidebar", label: "Collapse or expand the sidebar", group: "General", combos: [{ key: "b", mod: true }], target: "sidebar-toggle" },
   { id: "submit", label: "Submit the form or send", group: "General", combos: [{ key: "Enter", mod: true }], whileTyping: true, inOverlay: true },
   { id: "save", label: "Save", group: "General", combos: [{ key: "s", mod: true }], whileTyping: true, inOverlay: true },

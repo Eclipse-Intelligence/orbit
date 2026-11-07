@@ -1,15 +1,15 @@
 "use client";
 
 import { useEffect } from "react";
-import { useRouter } from "next/navigation";
-import { settingsHashTarget } from "@/lib/settings-nav";
+import { usePathname, useRouter } from "next/navigation";
+import { settingsAnchorRedirect } from "@/lib/settings-nav";
 
 export default function SettingsHashRedirect() {
   const router = useRouter();
+  const pathname = usePathname();
   useEffect(() => {
-    const target = settingsHashTarget(window.location.hash);
-    if (!target) return;
-    router.replace(`${target}${window.location.search}`);
-  }, [router]);
+    const next = settingsAnchorRedirect(pathname, window.location.search, window.location.hash);
+    if (next) router.replace(next);
+  }, [router, pathname]);
   return null;
 }

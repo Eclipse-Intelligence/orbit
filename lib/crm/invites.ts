@@ -985,7 +985,7 @@ type EventVerb = "cancel" | "move" | "answer";
 const NOT_CONNECTED_FOR: Record<EventVerb, string> = {
   cancel: INVITE_NOT_CONNECTED,
   move: INVITE_NOT_CONNECTED,
-  answer: "Connect Microsoft in Settings › Integrations to answer invites.",
+  answer: "Connect Microsoft in Settings › Email to answer invites.",
 };
 
 async function readOwnEvent(actor: UserActor, eventId: string, verb: EventVerb) {

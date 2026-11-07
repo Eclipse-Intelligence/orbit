@@ -180,7 +180,7 @@ function ComposeCard({
       </div>
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
         {accounts.length === 0 ? (
-          <p className="caption-style text-subtle px-4 pb-4">Connect Microsoft in Settings › Integrations to send email from Orbit.</p>
+          <p className="caption-style text-subtle px-4 pb-4">Connect Microsoft in Settings › Email to send email from Orbit.</p>
         ) : (
           <MailComposer
             start={card.start}

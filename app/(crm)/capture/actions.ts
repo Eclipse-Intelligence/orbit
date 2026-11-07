@@ -36,39 +36,40 @@ async function requireHomeUser() {
 
 function refreshRecords() {
   revalidatePath("/capture");
-  revalidatePath(SETTINGS_PATHS.integrations);
+  revalidatePath(SETTINGS_PATHS.email);
+  revalidatePath(SETTINGS_PATHS.connections);
   revalidatePath("/");
   revalidateRecordPages();
   revalidatePath(SETTINGS_PATHS.activity);
   revalidatePath("/contacts");
 }
 
-function integrationsWith(key: "error" | "info", message: string): never {
-  redirect(`${SETTINGS_PATHS.integrations}?${key}=${encodeURIComponent(message)}`);
+function settingsWith(path: string, key: "error" | "info", message: string): never {
+  redirect(`${path}?${key}=${encodeURIComponent(message)}`);
 }
 
 export async function syncInboxAction() {
   const user = await requireUser();
   const result = await syncMailbox(user);
   refreshRecords();
-  if (result.error) integrationsWith("error", result.error);
-  redirect(SETTINGS_PATHS.integrations);
+  if (result.error) settingsWith(SETTINGS_PATHS.email, "error", result.error);
+  redirect(SETTINGS_PATHS.email);
 }
 
 export async function syncCallsAction() {
   const user = await requireHomeUser();
   const result = await syncCalls(user, { force: true });
   refreshRecords();
-  if (result.error) integrationsWith("error", result.error);
-  redirect(SETTINGS_PATHS.integrations);
+  if (result.error) settingsWith(SETTINGS_PATHS.connections, "error", result.error);
+  redirect(SETTINGS_PATHS.connections);
 }
 
 export async function syncCalendarAction() {
   const user = await requireHomeUser();
   const result = await syncCalendar(user, { force: true });
   refreshRecords();
-  if (result.error) integrationsWith("error", result.error);
-  redirect(SETTINGS_PATHS.integrations);
+  if (result.error) settingsWith(SETTINGS_PATHS.email, "error", result.error);
+  redirect(SETTINGS_PATHS.email);
 }
 
 export async function syncGranolaAction() {
@@ -80,8 +81,8 @@ export async function syncGranolaAction() {
     error = actionError(failure).error;
   }
   refreshRecords();
-  if (error) integrationsWith("error", error);
-  redirect(SETTINGS_PATHS.integrations);
+  if (error) settingsWith(SETTINGS_PATHS.connections, "error", error);
+  redirect(SETTINGS_PATHS.connections);
 }
 
 export async function enableGranolaWebhookAction() {
@@ -93,10 +94,10 @@ export async function enableGranolaWebhookAction() {
   try {
     message = (await enableGranolaWebhook(user, `${proto}://${host}`)).message;
   } catch (failure) {
-    integrationsWith("error", actionError(failure).error);
+    settingsWith(SETTINGS_PATHS.connections, "error", actionError(failure).error);
   }
-  revalidatePath(SETTINGS_PATHS.integrations);
-  integrationsWith("info", message);
+  revalidatePath(SETTINGS_PATHS.connections);
+  settingsWith(SETTINGS_PATHS.connections, "info", message);
 }
 
 export async function syncTranscriptsAction() {
@@ -105,8 +106,8 @@ export async function syncTranscriptsAction() {
   const subscription = await ensureTranscriptSubscription(user);
   refreshRecords();
   const error = result.error ?? subscription.error;
-  if (error) integrationsWith("error", error);
-  redirect(SETTINGS_PATHS.integrations);
+  if (error) settingsWith(SETTINGS_PATHS.connections, "error", error);
+  redirect(SETTINGS_PATHS.connections);
 }
 
 type ConversationActionState = { error?: string; ok?: boolean };
@@ -186,7 +187,7 @@ export async function disconnectInboxAction() {
   const user = await requireUser();
   await disconnectMailbox(user);
   revalidatePath("/capture");
-  revalidatePath(SETTINGS_PATHS.integrations);
-  redirect(SETTINGS_PATHS.integrations);
+  revalidatePath(SETTINGS_PATHS.email);
+  redirect(SETTINGS_PATHS.email);
 }
 

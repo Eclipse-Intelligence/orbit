@@ -31,9 +31,10 @@ const SELECT = selectClass;
 const SCOPE_LABELS: Record<MemoryScope, string> = { personal: "You", business: "Business", market: "Market" };
 const SCOPE_HINTS: Record<MemoryScope, string> = {
   personal: "Private to you: your preferences, corrections and how you work, learned from your conversations, decisions and draft edits.",
-  business: "Shared with your workspace: customers, ICP, objections, competitors and what works, learned from deals, calls and replies.",
-  market: "Shared with your workspace: themes, competitor moves and buying signals, learned from the market notes Grok Bot sends.",
+  business: "Shared with your team: customers, ICP, objections, competitors and what works, learned from deals, calls and replies.",
+  market: "Shared with your team: themes, competitor moves and buying signals, learned from the market notes Grok Bot sends.",
 };
+const PERSONAL_HINT_MANY = "Private to you: your preferences, corrections and how you work. A note applies in every workspace or only in the one it names.";
 const KIND_LABELS: Record<LearningKind, string> = { personal: "About you", business: "Business", market: "Market", brief: "Morning brief" };
 const WATCH_LABELS: Record<WatchKind, string> = { topic: "Topic", competitor: "Competitor", person: "Person", account: "Target account", source: "Source" };
 
@@ -264,9 +265,23 @@ function MemoryRow({ memory, showPlace }: { memory: Memory; showPlace: boolean }
   );
 }
 
-export function MemoriesCard({ memories, workspaceName, manyWorkspaces }: { memories: Record<MemoryScope, Memory[]>; workspaceName: string; manyWorkspaces: boolean }) {
+export function MemoriesCard({
+  id,
+  heading,
+  scopes,
+  memories,
+  workspaceName,
+  manyWorkspaces,
+}: {
+  id: string;
+  heading: string;
+  scopes: MemoryScope[];
+  memories: Partial<Record<MemoryScope, Memory[]>>;
+  workspaceName: string;
+  manyWorkspaces: boolean;
+}) {
   const router = useRouter();
-  const [scope, setScope] = useState<MemoryScope>("personal");
+  const [scope, setScope] = useState<MemoryScope>(scopes[0]);
   const [search, setSearch] = useState("");
   const [adding, setAdding] = useState(false);
   const [title, setTitle] = useState("");
@@ -276,7 +291,7 @@ export function MemoriesCard({ memories, workspaceName, manyWorkspaces }: { memo
   const [busy, setBusy] = useState(false);
   const shown = useMemo(() => {
     const words = search.toLowerCase().split(/\s+/).filter(Boolean);
-    return memories[scope].filter((memory) => words.every((word) => `${memory.title} ${memory.body} ${memory.kind}`.toLowerCase().includes(word)));
+    return (memories[scope] ?? []).filter((memory) => words.every((word) => `${memory.title} ${memory.body} ${memory.kind}`.toLowerCase().includes(word)));
   }, [memories, scope, search]);
 
   async function add(event: FormEvent<HTMLFormElement>) {
@@ -297,15 +312,17 @@ export function MemoriesCard({ memories, workspaceName, manyWorkspaces }: { memo
   }
 
   return (
-    <SettingsCard id="memory" title="What Orbit has learned" description={SCOPE_HINTS[scope]}>
+    <SettingsCard id={id} title={heading} description={scope === "personal" && !manyWorkspaces ? SCOPE_HINTS.personal : scope === "personal" ? PERSONAL_HINT_MANY : SCOPE_HINTS[scope]}>
       <div className="flex flex-col gap-3">
-        <div role="group" aria-label="Which notes" className="flex flex-wrap gap-1">
-          {(Object.keys(SCOPE_LABELS) as MemoryScope[]).map((key) => (
-            <Button key={key} variant={scope === key ? "secondary" : "ghost"} size="sm" aria-pressed={scope === key} onClick={() => setScope(key)}>
-              {SCOPE_LABELS[key]} <span className="text-subtle tabular-nums">{memories[key].length}</span>
-            </Button>
-          ))}
-        </div>
+        {scopes.length > 1 && (
+          <div role="group" aria-label="Which notes" className="flex flex-wrap gap-1">
+            {scopes.map((key) => (
+              <Button key={key} variant={scope === key ? "secondary" : "ghost"} size="sm" aria-pressed={scope === key} onClick={() => setScope(key)}>
+                {SCOPE_LABELS[key]} <span className="text-subtle tabular-nums">{(memories[key] ?? []).length}</span>
+              </Button>
+            ))}
+          </div>
+        )}
         <div className="flex flex-wrap gap-2">
           <label className="sr-only" htmlFor="memory-search">
             Search notes
@@ -352,7 +369,9 @@ export function MemoriesCard({ memories, workspaceName, manyWorkspaces }: { memo
             ))}
           </ul>
         ) : (
-          <p className="caption-style text-subtle py-2">{search ? "No notes match." : "Nothing learned here yet. It fills in after the first nightly run, or press Learn now."}</p>
+          <p className="caption-style text-subtle py-2">
+            {search ? "No notes match." : scope === "personal" ? "Nothing learned yet. It fills in after the first nightly run." : "Nothing learned here yet. It fills in after the first nightly run, or press Learn now."}
+          </p>
         )}
       </div>
     </SettingsCard>

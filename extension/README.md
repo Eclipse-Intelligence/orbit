@@ -65,7 +65,7 @@ Add the Chrome Web Store ID to the list once the listing exists.
 
 Saving a new person also adds their company when it isn't in Orbit yet, with the same tags. The board and stage you choose put their company on that board.
 
-The browser can look up and save people and companies, and add tasks, notes and LinkedIn activity in the chosen workspaces. It can't read mail, calendars, docs or assistant chats. Revoke it, or change its workspaces, in Orbit under Settings › Integrations › LinkedIn capture. Hold to disconnect in the panel's menu revokes it too.
+The browser can look up and save people and companies, and add tasks, notes and LinkedIn activity in the chosen workspaces. It can't read mail, calendars, docs or assistant chats. Revoke it, or change its workspaces, in Orbit under Settings › Connections › LinkedIn capture. Hold to disconnect in the panel's menu revokes it too.
 
 ## Publish privately on the Chrome Web Store
 
@@ -80,7 +80,7 @@ The browser can look up and save people and companies, and add tasks, notes and 
    - Remote code: none.
 6. Distribution: set Visibility to Private and choose the company's Google Workspace domain (or a list of trusted testers).
 7. Submit for review.
-8. When it's approved, add the store's extension ID to `LINKEDIN_EXTENSION_ID` and set `LINKEDIN_EXTENSION_URL` to the listing's address, so Settings › Integrations shows Get the extension.
+8. When it's approved, add the store's extension ID to `LINKEDIN_EXTENSION_ID` and set `LINKEDIN_EXTENSION_URL` to the listing's address, so Settings › Connections shows Get the extension.
 
 Bump `version` in `extension/version.json` before each new upload.
 

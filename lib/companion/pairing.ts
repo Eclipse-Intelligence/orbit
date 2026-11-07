@@ -141,7 +141,7 @@ function sinceText(iso: string, now: number) {
 export async function companionOfflineMessage(actor: UserActor, now = Date.now()) {
   const companions = await listCompanions(actor);
   if (companions.length === 0) {
-    return "To use your Claude account, pair your Mac in Settings › Integrations. It takes one command in Terminal.";
+    return "To use your Claude account, pair your Mac in Settings › Connections. It takes one command in Terminal.";
   }
   const latest = companions
     .filter((companion) => companion.lastSeenAt)

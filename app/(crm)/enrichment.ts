@@ -20,7 +20,8 @@ export async function saveEnrichmentSettingsAction(input: Partial<EnrichmentSett
     if (input.webSignals === true) await ensureDefaultSignals(user);
     if ((saved.webTags && !before.webTags) || (saved.webGaps && !before.webGaps)) await markAllDue(user);
     if (saved.webIcp && !saved.icpText && (await icpProfile(user))) return await getEnrichmentSettings(user);
-    revalidatePath(SETTINGS_PATHS.integrations);
+    revalidatePath(SETTINGS_PATHS.tools);
+    revalidatePath(SETTINGS_PATHS.aiFields);
     return saved;
   } catch (error) {
     if (error instanceof CrmError) return { error: error.message };
@@ -88,7 +89,7 @@ export async function saveWebCheckAction(input: { id?: string; kind: "tag" | "si
   if (!user) return { error: "Sign in again." };
   try {
     const check = await saveWebCheck(user, input);
-    revalidatePath(SETTINGS_PATHS.integrations);
+    revalidatePath(SETTINGS_PATHS.aiFields);
     return { check };
   } catch (error) {
     return failure(error, "Couldn't save the check.");
@@ -100,7 +101,7 @@ export async function removeWebCheckAction(id: string): Promise<{ removed: true 
   if (!user) return { error: "Sign in again." };
   try {
     await removeWebCheck(user, id);
-    revalidatePath(SETTINGS_PATHS.integrations);
+    revalidatePath(SETTINGS_PATHS.aiFields);
     return { removed: true };
   } catch (error) {
     return failure(error, "Couldn't remove the check.");

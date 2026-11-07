@@ -25,6 +25,7 @@ async function act<T>(fallback: string, work: (user: Awaited<ReturnType<typeof r
   try {
     const result = await work(user);
     revalidatePath(SETTINGS_PATHS.learning);
+    revalidatePath(SETTINGS_PATHS.memory);
     return { result };
   } catch (error) {
     return failure(error, fallback);

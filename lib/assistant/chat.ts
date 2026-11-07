@@ -971,8 +971,8 @@ export async function sendMessage(
     if (connected && !connected.includes(picked.source)) {
       throw new AssistantError(
         picked.source === "claude"
-          ? "To use your Claude account, pair your Mac in Settings › Integrations, or pick one of Orbit's models."
-          : "To use your ChatGPT account, connect it in Settings › Integrations, or pick one of Orbit's models.",
+          ? "To use your Claude account, pair your Mac in Settings › Connections, or pick one of Orbit's models."
+          : "To use your ChatGPT account, connect it in Settings › Connections, or pick one of Orbit's models.",
       );
     }
   }

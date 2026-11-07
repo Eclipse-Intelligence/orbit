@@ -6,13 +6,15 @@ export const PERSONAL_LIMITS = {
   url: 300,
 } as const;
 
-export type PersonalContextInput = {
+export type AboutYouInput = {
   jobTitle: string;
   about: string;
+};
+
+export type YouInput = {
+  linkedinUrl: string;
   interests: string;
   writing: string;
-  linkedinUrl: string;
-  websiteUrl: string;
 };
 
 export function normaliseWebsite(value: string) {

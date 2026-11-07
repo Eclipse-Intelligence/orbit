@@ -302,7 +302,7 @@ describe("choosing who sends an invite", () => {
     eclipse = await createUser(MAIN, "Mark Ridgeon");
     await admin.query("update crm.workspaces set name = 'Eclipse' where id = $1", [eclipse.workspaceId]);
     eclipse = { ...eclipse, workspaceName: "Eclipse" };
-    const created = await createWorkspace(eclipse, { name: "Mark Ridgeon", brandStart: "blank" });
+    const created = await createWorkspace(eclipse, { name: "Mark Ridgeon" });
     ridgeon = { ...eclipse, workspaceId: created.id, workspaceName: "Mark Ridgeon", role: "owner", scopes: scopesForRole("owner") };
     await saveMailbox(eclipse, {
       email: MAIN,
@@ -776,7 +776,7 @@ describe("choosing who sends an invite", () => {
     await getAdminPool().query("update crm.send_identities set email = 'mark@unrelated.org' where id = $1", [identityId]);
     const sender = (await getInviteSetup(ridgeon)).senders.find((item) => item.address === "mark@unrelated.org")!;
     assert.equal(sender.problem, chooseHoldProblem("mark@unrelated.org"));
-    assert.equal(sender.fixHref, "/settings/email-templates#sending-addresses");
+    assert.equal(sender.fixHref, "/settings/email#sending-addresses");
     await setHoldCalendar(eclipse, identityId, mainCalendar);
     assert.equal((await getInviteSetup(ridgeon)).senders.find((item) => item.address === "mark@unrelated.org")?.problem, null);
   });

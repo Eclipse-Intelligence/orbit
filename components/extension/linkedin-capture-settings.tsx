@@ -80,6 +80,7 @@ function BrowserRow({ browser, workspaces }: { browser: BrowserRowView; workspac
   const [editing, setEditing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
+  const showWorkspaces = workspaces.length > 1 || browser.workspaces.length === 0;
   return (
     <li className="border-border flex flex-wrap items-center justify-between gap-3 border-t py-3 first:border-t-0 first:pt-0 last:pb-0">
       <span className="flex min-w-0 flex-col gap-1">
@@ -91,18 +92,22 @@ function BrowserRow({ browser, workspaces }: { browser: BrowserRowView; workspac
           </span>
           <span>· Connected {browser.connectedLabel}</span>
         </span>
-        <span className="flex flex-wrap items-center gap-1.5 pt-0.5">
-          {browser.workspaces.length > 0 ? (
-            browser.workspaces.map((workspace) => <WorkspaceChip key={workspace.id} workspace={workspace} />)
-          ) : (
-            <span className="caption-style text-warning">No workspaces. Choose at least one.</span>
-          )}
-        </span>
+        {showWorkspaces && (
+          <span className="flex flex-wrap items-center gap-1.5 pt-0.5">
+            {browser.workspaces.length > 0 ? (
+              browser.workspaces.map((workspace) => <WorkspaceChip key={workspace.id} workspace={workspace} />)
+            ) : (
+              <span className="caption-style text-warning">No workspaces. Choose at least one.</span>
+            )}
+          </span>
+        )}
       </span>
       <span className="flex items-center gap-1">
-        <Button variant="ghost" size="sm" aria-expanded={editing} disabled={pending} onClick={() => setEditing((value) => !value)}>
-          Workspaces<span className="sr-only"> for {browser.name}</span>
-        </Button>
+        {showWorkspaces && (
+          <Button variant="ghost" size="sm" aria-expanded={editing} disabled={pending} onClick={() => setEditing((value) => !value)}>
+            Workspaces<span className="sr-only"> for {browser.name}</span>
+          </Button>
+        )}
         <HoldButton
           disabled={pending}
           onConfirm={() =>

@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { Renderer } from "@/lib/browserbase";
 import { withActor } from "@/lib/crm/context";
 import { CrmError, isPgError } from "@/lib/crm/errors";
-import { isUuid, recordAudit } from "@/lib/crm/mutate";
+import { recordAudit } from "@/lib/crm/mutate";
 import type { Provenance, UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
 import { icpHashOf } from "@/lib/enrichment/settings";
@@ -182,39 +182,6 @@ export async function setEclipseTools(actor: UserActor, enabled: unknown, proven
       });
     }
     return mapBrand(actor.workspaceId, actor.workspaceName, await readBrand(db, actor.workspaceId));
-  });
-}
-
-export async function copyBrandProfile(
-  actor: UserActor,
-  fromWorkspaceId: string,
-  toWorkspaceId: string,
-  provenance: Provenance = { operation: "copy_brand_profile", source: "web" },
-) {
-  if (!isUuid(fromWorkspaceId) || !isUuid(toWorkspaceId)) throw new CrmError("not_found", "That workspace isn't one of yours.", 404);
-  if (fromWorkspaceId === toWorkspaceId) throw new CrmError("invalid_input", "Choose a different workspace to copy from.", 400);
-  return withActor(actor, async (db) => {
-    const visible = await db.query("select id from crm.workspaces where id = any($1::uuid[])", [[fromWorkspaceId, toWorkspaceId]]);
-    if (visible.rowCount !== 2) throw new CrmError("not_found", "That workspace isn't one of yours.", 404);
-    const source = mapBrand(fromWorkspaceId, "", await readBrand(db, fromWorkspaceId));
-    const copied = source.playbook || source.outreachBrief;
-    await db
-      .query(
-        `insert into crm.workspace_brands (workspace_id, website, what_you_sell, tone, playbook, outreach_brief, playbook_updated_at, updated_by)
-         values ($1, $2, $3, $4, $5, $6, $7, $8)
-         on conflict (workspace_id) do update set
-           website = excluded.website, what_you_sell = excluded.what_you_sell, tone = excluded.tone,
-           playbook = excluded.playbook, outreach_brief = excluded.outreach_brief, playbook_updated_at = excluded.playbook_updated_at,
-           updated_by = excluded.updated_by`,
-        [toWorkspaceId, source.website, source.whatYouSell, source.tone, source.playbook, source.outreachBrief, copied ? new Date() : null, actor.userId],
-      )
-      .catch(rlsRefused);
-    if (source.whoItsFor) await writeIdealCustomer(db, toWorkspaceId, source.whoItsFor);
-    await recordAudit(db, { ...actor, workspaceId: toWorkspaceId }, "workspace_brand.updated", "workspace_brand", toWorkspaceId, provenance, {
-      copiedFrom: fromWorkspaceId,
-      after: profileFields(source),
-    });
-    return mapBrand(toWorkspaceId, "", await readBrand(db, toWorkspaceId));
   });
 }
 

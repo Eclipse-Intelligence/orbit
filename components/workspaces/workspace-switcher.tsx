@@ -37,7 +37,6 @@ export default function WorkspaceSwitcher({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const canCreate = workspaces.some((item) => item.role === "owner");
-  const current = workspaces.find((item) => item.id === currentId);
   const waiting = workspaces.filter((item) => item.waiting && item.id !== currentId);
 
   async function choose(id: string) {
@@ -124,8 +123,6 @@ export default function WorkspaceSwitcher({
         <NewWorkspaceDialog
           open={creating}
           onOpenChange={setCreating}
-          currentId={current?.id ?? currentId}
-          currentName={current?.name ?? currentName}
           defaultName={viewerName}
           onCreated={() => window.location.assign(sectionIndex(pathname))}
         />

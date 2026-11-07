@@ -38,7 +38,7 @@ export async function pollChatGptAction() {
   const user = await requireUser();
   try {
     const result = await pollChatGptLogin(user);
-    if (result.status === "connected") revalidatePath(SETTINGS_PATHS.integrations);
+    if (result.status === "connected") revalidatePath(SETTINGS_PATHS.connections);
     return result;
   } catch (error) {
     return { status: "failed" as const, ...failed(error, "ChatGPT sign-in failed. Try again.") };
@@ -49,7 +49,7 @@ export async function disconnectAiAccountAction(provider: string): Promise<{ err
   const user = await requireUser();
   try {
     await disconnectAiAccount(user, provider);
-    revalidatePath(SETTINGS_PATHS.integrations);
+    revalidatePath(SETTINGS_PATHS.connections);
     return {};
   } catch (error) {
     return failed(error, "Couldn't disconnect that account.");
@@ -75,7 +75,7 @@ export async function revokeCompanionAction(id: string): Promise<{ error?: strin
   const user = await requireUser();
   try {
     await revokeCompanion(user, id);
-    revalidatePath(SETTINGS_PATHS.integrations);
+    revalidatePath(SETTINGS_PATHS.connections);
     return {};
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Couldn't remove that Mac." };

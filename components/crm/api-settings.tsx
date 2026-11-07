@@ -18,7 +18,7 @@ export default function ApiSettings({
   return (
     <SettingsCard
       id="agents"
-      title="Agents and API tokens"
+      title="Agents"
       description="Agents use a token to read and update Orbit over REST or MCP. Each token is limited to the scopes it was issued with."
     >
       <dl className="flex flex-col">
@@ -72,7 +72,7 @@ export default function ApiSettings({
           Orbit matches the person by email and the company by domain, then
           suggests a follow-up task when the company has no open task. To file
           Outlook mail automatically and send from a contact, connect Microsoft
-          in Settings › Integrations.
+          in Settings › Email.
         </p>
       </SettingsDisclosure>
     </SettingsCard>

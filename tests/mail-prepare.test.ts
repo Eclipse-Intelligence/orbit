@@ -225,7 +225,7 @@ describe("prepared replies and automatic reminders", () => {
 
   it("mirrors the sender, uses learned writing notes for this workspace and redrafts spelled out figures", async () => {
     await setMailHelp(owner, { prepareReplies: true, autoRemindDays: null });
-    const elsewhere = await createWorkspace(owner, { name: "Mark Ridgeon", brandStart: "blank" });
+    const elsewhere = await createWorkspace(owner, { name: "Mark Ridgeon" });
     const note = (workspaceId: string, kind: string, title: string, everywhere: boolean | null) =>
       getAdminPool().query("insert into crm.memories (workspace_id, user_id, scope, kind, title, body, all_workspaces) values ($1, $2, 'personal', $3, $4, $4, $5)", [
         workspaceId,

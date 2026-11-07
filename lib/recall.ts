@@ -9,7 +9,7 @@ const RETRY_WAIT_MS = 1_500;
 const MAX_RETRY_WAIT_MS = 10_000;
 const UNREADABLE = "Recall sent a reply Orbit couldn't read. Try again in a few minutes.";
 export const RECALL_REJECTED =
-  "Recall rejected the key. It may have expired or been revoked. Create a new key in Recall (Settings, API & MCP) and connect it again in Orbit's Settings, Integrations.";
+  "Recall rejected the key. It may have expired or been revoked. Create a new key in Recall (Settings, API & MCP) and connect it again in Orbit's Settings, Connections.";
 
 export type RecallChunk = { chunk_id?: string; content?: string; source?: string; timestamps?: string[] };
 

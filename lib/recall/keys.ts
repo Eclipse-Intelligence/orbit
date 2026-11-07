@@ -1,10 +1,11 @@
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import type { UserActor } from "@/lib/crm/types";
+import { homeWorkspaceId } from "@/lib/crm/workspaces";
 import { decryptSecret, encryptSecret } from "@/lib/crypto/secret";
 import { recallClient } from "@/lib/recall";
 
-export const RECALL_NOT_CONNECTED = "Recall isn't connected. Add your Recall API key in Settings, Integrations.";
+export const RECALL_NOT_CONNECTED = "Recall isn't connected. Add your Recall API key in Settings, Connections.";
 export const TAG_PROBE_EVERY_MS = 24 * 60 * 60 * 1000;
 
 export type RecallTagSupport = "names" | "ids" | "unknown";
@@ -33,8 +34,8 @@ export async function readRecallKey(actor: UserActor) {
   return withActor(actor, async (db) => {
     const result = await db.query<RecallKeyRow>(
       `select id, key_cipher, key_hint, connected_at, tags_path, tags_checked_at
-       from crm.recall_keys where workspace_id = $1 and user_id = $2`,
-      [actor.workspaceId, actor.userId],
+       from crm.recall_keys where user_id = $1`,
+      [actor.userId],
     );
     return result.rows[0] ?? null;
   });
@@ -62,11 +63,7 @@ export async function requireRecallKey(actor: UserActor) {
 
 export async function saveTagProbe(actor: UserActor, path: string | null) {
   await withActor(actor, (db) =>
-    db.query("update crm.recall_keys set tags_path = $3, tags_checked_at = now() where workspace_id = $1 and user_id = $2", [
-      actor.workspaceId,
-      actor.userId,
-      path,
-    ]),
+    db.query("update crm.recall_keys set tags_path = $2, tags_checked_at = now() where user_id = $1", [actor.userId, path]),
   );
 }
 
@@ -98,20 +95,21 @@ export async function saveRecallKey(actor: UserActor, apiKey: string, options: {
   try {
     probe = await api.probeTags();
   } catch {}
+  const home = await homeWorkspaceId(actor);
   await withActor(actor, (db) =>
     db.query(
       `insert into crm.recall_keys (workspace_id, user_id, key_cipher, key_hint, tags_path, tags_checked_at)
        values ($1, $2, $3, $4, $5::text, case when $6::boolean then now() else null end)
-       on conflict (workspace_id, user_id)
+       on conflict on constraint recall_keys_user
        do update set key_cipher = excluded.key_cipher, key_hint = excluded.key_hint, connected_at = now(),
          tags_path = excluded.tags_path, tags_checked_at = excluded.tags_checked_at`,
-      [actor.workspaceId, actor.userId, encryptSecret(trimmed), trimmed.slice(-4), probe?.path ?? null, probe !== null],
+      [home, actor.userId, encryptSecret(trimmed), trimmed.slice(-4), probe?.path ?? null, probe !== null],
     ),
   );
 }
 
 export async function removeRecallKey(actor: UserActor) {
-  await withActor(actor, (db) => db.query("delete from crm.recall_keys where workspace_id = $1 and user_id = $2", [actor.workspaceId, actor.userId]));
+  await withActor(actor, (db) => db.query("delete from crm.recall_keys where user_id = $1", [actor.userId]));
 }
 
 export async function recallStatus(actor: UserActor): Promise<RecallStatus> {

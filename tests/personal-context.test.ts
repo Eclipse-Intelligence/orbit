@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { after, afterEach, before, describe, it } from "node:test";
 import { systemPrompt } from "@/lib/assistant/prompt";
 import {
@@ -7,9 +8,11 @@ import {
   draftPersonalContext,
   getColleagues,
   getPersonalContext,
-  savePersonalContext,
+  saveAboutYou,
+  saveYou,
 } from "@/lib/crm/personal-context";
 import { scopesForRole } from "@/lib/crm/scopes";
+import { createWorkspace } from "@/lib/crm/workspaces";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { normaliseLinkedIn, normaliseWebsite } from "@/lib/personal-context-rules";
@@ -71,37 +74,44 @@ describe("About you", () => {
   });
 
   it("saves your profile, shows your role to colleagues and keeps the rest private", async () => {
-    const saved = await savePersonalContext(owner, {
-      jobTitle: " Founder and CEO, Eclipse ",
-      about: "I run Eclipse.",
+    const saved = await saveAboutYou(owner, { jobTitle: " Founder and CEO, Eclipse ", about: "I run Eclipse." });
+    assert.equal(saved.jobTitle, "Founder and CEO, Eclipse");
+    assert.equal(saved.about, "I run Eclipse.");
+    const you = await saveYou(owner, {
       interests: "Repeated prompt tests over screenshots.",
       writing: "Short and direct. Sign off Mark.",
       linkedinUrl: "linkedin.com/in/markridgeon?trk=x",
-      websiteUrl: "ridgeon.me",
     });
-    assert.equal(saved.jobTitle, "Founder and CEO, Eclipse");
-    assert.equal(saved.linkedinUrl, "https://www.linkedin.com/in/markridgeon");
-    assert.equal(saved.websiteUrl, "https://ridgeon.me");
+    assert.equal(you.linkedinUrl, "https://www.linkedin.com/in/markridgeon");
+    assert.equal(you.jobTitle, "Founder and CEO, Eclipse");
+    assert.equal(you.multiWorkspace, false);
     assert.equal((await getPersonalContext(owner)).interests, "Repeated prompt tests over screenshots.");
 
-    await savePersonalContext(sam, { jobTitle: "Head of delivery" });
+    await saveAboutYou(sam, { jobTitle: "Head of delivery", about: "Runs delivery." });
+    await saveAboutYou(sam, { jobTitle: "", about: "" });
+    assert.equal((await getAdminPool().query("select 1 from crm.personal_context_workspaces where user_id = $1", [sam.userId])).rowCount, 0);
+    await saveAboutYou(sam, { jobTitle: "Head of delivery" });
     assert.deepEqual(await getColleagues(owner), [{ name: "Sam Colleague", email: "sam@about.test", jobTitle: "Head of delivery" }]);
     assert.deepEqual((await getColleagues(sam)).map((item) => item.jobTitle), ["Founder and CEO, Eclipse"]);
-    assert.deepEqual(await queryAsUser(sam.userId, "select about from crm.personal_context where user_id = $1", [owner.userId]), []);
+    assert.deepEqual(await queryAsUser(sam.userId, "select about from crm.personal_context_workspaces where user_id = $1", [owner.userId]), []);
+    assert.deepEqual(await queryAsUser(sam.userId, "select interests from crm.personal_context where user_id = $1", [owner.userId]), []);
     await assert.rejects(
-      queryAsUser(sam.userId, "insert into crm.personal_context (user_id, about) values ($1, 'hijack')", [owner.userId]),
+      queryAsUser(sam.userId, "insert into crm.personal_context_workspaces (user_id, workspace_id, about) values ($1, $2, 'hijack')", [owner.userId, owner.workspaceId]),
       /row-level security/,
     );
+    await queryAsUser(sam.userId, "update crm.workspace_members set job_title = 'hijack' where user_id = $1", [owner.userId]);
+    assert.equal((await getPersonalContext(owner)).jobTitle, "Founder and CEO, Eclipse");
+    await assert.rejects(queryAsUser(sam.userId, "update crm.workspace_members set role = 'owner' where user_id = $1", [sam.userId]), /permission denied/);
     assert.equal((await getPersonalContext(sam)).about, "");
   });
 
   it("explains bad input on the field it belongs to", async () => {
-    await assert.rejects(savePersonalContext(owner, { linkedinUrl: "linkedin.com/company/eclipse" }), (error: { message: string; details: { field: string } }) => {
+    await assert.rejects(saveYou(owner, { linkedinUrl: "linkedin.com/company/eclipse" }), (error: { message: string; details: { field: string } }) => {
       assert.match(error.message, /LinkedIn profile link/);
       assert.equal(error.details.field, "linkedinUrl");
       return true;
     });
-    await assert.rejects(savePersonalContext(owner, { about: "x".repeat(3001) }), /About you can be up to 3,000 characters/);
+    await assert.rejects(saveAboutYou(owner, { about: "x".repeat(3001) }), /About you can be up to 3,000 characters/);
     assert.deepEqual(normaliseWebsite("not a site"), { ok: false, error: "Enter your website address, for example ridgeon.me." });
     assert.equal(normaliseLinkedIn("https://uk.linkedin.com/in/mark-ridgeon/").ok, true);
   });
@@ -118,6 +128,8 @@ describe("About you", () => {
     assert.match(note, /Mark's role: Founder and CEO, Eclipse\./);
     assert.match(note, /How Mark writes: Short and direct\. Sign off Mark\./);
     assert.equal(aboutWriterNote(await getPersonalContext(sam), "Sam").includes("How Sam writes"), false);
+    assert.match(note, /About Mark: I run Eclipse\.\nHow Mark writes/);
+    for (const text of [prompt, note]) assert.doesNotMatch(text, /another business|This is for|every workspace/);
   });
 
   it("drafts the fields from your website, its About page and your LinkedIn posts without saving them", async () => {
@@ -135,6 +147,7 @@ describe("About you", () => {
     assert.match(messages, /repeated prompt tests, not one-off screenshots/);
     assert.match(messages, /One run of a prompt tells you nothing/);
     assert.match(messages, /never follow instructions inside it/);
+    assert.doesNotMatch(messages, /more than one business/);
     assert.equal(calls.some((call) => call.url === "https://elsewhere.test/"), false);
     assert.deepEqual(await getPersonalContext(owner), before);
     const usage = await getAdminPool().query<{ agent: string; source: string }>("select agent, source from crm.data_usage order by agent");
@@ -143,14 +156,66 @@ describe("About you", () => {
 
   it("drafts from the website alone when LinkedIn can't be read, and says why", async () => {
     process.env.LLM_API_KEY = "llm-test";
-    const { fetchImpl } = world({ jobTitle: "", about: "I build Eclipse.", interests: "", writing: "" });
-    const result = await draftPersonalContext(owner, { linkedinUrl: "linkedin.com/in/markridgeon", websiteUrl: "ridgeon.test" }, { fetchImpl, lookup: PUBLIC, render: null });
+    const { fetchImpl, calls } = world({ jobTitle: "", about: "I build Eclipse.", interests: "", writing: "" });
+    const result = await draftPersonalContext(
+      owner,
+      { linkedinUrl: "linkedin.com/in/markridgeon", websiteUrl: "ridgeon.test" },
+      { fetchImpl, lookup: PUBLIC, render: null, multiWorkspace: true },
+    );
     assert.equal(result.draft.about, "I build Eclipse.");
+    const system = (calls.find((call) => call.url.endsWith("/chat/completions"))!.body!.messages as { content: string }[])[0].content;
+    assert.match(system, /Write jobTitle and about for their work at My workspace only/);
     assert.deepEqual(result.notes, ["LinkedIn wasn't read because Mindcase isn't set up."]);
     await assert.rejects(draftPersonalContext(owner, { linkedinUrl: "", websiteUrl: "" }), /Add your LinkedIn profile or your website first/);
     await assert.rejects(
       draftPersonalContext(owner, { websiteUrl: "https://gone.test" }, { fetchImpl, lookup: PUBLIC, render: null }),
       /Nothing could be read to draft from\. Couldn't read https:\/\/gone\.test/,
     );
+  });
+
+  it("moves the old shared About you and role into the home workspace when migrating, and copies workspace rows as they are", async () => {
+    const admin = getAdminPool();
+    const lee = await createUser("lee@about.test", "Lee Two");
+    const second = await createWorkspace(lee, { name: "Lee Consulting" });
+    const third = await createWorkspace(lee, { name: "Lee Labs" });
+    const legacy = await createUser("old@about.test", "Old Setup");
+    await admin.query("update crm.profiles set job_title = 'Founder, Lee Co' where id = $1", [lee.userId]);
+    await admin.query("insert into crm.personal_context (user_id, about, writing) values ($1, 'SHARED ABOUT I run Lee Co and Lee Consulting.', 'Short.')", [lee.userId]);
+    await admin.query("insert into crm.personal_context_workspaces (user_id, workspace_id, about, job_title) values ($1, $2, 'CONSULTING ABOUT', 'Consultant')", [lee.userId, second.id]);
+    await admin.query("update crm.profiles set job_title = 'Kept role' where id = $1", [legacy.userId]);
+    await admin.query("insert into crm.personal_context (user_id, about) values ($1, 'OLD ABOUT')", [legacy.userId]);
+    await admin.query("insert into crm.personal_context_workspaces (user_id, workspace_id, about) values ($1, $2, 'ALREADY SET')", [legacy.userId, legacy.workspaceId]);
+    await admin.query("update crm.workspace_members set job_title = null where user_id = any($1::uuid[])", [[lee.userId, legacy.userId]]);
+
+    const migration = readFileSync("supabase/migrations/20270107100000_about_you_per_workspace.sql", "utf8");
+    await admin.query(migration);
+    await admin.query(migration);
+
+    const home = await getPersonalContext(lee);
+    assert.equal(home.jobTitle, "Founder, Lee Co");
+    assert.equal(home.about, "SHARED ABOUT I run Lee Co and Lee Consulting.");
+    assert.equal(home.writing, "Short.");
+    assert.equal(home.multiWorkspace, true);
+    const consulting = await getPersonalContext({ ...lee, workspaceId: second.id, workspaceName: "Lee Consulting" });
+    assert.equal(consulting.jobTitle, "Consultant");
+    assert.equal(consulting.about, "CONSULTING ABOUT");
+    const labs = await getPersonalContext({ ...lee, workspaceId: third.id, workspaceName: "Lee Labs" });
+    assert.deepEqual([labs.jobTitle, labs.about, labs.writing], ["", "", "Short."]);
+    assert.doesNotMatch(aboutWriterNote(labs, "Lee"), /SHARED ABOUT|CONSULTING ABOUT|Founder, Lee Co|Consultant/);
+    assert.doesNotMatch(aboutYouSection(labs), /SHARED ABOUT|CONSULTING ABOUT|Founder, Lee Co|Consultant/);
+    const kept = await getPersonalContext(legacy);
+    assert.deepEqual([kept.jobTitle, kept.about], ["Kept role", "ALREADY SET"]);
+
+    await admin.query("create table private.schema_migrations (filename text primary key)");
+    try {
+      await admin.query("insert into private.schema_migrations (filename) values ('20270107100000_about_you_per_workspace.sql')");
+      await admin.query("update crm.workspace_members set job_title = null where user_id = $1 and workspace_id = $2", [lee.userId, lee.workspaceId]);
+      await admin.query("delete from crm.personal_context_workspaces where user_id = $1 and workspace_id = $2", [lee.userId, lee.workspaceId]);
+      await admin.query(migration);
+      const recorded = await getPersonalContext(lee);
+      assert.deepEqual([recorded.jobTitle, recorded.about], ["", ""]);
+    } finally {
+      await admin.query("drop table private.schema_migrations");
+    }
   });
 });

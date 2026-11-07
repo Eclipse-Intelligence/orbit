@@ -158,8 +158,8 @@ export function readerParts(text: string, size = READER_PART_CHARS) {
 async function storedHighlights(actor: UserActor, documentId: string) {
   return withActor(actor, async (db) => {
     const result = await db.query<{ highlights: Record<string, { text: string; note: string | null; updatedAt: string | null }> }>(
-      "select highlights from crm.readwise_documents where workspace_id = $1 and user_id = $2 and document_id = $3",
-      [actor.workspaceId, actor.userId, documentId],
+      "select highlights from crm.readwise_documents where user_id = $1 and document_id = $2 order by updated_at desc limit 1",
+      [actor.userId, documentId],
     );
     return result.rows[0]?.highlights ?? {};
   });

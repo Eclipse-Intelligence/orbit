@@ -71,9 +71,9 @@ function formErrorHref(message: string, sender: SenderOption | null) {
   if (sender?.fixHref && message === sender.problem) return sender.fixHref;
   const allow = /^Allow invites for (\S+) in Settings/.exec(message);
   if (allow) return `/api/microsoft/connect?purpose=send_account&hint=${encodeURIComponent(allow[1])}`;
-  if (/^Choose a calendar for invite holds/.test(message)) return "/settings/email-templates#sending-addresses";
+  if (/^Choose a calendar for invite holds/.test(message)) return "/settings/email#sending-addresses";
   if (/in Settings › Calendars/.test(message)) return "/settings/calendars";
-  if (/Reconnect Microsoft|Connect Microsoft/.test(message)) return "/settings/integrations";
+  if (/Reconnect Microsoft|Connect Microsoft/.test(message)) return "/settings/email";
   return null;
 }
 
@@ -98,8 +98,8 @@ function ConnectionNotice({ setup, sender, personal }: { setup: InviteSetup; sen
   const goal = personal ? "add events" : "send invites";
   return (
     <div role="alert" className="border-danger/40 flex flex-col items-start gap-1 rounded-lg border px-3 py-2.5">
-      <Button variant="link" size="none" className="text-danger text-left whitespace-normal" href="/settings/integrations">
-        {setup.connected ? `Reconnect Microsoft to ${goal}` : `Connect Microsoft in Settings › Integrations to ${goal}`}
+      <Button variant="link" size="none" className="text-danger text-left whitespace-normal" href="/settings/email">
+        {setup.connected ? `Reconnect Microsoft to ${goal}` : `Connect Microsoft in Settings › Email to ${goal}`}
       </Button>
       <p className="caption-style text-subtle">
         {setup.connected

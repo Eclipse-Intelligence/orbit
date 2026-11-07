@@ -26,5 +26,5 @@ export async function POST(request: Request) {
 }
 
 export function GET() {
-  return reply("Send text to Orbit with POST. See Settings, API and webhooks, iPhone Shortcut.", 405);
+  return reply("Send text to Orbit with POST. See Settings, API tokens, iPhone Shortcut.", 405);
 }

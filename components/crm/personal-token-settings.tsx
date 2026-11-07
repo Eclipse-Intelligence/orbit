@@ -3,7 +3,7 @@
 import { useState, useTransition, type FormEvent } from "react";
 import Button from "@/components/_ui/button";
 import { SettingsCard } from "@/components/crm/settings-ui";
-import { createPersonalTokenAction, revokePersonalTokenAction } from "@/app/(crm)/settings/api/actions";
+import { createPersonalTokenAction, revokePersonalTokenAction } from "@/app/(crm)/settings/api-tokens/actions";
 import type { PersonalToken } from "@/lib/auth/personal";
 
 const field =
@@ -13,7 +13,7 @@ function when(iso: string) {
   return new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric" }).format(new Date(iso));
 }
 
-export default function PersonalTokenSettings({ origin, initial }: { origin: string; initial: PersonalToken[] }) {
+export default function PersonalTokenSettings({ origin, initial, workspaceName }: { origin: string; initial: PersonalToken[]; workspaceName: string | null }) {
   const [tokens, setTokens] = useState(initial);
   const [fresh, setFresh] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -71,6 +71,7 @@ export default function PersonalTokenSettings({ origin, initial }: { origin: str
             Create token
           </Button>
         </form>
+        {workspaceName && <p className="caption-style text-subtle">New tokens work in {workspaceName}. Switch workspace to make one for another.</p>}
         {fresh && (
           <div role="status" className="flex flex-col gap-2 rounded-xl bg-white/[0.035] px-3 py-3">
             <p className="text-[14px] leading-5">Copy it now. Orbit won&apos;t show it again.</p>
@@ -101,7 +102,8 @@ export default function PersonalTokenSettings({ origin, initial }: { origin: str
                 <span className="flex min-w-0 flex-col">
                   <span className="truncate text-[14px]">{token.name}</span>
                   <span className="caption-style text-subtle">
-                    {token.prefix}… · made {when(token.createdAt)} · {token.lastUsedAt ? `last used ${when(token.lastUsedAt)}` : "not used yet"}
+                    {token.prefix}… · {workspaceName && token.workspaceName ? `${token.workspaceName} · ` : ""}made {when(token.createdAt)} ·{" "}
+                    {token.lastUsedAt ? `last used ${when(token.lastUsedAt)}` : "not used yet"}
                   </span>
                 </span>
                 <Button variant="ghost" size="sm" disabled={pending} onClick={() => revoke(token.id)} aria-label={`Revoke ${token.name}`}>

@@ -319,7 +319,7 @@ describe("Follow-ups across workspaces", () => {
 
   before(async () => {
     eclipse = await createUser("mark@eclipse-follow.test", "Mark Ridgeon");
-    const created = await createWorkspace(eclipse, { name: "Mark Ridgeon", brandStart: "blank" });
+    const created = await createWorkspace(eclipse, { name: "Mark Ridgeon" });
     personal = { ...eclipse, workspaceId: created.id, workspaceName: "Mark Ridgeon", role: "owner", scopes: scopesForRole("owner") };
     box = await mailbox(eclipse);
     await createContact(personal, { firstName: "Grace", lastName: "Lin", email: "grace@halden.test" });
@@ -545,7 +545,7 @@ describe("Capture after review", () => {
 
   before(async () => {
     mark = await createUser("mark@eclipse-review.test", "Mark Ridgeon");
-    const created = await createWorkspace(mark, { name: "Mark Ridgeon", brandStart: "blank" });
+    const created = await createWorkspace(mark, { name: "Mark Ridgeon" });
     personal = { ...mark, workspaceId: created.id, workspaceName: "Mark Ridgeon", role: "owner", scopes: scopesForRole("owner") };
     box = await mailbox(mark);
   });

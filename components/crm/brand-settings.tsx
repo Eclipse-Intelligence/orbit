@@ -41,11 +41,13 @@ export default function BrandSettings({
   canEdit,
   proofCount,
   knowledgeCount,
+  multi,
 }: {
   brand: BrandProfile;
   canEdit: boolean;
   proofCount: number;
   knowledgeCount: number;
+  multi: boolean;
 }) {
   const router = useRouter();
   const name = brand.workspaceName;
@@ -205,7 +207,11 @@ export default function BrandSettings({
       <SettingsCard
         id="brand-profile"
         title="Brand profile"
-        description={`Used by the assistant in ${name} only. About you, signatures and AI accounts are yours and stay the same in every workspace.`}
+        description={
+          multi
+            ? `Used by the assistant in ${name} only. How you write, signatures and AI accounts are yours and stay the same in every workspace.`
+            : "Used by the assistant whenever it writes, researches or drafts for the business."
+        }
       >
         <form className="flex flex-col gap-4" noValidate onSubmit={save}>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
@@ -274,7 +280,7 @@ export default function BrandSettings({
               className="field-sizing-content max-h-[24em]"
             />
           </Field>
-          <Field label="How you write" htmlFor="brand-tone" error={errors.tone} hint="Tone for email in this workspace. Adds to How you write in General.">
+          <Field label="How you write" htmlFor="brand-tone" error={errors.tone} hint={multi ? "Tone for email in this workspace. Adds to How you write in General." : "Tone for the business's email. Adds to How you write in General."}>
             <Textarea
               id="brand-tone"
               rows={2}
@@ -322,7 +328,7 @@ export default function BrandSettings({
         </form>
       </SettingsCard>
 
-      <SettingsCard id="brand-material" title="Proof, playbook and Knowledge" description={`${name}'s own. Nothing here is shared with your other workspaces.`}>
+      <SettingsCard id="brand-material" title="Proof, playbook and Knowledge" description={multi ? `${name}'s own. Nothing here is shared with your other workspaces.` : undefined}>
         <ul className="-my-1 flex flex-col">
           {rows.map((row) => (
             <li key={row.title} className="border-border flex items-center gap-3 border-b py-3 last:border-b-0">
@@ -345,8 +351,8 @@ export default function BrandSettings({
         description={
           <>
             {eclipse
-              ? "Lets the assistant read Eclipse articles, docs and product facts, and work in the Eclipse app. On in this workspace only."
-              : "Eclipse articles, docs and product facts. Off here, so the assistant never pitches Eclipse in this workspace."}
+              ? `Lets the assistant read Eclipse articles, docs and product facts, and work in the Eclipse app.${multi ? " On in this workspace only." : ""}`
+              : `Eclipse articles, docs and product facts. Off${multi ? " here" : ""}, so the assistant never pitches Eclipse${multi ? " in this workspace" : ""}.`}
             {playbookNamesEclipse && (
               <span className="mt-1 block">The playbook or brand profile mentions eclipse_ tools, which are off here. Switch them on, or edit the playbook so it doesn&apos;t rely on them.</span>
             )}

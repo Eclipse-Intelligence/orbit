@@ -5,7 +5,7 @@ function Code({ children, long = false }: { children: string; long?: boolean }) 
   return <code className={`bg-secondary rounded-md px-1.5 py-0.5 font-mono text-[12px] leading-5 ${long ? "break-all" : "whitespace-nowrap"}`}>{children}</code>;
 }
 
-export default function IphoneShortcutSettings({ origin }: { origin: string }) {
+export default function IphoneShortcutSettings({ origin, workspaceName }: { origin: string; workspaceName: string | null }) {
   const url = `${origin}/api/quick`;
   return (
     <SettingsCard
@@ -14,7 +14,10 @@ export default function IphoneShortcutSettings({ origin }: { origin: string }) {
       description="Add to today's daily note or make a task from your Home Screen, Lock Screen, Control Center, the Action Button or Siri, without opening Orbit."
     >
       <ol className="flex list-decimal flex-col gap-3 pl-5 text-[14px] leading-5">
-        <li>Create a personal token above called iPhone Shortcut and copy it.</li>
+        <li>
+          Create a personal token above called iPhone Shortcut and copy it.
+          {workspaceName && " Notes and tasks go to the token's workspace, shown next to it."}
+        </li>
         <li>
           In the Shortcuts app, make a new shortcut called Add to Orbit and add these actions:
           <ul className="text-soft mt-2 flex list-disc flex-col gap-2 pl-5">

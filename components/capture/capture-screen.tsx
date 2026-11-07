@@ -455,8 +455,8 @@ export default function CaptureScreen({
               className="caption-style text-warning flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl bg-white/[0.04] px-3 py-2.5 leading-[1.4]"
             >
               <span>{alert}</span>
-              <Button variant="link" size="none" href={`${SETTINGS_PATHS.integrations}#microsoft`} className="caption-style">
-                Open Integrations
+              <Button variant="link" size="none" href={`${SETTINGS_PATHS.email}#microsoft`} className="caption-style">
+                Open Email settings
               </Button>
             </p>
           )}

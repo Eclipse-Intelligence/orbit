@@ -106,7 +106,7 @@ describe("mail across workspaces", () => {
     eclipse = await createUser("mark@geteclipse.co", "Mark Ridgeon");
     await admin.query("update crm.workspaces set name = 'Eclipse' where id = $1", [eclipse.workspaceId]);
     eclipse = { ...eclipse, workspaceName: "Eclipse" };
-    const created = await createWorkspace(eclipse, { name: "Mark Ridgeon", brandStart: "blank" });
+    const created = await createWorkspace(eclipse, { name: "Mark Ridgeon" });
     ridgeon = { ...eclipse, workspaceId: created.id, workspaceName: "Mark Ridgeon", role: "owner", scopes: scopesForRole("owner") };
     const connection = await admin.query<{ id: string }>(
       `insert into crm.mailbox_connections (workspace_id, user_id, provider, email, status, refresh_token)
