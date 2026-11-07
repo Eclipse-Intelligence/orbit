@@ -23,7 +23,6 @@ export type BrandProfile = BrandProfileInput &
   BrandPlaybookInput & {
     workspaceId: string;
     workspaceName: string;
-    eclipseTools: boolean;
     playbookUpdatedAt: string | null;
     updatedAt: string | null;
     unread?: boolean;

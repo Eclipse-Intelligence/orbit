@@ -7,7 +7,7 @@ import { createCompany } from "@/lib/crm/companies";
 import { scopesForRole } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
-import { issueMarketAgentToken, marketAgentStatus } from "@/lib/learning/grok";
+import { grokRoutine, issueMarketAgentToken, marketAgentStatus } from "@/lib/learning/grok";
 import { addWatchItems, listMarketNotes } from "@/lib/learning/market";
 import { insertMemory, listMemories, memoryBriefing, pickForBriefing, searchTerms, type Memory } from "@/lib/learning/memories";
 import { addMarketNotes } from "@/lib/learning/market";
@@ -142,6 +142,17 @@ describe("nightly learning", () => {
     const replaced = (await issueMarketAgentToken(owner)).token;
     assert.equal((await rpc(grokToken, "tools/list")).result, undefined);
     assert.equal((await rpc(replaced, "tools/list")).result!.tools!.length, 2);
+  });
+
+  it("writes the Grok Bot routine from the watchlist alone, with no topics built in", () => {
+    for (const name of ["Eclipse", "Mark Ridgeon"]) {
+      const routine = grokRoutine("https://orbit.test/api/mcp", name);
+      assert.match(routine, new RegExp(`research the market for ${name} and send what you find to Orbit`));
+      assert.match(routine, /Call get_watchlist on the Orbit plugin \(https:\/\/orbit\.test\/api\/mcp\)/);
+      assert.match(routine, /Search X and my news sources for the last 24 hours on everything in the watchlist\./);
+      assert.match(routine, /Skip anything that doesn't touch the watchlist\./);
+      assert.doesNotMatch(routine, /AI visibility|\bGEO\b|AI search|content operations|agencies/i);
+    }
   });
 
   it("learns about each person, the business and the market overnight, then writes each member a brief", async () => {

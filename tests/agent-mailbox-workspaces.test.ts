@@ -209,7 +209,7 @@ describe("agent mailboxes in several workspaces", () => {
       assert.equal(job.rows[0].workspace_id, workspace.workspaceId);
       const prompt = JSON.stringify(job.rows[0].request);
       assert.doesNotMatch(prompt, /# Workspaces/);
-      if (workspace === ridgeon) assert.doesNotMatch(prompt, /# Eclipse\\n/);
+      assert.ok(prompt.includes(`use the Eclipse client named '${workspace.workspaceName}'`), workspace.workspaceName);
     }
 
     for (let round = 0; round < 2; round += 1) {

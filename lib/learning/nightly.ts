@@ -131,7 +131,7 @@ const OPS_FORMAT =
   "Each note holds one idea: a title of at most 12 words and a body of at most 70 words. Prefer updating an existing note over adding a near duplicate, and archive a note only when the material clearly contradicts it or it no longer holds. Never archive or rewrite notes pinned or written by the user; add a new note instead if needed. Sources name where it came from (for example \"Call with Pulse, 12 Oct\") with the link given in the material when there is one. Return empty arrays when nothing is worth keeping. Keep at most 8 additions. UK English.";
 
 async function askForOps(actor: UserActor, system: string, material: string, options: Options) {
-  const style = writingStyle((await brandOrEmpty(actor)).eclipseTools);
+  const style = writingStyle();
   const result = await completeJson({
     system: `${system} ${OPS_FORMAT} ${style} ${UNTRUSTED}`,
     user: material,
@@ -440,7 +440,7 @@ async function writeBrief(actor: UserActor, since: Date, options: Options & { da
   const result = await completeJson({
     system:
       `Write ${name}'s morning brief in Orbit, ${businessName(actor)}'s CRM. Reply with JSON only: {"brief": string}. The brief is markdown of at most 220 words with up to four short sections, each a heading line starting "### " and two to four bullets: "In your market" (market notes and research mail), "Accounts to act on" (buying signals and why now, with the company link given), "Deals gone quiet" (the stalled deals most worth a nudge, with the deal link given and a suggested next step), and "What Orbit learned" (the most useful new or changed notes). ` +
-      `Leave out a section with nothing worth saying. Lead with what ${name} should act on today. Link sources with markdown links using the links given. Plain and direct, UK English. ${writingStyle((await brandOrEmpty(actor)).eclipseTools)} ${UNTRUSTED}`,
+      `Leave out a section with nothing worth saying. Lead with what ${name} should act on today. Link sources with markdown links using the links given. Plain and direct, UK English. ${writingStyle()} ${UNTRUSTED}`,
     user: material,
     schema: BRIEF,
     maxTokens: AI_TOKENS,
@@ -508,7 +508,7 @@ async function tidyScope(actor: UserActor, scope: MemoryScope, options: Options)
         "Notes marked pinned or written by the user are never archived and their text is never changed; you may merge learned duplicates into them. " +
         (personal ? `Only merge notes that apply in the same place (all workspaces, or only ${businessName(actor)}). ` : "") +
         "Leave everything else alone. UK English. " +
-        writingStyle((await brandOrEmpty(actor)).eclipseTools),
+        writingStyle(),
       user: `NOTES (newest first):\n${listed.map((row) => `- id ${row.id} [${row.kind}, ${row.confidence}, ${shortDate(row.updated_at)}${row.pinned ? ", pinned" : ""}${row.origin !== "learning" ? ", written by the user" : ""}${personal ? whereTag(actor, row) : ""}] ${row.title}: ${clip(row.body, 300)}`).join("\n")}`,
       schema: TIDY,
       maxTokens: AI_TOKENS,

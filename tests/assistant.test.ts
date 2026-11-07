@@ -142,7 +142,7 @@ describe("assistant tools", () => {
   });
 
   it("writes the system prompt with Eclipse context and the house rules", () => {
-    const brand = { workspaceName: "Eclipse", website: ECLIPSE_WEBSITE, whatYouSell: ECLIPSE_CONTEXT, whoItsFor: ECLIPSE_IDEAL_CUSTOMER, tone: "", eclipseTools: true };
+    const brand = { workspaceName: "Eclipse", website: ECLIPSE_WEBSITE, whatYouSell: ECLIPSE_CONTEXT, whoItsFor: ECLIPSE_IDEAL_CUSTOMER, tone: "" };
     const prompt = systemPrompt(owner, { webSearch: false, now: new Date("2026-10-16T08:00:00Z"), brand });
     assert.match(prompt, /Eclipse is a content and intelligence platform/);
     assert.ok(!/Tags: #eclipse/.test(prompt));

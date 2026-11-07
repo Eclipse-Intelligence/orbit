@@ -5,10 +5,9 @@ import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import Field from "@/components/_ui/field";
 import { Input } from "@/components/_ui/input";
-import Switch from "@/components/_ui/switch";
 import { Textarea } from "@/components/_ui/textarea";
 import { SettingsCard } from "@/components/crm/settings-ui";
-import { draftBrandAction, saveBrandProfileAction, setEclipseToolsAction } from "@/app/(crm)/settings/brand/actions";
+import { draftBrandAction, saveBrandProfileAction } from "@/app/(crm)/settings/brand/actions";
 import { BRAND_LIMITS, type BrandProfile, type BrandProfileInput } from "@/lib/crm/brand-rules";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
 import { reloadIfStaleDeploy } from "@/lib/stale-deploy";
@@ -58,9 +57,6 @@ export default function BrandSettings({
   const [status, setStatus] = useState<string | null>(null);
   const [pending, setPending] = useState<"save" | "draft" | null>(null);
   const [replace, setReplace] = useState<Drafted | null>(null);
-  const [eclipse, setEclipse] = useState(brand.eclipseTools);
-  const [eclipseBusy, setEclipseBusy] = useState(false);
-  const [eclipseMessage, setEclipseMessage] = useState<{ text: string; error: boolean } | null>(null);
   const latestValues = useRef(values);
   const dirty = !same(values, saved);
   const busy = pending !== null;
@@ -157,27 +153,6 @@ export default function BrandSettings({
     setReplace(null);
     setStatus("Replaced with the draft. Check it, then save.");
   }
-
-  async function toggleEclipse(next: boolean) {
-    setEclipseBusy(true);
-    setEclipseMessage(null);
-    try {
-      const result = await setEclipseToolsAction(next);
-      if (result.error || !result.saved) {
-        setEclipseMessage({ text: result.error ?? "Could not change Eclipse tools.", error: true });
-        return;
-      }
-      setEclipse(result.saved.eclipseTools);
-      setEclipseMessage({ text: result.saved.eclipseTools ? "On. The assistant can use Eclipse from your next message." : "Off. The assistant won't use Eclipse here.", error: false });
-      router.refresh();
-    } catch (problem) {
-      if (!reloadIfStaleDeploy(problem)) setEclipseMessage({ text: "That didn't change. Try again.", error: true });
-    } finally {
-      setEclipseBusy(false);
-    }
-  }
-
-  const playbookNamesEclipse = !eclipse && /\beclipse_[a-z]/i.test(`${brand.playbook}\n${brand.outreachBrief}\n${brand.whatYouSell}`);
 
   const rows = [
     {
@@ -344,34 +319,6 @@ export default function BrandSettings({
           ))}
         </ul>
       </SettingsCard>
-
-      <SettingsCard
-        id="eclipse-tools"
-        title="Eclipse tools"
-        description={
-          <>
-            {eclipse
-              ? `Lets the assistant read Eclipse articles, docs and product facts, and work in the Eclipse app.${multi ? " On in this workspace only." : ""}`
-              : `Eclipse articles, docs and product facts. Off${multi ? " here" : ""}, so the assistant never pitches Eclipse${multi ? " in this workspace" : ""}.`}
-            {playbookNamesEclipse && (
-              <span className="mt-1 block">The playbook or brand profile mentions eclipse_ tools, which are off here. Switch them on, or edit the playbook so it doesn&apos;t rely on them.</span>
-            )}
-            {eclipseMessage && (
-              <span role={eclipseMessage.error ? "alert" : "status"} className={cn("mt-1 block", eclipseMessage.error && "text-danger")}>
-                {eclipseMessage.text}
-              </span>
-            )}
-          </>
-        }
-        action={
-          <span className="flex items-center gap-2">
-            <span aria-hidden className="caption-style text-subtle">
-              {eclipse ? "On" : "Off"}
-            </span>
-            <Switch checked={eclipse} onChange={(next) => void toggleEclipse(next)} disabled={!canEdit || eclipseBusy} label="Eclipse tools" />
-          </span>
-        }
-      />
     </>
   );
 }

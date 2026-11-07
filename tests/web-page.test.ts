@@ -3,7 +3,7 @@ import { beforeEach, describe, it } from "node:test";
 import { systemPrompt, UNBRANDED } from "@/lib/assistant/prompt";
 import { toolDefinitions } from "@/lib/assistant/tools";
 import type { UserActor } from "@/lib/crm/types";
-import { allowedEclipseUrl, clearEclipseSourceCache, listEclipseArticles, readEclipsePage } from "@/lib/eclipse-sources";
+import { allowedEclipseUrl, clearEclipseSourceCache, readEclipsePage } from "@/lib/eclipse-sources";
 import { renderWithBrowserbase } from "@/lib/browserbase";
 import { downloadPublic, privateAddress, readWebPage } from "@/lib/web-page";
 
@@ -134,41 +134,30 @@ describe("Browserbase sessions", () => {
   });
 });
 
-describe("Eclipse articles and docs", () => {
+describe("Eclipse docs", () => {
   beforeEach(() => clearEclipseSourceCache());
 
-  it("lists articles newest first, finds them by topic and reads docs pages as markdown", async () => {
-    const article = (title: string, description: string, date: string) =>
-      `<html><head><title>${title}</title><meta name="description" content="${description}"><meta property="article:published_time" content="${date}"></head><body><article><h1>${title}</h1><p>Body of ${title}.</p></article><footer>Footer</footer></body></html>`;
+  it("reads docs pages as markdown and nothing else", async () => {
     const { fetchImpl } = site({
-      "https://geteclipse.co/sitemap.xml": {
-        type: "application/xml",
-        body: "<urlset><url><loc>https://geteclipse.co/</loc></url><url><loc>https://geteclipse.co/articles/reddit-tools/</loc></url><url><loc>https://geteclipse.co/articles/ai-visibility-evidence/</loc></url></urlset>",
-      },
-      "https://geteclipse.co/articles/reddit-tools/": { body: article("Reddit tools for agencies", "How agencies pick Reddit tools.", "2026-09-01") },
-      "https://geteclipse.co/articles/ai-visibility-evidence/": { body: article("Proving AI visibility", "An evidence guide for agencies.", "2026-10-01") },
       "https://docs.geteclipse.co/features/content/planner.md": { type: "text/markdown", body: "# Planner\n\nPlan article topics and briefs." },
     });
-    const all = await listEclipseArticles({ fetchImpl });
-    assert.deepEqual(all.map((item) => item.title), ["Proving AI visibility", "Reddit tools for agencies"]);
-    assert.equal(all[0].url, "https://geteclipse.co/articles/ai-visibility-evidence/");
-    assert.deepEqual((await listEclipseArticles({ query: "reddit", fetchImpl })).map((item) => item.title), ["Reddit tools for agencies"]);
-    const read = await readEclipsePage("https://geteclipse.co/articles/reddit-tools/", { fetchImpl });
-    assert.match(read.text, /Body of Reddit tools for agencies\./);
-    assert.ok(!read.text.includes("Footer"));
     const docs = await readEclipsePage("https://docs.geteclipse.co/features/content/planner", { fetchImpl });
     assert.equal(docs.title, "Planner");
+    assert.match(docs.text, /Plan article topics and briefs\./);
+    await assert.rejects(readEclipsePage("https://geteclipse.co/articles/reddit-tools/", { fetchImpl }), /Only Eclipse docs pages/);
     assert.equal(allowedEclipseUrl("https://evil.test/articles/x"), null);
-    assert.equal(allowedEclipseUrl("https://geteclipse.co/admin"), null);
+    assert.equal(allowedEclipseUrl("https://geteclipse.co/articles/reddit-tools/"), null);
+    assert.equal(allowedEclipseUrl("http://docs.geteclipse.co/x"), null);
   });
 
   it("gives the assistant the tools and tells it how to use them", () => {
     const names = toolDefinitions().map((tool) => tool.function.name);
-    for (const name of ["read_web_page", "eclipse_articles", "eclipse_docs"]) assert.ok(names.includes(name), name);
+    for (const name of ["read_web_page", "eclipse_docs"]) assert.ok(names.includes(name), name);
+    assert.ok(!names.includes("eclipse_articles"));
     const actor = { type: "user", userId: "u", workspaceId: "w", email: "mark@eclipse.test", fullName: "Mark", role: "owner", scopes: [] } as unknown as UserActor;
-    const prompt = systemPrompt(actor, { webSearch: false, brand: { ...UNBRANDED, workspaceName: "Eclipse", eclipseTools: true } });
-    assert.match(prompt, /https:\/\/geteclipse\.co\/articles/);
-    assert.match(prompt, /sales collateral/);
+    const prompt = systemPrompt(actor, { webSearch: false, brand: { ...UNBRANDED, workspaceName: "Eclipse" } });
+    assert.doesNotMatch(prompt, /geteclipse\.co\/articles|eclipse_articles/);
+    assert.match(prompt, /use a published article from this brand's Eclipse client as the reason to get in touch/);
     assert.match(prompt, /https:\/\/docs\.geteclipse\.co/);
     assert.match(prompt, /you can still open any address you know or are given with read_web_page/);
   });

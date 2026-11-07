@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getUserActor } from "@/lib/auth/user";
-import { draftBrandFromWebsite, saveBrandPlaybook, saveBrandProfile, setEclipseTools, type BrandDraft, type BrandProfile } from "@/lib/crm/brand";
+import { draftBrandFromWebsite, saveBrandPlaybook, saveBrandProfile, type BrandDraft, type BrandProfile } from "@/lib/crm/brand";
 import { CrmError } from "@/lib/crm/errors";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
 
@@ -40,17 +40,6 @@ export async function draftBrandAction(input: { website: string }): Promise<Resu
     return { draft: await draftBrandFromWebsite(user, input, { deadline: Date.now() + 90_000 }) };
   } catch (error) {
     return failure(error, "Could not draft from the website.");
-  }
-}
-
-export async function setEclipseToolsAction(enabled: boolean): Promise<Result<{ saved?: BrandProfile }>> {
-  const user = await requireUser();
-  try {
-    const saved = await setEclipseTools(user, enabled, { ...WEB, operation: "set_eclipse_tools" });
-    revalidatePath(SETTINGS_PATHS.brand, "layout");
-    return { saved };
-  } catch (error) {
-    return failure(error, "Could not change Eclipse tools.");
   }
 }
 
