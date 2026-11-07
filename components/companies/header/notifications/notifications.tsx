@@ -8,13 +8,14 @@ import { useNotifications } from "@/components/crm/attention";
 import { markNotificationsReadAction } from "@/app/(crm)/workflows/actions";
 import { relativeWhen } from "@/lib/companies";
 import { captureSummary } from "@/lib/crm/capture-format";
+import { linkInWorkspace } from "@/lib/open-link";
 import { cn } from "@/lib/utils";
 import { captureLeft, useCompaniesStore } from "@/stores/companies-store";
 import BellIcon from "@/public/assets/images/companies/header/bell.svg";
 import ChevronRightIcon from "@/public/assets/images/_common/chevron-right.svg";
 import CaptureIcon from "@/public/assets/images/companies/sidebar/mail.svg";
 
-export default function Notifications() {
+export default function Notifications({ workspaceId }: { workspaceId?: string }) {
   const [open, setOpen] = useState(false);
   const [read, setRead] = useState<string[]>([]);
   const router = useRouter();
@@ -82,7 +83,10 @@ export default function Notifications() {
                       className="h-auto w-full items-start justify-start rounded-lg px-2 py-2 text-left whitespace-normal"
                       onClick={() => {
                         setOpen(false);
-                        if (item.href) router.push(item.href);
+                        if (!item.href) return;
+                        const target = linkInWorkspace(item.href, workspaceId);
+                        if (target.reload) window.location.assign(target.path);
+                        else router.push(target.path);
                       }}
                     >
                       <span aria-hidden className={cn("mt-1.5 size-1.5 shrink-0 rounded-full", fresh ? "bg-primary" : "bg-transparent")} />

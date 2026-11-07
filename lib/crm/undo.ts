@@ -224,7 +224,21 @@ function shownValue(field: string, value: unknown, names: Map<string, string>) {
   return clip(String(value));
 }
 
+const MERGE_REASON = "A merge can't be undone, so Orbit won't reverse any part of it.";
+
+function mergedInto(changes: Record<string, unknown> | null) {
+  const target = changes?.mergedInto;
+  return typeof target === "string" && target ? target : null;
+}
+
+function partOfMerge(event: AuditRow) {
+  const changes = record(event.changes);
+  return event.event_type.endsWith(".merged") || mergedInto(changes) !== null || changes?.merged === true;
+}
+
 function idsIn(changes: Record<string, unknown> | null, into: Set<string>) {
+  const target = mergedInto(changes);
+  if (target && isUuid(target)) into.add(target);
   for (const side of [record(changes?.before), record(changes?.after)]) {
     if (!side) continue;
     for (const [field, value] of Object.entries(side)) {
@@ -416,6 +430,15 @@ async function describeEvent(
   provenance: Provenance,
 ): Promise<Described> {
   const entity = isEntity(event.entity_type) ? event.entity_type : null;
+  if (entity && partOfMerge(event)) {
+    const changes = record(event.changes);
+    const name = (await snapshot(db, actor, entity, event.entity_id))?.name ?? eventName(event, entity);
+    const kept = names.get(mergedInto(changes) ?? "");
+    const summary = event.event_type.endsWith(".merged")
+      ? `Merged ${typeof changes?.mergedName === "string" ? changes.mergedName : `another ${NOUNS[entity]}`} into ${typeof changes?.keptName === "string" ? changes.keptName : name}`
+      : `${event.event_type.replace(/[._]/g, " ")}: ${name}${kept ? ` (merged into ${kept})` : " (part of a merge)"}`;
+    return { entityName: name, summary, plan: { ok: false, reason: MERGE_REASON } };
+  }
   if (!entity || event.event_type.endsWith(".merged")) {
     const name = eventName(event, entity);
     return { entityName: name, summary: `${event.event_type.replace(/[._]/g, " ")}: ${name}`, plan: { ok: false, reason: "Orbit can't undo this kind of change." } };

@@ -5,13 +5,10 @@ import Button from "@/components/_ui/button";
 import { SettingsCard } from "@/components/crm/settings-ui";
 import { createPersonalTokenAction, revokePersonalTokenAction } from "@/app/(crm)/settings/api-tokens/actions";
 import type { PersonalToken } from "@/lib/auth/personal";
+import { formatDate } from "@/lib/companies";
 
 const field =
   "bg-white/[0.06] text-foreground placeholder:text-subtle h-9 w-full rounded-lg px-3 text-[14px] outline-none focus-visible:ring-2 focus-visible:ring-ring/60";
-
-function when(iso: string) {
-  return new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric" }).format(new Date(iso));
-}
 
 export default function PersonalTokenSettings({ origin, initial, workspaceName }: { origin: string; initial: PersonalToken[]; workspaceName: string | null }) {
   const [tokens, setTokens] = useState(initial);
@@ -102,8 +99,8 @@ export default function PersonalTokenSettings({ origin, initial, workspaceName }
                 <span className="flex min-w-0 flex-col">
                   <span className="truncate text-[14px]">{token.name}</span>
                   <span className="caption-style text-subtle">
-                    {token.prefix}… · {workspaceName && token.workspaceName ? `${token.workspaceName} · ` : ""}made {when(token.createdAt)} ·{" "}
-                    {token.lastUsedAt ? `last used ${when(token.lastUsedAt)}` : "not used yet"}
+                    {token.prefix}… · {workspaceName && token.workspaceName ? `${token.workspaceName} · ` : ""}made {formatDate(token.createdAt)} ·{" "}
+                    {token.lastUsedAt ? `last used ${formatDate(token.lastUsedAt)}` : "not used yet"}
                   </span>
                 </span>
                 <Button variant="ghost" size="sm" disabled={pending} onClick={() => revoke(token.id)} aria-label={`Revoke ${token.name}`}>

@@ -16,6 +16,8 @@ import { importCompaniesCsv, importContactsCsv, parseCsv } from "@/lib/crm/sprea
 import { archiveTask, completeTask, createTask, listTasks } from "@/lib/crm/tasks";
 import { archiveWebhook, createWebhook, deliverDueWebhooks } from "@/lib/crm/webhooks";
 import { dayWindow } from "@/lib/time";
+import { scopesForRole } from "@/lib/crm/scopes";
+import type { UserActor } from "@/lib/crm/types";
 import { createAgent, createUser, resetDatabase } from "./helpers";
 
 before(async () => {
@@ -314,7 +316,50 @@ describe("imports, pipeline, communications, and webhooks", () => {
     assert.equal(context.relationshipStatus, "active");
   });
 
+  it("matches an accented LinkedIn profile whether the URL is encoded or not", async () => {
+    const owner = await createUser("accented@example.com", "Accented");
+    const first = await importContactsCsv(owner, "First name,Last name,LinkedIn\nJosé,García,https://www.linkedin.com/in/jos%C3%A9-garc%C3%ADa-1a2b\n");
+    assert.equal(first.created, 1, JSON.stringify(first.errors));
+    const again = await importContactsCsv(owner, "First name,Last name,LinkedIn,Title\nJosé,García,linkedin.com/in/JOSÉ-GARCÍA-1a2b,Director\n");
+    assert.equal(again.created, 0);
+    assert.equal(again.updated, 1);
+    const saved = await getAdminPool().query<{ linkedin_url: string; normalized_linkedin: string }>(
+      "select linkedin_url, normalized_linkedin from crm.contacts where workspace_id = $1",
+      [owner.workspaceId],
+    );
+    assert.equal(saved.rows.length, 1);
+    assert.equal(saved.rows[0].linkedin_url, "https://www.linkedin.com/in/josé-garcía-1a2b");
+    assert.equal(saved.rows[0].normalized_linkedin, "linkedin.com/in/josé-garcía-1a2b");
+  });
+
+  it("doesn't suggest a follow-up from a personal token when a colleague already has one open", async () => {
+    const owner = await createUser("follow-owner@example.com", "Owner");
+    const other = await createUser("follow-member@example.com", "Member");
+    await getAdminPool().query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [owner.workspaceId, other.userId]);
+    const member: UserActor = { ...other, workspaceId: owner.workspaceId, role: "member", scopes: scopesForRole("member") };
+    const company = await createCompany(owner, { name: "Shared Co", domain: "shared-follow.example" });
+    const colleagues = await createTask(owner, { title: "Call Shared Co back", companyId: company.body.company.id, ownerId: owner.userId });
+    assert.equal((await listTasks(member, { companyId: company.body.company.id })).data.length, 0);
+    const logged = await recordCommunication(member, {
+      kind: "meeting",
+      title: "Catch up",
+      body: "Talked through next steps",
+      companyId: company.body.company.id,
+    });
+    assert.equal(logged.suggested, false);
+    assert.equal(logged.task, null);
+    await completeTask(owner, colleagues.body.task.id);
+    const later = await recordCommunication(member, {
+      kind: "email",
+      title: "Notes",
+      body: "Sent the notes",
+      companyId: company.body.company.id,
+    });
+    assert.equal(later.suggested, true);
+  });
+
   it("signs a webhook and retries a failed delivery", async () => {
+    process.env.WEBHOOKS_ALLOW_PRIVATE_TARGETS = "1";
     const owner = await createUser("hooks@example.com", "Hooks");
     const hits: { signature: string | null; timestamp: string | null; body: string; event: string | null }[] = [];
     let failOnce = true;
@@ -387,6 +432,7 @@ describe("imports, pipeline, communications, and webhooks", () => {
         (error: unknown) => error instanceof CrmError && error.status === 404,
       );
     } finally {
+      delete process.env.WEBHOOKS_ALLOW_PRIVATE_TARGETS;
       await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
     }
   });

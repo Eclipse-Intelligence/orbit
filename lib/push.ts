@@ -1,6 +1,7 @@
 import webpush from "web-push";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
+import { alertLink } from "@/lib/crm/workspaces";
 import type { UserActor } from "@/lib/crm/types";
 import { decryptSecret, encryptSecret } from "@/lib/crypto/secret";
 import { query } from "@/lib/db/pool";
@@ -50,6 +51,22 @@ function subject(actor: UserActor) {
   return `mailto:${actor.email || "orbit@geteclipse.co"}`;
 }
 
+const PUSH_HOSTS = new Set(["fcm.googleapis.com", "jmt17.google.com", "updates.push.services.mozilla.com", "web.push.apple.com"]);
+const PUSH_HOST_SUFFIXES = [".push.apple.com", ".notify.windows.com"];
+
+export function isPushEndpoint(value: string) {
+  if (value.length > 2000) return false;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "https:" || url.port !== "" || url.username || url.password) return false;
+  const host = url.hostname.toLowerCase();
+  return PUSH_HOSTS.has(host) || PUSH_HOST_SUFFIXES.some((suffix) => host.endsWith(suffix));
+}
+
 export async function savePushSubscription(
   actor: UserActor,
   input: { endpoint: unknown; keys?: { p256dh?: unknown; auth?: unknown } },
@@ -60,6 +77,14 @@ export async function savePushSubscription(
   const auth = typeof input.keys?.auth === "string" ? input.keys.auth : "";
   if (!/^https:\/\//.test(endpoint) || endpoint.length > 2000 || !p256dh || p256dh.length > 200 || !auth || auth.length > 100) {
     throw new CrmError("invalid_input", "This device couldn't set up notifications. Try again.", 400);
+  }
+  if (!isPushEndpoint(endpoint)) {
+    throw new CrmError(
+      "invalid_input",
+      "This browser's push service isn't one Orbit sends to. Use Safari, Chrome, Edge or Firefox.",
+      400,
+      { field: "endpoint" },
+    );
   }
   await withActor(actor, (db) =>
     db.query(
@@ -110,7 +135,7 @@ export async function pushToUser(
   const payload = JSON.stringify({
     title: message.title.slice(0, 120),
     body: message.body.slice(0, 400),
-    url: message.url,
+    url: await alertLink(actor, message.url),
     tag: message.tag?.slice(0, 200),
     badge: message.badge ?? null,
   });
@@ -119,6 +144,10 @@ export async function pushToUser(
   const failures: PushFailure[] = [];
   await Promise.all(
     subscriptions.map(async (subscription) => {
+      if (!isPushEndpoint(subscription.endpoint)) {
+        failures.push({ status: null, reason: "This device's push service isn't one Orbit sends to." });
+        return;
+      }
       try {
         await send({ endpoint: subscription.endpoint, keys: { p256dh: subscription.p256dh, auth: subscription.auth } }, payload, {
           vapidDetails: { subject: subject(actor), publicKey: keys.publicKey, privateKey: keys.privateKey },

@@ -30,7 +30,7 @@ import {
   type TaskWrite,
 } from "@/lib/crm/types";
 import { isReminderMinutes, REMINDER_LOOKAHEAD_MS } from "@/lib/crm/reminder-options";
-import { dayWindow, parseDateTime } from "@/lib/time";
+import { dayWindow, readDateTime } from "@/lib/time";
 
 const TASK_SQL = `
   select
@@ -145,11 +145,9 @@ function mapTask(row: TaskRow): Task {
 function timestamp(value: string | null | undefined, field: string) {
   if (value === undefined) return undefined;
   if (value === null || value.trim() === "") return null;
-  const date = parseDateTime(value);
-  if (!date) {
-    throw new CrmError("invalid_input", "Enter a valid date and time.", 400, { field });
-  }
-  return date.toISOString();
+  const reading = readDateTime(value);
+  if (!reading.ok) throw new CrmError("invalid_input", reading.error, 400, { field });
+  return reading.date.toISOString();
 }
 
 function prepareTask(input: TaskWrite, mode: "create" | "patch"): PreparedTask {

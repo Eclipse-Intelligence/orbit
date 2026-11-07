@@ -2,7 +2,7 @@ import { withActor } from "@/lib/crm/context";
 import { upsertCompanyInDb } from "@/lib/crm/companies";
 import { upsertContactInDb } from "@/lib/crm/contacts";
 import { createActivityInDb } from "@/lib/crm/activities";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, itemFailure } from "@/lib/crm/errors";
 import {
   recordAudit,
   replayOrRun,
@@ -15,6 +15,7 @@ import { assertScope } from "@/lib/crm/scopes";
 import { createTaskInDb } from "@/lib/crm/tasks";
 import type { Actor, LeadInput, LeadResult, Provenance } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
+import { assertCalendarDate } from "@/lib/crm/validation";
 
 function assertLeadScopes(actor: Actor, input: LeadInput) {
   assertScope(actor.scopes, "leads:write");
@@ -57,6 +58,9 @@ async function ingestLeadInDb(
   provenance: Provenance,
   note = input.note?.trim() ?? "",
 ) {
+  assertCalendarDate(input.activity?.occurredAt, "activity.occurredAt");
+  assertCalendarDate(input.opportunity?.expectedCloseDate, "opportunity.expectedCloseDate");
+  assertCalendarDate(input.task?.dueAt, "task.dueAt");
   if (!input.company && !input.contact && !input.activity && !input.opportunity && !input.task && !note) {
     throw new CrmError(
       "invalid_input",
@@ -234,15 +238,9 @@ export async function bulkIngestLeads(
         } catch (error) {
           await db.query("rollback to savepoint bulk_lead");
           await db.query("release savepoint bulk_lead");
-          if (error instanceof CrmError) {
-            results.push({
-              index,
-              status: "error",
-              error: { code: error.code, message: error.message },
-            });
-            continue;
-          }
-          throw error;
+          const failure = itemFailure(error);
+          if (!failure) throw error;
+          results.push({ index, status: "error", error: failure });
         }
       }
       return { results };

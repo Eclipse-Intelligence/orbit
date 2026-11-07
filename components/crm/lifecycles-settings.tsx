@@ -9,6 +9,7 @@ import { SettingsCard } from "@/components/crm/settings-ui";
 import { deleteLifecycleAction, renameLifecycleAction } from "@/app/(crm)/actions";
 import { cleanLifecycle, LIFECYCLE_MAX_LENGTH } from "@/lib/companies";
 import type { LifecycleCount } from "@/lib/crm/types";
+import { GENERIC_ERROR } from "@/lib/utils";
 
 function companies(count: number) {
   return `${count} ${count === 1 ? "company" : "companies"}`;
@@ -34,7 +35,7 @@ export default function LifecyclesSettings({ lifecycles }: { lifecycles: Lifecyc
     if (!renaming || !target) return;
     setPending(true);
     setError(null);
-    const result = await renameLifecycleAction(renaming, draft);
+    const result = await renameLifecycleAction(renaming, draft).catch(() => ({ error: GENERIC_ERROR }));
     setPending(false);
     if (result.error) {
       setError(result.error);
@@ -48,7 +49,7 @@ export default function LifecyclesSettings({ lifecycles }: { lifecycles: Lifecyc
   async function remove(name: string) {
     setPending(true);
     setError(null);
-    const result = await deleteLifecycleAction(name);
+    const result = await deleteLifecycleAction(name).catch(() => ({ error: GENERIC_ERROR }));
     setPending(false);
     if (result.error) {
       setError(result.error);

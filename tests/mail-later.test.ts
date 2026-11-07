@@ -5,7 +5,7 @@ import { saveMailbox } from "@/lib/crm/inbox";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { applyMailAction } from "@/lib/mail/actions";
-import { listScheduledDrafts, readDraftInput, saveMailDraft, scheduleMailDraft, sendMailDraft } from "@/lib/mail/compose";
+import { ALREADY_SENDING, claimDueDrafts, DRAFT_GONE, dueDraftInput, listScheduledDrafts, readDraftInput, saveMailDraft, scheduleMailDraft, sendMailDraft } from "@/lib/mail/compose";
 import { processDueMail } from "@/lib/mail/due";
 import { laterOptions } from "@/lib/mail/later";
 import { syncMail } from "@/lib/mail/sync";
@@ -238,6 +238,85 @@ describe("remind me, send later and follow-ups", () => {
     assert.equal(left[0].sendAt, null);
     assert.equal(left[0].sendError, "Mailbox is full.");
     assert.ok((await listNotifications(owner, 10)).some((note) => note.title === "Scheduled email didn't send: Will fail"));
+  });
+
+  it("sends a scheduled email once when Send now and the scheduler reach it together", async () => {
+    const admin = getAdminPool();
+    const sourceId = (await mailNav(owner)).accounts[0].id;
+    const input = readDraftInput({ mode: "new", sourceId, to: ["sam@acme.test"], subject: "Only once", body: "Just the one" });
+    const providerSends = async (id: string) => {
+      const provider = (await admin.query<{ provider_draft_id: string }>("select provider_draft_id from crm.mail_drafts where id = $1", [id])).rows[0].provider_draft_id;
+      return (calls: Call[]) => calls.filter((call) => call.url === `${GRAPH}/me/messages/${provider}/send`).length;
+    };
+    const schedule = async (id: string | null = null) => {
+      const draft = await scheduleMailDraft(owner, { ...input, id, sendAt: new Date(Date.now() + 3_600_000).toISOString() }, { storedFiles: "replace", origin: ORIGIN, fetchImpl: outlook(state).fetchImpl });
+      await admin.query("update crm.mail_drafts set send_at = now() - interval '1 minute' where id = $1", [draft.id]);
+      return { id: draft.id, sends: await providerSends(draft.id) };
+    };
+    const sendNow = (id: string, fetchImpl: typeof fetch) => sendMailDraft(owner, { ...input, id }, { storedFiles: "keep", origin: ORIGIN, fetchImpl });
+
+    const racing = await schedule();
+    const { fetchImpl, calls } = outlook(state);
+    const [now, due] = await Promise.allSettled([sendNow(racing.id, fetchImpl), processDueMail(owner, { fetchImpl, origin: ORIGIN })]);
+    assert.equal(racing.sends(calls), 1);
+    assert.equal(due.status, "fulfilled");
+    if (now.status === "rejected") {
+      assert.match(now.reason.message, /already sending|already sent/);
+      assert.equal(due.value.sent, 1);
+    } else {
+      assert.equal(due.value.sent, 0);
+    }
+
+    const inFlight = await schedule();
+    const [claimed] = await claimDueDrafts(owner, 1);
+    assert.equal(claimed.id, inFlight.id);
+    const late = outlook(state);
+    await assert.rejects(() => sendNow(inFlight.id, late.fetchImpl), { message: ALREADY_SENDING });
+    assert.equal(inFlight.sends(late.calls), 0);
+    await admin.query("delete from crm.mail_drafts where id = $1", [inFlight.id]);
+  });
+
+  it("refuses a send from a composer opened before the draft was scheduled and sent elsewhere", async () => {
+    const admin = getAdminPool();
+    const sourceId = (await mailNav(owner)).accounts[0].id;
+    const input = readDraftInput({ mode: "new", sourceId, to: ["sam@acme.test"], subject: "Opened earlier", body: "Draft in an open composer" });
+    const draft = await saveMailDraft(owner, input, { storedFiles: "replace", origin: ORIGIN, fetchImpl: outlook(state).fetchImpl });
+    await scheduleMailDraft(owner, { ...input, id: draft.id, sendAt: new Date(Date.now() + 3_600_000).toISOString() }, { storedFiles: "keep", origin: ORIGIN, fetchImpl: outlook(state).fetchImpl });
+    await admin.query("update crm.mail_drafts set send_at = now() - interval '1 minute' where id = $1", [draft.id]);
+    const provider = (await admin.query<{ provider_draft_id: string }>("select provider_draft_id from crm.mail_drafts where id = $1", [draft.id])).rows[0].provider_draft_id;
+    const sends = (calls: Call[]) => calls.filter((call) => call.url === `${GRAPH}/me/messages/${provider}/send`).length;
+
+    const [picked] = await claimDueDrafts(owner, 1);
+    assert.equal(picked.id, draft.id);
+    const whileSending = outlook(state);
+    await assert.rejects(
+      () => sendMailDraft(owner, { ...input, id: draft.id }, { storedFiles: "keep", origin: ORIGIN, fetchImpl: whileSending.fetchImpl }),
+      { message: ALREADY_SENDING },
+    );
+    assert.equal(sends(whileSending.calls), 0);
+
+    const cron = outlook(state);
+    await sendMailDraft(owner, dueDraftInput(picked), { storedFiles: "keep", origin: ORIGIN, fetchImpl: cron.fetchImpl, claimed: true });
+    assert.equal(sends(cron.calls), 1);
+    const stale = outlook(state);
+    await assert.rejects(
+      () => sendMailDraft(owner, { ...input, id: draft.id }, { storedFiles: "keep", origin: ORIGIN, fetchImpl: stale.fetchImpl }),
+      { message: DRAFT_GONE },
+    );
+    assert.equal(stale.calls.length, 0);
+  });
+
+  it("lets a draft be sent again after a send fails", async () => {
+    const admin = getAdminPool();
+    const sourceId = (await mailNav(owner)).accounts[0].id;
+    const input = readDraftInput({ mode: "new", sourceId, to: ["sam@acme.test"], subject: "Try again", body: "Second time lucky" });
+    const draft = await saveMailDraft(owner, input, { storedFiles: "replace", origin: ORIGIN, fetchImpl: outlook(state).fetchImpl });
+    await assert.rejects(() => sendMailDraft(owner, { ...input, id: draft.id }, { storedFiles: "keep", origin: ORIGIN, fetchImpl: outlook({ ...state, failSend: true }).fetchImpl }));
+    const row = await admin.query<{ sending_at: Date | null; send_error: string | null }>("select sending_at, send_error from crm.mail_drafts where id = $1", [draft.id]);
+    assert.deepEqual(row.rows[0], { sending_at: null, send_error: null });
+    const again = outlook(state);
+    await sendMailDraft(owner, { ...input, id: draft.id }, { storedFiles: "keep", origin: ORIGIN, fetchImpl: again.fetchImpl });
+    assert.equal(again.calls.filter((call) => call.url.endsWith("/send")).length, 1);
   });
 
   it("skips the Outlook update when a draft hasn't changed", async () => {

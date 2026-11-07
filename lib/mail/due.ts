@@ -125,7 +125,7 @@ export async function processDueMail(
     const [draft] = await claimDueDrafts(actor, 1);
     if (!draft) break;
     try {
-      await sendMailDraft(actor, dueDraftInput(draft), { origin, fetchImpl, storedFiles: "keep" });
+      await sendMailDraft(actor, dueDraftInput(draft), { origin, fetchImpl, storedFiles: "keep", claimed: true });
       report.sent += 1;
     } catch (error) {
       report.failed += 1;

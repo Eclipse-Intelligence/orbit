@@ -8,6 +8,12 @@ export type Condition = { left: string; op: ConditionOp; right?: string };
 const TOKEN = /\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g;
 const SINGLE = /^\s*\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}\s*$/;
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
 function lookup(vars: Vars, path: string): unknown {
   let current: unknown = vars;
   for (const part of path.split(".")) {
@@ -16,8 +22,8 @@ function lookup(vars: Vars, path: string): unknown {
       current = current[Number(part)];
       continue;
     }
-    if (typeof current !== "object") return undefined;
-    current = (current as Record<string, unknown>)[part];
+    if (!isPlainObject(current) || !Object.hasOwn(current, part)) return undefined;
+    current = current[part];
   }
   return current;
 }

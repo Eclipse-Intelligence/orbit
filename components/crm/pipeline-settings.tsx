@@ -8,6 +8,7 @@ import { SettingsCard, SettingsDisclosure } from "@/components/crm/settings-ui";
 import { saveStagesAction } from "@/app/(crm)/settings/actions";
 import type { PipelineStage } from "@/lib/crm/types";
 import { Radio } from "@/components/_ui/radio";
+import { GENERIC_ERROR } from "@/lib/utils";
 
 export default function PipelineSettings({
   stages,
@@ -44,7 +45,7 @@ export default function PipelineSettings({
         isWon: stage.isWon,
         isLost: stage.isLost,
       })),
-    );
+    ).catch(() => ({ error: GENERIC_ERROR }));
     setPending(false);
     if (result.error) {
       setError(result.error);

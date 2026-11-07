@@ -52,7 +52,12 @@ describe("reading web pages", () => {
     for (const address of ["::ffff:7f00:1", "::ffff:a9fe:a9fe", "64:ff9b::a9fe:a9fe", "2002:7f00:1::1", "::127.0.0.1", "::1", "::", "fe80::1", "ff02::1"]) {
       assert.equal(privateAddress(address), true, address);
     }
-    for (const address of ["::ffff:8.8.8.8", "2606:4700::1111", "2002:808:808::1"]) assert.equal(privateAddress(address), false, address);
+    for (const address of ["fec0::1", "feff::1", "100::1", "100::ffff:1", "2001:db8::1", "2001:db8:ffff::1"]) {
+      assert.equal(privateAddress(address), true, address);
+    }
+    for (const address of ["::ffff:8.8.8.8", "2606:4700::1111", "2002:808:808::1", "100:0:0:1::1", "2001:db9::1", "2001:4860:4860::8888"]) {
+      assert.equal(privateAddress(address), false, address);
+    }
     await assert.rejects(downloadPublic("http://[::ffff:7f00:1]:8080/", { maxBytes: 1000 }), /Private and local/);
     await assert.rejects(downloadPublic("http://[::ffff:a9fe:a9fe]/latest/meta-data", { maxBytes: 1000 }), /Private and local/);
     await assert.rejects(readWebPage("http://localhost:3000/admin", { lookup: PUBLIC }), /Private and local/);

@@ -3,9 +3,12 @@ import { after, before, describe, it } from "node:test";
 import { listActivities } from "@/lib/crm/activities";
 import { createContact } from "@/lib/crm/contacts";
 import { saveMailbox } from "@/lib/crm/inbox";
+import { scopesForRole } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
+import { createWorkspace } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { deleteDraftMessage, discardMailDraft, readDraftInput, saveMailDraft, sendMailDraft } from "@/lib/mail/compose";
+import { ignoreUnknownMail, setThreadFiling } from "@/lib/mail/filing";
 import { composeEmailHtml, imageMarkers, trackingIdIn } from "@/lib/mail/html";
 import { attachToDraft } from "@/lib/microsoft/oauth";
 import { syncMail } from "@/lib/mail/sync";
@@ -373,5 +376,67 @@ describe("mail replies and read statuses", () => {
     assert.equal(readerAgent(null), null);
     assert.equal(addressHash(" , "), null);
     assert.equal(addressHash("1.2.3.4, 5.6.7.8"), addressHash("1.2.3.4"));
+  });
+
+  it("logs a reply once, only in the workspaces its conversation is filed in", async () => {
+    const admin = getAdminPool();
+    const created = await createWorkspace(owner, { name: "Mark Ridgeon" });
+    const other: UserActor = { ...owner, workspaceId: created.id, workspaceName: "Mark Ridgeon", role: "owner", scopes: scopesForRole("owner") };
+    await createContact(other, { firstName: "Jane", lastName: "Doe", email: "jane@acme.test" });
+    const loggedIn = async (body: string) =>
+      (
+        await admin.query<{ workspace_id: string }>("select workspace_id from crm.activities where type = 'email' and body = $1 order by workspace_id", [body])
+      ).rows.map((row) => row.workspace_id);
+    const reply = async (body: string, internetMessageId: string | null = null, more: { mode?: "reply" | "forward"; cc?: string[] } = {}) => {
+      const graph = outlook(state);
+      const fetchImpl: typeof fetch = async (input, init) =>
+        String(input).endsWith("?$select=internetMessageId") ? Response.json({ internetMessageId }) : graph.fetchImpl(input, init);
+      const result = await sendMailDraft(owner, readDraftInput({ mode: more.mode ?? "reply", messageId: jane, to: ["jane@acme.test"], cc: more.cc ?? [], body }), {
+        storedFiles: "replace",
+        origin: ORIGIN,
+        fetchImpl,
+      });
+      assert.equal(result.warning, null);
+    };
+
+    await setThreadFiling(owner, thread, [other.workspaceId]);
+    await reply("Filed in the other workspace.");
+    assert.deepEqual(await loggedIn("Filed in the other workspace."), [other.workspaceId]);
+    await reply("Forwarded from here.", null, { mode: "forward" });
+    assert.deepEqual(await loggedIn("Forwarded from here."), [owner.workspaceId]);
+
+    await setThreadFiling(owner, thread, [owner.workspaceId, other.workspaceId]);
+    await reply("Filed in both workspaces.", "<both-1@mail.test>");
+    const both = [owner.workspaceId, other.workspaceId].sort();
+    assert.deepEqual(await loggedIn("Filed in both workspaces."), both);
+
+    state.sent = [
+      message("sent-both", {
+        internetMessageId: "<both-1@mail.test>",
+        subject: "RE: Renewal pricing",
+        from: { emailAddress: { name: "Mark", address: "mark@eclipse.test" } },
+        toRecipients: [{ emailAddress: { name: "Jane Doe", address: "jane@acme.test" } }],
+        ccRecipients: [],
+        body: { contentType: "text", content: "Filed in both workspaces." },
+        sentDateTime: "2026-10-03T09:00:00Z",
+        receivedDateTime: "2026-10-03T09:00:00Z",
+      }),
+    ];
+    await syncMail(owner, { budgetMs: 30_000, fetchImpl: outlook(state).fetchImpl });
+    const copies = await admin.query<{ workspace_id: string }>(
+      "select workspace_id from crm.activities where type = 'email' and metadata->>'internetMessageId' = '<both-1@mail.test>' order by workspace_id",
+    );
+    assert.deepEqual(copies.rows.map((row) => row.workspace_id), both);
+
+    await ignoreUnknownMail(owner, thread);
+    await reply("Sent on an ignored conversation.");
+    assert.deepEqual(await loggedIn("Sent on an ignored conversation."), []);
+
+    await admin.query("delete from crm.mail_thread_routes where user_id = $1", [owner.userId]);
+    await admin.query("update crm.contacts set archived_at = now() where normalized_email = 'jane@acme.test'");
+    await admin.query("update crm.companies set archived_at = now() where domain = 'acme.test'");
+    await createContact(owner, { firstName: "Ola", lastName: "Berg", email: "ola@berg-studio.test" });
+    await reply("Sent on a conversation only in Capture.", null, { cc: ["ola@berg-studio.test"] });
+    assert.deepEqual(await loggedIn("Sent on a conversation only in Capture."), []);
   });
 });

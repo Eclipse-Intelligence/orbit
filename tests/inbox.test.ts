@@ -556,6 +556,38 @@ describe("microsoft inbox", () => {
     assert.equal(again.attached, 0);
   });
 
+  it("attaches earlier mail to the email the Mail timeline already filed instead of filing it again", async () => {
+    const owner = await createUser("filed-inbox@example.com", "Filed Inbox");
+    await saveMailbox(owner, {
+      email: "owner@filed-inbox.test",
+      refreshToken: "stored-refresh",
+      accessToken: "stored-access",
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    });
+    const filed = await fileInboundMessages(owner, [
+      {
+        providerMessageId: "msg-filed",
+        internetMessageId: "<kim-1@filed.test>",
+        subject: "Kim's intro",
+        fromEmail: "kim@filed.test",
+        receivedAt: new Date().toISOString(),
+      },
+    ]);
+    assert.equal(filed.unattached, 1);
+    const kim = (await createContact(owner, { firstName: "Kim", email: "kim@filed.test" })).body.contact;
+    await getAdminPool().query(
+      `insert into crm.activities (workspace_id, type, title, contact_id, metadata)
+       values ($1, 'email', 'Kim''s intro', $2, $3::jsonb)`,
+      [owner.workspaceId, kim.id, JSON.stringify({ source: "microsoft", direction: "inbound", mailMessageId: "8b0f6a52-0d5e-4d3f-9a43-7c1f2b9e0a11", internetMessageId: "<kim-1@filed.test>" })],
+    );
+    const result = await syncMailbox(owner, async () => Response.json({ value: [] }));
+    assert.equal(result.attached, 1);
+    const activities = await listActivities(owner, { contactId: kim.id });
+    assert.equal(activities.total, 1);
+    const messages = await listInbox(owner);
+    assert.equal(messages.find((message) => message.subject === "Kim's intro")?.contactId, kim.id);
+  });
+
   it("asks for a reconnect instead of failing when stored tokens cannot be read", async () => {
     const owner = await createUser("cipher-inbox@example.com", "Cipher Inbox");
     const contact = await createContact(owner, {

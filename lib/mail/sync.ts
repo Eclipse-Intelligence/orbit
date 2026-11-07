@@ -12,6 +12,7 @@ import {
   renewMailSubscription,
   fetchMicrosoftClassifications,
   fetchMicrosoftDelta,
+  fetchMicrosoftMessageFolder,
   GraphMailError,
   initialDeltaUrl,
   listMicrosoftFolders,
@@ -27,7 +28,8 @@ import { MailSyncReset, type MailRole, type ProviderMessage } from "@/lib/mail/t
 import type { MicrosoftToken } from "@/lib/microsoft/oauth";
 
 const FOLDER_REFRESH_MS = 6 * 60 * 60 * 1000;
-const LOCK_SECONDS = 300;
+const LOCK_GRACE_SECONDS = 60;
+const LOOKUP_BATCH = 4;
 const SKIPPED_ROLES: MailRole[] = ["outbox"];
 const ROLE_ORDER: MailRole[] = ["inbox", "sent", "drafts", "snoozed", "archive", "other", "trash", "junk"];
 const DEFAULT_STORAGE_LIMIT_MB = 400;
@@ -54,10 +56,15 @@ type FolderRow = {
 
 type Source = SourceRow & { tokens: StoredTokens };
 
+type Places = { folders: Map<string, string>; refreshed: boolean };
+
+type Removals = { deleted: string[]; moved: { id: string; folder_id: string }[] };
+
 export type MailSyncReport = {
   sources: number;
   stored: number;
   removed: number;
+  moved: number;
   backfilling: number;
   paused: boolean;
   errors: string[];
@@ -197,13 +204,14 @@ export async function mailSourceToken(actor: UserActor, sourceId: string, fetchI
   return token.accessToken;
 }
 
-async function claim(actor: UserActor, sourceId: string) {
+async function claim(actor: UserActor, sourceId: string, until: number) {
+  const seconds = Math.max(1, Math.ceil((until - Date.now()) / 1000)) + LOCK_GRACE_SECONDS;
   return withActor(actor, async (db) => {
     const result = await db.query(
       `update crm.mail_sources set locked_until = now() + make_interval(secs => $2)
        where id = $1 and (locked_until is null or locked_until < now())
        returning id`,
-      [sourceId, LOCK_SECONDS],
+      [sourceId, seconds],
     );
     return (result.rowCount ?? 0) > 0;
   });
@@ -282,17 +290,25 @@ function messageRows(messages: ProviderMessage[], ownEmail: string) {
     }));
 }
 
-async function storePage(db: Db, actor: UserActor, source: Source, folder: FolderRow, messages: ProviderMessage[], removed: string[]) {
+async function storePage(
+  db: Db,
+  actor: UserActor,
+  source: Source,
+  folder: FolderRow,
+  messages: ProviderMessage[],
+  removals: Removals,
+  arrivals: boolean,
+) {
   const rows = messageRows(messages, source.email);
   const inserted: string[] = [];
   if (rows.length > 0) {
     const result = await db.query<{ id: string; inserted: boolean }>(
       `insert into crm.mail_messages (
-         workspace_id, user_id, source_id, folder_id, provider_message_id, internet_message_id, thread_key, subject, snippet,
+         workspace_id, user_id, source_id, folder_id, arrival_pending, provider_message_id, internet_message_id, thread_key, subject, snippet,
          body_html, body_text, body_truncated, from_email, from_name, to_recipients, cc_recipients, bcc_recipients,
          sent_at, received_at, is_read, is_draft, is_flagged, importance, has_attachments, categories, web_link, tracking_id, focused
        )
-       select $1, $2, $3, $4, x.provider_message_id, x.internet_message_id, x.thread_key, x.subject, x.snippet,
+       select $1, $2, $3, $4, $6, x.provider_message_id, x.internet_message_id, x.thread_key, x.subject, x.snippet,
          x.body_html, x.body_text, coalesce(x.body_truncated, false), x.from_email, x.from_name,
          coalesce(x.to_recipients, '[]'), coalesce(x.cc_recipients, '[]'), coalesce(x.bcc_recipients, '[]'),
          x.sent_at, x.received_at, coalesce(x.is_read, false), coalesce(x.is_draft, false), coalesce(x.is_flagged, false),
@@ -330,7 +346,7 @@ async function storePage(db: Db, actor: UserActor, source: Source, folder: Folde
          tracking_id = excluded.tracking_id,
          focused = coalesce(excluded.focused, crm.mail_messages.focused)
        returning id, (xmax = 0) as inserted`,
-      [actor.workspaceId, actor.userId, source.id, folder.id, JSON.stringify(rows)],
+      [actor.workspaceId, actor.userId, source.id, folder.id, JSON.stringify(rows), arrivals],
     );
     for (const row of result.rows) if (row.inserted) inserted.push(row.id);
   }
@@ -340,10 +356,69 @@ async function storePage(db: Db, actor: UserActor, source: Source, folder: Folde
       [source.id, message.providerId, message.isRead, message.isFlagged, message.focused],
     );
   }
-  if (removed.length > 0) {
-    await db.query("delete from crm.mail_messages where folder_id = $1 and provider_message_id = any($2::text[])", [folder.id, removed]);
+  if (removals.moved.length > 0) {
+    await db.query(
+      `update crm.mail_messages m set folder_id = x.folder_id
+       from jsonb_to_recordset($3::jsonb) as x(id text, folder_id uuid)
+       where m.source_id = $1 and m.folder_id = $2 and m.provider_message_id = x.id`,
+      [source.id, folder.id, JSON.stringify(removals.moved)],
+    );
+  }
+  if (removals.deleted.length > 0) {
+    await db.query("delete from crm.mail_messages where folder_id = $1 and provider_message_id = any($2::text[])", [folder.id, removals.deleted]);
   }
   return { stored: rows.length, inserted };
+}
+
+async function folderPlaces(actor: UserActor, sourceId: string): Promise<Map<string, string>> {
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ id: string; provider_folder_id: string }>(
+      "select id, provider_folder_id from crm.mail_folders where source_id = $1 and sync_state <> 'skipped'",
+      [sourceId],
+    );
+    return new Map(result.rows.map((row) => [row.provider_folder_id, row.id]));
+  });
+}
+
+async function placeRemoved(
+  actor: UserActor,
+  source: Source,
+  folder: FolderRow,
+  removed: string[],
+  token: string,
+  places: Places,
+  fetchImpl: typeof fetch,
+  deadline: number,
+): Promise<Removals | null> {
+  if (removed.length === 0) return { deleted: [], moved: [] };
+  const held = await withActor(actor, async (db) => {
+    const result = await db.query<{ provider_message_id: string }>(
+      "select provider_message_id from crm.mail_messages where folder_id = $1 and provider_message_id = any($2::text[])",
+      [folder.id, removed],
+    );
+    return result.rows.map((row) => row.provider_message_id);
+  });
+  const parents = new Map<string, string | null>();
+  for (let index = 0; index < held.length; index += LOOKUP_BATCH) {
+    if (Date.now() >= deadline) return null;
+    const batch = held.slice(index, index + LOOKUP_BATCH);
+    const found = await Promise.all(batch.map((id) => fetchMicrosoftMessageFolder(token, id, fetchImpl)));
+    batch.forEach((id, position) => parents.set(id, found[position]));
+  }
+  const unknown = [...parents.values()].some((parent) => parent && !places.folders.has(parent));
+  if (unknown && !places.refreshed) {
+    places.refreshed = true;
+    await refreshFolders(actor, source, token, fetchImpl);
+    places.folders = await folderPlaces(actor, source.id);
+  }
+  const removals: Removals = { deleted: [], moved: [] };
+  for (const [id, parent] of parents) {
+    const target = parent ? places.folders.get(parent) : undefined;
+    if (target === folder.id) continue;
+    if (target) removals.moved.push({ id, folder_id: target });
+    else removals.deleted.push(id);
+  }
+  return removals;
 }
 
 function folderOrder(folders: FolderRow[]) {
@@ -360,11 +435,11 @@ async function syncFolder(
   source: Source,
   folder: FolderRow,
   token: string,
-  options: { deadline: number; fetchImpl: typeof fetch; guard: boolean },
+  options: { deadline: number; fetchImpl: typeof fetch; guard: boolean; places: Places },
   report: MailSyncReport,
 ) {
   let link = folder.sync_link ?? initialDeltaUrl(folder.provider_folder_id);
-  let backfilling = folder.sync_state !== "live";
+  const live = folder.sync_state === "live";
   while (Date.now() < options.deadline) {
     let page;
     try {
@@ -378,13 +453,15 @@ async function syncFolder(
       }
       throw error;
     }
+    const removals = await placeRemoved(actor, source, folder, page.removed, token, options.places, options.fetchImpl, options.deadline);
+    if (!removals) break;
     const full = await withActor(actor, async (db) => {
-      const stored = await storePage(db, actor, source, folder, page.messages, page.removed);
+      const stored = await storePage(db, actor, source, folder, page.messages, removals, live && folder.role === "inbox");
       report.stored += stored.stored;
-      if (folder.role === "inbox" && folder.sync_state === "live" && !backfilling) report.arrived.push(...stored.inserted);
-      report.removed += page.removed.length;
+      report.removed += removals.deleted.length;
+      report.moved += removals.moved.length;
       const next = page.deltaLink ?? page.nextLink;
-      const state = page.deltaLink ? "live" : backfilling ? "backfill" : "live";
+      const state = live || page.deltaLink ? "live" : "backfill";
       await db.query(
         `update crm.mail_folders set
            sync_link = $2,
@@ -400,7 +477,6 @@ async function syncFolder(
     if (page.deltaLink) return;
     if (!page.nextLink) return;
     link = page.nextLink;
-    backfilling = true;
     if (full) {
       report.paused = true;
       await withActor(actor, (db) =>
@@ -460,13 +536,23 @@ async function classifyFolder(actor: UserActor, source: Source, folder: FolderRo
   if (!url) await withActor(actor, (db) => db.query("update crm.mail_folders set classified_at = now() where id = $1", [folder.id]));
 }
 
+async function claimArrivals(actor: UserActor) {
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ id: string }>(
+      "update crm.mail_messages set arrival_pending = false where user_id = $1 and arrival_pending returning id",
+      [actor.userId],
+    );
+    return result.rows.map((row) => row.id);
+  });
+}
+
 export async function syncMail(
   actor: UserActor,
   options: { deadline?: number; budgetMs?: number; fetchImpl?: typeof fetch; backfill?: boolean; push?: PushSender },
 ): Promise<MailSyncReport> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const deadline = options.deadline ?? Date.now() + (options.budgetMs ?? 20_000);
-  const report: MailSyncReport = { sources: 0, stored: 0, removed: 0, backfilling: 0, paused: false, errors: [], arrived: [], routed: 0, workflowEvents: 0, filed: 0 };
+  const report: MailSyncReport = { sources: 0, stored: 0, removed: 0, moved: 0, backfilling: 0, paused: false, errors: [], arrived: [], routed: 0, workflowEvents: 0, filed: 0 };
   const sources = await loadSources(actor);
   const hardStop = await withActor(actor, async (db) => (await databaseBytes(db)) >= mailHardStopBytes());
   if (hardStop) {
@@ -478,10 +564,10 @@ export async function syncMail(
   }
   for (const [index, source] of sources.entries()) {
     if (Date.now() >= deadline) break;
-    if (!(await claim(actor, source.id))) continue;
-    report.sources += 1;
     const share = Math.max(5_000, Math.floor((deadline - Date.now()) / (sources.length - index)));
     const sourceDeadline = Math.min(deadline, Date.now() + share);
+    if (!(await claim(actor, source.id, sourceDeadline))) continue;
+    report.sources += 1;
     let lastError: string | null = null;
     try {
       const token = await currentToken(source.tokens, fetchImpl);
@@ -499,9 +585,13 @@ export async function syncMail(
         return result.rows;
       });
       const { live, backfill } = folderOrder(folders);
+      const places: Places = {
+        folders: new Map(folders.filter((folder) => folder.sync_state !== "skipped").map((folder) => [folder.provider_folder_id, folder.id])),
+        refreshed: stale,
+      };
       for (const folder of live) {
         if (Date.now() >= sourceDeadline) break;
-        await syncFolder(actor, source, folder, token.accessToken, { deadline: sourceDeadline, fetchImpl, guard: false }, report);
+        await syncFolder(actor, source, folder, token.accessToken, { deadline: sourceDeadline, fetchImpl, guard: false, places }, report);
       }
       for (const folder of live.filter((item) => item.role === "inbox" && !item.classified_at)) {
         if (Date.now() >= sourceDeadline) break;
@@ -510,7 +600,7 @@ export async function syncMail(
       if (options.backfill !== false) {
         for (const folder of backfill) {
           if (Date.now() >= sourceDeadline || report.paused) break;
-          await syncFolder(actor, source, folder, token.accessToken, { deadline: sourceDeadline, fetchImpl, guard: true }, report);
+          await syncFolder(actor, source, folder, token.accessToken, { deadline: sourceDeadline, fetchImpl, guard: true, places }, report);
         }
       }
     } catch (error) {
@@ -525,6 +615,7 @@ export async function syncMail(
       );
     }
   }
+  report.arrived = await claimArrivals(actor);
   const routed = report.arrived.length
     ? await routeArrivedMail(actor, report.arrived, { fetchImpl, deadline }).catch((error) => {
         console.error("Routing new mail failed", error instanceof Error ? error.message : error);

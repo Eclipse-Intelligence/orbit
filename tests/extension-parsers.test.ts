@@ -49,6 +49,9 @@ describe("LinkedIn URL classification", () => {
     assert.equal(canonicalProfile("/company/acme", LINKEDIN), null);
     assert.equal(canonicalCompany("https://www.linkedin.com/company/fernhill-digital/", LINKEDIN), "https://www.linkedin.com/company/fernhill-digital");
     assert.equal(targetFromPath("/in/x").kind, "other");
+    assert.equal(canonicalProfile("/in/jos%C3%A9-garc%C3%ADa/", LINKEDIN), "https://www.linkedin.com/in/josé-garcía");
+    assert.equal(classifyUrl("https://www.linkedin.com/in/JOS%C3%89-GARC%C3%8DA", LINKEDIN).canonical, "https://www.linkedin.com/in/josé-garcía");
+    assert.equal(onLinkedin("https://www.linkedin.com/in/josé-garcía", LINKEDIN), "https://www.linkedin.com/in/jos%C3%A9-garc%C3%ADa");
     assert.equal(domainFrom("https://www.Northlightseo.co.uk/?utm_source=linkedin"), "northlightseo.co.uk");
     assert.equal(domainFrom("kestrelcontent.com"), "kestrelcontent.com");
     assert.equal(domainFrom("https://www.linkedin.com/company/acme"), null);

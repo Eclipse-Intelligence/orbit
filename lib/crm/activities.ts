@@ -35,7 +35,7 @@ import {
   type Actor,
   type Provenance,
 } from "@/lib/crm/types";
-import { parseDateTime } from "@/lib/time";
+import { readDateTime } from "@/lib/time";
 
 const ACTOR_NAME_SQL = `coalesce(
       nullif(trim(pr.full_name), ''),
@@ -148,13 +148,9 @@ function prepareActivity(input: ActivityWrite): {
   }
   let occurredAt: string | null = null;
   if (input.occurredAt) {
-    const date = parseDateTime(input.occurredAt);
-    if (!date) {
-      throw new CrmError("invalid_input", "Enter a valid date and time.", 400, {
-        field: "occurredAt",
-      });
-    }
-    occurredAt = date.toISOString();
+    const reading = readDateTime(input.occurredAt);
+    if (!reading.ok) throw new CrmError("invalid_input", reading.error, 400, { field: "occurredAt" });
+    occurredAt = reading.date.toISOString();
   }
   let metadata: Record<string, unknown> = {};
   if (input.metadata) {
@@ -259,6 +255,43 @@ export async function createActivityInDb(
       "That activity already exists.",
     );
   }
+}
+
+export type EmailMessageIds = {
+  internetMessageId?: string | null;
+  mailMessageId?: string | null;
+  providerMessageId?: string | null;
+};
+
+export async function emailActivityFor(db: Db, workspaceId: string, ids: EmailMessageIds, contactId: string | null) {
+  if (!ids.internetMessageId && !ids.mailMessageId && !ids.providerMessageId) return null;
+  const found = await db.query<{ id: string }>(
+    `select id from crm.activities
+     where workspace_id = $1 and type = 'email'
+       and (metadata->>'internetMessageId' = $2 or metadata->>'mailMessageId' = $3 or metadata->>'providerMessageId' = $4)
+       and ($5::uuid is null or contact_id = $5)
+     order by created_at
+     limit 1`,
+    [workspaceId, ids.internetMessageId ?? null, ids.mailMessageId ?? null, ids.providerMessageId ?? null, contactId],
+  );
+  return found.rows[0]?.id ?? null;
+}
+
+export async function createEmailActivityOnce(
+  db: Db,
+  actor: Actor,
+  input: ActivityWrite,
+  ids: EmailMessageIds,
+  provenance?: Provenance,
+): Promise<{ id: string; created: boolean }> {
+  const key = ids.internetMessageId || ids.mailMessageId || ids.providerMessageId;
+  if (key) {
+    await db.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [`email-activity|${actor.workspaceId}|${key}`]);
+    const existing = await emailActivityFor(db, actor.workspaceId, ids, input.contactId ?? null);
+    if (existing) return { id: existing, created: false };
+  }
+  const activity = await createActivityInDb(db, actor, input, provenance);
+  return { id: activity.id, created: true };
 }
 
 export async function listActivities(
@@ -747,9 +780,9 @@ function editedValue(field: ActivityEditField, value: unknown): unknown {
     return cleanText(value, field === "title" ? 200 : 10000, field);
   }
   if (field === "occurredAt") {
-    const date = typeof value === "string" ? parseDateTime(value) : null;
-    if (!date) throw new CrmError("invalid_input", "Enter a valid date and time.", 400, { field: "occurredAt" });
-    return date.toISOString();
+    const reading = typeof value === "string" ? readDateTime(value) : null;
+    if (!reading?.ok) throw new CrmError("invalid_input", reading?.error ?? "Enter a valid date and time.", 400, { field: "occurredAt" });
+    return reading.date.toISOString();
   }
   return linkId(value, field);
 }

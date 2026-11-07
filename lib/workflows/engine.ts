@@ -28,6 +28,7 @@ import { pushToUser, type PushSender } from "@/lib/push";
 import { completeJson, LlmError } from "@/lib/llm";
 import { decide, parallelKey, ParallelError, type Decision, type DecisionAnswer, type DecisionQuestion } from "@/lib/parallel";
 import { siteOrigin } from "@/lib/site-url";
+import { alertLink } from "@/lib/crm/workspaces";
 import { appTimeZone } from "@/lib/time";
 import { dueDayFrom, scheduleTaskDue, withDueNote } from "@/lib/crm/task-due";
 import {
@@ -1024,11 +1025,12 @@ export async function notify(
   userId: string,
   input: { title: string; body?: string | null; href?: string | null; source?: string; category?: NotificationCategory },
 ) {
+  const href = input.href ? await alertLink({ ...actor, userId }, input.href) : null;
   await withActor(actor, (db) =>
     db.query(
       `insert into crm.notifications (workspace_id, user_id, title, body, href, source, category)
        values ($1, $2, $3, $4, $5, $6, $7)`,
-      [actor.workspaceId, userId, input.title.slice(0, 200), input.body ?? null, input.href ?? null, input.source ?? null, input.category ?? null],
+      [actor.workspaceId, userId, input.title.slice(0, 200), input.body ?? null, href, input.source ?? null, input.category ?? null],
     ),
   );
 }

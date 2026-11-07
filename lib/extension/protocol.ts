@@ -3,6 +3,18 @@ export const EXTENSION_TOKEN_PREFIX = "olx_";
 export const WORKSPACE_HEADER = "x-orbit-workspace";
 export const PAIRING_TTL_MINUTES = 10;
 export const SALES_NAVIGATOR_ID = /^[A-Za-z0-9_-]{6,120}$/;
+export const LINKEDIN_PROFILE_SLUG = /^[\p{L}\p{M}\p{N}_-]{2,100}$/u;
+
+export function linkedinProfileSlug(segment: string): string | null {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(segment);
+  } catch {
+    return null;
+  }
+  const slug = decoded.normalize("NFC").toLowerCase();
+  return LINKEDIN_PROFILE_SLUG.test(slug) ? slug : null;
+}
 
 const LETTERS = "\\p{L}{3,12}\\.?";
 const MONTH_NAME = "(?:jan|feb|f[eé]v|m[aä]r|apr|avr|abr|ma[iy]|mag|mei|jun|jui|giu|jul|lug|aug|ao[uû]|ago|sep|set|o[ck]t|ott|nov|de[cz]|d[eé]c|dic|ene|gen)\\p{L}*\\.?";

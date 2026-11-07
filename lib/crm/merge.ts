@@ -99,6 +99,9 @@ function mergeFailure(error: unknown): never {
     if (error.code === "P0002") throw new CrmError("not_found", error.message, 404);
     if (error.code === "22023") throw new CrmError("invalid_input", error.message, 400);
     if (error.code === "42501") throw new CrmError("forbidden", error.message, 403);
+    if (error.code === "23505") {
+      throw new CrmError("conflict", error.constraint ? "These records clash with another record. Merge or archive it first." : error.message, 409);
+    }
   }
   throw error;
 }
@@ -178,6 +181,33 @@ async function recordArchived(
   });
 }
 
+function combinedCards(raw: Record<string, unknown>) {
+  const list = Array.isArray(raw.combined_cards) ? raw.combined_cards : [];
+  return list.filter(
+    (item): item is { id: string; keptId: string; pipelineId: string } =>
+      Boolean(item) && typeof item.id === "string" && typeof item.keptId === "string",
+  );
+}
+
+async function recordCombinedCards(db: Db, actor: Actor, raw: Record<string, unknown>, provenance: Provenance) {
+  const cards = combinedCards(raw);
+  if (cards.length === 0) return 0;
+  const archived = await db.query<{ id: string; archived_at: Date | null }>(
+    "select id, archived_at from crm.opportunities where id = any($1::uuid[])",
+    [cards.map((card) => card.id)],
+  );
+  const at = new Map(archived.rows.map((row) => [row.id, row.archived_at ? new Date(row.archived_at).toISOString() : null]));
+  for (const card of cards) {
+    await recordAudit(db, actor, "opportunity.archived", "opportunity", card.id, provenance, {
+      combinedInto: card.keptId,
+      pipelineId: card.pipelineId,
+      before: { archivedAt: null },
+      after: { archivedAt: at.get(card.id) ?? null },
+    });
+  }
+  return cards.length;
+}
+
 function beforeFields<T>(fills: Fill<T>[], record: T) {
   return Object.fromEntries(fills.map(({ field }) => [field, record[field] ?? null]));
 }
@@ -217,6 +247,8 @@ export async function mergeCompanies(
       const merged = await readCompanyInDb(db, mergeId, actor.workspaceId);
       if (!kept || !merged) throw new CrmError("not_found", "Company not found.", 404);
       const moved = rowsMoved(raw);
+      const cardsCombined = await recordCombinedCards(db, actor, raw, provenance);
+      if (cardsCombined > 0) moved.board_cards_combined = cardsCombined;
       const filled = fills.map((fill) => fill.field);
       await recordAudit(db, actor, "company.merged", "company", keepId, provenance, {
         keptId: keepId,

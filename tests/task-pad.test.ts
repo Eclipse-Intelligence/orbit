@@ -70,6 +70,41 @@ describe("task pad parser", () => {
     }
   });
 
+  it("leaves prices in the title instead of reading them as times", () => {
+    const invoice = parse("Invoice £12.50 by Friday");
+    assert.deepEqual({ title: invoice.title, due: invoice.due }, { title: "Invoice £12.50", due: "2026-10-23T09:00" });
+    for (const [text, title] of [
+      ["Pay $9.15", "Pay $9.15"],
+      ["Refund € 7.45 tomorrow", "Refund € 7.45"],
+      ["Charge GBP 12.50 tomorrow", "Charge GBP 12.50"],
+      ["Charge 12.50 GBP tomorrow", "Charge 12.50 GBP"],
+      ["Quote usd 3pm", "Quote usd 3pm"],
+    ] as const) {
+      const result = parse(text);
+      assert.equal(result.title, title, text);
+      assert.ok(!result.due || result.due.endsWith("T09:00"), text);
+    }
+    const priced = parse("Send the £12.50 invoice at 14:30");
+    assert.deepEqual({ title: priced.title, due: priced.due }, { title: "Send the £12.50 invoice", due: "2026-10-16T14:30" });
+  });
+
+  it("still reads every time form it read before", () => {
+    const cases: [string, string, string][] = [
+      ["Call at 12.50", "Call", "2026-10-16T12:50"],
+      ["Call 12:50", "Call", "2026-10-16T12:50"],
+      ["Call at 12:50", "Call", "2026-10-16T12:50"],
+      ["Call 12.50pm", "Call", "2026-10-16T12:50"],
+      ["Call 1.30pm tomorrow", "Call", "2026-10-17T13:30"],
+      ["Call at 3pm", "Call", "2026-10-16T15:00"],
+      ["Call 9am", "Call", "2026-10-17T09:00"],
+      ["Call at noon", "Call", "2026-10-16T12:00"],
+    ];
+    for (const [text, title, due] of cases) {
+      const result = parse(text);
+      assert.deepEqual({ title: result.title, due: result.due }, { title, due }, text);
+    }
+  });
+
   it("marks where it read each part so the input can highlight it", () => {
     const text = "Call Toby Sutton OBE at 3pm on Wednesday and remind me 15 mins";
     const marks = mergeMarks([...parse(text).marks, ...nameMarks(text, ["Toby Sutton OBE"])]);

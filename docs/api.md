@@ -4,6 +4,8 @@ Base path: `/api/v1`
 
 Authentication is `Authorization: Bearer <agent token>` (from `npm run agent:create`). Browser cookies and personal tokens (`orbit_…`, which only work with the MCP server and quick capture below) are not accepted. Each credential is limited to 120 requests per minute. A 429 response includes `Retry-After: 60`.
 
+Dates and times (`dueAt`, `occurredAt`, `from`, `to` and the rest) are read by `readDateTime` in `lib/time.ts`. A bare date (`2026-11-07`) or a date and time without an offset (`2026-11-07T14:30`) is London time. Slash dates are day, month, year (`07/11/2026` is 7 November), and so are dates with dashes or dots in that order (`07-11-2026`, `07.11.2026`). Month names work too (`7 Nov 2026`, `Saturday 7 November 2026 2:30pm`, `Nov 7, 2026 14:30:15`). An offset or `Z` is kept as sent, and so are RFC 2822 dates with `GMT`, `UTC`, a numeric offset or one of `BST`, `CET`, `CEST`, `EST`, `EDT`, `CST`, `CDT`, `MST`, `MDT`, `PST` and `PDT`, each read as its fixed offset (`Sat, 07 Nov 2026 10:00:00 EST` is 15:00 UTC). A two-digit year, a date without a year, a date that doesn't exist, a London time skipped when the clocks go forward or repeated when they go back (add the offset), or anything else is a 400 that says why.
+
 Every request runs as the agent inside its workspace, under row-level security. Agent tokens see every task in the workspace, but never anyone's Mail, calendars, assistant chats, workflows, Knowledge, private docs or daily notes (only docs shared with the workspace). Every change to companies, contacts, opportunities, activities and tasks is audited with the agent as the actor and the `provenance` you send, and audit events can start workflows and are delivered to webhooks (see [Webhooks](#webhooks)). Nothing is deleted: `DELETE` archives.
 
 Send `Content-Type: application/json`. Unknown fields are rejected. Omitted fields on `PATCH` and upsert are left unchanged. `null` clears an optional field.
@@ -61,7 +63,7 @@ Optional `Idempotency-Key` header (printable ASCII, up to 200 characters). Reuse
 | `POST` | `/docs` | Create a doc: `title`, `content` (Markdown), `folderId`, `shared`, `provenance`. Always shared with the workspace. 201 | `docs:write` |
 | `GET` | `/docs/folders` | Shared folders, with parent and position | `docs:read` |
 | `GET` | `/docs/:id` | One doc with its links, mentions and folder path, and its text from `offset` (100,000 characters, with `nextOffset`) | `docs:read` |
-| `PATCH` | `/docs/:id` | Any of `title` (rename, rewriting links to it), `content` (replace), `append`, `find` with `replace` (and `all`), `folderId` (null for no folder; with `allowVisibilityChange` when the move changes who sees it), `shared`, `baseRevision` (409 if the doc changed before any of the changes), applied in that order in one transaction, so a refused change leaves the doc as it was | `docs:write` |
+| `PATCH` | `/docs/:id` | Any of `title` (rename, rewriting links to it), `content` (replace), `find` with `replace` (and `all`, matched against the text before anything is appended), `append`, `folderId` (null for no folder; with `allowVisibilityChange` when the move changes who sees it), `shared`, `baseRevision` (409 if the doc changed before any of the changes), applied in that order in one transaction, so a refused change leaves the doc as it was | `docs:write` |
 | `DELETE` | `/docs/:id` | Archive | `docs:write` |
 | `GET` | `/activities` | List activity | `crm:read` |
 | `POST` | `/activities` | Append an activity | `activities:write` |
@@ -83,7 +85,7 @@ Optional `Idempotency-Key` header (printable ASCII, up to 200 characters). Reuse
 | `DELETE` | `/webhooks/:id` | Archive an endpoint | `admin` |
 | `GET` | `/webhooks/deliveries` | The 50 most recent delivery attempts | `crm:read` |
 
-`GET /companies`, `/contacts`, `/opportunities`, `/activities` and `/tasks` take `limit` (1 to 100, default 50) and `offset` (up to 10,000). `owner` (or `owner_id`) takes a member id, `unassigned`, or `all` for no filter.
+`GET /companies`, `/contacts`, `/opportunities`, `/activities` and `/tasks` take `limit` (1 to 100, default 50) and `offset` (up to 10,000). `limit` and `offset` must be whole numbers, and dates must be real calendar dates (no 30 February); anything else is a 400 `invalid_input` that usually names the field in `details.field`. `owner` (or `owner_id`) takes a member id, `unassigned`, or `all` for no filter.
 
 ## Companies
 
@@ -197,11 +199,11 @@ Agent tokens see every task in the workspace; people in the app only see tasks t
 
 `GET /api/v1/companies/:id/context` returns the company, its contacts, opportunities, recent activities, open tasks, `lastInteraction`, `openTaskCount`, `relationshipStatus` (`new`, `active`, `quiet`, or `needs_action`), and `timeline`: the company's activities plus those of its current contacts, newest first. `insights` maps the id of each call in the timeline that has a summary to its summary, key points, suggested actions, status, and `sentiment` (`healthy`, `watch`, `at_risk` or null) with `sentimentReason` (the transcript is not included). The company carries `health`, `healthReason`, `healthAt` and `healthActivityId`.
 
-`GET /api/v1/relationships/stale` lists companies with no interaction in the last 21 days. `days` and `limit` are optional.
+`GET /api/v1/relationships/stale` lists companies with no interaction in the last 21 days. `days` and `limit` are optional whole numbers; anything else is a 400 `invalid_input`.
 
 ## Import and export
 
-`GET /api/v1/export/companies`, `/contacts`, `/opportunities`, `/activities`, and `/tasks` return CSV.
+`GET /api/v1/export/companies`, `/contacts`, `/opportunities`, `/activities`, and `/tasks` return CSV, paged through 100 rows at a time, up to 10,000 rows (`EXPORT_ROW_LIMIT` in `lib/csv.ts`), and stops reading after 50 seconds (`EXPORT_BUDGET_MS`) so it finishes inside the route's 60 second limit. The ceiling is there because the list reads cap their offset at 10,000 (each deeper `OFFSET` page re-reads every row before it) and the whole file is built in memory for one response. Every export sets `X-Export-Rows` (rows in the file), `X-Export-Total` (rows that matched) and `X-Export-Truncated` (`true` when rows were left out); a cut-off export also sets `X-Export-Note`, such as "Exported 10,000 of 12,345 contacts, the limit for one export." or "Exported 4,200 of 9,000 tasks, Orbit ran out of time." The app's Export buttons show the same note.
 
 `POST /api/v1/import/companies` and `POST /api/v1/import/contacts` accept `text/csv` or `{ "csv": "..." }`. Up to 50 rows. Companies match by domain. Contacts match by the usual contact rules and attach to a company with the same domain or name. A column that is absent, or a cell that is empty, leaves that field as it is. Exports include a `Tags` column with tags separated by `; `. Contact exports include `Location` and `Sales Navigator`, and imports read those columns too. On import a non-empty `Tags` cell (split on `;`) replaces that record's tags. Without the matching write scope the import returns 403.
 
@@ -228,7 +230,7 @@ The reply is plain text for the Shortcut to show, for example `Added to today's 
 
 ## Webhooks
 
-`POST /api/v1/webhooks` requires `admin`. Body: `{ "url", "events": ["lead.created"], "description" }`. `201` returns `{ "endpoint", "secret" }`. The secret is shown once. URLs must be `https`, except `http://127.0.0.1` and `http://localhost` for development.
+`POST /api/v1/webhooks` requires `admin`. Body: `{ "url", "events": ["lead.created"], "description" }`. `201` returns `{ "endpoint", "secret" }`. The secret is shown once. URLs must be `https` and resolve to public addresses: loopback, private, link-local (including cloud metadata), CGNAT, multicast and their IPv6 forms (including IPv4-mapped addresses) are refused when the webhook is saved and checked again on every delivery, once before the request and again on the addresses resolved when the connection is made. A host that can't be found fails the delivery; a lookup that fails for another reason is retried with the usual backoff. Deliveries don't follow redirects: a 3xx response counts as a failed attempt. For development, `WEBHOOKS_ALLOW_PRIVATE_TARGETS=1` allows `http` and local addresses outside production.
 
 `events` (1 to 30) takes any of `company.created`, `company.updated`, `company.archived`, `company.merged`, `company.undone`, `company.ai_field_changed`, `company.moved_out`, `company.moved_in`, `company.copied`, `contact.created`, `contact.updated`, `contact.archived`, `contact.merged`, `contact.undone`, `contact.moved_out`, `contact.moved_in`, `contact.copied`, `lead.created`, `opportunity.created`, `opportunity.updated`, `opportunity.stage_changed`, `opportunity.archived`, `opportunity.undone`, `activity.created`, `activity.updated`, `activity.archived`, `activity.undone`, `task.created`, `task.completed`, `task.reopened`, `task.updated`, `task.archived`, `task.undone`, the Docs events `page.created`, `page.updated`, `page.moved`, `page.shared`, `page.archived`, `page.restored`, `page_folder.created`, `page_folder.updated`, `page_folder.moved`, `page_folder.shared`, `page_folder.archived` and `page_folder.restored`, or `*` for every event. Docs events fire only for docs and folders shared with the workspace (or that were shared until that change), carry the title or name and never the text, and `page.updated` fires when a version is saved (at most every 10 minutes while a person types, on every rename and on every agent edit). Restoring a record from the archive fires `*.updated` with `fields: ["archivedAt"]`. When someone undoes a change through the assistant, the change it puts back fires its normal event first, then `*.undone` fires with `data` of `{ "undoes", "undoneEventType", "restored" }`: the id of the audit event that was undone, its type, and a sentence saying what was put back.
 

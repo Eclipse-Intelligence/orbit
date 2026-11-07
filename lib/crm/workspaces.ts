@@ -2,6 +2,7 @@ import { CrmError, isPgError } from "@/lib/crm/errors";
 import { scopesForRole } from "@/lib/crm/scopes";
 import type { UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
+import { safeOpenTarget, workspaceLink } from "@/lib/open-link";
 
 export type CreatedWorkspace = { id: string; name: string };
 
@@ -36,6 +37,12 @@ export async function workspaceActors(actor: UserActor): Promise<UserActor[]> {
       ? actor
       : { ...actor, workspaceId: row.workspace_id, workspaceName: row.workspace_name, role: row.role, scopes: scopesForRole(row.role) },
   );
+}
+
+export async function alertLink(actor: UserActor, path: string) {
+  if (!safeOpenTarget(path)) return path;
+  const actors = await workspaceActors(actor).catch(() => [actor]);
+  return workspaceLink(actor.workspaceId, path, actors.length);
 }
 
 export async function actorForWorkspace(actor: UserActor, workspaceId: string) {

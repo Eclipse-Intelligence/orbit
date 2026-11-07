@@ -1,3 +1,5 @@
+import { appTimeZone, dayKeyIn } from "@/lib/time";
+
 type CalendarDay = { value: string; day: number; inMonth: boolean };
 
 const DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -75,6 +77,12 @@ export function formatDateLabel(value: string, now = new Date()) {
   const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((entry) => entry.type === type)?.value ?? "";
   const label = `${part("weekday")} ${part("day")} ${part("month")}`;
   return date.getFullYear() === now.getFullYear() ? label : `${label} ${part("year")}`;
+}
+
+export function instantDateLabel(iso: string, now = new Date(), timeZone = appTimeZone()) {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  return formatDateLabel(dayKeyIn(date, timeZone), now);
 }
 
 export function formatDateTimeLabel(value: string, now = new Date()) {

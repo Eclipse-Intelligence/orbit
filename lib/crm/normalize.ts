@@ -1,7 +1,7 @@
 import { CrmError } from "@/lib/crm/errors";
 import { cleanLifecycle } from "@/lib/companies";
 import { ACCOUNT_HEALTH, type CompanyWrite } from "@/lib/crm/types";
-import { SALES_NAVIGATOR_ID } from "@/lib/extension/protocol";
+import { linkedinProfileSlug, SALES_NAVIGATOR_ID } from "@/lib/extension/protocol";
 
 const NAME_SUFFIXES = new Set([
   "inc",
@@ -128,14 +128,8 @@ export function canonicalLinkedin(value: string): string | null {
   if (host !== "linkedin.com" && !host.endsWith(".linkedin.com")) return null;
   const parts = url.pathname.split("/").filter(Boolean);
   if (parts.length < 2 || parts[0].toLowerCase() !== "in") return null;
-  let slug: string;
-  try {
-    slug = decodeURIComponent(parts[1]).toLowerCase();
-  } catch {
-    return null;
-  }
-  if (!/^[a-z0-9_-]{2,100}$/.test(slug)) return null;
-  return `https://www.linkedin.com/in/${slug}`;
+  const slug = linkedinProfileSlug(parts[1]);
+  return slug ? `https://www.linkedin.com/in/${slug}` : null;
 }
 
 export function canonicalCompanyLinkedin(value: string): string | null {

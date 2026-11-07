@@ -15,7 +15,7 @@ export const WEBHOOK_PATH = "/api/machinemail/webhook";
 export const SENDERS_MAX = 50;
 const DISPLAY_NAME = "Orbit";
 
-export type AgentSender = { address: string; userId: string; name: string };
+export type AgentSender = { address: string; userId: string; name: string; problem: string | null };
 export type AgentMailMember = { id: string; name: string };
 export type AgentMailboxView = {
   configured: boolean;
@@ -123,6 +123,12 @@ export async function agentMailboxView(actor: UserActor): Promise<AgentMailboxVi
         [actor.workspaceId],
       );
       return result.rows.map((row) => ({ address: row.address, userId: row.user_id, name: row.name ?? "Member" }));
+    }).then(async (listed): Promise<AgentSender[]> => {
+      const refusals = canAdmin ? await senderRefusals(listed.map((sender) => ({ ...sender, saved: true }))) : [];
+      return listed.map((sender) => ({
+        ...sender,
+        problem: refusals.find((item) => item.address === sender.address && item.userId === sender.userId)?.refusal ?? null,
+      }));
     }),
     canAdmin ? listMembers(actor).then((list) => list.map((member) => ({ id: member.id, name: member.name }))) : Promise.resolve([]),
     withActor(actor, async (db) => {
@@ -228,11 +234,32 @@ export async function ownSenderAddresses(actor: UserActor, mailboxAddress: strin
     return [...own, ...more.rows.map((row) => row.email)];
   });
   const addresses = [...new Set(found.map((value) => bareAddress(value)).filter((value): value is string => Boolean(value) && value !== mailboxAddress))];
+  const unknown = new Set((await senderRefusals(addresses.map((address) => ({ address, userId: actor.userId, saved: false })))).map((row) => row.address));
   const allowed: string[] = [];
-  for (const candidate of addresses.slice(0, SENDERS_MAX)) {
+  for (const candidate of addresses.filter((address) => !unknown.has(address)).slice(0, SENDERS_MAX)) {
     if (!(await addressTaken(candidate, actor.workspaceId))) allowed.push(candidate);
   }
   return allowed;
+}
+
+async function senderRefusals(pairs: { address: string; userId: string; saved: boolean }[]) {
+  if (pairs.length === 0) return [];
+  const result = await query<{ address: string; user_id: string; refusal: string }>(
+    `select x.address, x.user_id, r.refusal
+     from unnest($1::text[], $2::uuid[], $3::boolean[]) with ordinality as x(address, user_id, saved, position)
+     cross join lateral (select private.agent_sender_refusal(x.user_id, x.address, x.saved) as refusal) r
+     where r.refusal is not null
+     order by x.position`,
+    [pairs.map((pair) => pair.address), pairs.map((pair) => pair.userId), pairs.map((pair) => pair.saved)],
+  );
+  return result.rows.map((row) => ({ address: row.address, userId: row.user_id, refusal: row.refusal }));
+}
+
+function ownershipError(error: unknown): never {
+  if (isPgError(error) && error.code === "23514" && error.constraint === "agent_mailbox_senders_owned") {
+    throw new CrmError("invalid_input", error.message, 400, { field: "senders" });
+  }
+  throw error;
 }
 
 async function saveMailbox(actor: UserActor, address: string, webhook: { id: string; secret: string }, url: string, own: string[]) {
@@ -287,6 +314,12 @@ export async function saveAgentSenders(actor: UserActor, rows: unknown) {
       throw new CrmError("invalid_input", `${address} is another workspace's agent mailbox, so it can't give this one work.`, 400, { field: "senders" });
     }
   }
+  const saved = await withActor(actor, async (db) => {
+    const result = await db.query<{ address: string; user_id: string }>("select address, user_id from crm.agent_mailbox_senders where workspace_id = $1", [actor.workspaceId]);
+    return new Set(result.rows.map((row) => `${row.address} ${row.user_id}`));
+  });
+  const [refused] = await senderRefusals([...seen].map(([address, userId]) => ({ address, userId, saved: saved.has(`${address} ${userId}`) })));
+  if (refused) throw new CrmError("invalid_input", refused.refusal, 400, { field: "senders" });
   await withActor(actor, async (db) => {
     await db.query("delete from crm.agent_mailbox_senders where workspace_id = $1", [actor.workspaceId]);
     for (const [address, userId] of seen) {
@@ -295,7 +328,7 @@ export async function saveAgentSenders(actor: UserActor, rows: unknown) {
         [actor.workspaceId, mailbox.id, address, userId, actor.userId],
       );
     }
-  });
+  }).catch(ownershipError);
   return { message: seen.size ? "Saved." : "Saved. Nobody can give it work by email now." };
 }
 

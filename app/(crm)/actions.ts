@@ -16,6 +16,7 @@ import {
   updateCompany,
 } from "@/lib/crm/companies";
 import { mergeCompanies } from "@/lib/crm/merge";
+import { collectForExport, csvExport } from "@/lib/crm/spreadsheet";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import type { AccountHealth, Company, CompanyListQuery, CompanyWrite, LifecycleCount } from "@/lib/crm/types";
 import { deleteLifecycle, listLifecycles, renameLifecycle } from "@/lib/crm/lifecycles";
@@ -233,16 +234,8 @@ export async function searchCompaniesAction(query: string) {
 
 export async function exportCompaniesAction(filters: CompanyListQuery) {
   const user = await requireUser();
-  const rows = [];
-  let offset = 0;
-  let total = 0;
-  do {
-    const page = await listCompanies(user, { ...filters, aiFields: true, limit: 100, offset });
-    rows.push(...page.data);
-    total = page.total;
-    offset += page.data.length;
-  } while (rows.length < total && offset < 5000);
-  return companiesCsvRows(rows, await listAiFields(user));
+  const collected = await collectForExport((offset, limit) => listCompanies(user, { ...filters, aiFields: true, limit, offset }));
+  return csvExport(collected, companiesCsvRows(collected.rows, await listAiFields(user)));
 }
 
 export async function updateNameAction(name: string): Promise<{ error?: string }> {

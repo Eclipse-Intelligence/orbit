@@ -1,6 +1,6 @@
 import { withActor } from "@/lib/crm/context";
 import type { Actor } from "@/lib/crm/types";
-import { appTimeZone, zonedParts } from "@/lib/time";
+import { appTimeZone, readDay, zonedParts } from "@/lib/time";
 import {
   addWorkingDays,
   bankHolidays,
@@ -59,7 +59,7 @@ export function plannedDay(input: { days?: number | null; on?: string | null }, 
   const today = zonedParts(now, timeZone);
   const todayKey = dayKey(today.year, today.month, today.day);
   const on = input.on && /^\d{4}-\d{2}-\d{2}$/.test(input.on) ? input.on : null;
-  if (on && on > todayKey && on <= shiftDay(todayKey, LATEST_DAYS)) return { key: on, today: false };
+  if (on && on >= todayKey && on <= shiftDay(todayKey, LATEST_DAYS)) return { key: on, today: on === todayKey };
   if (input.days === null || input.days === undefined || !Number.isFinite(input.days)) return null;
   const days = Math.max(0, Math.min(Math.round(input.days), LATEST_DAYS));
   return { key: shiftDay(todayKey, days), today: days === 0 };
@@ -141,15 +141,8 @@ export function withDueNote(description: string | null | undefined, plan: DuePla
 export function dueDayFrom(value: string | null | undefined, timeZone = appTimeZone()) {
   const text = (value ?? "").trim();
   if (!text) return null;
-  const plain = /\b(\d{4})-(\d{2})-(\d{2})\b/.exec(text);
-  if (plain) {
-    const key = `${plain[1]}-${plain[2]}-${plain[3]}`;
-    const { year, month, day } = dayParts(key);
-    const check = new Date(Date.UTC(year, month - 1, day));
-    return check.getUTCMonth() === month - 1 && check.getUTCDate() === day ? key : null;
-  }
-  const parsed = Date.parse(text);
-  if (Number.isNaN(parsed)) return null;
-  const wall = zonedParts(new Date(parsed), timeZone);
-  return dayKey(wall.year, wall.month, wall.day);
+  const whole = readDay(text, timeZone);
+  if (whole) return whole;
+  const inside = /\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}\/\d{1,2}\/\d{4}\b/.exec(text);
+  return inside ? readDay(inside[0], timeZone) : null;
 }

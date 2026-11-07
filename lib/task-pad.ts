@@ -20,6 +20,8 @@ const WEEKDAY = "(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|t
 const MONTH = "(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)";
 const NUMBER_WORDS: Record<string, number> = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, ten: 10, fifteen: 15, thirty: 30 };
 const LEAD = "(?:\\b(?:on|by|due|for|at|this)\\s+)?";
+const NOT_MONEY = "(?<![£$€]\\s*)(?<!\\b(?:gbp|usd|eur)\\s*)";
+const NOT_CURRENCY_AFTER = "(?!\\s*(?:gbp|usd|eur)\\b)";
 
 const TEMPORAL =
   /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tues?|wed|thu(?:rs?)?|fri)\b|\b(january|february|march|april|june|july|august|september|october|november|december|jan|feb|apr|jun|jul|aug|sept?|oct|nov|dec)\b|\b(today|tomorrow|tonight|morning|afternoon|evening|noon|midday|week|weekend|month|fortnight|remind|reminder|after next|fortnight)\b|\b\d{1,2}(:\d{2})?\s*(am|pm)\b|\b\d{1,2}(st|nd|rd|th)\b/i;
@@ -203,12 +205,12 @@ export function parseTaskText(text: string, now = new Date()): PadParse {
     if (target < 0) return false;
     found.date = addDays(today, ((target - weekday(today) + 7) % 7) || 7);
   });
-  take(/\b(?:at\s+)?(\d{1,2})(?::|\.)(\d{2})(?:\s*(am|pm))?\b/i, (match) => {
+  take(new RegExp(`\\b(?:at\\s+)?${NOT_MONEY}(\\d{1,2})(?::|\\.)(\\d{2})(?:\\s*(am|pm))?\\b${NOT_CURRENCY_AFTER}`, "i"), (match) => {
     const parsed = toHour(Number(match[1]), Number(match[2]), match[3]);
     if (!parsed) return false;
     found.time = parsed;
   });
-  take(/\b(?:at\s+)?(\d{1,2})\s*(am|pm)\b/i, (match) => {
+  take(new RegExp(`\\b(?:at\\s+)?${NOT_MONEY}(\\d{1,2})\\s*(am|pm)\\b`, "i"), (match) => {
     const parsed = toHour(Number(match[1]), 0, match[2]);
     if (!parsed) return false;
     found.time = parsed;

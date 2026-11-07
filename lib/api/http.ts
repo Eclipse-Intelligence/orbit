@@ -1,4 +1,4 @@
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, isPgDataError } from "@/lib/crm/errors";
 
 export async function readJson(request: Request) {
   const text = await request.text();
@@ -33,6 +33,12 @@ export function errorResponse(error: unknown) {
         status: error.status,
         headers: error.status === 429 ? { "retry-after": "60" } : undefined,
       },
+    );
+  }
+  if (isPgDataError(error)) {
+    return Response.json(
+      { error: { code: "invalid_input", message: "A value in the request is invalid. Check its dates, numbers and ids." } },
+      { status: 400 },
     );
   }
   console.error(process.env.NODE_ENV === "production" ? "request_failed" : error);

@@ -3,7 +3,8 @@ import { CrmError } from "@/lib/crm/errors";
 import { cleanText } from "@/lib/crm/normalize";
 import { assertScope } from "@/lib/crm/scopes";
 import { isUuid } from "@/lib/crm/mutate";
-import type { Actor, BoardKind, PipelineStage } from "@/lib/crm/types";
+import { applyStageStatusesInDb } from "@/lib/crm/opportunities";
+import type { Actor, BoardKind, PipelineStage, Provenance } from "@/lib/crm/types";
 
 export type StageDraft = {
   id?: string;
@@ -17,6 +18,7 @@ export async function savePipelineStages(
   actor: Actor,
   drafts: StageDraft[],
   pipelineId: string | null = null,
+  provenance: Provenance = { operation: "save_pipeline_stages" },
 ): Promise<PipelineStage[]> {
   assertScope(actor.scopes, "opportunities:write");
   if (pipelineId !== null && !isUuid(pipelineId)) throw new CrmError("not_found", "Board not found.", 404);
@@ -128,17 +130,7 @@ export async function savePipelineStages(
       );
       await db.query("delete from crm.pipeline_stages where id = any($1::uuid[])", [removed]);
     }
-    await db.query(
-      `update crm.opportunities o
-       set status = next.status
-       from (
-         select id, case when is_won then 'won' when is_lost then 'lost' else 'open' end as status
-         from crm.pipeline_stages
-         where pipeline_id = $1
-       ) next
-       where o.stage_id = next.id and o.status <> next.status`,
-      [id],
-    );
+    await applyStageStatusesInDb(db, actor, id, provenance);
     return saved;
   });
 }

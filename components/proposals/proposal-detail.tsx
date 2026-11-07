@@ -459,6 +459,33 @@ export default function ProposalDetail({ viewer, initial, knowledge = [] }: { vi
   );
 }
 
+function QuantityInput({ quantity, onChange }: { quantity: number; onChange: (quantity: number) => void }) {
+  const [text, setText] = useState(String(quantity));
+  const [shown, setShown] = useState(quantity);
+  if (shown !== quantity) {
+    setShown(quantity);
+    setText(String(quantity));
+  }
+  return (
+    <Input
+      type="number"
+      min={1}
+      step={1}
+      inputMode="numeric"
+      value={text}
+      onChange={(event) => {
+        setText(event.target.value);
+        const next = Math.trunc(Number(event.target.value));
+        if (event.target.value.trim() && Number.isFinite(next) && next >= 1) {
+          setShown(next);
+          onChange(next);
+        }
+      }}
+      onBlur={() => setText(String(quantity))}
+    />
+  );
+}
+
 function Items({ items, currency, products, onChange }: { items: Item[]; currency: Currency; products: Product[]; onChange: (items: Item[]) => void }) {
   const [adding, setAdding] = useState("");
   const update = (index: number, patch: Partial<Item>) => onChange(items.map((item, at) => (at === index ? { ...item, ...patch } : item)));
@@ -485,7 +512,7 @@ function Items({ items, currency, products, onChange }: { items: Item[]; currenc
               </label>
               <label className="flex flex-col gap-1">
                 <span className="caption-style text-subtle">Quantity</span>
-                <Input type="number" min={1} value={item.quantity} onChange={(event) => update(index, { quantity: Math.max(1, Math.trunc(Number(event.target.value)) || 1) })} />
+                <QuantityInput quantity={item.quantity} onChange={(quantity) => update(index, { quantity })} />
               </label>
             </div>
             <label className="flex flex-col gap-1">

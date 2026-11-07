@@ -169,7 +169,8 @@ function MoveBody({
   const hasDeals = Boolean(preview && (copy ? preview.dealsAvailable > 0 : preview.deals > 0));
   const showDeals = hasDeals && (!copy || copyDeals) && pipelines.length > 0;
   const lines = preview ? summaryLines(preview, copy, copyDeals) : [];
-  const blocked = Boolean(showDeals && preview?.boardConflict && pipeline?.kind === "board");
+  const proposalBlocked = Boolean(preview?.proposalConflict && !copy && preview?.canMove !== false);
+  const blocked = Boolean(showDeals && preview?.boardConflict && pipeline?.kind === "board") || proposalBlocked;
   const previewError = loading ? null : (loaded?.error ?? null);
   const mustCopy = preview?.canMove === false;
   const copying = copy || mustCopy;
@@ -307,7 +308,12 @@ function MoveBody({
         <div role="status" aria-live="polite" className="caption-style text-soft flex min-h-10 flex-col gap-1">
           {!preview && loading ? <span>Checking what goes with it…</span> : lines.map((line) => <span key={line}>{line}</span>)}
         </div>
-        {blocked && (
+        {proposalBlocked && (
+          <p role="alert" className="caption-style text-danger">
+            {preview?.proposalConflict}
+          </p>
+        )}
+        {blocked && !proposalBlocked && (
           <p role="alert" className="caption-style text-danger">
             {preview?.boardConflict} would have more than one card on {pipeline?.name}. Put the deals on the pipeline.
           </p>

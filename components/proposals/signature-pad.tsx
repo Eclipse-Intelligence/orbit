@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type PointerEvent } from "react";
+import { signatureCanvasSize } from "@/lib/proposals/signature-canvas";
 import { cn } from "@/lib/utils";
 
 export type SignatureMode = "type" | "draw";
@@ -39,10 +40,8 @@ export default function SignaturePad({
     if (!element) return;
     const target = element;
     function fit() {
-      const ratio = window.devicePixelRatio || 1;
       const { width, height } = target.getBoundingClientRect();
-      const nextWidth = Math.round(width * ratio);
-      const nextHeight = Math.round(height * ratio);
+      const { width: nextWidth, height: nextHeight } = signatureCanvasSize(width, height, window.devicePixelRatio || 1);
       if (nextWidth === 0 || nextHeight === 0) return;
       if (target.width === nextWidth && target.height === nextHeight) return;
       let previous: HTMLCanvasElement | null = null;
@@ -58,7 +57,7 @@ export default function SignaturePad({
       target.height = nextHeight;
       const context = target.getContext("2d");
       if (context) {
-        context.setTransform(ratio, 0, 0, ratio, 0, 0);
+        context.setTransform(nextWidth / width, 0, 0, nextHeight / height, 0, 0);
         context.lineCap = "round";
         context.lineJoin = "round";
         context.lineWidth = 2.4;

@@ -9,6 +9,7 @@ import { Input } from "@/components/_ui/input";
 import { NativeSelect } from "@/components/_ui/native-select";
 import { prepareProposalImageAction } from "@/app/(crm)/proposals/actions";
 import { BLOCK_LABELS, FIELD_OPTIONS, newBlockId, type Block, type BlockType, type DocumentKind } from "@/lib/proposals/model";
+import { teamKeys, withTeamKey, withoutTeamKey } from "@/lib/proposals/team-keys";
 import { reloadIfStaleDeploy } from "@/lib/stale-deploy";
 import { uploadToSignedUrl } from "@/lib/upload-client";
 import { cn } from "@/lib/utils";
@@ -92,6 +93,17 @@ export function ImageField({ id, label, value, onChange, round }: { id: string; 
   const input = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const latestOnChange = useRef(onChange);
+  const mounted = useRef(true);
+  useEffect(() => {
+    latestOnChange.current = onChange;
+  });
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   async function pick(file: File | undefined) {
     if (input.current) input.current.value = "";
@@ -105,7 +117,7 @@ export function ImageField({ id, label, value, onChange, round }: { id: string; 
         return;
       }
       await uploadToSignedUrl(prepared.data.uploadUrl, file);
-      onChange(prepared.data.url);
+      if (mounted.current) latestOnChange.current(prepared.data.url);
     } catch (problem) {
       if (!reloadIfStaleDeploy(problem)) setError("The upload didn't finish. Try again.");
     } finally {
@@ -223,6 +235,7 @@ export function BlockEditor({
   const root = useRef<HTMLDivElement>(null);
   const pendingFocus = useRef<{ id: string; control: "field" | "remove" } | "add" | null>(null);
   const picked = useRef(false);
+  const [peopleKeys, setPeopleKeys] = useState<Record<string, string[]>>({});
 
   useEffect(() => {
     const target = pendingFocus.current;
@@ -499,19 +512,24 @@ export function BlockEditor({
                 {text(block, "heading", "Heading")}
                 <ol className="flex flex-col gap-3">
                   {block.people.map((person, personIndex) => {
+                    const key = teamKeys(peopleKeys[block.id], block.people.length, block.id)[personIndex];
                     const set = (patch: Partial<typeof person>) =>
                       update(block.id, (current) => ({
                         people: (current.type === "team" ? current.people : []).map((entry, position) => (position === personIndex ? { ...entry, ...patch } : entry)),
                       }));
                     return (
-                      <li key={personIndex} className="border-border flex flex-col gap-2 border-t pt-3">
+                      <li key={key} className="border-border flex flex-col gap-2 border-t pt-3">
                         <div className="grid gap-3 sm:grid-cols-2">
                           {field(`${block.id}-n${personIndex}`, "Name", person.name, (name) => set({ name }), { maxLength: 200 })}
                           {field(`${block.id}-r${personIndex}`, "Role", person.role, (role) => set({ role }), { maxLength: 200 })}
                         </div>
                         {field(`${block.id}-e${personIndex}`, "Email", person.email, (email) => set({ email }), { type: "text", maxLength: 200 })}
                         <ImageField id={`${block.id}-p${personIndex}`} label="Photo" value={person.photo} round onChange={(photo) => set({ photo })} />
-                        <Button variant="ghost" size="sm" className="self-start" onClick={() => update(block.id, { people: block.people.filter((_, position) => position !== personIndex) })}>
+                        <Button variant="ghost" size="sm" className="self-start" onClick={() => {
+                            setPeopleKeys((current) => ({ ...current, [block.id]: withoutTeamKey(current[block.id], block.people.length, block.id, personIndex) }));
+                            update(block.id, { people: block.people.filter((_, position) => position !== personIndex) });
+                          }}
+                        >
                           Remove person
                         </Button>
                       </li>
@@ -522,7 +540,11 @@ export function BlockEditor({
                   variant="secondary"
                   size="sm"
                   className="self-start"
-                  onClick={() => update(block.id, { people: [...block.people, { name: "", role: "", email: "", photo: "" }] })}
+                  onClick={() => {
+                    const added = `${block.id}-${crypto.randomUUID()}`;
+                    setPeopleKeys((current) => ({ ...current, [block.id]: withTeamKey(current[block.id], block.people.length, block.id, added) }));
+                    update(block.id, { people: [...block.people, { name: "", role: "", email: "", photo: "" }] });
+                  }}
                 >
                   Add person
                 </Button>

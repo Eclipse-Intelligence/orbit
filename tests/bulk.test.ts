@@ -55,6 +55,12 @@ describe("personalise", () => {
     assert.equal(personalise("{{ first_name }}, {{FIRST_NAME}}", recipient()), "Ada, Ada");
   });
 
+  it("leaves tokens from the object prototype as typed", () => {
+    const template = "{{constructor}} {{__proto__}} {{toString}} {{hasOwnProperty}} {{ valueOf }}";
+    assert.equal(personalise(template, recipient()), template);
+    assert.deepEqual(unknownTokens(template), ["{{constructor}}", "{{__proto__}}", "{{toString}}", "{{hasOwnProperty}}", "{{ valueOf }}"]);
+  });
+
   it("falls back when the first name is empty", () => {
     assert.equal(
       personalise("Hi {{first_name}}", recipient({ firstName: null, lastName: "Lovelace" })),

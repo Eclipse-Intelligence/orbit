@@ -1,10 +1,13 @@
 import { createHmac, randomBytes } from "node:crypto";
+import { lookup as dnsLookup } from "node:dns/promises";
+import { isIP } from "node:net";
 import type { Db } from "@/lib/db/pool";
 import { getAdminPool } from "@/lib/db/pool";
 import { CrmError } from "@/lib/crm/errors";
 import { assertScope } from "@/lib/crm/scopes";
 import { markWebhooksQueued } from "@/lib/crm/webhook-queue";
 import type { Actor } from "@/lib/crm/types";
+import { privateAddress, publicFetch, WebPageError } from "@/lib/web-page";
 
 function iso(value: Date | string | null) {
   if (!value) return null;
@@ -88,17 +91,83 @@ export type WebhookDelivery = {
   createdAt: string;
 };
 
-function assertWebhookUrl(value: string) {
+export type WebhookLookup = (hostname: string) => Promise<string[]>;
+
+export type WebhookNetwork = { lookup?: WebhookLookup; fetchImpl?: typeof fetch };
+
+export class WebhookTargetError extends Error {}
+
+export class WebhookLookupError extends Error {}
+
+const NOT_FOUND_CODES = new Set(["ENOTFOUND", "ENODATA"]);
+
+export function privateWebhookTargetsAllowed() {
+  return process.env.NODE_ENV !== "production" && process.env.WEBHOOKS_ALLOW_PRIVATE_TARGETS === "1";
+}
+
+async function systemLookup(hostname: string) {
+  return (await dnsLookup(hostname, { all: true, verbatim: true })).map((entry) => entry.address);
+}
+
+function privateTarget(host: string) {
+  return new WebhookTargetError(`${host} is a private or local address. Webhooks only go to public addresses.`);
+}
+
+export async function assertPublicWebhookTarget(url: URL, lookup: WebhookLookup = systemLookup) {
+  const host = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  if (/^(localhost|.*\.localhost|.*\.local|.*\.internal)$/.test(host)) throw privateTarget(host);
+  if (isIP(host)) {
+    if (privateAddress(host)) throw privateTarget(host);
+    return;
+  }
+  let addresses: string[];
+  try {
+    addresses = await lookup(host);
+  } catch (error) {
+    const code = (error as { code?: unknown } | null)?.code;
+    if (typeof code === "string" && NOT_FOUND_CODES.has(code)) {
+      throw new WebhookTargetError(`${host} couldn't be found. Check the webhook URL.`);
+    }
+    throw new WebhookLookupError(`${host} couldn't be looked up just now. Try again in a minute.`);
+  }
+  if (addresses.length === 0) throw new WebhookTargetError(`${host} couldn't be found. Check the webhook URL.`);
+  if (addresses.some(privateAddress)) throw privateTarget(host);
+}
+
+async function assertWebhookUrl(value: string, lookup?: WebhookLookup) {
   let url: URL;
   try {
     url = new URL(value);
   } catch {
     throw new CrmError("invalid_input", "Enter a valid webhook URL.", 400, { field: "url" });
   }
-  const local = url.hostname === "localhost" || url.hostname === "127.0.0.1";
-  if (url.protocol === "https:") return url.toString();
-  if (url.protocol === "http:" && local) return url.toString();
-  throw new CrmError("invalid_input", "Webhook URLs use https.", 400, { field: "url" });
+  if (url.username || url.password) {
+    throw new CrmError("invalid_input", "Webhook URLs can't include a username or password.", 400, { field: "url" });
+  }
+  const unrestricted = privateWebhookTargetsAllowed();
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && unrestricted)) {
+    throw new CrmError("invalid_input", "Webhook URLs use https.", 400, { field: "url" });
+  }
+  if (!unrestricted) {
+    try {
+      await assertPublicWebhookTarget(url, lookup);
+    } catch (error) {
+      if (error instanceof WebhookTargetError || error instanceof WebhookLookupError) {
+        throw new CrmError("invalid_input", error.message, 400, { field: "url" });
+      }
+      throw error;
+    }
+  }
+  return url.toString();
+}
+
+function deliveryError(error: unknown) {
+  for (let current = error; current && typeof current === "object"; current = (current as { cause?: unknown }).cause) {
+    if (current instanceof WebPageError || current instanceof WebhookTargetError) {
+      return { message: current.message, final: true };
+    }
+  }
+  return { message: error instanceof Error ? error.message : "Delivery failed", final: false };
 }
 
 export async function enqueueWebhookDeliveries(
@@ -126,9 +195,10 @@ export async function enqueueWebhookDeliveries(
 export async function createWebhook(
   actor: Actor,
   input: { url: string; events: string[]; description?: string | null },
+  network: WebhookNetwork = {},
 ) {
   assertScope(actor.scopes, "admin");
-  const url = assertWebhookUrl(input.url.trim());
+  const url = await assertWebhookUrl(input.url.trim(), network.lookup);
   const events = [...new Set(input.events.map((event) => event.trim()).filter(Boolean))];
   if (events.length === 0) {
     throw new CrmError("invalid_input", "Choose at least one event.", 400, { field: "events" });
@@ -250,7 +320,7 @@ type ClaimedDelivery = {
   attempts: number;
 };
 
-export async function deliverDueWebhooks(limit = 20) {
+export async function deliverDueWebhooks(limit = 20, network: WebhookNetwork = {}) {
   const admin = getAdminPool();
   const claimed = await admin.query<ClaimedDelivery>(
     `update crm.webhook_deliveries delivery
@@ -275,9 +345,12 @@ export async function deliverDueWebhooks(limit = 20) {
   for (const row of claimed.rows) {
     const body = JSON.stringify(row.payload);
     const timestamp = Math.floor(Date.now() / 1000).toString();
+    const unrestricted = privateWebhookTargetsAllowed();
+    const send = network.fetchImpl ?? (unrestricted ? fetch : publicFetch);
     try {
+      if (!unrestricted) await assertPublicWebhookTarget(new URL(row.url), network.lookup);
       const signature = createHmac("sha256", row.secret).update(`${timestamp}.${body}`).digest("hex");
-      const response = await fetch(row.url, {
+      const response = await send(row.url, {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -287,9 +360,11 @@ export async function deliverDueWebhooks(limit = 20) {
           "x-crm-signature": `v1=${signature}`,
         },
         body,
+        redirect: "manual",
         signal: AbortSignal.timeout(5000),
       });
-      if (response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      if (response.status >= 200 && response.status < 300) {
         await admin.query(
           `update crm.webhook_deliveries
            set status = 'delivered', delivered_at = now(), last_status_code = $2, last_error = null
@@ -298,18 +373,26 @@ export async function deliverDueWebhooks(limit = 20) {
         );
         continue;
       }
+      if (response.status >= 300 && response.status < 400) {
+        await markAttempt(
+          row,
+          response.status,
+          `The endpoint answered with a redirect (HTTP ${response.status}). Webhooks don't follow redirects, so use the final URL.`,
+        );
+        continue;
+      }
       await markAttempt(row, response.status, `HTTP ${response.status}`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Delivery failed";
-      await markAttempt(row, null, message.slice(0, 300));
+      const failure = deliveryError(error);
+      await markAttempt(row, null, failure.message.slice(0, 300), failure.final);
     }
   }
   return claimed.rowCount ?? 0;
 }
 
-async function markAttempt(row: ClaimedDelivery, statusCode: number | null, message: string) {
+async function markAttempt(row: ClaimedDelivery, statusCode: number | null, message: string, final = false) {
   const admin = getAdminPool();
-  const failed = row.attempts >= 5;
+  const failed = final || row.attempts >= 5;
   const delay = BACKOFF_SECONDS[Math.min(row.attempts - 1, BACKOFF_SECONDS.length - 1)] ?? 7200;
   await admin.query(
     `update crm.webhook_deliveries

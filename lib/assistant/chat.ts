@@ -1058,7 +1058,8 @@ export async function decideActions(
     }
     const alternative = variants.get(action.id) ? ACTION_ALTERNATIVES[action.name] : undefined;
     const chosenAlternative = alternative && alternative.key === variants.get(action.id) ? alternative : undefined;
-    const output = (await runTool(actor, chosenAlternative?.tool ?? call.function.name, parseArgs(call.function.arguments), {
+    const callArgs = parseArgs(call.function.arguments);
+    const output = (await runTool(actor, chosenAlternative?.tool ?? call.function.name, chosenAlternative ? chosenAlternative.args(callArgs) : callArgs, {
       deadline: options.deadline - 20_000,
       callId: call.id,
       approval: action.name === "save_doc" ? approvalFor(action) : undefined,

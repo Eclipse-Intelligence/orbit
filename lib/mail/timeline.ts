@@ -1,5 +1,5 @@
-import { createActivityInDb } from "@/lib/crm/activities";
-import { isRecent } from "@/lib/crm/communications";
+import { createEmailActivityOnce } from "@/lib/crm/activities";
+import { companyHasOpenTask, isRecent } from "@/lib/crm/communications";
 import { withActor } from "@/lib/crm/context";
 import { recordAudit } from "@/lib/crm/mutate";
 import { hasScope } from "@/lib/crm/scopes";
@@ -140,18 +140,14 @@ async function relinkActivity(db: Db, actor: UserActor, activityId: string, row:
   return true;
 }
 
-async function openTasks(db: Db, companyId: string) {
-  const result = await db.query<{ total: number }>(
-    "select count(*)::int as total from crm.tasks where company_id = $1 and archived_at is null and completed_at is null",
-    [companyId],
-  );
-  return result.rows[0]?.total ?? 0;
+async function needsFollowUp(actor: UserActor, row: Candidate, at: Date) {
+  if (!row.company_id || row.direction !== "inbound" || row.folder_role !== "inbox") return false;
+  if (!isRecent(at.toISOString()) || !hasScope(actor.scopes, "tasks:write")) return false;
+  return !(await companyHasOpenTask(actor.workspaceId, row.company_id));
 }
 
-async function suggestFollowUp(db: Db, actor: UserActor, row: Candidate, at: Date) {
-  if (!row.company_id || row.direction !== "inbound" || row.folder_role !== "inbox") return null;
-  if (!isRecent(at.toISOString()) || !hasScope(actor.scopes, "tasks:write")) return null;
-  if ((await openTasks(db, row.company_id)) > 0) return null;
+async function suggestFollowUp(db: Db, actor: UserActor, row: Candidate) {
+  if (!row.company_id) return null;
   const names = await db.query<{ contact: string | null; company: string | null }>(
     `select (select coalesce(nullif(trim(concat_ws(' ', c.first_name, c.last_name)), ''), c.email) from crm.contacts c where c.id = $1) as contact,
        (select co.name from crm.companies co where co.id = $2) as company`,
@@ -229,8 +225,9 @@ export async function fileMailOnTimeline(
       continue;
     }
     try {
-      const taskId = await withActor(target, async (db) => {
-        await createActivityInDb(
+      const followUp = await needsFollowUp(target, row, at);
+      const outcome = await withActor(target, async (db) => {
+        const saved = await createEmailActivityOnce(
           db,
           target,
           {
@@ -250,12 +247,14 @@ export async function fileMailOnTimeline(
               ...(row.attachments ? { hasAttachments: true } : {}),
             },
           },
+          { mailMessageId: row.message_id, internetMessageId: row.internet_message_id },
           { operation: "file_mail", source: "microsoft", catchUp: now - at.getTime() > FRESH_MS },
         );
-        return suggestFollowUp(db, target, row, at);
+        return { created: saved.created, taskId: saved.created && followUp ? await suggestFollowUp(db, target, row) : null };
       });
+      if (!outcome.created) continue;
       filed += 1;
-      if (taskId) followUps.set(target.workspaceId, [...(followUps.get(target.workspaceId) ?? []), taskId]);
+      if (outcome.taskId) followUps.set(target.workspaceId, [...(followUps.get(target.workspaceId) ?? []), outcome.taskId]);
     } catch (error) {
       console.error("Filing an email on the timeline failed", error);
     }

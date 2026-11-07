@@ -1,9 +1,10 @@
 import type { Db } from "@/lib/db/pool";
 import { decryptSecret, encryptSecret } from "@/lib/crypto/secret";
 import { withActor } from "@/lib/crm/context";
-import { createActivityInDb } from "@/lib/crm/activities";
+import { createActivityInDb, createEmailActivityOnce } from "@/lib/crm/activities";
 import { discardAttachments, loadAttachments } from "@/lib/crm/email-attachments";
 import {
+  companyHasOpenTask,
   FREE_MAIL_DOMAINS,
   isFreeMailDomain,
   isRecent,
@@ -561,11 +562,11 @@ export async function syncMailbox(
       .map(graphToInbound)
       .filter((message) => message.providerMessageId);
     const watermark = syncWatermark(stored, since, fetched);
-    const followUpIds: string[] = [];
+    const candidates: FollowUpCandidate[] = [];
     const counts = await withActor(owner, async (db) => {
       await lockMailbox(db, stored.id);
       await storeToken(db, stored.id, token);
-      const counts = await fileMessages(db, owner, stored, inbound, followUpIds);
+      const counts = await fileMessages(db, owner, stored, inbound, candidates);
       await db.query("savepoint attach_unmatched");
       try {
         counts.attached += await attachUnmatched(db, owner, stored);
@@ -584,6 +585,8 @@ export async function syncMailbox(
       );
       return counts;
     });
+    const followUpIds = await suggestFollowUps(owner, candidates);
+    counts.followUps = followUpIds.length;
     await sendFollowUpsToClickUp(owner, followUpIds);
     return counts;
   } catch (error) {
@@ -634,7 +637,6 @@ export async function fileInboundMessages(
   actor: UserActor,
   messages: InboundEmail[],
 ): Promise<SyncCounts> {
-  const followUpIds: string[] = [];
   const stored = await withActor(actor, (db) => readStored(db, actor));
   if (!stored) {
     throw new CrmError(
@@ -644,12 +646,49 @@ export async function fileInboundMessages(
     );
   }
   const owner = mailboxActor(actor, stored);
+  const candidates: FollowUpCandidate[] = [];
   const counts = await withActor(owner, async (db) => {
     await lockMailbox(db, stored.id);
-    return fileMessages(db, owner, stored, messages, followUpIds);
+    return fileMessages(db, owner, stored, messages, candidates);
   });
+  const followUpIds = await suggestFollowUps(owner, candidates);
+  counts.followUps = followUpIds.length;
   await sendFollowUpsToClickUp(owner, followUpIds);
   return counts;
+}
+
+type FollowUpCandidate = { companyId: string; contactId: string | null; who: string };
+
+async function suggestFollowUps(actor: UserActor, candidates: FollowUpCandidate[]) {
+  const taskIds: string[] = [];
+  const checked = new Set<string>();
+  for (const candidate of candidates) {
+    if (checked.has(candidate.companyId)) continue;
+    checked.add(candidate.companyId);
+    try {
+      if (await companyHasOpenTask(actor.workspaceId, candidate.companyId)) continue;
+      const due = await scheduleTaskDue(actor, { days: 2 });
+      const task = await withActor(actor, (db) =>
+        createTaskInDb(
+          db,
+          actor,
+          {
+            title: `Follow up with ${candidate.who}`.slice(0, 200),
+            description: withDueNote("Suggested after an email arrived.", due),
+            dueAt: due?.dueAt ?? null,
+            companyId: candidate.companyId,
+            contactId: candidate.contactId,
+            priority: "normal",
+          },
+          { operation: "suggest_follow_up", source: "microsoft" },
+        ),
+      );
+      if (task) taskIds.push(task.id);
+    } catch (error) {
+      console.error("Could not suggest a follow-up task", error);
+    }
+  }
+  return taskIds;
 }
 
 function mailboxActor(actor: UserActor, stored: StoredConnection): UserActor {
@@ -683,16 +722,8 @@ async function fileActivity(
   >,
   match: PartyMatch,
 ) {
-  if (message.internetMessageId) {
-    const existing = await db.query<{ id: string }>(
-      `select id from crm.activities
-       where workspace_id = $1 and type = 'email' and metadata->>'internetMessageId' = $2
-         and contact_id is not distinct from $3 limit 1`,
-      [actor.workspaceId, message.internetMessageId, match.contactId],
-    );
-    if (existing.rows[0]) return existing.rows[0].id;
-  }
-  const activity = await createActivityInDb(
+  const internetMessageId = message.internetMessageId || null;
+  const saved = await createEmailActivityOnce(
     db,
     actor,
     {
@@ -705,13 +736,14 @@ async function fileActivity(
       metadata: {
         source: "microsoft",
         providerMessageId: message.providerMessageId,
-        ...(message.internetMessageId ? { internetMessageId: message.internetMessageId } : {}),
+        ...(internetMessageId ? { internetMessageId } : {}),
         from: canonicalEmail(message.fromEmail ?? "") ?? null,
       },
     },
+    { internetMessageId, providerMessageId: message.providerMessageId },
     { operation: "sync_inbox", source: "microsoft" },
   );
-  return activity.id;
+  return saved.id;
 }
 
 async function attachUnmatched(
@@ -727,8 +759,9 @@ async function attachUnmatched(
     from_email: string;
     received_at: Date | string | null;
     conversation_id: string | null;
+    internet_message_id: string | null;
   }>(
-    `select m.id, m.provider_message_id, m.subject, m.preview, m.from_email, m.received_at, m.conversation_id
+    `select m.id, m.provider_message_id, m.subject, m.preview, m.from_email, m.received_at, m.conversation_id, m.internet_message_id
      from crm.email_messages m
      where m.connection_id = $1
        and m.workspace_id = $2
@@ -781,6 +814,7 @@ async function attachUnmatched(
         preview: row.preview,
         fromEmail: row.from_email,
         receivedAt: iso(row.received_at),
+        internetMessageId: row.internet_message_id,
       },
       match,
     );
@@ -800,7 +834,7 @@ async function fileMessages(
   actor: UserActor,
   mailbox: StoredConnection,
   messages: InboundEmail[],
-  followUpIds: string[] = [],
+  followUps: FollowUpCandidate[],
 ): Promise<SyncCounts> {
   const counts: SyncCounts = {
     attached: 0,
@@ -851,29 +885,12 @@ async function fileMessages(
         { ...message, providerMessageId, internetMessageId },
         match,
       );
-      if (
-        match.companyId &&
-        isRecent(message.receivedAt) &&
-        hasScope(actor.scopes, "tasks:write") &&
-        (await openTasks(db, match.companyId)) === 0
-      ) {
-        const who = match.contactName || match.companyName || "them";
-        const due = await scheduleTaskDue(actor, { days: 2 });
-        const followUp = await createTaskInDb(
-          db,
-          actor,
-          {
-            title: `Follow up with ${who}`.slice(0, 200),
-            description: withDueNote("Suggested after an email arrived.", due),
-            dueAt: due?.dueAt ?? null,
-            companyId: match.companyId,
-            contactId: match.contactId,
-            priority: "normal",
-          },
-          { operation: "suggest_follow_up", source: "microsoft" },
-        );
-        if (followUp) followUpIds.push(followUp.id);
-        counts.followUps += 1;
+      if (match.companyId && isRecent(message.receivedAt) && hasScope(actor.scopes, "tasks:write")) {
+        followUps.push({
+          companyId: match.companyId,
+          contactId: match.contactId,
+          who: match.contactName || match.companyName || "them",
+        });
       }
     }
     const inserted = await db.query(
@@ -974,15 +991,6 @@ async function companyName(db: Db, companyId: string) {
     [companyId],
   );
   return result.rows[0]?.name ?? null;
-}
-
-async function openTasks(db: Db, companyId: string) {
-  const result = await db.query<{ total: number }>(
-    `select count(*)::int as total from crm.tasks
-     where company_id = $1 and archived_at is null and completed_at is null`,
-    [companyId],
-  );
-  return result.rows[0]?.total ?? 0;
 }
 
 function validTime(value: string | null | undefined) {
