@@ -35,7 +35,7 @@ import {
   type Actor,
   type Provenance,
 } from "@/lib/crm/types";
-import { parseDateTime } from "@/lib/time";
+import { readDateTime } from "@/lib/time";
 
 const ACTOR_NAME_SQL = `coalesce(
       nullif(trim(pr.full_name), ''),
@@ -148,13 +148,9 @@ function prepareActivity(input: ActivityWrite): {
   }
   let occurredAt: string | null = null;
   if (input.occurredAt) {
-    const date = parseDateTime(input.occurredAt);
-    if (!date) {
-      throw new CrmError("invalid_input", "Enter a valid date and time.", 400, {
-        field: "occurredAt",
-      });
-    }
-    occurredAt = date.toISOString();
+    const reading = readDateTime(input.occurredAt);
+    if (!reading.ok) throw new CrmError("invalid_input", reading.error, 400, { field: "occurredAt" });
+    occurredAt = reading.date.toISOString();
   }
   let metadata: Record<string, unknown> = {};
   if (input.metadata) {
@@ -747,9 +743,9 @@ function editedValue(field: ActivityEditField, value: unknown): unknown {
     return cleanText(value, field === "title" ? 200 : 10000, field);
   }
   if (field === "occurredAt") {
-    const date = typeof value === "string" ? parseDateTime(value) : null;
-    if (!date) throw new CrmError("invalid_input", "Enter a valid date and time.", 400, { field: "occurredAt" });
-    return date.toISOString();
+    const reading = typeof value === "string" ? readDateTime(value) : null;
+    if (!reading?.ok) throw new CrmError("invalid_input", reading?.error ?? "Enter a valid date and time.", 400, { field: "occurredAt" });
+    return reading.date.toISOString();
   }
   return linkId(value, field);
 }

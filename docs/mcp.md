@@ -43,7 +43,7 @@ Three kinds of token reach the server. They see different tools.
 
 Every tool is listed for every non-market token whatever its scopes. A call without the scope it needs returns `forbidden: Missing scope <scope>.` with `isError: true`. Other failures return `<code>: <message>` the same way.
 
-Each agent credential and each personal token is limited to 120 requests a minute.
+Each agent credential and each personal token is limited to 120 tool calls a minute. Every `tools/call` in a JSON-RPC batch counts on its own, and a request without a tool call counts as one. A batch holds at most 25 messages (`MCP_BATCH_LIMIT` in `lib/api/mcp-request.ts`), so a batch can finish inside the route's 60 second limit. Over the limit the reply is status 429 with `Retry-After: 60` and a JSON-RPC error (code `-32029`, `data.code` `rate_limited`, `data.cost` the calls the request needed); a larger batch gets status 400 and code `-32600`.
 
 ### Personal tokens
 
@@ -216,7 +216,7 @@ For a person who has connected Reader in Settings › Connections. They use only
 
 ## Merging
 
-`merge_companies` and `merge_contacts` take `keep_id` and `merge_id`. One transaction moves every reference from the duplicate to the kept record (people, deals and board cards, tasks, activity, emails, calls, proposals, knowledge, market notes, signals, calendar links), fills the kept record's empty fields without overwriting, combines tags and archives the duplicate. A contact keeps its own email; a different one from the duplicate goes into the notes. Returns `kept`, `merged`, `moved` (rows per table), `filled` and `tagsAdded`. Refuses a record merged with itself, one in another workspace, or an archived one. Records a `company.merged` or `contact.merged` audit event (also a webhook event) with how many rows moved from each table and what was filled, and a `company.archived` or `contact.archived` event on the duplicate with `mergedInto`. A merge can't be undone; the audit event records what moved.
+`merge_companies` and `merge_contacts` take `keep_id` and `merge_id`. One transaction moves every reference from the duplicate to the kept record (people, deals and board cards, tasks, activity, emails, calls, proposals, knowledge, market notes, signals, calendar links), fills the kept record's empty fields without overwriting, combines tags and archives the duplicate. A contact keeps its own email; a different one from the duplicate goes into the notes. Returns `kept`, `merged`, `moved` (rows per table), `filled` and `tagsAdded`. Refuses a record merged with itself, one in another workspace, or an archived one. Records a `company.merged` or `contact.merged` audit event (also a webhook event) with how many rows moved from each table and what was filled, and a `company.archived` or `contact.archived` event on the duplicate with `mergedInto`. AI field answers move to fill the kept company's gaps (both answered: the kept one stays, unless only the duplicate's was set by hand), and follow-up suggestions, `mail_thread_routes` person links and Docs mention links (`page_links`) are repointed; `moved` counts them as `ai_field_answers`, `follow_up_suggestions`, `mail_thread_routes` and `page_links`. A merge can't be undone, and `undo_change` refuses the merge event and the duplicate's archive; the audit event records what moved.
 
 ## Moving between workspaces
 

@@ -84,26 +84,135 @@ export function zonedTimeToDate(wall: WallClock, timeZone = appTimeZone()) {
   return new Date(guess - Math.min(first, second));
 }
 
-export function parseDateTime(value: string, timeZone = appTimeZone()): Date | null {
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  const match = LOCAL_DATE_TIME.exec(trimmed);
-  if (!match) {
-    const date = new Date(trimmed);
+const ZONED_DATE_TIME = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)\s*(Z|UTC|GMT|[+-]\d{2}(?::?\d{2})?)$/i;
+const DAY_FIRST = /^(\d{1,2})([/.-])(\d{1,2})\2(\d{2,4})(?:(?:\s*,\s*|\s+|T)(?:at\s+)?(\d{1,2})[:.](\d{2})(?::(\d{2}))?)?$/i;
+const YEAR_FIRST = /^(\d{4})\/(\d{1,2})\/(\d{1,2})(?:(?:\s+|T)(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/;
+const WEEKDAY_PREFIX = "(?:(?:mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)(?:day|nesday|sday|urday)?\\.?,?\\s+)?";
+const NAMED_TIME = "(?:(?:\\s*,\\s*|\\s+)(?:at\\s+)?(\\d{1,2})[:.](\\d{2}))?";
+const DAY_MONTH_NAME = new RegExp(`^${WEEKDAY_PREFIX}(\\d{1,2})(?:st|nd|rd|th)?(?:\\s+of)?\\s+([a-z]+)\\.?,?\\s+(\\d{2,4})${NAMED_TIME}$`, "i");
+const MONTH_NAME_DAY = new RegExp(`^${WEEKDAY_PREFIX}([a-z]+)\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?,?\\s+(\\d{2,4})${NAMED_TIME}$`, "i");
+const EXPLICIT_ZONE = /(?:\b(?:GMT|UTC)\b|[+-]\d{4}\s*(?:\(.*\))?$)/i;
+const MONTH_NAMES = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+const NAMED_MONTH = /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b/i;
+const SHORT_DAY = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+
+const FORMAT_HINT = "Enter a valid date and time, such as 2026-11-07 14:30, 07/11/2026 or 7 Nov 2026.";
+
+export type DateTimeReading = { ok: true; date: Date; dateOnly: boolean } | { ok: false; error: string };
+
+type Wall = { year: number; month: number; day: number; hour: number; minute: number; second: number; dateOnly: boolean };
+
+function monthNumber(word: string) {
+  const key = word.toLowerCase();
+  if (key.length < 3) return 0;
+  return MONTH_NAMES.findIndex((name) => name.startsWith(key)) + 1;
+}
+
+function wallFrom(year: string, month: number, day: string, hour?: string, minute?: string, second?: string): Wall | string {
+  if (year.length !== 4) return "Write the year in full, such as 2026.";
+  return {
+    year: Number(year),
+    month,
+    day: Number(day),
+    hour: Number(hour ?? 0),
+    minute: Number(minute ?? 0),
+    second: Number(second ?? 0),
+    dateOnly: hour === undefined,
+  };
+}
+
+function readWall(text: string): Wall | string | null {
+  const local = LOCAL_DATE_TIME.exec(text);
+  if (local) return wallFrom(local[1], Number(local[2]), local[3], local[4], local[5], local[6]);
+  const dayFirst = DAY_FIRST.exec(text);
+  if (dayFirst) return wallFrom(dayFirst[4], Number(dayFirst[3]), dayFirst[1], dayFirst[5], dayFirst[6], dayFirst[7]);
+  const yearFirst = YEAR_FIRST.exec(text);
+  if (yearFirst) return wallFrom(yearFirst[1], Number(yearFirst[2]), yearFirst[3], yearFirst[4], yearFirst[5], yearFirst[6]);
+  const named = DAY_MONTH_NAME.exec(text);
+  if (named && monthNumber(named[2])) return wallFrom(named[3], monthNumber(named[2]), named[1], named[4], named[5]);
+  const monthFirst = MONTH_NAME_DAY.exec(text);
+  if (monthFirst && monthNumber(monthFirst[1])) return wallFrom(monthFirst[3], monthNumber(monthFirst[1]), monthFirst[2], monthFirst[4], monthFirst[5]);
+  return null;
+}
+
+function realWall(wall: Wall) {
+  const check = new Date(Date.UTC(wall.year, wall.month - 1, wall.day, wall.hour, wall.minute, wall.second));
+  return (
+    wall.month >= 1 &&
+    wall.month <= 12 &&
+    check.getUTCFullYear() === wall.year &&
+    check.getUTCMonth() === wall.month - 1 &&
+    check.getUTCDate() === wall.day &&
+    check.getUTCHours() === wall.hour &&
+    check.getUTCMinutes() === wall.minute &&
+    check.getUTCSeconds() === wall.second
+  );
+}
+
+function sameWall(date: Date, wall: Wall, timeZone: string) {
+  const parts = zonedParts(date, timeZone);
+  return parts.year === wall.year && parts.month === wall.month && parts.day === wall.day && parts.hour === wall.hour && parts.minute === wall.minute;
+}
+
+function wallLabel(wall: Wall) {
+  return `${pad(wall.hour)}:${pad(wall.minute)} on ${SHORT_DAY.format(new Date(Date.UTC(wall.year, wall.month - 1, wall.day)))}`;
+}
+
+function zonedInstant(text: string) {
+  const zoned = ZONED_DATE_TIME.exec(text);
+  if (zoned) {
+    const zone = zoned[3].toUpperCase();
+    const offset = zone === "Z" || zone === "UTC" || zone === "GMT" ? "Z" : zone.length === 3 ? `${zone}:00` : zone.includes(":") ? zone : `${zone.slice(0, 3)}:${zone.slice(3)}`;
+    const date = new Date(`${zoned[1]}T${zoned[2]}${offset}`);
     return Number.isNaN(date.getTime()) ? null : date;
   }
-  const [year, month, day, hour, minute, second] = match.slice(1).map((part) => Number(part ?? 0));
-  const check = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
-  if (
-    check.getUTCFullYear() !== year ||
-    check.getUTCMonth() !== month - 1 ||
-    check.getUTCDate() !== day ||
-    check.getUTCHours() !== hour ||
-    check.getUTCMinutes() !== minute
-  ) {
-    return null;
+  if (!EXPLICIT_ZONE.test(text) || !NAMED_MONTH.test(text)) return null;
+  const date = new Date(text);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function readInstant(value: string, timeZone: string, strict: boolean): DateTimeReading {
+  const text = value.trim();
+  if (!text) return { ok: false, error: FORMAT_HINT };
+  const zoned = zonedInstant(text);
+  if (zoned) return { ok: true, date: zoned, dateOnly: false };
+  const wall = readWall(text);
+  if (wall === null) return { ok: false, error: FORMAT_HINT };
+  if (typeof wall === "string") return { ok: false, error: wall };
+  if (!realWall(wall)) return { ok: false, error: `${text} isn't a real ${wall.dateOnly ? "date" : "date and time"}.` };
+  const date = zonedTimeToDate(wall, timeZone);
+  if (strict && !wall.dateOnly) {
+    if (!sameWall(date, wall, timeZone)) {
+      return { ok: false, error: `${wallLabel(wall)} doesn't exist in ${zoneLabel(timeZone)} because the clocks go forward. Pick another time.` };
+    }
+    const hour = 3_600_000;
+    if ([date.getTime() - hour, date.getTime() + hour].some((at) => sameWall(new Date(at), wall, timeZone))) {
+      return {
+        ok: false,
+        error: `${wallLabel(wall)} happens twice in ${zoneLabel(timeZone)} because the clocks go back. Add the offset, such as +01:00 or Z.`,
+      };
+    }
   }
-  return zonedTimeToDate({ year, month, day, hour, minute, second }, timeZone);
+  return { ok: true, date, dateOnly: wall.dateOnly };
+}
+
+export function readDateTime(value: string, timeZone = appTimeZone()): DateTimeReading {
+  return readInstant(value, timeZone, true);
+}
+
+export function parseDateTime(value: string, timeZone = appTimeZone()): Date | null {
+  const reading = readInstant(value, timeZone, false);
+  return reading.ok ? reading.date : null;
+}
+
+export function dayKeyIn(date: Date, timeZone = appTimeZone()) {
+  const parts = zonedParts(date, timeZone);
+  return `${pad(parts.year, 4)}-${pad(parts.month)}-${pad(parts.day)}`;
+}
+
+export function readDay(value: string, timeZone = appTimeZone()): string | null {
+  const reading = readInstant(value, timeZone, false);
+  return reading.ok ? dayKeyIn(reading.date, timeZone) : null;
 }
 
 export function toIsoInstant(value: string, timeZone = appTimeZone()) {

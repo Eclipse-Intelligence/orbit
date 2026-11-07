@@ -220,8 +220,67 @@ type LinkPlan = { content: string; links: LinkRow[]; tags: string[]; mentions: D
 
 type LinkedPage = { id: string; workspace_id: string; user_id: string | null; kind: string };
 
-async function planLinks(db: Db, page: LinkedPage, content: string, depth = 0, preferWorkspace = page.workspace_id): Promise<LinkPlan> {
+const MERGE_HOPS = 5;
+
+async function mergedMentionTargets(db: Db, mentions: DocMention[]) {
+  const ids = [...new Set(mentions.filter((mention) => mention.kind === "company" || mention.kind === "contact").map((mention) => mention.id))];
+  const keptFor = new Map<string, string>();
+  let frontier = ids;
+  for (let hop = 0; hop < MERGE_HOPS && frontier.length > 0; hop += 1) {
+    const archived = await db.query<{ id: string }>(
+      `select id::text from crm.companies where id = any($1::uuid[]) and archived_at is not null
+       union all
+       select id::text from crm.contacts where id = any($1::uuid[]) and archived_at is not null`,
+      [frontier],
+    );
+    if (archived.rows.length === 0) break;
+    const merged = await db.query<{ id: string; kept: string }>(
+      `select distinct on (e.entity_id) e.entity_id::text as id, e.changes->>'mergedInto' as kept
+       from crm.audit_events e
+       where e.entity_id = any($1::uuid[]) and e.changes ? 'mergedInto'
+         and e.event_type in ('company.archived', 'contact.archived')
+       order by e.entity_id, e.created_at desc`,
+      [archived.rows.map((row) => row.id)],
+    );
+    frontier = [];
+    for (const row of merged.rows) {
+      if (!isUuid(row.kept) || keptFor.has(row.id)) continue;
+      keptFor.set(row.id, row.kept);
+      if (!keptFor.has(row.kept)) frontier.push(row.kept);
+    }
+  }
+  const targets = new Map<string, string>();
+  for (const id of ids) {
+    let target = id;
+    for (let hop = 0; hop < MERGE_HOPS && keptFor.has(target); hop += 1) target = keptFor.get(target)!;
+    if (target !== id) targets.set(id, target);
+  }
+  return targets;
+}
+
+async function repointMergedMentions(db: Db, content: string, mentions: DocMention[]) {
+  const targets = await mergedMentionTargets(db, mentions);
+  let rewritten = content;
+  for (const mention of mentions) {
+    const kept = targets.get(mention.id);
+    if (kept) rewritten = rewritten.split(`](${mention.kind}:${mention.id})`).join(`](${mention.kind}:${kept})`);
+  }
+  return rewritten;
+}
+
+async function planLinks(
+  db: Db,
+  page: LinkedPage,
+  content: string,
+  depth = 0,
+  preferWorkspace = page.workspace_id,
+  mentionsChecked = false,
+): Promise<LinkPlan> {
   const parsed = parseDoc(content);
+  if (!mentionsChecked && parsed.mentions.length > 0) {
+    const repointed = await repointMergedMentions(db, content, parsed.mentions);
+    if (repointed !== content) return planLinks(db, page, repointed, depth, preferWorkspace, true);
+  }
   const raws = [...new Set(parsed.links.flatMap((link) => (link.heading !== null && link.title ? [link.target, link.title] : [link.target])))];
   const found = new Map<string, { key: string; id: string | null; title: string | null }>();
   if (raws.length > 0) {
@@ -287,7 +346,7 @@ async function planLinks(db: Db, page: LinkedPage, content: string, depth = 0, p
   }
   if (renames.length > 0 && depth === 0) {
     for (const rename of renames) rewritten = rewriteLinkTitle(rewritten, rename.from, rename.to).content;
-    if (rewritten !== content) return planLinks(db, page, rewritten, depth + 1, preferWorkspace);
+    if (rewritten !== content) return planLinks(db, page, rewritten, depth + 1, preferWorkspace, true);
   }
   return { content: rewritten, links: [...rows.values()], tags: parsed.tags, mentions: parsed.mentions };
 }

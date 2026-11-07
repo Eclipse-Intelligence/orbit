@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { bankHolidays, dueDayFrom, nextWorkingDay, planTaskDue } from "@/lib/crm/task-due";
+import { bankHolidays, dueDayFrom, nextWorkingDay, planTaskDue, scheduleTaskDue } from "@/lib/crm/task-due";
+import type { UserActor } from "@/lib/crm/types";
 
 const LONDON = "Europe/London";
 
@@ -57,5 +58,48 @@ describe("automatic task due dates", () => {
     assert.equal(planTaskDue({ on: "2027-01-11", days: 60 }, at("2026-11-03T13:05:00Z"), LONDON)?.dueAt, "2027-01-11T09:00:00.000Z");
     assert.equal(planTaskDue({ on: "2026-10-01", days: 2 }, at("2026-11-03T13:05:00Z"), LONDON)?.dueAt, "2026-11-05T09:00:00.000Z");
     assert.equal(planTaskDue({ days: null }, at("2026-11-03T13:05:00Z"), LONDON), null);
+  });
+});
+
+describe("a due date of today", () => {
+  const actor = { type: "user", userId: "00000000-0000-0000-0000-000000000001", workspaceId: "00000000-0000-0000-0000-000000000002", scopes: [] } as unknown as UserActor;
+
+  it("is accepted instead of dropped, and follows the end of day rule", async () => {
+    assert.equal(planTaskDue({ on: "2026-11-04" }, at("2026-11-04T10:00:00Z"), LONDON)?.dueAt, "2026-11-04T10:00:00.000Z");
+    assert.equal(planTaskDue({ on: "2026-11-04" }, at("2026-11-04T18:00:00Z"), LONDON)?.dueAt, "2026-11-05T09:00:00.000Z");
+    assert.equal(planTaskDue({ on: "2026-11-04", days: 5 }, at("2026-11-04T10:00:00Z"), LONDON)?.dueAt, "2026-11-04T10:00:00.000Z");
+    const scheduled = await scheduleTaskDue(actor, { on: "2026-11-04", busy: [] }, at("2026-11-04T10:00:00Z"));
+    assert.equal(scheduled?.dueAt, "2026-11-04T10:00:00.000Z");
+  });
+
+  it("uses the London day just after and before midnight in summer", () => {
+    assert.equal(planTaskDue({ on: "2026-07-02" }, at("2026-07-01T23:15:00Z"), LONDON)?.dueAt, "2026-07-01T23:15:00.000Z");
+    assert.equal(planTaskDue({ on: "2026-07-01" }, at("2026-07-01T23:15:00Z"), LONDON), null);
+    assert.equal(planTaskDue({ on: "2026-07-01" }, at("2026-07-01T22:45:00Z"), LONDON)?.dueAt, "2026-07-02T08:00:00.000Z");
+    assert.equal(planTaskDue({ on: "2026-07-01" }, at("2026-07-01T16:15:00Z"), LONDON)?.dueAt, "2026-07-01T16:15:00.000Z");
+    assert.equal(planTaskDue({ on: "2026-07-01" }, at("2026-07-01T16:45:00Z"), LONDON)?.dueAt, "2026-07-02T08:00:00.000Z");
+  });
+
+  it("handles the days the clocks change", () => {
+    const sunday = planTaskDue({ on: "2026-03-29" }, at("2026-03-29T10:00:00Z"), LONDON);
+    assert.equal(sunday?.dueAt, "2026-03-30T08:00:00.000Z");
+    assert.match(sunday?.note ?? "", /Sun 29 Mar is a Sunday/);
+    assert.equal(planTaskDue({ on: "2026-03-30" }, at("2026-03-30T16:00:00Z"), LONDON)?.dueAt, "2026-03-30T16:00:00.000Z");
+    assert.equal(planTaskDue({ on: "2026-03-30" }, at("2026-03-30T16:45:00Z"), LONDON)?.dueAt, "2026-03-31T08:00:00.000Z");
+    assert.equal(planTaskDue({ on: "2026-10-25" }, at("2026-10-24T23:30:00Z"), LONDON)?.dueAt, "2026-10-26T09:00:00.000Z");
+    assert.equal(planTaskDue({ on: "2026-10-26" }, at("2026-10-25T23:30:00Z"), LONDON)?.dueAt, "2026-10-26T09:00:00.000Z");
+    assert.equal(planTaskDue({ on: "2026-10-26" }, at("2026-10-26T17:15:00Z"), LONDON)?.dueAt, "2026-10-26T17:15:00.000Z");
+    assert.equal(planTaskDue({ on: "2026-10-26" }, at("2026-10-26T17:45:00Z"), LONDON)?.dueAt, "2026-10-27T09:00:00.000Z");
+  });
+
+  it("reads a workflow's due date as a London day, with slash dates as day, month, year", () => {
+    assert.equal(dueDayFrom("07/11/2026"), "2026-11-07");
+    assert.equal(dueDayFrom("Call back on 07/11/2026"), "2026-11-07");
+    assert.equal(dueDayFrom("7 Nov 2026"), "2026-11-07");
+    assert.equal(dueDayFrom("2026-07-01T23:30:00Z"), "2026-07-02");
+    assert.equal(dueDayFrom("2026-07-01T00:30"), "2026-07-01");
+    assert.equal(dueDayFrom("11/07"), null);
+    assert.equal(dueDayFrom("07/11/26"), null);
+    assert.equal(dueDayFrom("next-ish"), null);
   });
 });

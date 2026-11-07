@@ -22,7 +22,8 @@ import { ANY_TAG, tagFilterOptions } from "@/components/crm/tags";
 import RecordTransfer from "@/components/crm/record-transfer";
 import ListSearch from "@/components/shortcuts/list-search";
 import type { BulkSelection } from "@/hooks/use-bulk-selection";
-import { downloadCsv } from "@/lib/csv";
+import { downloadCsv, exportNote } from "@/lib/csv";
+import { dayKeyIn } from "@/lib/time";
 import type { CompanyListQuery, CompanyPresence, LifecycleCount, Member, TagCount } from "@/lib/crm/types";
 import ViewMenu, { useDropEditedView } from "@/components/ai-fields/view-menu";
 import { AiFilterChip } from "@/components/ai-fields/ai-filters";
@@ -72,6 +73,7 @@ export default function CompaniesToolbar({
 }: ToolbarProps) {
   const router = useRouter();
   const [exporting, setExporting] = useState(false);
+  const [exportMessage, setExportMessage] = useState<string | null>(null);
   useDropEditedView(views, canManage);
 
   const searchParams = useSearchParams();
@@ -97,10 +99,13 @@ export default function CompaniesToolbar({
 
   async function exportCsv() {
     setExporting(true);
+    setExportMessage(null);
     try {
-      const rows = await exportCompaniesAction(filters);
-      const day = new Date().toISOString().slice(0, 10);
-      downloadCsv(`companies-${day}.csv`, rows);
+      const result = await exportCompaniesAction(filters);
+      downloadCsv(`companies-${dayKeyIn(new Date())}.csv`, result.rows);
+      setExportMessage(exportNote(result, "companies"));
+    } catch {
+      setExportMessage("Export failed.");
     } finally {
       setExporting(false);
     }
@@ -205,6 +210,11 @@ export default function CompaniesToolbar({
       <div className="flex shrink-0 items-center gap-1">
         <SelectToggle selection={selection} />
         <RecordTransfer resource="companies" mode="import" />
+        {exportMessage && (
+          <span role="status" title={exportMessage} className="caption-style text-subtle max-w-[24em] truncate max-sm:hidden">
+            {exportMessage}
+          </span>
+        )}
         <Button variant="secondary" size="sm" onClick={exportCsv} disabled={exporting} data-shortcut="export">
           <ShareIcon aria-hidden className="size-3" />
           {exporting ? "Exporting…" : "Export"}

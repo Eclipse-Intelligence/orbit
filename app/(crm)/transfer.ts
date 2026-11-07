@@ -7,6 +7,8 @@ import { companiesCsvRows } from "@/lib/companies";
 import { CrmError } from "@/lib/crm/errors";
 import { listCompanies } from "@/lib/crm/companies";
 import {
+  collectForExport,
+  csvExport,
   exportActivitiesCsv,
   exportContactsCsv,
   exportOpportunitiesCsv,
@@ -28,17 +30,8 @@ async function requireUser() {
 export async function exportRecordsAction(resource: TransferResource) {
   const user = await requireUser();
   if (resource === "companies") {
-    const rows = [];
-    let offset = 0;
-    let total = 0;
-    do {
-      const page = await listCompanies(user, { limit: 100, offset, sort: "name", order: "asc" });
-      rows.push(...page.data);
-      total = page.total;
-      offset += page.data.length;
-      if (page.data.length === 0) break;
-    } while (rows.length < total && offset < 5000);
-    return companiesCsvRows(rows);
+    const collected = await collectForExport((offset, limit) => listCompanies(user, { limit, offset, sort: "name", order: "asc" }));
+    return csvExport(collected, companiesCsvRows(collected.rows));
   }
   if (resource === "contacts") return exportContactsCsv(user);
   if (resource === "opportunities") return exportOpportunitiesCsv(user);

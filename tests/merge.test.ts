@@ -13,6 +13,7 @@ import { mergeCompanies, mergeContacts } from "@/lib/crm/merge";
 import { createOpportunity } from "@/lib/crm/opportunities";
 import { scopesForRole } from "@/lib/crm/scopes";
 import { createTask } from "@/lib/crm/tasks";
+import { createDoc, docsMentioning, saveDoc } from "@/lib/docs/store";
 import type { AgentActor, UserActor } from "@/lib/crm/types";
 import { registerOperationTools } from "@/server/mcp/operations";
 import { createAgent, createUser, resetDatabase } from "./helpers";
@@ -525,5 +526,142 @@ describe("merging contacts", () => {
     await assert.rejects(mergeContacts(owner, keep.id, archived.id, PROVENANCE), isCrmError("invalid_input", /Old Cara is already archived/));
     await assert.rejects(mergeContacts(owner, archived.id, dupe.id, PROVENANCE), isCrmError("invalid_input", /Old Cara is archived/));
     await assert.rejects(mergeContacts({ ...owner, scopes: ["crm:read"] }, keep.id, dupe.id, PROVENANCE), isCrmError("forbidden"));
+  });
+});
+
+describe("merging keeps what lives beside a record", () => {
+  async function aiField(label: string) {
+    return (
+      await admin<{ id: string }>(
+        "insert into crm.ai_fields (workspace_id, label, question, kind) values ($1, $2, 'What does this company sell to customers?', 'text') returning id",
+        [owner.workspaceId, label],
+      )
+    )[0].id;
+  }
+
+  async function answer(fieldId: string, companyId: string, value: string | null, manual = false) {
+    await admin(
+      `insert into crm.ai_field_answers (field_id, company_id, workspace_id, state, value_text, manual, manual_at, manual_by)
+       values ($1, $2, $3, $4, $5, $6, case when $6 then now() end, case when $6 then $7::uuid end)`,
+      [fieldId, companyId, owner.workspaceId, value === null ? "pending" : "answered", value, manual, owner.userId],
+    );
+  }
+
+  async function answers(companyId: string) {
+    const rows = await admin<{ field_id: string; value_text: string | null; manual: boolean }>(
+      "select field_id, value_text, manual from crm.ai_field_answers where company_id = $1",
+      [companyId],
+    );
+    return new Map(rows.map((row) => [row.field_id, row]));
+  }
+
+  it("fills AI field gaps, prefers answers set by hand, and otherwise keeps the kept company's answers", async () => {
+    const keep = await company("Answer Keep");
+    const dupe = await company("Answer Dupe");
+    const both = await aiField("Both generated");
+    const handOnDupe = await aiField("Hand on dupe");
+    const handOnBoth = await aiField("Hand on both");
+    const onlyDupe = await aiField("Only dupe");
+    const keptPending = await aiField("Kept pending");
+    const dupePending = await aiField("Dupe pending");
+    await answer(both, keep.id, "Kept guess");
+    await answer(both, dupe.id, "Dupe guess");
+    await answer(handOnDupe, keep.id, "Kept guess");
+    await answer(handOnDupe, dupe.id, "Typed on dupe", true);
+    await answer(handOnBoth, keep.id, "Typed on keep", true);
+    await answer(handOnBoth, dupe.id, "Typed on dupe", true);
+    await answer(onlyDupe, dupe.id, "Dupe only");
+    await answer(keptPending, keep.id, null);
+    await answer(keptPending, dupe.id, "Dupe answer");
+    await answer(dupePending, keep.id, "Kept answer");
+    await answer(dupePending, dupe.id, null);
+
+    const result = await mergeCompanies(owner, keep.id, dupe.id, PROVENANCE);
+    assert.equal(result.moved.ai_field_answers, 3);
+
+    const kept = await answers(keep.id);
+    assert.equal(kept.get(both)?.value_text, "Kept guess");
+    assert.deepEqual([kept.get(handOnDupe)?.value_text, kept.get(handOnDupe)?.manual], ["Typed on dupe", true]);
+    assert.equal(kept.get(handOnBoth)?.value_text, "Typed on keep");
+    assert.equal(kept.get(onlyDupe)?.value_text, "Dupe only");
+    assert.equal(kept.get(keptPending)?.value_text, "Dupe answer");
+    assert.equal(kept.get(dupePending)?.value_text, "Kept answer");
+    assert.deepEqual([...(await answers(dupe.id)).keys()].sort(), [both, handOnBoth, dupePending].sort());
+  });
+
+  it("moves follow-up suggestions and filing rules to the kept records", async () => {
+    const keepCo = await company("Follow Keep");
+    const dupeCo = await company("Follow Dupe");
+    const keep = await contact({ firstName: "Fran", lastName: "Follow", email: "fran@follow-merge.test", companyId: keepCo.id });
+    const dupe = await contact({ firstName: "Fran", lastName: "Follow", companyId: dupeCo.id });
+    const call = await logActivity(owner, { companyId: dupeCo.id, contactId: dupe.id }, "call", "Catch up", "Agreed to follow up");
+    await admin(
+      `insert into crm.follow_up_suggestions (workspace_id, user_id, activity_id, company_id, contact_id, source, call_at)
+       values ($1, $2, $3, $4, $5, 'teams', now())`,
+      [owner.workspaceId, owner.userId, call.id, dupeCo.id, dupe.id],
+    );
+    const connection = (
+      await admin<{ id: string }>(
+        `insert into crm.mailbox_connections (workspace_id, user_id, provider, email, refresh_token)
+         values ($1, $2, 'microsoft', 'owner@merge.test', 'refresh') returning id`,
+        [owner.workspaceId, owner.userId],
+      )
+    )[0].id;
+    const source = (
+      await admin<{ id: string }>(
+        "insert into crm.mail_sources (workspace_id, user_id, connection_id, email) values ($1, $2, $3, 'owner@merge.test') returning id",
+        [owner.workspaceId, owner.userId, connection],
+      )
+    )[0].id;
+    await admin("insert into crm.mail_thread_routes (workspace_id, user_id, source_id, thread_key, contact_id) values ($1, $2, $3, 'thread-1', $4)", [
+      owner.workspaceId,
+      owner.userId,
+      source,
+      dupe.id,
+    ]);
+
+    const people = await mergeContacts(owner, keep.id, dupe.id, PROVENANCE);
+    assert.equal(people.moved.follow_up_suggestions, 1);
+    assert.equal(people.moved.mail_thread_routes, 1);
+    const companies = await mergeCompanies(owner, keepCo.id, dupeCo.id, PROVENANCE);
+    assert.equal(companies.moved.follow_up_suggestions, 1);
+
+    const suggestion = (
+      await admin<{ company_id: string; contact_id: string }>("select company_id, contact_id from crm.follow_up_suggestions where activity_id = $1", [call.id])
+    )[0];
+    assert.deepEqual({ ...suggestion }, { company_id: keepCo.id, contact_id: keep.id });
+    const route = (await admin<{ contact_id: string }>("select contact_id from crm.mail_thread_routes where source_id = $1", [source]))[0];
+    assert.equal(route.contact_id, keep.id);
+  });
+
+  it("points Docs mentions at the kept record, and keeps them there when the doc is edited", async () => {
+    const keep = await company("Docs Keep");
+    const dupe = await company("Docs Dupe");
+    const person = await contact({ firstName: "Dora", lastName: "Docs", email: "dora@docs-merge.test" });
+    const twin = await contact({ firstName: "Dora", lastName: "Docs" });
+    const only = await createDoc(owner, { title: "Dupe notes", content: `Call @[Docs Dupe](company:${dupe.id}) and @[Dora](contact:${twin.id})` }, PROVENANCE);
+    const both = await createDoc(owner, { title: "Both notes", content: `@[Docs Keep](company:${keep.id}) and @[Docs Dupe](company:${dupe.id})` }, PROVENANCE);
+
+    const companies = await mergeCompanies(owner, keep.id, dupe.id, PROVENANCE);
+    assert.equal(companies.moved.page_links, 2);
+    const people = await mergeContacts(owner, person.id, twin.id, PROVENANCE);
+    assert.equal(people.moved.page_links, 1);
+
+    const links = async (pageId: string) =>
+      (
+        await admin<{ target_kind: string; target_record_id: string }>(
+          "select target_kind, target_record_id from crm.page_links where page_id = $1 order by target_kind",
+          [pageId],
+        )
+      ).map((row) => `${row.target_kind}:${row.target_record_id}`);
+    assert.deepEqual(await links(only.id), [`company:${keep.id}`, `contact:${person.id}`]);
+    assert.deepEqual(await links(both.id), [`company:${keep.id}`]);
+    assert.deepEqual((await docsMentioning(owner, { kind: "company", id: keep.id })).map((doc) => doc.id).sort(), [only.id, both.id].sort());
+
+    const page = (await admin<{ content: string; revision: number }>("select content, revision from crm.pages where id = $1", [only.id]))[0];
+    await saveDoc(owner, only.id, { content: `${page.content} tomorrow`, baseRevision: page.revision }, PROVENANCE);
+    const saved = (await admin<{ content: string }>("select content from crm.pages where id = $1", [only.id]))[0];
+    assert.equal(saved.content, `Call @[Docs Dupe](company:${keep.id}) and @[Dora](contact:${person.id}) tomorrow`);
+    assert.deepEqual(await links(only.id), [`company:${keep.id}`, `contact:${person.id}`]);
   });
 });

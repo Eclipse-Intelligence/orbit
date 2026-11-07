@@ -3,7 +3,8 @@
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
-import { downloadCsv } from "@/lib/csv";
+import { downloadCsv, exportNote } from "@/lib/csv";
+import { dayKeyIn } from "@/lib/time";
 import {
   exportRecordsAction,
   importRecordsAction,
@@ -28,9 +29,9 @@ export default function RecordTransfer({
     setPending("export");
     setMessage(null);
     try {
-      const rows = await exportRecordsAction(resource);
-      const day = new Date().toISOString().slice(0, 10);
-      downloadCsv(`${resource}-${day}.csv`, rows);
+      const result = await exportRecordsAction(resource);
+      downloadCsv(`${resource}-${dayKeyIn(new Date())}.csv`, result.rows);
+      setMessage(exportNote(result, resource));
     } catch {
       setMessage("Export failed.");
     } finally {
@@ -64,7 +65,11 @@ export default function RecordTransfer({
 
   return (
     <div className="flex items-center gap-1 max-sm:hidden">
-      {message && <span className="caption-style text-subtle max-w-40 truncate">{message}</span>}
+      {message && (
+        <span role="status" title={message} className="caption-style text-subtle max-w-[24em] truncate">
+          {message}
+        </span>
+      )}
       {canImport && (
         <>
           <input

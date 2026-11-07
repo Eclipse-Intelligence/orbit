@@ -81,7 +81,10 @@ export async function authenticatePersonal(token: string): Promise<{ actor: User
   return { actor: memberActor(row), tokenId: row.token_id };
 }
 
-export async function consumePersonalRateLimit(tokenId: string) {
-  const result = await query<{ allowed: boolean }>("select private.consume_rate_limit($1, $2, $3) as allowed", [`personal:${tokenId}`, 120, 60]);
+export async function consumePersonalRateLimit(tokenId: string, cost = 1) {
+  const result = await query<{ allowed: boolean }>(
+    cost > 1 ? "select private.consume_rate_limit($1, $2, $3, $4) as allowed" : "select private.consume_rate_limit($1, $2, $3) as allowed",
+    cost > 1 ? [`personal:${tokenId}`, 120, 60, cost] : [`personal:${tokenId}`, 120, 60],
+  );
   if (!result.rows[0]?.allowed) throw new CrmError("rate_limited", "Too many requests.", 429);
 }

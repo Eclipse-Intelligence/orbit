@@ -4,7 +4,7 @@ import { isUuid } from "@/lib/crm/mutate";
 import { cleanLifecycle } from "@/lib/companies";
 import { aiFiltersFromParams, aiSortField } from "@/lib/ai-fields/params";
 import { normalizeTag } from "@/lib/crm/normalize";
-import { appTimeZone, parseDateTime, startOfDay } from "@/lib/time";
+import { appTimeZone, readDateTime, startOfDay } from "@/lib/time";
 import {
   ACTIVITY_TYPES,
   COMPANY_PRESENCE,
@@ -392,16 +392,14 @@ export function activityQueryFromSearchParams(params: URLSearchParams): Activity
   return { ...query, ...paging(params) };
 }
 
-const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
-
 function dateBound(params: URLSearchParams, name: string, end: boolean) {
   const value = params.get(name)?.trim();
   if (!value) return undefined;
-  const date = parseDateTime(value);
-  if (!date) {
-    throw new CrmError("invalid_input", `${name} must be a date, such as 2026-11-03, or a date and time.`, 400, { field: name });
+  const reading = readDateTime(value);
+  if (!reading.ok) {
+    throw new CrmError("invalid_input", `${name} must be a date, such as 2026-11-03, or a date and time. ${reading.error}`, 400, { field: name });
   }
-  return (end && DATE_ONLY.test(value) ? startOfDay(date, appTimeZone(), 1) : date).toISOString();
+  return (end && reading.dateOnly ? startOfDay(reading.date, appTimeZone(), 1) : reading.date).toISOString();
 }
 
 export function taskQueryFromSearchParams(params: URLSearchParams): TaskListQuery {

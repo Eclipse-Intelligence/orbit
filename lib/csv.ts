@@ -1,5 +1,15 @@
 export type CsvCell = string | number;
 
+export const EXPORT_ROW_LIMIT = 10_000;
+
+export type CsvExport = { rows: CsvCell[][]; total: number; exported: number; truncated: boolean };
+
+export function exportNote(result: Pick<CsvExport, "total" | "exported" | "truncated">, noun: string) {
+  if (!result.truncated) return null;
+  const count = (value: number) => value.toLocaleString("en-GB");
+  return `Exported ${count(result.exported)} of ${count(result.total)} ${noun}, the limit for one export.`;
+}
+
 function isPlainNumber(value: string) {
   return /^[+-]?[\d\s().-]+$/.test(value) && /\d/.test(value);
 }
