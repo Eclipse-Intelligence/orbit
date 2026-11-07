@@ -8,6 +8,7 @@ import { assertScope, hasScope } from "@/lib/crm/scopes";
 import { createTaskInDb } from "@/lib/crm/tasks";
 import { scheduleTaskDue, withDueNote } from "@/lib/crm/task-due";
 import type { Activity, Actor, Company, Contact, Task } from "@/lib/crm/types";
+import { query } from "@/lib/db/pool";
 
 const RECENT_MS = 48 * 60 * 60 * 1000;
 
@@ -106,6 +107,11 @@ export function isRecent(at: string | null | undefined) {
   return age <= RECENT_MS && age >= -5 * 60 * 1000;
 }
 
+export async function companyHasOpenTask(workspaceId: string, companyId: string) {
+  const result = await query<{ open: boolean }>("select private.company_has_open_task($1, $2) as open", [workspaceId, companyId]);
+  return result.rows[0]?.open === true;
+}
+
 type CommunicationInput = {
   kind: "email" | "meeting";
   title?: string | null;
@@ -194,12 +200,7 @@ export async function recordCommunication(
     let task: Task | null = null;
     let suggested = false;
     if (company && isRecent(activity.occurredAt) && hasScope(actor.scopes, "tasks:write")) {
-      const open = await db.query<{ total: number }>(
-        `select count(*)::int as total from crm.tasks
-         where company_id = $1 and archived_at is null and completed_at is null`,
-        [company.id],
-      );
-      if ((open.rows[0]?.total ?? 0) === 0) {
+      if (!(await companyHasOpenTask(actor.workspaceId, company.id))) {
         const due = await scheduleTaskDue(actor, { days: 2 });
         const who = contacts.find((contact) => contact.id === contactId)?.name || company.name;
         task = await createTaskInDb(

@@ -1,11 +1,9 @@
 import { NextResponse } from "next/server";
 import { WORKSPACE_COOKIE, sessionCookieOptions } from "@/lib/auth/config";
 import { getWorkspaceChoices } from "@/lib/auth/user";
+import { safeOpenTarget } from "@/lib/open-link";
 
 export const dynamic = "force-dynamic";
-
-const RECORD_PATH = /^\/(companies|contacts)\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const CHAT_PATH = /^\/\?chat=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
@@ -17,7 +15,7 @@ export async function GET(request: Request) {
     login.searchParams.set("next", `${url.pathname}${url.search}`);
     return NextResponse.redirect(login);
   }
-  const response = NextResponse.redirect(new URL(RECORD_PATH.test(to) || CHAT_PATH.test(to) ? to : "/", url));
+  const response = NextResponse.redirect(new URL(safeOpenTarget(to) ?? "/", url));
   if (choices.some((choice) => choice.id === workspace)) {
     response.cookies.set(WORKSPACE_COOKIE, workspace, sessionCookieOptions(60 * 60 * 24 * 365));
   }

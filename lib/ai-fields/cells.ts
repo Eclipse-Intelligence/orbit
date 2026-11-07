@@ -32,10 +32,16 @@ export const ANSWER_SQL = `
   from crm.ai_field_answers a
   left join crm.profiles p on p.id = a.manual_by`;
 
+export function storedNumber(value: string | number | null | undefined) {
+  if (value === null || value === undefined || (typeof value === "string" && value.trim() === "")) return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
 export function rowValue(field: Pick<StoredField, "kind">, row: Pick<AnswerRow, "state" | "value_bool" | "value_number" | "value_text" | "value_options">): AiValue {
   if (row.state !== "answered") return null;
   if (field.kind === "yes_no") return row.value_bool;
-  if (field.kind === "number") return row.value_number === null ? null : Number(row.value_number);
+  if (field.kind === "number") return storedNumber(row.value_number);
   if (field.kind === "text") return row.value_text;
   return row.value_options ?? [];
 }

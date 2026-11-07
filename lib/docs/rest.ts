@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { CrmError } from "@/lib/crm/errors";
 import type { Actor, Provenance } from "@/lib/crm/types";
-import { parseInput } from "@/lib/crm/validation";
+import { integerParam, parseInput } from "@/lib/crm/validation";
 import { searchDocs } from "@/lib/docs/search";
 import { archiveDoc, createDoc, getDoc, listDocs, readDoc, updateDoc } from "@/lib/docs/store";
 import { DOC_SORTS, type DocEdit, type DocSort } from "@/lib/docs/types";
@@ -40,7 +40,7 @@ function provenanceOf(operation: string, value: { source?: string | null; source
 
 export async function listDocsFromQuery(actor: Actor, params: URLSearchParams) {
   const query = params.get("q");
-  const limit = params.get("limit") ? Number(params.get("limit")) : undefined;
+  const limit = integerParam(params, "limit");
   if (query !== null) return { data: await searchDocs(actor, query, { limit, daily: actor.type === "user" }) };
   const sort = params.get("sort");
   const folder = params.get("folderId");
@@ -50,7 +50,7 @@ export async function listDocsFromQuery(actor: Actor, params: URLSearchParams) {
     sort: sort && (DOC_SORTS as readonly string[]).includes(sort) ? (sort as DocSort) : undefined,
     archived: params.get("archived") === "true",
     limit,
-    offset: params.get("offset") ? Number(params.get("offset")) : undefined,
+    offset: integerParam(params, "offset"),
   });
 }
 
@@ -60,8 +60,8 @@ export async function createDocFromBody(actor: Actor, body: unknown) {
 }
 
 export async function readDocFromQuery(actor: Actor, id: string, params: URLSearchParams) {
-  const offset = Number(params.get("offset") ?? 0);
-  const [doc, window] = await Promise.all([getDoc(actor, id), readDoc(actor, id, Number.isFinite(offset) ? offset : 0)]);
+  const offset = integerParam(params, "offset") ?? 0;
+  const [doc, window] = await Promise.all([getDoc(actor, id), readDoc(actor, id, offset)]);
   const rest = Object.fromEntries(Object.entries(doc).filter(([key]) => key !== "content"));
   return { doc: { ...rest, characters: window.characters }, offset: window.offset, text: window.text, nextOffset: window.nextOffset };
 }

@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { refreshPush, registerServiceWorker } from "@/components/push/push-client";
+import { linkInWorkspace } from "@/lib/open-link";
 
 export const OPEN_THREAD_EVENT = "orbit:open-thread";
 
@@ -21,7 +22,7 @@ async function takeCachedPending() {
   return value && typeof value.url === "string" && typeof value.at === "number" && Date.now() - value.at < FRESH_MS ? value.url : null;
 }
 
-export default function PushRegistrar() {
+export default function PushRegistrar({ workspaceId }: { workspaceId?: string }) {
   const router = useRouter();
 
   useEffect(() => {
@@ -33,8 +34,14 @@ export default function PushRegistrar() {
       window.setTimeout(() => {
         if (last === value) last = null;
       }, 5_000);
-      const url = new URL(value, window.location.origin);
-      if (url.origin !== window.location.origin) return;
+      const first = new URL(value, window.location.origin);
+      if (first.origin !== window.location.origin) return;
+      const target = linkInWorkspace(`${first.pathname}${first.search}`, workspaceId);
+      if (target.reload) {
+        window.location.assign(target.path);
+        return;
+      }
+      const url = new URL(target.path, window.location.origin);
       const thread = url.searchParams.get("thread");
       if (thread && url.pathname === "/mail" && window.location.pathname === "/mail") {
         window.dispatchEvent(new CustomEvent(OPEN_THREAD_EVENT, { detail: { thread, view: url.searchParams.get("view") } }));
@@ -81,7 +88,7 @@ export default function PushRegistrar() {
       window.removeEventListener("pageshow", watchPending);
       window.removeEventListener("focus", watchPending);
     };
-  }, [router]);
+  }, [router, workspaceId]);
 
   return null;
 }

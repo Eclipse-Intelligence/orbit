@@ -89,6 +89,10 @@ describe("proposals", () => {
     const rendered = renderBlocks([{ id: "b1", type: "section", heading: "Hi {{contact.firstName}}", body: "{{contact.jobTitle}} at {{company.name}}, until {{proposal.validUntil}}" }], values);
     assert.equal((rendered.blocks[0] as { heading: string }).heading, "Hi Andrew");
     assert.deepEqual(rendered.missing, ["contact.jobTitle"]);
+    const prototype = renderBlocks([{ id: "b2", type: "section", heading: "{{constructor}}", body: "{{__proto__}} {{toString}} {{hasOwnProperty}}" }], values);
+    assert.equal((prototype.blocks[0] as { heading: string }).heading, "[constructor]");
+    assert.equal((prototype.blocks[0] as { body: string }).body, "[__proto__] [toString] [hasOwnProperty]");
+    assert.deepEqual(prototype.missing, ["constructor", "__proto__", "toString", "hasOwnProperty"]);
   });
 
   it("only uses active templates, and needs a company and someone from it", async () => {

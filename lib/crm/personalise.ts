@@ -56,8 +56,8 @@ function tokenValues(recipient: Recipient): Record<string, string> {
 export function personalise(template: string, recipient: Recipient) {
   const values = tokenValues(recipient);
   return template.replace(TOKEN_PATTERN, (match, key: string) => {
-    const value = values[key.toLowerCase()];
-    return value === undefined ? match : value;
+    const name = key.toLowerCase();
+    return Object.hasOwn(values, name) ? values[name] : match;
   });
 }
 

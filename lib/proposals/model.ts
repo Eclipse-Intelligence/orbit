@@ -322,8 +322,8 @@ function plain(value: string) {
 
 function fill(template: string, values: Record<string, string>, missing: Set<string>) {
   return template.replace(TOKEN, (_, path: string) => {
-    const value = values[path];
-    if (value === undefined || value === "") {
+    const value = Object.hasOwn(values, path) ? values[path] : undefined;
+    if (typeof value !== "string" || value === "") {
       missing.add(path);
       return `[${path}]`;
     }

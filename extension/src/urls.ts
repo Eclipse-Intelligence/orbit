@@ -1,4 +1,4 @@
-import { SALES_NAVIGATOR_ID, type PageKind } from "../../lib/extension/protocol";
+import { linkedinProfileSlug, SALES_NAVIGATOR_ID, type PageKind } from "../../lib/extension/protocol";
 
 export type PageTarget = { kind: PageKind; canonical: string | null; path: string };
 
@@ -37,8 +37,8 @@ export function targetFromPath(pathname: string): PageTarget {
   const first = parts[0]?.toLowerCase();
   const path = `/${parts.join("/")}`;
   if (first === "in" && parts[1]) {
-    const slug = decode(parts[1]).toLowerCase();
-    if (/^[a-z0-9_-]{2,100}$/.test(slug)) return { kind: "person", canonical: `${REAL_ORIGIN}/in/${slug}`, path };
+    const slug = linkedinProfileSlug(parts[1]);
+    if (slug) return { kind: "person", canonical: `${REAL_ORIGIN}/in/${slug}`, path };
   }
   if ((first === "company" || first === "school" || first === "showcase") && parts[1]) {
     const slug = decode(parts[1]).toLowerCase();

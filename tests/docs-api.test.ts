@@ -76,4 +76,24 @@ describe("Docs REST API", () => {
     const blind = await listRoute(request("/docs", "GET", undefined, blindToken));
     assert.equal(blind.status, 403);
   });
+
+  it("applies find and replace before append, as documented, so appended text stays as sent", async () => {
+    const folder = await createFolder(mark, { name: "Order", shared: true });
+    const doc = await createDoc(mark, { title: "Order of edits", content: "Draft plan", folderId: folder.id });
+    const patched = await patchRoute(
+      request(`/docs/${doc.id}`, "PATCH", { find: "Draft", replace: "Final", all: true, append: "Draft notes follow" }),
+      params(doc.id),
+    );
+    assert.equal(patched.status, 200);
+    assert.equal((await getDoc(mark, doc.id)).content, "Final plan\n\nDraft notes follow");
+
+    const missing = await patchRoute(request(`/docs/${doc.id}`, "PATCH", { find: "Later", replace: "Now", append: "Later" }), params(doc.id));
+    assert.equal(missing.status, 400);
+    assert.equal((await getDoc(mark, doc.id)).content, "Final plan\n\nDraft notes follow");
+
+    const badOffset = await readRoute(request(`/docs/${doc.id}?offset=1.5`), params(doc.id));
+    assert.equal(badOffset.status, 400);
+    const badLimit = await listRoute(request("/docs?limit=ten"));
+    assert.equal(badLimit.status, 400);
+  });
 });

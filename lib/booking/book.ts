@@ -29,6 +29,7 @@ import {
   type BusyInterval,
 } from "@/lib/booking/slots";
 import { siteOrigin } from "@/lib/site-url";
+import { alertLink } from "@/lib/crm/workspaces";
 import { isTimeZone } from "@/lib/time";
 import { notify } from "@/lib/workflows/engine";
 
@@ -383,6 +384,7 @@ async function alertOwner(
   }
   if (!booking.mailbox) return;
   try {
+    const link = origin ? `${origin}${await alertLink(owner, path)}` : null;
     await sendOwnMail(
       owner,
       {
@@ -397,7 +399,7 @@ async function alertOwner(
           booking.note ? `\nNote from ${booking.name}:\n${booking.note}` : null,
           "",
           `It's in your calendar as "${booking.subject}"${booking.contactId ? ` and on ${booking.name}'s record in Orbit` : ""}.`,
-          origin ? `${origin}${path}` : null,
+          link,
         ]
           .filter((line) => line !== null)
           .join("\n"),

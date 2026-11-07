@@ -132,7 +132,7 @@ describe("workflow capabilities", () => {
     await setWorkflowStatus(owner, workflow.id, "active");
     await getAdminPool().query("update crm.workflows set next_run_at = now() - interval '1 minute' where id = $1", [workflow.id]);
 
-    await savePushSubscription(owner, { endpoint: "https://push.example/phone", keys: { p256dh: "BKey", auth: "auth" } }, "iPhone");
+    await savePushSubscription(owner, { endpoint: "https://web.push.apple.com/phone", keys: { p256dh: "BKey", auth: "auth" } }, "iPhone");
     const pushed: Record<string, unknown>[] = [];
     const push: PushSender = async (_subscription, payload) => {
       pushed.push(JSON.parse(payload));

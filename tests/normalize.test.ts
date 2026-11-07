@@ -53,4 +53,17 @@ describe("contact identity", () => {
     assert.equal(canonicalLinkedin("linkedin.com/in/%E0%A4%A"), null);
     assert.equal(canonicalLinkedin("https://notlinkedin.com/in/jane"), null);
   });
+
+  it("accepts accented profile slugs, encoded or not, as one canonical URL", () => {
+    const canonical = "https://www.linkedin.com/in/josé-garcía-0a1b2c";
+    assert.equal(canonicalLinkedin("https://www.linkedin.com/in/jos%C3%A9-garc%C3%ADa-0a1b2c/"), canonical);
+    assert.equal(canonicalLinkedin("https://www.linkedin.com/in/JOS%C3%89-GARC%C3%8DA-0a1b2c"), canonical);
+    assert.equal(canonicalLinkedin("linkedin.com/in/josé-garcía-0a1b2c"), canonical);
+    assert.equal(canonicalLinkedin("https://de.linkedin.com/in/JOSÉ-GARCÍA-0a1b2c?trk=x"), canonical);
+    assert.equal(canonicalLinkedin("https://www.linkedin.com/in/josé-garcía-0a1b2c"), canonical);
+    assert.equal(canonicalLinkedin("https://www.linkedin.com/in/%E5%BC%A0%E4%BC%9F"), "https://www.linkedin.com/in/张伟");
+    assert.equal(canonicalLinkedin("https://www.linkedin.com/in/jos%C3%A9%20garcia"), null);
+    assert.equal(canonicalLinkedin("https://www.linkedin.com/in/jos%C3%A9.garcia"), null);
+    assert.equal(canonicalLinkedin("https://www.linkedin.com/in/%E2%9C%93%E2%9C%93"), null);
+  });
 });
