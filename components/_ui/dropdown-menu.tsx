@@ -1,6 +1,6 @@
 "use client";
 
-import type { ComponentProps } from "react";
+import { useId, type ComponentProps } from "react";
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "@/components/_ui/scroll-area";
@@ -51,17 +51,35 @@ function DropdownMenuContent({
 
 function DropdownMenuItem({
   className,
+  disabledReason,
+  children,
   ...props
-}: ComponentProps<typeof DropdownMenuPrimitive.Item>) {
+}: ComponentProps<typeof DropdownMenuPrimitive.Item> & { disabledReason?: string }) {
+  const reasonId = useId();
+  const explained = Boolean(props.disabled && disabledReason);
   return (
     <DropdownMenuPrimitive.Item
       data-slot="dropdown-menu-item"
+      aria-disabled={props.disabled || undefined}
+      aria-describedby={explained ? reasonId : undefined}
       className={cn(
         "ui-style text-foreground ease-power3-out relative flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 transition-colors duration-150 outline-none select-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[highlighted]:bg-white/6",
+        explained && "flex-wrap",
         className,
       )}
       {...props}
-    />
+    >
+      {explained ? (
+        <>
+          {children}
+          <span id={reasonId} className="caption-style text-subtle basis-full">
+            {disabledReason}
+          </span>
+        </>
+      ) : (
+        children
+      )}
+    </DropdownMenuPrimitive.Item>
   );
 }
 

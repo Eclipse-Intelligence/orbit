@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { watchSwipe, type SwipeHandlers } from "@/components/mail/swipe";
 import Button from "@/components/_ui/button";
 import { cn } from "@/lib/utils";
@@ -23,6 +23,8 @@ const HIDE_QUOTES = "orbit-hide-quotes";
 const WRAP_ID = "orbit-mail";
 const PAN_ID = "orbit-pan";
 const MAX_ZOOM = 4;
+const ASK_AGAIN_MS = [80, 250, 600, 1200, 2000];
+const GIVE_UP_MS = 3000;
 
 type FrameMessage =
   | { type: "height"; value: number }
@@ -51,11 +53,29 @@ function frameScript(hideQuotes: boolean) {
   var zoom = 1;
   var panX = 0;
   var lastHeight = -1;
+  var started = false;
+  var quotesFound = null;
+  var lastWidth = -1;
   function post(message) { parent.postMessage(message, "*"); }
-  function height() {
+  function height(force) {
+    if (!document.body) return;
     var value = Math.ceil(document.body.scrollHeight);
-    if (value !== lastHeight) { lastHeight = value; post({ type: "height", value: value }); }
+    if (force || value !== lastHeight) { lastHeight = value; post({ type: "height", value: value }); }
   }
+  function report() {
+    if (!started) return;
+    fit();
+    height(true);
+    if (quotesFound !== null) post({ type: "quotes", found: quotesFound });
+  }
+  window.addEventListener("message", function (event) {
+    if (event.source !== parent || !event.data) return;
+    if (event.data.type === "measure") report();
+    else if (event.data.type === "quotes" && started) {
+      document.documentElement.classList.toggle(cfg.hideClass, !event.data.show);
+      fit();
+    }
+  });
   function wrap() { return document.getElementById(cfg.wrapId); }
   function maxPan() { return Math.max(0, layout.available * zoom - layout.available); }
   function place() {
@@ -78,7 +98,7 @@ function frameScript(hideQuotes: boolean) {
     }
     place();
     post({ type: "zoom", zoomed: zoom > 1.001 });
-    height();
+    height(false);
   }
   function fit() {
     var box = wrap();
@@ -110,7 +130,7 @@ function frameScript(hideQuotes: boolean) {
       root.classList.add(cfg.hideClass);
       var found = Boolean(document.querySelector(cfg.selectors.join(","))) && Boolean(document.body.innerText.trim());
       if (!found) root.classList.remove(cfg.hideClass);
-      post({ type: "quotes", found: found });
+      quotesFound = found;
     }
     var pinch = null;
     var swipe = null;
@@ -180,13 +200,17 @@ function frameScript(hideQuotes: boolean) {
     document.addEventListener("dblclick", function () { if (zoom > 1) zoomTo(1, 0); });
     document.addEventListener("load", fit, true);
     window.addEventListener("resize", fit);
-    window.addEventListener("message", function (event) {
-      if (event.source !== parent || !event.data || event.data.type !== "quotes") return;
-      root.classList.toggle(cfg.hideClass, !event.data.show);
-      fit();
-    });
-    if (typeof ResizeObserver !== "undefined") new ResizeObserver(height).observe(document.body);
-    fit();
+    window.addEventListener("load", report);
+    if (typeof ResizeObserver !== "undefined") {
+      new ResizeObserver(function () { height(false); }).observe(document.body);
+      new ResizeObserver(function () {
+        if (root.clientWidth === lastWidth) return;
+        lastWidth = root.clientWidth;
+        fit();
+      }).observe(root);
+    }
+    started = true;
+    report();
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start);
   else start();
@@ -234,9 +258,36 @@ export default function EmailFrame({
   const frame = useRef<HTMLIFrameElement>(null);
   const [nonce] = useState(randomNonce);
   const [height, setHeight] = useState(rich ? 320 : 80);
+  const [measured, setMeasured] = useState(false);
+  const [settled, setSettled] = useState(false);
+  const [gaveUp, setGaveUp] = useState(false);
   const [quoted, setQuoted] = useState(false);
   const [showQuotes, setShowQuotes] = useState(false);
+  const heard = useRef(false);
   const source = useMemo(() => documentFor(html, rich, hideQuotes, nonce), [html, rich, hideQuotes, nonce]);
+
+  const ask = useCallback(() => {
+    if (!heard.current) frame.current?.contentWindow?.postMessage({ type: "measure" }, "*");
+  }, []);
+
+  useEffect(() => {
+    heard.current = false;
+    ask();
+    const timers = ASK_AGAIN_MS.map((delay) => window.setTimeout(ask, delay));
+    const giveUp = window.setTimeout(() => {
+      if (!heard.current) setGaveUp(true);
+    }, GIVE_UP_MS);
+    return () => {
+      for (const timer of timers) window.clearTimeout(timer);
+      window.clearTimeout(giveUp);
+    };
+  }, [source, ask]);
+
+  useEffect(() => {
+    if (!measured || settled) return;
+    const frameRequest = window.requestAnimationFrame(() => setSettled(true));
+    return () => window.cancelAnimationFrame(frameRequest);
+  }, [measured, settled]);
 
   useEffect(() => {
     const proxy = document.createElement("div");
@@ -245,7 +296,11 @@ export default function EmailFrame({
       if (!frame.current || event.source !== frame.current.contentWindow) return;
       const message = event.data as FrameMessage | null;
       if (!message || typeof message !== "object") return;
-      if (message.type === "height" && Number.isFinite(message.value)) setHeight(Math.max(24, Math.ceil(message.value)));
+      if (message.type === "height" && Number.isFinite(message.value)) {
+        heard.current = true;
+        setHeight(Math.max(24, Math.ceil(message.value)));
+        setMeasured(true);
+      }
       else if (message.type === "quotes") setQuoted(Boolean(message.found));
       else if (message.type === "zoom") {
         if (message.zoomed) proxy.dataset.orbitZoomed = "true";
@@ -279,8 +334,15 @@ export default function EmailFrame({
         referrerPolicy="no-referrer"
         srcDoc={source}
         suppressHydrationWarning
-        className={cn("block w-full border-0", rich && "rounded-xl bg-white")}
-        style={{ height }}
+        onLoad={ask}
+        aria-busy={!measured && !gaveUp}
+        className={cn(
+          "ease-power3-out block w-full border-0 transition-opacity duration-200 motion-reduce:transition-none",
+          settled && "transition-[opacity,height]",
+          measured || gaveUp ? "opacity-100" : "opacity-0",
+          rich && "rounded-xl bg-white",
+        )}
+        style={{ height: measured || !gaveUp ? height : "min(70dvh, 40rem)" }}
       />
       {quoted && <QuoteToggle shown={showQuotes} onToggle={toggleQuotes} />}
     </>
@@ -296,7 +358,7 @@ export function QuoteToggle({ shown, onToggle }: { shown: boolean; onToggle: () 
       aria-label={shown ? "Hide quoted text" : "Show quoted text"}
       title={shown ? "Hide quoted text" : "Show quoted text"}
       onClick={onToggle}
-      className="self-start px-2.5 tracking-[0.2em]"
+      className="self-start px-2.5 tracking-[0.2em] pointer-coarse:h-11 pointer-coarse:px-4"
     >
       •••
     </Button>
