@@ -31,6 +31,7 @@ type PlanRecord = {
   archived?: boolean;
   deals?: PlanDeal[];
   boardCards?: number;
+  companyId?: string | null;
 };
 
 type PlanCompanyChoice = { id: string; name: string; others: number };
@@ -62,6 +63,7 @@ type Plan = {
   contactCompanies?: PlanCompanyChoice[];
   companyContacts?: number;
   leftBehind?: PlanLeftBehind[];
+  notCopied?: string[];
   proposalContacts?: string[];
   dealsLosingContact?: number;
 };
@@ -118,6 +120,7 @@ export type MovePreview = {
   contactCompanies: { name: string; others: number }[];
   companyContacts: number;
   leftBehind: string[];
+  notCopied: string[];
   proposalContacts: string[];
   dealsLosingContact: number;
 };
@@ -299,7 +302,7 @@ export async function previewMoveToWorkspace(actor: Actor, request: MoveRequest)
     target: plan.target,
     copy: plan.copy,
     names: selectedNames(plan),
-    contacts: plan.contacts.filter((item) => !item.selected && !item.archived).length,
+    contacts: plan.contacts.filter((item) => !item.selected).length,
     deals: plan.deals,
     dealsAvailable: plan.dealsAvailable,
     activities: plan.activities,
@@ -322,7 +325,8 @@ export async function previewMoveToWorkspace(actor: Actor, request: MoveRequest)
     canMove: plan.canMove,
     contactCompanies: (plan.contactCompanies ?? []).map((item) => ({ name: item.name, others: item.others })),
     companyContacts: plan.companyContacts ?? 0,
-    leftBehind: (plan.leftBehind ?? []).filter((item) => !item.archived).map((item) => item.name),
+    leftBehind: (plan.leftBehind ?? []).map((item) => item.name),
+    notCopied: plan.notCopied ?? [],
     proposalContacts: plan.proposalContacts ?? [],
     dealsLosingContact: plan.dealsLosingContact ?? 0,
   };
@@ -336,10 +340,21 @@ function counted(value: number, one: string, many: string) {
   return `${value} ${value === 1 ? one : many}`;
 }
 
+function alongPhrase(plan: Plan) {
+  const along = plan.companies.filter((item) => !item.selected);
+  if (along.length === 0) return "";
+  const ids = new Set(along.map((item) => item.id));
+  const others = plan.contacts.filter((item) => !item.selected && item.companyId && ids.has(item.companyId)).length;
+  const one = along.length === 1;
+  const what = one ? along[0].name : `${along.length} companies`;
+  const people = others > 0 ? ` and ${one ? "its" : "their"} ${counted(others, "other contact", "other contacts")}` : "";
+  return `, with ${what}${people},`;
+}
+
 function resultMessage(plan: Plan) {
   const names = selectedNames(plan);
   const what = names.length === 1 ? names[0] : counted(names.length, "record", "records");
-  return `${plan.copy ? "Copied" : "Moved"} ${what} to ${plan.target.name}.`;
+  return `${plan.copy ? "Copied" : "Moved"} ${what}${alongPhrase(plan)} to ${plan.target.name}.`;
 }
 
 type CopiedFrom = { workspaceId: string; workspaceName: string; id: string };

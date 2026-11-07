@@ -958,7 +958,7 @@ function moveCardDetails(key: string, preview: MovePreview, copy: boolean, copyD
     ...preview.links.map((link) => (link.matched ? `Linked to existing ${link.into}` : `${link.name} stays here, and a copy goes over`)),
   ];
   const where = preview.pipelineKind === "board" ? preview.pipelineName : "the pipeline";
-  const staying = preview.leftBehind.join(", ");
+  const staying = (copy ? preview.notCopied : preview.leftBehind).join(", ");
   return {
     [`${key}:goes`]: goes.length > 0 ? `${copy ? "Copies" : "Goes with them"}: ${goes.join(", ")}` : copy ? "Copies the details only" : "Nothing else goes with them",
     [`${key}:along`]: along.join("; "),

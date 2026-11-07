@@ -152,26 +152,36 @@ begin
     and (v_include_contacts or not (c.company_id = any(v_company_ids)))
   on conflict do nothing;
 
-  if not v_include_contacts then
-    if not v_copy then
-      insert into pg_temp.orbit_move_map (kind, old_id, merged)
-      select distinct 'contact', c.id, false
-      from crm.documents d
-      join crm.contacts c on c.id = d.contact_id
-      where d.workspace_id = p_source
-        and d.company_id = any(v_company_ids)
-        and c.workspace_id = p_source
-        and c.company_id = any(v_company_ids)
-      on conflict do nothing;
-      insert into pg_temp.orbit_move_map (kind, old_id)
-      select 'proposal_contact', m.old_id
+  if not v_copy then
+    insert into pg_temp.orbit_move_map (kind, old_id)
+    select distinct 'proposal_contact', c.id
+    from crm.documents d
+    join crm.contacts c on c.id = d.contact_id
+    where d.workspace_id = p_source
+      and d.company_id in (select item.old_id from pg_temp.orbit_move_map item where item.kind = 'company')
+      and c.workspace_id = p_source
+      and not exists (select 1 from pg_temp.orbit_move_map item where item.kind = 'contact' and item.old_id = c.id)
+    on conflict do nothing;
+    insert into pg_temp.orbit_move_map (kind, old_id)
+    select 'contact', m.old_id from pg_temp.orbit_move_map m where m.kind = 'proposal_contact'
+    on conflict do nothing;
+    for v_link in
+      select distinct c.company_id
       from pg_temp.orbit_move_map m
       join crm.contacts c on c.id = m.old_id
-      where m.kind = 'contact'
-        and not (m.old_id = any(v_contact_ids))
-        and c.company_id = any(v_company_ids)
-      on conflict do nothing;
-    end if;
+      where m.kind = 'proposal_contact'
+        and c.company_id is not null
+        and not exists (
+          select 1 from pg_temp.orbit_move_map item where item.kind in ('company', 'company_link') and item.old_id = c.company_id
+        )
+    loop
+      v_match := private.move_company_match(v_link.company_id, p_target);
+      insert into pg_temp.orbit_move_map (kind, old_id, new_id, merged)
+      values ('company_link', v_link.company_id, coalesce(v_match, gen_random_uuid()), v_match is not null);
+    end loop;
+  end if;
+
+  if not v_include_contacts then
     insert into pg_temp.orbit_move_map (kind, old_id)
     select 'contact_stay', c.id
     from crm.contacts c
@@ -256,7 +266,7 @@ begin
   from crm.activities a
   where a.workspace_id = p_source
     and (not v_copy or a.archived_at is null)
-    and not exists (select 1 from pg_temp.orbit_move_map s where s.kind = 'contact_stay' and s.old_id = a.contact_id)
+    and (v_copy or not exists (select 1 from pg_temp.orbit_move_map s where s.kind = 'contact_stay' and s.old_id = a.contact_id))
     and (
       a.company_id in (select item.old_id from pg_temp.orbit_move_map item where item.kind = 'company')
       or a.contact_id in (select item.old_id from pg_temp.orbit_move_map item where item.kind = 'contact')
@@ -341,7 +351,8 @@ begin
         'targetId', m.new_id, 'merged', m.merged,
         'targetName', coalesce(nullif(btrim(concat_ws(' ', t.first_name, t.last_name)), ''), t.email),
         'selected', m.old_id = any(v_contact_ids),
-        'archived', c.archived_at is not null
+        'archived', c.archived_at is not null,
+        'companyId', c.company_id
       ) order by c.first_name, c.last_name)
       from pg_temp.orbit_move_map m
       join crm.contacts c on c.id = m.old_id
@@ -389,7 +400,7 @@ begin
         'name', co.name,
         'others', (
           select count(*) from crm.contacts o
-          where o.workspace_id = p_source and o.company_id = co.id and o.archived_at is null
+          where o.workspace_id = p_source and o.company_id = co.id and (not v_copy or o.archived_at is null)
             and not (o.id = any(v_contact_ids))
         )
       ) order by co.name)
@@ -400,7 +411,7 @@ begin
     ), '[]'::jsonb),
     'companyContacts', (
       select count(*) from crm.contacts o
-      where o.workspace_id = p_source and o.company_id = any(v_company_ids) and o.archived_at is null
+      where o.workspace_id = p_source and o.company_id = any(v_company_ids) and (not v_copy or o.archived_at is null)
         and not (o.id = any(v_contact_ids))
     ),
     'leftBehind', coalesce((
@@ -412,7 +423,13 @@ begin
       ) order by c.first_name, c.last_name)
       from pg_temp.orbit_move_map m
       join crm.contacts c on c.id = m.old_id
-      where m.kind = 'contact_stay'
+      where m.kind = 'contact_stay' and not v_copy
+    ), '[]'::jsonb),
+    'notCopied', coalesce((
+      select jsonb_agg(coalesce(nullif(btrim(concat_ws(' ', c.first_name, c.last_name)), ''), c.email, 'Unnamed') order by c.first_name, c.last_name)
+      from pg_temp.orbit_move_map m
+      join crm.contacts c on c.id = m.old_id
+      where m.kind = 'contact_stay' and v_copy and c.archived_at is null
     ), '[]'::jsonb),
     'proposalContacts', coalesce((
       select jsonb_agg(coalesce(nullif(btrim(concat_ws(' ', c.first_name, c.last_name)), ''), c.email, 'Unnamed') order by c.first_name, c.last_name)
@@ -831,6 +848,23 @@ begin
     join crm.call_insights x on x.activity_id = m.old_id
     join crm.activities a on a.id = m.new_id
     where m.kind = 'activity';
+  end if;
+
+  if not v_copy then
+    update crm.calendar_events e
+    set company_ids = array(
+          select x from unnest(e.company_ids) as x
+          where not exists (select 1 from pg_temp.orbit_move_map m where m.kind = 'company' and m.old_id = x)
+        ),
+        contact_ids = array(
+          select x from unnest(e.contact_ids) as x
+          where not exists (select 1 from pg_temp.orbit_move_map m where m.kind = 'contact' and m.old_id = x)
+        )
+    where e.workspace_id = p_source
+      and (
+        e.company_ids && array(select m.old_id from pg_temp.orbit_move_map m where m.kind = 'company')
+        or e.contact_ids && array(select m.old_id from pg_temp.orbit_move_map m where m.kind = 'contact')
+      );
   end if;
 
   update crm.calendar_events e

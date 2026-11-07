@@ -14,7 +14,6 @@ import { useScreenState } from "@/components/crm/quick-add";
 import { useShortcut, useShortcuts } from "@/components/shortcuts/shortcuts-provider";
 import {
   chatDefaultsAction,
-  connectedSourcesAction,
   deleteConversationAction,
   discardChatFilesAction,
   getConversationAction,
@@ -646,19 +645,6 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
   const [dragging, setDragging] = useState(false);
   const files = useEmailAttachments([], CHAT_UPLOADS);
 
-  useEffect(() => {
-    if (!open) return;
-    let live = true;
-    void connectedSourcesAction()
-      .then((sources) => {
-        if (live && sources) setConnected(sources);
-      })
-      .catch(() => undefined);
-    return () => {
-      live = false;
-    };
-  }, [open]);
-
   const applyDefaults = useCallback(async () => {
     const saved = readSettings().saved;
     const defaults = await chatDefaultsAction().catch(() => null);
@@ -1018,6 +1004,10 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
       setError(result.error ?? "Couldn't open your brief. Try again.");
       return;
     }
+    const settings = settingsFor(result.opened.conversation.model, result.opened.conversation.reasoning);
+    modelChosen.current = true;
+    setModel(settings.model);
+    setReasoning(settings.reasoning);
     setConversation(result.opened.conversation);
     setMessages(result.opened.messages);
     setWorking(null);

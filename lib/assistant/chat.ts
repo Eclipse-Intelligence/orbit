@@ -784,7 +784,7 @@ export async function lastChatSettings(actor: UserActor): Promise<{ model: strin
 
 export async function chatDefaults(actor: UserActor) {
   const [last, connected] = await Promise.all([lastChatSettings(actor).catch(() => null), connectedSources(actor).catch(() => null)]);
-  return { connected, last, settings: startingSettings([last], connected ?? undefined) };
+  return { connected, last, settings: startingSettings([last], connected ?? []) };
 }
 
 export async function stopConversation(actor: UserActor, id: string) {

@@ -1,7 +1,7 @@
 "use server";
 
 import type { ModelSource } from "@/lib/assistant/models";
-import { chatDefaults, connectedSources, deleteConversation, getConversation, listConversations, openBrief, stopConversation } from "@/lib/assistant/chat";
+import { chatDefaults, deleteConversation, getConversation, listConversations, openBrief, stopConversation } from "@/lib/assistant/chat";
 import { discardChatFiles, prepareChatFile, type PreparedChatFile } from "@/lib/assistant/files";
 import { getUserActor } from "@/lib/auth/user";
 import { CrmError } from "@/lib/crm/errors";
@@ -52,17 +52,6 @@ export async function stopConversationAction(id: string) {
     return {};
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Could not stop that answer." };
-  }
-}
-
-export async function connectedSourcesAction(): Promise<ModelSource[] | null> {
-  const user = await getUserActor();
-  if (!user) return null;
-  try {
-    return await connectedSources(user);
-  } catch (error) {
-    console.error("Could not read AI accounts", error);
-    return null;
   }
 }
 

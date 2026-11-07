@@ -464,6 +464,17 @@ describe("assistant conversations", () => {
     ]);
 
     assert.deepEqual(await lastChatSettings(starter), { model: "claude/claude-opus-5-5", reasoning: "high" });
+    const theirs = (await admin.query<{ id: string }>(
+      "insert into crm.assistant_conversations (workspace_id, user_id, title, model, reasoning, web_search) values ($1, $2, 'Theirs', 'grok-4.7', 'low', false) returning id",
+      [owner.workspaceId, owner.userId],
+    )).rows[0].id;
+    await admin.query("insert into crm.assistant_messages (conversation_id, workspace_id, user_id, role, content) values ($1, $2, $3, 'user', 'Newer')", [
+      theirs,
+      owner.workspaceId,
+      owner.userId,
+    ]);
+    assert.deepEqual(await lastChatSettings(starter), { model: "claude/claude-opus-5-5", reasoning: "high" });
+    assert.deepEqual(await lastChatSettings(owner), { model: "grok-4.7", reasoning: "low" });
     const disconnected = await chatDefaults(starter);
     assert.deepEqual(disconnected.connected, []);
     assert.deepEqual(disconnected.settings, { model: DEFAULT_MODEL, reasoning: "medium" });
