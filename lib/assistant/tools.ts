@@ -6,7 +6,7 @@ import { everywhereAllowed, forgetMemory, recall, rememberNote } from "@/lib/lea
 import { addWatchItems, listWatchlist, removeWatchItems, WATCH_KINDS } from "@/lib/learning/market";
 import { latestBrief, learningKinds, learnNow, LEARNING_KINDS, type LearningKind } from "@/lib/learning/nightly";
 import { bookingUrl } from "@/lib/assistant/links";
-import { ARTICLES_URL, DOCS_URL, eclipseDocsIndex, listEclipseArticles, readEclipsePage } from "@/lib/eclipse-sources";
+import { DOCS_URL, eclipseDocsIndex, readEclipsePage } from "@/lib/eclipse-sources";
 import { readWebPage, WebPageError } from "@/lib/web-page";
 import { checkWeb } from "@/lib/assistant/check-web";
 import { searchKnowledge } from "@/lib/knowledge/search";
@@ -2490,7 +2490,7 @@ const TOOL_LIST: AssistantTool[] = [
         evidence: withProofList(evidenceFrom(args.evidence), await listProof(actor), { subject: str(args.subject), body }),
         firstTouch: args.firstTouch !== false,
         theirOffer: optionalStr(args.theirOffer),
-        brand: { name: actor.workspaceName, claims: brand.outreachBrief || brand.whatYouSell, eclipseTools: brand.eclipseTools },
+        brand: { name: actor.workspaceName, claims: brand.outreachBrief || brand.whatYouSell, formerNames: brand.formerNames, playbook: brand.playbook, tone: brand.tone },
       }, { deadline: context.deadline });
     },
   },
@@ -2519,25 +2519,6 @@ const TOOL_LIST: AssistantTool[] = [
       return socialLookup(actor, kind, target, typeof args.limit === "number" ? args.limit : 5).catch((error: Error) => ({
         error: error instanceof MindcaseError ? error.message : "The lookup didn't work.",
       }));
-    },
-  },
-  {
-    name: "eclipse_articles",
-    label: "Reading Eclipse articles",
-    description:
-      "Eclipse's published articles at https://geteclipse.co/articles, newest first, with title, link, summary and date. Pass query to find ones on a topic, or url (one of the article links) to read an article in full. Use them for facts about Eclipse's point of view and as sales collateral: a relevant article gives a prospect a reason to hear from you.",
-    parameters: {
-      type: "object",
-      properties: {
-        query: { type: "string", description: "Words to match against titles and summaries, for example 'reddit agencies' or 'AI visibility evidence'." },
-        url: { type: "string", description: "An article link from this tool, to read the whole article." },
-      },
-    },
-    run: async (_actor, args) => {
-      const url = optionalStr(args.url);
-      if (url) return readEclipsePage(url).catch((error: Error) => ({ error: error.message }));
-      const articles = await listEclipseArticles({ query: optionalStr(args.query) }).catch((error: Error) => ({ error: `Couldn't read the articles: ${error.message}` }));
-      return Array.isArray(articles) ? { articles, all: ARTICLES_URL } : articles;
     },
   },
   {
@@ -5117,14 +5098,22 @@ export function toolDescription(tool: Pick<AssistantTool, "description" | "write
   return tool.write ? `${tool.description} ${APPROVAL_NOTE}` : tool.description;
 }
 
-export const ECLIPSE_TOOL_NAMES: ReadonlySet<string> = new Set(["eclipse_guide", "eclipse_tools", "eclipse_read", "eclipse_action", "eclipse_articles", "eclipse_docs"]);
+export const RETIRED_TOOLS: Record<string, { label: string; error: string }> = {
+  eclipse_articles: {
+    label: "Reading Eclipse articles",
+    error:
+      "eclipse_articles is no longer available. This brand's published articles are in its Eclipse client. Find the content or articles tools with eclipse_tools, then read them with eclipse_read.",
+  },
+};
 
-export type ToolOptions = { eclipseTools?: boolean; multiWorkspace?: boolean };
+export function toolLabel(name: string) {
+  return findTool(name)?.label ?? (Object.hasOwn(RETIRED_TOOLS, name) ? RETIRED_TOOLS[name].label : name);
+}
+
+export type ToolOptions = { multiWorkspace?: boolean };
 
 export function assistantTools(options: ToolOptions = {}) {
-  return ASSISTANT_TOOLS.filter(
-    (tool) => !(options.eclipseTools === false && ECLIPSE_TOOL_NAMES.has(tool.name)) && !(options.multiWorkspace !== true && MULTI_WORKSPACE_TOOLS.has(tool.name)),
-  );
+  return ASSISTANT_TOOLS.filter((tool) => !(options.multiWorkspace !== true && MULTI_WORKSPACE_TOOLS.has(tool.name)));
 }
 
 export function toolDefinitions(options: ToolOptions = {}) {
@@ -5148,7 +5137,6 @@ const EXTERNAL_TOOLS = new Set([
   "map_website",
   "check_web",
   "social_lookup",
-  "eclipse_articles",
   "eclipse_docs",
   "eclipse_guide",
   "eclipse_tools",
@@ -5406,15 +5394,12 @@ export async function runTool(
   actor: UserActor,
   name: string,
   args: Args,
-  options: { deadline?: number; callId?: string; defer?: Defer; unattended?: boolean; approval?: DocApproval; source?: AssistantSource; eclipseTools?: boolean } = {},
+  options: { deadline?: number; callId?: string; defer?: Defer; unattended?: boolean; approval?: DocApproval; source?: AssistantSource } = {},
 ) {
   if (options.unattended && name !== "save_doc") return { error: "Only doc edits can run without approval. Propose this for approval instead." };
   const resolved = resolveTool(name, args);
-  if (!resolved) return { error: `There is no tool called ${name}.` };
+  if (!resolved) return { error: Object.hasOwn(RETIRED_TOOLS, name) ? RETIRED_TOOLS[name].error : `There is no tool called ${name}.` };
   const { tool } = resolved;
-  if (ECLIPSE_TOOL_NAMES.has(tool.name) && !(options.eclipseTools ?? (await brandOrEmpty(actor)).eclipseTools)) {
-    return { error: "Eclipse tools are off in this workspace. An owner or admin can turn them on in Settings, Brand." };
-  }
   const { workspace: requestedWorkspace, ...cleaned } = dropStrayNulls(resolved.args, tool.parameters) as Args;
   let scope: { targets: UserActor[]; all: boolean } | null = null;
   try {

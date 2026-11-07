@@ -2,13 +2,12 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { z } from "zod";
 import { shapeFor } from "@/companion/src/schema";
+import { systemPrompt, UNBRANDED } from "@/lib/assistant/prompt";
 import { describeAction, runTool, toolDefinitions } from "@/lib/assistant/tools";
 import type { UserActor } from "@/lib/crm/types";
 import { callEclipseTool, clearEclipseToolCache, eclipseGuide, findEclipseTools } from "@/lib/eclipse-mcp";
 
 const actor = { type: "user", userId: "u", workspaceId: "w", email: "mark@eclipse.test", fullName: "Mark", role: "owner", scopes: [] } as unknown as UserActor;
-
-const ON = { eclipseTools: true };
 
 const TOOLS = [
   { name: "list_clients", description: "List the clients. This read is free and changes nothing.", inputSchema: { type: "object", properties: {} } },
@@ -97,10 +96,10 @@ describe("Eclipse MCP", () => {
     const original = globalThis.fetch;
     globalThis.fetch = fetchImpl;
     try {
-      const read = (await runTool(actor, "eclipse_read", { tool: "geo_trends", argumentsJson: '{"profileId": 7}' }, ON)) as { result: string };
+      const read = (await runTool(actor, "eclipse_read", { tool: "geo_trends", argumentsJson: '{"profileId": 7}' })) as { result: string };
       assert.match(read.result, /"profileId":7/);
       assert.deepEqual(sent.at(-1)!.params.arguments, { profileId: 7 });
-      const bad = (await runTool(actor, "eclipse_read", { tool: "geo_trends", argumentsJson: "{profileId: 7" }, ON)) as { error: string };
+      const bad = (await runTool(actor, "eclipse_read", { tool: "geo_trends", argumentsJson: "{profileId: 7" })) as { error: string };
       assert.match(bad.error, /isn't valid JSON/);
     } finally {
       globalThis.fetch = original;
@@ -128,17 +127,17 @@ describe("Eclipse MCP", () => {
     }) as typeof fetch;
     try {
       const started = Date.now();
-      const slow = (await runTool(actor, "eclipse_read", { tool: "geo_trends", argumentsJson: "{}" }, { deadline: Date.now(), ...ON })) as { error: string };
+      const slow = (await runTool(actor, "eclipse_read", { tool: "geo_trends", argumentsJson: "{}" }, { deadline: Date.now() })) as { error: string };
       assert.match(slow.error, /took too long and was stopped after 5 seconds/);
       assert.ok(Date.now() - started < 8_000);
 
       pause = 6_000;
-      const action = (await runTool(actor, "eclipse_action", { tool: "start_deep_research", summary: "Research", argumentsJson: '{"question": "Who leads?"}' }, { deadline: Date.now(), callId: "call_1", ...ON })) as { error?: string; result?: string };
+      const action = (await runTool(actor, "eclipse_action", { tool: "start_deep_research", summary: "Research", argumentsJson: '{"question": "Who leads?"}' }, { deadline: Date.now(), callId: "call_1" })) as { error?: string; result?: string };
       assert.equal(action.error, undefined);
       assert.match(String(action.result), /start_deep_research/);
       pause = 0;
-      await runTool(actor, "eclipse_action", { tool: "start_deep_research", summary: "Research", argumentsJson: '{"question": "Who leads?"}' }, { callId: "call_1", ...ON });
-      await runTool(actor, "eclipse_action", { tool: "start_deep_research", summary: "Research", argumentsJson: '{"question": "Who leads?"}' }, { callId: "call_2", ...ON });
+      await runTool(actor, "eclipse_action", { tool: "start_deep_research", summary: "Research", argumentsJson: '{"question": "Who leads?"}' }, { callId: "call_1" });
+      await runTool(actor, "eclipse_action", { tool: "start_deep_research", summary: "Research", argumentsJson: '{"question": "Who leads?"}' }, { callId: "call_2" });
       assert.equal(keys.length, 3);
       assert.match(String(keys[0]), /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-a[0-9a-f]{3}-[0-9a-f]{12}$/);
       assert.equal(keys[0], keys[1]);
@@ -154,14 +153,32 @@ describe("Eclipse MCP", () => {
     globalThis.fetch = fetchImpl;
     try {
       const member = { ...actor, role: "member" } as UserActor;
-      const refused = (await runTool(member, "eclipse_action", { tool: "update_client_details", summary: "Update", argumentsJson: '{"website": "https://x.test"}' }, ON)) as { error: string };
+      const refused = (await runTool(member, "eclipse_action", { tool: "update_client_details", summary: "Update", argumentsJson: '{"website": "https://x.test"}' })) as { error: string };
       assert.match(refused.error, /Only workspace owners and admins can run Eclipse actions/);
       assert.ok(!sent.some((call) => call.method === "tools/call"));
       const admin = { ...actor, role: "admin" } as UserActor;
-      const allowed = (await runTool(admin, "eclipse_action", { tool: "update_client_details", summary: "Update", argumentsJson: '{"website": "https://x.test"}' }, ON)) as { error?: string };
+      const allowed = (await runTool(admin, "eclipse_action", { tool: "update_client_details", summary: "Update", argumentsJson: '{"website": "https://x.test"}' })) as { error?: string };
       assert.equal(allowed.error, undefined);
     } finally {
       globalThis.fetch = original;
+    }
+  });
+
+  it("gives every workspace the same Eclipse tools and names its own client in the prompt", () => {
+    for (const multiWorkspace of [false, true]) {
+      const names = toolDefinitions({ multiWorkspace }).map((tool) => tool.function.name);
+      for (const name of ["eclipse_guide", "eclipse_tools", "eclipse_read", "eclipse_action", "eclipse_docs"]) assert.ok(names.includes(name), name);
+      assert.ok(!names.includes("eclipse_articles"));
+    }
+    const eclipse = systemPrompt({ ...actor, workspaceName: "Eclipse" }, { webSearch: false, brand: { ...UNBRANDED, workspaceName: "Eclipse" } });
+    const ridgeon = systemPrompt({ ...actor, workspaceName: "Mark Ridgeon" }, { webSearch: false, brand: { ...UNBRANDED, workspaceName: "Mark Ridgeon" } });
+    assert.match(eclipse, /In Eclipse, use the Eclipse client named 'Eclipse'\. Find it with list_clients and pass its clientId on every call\. Use another client only when the user names it\./);
+    assert.match(ridgeon, /In Mark Ridgeon, use the Eclipse client named 'Mark Ridgeon'\. Find it with list_clients and pass its clientId on every call\. Use another client only when the user names it\./);
+    assert.doesNotMatch(ridgeon, /client named 'Eclipse'/);
+    for (const prompt of [eclipse, ridgeon]) {
+      assert.match(prompt, /If no client of that name exists, say so and ask the user which client to use/);
+      assert.match(prompt, /goes through eclipse_action, which the user approves/);
+      assert.match(prompt, /never share one client's data with another company/);
     }
   });
 

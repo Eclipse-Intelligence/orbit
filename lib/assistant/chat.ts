@@ -4,7 +4,7 @@ import { chatFileNote, chatFilesFor, removeChatObjects, type ChatFile } from "@/
 import { connectedProviders } from "@/lib/ai-accounts/store";
 import { systemPrompt } from "@/lib/assistant/prompt";
 import { docLinkOf } from "@/lib/assistant/doc-link";
-import { ACTION_ALTERNATIVES, actionAlternative, assistantTools, crossWorkspaceRefusal, describeAction, findTool, recordNames, runTool, toolDefinitions, toolDescription, toolJson } from "@/lib/assistant/tools";
+import { ACTION_ALTERNATIVES, actionAlternative, assistantTools, crossWorkspaceRefusal, describeAction, findTool, recordNames, runTool, toolDefinitions, toolDescription, toolJson, toolLabel } from "@/lib/assistant/tools";
 import { brandOrEmpty } from "@/lib/crm/brand";
 import { approvalFor, editsWithoutApproval, type DocApproval } from "@/lib/assistant/docs";
 import type { DocDiffLine } from "@/lib/docs/types";
@@ -145,7 +145,7 @@ function display(row: MessageRow): DisplayMessage {
     content: row.content,
     tools: (row.tool_calls ?? [])
       .filter((call) => !findTool(call.function.name)?.write)
-      .map((call) => ({ id: call.id, name: call.function.name, label: findTool(call.function.name)?.label ?? call.function.name })),
+      .map((call) => ({ id: call.id, name: call.function.name, label: toolLabel(call.function.name) })),
     actions: row.actions ?? [],
     sources: row.sources ?? [],
     files: row.files ?? [],
@@ -519,9 +519,9 @@ async function declinePending(actor: UserActor, conversationId: string, rows: Me
   }
 }
 
-function companionTools(eclipseTools: boolean, multiWorkspace: boolean) {
+function companionTools(multiWorkspace: boolean) {
   return [
-    ...assistantTools({ eclipseTools, multiWorkspace }).map((tool) => ({
+    ...assistantTools({ multiWorkspace }).map((tool) => ({
       name: tool.name,
       description: toolDescription(tool),
       parameters: tool.parameters,
@@ -655,7 +655,6 @@ async function promptFor(actor: UserActor, conversation: ConversationRow, option
   return {
     system: systemPrompt(actor, { webSearch: conversation.web_search, links, about: aboutYouSection(about, colleagues), briefReady: Boolean(brief) && !briefChat, brand, workspaces: shown }),
     learned,
-    eclipseTools: brand.eclipseTools,
     multiWorkspace: shown.length > 1,
   };
 }
@@ -683,7 +682,7 @@ async function runCompanionTurn(
   if (!online && (!headless || (await listCompanions(actor)).length === 0)) throw new AssistantError(await companionOfflineMessage(actor));
   const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
   const earlier = new Set(rows.map((row) => row.id));
-  const { system, learned, eclipseTools, multiWorkspace } = await promptFor(actor, conversation, { headless: Boolean(headless) });
+  const { system, learned, multiWorkspace } = await promptFor(actor, conversation, { headless: Boolean(headless) });
   const transcript = buildPrompt(history(rows));
   const jobId = await enqueueCompanionJob(actor, conversation.id, {
     model: apiModel,
@@ -691,7 +690,7 @@ async function runCompanionTurn(
     webSearch: conversation.web_search,
     system,
     prompt: learned ? `${learned}\n${LEARNED_NOTE}\n\n${transcript}` : transcript,
-    tools: companionTools(eclipseTools, multiWorkspace),
+    tools: companionTools(multiWorkspace),
   }, { agentMailId: headless?.agentMailId ?? null });
   if (headless) {
     headless.queued?.({ jobId, online });
@@ -825,8 +824,8 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
   const chosen = assistantModel(conversation.model);
   if (chosen?.source === "claude") return runCompanionTurn(actor, conversation, chosen.apiModel, emit, deadline, signal, options.headless);
   if (options.headless) throw new AssistantError(HEADLESS_MODEL_ERROR);
-  const { system, learned, eclipseTools, multiWorkspace } = await promptFor(actor, conversation);
-  const tools = toolDefinitions({ eclipseTools, multiWorkspace });
+  const { system, learned, multiWorkspace } = await promptFor(actor, conversation);
+  const tools = toolDefinitions({ multiWorkspace });
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
     if (signal?.aborted) return;
     const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
@@ -876,9 +875,9 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
     let writes = result.toolCalls.filter((call) => findTool(call.function.name)?.write);
     await Promise.all(
       reads.map(async (call) => {
-        const label = findTool(call.function.name)?.label ?? call.function.name;
+        const label = toolLabel(call.function.name);
         emit({ type: "tool", id: call.id, name: call.function.name, label, status: "running" });
-        const output = await runTool(actor, call.function.name, parseArgs(call.function.arguments), { deadline: deadline - 20_000, eclipseTools });
+        const output = await runTool(actor, call.function.name, parseArgs(call.function.arguments), { deadline: deadline - 20_000 });
         await insertMessage(actor, conversation.id, {
           role: "tool",
           content: toolJson(output),
@@ -926,7 +925,7 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
       await saveActions(actor, saved.id, actions);
       emit({ type: "actions", messageId: saved.id, actions });
       for (const call of writes.filter((entry) => unattended.has(entry.id))) {
-        const label = findTool(call.function.name)?.label ?? call.function.name;
+        const label = toolLabel(call.function.name);
         emit({ type: "tool", id: call.id, name: call.function.name, label, status: "running" });
         const output = (await runTool(actor, call.function.name, parseArgs(call.function.arguments), {
           deadline: deadline - 20_000,

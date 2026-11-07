@@ -7,7 +7,7 @@ import { createCompany } from "@/lib/crm/companies";
 import { scopesForRole } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
-import { issueMarketAgentToken, marketAgentStatus } from "@/lib/learning/grok";
+import { grokRoutine, issueMarketAgentToken, marketAgentStatus } from "@/lib/learning/grok";
 import { addWatchItems, listMarketNotes } from "@/lib/learning/market";
 import { insertMemory, listMemories, memoryBriefing, pickForBriefing, searchTerms, type Memory } from "@/lib/learning/memories";
 import { addMarketNotes } from "@/lib/learning/market";
@@ -144,8 +144,23 @@ describe("nightly learning", () => {
     assert.equal((await rpc(replaced, "tools/list")).result!.tools!.length, 2);
   });
 
+  it("writes the Grok Bot routine from the watchlist alone, with no topics built in", () => {
+    for (const name of ["Eclipse", "Mark Ridgeon"]) {
+      const routine = grokRoutine("https://orbit.test/api/mcp", name);
+      assert.match(routine, new RegExp(`research the market for ${name} and send what you find to Orbit`));
+      assert.match(routine, /Call get_watchlist on the Orbit plugin \(https:\/\/orbit\.test\/api\/mcp\)/);
+      assert.match(routine, /Search X and my news sources for the last 24 hours on everything in the watchlist\./);
+      assert.match(routine, /Skip anything that doesn't touch the watchlist\./);
+      assert.doesNotMatch(routine, /AI visibility|\bGEO\b|AI search|content operations|agencies/i);
+    }
+  });
+
   it("learns about each person, the business and the market overnight, then writes each member a brief", async () => {
     const { fetchImpl, calls } = gateway(() => pulseId);
+    await getAdminPool().query(
+      "insert into crm.workspace_brands (workspace_id, tone) values ($1, 'Short, warm sentences.') on conflict (workspace_id) do update set tone = excluded.tone",
+      [owner.workspaceId],
+    );
     const now = new Date();
     const first = await runNightlyLearning({ deadline: Date.now() + 600_000, fetchImpl, now });
     assert.equal(first.day, londonDay(now));
@@ -155,6 +170,8 @@ describe("nightly learning", () => {
     );
     assert.equal(first.report.find((item) => item.kind === "personal" && item.userId === sam.userId)!.result.skipped, "Nothing new to learn from.");
     assert.deepEqual(calls.map((call) => call.kind).sort(), ["brief", "brief", "business", "market", "personal"]);
+    for (const brief of calls.filter((call) => call.kind === "brief")) assert.match(brief.system, /writes, for anything written on its behalf: Short, warm sentences\./);
+    await getAdminPool().query("update crm.workspace_brands set tone = '' where workspace_id = $1", [owner.workspaceId]);
 
     const personalPrompt = calls.find((call) => call.kind === "personal")!;
     assert.match(personalPrompt.user, /Never send a first email over 100 words/);

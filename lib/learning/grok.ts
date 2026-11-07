@@ -25,22 +25,20 @@ export async function issueMarketAgentToken(actor: UserActor) {
   return { token };
 }
 
-export function grokRoutine(mcpUrl: string, business: string, eclipseTopics: boolean) {
+export function grokRoutine(mcpUrl: string, business: string) {
   const name = business.trim() || "the business";
-  const topics = eclipseTopics ? ", plus AI visibility, generative engine optimisation (GEO), AI search, content operations and agencies" : "";
-  const skip = eclipseTopics ? "AI search, content or the watchlist" : `${name}'s market or the watchlist`;
   return `Every night at 1am UK time, research the market for ${name} and send what you find to Orbit.
 
 1. Call get_watchlist on the Orbit plugin (${mcpUrl}). It lists the topics, competitors, people, target accounts and sources to watch.
-2. Search X and my news sources for the last 24 hours on everything in the watchlist${topics}.
-3. Keep only what matters to ${name}'s sales and positioning: competitor launches and moves, funding, hires and leadership changes, product news, notable posts by the people on the list, data or research worth quoting, and anything a target account posts or announces that is a reason to contact them now. Skip anything that doesn't touch ${skip}.
+2. Search X and my news sources for the last 24 hours on everything in the watchlist.
+3. Keep only what matters to ${name}'s sales and positioning: competitor launches and moves, funding, hires and leadership changes, product news, notable posts by the people on the list, data or research worth quoting, and anything a target account posts or announces that is a reason to contact them now. Skip anything that doesn't touch the watchlist.
 4. Prefer the original source (the study, the company's own announcement, the author's post) over reposts and roundups, and skip press-release wire sites unless the company is on the watchlist.
 5. Call add_market_notes once with up to 30 notes. Each note has:
    - kind: news, post, launch, hire, funding, research, or signal. Use signal only when a target account, competitor or person on the watchlist did something that is a reason to contact them now; general statistics are research.
    - headline: one line.
    - summary: two or three factual sentences, no opinion.
    - url: the original post or article.
-   - about: the specific company or person it concerns (for example "Semrush" or "Ross Simmonds"), spelled as in the watchlist when they're on it, not the topic.
+   - about: the specific company or person it concerns (for example "Acme" or "Jane Smith"), spelled as in the watchlist when they're on it, not the topic.
    - publishedAt: ISO date.
 6. Never invent a link or a figure. Skip anything you can't link to. If nothing qualifies, send nothing.`;
 }

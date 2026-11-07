@@ -8,7 +8,6 @@ import { listMarketNotes, listWatchlist } from "@/lib/learning/market";
 import { listMemories } from "@/lib/learning/memories";
 import { learningStatus } from "@/lib/learning/nightly";
 import { workspaceActors } from "@/lib/crm/workspaces";
-import { brandOrEmpty } from "@/lib/crm/brand";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -17,7 +16,7 @@ export default async function LearningSettingsPage() {
   const user = await getUserActor();
   if (!user) redirect("/login");
   const canAdmin = user.role === "owner" || user.role === "admin";
-  const [business, market, watchlist, notes, statuses, grok, headerStore, workspaces, brand] = await Promise.all([
+  const [business, market, watchlist, notes, statuses, grok, headerStore, workspaces] = await Promise.all([
     listMemories(user, { scope: "business", limit: 200 }),
     listMemories(user, { scope: "market", limit: 200 }),
     listWatchlist(user),
@@ -26,7 +25,6 @@ export default async function LearningSettingsPage() {
     marketAgentStatus(user).catch(() => null),
     headers(),
     workspaceActors(user).catch(() => [user]),
-    brandOrEmpty(user),
   ]);
   const host = headerStore.get("x-forwarded-host") ?? headerStore.get("host") ?? "localhost:4173";
   const mcpUrl = `${headerStore.get("x-forwarded-proto") ?? "http"}://${host}/api/mcp`;
@@ -46,7 +44,7 @@ export default async function LearningSettingsPage() {
       />
       <WatchlistCard items={watchlist} />
       <MarketNotesCard notes={notes} />
-      <GrokCard status={grok} mcpUrl={mcpUrl} routine={grokRoutine(mcpUrl, user.workspaceName, brand.eclipseTools)} canConnect={canAdmin} />
+      <GrokCard status={grok} mcpUrl={mcpUrl} routine={grokRoutine(mcpUrl, user.workspaceName)} canConnect={canAdmin} />
     </SettingsPage>
   );
 }
