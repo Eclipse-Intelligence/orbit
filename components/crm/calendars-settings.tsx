@@ -15,6 +15,7 @@ import {
 } from "@/app/(crm)/calendar/actions";
 import { formatWhen } from "@/lib/companies";
 import type { CalendarEntry, CalendarGroup } from "@/lib/crm/calendars";
+import { GENERIC_ERROR } from "@/lib/utils";
 
 const CONNECT_ACCOUNT = "/api/microsoft/connect?purpose=calendar_account";
 
@@ -84,8 +85,8 @@ export default function CalendarsSettings({
     setOverrides((current) => ({ ...current, [calendar.id]: { ...current[calendar.id], [field]: value } }));
     const result =
       field === "isVisible"
-        ? await setCalendarVisibleAction(calendar.id, value)
-        : await setCalendarForCrmAction(calendar.id, value);
+        ? await setCalendarVisibleAction(calendar.id, value).catch(() => ({ error: GENERIC_ERROR }))
+        : await setCalendarForCrmAction(calendar.id, value).catch(() => ({ error: GENERIC_ERROR }));
     if (result.error) {
       setError(result.error);
       setOverrides((current) => ({ ...current, [calendar.id]: { ...current[calendar.id], [field]: !value } }));
@@ -99,7 +100,7 @@ export default function CalendarsSettings({
     setPending(group.id);
     setError(null);
     setMessage(null);
-    const result = await disconnectCalendarAccountAction(group.id);
+    const result = await disconnectCalendarAccountAction(group.id).catch(() => ({ error: GENERIC_ERROR }));
     setPending(null);
     if (result.error) {
       setError(result.error);
@@ -116,7 +117,7 @@ export default function CalendarsSettings({
     setFeedError(null);
     setError(null);
     setMessage(null);
-    const result = await addCalendarFeedAction(feedUrl, feedName);
+    const result = await addCalendarFeedAction(feedUrl, feedName).catch(() => ({ error: GENERIC_ERROR, message: undefined }));
     setPending(null);
     if (result.error) {
       setFeedError(result.error);
@@ -134,7 +135,7 @@ export default function CalendarsSettings({
     setPending("sync");
     setError(null);
     setMessage(null);
-    const result = await syncCalendarsAction();
+    const result = await syncCalendarsAction().catch(() => ({ error: GENERIC_ERROR, message: undefined }));
     setPending(null);
     if (result.error) setError(result.error);
     else setMessage(result.message ?? "Calendars synced.");

@@ -131,6 +131,7 @@ export default function MailComposer({
   const draftId = useRef<string | null>(draft?.id || null);
   const chain = useRef<Promise<unknown>>(Promise.resolve());
   const dirty = useRef(false);
+  const discarded = useRef(false);
   const editor = useRef<BodyEditorHandle>(null);
   const [formats, setFormats] = useState({ bold: false, italic: false });
   const payload = useRef({
@@ -192,7 +193,7 @@ export default function MailComposer({
 
   function saveNow() {
     const run = chain.current.then(async () => {
-      if (!dirty.current) return;
+      if (!dirty.current || discarded.current) return;
       const snapshot = { ...payload.current, id: draftId.current };
       if (!draftId.current && !snapshot.body.trim() && !snapshot.subject.trim()) return;
       dirty.current = false;
@@ -223,10 +224,13 @@ export default function MailComposer({
 
   useEffect(
     () => () => {
-      if (!dirty.current) return;
-      const snapshot = { ...payload.current, id: draftId.current };
+      if (!dirty.current || discarded.current) return;
+      const snapshot = { ...payload.current };
       if (!draftId.current && !snapshot.body.trim() && !snapshot.subject.trim()) return;
-      void postJson("/api/mail/drafts", snapshot, true).catch(() => null);
+      void chain.current
+        .catch(() => null)
+        .then(() => postJson("/api/mail/drafts", { ...snapshot, id: draftId.current }, true))
+        .catch(() => null);
     },
     [],
   );
@@ -336,6 +340,7 @@ export default function MailComposer({
   }
 
   async function discard() {
+    discarded.current = true;
     dirty.current = false;
     await chain.current.catch(() => null);
     const current = draftId.current;

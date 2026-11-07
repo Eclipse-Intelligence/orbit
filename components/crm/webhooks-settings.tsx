@@ -11,7 +11,7 @@ import {
 } from "@/app/(crm)/settings/actions";
 import { formatWhen } from "@/lib/companies";
 import type { WebhookDelivery, WebhookEndpoint } from "@/lib/crm/webhooks";
-import { cn } from "@/lib/utils";
+import { cn, GENERIC_ERROR } from "@/lib/utils";
 
 const EVENT_CHOICES = [
   "company.created",
@@ -55,7 +55,7 @@ export default function WebhooksSettings({
     setPending(true);
     setError(null);
     setSecret(null);
-    const result = await createWebhookAction(url, events, "");
+    const result = await createWebhookAction(url, events, "").catch(() => ({ error: GENERIC_ERROR }));
     setPending(false);
     if ("error" in result && result.error) {
       setError(result.error);
@@ -69,7 +69,7 @@ export default function WebhooksSettings({
   async function remove(id: string) {
     setPending(true);
     setError(null);
-    const result = await archiveWebhookAction(id);
+    const result = await archiveWebhookAction(id).catch(() => ({ error: GENERIC_ERROR }));
     setPending(false);
     if (result.error) {
       setError(result.error);

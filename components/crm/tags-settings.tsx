@@ -9,6 +9,7 @@ import { TagChip } from "@/components/crm/tags";
 import { deleteTagAction, renameTagAction } from "@/app/(crm)/tags";
 import { normalizeTag, TAG_MAX_LENGTH } from "@/lib/crm/normalize";
 import type { TagCount } from "@/lib/crm/types";
+import { GENERIC_ERROR } from "@/lib/utils";
 
 function plural(value: number, noun: [string, string]) {
   return `${value} ${value === 1 ? noun[0] : noun[1]}`;
@@ -52,7 +53,7 @@ export default function TagsSettings({ tags }: { tags: TagCount[] }) {
     }
     setPending(true);
     setError(null);
-    const result = await renameTagAction(renaming, draft);
+    const result = await renameTagAction(renaming, draft).catch(() => ({ error: GENERIC_ERROR }));
     setPending(false);
     if ("error" in result) {
       setError(result.error);
@@ -68,7 +69,7 @@ export default function TagsSettings({ tags }: { tags: TagCount[] }) {
   async function remove(name: string) {
     setPending(true);
     setError(null);
-    const result = await deleteTagAction(name);
+    const result = await deleteTagAction(name).catch(() => ({ error: GENERIC_ERROR }));
     setPending(false);
     if ("error" in result) {
       setError(result.error);

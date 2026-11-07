@@ -22,7 +22,7 @@ import type { MarketAgentStatus } from "@/lib/learning/grok";
 import type { MarketNote, WatchItem, WatchKind } from "@/lib/learning/market";
 import type { Memory, MemoryScope } from "@/lib/learning/memories";
 import type { LearningKind, LearningStatus } from "@/lib/learning/nightly";
-import { cn } from "@/lib/utils";
+import { cn, GENERIC_ERROR } from "@/lib/utils";
 import { selectClass, textareaClass } from "@/components/_ui/field-styles";
 
 const AREA = textareaClass;
@@ -154,10 +154,26 @@ function MemoryRow({ memory, showPlace }: { memory: Memory; showPlace: boolean }
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  function startEditing() {
+    setTitle(memory.title);
+    setBody(memory.body);
+    setEverywhere(memory.allWorkspaces === true);
+    setError(null);
+    setEditing(true);
+  }
+
+  function cancelEditing() {
+    setTitle(memory.title);
+    setBody(memory.body);
+    setEverywhere(memory.allWorkspaces === true);
+    setError(null);
+    setEditing(false);
+  }
+
   async function run(work: () => Promise<{ error?: string }>) {
     setBusy(true);
     setError(null);
-    const result = await work();
+    const result = await work().catch(() => ({ error: GENERIC_ERROR }));
     setBusy(false);
     if (result.error) {
       setError(result.error);
@@ -201,10 +217,7 @@ function MemoryRow({ memory, showPlace }: { memory: Memory; showPlace: boolean }
               variant="ghost"
               size="sm"
               type="button"
-              onClick={() => {
-                setEverywhere(memory.allWorkspaces === true);
-                setEditing(false);
-              }}
+              onClick={cancelEditing}
             >
               Cancel
             </Button>
@@ -247,7 +260,7 @@ function MemoryRow({ memory, showPlace }: { memory: Memory; showPlace: boolean }
             <Button variant="ghost" size="sm" disabled={busy} onClick={() => void run(() => updateMemoryAction(memory.id, { pinned: !memory.pinned }))}>
               {memory.pinned ? "Unpin" : "Pin"}
             </Button>
-            <Button variant="ghost" size="sm" disabled={busy} onClick={() => setEditing(true)}>
+            <Button variant="ghost" size="sm" disabled={busy} onClick={startEditing}>
               Edit
             </Button>
             <Button variant="ghost" size="sm" disabled={busy} onClick={() => void run(() => forgetMemoryAction(memory.id))}>

@@ -10,6 +10,7 @@ import { SettingsCard } from "@/components/crm/settings-ui";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
 import { draftAboutYouAction, saveAboutYouAction, saveYouAction } from "@/app/(crm)/settings/actions";
 import { PERSONAL_LIMITS, type AboutYouInput, type YouInput } from "@/lib/personal-context-rules";
+import { GENERIC_ERROR } from "@/lib/utils";
 
 type Pending = "save" | "draft" | null;
 
@@ -97,7 +98,7 @@ export function AboutYouSettings({
     setPending("save");
     setAboutError(null);
     setAboutStatus(null);
-    const result = await saveAboutYouAction(about);
+    const result = await saveAboutYouAction(about).catch(() => ({ error: GENERIC_ERROR, field: undefined, saved: undefined }));
     setPending(null);
     if (result.error || !result.saved) {
       if (result.field === "jobTitle" || result.field === "about") setErrors({ [result.field]: result.error });
@@ -116,7 +117,7 @@ export function AboutYouSettings({
     setDraftError(null);
     setAboutError(null);
     setAboutStatus("Reading your LinkedIn and website. This takes up to a minute.");
-    const result = await draftAboutYouAction({ linkedinUrl, websiteUrl: website });
+    const result = await draftAboutYouAction({ linkedinUrl, websiteUrl: website }).catch(() => ({ error: GENERIC_ERROR, field: undefined, draft: undefined }));
     setPending(null);
     if (result.error || !result.draft) {
       setAboutStatus(null);
@@ -255,7 +256,7 @@ export function YouSettings({ you: initialYou, website, multi }: { you: YouInput
     setPending("save");
     setYouError(null);
     setYouStatus(null);
-    const result = await saveYouAction(you);
+    const result = await saveYouAction(you).catch(() => ({ error: GENERIC_ERROR, field: undefined, saved: undefined }));
     setPending(null);
     if (result.error || !result.saved) {
       if (result.field && result.field in you) setErrors({ [result.field]: result.error });
@@ -273,7 +274,7 @@ export function YouSettings({ you: initialYou, website, multi }: { you: YouInput
     setPending("draft");
     setYouError(null);
     setYouStatus("Reading your LinkedIn and website. This takes up to a minute.");
-    const result = await draftAboutYouAction({ linkedinUrl: you.linkedinUrl, websiteUrl: website });
+    const result = await draftAboutYouAction({ linkedinUrl: you.linkedinUrl, websiteUrl: website }).catch(() => ({ error: GENERIC_ERROR, field: undefined, draft: undefined }));
     setPending(null);
     if (result.error || !result.draft) {
       setYouStatus(null);

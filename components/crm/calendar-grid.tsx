@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -92,8 +93,14 @@ function EventBlock({
 }) {
   const color = calendar?.color ?? "#9aa1ab";
   const muted = item.showAs === "free" || item.showAs === "tentative";
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!open || !onOpenChange) return;
+    onOpenChange(true);
+    return () => onOpenChange(false);
+  }, [open, onOpenChange]);
   return (
-    <Popover onOpenChange={onOpenChange}>
+    <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button
           type="button"
@@ -166,9 +173,9 @@ export default function CalendarGrid({
   const scrolled = useRef(false);
   const openPopovers = useRef(0);
   const dismissing = useRef(false);
-  const trackPopover = (open: boolean) => {
+  const trackPopover = useCallback((open: boolean) => {
     openPopovers.current = Math.max(0, openPopovers.current + (open ? 1 : -1));
-  };
+  }, []);
   const [current, setCurrent] = useState(now);
   const [hourHeight, setHourHeight] = useState(MIN_HOUR_HEIGHT);
   const perMinute = hourHeight / 60;
