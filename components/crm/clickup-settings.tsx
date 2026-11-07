@@ -28,6 +28,14 @@ export default function ClickUpSettings({
   const [teamId, setTeamId] = useState(view.teamId ?? view.teams[0]?.id ?? "");
   const [defaultListId, setDefaultListId] = useState(view.defaultListId ?? "");
   const [watched, setWatched] = useState<string[]>(view.watchedListIds);
+  const saved = [view.teamId, view.defaultListId, ...view.watchedListIds].join("\n");
+  const [shownSaved, setShownSaved] = useState(saved);
+  if (shownSaved !== saved) {
+    setShownSaved(saved);
+    setTeamId(view.teamId ?? view.teams[0]?.id ?? "");
+    setDefaultListId(view.defaultListId ?? "");
+    setWatched(view.watchedListIds);
+  }
   const [pending, setPending] = useState(false);
   const [outcome, setOutcome] = useState<ClickUpActionState>({});
   const sameTeam = teamId === view.teamId;
@@ -36,7 +44,7 @@ export default function ClickUpSettings({
   async function run(action: () => Promise<ClickUpActionState>) {
     setPending(true);
     setOutcome({});
-    const result = await action();
+    const result = await action().catch((): ClickUpActionState => ({ error: "Something went wrong. Try again." }));
     setPending(false);
     setOutcome(result);
     router.refresh();

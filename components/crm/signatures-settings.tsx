@@ -18,7 +18,7 @@ function SignatureEditor({ sender }: { sender: Sender }) {
   async function save() {
     setPending(true);
     setMessage(null);
-    const result = await saveSignatureAction(sender.email, value);
+    const result = await saveSignatureAction(sender.email, value).catch(() => ({ error: "Something went wrong. Try again.", signature: undefined }));
     setPending(false);
     if (result.error) {
       setMessage({ text: result.error, error: true });

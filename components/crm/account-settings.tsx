@@ -37,7 +37,7 @@ export default function AccountSettings({
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     setPending(true);
-    const result = await changePasswordAction(String(form.get("password") ?? ""), String(form.get("confirm") ?? ""));
+    const result = await changePasswordAction(String(form.get("password") ?? ""), String(form.get("confirm") ?? "")).catch(() => ({ error: "Something went wrong. Try again." }));
     setPending(false);
     if (result.error) {
       setMessage({ text: result.error, tone: "alert" });
@@ -65,7 +65,7 @@ export default function AccountSettings({
           label="Name"
           value={name}
           onSave={async (value) => {
-            const result = await updateNameAction(value);
+            const result = await updateNameAction(value).catch(() => ({ error: "Something went wrong. Try again." }));
             if (result.error) return result.error;
             router.refresh();
             return null;

@@ -44,11 +44,14 @@ export default function AgentMailboxSettings({ view }: { view: AgentMailboxView 
   const [senders, setSenders] = useState<SenderDraft[]>(() => draftsFrom(view));
   const [nextKey, setNextKey] = useState(view.senders.length);
   const [shown, setShown] = useState(view);
+  const [keepDrafts, setKeepDrafts] = useState(false);
   if (shown !== view) {
     setShown(view);
-    setAddress(view.address);
-    setSenders(draftsFrom(view));
-    setNextKey(view.senders.length);
+    if (!keepDrafts) {
+      setAddress(view.address);
+      setSenders(draftsFrom(view));
+      setNextKey(view.senders.length);
+    }
   }
   const [pending, setPending] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<AgentMailboxActionState>({});
@@ -56,8 +59,9 @@ export default function AgentMailboxSettings({ view }: { view: AgentMailboxView 
   async function run(kind: string, action: () => Promise<AgentMailboxActionState>) {
     setPending(kind);
     setOutcome({});
-    const result = await action();
+    const result = await action().catch((): AgentMailboxActionState => ({ error: "Something went wrong. Try again." }));
     setPending(null);
+    setKeepDrafts(Boolean(result.error));
     setOutcome(result);
     router.refresh();
   }

@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
+import ConfirmDialog from "@/components/_ui/confirm-dialog";
 import {
   Dialog,
   DialogContent,
@@ -51,6 +52,10 @@ import PlusIcon from "@/public/assets/images/_common/plus.svg";
 import SearchIcon from "@/public/assets/images/_common/search.svg";
 
 const NEW = "new";
+
+function failed(): { error: string } {
+  return { error: "Something went wrong. Try again." };
+}
 
 type Draft = { name: string; subject: string; body: string; tags: string[] };
 
@@ -104,6 +109,9 @@ export default function EmailTemplatesSettings({
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const [discarding, setDiscarding] = useState<{ next: () => void } | null>(
+    null,
+  );
 
   const selected =
     selectedId && selectedId !== NEW
@@ -135,14 +143,17 @@ export default function EmailTemplatesSettings({
       );
   }
 
-  function leave() {
-    return (
-      !dirty || window.confirm("Discard your unsaved changes to this template?")
-    );
+  function leave(next: () => void) {
+    if (dirty) setDiscarding({ next });
+    else next();
   }
 
   function select(id: string) {
-    if (id === selectedId || !leave()) return;
+    if (id === selectedId) return;
+    leave(() => open(id));
+  }
+
+  function open(id: string) {
     setSelectedId(id);
     setDraft(id === NEW ? EMPTY : draftOf(list.find((item) => item.id === id)));
     setError(null);
@@ -176,24 +187,31 @@ export default function EmailTemplatesSettings({
     setPending("save");
     setError(null);
     setMessage(null);
-    const result =
+    const result = await (
       selectedId === NEW || !selected
-        ? await createEmailTemplateAction(draft)
-        : await updateEmailTemplateAction(selected.id, draft);
-    setPending(null);
+        ? createEmailTemplateAction(draft)
+        : updateEmailTemplateAction(selected.id, draft)
+    )
+      .catch(failed)
+      .finally(() => setPending(null));
     accept(
       result,
       selectedId === NEW ? "Template created." : "Template saved.",
     );
   }
 
-  async function duplicate() {
-    if (pending || !selected || !leave()) return;
+  function duplicate() {
+    if (pending || !selected) return;
+    leave(() => void duplicateNow(selected.id));
+  }
+
+  async function duplicateNow(id: string) {
     setPending("duplicate");
     setError(null);
     setMessage(null);
-    const result = await duplicateEmailTemplateAction(selected.id);
-    setPending(null);
+    const result = await duplicateEmailTemplateAction(id)
+      .catch(failed)
+      .finally(() => setPending(null));
     if ("template" in result) setSearch("");
     accept(result, "Template duplicated.");
   }
@@ -203,8 +221,9 @@ export default function EmailTemplatesSettings({
     setPending("delete");
     setError(null);
     setMessage(null);
-    const result = await deleteEmailTemplateAction(selected.id);
-    setPending(null);
+    const result = await deleteEmailTemplateAction(selected.id)
+      .catch(failed)
+      .finally(() => setPending(null));
     setConfirming(false);
     if ("error" in result) {
       setError(result.error);
@@ -372,12 +391,13 @@ export default function EmailTemplatesSettings({
                   variant="ghost"
                   size="sm"
                   disabled={pending !== null}
-                  onClick={() => {
-                    if (!leave()) return;
-                    setSelectedId(list[0]?.id ?? null);
-                    setDraft(draftOf(list[0]));
-                    setError(null);
-                  }}
+                  onClick={() =>
+                    leave(() => {
+                      setSelectedId(list[0]?.id ?? null);
+                      setDraft(draftOf(list[0]));
+                      setError(null);
+                    })
+                  }
                 >
                   Cancel
                 </Button>
@@ -539,6 +559,14 @@ export default function EmailTemplatesSettings({
         </SettingsCard>
       )}
 
+      <ConfirmDialog
+        open={discarding !== null}
+        onOpenChange={(next) => !next && setDiscarding(null)}
+        title="Discard your changes?"
+        description="Your unsaved changes to this template will be lost."
+        confirmLabel="Discard changes"
+        onConfirm={() => discarding?.next()}
+      />
       <Dialog open={confirming} onOpenChange={setConfirming}>
         <DialogContent className="max-w-[420px]">
           <DialogHeader>

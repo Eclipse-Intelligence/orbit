@@ -44,7 +44,7 @@ export default function PipelineSettings({
         isWon: stage.isWon,
         isLost: stage.isLost,
       })),
-    );
+    ).catch(() => ({ error: "Something went wrong. Try again." }));
     setPending(false);
     if (result.error) {
       setError(result.error);

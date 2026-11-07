@@ -55,7 +55,7 @@ export default function WebhooksSettings({
     setPending(true);
     setError(null);
     setSecret(null);
-    const result = await createWebhookAction(url, events, "");
+    const result = await createWebhookAction(url, events, "").catch(() => ({ error: "Something went wrong. Try again." }));
     setPending(false);
     if ("error" in result && result.error) {
       setError(result.error);
@@ -69,7 +69,7 @@ export default function WebhooksSettings({
   async function remove(id: string) {
     setPending(true);
     setError(null);
-    const result = await archiveWebhookAction(id);
+    const result = await archiveWebhookAction(id).catch(() => ({ error: "Something went wrong. Try again." }));
     setPending(false);
     if (result.error) {
       setError(result.error);

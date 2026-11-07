@@ -52,7 +52,7 @@ export default function TagsSettings({ tags }: { tags: TagCount[] }) {
     }
     setPending(true);
     setError(null);
-    const result = await renameTagAction(renaming, draft);
+    const result = await renameTagAction(renaming, draft).catch(() => ({ error: "Something went wrong. Try again." }));
     setPending(false);
     if ("error" in result) {
       setError(result.error);
@@ -68,7 +68,7 @@ export default function TagsSettings({ tags }: { tags: TagCount[] }) {
   async function remove(name: string) {
     setPending(true);
     setError(null);
-    const result = await deleteTagAction(name);
+    const result = await deleteTagAction(name).catch(() => ({ error: "Something went wrong. Try again." }));
     setPending(false);
     if ("error" in result) {
       setError(result.error);

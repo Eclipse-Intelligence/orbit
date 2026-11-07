@@ -34,7 +34,7 @@ export default function LifecyclesSettings({ lifecycles }: { lifecycles: Lifecyc
     if (!renaming || !target) return;
     setPending(true);
     setError(null);
-    const result = await renameLifecycleAction(renaming, draft);
+    const result = await renameLifecycleAction(renaming, draft).catch(() => ({ error: "Something went wrong. Try again." }));
     setPending(false);
     if (result.error) {
       setError(result.error);
@@ -48,7 +48,7 @@ export default function LifecyclesSettings({ lifecycles }: { lifecycles: Lifecyc
   async function remove(name: string) {
     setPending(true);
     setError(null);
-    const result = await deleteLifecycleAction(name);
+    const result = await deleteLifecycleAction(name).catch(() => ({ error: "Something went wrong. Try again." }));
     setPending(false);
     if (result.error) {
       setError(result.error);

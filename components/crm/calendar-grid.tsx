@@ -92,8 +92,14 @@ function EventBlock({
 }) {
   const color = calendar?.color ?? "#9aa1ab";
   const muted = item.showAs === "free" || item.showAs === "tentative";
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!open || !onOpenChange) return;
+    onOpenChange(true);
+    return () => onOpenChange(false);
+  }, [open, onOpenChange]);
   return (
-    <Popover onOpenChange={onOpenChange}>
+    <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button
           type="button"

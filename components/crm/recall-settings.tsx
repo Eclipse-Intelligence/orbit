@@ -16,7 +16,7 @@ export default function RecallKey({ connected, children }: { connected: boolean;
   async function run(action: () => Promise<{ error?: string }>) {
     setPending(true);
     setError(null);
-    const result = await action();
+    const result = await action().catch(() => ({ error: "Something went wrong. Try again." }));
     setPending(false);
     if (result.error) {
       setError(result.error);

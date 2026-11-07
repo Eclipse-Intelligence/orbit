@@ -31,7 +31,7 @@ export default function MeetingLinkSettings({ meetingLink }: { meetingLink: stri
     }
     setError(null);
     setPending(true);
-    const result = await saveMeetingLinkAction(checked.link ?? "");
+    const result = await saveMeetingLinkAction(checked.link ?? "").catch(() => ({ error: "Something went wrong. Try again.", meetingLink: undefined }));
     setPending(false);
     if (result.error) {
       setError(result.error);

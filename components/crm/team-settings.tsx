@@ -58,7 +58,7 @@ export default function TeamSettings({
     setPending(true);
     setError(null);
     setSent(null);
-    const result = await inviteAction({ email, role, send: send && mailboxConnected });
+    const result = await inviteAction({ email, role, send: send && mailboxConnected }).catch(() => ({ error: "Something went wrong. Try again.", link: undefined, email: undefined, sent: undefined, sendError: undefined }));
     setPending(false);
     if (result.error || !result.link || !result.email) {
       setError(result.error ?? "Couldn't create the invite.");
@@ -71,7 +71,7 @@ export default function TeamSettings({
 
   async function run(action: () => Promise<{ error?: string }>) {
     setError(null);
-    const result = await action();
+    const result = await action().catch(() => ({ error: "Something went wrong. Try again." }));
     if (result.error) {
       setError(result.error);
       return;

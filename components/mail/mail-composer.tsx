@@ -224,9 +224,12 @@ export default function MailComposer({
   useEffect(
     () => () => {
       if (!dirty.current) return;
-      const snapshot = { ...payload.current, id: draftId.current };
+      const snapshot = { ...payload.current };
       if (!draftId.current && !snapshot.body.trim() && !snapshot.subject.trim()) return;
-      void postJson("/api/mail/drafts", snapshot, true).catch(() => null);
+      void chain.current
+        .catch(() => null)
+        .then(() => postJson("/api/mail/drafts", { ...snapshot, id: draftId.current }, true))
+        .catch(() => null);
     },
     [],
   );

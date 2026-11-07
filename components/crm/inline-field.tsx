@@ -60,7 +60,7 @@ export default function InlineField({
     if (next === current) return;
     setShown(next);
     setSaving(true);
-    const problem = await onSave(next);
+    const problem = await onSave(next).catch(() => "Something went wrong. Try again.");
     setSaving(false);
     if (problem) {
       setShown(null);

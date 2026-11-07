@@ -72,7 +72,7 @@ export default function ProposalsScreen({
   async function newTemplate(starter: string) {
     setBusy(starter);
     setError(null);
-    const result = await createTemplateAction({ starter });
+    const result = await createTemplateAction({ starter }).catch(() => ({ error: "Something went wrong. Try again.", data: undefined }));
     setBusy(null);
     if (!result.data) {
       setError(result.error ?? "Couldn't create the template.");
@@ -274,7 +274,7 @@ function ProductEditor({ product, onDone, onCancel }: { product?: Product; onDon
       priceGbp: String(values.get("priceGbp") ?? ""),
       priceUsd: String(values.get("priceUsd") ?? ""),
       billing: String(values.get("billing") ?? "one_off"),
-    });
+    }).catch(() => ({ error: "Something went wrong. Try again." }));
     setBusy(false);
     if (result.error) {
       setError(result.error);
@@ -291,7 +291,7 @@ function ProductEditor({ product, onDone, onCancel }: { product?: Product; onDon
   async function archive(archived: boolean) {
     if (!product) return;
     setBusy(true);
-    const result = await saveProductAction(product.id, { archived });
+    const result = await saveProductAction(product.id, { archived }).catch(() => ({ error: "Something went wrong. Try again." }));
     setBusy(false);
     if (result.error) setError(result.error);
     else onDone();
