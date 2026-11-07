@@ -43,7 +43,7 @@ Three kinds of token reach the server. They see different tools.
 
 Every tool is listed for every non-market token whatever its scopes. A call without the scope it needs returns `forbidden: Missing scope <scope>.` with `isError: true`. Other failures return `<code>: <message>` the same way.
 
-Each agent credential and each personal token is limited to 120 tool calls a minute. Every `tools/call` in a JSON-RPC batch counts on its own, and a request without a tool call counts as one. A batch holds at most 25 messages (`MCP_BATCH_LIMIT` in `lib/api/mcp-request.ts`), so a batch can finish inside the route's 60 second limit. Over the limit the reply is status 429 with `Retry-After: 60` and a JSON-RPC error (code `-32029`, `data.code` `rate_limited`, `data.cost` the calls the request needed); a larger batch gets status 400 and code `-32600`.
+Each agent credential and each personal token is limited to 120 tool calls a minute. Every `tools/call` in a JSON-RPC batch counts on its own, and a request without a tool call counts as one. A batch holds at most 25 messages (`MCP_BATCH_LIMIT` in `lib/api/mcp-request.ts`), so a batch can finish inside the route's 60 second limit. Over the limit the reply is status 429 with `Retry-After: 60` and a JSON-RPC error (code `-32029`, `data.code` `rate_limited`, `data.cost` the calls the request needed); a larger batch gets status 400 and code `-32600`. Charging a batch uses the four-argument `private.consume_rate_limit` from `20270111400000_review_batch_3.sql`; apply that migration before deploying. Until it is applied, `lib/auth/rate-limit.ts` sees the missing function (`42883`) and charges each call through the three-argument one instead, so batches still work.
 
 ### Personal tokens
 

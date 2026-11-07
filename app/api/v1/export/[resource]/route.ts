@@ -10,6 +10,9 @@ import {
 } from "@/lib/crm/spreadsheet";
 import { exportNote, toCsv } from "@/lib/csv";
 
+export const runtime = "nodejs";
+export const maxDuration = 60;
+
 const exporters = {
   companies: exportCompaniesCsv,
   contacts: exportContactsCsv,

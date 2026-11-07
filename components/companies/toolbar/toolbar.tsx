@@ -207,14 +207,17 @@ export default function CompaniesToolbar({
         />
       </div>
 
+      <span
+        role="status"
+        title={exportMessage ?? undefined}
+        className={exportMessage ? "caption-style text-subtle max-sm:order-last max-sm:w-full sm:max-w-[24em] sm:truncate sm:leading-[30px]" : "sr-only"}
+      >
+        {exportMessage}
+      </span>
+
       <div className="flex shrink-0 items-center gap-1">
         <SelectToggle selection={selection} />
         <RecordTransfer resource="companies" mode="import" />
-        {exportMessage && (
-          <span role="status" title={exportMessage} className="caption-style text-subtle max-w-[24em] truncate max-sm:hidden">
-            {exportMessage}
-          </span>
-        )}
         <Button variant="secondary" size="sm" onClick={exportCsv} disabled={exporting} data-shortcut="export">
           <ShareIcon aria-hidden className="size-3" />
           {exporting ? "Exporting…" : "Export"}

@@ -25,7 +25,7 @@ describe("CSV export paging", () => {
     assert.equal(result.rows[7_249], 7_249);
     assert.equal(result.truncated, false);
     assert.equal(result.total, 7_250);
-    assert.equal(exportNote({ exported: result.rows.length, total: result.total, truncated: result.truncated }, "contacts"), null);
+    assert.equal(exportNote({ exported: result.rows.length, total: result.total, truncated: result.truncated, outOfTime: result.outOfTime }, "contacts"), null);
   });
 
   it("stops at the ceiling, never asks past the list offset cap, and says what it left out", async () => {
@@ -37,14 +37,34 @@ describe("CSV export paging", () => {
     assert.ok(list.asked.every((page) => page.offset + page.limit <= EXPORT_ROW_LIMIT && page.offset <= 10_000));
     assert.equal(new Set(result.rows).size, EXPORT_ROW_LIMIT);
     assert.equal(
-      exportNote({ exported: result.rows.length, total: result.total, truncated: result.truncated }, "contacts"),
+      exportNote({ exported: result.rows.length, total: result.total, truncated: result.truncated, outOfTime: result.outOfTime }, "contacts"),
       "Exported 10,000 of 12,345 contacts, the limit for one export.",
     );
   });
 
+  it("stops before the deadline and says it ran out of time", async () => {
+    const list = fakeList(9_000);
+    let clock = 0;
+    const result = await collectForExport(
+      async (offset, limit) => {
+        clock += 1_000;
+        return list.load(offset, limit);
+      },
+      { budgetMs: 5_000, now: () => clock },
+    );
+    assert.equal(result.rows.length, 500);
+    assert.deepEqual([result.truncated, result.outOfTime], [true, true]);
+    assert.equal(
+      exportNote({ exported: result.rows.length, total: result.total, truncated: result.truncated, outOfTime: result.outOfTime }, "tasks"),
+      "Exported 500 of 9,000 tasks, Orbit ran out of time.",
+    );
+    const quick = await collectForExport(fakeList(300).load, { budgetMs: 5_000, now: () => 0 });
+    assert.deepEqual([quick.rows.length, quick.outOfTime], [300, false]);
+  });
+
   it("stops when a page comes back empty", async () => {
     const result = await collectForExport(async () => ({ data: [] as number[], total: 40 }));
-    assert.deepEqual(result, { rows: [], total: 40, truncated: true });
+    assert.deepEqual(result, { rows: [], total: 40, truncated: true, outOfTime: false });
   });
 });
 

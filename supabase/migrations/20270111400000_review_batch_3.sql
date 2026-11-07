@@ -266,6 +266,10 @@ grant execute on function private.merge_company_references(uuid, uuid, uuid, uui
 grant execute on function private.merge_contact_references(uuid, uuid, uuid, uuid, uuid) to crm_app;
 
 create index if not exists audit_events_merged_into_idx on crm.audit_events (entity_id) where changes ? 'mergedInto';
+create index if not exists mail_thread_routes_contact_idx on crm.mail_thread_routes (contact_id) where contact_id is not null;
+create index if not exists follow_up_suggestions_company_idx on crm.follow_up_suggestions (company_id) where company_id is not null;
+create index if not exists follow_up_suggestions_contact_idx on crm.follow_up_suggestions (contact_id) where contact_id is not null;
+create index if not exists page_links_target_record_idx on crm.page_links (target_kind, target_record_id) where target_record_id is not null;
 
 create or replace function private.consume_rate_limit(
   p_key text,

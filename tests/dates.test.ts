@@ -51,6 +51,41 @@ describe("reading dates people and agents type", () => {
     assert.equal(iso("Wed, 01 Jul 2026 09:00:00 GMT"), "2026-07-01T09:00:00.000Z");
   });
 
+  it("reads dashes and dots in the same day, month, year order as slashes", () => {
+    assert.equal(iso("07-11-2026"), "2026-11-07T00:00:00.000Z");
+    assert.equal(iso("01-07-2026 09:00"), "2026-07-01T08:00:00.000Z");
+    assert.equal(iso("01.07.2026 09.00"), "2026-07-01T08:00:00.000Z");
+  });
+
+  it("reads seconds and am or pm after a month name", () => {
+    assert.equal(iso("Nov 7, 2026 14:30:15"), "2026-11-07T14:30:15.000Z");
+    assert.equal(iso("7 Nov 2026 2:30pm"), "2026-11-07T14:30:00.000Z");
+    assert.equal(iso("1 July 2026 9am"), "2026-07-01T08:00:00.000Z");
+    assert.equal(iso("1 July 2026 12am"), "2026-06-30T23:00:00.000Z");
+    assert.equal(iso("1 July 2026 12:15 pm"), "2026-07-01T11:15:00.000Z");
+    refused("1 July 2026 13pm", /Enter a valid date and time/);
+    refused("1 July 2026 9", /Enter a valid date and time/);
+  });
+
+  it("reads RFC 2822 dates with zone names as their fixed offsets", () => {
+    assert.equal(iso("Sat, 07 Nov 2026 10:00:00 EST"), "2026-11-07T15:00:00.000Z");
+    assert.equal(iso("Wed, 01 Jul 2026 10:00:00 EDT"), "2026-07-01T14:00:00.000Z");
+    assert.equal(iso("Wed, 01 Jul 2026 10:00:00 CST"), "2026-07-01T16:00:00.000Z");
+    assert.equal(iso("Wed, 01 Jul 2026 10:00:00 CDT"), "2026-07-01T15:00:00.000Z");
+    assert.equal(iso("Wed, 01 Jul 2026 10:00:00 MST"), "2026-07-01T17:00:00.000Z");
+    assert.equal(iso("Wed, 01 Jul 2026 10:00:00 MDT"), "2026-07-01T16:00:00.000Z");
+    assert.equal(iso("Wed, 01 Jul 2026 10:00:00 PST"), "2026-07-01T18:00:00.000Z");
+    assert.equal(iso("Wed, 01 Jul 2026 10:00:00 PDT"), "2026-07-01T17:00:00.000Z");
+    assert.equal(iso("Wed, 01 Jul 2026 10:00:00 BST"), "2026-07-01T09:00:00.000Z");
+    assert.equal(iso("Wed, 01 Jul 2026 10:00:00 CET"), "2026-07-01T09:00:00.000Z");
+    assert.equal(iso("Wed, 01 Jul 2026 10:00:00 CEST"), "2026-07-01T08:00:00.000Z");
+    assert.equal(iso("Wed, 01 Jul 2026 10:00:00 -0700"), "2026-07-01T17:00:00.000Z");
+    assert.equal(iso("Thu Jul 02 2026 10:00:00 GMT+0100 (British Summer Time)"), "2026-07-02T09:00:00.000Z");
+    assert.equal(iso("Sun, 25 Oct 2026 01:30:00 BST"), "2026-10-25T00:30:00.000Z");
+    assert.equal(iso("Sun, 25 Oct 2026 01:30:00 GMT"), "2026-10-25T01:30:00.000Z");
+    refused("Wed, 01 Jul 2026 10:00:00 AEST", /Enter a valid date and time/);
+  });
+
   it("refuses ambiguous or impossible dates with a reason instead of guessing", () => {
     refused("07/11/26", /year in full/);
     refused("11/07", /Enter a valid date and time/);

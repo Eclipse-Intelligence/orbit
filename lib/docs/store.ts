@@ -27,7 +27,7 @@ import {
   type LiveCopy,
 } from "@/lib/docs/live/persist";
 import { liveText, pendingLiveDoc, plainLiveDoc, setLiveText } from "@/lib/docs/live/ydoc";
-import { cleanTitle, excerptFrom, lineAround, linkKey, parseDoc, parseLinks, rewriteLinkTitle, wordCount } from "@/lib/docs/markdown";
+import { cleanTitle, excerptFrom, lineAround, linkKey, maskCode, parseDoc, parseLinks, rewriteLinkTitle, wordCount } from "@/lib/docs/markdown";
 import {
   DOC_CONTENT_MAX,
   DOC_READ_WINDOW,
@@ -239,6 +239,15 @@ async function mergedMentionTargets(db: Db, mentions: DocMention[]) {
        from crm.audit_events e
        where e.entity_id = any($1::uuid[]) and e.changes ? 'mergedInto'
          and e.event_type in ('company.archived', 'contact.archived')
+         and not exists (
+           select 1 from crm.audit_events later
+           where later.workspace_id = e.workspace_id and later.entity_type = e.entity_type and later.entity_id = e.entity_id
+             and later.created_at > e.created_at
+             and (
+               later.event_type like '%.restored' or later.event_type like '%.unarchived'
+               or (later.changes -> 'after' ? 'archivedAt' and later.changes -> 'after' -> 'archivedAt' = 'null'::jsonb)
+             )
+         )
        order by e.entity_id, e.created_at desc`,
       [archived.rows.map((row) => row.id)],
     );
@@ -258,14 +267,21 @@ async function mergedMentionTargets(db: Db, mentions: DocMention[]) {
   return targets;
 }
 
+const RECORD_MENTION = /@\[[^[\]\n]{1,200}\]\((?:contact|company):([0-9a-f-]{36})\)/g;
+
 async function repointMergedMentions(db: Db, content: string, mentions: DocMention[]) {
   const targets = await mergedMentionTargets(db, mentions);
-  let rewritten = content;
-  for (const mention of mentions) {
-    const kept = targets.get(mention.id);
-    if (kept) rewritten = rewritten.split(`](${mention.kind}:${mention.id})`).join(`](${mention.kind}:${kept})`);
+  if (targets.size === 0) return content;
+  let rewritten = "";
+  let last = 0;
+  for (const match of maskCode(content).matchAll(RECORD_MENTION)) {
+    const kept = targets.get(match[1]);
+    if (!kept) continue;
+    const at = match.index + match[0].length - 1 - match[1].length;
+    rewritten += content.slice(last, at) + kept;
+    last = at + match[1].length;
   }
-  return rewritten;
+  return rewritten + content.slice(last);
 }
 
 async function planLinks(

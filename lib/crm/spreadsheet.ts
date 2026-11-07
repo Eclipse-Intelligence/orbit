@@ -247,23 +247,38 @@ function countBulk(
 
 export const EXPORT_PAGE_SIZE = 100;
 
-export type Collected<T> = { rows: T[]; total: number; truncated: boolean };
+export const EXPORT_BUDGET_MS = 50_000;
 
-export async function collectForExport<T>(load: (offset: number, limit: number) => Promise<{ data: T[]; total: number }>): Promise<Collected<T>> {
+export type Collected<T> = { rows: T[]; total: number; truncated: boolean; outOfTime: boolean };
+
+type CollectOptions = { budgetMs?: number; now?: () => number };
+
+export async function collectForExport<T>(
+  load: (offset: number, limit: number) => Promise<{ data: T[]; total: number }>,
+  options: CollectOptions = {},
+): Promise<Collected<T>> {
+  const now = options.now ?? Date.now;
+  const deadline = now() + (options.budgetMs ?? EXPORT_BUDGET_MS);
   const rows: T[] = [];
   let total = 0;
+  let outOfTime = false;
   while (rows.length < EXPORT_ROW_LIMIT) {
+    if (rows.length > 0 && now() >= deadline) {
+      outOfTime = true;
+      break;
+    }
     const page = await load(rows.length, Math.min(EXPORT_PAGE_SIZE, EXPORT_ROW_LIMIT - rows.length));
     total = Math.max(page.total, rows.length + page.data.length);
     rows.push(...page.data);
     if (page.data.length === 0 || rows.length >= page.total) break;
   }
   const kept = rows.slice(0, EXPORT_ROW_LIMIT);
-  return { rows: kept, total, truncated: total > kept.length };
+  const truncated = total > kept.length;
+  return { rows: kept, total, truncated, outOfTime: truncated && outOfTime };
 }
 
 export function csvExport<T>(collected: Collected<T>, rows: CsvCell[][]): CsvExport {
-  return { rows, total: collected.total, exported: collected.rows.length, truncated: collected.truncated };
+  return { rows, total: collected.total, exported: collected.rows.length, truncated: collected.truncated, outOfTime: collected.outOfTime };
 }
 
 export async function exportCompaniesCsv(actor: Actor) {

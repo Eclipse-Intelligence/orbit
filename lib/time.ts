@@ -88,12 +88,28 @@ const ZONED_DATE_TIME = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}(?::\d{2}(?:\.\d+)?
 const DAY_FIRST = /^(\d{1,2})([/.-])(\d{1,2})\2(\d{2,4})(?:(?:\s*,\s*|\s+|T)(?:at\s+)?(\d{1,2})[:.](\d{2})(?::(\d{2}))?)?$/i;
 const YEAR_FIRST = /^(\d{4})\/(\d{1,2})\/(\d{1,2})(?:(?:\s+|T)(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/;
 const WEEKDAY_PREFIX = "(?:(?:mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)(?:day|nesday|sday|urday)?\\.?,?\\s+)?";
-const NAMED_TIME = "(?:(?:\\s*,\\s*|\\s+)(?:at\\s+)?(\\d{1,2})[:.](\\d{2}))?";
+const NAMED_TIME = "(?:(?:\\s*,\\s*|\\s+)(?:at\\s+)?(\\d{1,2})(?:[:.](\\d{2})(?::(\\d{2}))?)?\\s*(am|pm)?)?";
 const DAY_MONTH_NAME = new RegExp(`^${WEEKDAY_PREFIX}(\\d{1,2})(?:st|nd|rd|th)?(?:\\s+of)?\\s+([a-z]+)\\.?,?\\s+(\\d{2,4})${NAMED_TIME}$`, "i");
 const MONTH_NAME_DAY = new RegExp(`^${WEEKDAY_PREFIX}([a-z]+)\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?,?\\s+(\\d{2,4})${NAMED_TIME}$`, "i");
-const EXPLICIT_ZONE = /(?:\b(?:GMT|UTC)\b|[+-]\d{4}\s*(?:\(.*\))?$)/i;
+const ZONE_SUFFIX = /\s+(?:(?:GMT|UTC)?([+-])(\d{2}):?(\d{2})|([a-z]{1,4}))(?:\s*\([^)]*\))?$/i;
+const ZONE_OFFSETS: Record<string, number> = {
+  Z: 0,
+  UT: 0,
+  UTC: 0,
+  GMT: 0,
+  BST: 60,
+  CET: 60,
+  CEST: 120,
+  EST: -300,
+  EDT: -240,
+  CST: -360,
+  CDT: -300,
+  MST: -420,
+  MDT: -360,
+  PST: -480,
+  PDT: -420,
+};
 const MONTH_NAMES = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
-const NAMED_MONTH = /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b/i;
 const SHORT_DAY = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
 
 const FORMAT_HINT = "Enter a valid date and time, such as 2026-11-07 14:30, 07/11/2026 or 7 Nov 2026.";
@@ -121,6 +137,17 @@ function wallFrom(year: string, month: number, day: string, hour?: string, minut
   };
 }
 
+function namedWall(year: string, month: number, day: string, hour?: string, minute?: string, second?: string, meridiem?: string): Wall | string | null {
+  if (hour === undefined) return wallFrom(year, month, day);
+  if (minute === undefined && meridiem === undefined) return null;
+  let clock = Number(hour);
+  if (meridiem) {
+    if (clock < 1 || clock > 12) return null;
+    clock = (clock % 12) + (meridiem.toLowerCase() === "pm" ? 12 : 0);
+  }
+  return wallFrom(year, month, day, String(clock), minute ?? "0", second);
+}
+
 function readWall(text: string): Wall | string | null {
   const local = LOCAL_DATE_TIME.exec(text);
   if (local) return wallFrom(local[1], Number(local[2]), local[3], local[4], local[5], local[6]);
@@ -129,9 +156,11 @@ function readWall(text: string): Wall | string | null {
   const yearFirst = YEAR_FIRST.exec(text);
   if (yearFirst) return wallFrom(yearFirst[1], Number(yearFirst[2]), yearFirst[3], yearFirst[4], yearFirst[5], yearFirst[6]);
   const named = DAY_MONTH_NAME.exec(text);
-  if (named && monthNumber(named[2])) return wallFrom(named[3], monthNumber(named[2]), named[1], named[4], named[5]);
+  if (named && monthNumber(named[2])) return namedWall(named[3], monthNumber(named[2]), named[1], named[4], named[5], named[6], named[7]);
   const monthFirst = MONTH_NAME_DAY.exec(text);
-  if (monthFirst && monthNumber(monthFirst[1])) return wallFrom(monthFirst[3], monthNumber(monthFirst[1]), monthFirst[2], monthFirst[4], monthFirst[5]);
+  if (monthFirst && monthNumber(monthFirst[1])) {
+    return namedWall(monthFirst[3], monthNumber(monthFirst[1]), monthFirst[2], monthFirst[4], monthFirst[5], monthFirst[6], monthFirst[7]);
+  }
   return null;
 }
 
@@ -166,9 +195,15 @@ function zonedInstant(text: string) {
     const date = new Date(`${zoned[1]}T${zoned[2]}${offset}`);
     return Number.isNaN(date.getTime()) ? null : date;
   }
-  if (!EXPLICIT_ZONE.test(text) || !NAMED_MONTH.test(text)) return null;
-  const date = new Date(text);
-  return Number.isNaN(date.getTime()) ? null : date;
+  const suffix = ZONE_SUFFIX.exec(text);
+  if (!suffix) return null;
+  const offset = suffix[4]
+    ? ZONE_OFFSETS[suffix[4].toUpperCase()]
+    : (suffix[1] === "-" ? -1 : 1) * (Number(suffix[2]) * 60 + Number(suffix[3]));
+  if (offset === undefined) return null;
+  const wall = readWall(text.slice(0, suffix.index));
+  if (!wall || typeof wall === "string" || wall.dateOnly || !realWall(wall)) return null;
+  return new Date(Date.UTC(wall.year, wall.month - 1, wall.day, wall.hour, wall.minute, wall.second) - offset * 60_000);
 }
 
 function readInstant(value: string, timeZone: string, strict: boolean): DateTimeReading {

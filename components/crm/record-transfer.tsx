@@ -65,11 +65,9 @@ export default function RecordTransfer({
 
   return (
     <div className="flex items-center gap-1 max-sm:hidden">
-      {message && (
-        <span role="status" title={message} className="caption-style text-subtle max-w-[24em] truncate">
-          {message}
-        </span>
-      )}
+      <span role="status" title={message ?? undefined} className={message ? "caption-style text-subtle max-w-[24em] truncate" : "sr-only"}>
+        {message}
+      </span>
       {canImport && (
         <>
           <input

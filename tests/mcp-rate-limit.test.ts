@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { after, before, describe, it } from "node:test";
 import { POST as mcpRoute } from "@/app/api/mcp/route";
 import { MCP_BATCH_LIMIT, mcpCost } from "@/lib/api/mcp-request";
 import { createPersonalToken } from "@/lib/auth/personal";
+import { consumeRateLimitFor } from "@/lib/auth/rate-limit";
+import { CrmError } from "@/lib/crm/errors";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { createAgent, createUser, resetDatabase } from "./helpers";
@@ -91,6 +94,22 @@ describe("MCP rate limit", () => {
     const single = await post(agentToken, call(9));
     assert.equal(single.status, 429);
     assert.equal((single.body as RpcReply).id, 9);
+  });
+
+  it("still charges each call through the old function before the migration is applied", async () => {
+    const admin = getAdminPool();
+    await admin.query("drop function private.consume_rate_limit(text, integer, integer, integer)");
+    try {
+      const key = "fallback:test";
+      await consumeRateLimitFor(key, 3);
+      assert.equal(await used(key), 3);
+      await setUsed(key, 118);
+      await assert.rejects(() => consumeRateLimitFor(key, 3), (error: unknown) => error instanceof CrmError && error.code === "rate_limited");
+    } finally {
+      await admin.query(readFileSync("supabase/migrations/20270111400000_review_batch_3.sql", "utf8"));
+    }
+    await consumeRateLimitFor("fallback:after", 2);
+    assert.equal(await used("fallback:after"), 2);
   });
 
   it("counts batches on personal tokens too", async () => {

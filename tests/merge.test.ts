@@ -6,7 +6,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { describeAction, recordNames } from "@/lib/assistant/tools";
 import { getAdminPool, getPool, type Db } from "@/lib/db/pool";
 import { logActivity } from "@/lib/crm/activities";
-import { archiveCompany, createCompany } from "@/lib/crm/companies";
+import { archiveCompany, createCompany, unarchiveCompany } from "@/lib/crm/companies";
 import { archiveContact, createContact, updateContact } from "@/lib/crm/contacts";
 import { CrmError } from "@/lib/crm/errors";
 import { mergeCompanies, mergeContacts } from "@/lib/crm/merge";
@@ -663,5 +663,30 @@ describe("merging keeps what lives beside a record", () => {
     const saved = (await admin<{ content: string }>("select content from crm.pages where id = $1", [only.id]))[0];
     assert.equal(saved.content, `Call @[Docs Dupe](company:${keep.id}) and @[Dora](contact:${person.id}) tomorrow`);
     assert.deepEqual(await links(only.id), [`company:${keep.id}`, `contact:${person.id}`]);
+  });
+
+  async function saveAgain(pageId: string, extra: string) {
+    const page = (await admin<{ content: string; revision: number }>("select content, revision from crm.pages where id = $1", [pageId]))[0];
+    await saveDoc(owner, pageId, { content: `${page.content}${extra}`, baseRevision: page.revision }, PROVENANCE);
+    return (await admin<{ content: string }>("select content from crm.pages where id = $1", [pageId]))[0].content;
+  }
+
+  it("leaves mentions inside code alone when it repoints a doc", async () => {
+    const keep = await company("Code Keep");
+    const dupe = await company("Code Dupe");
+    const code = `\`@[Code Dupe](company:${dupe.id})\``;
+    const doc = await createDoc(owner, { title: "Code notes", content: `See @[Code Dupe](company:${dupe.id}) and ${code}` }, PROVENANCE);
+    await mergeCompanies(owner, keep.id, dupe.id, PROVENANCE);
+    assert.equal(await saveAgain(doc.id, "."), `See @[Code Dupe](company:${keep.id}) and ${code}.`);
+  });
+
+  it("doesn't repoint a duplicate that was restored after the merge and archived again", async () => {
+    const keep = await company("Restored Keep");
+    const dupe = await company("Restored Dupe");
+    await mergeCompanies(owner, keep.id, dupe.id, PROVENANCE);
+    await unarchiveCompany(owner, dupe.id, { provenance: PROVENANCE });
+    await archiveCompany(owner, dupe.id, { provenance: PROVENANCE });
+    const doc = await createDoc(owner, { title: "Restored notes", content: `Ask @[Restored Dupe](company:${dupe.id})` }, PROVENANCE);
+    assert.equal(await saveAgain(doc.id, " again"), `Ask @[Restored Dupe](company:${dupe.id}) again`);
   });
 });

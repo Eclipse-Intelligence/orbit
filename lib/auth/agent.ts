@@ -2,6 +2,7 @@ import { query } from "@/lib/db/pool";
 import { CrmError } from "@/lib/crm/errors";
 import { isScope, type Scope } from "@/lib/crm/scopes";
 import { hashToken } from "@/lib/crm/tokens";
+import { consumeRateLimitFor } from "@/lib/auth/rate-limit";
 import type { AgentActor } from "@/lib/crm/types";
 
 type AgentRow = {
@@ -43,11 +44,5 @@ export async function authenticateAgent(request: Request): Promise<AgentActor> {
 }
 
 export async function consumeRateLimit(actor: AgentActor, cost = 1) {
-  const result = await query<{ allowed: boolean }>(
-    cost > 1 ? "select private.consume_rate_limit($1, $2, $3, $4) as allowed" : "select private.consume_rate_limit($1, $2, $3) as allowed",
-    cost > 1 ? [`agent:${actor.credentialId}`, 120, 60, cost] : [`agent:${actor.credentialId}`, 120, 60],
-  );
-  if (!result.rows[0]?.allowed) {
-    throw new CrmError("rate_limited", "Too many requests.", 429);
-  }
+  await consumeRateLimitFor(`agent:${actor.credentialId}`, cost);
 }

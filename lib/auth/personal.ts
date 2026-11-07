@@ -4,6 +4,7 @@ import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import { hashToken } from "@/lib/crm/tokens";
+import { consumeRateLimitFor } from "@/lib/auth/rate-limit";
 import type { UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
 
@@ -82,9 +83,5 @@ export async function authenticatePersonal(token: string): Promise<{ actor: User
 }
 
 export async function consumePersonalRateLimit(tokenId: string, cost = 1) {
-  const result = await query<{ allowed: boolean }>(
-    cost > 1 ? "select private.consume_rate_limit($1, $2, $3, $4) as allowed" : "select private.consume_rate_limit($1, $2, $3) as allowed",
-    cost > 1 ? [`personal:${tokenId}`, 120, 60, cost] : [`personal:${tokenId}`, 120, 60],
-  );
-  if (!result.rows[0]?.allowed) throw new CrmError("rate_limited", "Too many requests.", 429);
+  await consumeRateLimitFor(`personal:${tokenId}`, cost);
 }
