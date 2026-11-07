@@ -15,10 +15,11 @@ import { createContact, getContact, updateContact } from "@/lib/crm/contacts";
 import { mergeContacts } from "@/lib/crm/merge";
 import { isUuid } from "@/lib/crm/mutate";
 import { createOpportunity, listOpportunities, updateOpportunity } from "@/lib/crm/opportunities";
+import { opportunityWriteFromForm } from "@/lib/crm/opportunity-form";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 
 import { completeTask, listDueReminders, type DueReminder } from "@/lib/crm/tasks";
-import type { Activity, Contact, ContactWrite, Opportunity, OpportunityStatus, OpportunityWrite } from "@/lib/crm/types";
+import type { Activity, Contact, ContactWrite, Opportunity, OpportunityWrite } from "@/lib/crm/types";
 import { clickupToken } from "@/lib/clickup";
 import { revalidateRecordPages } from "@/lib/revalidate";
 
@@ -134,23 +135,7 @@ export async function saveOpportunityAction(
 ): Promise<RecordActionState> {
   const user = await requireUser();
   const id = text(formData, "id");
-  const value = text(formData, "value");
-  const probability = text(formData, "probability");
-  const write = {
-    companyId: text(formData, "companyId"),
-    ...(id ? {} : { pipelineId: optionalId(text(formData, "pipelineId")) }),
-    name: text(formData, "name"),
-    stageId: optionalId(text(formData, "stageId")) ?? undefined,
-    primaryContactId: optionalId(text(formData, "primaryContactId")),
-    value: value ? value : null,
-    currency: text(formData, "currency") || undefined,
-    probability: probability ? Number(probability) : undefined,
-    expectedCloseDate: text(formData, "expectedCloseDate") || null,
-    status: (text(formData, "status") || undefined) as
-      | OpportunityStatus
-      | undefined,
-    source: text(formData, "source") || null,
-  };
+  const write = opportunityWriteFromForm(formData);
   try {
     if (id) {
       await updateOpportunity(user, id, write, {

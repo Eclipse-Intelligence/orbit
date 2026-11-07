@@ -264,6 +264,20 @@ export async function fetchMicrosoftDelta(url: string, token: string, fetchImpl:
   };
 }
 
+export async function fetchMicrosoftMessageFolder(token: string, messageId: string, fetchImpl: typeof fetch = fetch) {
+  try {
+    const found = await graphJson<{ parentFolderId?: string | null }>(
+      `${GRAPH}/me/messages/${encodeURIComponent(messageId)}?$select=id,parentFolderId`,
+      token,
+      fetchImpl,
+    );
+    return typeof found.parentFolderId === "string" && found.parentFolderId ? found.parentFolderId : null;
+  } catch (error) {
+    if (error instanceof GraphMailError && error.status === 404) return null;
+    throw error;
+  }
+}
+
 type MicrosoftMessageChange = { isRead?: boolean; flagged?: boolean };
 
 export async function updateMicrosoftMessage(token: string, messageId: string, change: MicrosoftMessageChange, fetchImpl: typeof fetch = fetch) {

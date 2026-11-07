@@ -5,9 +5,10 @@ import { archiveBoard, createBoard, getBoard, listBoards, updateBoard } from "@/
 import { createCompany, getCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
 import { createOpportunity, listOpportunities, listPipeline, updateOpportunity } from "@/lib/crm/opportunities";
+import { opportunityWriteFromForm } from "@/lib/crm/opportunity-form";
 import { savePipelineStages } from "@/lib/crm/pipeline";
 import type { UserActor } from "@/lib/crm/types";
-import { getPool } from "@/lib/db/pool";
+import { getAdminPool, getPool } from "@/lib/db/pool";
 import { createUser, resetDatabase } from "./helpers";
 
 describe("boards", () => {
@@ -153,6 +154,53 @@ describe("boards", () => {
     await assert.rejects(updateOpportunity(owner, card.id, { companyId: globex }), /doesn't work at Globex Boards/);
     const cleared = await updateOpportunity(owner, card.id, { companyId: globex, primaryContactId: null });
     assert.equal(cleared.body.opportunity.primaryContactId, null);
+    await archiveBoard(owner, board.id);
+  });
+
+  it("keeps the fields the board card editor doesn't show when it saves", async () => {
+    const board = await createBoard(owner, { name: "Renewals" });
+    const stages = (await getBoard(owner, board.id)).stages;
+    const card = (
+      await createOpportunity(owner, { companyId: acme, pipelineId: board.id, primaryContactId: jane, value: "12000", source: "Referral", currency: "USD" })
+    ).body.opportunity;
+    assert.equal(card.value, "12000.00");
+    assert.equal(card.source, "Referral");
+
+    const form = new FormData();
+    form.set("id", card.id);
+    form.set("pipelineId", board.id);
+    form.set("name", card.name);
+    form.set("companyId", acme);
+    form.set("primaryContactId", jane);
+    form.set("stageId", stages[1].id);
+    form.set("expectedCloseDate", "2027-02-01");
+    const write = opportunityWriteFromForm(form);
+    assert.equal(write.value, undefined);
+    assert.equal(write.source, undefined);
+    assert.equal(write.currency, undefined);
+    const saved = (await updateOpportunity(owner, card.id, write, { provenance: { operation: "update_opportunity", source: "web" } })).body.opportunity;
+    assert.equal(saved.value, "12000.00");
+    assert.equal(saved.source, "Referral");
+    assert.equal(saved.currency, "USD");
+    assert.equal(saved.primaryContactId, jane);
+    assert.equal(saved.stageId, stages[1].id);
+    assert.equal(saved.expectedCloseDate, "2027-02-01");
+    const audit = await getAdminPool().query<{ changes: { fields?: string[] } }>(
+      "select changes from crm.audit_events where entity_id = $1 and event_type = 'opportunity.updated' order by created_at desc limit 1",
+      [card.id],
+    );
+    assert.ok(!audit.rows[0].changes.fields?.includes("value"));
+    assert.ok(!audit.rows[0].changes.fields?.includes("source"));
+
+    const cleared = new FormData();
+    cleared.set("id", card.id);
+    cleared.set("companyId", acme);
+    cleared.set("primaryContactId", "");
+    cleared.set("expectedCloseDate", "");
+    cleared.set("value", "");
+    cleared.set("source", "");
+    const emptied = (await updateOpportunity(owner, card.id, opportunityWriteFromForm(cleared))).body.opportunity;
+    assert.deepEqual([emptied.value, emptied.source, emptied.primaryContactId, emptied.expectedCloseDate], [null, null, null, null]);
     await archiveBoard(owner, board.id);
   });
 

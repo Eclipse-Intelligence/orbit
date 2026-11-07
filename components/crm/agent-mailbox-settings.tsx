@@ -59,7 +59,7 @@ export default function AgentMailboxSettings({ view }: { view: AgentMailboxView 
     const result = await action();
     setPending(null);
     setOutcome(result);
-    router.refresh();
+    if (kind !== "senders" || !result.error) router.refresh();
   }
 
   function update(key: number, patch: Partial<SenderDraft>) {

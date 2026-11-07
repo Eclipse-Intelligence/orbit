@@ -30,6 +30,7 @@ import { EXPIRED_MESSAGE, expireStaleJobs, finishCompanionJob, nextCompanionJob 
 import { authenticateCompanion, createPairingCode, redeemPairing, type AuthenticatedCompanion } from "@/lib/companion/pairing";
 import { decryptSecret } from "@/lib/crypto/secret";
 import { createCompany } from "@/lib/crm/companies";
+import { CrmError } from "@/lib/crm/errors";
 import { listTasks } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
@@ -535,14 +536,21 @@ describe("setting up the agent mailbox", () => {
       ]),
       /on the list twice/,
     );
+    await assert.rejects(
+      saveAgentSenders(owner, [{ address: "jane@geteclipse.co", userId: member.userId }]),
+      (error: unknown) => error instanceof CrmError && error.message === "jane@geteclipse.co isn't one of Jane Doe's addresses. Jane Doe can add it in Settings › Email.",
+    );
+    await assert.rejects(saveAgentSenders(owner, [{ address: "setup-owner@orbit.test", userId: member.userId }]), /isn't one of Jane Doe's addresses/);
+    await getAdminPool().query("update crm.profiles set other_emails = $2 where id = $1", [member.userId, ["jane@geteclipse.co"]]);
     await saveAgentSenders(owner, [
       { address: "Mark Ridgeon <MARK@geteclipse.co>", userId: owner.userId },
       { address: "jane@geteclipse.co", userId: member.userId },
+      { address: "setup-member@orbit.test", userId: member.userId },
     ]);
     const view = await agentMailboxView(owner);
-    assert.deepEqual(view.senders.map((sender) => sender.address).sort(), ["jane@geteclipse.co", "mark@geteclipse.co"]);
+    assert.deepEqual(view.senders.map((sender) => sender.address).sort(), ["jane@geteclipse.co", "mark@geteclipse.co", "setup-member@orbit.test"]);
     const own = await agentMailboxView(member);
-    assert.deepEqual(own.senders.map((sender) => sender.address), ["jane@geteclipse.co"]);
+    assert.deepEqual(own.senders.map((sender) => sender.address).sort(), ["jane@geteclipse.co", "setup-member@orbit.test"]);
     assert.equal(own.canAdmin, false);
   });
 
@@ -758,6 +766,7 @@ describe("agent mail data and row-level security", () => {
     colleague = await addMember(owner, "rls-colleague@orbit.test", "Jane Doe");
     services = fakeServices();
     await setUp(owner, services, inbox);
+    await getAdminPool().query("update crm.profiles set other_emails = $2 where id = $1", [colleague.userId, ["jane@geteclipse.co"]]);
     await saveAgentSenders(owner, [
       { address: MARK, userId: owner.userId },
       { address: "jane@geteclipse.co", userId: colleague.userId },
@@ -792,6 +801,53 @@ describe("agent mail data and row-level security", () => {
       [outsider.userId, owner.workspaceId],
     ).catch((error: Error) => error);
     assert.ok(mapped instanceof Error);
+    const stolen = await queryAsUser(
+      owner.userId,
+      "insert into crm.agent_mailbox_senders (workspace_id, mailbox_id, address, user_id) select workspace_id, id, 'owner-controlled@attacker.test', $1 from crm.agent_mailboxes where workspace_id = $2",
+      [colleague.userId, owner.workspaceId],
+    ).catch((error: Error) => error);
+    assert.match(String(stolen), /owner-controlled@attacker\.test isn't one of Jane Doe's addresses\. Jane Doe can add it in Settings › Email\./);
+    const repointed = await queryAsUser(
+      owner.userId,
+      "update crm.agent_mailbox_senders set user_id = $1 where workspace_id = $2 and address = $3",
+      [colleague.userId, owner.workspaceId, MARK],
+    ).catch((error: Error) => error);
+    assert.match(String(repointed), /isn't one of Jane Doe's addresses/);
+    const direct = await getAdminPool()
+      .query(
+        "insert into crm.agent_mailbox_senders (workspace_id, mailbox_id, address, user_id) select workspace_id, id, 'admin-typed@attacker.test', $1 from crm.agent_mailboxes where workspace_id = $2",
+        [colleague.userId, owner.workspaceId],
+      )
+      .catch((error: Error) => error);
+    assert.match(String(direct), /isn't one of Jane Doe's addresses/);
+  });
+
+  it("lets a member's connected and sending addresses be mapped to them", async () => {
+    const admin = getAdminPool();
+    const account = await admin.query<{ id: string }>(
+      "insert into crm.calendar_accounts (workspace_id, user_id, email, status) values ($1, $2, 'jane@calendar.test', 'disconnected') returning id",
+      [owner.workspaceId, colleague.userId],
+    );
+    const source = await admin.query<{ id: string }>(
+      "insert into crm.mail_sources (workspace_id, user_id, account_id, email) values ($1, $2, $3, 'jane@mailbox.test') returning id",
+      [owner.workspaceId, colleague.userId, account.rows[0].id],
+    );
+    await admin.query(
+      "insert into crm.send_identities (workspace_id, user_id, source_id, email, smtp_host, smtp_port, username, password_cipher) values ($1, $2, $3, 'jane@sending.test', 'smtp.test', 587, 'jane', 'x')",
+      [owner.workspaceId, colleague.userId, source.rows[0].id],
+    );
+    await saveAgentSenders(owner, [
+      { address: MARK, userId: owner.userId },
+      { address: "jane@geteclipse.co", userId: colleague.userId },
+      { address: "rls-colleague@orbit.test", userId: colleague.userId },
+      { address: "JANE@calendar.test", userId: colleague.userId },
+      { address: "jane@mailbox.test", userId: colleague.userId },
+      { address: "jane@sending.test", userId: colleague.userId },
+    ]);
+    const view = await agentMailboxView(owner);
+    assert.equal(view.senders.filter((sender) => sender.userId === colleague.userId).length, 5);
+    await assert.rejects(saveAgentSenders(owner, [{ address: "jane@sending.test", userId: owner.userId }]), /isn't one of Mark Ridgeon's addresses/);
+    assert.equal((await agentMailboxView(owner)).senders.length, 6, "a refused save leaves the list as it was");
   });
 
   it("won't point a message at another member's conversation or show their threads", async () => {
