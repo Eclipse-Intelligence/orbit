@@ -65,7 +65,7 @@ type AccountRow = {
 type IdentityRow = { id: string; email: string; hold_calendar_id: string | null };
 
 const CALENDARS_HREF = "/settings/calendars";
-const INTEGRATIONS_HREF = "/settings/email";
+const MAILBOX_HREF = "/settings/email";
 const HOLDS_HREF = "/settings/email#sending-addresses";
 
 function iso(value: Date | string | null) {
@@ -206,7 +206,7 @@ export async function readInviteSenders(db: Db, actor: UserActor): Promise<Invit
       kind: "microsoft",
       primary: true,
       problem,
-      fixHref: problem ? INTEGRATIONS_HREF : null,
+      fixHref: problem ? MAILBOX_HREF : null,
       source: mainSource,
       calendar: mainCalendar ? graphCalendar(mainCalendar) : null,
       identityId: null,
@@ -304,7 +304,7 @@ function pickHold(holds: HoldOption[], address: string, chosen: string | null) {
 
 function holdWriteProblem(hold: HoldOption) {
   const write = grantsCalendarWrite(hold.source.scopes);
-  if (hold.source.kind === "connection") return write === false ? { problem: INVITE_RECONNECT, fixHref: INTEGRATIONS_HREF } : null;
+  if (hold.source.kind === "connection") return write === false ? { problem: INVITE_RECONNECT, fixHref: MAILBOX_HREF } : null;
   return write === true ? null : { problem: allowInvitesProblem(hold.source.email), fixHref: allowInvitesHref(hold.source.email) };
 }
 

@@ -7,7 +7,7 @@ import SectionHeader from "@/components/crm/section-header";
 import SettingsHashRedirect from "@/components/crm/settings-hash-redirect";
 import WorkspaceTile from "@/components/workspaces/workspace-tile";
 import type { Viewer } from "@/components/crm/viewer";
-import { SETTINGS_ROOT, settingsNav, type SettingsNavGroup } from "@/lib/settings-nav";
+import { SETTINGS_PATHS, SETTINGS_ROOT, settingsNav, type SettingsNavGroup } from "@/lib/settings-nav";
 import { cn } from "@/lib/utils";
 import ChevronLeftIcon from "@/public/assets/images/_common/chevron-left.svg";
 import ChevronRightIcon from "@/public/assets/images/_common/chevron-right.svg";
@@ -64,7 +64,7 @@ export default function SettingsShell({
                 <GroupHeading group={group} workspace={workspace} />
                 <ul className="flex flex-col gap-0.5">
                   {group.items.map((item) => {
-                    const active = isActive(pathname, item.href);
+                    const active = isActive(atRoot ? SETTINGS_PATHS.general : pathname, item.href);
                     return (
                       <li key={item.href}>
                         <Link

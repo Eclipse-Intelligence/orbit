@@ -1,18 +1,16 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { after, before, describe, it } from "node:test";
-import * as bookingPages from "@/lib/booking/pages";
-import * as brandModule from "@/lib/crm/brand";
 import { getGranolaStatus, personalGranolaKey, removeGranolaKey, saveGranolaKey } from "@/lib/crm/granola";
 import { scopesForRole } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
-import * as workspacesModule from "@/lib/crm/workspaces";
 import { createWorkspace } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { defaultSender } from "@/lib/mail/compose";
 import { listUnknownMail } from "@/lib/mail/filing";
 import { listAddressHomes, setAddressHome } from "@/lib/mail/routing";
-import { readwiseStatus, readwiseToken, removeReadwiseToken, saveReadwiseToken } from "@/lib/readwise/keys";
+import { readwiseStatus, readwiseToken, removeReadwiseToken, saveReadwiseToken, setReadwiseWorkspace } from "@/lib/readwise/keys";
+import { listMemories } from "@/lib/learning/memories";
 import { recallKey, recallStatus, removeRecallKey, saveRecallKey } from "@/lib/recall/keys";
 import { createUser, resetDatabase } from "./helpers";
 
@@ -146,41 +144,162 @@ describe("settings that belong to you or to one workspace", () => {
     }
   });
 
-  it("keeps the newest key per person and service when the migration runs again", async () => {
+  async function keyRows(table: string) {
+    const result = await getAdminPool().query<{ workspace_id: string; key_hint: string | null }>(
+      `select workspace_id, ${table === "readwise_keys" ? "token_hint" : "key_hint"} as key_hint from crm.${table} where user_id = $1`,
+      [eclipse.userId],
+    );
+    return result.rows;
+  }
+
+  async function readwiseKeyWithDocument() {
+    const admin = getAdminPool();
+    await admin.query("delete from crm.readwise_keys where user_id = $1", [eclipse.userId]);
+    const key = await admin.query<{ id: string }>(
+      `insert into crm.readwise_keys (workspace_id, user_id, token_cipher, token_hint, updated_after, full_sync_at, scan_cursor, list_cursor, list_done)
+       values ($1, $2, 'cipher', 'rw01', now(), now(), 'scan-cursor', 'list-cursor', true) returning id`,
+      [eclipse.workspaceId, eclipse.userId],
+    );
+    await admin.query("insert into crm.readwise_documents (key_id, workspace_id, user_id, document_id) values ($1, $2, $3, 'doc-1')", [
+      key.rows[0].id,
+      eclipse.workspaceId,
+      eclipse.userId,
+    ]);
+    return key.rows[0].id;
+  }
+
+  async function readwiseState() {
+    const admin = getAdminPool();
+    const key = await admin.query<{ workspace_id: string; updated_after: Date | null; full_sync_at: Date | null; scan_cursor: string | null; list_cursor: string | null; list_done: boolean }>(
+      "select workspace_id, updated_after, full_sync_at, scan_cursor, list_cursor, list_done from crm.readwise_keys where user_id = $1",
+      [eclipse.userId],
+    );
+    const documents = await admin.query("select 1 from crm.readwise_documents where user_id = $1", [eclipse.userId]);
+    return { key: key.rows[0], documents: documents.rowCount };
+  }
+
+  it("keeps the newest key per person and service when the migration runs again, alongside the old per-workspace constraint", async () => {
     const admin = getAdminPool();
     const sql = readFileSync("supabase/migrations/20270108100000_settings_simplified.sql", "utf8");
-    await admin.query("alter table crm.recall_keys drop constraint recall_keys_owner");
-    await admin.query("alter table crm.recall_keys add constraint recall_keys_owner unique (workspace_id, user_id)");
+    for (const table of ["recall_keys", "readwise_keys", "granola_keys"]) {
+      await admin.query(`delete from crm.${table} where user_id = $1`, [eclipse.userId]);
+      await admin.query(`alter table crm.${table} drop constraint ${table.replace("_keys", "_keys_user")}`);
+    }
     await admin.query(
       `insert into crm.recall_keys (workspace_id, user_id, key_cipher, key_hint, connected_at) values
-       ($1, $3, 'old', 'old1', now() - interval '2 days'),
-       ($2, $3, 'new', 'new1', now() - interval '1 day')`,
+       ($1, $3, 'old', 'old1', now() - interval '2 days'), ($2, $3, 'new', 'new1', now() - interval '1 day')`,
+      [eclipse.workspaceId, ridgeon.workspaceId, eclipse.userId],
+    );
+    await admin.query(
+      `insert into crm.readwise_keys (workspace_id, user_id, token_cipher, token_hint, connected_at) values
+       ($1, $3, 'new', 'new1', now() - interval '1 day'), ($2, $3, 'old', 'old1', now() - interval '3 days')`,
+      [eclipse.workspaceId, ridgeon.workspaceId, eclipse.userId],
+    );
+    await admin.query(
+      `insert into crm.granola_keys (workspace_id, user_id, key_cipher, key_hint, created_at, updated_at) values
+       ($1, $3, 'old', 'old1', now() - interval '1 day', now() - interval '5 days'), ($2, $3, 'new', 'new1', now() - interval '9 days', now() - interval '1 hour')`,
       [eclipse.workspaceId, ridgeon.workspaceId, eclipse.userId],
     );
     await admin.query(sql);
     await admin.query(sql);
-    const kept = await admin.query<{ key_hint: string; workspace_id: string }>("select key_hint, workspace_id from crm.recall_keys where user_id = $1", [eclipse.userId]);
-    assert.deepEqual(kept.rows, [{ key_hint: "new1", workspace_id: ridgeon.workspaceId }]);
+    assert.deepEqual(await keyRows("recall_keys"), [{ workspace_id: ridgeon.workspaceId, key_hint: "new1" }]);
+    assert.deepEqual(await keyRows("readwise_keys"), [{ workspace_id: eclipse.workspaceId, key_hint: "new1" }]);
+    assert.deepEqual(await keyRows("granola_keys"), [{ workspace_id: ridgeon.workspaceId, key_hint: "new1" }]);
+    const constraints = await admin.query<{ conname: string }>(
+      "select conname from pg_constraint where conname in ('recall_keys_owner', 'recall_keys_user', 'readwise_keys_owner', 'readwise_keys_user', 'granola_keys_owner', 'granola_keys_user') order by conname",
+    );
+    assert.deepEqual(
+      constraints.rows.map((row) => row.conname),
+      ["granola_keys_owner", "granola_keys_user", "readwise_keys_owner", "readwise_keys_user", "recall_keys_owner", "recall_keys_user"],
+    );
+    await admin.query(
+      `insert into crm.recall_keys (workspace_id, user_id, key_cipher) values ($1, $2, 'same')
+       on conflict (workspace_id, user_id) do update set key_cipher = excluded.key_cipher`,
+      [ridgeon.workspaceId, eclipse.userId],
+    );
     await assert.rejects(
       admin.query("insert into crm.recall_keys (workspace_id, user_id, key_cipher) values ($1, $2, 'again')", [eclipse.workspaceId, eclipse.userId]),
-      /recall_keys_owner/,
+      /recall_keys_user/,
     );
-    await admin.query("delete from crm.recall_keys where user_id = $1", [eclipse.userId]);
+    for (const table of ["recall_keys", "readwise_keys", "granola_keys"]) await admin.query(`delete from crm.${table} where user_id = $1`, [eclipse.userId]);
   });
 
-  it("moves a person's keys with them when they leave the workspace the keys live in", async () => {
+  it("moves a person's keys with them when they leave the workspace the keys live in, and restarts Readwise there", async () => {
     const admin = getAdminPool();
     await saveRecallKey(eclipse, RECALL_KEY, { fetchImpl: accepting });
+    await saveGranolaKey(eclipse, GRANOLA_KEY, { fetchImpl: accepting });
+    await readwiseKeyWithDocument();
     await admin.query("select private.move_personal_rows($1, $2, $3)", [eclipse.userId, eclipse.workspaceId, ridgeon.workspaceId]);
-    const moved = await admin.query<{ workspace_id: string }>("select workspace_id from crm.recall_keys where user_id = $1", [eclipse.userId]);
-    assert.deepEqual(moved.rows.map((row) => row.workspace_id), [ridgeon.workspaceId]);
+    assert.deepEqual((await keyRows("recall_keys")).map((row) => row.workspace_id), [ridgeon.workspaceId]);
+    assert.deepEqual((await keyRows("granola_keys")).map((row) => row.workspace_id), [ridgeon.workspaceId]);
     assert.equal(await recallKey(eclipse), RECALL_KEY);
+    assert.equal(await personalGranolaKey(eclipse), GRANOLA_KEY);
+    const state = await readwiseState();
+    assert.equal(state.key.workspace_id, ridgeon.workspaceId);
+    assert.deepEqual([state.key.updated_after, state.key.full_sync_at, state.key.scan_cursor, state.key.list_cursor, state.key.list_done], [null, null, null, null, false]);
+    assert.equal(state.documents, 0);
+    await admin.query("select private.move_personal_rows($1, $2, $3)", [eclipse.userId, ridgeon.workspaceId, eclipse.workspaceId]);
+    await removeRecallKey(eclipse);
+    await removeGranolaKey(eclipse);
   });
 
-  it("has no Copy from: new workspaces start blank and booking pages are never offered from another workspace", () => {
-    assert.equal("otherBookingPages" in bookingPages, false);
-    assert.equal("copyBrandProfile" in brandModule, false);
-    assert.equal("BRAND_COPY_FAILED" in workspacesModule, false);
-    assert.equal(createWorkspace.length, 2);
+  it("lets someone in two workspaces choose where Readwise adds to Knowledge", async () => {
+    await readwiseKeyWithDocument();
+    assert.equal((await readwiseStatus(ridgeon)).workspaceId, eclipse.workspaceId);
+    await assert.rejects(setReadwiseWorkspace(ridgeon, "00000000-0000-4000-8000-000000000000"), /Choose a workspace you're in/);
+    assert.deepEqual(await setReadwiseWorkspace(eclipse, eclipse.workspaceId), { workspaceId: eclipse.workspaceId, moved: false });
+    assert.equal((await readwiseState()).documents, 1);
+    assert.deepEqual(await setReadwiseWorkspace(eclipse, ridgeon.workspaceId), { workspaceId: ridgeon.workspaceId, moved: true });
+    const state = await readwiseState();
+    assert.equal(state.key.workspace_id, ridgeon.workspaceId);
+    assert.deepEqual([state.key.updated_after, state.key.full_sync_at, state.key.scan_cursor, state.key.list_cursor, state.key.list_done], [null, null, null, null, false]);
+    assert.equal(state.documents, 0);
+    for (const actor of [eclipse, ridgeon]) {
+      const status = await readwiseStatus(actor);
+      assert.equal(status.workspaceId, ridgeon.workspaceId);
+      assert.equal(status.workspaceName, "Mark Ridgeon");
+    }
+    await removeReadwiseToken(eclipse);
+  });
+
+  it("lists your own notes from every workspace for Memory, never someone else's or shared ones", async () => {
+    const admin = getAdminPool();
+    const priya = await createUser("priya@geteclipse.co", "Priya Shah");
+    await admin.query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [eclipse.workspaceId, priya.userId]);
+    await admin.query(
+      `insert into crm.memories (workspace_id, user_id, scope, kind, title, body, all_workspaces) values
+       ($1, $3, 'personal', 'preference', 'Mine everywhere', 'Mine everywhere', true),
+       ($2, $3, 'personal', 'preference', 'Mine in Ridgeon', 'Mine in Ridgeon', false),
+       ($1, $3, 'personal', 'preference', 'Mine in Eclipse', 'Mine in Eclipse', false),
+       ($1, $4, 'personal', 'preference', 'Priya only', 'Priya only', true),
+       ($1, null, 'business', 'icp', 'Shared business', 'Shared business', null),
+       ($2, null, 'market', 'theme', 'Shared market', 'Shared market', null)`,
+      [eclipse.workspaceId, ridgeon.workspaceId, eclipse.userId, priya.userId],
+    );
+    for (const actor of [eclipse, ridgeon]) {
+      const titles = (await listMemories(actor, { scope: "personal", allWorkspaces: true, limit: 200 })).map((memory) => memory.title).sort();
+      assert.deepEqual(titles, ["Mine everywhere", "Mine in Eclipse", "Mine in Ridgeon"]);
+    }
+    const everything = (await listMemories(eclipse, { allWorkspaces: true, limit: 200 })).map((memory) => memory.title);
+    assert.equal(everything.includes("Shared business"), false);
+    assert.equal(everything.includes("Priya only"), false);
+    const here = (await listMemories(ridgeon, { scope: "personal", limit: 200 })).map((memory) => memory.title).sort();
+    assert.deepEqual(here, ["Mine everywhere", "Mine in Ridgeon"]);
+    const places = (await listMemories(ridgeon, { scope: "personal", allWorkspaces: true, limit: 200 })).map((memory) => [memory.title, memory.workspaceName, memory.allWorkspaces]);
+    assert.ok(places.some(([title, name, all]) => title === "Mine in Eclipse" && name === "Eclipse" && all === false));
+  });
+
+  it("starts a new workspace blank even when an old client still asks to copy the brand", async () => {
+    const admin = getAdminPool();
+    await admin.query(
+      `insert into crm.workspace_brands (workspace_id, what_you_sell, tone, playbook) values ($1, 'AI visibility', 'Plain', 'One idea per email')
+       on conflict (workspace_id) do update set what_you_sell = excluded.what_you_sell, tone = excluded.tone, playbook = excluded.playbook`,
+      [eclipse.workspaceId],
+    );
+    const created = await createWorkspace(eclipse, { name: "Side project", brandStart: "copy" } as { name: string });
+    const brand = await admin.query("select 1 from crm.workspace_brands where workspace_id = $1 and (what_you_sell <> '' or tone <> '' or playbook <> '')", [created.id]);
+    assert.equal(brand.rowCount, 0);
+    const stored = await admin.query<{ brand_source_id: string | null }>("select brand_source_id from crm.workspaces where id = $1", [created.id]);
+    assert.equal(stored.rows[0].brand_source_id, null);
   });
 });

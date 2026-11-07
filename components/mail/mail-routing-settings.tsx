@@ -55,7 +55,7 @@ export default function MailRoutingSettings({ homes, rules, workspaces }: { home
     <SettingsCard
       id="addresses"
       title="Addresses"
-      description="Each address belongs to one workspace. It's the address you send from there, and email from people Orbit doesn't know waits in that workspace's Capture."
+      description="Each address belongs to one workspace. It's the address you send from there, and email from people Orbit doesn't know waits in that workspace's Capture. A workspace with no address of its own sends from your Microsoft 365 mailbox."
     >
       <div className="flex flex-col gap-4">
         <ul className="flex flex-col gap-2">

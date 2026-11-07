@@ -31,6 +31,7 @@ function Status({ on, children }: { on: boolean; children: string }) {
 }
 
 function Row({
+  id,
   title,
   status,
   on,
@@ -38,6 +39,7 @@ function Row({
   action,
   children,
 }: {
+  id?: string;
   title: string;
   status: string;
   on: boolean;
@@ -46,7 +48,7 @@ function Row({
   children?: ReactNode;
 }) {
   return (
-    <div className="flex flex-col gap-3">
+    <div id={id} className="flex scroll-mt-4 flex-col gap-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
           <span className="text-foreground text-[14px] leading-5 font-medium">{title}</span>
@@ -254,6 +256,7 @@ function AgentRow({ companions }: { companions: CompanionSummary[] }) {
 
   return (
     <Row
+      id="orbit-agent"
       title="Claude"
       on={Boolean(online)}
       status={

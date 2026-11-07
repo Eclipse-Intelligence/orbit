@@ -13,14 +13,14 @@ using crm.recall_keys newer
 where newer.user_id = k.user_id
   and (newer.connected_at, newer.id) > (k.connected_at, k.id);
 
-alter table crm.granola_keys drop constraint if exists granola_keys_owner;
-alter table crm.granola_keys add constraint granola_keys_owner unique (user_id);
+alter table crm.granola_keys drop constraint if exists granola_keys_user;
+alter table crm.granola_keys add constraint granola_keys_user unique (user_id);
 
-alter table crm.readwise_keys drop constraint if exists readwise_keys_owner;
-alter table crm.readwise_keys add constraint readwise_keys_owner unique (user_id);
+alter table crm.readwise_keys drop constraint if exists readwise_keys_user;
+alter table crm.readwise_keys add constraint readwise_keys_user unique (user_id);
 
-alter table crm.recall_keys drop constraint if exists recall_keys_owner;
-alter table crm.recall_keys add constraint recall_keys_owner unique (user_id);
+alter table crm.recall_keys drop constraint if exists recall_keys_user;
+alter table crm.recall_keys add constraint recall_keys_user unique (user_id);
 
 create index if not exists readwise_documents_user_document_idx on crm.readwise_documents (user_id, document_id);
 

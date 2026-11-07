@@ -20,7 +20,7 @@ import type { MailSourceStatus } from "@/lib/mail/store";
 import type { LinearStatus } from "@/lib/linear";
 import GranolaKey from "@/components/crm/granola-key";
 import type { MailboxSummary } from "@/lib/crm/inbox";
-import { ReadwiseSync, ReadwiseToken } from "@/components/crm/readwise-settings";
+import { ReadwiseSync, ReadwiseToken, ReadwiseWorkspace } from "@/components/crm/readwise-settings";
 import type { ReadwiseStatus } from "@/lib/readwise/keys";
 import RecallKey from "@/components/crm/recall-settings";
 import type { RecallStatus } from "@/lib/recall/keys";
@@ -344,12 +344,12 @@ export function GranolaSettings({ granola, canAdmin }: { granola: GranolaStatus;
   );
 }
 
-export function ReadwiseSettings({ readwise, multi }: { readwise: ReadwiseStatus; multi: boolean }) {
+export function ReadwiseSettings({ readwise, workspaces }: { readwise: ReadwiseStatus; workspaces: { id: string; name: string }[] }) {
   return (
     <SettingsCard
       id="readwise"
       title="Readwise Reader"
-      description={`Documents you tag orbit in Reader are added to Knowledge${multi && readwise.workspaceName ? ` in ${readwise.workspaceName}` : ""} with their highlights. The assistant can read your Reader when you ask. Orbit never changes anything in Reader. If you disconnect, items already in Knowledge stay.`}
+      description="Documents you tag orbit in Reader are added to Knowledge with their highlights. The assistant can read your Reader when you ask. Orbit never changes anything in Reader. If you disconnect, items already in Knowledge stay."
     >
       {readwise.connected && (
         <ReadwiseSync lastError={readwise.lastError}>
@@ -363,6 +363,7 @@ export function ReadwiseSettings({ readwise, multi }: { readwise: ReadwiseStatus
           )}
         </ReadwiseSync>
       )}
+      {readwise.connected && readwise.workspaceId && workspaces.length > 1 && <ReadwiseWorkspace current={readwise.workspaceId} workspaces={workspaces} />}
       <ReadwiseToken connected={readwise.connected} hint={readwise.hint} />
     </SettingsCard>
   );

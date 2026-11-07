@@ -29,7 +29,7 @@ import { draftPersonalContext, saveAboutYou, saveYou, type PersonalContext, type
 import { saveOtherEmails, type MyEmails } from "@/lib/crm/profile";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import type { PipelineStage } from "@/lib/crm/types";
-import { removeReadwiseToken, saveReadwiseToken } from "@/lib/readwise/keys";
+import { removeReadwiseToken, saveReadwiseToken, setReadwiseWorkspace } from "@/lib/readwise/keys";
 import { removeRecallKey, saveRecallKey } from "@/lib/recall/keys";
 import { syncReaderToKnowledge } from "@/lib/readwise/sync";
 import { archiveWebhook, createWebhook } from "@/lib/crm/webhooks";
@@ -270,6 +270,17 @@ export async function removeReadwiseTokenAction(): Promise<{ error?: string }> {
     return {};
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Couldn't disconnect Readwise Reader." };
+  }
+}
+
+export async function setReadwiseWorkspaceAction(workspaceId: string): Promise<{ error?: string }> {
+  const user = await requireUser();
+  try {
+    await setReadwiseWorkspace(user, workspaceId);
+    revalidatePath(SETTINGS_PATHS.connections);
+    return {};
+  } catch (error) {
+    return { error: error instanceof CrmError ? error.message : "Couldn't change where Readwise documents go." };
   }
 }
 

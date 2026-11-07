@@ -232,7 +232,7 @@ export function AboutYouSettings({
   );
 }
 
-export function YouSettings({ you: initialYou, multi }: { you: YouInput; multi: boolean }) {
+export function YouSettings({ you: initialYou, website, multi }: { you: YouInput; website: string; multi: boolean }) {
   const router = useRouter();
   const [savedYou, setSavedYou] = useState(initialYou);
   const [you, setYou] = useState(initialYou);
@@ -272,13 +272,13 @@ export function YouSettings({ you: initialYou, multi }: { you: YouInput; multi: 
   async function draft() {
     setPending("draft");
     setYouError(null);
-    setYouStatus("Reading your LinkedIn. This takes up to a minute.");
-    const result = await draftAboutYouAction({ linkedinUrl: you.linkedinUrl, websiteUrl: "" });
+    setYouStatus("Reading your LinkedIn and website. This takes up to a minute.");
+    const result = await draftAboutYouAction({ linkedinUrl: you.linkedinUrl, websiteUrl: website });
     setPending(null);
     if (result.error || !result.draft) {
       setYouStatus(null);
       if (result.field === "linkedinUrl") setErrors({ linkedinUrl: result.error });
-      else setYouError(result.error ?? "Could not draft from your LinkedIn.");
+      else setYouError(result.error ?? "Could not draft from your LinkedIn and website.");
       return;
     }
     const { draft: drafted, notes } = result.draft;
@@ -341,10 +341,19 @@ export function YouSettings({ you: initialYou, multi }: { you: YouInput; multi: 
           />
         </Field>
         <div className="flex flex-wrap items-center gap-3">
-          <Button variant="secondary" size="sm" type="button" disabled={busy || !you.linkedinUrl.trim()} onClick={() => void draft()}>
-            {pending === "draft" ? "Drafting…" : "Draft from my LinkedIn"}
+          <Button
+            variant="secondary"
+            size="sm"
+            type="button"
+            disabled={busy || (!you.linkedinUrl.trim() && !website.trim())}
+            aria-describedby="you-draft-caption"
+            onClick={() => void draft()}
+          >
+            {pending === "draft" ? "Drafting…" : "Draft from my LinkedIn and website"}
           </Button>
-          <span className="caption-style text-subtle">Fills in how you write and what you care about for you to check.</span>
+          <span id="you-draft-caption" className="caption-style text-subtle">
+            Fills in how you write and what you care about for you to check. Nothing is saved until you save.
+          </span>
         </div>
         <SaveRow
           label="Save"

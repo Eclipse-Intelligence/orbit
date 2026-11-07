@@ -100,7 +100,7 @@ export async function saveRecallKey(actor: UserActor, apiKey: string, options: {
     db.query(
       `insert into crm.recall_keys (workspace_id, user_id, key_cipher, key_hint, tags_path, tags_checked_at)
        values ($1, $2, $3, $4, $5::text, case when $6::boolean then now() else null end)
-       on conflict (user_id)
+       on conflict on constraint recall_keys_user
        do update set key_cipher = excluded.key_cipher, key_hint = excluded.key_hint, connected_at = now(),
          tags_path = excluded.tags_path, tags_checked_at = excluded.tags_checked_at`,
       [home, actor.userId, encryptSecret(trimmed), trimmed.slice(-4), probe?.path ?? null, probe !== null],

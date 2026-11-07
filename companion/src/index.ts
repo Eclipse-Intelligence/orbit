@@ -175,7 +175,7 @@ async function serve(api: Api, cwd: string) {
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
         await clearConfig();
-        stop(`${error.message}\nRun orbit-agent again with --pair and a new code from Orbit › Settings › Integrations.`);
+        stop(`${error.message}\nRun orbit-agent again with --pair and a new code from Orbit › Settings › Connections.`);
       }
       log(`${error instanceof Error ? error.message : String(error)} Retrying in ${Math.round(backoff / 1000)}s.`);
       await new Promise((resolve) => setTimeout(resolve, backoff));
@@ -195,7 +195,7 @@ async function main() {
       [
         "orbit-agent: answers Orbit assistant questions with your own Claude Code login.",
         "",
-        "  orbit-agent --pair CODE   pair this Mac using the code from Orbit › Settings › Integrations",
+        "  orbit-agent --pair CODE   pair this Mac using the code from Orbit › Settings › Connections",
         "  orbit-agent               start answering (after pairing)",
         "  orbit-agent --install     keep it running: start at login and restart if it stops (Mac)",
         "  orbit-agent --uninstall   stop starting at login",
@@ -224,8 +224,8 @@ async function main() {
   const url = (args.url ?? saved.url ?? DEFAULT_URL).replace(/\/+$/, "");
   let token = args.pair ? null : (saved.token ?? null);
   if (!token) {
-    if (!args.pair && !process.stdin.isTTY) stop("This Mac isn't paired. Run orbit-agent --pair CODE in Terminal with a code from Orbit › Settings › Integrations.");
-    const code = args.pair ?? (await ask("Pairing code from Orbit › Settings › Integrations: "));
+    if (!args.pair && !process.stdin.isTTY) stop("This Mac isn't paired. Run orbit-agent --pair CODE in Terminal with a code from Orbit › Settings › Connections.");
+    const code = args.pair ?? (await ask("Pairing code from Orbit › Settings › Connections: "));
     if (!code) stop("A pairing code is needed.");
     try {
       token = await pair(url, code, args.name ?? hostname().replace(/\.local$/, ""));

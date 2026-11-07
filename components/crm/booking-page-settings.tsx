@@ -414,9 +414,9 @@ export default function BookingPageSettings({
     warnings.push(
       <>
         Microsoft isn&apos;t connected, so bookings can&apos;t create meetings.{" "}
-        <a href={SETTINGS_PATHS.email} className="underline underline-offset-2">
+        <Button variant="link" size="none" href={SETTINGS_PATHS.email} className="whitespace-normal">
           Connect Microsoft in Settings › Email
-        </a>
+        </Button>
         .
       </>,
     );
@@ -424,9 +424,9 @@ export default function BookingPageSettings({
     warnings.push(
       <>
         Orbit can read your calendar but can&apos;t create meetings yet.{" "}
-        <a href={SETTINGS_PATHS.email} className="underline underline-offset-2">
+        <Button variant="link" size="none" href={SETTINGS_PATHS.email} className="whitespace-normal">
           Reconnect Microsoft in Settings › Email
-        </a>{" "}
+        </Button>{" "}
         to allow it.
       </>,
     );

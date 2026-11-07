@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { legacySettingsHref, SETTINGS_PATHS, settingsHashTarget, settingsNav, settingsRedirect, type SettingsPage } from "@/lib/settings-nav";
+import { legacySettingsHref, SETTINGS_PATHS, settingsAnchorRedirect, settingsHashTarget, settingsNav, settingsRedirect, type SettingsPage } from "@/lib/settings-nav";
 
 const query = (value: string) => new URLSearchParams(value);
 
@@ -68,7 +68,7 @@ describe("old settings addresses", () => {
 
   it("sends old anchors to the page that now holds them", () => {
     assert.equal(settingsHashTarget("#microsoft"), SETTINGS_PATHS.email);
-    assert.equal(settingsHashTarget("#new-people"), SETTINGS_PATHS.email);
+    assert.equal(settingsHashTarget("#new-people"), `${SETTINGS_PATHS.email}#addresses`);
     assert.equal(settingsHashTarget("#sending-addresses"), SETTINGS_PATHS.email);
     assert.equal(settingsHashTarget("#signatures"), SETTINGS_PATHS.email);
     assert.equal(settingsHashTarget("#my-emails"), SETTINGS_PATHS.email);
@@ -92,11 +92,20 @@ describe("old settings addresses", () => {
     assert.equal(settingsHashTarget("#%E0%A4%A"), null);
   });
 
+  it("stays on a page or one of its sub-pages, and keeps or replaces the anchor when it moves", () => {
+    assert.equal(settingsAnchorRedirect("/settings/brand/playbook", "", "#playbook"), null);
+    assert.equal(settingsAnchorRedirect("/settings/brand", "", "#playbook"), null);
+    assert.equal(settingsAnchorRedirect("/settings/general", "?a=1", "#clickup"), "/settings/tools?a=1#clickup");
+    assert.equal(settingsAnchorRedirect("/settings/connections", "", "#new-people"), "/settings/email#addresses");
+    assert.equal(settingsAnchorRedirect("/settings/email", "", "#new-people"), null);
+    assert.equal(settingsAnchorRedirect("/settings/general", "", "#nothing-here"), null);
+  });
+
   it("never sends a card's own anchor away from the page it is on", () => {
     const cards: Record<string, string[]> = {
       [SETTINGS_PATHS.general]: ["account", "you", "notifications", "meeting-link", "shortcuts"],
       [SETTINGS_PATHS.email]: ["addresses", "microsoft", "sending-addresses", "my-emails", "signatures", "mail-help", "read-statuses"],
-      [SETTINGS_PATHS.connections]: ["teams", "granola", "readwise", "recall", "linkedin-capture", "ai-accounts"],
+      [SETTINGS_PATHS.connections]: ["teams", "granola", "readwise", "recall", "linkedin-capture", "ai-accounts", "orbit-agent"],
       [SETTINGS_PATHS.memory]: ["memory"],
       [SETTINGS_PATHS.apiTokens]: ["personal-tokens", "iphone-shortcut"],
       [SETTINGS_PATHS.aboutYou]: ["about-you"],

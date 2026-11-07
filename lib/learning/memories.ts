@@ -192,7 +192,9 @@ export async function listMemories(
 ): Promise<Memory[]> {
   const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
   const query = options.query?.trim();
-  const visible = options.allWorkspaces ? "scope = 'personal' and user_id = $6 and $1::uuid is not null" : visibleMemorySql("$1", "$6");
+  const visible = options.allWorkspaces ? "scope = 'personal' and user_id = $1" : visibleMemorySql("$6", "$1");
+  const params: unknown[] = [actor.userId, options.scope ?? null, query || null, limit, options.since ?? null];
+  if (!options.allWorkspaces) params.push(actor.workspaceId);
   return withActor(actor, async (db) => {
     const result = await db.query<Row>(
       `select ${COLUMNS} from crm.memories
@@ -202,7 +204,7 @@ export async function listMemories(
          and ($5::timestamptz is null or updated_at >= $5)
        order by pinned desc, ${query ? "ts_rank(search, websearch_to_tsquery('english', $3)) desc," : ""} updated_at desc
        limit $4`,
-      [actor.workspaceId, options.scope ?? null, query || null, limit, options.since ?? null, actor.userId],
+      params,
     );
     return result.rows.map(mapMemory);
   });

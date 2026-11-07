@@ -53,7 +53,7 @@ export default async function ConnectionsSettingsPage({
       <SettingsNotices notice={notice} info={info} />
       <TeamsCallsSettings configured={microsoftConfigured()} mailbox={mailbox} calls={calls} transcripts={transcripts} />
       <GranolaSettings granola={granola} canAdmin={canAdmin} />
-      <ReadwiseSettings readwise={readwise} multi={workspaces.length > 1} />
+      <ReadwiseSettings readwise={readwise} workspaces={workspaces.map((item) => ({ id: item.id, name: item.name }))} />
       <RecallSettings recall={recall} />
       <LinkedinCaptureSettings
         browsers={browserRows(browsers)}

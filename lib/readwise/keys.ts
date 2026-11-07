@@ -1,7 +1,7 @@
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import type { UserActor } from "@/lib/crm/types";
-import { homeWorkspaceId } from "@/lib/crm/workspaces";
+import { homeWorkspaceId, workspaceActors } from "@/lib/crm/workspaces";
 import { decryptSecret, encryptSecret } from "@/lib/crypto/secret";
 import { ReadwiseError, validateReadwiseToken } from "@/lib/readwise";
 
@@ -15,6 +15,7 @@ export type ReadwiseStatus = {
   lastError: string | null;
   lastErrorAt: string | null;
   documents: number;
+  workspaceId: string | null;
   workspaceName: string | null;
 };
 
@@ -89,7 +90,7 @@ export async function saveReadwiseToken(actor: UserActor, token: string, options
     db.query(
       `insert into crm.readwise_keys (workspace_id, user_id, token_cipher, token_hint)
        values ($1, $2, $3, $4)
-       on conflict (user_id)
+       on conflict on constraint readwise_keys_user
        do update set token_cipher = excluded.token_cipher, token_hint = excluded.token_hint, connected_at = now(),
          last_error = null, last_error_at = null, updated_after = null, full_sync_at = null,
          scan_cursor = null, scan_since = null, scan_started_at = null, scan_full = false,
@@ -105,6 +106,27 @@ export async function removeReadwiseToken(actor: UserActor) {
   );
 }
 
+export async function setReadwiseWorkspace(actor: UserActor, workspaceId: string) {
+  const actors = await workspaceActors(actor);
+  if (!actors.some((item) => item.workspaceId === workspaceId)) {
+    throw new CrmError("forbidden", "Choose a workspace you're in.", 403, { field: "workspaceId" });
+  }
+  return withActor(actor, async (db) => {
+    const key = await db.query<{ workspace_id: string }>("select workspace_id from crm.readwise_keys where user_id = $1 for update", [actor.userId]);
+    if (!key.rows[0]) throw new CrmError("not_connected", READWISE_NOT_CONNECTED, 400);
+    if (key.rows[0].workspace_id === workspaceId) return { workspaceId, moved: false };
+    await db.query("delete from crm.readwise_documents where user_id = $1", [actor.userId]);
+    await db.query(
+      `update crm.readwise_keys
+       set workspace_id = $2, updated_after = null, full_sync_at = null, scan_cursor = null, scan_since = null,
+         scan_started_at = null, scan_full = false, list_cursor = null, list_full = false, list_done = false, sync_started_at = null
+       where user_id = $1`,
+      [actor.userId, workspaceId],
+    );
+    return { workspaceId, moved: true };
+  });
+}
+
 export async function readwiseStatus(actor: UserActor): Promise<ReadwiseStatus> {
   return withActor(actor, async (db) => {
     const result = await db.query<{
@@ -114,9 +136,10 @@ export async function readwiseStatus(actor: UserActor): Promise<ReadwiseStatus> 
       last_error: string | null;
       last_error_at: Date | null;
       documents: number;
+      workspace_id: string;
       workspace_name: string | null;
     }>(
-      `select k.token_hint, k.connected_at, k.last_sync_at, k.last_error, k.last_error_at,
+      `select k.workspace_id, k.token_hint, k.connected_at, k.last_sync_at, k.last_error, k.last_error_at,
          (select count(*)::int from crm.readwise_documents d
             join crm.knowledge_items i on i.id = d.knowledge_item_id and i.archived_at is null
             where d.key_id = k.id) as documents,
@@ -127,7 +150,7 @@ export async function readwiseStatus(actor: UserActor): Promise<ReadwiseStatus> 
     );
     const row = result.rows[0];
     if (!row) {
-      return { connected: false, hint: null, connectedAt: null, lastSyncedAt: null, lastError: null, lastErrorAt: null, documents: 0, workspaceName: null };
+      return { connected: false, hint: null, connectedAt: null, lastSyncedAt: null, lastError: null, lastErrorAt: null, documents: 0, workspaceId: null, workspaceName: null };
     }
     return {
       connected: true,
@@ -137,6 +160,7 @@ export async function readwiseStatus(actor: UserActor): Promise<ReadwiseStatus> 
       lastError: row.last_error,
       lastErrorAt: row.last_error_at?.toISOString() ?? null,
       documents: row.documents,
+      workspaceId: row.workspace_id,
       workspaceName: row.workspace_name,
     };
   });

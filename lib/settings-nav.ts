@@ -114,7 +114,7 @@ const HASH_TARGETS: Record<string, string> = {
   microsoft: SETTINGS_PATHS.email,
   mailbox: SETTINGS_PATHS.email,
   addresses: SETTINGS_PATHS.email,
-  "new-people": SETTINGS_PATHS.email,
+  "new-people": `${SETTINGS_PATHS.email}#addresses`,
   "my-emails": SETTINGS_PATHS.email,
   "sending-addresses": SETTINGS_PATHS.email,
   signatures: SETTINGS_PATHS.email,
@@ -182,6 +182,14 @@ export function settingsHashTarget(hash: string) {
   }
   key = key.trim().toLowerCase();
   return Object.hasOwn(HASH_TARGETS, key) ? HASH_TARGETS[key] : null;
+}
+
+export function settingsAnchorRedirect(pathname: string, search: string, hash: string) {
+  const target = settingsHashTarget(hash);
+  if (!target) return null;
+  const [path, anchor] = target.split("#");
+  if (pathname === path || pathname.startsWith(`${path}/`)) return null;
+  return `${path}${search}${anchor ? `#${anchor}` : hash}`;
 }
 
 const MOVED_PAGES: Record<string, string> = {

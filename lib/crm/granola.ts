@@ -205,7 +205,7 @@ export async function saveGranolaKey(actor: UserActor, key: string, options: Gra
     db.query(
       `insert into crm.granola_keys (workspace_id, user_id, key_cipher, key_hint)
        values ($1, $2, $3, $4)
-       on conflict (user_id)
+       on conflict on constraint granola_keys_user
        do update set key_cipher = excluded.key_cipher, key_hint = excluded.key_hint, updated_at = now()`,
       [home, actor.userId, encryptSecret(trimmed), trimmed.slice(-4)],
     ),
