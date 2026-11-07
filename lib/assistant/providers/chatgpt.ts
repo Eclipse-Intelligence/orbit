@@ -24,7 +24,7 @@ export function chatGptRequest(input: ProviderInput) {
     }
     const calls = new Set((message.tool_calls ?? []).map((call) => callId(call.id)));
     const state = message.state;
-    if (state && state.model === input.modelId && Array.isArray(state.content)) {
+    if (state && (state.format ?? "responses") === "responses" && state.model === input.modelId && Array.isArray(state.content)) {
       items.push(
         ...(state.content as Item[]).filter((item) => item.type !== "function_call" || calls.has(callId(String(item.call_id)))),
       );
@@ -158,6 +158,7 @@ export async function completeChatGpt(input: ProviderInput & { token: string; ac
 export async function readResponses(body: ReadableStream<Uint8Array>, options: { label: string; modelId: string; onText?: (text: string) => void }): Promise<Completion> {
   const items: Item[] = [];
   let finished: Item | null = null;
+  let incomplete = false;
   let streamed = "";
   try {
     for await (const event of events(body)) {
@@ -165,7 +166,10 @@ export async function readResponses(body: ReadableStream<Uint8Array>, options: {
         streamed += event.delta;
         options.onText(streamed);
       } else if (event.type === "response.output_item.done" && event.item && typeof event.item === "object") items.push(event.item as Item);
-      else if (event.type === "response.completed" || event.type === "response.incomplete") finished = (event.response as Item) ?? {};
+      else if (event.type === "response.completed" || event.type === "response.incomplete") {
+        finished = (event.response as Item) ?? {};
+        incomplete = event.type === "response.incomplete" || finished.status === "incomplete";
+      }
       else if (event.type === "response.failed" || event.type === "error") {
         const problem = ((event.response as Item | undefined)?.error ?? event.error ?? event) as { message?: unknown };
         throw new ProviderError(`${options.label} stopped: ${typeof problem.message === "string" ? problem.message : "unknown error"}`);
@@ -186,6 +190,7 @@ export async function readResponses(body: ReadableStream<Uint8Array>, options: {
     sources: reply.sources,
     model: options.modelId,
     usage: finished?.usage && typeof finished.usage === "object" ? (finished.usage as Record<string, unknown>) : null,
-    state: { model: options.modelId, content: items },
+    state: { model: options.modelId, format: "responses", content: items },
+    cutOff: incomplete && (finished?.incomplete_details as { reason?: unknown } | undefined)?.reason !== "content_filter",
   };
 }

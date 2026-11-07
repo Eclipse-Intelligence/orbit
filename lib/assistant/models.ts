@@ -10,7 +10,9 @@ type AssistantModel = {
   maker: string;
   source: ModelSource;
   reasoning: readonly ReasoningLevel[];
+  maxOutput: number;
   responses?: boolean;
+  claudeApi?: boolean;
 };
 
 const CODEX_LEVELS: readonly ReasoningLevel[] = ["low", "medium", "high", "xhigh"];
@@ -21,23 +23,40 @@ export const MODEL_SOURCES: { id: ModelSource; label: string }[] = [
   { id: "chatgpt", label: "ChatGPT account" },
 ];
 
-function orbit(id: string, label: string, maker: string, reasoning: readonly ReasoningLevel[] = REASONING_LEVELS, responses = false): AssistantModel {
-  return { id, apiModel: id, label, maker, source: "orbit", reasoning, ...(responses ? { responses } : {}) };
+const K = 1_000;
+
+function orbit(
+  id: string,
+  label: string,
+  maker: string,
+  options: { reasoning?: readonly ReasoningLevel[]; maxOutput?: number; responses?: boolean; claudeApi?: boolean } = {},
+): AssistantModel {
+  return {
+    id,
+    apiModel: id,
+    label,
+    maker,
+    source: "orbit",
+    reasoning: options.reasoning ?? REASONING_LEVELS,
+    maxOutput: options.maxOutput ?? 128 * K,
+    ...(options.responses ? { responses: true } : {}),
+    ...(options.claudeApi ? { claudeApi: true } : {}),
+  };
 }
 
 function account(source: "chatgpt" | "claude", apiModel: string, label: string, reasoning: readonly ReasoningLevel[]): AssistantModel {
-  return { id: `${source}/${apiModel}`, apiModel, label, maker: source === "claude" ? "Anthropic" : "OpenAI", source, reasoning };
+  return { id: `${source}/${apiModel}`, apiModel, label, maker: source === "claude" ? "Anthropic" : "OpenAI", source, reasoning, maxOutput: 128 * K };
 }
 
 export const ASSISTANT_MODELS: AssistantModel[] = [
-  orbit("claude-sonnet-5-5", "Sonnet 5.5", "Anthropic"),
-  orbit("claude-opus-5-5", "Opus 5.5", "Anthropic"),
-  orbit("claude-haiku-5-5", "Haiku 5.5", "Anthropic"),
+  orbit("claude-sonnet-5-5", "Sonnet 5.5", "Anthropic", { claudeApi: true }),
+  orbit("claude-opus-5-5", "Opus 5.5", "Anthropic", { claudeApi: true }),
+  orbit("claude-haiku-5-5", "Haiku 5.5", "Anthropic", { claudeApi: true }),
   orbit("gpt-6-astra", "GPT-6 Astra", "OpenAI"),
   orbit("gpt-6.1-sol", "GPT-6.1 Sol", "OpenAI"),
-  orbit("gpt-6.1-terra", "GPT-6.1 Terra", "OpenAI", REASONING_LEVELS, true),
-  orbit("grok-4.7", "Grok 4.7", "xAI", ["low", "medium", "high", "xhigh"]),
-  orbit("gemini-4-argon", "Gemini 4 Argon", "Google", ["low", "medium", "high"]),
+  orbit("gpt-6.1-terra", "GPT-6.1 Terra", "OpenAI", { responses: true }),
+  orbit("grok-4.7", "Grok 4.7", "xAI", { reasoning: ["low", "medium", "high", "xhigh"] }),
+  orbit("gemini-4-argon", "Gemini 4 Argon", "Google", { reasoning: ["low", "medium", "high"], maxOutput: 65_536 }),
   account("claude", "claude-fable-5-1", "Fable 5.1", REASONING_LEVELS),
   account("claude", "claude-opus-5-5", "Opus 5.5", REASONING_LEVELS),
   account("claude", "claude-sonnet-5-5", "Sonnet 5.5", REASONING_LEVELS),
@@ -47,6 +66,20 @@ export const ASSISTANT_MODELS: AssistantModel[] = [
   account("chatgpt", "gpt-6-astra", "GPT-6 Astra", CODEX_LEVELS),
   account("chatgpt", "gpt-6-luna", "GPT-6 Luna", CODEX_LEVELS),
 ];
+
+export const OUTPUT_TOKENS: Record<ReasoningLevel, number> = {
+  low: 16 * K,
+  medium: 16 * K,
+  high: 32 * K,
+  xhigh: 64 * K,
+  max: 96 * K,
+};
+
+export function outputTokens(model: unknown, reasoning: unknown) {
+  const wanted = OUTPUT_TOKENS[reasoning as ReasoningLevel] ?? OUTPUT_TOKENS.medium;
+  const known = assistantModel(model) ?? ASSISTANT_MODELS.find((entry) => entry.apiModel === model);
+  return Math.min(wanted, known?.maxOutput ?? OUTPUT_TOKENS.medium);
+}
 
 export const DEFAULT_MODEL = "claude-sonnet-5-5";
 export const DEFAULT_REASONING: ReasoningLevel = "medium";

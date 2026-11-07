@@ -7,7 +7,10 @@ The Orbit assistant is the "Ask Orbit anything" dock on every CRM page. It answe
 | `lib/assistant/tools.ts` | The tool registry (`ASSISTANT_TOOLS`), `runTool`, approval card text (`describeAction`), the outside-content list (`EXTERNAL_TOOLS`) |
 | `lib/assistant/prompt.ts` | The system prompt: a part fixed per workspace (built from its brand profile and name), then "Right now" (who, today's date and London time, the Web switch, links) |
 | `lib/assistant/chat.ts` | The turn loop, history budget, approvals (`decideActions`) and the Orbit Agent hand-off |
-| `lib/assistant/gateway.ts` | Model calls for Orbit and ChatGPT account models |
+| `lib/assistant/gateway.ts` | Model calls for Orbit and ChatGPT account models, and the stop reasons and reasoning they carry between rounds |
+| `lib/assistant/providers/anthropic.ts` | Claude through the Messages API (`@anthropic-ai/sdk`), with thinking kept across tool rounds |
+| `lib/assistant/page-context.ts` | The page the person is on, checked and turned into a short note for their message |
+| `lib/assistant/concise.ts` | The concise default for tools with big results (`detail`) |
 | `lib/assistant/models.ts` | The model list and reasoning levels |
 | `lib/assistant/files.ts` | Files attached in the chat: upload, the note the model gets, reading, adding to Knowledge and the sweep |
 | `companion/` | Orbit Agent, which runs Claude account turns on the person's Mac |
@@ -21,11 +24,32 @@ The Orbit assistant is the "Ask Orbit anything" dock on every CRM page. It answe
 
 | Source | Models | Runs through |
 | --- | --- | --- |
-| Orbit | Sonnet 5.5 (default), Opus 5.5, Haiku 5.5, GPT-6 Astra, GPT-6.1 Sol, GPT-6.1 Terra, Grok 4.7, Gemini 4 Argon | `lib/assistant/gateway.ts` to the LLM gateway (`LLM_API_BASE_URL`, `LLM_API_KEY`): chat completions, or the Responses API for GPT-6.1 Terra. `max_tokens` 16,000. A 429 or 5xx is retried once. |
+| Orbit | Sonnet 5.5 (default), Opus 5.5, Haiku 5.5, GPT-6 Astra, GPT-6.1 Sol, GPT-6.1 Terra, Grok 4.7, Gemini 4 Argon | `lib/assistant/gateway.ts` to the LLM gateway (`LLM_API_BASE_URL`, `LLM_API_KEY`): chat completions, the Responses API for GPT-6.1 Terra, or for the Claude models the Messages API when it is turned on (see Reasoning between rounds). A 429 or 5xx is retried once. |
 | ChatGPT account | GPT-6.1 Sol, GPT-6.1 Terra, GPT-6 Astra, GPT-6 Luna | The person's own ChatGPT sign-in, through `lib/assistant/providers/chatgpt.ts` |
 | Claude account | Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5 | Orbit Agent on the person's paired Mac, using their signed-in Claude Code. Never the gateway. |
 
 Reasoning is `low`, `medium` (default), `high`, `xhigh` or `max`. A level a model doesn't support drops to the nearest lower one. A model whose account isn't connected is refused with a message saying how to connect it.
+
+The output limit (`max_tokens`, or `max_output_tokens` on the Responses API) includes reasoning, so it grows with the level (`outputTokens` in `models.ts`): 16,000 at `low` and `medium`, 32,000 at `high`, 64,000 at `xhigh` and 96,000 at `max`, never above the model's own limit (`maxOutput`: 128,000 for Claude and GPT, 65,536 for Gemini 4 Argon). Turns always stream, so a large limit doesn't risk a timeout, and only the tokens used are paid for.
+
+### Stop reasons
+
+Every completion says whether the model stopped because it ran out of output tokens (`cutOff`): `finish_reason` `length` on chat completions (streamed or not), `response.incomplete` on the Responses API, `stop_reason` `max_tokens` on the Messages API, and on Orbit Agent a last step that stopped at `max_tokens`.
+
+- A reply cut off with tool calls never runs any of them. Each gets the error result `CUT_OFF_CALL` ("Your reply was cut off before it finished, so this call didn't run …") and the loop continues once on its own. If the next reply is cut off too, or a reply with no calls is cut off, the turn ends with what was written and `CUT_OFF_MESSAGE`: "The answer was cut off. Ask me to continue."
+- A tool call whose arguments aren't a JSON object never runs, whatever the stop reason: it gets the error result `BROKEN_CALL` and the model can call it again. It never becomes a card.
+- On the Messages API a `refusal` stop shows "The model declined to answer that …", and a `pause_turn` (a long web search) is resumed up to three times.
+
+### Reasoning between rounds
+
+| Path | Models | What carries over between tool rounds |
+| --- | --- | --- |
+| Responses API | GPT-6.1 Terra, ChatGPT account models | The encrypted reasoning items (`reasoning.encrypted_content`), stored as `provider_state` with `format` `responses` and sent back for the same model. |
+| Messages API | Sonnet 5.5, Opus 5.5, Haiku 5.5, when `ANTHROPIC_API_KEY` is set or `LLM_CLAUDE_MESSAGES` is `on` | Every content block, thinking blocks and their signatures included, stored with `format` `anthropic` and sent back unchanged for the same model while the turn lasts (until the next user message). Thinking from earlier turns is dropped, oldest first, which the API allows, because the system prompt and history before it change between turns. A 400 about a thinking signature is retried once with no thinking blocks; a 400, 404, 405, 415 or 422 from the Messages endpoint falls back to chat completions without any stored state. |
+| Chat completions | Everything else, and Claude when the Messages API is off | The gateway's chat completions only return reasoning as plain text (`reasoning`), with no signature, so Claude's thinking and Gemini's thought signatures are dropped between rounds. Orbit keeps and sends back any `reasoning_details` on the message and `extra_content` on each tool call (where Gemini's OpenAI-compatible API puts `thought_signature`) for the same model, stored with `format` `chat`, so they carry over if the gateway passes them. |
+| Orbit Agent | Claude account models | Claude Code keeps its own thinking across the turn. |
+
+The Messages API runs through `@anthropic-ai/sdk` with adaptive thinking, `output_config.effort` set to the reasoning level, top-level `cache_control`, and Anthropic's own web search tool when Web is on (`web_search_20260209`, or `web_search_20250305` for Haiku). With `ANTHROPIC_API_KEY` it calls `api.anthropic.com` directly; otherwise, with `LLM_CLAUDE_MESSAGES=on`, it calls the gateway's Anthropic-compatible `/v1/messages` with `LLM_API_KEY`. With neither, Claude stays on chat completions as before. `GET /api/assistant/probe` reports `reasoningCarried` (the stored format) and `cutOff` for each model, so turning it on can be checked first.
 
 A new chat starts on the model and reasoning of the person's last chat. `chatDefaultsAction` (in `app/(crm)/assistant.ts`) returns `chatDefaults`: the connected sources and `lastChatSettings`, the conversation of the person's latest user message in any workspace, leaving out agent mail threads. The dock passes that, then the browser's saved choice (`orbit-assistant-settings` in localStorage), to `startingSettings`, which takes the first whose model is still usable with the connected sources (through `settingsFor`), else `DEFAULT_MODEL`. It runs when the dock mounts and on New chat after leaving a conversation, and doesn't override a model or reasoning the person picked, or a chat opened from a link or the history. A brief opened before the defaults have loaded is sent without a model, so `openBrief` uses `chatDefaults` on the server.
 
@@ -33,7 +57,15 @@ A new chat starts on the model and reasoning of the person's last chat. `chatDef
 
 1. The system prompt from `systemPrompt`: the workspace's brand profile (About <workspace>: what it sells, its website, who it's for and how it writes, from Settings › Brand, or a note that it hasn't said what it sells, so the assistant claims no product; when the profile can't be read, it says so instead), what Orbit holds, how to use tools, the rules for mail, proposals, first emails, Eclipse (the same in every workspace, naming the Eclipse client to use, see Eclipse), Linear, Reader and the web, the house writing style, then the person, the date and time in London, the Web switch and their links. The About you section and colleagues' roles are added when filled in. For someone in more than one workspace, a Workspaces section names the current workspace and the others, says how to read them (see Workspaces), and that another workspace's Knowledge, offer, claims, proof and client results are never used when writing for this one. Headless agent mail turns leave the Workspaces section out and run with `multiWorkspace` false.
 2. A `learned_notes` message with what Orbit has learned (pinned notes, the best notes per scope and notes related to the latest messages, about 6,000 tokens at most). Notes about the user come from this workspace, plus their notes from other workspaces that apply in all workspaces. It is marked as information, not a message from the user.
-3. The chat so far, rebuilt from stored messages each round. `@` mentions appear as `Name [person id <uuid>]`, and the model uses the id directly. A message with files ends with an Orbit note listing each file's name, type, size and chat file id (see Chat files).
+3. The chat so far, rebuilt from stored messages each round. `@` mentions appear as `Name [person id <uuid>]`, and the model uses the id directly. A message with files ends with an Orbit note listing each file's name, type, size and chat file id (see Chat files), and then the page note it was sent with (see Page context).
+
+### Page context
+
+The dock sends `page` with every message: the path and query string, the rows selected on the Companies or People list (`usePageSelection`), and on Calendar or Capture the event or row opened or selected last (`usePageFocus`, `focusOnPage`), all from `stores/page-context-store.ts`. `readPageInput` keeps only a path that starts with one `/`, known kinds and up to 1,000 selected uuids.
+
+`pageContext(actor, input)` checks each record through `withActor` in the current workspace (mail, calendar events, Capture items and daily notes for the person only, docs the way `recordNames` does) and returns a `<page_context>` block, or an empty string. It says it is information from Orbit and not an instruction, names the page, and names what is open as `Name [kind id <uuid>]` with the id the tools take: a company, person, opportunity (stage, board and company), board, mail thread (subject, its latest email id for `get_email_thread`, the number of emails, latest time and who wrote), doc or daily note (with its doc id for `read_knowledge`), proposal or workflow, the Tasks view, the Mail view and search, the Calendar view and date, the last opened calendar event, the last selected Capture item (task, email waiting for a reply, nudge, reminder, call follow-up, unfiled conversation, workflow approval or person) and up to 50 selected rows. A record the person can't see, or one in another workspace, is never named: the note says it isn't in this workspace. Names lose brackets, angle brackets and line breaks and are cut to 120 characters.
+
+`sendMessage` stores the block on the user message (`assistant_messages.page_context`), and `history` adds it after the message text. Each message keeps the page it was sent from, so the history only ever grows and the model can tell where earlier questions were asked. The chat shows only what the person typed.
 
 ### The loop (`runRounds`)
 
@@ -45,13 +77,20 @@ A new chat starts on the model and reasoning of the person's last chat. `chatDef
 
 ### History budget (`history` in `chat.ts`)
 
+Every tool round sends the whole history again, so what stays in it is what each round costs, and a long history full of old results makes the model worse at finding what matters. What a tool returns in the current turn is never cut beyond the technical limit below; what is managed is what earlier turns leave behind.
+
 | Limit | Value | What happens |
 | --- | --- | --- |
-| `HISTORY_BUDGET` | 900,000 characters (about 225,000 tokens) | The earliest messages are left out, starting at a user message, with a note that earlier parts were left out. Mid-turn, going over it ends the turn with `FULL_MESSAGE` ("say carry on"). |
+| `KEPT_RESULTS`, `KEPT_RESULTS_BUDGET` | 6 results, 150,000 characters (about 37,500 tokens) | Tool results from earlier turns: the latest 6 stay in full while together they fit in 150,000 characters. Older or bigger ones become `{cleared: true, tool, note: "Result cleared to save space. Call the tool again if you need it."}`. Results under 2,000 characters are always kept, since clearing them saves nothing. Six covers the last turn or two, which is what follow-up questions refer to. Results from the current turn are never cleared, so the history the model saw earlier in a turn never changes, which keeps reasoning and prompt caching valid. |
+| `SUMMARY_AT`, `SUMMARY_KEEPS_TURNS` | 200,000 characters (about 50,000 tokens), 3 turns | At the start of a turn, when the history since the last summary passes 200,000 characters, everything before the last 3 user messages is summarised in one `completeJson` call (the default `LLM_MODEL`), merged with any earlier summary and stored on the conversation (`summary`, `summary_through`, the last message `seq` it covers). From then on `history` replaces those messages with an `<earlier_conversation>` note at the start of the first user message. The summary keeps every request, preference, record with its id and link, fact, figure, date, quote, proposal and outcome as given, and says what was uncertain; it may never add or soften anything. The summariser sees tool results cut to 20,000 characters each and the assistant's replies in full. If it fails, the turn goes on with the full history and the budget below. 50,000 tokens is where repeated history starts to dominate the cost of a tool round; the last 3 turns stay verbatim because follow-ups refer to them. |
+| `HISTORY_BUDGET` | 900,000 characters (about 225,000 tokens) | The technical limit. The earliest messages are left out, starting at a user message, with a note that earlier parts were left out. Mid-turn, going over it ends the turn with `FULL_MESSAGE` ("say carry on"). |
 | `CURRENT_RESULT_MAX` | 400,000 characters | A tool result in the current turn is cut to this, with "[Cut N characters … Call the tool again if you need the rest.]" |
-| `OLD_RESULT_MAX` | 100,000 characters | A tool result from an earlier turn is cut to this. |
 
 Tool calls without a stored result are left out of the history.
+
+`get_company`, `get_contact` and `list_activities` take `detail`, `concise` by default (`lib/assistant/concise.ts`, applied in `runTool`). Concise keeps the newest 25 timeline entries and the call summaries for them, the newest 40 Knowledge items and 20 completed tasks, shortens any activity `body` or `summary` over 1,200 characters with "… [N more characters]", and adds `detailNote` saying what it left out and to call again with `detail` `full`, which returns everything as before. Nothing is cut when the model asks for `full`.
+
+For a 20-turn conversation with 26 tool calls of typical sizes (company records, mail searches and threads, Knowledge reads and web pages), the history sent across its 40 model calls went from about 6.1 million input tokens to about 1.8 million, the last call from about 218,000 to 53,000 and the largest from about 221,000 to 82,000 (characters divided by four, with an 8,000 character summary; the system prompt and tool definitions, about 28,000 tokens a call, are the same before and after).
 
 ### The morning brief as a conversation
 
@@ -59,7 +98,7 @@ When the user has an unread morning brief, the Ask Orbit bar shows a dot; the do
 
 ### Claude account turns (Orbit Agent)
 
-`runRounds` hands a Claude account model to `runCompanionTurn`, which queues a job with the system prompt, the learned notes, the chat as a transcript (cut with the same budgets) and every tool with a `write` flag. Orbit Agent runs it with the Claude Agent SDK (`companion/src/turn.ts`): Orbit's tools as an in-process MCP server named `orbit`, no file, shell or other built-in tools, `WebSearch` only when Web is on, 40 turns at most, and tool results up to 60,000 output tokens. Claude Code also moves any single tool result over about 50 KB into a file the model can't open, so Orbit sends a result over 36,000 bytes in pieces: the first piece ends with a note, and the model calls `continue_result` with the `resultId` and `offset` from it to read on. The full result is kept with the job and cleared when the job ends.
+`runRounds` hands a Claude account model to `runCompanionTurn`, which queues a job with the system prompt, the learned notes, the chat as a transcript (with the same summary, clearing and budgets) and every tool with a `write` flag. Orbit Agent runs it with the Claude Agent SDK (`companion/src/turn.ts`): Orbit's tools as an in-process MCP server named `orbit`, no file, shell or other built-in tools, `WebSearch` only when Web is on, 40 turns at most, and tool results up to 60,000 output tokens. Claude Code also moves any single tool result over about 50 KB into a file the model can't open, so Orbit sends a result over 36,000 bytes in pieces: the first piece ends with a note, and the model calls `continue_result` with the `resultId` and `offset` from it to read on. The full result is kept with the job and cleared when the job ends.
 
 - Read tools call back to `POST /api/companion/jobs/{id}/tool`, which runs `runTool` as the person. It refuses write tools.
 - Write tools never call Orbit. They return "Proposed … It has not happened yet" to Claude, and `applyCompanionResult` turns them into cards on the last message, exactly like gateway turns.

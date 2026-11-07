@@ -21,6 +21,7 @@ import type { CalendarItem, EventPerson } from "@/lib/crm/calendars";
 import { INVITE_COMMENT_MAX, TIME_OPTIONS } from "@/lib/invite-rules";
 import { textareaClass } from "@/components/_ui/field-styles";
 import { cn } from "@/lib/utils";
+import { usePageFocus } from "@/stores/page-context-store";
 
 const ATTENDEES_SHOWN = 25;
 
@@ -499,6 +500,7 @@ export default function CalendarEventDetails({
   others?: CalendarMeta[];
   headingId?: string;
 }) {
+  usePageFocus("calendar_event", item.id);
   const [created, setCreated] = useState<Record<string, string>>({});
   const onCreated = (email: string, contactId: string) =>
     setCreated((current) => ({ ...current, [email]: contactId }));

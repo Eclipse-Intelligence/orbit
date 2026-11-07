@@ -29,6 +29,7 @@ const MAX_TURNS = 40;
 const MCP_OUTPUT_TOKENS = "60000";
 
 export const STOPPED = "I've stopped after a lot of steps. Ask again more narrowly, or say \"carry on\".";
+export const CUT_OFF = "The answer was cut off. Ask me to continue.";
 
 export const PROPOSED =
   "Proposed. Orbit will show this change to the user for approval. It has not happened yet. Do not call this tool again for the same change. When you have proposed everything, say in one or two sentences what you proposed and stop.";
@@ -116,6 +117,8 @@ export async function runTurn(request: CompanionRequest, deps: TurnDeps): Promis
   let usage: Record<string, unknown> | null = null;
   let failure: string | null = null;
   let stopped = false;
+  let lastStep: string | null = null;
+  const stops = new Map<string, string>();
 
   let draft = "";
   const stream = deps.sdk.query({ prompt: request.prompt, options: turnOptions(request, { [SERVER]: server }, deps, abort) });
@@ -134,6 +137,8 @@ export async function runTurn(request: CompanionRequest, deps: TurnDeps): Promis
       const step = steps.get(id) ?? { text: "", calls: [] };
       steps.set(id, step);
       model = message.message.model ?? model;
+      lastStep = id;
+      if (message.message.stop_reason) stops.set(id, message.message.stop_reason);
       for (const block of message.message.content ?? []) {
         if (block.type === "text" && block.text) {
           step.text = step.text ? `${step.text}\n\n${block.text}` : block.text;
@@ -165,6 +170,7 @@ export async function runTurn(request: CompanionRequest, deps: TurnDeps): Promis
     }
   }
   if (failure) throw new Error(failure);
-  const finished = stopped ? [...steps.values(), { text: STOPPED, calls: [] }] : [...steps.values()];
+  const ending = stopped ? STOPPED : lastStep && stops.get(lastStep) === "max_tokens" ? CUT_OFF : null;
+  const finished = ending ? [...steps.values(), { text: ending, calls: [] }] : [...steps.values()];
   return { steps: finished, results, sources: [...sources.values()], model, usage };
 }

@@ -1,6 +1,8 @@
 import { AssistantError, StoppedError, complete, type ChatMessage, type ProviderState, type Source, type ToolCall } from "@/lib/assistant/gateway";
 import { assistantModel, settingsFor, startingSettings, type ModelSource, type ReasoningLevel } from "@/lib/assistant/models";
 import { chatFileNote, chatFilesFor, removeChatObjects, type ChatFile } from "@/lib/assistant/files";
+import { withDetail } from "@/lib/assistant/concise";
+import { pageContext, readPageInput } from "@/lib/assistant/page-context";
 import { connectedProviders } from "@/lib/ai-accounts/store";
 import { systemPrompt } from "@/lib/assistant/prompt";
 import { docLinkOf } from "@/lib/assistant/doc-link";
@@ -31,15 +33,27 @@ import { iso, isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
 import { workspaceActors } from "@/lib/crm/workspaces";
 import type { Db } from "@/lib/db/pool";
+import { completeJson } from "@/lib/llm";
+import { z } from "zod";
 
 export const MAX_ROUNDS = 40;
 export const STOPPED_MESSAGE = "I've stopped after a lot of steps. Ask again more narrowly, or say \"carry on\".";
 export const FULL_MESSAGE = "I've read a lot in this step, more than the model can hold at once, so I've stopped here. Say \"carry on\" and I'll continue from what I found, or ask a narrower question.";
+export const CUT_OFF_MESSAGE = "The answer was cut off. Ask me to continue.";
+export const CUT_OFF_CALL = "Your reply was cut off before it finished, so this call didn't run. Make it again, and keep each reply shorter (fewer calls at once, or less text in the arguments).";
+export const BROKEN_CALL = "The arguments for this call weren't valid JSON, so it didn't run. Call it again with valid arguments.";
+export const CLEARED_RESULT = "Result cleared to save space. Call the tool again if you need it.";
 const EMPTY_REPLY = "I didn't get an answer back. Try again.";
 const STOP_POLL_MS = 3_000;
 const HISTORY_BUDGET = 900_000;
-const OLD_RESULT_MAX = 100_000;
 const CURRENT_RESULT_MAX = 400_000;
+export const KEPT_RESULTS = 6;
+export const KEPT_RESULTS_BUDGET = 150_000;
+const CLEAR_MIN = 2_000;
+export const SUMMARY_AT = 200_000;
+export const SUMMARY_KEEPS_TURNS = 3;
+const SUMMARY_RESULT_MAX = 20_000;
+const SUMMARY_MAX = 40_000;
 const COMPANION_POLL_MS = 500;
 const COMPANION_CLAIM_MS = 20_000;
 const TITLE_MAX = 80;
@@ -112,6 +126,8 @@ type MessageRow = {
   sources: Source[] | null;
   provider_state: ProviderState | null;
   files?: ChatFile[] | null;
+  page_context?: string | null;
+  seq?: string | number | null;
   created_at: Date | string;
 };
 
@@ -123,6 +139,8 @@ type ConversationRow = {
   web_search: boolean;
   updated_at: Date | string;
   stopped_at: Date | string | null;
+  summary?: string | null;
+  summary_through?: string | number | null;
   email?: boolean;
 };
 
@@ -153,17 +171,21 @@ function display(row: MessageRow): DisplayMessage {
   };
 }
 
-function parseArgs(raw: string) {
+export function argsOf(raw: string) {
   try {
     const parsed = JSON.parse(raw || "{}");
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
   } catch {
-    return {};
+    return null;
   }
 }
 
-const MESSAGE_COLUMNS = "id, role, content, tool_calls, tool_call_id, tool_name, actions, sources, provider_state, files, created_at";
-const CONVERSATION_COLUMNS = "id, title, model, reasoning, web_search, updated_at, stopped_at";
+function parseArgs(raw: string) {
+  return argsOf(raw) ?? {};
+}
+
+const MESSAGE_COLUMNS = "id, seq, role, content, tool_calls, tool_call_id, tool_name, actions, sources, provider_state, files, page_context, created_at";
+const CONVERSATION_COLUMNS = "id, title, model, reasoning, web_search, updated_at, stopped_at, summary, summary_through";
 const EMAIL_MARK = "exists (select 1 from crm.agent_mail_threads t where t.conversation_id = crm.assistant_conversations.id) as email";
 
 async function readConversation(db: Db, actor: UserActor, id: string) {
@@ -199,13 +221,14 @@ async function insertMessage(
     usage?: Record<string, unknown> | null;
     state?: ProviderState | null;
     files?: ChatFile[];
+    pageContext?: string | null;
   },
 ) {
   return withActor(actor, async (db) => {
     const result = await db.query<MessageRow>(
       `insert into crm.assistant_messages
-         (conversation_id, workspace_id, user_id, role, content, tool_calls, tool_call_id, tool_name, sources, model, usage, provider_state, files)
-       values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9::jsonb, $10, $11::jsonb, $12::jsonb, $13::jsonb)
+         (conversation_id, workspace_id, user_id, role, content, tool_calls, tool_call_id, tool_name, sources, model, usage, provider_state, files, page_context)
+       values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9::jsonb, $10, $11::jsonb, $12::jsonb, $13::jsonb, $14)
        returning ${MESSAGE_COLUMNS}`,
       [
         conversationId,
@@ -221,6 +244,7 @@ async function insertMessage(
         message.usage ? JSON.stringify(message.usage) : null,
         message.state ? JSON.stringify(message.state) : null,
         message.files && message.files.length > 0 ? JSON.stringify(message.files) : null,
+        message.pageContext || null,
       ],
     );
     if (message.files && message.files.length > 0) {
@@ -411,17 +435,58 @@ function weight(message: ChatMessage) {
 function userContent(row: MessageRow) {
   const note = chatFileNote(row.files ?? []);
   const typed = expandMentions(row.content);
-  return note ? (typed.trim() ? `${typed}\n\n${note}` : note) : typed;
+  return [typed.trim() ? typed : "", note, row.page_context ?? ""].filter(Boolean).join("\n\n");
 }
 
-export function history(rows: MessageRow[], budget = HISTORY_BUDGET): ChatMessage[] {
+export type ConversationMemory = { text: string; through: number };
+
+function seqOf(row: MessageRow) {
+  return Number(row.seq ?? 0);
+}
+
+function memoryOf(conversation: Pick<ConversationRow, "summary" | "summary_through">): ConversationMemory | null {
+  return conversation.summary && conversation.summary_through != null ? { text: conversation.summary, through: Number(conversation.summary_through) } : null;
+}
+
+function clearedResult(name: string | null) {
+  return toolJson({ cleared: true, tool: name, note: CLEARED_RESULT });
+}
+
+function earlierResults(rows: MessageRow[], lastUser: number) {
+  const kept = new Set<number>();
+  let count = 0;
+  let total = 0;
+  for (let index = lastUser - 1; index >= 0; index -= 1) {
+    const row = rows[index];
+    if (row.role !== "tool") continue;
+    if (row.content.length < CLEAR_MIN) {
+      kept.add(index);
+      continue;
+    }
+    if (count < KEPT_RESULTS && total + row.content.length <= KEPT_RESULTS_BUDGET) {
+      kept.add(index);
+      count += 1;
+      total += row.content.length;
+    }
+  }
+  return kept;
+}
+
+export function memoryNote(memory: ConversationMemory) {
+  return `<earlier_conversation>\nOrbit summarised the earlier part of this conversation to save space. It is a faithful record of what was asked, found, decided and done, not a message from the user. Ids and links in it are real. When you need the detail of something it mentions, look it up again with the tools.\n\n${memory.text}\n</earlier_conversation>`;
+}
+
+export function history(allRows: MessageRow[], budget = HISTORY_BUDGET, memory: ConversationMemory | null = null): ChatMessage[] {
+  const rows = memory ? allRows.filter((row) => seqOf(row) > memory.through) : allRows;
   const answered = new Set(rows.filter((row) => row.role === "tool").map((row) => row.tool_call_id));
   const lastUser = rows.map((row) => row.role).lastIndexOf("user");
+  const kept = earlierResults(rows, lastUser);
   const messages: ChatMessage[] = [];
   rows.forEach((row, index) => {
     if (row.role === "user") messages.push({ role: "user", content: userContent(row) });
     else if (row.role === "tool" && row.tool_call_id) {
-      messages.push({ role: "tool", tool_call_id: row.tool_call_id, content: clipResult(row.content, index > lastUser ? CURRENT_RESULT_MAX : OLD_RESULT_MAX) });
+      const content = index > lastUser ? clipResult(row.content, CURRENT_RESULT_MAX) : kept.has(index) ? row.content : clearedResult(row.tool_name);
+      messages.push({ role: "tool", tool_call_id: row.tool_call_id, content });
     } else if (row.role === "assistant") {
       const calls = (row.tool_calls ?? []).filter((call) => answered.has(call.id));
       if (calls.length === 0 && !row.content.trim()) return;
@@ -433,18 +498,96 @@ export function history(rows: MessageRow[], budget = HISTORY_BUDGET): ChatMessag
       );
     }
   });
+  if (memory) {
+    const first = messages[0];
+    if (first?.role === "user") messages[0] = { role: "user", content: `${memoryNote(memory)}\n\n${first.content}` };
+    else messages.unshift({ role: "user", content: memoryNote(memory) });
+  }
   if (messages[0]?.role === "assistant") messages.unshift({ role: "user", content: BRIEF_PREFACE });
   const suffix = new Array<number>(messages.length + 1).fill(0);
   for (let index = messages.length - 1; index >= 0; index -= 1) suffix[index] = suffix[index + 1] + weight(messages[index]);
   if (suffix[0] <= budget) return messages;
   const starts = messages.flatMap((message, index) => (message.role === "user" ? [index] : []));
   const start = starts.find((index) => suffix[index] <= budget) ?? starts[starts.length - 1] ?? 0;
-  const kept = messages.slice(start);
-  const first = kept[0];
+  const trimmed = messages.slice(start);
+  const first = trimmed[0];
   if (first?.role === "user") {
-    kept[0] = { role: "user", content: `(Earlier parts of this conversation were left out to save space. Ask the user if you need something from them.)\n\n${first.content}` };
+    trimmed[0] = { role: "user", content: `(Earlier parts of this conversation were left out to save space. Ask the user if you need something from them.)\n\n${first.content}` };
   }
-  return kept;
+  return trimmed;
+}
+
+export function historyWeight(messages: ChatMessage[]) {
+  return messages.reduce((sum, message) => sum + weight(message), 0);
+}
+
+const SUMMARY_SYSTEM = `You summarise the earlier part of a conversation between a person and the assistant inside Orbit, a CRM, so the assistant can carry on without the full transcript. Write in UK English, as compact notes under short headings.
+
+Keep everything the assistant would need later, exactly as it appears:
+- what the person asked for and why, their preferences and corrections, in their own words where it matters;
+- every record, email, doc, task or deal mentioned, with its name, id and link exactly as given;
+- facts found with tools: names, figures, dates, statuses, quotes, sources;
+- what the assistant proposed, what was approved, declined, done or failed, and anything still open or promised.
+
+Never add, guess or soften anything. If something was uncertain or unverified, say so. Leave out greetings, filler and raw tool output that led nowhere. If a previous summary is given, merge it in and keep what still matters.
+
+Reply with JSON only: {"summary": "..."}.`;
+
+const SUMMARY_LABEL = "Summarising the earlier conversation";
+
+const SummarySchema = z.object({ summary: z.string().min(1) });
+
+function transcriptFor(rows: MessageRow[]) {
+  return rows
+    .map((row) => {
+      if (row.role === "user") return `USER: ${userContent(row)}`;
+      if (row.role === "tool") return `TOOL RESULT (${row.tool_name ?? "tool"}): ${clipResult(row.content, SUMMARY_RESULT_MAX)}`;
+      const calls = (row.tool_calls ?? []).map((call) => `CALLED ${call.function.name} ${call.function.arguments}`);
+      const actions = (row.actions ?? []).map((action) => `PROPOSED ${action.title} (${action.status})${action.result ? `: ${action.result}` : ""}`);
+      return [row.content.trim() ? `ASSISTANT: ${row.content}` : "", ...calls, ...actions].filter(Boolean).join("\n");
+    })
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+export async function conversationMemory(
+  actor: UserActor,
+  conversation: Pick<ConversationRow, "id" | "summary" | "summary_through">,
+  rows: MessageRow[],
+  options: { deadline: number; fetchImpl?: typeof fetch; emit?: Emit },
+): Promise<ConversationMemory | null> {
+  const stored = memoryOf(conversation);
+  const open = stored ? rows.filter((row) => seqOf(row) > stored.through) : rows;
+  if (historyWeight(history(open, Number.POSITIVE_INFINITY)) <= SUMMARY_AT) return stored;
+  const starts = open.flatMap((row, index) => (row.role === "user" ? [index] : []));
+  if (starts.length <= SUMMARY_KEEPS_TURNS) return stored;
+  const cut = starts[starts.length - SUMMARY_KEEPS_TURNS];
+  const older = open.slice(0, cut);
+  const through = seqOf(older[older.length - 1]);
+  if (!through) return stored;
+  const step = { id: `summary-${conversation.id}-${through}`, name: "summarise_conversation", label: SUMMARY_LABEL };
+  options.emit?.({ type: "tool", ...step, status: "running" });
+  try {
+    const result = await completeJson({
+      system: SUMMARY_SYSTEM,
+      user: `${stored ? `Previous summary:\n${stored.text}\n\n` : ""}Conversation to summarise:\n\n${transcriptFor(older)}`,
+      schema: SummarySchema,
+      maxTokens: 12_000,
+      timeoutMs: 90_000,
+      deadline: Math.min(options.deadline - 90_000, Date.now() + 90_000),
+      fetchImpl: options.fetchImpl,
+    });
+    const text = result.data.summary.trim().slice(0, SUMMARY_MAX);
+    await withActor(actor, (db) =>
+      db.query("update crm.assistant_conversations set summary = $2, summary_through = $3 where id = $1", [conversation.id, text, through]),
+    );
+    return { text, through };
+  } catch (error) {
+    console.error("Couldn't summarise the earlier conversation", error instanceof Error ? error.message : error);
+    return stored;
+  } finally {
+    options.emit?.({ type: "tool", ...step, status: "done" });
+  }
 }
 
 const BRIEF_PREFACE =
@@ -524,7 +667,7 @@ function companionTools(multiWorkspace: boolean) {
     ...assistantTools({ multiWorkspace }).map((tool) => ({
       name: tool.name,
       description: toolDescription(tool),
-      parameters: tool.parameters,
+      parameters: withDetail(tool.name, tool.parameters),
       write: Boolean(tool.write),
     })),
     CONTINUE_RESULT_TOOL,
@@ -677,13 +820,14 @@ async function runCompanionTurn(
   deadline: number,
   signal?: AbortSignal,
   headless?: HeadlessTurn,
+  memory: ConversationMemory | null = null,
 ) {
   const online = (await companionOnline(actor)) || (await companionWorking(actor));
   if (!online && (!headless || (await listCompanions(actor)).length === 0)) throw new AssistantError(await companionOfflineMessage(actor));
   const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
   const earlier = new Set(rows.map((row) => row.id));
   const { system, learned, multiWorkspace } = await promptFor(actor, conversation, { headless: Boolean(headless) });
-  const transcript = buildPrompt(history(rows));
+  const transcript = buildPrompt(history(rows, HISTORY_BUDGET, memory));
   const jobId = await enqueueCompanionJob(actor, conversation.id, {
     model: apiModel,
     effort: conversation.reasoning as Effort,
@@ -843,10 +987,12 @@ function draftEmitter(emit: Emit) {
 async function runRounds(actor: UserActor, conversation: ConversationRow, emit: Emit, options: TurnOptions) {
   const { deadline, fetchImpl, signal } = options;
   const chosen = assistantModel(conversation.model);
-  if (chosen?.source === "claude") return runCompanionTurn(actor, conversation, chosen.apiModel, emit, deadline, signal, options.headless);
+  const memory = await conversationMemory(actor, conversation, await withActor(actor, (db) => readMessages(db, conversation.id)), { deadline, fetchImpl, emit });
+  if (chosen?.source === "claude") return runCompanionTurn(actor, conversation, chosen.apiModel, emit, deadline, signal, options.headless, memory);
   if (options.headless) throw new AssistantError(HEADLESS_MODEL_ERROR);
   const { system, learned, multiWorkspace } = await promptFor(actor, conversation);
   const tools = toolDefinitions({ multiWorkspace });
+  let continuedAfterCut = false;
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
     if (signal?.aborted) return;
     const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
@@ -859,8 +1005,8 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
       emit({ type: "message", message: display(paused) });
       return;
     }
-    const messages = history(rows);
-    if (round > 0 && messages.reduce((sum, message) => sum + weight(message), 0) > HISTORY_BUDGET) {
+    const messages = history(rows, HISTORY_BUDGET, memory);
+    if (round > 0 && historyWeight(messages) > HISTORY_BUDGET) {
       const full = await insertMessage(actor, conversation.id, { role: "assistant", content: FULL_MESSAGE });
       emit({ type: "message", message: display(full) });
       return;
@@ -878,22 +1024,36 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
       onText: draftEmitter(emit),
     });
     if (signal?.aborted) return;
+    const cutOff = Boolean(result.cutOff);
+    const stopsHere = cutOff && (continuedAfterCut || result.toolCalls.length === 0);
+    const text = result.content.trim() ? result.content : "";
     const saved = await insertMessage(actor, conversation.id, {
       role: "assistant",
-      content: result.content.trim() || result.toolCalls.length > 0 ? result.content : EMPTY_REPLY,
+      content: stopsHere ? [text, CUT_OFF_MESSAGE].filter(Boolean).join("\n\n") : text || result.toolCalls.length > 0 ? result.content : EMPTY_REPLY,
       toolCalls: result.toolCalls,
       sources: result.sources,
       model: result.model,
       usage: result.usage,
       state: result.state ?? null,
     });
-    if (result.toolCalls.length === 0) {
-      emit({ type: "message", message: display(saved) });
-      return;
+    const blocked = result.toolCalls.filter((call) => cutOff || argsOf(call.function.arguments) === null);
+    for (const call of blocked) {
+      await insertMessage(actor, conversation.id, {
+        role: "tool",
+        content: toolJson({ error: cutOff ? CUT_OFF_CALL : BROKEN_CALL }),
+        toolCallId: call.id,
+        toolName: call.function.name,
+      });
     }
     emit({ type: "message", message: display(saved) });
-    const reads = result.toolCalls.filter((call) => !findTool(call.function.name)?.write);
-    let writes = result.toolCalls.filter((call) => findTool(call.function.name)?.write);
+    if (stopsHere || result.toolCalls.length === 0) return;
+    if (cutOff) {
+      continuedAfterCut = true;
+      continue;
+    }
+    const runnable = result.toolCalls.filter((call) => !blocked.includes(call));
+    const reads = runnable.filter((call) => !findTool(call.function.name)?.write);
+    let writes = runnable.filter((call) => findTool(call.function.name)?.write);
     await Promise.all(
       reads.map(async (call) => {
         const label = toolLabel(call.function.name);
@@ -972,7 +1132,7 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
 
 export async function sendMessage(
   actor: UserActor,
-  input: { conversationId?: string | null; message: string; model: unknown; reasoning: unknown; webSearch: unknown; files?: unknown; title?: string; keepPending?: boolean },
+  input: { conversationId?: string | null; message: string; model: unknown; reasoning: unknown; webSearch: unknown; files?: unknown; title?: string; keepPending?: boolean; page?: unknown },
   emit: Emit,
   options: TurnOptions,
 ) {
@@ -1007,7 +1167,11 @@ export async function sendMessage(
   const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
   await settleStuckActions(actor, conversation.id, rows);
   if (!input.keepPending) await declinePending(actor, conversation.id, rows, "The user moved on without confirming this action.");
-  const user = await insertMessage(actor, conversation.id, { role: "user", content: message, files });
+  const page = await pageContext(actor, readPageInput(input.page)).catch((error) => {
+    console.error("Couldn't read the page context", error instanceof Error ? error.message : error);
+    return "";
+  });
+  const user = await insertMessage(actor, conversation.id, { role: "user", content: message, files, pageContext: page });
   emit({ type: "user", message: display(user) });
   await runLoop(actor, conversation, emit, options);
   emit({ type: "done" });
