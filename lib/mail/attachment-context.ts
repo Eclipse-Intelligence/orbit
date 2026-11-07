@@ -160,3 +160,28 @@ export async function attachmentNotes(
   }
   return notes;
 }
+
+export type EmailAttachmentText = { name: string; state: string; text: string | null };
+
+export async function readEmailAttachment(
+  actor: UserActor,
+  messageId: string,
+  attachment: string | null,
+  options: { deadline?: number; fetchImpl?: typeof fetch } = {},
+): Promise<EmailAttachmentText[]> {
+  await withActor(actor, (db) => db.query("delete from crm.mail_attachment_texts where message_id = $1 and user_id = $2 and state = 'failed'", [messageId, actor.userId]));
+  await readAttachments(actor, [messageId], { deadline: options.deadline ?? Date.now() + 45_000, fetchImpl: options.fetchImpl });
+  const wanted = attachment?.trim().toLowerCase() || null;
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ attachment_id: string; name: string; state: string; text: string | null }>(
+      `select t.attachment_id, t.name, t.state, t.text
+       from crm.mail_attachment_texts t
+       join crm.mail_messages m on m.id = t.message_id
+       where t.message_id = $1 and m.user_id = $2
+       order by t.name`,
+      [messageId, actor.userId],
+    );
+    const rows = wanted ? result.rows.filter((row) => row.attachment_id === attachment || row.name.toLowerCase() === wanted) : result.rows;
+    return rows.map((row) => ({ name: row.name, state: row.state, text: row.text }));
+  });
+}
