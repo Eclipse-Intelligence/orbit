@@ -3,9 +3,20 @@ import MailScreen from "@/components/mail/mail-screen";
 import { getUserActor } from "@/lib/auth/user";
 import { composeAccounts } from "@/lib/mail/compose";
 import { getThread, listThreads, mailNav } from "@/lib/mail/threads";
-import { readMailView, mailViewParam } from "@/lib/mail/view";
+import { readMailView, mailViewParam, type MailNav } from "@/lib/mail/view";
+import { isUuid } from "@/lib/crm/mutate";
 
 export const dynamic = "force-dynamic";
+
+const NAV_WAIT_MS = 1_500;
+
+const PARTIAL_NAV: MailNav = { accounts: [], folders: [], unread: 0, snoozed: 0, scheduled: 0, splits: [], partial: true };
+
+function navWithin(request: Promise<MailNav>) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<MailNav>((resolve) => (timer = setTimeout(() => resolve(PARTIAL_NAV), NAV_WAIT_MS)));
+  return Promise.race([request.catch(() => PARTIAL_NAV), late]).finally(() => clearTimeout(timer));
+}
 
 function requestTime() {
   return Date.now();
@@ -25,16 +36,19 @@ export default async function MailPage({
   const resolved = await searchParams;
   const view = readMailView(text(resolved.view) || "inbox");
   const query = text(resolved.q).trim().slice(0, 300);
-  const nav = await mailNav(user);
-  const account = nav.accounts.some((item) => item.id === text(resolved.account)) ? text(resolved.account) : null;
+  const asked = isUuid(text(resolved.account)) ? text(resolved.account) : null;
   const threadKey = text(resolved.thread);
   const compose = text(resolved.compose);
   const scheduledView = text(resolved.view) === "scheduled" && !query;
-  const [page, thread, accounts] = await Promise.all([
-    scheduledView ? Promise.resolve({ threads: [], next: null }) : listThreads(user, { view, sourceId: account, query }),
-    threadKey ? getThread(user, threadKey).catch(() => null) : Promise.resolve(null),
+  const list = (sourceId: string | null) => (scheduledView ? Promise.resolve({ threads: [], next: null }) : listThreads(user, { view, sourceId, query }));
+  const [nav, listed, thread, accounts] = await Promise.all([
+    navWithin(mailNav(user)),
+    list(asked),
+    threadKey ? getThread(user, threadKey, { reader: true }).catch(() => null) : Promise.resolve(null),
     composeAccounts(user).catch(() => []),
   ]);
+  const account = asked && (nav.partial || nav.accounts.some((item) => item.id === asked)) ? asked : null;
+  const page = asked && !account ? await list(null) : listed;
 
   return (
     <MailScreen

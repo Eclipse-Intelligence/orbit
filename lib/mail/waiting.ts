@@ -187,7 +187,7 @@ function repliesSql() {
       ${ownAddressesSql("$1", "$2")}
     ),
     candidates as materialized (
-      select m.id, m.source_id, m.thread_key, coalesce(m.thread_key, 'm:' || m.id::text) as tk, m.subject, m.snippet,
+      select m.id, m.source_id, m.thread_key, m.thread_key as tk, m.subject, m.snippet,
         lower(m.from_email) as from_email, m.from_name, m.focused, m.received_at as at
       from crm.mail_messages m
       join crm.mail_folders f on f.id = m.folder_id

@@ -299,7 +299,7 @@ async function latestMessage(db: Db, actor: UserActor, input: { thread?: string;
     const result = await db.query<SenderMessage>(
       `select m.id, m.source_id, m.provider_message_id, lower(m.from_email) as from_email, m.from_name, s.email as account
        from crm.mail_messages m join crm.mail_sources s on s.id = m.source_id join crm.mail_folders f on f.id = m.folder_id
-       where m.user_id = $1 and m.source_id = $2 and coalesce(m.thread_key, 'm:' || m.id::text) = $3
+       where m.user_id = $1 and m.source_id = $2 and m.thread_key = $3
          and f.role not in ('sent', 'drafts', 'junk', 'outbox') and not m.is_draft and nullif(m.from_email, '') is not null
          and lower(m.from_email) not in (select own.email from ${ownSql("$1", "$4")} as own(email) where own.email is not null)
        order by coalesce(m.received_at, m.created_at) desc limit 1`,
@@ -495,7 +495,7 @@ async function clearSenderMail(
   for (;;) {
     const rows = await withActor(actor, async (db) => {
       const result = await db.query<MoveRow>(
-        `select m.id, m.source_id, m.provider_message_id, coalesce(m.thread_key, 'm:' || m.id::text) as tk
+        `select m.id, m.source_id, m.provider_message_id, m.thread_key as tk
          from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
          where m.user_id = $1 and f.role = any($3::text[]) and not m.is_draft and ${senderMatch("m", "$2::text")}
          order by coalesce(m.received_at, m.created_at) desc limit $4`,
@@ -750,7 +750,7 @@ export async function routeArrivedMail(actor: UserActor, ids: string[], options:
   const deadline = Math.min(Math.max(options.deadline ?? 0, Date.now() + ROUTE_MIN_MS), Date.now() + ROUTE_MAX_MS);
   const rows = await withActor(actor, async (db) => {
     const result = await db.query<Arrival>(
-      `select m.id, m.source_id, m.provider_message_id, coalesce(m.thread_key, 'm:' || m.id::text) as tk,
+      `select m.id, m.source_id, m.provider_message_id, m.thread_key as tk,
          coalesce(m.received_at, m.created_at) as at, sub.sender, sub.status, sub.unsubscribed_at, sub.cold_pitch_at,
          coalesce((select p.cold_pitches from crm.mail_preferences p where p.user_id = $1 order by p.updated_at desc limit 1), 'off') as cold_pitches,
          exists (
@@ -759,7 +759,7 @@ export async function routeArrivedMail(actor: UserActor, ids: string[], options:
          ) as replied,
          exists (
            select 1 from crm.mail_messages s join crm.mail_folders sf on sf.id = s.folder_id
-           where s.user_id = $1 and s.source_id = m.source_id and coalesce(s.thread_key, 'm:' || s.id::text) = coalesce(m.thread_key, 'm:' || m.id::text)
+           where s.user_id = $1 and s.source_id = m.source_id and s.thread_key = m.thread_key
              and (sf.role = 'sent' or lower(coalesce(s.from_email, '')) in (select own.email from ${ownSql("$1", "$3")} as own(email) where own.email is not null))
          ) as thread_sent
        from crm.mail_messages m
@@ -842,7 +842,7 @@ export async function researchMail(actor: UserActor, options: { hours?: number; 
       `select n.id, n.from_email, n.from_name, n.subject, n.at, n.account, n.body_text, n.snippet
        from (
          select m.id, lower(m.from_email) as from_email, m.from_name, m.subject, coalesce(m.received_at, m.created_at) as at, s.email as account,
-           m.body_text, m.snippet, m.to_recipients, m.cc_recipients, m.source_id, coalesce(m.thread_key, 'm:' || m.id::text) as tk, s.workspace_id as source_workspace
+           m.body_text, m.snippet, m.to_recipients, m.cc_recipients, m.source_id, m.thread_key as tk, s.workspace_id as source_workspace
          from crm.mail_messages m
          join crm.mail_folders f on f.id = m.folder_id
          join crm.mail_sources s on s.id = m.source_id

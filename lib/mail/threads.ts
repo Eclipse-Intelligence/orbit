@@ -13,11 +13,12 @@ import { threadSubscription } from "@/lib/mail/subscriptions";
 import { firstName } from "@/lib/mail/format";
 import { replyAfterSql } from "@/lib/mail/follow-up-rules";
 import { threadDeferral } from "@/lib/mail/deferrals";
-import type { MailNav, MailSplit, MailView, ThreadCursor, ThreadDetail, ThreadPerson, ThreadSummary } from "@/lib/mail/view";
+import type { CachedSummary, MailNav, MailSplit, MailView, ThreadCursor, ThreadDetail, ThreadPerson, ThreadSummary } from "@/lib/mail/view";
+import { listMessageAttachments } from "@/lib/mail/attachments";
+import { mailSourceToken } from "@/lib/mail/sync";
 import { workspaceActors } from "@/lib/crm/workspaces";
 import { threadFilingInDb } from "@/lib/mail/routing";
 
-const THREAD_KEY = "coalesce(m.thread_key, 'm:' || m.id::text)";
 
 export function threadKey(sourceId: string, key: string) {
   return `${sourceId}|${key}`;
@@ -62,6 +63,10 @@ type ThreadRow = {
   follow_up_at: Date | string | null;
 };
 
+const SCOPED_COLUMNS = `m.id, m.source_id, m.thread_key as tk, m.subject, m.snippet, m.from_email, m.from_name, m.to_recipients,
+  m.is_read, m.is_flagged, m.has_attachments, (m.is_draft and f.role = 'drafts') as is_draft, coalesce(m.received_at, m.sent_at, m.created_at) as at,
+  m.tracking_id, m.focused`;
+
 export async function listThreads(
   actor: UserActor,
   input: { view?: MailView; sourceId?: string | null; query?: string; before?: ThreadCursor | null; limit?: number },
@@ -72,6 +77,7 @@ export async function listThreads(
     const where = ["m.user_id = $1"];
     let split: MailSplit | null = null;
     let splitting = false;
+    let inbox = false;
     const text = input.query?.trim().slice(0, 300);
     if (text) {
       values.push(text);
@@ -85,22 +91,28 @@ export async function listThreads(
       const role = input.view && "role" in input.view ? input.view.role : "inbox";
       split = role === "inbox" && input.view && "role" in input.view ? (input.view.split ?? null) : null;
       splitting = role === "inbox";
-      values.push(role);
-      where.push(
-        role === "inbox"
-          ? `(f.role = $${values.length} or (f.role not in ('trash', 'junk', 'outbox', 'drafts') and exists (
-              select 1 from crm.mail_reminders rm
-              where rm.user_id = m.user_id and rm.source_id = m.source_id and rm.thread_key = ${THREAD_KEY}
-                and rm.state = 'due' and rm.kind = 'follow_up'
-            )))`
-          : `f.role = $${values.length}`,
-      );
+      inbox = role === "inbox";
+      if (!inbox) {
+        values.push(role);
+        where.push(`f.role = $${values.length}`);
+      }
     }
     if (input.sourceId) {
       if (!isUuid(input.sourceId)) return { threads: [], next: null };
       values.push(input.sourceId);
       where.push(`m.source_id = $${values.length}`);
     }
+    const scoped = inbox
+      ? `select ${SCOPED_COLUMNS} from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
+         where ${where.join(" and ")} and f.role = 'inbox'
+         union all
+         select ${SCOPED_COLUMNS} from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
+         where ${where.join(" and ")} and f.role not in ('inbox', 'trash', 'junk', 'outbox', 'drafts')
+           and (m.source_id, m.thread_key) in (
+             select rm.source_id, rm.thread_key from crm.mail_reminders rm
+             where rm.user_id = $1 and rm.state = 'due' and rm.kind = 'follow_up'
+           )`
+      : `select ${SCOPED_COLUMNS} from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id where ${where.join(" and ")}`;
     const cursor: string[] = [];
     if (split) {
       values.push(split);
@@ -113,15 +125,9 @@ export async function listThreads(
     values.push(actor.email);
     const emailParam = `$${values.length}`;
     values.push(limit + 1);
+    const splitEarly = Boolean(split);
     const result = await db.query<ThreadRow>(
-      `with scoped as (
-         select m.id, m.source_id, ${THREAD_KEY} as tk, m.subject, m.snippet, m.from_email, m.from_name, m.to_recipients,
-           m.is_read, m.is_flagged, m.has_attachments, (m.is_draft and f.role = 'drafts') as is_draft, coalesce(m.received_at, m.sent_at, m.created_at) as at,
-           m.tracking_id, m.focused
-         from crm.mail_messages m
-         join crm.mail_folders f on f.id = m.folder_id
-         where ${where.join(" and ")}
-       ),
+      `with scoped as (${scoped}),
        ranked as (
          select s.*,
            row_number() over (partition by s.source_id, s.tk order by s.at desc, s.id desc) as rn,
@@ -132,41 +138,49 @@ export async function listThreads(
          from scoped s
          window w as (partition by s.source_id, s.tk)
        ),
+       due as (
+         select distinct on (rm.source_id, rm.thread_key) rm.source_id, rm.thread_key, rm.kind, rm.surfaced_at
+         from crm.mail_reminders rm
+         where rm.user_id = $1 and rm.state = 'due'
+         order by rm.source_id, rm.thread_key, rm.surfaced_at desc
+       ),
        listed as (
-         select r.*, rem.kind as reminder_kind, rem.surfaced_at, snz.until as snoozed_until, fu.at as follow_up_at,
-           greatest(r.at, coalesce(rem.surfaced_at, r.at)) as sort_at,
-           ${splitting ? splitCase("r") : "null"} as split
+         select r.*, due.kind as reminder_kind, due.surfaced_at,
+           greatest(r.at, coalesce(due.surfaced_at, r.at)) as sort_at,
+           ${splitEarly ? splitCase("r") : "null::text"} as split
          from ranked r
-         ${splitting ? splitJoin("r", "$1") : ""}
-         left join lateral (
-           select rm.kind, rm.surfaced_at from crm.mail_reminders rm
-           where rm.user_id = $1 and rm.source_id = r.source_id and rm.thread_key = r.tk and rm.state = 'due'
-           order by rm.surfaced_at desc limit 1
-         ) rem on true
-         left join lateral (
-           select min(rm.due_at) as until from crm.mail_reminders rm
-           where rm.user_id = $1 and rm.source_id = r.source_id and rm.thread_key = r.tk and rm.state = 'waiting' and rm.kind = 'snooze'
-         ) snz on true
-         left join lateral (
-           select min(rm.due_at) as at from crm.mail_reminders rm
-           where rm.user_id = $1 and rm.source_id = r.source_id and rm.thread_key = r.tk and rm.state = 'waiting'
-             and rm.kind = 'follow_up' and rm.action = 'send'
-             and not exists (${replyAfterSql("rm", "$1", emailParam)})
-         ) fu on true
+         ${splitEarly ? splitJoin("r", "$1") : ""}
+         left join due on due.source_id = r.source_id and due.thread_key = r.tk
          where r.rn = 1
+       ),
+       page as (
+         select l.* from listed l
+         ${cursor.length ? `where ${cursor.join(" and ")}` : ""}
+         order by l.sort_at desc, l.source_id::text || '|' || l.tk desc
+         limit $${values.length}
        )
        select l.source_id, l.tk, src.email as account, l.id, l.subject, l.snippet, l.from_email, l.from_name, l.to_recipients,
-         l.n::int as n, l.unread, l.flagged, l.attachments, l.is_draft, l.at, l.sort_at, l.reminder_kind, l.surfaced_at, l.snoozed_until, l.split, l.follow_up_at,
+         l.n::int as n, l.unread, l.flagged, l.attachments, l.is_draft, l.at, l.sort_at, l.reminder_kind, l.surfaced_at, snz.until as snoozed_until,
+         ${splitEarly ? "l.split" : splitting ? splitCase("l") : "null"} as split, fu.at as follow_up_at,
          ${readsSql("l")} as reads,
          exists (
            select 1 from crm.mail_prepared p
            where p.message_id = l.id and p.kind in ('reply', 'nudge') and p.state in ('ready', 'used')
          ) as prepared
-       from listed l
+       from page l
        join crm.mail_sources src on src.id = l.source_id
-       ${cursor.length ? `where ${cursor.join(" and ")}` : ""}
-       order by l.sort_at desc, l.source_id::text || '|' || l.tk desc
-       limit $${values.length}`,
+       ${!splitEarly && splitting ? splitJoin("l", "$1") : ""}
+       left join lateral (
+         select min(rm.due_at) as until from crm.mail_reminders rm
+         where rm.user_id = $1 and rm.source_id = l.source_id and rm.thread_key = l.tk and rm.state = 'waiting' and rm.kind = 'snooze'
+       ) snz on true
+       left join lateral (
+         select min(rm.due_at) as at from crm.mail_reminders rm
+         where rm.user_id = $1 and rm.source_id = l.source_id and rm.thread_key = l.tk and rm.state = 'waiting'
+           and rm.kind = 'follow_up' and rm.action = 'send'
+           and not exists (${replyAfterSql("rm", "$1", emailParam)})
+       ) fu on true
+       order by l.sort_at desc, l.source_id::text || '|' || l.tk desc`,
       values,
     );
     const rows = result.rows.slice(0, limit);
@@ -200,12 +214,46 @@ export async function listThreads(
   });
 }
 
-export async function getThread(actor: UserActor, key: string): Promise<ThreadDetail> {
-  const actors = await workspaceActors(actor);
-  const detail = await readThread(actor, key, actors);
-  if (detail.prepared?.times) {
-    detail.prepared = (await freshPrepared(actor, detail.prepared.id).catch(() => null)) ?? detail.prepared;
-  }
+export type ThreadOptions = { reader?: boolean; attachments?: boolean; fetchImpl?: typeof fetch };
+
+const ATTACHMENT_WAIT_MS = 2_500;
+const ATTACHMENT_MESSAGES = 4;
+const SHORT_SUMMARY = 280;
+
+async function readerAttachments(actor: UserActor, detail: ThreadDetail, sourceId: string, providerIds: Map<string, string>, fetchImpl: typeof fetch) {
+  const last = detail.messages.length - 1;
+  const wanted = detail.messages
+    .filter((message, index) => message.hasAttachments && (index === last || !message.isRead) && providerIds.has(message.id))
+    .slice(-ATTACHMENT_MESSAGES);
+  if (wanted.length === 0) return;
+  const work = (async () => {
+    const token = await mailSourceToken(actor, sourceId, fetchImpl);
+    await Promise.all(
+      wanted.map(async (message) => {
+        const items = await listMessageAttachments(token, providerIds.get(message.id)!, fetchImpl).catch(() => null);
+        if (items) message.attachments = items.map((item) => ({ id: item.id, name: item.name, contentType: item.contentType, size: item.size }));
+      }),
+    );
+  })().catch(() => null);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([work, new Promise((resolve) => (timer = setTimeout(resolve, ATTACHMENT_WAIT_MS)))]);
+  clearTimeout(timer);
+}
+
+export async function getThread(actor: UserActor, key: string, options: ThreadOptions = {}): Promise<ThreadDetail> {
+  const actors = workspaceActors(actor);
+  actors.catch(() => null);
+  const { detail, providerIds, sourceId } = await readThread(actor, key, actors, options);
+  await Promise.all([
+    detail.prepared?.times
+      ? freshPrepared(actor, detail.prepared.id)
+          .catch(() => null)
+          .then((fresh) => {
+            if (fresh && detail.prepared) detail.prepared = fresh;
+          })
+      : null,
+    options.attachments ? readerAttachments(actor, detail, sourceId, providerIds, options.fetchImpl ?? fetch) : null,
+  ]);
   return detail;
 }
 
@@ -216,10 +264,8 @@ async function threadPeople(
   actor: UserActor,
   actors: UserActor[],
   rows: { from_email: string | null; from_name: string | null; to_recipients: MailAddress[]; cc_recipients: MailAddress[] }[],
+  own: Set<string>,
 ): Promise<ThreadPerson[]> {
-  const own = new Set(
-    (await db.query<{ email: string }>("select lower(email) as email from crm.mail_sources where user_id = $1 union select lower(email) from crm.send_identities where user_id = $1", [actor.userId])).rows.map((row) => row.email),
-  );
   const seen = new Map<string, string | null>();
   for (const row of rows) {
     const addresses = [{ address: row.from_email ?? "", name: row.from_name }, ...(row.to_recipients ?? []), ...(row.cc_recipients ?? [])];
@@ -290,7 +336,7 @@ async function threadPeople(
   });
 }
 
-async function readThread(actor: UserActor, key: string, actors: UserActor[]): Promise<ThreadDetail> {
+async function readThread(actor: UserActor, key: string, actorsReady: Promise<UserActor[]>, options: ThreadOptions) {
   const { sourceId, key: tk } = parseThreadKey(key);
   return withActor(actor, async (db) => {
     const result = await db.query<{
@@ -322,10 +368,10 @@ async function readThread(actor: UserActor, key: string, actors: UserActor[]): P
        from crm.mail_messages m
        join crm.mail_folders f on f.id = m.folder_id
        join crm.mail_sources src on src.id = m.source_id
-       where m.user_id = $1 and m.source_id = $2 and ${THREAD_KEY} = $3 and f.role <> 'outbox'
+       where m.user_id = $1 and m.source_id = $2 and m.thread_key = $3 and f.role <> 'outbox'
          and (f.role <> 'junk' or not exists (
            select 1 from crm.mail_messages o join crm.mail_folders ofo on ofo.id = o.folder_id
-           where o.user_id = m.user_id and o.source_id = m.source_id and coalesce(o.thread_key, 'm:' || o.id::text) = $3
+           where o.user_id = m.user_id and o.source_id = m.source_id and o.thread_key = $3
              and ofo.role not in ('junk', 'outbox')
          ))
        order by at asc, m.id asc
@@ -370,17 +416,15 @@ async function readThread(actor: UserActor, key: string, actors: UserActor[]): P
     const reply = replied.rows[0] ?? null;
     const followUp = reminder.rows[0] && !(reply && reply.reminder_id === reminder.rows[0].id) ? reminder.rows[0] : undefined;
     const deferral = await threadDeferral(db, actor, sourceId, tk);
-    const people = await threadPeople(db, actor, actors, rows.length ? rows : result.rows);
-    const own = new Set(
-      (
-        await db.query<{ email: string }>(
-          "select lower(email) as email from crm.mail_sources where user_id = $1 union select lower(email) from crm.send_identities where user_id = $1",
-          [actor.userId],
-        )
-      ).rows
-        .map((row) => row.email)
-        .concat(actor.email.toLowerCase()),
-    );
+    const addresses = (
+      await db.query<{ email: string }>(
+        "select lower(email) as email from crm.mail_sources where user_id = $1 union select lower(email) from crm.send_identities where user_id = $1",
+        [actor.userId],
+      )
+    ).rows.map((row) => row.email);
+    const actors = await actorsReady;
+    const people = await threadPeople(db, actor, actors, rows.length ? rows : result.rows, new Set(addresses));
+    const own = new Set([...addresses, actor.email.toLowerCase()]);
     const fromThem = rows.filter((row) => row.from_email && !own.has(row.from_email.toLowerCase()));
     const sender = fromThem.at(-1)?.from_email ?? null;
     const deferredOn =
@@ -393,7 +437,8 @@ async function readThread(actor: UserActor, key: string, actors: UserActor[]): P
       counterpart: sender ?? people[0]?.email ?? null,
       own,
     });
-    return {
+    const cachedSummary = options.reader && target ? await readerSummary(db, sourceId, tk, target.id, rows) : undefined;
+    const detail: ThreadDetail = {
       subscription,
       filing,
       key,
@@ -431,22 +476,53 @@ async function readThread(actor: UserActor, key: string, actors: UserActor[]): P
           snippet: row.snippet,
           html,
           rich: html ? richEmail(html) : false,
-          text: row.body_text,
+          text: options.reader && html && !row.is_draft ? null : row.body_text,
           webLink: row.web_link,
           opens: row.opens ? row.opens.map((open) => ({ at: iso(open.at)!, agent: open.agent })) : null,
         };
       }),
+      ...(cachedSummary !== undefined ? { cachedSummary } : {}),
     };
+    return { detail, sourceId, providerIds: new Map(rows.map((row) => [row.id, row.provider_message_id])) };
   });
 }
 
-async function splitCounts(db: Db, actor: UserActor) {
+async function readerSummary(
+  db: Db,
+  sourceId: string,
+  tk: string,
+  latestId: string,
+  rows: { id: string; is_draft: boolean; body_text: string | null; snippet: string | null; has_attachments: boolean }[],
+): Promise<CachedSummary | null> {
+  if (!process.env.LLM_API_KEY?.trim()) return { latestId, summary: null, todo: null };
+  const sent = rows.filter((row) => !row.is_draft);
+  if (sent.length === 1 && !sent[0].has_attachments && (sent[0].body_text ?? sent[0].snippet ?? "").length < SHORT_SUMMARY) {
+    return { latestId, summary: null, todo: null };
+  }
+  const stored = await db.query<{ summary: string; todo: string | null }>(
+    "select summary, todo from crm.mail_summaries where source_id = $1 and thread_key = $2 and latest_message_id = $3 limit 1",
+    [sourceId, tk, latestId],
+  );
+  const row = stored.rows[0];
+  return row ? { latestId, summary: row.summary, todo: row.todo } : null;
+}
+
+async function splitCounts(db: Db, actor: UserActor, unreadOnly = false) {
+  const inbox = "m.user_id = $1 and f.role = 'inbox'";
   const result = await db.query<{ source_id: string; split: MailSplit; total: number; unread: number }>(
     `with scoped as (
-       select m.id, m.source_id, ${THREAD_KEY} as tk, m.subject, m.from_email, m.focused, m.is_read,
+       select m.id, m.source_id, m.thread_key as tk, m.subject, m.from_email, m.focused, m.is_read,
          coalesce(m.received_at, m.sent_at, m.created_at) as at
        from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
-       where m.user_id = $1 and f.role = 'inbox'
+       where ${inbox}
+         ${
+           unreadOnly
+             ? `and (m.source_id, m.thread_key) in (
+                  select m.source_id, m.thread_key from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
+                  where ${inbox} and not m.is_read
+                )`
+             : ""
+         }
      ),
      ranked as (
        select s.*, row_number() over (partition by s.source_id, s.tk order by s.at desc, s.id desc) as rn,
@@ -466,8 +542,18 @@ async function splitCounts(db: Db, actor: UserActor) {
   return result.rows.map((row) => ({ sourceId: row.source_id, split: row.split, total: row.total, unread: row.unread }));
 }
 
+async function readVersion(db: Db, actor: UserActor) {
+  const result = await db.query<{ version: string }>("select version::text as version from crm.mail_versions where user_id = $1", [actor.userId]);
+  return result.rows[0]?.version ?? "0";
+}
+
+export async function mailVersion(actor: UserActor) {
+  return withActor(actor, (db) => readVersion(db, actor));
+}
+
 export async function mailNav(actor: UserActor): Promise<MailNav> {
   return withActor(actor, async (db) => {
+    const version = await readVersion(db, actor);
     const accounts = await db.query<{ id: string; email: string; connected: boolean }>(
       `select s.id, s.email,
          coalesce(
@@ -480,7 +566,7 @@ export async function mailNav(actor: UserActor): Promise<MailNav> {
     );
     const folders = await db.query<{ id: string; source_id: string; name: string; role: MailRole; unread: number }>(
       `select f.id, f.source_id, f.name, f.role,
-         (select count(distinct ${THREAD_KEY})::int from crm.mail_messages m where m.folder_id = f.id and not m.is_read) as unread
+         (select count(distinct m.thread_key)::int from crm.mail_messages m where m.folder_id = f.id and not m.is_read) as unread
        from crm.mail_folders f
        where f.user_id = $1 and f.sync_state <> 'skipped'
        order by f.name`,
@@ -501,12 +587,14 @@ export async function mailNav(actor: UserActor): Promise<MailNav> {
       snoozed: counts.rows[0]?.snoozed ?? 0,
       scheduled: counts.rows[0]?.scheduled ?? 0,
       splits: await splitCounts(db, actor),
+      version,
     };
   });
 }
 
 export async function mailUnreadCount(actor: UserActor) {
   return withActor(actor, async (db) =>
-    (await splitCounts(db, actor)).filter((row) => row.split === "important").reduce((sum, row) => sum + row.unread, 0),
+    (await splitCounts(db, actor, true)).filter((row) => row.split === "important").reduce((sum, row) => sum + row.unread, 0),
   );
 }
+

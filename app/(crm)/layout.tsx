@@ -5,6 +5,7 @@ import { after } from "next/server";
 import Sidebar from "@/components/_common/sidebar/sidebar";
 import CrmChrome from "@/components/crm/chrome";
 import DocsProvider from "@/components/docs/docs-provider";
+import MailUnread from "@/components/mail/mail-unread";
 import { ShortcutsProvider } from "@/components/shortcuts/shortcuts-provider";
 import { getHomeActor, getUserActor, getWorkspaceChoices } from "@/lib/auth/user";
 import { syncCalendar } from "@/lib/crm/calendar";
@@ -21,7 +22,6 @@ import { unreadBrief } from "@/lib/learning/nightly";
 import { syncTeamsTranscripts } from "@/lib/crm/teams-transcripts";
 import { processDueMail } from "@/lib/mail/due";
 import { syncMail } from "@/lib/mail/sync";
-import { mailUnreadCount } from "@/lib/mail/threads";
 import { noteViewerAddress } from "@/lib/mail/tracking";
 import { clickupToken } from "@/lib/clickup";
 import { microsoftConfigured } from "@/lib/microsoft/oauth";
@@ -98,12 +98,11 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
       }
     });
   }
-  const [companyCount, openActionCount, boards, notifications, mailUnread, captures, brief] = await Promise.all([
+  const [companyCount, openActionCount, boards, notifications, captures, brief] = await Promise.all([
     countCompanies(user),
     countOpenTasks(user, { mine: true }),
     listBoards(user),
     listNotifications(user, 10),
-    mailUnreadCount(user).catch(() => 0),
     captureStatuses(user).catch(() => null),
     unreadBrief(user).catch(() => null),
   ]);
@@ -116,11 +115,12 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
       <DocsProvider seed={docsSeed(user)} nav={emptyDocsNav(user)}>
         <main data-app-shell className="relative flex h-dvh max-w-full overflow-hidden">
           <KeepPageInPlace />
+          <MailUnread />
           <Sidebar
             boards={boards}
             companyCount={companyCount}
             openActionCount={openActionCount}
-            mailUnread={mailUnread}
+            mailUnread={0}
             capture={capture}
             workspace={{
               id: user.workspaceId,

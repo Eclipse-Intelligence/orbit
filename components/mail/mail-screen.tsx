@@ -140,13 +140,18 @@ function patchSummary(thread: ThreadSummary, action: ReaderAction): ThreadSummar
   return thread;
 }
 
-function shiftUnread(nav: MailNav, sourceId: string, change: number): MailNav {
+function shiftUnread(nav: MailNav, thread: Pick<ThreadSummary, "sourceId" | "split">, change: number): MailNav {
+  const { sourceId, split } = thread;
   return {
     ...nav,
     unread: Math.max(0, nav.unread + change),
     accounts: nav.accounts.map((account) => (account.id === sourceId ? { ...account, unread: Math.max(0, account.unread + change) } : account)),
+    folders: nav.folders.map((folder) => (folder.role === "inbox" && folder.sourceId === sourceId ? { ...folder, unread: Math.max(0, folder.unread + change) } : folder)),
+    splits: split ? nav.splits.map((row) => (row.sourceId === sourceId && row.split === split ? { ...row, unread: Math.max(0, row.unread + change) } : row)) : nav.splits,
   };
 }
+
+const FULL_REFRESH_MS = 5 * 60_000;
 
 export default function MailScreen({
   viewer,
@@ -193,11 +198,17 @@ export default function MailScreen({
   const loadingMore = useRef(false);
   const searchInput = useRef<HTMLInputElement>(null);
   const searchInputList = useRef<HTMLInputElement>(null);
-  const latest = useRef({ query, page, cursor });
+  const latest = useRef({ query, page, cursor, version: nav.version });
+  const fullRefresh = useRef(0);
 
   useEffect(() => {
-    latest.current = { query, page, cursor };
+    latest.current = { query, page, cursor, version: nav.version };
   });
+
+  useEffect(() => {
+    fullRefresh.current = Date.now();
+    if (initialNav.partial) fetchNav().then(setNav).catch(() => null);
+  }, [initialNav]);
 
   useEffect(() => {
     if (page) storeList(query, page);
@@ -310,13 +321,23 @@ export default function MailScreen({
       });
   }
 
-  function refresh(sync: boolean) {
+  function refresh(sync: boolean, poll = false) {
     const target = latest.current.query;
     const token = request.current;
     setSyncing(true);
     (sync ? syncNow().catch(() => null) : Promise.resolve(null))
-      .then(() => Promise.all([fetchList(target), fetchNav()]))
-      .then(([fresh, freshNav]) => {
+      .then((synced) => {
+        const unchanged = poll && synced?.version && synced.version === latest.current.version && Date.now() - fullRefresh.current < FULL_REFRESH_MS;
+        if (unchanged) {
+          setNow(Date.now());
+          return null;
+        }
+        return Promise.all([fetchList(target), fetchNav()]);
+      })
+      .then((loaded) => {
+        if (!loaded) return;
+        const [fresh, freshNav] = loaded;
+        fullRefresh.current = Date.now();
         setNav(freshNav);
         setNow(Date.now());
         if (token !== request.current) return;
@@ -365,7 +386,7 @@ export default function MailScreen({
 
   function restore(thread: ThreadSummary, from: string) {
     setPage((existing) => (existing ? { ...existing, threads: insertByDate(existing.threads, thread) } : existing));
-    if (thread.unread && inInbox(from)) setNav((existing) => shiftUnread(existing, thread.sourceId, 1));
+    if (thread.unread && inInbox(from)) setNav((existing) => shiftUnread(existing, thread, 1));
   }
 
   function snooze(keys: string[]) {
@@ -378,7 +399,7 @@ export default function MailScreen({
           : "Orbit moves the conversation out of your inbox and brings it back to the top at this time.",
       options: laterOptions(now),
       now,
-      onPick: (at, detail) => (keys.length > 1 ? actMany(keys, "snooze", at, detail) : act(keys[0], "snooze", false, at, detail)),
+      onPick: (at, detail) => (keys.length > 1 ? actMany(keys, "snooze", at, detail) : act(keys[0], "snooze", at, detail)),
     });
   }
 
@@ -416,7 +437,7 @@ export default function MailScreen({
     const index = list.findIndex((item) => item.key === key);
     const remaining = list.filter((item) => item.key !== key);
     setPage({ ...currentPage!, threads: remaining });
-    if (thread.unread) setNav((existing) => shiftUnread(existing, thread.sourceId, -1));
+    if (thread.unread) setNav((existing) => shiftUnread(existing, thread, -1));
     if (latest.current.cursor === key) {
       select(remaining[index]?.key ?? remaining[index - 1]?.key ?? null);
       setOpen(false);
@@ -456,14 +477,14 @@ export default function MailScreen({
     setSelected(new Set());
     if (chosen.length === 0) return;
     if (!MOVES.has(action)) {
-      for (const thread of chosen) act(thread.key, action, true);
-      window.setTimeout(() => fetchNav().then(setNav).catch(() => null), 1500);
+      for (const thread of chosen) act(thread.key, action);
       return;
     }
     const from = target.query ? "search" : target.view;
     const chosenKeys = new Set(chosen.map((thread) => thread.key));
     chosen.forEach((thread) => removing.current.add(thread.key));
     setPage({ ...currentPage!, threads: currentPage!.threads.filter((thread) => !chosenKeys.has(thread.key)) });
+    if (inInbox(from)) setNav((existing) => chosen.filter((thread) => thread.unread).reduce((shifted, thread) => shiftUnread(shifted, thread, -1), existing));
     if (latest.current.cursor && chosenKeys.has(latest.current.cursor)) {
       select(null);
       setOpen(false);
@@ -506,10 +527,7 @@ export default function MailScreen({
               run: () => {
                 void pending.then(() => {
                   chosen.forEach((thread) => restore(thread, from));
-                  void runAll((thread) => postAction(thread.key, "inbox", undoFrom)).then(() => {
-                    forgetOtherLists(latest.current.query);
-                    fetchNav().then(setNav).catch(() => null);
-                  });
+                  void runAll((thread) => postAction(thread.key, "inbox", undoFrom)).then(() => forgetOtherLists(latest.current.query));
                 });
               },
             },
@@ -517,12 +535,11 @@ export default function MailScreen({
     void pending
       .then((failures) => {
         if (failures.length) showToast({ message: `${failures.length} of ${count} didn't move. ${failures[0]}`, tone: "alert" });
-        fetchNav().then(setNav).catch(() => null);
       })
       .finally(() => chosen.forEach((thread) => removing.current.delete(thread.key)));
   }
 
-  function act(key: string, action: ReaderAction, quiet = false, until?: string, detail?: string) {
+  function act(key: string, action: ReaderAction, until?: string, detail?: string) {
     const { page: currentPage, query: target } = latest.current;
     const thread = currentPage?.threads.find((item) => item.key === key);
     if (!thread) return;
@@ -533,7 +550,7 @@ export default function MailScreen({
       const remaining = list.filter((item) => item.key !== key);
       removing.current.add(key);
       setPage({ ...currentPage!, threads: remaining });
-      if (thread.unread && inInbox(from)) setNav((existing) => shiftUnread(existing, thread.sourceId, -1));
+      if (thread.unread && inInbox(from)) setNav((existing) => shiftUnread(existing, thread, -1));
       if (latest.current.cursor === key) {
         const next = remaining[index] ?? remaining[index - 1] ?? null;
         select(next?.key ?? null);
@@ -551,10 +568,7 @@ export default function MailScreen({
                 void pendingMove.then(() => {
                   restore(thread, from);
                   postAction(key, "inbox", undoFrom)
-                    .then(() => {
-                      forgetOtherLists(latest.current.query);
-                      fetchNav().then(setNav).catch(() => null);
-                    })
+                    .then(() => forgetOtherLists(latest.current.query))
                     .catch((error: Error) => showToast({ message: error.message, tone: "alert" }));
                 });
               },
@@ -562,9 +576,7 @@ export default function MailScreen({
           : undefined,
       });
       const pendingMove = postAction(key, action, from, until)
-        .then(() => {
-          fetchNav().then(setNav).catch(() => null);
-        })
+        .then(() => undefined)
         .catch((error: Error) => {
           restore(thread, from);
           showToast({ message: error.message, tone: "alert" });
@@ -578,17 +590,14 @@ export default function MailScreen({
     setDetails((existing) => (existing[key] ? { ...existing, [key]: patchDetail(existing[key], action) } : existing));
     const cached = cachedThread(key);
     if (cached) storeThread(patchDetail(cached, action));
-    if (change && inInbox(from)) setNav((existing) => shiftUnread(existing, thread.sourceId, change));
+    if (change && inInbox(from)) setNav((existing) => shiftUnread(existing, thread, change));
     const undoAction: ReaderAction = action === "read" ? "unread" : action === "unread" ? "read" : action === "flag" ? "unflag" : "flag";
     postAction(key, action, from)
-      .then(() => {
-        if (!quiet) fetchNav().then(setNav).catch(() => null);
-      })
       .catch((error: Error) => {
         setPage((existing) => (existing ? { ...existing, threads: existing.threads.map((item) => (item.key === key ? patchSummary(item, undoAction) : item)) } : existing));
         forgetThread(key);
         fetchDetail(key, true);
-        if (change && inInbox(from)) setNav((existing) => shiftUnread(existing, thread.sourceId, -change));
+        if (change && inInbox(from)) setNav((existing) => shiftUnread(existing, thread, -change));
         showToast({ message: error.message, tone: "alert" });
       });
   }
@@ -620,7 +629,7 @@ export default function MailScreen({
   useEffect(() => {
     if (!cursor || !current?.unread || keptUnread.current.has(cursor)) return;
     const key = cursor;
-    const timer = window.setTimeout(() => actRef.current(key, "read", true), READ_DWELL_MS);
+    const timer = window.setTimeout(() => actRef.current(key, "read"), READ_DWELL_MS);
     return () => window.clearTimeout(timer);
   }, [cursor, current?.unread]);
 
@@ -669,7 +678,7 @@ export default function MailScreen({
     const tick = () => {
       if (document.visibilityState !== "visible" || Date.now() - last < MIN_POLL_GAP_MS) return;
       last = Date.now();
-      refreshRef.current(true);
+      refreshRef.current(true, true);
     };
     const first = window.setTimeout(tick, FIRST_POLL_MS);
     const timer = window.setInterval(tick, POLL_MS);

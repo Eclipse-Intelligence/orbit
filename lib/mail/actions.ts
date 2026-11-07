@@ -168,11 +168,11 @@ export async function applyMailAction(
       `select m.id, m.provider_message_id, m.folder_id, f.role, m.is_read, m.is_flagged, m.subject,
          coalesce(m.received_at, m.sent_at, m.created_at) as at
        from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
-       where m.user_id = $1 and m.source_id = $2 and coalesce(m.thread_key, 'm:' || m.id::text) = $3
+       where m.user_id = $1 and m.source_id = $2 and m.thread_key = $3
          and f.role <> 'outbox'
          and (f.role <> 'junk' or not exists (
            select 1 from crm.mail_messages o join crm.mail_folders ofo on ofo.id = o.folder_id
-           where o.user_id = m.user_id and o.source_id = m.source_id and coalesce(o.thread_key, 'm:' || o.id::text) = $3
+           where o.user_id = m.user_id and o.source_id = m.source_id and o.thread_key = $3
              and ofo.role not in ('junk', 'outbox')
          ))
        order by at asc, m.id asc
@@ -224,7 +224,7 @@ export async function threadForEmail(actor: UserActor, emailId: string) {
   if (!isUuid(emailId)) throw new CrmError("not_found", "That email isn't in Orbit Mail. Search for it again.", 404);
   return withActor(actor, async (db) => {
     const result = await db.query<{ source_id: string; tk: string; subject: string | null }>(
-      "select source_id, coalesce(thread_key, 'm:' || id::text) as tk, subject from crm.mail_messages where id = $1 and user_id = $2",
+      "select source_id, thread_key as tk, subject from crm.mail_messages where id = $1 and user_id = $2",
       [emailId, actor.userId],
     );
     const row = result.rows[0];

@@ -44,7 +44,7 @@ function bodyOf(row: Pick<Candidate, "body_text" | "snippet">) {
 
 export function mailFilter(filter: MailFilter, now: number, days: number) {
   if (filter.thread) {
-    return { sql: "m.source_id = $6 and coalesce(m.thread_key, 'm:' || m.id::text) = $7", params: [filter.thread.sourceId, filter.thread.key] };
+    return { sql: "m.source_id = $6 and m.thread_key = $7", params: [filter.thread.sourceId, filter.thread.key] };
   }
   if (filter.messageIds) return { sql: "m.id = any($6::uuid[])", params: [filter.messageIds] };
   return {
@@ -77,12 +77,23 @@ async function ruledSenders(db: Db, actor: UserActor, workspaceIds: string[], fi
   return result.rows;
 }
 
+const LOGGED_AT_SEND = `a.mail_id is null and a.internet_id is null
+  and (a.direction = 'outbound') = (x.direction = 'outbound')
+  and a.title = left(coalesce(nullif(trim(x.subject), ''), '(no subject)'), 200)
+  and abs(extract(epoch from a.occurred_at - x.at)) < 180`;
+
 const SAME_MESSAGE = `(a.metadata->>'mailMessageId' = x.id::text or (x.internet_message_id is not null and a.metadata->>'internetMessageId' = x.internet_message_id))`;
 
 async function candidates(db: Db, actor: UserActor, workspaceIds: string[], filter: { sql: string; params: unknown[] }, limit: number) {
   const limitParam = `$${6 + filter.params.length}`;
   const result = await db.query<Candidate>(
-    `${routedSql(filter.sql)}
+    `${routedSql(filter.sql)},
+     logged as (
+       select a.metadata->>'mailMessageId' as mail_id, a.metadata->>'internetMessageId' as internet_id, a.workspace_id, a.contact_id, a.company_id,
+         a.metadata->>'direction' as direction, a.title, a.occurred_at
+       from crm.activities a
+       where a.type = 'email' and a.workspace_id = any($3::uuid[])
+     )
      select distinct on (x.id, x.workspace_id, coalesce(x.contact_id, x.company_id))
        x.id as message_id, x.internet_message_id, x.subject, x.snippet, x.body_text, x.at, x.account, x.folder_role,
        x.workspace_id, x.contact_id, x.company_id, x.address, x.direction, x.has_attachments as attachments,
@@ -96,18 +107,20 @@ async function candidates(db: Db, actor: UserActor, workspaceIds: string[], filt
        ) end as relink_id
      from matched x
      where not exists (
-       select 1 from crm.activities a
-       where a.workspace_id = x.workspace_id and a.type = 'email'
-         and (
-           (${SAME_MESSAGE} and (x.contact_id is null or a.contact_id = x.contact_id))
-           or (
-             (a.contact_id = x.contact_id or (x.contact_id is null and a.contact_id is null and a.company_id = x.company_id))
-             and a.metadata->>'mailMessageId' is null and a.metadata->>'internetMessageId' is null
-             and (a.metadata->>'direction' = 'outbound') = (x.direction = 'outbound')
-             and a.title = left(coalesce(nullif(trim(x.subject), ''), '(no subject)'), 200)
-             and abs(extract(epoch from a.occurred_at - x.at)) < 180
-           )
-         )
+       select 1 from logged a
+       where a.mail_id = x.id::text and a.workspace_id = x.workspace_id and (x.contact_id is null or a.contact_id = x.contact_id)
+     )
+     and not exists (
+       select 1 from logged a
+       where a.internet_id = x.internet_message_id and a.workspace_id = x.workspace_id and (x.contact_id is null or a.contact_id = x.contact_id)
+     )
+     and not exists (
+       select 1 from logged a
+       where a.contact_id = x.contact_id and a.workspace_id = x.workspace_id and ${LOGGED_AT_SEND}
+     )
+     and not exists (
+       select 1 from logged a
+       where x.contact_id is null and a.company_id = x.company_id and a.contact_id is null and a.workspace_id = x.workspace_id and ${LOGGED_AT_SEND}
      )
      order by x.id, x.workspace_id, coalesce(x.contact_id, x.company_id), x.at desc
      limit ${limitParam}`,

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { AttachmentDownload, AttachmentLink } from "@/components/_common/attachment-viewer";
 import Button from "@/components/_ui/button";
+import { cachedAttachments } from "@/components/mail/mail-cache";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/_ui/dropdown-menu";
 import { addAttachmentToKnowledgeAction } from "@/app/(crm)/knowledge";
 import PaperclipIcon from "@/public/assets/images/_common/paperclip.svg";
@@ -23,6 +24,12 @@ const loaded = new Map<string, Promise<Attachment[]>>();
 function load(messageId: string) {
   const hit = loaded.get(messageId);
   if (hit) return hit;
+  const known = cachedAttachments(messageId);
+  if (known) {
+    const ready = Promise.resolve(known);
+    loaded.set(messageId, ready);
+    return ready;
+  }
   const request = fetch(`/api/mail/attachments?message=${encodeURIComponent(messageId)}`, { cache: "no-store" })
     .then(async (response) => {
       const body = (await response.json().catch(() => ({}))) as { attachments?: Attachment[]; error?: string };
@@ -44,7 +51,10 @@ function size(bytes: number) {
 
 export default function MessageAttachments({ messageId, companies = [], workspaceName = "" }: { messageId: string; companies?: Company[]; workspaceName?: string }) {
   const ownLabel = workspaceName.trim() || "This workspace";
-  const [state, setState] = useState<{ id: string; items: Attachment[] | null; error: string | null } | null>(null);
+  const [state, setState] = useState<{ id: string; items: Attachment[] | null; error: string | null } | null>(() => {
+    const known = cachedAttachments(messageId);
+    return known ? { id: messageId, items: known, error: null } : null;
+  });
   const [saved, setSaved] = useState<Saved | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
 

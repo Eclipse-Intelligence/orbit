@@ -208,7 +208,7 @@ function pitchEligible(alias: string, userParam: string, workspacesParam: string
       select 1 from crm.mail_messages o join crm.mail_folders ofo on ofo.id = o.folder_id
       where o.user_id = ${userParam} and o.id <> ${alias}.id and ofo.role not in ('junk', 'outbox')
         and (
-          (lower(o.from_email) = lower(${alias}.from_email) and coalesce(o.thread_key, 'm:' || o.id::text) <> ${alias}.tk)
+          (lower(o.from_email) = lower(${alias}.from_email) and o.thread_key <> ${alias}.tk)
           or o.to_recipients @> jsonb_build_array(jsonb_build_object('address', lower(${alias}.from_email)))
           or o.cc_recipients @> jsonb_build_array(jsonb_build_object('address', lower(${alias}.from_email)))
         )
@@ -220,7 +220,7 @@ async function replyCandidates(db: Db, actor: UserActor, workspaceIds: string[],
     `select n.id, n.source_id, n.tk, n.provider_message_id, n.from_email, n.from_name, n.subject, n.body_text, n.snippet,
        ($6 and ${pitchEligible("n", "$1", "$2")}) as pitch
      from (
-       select m.id, m.source_id, coalesce(m.thread_key, 'm:' || m.id::text) as tk, m.subject, m.from_email, m.from_name, m.focused,
+       select m.id, m.source_id, m.thread_key as tk, m.subject, m.from_email, m.from_name, m.focused,
          m.provider_message_id, m.body_text, m.snippet,
          coalesce(m.received_at, m.sent_at, m.created_at) as at
        from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
@@ -234,13 +234,13 @@ async function replyCandidates(db: Db, actor: UserActor, workspaceIds: string[],
          ))
          and not exists (
            select 1 from crm.mail_messages later join crm.mail_folders lf on lf.id = later.folder_id
-           where later.source_id = m.source_id and coalesce(later.thread_key, 'm:' || later.id::text) = coalesce(m.thread_key, 'm:' || m.id::text)
+           where later.source_id = m.source_id and later.thread_key = m.thread_key
              and later.id <> m.id and lf.role not in ('junk', 'outbox')
              and (later.is_draft or coalesce(later.received_at, later.sent_at, later.created_at) > coalesce(m.received_at, m.sent_at, m.created_at))
          )
          and not exists (
            select 1 from crm.mail_drafts d
-           where d.user_id = $1 and d.source_id = m.source_id and (d.reply_to = m.id or d.thread_key = coalesce(m.thread_key, 'm:' || m.id::text))
+           where d.user_id = $1 and d.source_id = m.source_id and (d.reply_to = m.id or d.thread_key = m.thread_key)
          )
      ) n
      ${splitJoin("n", "$1")}
@@ -549,11 +549,11 @@ type SentCandidate = {
 
 async function sentCandidates(db: Db, actor: UserActor, limit: number) {
   const result = await db.query<SentCandidate>(
-    `select m.id, m.source_id, coalesce(m.thread_key, 'm:' || m.id::text) as tk, m.subject, m.to_recipients, m.body_text, m.snippet,
+    `select m.id, m.source_id, m.thread_key as tk, m.subject, m.to_recipients, m.body_text, m.snippet,
        coalesce(m.sent_at, m.received_at, m.created_at) as at,
        exists (
          select 1 from crm.mail_messages earlier
-         where earlier.source_id = m.source_id and coalesce(earlier.thread_key, 'm:' || earlier.id::text) = coalesce(m.thread_key, 'm:' || m.id::text)
+         where earlier.source_id = m.source_id and earlier.thread_key = m.thread_key
            and earlier.id <> m.id and not earlier.is_draft
        ) as replying
      from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
@@ -564,12 +564,12 @@ async function sentCandidates(db: Db, actor: UserActor, limit: number) {
        and not exists (select 1 from crm.mail_prepared p where p.message_id = m.id and p.kind = 'follow_up')
        and not exists (
          select 1 from crm.mail_reminders r
-         where r.user_id = $1 and r.source_id = m.source_id and r.thread_key = coalesce(m.thread_key, 'm:' || m.id::text)
+         where r.user_id = $1 and r.source_id = m.source_id and r.thread_key = m.thread_key
            and r.kind = 'follow_up' and r.state = 'waiting'
        )
        and not exists (
          select 1 from crm.mail_messages later join crm.mail_folders lf on lf.id = later.folder_id
-         where later.source_id = m.source_id and coalesce(later.thread_key, 'm:' || later.id::text) = coalesce(m.thread_key, 'm:' || m.id::text)
+         where later.source_id = m.source_id and later.thread_key = m.thread_key
            and later.id <> m.id and not later.is_draft and lf.role not in ('junk', 'outbox')
            and coalesce(later.received_at, later.sent_at, later.created_at) > coalesce(m.sent_at, m.received_at, m.created_at)
        )

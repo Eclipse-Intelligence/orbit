@@ -18,7 +18,7 @@ import type { MailAddress } from "@/lib/mail/types";
 import type { DraftMode } from "@/lib/mail/view";
 import { appTimeZone, zonedParts } from "@/lib/time";
 
-const THREAD_KEY = "coalesce(m.thread_key, 'm:' || m.id::text)";
+const THREAD_KEY = "m.thread_key";
 const MESSAGE_CHARS = 20_000;
 const THREAD_CHARS = 100_000;
 const SHORT_THREAD = 280;

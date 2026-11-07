@@ -1,5 +1,6 @@
 import type {
   ExistingMailChoice,
+  MailAttachmentMeta,
   MailDraft,
   MailNav,
   SubscriptionSender,
@@ -17,7 +18,9 @@ export type ListQuery = { view: string; account: string | null; query: string };
 const lists = new Map<string, ThreadPage>();
 const details = new Map<string, ThreadDetail>();
 const pending = new Map<string, Promise<ThreadDetail>>();
+const prefetching = new Map<string, Promise<ThreadDetail>>();
 const summaries = new Map<string, Promise<ThreadSummaryText>>();
+const attachmentLists = new Map<string, MailAttachmentMeta[]>();
 
 export type ThreadSummaryText = { summary: string | null; todo: string | null };
 export type AskResult = { answer: string; sources: { key: string; subject: string | null; from: string; at: string | null }[] };
@@ -59,27 +62,43 @@ export function cachedThread(key: string) {
   return details.get(key) ?? null;
 }
 
-export function storeThread(detail: ThreadDetail) {
+function keep(detail: ThreadDetail) {
   details.set(detail.key, detail);
+  const cached = detail.cachedSummary;
+  if (cached && !summaries.has(`${detail.key}|${cached.latestId}`)) {
+    summaries.set(`${detail.key}|${cached.latestId}`, Promise.resolve({ summary: cached.summary, todo: cached.todo }));
+  }
+  for (const message of detail.messages) if (message.attachments) attachmentLists.set(message.id, message.attachments);
+}
+
+export function storeThread(detail: ThreadDetail) {
+  keep(detail);
+}
+
+export function cachedAttachments(messageId: string) {
+  return attachmentLists.get(messageId) ?? null;
 }
 
 export function forgetThread(key: string) {
   details.delete(key);
 }
 
+function requestThread(key: string, attachments: boolean) {
+  const queue = attachments ? prefetching : pending;
+  const request = getJson<ThreadDetail>(`/api/mail/thread?key=${encodeURIComponent(key)}${attachments ? "&attachments=1" : ""}`)
+    .then((detail) => {
+      keep(detail);
+      return detail;
+    })
+    .finally(() => queue.delete(key));
+  queue.set(key, request);
+  return request;
+}
+
 export function loadThread(key: string, fresh = false) {
   const hit = details.get(key);
   if (hit && !fresh) return Promise.resolve(hit);
-  const inflight = pending.get(key);
-  if (inflight) return inflight;
-  const request = getJson<ThreadDetail>(`/api/mail/thread?key=${encodeURIComponent(key)}`)
-    .then((detail) => {
-      details.set(key, detail);
-      return detail;
-    })
-    .finally(() => pending.delete(key));
-  pending.set(key, request);
-  return request;
+  return pending.get(key) ?? requestThread(key, false);
 }
 
 export function prefetchThreads(keys: string[]) {
@@ -87,8 +106,8 @@ export function prefetchThreads(keys: string[]) {
   const work = async () => {
     while (index < keys.length) {
       const key = keys[index++];
-      if (details.has(key)) continue;
-      await loadThread(key).catch(() => null);
+      if (details.has(key) || pending.has(key)) continue;
+      await (prefetching.get(key) ?? requestThread(key, true)).catch(() => null);
     }
   };
   void Promise.all([work(), work()]);
@@ -111,7 +130,7 @@ export function fetchScheduled() {
 }
 
 export function syncNow() {
-  return getJson<{ stored: number; removed: number }>("/api/mail/sync", { method: "POST" });
+  return getJson<{ stored: number; removed: number; version?: string | null }>("/api/mail/sync", { method: "POST" });
 }
 
 export function loadSummary(key: string, latestId: string) {

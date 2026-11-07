@@ -392,7 +392,7 @@ async function replyWorkspaces(actor: UserActor, input: DraftInput, sent: SentRe
   if (input.mode === "new" || input.mode === "forward" || !sent.replyTo) return [actor];
   const thread = await withActor(actor, async (db) => {
     const result = await db.query<{ source_id: string; tk: string }>(
-      "select source_id, coalesce(thread_key, 'm:' || id::text) as tk from crm.mail_messages where id = $1 and user_id = $2",
+      "select source_id, thread_key as tk from crm.mail_messages where id = $1 and user_id = $2",
       [sent.replyTo, actor.userId],
     );
     return result.rows[0] ?? null;
@@ -1009,7 +1009,7 @@ export async function saveDraftForAgent(actor: UserActor, input: ToolDraftInput,
           to_recipients: MailAddress[] | null;
           cc_recipients: MailAddress[] | null;
         }>(
-          "select source_id, coalesce(thread_key, 'm:' || id::text) as tk, subject, from_email, from_name, to_recipients, cc_recipients from crm.mail_messages where id = $1 and user_id = $2",
+          "select source_id, thread_key as tk, subject, from_email, from_name, to_recipients, cc_recipients from crm.mail_messages where id = $1 and user_id = $2",
           [input.replyTo, actor.userId],
         );
         return result.rows[0] ?? null;
@@ -1135,7 +1135,7 @@ export async function sendForAgent(
     ? await withActor(actor, async (db) => {
         if (!isUuid(replyTo!)) return null;
         const result = await db.query<{ source_id: string; tk: string; subject: string | null; from_email: string | null; from_name: string | null; to_recipients: MailAddress[]; cc_recipients: MailAddress[] }>(
-          `select source_id, coalesce(thread_key, 'm:' || id::text) as tk, subject, from_email, from_name, to_recipients, cc_recipients
+          `select source_id, thread_key as tk, subject, from_email, from_name, to_recipients, cc_recipients
            from crm.mail_messages where id = $1 and user_id = $2`,
           [replyTo, actor.userId],
         );
