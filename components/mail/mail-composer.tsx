@@ -6,7 +6,7 @@ import { AttachButton, AttachmentList, useEmailAttachments } from "@/components/
 import BodyEditor, { type BodyEditorHandle } from "@/components/mail/body-editor";
 import { useComposer } from "@/components/mail/compose-dock";
 import { FollowUpBlock, NoReplyMenu, type NoReplyChoice, type NoReplyThen } from "@/components/mail/follow-up-composer";
-import { writeWithAi } from "@/components/mail/mail-cache";
+import { holdQueuedDraft, newSendKey, unscheduleDraft, writeWithAi } from "@/components/mail/mail-cache";
 import RecipientField from "@/components/mail/recipient-field";
 import { laterDetail, laterOptions } from "@/lib/mail/later";
 import { useShortcutHint, useShortcuts } from "@/components/shortcuts/shortcuts-provider";
@@ -42,6 +42,7 @@ export type SendPayload = {
   files: DraftFile[];
   replaces?: string | null;
   identityId?: string | null;
+  sendKey?: string | null;
 };
 
 export type ComposerStart = {
@@ -132,6 +133,7 @@ export default function MailComposer({
   const chain = useRef<Promise<unknown>>(Promise.resolve());
   const dirty = useRef(false);
   const discarded = useRef(false);
+  const sendKey = useRef<string | null>(null);
   const editor = useRef<BodyEditorHandle>(null);
   const [formats, setFormats] = useState({ bold: false, italic: false });
   const payload = useRef({
@@ -283,10 +285,7 @@ export default function MailComposer({
   }
 
   function ready() {
-    if (attachments.uploading) {
-      setError("Wait for the attachments to finish uploading.");
-      return false;
-    }
+    if (attachments.blocked) return false;
     if (to.length + cc.length + bcc.length === 0) {
       setError("Add at least one person to send to.");
       return false;
@@ -306,13 +305,22 @@ export default function MailComposer({
     const snapshot = { ...payload.current, attachments: attachments.ids, files: attachments.files };
     dirty.current = false;
     const pending = chain.current.catch(() => null);
-    return pending.then(() => ({ ...snapshot, id: draftId.current }));
+    return pending.then(() => ({ ...snapshot, id: draftId.current, sendKey: sendKey.current }));
   }
 
   function send(event?: FormEvent) {
     event?.preventDefault();
-    if (!ready()) return;
-    queueSend(handOver(), { onDelivered, onUndone });
+    if (sendKey.current || !ready()) return;
+    sendKey.current = newSendKey();
+    const handed = handOver();
+    const release = holdQueuedDraft(draftId.current, handed);
+    queueSend(handed, {
+      onDelivered,
+      onUndone: () => {
+        release();
+        onUndone?.();
+      },
+    });
     onSent(body, [...to, ...cc]);
   }
 
@@ -335,8 +343,15 @@ export default function MailComposer({
   async function unschedule() {
     const current = draftId.current;
     if (!current) return;
+    const previous = scheduledFor;
     setScheduledFor(null);
-    await fetch(`/api/mail/drafts/schedule?id=${encodeURIComponent(current)}`, { method: "DELETE" }).catch(() => null);
+    setError(null);
+    try {
+      await unscheduleDraft(current);
+    } catch (problem) {
+      setScheduledFor(previous);
+      setError(problem instanceof Error ? problem.message : "Orbit couldn't unschedule the email. Try again.");
+    }
   }
 
   async function discard() {
@@ -578,8 +593,20 @@ export default function MailComposer({
           {error}
         </p>
       )}
+      {!error && attachments.blocked && (
+        <p id={`${id}-send-blocked`} role="status" className="caption-style text-subtle">
+          {attachments.blocked}
+        </p>
+      )}
       <div className="flex items-center gap-1 pt-2">
-        <Button variant="primary" type="submit" data-shortcut-submit title={`Send (${sendHint})`}>
+        <Button
+          variant="primary"
+          type="submit"
+          data-shortcut-submit
+          title={`Send (${sendHint})`}
+          disabled={Boolean(attachments.blocked)}
+          aria-describedby={!error && attachments.blocked ? `${id}-send-blocked` : undefined}
+        >
           {scheduledFor ? "Send now" : "Send"}
         </Button>
         <Button variant="ghost" size="icon" aria-label="Send later" title="Send later" onClick={sendLater}>

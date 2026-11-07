@@ -78,9 +78,43 @@ export class GraphMailError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    readonly code: string = "",
   ) {
     super(message);
   }
+}
+
+const SETTINGS = "Settings › Email";
+const ADMIN_CONSENT = /AADSTS(50020|700016|65001|90094|50194|90008|500011)\b|consent_required|admin (approval|consent)|need admin|unauthorized_client/i;
+const SIGNED_OUT = /invalid_grant|interaction_required|AADSTS(70008|50173|700082|50076|50079|50078|54005)\b|expired|revoked|rejected the mailbox connection/i;
+const UNREADABLE = /could not read the saved Microsoft connection/i;
+
+export function disconnectedMessage(email: string) {
+  return `Reconnect ${email} in ${SETTINGS}. It isn't connected to Orbit any more.`;
+}
+
+export function reconnectProblem(error: unknown, email: string | null | undefined): string | null {
+  const account = email?.trim() || "the mailbox";
+  if (error instanceof GraphMailError) {
+    if (error.status === 401) return `Reconnect ${account} in ${SETTINGS}. Microsoft has signed Orbit out of it.`;
+    if (error.status !== 403) return null;
+    if (ADMIN_CONSENT.test(error.code)) return `Ask your Microsoft admin to approve Orbit for ${account}, then reconnect it in ${SETTINGS}.`;
+    return `Reconnect ${account} in ${SETTINGS} and allow every permission Microsoft asks for. Orbit doesn't have access to its mail.`;
+  }
+  if (!(error instanceof Error)) return null;
+  const detail = `${"detail" in error && typeof error.detail === "string" ? error.detail : ""} ${error.message}`;
+  if (ADMIN_CONSENT.test(detail)) return `Ask your Microsoft admin to approve Orbit for ${account}, then reconnect it in ${SETTINGS}.`;
+  if (SIGNED_OUT.test(detail)) return `Reconnect ${account} in ${SETTINGS}. Microsoft has signed Orbit out of it.`;
+  if (UNREADABLE.test(detail)) return `Reconnect ${account} in ${SETTINGS}. Orbit can't read its saved connection.`;
+  return null;
+}
+
+const UNSURE_CODES = /^(UnknownError|ServiceUnavailable|GatewayTimeout|InternalServerError|ErrorInternalServerError|ErrorTimeoutExpired)$/i;
+
+export function sendOutcomeUnknown(error: unknown) {
+  if (!(error instanceof GraphMailError)) return true;
+  if (error.status < 500) return false;
+  return error.status !== 500 || !error.code || UNSURE_CODES.test(error.code);
 }
 
 const GRAPH_RETRIES = 2;
@@ -134,15 +168,16 @@ async function graphJson<T>(
   const code = body.error?.code ?? "";
   if (response.status === 410 || /syncstate/i.test(code)) throw new MailSyncReset(body.error?.message ?? "The sync state expired.");
   if (response.status === 401 || code === "InvalidAuthenticationToken") {
-    throw new GraphMailError("Microsoft rejected the mailbox connection. Connect it again.", 401);
+    throw new GraphMailError("Microsoft rejected the mailbox connection. Connect it again.", 401, code);
   }
   if (response.status === 403) {
     throw new GraphMailError(
       write ? "Microsoft hasn't allowed Orbit to change this mailbox. Connect it again." : "Microsoft hasn't allowed Orbit to read this mailbox. Connect it again.",
       403,
+      `${code} ${body.error?.message ?? ""}`.trim(),
     );
   }
-  throw new GraphMailError((body.error?.message || `Microsoft answered ${response.status}.`).slice(0, 240), response.status);
+  throw new GraphMailError((body.error?.message || `Microsoft answered ${response.status}.`).slice(0, 240), response.status, code);
 }
 
 function address(value: GraphRecipient | null | undefined): MailAddress | null {
@@ -352,6 +387,49 @@ export async function fetchInternetMessageId(token: string, messageId: string, f
     fetchImpl,
   );
   return message.internetMessageId?.slice(0, 1000) || null;
+}
+
+export type DraftState = "draft" | "sent" | "gone";
+
+export async function fetchDraftState(token: string, draftId: string, fetchImpl: typeof fetch = fetch): Promise<DraftState> {
+  try {
+    const message = await graphJson<{ id?: string; isDraft?: boolean }>(`${GRAPH}/me/messages/${encodeURIComponent(draftId)}?$select=id,isDraft`, token, fetchImpl);
+    if (!message.id || typeof message.isDraft !== "boolean") throw new GraphMailError("Outlook didn't say whether the draft is still there.", 502);
+    return message.isDraft ? "draft" : "sent";
+  } catch (error) {
+    if (error instanceof GraphMailError && error.status === 404) return "gone";
+    throw error;
+  }
+}
+
+const SENT_LOOKBACK_MS = 60_000;
+
+function sameSubject(left: string | null | undefined, right: string | null | undefined) {
+  const clean = (value: string | null | undefined) => (value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+  return clean(left) === clean(right);
+}
+
+export async function findSentCopy(
+  token: string,
+  match: { internetMessageId: string | null; conversationId: string | null; subject: string | null; since: Date },
+  fetchImpl: typeof fetch = fetch,
+) {
+  if (match.internetMessageId) {
+    const filter = encodeURIComponent(`internetMessageId eq '${match.internetMessageId.replace(/'/g, "''")}'`);
+    const page = await graphJson<{ value?: { id: string; isDraft?: boolean }[] }>(`${GRAPH}/me/messages?$filter=${filter}&$select=id,isDraft&$top=10`, token, fetchImpl);
+    if ((page.value ?? []).some((message) => message.isDraft === false)) return true;
+  }
+  if (!match.conversationId) return false;
+  const filter = encodeURIComponent(`conversationId eq '${match.conversationId.replace(/'/g, "''")}'`);
+  const page = await graphJson<{ value?: { id: string; subject?: string | null; sentDateTime?: string | null; isDraft?: boolean }[] }>(
+    `${GRAPH}/me/mailFolders/sentitems/messages?$filter=${filter}&$select=id,subject,sentDateTime,isDraft&$top=50`,
+    token,
+    fetchImpl,
+  );
+  const since = match.since.getTime() - SENT_LOOKBACK_MS;
+  return (page.value ?? []).some(
+    (message) => message.isDraft !== true && sameSubject(message.subject, match.subject) && new Date(message.sentDateTime ?? 0).getTime() >= since,
+  );
 }
 
 export type DraftMode = "new" | "reply" | "reply_all" | "forward";

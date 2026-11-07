@@ -6,7 +6,7 @@ import DeferralNotice from "@/components/mail/deferral-notice";
 import MessageAttachments from "@/components/mail/message-attachments";
 import ReadStatus from "@/components/mail/read-status";
 import ThreadPeople from "@/components/mail/thread-people";
-import { loadSummary, type ThreadSummaryText } from "@/components/mail/mail-cache";
+import { cancelReminder, loadSummary, type ThreadSummaryText } from "@/components/mail/mail-cache";
 import { watchSwipe, type SwipeHandlers } from "@/components/mail/swipe";
 import MailComposer, { type ComposerStart } from "@/components/mail/mail-composer";
 import Button from "@/components/_ui/button";
@@ -965,8 +965,13 @@ export default function ThreadReader({
                         variant="ghost"
                         size="sm"
                         onClick={() => {
-                          setCancelledFollowUp(followUp.id);
-                          void preparedAction(followUp.id, "cancel_reminder");
+                          const id = followUp.id;
+                          setCancelledFollowUp(id);
+                          setNotice(null);
+                          cancelReminder(id).catch((problem: Error) => {
+                            setCancelledFollowUp((current) => (current === id ? null : current));
+                            setNotice(problem.message);
+                          });
                         }}
                       >
                         Don&apos;t remind me

@@ -13,7 +13,9 @@ import {
   fetchMicrosoftClassifications,
   fetchMicrosoftDelta,
   fetchMicrosoftMessageFolder,
+  disconnectedMessage,
   GraphMailError,
+  reconnectProblem,
   initialDeltaUrl,
   listMicrosoftFolders,
 } from "@/lib/mail/microsoft";
@@ -198,8 +200,17 @@ async function loadSource(actor: UserActor, sourceId: string): Promise<Source | 
 
 export async function mailSourceToken(actor: UserActor, sourceId: string, fetchImpl: typeof fetch = fetch) {
   const source = await loadSource(actor, sourceId);
-  if (!source) throw new CrmError("not_found", "That mail account is no longer connected. Connect it again in Settings › Email.", 404);
-  const token = await currentToken(source.tokens, fetchImpl);
+  if (!source) {
+    const email = await withActor(actor, async (db) => {
+      const result = await db.query<{ email: string }>("select email from crm.mail_sources where id = $1 and user_id = $2", [sourceId, actor.userId]);
+      return result.rows[0]?.email ?? null;
+    });
+    throw new CrmError("not_found", email ? disconnectedMessage(email) : "That mail account is no longer connected. Connect it again in Settings › Email.", 404);
+  }
+  const token = await currentToken(source.tokens, fetchImpl).catch((error) => {
+    const reconnect = reconnectProblem(error, source.email);
+    throw reconnect ? new CrmError("upstream_error", reconnect, 502) : error;
+  });
   if (token.expiresAt !== source.tokens.accessTokenExpiresAt) await withActor(actor, (db) => saveToken(db, source, token));
   return token.accessToken;
 }
@@ -604,8 +615,9 @@ export async function syncMail(
         }
       }
     } catch (error) {
-      lastError = error instanceof GraphMailError || error instanceof Error ? error.message.slice(0, 500) : "Mail sync failed.";
-      report.errors.push(`${source.email}: ${lastError}`);
+      const reconnect = reconnectProblem(error, source.email);
+      lastError = reconnect ?? (error instanceof GraphMailError || error instanceof Error ? error.message.slice(0, 500) : "Mail sync failed.");
+      report.errors.push(reconnect ?? `${source.email}: ${lastError}`);
     } finally {
       await withActor(actor, (db) =>
         db.query(

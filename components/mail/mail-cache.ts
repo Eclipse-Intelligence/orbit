@@ -26,11 +26,107 @@ function listKey(query: ListQuery) {
   return `${query.query ? "search" : query.view}|${query.account ?? ""}|${query.query}`;
 }
 
+export function sameList(left: ListQuery, right: ListQuery) {
+  return listKey(left) === listKey(right);
+}
+
+export const OFFLINE = "Orbit couldn't reach the server. Check your connection and try again.";
+
+export function statusProblem(status: number) {
+  if (status === 401) return "Your session has ended. Sign in again.";
+  if (status === 429) return "Too many requests at once. Wait a moment and try again.";
+  if (status === 504) return "Orbit's server took too long to answer. Try again.";
+  if (status >= 500) return `Orbit's server had a problem (${status}). Try again.`;
+  return `Orbit's server refused that (${status}). Try again.`;
+}
+
 async function getJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, { cache: "no-store", ...init });
+  const response = await fetch(url, { cache: "no-store", ...init }).catch(() => null);
+  if (!response) throw new Error(OFFLINE);
   const body = (await response.json().catch(() => ({}))) as T & { error?: string };
-  if (!response.ok) throw new Error(body.error ?? "Mail didn't load. Try again.");
+  if (!response.ok) throw new Error(body.error ?? statusProblem(response.status));
   return body;
+}
+
+const PROBLEM_REPEAT_MS = 5 * 60_000;
+let shownProblem: { message: string; at: number } | null = null;
+
+export function refreshProblem(message: string | null, now = Date.now()) {
+  if (!message) {
+    shownProblem = null;
+    return null;
+  }
+  if (shownProblem?.message === message && now - shownProblem.at < PROBLEM_REPEAT_MS) return null;
+  shownProblem = { message, at: now };
+  return message;
+}
+
+const dwellReads = new Set<string>();
+
+export function dwellReadDue(key: string, latestId: string | null | undefined) {
+  return !dwellReads.has(`${key}|${latestId ?? ""}`);
+}
+
+export function noteDwellRead(key: string, latestId: string | null | undefined) {
+  dwellReads.add(`${key}|${latestId ?? ""}`);
+}
+
+export function forgetDwellRead(key: string) {
+  for (const entry of [...dwellReads]) if (entry.startsWith(`${key}|`)) dwellReads.delete(entry);
+}
+
+export function restoreToList(origin: ListQuery, thread: ThreadSummary) {
+  const cached = lists.get(listKey(origin));
+  if (!cached || cached.threads.some((item) => item.key === thread.key)) return;
+  const index = cached.threads.findIndex((item) => (item.latestAt ?? "") < (thread.latestAt ?? ""));
+  const threads = index === -1 ? [...cached.threads, thread] : [...cached.threads.slice(0, index), thread, ...cached.threads.slice(index)];
+  lists.set(listKey(origin), { ...cached, threads });
+}
+
+const queuedDrafts = new Set<string>();
+
+function withoutQueued(detail: ThreadDetail) {
+  if (!detail.drafts?.some((draft) => queuedDrafts.has(draft.id))) return detail;
+  return { ...detail, drafts: detail.drafts.filter((draft) => !queuedDrafts.has(draft.id)) };
+}
+
+function hideDraft(id: string | null | undefined) {
+  if (!id) return;
+  queuedDrafts.add(id);
+  for (const [key, detail] of details) {
+    const kept = withoutQueued(detail);
+    if (kept !== detail) details.set(key, kept);
+  }
+}
+
+export function holdQueuedDraft(current: string | null, payload: Promise<{ id: string | null }>) {
+  hideDraft(current);
+  void payload.then((value) => hideDraft(value.id)).catch(() => undefined);
+  return () => {
+    if (current) queuedDrafts.delete(current);
+    void payload.then((value) => value.id && queuedDrafts.delete(value.id)).catch(() => undefined);
+  };
+}
+
+export function newSendKey() {
+  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+export function unscheduleDraft(id: string) {
+  return getJson<{ draft: MailDraft | null }>(`/api/mail/drafts/schedule?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+export function cancelReminder(id: string) {
+  return getJson<{ ok: boolean }>("/api/mail/prepared", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id, action: "cancel_reminder" }),
+  });
 }
 
 export function cachedList(query: ListQuery) {
@@ -60,7 +156,7 @@ export function cachedThread(key: string) {
 }
 
 export function storeThread(detail: ThreadDetail) {
-  details.set(detail.key, detail);
+  details.set(detail.key, withoutQueued(detail));
 }
 
 export function forgetThread(key: string) {
@@ -73,7 +169,8 @@ export function loadThread(key: string, fresh = false) {
   const inflight = pending.get(key);
   if (inflight) return inflight;
   const request = getJson<ThreadDetail>(`/api/mail/thread?key=${encodeURIComponent(key)}`)
-    .then((detail) => {
+    .then((loaded) => {
+      const detail = withoutQueued(loaded);
       details.set(key, detail);
       return detail;
     })
@@ -111,7 +208,7 @@ export function fetchScheduled() {
 }
 
 export function syncNow() {
-  return getJson<{ stored: number; removed: number }>("/api/mail/sync", { method: "POST" });
+  return getJson<{ stored: number; removed: number; problem?: string | null }>("/api/mail/sync", { method: "POST" });
 }
 
 export function loadSummary(key: string, latestId: string) {

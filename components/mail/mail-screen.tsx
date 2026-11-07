@@ -20,16 +20,22 @@ import type { Viewer } from "@/components/crm/viewer";
 import {
   cachedList,
   cachedThread,
+  dwellReadDue,
   fetchList,
   fetchNav,
   fetchScheduled,
   postSenderSplit,
   askAi,
+  forgetDwellRead,
   forgetOtherLists,
   forgetThread,
   loadThread,
+  noteDwellRead,
   postAction,
   prefetchThreads,
+  refreshProblem,
+  restoreToList,
+  sameList,
   storeList,
   storeThread,
   syncNow,
@@ -314,7 +320,18 @@ export default function MailScreen({
     const target = latest.current.query;
     const token = request.current;
     setSyncing(true);
-    (sync ? syncNow().catch(() => null) : Promise.resolve(null))
+    let problem: string | null = null;
+    (sync
+      ? syncNow().then(
+          (result) => {
+            problem = result.problem ?? null;
+          },
+          (error: Error) => {
+            problem = `Mail didn't sync. ${error.message}`;
+          },
+        )
+      : Promise.resolve()
+    )
       .then(() => Promise.all([fetchList(target), fetchNav()]))
       .then(([fresh, freshNav]) => {
         setNav(freshNav);
@@ -338,8 +355,14 @@ export default function MailScreen({
           };
         });
       })
-      .catch(() => null)
-      .finally(() => setSyncing(false));
+      .catch((error: Error) => {
+        problem = problem ?? `Mail didn't refresh. ${error.message}`;
+      })
+      .finally(() => {
+        setSyncing(false);
+        const shown = refreshProblem(problem);
+        if (shown) showToast({ message: shown, tone: "alert" });
+      });
   }
 
   function more() {
@@ -363,9 +386,10 @@ export default function MailScreen({
       });
   }
 
-  function restore(thread: ThreadSummary, from: string) {
-    setPage((existing) => (existing ? { ...existing, threads: insertByDate(existing.threads, thread) } : existing));
-    if (thread.unread && inInbox(from)) setNav((existing) => shiftUnread(existing, thread.sourceId, 1));
+  function restore(thread: ThreadSummary, origin: ListQuery) {
+    if (sameList(latest.current.query, origin)) setPage((existing) => (existing ? { ...existing, threads: insertByDate(existing.threads, thread) } : existing));
+    else restoreToList(origin, thread);
+    if (thread.unread && !origin.query && inInbox(origin.view)) setNav((existing) => shiftUnread(existing, thread.sourceId, 1));
   }
 
   function snooze(keys: string[]) {
@@ -401,7 +425,7 @@ export default function MailScreen({
     postSenderSplit(sender, split)
       .then(() => fetchNav().then(setNav).catch(() => null))
       .catch((error: Error) => {
-        if (thread && leaves) restore(thread, target.view);
+        if (thread && leaves) restore(thread, target);
         showToast({ message: error.message, tone: "alert" });
       });
   }
@@ -480,7 +504,7 @@ export default function MailScreen({
               await run(thread);
             } catch (error) {
               failures.push(error instanceof Error ? error.message : "Outlook refused a change.");
-              restore(thread, from);
+              restore(thread, target);
             }
           }
         }),
@@ -505,7 +529,7 @@ export default function MailScreen({
               label: "Undo",
               run: () => {
                 void pending.then(() => {
-                  chosen.forEach((thread) => restore(thread, from));
+                  chosen.forEach((thread) => restore(thread, target));
                   void runAll((thread) => postAction(thread.key, "inbox", undoFrom)).then(() => {
                     forgetOtherLists(latest.current.query);
                     fetchNav().then(setNav).catch(() => null);
@@ -522,7 +546,7 @@ export default function MailScreen({
       .finally(() => chosen.forEach((thread) => removing.current.delete(thread.key)));
   }
 
-  function act(key: string, action: ReaderAction, quiet = false, until?: string, detail?: string) {
+  function act(key: string, action: ReaderAction, quiet = false, until?: string, detail?: string, silent = false) {
     const { page: currentPage, query: target } = latest.current;
     const thread = currentPage?.threads.find((item) => item.key === key);
     if (!thread) return;
@@ -549,7 +573,7 @@ export default function MailScreen({
               label: "Undo",
               run: () => {
                 void pendingMove.then(() => {
-                  restore(thread, from);
+                  restore(thread, target);
                   postAction(key, "inbox", undoFrom)
                     .then(() => {
                       forgetOtherLists(latest.current.query);
@@ -566,13 +590,16 @@ export default function MailScreen({
           fetchNav().then(setNav).catch(() => null);
         })
         .catch((error: Error) => {
-          restore(thread, from);
+          restore(thread, target);
           showToast({ message: error.message, tone: "alert" });
         })
         .finally(() => removing.current.delete(key));
       return;
     }
-    if (action === "unread") keptUnread.current.add(key);
+    if (action === "unread") {
+      keptUnread.current.add(key);
+      forgetDwellRead(key);
+    }
     const change = action === "read" && thread.unread ? -1 : action === "unread" && !thread.unread ? 1 : 0;
     setPage((existing) => (existing ? { ...existing, threads: existing.threads.map((item) => (item.key === key ? patchSummary(item, action) : item)) } : existing));
     setDetails((existing) => (existing[key] ? { ...existing, [key]: patchDetail(existing[key], action) } : existing));
@@ -589,7 +616,7 @@ export default function MailScreen({
         forgetThread(key);
         fetchDetail(key, true);
         if (change && inInbox(from)) setNav((existing) => shiftUnread(existing, thread.sourceId, -change));
-        showToast({ message: error.message, tone: "alert" });
+        if (!silent) showToast({ message: error.message, tone: "alert" });
       });
   }
 
@@ -618,11 +645,15 @@ export default function MailScreen({
   usePullToRefresh(listScroller, listBody, pullMark, pullRefresh);
 
   useEffect(() => {
-    if (!cursor || !current?.unread || keptUnread.current.has(cursor)) return;
+    if (!cursor || !current?.unread || keptUnread.current.has(cursor) || !dwellReadDue(cursor, current.latestId)) return;
     const key = cursor;
-    const timer = window.setTimeout(() => actRef.current(key, "read", true), READ_DWELL_MS);
+    const latestId = current.latestId;
+    const timer = window.setTimeout(() => {
+      noteDwellRead(key, latestId);
+      actRef.current(key, "read", true, undefined, undefined, true);
+    }, READ_DWELL_MS);
     return () => window.clearTimeout(timer);
-  }, [cursor, current?.unread]);
+  }, [cursor, current?.unread, current?.latestId]);
 
   useEffect(() => {
     const onOpen = (event: Event) => {
