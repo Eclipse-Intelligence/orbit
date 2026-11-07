@@ -16,7 +16,7 @@ import type { Viewer } from "@/components/crm/viewer";
 import { patchOpportunityAction, type OpportunityPatch } from "@/app/(crm)/records";
 import { formatMoney } from "@/lib/companies";
 import { companyHref } from "@/lib/crm/hrefs";
-import { formatDateLabel } from "@/lib/date-input";
+import { formatDateLabel, instantDateLabel } from "@/lib/date-input";
 import type { StageStay } from "@/lib/crm/pipeline-history";
 import type { CompanyContext, Member, Opportunity, PipelineStage } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
@@ -28,8 +28,6 @@ const STATUS: Record<Opportunity["status"], { label: string; tone: "blue" | "gre
   won: { label: "Won", tone: "green" },
   lost: { label: "Lost", tone: "red" },
 };
-
-const LONDON_DAY = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit" });
 
 function stayDays(days: number) {
   const whole = Math.floor(days);
@@ -227,7 +225,7 @@ export default function OpportunityRecord({
                   <li key={`${stay.stageId ?? "none"}-${stay.enteredAt}`} className="flex items-baseline justify-between gap-3 text-[14px] leading-5">
                     <span className="min-w-0 truncate">{stay.stageName ?? "No stage"}</span>
                     <span className="caption-style text-subtle shrink-0 tabular-nums">
-                      {formatDateLabel(LONDON_DAY.format(new Date(stay.enteredAt)))}
+                      {instantDateLabel(stay.enteredAt)}
                       {stay.leftAt === null && opportunity.status !== "open" ? "" : ` · ${stayDays(stay.daysInStage)}`}
                     </span>
                   </li>
@@ -242,7 +240,7 @@ export default function OpportunityRecord({
                   {tasks.slice(0, 8).map((task) => (
                     <li key={task.id} className="flex items-baseline justify-between gap-3 text-[14px] leading-5">
                       <span className="min-w-0 truncate">{task.title}</span>
-                      {task.dueAt && <span className="caption-style text-subtle shrink-0 tabular-nums">{formatDateLabel(task.dueAt.slice(0, 10))}</span>}
+                      {task.dueAt && <span className="caption-style text-subtle shrink-0 tabular-nums">{instantDateLabel(task.dueAt)}</span>}
                     </li>
                   ))}
                 </ul>

@@ -10,6 +10,7 @@ import { canonicalDomain, parseTagList } from "@/lib/crm/normalize";
 import { assertScope } from "@/lib/crm/scopes";
 import type { Actor, Activity, Company, CompanyWrite, Contact, Opportunity, Task } from "@/lib/crm/types";
 import { withActor } from "@/lib/crm/context";
+import { EXPORT_ROW_LIMIT, type CsvCell, type CsvExport } from "@/lib/csv";
 
 export type ImportResult = {
   created: number;
@@ -244,30 +245,52 @@ function countBulk(
   return summary;
 }
 
-async function collect<T>(load: (offset: number) => Promise<{ data: T[]; total: number }>) {
+export const EXPORT_PAGE_SIZE = 100;
+
+export const EXPORT_BUDGET_MS = 50_000;
+
+export type Collected<T> = { rows: T[]; total: number; truncated: boolean; outOfTime: boolean };
+
+type CollectOptions = { budgetMs?: number; now?: () => number };
+
+export async function collectForExport<T>(
+  load: (offset: number, limit: number) => Promise<{ data: T[]; total: number }>,
+  options: CollectOptions = {},
+): Promise<Collected<T>> {
+  const now = options.now ?? Date.now;
+  const deadline = now() + (options.budgetMs ?? EXPORT_BUDGET_MS);
   const rows: T[] = [];
-  let offset = 0;
   let total = 0;
-  do {
-    const page = await load(offset);
+  let outOfTime = false;
+  while (rows.length < EXPORT_ROW_LIMIT) {
+    if (rows.length > 0 && now() >= deadline) {
+      outOfTime = true;
+      break;
+    }
+    const page = await load(rows.length, Math.min(EXPORT_PAGE_SIZE, EXPORT_ROW_LIMIT - rows.length));
+    total = Math.max(page.total, rows.length + page.data.length);
     rows.push(...page.data);
-    total = page.total;
-    offset += page.data.length;
-    if (page.data.length === 0) break;
-  } while (rows.length < total && offset < 5000);
-  return rows;
+    if (page.data.length === 0 || rows.length >= page.total) break;
+  }
+  const kept = rows.slice(0, EXPORT_ROW_LIMIT);
+  const truncated = total > kept.length;
+  return { rows: kept, total, truncated, outOfTime: truncated && outOfTime };
+}
+
+export function csvExport<T>(collected: Collected<T>, rows: CsvCell[][]): CsvExport {
+  return { rows, total: collected.total, exported: collected.rows.length, truncated: collected.truncated, outOfTime: collected.outOfTime };
 }
 
 export async function exportCompaniesCsv(actor: Actor) {
-  const rows = await collect<Company>((offset) =>
-    listCompanies(actor, { limit: 100, offset, sort: "name", order: "asc" }),
+  const collected = await collectForExport<Company>((offset, limit) =>
+    listCompanies(actor, { limit, offset, sort: "name", order: "asc" }),
   );
-  return companiesCsvRows(rows);
+  return csvExport(collected, companiesCsvRows(collected.rows));
 }
 
 export async function exportContactsCsv(actor: Actor) {
-  const rows = await collect<Contact>((offset) => listContacts(actor, { limit: 100, offset }));
-  return contactsCsvRows(rows);
+  const collected = await collectForExport<Contact>((offset, limit) => listContacts(actor, { limit, offset }));
+  return csvExport(collected, contactsCsvRows(collected.rows));
 }
 
 export function contactsCsvRows(rows: Contact[]) {
@@ -291,8 +314,9 @@ export function contactsCsvRows(rows: Contact[]) {
 }
 
 export async function exportOpportunitiesCsv(actor: Actor) {
-  const rows = await collect<Opportunity>((offset) => listOpportunities(actor, { limit: 100, offset }));
-  return [
+  const collected = await collectForExport<Opportunity>((offset, limit) => listOpportunities(actor, { limit, offset }));
+  const rows = collected.rows;
+  return csvExport(collected, [
     ["Name", "Company", "Stage", "Status", "Value", "Currency", "Expected close", "Source"],
     ...rows.map((opportunity) => [
       opportunity.name,
@@ -304,12 +328,13 @@ export async function exportOpportunitiesCsv(actor: Actor) {
       opportunity.expectedCloseDate ?? "",
       opportunity.source ?? "",
     ]),
-  ];
+  ]);
 }
 
 export async function exportActivitiesCsv(actor: Actor) {
-  const rows = await collect<Activity>((offset) => listActivities(actor, { limit: 100, offset }));
-  return [
+  const collected = await collectForExport<Activity>((offset, limit) => listActivities(actor, { limit, offset }));
+  const rows = collected.rows;
+  return csvExport(collected, [
     ["Type", "Title", "Body", "Company", "Contact", "When"],
     ...rows.map((activity) => [
       activity.type,
@@ -319,14 +344,15 @@ export async function exportActivitiesCsv(actor: Actor) {
       activity.contactName ?? "",
       activity.occurredAt,
     ]),
-  ];
+  ]);
 }
 
 export async function exportTasksCsv(actor: Actor) {
-  const rows = await collect<Task>((offset) =>
-    listTasks(actor, { limit: 100, offset, includeArchived: false, view: "none" }),
+  const collected = await collectForExport<Task>((offset, limit) =>
+    listTasks(actor, { limit, offset, includeArchived: false, view: "none" }),
   );
-  return [
+  const rows = collected.rows;
+  return csvExport(collected, [
     ["Title", "Company", "Due", "Priority", "Completed"],
     ...rows.map((task) => [
       task.title,
@@ -335,5 +361,5 @@ export async function exportTasksCsv(actor: Actor) {
       task.priority,
       task.completedAt ?? "",
     ]),
-  ];
+  ]);
 }

@@ -5,6 +5,7 @@ import { createBoard } from "@/lib/crm/boards";
 import { archiveActivity, createActivity, listActivities, updateActivity } from "@/lib/crm/activities";
 import { archiveCompany, createCompany, getCompany, unarchiveCompany, updateCompany } from "@/lib/crm/companies";
 import { createContact, getContact, updateContact } from "@/lib/crm/contacts";
+import { mergeCompanies, mergeContacts } from "@/lib/crm/merge";
 import { CrmError } from "@/lib/crm/errors";
 import { archiveOpportunity, createOpportunity, getOpportunity, listPipeline, updateOpportunity } from "@/lib/crm/opportunities";
 import { setRelationshipOverride } from "@/lib/crm/relationship-override";
@@ -351,6 +352,42 @@ describe("undoing changes", () => {
       editor.release();
     }
     assert.equal((await listActivities(owner, { companyId: company.id })).data[0].title, "Draft three");
+  });
+
+  it("refuses every part of a merge and doesn't offer it", async () => {
+    const provenance = { operation: "merge_test", source: "web" };
+    const keep = (await createCompany(owner, { name: "Merge Keep Ltd", domain: "merge-keep-undo.test" })).body.company;
+    const duplicate = (await createCompany(owner, { name: "Merge Keep Limited" })).body.company;
+    await createTask(owner, { title: "Chase the merged one", companyId: duplicate.id });
+    await mergeCompanies(owner, keep.id, duplicate.id, provenance);
+    const person = (await createContact(owner, { firstName: "Mia", lastName: "Merge", email: "mia@merge-undo.test" })).body.contact;
+    const twin = (await createContact(owner, { firstName: "Mia", lastName: "Merge" })).body.contact;
+    await mergeContacts(owner, person.id, twin.id, provenance);
+
+    const changes = await listRecentChanges(owner, { limit: 50 });
+    const archived = changes.find((item) => item.entityId === duplicate.id && item.type === "company.archived");
+    assert.ok(archived);
+    assert.equal(archived.canUndo, false);
+    assert.match(archived.reason ?? "", /merge can't be undone/);
+    assert.match(archived.summary, /merged into Merge Keep Ltd/);
+    const twinArchived = changes.find((item) => item.entityId === twin.id && item.type === "contact.archived");
+    assert.equal(twinArchived?.canUndo, false);
+    assert.ok(!changes.some((item) => item.canUndo && [duplicate.id, twin.id].includes(item.entityId) && item.type.endsWith(".archived")));
+
+    const events = await getAdminPool().query<{ id: string; event_type: string }>(
+      `select id, event_type from crm.audit_events
+       where workspace_id = $1 and entity_id = any($2::uuid[])
+         and event_type in ('company.merged', 'company.archived', 'contact.merged', 'contact.archived')`,
+      [owner.workspaceId, [keep.id, duplicate.id, person.id, twin.id]],
+    );
+    assert.equal(events.rows.length, 4);
+    for (const event of events.rows) {
+      const described = await describeUndo(owner, event.id);
+      assert.equal(described.canUndo, false, event.event_type);
+      assert.match(described.reason ?? "", /merge can't be undone/, event.event_type);
+      await assert.rejects(() => undoAuditEvent(owner, event.id, UNDO), refused(/merge can't be undone/));
+    }
+    assert.ok((await getCompany(owner, duplicate.id)).archivedAt);
   });
 
   it("refuses changes it can't safely reverse, and other people's changes", async () => {

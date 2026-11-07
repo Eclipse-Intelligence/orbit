@@ -27,7 +27,7 @@ import {
   type LiveCopy,
 } from "@/lib/docs/live/persist";
 import { liveText, pendingLiveDoc, plainLiveDoc, setLiveText } from "@/lib/docs/live/ydoc";
-import { cleanTitle, excerptFrom, lineAround, linkKey, parseDoc, parseLinks, rewriteLinkTitle, wordCount } from "@/lib/docs/markdown";
+import { cleanTitle, excerptFrom, lineAround, linkKey, maskCode, parseDoc, parseLinks, rewriteLinkTitle, wordCount } from "@/lib/docs/markdown";
 import {
   DOC_CONTENT_MAX,
   DOC_READ_WINDOW,
@@ -220,8 +220,83 @@ type LinkPlan = { content: string; links: LinkRow[]; tags: string[]; mentions: D
 
 type LinkedPage = { id: string; workspace_id: string; user_id: string | null; kind: string };
 
-async function planLinks(db: Db, page: LinkedPage, content: string, depth = 0, preferWorkspace = page.workspace_id): Promise<LinkPlan> {
+const MERGE_HOPS = 5;
+
+async function mergedMentionTargets(db: Db, mentions: DocMention[]) {
+  const ids = [...new Set(mentions.filter((mention) => mention.kind === "company" || mention.kind === "contact").map((mention) => mention.id))];
+  const keptFor = new Map<string, string>();
+  let frontier = ids;
+  for (let hop = 0; hop < MERGE_HOPS && frontier.length > 0; hop += 1) {
+    const archived = await db.query<{ id: string }>(
+      `select id::text from crm.companies where id = any($1::uuid[]) and archived_at is not null
+       union all
+       select id::text from crm.contacts where id = any($1::uuid[]) and archived_at is not null`,
+      [frontier],
+    );
+    if (archived.rows.length === 0) break;
+    const merged = await db.query<{ id: string; kept: string }>(
+      `select distinct on (e.entity_id) e.entity_id::text as id, e.changes->>'mergedInto' as kept
+       from crm.audit_events e
+       where e.entity_id = any($1::uuid[]) and e.changes ? 'mergedInto'
+         and e.event_type in ('company.archived', 'contact.archived')
+         and not exists (
+           select 1 from crm.audit_events later
+           where later.workspace_id = e.workspace_id and later.entity_type = e.entity_type and later.entity_id = e.entity_id
+             and later.created_at > e.created_at
+             and (
+               later.event_type like '%.restored' or later.event_type like '%.unarchived'
+               or (later.changes -> 'after' ? 'archivedAt' and later.changes -> 'after' -> 'archivedAt' = 'null'::jsonb)
+             )
+         )
+       order by e.entity_id, e.created_at desc`,
+      [archived.rows.map((row) => row.id)],
+    );
+    frontier = [];
+    for (const row of merged.rows) {
+      if (!isUuid(row.kept) || keptFor.has(row.id)) continue;
+      keptFor.set(row.id, row.kept);
+      if (!keptFor.has(row.kept)) frontier.push(row.kept);
+    }
+  }
+  const targets = new Map<string, string>();
+  for (const id of ids) {
+    let target = id;
+    for (let hop = 0; hop < MERGE_HOPS && keptFor.has(target); hop += 1) target = keptFor.get(target)!;
+    if (target !== id) targets.set(id, target);
+  }
+  return targets;
+}
+
+const RECORD_MENTION = /@\[[^[\]\n]{1,200}\]\((?:contact|company):([0-9a-f-]{36})\)/g;
+
+async function repointMergedMentions(db: Db, content: string, mentions: DocMention[]) {
+  const targets = await mergedMentionTargets(db, mentions);
+  if (targets.size === 0) return content;
+  let rewritten = "";
+  let last = 0;
+  for (const match of maskCode(content).matchAll(RECORD_MENTION)) {
+    const kept = targets.get(match[1]);
+    if (!kept) continue;
+    const at = match.index + match[0].length - 1 - match[1].length;
+    rewritten += content.slice(last, at) + kept;
+    last = at + match[1].length;
+  }
+  return rewritten + content.slice(last);
+}
+
+async function planLinks(
+  db: Db,
+  page: LinkedPage,
+  content: string,
+  depth = 0,
+  preferWorkspace = page.workspace_id,
+  mentionsChecked = false,
+): Promise<LinkPlan> {
   const parsed = parseDoc(content);
+  if (!mentionsChecked && parsed.mentions.length > 0) {
+    const repointed = await repointMergedMentions(db, content, parsed.mentions);
+    if (repointed !== content) return planLinks(db, page, repointed, depth, preferWorkspace, true);
+  }
   const raws = [...new Set(parsed.links.flatMap((link) => (link.heading !== null && link.title ? [link.target, link.title] : [link.target])))];
   const found = new Map<string, { key: string; id: string | null; title: string | null }>();
   if (raws.length > 0) {
@@ -287,7 +362,7 @@ async function planLinks(db: Db, page: LinkedPage, content: string, depth = 0, p
   }
   if (renames.length > 0 && depth === 0) {
     for (const rename of renames) rewritten = rewriteLinkTitle(rewritten, rename.from, rename.to).content;
-    if (rewritten !== content) return planLinks(db, page, rewritten, depth + 1, preferWorkspace);
+    if (rewritten !== content) return planLinks(db, page, rewritten, depth + 1, preferWorkspace, true);
   }
   return { content: rewritten, links: [...rows.values()], tags: parsed.tags, mentions: parsed.mentions };
 }
