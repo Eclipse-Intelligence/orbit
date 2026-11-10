@@ -800,7 +800,7 @@ function followUpLines(value: unknown) {
   if (!followUp) return [];
   const when = `${followUp.afterDays} working ${followUp.afterDays === 1 ? "day" : "days"}`;
   return [
-    `Follow-up after ${when} if no reply${followUp.body ? ":" : ". Orbit writes it then."}`,
+    `Follow-up sent after ${when} if no reply${followUp.body ? ":" : ". Orbit writes it then."}`,
     followUp.body ?? "",
   ].filter(Boolean);
 }
@@ -2271,7 +2271,7 @@ const TOOL_LIST: AssistantTool[] = [
         [`${id}:what`]: conversationLine(conversation),
         [`${id}:people`]: conversation.participants.map((person) => person.name || person.email).filter(Boolean).join(", "),
         [`${id}:filed`]: conversation.status === "unfiled" ? "" : conversation.status === "filed" ? "This conversation is already filed." : "This conversation is no longer waiting to be filed.",
-                ...(contact ? { [`${contactId}:company`]: contact.companyName ?? "" } : {}),
+        ...(contact ? { [`${contactId}:company`]: contact.companyName ?? "" } : {}),
         ...(email ? { [`${id}:person`]: newPerson ? (newPerson.name ? `${newPerson.name} (${newPerson.email})` : newPerson.email) : "", [`${id}:known`]: newPerson ? "" : "yes" } : {}),
       };
     },
@@ -3320,7 +3320,7 @@ const TOOL_LIST: AssistantTool[] = [
   },
   {
     name: "update_activity",
-    label: "Editing an activity",
+    label: "Updating an activity",
     write: true,
     description:
       "Edit a logged activity by its id from list_activities, get_company or get_contact: its type, title, text, when it happened, and the company, person and opportunity it is on. Pass only what changes. Emails filed from Mail only take a new company or opportunity. Calls and meetings from Teams, Granola or a transcript only take a new title, company, person or opportunity. Only the person who logged it, or an owner or admin, can edit it, and it can be undone with undo_change.",
@@ -4280,8 +4280,8 @@ const TOOL_LIST: AssistantTool[] = [
       required: ["kind", "ids"],
     },
     describe: (args, name) => ({
-      title: `Tag ${strings(args.ids).length} ${args.kind === "contact" ? "people" : "companies"}`,
-      lines: [...fieldLines(args, { add: "Add", remove: "Remove" }), nameList(strings(args.ids), name, args.kind === "contact" ? "People" : "Companies")],
+      title: `Tag ${strings(args.ids).length} ${args.kind === "contact" ? "contacts" : "companies"}`,
+      lines: [...fieldLines(args, { add: "Add", remove: "Remove" }), nameList(strings(args.ids), name, args.kind === "contact" ? "Contacts" : "Companies")],
     }),
     run: async (actor, args) => {
       const kind = oneOf(args.kind, ["company", "contact"] as const) ?? "company";
@@ -5503,6 +5503,7 @@ const TOOL_LIST: AssistantTool[] = [
         lines: [
           kinds.length ? `Runs: ${kinds.map((kind) => LEARNING_LABELS[kind]).join(", ")}` : "",
           kinds.length ? `Takes up to ${counted(kinds.length, "minute", "minutes")}.` : "",
+          "Uses model calls.",
           onlyBrief ? "Replaces today's brief." : "",
         ],
       };

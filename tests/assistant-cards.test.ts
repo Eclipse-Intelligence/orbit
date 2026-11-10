@@ -145,7 +145,7 @@ describe("assistant approval cards", () => {
     ).rows[0].id;
     const followUpArgs = { draftId: withFollowUp, body: "Hi Jane" };
     const followUpCard = describeAction("send_email", followUpArgs, await recordNames(owner, [followUpArgs], ["send_email"]));
-    assert.ok(followUpCard.lines.includes("Follow-up after 3 working days if no reply:"), followUpCard.lines.join("\n"));
+    assert.ok(followUpCard.lines.includes("Follow-up sent after 3 working days if no reply:"), followUpCard.lines.join("\n"));
     assert.ok(followUpCard.lines.includes("Just checking this landed."), followUpCard.lines.join("\n"));
     assert.ok(!followUpCard.lines.some((line) => line.startsWith("Reminder:")), followUpCard.lines.join("\n"));
     await admin.query("delete from crm.mail_drafts where id = $1", [withFollowUp]);

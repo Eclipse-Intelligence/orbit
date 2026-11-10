@@ -399,9 +399,9 @@ export const STEP_LABELS: Record<StepType, string> = {
 export const STEP_HINTS: Partial<Record<StepType, string>> = {
   ai: "Returns named answers for later steps.",
   decide: "Answers questions from the live web.",
-  filter: "Stop here unless a condition is true.",
+  filter: "Stops here unless a condition is true.",
   loop: "Repeats steps for each item in a list.",
-  notify: "Send an in-app notification.",
+  notify: "Sends an in-app notification.",
   find_records: "Lists matching records for For each item.",
   webhook: "Posts the run's data to another app.",
   create_proposal: "Drafts a proposal. Nothing is sent.",

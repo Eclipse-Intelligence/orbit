@@ -325,7 +325,7 @@ export default function TriggerEditor({
       {trigger.type !== "manual" && trigger.type !== "schedule" && trigger.type !== "email_received" && trigger.type !== "proposal_event" && (
         <label className="caption-style text-subtle flex items-center gap-2">
           <Checkbox checked={Boolean(trigger.mine)} onCheckedChange={(value) => onChange({ ...trigger, mine: value === true })} />
-          Only my own changes
+          Only when it&apos;s mine
         </label>
       )}
     </div>

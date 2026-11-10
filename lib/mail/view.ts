@@ -118,7 +118,7 @@ export const OUTCOME_LABELS: Record<UnsubscribeOutcome, string> = {
   unsubscribed: "Unsubscribed",
   requested: "Requested",
   needs_you: "Needs you",
-  failed: "Didn't work",
+  failed: "Failed",
   none: "No unsubscribe link",
 };
 

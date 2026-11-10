@@ -396,7 +396,7 @@ export default function WorkflowEditor({
                 {active ? "On" : "Off"}
               </label>
               {definition.trigger.type === "schedule" ? (
-                <Button variant="secondary" size="sm" disabled={busy !== null} onClick={() => void test()}>
+                <Button variant="secondary" size="sm" disabled={busy !== null} title="AI steps run for real. Nothing is changed or sent." onClick={() => void test()}>
                   {busy === "test" ? "Testing…" : "Test run"}
                 </Button>
               ) : (
@@ -429,7 +429,7 @@ export default function WorkflowEditor({
                           </option>
                         ))}
                       </select>
-                      <Button variant="primary" size="sm" className="self-start" disabled={busy !== null} onClick={() => void test()}>
+                      <Button variant="primary" size="sm" className="self-start" aria-label="Test run on this record" disabled={busy !== null} onClick={() => void test()}>
                         Test run
                       </Button>
                     </div>

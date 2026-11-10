@@ -6,12 +6,16 @@ import { scopesForRole } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { createFolder } from "@/lib/docs/folders";
-import { CHANGED_SINCE_APPROVAL, mergeRewrite } from "@/lib/assistant/docs";
+import { CHANGED_SINCE_APPROVAL, CHANGED_SINCE_APPROVAL_CARD, mergeRewrite } from "@/lib/assistant/docs";
 import { EXTERNAL_NOTICE } from "@/lib/assistant/tools";
 import { createDoc, getDoc, listVersions, saveDoc, setAssistantCanEdit } from "@/lib/docs/store";
 import { createUser, resetDatabase } from "./helpers";
 
 type Reply = { content?: string; tool_calls?: { id: string; name: string; args: Record<string, unknown> }[] };
+
+async function toolMessage(id: string) {
+  return (await getAdminPool().query<{ content: string }>("select content from crm.assistant_messages where tool_call_id = $1 order by created_at desc limit 1", [id])).rows[0]?.content ?? "";
+}
 
 function gateway(replies: Reply[]) {
   const requests: Record<string, unknown>[] = [];
@@ -293,7 +297,8 @@ describe("approved doc edits", () => {
     await decideActions(mark, { conversationId, decisions: [{ id: "call_stale", approve: true }] }, second.emit, { deadline: deadline(), fetchImpl: fake.fetchImpl });
     const decided = lastActions(second.events)[0];
     assert.equal(decided.status, "failed");
-    assert.equal(decided.result, CHANGED_SINCE_APPROVAL);
+    assert.equal(decided.result, CHANGED_SINCE_APPROVAL_CARD);
+    assert.ok((await toolMessage(decided.id)).includes(CHANGED_SINCE_APPROVAL));
     assert.equal((await getDoc(mark, doc.id)).content, "Line one, and Priya's line");
   });
 
@@ -328,7 +333,8 @@ describe("approved doc edits", () => {
     await saveDoc(priya, doc.id, { content: changed });
     const decided = await approve();
     assert.equal(decided.status, "failed");
-    assert.equal(decided.result, CHANGED_SINCE_APPROVAL);
+    assert.equal(decided.result, CHANGED_SINCE_APPROVAL_CARD);
+    assert.ok((await toolMessage(decided.id)).includes(CHANGED_SINCE_APPROVAL));
     assert.equal((await getDoc(mark, doc.id)).content, changed);
   });
 
@@ -338,7 +344,8 @@ describe("approved doc edits", () => {
     await saveDoc(priya, doc.id, { content: `${MINUTES}\n- one more` });
     const decided = await approve();
     assert.equal(decided.status, "failed");
-    assert.equal(decided.result, CHANGED_SINCE_APPROVAL);
+    assert.equal(decided.result, CHANGED_SINCE_APPROVAL_CARD);
+    assert.ok((await toolMessage(decided.id)).includes(CHANGED_SINCE_APPROVAL));
   });
 
   it("merges an approved rewrite with typing elsewhere, and keeps both", async () => {

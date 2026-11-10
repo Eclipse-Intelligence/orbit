@@ -298,7 +298,13 @@ export async function editsWithoutApproval(actor: UserActor, name: string, args:
   return assistantMayEdit(actor, docId);
 }
 
-export const CHANGED_SINCE_APPROVAL = "The note changed since this was proposed, so it wasn't applied. Ask again.";
+export const CHANGED_SINCE_APPROVAL = "The note changed since this was proposed, so it wasn't applied. Read the note again and propose the change again.";
+
+export const CHANGED_SINCE_APPROVAL_CARD = "The note changed since this was proposed, so it wasn't applied. Ask again.";
+
+export function docRefusalForCard(message: string) {
+  return message === CHANGED_SINCE_APPROVAL ? CHANGED_SINCE_APPROVAL_CARD : message;
+}
 
 function refuse(message: string) {
   return new CrmError("conflict", message, 409);

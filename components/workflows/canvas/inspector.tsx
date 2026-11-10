@@ -10,8 +10,8 @@ import { variableOptions } from "@/lib/workflows/variables";
 import { cn } from "@/lib/utils";
 
 const OUTPUT_HINTS: Partial<Record<WorkflowNode["type"], string>> = {
-  loop: "Each item runs once per item. Done carries on afterwards.",
-  approval: "Rejecting stops the run.",
+  loop: "Steps on Each item run once per item. The run then carries on from Done.",
+  approval: "Approve on the Workflows page. Rejecting stops the run.",
 };
 
 export default function Inspector({

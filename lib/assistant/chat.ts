@@ -32,7 +32,7 @@ import { eclipseAvailable } from "@/lib/assistant/eclipse-scope";
 import { isWebApproval, needsWebApproval, webCard, webGateState, WEB_TOOLS } from "@/lib/assistant/web-gate";
 import { linearHere } from "@/lib/crm/linear-connection";
 import { brandOrEmpty } from "@/lib/crm/brand";
-import { approvalFor, editsWithoutApproval, type DocApproval } from "@/lib/assistant/docs";
+import { approvalFor, docRefusalForCard, editsWithoutApproval, type DocApproval } from "@/lib/assistant/docs";
 import type { DocDiffLine } from "@/lib/docs/types";
 import { PROPOSED, type CompanionResult, type CompanionSteer, type Effort } from "@/companion/src/protocol";
 import {
@@ -1540,7 +1540,7 @@ export async function decideActions(
       });
       await update(action.id, {
         status: failed ? "failed" : "done",
-        result: failed ? String((output as { error: unknown }).error) : null,
+        result: failed ? docRefusalForCard(String((output as { error: unknown }).error)) : null,
         ...(chosenAlternative && !failed ? { chose: chosenAlternative.key, title: chosenAlternative.title(action.title), lines: chosenAlternative.lines(action.lines) } : {}),
       });
     }
