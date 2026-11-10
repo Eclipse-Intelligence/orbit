@@ -64,7 +64,7 @@ export default function MoreMenu({
   const owned = page.owner.id === viewerId;
   const placement = { ownerId: page.owner.id, ownShared: page.visibility === "shared", viewerId };
   const destinations = [
-    ...(canPlaceAtTop(placement) || page.folderId === null ? [{ id: null as string | null, name: "No folder" }] : []),
+    ...(canPlaceAtTop(placement) || page.folderId === null ? [{ id: null as string | null, name: "Top level" }] : []),
     ...placeableFolders(nav?.folders ?? [], placement).map((folder) => ({ id: folder.id as string | null, name: folder.name })),
   ];
 
@@ -118,7 +118,7 @@ export default function MoreMenu({
             <ul className="flex flex-col">
               {note && (
                 <Row onClick={() => setView("move")} trailing={<ChevronRightIcon aria-hidden className="text-faint size-3" />}>
-                  Move to…
+                  Move to
                 </Row>
               )}
               {note && <Row onClick={() => close(onRename)}>Rename</Row>}
@@ -134,10 +134,10 @@ export default function MoreMenu({
                 <div className="bg-line-strong mx-1 my-1.5 h-px" />
                 <label className="flex cursor-pointer items-start gap-3 rounded-lg px-2.5 py-2">
                   <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                    <span className="ui-style text-soft">Let the assistant edit without asking</span>
+                    <span className="ui-style text-soft">Assistant can edit without asking</span>
                     <span className="caption-style text-subtle">Its edits are saved as versions, so you can undo them.</span>
                   </span>
-                  <Switch checked={page.assistantCanEdit} onChange={(value) => void setAssistantCanEdit(page.id, value)} label="Let the assistant edit without asking" />
+                  <Switch checked={page.assistantCanEdit} onChange={(value) => void setAssistantCanEdit(page.id, value)} label="Assistant can edit without asking" />
                 </label>
               </>
             )}

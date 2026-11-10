@@ -33,7 +33,7 @@ export function registerProposalTools(server: McpServer, actor: Actor) {
   server.registerTool(
     "list_proposals",
     {
-      description: "List proposals and NDAs, newest first, with status, value, views and the Orbit link. status can be all, draft, open (waiting on a signature), sent, viewed, client_signed, completed, declined, withdrawn or expired.",
+      description: "List proposals and NDAs, newest first, with status, value, views and the Orbit link. status can be all, draft, open (waiting on a signature), sent, viewed (shown as Opened), client_signed, completed, declined, withdrawn or expired.",
       inputSchema: { company_id: z.uuid().optional(), contact_id: z.uuid().optional(), status: z.string().max(20).optional(), kind: z.enum(["proposal", "nda"]).optional(), search: z.string().max(200).optional() },
     },
     async (args) =>

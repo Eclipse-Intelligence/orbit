@@ -288,7 +288,7 @@ export async function docsVersions(actor: UserActor, pageId: string): Promise<Ve
 
 export async function docsVersionBody(actor: UserActor, pageId: string, versionId: string): Promise<VersionBody> {
   const version = await getVersion(actor, versionId);
-  if (version.pageId !== pageId) throw new CrmError("not_found", "That version isn't one of this doc's versions.", 404);
+  if (version.pageId !== pageId) throw new CrmError("not_found", "That version isn't one of this note's versions.", 404);
   return { id: version.id, title: version.title, body: version.content };
 }
 

@@ -374,7 +374,7 @@ function Extra({ block, content, extras }: { block: Block; content: Content; ext
             <BookingPanel page={extras.booking} defaults={extras.bookingDefaults} embedded className="sm:px-7" />
           </div>
         ) : (
-          extras.preview && <Placeholder>Your booking calendar shows here for clients. Switch your booking page on in Settings.</Placeholder>
+          extras.preview && <Placeholder>Switch your booking page on in Settings › Booking page to show it here.</Placeholder>
         )}
       </>
     );

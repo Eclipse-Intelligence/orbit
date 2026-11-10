@@ -4,14 +4,6 @@ import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import ConfirmDialog from "@/components/_ui/confirm-dialog";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/_ui/dialog";
 import { Input } from "@/components/_ui/input";
 import {
   Select,
@@ -194,10 +186,7 @@ export default function EmailTemplatesSettings({
     )
       .catch(failed)
       .finally(() => setPending(null));
-    accept(
-      result,
-      selectedId === NEW ? "Template created." : "Template saved.",
-    );
+    accept(result, "Saved");
   }
 
   function duplicate() {
@@ -213,7 +202,7 @@ export default function EmailTemplatesSettings({
       .catch(failed)
       .finally(() => setPending(null));
     if ("template" in result) setSearch("");
-    accept(result, "Template duplicated.");
+    accept(result, "Duplicated");
   }
 
   async function remove() {
@@ -241,7 +230,6 @@ export default function EmailTemplatesSettings({
     <SettingsPage
       wide
       title="Email templates"
-      description="Reusable emails for one contact or a bulk send. Tokens are filled in for each person."
       action={
         <Button
           variant="primary"
@@ -260,20 +248,9 @@ export default function EmailTemplatesSettings({
             ? "Templates"
             : `${list.length} ${list.length === 1 ? "template" : "templates"}`
         }
-        description="Use a template from the email composer on a contact, a company, or a bulk email."
       >
         {list.length === 0 ? (
-          <div className="flex flex-col items-start gap-3 py-2">
-            <p className="caption-style text-subtle">
-              No templates yet. Create one here, or save a drafted email as a
-              template from the composer.
-            </p>
-            {selectedId !== NEW && (
-              <Button variant="secondary" size="sm" onClick={() => select(NEW)}>
-                Create a template
-              </Button>
-            )}
-          </div>
+          <p className="caption-style text-subtle py-2">No templates</p>
         ) : (
           <>
             <div className="relative">
@@ -289,7 +266,7 @@ export default function EmailTemplatesSettings({
                 type="search"
                 value={search}
                 autoComplete="off"
-                placeholder="Search by name, subject or message"
+                placeholder="Search"
                 onChange={(event) => setSearch(event.target.value)}
                 className="pl-8"
               />
@@ -358,11 +335,6 @@ export default function EmailTemplatesSettings({
           title={
             selectedId === NEW ? "New template" : selected?.name || "Template"
           }
-          description={
-            selected
-              ? `Created ${formatWhen(selected.createdAt)} · Updated ${formatWhen(selected.updatedAt)}`
-              : undefined
-          }
           action={
             <>
               {selected && (
@@ -413,7 +385,7 @@ export default function EmailTemplatesSettings({
                 {pending === "save"
                   ? "Saving…"
                   : selectedId === NEW
-                    ? "Create template"
+                    ? "Create"
                     : "Save"}
               </Button>
             </>
@@ -436,7 +408,7 @@ export default function EmailTemplatesSettings({
                   value={draft.name}
                   autoComplete="off"
                   maxLength={TEMPLATE_NAME_MAX}
-                  placeholder="For example, Intro follow-up"
+                  placeholder="Intro follow-up"
                   onChange={(event) =>
                     setDraft((current) => ({
                       ...current,
@@ -476,7 +448,7 @@ export default function EmailTemplatesSettings({
                   value={draft.body}
                   autoComplete="off"
                   maxLength={TEMPLATE_BODY_MAX}
-                  placeholder={"Hi {{first_name}},\n\nWrite the message"}
+                  placeholder="Hi {{first_name}},"
                   onFocus={() => {
                     field.current = "body";
                   }}
@@ -551,7 +523,7 @@ export default function EmailTemplatesSettings({
                   </p>
                 </div>
                 <p className="text-soft px-3 py-2.5 text-[14px] leading-5 break-words whitespace-pre-wrap">
-                  {preview.body || "The message appears here as you type."}
+                  {preview.body}
                 </p>
               </div>
             </section>
@@ -562,39 +534,19 @@ export default function EmailTemplatesSettings({
       <ConfirmDialog
         open={discarding !== null}
         onOpenChange={(next) => !next && setDiscarding(null)}
-        title="Discard your changes?"
-        description="Your unsaved changes to this template will be lost."
-        confirmLabel="Discard changes"
+        title="Discard changes?"
+        description="Unsaved changes will be lost."
+        confirmLabel="Discard"
         onConfirm={() => discarding?.next()}
       />
-      <Dialog open={confirming} onOpenChange={setConfirming}>
-        <DialogContent className="max-w-[420px]">
-          <DialogHeader>
-            <DialogTitle>Delete “{selected?.name}”?</DialogTitle>
-            <DialogDescription>
-              The template is removed for good. Emails already sent with it
-              aren&apos;t affected.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setConfirming(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="primary"
-              size="sm"
-              disabled={pending === "delete"}
-              onClick={remove}
-            >
-              {pending === "delete" ? "Deleting…" : "Delete template"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ConfirmDialog
+        open={confirming}
+        onOpenChange={setConfirming}
+        title={`Delete “${selected?.name ?? ""}”?`}
+        description="This can't be undone."
+        confirmLabel="Delete"
+        onConfirm={() => void remove()}
+      />
     </SettingsPage>
   );
 }

@@ -84,10 +84,9 @@ export default function TagsSettings({ tags }: { tags: TagCount[] }) {
     <SettingsCard
       id="tags"
       title={tags.length === 0 ? "Tags" : `${tags.length} ${tags.length === 1 ? "tag" : "tags"}`}
-      description="Add tags from a contact or company, or select rows in a list. Renaming a tag to one that already exists merges them."
     >
       {tags.length === 0 ? (
-        <p className="caption-style text-subtle">No tags yet.</p>
+        <p className="caption-style text-subtle">No tags. Add them on a contact or company.</p>
       ) : (
         <ul className="flex flex-col">
           {tags.map((tag) => (
@@ -127,7 +126,7 @@ export default function TagsSettings({ tags }: { tags: TagCount[] }) {
                   </div>
                   {merges && (
                     <span className="caption-style text-subtle">
-                      “{target}” already exists. Records with either tag will keep one “{target}”.
+                      Merges into the existing “{target}”.
                     </span>
                   )}
                 </form>
@@ -150,7 +149,7 @@ export default function TagsSettings({ tags }: { tags: TagCount[] }) {
                         disabled={pending}
                         onClick={() => setDeleting(null)}
                       >
-                        Keep
+                        Cancel
                       </Button>
                       <Button
                         variant="ghost"
@@ -159,7 +158,7 @@ export default function TagsSettings({ tags }: { tags: TagCount[] }) {
                         disabled={pending}
                         onClick={() => remove(tag.name)}
                       >
-                        {pending ? "Deleting…" : "Delete tag"}
+                        {pending ? "Deleting…" : "Delete"}
                       </Button>
                     </>
                   ) : (

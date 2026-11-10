@@ -31,7 +31,7 @@ export async function createBoardAction(name: string): Promise<{ board?: BoardSu
     refresh();
     return { board };
   } catch (error) {
-    return failure(error, "Could not create the board.");
+    return failure(error, "Couldn't create the board. Try again.");
   }
 }
 
@@ -45,7 +45,7 @@ export async function updateBoardAction(
     refresh();
     return { board };
   } catch (error) {
-    return failure(error, "Could not save the board.");
+    return failure(error, "Couldn't save the board. Try again.");
   }
 }
 
@@ -56,7 +56,7 @@ export async function archiveBoardAction(id: string): Promise<{ error?: string }
     refresh();
     return {};
   } catch (error) {
-    return failure(error, "Could not delete the board.");
+    return failure(error, "Couldn't delete the board. Try again.");
   }
 }
 
@@ -67,7 +67,7 @@ export async function removeCardAction(id: string): Promise<{ error?: string }> 
     refresh();
     return {};
   } catch (error) {
-    return failure(error, "Could not remove it from the board.");
+    return failure(error, "Couldn't remove it from the board. Try again.");
   }
 }
 
@@ -82,6 +82,6 @@ export async function cardContextAction(
     ]);
     return { activities: activities.data, tasks: tasks.data };
   } catch (error) {
-    return { activities: [], tasks: [], ...failure(error, "Could not load this client.") };
+    return { activities: [], tasks: [], ...failure(error, "Couldn't load this company. Try again.") };
   }
 }

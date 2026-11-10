@@ -49,7 +49,7 @@ export async function createWebhookAction(url: string, events: string[], descrip
     revalidatePath(SETTINGS_ROOT, "layout");
     return { secret: result.secret, id: result.endpoint.id };
   } catch (error) {
-    return { error: error instanceof CrmError ? error.message : "Could not save the webhook." };
+    return { error: error instanceof CrmError ? error.message : "Couldn't save the webhook. Try again." };
   }
 }
 
@@ -60,7 +60,7 @@ export async function archiveWebhookAction(id: string) {
     revalidatePath(SETTINGS_ROOT, "layout");
     return {};
   } catch (error) {
-    return { error: error instanceof CrmError ? error.message : "Could not remove the webhook." };
+    return { error: error instanceof CrmError ? error.message : "Couldn't delete the webhook. Try again." };
   }
 }
 
@@ -76,7 +76,7 @@ export async function saveStagesAction(
     revalidatePath("/boards", "layout");
     return { stages: saved };
   } catch (error) {
-    return { error: error instanceof CrmError ? error.message : "Could not save the pipeline." };
+    return { error: error instanceof CrmError ? error.message : "Couldn't save the pipeline. Try again." };
   }
 }
 
@@ -196,9 +196,9 @@ export async function saveClickUpSettingsAction(input: {
   try {
     const saved = await saveClickUpSettings(user, input, { origin: await requestOrigin() });
     refreshClickUp();
-    return { message: saved.warning ?? "ClickUp settings saved." };
+    return { message: saved.warning ?? "Saved" };
   } catch (error) {
-    return clickupFailure(error, "Could not save the ClickUp settings.");
+    return clickupFailure(error, "Couldn't save the ClickUp settings. Try again.");
   }
 }
 
@@ -212,10 +212,10 @@ export async function syncClickUpAction(): Promise<ClickUpActionState> {
     refreshClickUp();
     if (result.error) return { error: result.error };
     return {
-      message: `Synced: ${result.imported} new, ${result.updated} updated from ClickUp, ${result.pushed} sent to ClickUp.`,
+      message: `Synced: ${result.imported} new, ${result.updated} updated, ${result.pushed} sent.`,
     };
   } catch (error) {
-    return clickupFailure(error, "Could not sync ClickUp.");
+    return clickupFailure(error, "Couldn't sync ClickUp. Try again.");
   }
 }
 
@@ -226,7 +226,7 @@ export async function enableClickUpWebhookAction(): Promise<ClickUpActionState> 
     refreshClickUp();
     return { message: result.message };
   } catch (error) {
-    return clickupFailure(error, "Could not turn on instant ClickUp sync.");
+    return clickupFailure(error, "Couldn't turn on instant sync. Try again.");
   }
 }
 
@@ -237,7 +237,7 @@ export async function disableClickUpWebhookAction(): Promise<ClickUpActionState>
     refreshClickUp();
     return { message: result.message };
   } catch (error) {
-    return clickupFailure(error, "Could not turn off instant ClickUp sync.");
+    return clickupFailure(error, "Couldn't turn off instant sync. Try again.");
   }
 }
 

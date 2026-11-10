@@ -221,7 +221,7 @@ export async function setUpAgentMailbox(actor: UserActor, input: { address?: unk
     if (isPgError(error) && error.code === "23505") throw new CrmError("conflict", addressTakenMessage(address), 409, { field: "address" });
     throw error;
   });
-  return { message: existing?.set_up_at ? "Checked. The agent mailbox is set up." : "The agent mailbox is set up." };
+  return { message: "Agent mailbox set up." };
 }
 
 export async function ownSenderAddresses(actor: UserActor, mailboxAddress: string) {

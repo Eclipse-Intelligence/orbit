@@ -179,7 +179,6 @@ export default function ProposalDetail({ viewer, initial, knowledge = [] }: { vi
                 variant="primary"
                 size="sm"
                 disabled={busy !== null || unsendable}
-                title={unsendable ? "Fill in the highlighted details before sending" : undefined}
                 onClick={async () => {
                   if (dirty && !(await save())) return;
                   setSending(true);
@@ -355,12 +354,12 @@ export default function ProposalDetail({ viewer, initial, knowledge = [] }: { vi
 
                 {doc.missing.length > 0 && (
                   <p role="status" className="caption-style text-[var(--tag-amber-text)]">
-                    Missing before you can send: {doc.missing.map((item) => `{{${item}}}`).join(", ")}. Add the details to the company or contact, or edit the text.
+                    Missing: {doc.missing.map((item) => `{{${item}}}`).join(", ")}. Add them to the company or contact, or edit the text.
                   </p>
                 )}
                 {doc.placeholders.length > 0 && (
                   <p role="status" className="caption-style text-[var(--tag-amber-text)]">
-                    Replace before you can send: {doc.placeholders.join(", ")}.
+                    Still to replace: {doc.placeholders.join(", ")}.
                   </p>
                 )}
 
@@ -372,13 +371,13 @@ export default function ProposalDetail({ viewer, initial, knowledge = [] }: { vi
 
                 <div className="flex flex-wrap gap-2">
                   <Button variant="secondary" disabled={!dirty || busy !== null} onClick={() => void save()}>
-                    {busy === "save" ? "Saving…" : dirty ? "Save changes" : "Saved"}
+                    {busy === "save" ? "Saving…" : dirty ? "Save" : "Saved"}
                   </Button>
                   <HoldButton
                     disabled={busy !== null}
                     onConfirm={() => void act("delete", () => changeProposalAction(doc.id, "archive"), () => router.push("/proposals"))}
                   >
-                    Hold to delete draft
+                    Hold to delete
                   </HoldButton>
                 </div>
               </div>
@@ -425,9 +424,6 @@ export default function ProposalDetail({ viewer, initial, knowledge = [] }: { vi
         <div className={cn("min-h-0 overflow-y-auto", view === "details" && "hidden lg:block")}>
           <div className="paper min-h-full px-5 pt-10 pb-28 sm:px-10">
             <div className="mx-auto max-w-[44em]">
-              <p className="caption-style text-subtle pb-6">
-                {draft ? "Preview with this client's details" : `What ${doc.contactName.split(/\s+/)[0]} sees, version ${doc.version?.number ?? 1}`}
-              </p>
               <ProposalSite
                 extras={{ preview: true, steps: doc.steps }}
                 content={draft ? { ...preview, items, currency, totals: totalsOf(items) } : preview}
@@ -442,7 +438,7 @@ export default function ProposalDetail({ viewer, initial, knowledge = [] }: { vi
         open={confirmRevise}
         onOpenChange={setConfirmRevise}
         title={`Make changes to this ${noun}?`}
-        description="Your client can still read the version you sent, but can't sign it until you send the new one on the same link."
+        description="Your client can still read the sent version, but can't sign until you send the new one."
         confirmLabel="Make changes"
         tone="neutral"
         onConfirm={() => void revise()}
@@ -453,7 +449,7 @@ export default function ProposalDetail({ viewer, initial, knowledge = [] }: { vi
       }} />
       <CountersignDialog open={signing} onOpenChange={setSigning} doc={doc} viewer={viewer} onSigned={(next) => {
         apply(next);
-        setMessage({ text: next.emailed ? "Countersigned. It's fully signed, and the client has been emailed the signed copy." : "Countersigned. It's fully signed.", tone: "status" });
+        setMessage({ text: next.emailed ? "Countersigned. Signed copy emailed to the client." : "Countersigned.", tone: "status" });
       }} />
     </section>
   );
@@ -491,7 +487,7 @@ function Items({ items, currency, products, onChange }: { items: Item[]; currenc
   const update = (index: number, patch: Partial<Item>) => onChange(items.map((item, at) => (at === index ? { ...item, ...patch } : item)));
   return (
     <fieldset className="flex flex-col gap-2">
-      <legend className="caption-style text-subtle pb-1.5">Products and prices</legend>
+      <legend className="caption-style text-subtle pb-1.5">Products</legend>
       {items.length === 0 && <p className="caption-style text-subtle">Add at least one product before sending.</p>}
       <ul className="flex flex-col gap-2">
         {items.map((item, index) => (
@@ -600,7 +596,7 @@ function SendDialog({
       onSent(
         result.data.detail,
         result.data.warning ??
-          (email ? `Sent to ${doc.contactEmail}. You'll be notified when they open and sign it.` : copied ? "Ready to share. The link is copied." : "Ready to share. Use Copy link to copy it."),
+          (email ? `Sent to ${doc.contactEmail}.` : copied ? "Link copied." : "Ready. Use Copy link."),
       );
     } catch (problem) {
       if (!reloadIfStaleDeploy(problem)) setError("It didn't send. Try again.");
@@ -611,14 +607,10 @@ function SendDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-[540px]">
+      <DialogContent className="max-w-[540px]" {...(doc.status === "draft" ? {} : { "aria-describedby": undefined })}>
         <DialogHeader>
-          <DialogTitle>{doc.status === "draft" ? `Send ${doc.kind === "nda" ? "NDA" : "proposal"}` : "Email it again"}</DialogTitle>
-          <DialogDescription>
-            {doc.status === "draft"
-              ? "Sending locks this version: later changes need a new version. The email comes from your mailbox with a private link."
-              : "Sends the same link again."}
-          </DialogDescription>
+          <DialogTitle>{doc.status === "draft" ? `Send ${doc.kind === "nda" ? "NDA" : "proposal"}` : "Email again"}</DialogTitle>
+          {doc.status === "draft" && <DialogDescription>Sending locks this version. The email comes from your mailbox.</DialogDescription>}
         </DialogHeader>
         <div className="flex flex-col gap-4 px-6 py-5">
           <p className="text-[13.5px]">
@@ -630,7 +622,7 @@ function SendDialog({
             <Input value={subject} maxLength={300} onChange={(event) => setSubject(event.target.value)} />
           </label>
           <label className="flex flex-col gap-1.5">
-            <span className="caption-style text-subtle">Message (the link is added below it)</span>
+            <span className="caption-style text-subtle">Message (link added below)</span>
             <textarea rows={5} value={message} onChange={(event) => setMessage(event.target.value)} className={textarea} />
           </label>
           {error && (
@@ -710,16 +702,14 @@ function CountersignDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-[520px]">
+      <DialogContent className="max-w-[520px]" {...(client ? {} : { "aria-describedby": undefined })}>
         <DialogHeader>
           <DialogTitle>Countersign</DialogTitle>
-          <DialogDescription>
-            {client ? `${client.name} signed on ${longDate(client.signedAt)}. ` : ""}Signing completes it for {doc.version?.content.sender.company ?? viewer.workspaceName}.
-          </DialogDescription>
+          {client && <DialogDescription>{`${client.name} signed on ${longDate(client.signedAt)}.`}</DialogDescription>}
         </DialogHeader>
         <div className="flex flex-col gap-4 px-6 py-5">
           <label className="flex flex-col gap-1.5">
-            <span className="caption-style text-subtle">Your job title</span>
+            <span className="caption-style text-subtle">Job title</span>
             <Input value={title} maxLength={200} onChange={(event) => setTitle(event.target.value)} placeholder="Founder" />
           </label>
           <SignaturePad

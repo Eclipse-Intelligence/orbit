@@ -139,7 +139,7 @@ export const AGENT_SENDS_PER_DAY = 50;
 async function allowSend(actor: UserActor) {
   const result = await query<{ allowed: boolean }>("select private.consume_rate_limit($1, $2, $3) as allowed", [`agent-mail-send:${actor.userId}`, AGENT_SENDS_PER_DAY, 86_400]);
   if (!result.rows[0]?.allowed) {
-    throw new CrmError("rate_limited", `You've sent ${AGENT_SENDS_PER_DAY} emails from the agent mailbox in the last day, the most Orbit allows. Try again tomorrow.`, 429);
+    throw new CrmError("rate_limited", `Daily limit of ${AGENT_SENDS_PER_DAY} agent emails reached. Try again tomorrow.`, 429);
   }
 }
 

@@ -41,7 +41,7 @@ export default function LifecyclesSettings({ lifecycles }: { lifecycles: Lifecyc
       setError(result.error);
       return;
     }
-    setMessage(merges ? `Moved “${renaming}” into “${draft.trim()}”.` : `Renamed “${renaming}” to “${draft.trim()}”.`);
+    setMessage(merges ? `Merged “${renaming}” into “${draft.trim()}”.` : `Renamed “${renaming}” to “${draft.trim()}”.`);
     setRenaming(null);
     router.refresh();
   }
@@ -55,7 +55,7 @@ export default function LifecyclesSettings({ lifecycles }: { lifecycles: Lifecyc
       setError(result.error);
       return;
     }
-    setMessage(`Deleted “${name}”. Its companies are now Lead.`);
+    setMessage(`Deleted “${name}”.`);
     setDeleting(null);
     router.refresh();
   }
@@ -64,7 +64,7 @@ export default function LifecyclesSettings({ lifecycles }: { lifecycles: Lifecyc
     <SettingsCard
       id="lifecycles"
       title="Lifecycles"
-      description="Every company has one lifecycle. Lead, Prospect, Customer and Churned are built in (a won deal makes a company a Customer). Create your own, such as Consultant or Personal, from the Lifecycle on any company."
+      description="Add new ones from the Lifecycle field on any company. A won opportunity makes its company a Customer."
     >
       <ul className="flex flex-col">
         {lifecycles.map((item) => (
@@ -96,7 +96,7 @@ export default function LifecyclesSettings({ lifecycles }: { lifecycles: Lifecyc
                     {pending ? "Saving…" : merges ? "Merge" : "Save"}
                   </Button>
                 </div>
-                {merges && <span className="caption-style text-subtle">That lifecycle already exists. Its companies and these will share it.</span>}
+                {merges && <span className="caption-style text-subtle">Merges into the existing lifecycle.</span>}
               </form>
             ) : (
               <span className="flex min-w-0 items-center gap-2">
@@ -113,10 +113,10 @@ export default function LifecyclesSettings({ lifecycles }: { lifecycles: Lifecyc
                   <>
                     <span className="caption-style text-subtle mr-1">Move {companies(item.companies)} to Lead?</span>
                     <Button variant="ghost" size="sm" disabled={pending} onClick={() => setDeleting(null)}>
-                      Keep
+                      Cancel
                     </Button>
                     <Button variant="ghost" size="sm" className="text-danger hover:text-danger" disabled={pending} onClick={() => remove(item.value)}>
-                      {pending ? "Deleting…" : "Delete lifecycle"}
+                      {pending ? "Deleting…" : "Delete"}
                     </Button>
                   </>
                 ) : (

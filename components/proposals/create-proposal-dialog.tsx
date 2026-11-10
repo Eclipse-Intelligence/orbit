@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/_ui/dialog";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/_ui/dialog";
 import { Input } from "@/components/_ui/input";
 import { recordSelectClass } from "@/components/crm/record-form";
 import { searchCompaniesAction } from "@/app/(crm)/actions";
@@ -32,7 +32,7 @@ export default function CreateProposalDialog({
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-[600px]">{open && <CreateForm company={company ?? null} contactId={contactId ?? null} onClose={() => onOpenChange(false)} />}</DialogContent>
+      <DialogContent className="max-w-[600px]" aria-describedby={undefined}>{open && <CreateForm company={company ?? null} contactId={contactId ?? null} onClose={() => onOpenChange(false)} />}</DialogContent>
     </Dialog>
   );
 }
@@ -142,10 +142,8 @@ function CreateForm({ company: preset, contactId, onClose }: { company: { id: st
       : contacts.length === 0
         ? `Add a contact at ${company.name} first.`
         : !person
-          ? "Choose a person."
-          : !template
-            ? "Make a template active first."
-            : null;
+          ? "Choose a contact."
+          : null;
 
   async function create() {
     if (!company || !person || !template) return;
@@ -178,8 +176,7 @@ function CreateForm({ company: preset, contactId, onClose }: { company: { id: st
   return (
     <>
       <DialogHeader>
-        <DialogTitle>Create proposal</DialogTitle>
-        <DialogDescription>Choose who it&apos;s for, a template and what you&apos;re offering. You can edit the wording before sending.</DialogDescription>
+        <DialogTitle>New proposal</DialogTitle>
       </DialogHeader>
       <div className="flex max-h-[65dvh] flex-col gap-5 overflow-y-auto px-6 py-5">
         {company ? (
@@ -228,10 +225,10 @@ function CreateForm({ company: preset, contactId, onClose }: { company: { id: st
         {company && (
           <div className="flex flex-col gap-1.5">
             <label htmlFor="proposal-contact" className="caption-style text-subtle">
-              Person
+              Contact
             </label>
             {contacts.length === 0 ? (
-              <p className="caption-style text-subtle">{templates && !loadingContacts ? `Add a contact at ${company.name} first. A proposal goes to a person.` : "Loading…"}</p>
+              <p className="caption-style text-subtle">{templates && !loadingContacts ? "No contacts" : "Loading…"}</p>
             ) : (
               <select id="proposal-contact" value={contact} onChange={(event) => setContact(event.target.value)} className={recordSelectClass}>
                 {contacts.map((item) => (
@@ -248,7 +245,7 @@ function CreateForm({ company: preset, contactId, onClose }: { company: { id: st
 
         <fieldset className="flex flex-col gap-2">
           <legend className="caption-style text-subtle pb-1.5">Template</legend>
-          {templates && templates.length === 0 && <p className="caption-style text-subtle">No active templates yet. Make one active under Proposals › Templates.</p>}
+          {templates && templates.length === 0 && <p className="caption-style text-subtle">No active templates. Activate one in Templates.</p>}
           <div className="grid gap-2 sm:grid-cols-2">
             {(templates ?? []).map((item) => (
               <label
@@ -270,17 +267,17 @@ function CreateForm({ company: preset, contactId, onClose }: { company: { id: st
 
         {template?.kind === "proposal" && (
           <fieldset className="flex flex-col gap-2">
-            <legend className="sr-only">What you&apos;re offering</legend>
+            <legend className="sr-only">Products</legend>
             <div className="flex items-center justify-between gap-3">
               <span aria-hidden className="caption-style text-subtle">
-                What you&apos;re offering
+                Products
               </span>
               <select aria-label="Currency" value={currency} onChange={(event) => changeCurrency(event.target.value as Currency)} className={cn(recordSelectClass, "h-8 w-auto")}>
                 <option value="GBP">Pounds (£)</option>
                 <option value="USD">Dollars ($)</option>
               </select>
             </div>
-            {products.length === 0 && <p className="caption-style text-subtle">No products yet. Add them under Proposals › Products, or add lines after creating it.</p>}
+            {products.length === 0 && <p className="caption-style text-subtle">No products. Add them in Products.</p>}
             <ul className="border-border flex flex-col rounded-xl border">
               {products.map((product) => {
                 const price = priceOf(product);

@@ -113,8 +113,8 @@ function cleanProfile(raw: unknown): BrandProfileInput & { formerNames?: string[
   return {
     website: website(input.website),
     whatYouSell: text(input, "whatYouSell", "What you sell"),
-    whoItsFor: text(input, "whoItsFor", "Who it's for"),
-    tone: text(input, "tone", "How you write"),
+    whoItsFor: text(input, "whoItsFor", "Ideal customer"),
+    tone: text(input, "tone", "Tone"),
     formerNames: formerNames(input.formerNames),
   };
 }
@@ -243,7 +243,7 @@ export async function draftBrandFromWebsite(
       tone: clip(result.data.tone, BRAND_LIMITS.tone),
     };
     const empty = (["whatYouSell", "whoItsFor", "tone"] as const).filter((key) => !draft[key]);
-    const labels = { whatYouSell: "What you sell", whoItsFor: "Who it's for", tone: "How you write" };
+    const labels = { whatYouSell: "What you sell", whoItsFor: "Ideal customer", tone: "Tone" };
     return {
       draft,
       sources: pages.map((page) => page.url),

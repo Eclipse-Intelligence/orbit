@@ -87,10 +87,9 @@ const MIN_DURATION = 5;
 const MAX_DURATION = 8 * 60;
 const MAX_AHEAD_MS = 2 * 366 * 86_400_000;
 const RAW_GUESTS_MAX = 500;
-const SAVE_WARNING = "The invite was sent, but Orbit couldn't save it yet. It shows up after the next calendar sync.";
-const PERSONAL_SAVE_WARNING = "The event is in your calendar, but Orbit couldn't save it yet. It shows up after the next calendar sync.";
-const EMAIL_SAVE_WARNING =
-  "The invite was emailed, but Orbit couldn't save it. The time shows in your calendar after the next sync, but moving or cancelling it there won't tell your guests.";
+const SAVE_WARNING = "Sent. It appears in Orbit after the next calendar sync.";
+const PERSONAL_SAVE_WARNING = "Added. It appears in Orbit after the next calendar sync.";
+const EMAIL_SAVE_WARNING = "Sent, but not saved in Orbit. Moving or cancelling it in your calendar won't tell your guests.";
 
 export type InviteSetup = {
   connected: boolean;
@@ -259,7 +258,7 @@ export function cleanGuests(values: unknown, own: Set<string>): InviteGuest[] {
   }
   if (guests.size === 0) {
     throw invalid(
-      skippedOwn ? "You're the organiser, so invite someone other than yourself." : "Add at least one guest.",
+      skippedOwn ? "You're already the organiser." : "Add at least one guest.",
       "attendees",
     );
   }

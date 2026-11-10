@@ -125,7 +125,7 @@ export function SaveViewDialog({ open, onOpenChange, view }: { open: boolean; on
       <DialogContent className="max-w-[420px]">
         <DialogHeader className="pr-12">
           <DialogTitle>{view ? "Rename view" : "Save view"}</DialogTitle>
-          <DialogDescription>{view ? "Everyone in the workspace sees the new name." : "Saves the current filters and sort for everyone in the workspace."}</DialogDescription>
+          <DialogDescription>Shared with everyone in the workspace.</DialogDescription>
         </DialogHeader>
         <form
           id={`${id}-form`}
@@ -209,7 +209,7 @@ export default function ViewMenu({ views, canManage }: { views: CompanyView[]; c
                   {updating.pending ? "Updating…" : `Update ${current.name}`}
                 </DropdownMenuItem>
               )}
-              <DropdownMenuItem onSelect={() => setSaving(true)}>{current && edited ? "Save as new view…" : "Save current filters as a view…"}</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setSaving(true)}>{current && edited ? "Save as new view…" : "Save as view…"}</DropdownMenuItem>
               {current && (
                 <>
                   <DropdownMenuItem onSelect={() => setRenaming(true)}>Rename {current.name}…</DropdownMenuItem>
@@ -227,8 +227,8 @@ export default function ViewMenu({ views, canManage }: { views: CompanyView[]; c
           open={deleting}
           onOpenChange={setDeleting}
           title={`Delete ${current.name}?`}
-          description="The view goes for everyone in the workspace. Companies and their answers stay."
-          confirmLabel="Delete view"
+          description="Deleted for everyone. Companies stay."
+          confirmLabel="Delete"
           onConfirm={() => void remove()}
         />
       )}

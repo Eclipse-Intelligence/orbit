@@ -57,7 +57,7 @@ const MailComposer = dynamic(() => import("@/components/mail/mail-composer"), { 
 const InviteDialog = dynamic(() => import("@/components/crm/invite-dialog"), { ssr: false });
 
 const UNDO_DELETE_MS = 8_000;
-const DRAFT_DELETE_FAILED = "Outlook didn't delete the draft. Try again.";
+const DRAFT_DELETE_FAILED = "Couldn't discard the draft. Try again.";
 
 async function sendDraftDelete(id: string, keepalive: boolean) {
   const response = await fetch(`/api/mail/draft-message?id=${encodeURIComponent(id)}`, { method: "DELETE", keepalive }).catch(() => null);
@@ -310,12 +310,11 @@ function Message({
       {showingDetails && <AddressDetails id={detailsId} message={message} />}
       {draft && (
         <div className="-mt-1 flex flex-wrap items-center gap-2 px-4 pb-3 sm:pl-14">
-          <span className="caption-style text-subtle mr-1">Draft made outside Orbit.</span>
           <Button variant="secondary" size="sm" onClick={() => onEditDraft(message)} className="pointer-coarse:h-11">
-            Edit in Orbit
+            Edit
           </Button>
           <Button variant="ghost" size="sm" onClick={() => onDeleteDraft(message)} className="pointer-coarse:h-11">
-            Delete draft
+            Discard
           </Button>
         </div>
       )}
@@ -379,11 +378,11 @@ function PreparedCard({ prepared, onUse, onDismiss }: { prepared: PreparedReply;
     >
       <span className="text-subtle flex items-center gap-1.5 text-[12px]">
         <SparkleIcon aria-hidden className="text-primary-foreground size-3.5" />
-        {prepared.kind === "nudge" ? "Nobody has replied. Orbit has a follow-up ready." : "Orbit has a reply ready"}
+        {prepared.kind === "nudge" ? "Follow-up ready" : "Reply ready"}
       </span>
       <p className={cn("text-soft text-[14px] leading-6 whitespace-pre-line", prepared.times ? "line-clamp-[14]" : "line-clamp-5")}>{prepared.body}</p>
       {prepared.times && (
-        <span className="caption-style text-subtle">The times are free in your calendar. Orbit checks them again when you open the reply.</span>
+        <span className="caption-style text-subtle">Times are free in your calendar.</span>
       )}
       <span className="mt-1 flex flex-wrap gap-2">
         <Button variant="primary" onClick={onUse}>
@@ -512,15 +511,15 @@ function SenderNotice({
 }) {
   const line =
     subscription.status === "ignored"
-      ? `Ignored your unsubscribe on ${shortDay(subscription.unsubscribedAt)}. Orbit archives their mail as it arrives.`
+      ? `Unsubscribe ignored on ${shortDay(subscription.unsubscribedAt)}. Their mail is archived.`
       : subscription.status === "blocked"
-        ? `You blocked ${subscription.sender}. Their mail is archived as it arrives.`
+        ? "Blocked. Their mail is archived."
         : subscription.status === "research"
-          ? "Kept for research. Their mail goes to the Research folder."
+          ? "Kept for research."
           : subscription.status === "unsubscribed"
-            ? `You unsubscribed on ${shortDay(subscription.unsubscribedAt)}.`
+            ? `Unsubscribed ${shortDay(subscription.unsubscribedAt)}.`
             : subscription.coldPitch
-              ? "Cold pitch from someone who isn't in Orbit."
+              ? "Cold pitch"
               : "";
   if (!line) return null;
   const tone = subscription.status === "ignored" || (subscription.coldPitch && subscription.status === "subscribed");
@@ -691,7 +690,7 @@ export default function ThreadReader({
         guests?: InvitePrefill["guests"];
         setup?: InviteSetup;
       };
-      if (!response.ok || !body.setup) throw new Error(body.error ?? "Orbit couldn't read the meeting from this email. Try again.");
+      if (!response.ok || !body.setup) throw new Error(body.error ?? "Couldn't read the meeting. Try again.");
       setInvite({
         prefill: {
           title: body.title,
@@ -705,7 +704,7 @@ export default function ThreadReader({
         at: Date.now(),
       });
     } catch (problem) {
-      showToast({ message: problem instanceof Error ? problem.message : "Orbit couldn't read the meeting from this email. Try again.", tone: "alert" });
+      showToast({ message: problem instanceof Error ? problem.message : "Couldn't read the meeting. Try again.", tone: "alert" });
     } finally {
       setInviteBusy(false);
     }
@@ -778,7 +777,7 @@ export default function ThreadReader({
     }, UNDO_DELETE_MS);
     pending.set(id, timer);
     showToast({
-      message: "Draft deleted.",
+      message: "Draft discarded.",
       duration: UNDO_DELETE_MS - 500,
       action: {
         label: "Undo",
@@ -934,8 +933,7 @@ export default function ThreadReader({
   if (!summary && !detail) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
-        <p className="text-soft">Nothing open.</p>
-        <p className="caption-style text-subtle">Press J or K to move through your mail, or pick a conversation.</p>
+        <p className="text-soft">Nothing open</p>
       </div>
     );
   }
@@ -1009,7 +1007,7 @@ export default function ThreadReader({
             </ToolButton>
           )}
           {detail && (
-            <ToolButton label={inviteBusy ? "Reading the meeting from this email" : "Send an invite from this email"} onClick={() => void makeInvite()}>
+            <ToolButton label={inviteBusy ? "Reading the meeting…" : "Send an invite"} onClick={() => void makeInvite()}>
               <CalendarIcon aria-hidden className={cn("size-3.5", inviteBusy && "animate-pulse")} />
             </ToolButton>
           )}
@@ -1033,7 +1031,7 @@ export default function ThreadReader({
             <MenuAction
               icon={CalendarIcon}
               label="Send an invite"
-              reason={!detail ? "The conversation is still loading." : inviteBusy ? "Orbit is reading the meeting from this email." : null}
+              reason={!detail ? "Still loading" : inviteBusy ? "Reading the meeting" : null}
               onSelect={() => void makeInvite()}
             />
           </DropdownMenuContent>
@@ -1042,13 +1040,13 @@ export default function ThreadReader({
           {summary?.split && sender && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="sm" aria-label={`Split: ${SPLIT_LABELS[summary.split]}. Change where this sender goes`} title="Change where this sender's email goes" className="pointer-coarse:h-11 pointer-coarse:px-3">
+                <Button variant="ghost" size="sm" aria-label={`Split: ${SPLIT_LABELS[summary.split]}. Change where this sender goes`} className="pointer-coarse:h-11 pointer-coarse:px-3">
                   {SPLIT_LABELS[summary.split]}
                   <ChevronDownIcon aria-hidden className="size-3" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="min-w-[17rem]">
-                <DropdownMenuLabel>Always put email from {sender} in</DropdownMenuLabel>
+                <DropdownMenuLabel>{sender} goes to</DropdownMenuLabel>
                 {MAIL_SPLITS.map((split) => (
                   <DropdownMenuItem key={split} onSelect={() => onSplit(sender, split)}>
                     <span className="flex-1">{SPLIT_LABELS[split]}</span>
@@ -1176,11 +1174,12 @@ export default function ThreadReader({
                   {followUp && followUp.action !== "send" && (
                     <div role="status" className="caption-style text-subtle flex flex-wrap items-center gap-x-2 px-4">
                       <span>
-                        {followUp.automatic ? "Orbit will remind you" : "You'll be reminded"} on {mailFullWhen(followUp.at)} if nobody replies.
+                        Reminder {mailFullWhen(followUp.at)} if no reply
                       </span>
                       <Button
                         variant="ghost"
                         size="sm"
+                        aria-label="Cancel reminder"
                         onClick={() => {
                           const id = followUp.id;
                           setCancelledFollowUp(id);
@@ -1191,7 +1190,7 @@ export default function ThreadReader({
                           });
                         }}
                       >
-                        Don&apos;t remind me
+                        Cancel
                       </Button>
                     </div>
                   )}

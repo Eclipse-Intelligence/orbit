@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
+import HoldButton from "@/components/_ui/hold-button";
 import { Input } from "@/components/_ui/input";
 import { SettingsCard, SettingsDisclosure } from "@/components/crm/settings-ui";
 import {
@@ -79,13 +80,9 @@ export default function WebhooksSettings({
   }
 
   return (
-    <SettingsCard
-      id="webhooks"
-      title="Webhooks"
-      description="Events are signed with HMAC SHA-256 in the X-CRM-Signature header. Deliveries retry for about three hours."
-    >
+    <SettingsCard id="webhooks" title="Webhooks" description="Retries for about three hours.">
       {endpoints.length === 0 ? (
-        <p className="caption-style text-subtle">No webhooks yet.</p>
+        <p className="caption-style text-subtle">No webhooks</p>
       ) : (
         <ul className="flex flex-col">
           {endpoints.map((endpoint) => (
@@ -102,16 +99,13 @@ export default function WebhooksSettings({
                 </span>
               </span>
               {canAdmin && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  type="button"
+                <HoldButton
                   disabled={pending}
-                  aria-label={`Remove webhook ${endpoint.url}`}
-                  onClick={() => remove(endpoint.id)}
+                  onConfirm={() => void remove(endpoint.id)}
                 >
-                  Remove
-                </Button>
+                  Hold to delete
+                  <span className="sr-only">{` webhook ${endpoint.url}`}</span>
+                </HoldButton>
               )}
             </li>
           ))}
@@ -124,15 +118,12 @@ export default function WebhooksSettings({
       )}
       {secret && (
         <p role="status" className="caption-style text-soft leading-[1.4]">
-          Signing secret, shown once:{" "}
+          Signing secret (HMAC SHA-256, X-CRM-Signature header), shown once:{" "}
           <span className="text-foreground font-mono break-all">{secret}</span>
         </p>
       )}
       {canAdmin ? (
-        <SettingsDisclosure
-          title="Add a webhook"
-          summary="Choose an endpoint and the events to send to it."
-        >
+        <div className="flex flex-col gap-3">
           <label className="flex flex-col gap-2" htmlFor="webhook-url">
             <span className="caption-style text-subtle">Endpoint URL</span>
             <Input
@@ -179,23 +170,14 @@ export default function WebhooksSettings({
           >
             {pending ? "Saving…" : "Add webhook"}
           </Button>
-        </SettingsDisclosure>
+        </div>
       ) : (
         <p className="caption-style text-subtle">
-          Only an owner or admin can add webhooks.
+          Only owners and admins can add webhooks.
         </p>
       )}
-      <SettingsDisclosure
-        title="Recent deliveries"
-        summary={
-          deliveries.length === 0
-            ? "Nothing sent yet."
-            : `The last ${deliveries.length} attempts.`
-        }
-      >
-        {deliveries.length === 0 ? (
-          <p className="caption-style text-subtle">Nothing sent yet.</p>
-        ) : (
+      {deliveries.length > 0 && (
+        <SettingsDisclosure title={`Recent deliveries (${deliveries.length})`}>
           <ul className="flex flex-col">
             {deliveries.map((delivery) => (
               <li
@@ -230,8 +212,8 @@ export default function WebhooksSettings({
               </li>
             ))}
           </ul>
-        )}
-      </SettingsDisclosure>
+        </SettingsDisclosure>
+      )}
     </SettingsCard>
   );
 }

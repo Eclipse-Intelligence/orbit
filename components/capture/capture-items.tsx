@@ -104,7 +104,7 @@ function RejectButton({ onReject, hint }: { onReject: (note: string) => void; hi
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button variant="subtle" size="sm" data-row-key="r" title="Reject (R)" shortcut={hint}>
+        <Button variant="subtle" size="sm" data-row-key="r" shortcut={hint}>
           Reject
         </Button>
       </PopoverTrigger>
@@ -217,7 +217,7 @@ export function NudgeItem({ item, now, clearId }: { item: WaitingNudge; now: num
       title={item.subject?.trim() || "(no subject)"}
       titleHref={threadHref(item.key)}
       when={`Sent ${sinceLabel(item.sentAt, now)}`}
-      meta={`${people ? `To ${people} · ` : ""}${opened}Nobody has replied.`}
+      meta={`${people ? `To ${people} · ` : ""}${opened}No reply yet`}
       detail={<DraftLine text={item.body} />}
       actions={[
         {
@@ -230,14 +230,14 @@ export function NudgeItem({ item, now, clearId }: { item: WaitingNudge; now: num
         },
         {
           id: "dismiss",
-          label: "Not needed",
+          label: "Dismiss",
           variant: "ghost",
           key: "e",
           hint: "E",
           run: dismiss,
         },
       ]}
-      swipe={{ left: { label: "Not needed", run: dismiss } }}
+      swipe={{ left: { label: "Dismiss", run: dismiss } }}
     />
   );
 }
@@ -287,7 +287,7 @@ export function CallItem({ item, now, clearId, onSent }: { item: FollowUpSuggest
       mark={<IconMark icon={item.source === "teams" ? PhoneIcon : MicIcon} />}
       title={item.title}
       when={dayLabel(item.callAt, now)}
-      meta={`${SOURCE[item.source]} · To ${item.to.name ?? item.to.address} · No next step was agreed.`}
+      meta={`${SOURCE[item.source]} · To ${item.to.name ?? item.to.address} · No next step agreed`}
       detail={<DraftLine text={item.body} />}
       actions={[
         {
@@ -306,14 +306,14 @@ export function CallItem({ item, now, clearId, onSent }: { item: FollowUpSuggest
         },
         {
           id: "dismiss",
-          label: "Not needed",
+          label: "Dismiss",
           variant: "ghost",
           key: "e",
           hint: "E",
           run: dismiss,
         },
       ]}
-      swipe={{ left: { label: "Not needed", run: dismiss } }}
+      swipe={{ left: { label: "Dismiss", run: dismiss } }}
     />
   );
 }
@@ -332,7 +332,7 @@ export function ReplyItem({ item, now, clearId }: { item: WaitingReply; now: num
     });
   const notNeeded: MenuItem = {
     id: "not-needed",
-    label: "No reply needed",
+    label: "Dismiss",
     run: () =>
       onClear("Dismissed", {
         kind: "reply-dismiss",
@@ -348,7 +348,7 @@ export function ReplyItem({ item, now, clearId }: { item: WaitingReply; now: num
       titleHref={threadHref(item.key)}
       badge={
         <Tag size="sm" tone={item.waitingDays >= REPLY_AMBER_WORKING_DAYS ? "amber" : "neutral"} className="text-[12px]">
-          Waiting {item.waitingDays} days
+          Waiting {item.waitingDays} {item.waitingDays === 1 ? "day" : "days"}
         </Tag>
       }
       when={dayLabel(item.at, now)}
@@ -457,7 +457,7 @@ export function TaskItem({ item, now, clearId }: { item: WaitingTask; now: numbe
       ]}
       swipe={{
         left: { label: "Done", run: done },
-        right: () => pick(taskChoices(item), "The task's due time moves. A weekend or bank holiday moves to the next working day.", snooze, onWorkingDay),
+        right: () => pick(taskChoices(item), "Moves the due date.", snooze, onWorkingDay),
       }}
     />
   );
@@ -467,7 +467,7 @@ function MoveMenu({ others, onMove }: { others: WorkspaceChoiceRef[]; onMove: (t
   return (
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
-        <Button variant="secondary" size="sm" title="Move to another workspace's Capture">
+        <Button variant="secondary" size="sm">
           Move to
           <ChevronDownIcon aria-hidden className="size-3" />
         </Button>
@@ -501,7 +501,7 @@ export function EmailItem({
 }) {
   const onClear = useClear(clearId);
   const label = item.name || item.email;
-  const ignore = () => onClear("Ignored", { kind: "email-ignore", key: item.key });
+  const ignore = () => onClear("Dismissed", { kind: "email-ignore", key: item.key });
   const move = (target: WorkspaceChoiceRef) =>
     onClear(`Moved to ${target.name}`, {
       kind: "email-move",
@@ -538,7 +538,7 @@ export function EmailItem({
   }
   actions.push({
     id: "ignore",
-    label: "Ignore",
+    label: "Dismiss",
     variant: "ghost",
     key: "i",
     hint: "I",
@@ -569,7 +569,7 @@ export function EmailItem({
         label: `Move to ${target.name}`,
         run: () => move(target),
       }))}
-      swipe={{ left: { label: "Ignore", run: ignore } }}
+      swipe={{ left: { label: "Dismiss", run: ignore } }}
       below={
         filing ? (
           <FilePicker
@@ -607,7 +607,7 @@ function plainSummary(markdown: string) {
     .trim();
 }
 
-function Summary({ id, text, source }: { id: string; text: string; source: string }) {
+function Summary({ id, text }: { id: string; text: string }) {
   const [open, setOpen] = useState(false);
   const summaryId = `capture-summary-${id}`;
   return (
@@ -616,7 +616,7 @@ function Summary({ id, text, source }: { id: string; text: string; source: strin
         {text}
       </span>
       <Button variant="link" size="none" className="caption-style text-subtle" aria-expanded={open} aria-controls={summaryId} onClick={() => setOpen((value) => !value)}>
-        {open ? "Show less" : `Show the ${source} summary`}
+        {open ? "Show less" : "Show more"}
       </Button>
     </span>
   );
@@ -638,7 +638,7 @@ export function ImportItem({
   clearId: string;
 }) {
   const onClear = useClear(clearId);
-  const ignore = () => onClear("Ignored", { kind: "import-ignore", id: item.id });
+  const ignore = () => onClear("Dismissed", { kind: "import-ignore", id: item.id });
   const move = (target: WorkspaceChoiceRef) =>
     onClear(`Moved to ${target.name}`, { kind: "import-move", id: item.id, workspaceId: target.id });
   const people = participants(item);
@@ -678,7 +678,7 @@ export function ImportItem({
       render: () => <MoveMenu others={others} onMove={move} />,
     });
   }
-  actions.push({ id: "ignore", label: "Ignore", variant: "ghost", key: "i", hint: "I", run: ignore });
+  actions.push({ id: "ignore", label: "Dismiss", variant: "ghost", key: "i", hint: "I", run: ignore });
   return (
     <CaptureRow
       rowId={clearId}
@@ -686,14 +686,14 @@ export function ImportItem({
       title={item.title || (item.kind === "call" ? "Teams call" : "Meeting")}
       when={item.occurredAt ? dayLabel(item.occurredAt, now) : null}
       meta={`${SOURCE[item.source]} · ${people ? `${people}, no contact matched` : "No contact matched"}`}
-      detail={summary ? <Summary id={item.id} text={summary} source={SOURCE[item.source]} /> : null}
+      detail={summary ? <Summary id={item.id} text={summary} /> : null}
       actions={actions}
       more={others.map((target) => ({
         id: `move-${target.id}`,
         label: `Move to ${target.name}`,
         run: () => move(target),
       }))}
-      swipe={{ left: { label: "Ignore", run: ignore } }}
+      swipe={{ left: { label: "Dismiss", run: ignore } }}
       below={
         filing ? (
           <FilePicker
@@ -723,7 +723,7 @@ function meetingLine(label: string, meeting: MetPerson["lastMeeting"]) {
 export function PersonItem({ item, clearId }: { item: MetPerson; clearId: string }) {
   const onClear = useClear(clearId);
   const label = item.name ?? item.email;
-  const hide = () => onClear("Hidden", { kind: "person-hide", email: item.email });
+  const hide = () => onClear("Dismissed", { kind: "person-hide", email: item.email });
   const meeting = meetingLine("Next", item.nextMeeting) ?? meetingLine("Last", item.lastMeeting);
   return (
     <CaptureRow
@@ -745,9 +745,9 @@ export function PersonItem({ item, clearId }: { item: MetPerson; clearId: string
               email: item.email,
             }),
         },
-        { id: "hide", label: "Hide", variant: "ghost", key: "i", hint: "I", run: hide },
+        { id: "hide", label: "Dismiss", variant: "ghost", key: "i", hint: "I", run: hide },
       ]}
-      swipe={{ left: { label: "Hide", run: hide } }}
+      swipe={{ left: { label: "Dismiss", run: hide } }}
     />
   );
 }

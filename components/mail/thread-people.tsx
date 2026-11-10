@@ -25,7 +25,7 @@ export default function ThreadPeople({ people, threadKey, filing: initialFiling 
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   const [filing, setFiling] = useState(initialFiling);
-  const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);
+  const [message, setMessage] = useState<{ text: string; error: boolean; quiet?: boolean } | null>(null);
   const listId = useId();
   if (people.length === 0) return null;
   const active = filing?.active ?? null;
@@ -81,7 +81,7 @@ export default function ThreadPeople({ people, threadKey, filing: initialFiling 
           {message.text}
         </p>
       )}
-      <p role="status" className={message && !message.error ? "caption-style text-subtle" : "sr-only"}>
+      <p role="status" className={message && !message.error && !message.quiet ? "caption-style text-subtle" : "sr-only"}>
         {message && !message.error ? message.text : ""}
       </p>
       <ul id={listId} hidden={!open} className="flex flex-wrap gap-2">
@@ -139,7 +139,6 @@ export default function ThreadPeople({ people, threadKey, filing: initialFiling 
               {elsewhere.map((place) => (
                 <span
                   key={place.id}
-                  title={`${fallbackName(person)} is a contact in ${place.name}`}
                   className="text-soft flex h-[22px] shrink-0 items-center gap-1.5 rounded-full bg-white/[0.05] pr-2 pl-[3px] text-[12px] leading-none"
                 >
                   <WorkspaceTile id={place.id} name={place.name} className="size-4 rounded-full text-[9px]" />

@@ -11,10 +11,7 @@ export default async function PipelineSettingsPage() {
   if (!user) redirect("/login");
   const pipeline = await listPipeline(user);
   return (
-    <SettingsPage
-      title="Pipeline"
-      description="The stages an opportunity moves through, and how likely each one is to close."
-    >
+    <SettingsPage title="Pipeline">
       <PipelineSettings stages={pipeline.stages} />
     </SettingsPage>
   );

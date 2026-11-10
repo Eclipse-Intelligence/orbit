@@ -85,7 +85,7 @@ Optional `Idempotency-Key` header (printable ASCII, up to 200 characters). Reuse
 | `DELETE` | `/webhooks/:id` | Archive an endpoint | `admin` |
 | `GET` | `/webhooks/deliveries` | The 50 most recent delivery attempts | `crm:read` |
 
-`GET /companies`, `/contacts`, `/opportunities`, `/activities` and `/tasks` take `limit` (1 to 100, default 50) and `offset` (up to 10,000). `limit` and `offset` must be whole numbers, and dates must be real calendar dates (no 30 February); anything else is a 400 `invalid_input` that usually names the field in `details.field`. `owner` (or `owner_id`) takes a member id, `unassigned`, or `all` for no filter.
+`GET /companies`, `/contacts`, `/opportunities`, `/activities` and `/tasks` take `limit` (1 to 100, default 50) and `offset` (up to 10,000). `limit` and `offset` must be whole numbers, and dates must be real calendar dates (no 30 February); anything else is a 400 `invalid_input` that usually names the field in `details.field`. `GET /docs` and `GET /docs/:id` follow the same rule: a `limit` or `offset` that isn't a whole number is a 400, not an empty page. `owner` (or `owner_id`) takes a member id, `unassigned`, or `all` for no filter.
 
 ## Companies
 
@@ -165,7 +165,7 @@ Contact fields: `companyId`, `firstName`, `lastName`, `email`, `phone`, `jobTitl
 
 Opportunity fields: `companyId`, `pipelineId`, `name`, `stageId`, `status`, `value` (a number or a numeric string), `currency`, `probability`, `expectedCloseDate` (YYYY-MM-DD), `primaryContactId`, `ownerId`, `source`.
 
-`POST /api/v1/opportunities` requires `companyId` and, on the default pipeline, `name`. `pipelineId` adds a card to a board instead: the name defaults to the company's, a company can be on a board once (409 `conflict` otherwise), and board stages have no won or lost. `primaryContactId` must be a contact who works at `companyId`; a create, or a `PATCH` that changes the company or contact, fails with 400 `invalid_input` (`field: primaryContactId`) otherwise. Omitting `stageId` uses the first stage of the pipeline. Marking a sales opportunity won also makes the company a customer and adds it to boards set to Add companies when a deal is won. A won or lost stage sets `status`. Setting `status` to `won` or `lost` moves the opportunity to that stage. Value is a non-negative amount with up to two decimal places. Currency is a three-letter code and defaults to `GBP`.
+`POST /api/v1/opportunities` requires `companyId` and, on the default pipeline, `name`. `pipelineId` adds a card to a board instead: the name defaults to the company's, a company can be on a board once (409 `conflict` otherwise), and board stages have no won or lost. `primaryContactId` must be a contact who works at `companyId`; a create, or a `PATCH` that changes the company or contact, fails with 400 `invalid_input` (`field: primaryContactId`) otherwise. Omitting `stageId` uses the first stage of the pipeline. Marking a sales opportunity won also makes the company a customer and adds it to boards set to Add companies when an opportunity is won. A won or lost stage sets `status`. Setting `status` to `won` or `lost` moves the opportunity to that stage. Value is a non-negative amount with up to two decimal places. Currency is a three-letter code and defaults to `GBP`.
 
 `GET /api/v1/pipeline` returns the default pipeline and its stages.
 
