@@ -3,7 +3,7 @@ const ROW_WIDTHS = ["w-[38%]", "w-[52%]", "w-[44%]", "w-[60%]", "w-[34%]", "w-[4
 export default function CrmLoading() {
   return (
     <section role="status" aria-label="Loading" className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <div className="border-border flex shrink-0 items-center gap-3 border-b px-3 py-2.5 sm:px-4 sm:py-[14px]">
+      <div className="border-border lg:bg-sidebar-accent flex shrink-0 items-center gap-3 border-b px-3 py-2.5 sm:px-4 sm:py-[14px] lg:h-(--header-height) lg:py-0">
         <div className="bg-muted h-[30px] w-[30px] shrink-0 rounded-lg lg:hidden" />
         <div className="bg-muted h-4 w-32 rounded-md" />
         <div className="ml-auto flex gap-2">

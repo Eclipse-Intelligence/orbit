@@ -266,7 +266,7 @@ function AgentRow({ companions }: { companions: CompanionSummary[] }) {
             ? "Orbit Agent paired, not running"
             : "Not connected"
       }
-      detail="Fable 5.1, Opus 5.5, Sonnet 5.5 and Haiku 5.5 through Claude Code on your Mac, on your Claude plan"
+      detail="Fable 5.2, Fable 5.1, Opus 5.5, Sonnet 5.5 and Haiku 5.5 through Claude Code on your Mac, on your Claude plan"
       action={
         pairing ? (
           <Button variant="ghost" size="sm" onClick={() => setPairing(null)}>

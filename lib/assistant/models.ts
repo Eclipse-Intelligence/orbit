@@ -57,6 +57,7 @@ export const ASSISTANT_MODELS: AssistantModel[] = [
   orbit("gpt-6.1-terra", "GPT-6.1 Terra", "OpenAI", { responses: true }),
   orbit("grok-4.7", "Grok 4.7", "xAI", { reasoning: ["low", "medium", "high", "xhigh"] }),
   orbit("gemini-4-argon", "Gemini 4 Argon", "Google", { reasoning: ["low", "medium", "high"], maxOutput: 65_536 }),
+  account("claude", "claude-fable-5-2", "Fable 5.2", REASONING_LEVELS),
   account("claude", "claude-fable-5-1", "Fable 5.1", REASONING_LEVELS),
   account("claude", "claude-opus-5-5", "Opus 5.5", REASONING_LEVELS),
   account("claude", "claude-sonnet-5-5", "Sonnet 5.5", REASONING_LEVELS),

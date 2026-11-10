@@ -229,6 +229,7 @@
   --line-subtle: rgb(255 255 255 / 0.06);
   --floating-clearance: calc(env(safe-area-inset-bottom) + 8.5rem);
   --sidebar-width: 254px;
+  --header-height: 3.75rem;
   --tag-blue-bg: #1d2b3e;
   --tag-blue-border: #23354c;
   --tag-blue-text: #bfdbfe;
