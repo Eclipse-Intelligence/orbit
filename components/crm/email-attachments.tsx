@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import Button from "@/components/_ui/button";
 import { discardAttachmentsAction, prepareAttachmentAction } from "@/app/(crm)/capture/actions";
+import { attachmentBlock } from "@/lib/mail/send-ready";
 import type { DraftFile } from "@/lib/mail/view";
 import { cn } from "@/lib/utils";
 import PaperclipIcon from "@/public/assets/images/_common/paperclip.svg";
@@ -100,6 +101,7 @@ export function useEmailAttachments(onDraft: DraftFile[] = [], uploads: Uploads 
     ids: ready.map((item) => item.id as string),
     files: ready.map((item): DraftFile => ({ id: item.id as string, name: item.name, size: item.size, contentType: item.contentType })),
     uploading: items.some((item) => item.status === "uploading"),
+    blocked: attachmentBlock(items),
     add,
     remove,
     clear: () => setItems([]),
