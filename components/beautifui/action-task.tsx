@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import Button from "@/components/_ui/button";
 import Tag from "@/components/_ui/tag";
 import { EntityChip } from "@/components/beautifui/record-marks";
 import { ClickUpBadge } from "@/components/crm/clickup";
@@ -52,9 +51,6 @@ export default function ActionTask({
   const due = dueBadge ? taskDueState(task.dueAt, now) : null;
   const reminder = task.dueAt ? reminderLabel(task.remindMinutes) : null;
   const description = splitDescription(task.description);
-  const hasDetail = Boolean(
-    task.description || task.contactName || task.opportunityName || task.clickupError || reminder,
-  );
 
   return (
     <li data-list-row="" className={cn(KEYBOARD_ROW_CLASS, "border-border overflow-hidden border-b")}>
@@ -145,9 +141,7 @@ export default function ActionTask({
                 {due.label}
               </Tag>
             ) : (
-              <span className="text-subtle shrink-0 text-[13px]">
-                {task.dueAt ? relativeWhen(task.dueAt, now) : "No due date"}
-              </span>
+              task.dueAt && <span className="text-subtle shrink-0 text-[13px]">{relativeWhen(task.dueAt, now)}</span>
             )}
             <ClickUpBadge task={task} />
             {task.companyName && (
@@ -158,11 +152,6 @@ export default function ActionTask({
             )}
           </div>
         </div>
-        {!completed && onComplete && (
-          <Button variant="secondary" size="sm" onClick={onComplete} className="hidden sm:inline-flex" tabIndex={-1}>
-            Done
-          </Button>
-        )}
       </div>
       <div
         className="grid transition-[grid-template-rows,opacity] duration-300"
@@ -200,7 +189,6 @@ export default function ActionTask({
               </p>
             ))}
             {task.clickupError && <p className="text-danger">ClickUp: {task.clickupError}</p>}
-            {!hasDetail && <p>No extra detail.</p>}
             {task.priority !== "normal" && <p>Priority {task.priority}</p>}
             {opened && <RecordNotes compact record={{ kind: "task", id: task.id, name: task.title }} className="mt-2" />}
           </div>

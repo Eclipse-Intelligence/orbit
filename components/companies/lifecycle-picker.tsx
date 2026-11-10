@@ -77,7 +77,7 @@ export default function LifecyclePicker({
             maxLength={LIFECYCLE_MAX_LENGTH}
           />
           <CommandList>
-            <CommandEmpty className="py-6">Type a name for the lifecycle.</CommandEmpty>
+            <CommandEmpty className="py-6">{typed ? "No matches" : "Type a name for the lifecycle."}</CommandEmpty>
             {matches.map((option) => (
               <CommandItem key={option.value} value={`pick:${option.value}`} onSelect={() => pick(option.value)}>
                 <LifecycleMark lifecycle={option.value} />

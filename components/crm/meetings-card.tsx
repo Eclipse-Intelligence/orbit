@@ -13,17 +13,9 @@ function peopleLine(meeting: Meeting) {
   const parts = [];
   if (meeting.organizer) parts.push(`Organised by ${meeting.organizer.name ?? meeting.organizer.email}`);
   if (meeting.attendeeCount > 0) {
-    parts.push(`${meeting.attendeeCount} ${meeting.attendeeCount === 1 ? "attendee" : "attendees"}`);
+    parts.push(`${meeting.attendeeCount} ${meeting.attendeeCount === 1 ? "guest" : "guests"}`);
   }
   return parts.join(" · ");
-}
-
-function joinLabel(url: string) {
-  try {
-    return new URL(url).hostname.endsWith("teams.microsoft.com") ? "Teams link" : "Join link";
-  } catch {
-    return "Join link";
-  }
 }
 
 function MeetingLinks({ meeting, upcoming }: { meeting: Meeting; upcoming: boolean }) {
@@ -43,7 +35,7 @@ function MeetingLinks({ meeting, upcoming }: { meeting: Meeting; upcoming: boole
       )}
       {meeting.granolaActivityId && (
         <a href={`#activity-${meeting.granolaActivityId}`} className={LINK}>
-          Notes in Granola
+          Notes
         </a>
       )}
     </span>
@@ -101,12 +93,11 @@ export default function MeetingsCard({
     <DetailSection title="Meetings" className={className}>
       {meetings.scopeMissing && (
         <p className="caption-style text-subtle flex flex-wrap items-center gap-2">
-          Reconnect Microsoft to see meetings.
           <a
             href="/api/microsoft/connect"
             className={buttonVariants({ variant: "secondary", size: "sm" })}
           >
-            Reconnect
+            Reconnect Microsoft
           </a>
         </p>
       )}
@@ -119,7 +110,7 @@ export default function MeetingsCard({
               <>
                 {" ("}
                 <a href={next.joinUrl} target="_blank" rel="noreferrer" className={LINK}>
-                  {joinLabel(next.joinUrl)}
+                  Join
                 </a>
                 {")"}
               </>

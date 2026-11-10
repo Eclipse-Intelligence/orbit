@@ -118,7 +118,7 @@ function Shell({
         </DialogClose>
         <Button variant="primary" size="sm" type="submit" disabled={pending}>
           <PlusIcon aria-hidden className="size-3" />
-          {pending ? "Adding…" : TITLES[kind]}
+          {pending ? "Adding…" : "Add"}
         </Button>
       </DialogFooter>
     </form>
@@ -419,7 +419,7 @@ export function QuickOpportunityForm({ prefill, setup, onDone }: FormProps) {
       </div>
       <LinkField
         id="quick-opportunity-contact"
-        label="Primary contact"
+        label="Contact"
         kind="contact"
         name="primaryContactId"
         empty="none"

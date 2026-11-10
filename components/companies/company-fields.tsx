@@ -65,7 +65,7 @@ export default function CompanyFields({
       <input type="hidden" name="sizeCategory" value={values.sizeCategory} />
 
       <Field
-        label="Company name"
+        label="Name"
         htmlFor={`${idPrefix}-name`}
         required
         error={nameError}
@@ -89,7 +89,6 @@ export default function CompanyFields({
         <Field
           label="Domain"
           htmlFor={`${idPrefix}-domain`}
-          hint="Used to match existing companies."
           error={errors?.domain}
         >
           <Input
@@ -202,7 +201,6 @@ export default function CompanyFields({
           name="description"
           value={values.description}
           onChange={(event) => update("description", event.target.value)}
-          placeholder="What this company does, and why it matters."
           className={cn(textareaClass, errors?.description && "border-danger")}
           aria-invalid={errors?.description ? true : undefined}
         />

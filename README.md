@@ -290,9 +290,9 @@ Orbit syncs in the background after a CRM page loads, at most once every five mi
 
 ### Call summaries
 
-Orbit can turn a call or meeting transcript into a short summary, key points, and suggested tasks, stored against the activity. Action items that are yours become tasks on the contact automatically and, when ClickUp is set up with a default list, ClickUp tasks too. Items for the other person, or with no clear owner, stay in the summary with an "Add as task" button. It uses the llmapi.ai gateway (OpenAI-compatible chat completions). Set `LLM_API_KEY`. Optionally set `LLM_MODEL` (default `claude-haiku-5-5`) and `LLM_API_BASE_URL` (default `https://api.llmapi.ai/v1`). For the assistant's Claude models to keep their reasoning between tool steps, set `LLM_CLAUDE_MESSAGES=on` to use the gateway's Anthropic-compatible endpoint, or `ANTHROPIC_API_KEY` to call Anthropic directly; with neither, they use chat completions.
+Orbit can turn a call or meeting transcript into a short summary, key points, and suggested tasks, stored against the activity. Action items that are yours become tasks on the contact automatically and, when ClickUp is set up with a default list, ClickUp tasks too. Items for the other person, or with no clear owner, stay in the summary with an "Add task" button. It uses the llmapi.ai gateway (OpenAI-compatible chat completions). Set `LLM_API_KEY`. Optionally set `LLM_MODEL` (default `claude-haiku-5-5`) and `LLM_API_BASE_URL` (default `https://api.llmapi.ai/v1`). For the assistant's Claude models to keep their reasoning between tool steps, set `LLM_CLAUDE_MESSAGES=on` to use the gateway's Anthropic-compatible endpoint, or `ANTHROPIC_API_KEY` to call Anthropic directly; with neither, they use chat completions.
 
-On a call in a contact's or company's activity, choose Add transcript, paste the transcript (plain text or the Teams `.vtt` text), and choose Summarise. Teams `.vtt` files are reduced to `Speaker: line` text first. Each suggested task has Add as task, which creates a task on the call's contact and company due at 09:00 London time on the stated day, and Dismiss. The transcript stays on the call under Transcript. A summary that fails keeps the transcript and shows the error with Try again.
+On a call in a contact's or company's activity, choose Add transcript, paste the transcript (plain text or the Teams `.vtt` text), and choose Summarise. Teams `.vtt` files are reduced to `Speaker: line` text first. Each suggested task has Add task, which creates a task on the call's contact and company due at 09:00 London time on the stated day, and Dismiss. The transcript stays on the call under Transcript. A summary that fails keeps the transcript and shows the error with Try again.
 
 ### Account health
 
@@ -466,7 +466,7 @@ The company page uses the first brand colour to tint the header, shows the backd
 Companies are filled in:
 
 - **Automatically** when a company is created (in the app, by import, or through the API or MCP) or gains a domain, when the key is set and "Fill in new companies automatically" is on in Settings › Tools, Contact enrichment (on by default). It runs after the response, so saving never waits for it.
-- **On the company page,** with Find company details or Refresh details.
+- **On the company page,** with Find details or Refresh details.
 - **From the Companies bulk bar,** with Find details, five companies per request.
 - **From Settings,** with Fill in existing companies, Fill in (owners and admins only), five at a time through every active company with a domain or website that has never been checked, skipping lookups that failed in the last hour. Each costs about 10 context.dev credits.
 
@@ -510,7 +510,7 @@ When you edit a contact that has no company, leaving the Email field checks its 
 
 ### Merging duplicates
 
-On a company or a person, More › Merge into… picks the record to keep, explains what moves, then merges. People, deals and board cards, tasks, activity, emails, calls, proposals, Knowledge, market notes, signals and calendar links move to the kept record, including other members' private rows such as their emails and tasks. Empty fields on the kept record are filled from the duplicate (never overwritten), a kept company still at Lead takes the duplicate's lifecycle, and tags are combined, up to 20. An owner who has left the workspace isn't copied. For people the kept email stays; a different email from the duplicate is added to the notes, along with the duplicate's notes. The duplicate is archived, never deleted, with its own `company.archived` or `contact.archived` event, and a `company.merged` or `contact.merged` audit event records how many rows moved from each table and what was filled. A merge can't be undone. When both companies have web check results, the kept company's stay. AI field answers fill the kept company's gaps: where both have an answer the kept one stays, unless only the duplicate's was set by hand. Follow-up suggestions, mail filing links to a person and Docs mentions move to the kept record too, and a doc that still names the duplicate points at the kept record the next time it is saved. Undo refuses every part of a merge, including the duplicate's archive. The assistant's `merge_companies` and `merge_contacts` and the MCP tools of the same names do the same.
+On a company or a person, More › Merge into… picks the record to keep and merges, in one dialog. People, deals and board cards, tasks, activity, emails, calls, proposals, Knowledge, market notes, signals and calendar links move to the kept record, including other members' private rows such as their emails and tasks. Empty fields on the kept record are filled from the duplicate (never overwritten), a kept company still at Lead takes the duplicate's lifecycle, and tags are combined, up to 20. An owner who has left the workspace isn't copied. For people the kept email stays; a different email from the duplicate is added to the notes, along with the duplicate's notes. The duplicate is archived, never deleted, with its own `company.archived` or `contact.archived` event, and a `company.merged` or `contact.merged` audit event records how many rows moved from each table and what was filled. A merge can't be undone. When both companies have web check results, the kept company's stay. AI field answers fill the kept company's gaps: where both have an answer the kept one stays, unless only the duplicate's was set by hand. Follow-up suggestions, mail filing links to a person and Docs mentions move to the kept record too, and a doc that still names the duplicate points at the kept record the next time it is saved. Undo refuses every part of a merge, including the duplicate's archive. The assistant's `merge_companies` and `merge_contacts` and the MCP tools of the same names do the same.
 
 ### Moving between workspaces
 
@@ -549,7 +549,7 @@ The chips under the pad change the type and time, remove a tagged record, and tu
 
 With `LLM_API_KEY` set, Orbit sends the text to the model about a second after you stop typing, when the text is at least 140 characters or contains a follow-up and you aren't dictating. The reply can fill in the type, suggest the follow-up's title and due date, and give a long entry a short title. The body is always what you typed. The microphone button uses the browser's speech recognition (UK English) where the browser supports it; the audio never reaches Orbit's server.
 
-In the Activity log, clicking into the pad lists up to four meetings that ended in the last 18 hours and haven't been logged, as "How did <meeting> go?". Only meetings from calendars used for CRM that include a contact or company count. Choosing one fills in "Met @Jane: ", sets the type to meeting and the time to the meeting's start, and links the activity to that event.
+In the Activity log, clicking into the pad lists up to four meetings that ended in the last 18 hours and haven't been logged, as "Log <meeting>". Only meetings from calendars used for CRM that include a contact or company count. Choosing one fills in "Met @Jane: ", sets the type to meeting and the time to the meeting's start, and links the activity to that event.
 
 ## Bulk actions
 
@@ -557,12 +557,12 @@ On the Contacts and Companies lists, a checkbox appears when you point at a row.
 
 | Action | Key | What it does |
 | --- | --- | --- |
-| Email (Contacts) or Email people (Companies) | E | Opens the bulk email dialog for the selected people, or every active person at the selected companies. Needs Microsoft connected in Settings › Email. Sends to up to 50 people, about two seconds apart, skipping people with no email or a duplicate address. |
+| Email (Contacts) or Email contacts (Companies) | E | Opens the bulk email dialog for the selected people, or every active person at the selected companies. Needs Microsoft connected in Settings › Email. Sends to up to 50 people, about two seconds apart, skipping people with no email or a duplicate address. |
 | Tag | L | Adds a tag to the selection, or removes one it already has. |
 | Find emails, Find LinkedIn, Find phones (Contacts) | | Runs enrichment for the selection. |
 | Find details (Companies) | | Fills in the selected companies from context.dev. |
-| Export selected | | Downloads `contacts-selected-<date>.csv` or `companies-selected-<date>.csv`. |
-| Archive | Delete | Asks first, then archives. Undo (Z) restores them for the next 10 seconds. |
+| Export | | Downloads `contacts-selected-<date>.csv` or `companies-selected-<date>.csv`. |
+| Archive | Delete | Archives straight away. Undo (Z) restores them for the next 10 seconds. |
 
 Each record is handled on its own; when some fail, the notice says how many and gives the first reason. One action handles up to 100 records.
 

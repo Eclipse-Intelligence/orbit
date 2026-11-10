@@ -147,7 +147,7 @@ export default function ContactRecord({
               title={
                 shown.email
                   ? undefined
-                  : `Add an email address to invite ${shown.name} to a meeting`
+                  : "Add an email address to invite"
               }
             >
               <Button
@@ -334,8 +334,8 @@ export default function ContactRecord({
                           href={shown.salesNavigatorUrl}
                           target="_blank"
                           rel="noreferrer"
-                          aria-label="Open in Sales Navigator"
-                          title="Open in Sales Navigator"
+                          aria-label="Open Sales Navigator"
+                          title="Open Sales Navigator"
                           className="text-subtle hover:text-foreground focus-visible:ring-ring/60 inline-flex size-7 shrink-0 items-center justify-center rounded-full outline-none transition-colors duration-150 hover:bg-white/6 focus-visible:ring-2"
                         >
                           <ExternalIcon aria-hidden className="size-3.5" />
@@ -378,10 +378,8 @@ export default function ContactRecord({
                       <span className="text-[14px] leading-5">
                         {task.title}
                       </span>
-                      <span className="caption-style text-subtle flex flex-wrap items-center gap-2">
-                        {task.dueAt
-                          ? `Due ${formatWhen(task.dueAt)}`
-                          : "No due date"}
+                      <span className="caption-style text-subtle flex flex-wrap items-center gap-2 empty:hidden">
+                        {task.dueAt && `Due ${formatWhen(task.dueAt)}`}
                         <ClickUpBadge task={task} />
                       </span>
                     </li>

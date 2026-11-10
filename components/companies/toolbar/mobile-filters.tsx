@@ -201,7 +201,7 @@ export default function MobileFilters({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value={ALL_OWNERS}>All owners</SelectItem>
+                  <SelectItem value={ALL_OWNERS}>Any owner</SelectItem>
                   <SelectItem value={UNASSIGNED_OWNER}>Unassigned</SelectItem>
                   {members.map((member) => (
                     <SelectItem key={member.id} value={member.id}>

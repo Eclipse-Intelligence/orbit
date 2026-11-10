@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useState, type CSSProperties } from "react";
+import { useCallback, useRef, useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import Asset from "@/components/_ui/asset";
 import Button from "@/components/_ui/button";
+import HoldButton from "@/components/_ui/hold-button";
 import {
   lifecycleTagBase,
   RecordTag,
@@ -28,6 +29,7 @@ import type { KnowledgeItem } from "@/lib/knowledge/store";
 import type { DocumentSummary } from "@/lib/proposals/documents";
 import SectionHeader from "@/components/crm/section-header";
 import RecordNotes from "@/components/docs/record-notes";
+import { useShortcut } from "@/components/shortcuts/shortcuts-provider";
 import RecordSequence from "@/components/shortcuts/record-sequence";
 import RecordTags from "@/components/crm/tags";
 import type { Viewer } from "@/components/crm/viewer";
@@ -107,7 +109,7 @@ export default function CompanyRecord({
   const listHref = useListHref("companies");
   const [editing, setEditing] = useState(false);
   const [fresh, setFresh] = useState<Company | null>(null);
-  const [confirmArchive, setConfirmArchive] = useState(false);
+  const archiveHold = useRef<HTMLSpanElement>(null);
   const [archiving, setArchiving] = useState(false);
   const [archiveError, setArchiveError] = useState<string | null>(null);
   const [lifecycleError, setLifecycleError] = useState<string | null>(null);
@@ -116,6 +118,7 @@ export default function CompanyRecord({
       ? fresh
       : context.company;
   useQuickAddRecord({ type: "company", id: company.id, name: company.name });
+  useShortcut("record-archive", () => archiveHold.current?.querySelector("button")?.focus(), !company.archivedAt && !editing);
 
   async function patch(input: CompanyWrite) {
     const result = await patchCompanyAction(company.id, input);
@@ -143,6 +146,7 @@ export default function CompanyRecord({
   }
 
   async function archive() {
+    setArchiveError(null);
     setArchiving(true);
     const result = await archiveCompanyAction(company.id);
     if (result.error) {
@@ -164,41 +168,12 @@ export default function CompanyRecord({
           <div className="flex items-center gap-1">
             {!company.archivedAt && <RunWorkflowButton object="company" recordId={company.id} workflows={workflows} />}
             {!company.archivedAt && <MergeRecordMenu kind="company" id={company.id} name={company.name} moveTargets={moveTargets} workspaceName={viewer.workspaceName} />}
-            {company.archivedAt ? null : confirmArchive ? (
-              <>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={archiving}
-                  onClick={() => {
-                    setConfirmArchive(false);
-                    setArchiveError(null);
-                  }}
-                >
-                  Keep
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="text-danger hover:text-danger"
-                  disabled={archiving}
-                  autoFocus
-                  onClick={archive}
-                >
-                  {archiving ? "Archiving…" : "Archive company"}
-                </Button>
-              </>
-            ) : (
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={editing}
-                data-shortcut="archive"
-                title="Archive (Delete)"
-                onClick={() => setConfirmArchive(true)}
-              >
-                Archive
-              </Button>
+            {!company.archivedAt && (
+              <span ref={archiveHold} className="contents">
+                <HoldButton tone="neutral" disabled={editing || archiving} onConfirm={() => void archive()}>
+                  {archiving ? "Archiving…" : "Hold to archive"}
+                </HoldButton>
+              </span>
             )}
             {!editing && (
               <Button
@@ -207,10 +182,7 @@ export default function CompanyRecord({
                 disabled={archiving}
                 data-shortcut="edit"
                 title="Edit (E)"
-                onClick={() => {
-                  setConfirmArchive(false);
-                  setEditing(true);
-                }}
+                onClick={() => setEditing(true)}
               >
                 Edit
               </Button>

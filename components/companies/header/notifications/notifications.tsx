@@ -101,7 +101,7 @@ export default function Notifications({ workspaceId }: { workspaceId?: string })
               })}
             </ul>
           ) : (
-            waiting.total === 0 && <p className="caption-style text-subtle">No updates.</p>
+            waiting.total === 0 && <p className="caption-style text-subtle">No notifications</p>
           )}
         </div>
       </PopoverContent>

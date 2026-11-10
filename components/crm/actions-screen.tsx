@@ -24,7 +24,7 @@ const VIEWS: { id: TaskView; label: string }[] = [
   { id: "today", label: "Today" },
   { id: "upcoming", label: "Upcoming" },
   { id: "completed", label: "Completed" },
-  { id: "none", label: "Companies without tasks" },
+  { id: "none", label: "Without tasks" },
 ];
 
 export default function ActionsScreen({
@@ -125,14 +125,14 @@ export default function ActionsScreen({
       {view === "none" ? (
         <RecordList
           count={companies.length}
-          empty="Every company has an open task."
+          empty="No companies"
         >
           {companies.map((company) => (
             <RecordRow
               key={company.id}
               mark={<Monogram name={company.name} />}
               title={company.name}
-              meta={`${relativeWhen(company.lastInteractionAt, now)} · ${company.domain ?? "No domain"}`}
+              meta={[relativeWhen(company.lastInteractionAt, now), company.domain].filter(Boolean).join(" · ")}
               action={
                 <span className="flex items-center gap-3">
                   <ConnectionMark relationship={company.relationship} />
@@ -145,7 +145,7 @@ export default function ActionsScreen({
           ))}
         </RecordList>
       ) : (
-        <RecordList count={tasks.length} empty={view === "all" ? "No open tasks." : "Nothing in this view."}>
+        <RecordList count={tasks.length} empty="No tasks">
           {tasks.map((task) => (
             <ActionTask
               key={task.id}

@@ -34,14 +34,7 @@ export default function BoardCardContext({ companyId, companyName }: { companyId
 
   return (
     <div className="flex flex-col gap-5">
-      <div className="flex flex-col gap-2">
-        <span className="caption-style text-subtle">Log a check-in</span>
-        <ActivityPad
-          fixedCompany={{ id: companyId, name: companyName }}
-          placeholder="How's it going? e.g. Call with @Jane, all on track"
-          onAdded={(activity) => setAdded((list) => [activity, ...list])}
-        />
-      </div>
+      <ActivityPad fixedCompany={{ id: companyId, name: companyName }} onAdded={(activity) => setAdded((list) => [activity, ...list])} />
       <section className="flex flex-col gap-2" aria-label="Recent activity">
         <div className="flex items-center justify-between gap-2">
           <span className="caption-style text-subtle">Recent activity</span>
@@ -52,7 +45,7 @@ export default function BoardCardContext({ companyId, companyName }: { companyId
         {!current && added.length === 0 ? (
           <p className="caption-style text-subtle">Loading…</p>
         ) : activities.length === 0 ? (
-          <p className="caption-style text-subtle">Nothing logged yet.</p>
+          <p className="caption-style text-subtle">No activity</p>
         ) : (
           <ul className="flex flex-col gap-2.5">
             {activities.map((activity) => (
@@ -75,7 +68,7 @@ export default function BoardCardContext({ companyId, companyName }: { companyId
             {current.tasks.map((task) => (
               <li key={task.id} className="flex flex-col gap-0.5">
                 <span className="truncate text-[14px] leading-5">{task.title}</span>
-                <span className="caption-style text-subtle">{task.dueAt ? `Due ${formatWhen(task.dueAt)}` : "No due date"}</span>
+                {task.dueAt && <span className="caption-style text-subtle">Due {formatWhen(task.dueAt)}</span>}
               </li>
             ))}
           </ul>

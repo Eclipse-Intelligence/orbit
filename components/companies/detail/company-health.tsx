@@ -26,8 +26,8 @@ export default function CompanyHealth({ company }: { company: Company }) {
 
   const source = company.healthAt
     ? company.healthActivityId
-      ? `From the call on ${formatDate(company.healthAt)}`
-      : `Set by hand on ${formatDate(company.healthAt)}`
+      ? `From call, ${formatDate(company.healthAt)}`
+      : `Set ${formatDate(company.healthAt)}`
     : null;
 
   return (
@@ -50,14 +50,12 @@ export default function CompanyHealth({ company }: { company: Company }) {
         </select>
       }
     >
-      {company.health ? (
+      {company.health && (
         <div className="flex flex-col items-start gap-2">
           <HealthMark health={company.health} />
           {company.healthReason && <p className="text-[14px] leading-5">{company.healthReason}</p>}
           {source && <p className="caption-style text-subtle">{source}</p>}
         </div>
-      ) : (
-        <p className="caption-style text-subtle">Set automatically from the next summarised call, or choose one.</p>
       )}
       {error && (
         <p role="alert" className="caption-style text-danger">
