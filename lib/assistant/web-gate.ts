@@ -39,7 +39,7 @@ export const WEB_APPROVAL_RESULT =
 
 export type WebGateState = { outside: boolean; seen: Set<string>; hosts: Set<string>; typed: string };
 
-export type GateRow = { role: string; content: string | null; tool_name?: string | null; sources?: unknown[] | null };
+export type GateRow = { role: string; content: string | null; tool_name?: string | null; sources?: unknown[] | null; page_context?: string | null };
 
 const LINK = /(?:https?:\/\/)?(?:(?:[a-z0-9-]+\.)+[a-z]{2,}|\d{1,3}(?:\.\d{1,3}){3})(?::\d+)?(?:[/?#][^\s"'<>\\)\]}`]*)?/gi;
 const HANDLE = /@[a-z0-9_]{1,30}\b/gi;
@@ -48,6 +48,8 @@ const HOST_PREFIX = "host:";
 const FORWARDED_START = "[Forwarded material starts.";
 const FORWARDED_END = "[Forwarded material ends.]";
 const FIRST_PARTY_FIELD = /^(domain|website|url|linkedin(url)?|x(url)?|twitter(url)?|homepage)$/i;
+const PAGE_OUTSIDE_LINE = /^(?:Text in the search box:|Open: email thread |Event they last opened:|Capture item they last selected:)/m;
+const PAGE_DOMAIN = /(?:^|, )domain "([^"\\]+)"/gm;
 
 function text(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
@@ -125,6 +127,12 @@ function firstPartyHosts(content: string) {
   return hosts;
 }
 
+export function pageGate(pageContext: string | null | undefined) {
+  const block = pageContext ?? "";
+  const hosts = [...block.matchAll(PAGE_DOMAIN)].map((match) => hostOf(match[1])).filter(Boolean);
+  return { outside: PAGE_OUTSIDE_LINE.test(block), hosts };
+}
+
 export function readTargets(name: string, content: string) {
   if (PAGE_TOOLS.has(name)) return [];
   const exact = [...seenTargets(content)];
@@ -150,6 +158,9 @@ export function webGateState(rows: GateRow[], extra: { outside?: boolean; seen?:
       const targets = seenTargets(own);
       add(seen, targets);
       add(hosts, [...targets].map(hostOf));
+      const page = pageGate(row.page_context);
+      if (page.outside) outside = true;
+      add(hosts, page.hosts);
     } else if (row.role === "assistant") {
       if (Array.isArray(row.sources) && row.sources.length > 0) outside = true;
     } else if (row.role === "tool" && row.tool_name) {

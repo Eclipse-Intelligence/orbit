@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
-import type { CompanionResult } from "@/companion/src/protocol";
+import { PROPOSED, type CompanionResult } from "@/companion/src/protocol";
 import { applyCompanionResult, sendMessage, type AssistantEvent } from "@/lib/assistant/chat";
 import { systemPrompt } from "@/lib/assistant/prompt";
 import { ASSISTANT_TOOLS, WORKSPACE_READ_TOOLS, crossWorkspaceRefusal, runTool } from "@/lib/assistant/tools";
@@ -169,7 +169,7 @@ describe("assistant across workspaces", () => {
           ],
         },
       ],
-      results: {},
+      results: { "call-other": { content: PROPOSED, isError: false }, "call-here": { content: PROPOSED, isError: false } },
       sources: [],
       model: "claude-fable-5-1",
       usage: null,

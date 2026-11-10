@@ -9,6 +9,7 @@ import CompaniesToolbar from "./toolbar/toolbar";
 import CompaniesTable from "./table/companies-table";
 import { RememberList } from "@/components/crm/list-memory";
 import { useBulkSelection } from "@/hooks/use-bulk-selection";
+import { usePageSelection } from "@/stores/page-context-store";
 import { activeFilterCount } from "@/lib/companies";
 import type { Viewer } from "@/components/crm/viewer";
 import type { Company, CompanyListQuery, LifecycleCount, Member, TagCount } from "@/lib/crm/types";
@@ -54,6 +55,7 @@ export default function Companies({
     companies.map((company) => company.id),
     JSON.stringify(filters),
   );
+  usePageSelection("companies", selection.selectedIds);
   const phone = usePhone();
   const canManage = viewer.role === "owner" || viewer.role === "admin";
   const visible = aiFields.filter((field) => !hiddenAiFields.includes(field.id));

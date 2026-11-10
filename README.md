@@ -290,7 +290,7 @@ Orbit syncs in the background after a CRM page loads, at most once every five mi
 
 ### Call summaries
 
-Orbit can turn a call or meeting transcript into a short summary, key points, and suggested tasks, stored against the activity. Action items that are yours become tasks on the contact automatically and, when ClickUp is set up with a default list, ClickUp tasks too. Items for the other person, or with no clear owner, stay in the summary with an "Add as task" button. It uses the llmapi.ai gateway (OpenAI-compatible chat completions). Set `LLM_API_KEY`. Optionally set `LLM_MODEL` (default `claude-haiku-5-5`) and `LLM_API_BASE_URL` (default `https://api.llmapi.ai/v1`).
+Orbit can turn a call or meeting transcript into a short summary, key points, and suggested tasks, stored against the activity. Action items that are yours become tasks on the contact automatically and, when ClickUp is set up with a default list, ClickUp tasks too. Items for the other person, or with no clear owner, stay in the summary with an "Add as task" button. It uses the llmapi.ai gateway (OpenAI-compatible chat completions). Set `LLM_API_KEY`. Optionally set `LLM_MODEL` (default `claude-haiku-5-5`) and `LLM_API_BASE_URL` (default `https://api.llmapi.ai/v1`). For the assistant's Claude models to keep their reasoning between tool steps, set `LLM_CLAUDE_MESSAGES=on` to use the gateway's Anthropic-compatible endpoint, or `ANTHROPIC_API_KEY` to call Anthropic directly; with neither, they use chat completions.
 
 On a call in a contact's or company's activity, choose Add transcript, paste the transcript (plain text or the Teams `.vtt` text), and choose Summarise. Teams `.vtt` files are reduced to `Speaker: line` text first. Each suggested task has Add as task, which creates a task on the call's contact and company due at 09:00 London time on the stated day, and Dismiss. The transcript stays on the call under Transcript. A summary that fails keeps the transcript and shows the error with Try again.
 
@@ -725,13 +725,13 @@ Claude account models run through Orbit Agent, a small command-line program on y
 2. In Settings › Connections, AI accounts, choose Pair a Mac. Orbit shows a command with a one-time code that works for 10 minutes:
 
    ```bash
-   npx -y --package=https://orbit.geteclipse.co/downloads/orbit-agent-1.5.0.tgz orbit-agent --pair ABCD-EFGH --install
+   npx -y --package=https://orbit.geteclipse.co/downloads/orbit-agent-1.5.2.tgz orbit-agent --pair ABCD-EFGH --install
    ```
 
-   On any other Orbit address the command uses that address for the package and adds `--url <address>`.
+   The version in the address is the one current when the command was shown. Every `/downloads/orbit-agent-<version>.tgz` address serves the current package (a rewrite in `next.config.ts`), so an older command or an installed agent never gets a 404. On any other Orbit address the command uses that address for the package and adds `--url <address>`.
 3. Run it in Terminal. The Settings page updates when the Mac connects. On its first run, npx downloads the package and its dependencies (the Claude Agent SDK and zod).
 
-The command ends with `--install`, which sets Orbit Agent up as a background service on the Mac (a LaunchAgent in `~/Library/LaunchAgents/co.geteclipse.orbit-agent.plist`): it starts when you log in and restarts if it stops, so Terminal can be closed. It fetches the latest Orbit Agent each time it starts and logs to `~/Library/Logs/orbit-agent.log`. `orbit-agent --uninstall` stops that, and `--logout` also forgets the pairing. Without `--install` it runs only while the Terminal window is open. If it isn't running, the assistant says when the Mac was last seen and gives the command to start it. The pairing is saved in `~/.config/orbit-agent/config.json`, which only your user can read.
+The command ends with `--install`, which sets Orbit Agent up as a background service on the Mac (a LaunchAgent in `~/Library/LaunchAgents/co.geteclipse.orbit-agent.plist`): it starts when you log in and restarts if it stops, so Terminal can be closed. It runs the package from the address it was installed with, which serves the current Orbit Agent, but npx reuses its cached copy while it has one, so an installed agent picks up a new version only when that cache is cleared or the agent is installed again with the current command. It logs to `~/Library/Logs/orbit-agent.log`. `orbit-agent --uninstall` stops that, and `--logout` also forgets the pairing. Without `--install` it runs only while the Terminal window is open. If it isn't running, the assistant says when the Mac was last seen and gives the command to start it. The pairing is saved in `~/.config/orbit-agent/config.json`, which only your user can read.
 
 | Option | What it does |
 | --- | --- |

@@ -17,6 +17,7 @@
     "extension:zip": "node scripts/build-extension.mjs --zip"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.135.0",
     "@codemirror/commands": "^6.11.1",
     "@codemirror/lang-markdown": "^6.5.2",
     "@codemirror/language": "^6.13.1",

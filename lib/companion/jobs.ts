@@ -314,8 +314,8 @@ async function companionWebState(auth: AuthenticatedCompanion, jobId: string, co
       "select outside_read, seen_urls, coalesce((request->>'webSearch')::boolean, false) as web_search from crm.ai_companion_jobs where id = $1",
       [jobId],
     );
-    const rows = await db.query<{ role: string; content: string; tool_name: string | null; sources: unknown[] | null }>(
-      "select role, content, tool_name, sources from crm.assistant_messages where conversation_id = $1 order by seq",
+    const rows = await db.query<{ role: string; content: string; tool_name: string | null; sources: unknown[] | null; page_context: string | null }>(
+      "select role, content, tool_name, sources, page_context from crm.assistant_messages where conversation_id = $1 order by seq",
       [conversationId],
     );
     const row = job.rows[0];

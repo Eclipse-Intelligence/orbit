@@ -30,3 +30,9 @@ export class ProviderAuthError extends ProviderError {
     this.name = "ProviderAuthError";
   }
 }
+
+export const REFUSED_NOTICE = "(The model stopped here and declined to go on.)";
+
+export function replayContent(message: Extract<ChatMessage, { role: "assistant" }>) {
+  return message.state?.refused ? REFUSED_NOTICE : message.content;
+}

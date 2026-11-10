@@ -136,7 +136,7 @@ describe("Orbit Agent turns", () => {
           { text: "Looking up Acme.", calls: [{ id: "toolu_read", name: "search_records", arguments: '{"query":"Acme"}' }] },
           { text: "I'll add a follow-up task.", calls: [{ id: "toolu_write", name: "create_task", arguments: '{"title":"Call Acme","sendToClickUp":false}' }] },
         ],
-        results: { toolu_read: { content: tool.content, isError: false } },
+        results: { toolu_read: { content: tool.content, isError: false }, toolu_write: { content: PROPOSED, isError: false } },
         sources: [],
         model: "claude-sonnet-5-5",
         usage: { input_tokens: 10 },

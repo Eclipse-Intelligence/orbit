@@ -1,6 +1,7 @@
 import { AssistantError, StoppedError, complete, type ChatMessage, type ProviderState, type Source, type ToolCall } from "@/lib/assistant/gateway";
 import { assistantModel, settingsFor, startingSettings, type ModelSource, type ReasoningLevel } from "@/lib/assistant/models";
 import { chatFileNote, chatFilesFor, removeChatObjects, type ChatFile } from "@/lib/assistant/files";
+import { pageContext, readPageInput } from "@/lib/assistant/page-context";
 import { connectedProviders } from "@/lib/ai-accounts/store";
 import { systemPrompt } from "@/lib/assistant/prompt";
 import { docLinkOf } from "@/lib/assistant/doc-link";
@@ -27,7 +28,7 @@ import { linearHere } from "@/lib/crm/linear-connection";
 import { brandOrEmpty } from "@/lib/crm/brand";
 import { approvalFor, editsWithoutApproval, type DocApproval } from "@/lib/assistant/docs";
 import type { DocDiffLine } from "@/lib/docs/types";
-import type { CompanionResult, Effort } from "@/companion/src/protocol";
+import { PROPOSED, type CompanionResult, type Effort } from "@/companion/src/protocol";
 import {
   CONTINUE_RESULT_TOOL,
   cancelCompanionJob,
@@ -54,6 +55,10 @@ import type { Db } from "@/lib/db/pool";
 export const MAX_ROUNDS = 40;
 export const STOPPED_MESSAGE = "I've stopped after a lot of steps. Ask again more narrowly, or say \"carry on\".";
 export const FULL_MESSAGE = "I've read a lot in this step, more than the model can hold at once, so I've stopped here. Say \"carry on\" and I'll continue from what I found, or ask a narrower question.";
+export const CUT_OFF_MESSAGE = "The answer was cut off. Ask me to continue.";
+export const CUT_OFF_CALL = "Your reply was cut off before it finished, so this call didn't run. Make it again, and keep each reply shorter (fewer calls at once, or less text in the arguments).";
+export const NOT_PROPOSED = "This call didn't run, so nothing was proposed. Make it again if it's still needed.";
+export const BROKEN_CALL = "The arguments for this call weren't valid JSON, so it didn't run. Call it again with valid arguments.";
 const EMPTY_REPLY = "I didn't get an answer back. Try again.";
 const STOP_POLL_MS = 3_000;
 const HISTORY_BUDGET = 900_000;
@@ -131,6 +136,7 @@ type MessageRow = {
   sources: Source[] | null;
   provider_state: ProviderState | null;
   files?: ChatFile[] | null;
+  page_context?: string | null;
   created_at: Date | string;
 };
 
@@ -172,16 +178,20 @@ function display(row: MessageRow): DisplayMessage {
   };
 }
 
-function parseArgs(raw: string) {
+export function argsOf(raw: string) {
   try {
     const parsed = JSON.parse(raw || "{}");
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
   } catch {
-    return {};
+    return null;
   }
 }
 
-const MESSAGE_COLUMNS = "id, role, content, tool_calls, tool_call_id, tool_name, actions, sources, provider_state, files, created_at";
+function parseArgs(raw: string) {
+  return argsOf(raw) ?? {};
+}
+
+const MESSAGE_COLUMNS = "id, role, content, tool_calls, tool_call_id, tool_name, actions, sources, provider_state, files, page_context, created_at";
 const CONVERSATION_COLUMNS = "id, title, model, reasoning, web_search, updated_at, stopped_at";
 const EMAIL_MARK = "exists (select 1 from crm.agent_mail_threads t where t.conversation_id = crm.assistant_conversations.id) as email";
 
@@ -218,13 +228,14 @@ async function insertMessage(
     usage?: Record<string, unknown> | null;
     state?: ProviderState | null;
     files?: ChatFile[];
+    pageContext?: string | null;
   },
 ) {
   return withActor(actor, async (db) => {
     const result = await db.query<MessageRow>(
       `insert into crm.assistant_messages
-         (conversation_id, workspace_id, user_id, role, content, tool_calls, tool_call_id, tool_name, sources, model, usage, provider_state, files)
-       values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9::jsonb, $10, $11::jsonb, $12::jsonb, $13::jsonb)
+         (conversation_id, workspace_id, user_id, role, content, tool_calls, tool_call_id, tool_name, sources, model, usage, provider_state, files, page_context)
+       values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9::jsonb, $10, $11::jsonb, $12::jsonb, $13::jsonb, $14)
        returning ${MESSAGE_COLUMNS}`,
       [
         conversationId,
@@ -240,6 +251,7 @@ async function insertMessage(
         message.usage ? JSON.stringify(message.usage) : null,
         message.state ? JSON.stringify(message.state) : null,
         message.files && message.files.length > 0 ? JSON.stringify(message.files) : null,
+        message.pageContext || null,
       ],
     );
     if (message.files && message.files.length > 0) {
@@ -430,7 +442,7 @@ function weight(message: ChatMessage) {
 function userContent(row: MessageRow) {
   const note = chatFileNote(row.files ?? []);
   const typed = expandMentions(row.content);
-  return note ? (typed.trim() ? `${typed}\n\n${note}` : note) : typed;
+  return [typed.trim() ? typed : "", note, row.page_context ?? ""].filter(Boolean).join("\n\n");
 }
 
 export function history(rows: MessageRow[], budget = HISTORY_BUDGET): ChatMessage[] {
@@ -647,7 +659,8 @@ export async function applyCompanionResult(actor: UserActor, conversationId: str
     if (step.text.trim() || reads.length > 0) entries.push({ content: step.text.trim(), reads });
   }
   const refused = await refusedWrites(actor, writes.filter((call) => !gated.has(call.id)));
-  const proposed = writes.filter((call) => !refused.has(call.id));
+  const unrun = writes.filter((call) => !refused.has(call.id) && !gated.has(call.id) && result.results[call.id]?.content !== PROPOSED);
+  const proposed = writes.filter((call) => !refused.has(call.id) && !unrun.includes(call));
   if (refused.size > 0) {
     const reasons = [...new Set(refused.values())].join("\n\n");
     const last = entries.at(-1);
@@ -683,6 +696,14 @@ export async function applyCompanionResult(actor: UserActor, conversationId: str
       await insertMessage(actor, conversationId, {
         role: "tool",
         content: toolJson({ error: refused.get(call.id), field: "workspace" }),
+        toolCallId: call.id,
+        toolName: call.function.name,
+      });
+    }
+    for (const call of unrun) {
+      await insertMessage(actor, conversationId, {
+        role: "tool",
+        content: result.results[call.id]?.content || toolJson({ error: NOT_PROPOSED }),
         toolCallId: call.id,
         toolName: call.function.name,
       });
@@ -945,6 +966,7 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
   if (options.headless) throw new AssistantError(HEADLESS_MODEL_ERROR);
   const { system, learned, tools: toolOptions } = await promptFor(actor, conversation, { fetchImpl });
   const tools = toolDefinitions(toolOptions);
+  let continuedAfterCut = false;
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
     if (signal?.aborted) return;
     const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
@@ -976,31 +998,45 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
       onText: draftEmitter(emit),
     });
     if (signal?.aborted) return;
+    const cutOff = Boolean(result.cutOff || result.contextFull);
+    const stopsHere = cutOff && (continuedAfterCut || result.toolCalls.length === 0 || Boolean(result.contextFull));
+    const text = result.content.trim() ? result.content : "";
     const saved = await insertMessage(actor, conversation.id, {
       role: "assistant",
-      content: result.content.trim() || result.toolCalls.length > 0 ? result.content : EMPTY_REPLY,
+      content: stopsHere ? [text, result.contextFull ? FULL_MESSAGE : CUT_OFF_MESSAGE].filter(Boolean).join("\n\n") : text || result.toolCalls.length > 0 ? result.content : EMPTY_REPLY,
       toolCalls: result.toolCalls,
       sources: result.sources,
       model: result.model,
       usage: result.usage,
       state: result.state ?? null,
     });
-    if (result.toolCalls.length === 0) {
-      emit({ type: "message", message: display(saved) });
-      return;
+    const blocked = result.toolCalls.filter((call) => cutOff || argsOf(call.function.arguments) === null);
+    for (const call of blocked) {
+      await insertMessage(actor, conversation.id, {
+        role: "tool",
+        content: toolJson({ error: cutOff ? CUT_OFF_CALL : BROKEN_CALL }),
+        toolCallId: call.id,
+        toolName: call.function.name,
+      });
     }
     emit({ type: "message", message: display(saved) });
+    if (stopsHere || result.toolCalls.length === 0) return;
+    if (cutOff) {
+      continuedAfterCut = true;
+      continue;
+    }
+    const runnable = result.toolCalls.filter((call) => !blocked.includes(call));
     const webState = webStateOf([...rows, saved]);
     const gated = new Set(
-      result.toolCalls
+      runnable
         .filter((call) => {
           const tool = findTool(call.function.name);
           return tool && !tool.write && needsWebApproval(tool.name, parseArgs(call.function.arguments), webState);
         })
         .map((call) => call.id),
     );
-    const reads = result.toolCalls.filter((call) => !findTool(call.function.name)?.write && !gated.has(call.id));
-    let writes = result.toolCalls.filter((call) => findTool(call.function.name)?.write);
+    const reads = runnable.filter((call) => !findTool(call.function.name)?.write && !gated.has(call.id));
+    let writes = runnable.filter((call) => findTool(call.function.name)?.write);
     await Promise.all(
       reads.map(async (call) => {
         const label = toolLabel(call.function.name);
@@ -1025,7 +1061,7 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
         toolName: call.function.name,
       });
     }
-    writes = [...writes.filter((call) => !refused.has(call.id)), ...result.toolCalls.filter((call) => gated.has(call.id))];
+    writes = [...writes.filter((call) => !refused.has(call.id)), ...runnable.filter((call) => gated.has(call.id))];
     if (writes.length > 0) {
       const unattended = new Set<string>();
       for (const call of writes) {
@@ -1080,7 +1116,7 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
 
 export async function sendMessage(
   actor: UserActor,
-  input: { conversationId?: string | null; message: string; model: unknown; reasoning: unknown; webSearch: unknown; files?: unknown; title?: string; keepPending?: boolean },
+  input: { conversationId?: string | null; message: string; model: unknown; reasoning: unknown; webSearch: unknown; files?: unknown; title?: string; keepPending?: boolean; page?: unknown },
   emit: Emit,
   options: TurnOptions,
 ) {
@@ -1115,7 +1151,11 @@ export async function sendMessage(
   const rows = await withActor(actor, (db) => readMessages(db, conversation.id));
   await settleStuckActions(actor, conversation.id, rows);
   if (!input.keepPending) await declinePending(actor, conversation.id, rows, "The user moved on without confirming this action.");
-  const user = await insertMessage(actor, conversation.id, { role: "user", content: message, files });
+  const page = await pageContext(actor, readPageInput(input.page)).catch((error) => {
+    console.error("Couldn't read the page context", error instanceof Error ? error.message : error);
+    return "";
+  });
+  const user = await insertMessage(actor, conversation.id, { role: "user", content: message, files, pageContext: page });
   emit({ type: "user", message: display(user) });
   await runLoop(actor, conversation, emit, options);
   emit({ type: "done" });
