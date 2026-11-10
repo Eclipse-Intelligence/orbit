@@ -414,7 +414,7 @@ export default function TaskPad({
         {mention && suggestions.length > 0 && (
           <ul
             role="listbox"
-            aria-label="Link a person or company"
+            aria-label="Link a contact or company"
             className="bg-popover border-line-strong shadow-overlay absolute top-full left-0 z-30 mt-1 w-[min(22rem,100%)] overflow-hidden rounded-xl border p-1"
           >
             {suggestions.map((suggestion, index) => (
@@ -430,7 +430,7 @@ export default function TaskPad({
                 >
                   <span className="text-foreground truncate text-[13.5px] leading-5">{suggestion.name}</span>
                   <span className="caption-style text-subtle truncate">
-                    {suggestion.kind === "company" ? "Company" : "Person"}
+                    {suggestion.kind === "company" ? "Company" : "Contact"}
                     {suggestion.detail ? ` · ${suggestion.detail}` : ""}
                   </span>
                 </button>

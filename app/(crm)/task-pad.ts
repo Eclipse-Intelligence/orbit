@@ -54,7 +54,7 @@ export async function addPadTaskAction(input: {
     revalidatePath(TASKS_PATH);
     revalidateRecordPages();
     return created.clickupError
-      ? { ok: true, warning: `Saved in Orbit, but ClickUp said: ${created.clickupError} Orbit will try again.` }
+      ? { ok: true, warning: `Saved. ClickUp sync failed and will retry: ${created.clickupError}` }
       : { ok: true };
   } catch (error) {
     return actionError(error);

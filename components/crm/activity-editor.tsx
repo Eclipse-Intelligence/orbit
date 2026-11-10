@@ -50,7 +50,7 @@ function pickedCompany(activity: Activity): PickedRecord | null {
 
 function pickedContact(activity: Activity): PickedRecord | null {
   if (!activity.contactId) return null;
-  return { id: activity.contactId, name: activity.contactName ?? "Current person", company: pickedCompany(activity) };
+  return { id: activity.contactId, name: activity.contactName ?? "Current contact", company: pickedCompany(activity) };
 }
 
 export function EditActivityButton({ activity, hasTranscript }: { activity: Activity; hasTranscript: boolean }) {
@@ -211,7 +211,7 @@ function ActivityEditor({
         )}
         {allowed.has("body") && (
           <label className="flex flex-col gap-2" htmlFor={`${id}-body`}>
-            <span className="caption-style text-subtle">Text</span>
+            <span className="caption-style text-subtle">Details</span>
             <Textarea id={`${id}-body`} value={body} maxLength={10000} className="min-h-32" onChange={(event) => setBody(event.target.value)} />
           </label>
         )}
@@ -220,7 +220,7 @@ function ActivityEditor({
             <label className="caption-style text-subtle" htmlFor={`${id}-when`}>
               When
             </label>
-            <DateTimePicker id={`${id}-when`} value={when} onChange={setWhen} placeholder="Pick when it happened" />
+            <DateTimePicker id={`${id}-when`} value={when} onChange={setWhen} placeholder="Date and time" />
           </div>
         )}
         <div className="flex min-w-0 flex-col gap-2">
@@ -232,21 +232,21 @@ function ActivityEditor({
         {allowed.has("contactId") ? (
           <div className="flex min-w-0 flex-col gap-2">
             <label className="caption-style text-subtle" htmlFor={`${id}-contact`}>
-              Person
+              Contact
             </label>
             <RecordPicker
               id={`${id}-contact`}
               kind="contact"
               value={contact}
               onChange={chooseContact}
-              placeholder={company ? `Choose someone at ${company.name}` : "Choose a person"}
+              placeholder={company ? `Choose someone at ${company.name}` : "Choose a contact"}
               companyId={companyId}
             />
           </div>
         ) : (
           activity.contactName && (
             <div className="flex min-w-0 flex-col gap-1">
-              <span className="caption-style text-subtle">Person</span>
+              <span className="caption-style text-subtle">Contact</span>
               <p className="text-[14px] leading-5">{activity.contactName}</p>
             </div>
           )

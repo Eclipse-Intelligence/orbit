@@ -113,7 +113,7 @@ export default function SectionHeader({
                 Keyboard shortcuts
                 <span className="text-subtle ml-auto">?</span>
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={openProfile}>Account details</DropdownMenuItem>
+              <DropdownMenuItem onSelect={openProfile}>Account</DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem onSelect={() => void signOutAction()}>Sign out</DropdownMenuItem>
             </DropdownMenuContent>

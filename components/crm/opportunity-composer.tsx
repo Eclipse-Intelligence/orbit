@@ -124,7 +124,7 @@ export default function OpportunityComposer({
       id={`${id}-company`}
       kind="company"
       label={board ? `Add a company to ${board.name}` : "Company for a new opportunity"}
-      placeholder={board ? "Add a company…" : "New opportunity: choose a company…"}
+      placeholder={board ? "Add a company…" : "Add an opportunity…"}
       value={company}
       onChange={chooseCompany}
       allowCreate
@@ -140,8 +140,8 @@ export default function OpportunityComposer({
       <RecordCombobox
         id={`${id}-contact`}
         kind="contact"
-        label={board ? "Main contact" : "Primary contact"}
-        placeholder={`Contact at ${company.name} (optional)`}
+        label="Contact"
+        placeholder="Contact"
         value={contact}
         onChange={chooseContact}
         companyId={company.id}
@@ -237,9 +237,6 @@ export default function OpportunityComposer({
       <p role="status" className="sr-only">
         {status}
       </p>
-      {layout === "card" && !company && !error && (
-        <p className="caption-style text-subtle">Type to find or add a company. Esc to close.</p>
-      )}
     </div>
   );
 }

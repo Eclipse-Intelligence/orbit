@@ -167,12 +167,10 @@ export default function RecordPicker({
             {current && (
               <CommandEmpty className="py-6">
                 {current.failed
-                  ? "Search is unavailable right now."
+                  ? "Search failed. Try again."
                   : trimmed
-                    ? `No ${noun} match “${trimmed}”${companyId ? " at this company" : ""}.`
-                    : companyId
-                      ? "No contacts at this company yet."
-                      : `No ${noun} yet.`}
+                    ? "No matches"
+                    : `No ${noun}`}
               </CommandEmpty>
             )}
             {!current && (

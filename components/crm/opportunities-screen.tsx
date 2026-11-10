@@ -452,7 +452,6 @@ export default function OpportunitiesScreen({
               variant="primary"
               size="sm"
               data-shortcut="add-record"
-              title={board ? "Add a company (C then P)" : "Add opportunity (C then P)"}
               shortcut={["C", "P"]}
               onClick={startAdding}
             >
@@ -668,11 +667,11 @@ export default function OpportunitiesScreen({
         empty={
           board
             ? query
-              ? "No companies match the search."
-              : `Nothing on ${board.name} yet.`
+              ? "No matches"
+              : "No companies"
             : query
-              ? "No opportunities match the search."
-              : "No opportunities yet."
+              ? "No matches"
+              : "No opportunities"
         }
       >
         {opportunities.map((opportunity) =>
@@ -814,7 +813,7 @@ function OpportunityEditor({
           idPrefix="opp"
           initialCompany={pickedCompany(editing)}
           initialContact={pickedContact(editing)}
-          contactLabel="Primary contact"
+          contactLabel="Contact"
           onCompanyChange={(company) => setHasCompany(Boolean(company))}
         >
           <RecordSelect
@@ -843,12 +842,11 @@ function OpportunityEditor({
         </div>
         <div className="flex min-w-0 flex-col gap-2">
           <label className="caption-style text-subtle" htmlFor="opp-close">
-            Expected close
+            Close date
           </label>
           <DatePicker
             id="opp-close"
             name="expectedCloseDate"
-            placeholder="Pick a close date"
             defaultValue={editing?.expectedCloseDate ?? ""}
           />
         </div>
@@ -1145,7 +1143,7 @@ function BoardCardEditor({
             idPrefix="card"
             initialCompany={pickedCompany(editing)}
             initialContact={pickedContact(editing)}
-            contactLabel="Main contact"
+            contactLabel="Contact"
             onCompanyChange={(company) => setHasCompany(Boolean(company))}
           >
             <RecordSelect id="card-stage" name="stageId" label="Stage" defaultValue={editing?.stageId ?? stages[0]?.id ?? ""}>
@@ -1160,7 +1158,7 @@ function BoardCardEditor({
             <label className="caption-style text-subtle" htmlFor="card-due">
               Due
             </label>
-            <DatePicker id="card-due" name="expectedCloseDate" placeholder="Pick a due date" defaultValue={editing?.expectedCloseDate ?? ""} />
+            <DatePicker id="card-due" name="expectedCloseDate" defaultValue={editing?.expectedCloseDate ?? ""} />
           </div>
         </form>
         {editing && <BoardCardContext companyId={editing.companyId} companyName={editing.companyName ?? editing.name} />}

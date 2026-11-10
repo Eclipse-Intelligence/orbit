@@ -3,7 +3,6 @@
 import { useEffect, useId, useState } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
-import ConfirmDialog from "@/components/_ui/confirm-dialog";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/_ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/_ui/dropdown-menu";
 import { Label } from "@/components/_ui/label";
@@ -15,15 +14,9 @@ import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import type { WorkspaceRef } from "@/lib/crm/workspaces";
 import MoreIcon from "@/public/assets/images/_common/more.svg";
 
-const COPY = {
-  company: {
-    choose: "Choose a company",
-    moves: "People, deals, tasks, activity, emails, proposals and Knowledge",
-  },
-  contact: {
-    choose: "Choose a person",
-    moves: "Activity, tasks, deals, emails and proposals",
-  },
+const CHOOSE = {
+  company: "Choose a company",
+  contact: "Choose a contact",
 } as const;
 
 const NOTICE_MS = 6000;
@@ -46,11 +39,9 @@ export default function MergeRecordMenu({
   const [notice, setNotice] = useState<string | null>(null);
   const pickerId = useId();
   const [picking, setPicking] = useState(false);
-  const [confirming, setConfirming] = useState(false);
   const [target, setTarget] = useState<PickedRecord | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const copy = COPY[kind];
 
   useEffect(() => {
     if (!notice) return;
@@ -66,7 +57,6 @@ export default function MergeRecordMenu({
     if (result.error || !result.keptId) {
       setBusy(false);
       setError(result.error ?? "That didn't merge. Try again.");
-      setPicking(true);
       return;
     }
     router.push(kind === "company" ? companyHref(result.keptId) : contactHref(result.keptId));
@@ -74,11 +64,6 @@ export default function MergeRecordMenu({
 
   return (
     <>
-      {busy && (
-        <span role="status" className="ui-style whitespace-nowrap text-subtle">
-          Merging…
-        </span>
-      )}
       {notice && (
         <span role="status" className="ui-style max-w-[16em] truncate text-subtle">
           {notice}
@@ -94,6 +79,7 @@ export default function MergeRecordMenu({
           <DropdownMenuItem
             onSelect={() => {
               setError(null);
+              setTarget(null);
               setPicking(true);
             }}
           >
@@ -111,15 +97,16 @@ export default function MergeRecordMenu({
           )}
         </DropdownMenuContent>
       </DropdownMenu>
-      <Dialog open={picking} onOpenChange={setPicking}>
+      <Dialog open={picking} onOpenChange={(open) => !busy && setPicking(open)}>
         <DialogContent>
           <DialogHeader className="pr-12">
             <DialogTitle>Merge {name} into…</DialogTitle>
-            <DialogDescription>Pick the record to keep. {name} is archived after the merge.</DialogDescription>
+            <DialogDescription>{name} is archived after the merge.</DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-2 px-6 py-5">
             <Label htmlFor={pickerId}>Keep</Label>
-            <RecordPicker id={pickerId} kind={kind} value={target} onChange={setTarget} placeholder={copy.choose} excludeId={id} />
+            <RecordPicker id={pickerId} kind={kind} value={target} onChange={setTarget} placeholder={CHOOSE[kind]} excludeId={id} />
+            {target && <p className="caption-style text-soft">Everything on {name} moves to {target.name}. Details {target.name} already has are kept.</p>}
             {error && (
               <p role="alert" className="caption-style text-danger">
                 {error}
@@ -128,20 +115,12 @@ export default function MergeRecordMenu({
           </div>
           <DialogFooter>
             <DialogClose asChild>
-              <Button variant="ghost" size="md">
+              <Button variant="ghost" size="md" disabled={busy}>
                 Cancel
               </Button>
             </DialogClose>
-            <Button
-              variant="primary"
-              size="md"
-              disabled={!target || busy}
-              onClick={() => {
-                setPicking(false);
-                setConfirming(true);
-              }}
-            >
-              {busy ? "Merging…" : "Continue"}
+            <Button variant="primary" size="md" disabled={!target || busy} onClick={() => void merge()}>
+              {busy ? "Merging…" : "Merge"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -163,16 +142,6 @@ export default function MergeRecordMenu({
             }
             router.push(kind === "company" ? "/" : "/contacts");
           }}
-        />
-      )}
-      {target && (
-        <ConfirmDialog
-          open={confirming}
-          onOpenChange={setConfirming}
-          title={`Merge into ${target.name}?`}
-          description={`${copy.moves} move from ${name} to ${target.name}. Empty details on ${target.name} are filled from ${name} and tags are combined. ${name} is then archived.`}
-          confirmLabel="Merge"
-          onConfirm={() => void merge()}
         />
       )}
     </>

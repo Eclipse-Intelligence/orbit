@@ -191,7 +191,7 @@ export default function ContactEmail({
       }
       reset();
       onDone?.({ sent: false, from: null, warning: null });
-      setNotice({ text: "Email recorded on this contact.", tone: "ok" });
+      setNotice({ text: "Email logged", tone: "ok" });
       router.refresh();
     } finally {
       sending.current = false;
@@ -211,7 +211,7 @@ export default function ContactEmail({
     setWithSignature(true);
   }
 
-  if (!contactId && !to) return <p className="caption-style text-subtle px-1 py-2">{unavailable}</p>;
+  if (!contactId && !to) return unavailable ? <p className="caption-style text-subtle px-1 py-2">{unavailable}</p> : null;
 
   return (
     <div className="flex flex-col">
@@ -283,7 +283,7 @@ export default function ContactEmail({
         value={message}
         autoComplete="off"
         maxLength={8000}
-        placeholder={email ? "Write your message" : "Write the email to log"}
+        placeholder="Message"
         onFocus={() => {
           field.current = "body";
         }}
@@ -309,7 +309,7 @@ export default function ContactEmail({
               />
               <span className="flex gap-1">
                 <Button variant="secondary" size="sm" type="button" onClick={() => void saveSignature()}>
-                  Save signature
+                  Save
                 </Button>
                 <Button variant="ghost" size="sm" type="button" onClick={() => setEditingSignature(false)}>
                   Cancel
@@ -348,7 +348,7 @@ export default function ContactEmail({
               }}
               className="caption-style text-subtle hover:text-foreground cursor-pointer rounded-sm outline-none focus-visible:underline"
             >
-              {signature ? "Add signature back" : "Add a signature"}
+              Add signature
             </button>
           )}
         </div>
@@ -363,7 +363,7 @@ export default function ContactEmail({
             {...unpersonalised({ subject, body: message }, used)}
             onDone={(template) => {
               setSaving(false);
-              if (template) setNotice({ text: `Saved “${template.name}” as a template.`, tone: "ok" });
+              if (template) setNotice({ text: `Saved “${template.name}”`, tone: "ok" });
             }}
           />
         </div>
@@ -377,10 +377,10 @@ export default function ContactEmail({
           {error ??
             notice?.text ??
             (!contactId
-              ? (unavailable ?? "Choose who to email.")
+              ? unavailable
               : !email
-                ? "Save an email address on this contact to send. You can still log an email."
-                : "Connect Microsoft in Settings › Email to send. You can still log the email.")}
+                ? "Add an email address to send, or log only."
+                : "Connect Microsoft in Settings › Email to send, or log only.")}
         </p>
       )}
 
@@ -424,7 +424,6 @@ export default function ContactEmail({
             type="button"
             disabled={pending !== null || files.uploading || !email || !canSendMail || empty}
             data-shortcut-submit=""
-            title="Send (⌘ Enter)"
             onClick={send}
           >
             {pending === "send" ? "Sending…" : files.uploading ? "Uploading…" : "Send"}

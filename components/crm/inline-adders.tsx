@@ -72,7 +72,7 @@ export function CompanyAdder({ className }: { className?: string }) {
     const result = await addCompanyInlineAction({ name, domain });
     setPending(false);
     if (!result.company) {
-      setError(result.error ?? "That did not work. Try again.");
+      setError(result.error ?? "That didn't work. Try again.");
       return;
     }
     setAdded({ name: result.company.name, href: companyHref(result.company.id) });
@@ -115,7 +115,7 @@ export function CompanyAdder({ className }: { className?: string }) {
         <>
           <input
             aria-label="Website or domain"
-            placeholder="Website (optional)"
+            placeholder="Website"
             autoComplete="off"
             value={domain}
             onChange={(event) => setDomain(event.target.value)}
@@ -155,7 +155,7 @@ export function ContactAdder({ className }: { className?: string }) {
     const result = await addContactInlineAction({ name, email, companyId: company?.id ?? null });
     setPending(false);
     if (!result.contact) {
-      setError(result.error ?? "That did not work. Try again.");
+      setError(result.error ?? "That didn't work. Try again.");
       return;
     }
     setAdded({ name: result.contact.name, href: contactHref(result.contact.id) });
@@ -188,8 +188,8 @@ export function ContactAdder({ className }: { className?: string }) {
       <input
         ref={nameInput}
         id="inline-add-contact"
-        aria-label="New person's name"
-        placeholder="Add a person…"
+        aria-label="New contact name"
+        placeholder="Add a contact…"
         autoComplete="off"
         value={name}
         onChange={(event) => {
@@ -204,7 +204,7 @@ export function ContactAdder({ className }: { className?: string }) {
           <input
             type="email"
             aria-label="Email"
-            placeholder="Email (optional)"
+            placeholder="Email"
             autoComplete="off"
             value={email}
             onChange={(event) => setEmail(event.target.value)}
@@ -215,7 +215,7 @@ export function ContactAdder({ className }: { className?: string }) {
             id="inline-add-contact-company"
             kind="company"
             label="Company"
-            placeholder="Company (optional)"
+            placeholder="Company"
             value={company}
             onChange={setCompany}
             allowCreate

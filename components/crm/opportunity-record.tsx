@@ -234,7 +234,7 @@ export default function OpportunityRecord({
             </DetailSection>
             <DetailSection title={tasks.length ? `Open tasks · ${tasks.length}` : "Open tasks"}>
               {tasks.length === 0 ? (
-                <p className="caption-style text-subtle">No open tasks for {opportunity.companyName ?? "this company"}.</p>
+                <p className="caption-style text-subtle">No tasks</p>
               ) : (
                 <ul className="flex flex-col gap-2">
                   {tasks.slice(0, 8).map((task) => (

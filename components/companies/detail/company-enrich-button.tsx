@@ -39,10 +39,10 @@ export default function CompanyEnrichButton({ companyId, enrichedAt }: { company
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
       <Button variant="secondary" size="sm" disabled={running} onClick={run}>
         <SparkleIcon aria-hidden className={running ? "size-3.5 animate-pulse" : "size-3.5"} />
-        {running ? "Finding details…" : enrichedAt ? "Refresh details" : "Find company details"}
+        {running ? "Finding details…" : enrichedAt ? "Refresh details" : "Find details"}
       </Button>
       <span role="status" className={result?.error ? "caption-style text-danger" : "caption-style text-subtle"}>
-        {result?.message ?? (enrichedAt ? `Checked with context.dev ${formatWhen(enrichedAt)}` : "")}
+        {result?.message ?? (enrichedAt ? `Checked ${formatWhen(enrichedAt)}` : "")}
       </span>
     </div>
   );

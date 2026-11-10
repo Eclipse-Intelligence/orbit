@@ -34,7 +34,7 @@ import PlusIcon from "@/public/assets/images/_common/plus.svg";
 
 const PRESENCE_FIELDS: PresenceField<CompanyPresence>[] = [
   { key: "domain", label: "Domain", has: "Has domain", missing: "No domain" },
-  { key: "contacts", label: "People", has: "Has people", missing: "No people" },
+  { key: "contacts", label: "Contacts", has: "Has contacts", missing: "No contacts" },
   { key: "interactions", label: "Interactions", has: "Contacted", missing: "Never contacted" },
 ];
 
@@ -126,14 +126,13 @@ export default function CompaniesToolbar({
     ...lifecycles.filter((item) => item.builtIn || item.companies > 0).map((item) => ({ value: item.value, label: item.label })),
   ];
   const ownerOptions = [
-    { value: ALL_OWNERS, label: "All owners" },
+    { value: ALL_OWNERS, label: "Any owner" },
     { value: UNASSIGNED_OWNER, label: "Unassigned" },
     ...members.map((member) => ({ value: member.id, label: member.name })),
   ];
 
   const setAiFilter = (field: AiField, filter: AiFilter | null) => replaceParams({ [aiParamKey(field.id)]: filter ? aiFilterValue(filter) : null });
   const chipFields = aiFields.filter((field) => field.id === filterField || filters.ai?.some((filter) => filter.fieldId === field.id));
-  const sortedBy = filters.aiSort ? aiFields.find((field) => field.id === filters.aiSort) : null;
 
   return (
     <div className="flex shrink-0 flex-col gap-2 px-4 py-4">
@@ -231,7 +230,6 @@ export default function CompaniesToolbar({
             input?.focus();
           }}
           data-shortcut="add-record"
-          title="Add company (C then O)"
           shortcut={["C", "O"]}
         >
           <PlusIcon aria-hidden className="size-3" />
@@ -239,7 +237,7 @@ export default function CompaniesToolbar({
         </Button>
       </div>
     </div>
-      {(chipFields.length > 0 || sortedBy) && (
+      {chipFields.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 max-sm:hidden">
           {chipFields.map((field) => (
             <AiFilterChip
@@ -251,11 +249,6 @@ export default function CompaniesToolbar({
               onChange={(filter) => setAiFilter(field, filter)}
             />
           ))}
-          {sortedBy && (
-            <span className="caption-style text-subtle">
-              Sorted by {sortedBy.label}, {filters.order === "asc" ? "low to high" : "high to low"}
-            </span>
-          )}
         </div>
       )}
     </div>

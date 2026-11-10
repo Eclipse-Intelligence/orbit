@@ -20,6 +20,7 @@ import type { Recipient } from "@/lib/crm/personalise";
 import { contactsCsvRows } from "@/lib/crm/spreadsheet";
 import type { Actor } from "@/lib/crm/types";
 import { revalidateRecordPages } from "@/lib/revalidate";
+import { GENERIC_ERROR } from "@/lib/utils";
 
 export type BulkActionResult = { results: BulkOutcome[] } | { error: string };
 
@@ -41,7 +42,7 @@ async function bulk(
     revalidateRecordPages();
     return { results };
   } catch (error) {
-    return { error: error instanceof CrmError ? error.message : "Something went wrong." };
+    return { error: error instanceof CrmError ? error.message : GENERIC_ERROR };
   }
 }
 

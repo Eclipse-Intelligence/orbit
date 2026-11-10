@@ -46,7 +46,7 @@ export async function setCalendarVisibleAction(
   visible: boolean,
 ): Promise<CalendarActionState> {
   const user = await getUserActor();
-  if (!user) return { error: "Sign in to change your calendars." };
+  if (!user) return { error: "Sign in again." };
   try {
     const result = await setCalendarVisible(user, calendarId, visible);
     if (result.needsSync) syncLater(user);
@@ -62,7 +62,7 @@ export async function setCalendarForCrmAction(
   useForCrm: boolean,
 ): Promise<CalendarActionState> {
   const user = await getUserActor();
-  if (!user) return { error: "Sign in to change your calendars." };
+  if (!user) return { error: "Sign in again." };
   try {
     const result = await setCalendarForCrm(user, calendarId, useForCrm);
     if (result.needsSync) syncLater(user);
@@ -75,7 +75,7 @@ export async function setCalendarForCrmAction(
 
 export async function disconnectCalendarAccountAction(accountId: string, confirmedEmail?: string | null): Promise<CalendarActionState> {
   const user = await getUserActor();
-  if (!user) return { error: "Sign in to change your calendars." };
+  if (!user) return { error: "Sign in again." };
   try {
     await disconnectCalendarAccount(user, accountId, { email: typeof confirmedEmail === "string" ? confirmedEmail : null });
   } catch (error) {
@@ -88,7 +88,7 @@ export async function disconnectCalendarAccountAction(accountId: string, confirm
 
 export async function addCalendarFeedAction(url: string, name: string): Promise<CalendarActionState> {
   const user = await getUserActor();
-  if (!user) return { error: "Sign in to add a calendar." };
+  if (!user) return { error: "Sign in again." };
   try {
     const added = await addCalendarFeed(user, {
       url: typeof url === "string" ? url : "",
@@ -103,11 +103,11 @@ export async function addCalendarFeedAction(url: string, name: string): Promise<
 
 export async function syncCalendarsAction(): Promise<CalendarActionState> {
   const user = await getUserActor();
-  if (!user) return { error: "Sign in to sync your calendars." };
+  if (!user) return { error: "Sign in again." };
   const result = await syncCalendar((await getHomeActor()) ?? user, { force: true });
   refreshRecords();
   if (result.error) return { error: result.error };
-  return { ok: true, message: result.complete ? "Calendars synced." : "Synced some calendars. The rest follow shortly." };
+  return { ok: true, message: result.complete ? "Calendars synced." : "Still syncing some calendars." };
 }
 
 export async function createContactFromEventAction(
@@ -115,7 +115,7 @@ export async function createContactFromEventAction(
   email: string,
 ): Promise<CalendarActionState & { contactId?: string; contactName?: string }> {
   const user = await getUserActor();
-  if (!user) return { error: "Sign in to add contacts." };
+  if (!user) return { error: "Sign in again." };
   try {
     const created = await createContactFromEvent(user, eventId, email);
     refreshRecords();
@@ -140,7 +140,7 @@ function refreshInvites() {
 
 export async function sendInviteAction(input: InviteInput): Promise<InviteActionState> {
   const user = await getUserActor();
-  if (!user) return { error: "Sign in to send invites." };
+  if (!user) return { error: "Sign in again." };
   try {
     const sent = await createInvite(user, input && typeof input === "object" ? input : {});
     refreshInvites();
@@ -152,7 +152,7 @@ export async function sendInviteAction(input: InviteInput): Promise<InviteAction
 
 export async function cancelInviteAction(eventId: string, comment: string): Promise<InviteActionState> {
   const user = await getUserActor();
-  if (!user) return { error: "Sign in to cancel meetings." };
+  if (!user) return { error: "Sign in again." };
   try {
     const cancelled = await cancelInvite(user, typeof eventId === "string" ? eventId : "", comment);
     refreshInvites();
@@ -167,7 +167,7 @@ export async function moveInviteAction(
   input: { startLocal: string; message: string },
 ): Promise<InviteActionState & { startsAt?: string; endsAt?: string; gone?: boolean }> {
   const user = await getUserActor();
-  if (!user) return { error: "Sign in to move meetings." };
+  if (!user) return { error: "Sign in again." };
   try {
     const moved = await rescheduleInvite(user, {
       eventId: typeof eventId === "string" ? eventId : "",
@@ -190,7 +190,7 @@ export async function respondToInviteAction(
   input: { response: string; note: string; sendResponse: boolean },
 ): Promise<InviteActionState & { responseStatus?: string; gone?: boolean }> {
   const user = await getUserActor();
-  if (!user) return { error: "Sign in to answer invites." };
+  if (!user) return { error: "Sign in again." };
   try {
     const answered = await respondToInvite(user, {
       eventId: typeof eventId === "string" ? eventId : "",
