@@ -37,13 +37,15 @@ import ZapIcon from "@/public/assets/images/companies/sidebar/zap.svg";
 import FollowUpIcon from "@/public/assets/images/mail/follow-up.svg";
 import SparkleIcon from "@/public/assets/images/mail/sparkle.svg";
 
-type Clear = (verb: string, action: CaptureAction) => void;
+export type ClearInstead = { label: string; action: CaptureAction; done: string };
 
-export const ClearContext = createContext<(id: string, verb: string, action: CaptureAction) => void>(() => undefined);
+type Clear = (verb: string, action: CaptureAction, instead?: ClearInstead) => void;
+
+export const ClearContext = createContext<(id: string, verb: string, action: CaptureAction, instead?: ClearInstead) => void>(() => undefined);
 
 function useClear(id: string): Clear {
   const clear = useContext(ClearContext);
-  return (verb, action) => clear(id, verb, action);
+  return (verb, action, instead) => clear(id, verb, action, instead);
 }
 
 const REPLY_SNOOZE = new Set(["later", "tomorrow", "next-week"]);
@@ -501,7 +503,12 @@ export function EmailItem({
 }) {
   const onClear = useClear(clearId);
   const label = item.name || item.email;
-  const ignore = () => onClear("Dismissed", { kind: "email-ignore", key: item.key });
+  const ignore = () =>
+    onClear(
+      "Dismissed",
+      { kind: "email-ignore", key: item.key },
+      { label: `Never ask about ${item.neverAsk}`, action: { kind: "email-never", key: item.key }, done: `Won't ask about ${item.neverAsk} again` },
+    );
   const move = (target: WorkspaceChoiceRef) =>
     onClear(`Moved to ${target.name}`, {
       kind: "email-move",

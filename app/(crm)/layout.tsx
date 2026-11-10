@@ -21,6 +21,7 @@ import { captureStatuses } from "@/lib/crm/capture";
 import { unreadBrief } from "@/lib/learning/nightly";
 import { syncTeamsTranscripts } from "@/lib/crm/teams-transcripts";
 import { processDueMail } from "@/lib/mail/due";
+import { classifyCapture } from "@/lib/mail/capture-filter";
 import { syncMail } from "@/lib/mail/sync";
 import { noteViewerAddress } from "@/lib/mail/tracking";
 import { clickupToken } from "@/lib/clickup";
@@ -60,6 +61,9 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
         const result = await syncMail(home, { budgetMs: 10_000, backfill: false });
         if (result.errors.length) console.error("Mail sync failed", result.errors.join("; "));
         await processDueMail(home);
+        await classifyCapture(home, { budgetMs: 20_000 }).catch((error) =>
+          console.error("Sorting Capture email failed", error instanceof Error ? error.message : error),
+        );
       } catch (error) {
         console.error("Mail sync failed", error);
       }

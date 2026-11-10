@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { completeJson } from "@/lib/llm";
+import { askJev, jevConfigured } from "@/lib/jev";
 import { midSentenceColons } from "@/lib/writing-style";
 import { currentToolNames } from "@/lib/assistant/guides";
 import { PROOF_PERMISSIONS, type ProofEntry, type ProofPermission } from "@/lib/crm/proof-rules";
@@ -734,14 +735,6 @@ export function lintColdEmail(input: { subject: string; body: string; firstTouch
   return checks.map((check) => ({ ...check, source: "rules" as const, ...(check.pass ? { fix: undefined } : {}) }));
 }
 
-type JevAnswer = { type: string; noul?: number; choice?: string; score?: number; confidence?: number };
-
-const JEV_URL = "https://api.typesafe.ai/v1/systemone";
-
-export function jevConfigured() {
-  return Boolean(process.env.TYPESAFE_API_KEY?.trim());
-}
-
 type CheckOptions = { fetchImpl?: typeof fetch; deadline?: number };
 
 const MIN_CHECK_MS = 8_000;
@@ -907,14 +900,7 @@ export async function judgeColdEmail(
       criteria: ["Generic template or obviously machine written", "Mostly generic with some specifics", "Specific and natural", "Specific, natural and clearly written for this one person"],
     },
   };
-  const response = await (options.fetchImpl ?? fetch)(JEV_URL, {
-    method: "POST",
-    headers: { authorization: `Bearer ${process.env.TYPESAFE_API_KEY!.trim()}`, "content-type": "application/json" },
-    body: JSON.stringify({ model: process.env.TYPESAFE_MODEL?.trim() || "jev-latest", state, questions }),
-    signal: AbortSignal.timeout(Math.max(1_000, timeLeft(options, 30_000))),
-  });
-  if (!response.ok) throw new Error(`Jev answered ${response.status}.`);
-  const answers = ((await response.json()) as { answers?: Record<string, JevAnswer> }).answers ?? {};
+  const answers = await askJev(state, questions, { fetchImpl: options.fetchImpl, timeoutMs: timeLeft(options, 30_000) });
   const yes = (id: string, label: string, fix: string): ColdEmailCheck => {
     const value = answers[id]?.noul;
     const known = typeof value === "number";

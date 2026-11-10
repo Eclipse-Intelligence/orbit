@@ -11,7 +11,7 @@ import { getGranolaStatus } from "@/lib/crm/granola";
 import { getMailbox, shouldSyncMailbox, syncMailbox } from "@/lib/crm/inbox";
 import { getTeamsTranscriptStatus } from "@/lib/crm/teams-transcripts";
 import type { CaptureSection } from "@/lib/crm/capture-format";
-import { listUnknownMail } from "@/lib/mail/filing";
+import { classifyCapture, listUnknownMail } from "@/lib/mail/capture-filter";
 import { microsoftConfigured } from "@/lib/microsoft/oauth";
 
 export const dynamic = "force-dynamic";
@@ -38,7 +38,7 @@ export default async function CapturePage() {
     mailbox = await getMailbox(user);
   }
   const live = mailbox?.status === "connected";
-  const context = await captureContext(user, openedAt.getTime());
+  const context = await captureContext(user, openedAt.getTime(), { inline: true });
   const failed = new Set<CaptureSection>(context.failed);
   const [items, status, calls, granola, transcripts, calendar, followUps, unknown, others] = await Promise.all([
     listToFile(user, openedAt.getTime()).catch((error) => {
@@ -54,9 +54,15 @@ export default async function CapturePage() {
       failed.add("followUps");
       return logged("Reading call follow-ups failed", [])(error);
     }),
-    listUnknownMail(user, openedAt.getTime(), { actors: context.actors, emails: context.unknown }).catch((error) => {
+    listUnknownMail(user, openedAt.getTime(), { actors: context.actors, emails: context.unknown, skipped: context.skipped }).catch((error) => {
       failed.add("toFile");
-      return logged("Reading email from new people failed", { emails: [], total: 0, workspaces: [{ id: user.workspaceId, name: user.workspaceName }] })(error);
+      return logged("Reading email from new people failed", {
+        emails: [],
+        total: 0,
+        notShown: [],
+        notShownTotal: 0,
+        workspaces: [{ id: user.workspaceId, name: user.workspaceName }],
+      })(error);
     }),
     listWaitingOnOthers(user, openedAt).catch(logged("Reading approvals waiting on others failed", [])),
   ]);
@@ -67,6 +73,15 @@ export default async function CapturePage() {
       console.error("Could not mark Capture as seen", error);
     }
   });
+  if (context.held.length > 0) {
+    after(async () => {
+      try {
+        await classifyCapture(user, { budgetMs: 25_000 });
+      } catch (error) {
+        console.error("Sorting Capture email failed", error instanceof Error ? error.message : error);
+      }
+    });
+  }
   const here = waitingHere(context, user.workspaceId);
 
   return (
@@ -87,10 +102,12 @@ export default async function CapturePage() {
         replies: here.replies,
         tasks: here.tasks,
         emails: unknown.emails,
+        notShown: unknown.notShown,
         unfiled: items.unfiled,
         people: items.people,
       }}
       toFileTotal={status?.sections.toFile ?? 0}
+      notShownTotal={unknown.notShownTotal}
       failed={[...failed]}
       workspaces={unknown.workspaces}
       workspaceId={user.workspaceId}

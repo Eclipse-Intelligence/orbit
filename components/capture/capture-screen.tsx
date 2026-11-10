@@ -15,7 +15,9 @@ import {
   ReplyItem,
   TaskItem,
   ClearContext,
+  type ClearInstead,
 } from "@/components/capture/capture-items";
+import NotShown from "@/components/capture/not-shown";
 import { CaptureListContext, COLLAPSE_MS } from "@/components/capture/capture-row";
 import CaptureSeen from "@/components/crm/capture-seen";
 import SectionHeader from "@/components/crm/section-header";
@@ -30,6 +32,7 @@ import type { CaptureAction, CaptureOutcome } from "@/lib/crm/capture-actions";
 import type { UnfiledImport } from "@/lib/crm/conversations";
 import type { FollowUpSuggestion } from "@/lib/crm/follow-ups";
 import { contactHref } from "@/lib/crm/hrefs";
+import type { SkippedEmail } from "@/lib/mail/capture-filter";
 import type { UnknownEmail } from "@/lib/mail/filing";
 import type { WorkspaceChoiceRef } from "@/lib/mail/view";
 import type { WaitingNudge, WaitingReminder, WaitingReply } from "@/lib/mail/waiting";
@@ -62,6 +65,7 @@ export type CaptureData = {
   replies: WaitingReply[];
   tasks: WaitingTask[];
   emails: UnknownEmail[];
+  notShown: SkippedEmail[];
   unfiled: UnfiledImport[];
   people: MetPerson[];
 };
@@ -73,6 +77,7 @@ type Pending = {
   action: CaptureAction;
   timer: number;
   toast: number;
+  done?: string;
 };
 
 type Filter = "all" | CaptureSectionId;
@@ -148,6 +153,7 @@ export default function CaptureScreen({
   viewer,
   data,
   toFileTotal,
+  notShownTotal,
   failed,
   workspaces,
   workspaceId,
@@ -158,6 +164,7 @@ export default function CaptureScreen({
   viewer: Viewer;
   data: CaptureData;
   toFileTotal: number;
+  notShownTotal: number;
   failed: CaptureSectionId[];
   workspaces: WorkspaceChoiceRef[];
   workspaceId: string;
@@ -349,6 +356,7 @@ export default function CaptureScreen({
       .then((outcome) => {
         if (filing !== null) dismissToast(filing);
         filed(outcome, item.action);
+        if (item.done && mounted.current) showToast({ message: item.done });
         router.refresh();
       })
       .catch((error: Error) => {
@@ -415,7 +423,7 @@ export default function CaptureScreen({
     if (focused && next) activateRow(next);
   }
 
-  function clear(id: string, verb: string, action: CaptureAction) {
+  function clear(id: string, verb: string, action: CaptureAction, instead?: ClearInstead) {
     const swiped = swipedRow.current === id;
     swipedRow.current = null;
     if (!swiped && Date.now() < settleUntil.current) return;
@@ -433,6 +441,19 @@ export default function CaptureScreen({
         message: verb,
         duration: UNDO_MS,
         action: { label: "Undo", run: () => void undo() },
+        ...(instead
+          ? {
+              extra: {
+                label: instead.label,
+                run: () => {
+                  if (pending.current !== item) return;
+                  item.action = instead.action;
+                  item.done = instead.done;
+                  flush();
+                },
+              },
+            }
+          : {}),
       }),
     };
     item.timer = window.setTimeout(() => {
@@ -446,6 +467,7 @@ export default function CaptureScreen({
   const showing = sections.filter((id) => view === "all" || view === id);
   const othersShown = data.others.length > 0 && (view === "all" || view === "approvals");
   const nothing = total === 0 && unread.size === 0;
+  const notShownHere = notShownTotal > 0 && (view === "all" || view === "toFile");
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -529,6 +551,7 @@ export default function CaptureScreen({
                 })}
                 {othersShown && !showing.includes("approvals") && <OthersApprovals items={data.others} />}
               </KeyboardList>
+              {notShownHere && <NotShown items={data.notShown} total={notShownTotal} workspaceId={workspaceId} />}
             </ClearContext.Provider>
           </CaptureListContext.Provider>
         </div>

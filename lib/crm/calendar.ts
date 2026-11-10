@@ -25,6 +25,7 @@ import { canonicalDomain, canonicalEmail } from "@/lib/crm/normalize";
 import { assertScope } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
 import { decryptSecret } from "@/lib/crypto/secret";
+import { isMeetingNoise } from "@/lib/mail/senders";
 import { readFeed } from "@/lib/ical/events";
 import { FeedError, feedErrorSummary, fetchFeed, type Lookup } from "@/lib/ical/fetch";
 import { IcsParseError } from "@/lib/ical/parse";
@@ -1056,7 +1057,7 @@ export async function listPeopleMet(actor: UserActor, now = Date.now()): Promise
       const past = new Date(startsAt).getTime() <= now;
       const seen = new Set<string>();
       for (const person of [readPerson(row.organizer), ...readPeople(row.attendees)]) {
-        if (!person || seen.has(person.email) || internal.isInternal(person.email)) continue;
+        if (!person || seen.has(person.email) || internal.isInternal(person.email) || isMeetingNoise(person.email)) continue;
         seen.add(person.email);
         const entry = people.get(person.email) ?? {
           email: person.email,

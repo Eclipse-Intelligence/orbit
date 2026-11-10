@@ -7,12 +7,15 @@ import type { UserActor } from "@/lib/crm/types";
 import { createWorkspace } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { defaultSender } from "@/lib/mail/compose";
-import { listUnknownMail } from "@/lib/mail/filing";
+import { listUnknownMail } from "@/lib/mail/capture-filter";
 import { listAddressHomes, setAddressHome } from "@/lib/mail/routing";
 import { readwiseStatus, readwiseToken, removeReadwiseToken, saveReadwiseToken, setReadwiseWorkspace } from "@/lib/readwise/keys";
 import { listMemories } from "@/lib/learning/memories";
 import { recallKey, recallStatus, removeRecallKey, saveRecallKey } from "@/lib/recall/keys";
 import { createUser, resetDatabase } from "./helpers";
+
+delete process.env.TYPESAFE_API_KEY;
+delete process.env.LLM_API_KEY;
 
 const READWISE_TOKEN = "rw_settings_token_0001";
 const RECALL_KEY = "sk_settings_recall_key_0001";

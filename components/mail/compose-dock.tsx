@@ -24,7 +24,13 @@ const EDGE = 16;
 const UNDO_MS = 10_000;
 const TOAST_MS = 5_000;
 
-type Toast = { message: string; tone?: "status" | "alert"; action?: { label: string; run: () => void }; duration?: number };
+type Toast = {
+  message: string;
+  tone?: "status" | "alert";
+  action?: { label: string; run: () => void };
+  extra?: { label: string; run: () => void };
+  duration?: number;
+};
 
 type ShownToast = Toast & { id: number };
 
@@ -604,6 +610,19 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
               className="bg-popover border-line-strong shadow-overlay animate-rise-in pointer-events-auto flex max-w-[min(36rem,100%)] items-center gap-3 rounded-full border py-1.5 pr-1.5 pl-4 text-[13px]"
             >
               <span className={cn("min-w-0", toast.tone === "alert" ? "text-danger" : "text-foreground")}>{toast.message}</span>
+              {toast.extra && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="min-w-0 shrink"
+                  onClick={() => {
+                    toast.extra!.run();
+                    dismiss(toast.id);
+                  }}
+                >
+                  <span className="truncate">{toast.extra.label}</span>
+                </Button>
+              )}
               {toast.action ? (
                 <Button
                   variant="ghost"

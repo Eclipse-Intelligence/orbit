@@ -14,7 +14,9 @@ import type { TeamsTranscriptStatus } from "@/lib/crm/teams-transcripts";
 import type { UserActor } from "@/lib/crm/types";
 import { CALL_FOLLOW_UP_LIMIT } from "@/lib/crm/follow-ups";
 import { workspaceActors } from "@/lib/crm/workspaces";
-import { unknownMailOnce, type UnknownEmail } from "@/lib/mail/filing";
+import { relevantMailOnce, type RelevantMail, type SkippedEmail } from "@/lib/mail/capture-filter";
+import type { UnknownEmail } from "@/lib/mail/filing";
+import { meetingNoiseSql } from "@/lib/mail/senders";
 
 export type ToFile = { unfiled: UnfiledImport[]; people: MetPerson[] };
 
@@ -30,6 +32,8 @@ export type CaptureStatus = {
 export type CaptureContext = {
   actors: UserActor[];
   unknown: UnknownEmail[];
+  skipped: SkippedEmail[];
+  held: string[];
   waiting: Waiting;
   failed: CaptureSection[];
 };
@@ -95,6 +99,7 @@ const PEOPLE_COUNTS = `
     where char_length(met.email) <= 200
       and met.email ~ '^[^[:space:]@]+@[^[:space:]@]+[.][^[:space:]@]+$'
       and met.email not in (select email from own)
+      and not ${meetingNoiseSql("met.email")}
       and split_part(met.email, '@', 2) not in (select domain from own_domains)
       and not exists (
         select 1 from crm.contacts ct
@@ -139,8 +144,8 @@ function later(left: string | null, right: string | null) {
   return left > right ? left : right;
 }
 
-async function unknownFor(actor: UserActor, now: number, actors?: UserActor[]) {
-  return unknownMailOnce(actor, actors ?? (await workspaceActors(actor)), now).catch((error) => {
+async function unknownFor(actor: UserActor, now: number, actors: UserActor[], inline: boolean): Promise<RelevantMail | null> {
+  return relevantMailOnce(actor, actors, now, { inline }).catch((error) => {
     console.error("Reading email from new people failed", error instanceof Error ? error.message : error);
     return null;
   });
@@ -155,17 +160,17 @@ async function waitingFor(actor: UserActor, actors: UserActor[], now: number) {
 
 const requestContext = cache(() => new Map<string, Promise<CaptureContext>>());
 
-export function captureContext(actor: UserActor, now = Date.now()) {
+export function captureContext(actor: UserActor, now = Date.now(), options: { inline?: boolean } = {}) {
   assertScope(actor.scopes, "crm:read");
   const store = requestContext();
-  const key = `${actor.userId}|${actor.workspaceId}`;
+  const key = `${actor.userId}|${actor.workspaceId}|${options.inline ? "inline" : ""}`;
   const found = store.get(key);
   if (found) return found;
   const pending = (async () => {
     const actors = await workspaceActors(actor);
-    const [unknown, waiting] = await Promise.all([unknownFor(actor, now, actors), waitingFor(actor, actors, now)]);
-    const failed: CaptureSection[] = [...waiting.failed, ...(unknown ? [] : ["toFile" as const])];
-    return { actors, unknown: unknown ?? [], waiting, failed };
+    const [mail, waiting] = await Promise.all([unknownFor(actor, now, actors, Boolean(options.inline)), waitingFor(actor, actors, now)]);
+    const failed: CaptureSection[] = [...waiting.failed, ...(mail ? [] : ["toFile" as const])];
+    return { actors, unknown: mail?.shown ?? [], skipped: mail?.skipped ?? [], held: mail?.pending ?? [], waiting, failed };
   })();
   store.set(key, pending);
   pending.catch(() => store.delete(key));
@@ -173,7 +178,7 @@ export function captureContext(actor: UserActor, now = Date.now()) {
 }
 
 export function waitingHere(context: CaptureContext, workspaceId: string) {
-  return waitingIn(context.waiting, workspaceId, context.unknown.map((item) => item.key));
+  return waitingIn(context.waiting, workspaceId, [...context.unknown.map((item) => item.key), ...context.skipped.map((item) => item.key), ...context.held]);
 }
 
 export async function captureStatuses(actor: UserActor, now = Date.now()) {
