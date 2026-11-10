@@ -170,7 +170,7 @@ export const SENDING_DOMAINS = new Map<string, ListedCategory>([
 export const AUTOMATED_LOCAL =
   "^(no-?reply|noreply-?[a-z]+|do-?not-?reply|donotreply|mailer-?daemon|postmaster|bounces?|notifications?|notify|alerts?|automated|auto-?reply|auto-?confirm|statements?|e-?statements?)(\\+[^@]*)?@";
 
-const SENDING_LABEL = /^(e|em|email|emails|mail|mailer|mailing|mg|news|newsletter|newsletters|marketing|notifications?|notify|alerts?|updates?|bounces?|txn|transactional|comms)$/;
+const SENDING_LABEL = /^(e|em|email|emails|mail|mailer|mailing|mg|news|newsletter|newsletters|marketing|notifications?|notify|alerts?|updates?|bounces?|txn|transactional)$/;
 
 export type ListedSender = { category: ListedCategory; hide: boolean };
 

@@ -6,7 +6,7 @@ import type { UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
 import { askJev, jevConfigured } from "@/lib/jev";
 import { completeJson } from "@/lib/llm";
-import { domainOf, listedCategory, listedSender, type ListedCategory } from "@/lib/mail/senders";
+import { domainOf, listedSender, type ListedCategory } from "@/lib/mail/senders";
 
 import {
   RELEVANCE_CATEGORIES,
@@ -61,7 +61,7 @@ type StoredRow = {
   decided_at: Date;
 };
 
-type ThreadRow = StoredRow & { source_id: string; thread_key: string };
+type ThreadRow = StoredRow & { source_id: string; thread_key: string; message_id: string | null };
 
 export function classifierConfigured() {
   return jevConfigured() || Boolean(process.env.LLM_API_KEY?.trim());
@@ -113,7 +113,7 @@ async function contactFacts(db: Db, actor: UserActor, items: Candidate[]): Promi
      from crm.contacts c
      join crm.activities a on a.contact_id = c.id and a.archived_at is null
      where c.workspace_id = any($4::uuid[]) and c.archived_at is null
-       and c.normalized_email like any(array(select '%@' || d from unnest($3::text[]) as d))`,
+       and split_part(c.normalized_email, '@', 2) = any($3::text[])`,
     [actor.userId, senders, domains, [...new Set(items.map((item) => item.workspaceId))]],
   );
   for (const row of result.rows) {
@@ -137,7 +137,7 @@ export async function judgeInDb<T extends Candidate>(db: Db, actor: UserActor, i
       [actor.userId, workspaceIds, senders],
     ),
     db.query<ThreadRow>(
-      `select t.source_id, t.thread_key, t.workspace_id, t.sender, t.category, t.engine, t.confidence, t.reason, t.decided_at
+      `select t.source_id, t.thread_key, t.workspace_id, t.sender, t.message_id, t.category, t.engine, t.confidence, t.reason, t.decided_at
        from crm.mail_thread_relevance t
        join unnest($2::uuid[], $3::text[]) as k(source_id, thread_key) on k.source_id = t.source_id and k.thread_key = t.thread_key
        where t.user_id = $1`,
@@ -161,7 +161,7 @@ export async function judgeInDb<T extends Candidate>(db: Db, actor: UserActor, i
       thread &&
       thread.workspace_id === item.workspaceId &&
       thread.sender === email &&
-      new Date(thread.decided_at).getTime() >= new Date(item.at).getTime() &&
+      (thread.message_id ? thread.message_id === item.messageId : new Date(thread.decided_at).getTime() >= new Date(item.at).getTime()) &&
       !(thread.engine === "history") &&
       !(thread.engine === "listed" && !(listUsable && listed.hide))
         ? thread
@@ -189,15 +189,31 @@ export async function judgeInDb<T extends Candidate>(db: Db, actor: UserActor, i
   });
 }
 
-export async function storeThreadDecision(db: Db, actor: UserActor, item: Pick<Candidate, "key" | "email" | "workspaceId">, decision: Decision) {
+export async function storeThreadDecision(
+  db: Db,
+  actor: UserActor,
+  item: Pick<Candidate, "key" | "email" | "workspaceId"> & { messageId?: string | null },
+  decision: Decision,
+) {
   const { sourceId, threadKey } = splitKey(item.key);
   await db.query(
-    `insert into crm.mail_thread_relevance (workspace_id, user_id, source_id, thread_key, sender, category, engine, confidence, reason)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    `insert into crm.mail_thread_relevance (workspace_id, user_id, source_id, thread_key, sender, message_id, category, engine, confidence, reason)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      on conflict (user_id, source_id, thread_key) do update set workspace_id = excluded.workspace_id, sender = excluded.sender,
-       category = excluded.category, engine = excluded.engine, confidence = excluded.confidence, reason = excluded.reason,
-       decided_at = now(), updated_at = now()`,
-    [item.workspaceId, actor.userId, sourceId, threadKey, item.email.toLowerCase(), decision.category, decision.engine, decision.confidence, decision.reason?.slice(0, 300) ?? null],
+       message_id = excluded.message_id, category = excluded.category, engine = excluded.engine, confidence = excluded.confidence,
+       reason = excluded.reason, decided_at = now(), updated_at = now()`,
+    [
+      item.workspaceId,
+      actor.userId,
+      sourceId,
+      threadKey,
+      item.email.toLowerCase(),
+      item.messageId ?? null,
+      decision.category,
+      decision.engine,
+      decision.confidence,
+      decision.reason?.slice(0, 300) ?? null,
+    ],
   );
 }
 
@@ -235,7 +251,14 @@ export async function recordFiledInDb(db: Db, actor: UserActor, workspaceId: str
   const sender = email.toLowerCase();
   await setSenderRule(db, actor, workspaceId, sender, "business", "filed");
   const target = ruleTarget(sender);
-  if (target !== sender) await setSenderRule(db, actor, workspaceId, target, "business", "filed");
+  if (target !== sender && !listedSender(sender)) {
+    await db.query(
+      `insert into crm.mail_sender_relevance (workspace_id, user_id, sender, category, engine, rule)
+       values ($1, $2, $3, 'business', 'filed', true)
+       on conflict (user_id, workspace_id, sender) do nothing`,
+      [workspaceId, actor.userId, target],
+    );
+  }
   await markSenderThreadsBusiness(db, actor, workspaceId, sender, "filed");
 }
 
@@ -244,7 +267,7 @@ export type SenderRule = { sender: string; kind: "never" | "always" };
 export async function listSenderRulesInDb(db: Db, actor: UserActor): Promise<SenderRule[]> {
   const result = await db.query<{ sender: string; category: StoredCategory }>(
     `select sender, category from crm.mail_sender_relevance
-     where user_id = $1 and workspace_id = $2 and rule and (category = 'muted' or engine = 'shown')
+     where user_id = $1 and workspace_id = $2 and rule and (category = 'muted' or engine = 'shown' or (engine = 'filed' and sender like '@%'))
      order by category = 'muted' desc, sender
      limit 200`,
     [actor.userId, actor.workspaceId],
@@ -254,7 +277,7 @@ export async function listSenderRulesInDb(db: Db, actor: UserActor): Promise<Sen
 
 export async function removeSenderRuleInDb(db: Db, actor: UserActor, sender: string) {
   await db.query(
-    "delete from crm.mail_sender_relevance where user_id = $1 and workspace_id = $2 and sender = $3 and rule and (category = 'muted' or engine = 'shown')",
+    "delete from crm.mail_sender_relevance where user_id = $1 and workspace_id = $2 and sender = $3 and rule and (category = 'muted' or engine = 'shown' or (engine = 'filed' and sender like '@%'))",
     [actor.userId, actor.workspaceId, sender.trim().toLowerCase()],
   );
 }
@@ -266,7 +289,7 @@ function noBusinessRuleSql(userExpr: string, workspaceExpr: string) {
   return `not exists (
       select 1 from crm.mail_sender_relevance kept
       where kept.user_id = ${userExpr} and kept.workspace_id = ${workspaceExpr} and kept.rule and kept.category = 'business'
-        and kept.sender in (sensitive.sender, '@' || split_part(sensitive.sender, '@', 2))
+        and kept.sender = sensitive.sender
     )`;
 }
 
@@ -282,10 +305,9 @@ export function notSensitiveThreadSql(userExpr: string, workspaceExpr: string, s
 
 export function noSensitivePeopleSql(userExpr: string, workspaceExpr: string, peopleExpr: string) {
   return `not exists (
-    select 1 from crm.mail_thread_relevance sensitive
-    where sensitive.user_id = ${userExpr} and sensitive.workspace_id = ${workspaceExpr} and sensitive.sender = any(${peopleExpr})
-      and ${CONFIDENTLY_SENSITIVE}
-      and ${noBusinessRuleSql(userExpr, workspaceExpr)}
+    select 1 from crm.mail_sender_relevance chosen
+    where chosen.user_id = ${userExpr} and chosen.workspace_id = ${workspaceExpr} and chosen.rule
+      and chosen.sender = any(${peopleExpr}) and chosen.category in ('personal', 'collections')
   )`;
 }
 
@@ -294,10 +316,6 @@ export function sensitiveAddress(email: string | null | undefined) {
   return Boolean(listed?.hide && (listed.category === "personal" || listed.category === "collections"));
 }
 
-export function possiblySensitiveAddress(email: string | null | undefined) {
-  const category = email ? listedCategory(email) : null;
-  return category === "personal" || category === "collections";
-}
 
 export function sensitiveCategory(category: StoredCategory | null | undefined) {
   return Boolean(category && SENSITIVE_CATEGORIES.includes(category));

@@ -1,5 +1,119 @@
 set lock_timeout = '3s';
 
+do $$
+begin
+  if not exists (select 1 from pg_roles r where r.rolname = current_user and (r.rolsuper or r.rolbypassrls)) then
+    raise exception 'Run this as a role that bypasses row-level security: the trigger functions write to crm.mail_known_addresses, which has no insert policy.';
+  end if;
+end;
+$$;
+
+alter table crm.mail_messages add column if not exists from_domain text;
+
+create or replace function private.mail_known_sent()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_at timestamptz := coalesce(new.sent_at, new.created_at);
+  v_entered boolean := tg_op = 'INSERT';
+begin
+  if tg_op = 'UPDATE' then
+    if old.folder_id is not distinct from new.folder_id then
+      return null;
+    end if;
+    if exists (select 1 from crm.mail_folders f where f.id = old.folder_id and f.role = 'sent') then
+      return null;
+    end if;
+  end if;
+  if new.is_draft or not exists (select 1 from crm.mail_folders f where f.id = new.folder_id and f.role = 'sent') then
+    return null;
+  end if;
+  insert into crm.mail_known_addresses as k (user_id, address, domain, sent_count, sent_first, sent_last)
+  select new.user_id, x.address, split_part(x.address, '@', 2), 1, v_at, v_at
+  from (
+    select distinct lower(btrim(r->>'address')) as address
+    from jsonb_array_elements(
+      (case when jsonb_typeof(new.to_recipients) = 'array' then new.to_recipients else '[]'::jsonb end)
+      || (case when jsonb_typeof(new.cc_recipients) = 'array' then new.cc_recipients else '[]'::jsonb end)
+      || (case when jsonb_typeof(new.bcc_recipients) = 'array' then new.bcc_recipients else '[]'::jsonb end)
+    ) r
+    where jsonb_typeof(r) = 'object' and jsonb_typeof(r->'address') = 'string'
+  ) x
+  where x.address ~ '^[^[:space:]@]+@[^[:space:]@]+$' and char_length(x.address) <= 320
+  order by x.address
+  on conflict (user_id, address) do update set
+    sent_count = case when v_entered then k.sent_count + 1 else greatest(k.sent_count, 1) end,
+    sent_first = least(k.sent_first, excluded.sent_first),
+    sent_last = greatest(k.sent_last, excluded.sent_last),
+    updated_at = now();
+  return null;
+end;
+$$;
+
+revoke all on function private.mail_known_sent() from public;
+
+create or replace function private.calendar_known_met()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if tg_op = 'UPDATE' and old.attendees is not distinct from new.attendees and old.organizer is not distinct from new.organizer then
+    return null;
+  end if;
+  if new.is_cancelled or jsonb_typeof(new.attendees) <> 'array' or jsonb_array_length(new.attendees) > 25 then
+    return null;
+  end if;
+  insert into crm.mail_known_addresses as k (user_id, address, domain, met_first)
+  select new.user_id, x.address, split_part(x.address, '@', 2), new.starts_at
+  from (
+    select distinct lower(btrim(p->>'email')) as address
+    from jsonb_array_elements(
+      new.attendees || (case when jsonb_typeof(new.organizer) = 'object' then jsonb_build_array(new.organizer) else '[]'::jsonb end)
+    ) p
+    where jsonb_typeof(p) = 'object' and jsonb_typeof(p->'email') = 'string'
+  ) x
+  where x.address ~ '^[^[:space:]@]+@[^[:space:]@]+$' and char_length(x.address) <= 320
+  order by x.address
+  on conflict (user_id, address) do update set
+    met_first = least(coalesce(k.met_first, excluded.met_first), excluded.met_first),
+    updated_at = now()
+  where k.met_first is distinct from least(coalesce(k.met_first, excluded.met_first), excluded.met_first);
+  return null;
+end;
+$$;
+
+revoke all on function private.calendar_known_met() from public;
+
+create or replace function private.mail_message_from_domain()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  new.from_domain := nullif(split_part(lower(coalesce(new.from_email, '')), '@', 2), '');
+  return new;
+end;
+$$;
+
+revoke all on function private.mail_message_from_domain() from public;
+
+create or replace trigger mail_messages_from_domain
+  before insert or update of from_email on crm.mail_messages
+  for each row execute function private.mail_message_from_domain();
+
+create or replace trigger mail_messages_known_sent
+  after insert or update of folder_id on crm.mail_messages
+  for each row execute function private.mail_known_sent();
+
+create or replace trigger calendar_events_known_met
+  after insert or update of attendees, organizer on crm.calendar_events
+  for each row execute function private.calendar_known_met();
+
 create table if not exists crm.mail_sender_relevance (
   id uuid primary key default gen_random_uuid(),
   workspace_id uuid not null references crm.workspaces (id) on delete cascade,
@@ -43,6 +157,7 @@ create table if not exists crm.mail_thread_relevance (
   source_id uuid not null references crm.mail_sources (id) on delete cascade,
   thread_key text not null,
   sender text not null,
+  message_id uuid,
   category text,
   engine text not null,
   confidence real,
@@ -58,6 +173,8 @@ create table if not exists crm.mail_thread_relevance (
   constraint mail_thread_relevance_reason check (reason is null or char_length(reason) <= 300),
   constraint mail_thread_relevance_unique unique (user_id, source_id, thread_key)
 );
+
+alter table crm.mail_thread_relevance add column if not exists message_id uuid;
 
 alter table crm.mail_thread_relevance enable row level security;
 alter table crm.mail_thread_relevance force row level security;
@@ -118,80 +235,6 @@ create policy mail_known_addresses_owner on crm.mail_known_addresses
 revoke all on crm.mail_known_addresses from anon, authenticated, crm_agent;
 grant select on crm.mail_known_addresses to authenticated;
 
-create or replace function private.mail_known_sent()
-returns trigger
-language plpgsql
-security definer
-set search_path = ''
-as $$
-declare
-  v_at timestamptz := coalesce(new.sent_at, new.created_at);
-begin
-  if new.is_draft or not exists (select 1 from crm.mail_folders f where f.id = new.folder_id and f.role = 'sent') then
-    return null;
-  end if;
-  insert into crm.mail_known_addresses as k (user_id, address, domain, sent_count, sent_first, sent_last)
-  select new.user_id, x.address, split_part(x.address, '@', 2), 1, v_at, v_at
-  from (
-    select distinct lower(btrim(r->>'address')) as address
-    from jsonb_array_elements(
-      (case when jsonb_typeof(new.to_recipients) = 'array' then new.to_recipients else '[]'::jsonb end)
-      || (case when jsonb_typeof(new.cc_recipients) = 'array' then new.cc_recipients else '[]'::jsonb end)
-      || (case when jsonb_typeof(new.bcc_recipients) = 'array' then new.bcc_recipients else '[]'::jsonb end)
-    ) r
-    where jsonb_typeof(r) = 'object' and jsonb_typeof(r->'address') = 'string'
-  ) x
-  where x.address ~ '^[^[:space:]@]+@[^[:space:]@]+$' and char_length(x.address) <= 320
-  on conflict (user_id, address) do update set
-    sent_count = k.sent_count + 1,
-    sent_first = least(k.sent_first, excluded.sent_first),
-    sent_last = greatest(k.sent_last, excluded.sent_last),
-    updated_at = now();
-  return null;
-end;
-$$;
-
-revoke all on function private.mail_known_sent() from public;
-
-drop trigger if exists mail_messages_known_sent on crm.mail_messages;
-create trigger mail_messages_known_sent
-  after insert or update of folder_id on crm.mail_messages
-  for each row execute function private.mail_known_sent();
-
-create or replace function private.calendar_known_met()
-returns trigger
-language plpgsql
-security definer
-set search_path = ''
-as $$
-begin
-  if new.is_cancelled or jsonb_typeof(new.attendees) <> 'array' or jsonb_array_length(new.attendees) > 25 then
-    return null;
-  end if;
-  insert into crm.mail_known_addresses as k (user_id, address, domain, met_first)
-  select new.user_id, x.address, split_part(x.address, '@', 2), new.starts_at
-  from (
-    select distinct lower(btrim(p->>'email')) as address
-    from jsonb_array_elements(
-      new.attendees || (case when jsonb_typeof(new.organizer) = 'object' then jsonb_build_array(new.organizer) else '[]'::jsonb end)
-    ) p
-    where jsonb_typeof(p) = 'object' and jsonb_typeof(p->'email') = 'string'
-  ) x
-  where x.address ~ '^[^[:space:]@]+@[^[:space:]@]+$' and char_length(x.address) <= 320
-  on conflict (user_id, address) do update set
-    met_first = least(coalesce(k.met_first, excluded.met_first), excluded.met_first),
-    updated_at = now();
-  return null;
-end;
-$$;
-
-revoke all on function private.calendar_known_met() from public;
-
-drop trigger if exists calendar_events_known_met on crm.calendar_events;
-create trigger calendar_events_known_met
-  after insert or update of attendees, organizer, starts_at, is_cancelled on crm.calendar_events
-  for each row execute function private.calendar_known_met();
-
 insert into crm.mail_known_addresses as k (user_id, address, domain, sent_count, sent_first, sent_last)
 select m.user_id, x.address, split_part(x.address, '@', 2), count(*)::int, min(coalesce(m.sent_at, m.created_at)), max(coalesce(m.sent_at, m.created_at))
 from crm.mail_messages m
@@ -207,11 +250,13 @@ cross join lateral (
 ) x
 where not m.is_draft and x.address ~ '^[^[:space:]@]+@[^[:space:]@]+$' and char_length(x.address) <= 320
 group by m.user_id, x.address
+order by m.user_id, x.address
 on conflict (user_id, address) do update set
   sent_count = excluded.sent_count,
   sent_first = excluded.sent_first,
   sent_last = excluded.sent_last,
-  updated_at = now();
+  updated_at = now()
+where (k.sent_count, k.sent_first, k.sent_last) is distinct from (excluded.sent_count, excluded.sent_first, excluded.sent_last);
 
 insert into crm.mail_known_addresses as k (user_id, address, domain, met_first)
 select e.user_id, x.address, split_part(x.address, '@', 2), min(e.starts_at)
@@ -226,29 +271,11 @@ cross join lateral (
 where not e.is_cancelled and jsonb_typeof(e.attendees) = 'array' and jsonb_array_length(e.attendees) <= 25
   and x.address ~ '^[^[:space:]@]+@[^[:space:]@]+$' and char_length(x.address) <= 320
 group by e.user_id, x.address
+order by e.user_id, x.address
 on conflict (user_id, address) do update set
   met_first = least(coalesce(k.met_first, excluded.met_first), excluded.met_first),
-  updated_at = now();
-
-alter table crm.mail_messages add column if not exists from_domain text;
-
-create or replace function private.mail_message_from_domain()
-returns trigger
-language plpgsql
-set search_path = ''
-as $$
-begin
-  new.from_domain := nullif(split_part(lower(coalesce(new.from_email, '')), '@', 2), '');
-  return new;
-end;
-$$;
-
-revoke all on function private.mail_message_from_domain() from public;
-
-drop trigger if exists mail_messages_from_domain on crm.mail_messages;
-create trigger mail_messages_from_domain
-  before insert or update of from_email on crm.mail_messages
-  for each row execute function private.mail_message_from_domain();
+  updated_at = now()
+where k.met_first is distinct from least(coalesce(k.met_first, excluded.met_first), excluded.met_first);
 
 do $$
 begin
@@ -274,18 +301,28 @@ as $$
       then (a.metadata->>'mailMessageId')::uuid end
   )
   where a.workspace_id = p_workspace and a.type = 'email'
-    and exists (select 1 from crm.activity_tones t where t.activity_id = a.id and t.created_at > p_since)
+    and exists (
+      select 1 from crm.activity_tones t
+      where t.activity_id = a.id and t.workspace_id = a.workspace_id and t.created_at > p_since
+    )
     and not exists (
       select 1 from crm.mail_sender_relevance b
       where b.user_id = m.user_id and b.workspace_id = a.workspace_id and b.rule and b.category = 'business'
-        and b.sender in (lower(m.from_email), '@' || split_part(lower(m.from_email), '@', 2))
+        and b.sender = lower(m.from_email)
     )
-    and exists (
-      select 1 from crm.mail_thread_relevance r
-      where r.user_id = m.user_id and r.workspace_id = a.workspace_id
-        and ((r.source_id = m.source_id and r.thread_key = m.thread_key) or r.sender = lower(m.from_email))
-        and r.category in ('personal', 'collections')
-        and (r.engine in ('listed', 'headers') or coalesce(r.confidence, 0) >= 0.8)
+    and (
+      exists (
+        select 1 from crm.mail_thread_relevance r
+        where r.user_id = m.user_id and r.source_id = m.source_id and r.thread_key = m.thread_key
+          and r.workspace_id = a.workspace_id
+          and r.category in ('personal', 'collections')
+          and (r.engine in ('listed', 'headers') or coalesce(r.confidence, 0) >= 0.8)
+      )
+      or exists (
+        select 1 from crm.mail_sender_relevance s
+        where s.user_id = m.user_id and s.workspace_id = a.workspace_id and s.rule
+          and s.sender = lower(m.from_email) and s.category in ('personal', 'collections')
+      )
     )
 $$;
 
@@ -338,6 +375,8 @@ begin
   where s.workspace_id = p_from and s.user_id = p_user
     and exists (select 1 from crm.booking_pages t where t.workspace_id = p_to and t.user_id = p_user);
   delete from crm.personal_context_workspaces where workspace_id = p_from and user_id = p_user;
+  delete from crm.mail_sender_relevance where workspace_id = p_from and user_id = p_user;
+  delete from crm.mail_thread_relevance where workspace_id = p_from and user_id = p_user;
 
   foreach v_table in array array[
     'calendar_accounts', 'mail_sources', 'mail_folders', 'mail_messages', 'mail_drafts', 'mail_prepared',
@@ -352,8 +391,13 @@ begin
       using p_to, p_from, p_user;
   end loop;
 
-  delete from crm.mail_sender_relevance where workspace_id = p_from and user_id = p_user;
-  delete from crm.mail_thread_relevance where workspace_id = p_from and user_id = p_user;
+  if to_regclass('crm.calendar_event_notes') is not null then
+    execute 'update crm.calendar_event_notes set workspace_id = $1 where workspace_id = $2 and user_id = $3' using p_to, p_from, p_user;
+  end if;
+  if to_regclass('crm.calendar_event_links') is not null then
+    execute 'update crm.calendar_event_links set workspace_id = $1 where workspace_id = $2 and user_id = $3' using p_to, p_from, p_user;
+  end if;
+
   delete from crm.mail_address_homes where workspace_id = p_from and user_id = p_user;
   update crm.granola_keys set workspace_id = p_to where workspace_id = p_from and user_id = p_user;
   update crm.recall_keys set workspace_id = p_to where workspace_id = p_from and user_id = p_user;

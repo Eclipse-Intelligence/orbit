@@ -14,6 +14,7 @@ import {
   listSenderRulesInDb,
   removeSenderRuleInDb,
   pendingIsFresh,
+  RETRY_MS,
   signatureOf,
   storeThreadDecision,
   verdictFor,
@@ -43,7 +44,9 @@ const CLAIM_SECONDS = 120;
 
 export type SkippedEmail = UnknownEmail & { category: SkippedCategory; engine: RelevanceEngine; reason: string | null; stored: StoredCategory | null };
 
-export type RelevantMail = { shown: UnknownEmail[]; skipped: SkippedEmail[]; pending: UnknownEmail[] };
+export type ShownEmail = UnknownEmail & { stored: StoredCategory | null };
+
+export type RelevantMail = { shown: ShownEmail[]; skipped: SkippedEmail[]; pending: UnknownEmail[] };
 
 type Header = { name: string; value: string };
 
@@ -57,16 +60,17 @@ type ClassifyOptions = {
 type Work = { item: UnknownEmail; hint: ListedCategory | null };
 
 const inFlight = new Set<string>();
+const unstorable = new Map<string, number>();
 
 function sortOut(judged: Judged<UnknownEmail>[], now = Date.now()): RelevantMail {
-  const shown: UnknownEmail[] = [];
+  const shown: ShownEmail[] = [];
   const skipped: SkippedEmail[] = [];
   const pending: UnknownEmail[] = [];
   for (const { item, verdict, stored } of judged) {
-    if (verdict.state === "shown") shown.push(item);
+    if (verdict.state === "shown") shown.push({ ...item, stored });
     else if (verdict.state === "skipped") skipped.push({ ...item, category: verdict.category, engine: verdict.engine, reason: verdict.reason, stored });
     else if (pendingIsFresh(item.at, now)) pending.push(item);
-    else shown.push(item);
+    else shown.push({ ...item, stored });
   }
   return { shown, skipped, pending };
 }
@@ -111,13 +115,23 @@ async function store(actor: UserActor, item: UnknownEmail, decision: Decision) {
 }
 
 async function storeFailed(actor: UserActor, item: UnknownEmail) {
-  await withActor(actor, (db) => storeThreadDecision(db, actor, item, { category: null, engine: "failed", confidence: null, reason: null })).catch((error) =>
-    console.error("Couldn't store a Capture sorting failure", error instanceof Error ? error.message : error),
-  );
+  await withActor(actor, (db) => storeThreadDecision(db, actor, item, { category: null, engine: "failed", confidence: null, reason: null })).catch((error) => {
+    unstorable.set(`${item.key}|${item.messageId}`, Date.now());
+    console.error("Couldn't store a Capture sorting failure", error instanceof Error ? error.message : error);
+  });
+}
+
+function recentlyUnstorable(item: UnknownEmail) {
+  const key = `${item.key}|${item.messageId}`;
+  const at = unstorable.get(key);
+  if (at === undefined) return false;
+  if (Date.now() - at < RETRY_MS) return true;
+  unstorable.delete(key);
+  return false;
 }
 
 export async function classifyItems(actor: UserActor, actors: UserActor[], work: Work[], options: ClassifyOptions) {
-  const mine = work.filter(({ item }) => !inFlight.has(item.key));
+  const mine = work.filter(({ item }) => !inFlight.has(item.key) && !recentlyUnstorable(item));
   if (mine.length === 0) return 0;
   for (const { item } of mine) inFlight.add(item.key);
   const contexts = new Map<string, Promise<WorkspaceContext>>();
@@ -318,7 +332,7 @@ export async function removeSenderRule(actor: UserActor, sender: string) {
 export async function listUnknownMail(
   actor: UserActor,
   now = Date.now(),
-  known?: { actors: UserActor[]; emails: UnknownEmail[]; skipped: SkippedEmail[]; pending?: UnknownEmail[] },
+  known?: { actors: UserActor[]; emails: ShownEmail[]; skipped: SkippedEmail[]; pending?: UnknownEmail[] },
 ) {
   const actors = known?.actors ?? (await workspaceActors(actor));
   const mail = known ? { shown: known.emails, skipped: known.skipped, pending: known.pending ?? [] } : await relevantMailOnce(actor, actors, now);

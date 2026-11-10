@@ -14,7 +14,7 @@ import type { TeamsTranscriptStatus } from "@/lib/crm/teams-transcripts";
 import type { UserActor } from "@/lib/crm/types";
 import { CALL_FOLLOW_UP_LIMIT } from "@/lib/crm/follow-ups";
 import { workspaceActors } from "@/lib/crm/workspaces";
-import { relevantMailOnce, type RelevantMail, type SkippedEmail } from "@/lib/mail/capture-filter";
+import { relevantMailOnce, type RelevantMail, type ShownEmail, type SkippedEmail } from "@/lib/mail/capture-filter";
 import type { UnknownEmail } from "@/lib/mail/filing";
 import { meetingNoiseSql } from "@/lib/mail/senders";
 
@@ -31,7 +31,7 @@ export type CaptureStatus = {
 
 export type CaptureContext = {
   actors: UserActor[];
-  unknown: UnknownEmail[];
+  unknown: ShownEmail[];
   skipped: SkippedEmail[];
   held: UnknownEmail[];
   waiting: Waiting;
