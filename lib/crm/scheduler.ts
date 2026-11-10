@@ -28,8 +28,15 @@ const STEP_MIN_MS = 3_000;
 const META_BACKUP_MS = 10_000;
 const META_BACKUP_MIN_MS = 5_000;
 
-function syncBudgetMs() {
-  return metaAccessToken() ? CRON_BUDGET_MS - META_BACKUP_MS : CRON_BUDGET_MS;
+async function metaLeadsDue() {
+  if (!metaAccessToken()) return false;
+  try {
+    const { metaLeadWorkDue } = await import("@/lib/crm/meta-leads");
+    return await metaLeadWorkDue();
+  } catch (error) {
+    console.error("Meta lead check failed", redactedError(error));
+    return false;
+  }
 }
 
 type CronAuth = "ok" | "unauthorized" | "unconfigured";
@@ -309,7 +316,7 @@ export async function runScheduledSync(
 
 export async function handleCronRequest(
   request: Request,
-  run: () => Promise<CronReport> = () => runScheduledSync({ budgetMs: syncBudgetMs() }),
+  run: (budgetMs: number) => Promise<CronReport> = (budgetMs) => runScheduledSync({ budgetMs }),
 ) {
   const received = Date.now();
   const auth = cronAuthorization(request.headers.get("authorization"));
@@ -319,10 +326,11 @@ export async function handleCronRequest(
   if (auth === "unauthorized") {
     return Response.json({ error: "Unauthorized." }, { status: 401 });
   }
-  const report = await run();
+  const metaDue = await metaLeadsDue();
+  const report = await run(metaDue ? CRON_BUDGET_MS - META_BACKUP_MS : CRON_BUDGET_MS);
   try {
-    const deadline = Math.min(Date.now() + META_BACKUP_MS, received + CRON_BUDGET_MS);
-    if (metaAccessToken() && deadline - Date.now() >= META_BACKUP_MIN_MS) {
+    const deadline = Math.floor(Math.min(Date.now() + META_BACKUP_MS, received + CRON_BUDGET_MS));
+    if (metaDue && deadline - Date.now() >= META_BACKUP_MIN_MS) {
       const { runMetaLeadBackup } = await import("@/lib/crm/meta-leads");
       await runMetaLeadBackup({ deadline });
     }

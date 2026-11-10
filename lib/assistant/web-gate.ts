@@ -35,6 +35,10 @@ const PAGE_TOOLS: ReadonlySet<string> = new Set(["read_web_page", "map_website"]
 const OUTSIDE_RECORD = /\\?"source\\?"\s*:\s*\\?"(?:meta_lead_ad|meta lead ad)\\?"/i;
 const OUTSIDE_SOURCE = /^(?:meta_lead_ad|meta lead ad)$/i;
 
+export function isLeadSource(source: unknown) {
+  return typeof source === "string" && OUTSIDE_SOURCE.test(source.trim());
+}
+
 export function hasOutsideRecord(content: string) {
   return OUTSIDE_RECORD.test(content);
 }
@@ -129,7 +133,7 @@ function firstPartyHosts(content: string) {
       return;
     }
     const record = value as Record<string, unknown>;
-    if (typeof record.source === "string" && OUTSIDE_SOURCE.test(record.source.trim())) return;
+    if (isLeadSource(record.source)) return;
     for (const [key, item] of Object.entries(record)) {
       if (typeof item === "string" && FIRST_PARTY_FIELD.test(key)) {
         const host = hostOf(item);

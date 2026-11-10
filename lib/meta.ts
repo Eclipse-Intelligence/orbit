@@ -55,6 +55,12 @@ export class MetaError extends ShownError {
   }
 }
 
+export function cut(value: string, max: number) {
+  const whole = value.toWellFormed();
+  if (whole.length <= max) return whole;
+  return Array.from(whole).slice(0, max).join("");
+}
+
 function env(name: string) {
   const value = process.env[name]?.trim();
   return value ? value : null;
@@ -94,7 +100,7 @@ export function verifyMetaChallenge(params: URLSearchParams, expected = env("MET
   const challenge = params.get("hub.challenge");
   if (!expected || mode !== "subscribe" || token === null || challenge === null) return null;
   if (!sameSecret(token, expected)) return null;
-  return challenge.slice(0, 200);
+  return cut(challenge, 200);
 }
 
 function sameSecret(given: string, expected: string) {
@@ -149,7 +155,7 @@ async function graphGet<T>(url: URL, options: MetaOptions): Promise<T> {
   try {
     response = await (options.fetchImpl ?? fetch)(url.toString(), {
       headers: { authorization: `Bearer ${token}`, accept: "application/json" },
-      signal: AbortSignal.timeout(Math.min(TIMEOUT_MS, remaining)),
+      signal: AbortSignal.timeout(Math.max(1, Math.floor(Math.min(TIMEOUT_MS, remaining)))),
       cache: "no-store",
     });
   } catch (error) {
@@ -161,7 +167,7 @@ async function graphGet<T>(url: URL, options: MetaOptions): Promise<T> {
   try {
     body = text ? JSON.parse(text) : null;
   } catch {
-    body = redactSecrets(text.slice(0, 300), [token]);
+    body = redactSecrets(cut(text, 300), [token]);
   }
   if (!response.ok || (body && typeof body === "object" && "error" in body)) {
     throw graphFailure(response.ok ? 400 : response.status, body, token);
@@ -183,7 +189,7 @@ export async function fetchMetaForm(formId: string, options: MetaOptions = {}): 
 export async function fetchMetaPage(pageId: string, options: MetaOptions = {}) {
   const page = await graphGet<{ name?: unknown; access_token?: unknown }>(graphUrl(encodeURIComponent(pageId), { fields: "name,access_token" }), options);
   return {
-    name: typeof page.name === "string" ? page.name.slice(0, 200) : null,
+    name: typeof page.name === "string" ? cut(page.name, 200) : null,
     accessToken: typeof page.access_token === "string" && page.access_token ? page.access_token : null,
   };
 }
@@ -241,18 +247,21 @@ export async function listMetaForms(pageId: string, options: MetaOptions = {}) {
   return forms;
 }
 
-export async function listMetaLeads(formId: string, since: Date, options: MetaOptions = {}) {
+export async function listMetaLeadsPage(formId: string, since: Date, after: string | null, options: MetaOptions = {}) {
   const filtering = JSON.stringify([{ field: "time_created", operator: "GREATER_THAN", value: Math.floor(since.getTime() / 1000) }]);
-  const { items, truncated } = await readAll<MetaLead>(
-    graphUrl(`${encodeURIComponent(formId)}/leads`, { fields: `id,${LEAD_FIELDS}`, filtering, limit: String(PAGE_SIZE) }),
-    options,
-  );
+  const url = graphUrl(`${encodeURIComponent(formId)}/leads`, { fields: `id,${LEAD_FIELDS}`, filtering, limit: String(PAGE_SIZE) });
+  if (after) url.searchParams.set("after", after);
+  const body = await graphGet<Paged<MetaLead>>(url, options);
+  const data = Array.isArray(body.data) ? body.data : [];
   const leads: MetaLead[] = [];
-  for (const lead of items) {
+  for (const lead of data) {
     const id = metaId(lead.id);
     if (id) leads.push({ ...lead, id });
   }
-  return { leads, truncated };
+  const next = typeof body.paging?.next === "string" ? nextUrl(body.paging.next) : null;
+  const cursor = typeof body.paging?.cursors?.after === "string" ? body.paging.cursors.after : null;
+  const following = next ? (next.searchParams.get("after") ?? cursor) : null;
+  return { leads, after: following && following.length <= 2000 ? following : null };
 }
 
 export function metaId(value: unknown) {

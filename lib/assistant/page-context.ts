@@ -3,6 +3,7 @@ import { parseDocsRoute } from "@/lib/docs/routes";
 import { withActor } from "@/lib/crm/context";
 import { isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
+import { isLeadSource } from "@/lib/assistant/web-gate";
 import type { Db } from "@/lib/db/pool";
 
 export const PAGE_SELECTION_KINDS = ["companies", "contacts"] as const;
@@ -121,12 +122,13 @@ type Lines = string[];
 const MISSING = "isn't in this workspace, or you can't see it";
 
 async function company(db: Db, actor: UserActor, id: string) {
-  const result = await db.query<{ name: string; domain: string | null }>(
-    "select name, domain from crm.companies where id = $1 and workspace_id = $2 and archived_at is null",
+  const result = await db.query<{ name: string; domain: string | null; source: string | null }>(
+    "select name, domain, source from crm.companies where id = $1 and workspace_id = $2 and archived_at is null",
     [id, actor.workspaceId],
   );
   const row = result.rows[0];
-  return row ? `company ${quoted(row.name, "Unnamed company")} [company id ${id}]${row.domain ? `, domain ${quoted(row.domain, "")}` : ""}` : null;
+  const domain = row?.domain && !isLeadSource(row.source) ? row.domain : null;
+  return row ? `company ${quoted(row.name, "Unnamed company")} [company id ${id}]${domain ? `, domain ${quoted(domain, "")}` : ""}` : null;
 }
 
 async function contact(db: Db, actor: UserActor, id: string) {

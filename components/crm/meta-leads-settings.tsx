@@ -104,7 +104,7 @@ export default function MetaLeadsSettings({ view, canAdmin }: { view: MetaLeadSe
             ))}
           </ul>
         )}
-        {canAdmin && view.pages.length > 0 && <p className="caption-style text-subtle">Leads from a removed Page wait until it&apos;s linked again.</p>}
+        {canAdmin && view.pages.length > 0 && <p className="caption-style text-subtle">Leads from a removed Page are held for an owner.</p>}
       </div>
 
       {canAdmin ? (

@@ -6,19 +6,20 @@ import { createCompanyInDb, readCompanyInDb } from "@/lib/crm/companies";
 import { isFreeMailDomain } from "@/lib/crm/communications";
 import { readContactInDb, updateContactInDb, upsertContactInDb } from "@/lib/crm/contacts";
 import { memberActor } from "@/lib/crm/conversations";
-import { CrmError, errorText, isPgError, notSetUp } from "@/lib/crm/errors";
+import { CrmError, isPgError, notSetUp, ShownError } from "@/lib/crm/errors";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import { lockNamespace, recordAudit } from "@/lib/crm/mutate";
-import { canonicalDomain, canonicalEmail, normalizeCompanyName, normalizeTag, TAG_LIMIT } from "@/lib/crm/normalize";
-import { workspaceActors } from "@/lib/crm/workspaces";
+import { canonicalDomain, canonicalEmail, isSharedHost, normalizeCompanyName, normalizeTag, TAG_LIMIT } from "@/lib/crm/normalize";
+import { alertLink, workspaceActors } from "@/lib/crm/workspaces";
 import type { Company, Contact, ContactWrite, Provenance, UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { query, type Db } from "@/lib/db/pool";
 import {
+  cut,
   fetchMetaForm,
   fetchMetaLead,
   fetchMetaPage,
   listMetaForms,
-  listMetaLeads,
+  listMetaLeadsPage,
   metaAccessToken,
   metaConfigured,
   metaEnvStatus,
@@ -28,7 +29,6 @@ import {
   type MetaLead,
 } from "@/lib/meta";
 import { pushToUser, type PushSender } from "@/lib/push";
-import { redactedError } from "@/lib/upstream";
 
 const META_LEAD_SOURCE = "Meta Lead Ad";
 const META_LEAD_TAG = "Meta lead";
@@ -36,7 +36,7 @@ const META_WEBHOOK_PATH = "/api/webhooks/meta-leads";
 const META_SETTINGS_HREF = "/settings/tools#meta-leads";
 
 const PROVENANCE: Provenance = { operation: "meta_lead_ad", source: "meta_lead_ad", automatic: true };
-const MAX_BODY_BYTES = 256 * 1024;
+const MAX_BODY_BYTES = 1024 * 1024;
 const RATE_LIMIT = 300;
 const RATE_WINDOW_SECONDS = 60;
 const WEBHOOK_BUDGET_MS = 45_000;
@@ -44,11 +44,16 @@ const BACKUP_EVERY = "1 hour";
 const OVERLAP_MS = 2 * 60 * 60 * 1000;
 const FIRST_LOOK_BACK_MS = 24 * 60 * 60 * 1000;
 const STEP_RESERVE_MS = 1_500;
+const ALERT_RESERVE_MS = 3_000;
+const PAGE_RESERVE_MS = 3_000;
+const RETRY_SHARE = 0.4;
 const MAX_VALUE = 1000;
 const MAX_ANSWERS = 100;
 const MAX_ANSWER_BYTES = 60_000;
-const MAX_RAW_BYTES = 200_000;
+const MAX_RAW_BYTES = 150_000;
 const NO_DETAILS = "The lead has no name, email, phone or company.";
+const MIN_TIME = Date.UTC(1970, 0, 1);
+const MAX_TIME = Date.UTC(9999, 11, 31);
 
 type LeadChange = { leadgenId: string; pageId: string | null; formId: string | null; adId: string | null; raw: Record<string, unknown> };
 
@@ -63,6 +68,8 @@ export type MetaLeadOptions = {
   schedule?: (work: () => Promise<void>) => void;
   rateLimit?: boolean;
 };
+
+type RunContext = MetaLeadOptions & { heldAlerted?: Set<string>; token?: string };
 
 type MemberRow = {
   workspace_id: string;
@@ -118,8 +125,23 @@ type FiledLead = {
   form: string | null;
 };
 
+function errorType(error: unknown) {
+  if (isPgError(error)) return `pg ${error.code}`;
+  if (error instanceof CrmError) return `crm ${error.code}`;
+  if (error instanceof Error) return error.name;
+  return typeof error;
+}
+
+function logFailure(context: string, id: string | null, error: unknown) {
+  console.error(context, { id, type: errorType(error) });
+}
+
+function shownMessage(error: unknown, fallback: string) {
+  return error instanceof ShownError && error.message.trim() ? cut(error.message.replace(/\s+/g, " ").trim(), 500) : fallback;
+}
+
 function background(work: () => Promise<void>) {
-  const guarded = () => work().catch((error) => console.error("Meta lead job failed", redactedError(error)));
+  const guarded = () => work().catch((error) => logFailure("Meta lead job failed", null, error));
   try {
     after(guarded);
   } catch {
@@ -131,10 +153,14 @@ function timeLeft(deadline: number | undefined, reserve = STEP_RESERVE_MS) {
   return !deadline || deadline - Date.now() > reserve;
 }
 
+function remainingMs(deadline: number | undefined) {
+  return deadline ? Math.max(0, Math.floor(deadline - Date.now())) : Number.POSITIVE_INFINITY;
+}
+
 const INVISIBLE = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g;
 
 function plain(value: string, max = MAX_VALUE) {
-  return value.normalize("NFC").replace(INVISIBLE, "").replace(/\s+/g, " ").trim().slice(0, max);
+  return cut(value.toWellFormed().normalize("NFC").replace(INVISIBLE, "").replace(/\s+/g, " ").trim(), max).trim();
 }
 
 const LABELS: Record<string, string> = {
@@ -185,8 +211,9 @@ export function readAnswers(fieldData: unknown): Answer[] {
       .filter(Boolean)
       .slice(0, 20);
     const entry = { name, label: answerLabel(name), values };
-    size += bytes(entry) + 1;
-    if (size > MAX_ANSWER_BYTES) break;
+    const entryBytes = bytes(entry) + 1;
+    if (size + entryBytes > MAX_ANSWER_BYTES) continue;
+    size += entryBytes;
     answers.push(entry);
   }
   return answers;
@@ -213,7 +240,7 @@ function firstEmail(values: string[]) {
 }
 
 function firstPhone(values: string[]) {
-  const value = values.find((item) => /\d{5,}/.test(item.replace(/[\s().-]/g, "")) && !item.includes("@"));
+  const value = values.find((item) => /^\+?[\d\s().-]{6,40}$/.test(item) && item.replace(/\D/g, "").length >= 6);
   return value ? clip(value, 40) : null;
 }
 
@@ -228,11 +255,24 @@ type LeadPerson = {
 };
 
 function clip(value: string | null, max: number) {
-  return value ? value.slice(0, max).trim() || null : null;
+  return value ? cut(value, max).trim() || null : null;
 }
 
-const EMAIL_KEY = /e-?mail/i;
-const PHONE_KEY = /phone|mobile|tele|^tel|cell/i;
+const SOMEONE_ELSE = /refer|friend|partner|colleague|manager|assistant|other|someone|recommend/i;
+const EMAIL_WORDS = new Set(["email", "mail", "emailaddress", "mailaddress"]);
+const PHONE_WORDS = new Set(["phone", "phonenumber", "mobile", "mobilenumber", "tel", "telephone", "telefon", "telefonnummer", "cell", "cellphone", "whatsapp"]);
+
+function keyWords(name: string) {
+  return name
+    .toLowerCase()
+    .replace(/e-mail/g, "email")
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+}
+
+function ownAnswers(answers: Answer[], words: Set<string>) {
+  return answers.filter((item) => !SOMEONE_ELSE.test(item.name) && keyWords(item.name).some((word) => words.has(word)));
+}
 
 export function leadPerson(answers: Answer[]): LeadPerson {
   const full = joined(answers, "full_name");
@@ -243,13 +283,10 @@ export function leadPerson(answers: Answer[]): LeadPerson {
     firstName = parts[0] ?? null;
     lastName = parts.slice(1).join(" ") || null;
   }
-  const email =
-    firstEmail(valuesOf(answers, ["email", "work_email"])) ??
-    firstEmail(answers.filter((item) => EMAIL_KEY.test(item.name)).flatMap((item) => item.values)) ??
-    firstEmail(answers.flatMap((item) => item.values));
+  const email = firstEmail(valuesOf(answers, ["email", "work_email"])) ?? firstEmail(ownAnswers(answers, EMAIL_WORDS).flatMap((item) => item.values));
   const phone =
     firstPhone(valuesOf(answers, ["phone_number", "work_phone_number", "user_provided_phone_number"])) ??
-    firstPhone(answers.filter((item) => PHONE_KEY.test(item.name)).flatMap((item) => item.values));
+    firstPhone(ownAnswers(answers, PHONE_WORDS).flatMap((item) => item.values));
   return {
     firstName: clip(firstName, 80),
     lastName: clip(lastName, 80),
@@ -271,10 +308,10 @@ function platformLabel(value: unknown) {
   return label || null;
 }
 
-function isoTime(value: unknown) {
+export function isoTime(value: unknown) {
   if (typeof value !== "string" && typeof value !== "number") return null;
   const time = typeof value === "number" ? value * 1000 : new Date(value).getTime();
-  return Number.isFinite(time) ? new Date(time).toISOString() : null;
+  return Number.isFinite(time) && time >= MIN_TIME && time <= MAX_TIME ? new Date(time).toISOString() : null;
 }
 
 function text(value: unknown, max = 300) {
@@ -298,11 +335,16 @@ function normaliseLead(lead: MetaLead, formName: string | null) {
   };
 }
 
-const NUL_ESCAPE = /(?<!\\)((?:\\\\)*)\\u0000/g;
+function wellFormed(value: unknown, depth = 0): unknown {
+  if (typeof value === "string") return value.toWellFormed().replace(/\u0000/g, "");
+  if (depth > 20 || !value || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map((item) => wellFormed(item, depth + 1));
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, item]) => [wellFormed(key, depth + 1) as string, wellFormed(item, depth + 1)]));
+}
 
 export function rawLead(lead: MetaLead): Record<string, unknown> {
   try {
-    const raw = JSON.stringify(lead).replace(NUL_ESCAPE, "$1");
+    const raw = JSON.stringify(wellFormed(lead));
     if (Buffer.byteLength(raw, "utf8") <= MAX_RAW_BYTES) return JSON.parse(raw) as Record<string, unknown>;
   } catch {}
   return { id: String(lead.id), truncated: true };
@@ -394,6 +436,7 @@ async function receive(changes: LeadChange[], via: Via) {
 }
 
 export async function handleMetaLeadsWebhook(request: Request, options: MetaLeadOptions = {}) {
+  const started = Date.now();
   try {
     const length = Number(request.headers.get("content-length") ?? 0);
     if (length > MAX_BODY_BYTES) return Response.json({ error: "Too large." }, { status: 413, headers: NO_STORE });
@@ -428,13 +471,13 @@ export async function handleMetaLeadsWebhook(request: Request, options: MetaLead
           };
         });
       if (pending.length > 0) {
-        const deadline = options.deadline ?? Date.now() + WEBHOOK_BUDGET_MS;
+        const deadline = options.deadline ?? started + WEBHOOK_BUDGET_MS;
         (options.schedule ?? background)(() => processAll(pending, { ...options, deadline }));
       }
     }
     return Response.json({ ok: true }, { headers: NO_STORE });
   } catch (error) {
-    console.error("Meta lead webhook failed", redactedError(error));
+    logFailure("Meta lead webhook failed", null, error);
     return Response.json({ error: "Try again later." }, { status: 503, headers: NO_STORE });
   }
 }
@@ -455,22 +498,24 @@ async function save(leadgenId: string, input: { pageId: string | null; formId: s
 }
 
 async function markFailed(id: string, message: string) {
-  await query("select private.meta_lead_failed($1, $2)", [id, message.slice(0, 500)]).catch((error) => console.error("Meta lead failure not saved", redactedError(error)));
+  await query("select private.meta_lead_failed($1, $2)", [id, cut(message, 500)]).catch((error) => logFailure("Meta lead failure not saved", id, error));
 }
 
-async function processAll(pending: Pending[], options: MetaLeadOptions) {
+async function processAll(pending: Pending[], options: RunContext) {
   const forms = new Map<string, string | null>();
+  const context: RunContext = { ...options, heldAlerted: options.heldAlerted ?? new Set() };
   for (const item of pending) {
-    if (!timeLeft(options.deadline)) break;
-    await processSafely(item, forms, options);
+    if (!timeLeft(context.deadline)) break;
+    await processSafely(item, forms, context);
   }
 }
 
-async function processSafely(pending: Pending, forms: Map<string, string | null>, options: MetaLeadOptions) {
+async function processSafely(pending: Pending, forms: Map<string, string | null>, options: RunContext) {
   try {
     return await processLead(pending, forms, options);
   } catch (error) {
-    await markFailed(pending.id, errorText(error, "Couldn't save the lead."));
+    logFailure("Meta lead not processed", pending.id, error);
+    await markFailed(pending.id, shownMessage(error, "Couldn't save the lead."));
     return null;
   }
 }
@@ -485,7 +530,7 @@ async function formName(formId: string | null, forms: Map<string, string | null>
   return name;
 }
 
-async function processLead(pending: Pending, forms: Map<string, string | null>, options: MetaLeadOptions) {
+async function processLead(pending: Pending, forms: Map<string, string | null>, options: RunContext) {
   if (pending.filed) {
     if (pending.workspaceId) await notifyFiled(pending.id, pending.workspaceId, pending.linkedBy, options);
     return null;
@@ -497,7 +542,7 @@ async function processLead(pending: Pending, forms: Map<string, string | null>, 
     try {
       lead = await fetchMetaLead(pending.leadgenId, { fetchImpl: options.fetchImpl, deadline: options.deadline });
     } catch (error) {
-      await markFailed(pending.id, errorText(error, "Couldn't fetch the lead from Meta."));
+      await markFailed(pending.id, shownMessage(error, "Couldn't fetch the lead from Meta."));
       if (!workspaceId && pending.pageId) await alertHeld(pending.pageId, options);
       return null;
     }
@@ -537,10 +582,18 @@ async function fileAndAlert(leadId: string, workspaceId: string, linkedBy: strin
   try {
     filed = await fileMetaLead(actor, leadId);
   } catch (error) {
-    await markFailed(leadId, errorText(error, "Couldn't save the lead."));
+    logFailure("Meta lead not filed", leadId, error);
+    await markFailed(leadId, shownMessage(error, "Couldn't save the lead."));
     return null;
   }
-  if (filed) await alertNewLead(filed, members, linkedBy, options).catch((error) => console.error("Meta lead alert failed", redactedError(error)));
+  if (filed && timeLeft(options.deadline, ALERT_RESERVE_MS)) {
+    try {
+      await alertNewLead(filed, members, linkedBy, options);
+    } catch (error) {
+      logFailure("Meta lead alert failed", leadId, error);
+      await markFailed(leadId, "Couldn't send the notification.");
+    }
+  }
   return filed;
 }
 
@@ -592,15 +645,21 @@ function activityBody(row: Pick<LeadRow, "campaign_name" | "adset_name" | "ad_na
     row.is_organic ? "Organic: yes" : null,
   ].filter((line): line is string => Boolean(line));
   const body = [lines.join("\n"), details.join("\n")].filter(Boolean).join("\n\n");
-  return body.length > 9_500 ? `${body.slice(0, 9_500).trim()}\n…` : body;
+  return body.length > 9_500 ? `${cut(body, 9_500).trim()}\n…` : body;
+}
+
+function leadDomain(email: string | null) {
+  const raw = email?.split("@")[1];
+  const domain = raw ? canonicalDomain(raw) : null;
+  if (!domain || isFreeMailDomain(domain) || isSharedHost(domain) || /^\d{1,3}(\.\d{1,3}){3}$/.test(domain) || !domain.includes(".")) return null;
+  return domain;
 }
 
 async function matchCompany(db: Db, actor: UserActor, person: LeadPerson, leadgenId: string): Promise<{ company: Company | null; created: boolean }> {
   if (!person.companyName) return { company: null, created: false };
   const normalized = normalizeCompanyName(person.companyName);
   if (!normalized) return { company: null, created: false };
-  const emailDomain = person.email?.split("@")[1] ?? null;
-  const domain = emailDomain && !isFreeMailDomain(emailDomain) ? canonicalDomain(emailDomain) : null;
+  const domain = leadDomain(person.email);
   await lockNamespace(db, actor.workspaceId, "companies");
   if (domain) {
     const byDomain = await db.query<{ id: string }>(
@@ -681,7 +740,7 @@ async function matchContact(db: Db, actor: UserActor, person: LeadPerson, compan
   return { contact: result.contact, created: result.created };
 }
 
-async function degrade<T>(db: Db, name: string, fallback: T, attempts: (() => Promise<T>)[]) {
+async function degrade<T>(db: Db, name: string, leadId: string, fallback: T, attempts: (() => Promise<T>)[]) {
   for (const attempt of attempts) {
     await db.query(`savepoint ${name}`);
     try {
@@ -692,7 +751,7 @@ async function degrade<T>(db: Db, name: string, fallback: T, attempts: (() => Pr
       await db.query(`rollback to savepoint ${name}`);
       await db.query(`release savepoint ${name}`);
       if (!(error instanceof CrmError)) throw error;
-      console.error(`Meta lead ${name} skipped`, error.code);
+      logFailure(`Meta lead ${name} skipped`, leadId, error);
     }
   }
   return fallback;
@@ -710,10 +769,11 @@ async function fileMetaLead(actor: UserActor, leadId: string): Promise<FiledLead
     if (!row || row.filed_at || !row.fetched_at) return null;
     const answers = readAnswers(Array.isArray(row.answers) ? row.answers : []);
     const person = leadPerson(answers);
-    const none = { company: null, created: false };
-    const company = await degrade(db, "meta_company", none, [() => matchCompany(db, actor, person, row.leadgen_id)]);
+    const company = await degrade<{ company: Company | null; created: boolean }>(db, "meta_company", row.id, { company: null, created: false }, [
+      () => matchCompany(db, actor, person, row.leadgen_id),
+    ]);
     const companyId = company.company?.id ?? null;
-    const contact = await degrade(db, "meta_contact", { contact: null, created: false } as { contact: Contact | null; created: boolean }, [
+    const contact = await degrade<{ contact: Contact | null; created: boolean }>(db, "meta_contact", row.id, { contact: null, created: false }, [
       () => matchContact(db, actor, person, companyId, row.leadgen_id),
       () => matchContact(db, actor, { ...person, phone: null, jobTitle: null, city: null }, companyId, row.leadgen_id),
       () => matchContact(db, actor, { ...person, phone: null, jobTitle: null, city: null }, null, row.leadgen_id),
@@ -725,7 +785,7 @@ async function fileMetaLead(actor: UserActor, leadId: string): Promise<FiledLead
         actor,
         {
           type: "note",
-          title: `Meta lead: ${row.form_name ?? "Lead form"}`.slice(0, 200),
+          title: cut(`Meta lead: ${row.form_name ?? "Lead form"}`, 200),
           body: activityBody(row, answers) || "No answers.",
           occurredAt: row.lead_created_at ? new Date(row.lead_created_at).toISOString() : undefined,
           contactId: contact.contact?.id ?? null,
@@ -777,24 +837,39 @@ async function fileMetaLead(actor: UserActor, leadId: string): Promise<FiledLead
   });
 }
 
-async function alert(actor: UserActor, input: { key: string; title: string; body: string; href: string }, send?: PushSender) {
-  const key = input.key.slice(0, 500);
+async function alert(actor: UserActor, input: { key: string; title: string; body: string; href: string }, options: MetaLeadOptions) {
+  const key = cut(input.key, 500);
+  const title = cut(input.title, 200);
+  const href = await alertLink(actor, input.href);
   const fresh = await withActor(actor, async (db) => {
-    const result = await db.query(
-      "insert into crm.push_log (workspace_id, user_id, key) values ($1, $2, $3) on conflict (user_id, key) do nothing returning id",
-      [actor.workspaceId, actor.userId, key],
-    );
-    return (result.rowCount ?? 0) > 0;
+    const logged = await db.query("insert into crm.push_log (workspace_id, user_id, key) values ($1, $2, $3) on conflict (user_id, key) do nothing returning id", [
+      actor.workspaceId,
+      actor.userId,
+      key,
+    ]);
+    if ((logged.rowCount ?? 0) === 0) return false;
+    await db.query("insert into crm.notifications (workspace_id, user_id, title, body, href, source) values ($1, $2, $3, $4, $5, 'meta_lead')", [
+      actor.workspaceId,
+      actor.userId,
+      title,
+      input.body ? cut(input.body, 4000) : null,
+      href,
+    ]);
+    return true;
   });
   if (!fresh) return false;
-  const { notify } = await import("@/lib/workflows/engine");
-  try {
-    await notify(actor, actor.userId, { title: input.title.slice(0, 200), body: input.body || null, href: input.href, source: "meta_lead" });
-  } catch (error) {
-    await withActor(actor, (db) => db.query("delete from crm.push_log where user_id = $1 and key = $2", [actor.userId, key])).catch(() => undefined);
-    throw error;
+  const wait = remainingMs(options.deadline) - STEP_RESERVE_MS;
+  if (wait <= 0) return true;
+  const pushed = pushToUser(actor, { title: cut(input.title, 120), body: cut(input.body, 400), url: input.href, tag: key }, { send: options.send }).catch((error) =>
+    logFailure("Meta lead push failed", actor.userId, error),
+  );
+  if (Number.isFinite(wait)) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([pushed, new Promise<void>((resolve) => (timer = setTimeout(resolve, Math.max(1, Math.floor(wait)))))]);
+    if (timer) clearTimeout(timer);
+  } else {
+    await pushed;
   }
-  await pushToUser(actor, { title: input.title, body: input.body, url: input.href, tag: key }, { send }).catch((error) => console.error("Meta lead push failed", redactedError(error)));
   return true;
 }
 
@@ -803,25 +878,25 @@ async function alertNewLead(filed: FiledLead, members: MemberRow[], linkedBy: st
   const href = filed.contactId ? contactHref(filed.contactId) : filed.companyId ? companyHref(filed.companyId) : META_SETTINGS_HREF;
   const body = filed.campaign ?? filed.form ?? META_LEAD_SOURCE;
   const title = filed.activityId ? `New lead: ${filed.name ?? "Unnamed lead"}` : "New lead without contact details";
-  for (const member of recipients) {
-    await alert(memberActor(member), { key: `meta-lead:${filed.leadgenId}`, title, body, href }, options.send);
-  }
+  const results = await Promise.allSettled(recipients.map((member) => alert(memberActor(member), { key: `meta-lead:${filed.leadgenId}`, title, body, href }, options)));
+  const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+  if (failed) throw failed.reason;
   await query("select private.meta_lead_notified($1)", [filed.leadId]);
 }
 
-async function alertHeld(pageId: string, options: MetaLeadOptions) {
+async function alertHeld(pageId: string, options: RunContext) {
+  if (options.heldAlerted?.has(pageId)) return;
+  options.heldAlerted?.add(pageId);
   try {
     const owners = await query<MemberRow>("select * from private.meta_lead_alert_owners()");
     const day = new Date().toISOString().slice(0, 10);
-    for (const owner of owners.rows) {
-      await alert(
-        memberActor(owner),
-        { key: `meta-unlinked:${pageId}:${day}`, title: "Lead from a Page that isn't linked", body: `Page ${pageId}`, href: META_SETTINGS_HREF },
-        options.send,
-      );
-    }
+    await Promise.allSettled(
+      owners.rows.map((owner) =>
+        alert(memberActor(owner), { key: `meta-unlinked:${pageId}:${day}`, title: "Lead from a Page that isn't linked", body: `Page ${pageId}`, href: META_SETTINGS_HREF }, options),
+      ),
+    );
   } catch (error) {
-    console.error("Meta held lead alert failed", redactedError(error));
+    logFailure("Meta held lead alert failed", pageId, error);
   }
 }
 
@@ -838,12 +913,13 @@ type WaitingRow = {
   received_via: Via;
 };
 
-async function fileWaitingLeads(options: MetaLeadOptions & { pageId?: string; limit?: number } = {}) {
+async function fileWaitingLeads(options: RunContext & { pageId?: string; limit?: number } = {}) {
   const waiting = await query<WaitingRow>("select * from private.meta_leads_waiting($1, $2)", [options.limit ?? 50, options.pageId ?? null]);
   const forms = new Map<string, string | null>();
+  const context: RunContext = { ...options, heldAlerted: options.heldAlerted ?? new Set() };
   let filed = 0;
   for (const row of waiting.rows) {
-    if (!timeLeft(options.deadline)) break;
+    if (!timeLeft(context.deadline)) break;
     if (!row.fetched && !metaAccessToken()) continue;
     const result = await processSafely(
       {
@@ -859,25 +935,36 @@ async function fileWaitingLeads(options: MetaLeadOptions & { pageId?: string; li
         via: row.received_via,
       },
       forms,
-      options,
+      context,
     );
     if (result) filed += 1;
   }
   return { waiting: waiting.rows.length, filed };
 }
 
-type DuePage = { id: string; workspace_id: string; page_id: string; page_name: string | null; linked_by: string | null; last_run_at: Date | null; created_at: Date };
+type DuePage = {
+  id: string;
+  workspace_id: string;
+  page_id: string;
+  page_name: string | null;
+  linked_by: string | null;
+  full_history: boolean;
+  last_run_at: Date | null;
+  created_at: Date;
+};
+
+type FormCursor = { form_id: string; last_run_at: Date | null; last_attempt_at: Date | null; list_since: Date | null; list_after: string | null; list_started_at: Date | null };
 
 type PageRun = { imported: number; skipped: number; complete: boolean; errors: string[]; name: string | null; started: Date };
 
-async function backupLead(page: DuePage, formId: string, formName: string | null, lead: MetaLead, options: MetaLeadOptions) {
+async function backupLead(page: DuePage, formId: string, formName: string | null, lead: MetaLead, options: RunContext) {
   let row: SavedRow | null;
   try {
     row = await save(lead.id, { pageId: page.page_id, formId, adId: metaId(lead.ad_id), via: "backup", lead: normaliseLead(lead, formName), payload: { lead: rawLead(lead) } });
   } catch (error) {
-    const message = errorText(error, "Couldn't save the lead.");
+    logFailure("Meta lead not saved", lead.id, error);
     const stub = (await receive([{ leadgenId: lead.id, pageId: page.page_id, formId, adId: metaId(lead.ad_id), raw: {} }], "backup"))[0];
-    if (stub) await markFailed(stub.id, message);
+    if (stub) await markFailed(stub.id, shownMessage(error, "Couldn't save the lead."));
     return "failed" as const;
   }
   if (!row || row.filed) return "skipped" as const;
@@ -886,83 +973,116 @@ async function backupLead(page: DuePage, formId: string, formName: string | null
   return filed ? ("imported" as const) : ("failed" as const);
 }
 
-async function backupPage(page: DuePage, options: MetaLeadOptions): Promise<PageRun> {
+function outOfTime(deadline: number | undefined) {
+  return Boolean(deadline) && deadline! - Date.now() <= 600;
+}
+
+async function backupForm(page: DuePage, form: { id: string; name: string | null }, cursor: FormCursor | undefined, floor: number, run: PageRun, options: RunContext) {
+  const base = { fetchImpl: options.fetchImpl, deadline: options.deadline };
+  const resuming = Boolean(cursor?.list_after && cursor.list_since && cursor.list_started_at);
+  const listStarted = resuming ? new Date(cursor!.list_started_at!) : new Date();
+  const fromCursor = cursor?.last_run_at ? new Date(cursor.last_run_at).getTime() - OVERLAP_MS : floor;
+  const since = resuming ? new Date(cursor!.list_since!) : new Date(Math.max(fromCursor, floor));
+  let after = resuming ? cursor!.list_after : null;
+  for (;;) {
+    if (!timeLeft(options.deadline)) {
+      run.complete = false;
+      return;
+    }
+    let listed: { leads: MetaLead[]; after: string | null };
+    try {
+      listed = await listMetaLeadsPage(form.id, since, after, { ...base, token: options.token });
+    } catch (error) {
+      if (outOfTime(options.deadline)) {
+        run.complete = false;
+        return;
+      }
+      const message = shownMessage(error, "Couldn't read the form's leads.");
+      run.errors.push(message);
+      await query("select private.meta_lead_form_ran($1, $2, $3, $4, false, $5)", [page.page_id, form.id, form.name, listStarted.toISOString(), message]);
+      return;
+    }
+    for (const lead of listed.leads) {
+      if (!timeLeft(options.deadline)) {
+        run.complete = false;
+        return;
+      }
+      const outcome = await backupLead(page, form.id, form.name, lead, options);
+      if (outcome === "imported") run.imported += 1;
+      if (outcome === "skipped") run.skipped += 1;
+    }
+    if (!listed.after) {
+      await query("select private.meta_lead_form_ran($1, $2, $3, $4, true, null)", [page.page_id, form.id, form.name, listStarted.toISOString()]);
+      return;
+    }
+    after = listed.after;
+    await query("select private.meta_lead_form_progress($1, $2, $3, $4, $5, $6)", [page.page_id, form.id, form.name, since.toISOString(), after, listStarted.toISOString()]);
+  }
+}
+
+async function backupPage(page: DuePage, options: RunContext): Promise<PageRun> {
   const started = new Date();
   const base = { fetchImpl: options.fetchImpl, deadline: options.deadline };
   const info = await fetchMetaPage(page.page_id, base).catch(() => ({ name: null, accessToken: null }));
-  const token = info.accessToken ?? undefined;
   const run: PageRun = { imported: 0, skipped: 0, complete: true, errors: [], name: info.name, started };
-  const forms = await listMetaForms(page.page_id, { ...base, token });
-  const cursors = new Map(
-    (await query<{ form_id: string; last_run_at: Date | null; last_attempt_at: Date | null }>("select * from private.meta_lead_form_cursors($1)", [page.page_id])).rows.map((row) => [row.form_id, row]),
-  );
+  let forms: { id: string; name: string | null }[];
+  try {
+    forms = await listMetaForms(page.page_id, { ...base, token: info.accessToken ?? undefined });
+  } catch (error) {
+    if (outOfTime(options.deadline)) {
+      run.complete = false;
+      return run;
+    }
+    throw error;
+  }
+  const cursors = new Map((await query<FormCursor>("select * from private.meta_lead_form_cursors($1)", [page.page_id])).rows.map((row) => [row.form_id, row]));
   const ordered = [...forms].sort((left, right) => {
-    const a = cursors.get(left.id)?.last_attempt_at?.getTime() ?? 0;
-    const b = cursors.get(right.id)?.last_attempt_at?.getTime() ?? 0;
+    const a = cursors.get(left.id)?.last_attempt_at ? new Date(cursors.get(left.id)!.last_attempt_at!).getTime() : 0;
+    const b = cursors.get(right.id)?.last_attempt_at ? new Date(cursors.get(right.id)!.last_attempt_at!).getTime() : 0;
     return a - b;
   });
-  const fallback = page.last_run_at ? new Date(page.last_run_at).getTime() - OVERLAP_MS : new Date(page.created_at).getTime() - FIRST_LOOK_BACK_MS;
+  const linkedAt = new Date(page.created_at).getTime();
+  const floor = page.full_history ? linkedAt - FIRST_LOOK_BACK_MS : linkedAt;
+  const scoped: RunContext = { ...options, token: info.accessToken ?? undefined };
   for (const form of ordered) {
     if (!timeLeft(options.deadline)) {
       run.complete = false;
       break;
     }
-    const formStarted = new Date();
-    const cursor = cursors.get(form.id)?.last_run_at;
-    const since = new Date(cursor ? new Date(cursor).getTime() - OVERLAP_MS : fallback);
-    let formOk = true;
-    let formError: string | null = null;
-    try {
-      const listed = await listMetaLeads(form.id, since, { ...base, token });
-      for (const lead of listed.leads) {
-        if (!timeLeft(options.deadline)) {
-          run.complete = false;
-          formOk = false;
-          break;
-        }
-        const outcome = await backupLead(page, form.id, form.name, lead, options);
-        if (outcome === "imported") run.imported += 1;
-        if (outcome === "skipped") run.skipped += 1;
-      }
-      if (listed.truncated) {
-        formOk = false;
-        formError = "Too many leads to read in one go. Orbit carries on next time.";
-      }
-    } catch (error) {
-      formOk = false;
-      formError = errorText(error, "Couldn't read the form's leads.");
-    }
-    if (formError) run.errors.push(formError);
-    if (formOk || formError) {
-      await query("select private.meta_lead_form_ran($1, $2, $3, $4, $5, $6)", [page.page_id, form.id, form.name, formStarted.toISOString(), formOk, formError]);
-    }
+    await backupForm(page, form, cursors.get(form.id), floor, run, scoped);
     if (!run.complete) break;
   }
   return run;
 }
 
+export async function metaLeadWorkDue() {
+  if (!metaAccessToken()) return false;
+  const result = await query<{ due: boolean }>("select private.meta_lead_work_due($1::interval) as due", [BACKUP_EVERY]);
+  return Boolean(result.rows[0]?.due);
+}
+
 export async function runMetaLeadBackup(options: MetaLeadOptions = {}) {
   const empty = { pages: [] as { pageId: string; imported?: number; skipped?: number; complete?: boolean; error?: string }[], retried: { waiting: 0, filed: 0 } };
   if (!metaAccessToken()) return { skipped: "Meta lead ads isn't set up.", ...empty };
-  const deadline = options.deadline ?? Date.now() + 10_000;
-  const retryUntil = Date.now() + Math.max(0, (deadline - Date.now()) * 0.4);
-  const retried = await fileWaitingLeads({ ...options, deadline: Math.min(deadline, retryUntil) }).catch((error) => {
-    console.error("Meta lead retry failed", redactedError(error));
+  const deadline = Math.floor(options.deadline ?? Date.now() + 10_000);
+  const context: RunContext = { ...options, deadline, heldAlerted: new Set() };
+  const due = await query<DuePage>("select * from private.meta_lead_pages_due($1::interval)", [BACKUP_EVERY]);
+  const retryUntil = due.rows.length === 0 ? deadline : Math.floor(Date.now() + Math.max(0, deadline - Date.now()) * RETRY_SHARE);
+  const retried = await fileWaitingLeads({ ...context, deadline: retryUntil }).catch((error) => {
+    logFailure("Meta lead retry failed", null, error);
     return { waiting: 0, filed: 0 };
   });
-  const scoped = { ...options, deadline };
-  const due = await query<DuePage>("select * from private.meta_lead_pages_due($1::interval)", [BACKUP_EVERY]);
   const pages = empty.pages;
   for (const page of due.rows) {
-    if (!timeLeft(deadline, 3_000)) break;
+    if (!timeLeft(deadline, PAGE_RESERVE_MS)) break;
     try {
-      const run = await backupPage(page, scoped);
+      const run = await backupPage(page, context);
       const ok = run.errors.length === 0 && run.complete;
       const error = run.errors[0] ?? (run.complete ? null : "Not finished. Orbit carries on in the next run.");
       await query("select private.meta_lead_page_ran($1, $2, $3, $4, $5, $6)", [page.id, run.started.toISOString(), ok, run.complete, error, run.name]);
       pages.push({ pageId: page.page_id, imported: run.imported, skipped: run.skipped, complete: run.complete, ...(error ? { error } : {}) });
     } catch (error) {
-      const message = errorText(error, "Couldn't check the Page for leads.");
+      const message = shownMessage(error, "Couldn't check the Page for leads.");
       await query("select private.meta_lead_page_ran($1, now(), false, true, $2, null)", [page.id, message]);
       pages.push({ pageId: page.page_id, error: message });
     }
@@ -1073,7 +1193,7 @@ export async function linkMetaPage(actor: UserActor, value: unknown, options: Me
       await recordAudit(db, actor, "integration.connected", "integration", actor.workspaceId, { operation: "link_meta_page", source: "web" }, { integration: "meta_lead_ads", pageId });
     });
   } catch (error) {
-    if (isPgError(error) && error.code === "23505") {
+    if (isPgError(error) && error.code === "23505" && error.constraint === "meta_lead_pages_unique") {
       const visible = await withActor(actor, (db) =>
         db.query<{ here: boolean }>("select workspace_id = $2 as here from crm.meta_lead_pages where page_id = $1", [pageId, actor.workspaceId]),
       );
@@ -1084,7 +1204,13 @@ export async function linkMetaPage(actor: UserActor, value: unknown, options: Me
     }
     throw error;
   }
-  const released = await release(actor, pageId);
+  let released = 0;
+  try {
+    await query("select private.meta_lead_page_linked($1, $2, $3)", [actor.userId, pageId, actor.workspaceId]);
+    released = await release(actor, pageId);
+  } catch (error) {
+    logFailure("Meta held leads not released", pageId, error);
+  }
   fileSoon(pageId, options);
   return { pageId, released };
 }
