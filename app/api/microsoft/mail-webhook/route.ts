@@ -1,6 +1,7 @@
 import { after } from "next/server";
 import { memberActor } from "@/lib/crm/conversations";
 import { query } from "@/lib/db/pool";
+import { classifyCapture } from "@/lib/mail/capture-filter";
 import { prepareMail } from "@/lib/mail/prepare";
 import { syncMail } from "@/lib/mail/sync";
 import { runWorkflowTick } from "@/lib/workflows/engine";
@@ -23,6 +24,11 @@ async function syncOwner(subscriptionId: string, clientState: string) {
     if (report.sources > 0) {
       if (report.workflowEvents > 0) await runWorkflowTick({ budgetMs: 15_000 }).catch((error) => console.error("Workflow tick failed", error));
       if (report.stored > 0) await prepareMail(actor, { deadline: Date.now() + 30_000 }).catch((error) => console.error("Preparing mail failed", error));
+      if (report.stored > 0) {
+        await classifyCapture(actor, { deadline: Date.now() + 10_000 }).catch((error) =>
+          console.error("Sorting Capture email failed", error instanceof Error ? error.message : error),
+        );
+      }
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, RETRY_MS));

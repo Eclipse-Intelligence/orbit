@@ -15,18 +15,21 @@ import {
   createAndFileUnknown,
   fileUnknownTo,
   ignoreUnknownMail,
-  listUnknownMail,
   moveUnknownMail,
   setThreadDomainRule,
   setThreadFiling,
   threadBrand,
 } from "@/lib/mail/filing";
+import { listUnknownMail } from "@/lib/mail/capture-filter";
 import { writeNudge } from "@/lib/mail/prepare";
 import { listAddressHomes, routedAway, setAddressHome, setDomainRule } from "@/lib/mail/routing";
 import { getThread } from "@/lib/mail/threads";
 import { fileMailOnTimeline } from "@/lib/mail/timeline";
 import { queueMailWorkflowEvents } from "@/lib/workflows/mail-events";
 import { createUser, queryAsUser, resetDatabase } from "./helpers";
+
+delete process.env.TYPESAFE_API_KEY;
+delete process.env.LLM_API_KEY;
 
 type Box = { sourceId: string; inbox: string; sent: string };
 

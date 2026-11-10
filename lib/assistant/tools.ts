@@ -98,7 +98,8 @@ import { companyHref, contactHref, opportunityHref } from "@/lib/crm/hrefs";
 import { getMailbox } from "@/lib/crm/inbox";
 import { listFollowUps } from "@/lib/crm/follow-ups";
 import { captureContext, listToFile, waitingHere } from "@/lib/crm/capture";
-import { listUnknownMail } from "@/lib/mail/filing";
+import { listUnknownMail } from "@/lib/mail/capture-filter";
+import { SENSITIVE_CATEGORIES, sensitiveCategory, SKIPPED_LABELS, type SkippedCategory, type StoredCategory } from "@/lib/mail/relevance";
 import {
   cancelInvite,
   cleanGuests,
@@ -2179,11 +2180,13 @@ const TOOL_LIST: AssistantTool[] = [
     name: "get_capture",
     label: "Checking Capture",
     description:
-      "Everything waiting on the user in Capture for this workspace, in its sections: approvals (workflow steps waiting on them), follow-ups (Orbit's ready follow-up emails for sent mail nobody answered, sent mail whose follow-up reminder is due with no draft yet, and calls that ended with no next step, each with the draft), replies (emails from people waiting two or more working days for their reply), tasks (theirs, overdue then due today) and to file (email from people not in Orbit, unfiled Teams and Granola conversations, and people met who aren't contacts). unreadSections lists any section Orbit couldn't read this time. For the mailbox itself use search_email.",
+      "Everything waiting on the user in Capture for this workspace, in its sections: approvals (workflow steps waiting on them), follow-ups (Orbit's ready follow-up emails for sent mail nobody answered, sent mail whose follow-up reminder is due with no draft yet, and calls that ended with no next step, each with the draft), replies (emails from people waiting two or more working days for their reply), tasks (theirs, overdue then due today) and to file (email from people not in Orbit who might do business with this workspace, unfiled Teams and Granola conversations, and people met who aren't contacts). toFile.notShown counts email from new people that Capture filtered out as not business, lists the ones that aren't Personal or Collections (Supplier, Service, Spam, Newsletter, Never ask), and only counts Personal and Collections email (personalOrCollections, and personalOrCollectionsEmails for emails to file that were themselves judged Personal or Collections with low confidence); mention the counts when they help, and leave Personal and Collections email alone. Opening Capture this way may first sort a few new emails with Jev or the AI gateway. unreadSections lists any section Orbit couldn't read this time. For the mailbox itself use search_email.",
     parameters: { type: "object", properties: {} },
     run: async (actor) => {
       const now = Date.now();
-      const context = await captureContext(actor, now);
+      const context = await captureContext(actor, now, { inline: true });
+      const sensitiveSkip = (item: { category: SkippedCategory; email: string; stored: StoredCategory | null }) =>
+        SENSITIVE_CATEGORIES.includes(item.category) || sensitiveCategory(item.stored);
       const here = waitingHere(context, actor.workspaceId);
       const unread: string[] = [...context.failed];
       const [toFile, calls, unknown] = await Promise.all([
@@ -2195,7 +2198,7 @@ const TOOL_LIST: AssistantTool[] = [
           unread.push("followUps");
           return [];
         }),
-        listUnknownMail(actor, now, { actors: context.actors, emails: context.unknown }),
+        listUnknownMail(actor, now, { actors: context.actors, emails: context.unknown, skipped: context.skipped }),
       ]);
       return {
         unreadSections: [...new Set(unread)],
@@ -2237,7 +2240,17 @@ const TOOL_LIST: AssistantTool[] = [
         })),
         tasks: here.tasks.map((item) => ({ id: item.id, title: item.title, dueAt: item.dueAt, overdue: item.overdue, company: item.companyName, contact: item.contactName })),
         toFile: {
-          emails: unknown.emails.map((item) => ({ thread: item.key, from: item.name ? `${item.name} <${item.email}>` : item.email, to: item.address, subject: item.subject, receivedAt: item.at })),
+          emails: unknown.emails
+            .filter((item) => !sensitiveCategory(item.stored))
+            .map((item) => ({ thread: item.key, from: item.name ? `${item.name} <${item.email}>` : item.email, to: item.address, subject: item.subject, receivedAt: item.at })),
+          personalOrCollectionsEmails: unknown.emails.filter((item) => sensitiveCategory(item.stored)).length,
+          notShown: {
+            count: unknown.notShownTotal,
+            personalOrCollections: context.skipped.filter((item) => item.workspaceId === actor.workspaceId && sensitiveSkip(item)).length,
+            emails: unknown.notShown
+              .filter((item) => !sensitiveSkip(item))
+              .map((item) => ({ thread: item.key, from: item.name ? `${item.name} <${item.email}>` : item.email, subject: item.subject, category: SKIPPED_LABELS[item.category], receivedAt: item.at })),
+          },
           conversations: toFile.unfiled.map((item) => ({
             id: item.id,
             source: item.source,

@@ -239,6 +239,7 @@ const FAKE_ENV: Record<string, string | undefined> = {
   PARALLEL_API_KEY: "eval-parallel-key",
   MINDCASE_API_KEY: "eval-mindcase-key",
   BROWSERBASE_API_KEY: undefined,
+  TYPESAFE_API_KEY: undefined,
   BROWSERBASE_PROJECT_ID: undefined,
   NEXT_PUBLIC_SUPABASE_URL: "https://storage.eval.test",
   SUPABASE_SERVICE_ROLE_KEY: "eval-storage-key",

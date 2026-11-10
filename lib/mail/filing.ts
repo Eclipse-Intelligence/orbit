@@ -20,7 +20,6 @@ import {
   homesJson,
   NOT_AUTOMATED,
   parseRouteKey,
-  refs,
   setDomainRule,
   threadFilingInDb,
   threadRoute,
@@ -29,10 +28,10 @@ import {
 import { splitCase, splitJoin, UNSUBSCRIBE_TEXT } from "@/lib/mail/split";
 import { fileMailOnTimeline } from "@/lib/mail/timeline";
 import { captureCutoff, ownAddressesSql } from "@/lib/mail/waiting";
+import { markSenderThreadsBusiness, neverAskLabel, recordFiledInDb, ruleTarget, setSenderRule, storeThreadDecision } from "@/lib/mail/relevance";
 import type { ThreadFiling } from "@/lib/mail/view";
 
 const CAPTURE_SCAN = 300;
-const CAPTURE_SHOWN = 30;
 
 export type UnknownEmail = {
   key: string;
@@ -44,6 +43,7 @@ export type UnknownEmail = {
   snippet: string | null;
   at: string;
   workspaceId: string;
+  neverAsk: string;
 };
 
 type ThreadInfo = {
@@ -358,6 +358,7 @@ export async function unknownMail(actor: UserActor, actors: UserActor[], now = D
       snippet: row.snippet,
       at: new Date(row.at).toISOString(),
       workspaceId: workspaceIds.includes(row.capture_workspace_id) ? row.capture_workspace_id : workspaceIds[0],
+      neverAsk: neverAskLabel(row.from_email),
     }));
   });
 }
@@ -375,17 +376,43 @@ export function unknownMailOnce(actor: UserActor, actors: UserActor[], now = Dat
   return pending;
 }
 
-export async function listUnknownMail(actor: UserActor, now = Date.now(), known?: { actors: UserActor[]; emails: UnknownEmail[] }) {
-  const actors = known?.actors ?? (await workspaceActors(actor));
-  const rows = known?.emails ?? (await unknownMailOnce(actor, actors, now));
-  const here = rows.filter((row) => row.workspaceId === actor.workspaceId);
-  return { emails: here.slice(0, CAPTURE_SHOWN), total: here.length, workspaces: refs(actors) };
-}
-
 export async function ignoreUnknownMail(actor: UserActor, threadKey: string) {
   const { sourceId, key } = parseRouteKey(threadKey);
   await withActor(actor, (db) => upsertRoute(db, actor, sourceId, key, { ignored: true }));
   return { key: threadKey };
+}
+
+async function captureSender(db: Db, actor: UserActor, sourceId: string, key: string) {
+  const info = await threadInfo(db, actor, sourceId, key);
+  if (!info.counterpart) throw new CrmError("not_found", "There's nobody on this email.", 404);
+  return { email: info.counterpart.email };
+}
+
+export async function neverAskUnknownMail(actor: UserActor, threadKey: string) {
+  const { sourceId, key } = parseRouteKey(threadKey);
+  return withActor(actor, async (db) => {
+    const sender = await captureSender(db, actor, sourceId, key);
+    const target = ruleTarget(sender.email);
+    await upsertRoute(db, actor, sourceId, key, { ignored: true });
+    await setSenderRule(db, actor, actor.workspaceId, target, "muted", "rule");
+    return { key: threadKey, target };
+  });
+}
+
+export async function showUnknownMail(actor: UserActor, threadKey: string) {
+  const { sourceId, key } = parseRouteKey(threadKey);
+  return withActor(actor, async (db) => {
+    const sender = await captureSender(db, actor, sourceId, key);
+    await setSenderRule(db, actor, actor.workspaceId, sender.email, "business", "shown");
+    await markSenderThreadsBusiness(db, actor, actor.workspaceId, sender.email, "shown");
+    await storeThreadDecision(
+      db,
+      actor,
+      { key: threadKey, email: sender.email, workspaceId: actor.workspaceId },
+      { category: "business", engine: "shown", confidence: null, reason: null },
+    );
+    return { key: threadKey, sender: sender.email };
+  });
 }
 
 export async function moveUnknownMail(actor: UserActor, threadKey: string, workspaceId: string) {
@@ -404,6 +431,7 @@ export async function createAndFileUnknown(actor: UserActor, threadKey: string) 
     const info = await threadInfo(db, actor, sourceId, key);
     if (!info.counterpart) throw new CrmError("not_found", "There's nobody on this email to add.", 404);
     const result = await ensureContactInDb(db, actor, info.counterpart, null, { operation: "create_from_email", source: "mail" });
+    await recordFiledInDb(db, actor, actor.workspaceId, info.counterpart.email);
     const name = await db.query<{ name: string | null }>(
       "select coalesce(nullif(trim(concat_ws(' ', first_name, last_name)), ''), email) as name from crm.contacts where id = $1",
       [result.contactId],
@@ -425,8 +453,9 @@ export async function fileUnknownTo(actor: UserActor, threadKey: string, contact
       [contactId, actor.workspaceId],
     );
     if (!contact.rows[0]) throw new CrmError("not_found", "That contact has gone.", 404);
-    await threadInfo(db, actor, sourceId, key);
+    const info = await threadInfo(db, actor, sourceId, key);
     await upsertRoute(db, actor, sourceId, key, { filedIn: [actor.workspaceId], contactId, ignored: false });
+    if (info.counterpart) await recordFiledInDb(db, actor, actor.workspaceId, info.counterpart.email);
     return { contactId, contactName: contact.rows[0].name };
   });
   await fileMailOnTimeline(actor, { filter: { thread: { sourceId, key } }, actors });

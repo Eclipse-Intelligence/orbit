@@ -23,6 +23,9 @@ import { sendAlert } from "@/lib/alerts";
 import { notify } from "@/lib/workflows/engine";
 import { createUser, queryAsUser, resetDatabase } from "./helpers";
 
+delete process.env.TYPESAFE_API_KEY;
+delete process.env.LLM_API_KEY;
+
 type Box = { sourceId: string; inbox: string; sent: string; archive: string; snoozed: string; trash: string };
 
 const DAY_MS = 86_400_000;
@@ -774,7 +777,7 @@ describe("Capture after review", () => {
       ["approvals", "followUps", "replies", "tasks", "toFile", "unreadSections"],
     );
     assert.deepEqual(Object.keys(result.followUps).sort(), ["calls", "emails", "noReplyYet"]);
-    assert.deepEqual(Object.keys(result.toFile).sort(), ["conversations", "emails", "peopleMet"]);
+    assert.deepEqual(Object.keys(result.toFile).sort(), ["conversations", "emails", "notShown", "peopleMet", "personalOrCollectionsEmails"]);
     assert.deepEqual(result.unreadSections, []);
     assert.ok(Array.isArray(result.replies));
     const noReply = result.followUps.noReplyYet as { subject: string; kind: string }[];

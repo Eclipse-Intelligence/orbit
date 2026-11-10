@@ -15,7 +15,10 @@ import {
   ReplyItem,
   TaskItem,
   ClearContext,
+  type ClearInstead,
 } from "@/components/capture/capture-items";
+import NotShown from "@/components/capture/not-shown";
+import { OFFLINE, postCapture } from "@/components/capture/capture-post";
 import { CaptureListContext, COLLAPSE_MS } from "@/components/capture/capture-row";
 import CaptureSeen from "@/components/crm/capture-seen";
 import SectionHeader from "@/components/crm/section-header";
@@ -30,6 +33,8 @@ import type { CaptureAction, CaptureOutcome } from "@/lib/crm/capture-actions";
 import type { UnfiledImport } from "@/lib/crm/conversations";
 import type { FollowUpSuggestion } from "@/lib/crm/follow-ups";
 import { contactHref } from "@/lib/crm/hrefs";
+import type { SkippedEmail } from "@/lib/mail/capture-filter";
+import type { SenderRule } from "@/lib/mail/relevance";
 import type { UnknownEmail } from "@/lib/mail/filing";
 import type { WorkspaceChoiceRef } from "@/lib/mail/view";
 import type { WaitingNudge, WaitingReminder, WaitingReply } from "@/lib/mail/waiting";
@@ -41,7 +46,6 @@ import CheckIcon from "@/public/assets/images/assistant/check.svg";
 const UNDO_MS = 6_000;
 const FILING_MS = 30_000;
 const SETTLE_MS = 250;
-const OFFLINE = "That didn't save. Check your connection and try again.";
 
 const LABELS: Record<CaptureSectionId, string> = {
   approvals: "Approvals",
@@ -62,6 +66,7 @@ export type CaptureData = {
   replies: WaitingReply[];
   tasks: WaitingTask[];
   emails: UnknownEmail[];
+  notShown: SkippedEmail[];
   unfiled: UnfiledImport[];
   people: MetPerson[];
 };
@@ -86,23 +91,6 @@ function EmptyState() {
       <h2>Nothing waiting</h2>
     </div>
   );
-}
-
-async function post(action: CaptureAction, workspaceId: string, keepalive: boolean) {
-  let response: Response;
-  try {
-    response = await fetch("/api/capture", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ...action, captureWorkspaceId: workspaceId }),
-      keepalive,
-    });
-  } catch {
-    throw new Error(OFFLINE);
-  }
-  const body = (await response.json().catch(() => ({}))) as Partial<CaptureOutcome> & { error?: string };
-  if (!response.ok) throw new Error(body.error ?? "That didn't save. Try again.");
-  return body;
 }
 
 function liveRows() {
@@ -148,6 +136,9 @@ export default function CaptureScreen({
   viewer,
   data,
   toFileTotal,
+  notShownTotal,
+  sorting,
+  rules,
   failed,
   workspaces,
   workspaceId,
@@ -158,6 +149,9 @@ export default function CaptureScreen({
   viewer: Viewer;
   data: CaptureData;
   toFileTotal: number;
+  notShownTotal: number;
+  sorting: number;
+  rules: SenderRule[];
   failed: CaptureSectionId[];
   workspaces: WorkspaceChoiceRef[];
   workspaceId: string;
@@ -345,7 +339,7 @@ export default function CaptureScreen({
   function commit(item: Pending, keepalive: boolean) {
     dismissToast(item.toast);
     const filing = FILED.has(item.action.kind) && mounted.current ? showToast({ message: "Filing…", duration: FILING_MS }) : null;
-    post(item.action, workspaceId, keepalive)
+    postCapture(item.action, workspaceId, keepalive)
       .then((outcome) => {
         if (filing !== null) dismissToast(filing);
         filed(outcome, item.action);
@@ -382,6 +376,7 @@ export default function CaptureScreen({
   }
 
   const flushRef = useRef(flush);
+  const queueRef = useRef<(id: string, verb: string, action: CaptureAction) => void>(() => undefined);
   useEffect(() => {
     flushRef.current = flush;
   });
@@ -415,7 +410,7 @@ export default function CaptureScreen({
     if (focused && next) activateRow(next);
   }
 
-  function clear(id: string, verb: string, action: CaptureAction) {
+  function clear(id: string, verb: string, action: CaptureAction, instead?: ClearInstead) {
     const swiped = swipedRow.current === id;
     swipedRow.current = null;
     if (!swiped && Date.now() < settleUntil.current) return;
@@ -425,6 +420,10 @@ export default function CaptureScreen({
     moveFocusFrom(id);
     if (swiped) hide(id);
     else leave(id);
+    queue(id, verb, action, instead);
+  }
+
+  function queue(id: string, verb: string, action: CaptureAction, instead?: ClearInstead) {
     const item: Pending = {
       id,
       action,
@@ -433,6 +432,20 @@ export default function CaptureScreen({
         message: verb,
         duration: UNDO_MS,
         action: { label: "Undo", run: () => void undo() },
+        ...(instead
+          ? {
+              extra: {
+                label: instead.label,
+                short: instead.short,
+                run: () => {
+                  if (pending.current !== item) return;
+                  window.clearTimeout(item.timer);
+                  pending.current = null;
+                  queueRef.current(id, instead.done, instead.action);
+                },
+              },
+            }
+          : {}),
       }),
     };
     item.timer = window.setTimeout(() => {
@@ -443,9 +456,14 @@ export default function CaptureScreen({
     pending.current = item;
   }
 
+  useEffect(() => {
+    queueRef.current = queue;
+  });
+
   const showing = sections.filter((id) => view === "all" || view === id);
   const othersShown = data.others.length > 0 && (view === "all" || view === "approvals");
   const nothing = total === 0 && unread.size === 0;
+  const notShownHere = (notShownTotal > 0 || rules.length > 0 || sorting > 0) && (view === "all" || view === "toFile");
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -529,6 +547,7 @@ export default function CaptureScreen({
                 })}
                 {othersShown && !showing.includes("approvals") && <OthersApprovals items={data.others} />}
               </KeyboardList>
+              {notShownHere && <NotShown items={data.notShown} total={notShownTotal} sorting={sorting} rules={rules} workspaceId={workspaceId} />}
             </ClearContext.Provider>
           </CaptureListContext.Provider>
         </div>

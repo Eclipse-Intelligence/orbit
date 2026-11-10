@@ -10,6 +10,7 @@ import { completeJson } from "@/lib/llm";
 import { businessNamesInDb, insertMemory, lessTrusted, mayApplyEverywhere, reviseMemory, searchTerms, visibleMemorySql, type Memory, type MemoryScope, type NoteOrigin } from "@/lib/learning/memories";
 import { mapNote, NOTE_SELECT } from "@/lib/learning/market";
 import { stalledDealsInDb } from "@/lib/crm/pipeline-history";
+import { noSensitivePeopleSql, notSensitiveThreadSql, sensitiveAddress } from "@/lib/mail/relevance";
 import { researchMail } from "@/lib/mail/subscriptions";
 import { writingStyle } from "@/lib/writing-style";
 
@@ -271,9 +272,19 @@ async function learnPersonal(actor: UserActor, since: Date, options: Options): P
        where m.user_id = $1 and c.workspace_id = $3 and m.created_at > $2 and a->>'status' in ('declined', 'done', 'failed') order by m.created_at limit 40`,
       [actor.userId, since, actor.workspaceId],
     );
-    const edits = await db.query<{ body: string; sent_body: string; updated_at: Date }>(
-      `select body, sent_body, updated_at from crm.mail_prepared where user_id = $1 and workspace_id = $3 and state = 'sent' and updated_at > $2
-         and body is not null and sent_body is not null and btrim(body) <> btrim(sent_body) order by updated_at desc limit 6`,
+    const edits = await db.query<{ body: string; sent_body: string; updated_at: Date; people: string[] | null }>(
+      `select e.body, e.sent_body, e.updated_at, e.people from (
+         select p.body, p.sent_body, p.updated_at,
+           coalesce((select array_agg(lower(x->>'address')) from jsonb_array_elements(
+             jsonb_build_array(jsonb_build_object('address', m.from_email)) || coalesce(m.to_recipients, '[]'::jsonb) || coalesce(m.cc_recipients, '[]'::jsonb)
+           ) x where jsonb_typeof(x) = 'object' and x->>'address' is not null), '{}'::text[]) as people
+         from crm.mail_prepared p left join crm.mail_messages m on m.id = p.message_id
+         where p.user_id = $1 and p.workspace_id = $3 and p.state = 'sent' and p.updated_at > $2
+           and p.body is not null and p.sent_body is not null and btrim(p.body) <> btrim(p.sent_body)
+           and ${notSensitiveThreadSql("$1", "$3", "p.source_id", "p.thread_key")}
+       ) e
+       where ${noSensitivePeopleSql("$1", "$3", "e.people")}
+       order by e.updated_at desc limit 12`,
       [actor.userId, since, actor.workspaceId],
     );
     const about = await db.query<{ about: string | null; writing: string | null }>(
@@ -283,7 +294,8 @@ async function learnPersonal(actor: UserActor, since: Date, options: Options): P
       [actor.userId, actor.workspaceId],
     );
     const others = await db.query<{ name: string }>("select name from crm.workspaces where id <> $1 order by name limit 20", [actor.workspaceId]);
-    return { chat: chat.rows, decisions: decisions.rows, edits: edits.rows, about: about.rows[0] ?? null, others: others.rows.map((row) => row.name) };
+    const kept = edits.rows.filter((row) => !(row.people ?? []).some((address) => sensitiveAddress(address))).slice(0, 6);
+    return { chat: chat.rows, decisions: decisions.rows, edits: kept, about: about.rows[0] ?? null, others: others.rows.map((row) => row.name) };
   });
   if (!gathered.chat.length && !gathered.decisions.length && !gathered.edits.length) return { skipped: "Nothing new to learn from." };
   const name = actor.fullName || actor.email;
@@ -318,6 +330,9 @@ async function learnPersonal(actor: UserActor, since: Date, options: Options): P
 }
 
 async function learnBusiness(actor: UserActor, since: Date, options: Options): Promise<UnitResult> {
+  const sensitive = (
+    await query<{ id: string }>("select id from private.sensitive_email_activities($1, $2) as id", [actor.workspaceId, since])
+  ).rows.map((row) => row.id);
   const gathered = await withActor(actor, async (db) => {
     const ws = actor.workspaceId;
     const stages = await db.query<{ name: string; company_id: string | null; company: string | null; value: string | null; currency: string | null; changes: { before?: { stageName?: string; status?: string }; after?: { stageName?: string; status?: string } }; created_at: Date }>(
@@ -341,8 +356,10 @@ async function learnBusiness(actor: UserActor, since: Date, options: Options): P
     const tones = await db.query<{ tone: string; reason: string | null; title: string | null; company_id: string | null; company: string | null; created_at: Date }>(
       `select t.tone, t.reason, a.title, c.id as company_id, c.name as company, t.created_at
        from crm.activity_tones t join crm.activities a on a.id = t.activity_id left join crm.companies c on c.id = a.company_id
-       where t.workspace_id = $1 and t.created_at > $2 and t.tone <> 'neutral' and a.archived_at is null order by t.created_at limit 30`,
-      [ws, since],
+       where t.workspace_id = $1 and t.created_at > $2 and t.tone <> 'neutral' and a.archived_at is null
+         and a.id <> all($3::uuid[])
+       order by t.created_at limit 30`,
+      [ws, since, sensitive],
     );
     const notes = await db.query<{ type: string; title: string | null; body: string | null; company_id: string | null; company: string | null; occurred_at: Date }>(
       `select a.type, a.title, a.body, c.id as company_id, c.name as company, a.occurred_at

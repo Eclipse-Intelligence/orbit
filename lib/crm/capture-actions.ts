@@ -9,7 +9,8 @@ import { isUuid } from "@/lib/crm/mutate";
 import { completeTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { applyMailAction } from "@/lib/mail/actions";
-import { createAndFileUnknown, fileUnknownTo, ignoreUnknownMail, moveUnknownMail } from "@/lib/mail/filing";
+import { createAndFileUnknown, fileUnknownTo, ignoreUnknownMail, moveUnknownMail, neverAskUnknownMail, showUnknownMail } from "@/lib/mail/filing";
+import { removeSenderRule } from "@/lib/mail/capture-filter";
 import { updatePrepared } from "@/lib/mail/prepare";
 import { dismissReply, finishReminder } from "@/lib/mail/waiting";
 import { decideApproval } from "@/lib/workflows/store";
@@ -30,6 +31,9 @@ export type CaptureAction =
   | { kind: "email-file"; key: string; contactId: string }
   | { kind: "email-move"; key: string; workspaceId: string }
   | { kind: "email-ignore"; key: string }
+  | { kind: "email-never"; key: string }
+  | { kind: "email-show"; key: string }
+  | { kind: "rule-remove"; sender: string }
   | { kind: "import-create"; id: string; email: string }
   | { kind: "import-file"; id: string; contactId: string }
   | { kind: "import-ignore"; id: string }
@@ -82,7 +86,11 @@ export function readCaptureAction(body: unknown): CaptureAction {
       return { kind: "task-snooze", id: id(input.id), until: required(input.until, 40) };
     case "email-create":
     case "email-ignore":
+    case "email-never":
+    case "email-show":
       return { kind: input.kind, key: required(input.key) };
+    case "rule-remove":
+      return { kind: "rule-remove", sender: required(input.sender, 320) };
     case "email-file":
       return { kind: "email-file", key: required(input.key), contactId: id(input.contactId) };
     case "email-move":
@@ -162,6 +170,15 @@ export async function runCaptureAction(actor: UserActor, action: CaptureAction, 
       return { ok: true };
     case "email-ignore":
       await ignoreUnknownMail(actor, action.key);
+      return { ok: true };
+    case "email-never":
+      await neverAskUnknownMail(actor, action.key);
+      return { ok: true };
+    case "email-show":
+      await showUnknownMail(actor, action.key);
+      return { ok: true };
+    case "rule-remove":
+      await removeSenderRule(actor, action.sender);
       return { ok: true };
     case "import-create": {
       const filed = await createContactAndFile(actor, action.id, action.email, { summarise: false });

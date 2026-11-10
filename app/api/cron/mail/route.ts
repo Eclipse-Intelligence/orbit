@@ -3,6 +3,7 @@ import { followUpCallsAcross } from "@/lib/crm/follow-ups";
 import { cronAuthorization } from "@/lib/crm/scheduler";
 import { processDueMail } from "@/lib/mail/due";
 import { readInviteReplies } from "@/lib/mail/invite-replies";
+import { classifyCapture } from "@/lib/mail/capture-filter";
 import { prepareMail } from "@/lib/mail/prepare";
 import { runWorkflowTick } from "@/lib/workflows/engine";
 import { syncMail, type MailSyncReport } from "@/lib/mail/sync";
@@ -38,6 +39,9 @@ async function handle(request: Request) {
       );
       await readInviteReplies(target.actor, { deadline: Math.min(mailDeadline, Date.now() + 20_000) }).catch((error) =>
         console.error("Invite replies failed", error),
+      );
+      await classifyCapture(target.actor, { deadline: Math.min(mailDeadline, Date.now() + 30_000) }).catch((error) =>
+        console.error("Sorting Capture email failed", error instanceof Error ? error.message : error),
       );
       users.push({ userId: target.actor.userId, report });
     } catch (error) {
