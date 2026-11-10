@@ -42,6 +42,7 @@ import type {
   Company,
   Contact,
   ContactWrite,
+  EmailRead,
   Member,
   TagCount,
   Task,
@@ -60,6 +61,7 @@ export default function ContactRecord({
   mailboxConnected,
   activities,
   insights,
+  reads = {},
   meetings,
   tasks,
   tags,
@@ -77,6 +79,7 @@ export default function ContactRecord({
   mailboxConnected: boolean;
   activities: Activity[];
   insights: Record<string, CallInsight>;
+  reads?: Record<string, EmailRead>;
   meetings: MeetingsSummary | null;
   tasks: Task[];
   tags: TagCount[];
@@ -409,6 +412,7 @@ export default function ContactRecord({
             viewerRole={viewer.role}
             activities={activities}
             insights={insights}
+            reads={reads}
           />
         }
       />

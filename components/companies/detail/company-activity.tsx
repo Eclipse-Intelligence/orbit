@@ -17,7 +17,7 @@ import {
 import ActivityPad from "@/components/crm/activity-pad";
 import ContactEmail from "@/components/crm/contact-email";
 import { contactRecipient } from "@/lib/crm/personalise";
-import type { Activity, CallInsight, Contact } from "@/lib/crm/types";
+import type { Activity, CallInsight, Contact, EmailRead } from "@/lib/crm/types";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
 
 const NONE = "none";
@@ -29,6 +29,7 @@ export default function CompanyActivity({
   contacts,
   timeline,
   insights,
+  reads,
   mailboxConnected,
   viewerId,
   viewerRole,
@@ -38,6 +39,7 @@ export default function CompanyActivity({
   contacts: Contact[];
   timeline: Activity[];
   insights: Record<string, CallInsight>;
+  reads?: Record<string, EmailRead>;
   mailboxConnected: boolean;
   viewerId?: string | null;
   viewerRole?: string | null;
@@ -142,6 +144,7 @@ export default function CompanyActivity({
       <ActivityTimeline
         activities={shown}
         insights={insights}
+        reads={reads}
         showContact
         viewerId={viewerId}
         viewerRole={viewerRole}

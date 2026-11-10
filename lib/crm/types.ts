@@ -465,6 +465,12 @@ export type RelationshipStatus = "new" | "active" | "quiet" | "needs_action";
 
 export const QUIET_DAYS = 21;
 
+export type EmailRead = {
+  opens: { at: string; agent: string | null }[];
+  recipients: { name: string | null; address: string }[];
+  sentAt: string | null;
+};
+
 export const CALL_INSIGHT_SOURCES = ["teams", "manual", "granola"] as const;
 export type CallInsightSource = (typeof CALL_INSIGHT_SOURCES)[number];
 export type CallInsightStatus = "pending" | "ready" | "failed";

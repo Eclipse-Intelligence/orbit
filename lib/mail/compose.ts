@@ -7,7 +7,7 @@ import { isUuid } from "@/lib/crm/mutate";
 import { canonicalEmail } from "@/lib/crm/normalize";
 import type { UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
-import { composeEmailHtml, imageMarkers, TRACKING_PATH } from "@/lib/mail/html";
+import { composeEmailHtml, imageMarkers, trackingPixelUrl } from "@/lib/mail/html";
 import {
   createMicrosoftDraft,
   deleteMicrosoftDraft,
@@ -221,10 +221,6 @@ function graphProblem(error: unknown, target?: Target): never {
   throw new CrmError("upstream_error", error instanceof Error ? error.message.slice(0, 240) : "Outlook didn't accept the email.", 502);
 }
 
-function pixelUrl(origin: string | null, trackingId: string | null) {
-  return origin && trackingId ? `${origin}${TRACKING_PATH}${trackingId}` : null;
-}
-
 async function createDraft(
   actor: UserActor,
   input: DraftInput,
@@ -377,7 +373,7 @@ async function storeDraft(actor: UserActor, input: DraftInput, options: DraftWri
   let row = existing ?? (await createDraft(actor, input, target, token, options));
   let created = !existing;
   const html = () =>
-    composeEmailHtml({ body: input.body, signature, pixel: pixelUrl(options.origin, row.tracking_id), quote: row.quote_html, inline: options.inline });
+    composeEmailHtml({ body: input.body, signature, pixel: trackingPixelUrl(options.origin, row.tracking_id), quote: row.quote_html, inline: options.inline });
   const subject = input.subject || row.subject || "";
   const inlineKey = Object.entries(options.inline ?? {}).map(([name, cid]) => `${name}=${cid}`).join("|");
   const hash = contentHash(input, signature, inlineKey ? `${subject}\u0000${inlineKey}` : subject);
