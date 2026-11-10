@@ -13,10 +13,7 @@ export default async function TagSettingsPage() {
   if (!user) redirect("/login");
   const [tags, lifecycles] = await Promise.all([listTags(user), listLifecycles(user)]);
   return (
-    <SettingsPage
-      title="Tags and lifecycles"
-      description="Rename, merge or delete the tags on your contacts and companies, and the lifecycles on your companies."
-    >
+    <SettingsPage title="Tags and lifecycles">
       <TagsSettings tags={tags} />
       <LifecyclesSettings lifecycles={lifecycles} />
     </SettingsPage>

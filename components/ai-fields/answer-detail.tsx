@@ -129,8 +129,8 @@ function AnswerEditor({ field, answer, onSaved, onCancel }: { field: AiField; an
           ))}
         </fieldset>
       )}
-      {webText && <span className="caption-style text-subtle">Web answer: {webText}. Saving your own keeps it and stops checks.</span>}
-      {!webText && <span className="caption-style text-subtle">Saving your own keeps it and stops checks.</span>}
+      {webText && <span className="caption-style text-subtle">Web answer: {webText}. Your answer stops further checks.</span>}
+      {!webText && <span className="caption-style text-subtle">Your answer stops further checks.</span>}
       {error && (
         <span role="alert" className="caption-style text-danger">
           {error}
@@ -233,8 +233,7 @@ export function AnswerDetail({ field, companyId, canManage, showTitle = true }: 
               <span className="text-foreground text-[14px] leading-5 font-medium break-words">{answerText(field, answer)}</span>
               {likelihood && <span className="caption-style text-subtle">{likelihood}</span>}
             </div>
-            {answer.state === "checking" && <p className="ui-style text-soft">Checking this company now.</p>}
-            {answer.state === "outside" && <p className="ui-style text-soft">This company isn&apos;t in this field&apos;s companies.</p>}
+            {answer.state === "outside" && <p className="ui-style text-soft">Outside this field&apos;s companies.</p>}
             {answer.reason && <p className="ui-style text-soft break-words">“{answer.reason}”</p>}
           </>
         )}
@@ -276,7 +275,7 @@ export function AnswerDetail({ field, companyId, canManage, showTitle = true }: 
               )}
               <Button variant="secondary" size="sm" onClick={() => setEditing(true)} disabled={pending}>
                 <EditIcon aria-hidden className="size-3" />
-                Edit answer
+                Edit
               </Button>
             </span>
           )}

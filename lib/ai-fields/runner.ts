@@ -607,12 +607,12 @@ export async function checkCompanyNow(actor: Actor, companyId: string, options: 
 
 export function checkNowMessage(report: AiFieldsReport): { ok: true; message: string } | { error: string } {
   if (report.skipped === "No PARALLEL_API_KEY.") return { error: "Add PARALLEL_API_KEY in Vercel to check the web." };
-  if (report.skipped === "Monthly limit reached.") return { error: `This month's checks reached $${MONTHLY_LIMIT_USD}. Checks start again next month.` };
+  if (report.skipped === "Monthly limit reached.") return { error: `Monthly limit of $${MONTHLY_LIMIT_USD} reached.` };
   if (report.error) return { error: report.error };
-  if (report.started > 0) return { ok: true, message: "Checking. Numbers and short text take a minute or two." };
+  if (report.started > 0) return { ok: true, message: "Checking…" };
   if (report.checked > 0) return { ok: true, message: "Checked." };
   if (report.failed > 0) return { error: "The web check failed. Try again shortly." };
-  return { ok: true, message: "Nothing to check. Answers set by hand and companies outside a field's companies aren't checked." };
+  return { ok: true, message: "Nothing to check" };
 }
 
 export async function autoAiFields(actor: Actor, companyId: string) {

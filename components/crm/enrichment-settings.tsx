@@ -116,15 +116,15 @@ function Backfill({ initial }: { initial: number }) {
         <span className="text-foreground text-[13.5px] leading-5">Fill in existing companies</span>
         <span className="caption-style text-subtle">
           {running
-            ? `Looking up companies… ${done} done, ${remaining} to go`
+            ? `${done} done, ${remaining} to go`
             : remaining > 0
-              ? `${remaining} ${remaining === 1 ? "company has" : "companies have"} a website but no details yet. About 10 context.dev credits each.`
-              : "Every company with a website has been checked."}
+              ? `${remaining} ${remaining === 1 ? "company" : "companies"} to fill in. About 10 context.dev credits each.`
+              : "Nothing to fill in"}
         </span>
         {message && <span className={cn("caption-style", message.error ? "text-danger" : "text-subtle")}>{message.text}</span>}
       </span>
       <Button variant="secondary" size="sm" disabled={running || remaining === 0} onClick={run}>
-        {running ? "Filling in…" : "Fill in now"}
+        {running ? "Filling in…" : "Fill in"}
       </Button>
     </div>
   );
@@ -173,31 +173,29 @@ export default function EnrichmentSettingsCard({
   }
 
   return (
-    <SettingsCard
-      id="enrichment"
-      title="Contact enrichment"
-      description="Finds missing work emails, LinkedIn profiles and phone numbers, trying each provider in order until one finds it. You only pay the provider that finds it. Company details, logos and social profiles come from context.dev."
-    >
+    <SettingsCard id="enrichment" title="Contact enrichment">
       <div className="flex flex-col gap-5">
-        <ul className="flex flex-col gap-2">
-          {providers.map((provider) => (
-            <li key={provider.id} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-              <span className="flex min-w-0 flex-col gap-0.5">
-                <span className="text-foreground text-[13.5px] leading-5">{provider.name}</span>
-                <span className="caption-style text-subtle">
-                  {provider.id === "context"
-                    ? "Emails, LinkedIn and company details"
-                    : provider.fields.includes("phone")
-                      ? "Emails and phone numbers"
-                      : provider.fields.includes("linkedin")
-                        ? "Emails and LinkedIn"
-                        : "Emails"}
+        {providers.some((provider) => !provider.configured) && (
+          <ul className="flex flex-col gap-2">
+            {providers.filter((provider) => !provider.configured).map((provider) => (
+              <li key={provider.id} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                <span className="flex min-w-0 flex-col gap-0.5">
+                  <span className="text-foreground text-[13.5px] leading-5">{provider.name}</span>
+                  <span className="caption-style text-subtle">
+                    {provider.id === "context"
+                      ? "Emails, LinkedIn and company details"
+                      : provider.fields.includes("phone")
+                        ? "Emails and phone numbers"
+                        : provider.fields.includes("linkedin")
+                          ? "Emails and LinkedIn"
+                          : "Emails"}
+                  </span>
                 </span>
-              </span>
-              <Status on={provider.configured}>{provider.configured ? "Connected" : `Add ${provider.envKey} in Vercel`}</Status>
-            </li>
-          ))}
-        </ul>
+                <Status on={false}>{`Add ${provider.envKey} in Vercel`}</Status>
+              </li>
+            ))}
+          </ul>
+        )}
         <div className="flex flex-col gap-4 sm:flex-row">
           <OrderList
             title="Email order"
@@ -216,14 +214,10 @@ export default function EnrichmentSettingsCard({
             onMove={(from, to) => move("linkedin", from, to)}
           />
         </div>
-        <p className="caption-style text-subtle leading-[1.4]">
-          An email from context.dev is only saved if it&apos;s on the company&apos;s own domain, the match is confident and an email checker
-          (Enrow, Icypeas or Hunter) confirms it can receive mail. Otherwise the next provider is tried.
-        </p>
         <label className="flex items-center justify-between gap-3">
           <span className="flex flex-col gap-0.5">
             <span className="text-foreground text-[13.5px] leading-5">Fill in new companies automatically</span>
-            <span className="caption-style text-subtle">Uses context.dev when a company with a website is added. Only empty fields are filled.</span>
+            <span className="caption-style text-subtle">Only empty fields are filled.</span>
           </span>
           {canAdmin ? (
             <Switch
@@ -236,16 +230,12 @@ export default function EnrichmentSettingsCard({
           )}
         </label>
         {canAdmin && providers.some((provider) => provider.id === "context" && provider.configured) && <Backfill initial={unenriched} />}
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <span className="flex min-w-0 flex-col gap-0.5">
+        {!logoLinkReady && (
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <span className="text-foreground text-[13.5px] leading-5">Logos in lists</span>
-            <span className="caption-style text-subtle leading-[1.4]">
-              Shows every company&apos;s logo in the companies list using context.dev Logo Link, which has its own free allowance. Copy the Public
-              Client ID from context.dev › Logo Link, restrict it to orbit.geteclipse.co, and add it in Vercel as NEXT_PUBLIC_CONTEXT_LOGO_CLIENT_ID.
-            </span>
-          </span>
-          <Status on={logoLinkReady}>{logoLinkReady ? "On" : "Not set up"}</Status>
-        </div>
+            <Status on={false}>Add NEXT_PUBLIC_CONTEXT_LOGO_CLIENT_ID in Vercel (context.dev › Logo Link)</Status>
+          </div>
+        )}
         {error && <p className="caption-style text-danger leading-[1.4]">{error}</p>}
       </div>
     </SettingsCard>

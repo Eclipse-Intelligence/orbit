@@ -111,10 +111,10 @@ export default function SitePicker({
         onOpenChange(next);
       }}
     >
-      <DialogContent className="max-w-[640px]">
+      <DialogContent className="max-w-[640px]" {...(map ? {} : { "aria-describedby": undefined })}>
         <DialogHeader className="pr-12">
           <DialogTitle>Add website</DialogTitle>
-          <DialogDescription>{map ? `${plural(map.pages.length, "page", "pages")} on ${map.host}${map.truncated ? ", the first found" : ""}.` : "Find a site's pages and choose which to add."}</DialogDescription>
+          {map && <DialogDescription>{`${plural(map.pages.length, "page", "pages")} on ${map.host}${map.truncated ? ", the first found" : ""}.`}</DialogDescription>}
         </DialogHeader>
         <div className="flex flex-col gap-3 px-6 py-4">
           {!map ? (
@@ -136,7 +136,7 @@ export default function SitePicker({
                 autoFocus
               />
               <Button variant="primary" size="sm" type="submit" disabled={!url.trim() || busy !== null}>
-                {busy === "mapping" ? "Finding pages" : "Find pages"}
+                {busy === "mapping" ? "Finding…" : "Find pages"}
               </Button>
             </form>
           ) : (
@@ -168,7 +168,7 @@ export default function SitePicker({
           )}
           {busy === "mapping" && (
             <p role="status" className="sr-only">
-              Finding pages
+              Finding…
             </p>
           )}
           {error && (
@@ -183,7 +183,7 @@ export default function SitePicker({
               Back
             </Button>
             <Button variant="primary" size="md" onClick={() => void add()} disabled={selected.size === 0 || busy !== null}>
-              {busy === "adding" ? "Adding" : `Add ${plural(selected.size, "page", "pages")}`}
+              {busy === "adding" ? "Adding…" : `Add ${plural(selected.size, "page", "pages")}`}
             </Button>
           </DialogFooter>
         )}

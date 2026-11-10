@@ -4,7 +4,6 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Input } from "@/components/_ui/input";
-import { SettingsCard, SettingsDisclosure } from "@/components/crm/settings-ui";
 import { saveStagesAction } from "@/app/(crm)/settings/actions";
 import type { PipelineStage } from "@/lib/crm/types";
 import { Radio } from "@/components/_ui/radio";
@@ -51,7 +50,7 @@ export default function PipelineSettings({
       setError(result.error);
       return;
     }
-    setMessage("Pipeline saved.");
+    setMessage("Saved");
     router.refresh();
   }
 
@@ -74,10 +73,10 @@ export default function PipelineSettings({
   }
 
   return (
-    <SettingsCard
+    <section
       id="pipeline"
-      title="Stages"
-      description="Keep one won stage and one lost stage. A stage with opportunities stays until those records move."
+      aria-label="Stages"
+      className="border-sidebar-border bg-sidebar-accent flex scroll-mt-4 flex-col gap-3 rounded-xl border px-4 py-4 sm:px-5"
     >
       <div className="caption-style text-subtle hidden grid-cols-[1fr_90px_auto_auto_auto] gap-2 sm:grid">
         <span>Name</span>
@@ -189,32 +188,12 @@ export default function PipelineSettings({
           data-shortcut="save"
           title="Save (⌘S)"
         >
-          {pending ? "Saving…" : "Save pipeline"}
+          {pending ? "Saving…" : "Save"}
         </Button>
         <p role="status" className="caption-style text-subtle">
           {message}
         </p>
       </div>
-      <SettingsDisclosure
-        title="How stages work"
-        summary="Limits, probabilities, and removing a stage."
-      >
-        <ul className="caption-style text-subtle flex list-disc flex-col gap-1.5 pl-4 leading-[1.4]">
-          <li>
-            A pipeline has 2 to 20 stages, each with its own name. New stages go
-            before the lost stage.
-          </li>
-          <li>
-            When an opportunity moves to a stage, it takes that stage&apos;s
-            probability unless you set one yourself.
-          </li>
-          <li>The won stage is always 100% and the lost stage 0%.</li>
-          <li>
-            You can&apos;t remove the won or lost stage, or a stage that still
-            has opportunities.
-          </li>
-        </ul>
-      </SettingsDisclosure>
-    </SettingsCard>
+    </section>
   );
 }

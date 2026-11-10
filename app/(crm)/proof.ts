@@ -32,7 +32,7 @@ export async function saveProofAction(id: string | null, input: ProofWrite): Pro
     revalidatePath(SETTINGS_PATHS.knowledge);
     return { entry };
   } catch (error) {
-    return failure(error, "That proof didn't save. Try again.");
+    return failure(error, "Couldn't save. Try again.");
   }
 }
 
@@ -43,6 +43,6 @@ export async function archiveProofAction(id: string): Promise<{ error?: string }
     revalidatePath(SETTINGS_PATHS.knowledge);
     return {};
   } catch (error) {
-    return failure(error, "That proof wasn't removed. Try again.");
+    return failure(error, "Couldn't delete. Try again.");
   }
 }

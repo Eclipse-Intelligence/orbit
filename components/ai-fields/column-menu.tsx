@@ -94,7 +94,7 @@ export function AiColumnHeader({
                 setChecking(true);
                 run(
                   () => checkFieldAgainAction(field.id),
-                  () => onNotice(`Checking ${field.label} for every company. Answers fill in over the next few minutes.`),
+                  () => onNotice(`Checking ${field.label} for every company.`),
                 );
               }}
             >
@@ -102,7 +102,7 @@ export function AiColumnHeader({
             </DropdownMenuItem>
           </>
         )}
-        <DropdownMenuItem onSelect={() => run(() => setAiFieldHiddenAction(field.id, true), () => onNotice(`Hid ${field.label} for you. Bring it back with + at the end of the header.`))}>
+        <DropdownMenuItem onSelect={() => run(() => setAiFieldHiddenAction(field.id, true), () => onNotice(`Hid ${field.label}. Show it again with +.`))}>
           Hide column
         </DropdownMenuItem>
         {canManage && (

@@ -59,7 +59,7 @@ export default function NewWorkspaceDialog({
         >
           <DialogHeader className="pr-12">
             <DialogTitle>New workspace</DialogTitle>
-            <DialogDescription>Its own records, team and brand. It starts blank. Your mail and calendar stay the same.</DialogDescription>
+            <DialogDescription>Starts blank. Your mail and calendar stay the same.</DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-5 px-6 py-5">
             <Field label="Name" htmlFor="workspace-name" error={error ?? undefined}>

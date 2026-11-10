@@ -3,10 +3,10 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
+import Switch from "@/components/_ui/switch";
 import { ClickUpListOptions, listGroups } from "@/components/crm/clickup";
 import { recordSelectClass } from "@/components/crm/record-form";
 import { SettingsCard, SettingsDisclosure } from "@/components/crm/settings-ui";
-import WorkspaceTile from "@/components/workspaces/workspace-tile";
 import {
   disableClickUpWebhookAction,
   enableClickUpWebhookAction,
@@ -37,16 +37,18 @@ export default function ClickUpSettings({
     setDefaultListId(view.defaultListId ?? "");
     setWatched(view.watchedListIds);
   }
-  const [pending, setPending] = useState(false);
+  const [pending, setPending] = useState<"sync" | "other" | null>(null);
   const [outcome, setOutcome] = useState<ClickUpActionState>({});
   const sameTeam = teamId === view.teamId;
   const lists = sameTeam ? view.lists : [];
 
-  async function run(action: () => Promise<ClickUpActionState>) {
-    setPending(true);
+  const httpsSite = view.siteUrl?.startsWith("https://") ?? false;
+
+  async function run(action: () => Promise<ClickUpActionState>, kind: "sync" | "other" = "other") {
+    setPending(kind);
     setOutcome({});
     const result = await action().catch((): ClickUpActionState => ({ error: GENERIC_ERROR }));
-    setPending(false);
+    setPending(null);
     setOutcome(result);
     router.refresh();
   }
@@ -56,7 +58,7 @@ export default function ClickUpSettings({
       <SettingsCard
         id="clickup"
         title="ClickUp"
-        description="To sync tasks with ClickUp, create a personal token in ClickUp under Settings › Apps › API Token, add it as CLICKUP_API_TOKEN in the server environment (in Vercel, Settings › Environment Variables), then redeploy."
+        description="Add CLICKUP_API_TOKEN in Vercel (ClickUp › Settings › Apps › API Token), then redeploy."
       />
     );
   }
@@ -67,25 +69,18 @@ export default function ClickUpSettings({
       title="ClickUp"
       description={
         <span className="flex flex-col gap-1.5">
-          <span className="flex min-w-0 items-center gap-1.5">
-            <WorkspaceTile id={view.workspaceId} name={view.workspaceName} className="size-4 rounded-[5px] text-[9px]" />
-            <span className="min-w-0 wrap-anywhere">{`Lists for ${view.workspaceName}`}</span>
-          </span>
           <span>
             {view.user
               ? `Connected as ${view.user.username ?? view.user.email ?? "ClickUp user"}`
-              : "ClickUp token set"}
+              : "Connected"}
             {" · "}
             {view.lastSyncedAt
-              ? `Last synced ${formatWhen(view.lastSyncedAt)}`
-              : "Not synced yet"}
-            {view.webhookEnabled
-              ? " · Instant sync on"
-              : " · Checked every 10 minutes"}
+              ? `Synced ${formatWhen(view.lastSyncedAt)}`
+              : "Not synced"}
           </span>
           {view.shared.map((item) => (
             <span key={item.workspaceId} className="text-subtle">
-              {`${item.workspaceName} also uses ${item.listNames.join(", ")}. Tasks in a list both workspaces watch sync into both.`}
+              {`${item.workspaceName} also watches ${item.listNames.join(", ")}.`}
             </span>
           ))}
           {(view.error || view.lastError) && (
@@ -98,41 +93,28 @@ export default function ClickUpSettings({
       action={
         view.teamId && (
           <>
-            {canAdmin &&
-              (view.webhookEnabled ? (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  type="button"
-                  disabled={pending}
-                  onClick={() => run(disableClickUpWebhookAction)}
-                >
-                  Turn off instant sync
-                </Button>
-              ) : (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  type="button"
-                  disabled={pending || !view.siteUrl?.startsWith("https://")}
-                  title={
-                    view.siteUrl?.startsWith("https://")
-                      ? undefined
-                      : "Set SITE_URL to Orbit's https address first."
-                  }
-                  onClick={() => run(enableClickUpWebhookAction)}
-                >
-                  Enable instant ClickUp sync
-                </Button>
-              ))}
+            <span
+              className="flex items-center gap-2"
+              title={!view.webhookEnabled && !httpsSite ? "Set SITE_URL to Orbit's https address first." : undefined}
+            >
+              <span className="caption-style text-subtle" aria-hidden>
+                Instant sync
+              </span>
+              <Switch
+                checked={view.webhookEnabled}
+                label="Instant sync"
+                disabled={!canAdmin || pending !== null || (!view.webhookEnabled && !httpsSite)}
+                onChange={(on) => run(on ? enableClickUpWebhookAction : disableClickUpWebhookAction)}
+              />
+            </span>
             <Button
               variant="secondary"
               size="sm"
               type="button"
-              disabled={pending}
-              onClick={() => run(syncClickUpAction)}
+              disabled={pending !== null}
+              onClick={() => run(syncClickUpAction, "sync")}
             >
-              {pending ? "Working…" : "Sync now"}
+              {pending === "sync" ? "Syncing…" : "Sync"}
             </Button>
           </>
         )
@@ -186,10 +168,7 @@ export default function ClickUpSettings({
                   <ClickUpListOptions lists={lists} />
                 </select>
               </label>
-              <SettingsDisclosure
-                title="Watched lists"
-                summary={`${watched.length} ${watched.length === 1 ? "list" : "lists"} watched. Their tasks become Orbit tasks when Orbit can tell which contact or company they are for.`}
-              >
+              <SettingsDisclosure title={`Watched lists (${watched.length})`}>
                 <fieldset className="flex flex-col gap-2">
                   <legend className="sr-only">Watched lists</legend>
                   <div className="flex max-h-[18em] flex-col gap-3 overflow-auto">
@@ -230,7 +209,7 @@ export default function ClickUpSettings({
               size="sm"
               className="self-start"
               type="button"
-              disabled={pending}
+              disabled={pending !== null}
               onClick={() =>
                 run(() =>
                   saveClickUpSettingsAction({
@@ -241,26 +220,20 @@ export default function ClickUpSettings({
                 )
               }
             >
-              {sameTeam ? "Save ClickUp settings" : "Use this workspace"}
+              {sameTeam ? "Save" : "Use this workspace"}
             </Button>
           )}
         </>
       ) : (
         <p className="caption-style text-subtle">
-          Only an owner or admin can change the ClickUp settings.
+          Only owners and admins can change ClickUp settings.
         </p>
       )}
-      <SettingsDisclosure
-        title="Linking tasks made in ClickUp"
-        summary="How Orbit knows who a ClickUp task is for."
-      >
-        <p className="caption-style text-subtle leading-[1.4]">
-          To link tasks you create in ClickUp, add a text custom field named
-          Orbit to the list and put the contact&apos;s email, the company&apos;s
-          domain, or the Orbit link in it. A contact&apos;s email or an Orbit
-          link in the task description works too.
-        </p>
-      </SettingsDisclosure>
+      <p className="caption-style text-subtle leading-[1.4]">
+        Linking ClickUp tasks: add a text custom field named Orbit to the list,
+        holding the contact&apos;s email, company domain or Orbit link. An email
+        or Orbit link in the description also works.
+      </p>
     </SettingsCard>
   );
 }

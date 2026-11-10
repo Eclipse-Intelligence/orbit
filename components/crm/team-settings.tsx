@@ -21,11 +21,6 @@ const ROLE_TONES = { owner: "purple", admin: "blue", member: "neutral" } as cons
 
 type Sent = { link: string; email: string; sent: boolean; sendError?: string };
 
-function nameList(names: string[]) {
-  if (names.length <= 1) return names.join("");
-  return `${names.slice(0, -1).join(", ")} or ${names[names.length - 1]}`;
-}
-
 export default function TeamSettings({
   team,
   workspaceName,
@@ -82,13 +77,7 @@ export default function TeamSettings({
 
   return (
     <>
-      <SettingsCard
-        id="people"
-        title={`People in ${workspaceName}`}
-        description={`They see and work on ${workspaceName}'s companies, contacts, deals, boards and activity${
-          otherWorkspaces.length ? `, and nothing from ${nameList(otherWorkspaces)}` : ""
-        }. Each person connects their own email, calendar and AI account.`}
-      >
+      <SettingsCard id="people" title="People">
         {error && (
           <p role="alert" className="caption-style text-danger">
             {error}
@@ -143,10 +132,8 @@ export default function TeamSettings({
       {canManage && (
         <SettingsCard
           id="invite"
-          title="Invite someone"
-          description={`They get a link to join ${workspaceName} only.${
-            otherWorkspaces.length === 1 ? " Your other workspace stays hidden from them." : otherWorkspaces.length > 1 ? " Your other workspaces stay hidden from them." : ""
-          }`}
+          title="Invite"
+          description={otherWorkspaces.length > 0 ? `They join ${workspaceName} only.` : undefined}
         >
           <form
             className="flex flex-col gap-3"
@@ -180,13 +167,13 @@ export default function TeamSettings({
             </div>
             <label className="caption-style text-subtle flex items-center gap-2">
               <Checkbox checked={send && mailboxConnected} disabled={!mailboxConnected} onCheckedChange={(value) => setSend(value === true)} />
-              {mailboxConnected ? `Email the invite from ${mailboxEmail ?? "my Outlook"}` : "Connect Microsoft in Settings › Email to email invites from Outlook. Until then, copy the link."}
+              {mailboxConnected ? `Email the invite from ${mailboxEmail ?? "my Outlook"}` : "Connect Microsoft in Settings › Email to send invites by email."}
             </label>
           </form>
           {sent && (
             <div role="status" className="border-line-strong bg-secondary flex flex-col gap-2 rounded-lg border p-3">
               <span className="text-[14px] leading-5">
-                {sent.sent ? `Invite sent to ${sent.email}.` : `Invite ready for ${sent.email}. Send them this link:`}
+                {sent.sent ? `Invite sent to ${sent.email}.` : `Send ${sent.email} this link:`}
               </span>
               {sent.sendError && <span className="caption-style text-danger">Couldn&apos;t email it: {sent.sendError}</span>}
               <div className="flex items-center gap-2">
@@ -197,7 +184,7 @@ export default function TeamSettings({
           )}
           {team.invites.length > 0 && (
             <div className="flex flex-col gap-1">
-              <span className="caption-style text-subtle">Waiting to join</span>
+              <span className="caption-style text-subtle">Pending</span>
               <ul className="flex flex-col">
                 {team.invites.map((item) => (
                   <li key={item.id} className="border-border flex flex-wrap items-center gap-3 border-b py-2.5 last:border-b-0">
@@ -210,12 +197,13 @@ export default function TeamSettings({
                     <Button
                       variant="ghost"
                       size="sm"
+                      aria-label={`Invite ${item.email} again`}
                       onClick={() => {
                         setEmail(item.email);
                         setRole(item.role);
                       }}
                     >
-                      New link
+                      Invite again
                     </Button>
                     <Button variant="ghost" size="sm" className="text-danger" onClick={() => void run(() => revokeInviteAction(item.id))}>
                       Cancel
@@ -225,17 +213,14 @@ export default function TeamSettings({
               </ul>
             </div>
           )}
-          <SettingsDisclosure title="What each role can do" summary="Members, admins and the owner.">
+          <SettingsDisclosure title="Roles">
             <ul className="caption-style text-subtle flex list-disc flex-col gap-1.5 pl-4 leading-[1.4]">
+              <li>Member: everything except workspace settings, managing people and changing what others logged.</li>
+              <li>Admin: everything except changing roles or inviting and removing admins. Nobody can remove the owner.</li>
               <li>
-                Members use everything: companies, contacts, deals, boards, tasks, activity, Mail, Capture, Calendar and the assistant. They
-                connect their own Microsoft account, calendars, Granola and AI account.
+                Records and activity are shared. Inboxes and calendars are private. Tasks are seen by the person they&apos;re assigned to, whoever
+                made them, and the owner and admins.
               </li>
-              <li>Members can&apos;t change workspace settings like ClickUp, enrichment and webhooks, or manage people.</li>
-              <li>Admins can do everything except make other admins. Only the owner can change roles.</li>
-              <li>Nobody can remove or demote the owner.</li>
-              <li>Everything logged to a company or contact is visible to everyone. Each person&apos;s inbox and calendar stay private.</li>
-              <li>Tasks are private to the person they&apos;re assigned to. The owner and admins can see everyone&apos;s.</li>
             </ul>
           </SettingsDisclosure>
         </SettingsCard>
@@ -244,8 +229,8 @@ export default function TeamSettings({
         open={removing !== null}
         onOpenChange={(open) => !open && setRemoving(null)}
         title={`Remove ${removing?.name ?? "this member"}?`}
-        description="Their companies, contacts, deals and tasks move to you. If they're in another of your workspaces, their email, calendar and other personal connections move there; otherwise they're disconnected. Everything they logged stays."
-        confirmLabel="Remove from workspace"
+        description="Their companies, contacts, opportunities and tasks move to you. Their email and calendar are disconnected unless they're in another of your workspaces. What they logged stays."
+        confirmLabel="Remove"
         onConfirm={() => {
           const member = removing;
           if (member) void run(() => removeMemberAction(member.id));

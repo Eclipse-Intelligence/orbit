@@ -5,17 +5,14 @@ import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import HoldButton from "@/components/_ui/hold-button";
 import Switch from "@/components/_ui/switch";
-import { RecordTag } from "@/components/beautifui/record-marks";
 import { SettingsCard, SettingsPage } from "@/components/crm/settings-ui";
 import AiFieldDialog from "@/components/ai-fields/field-dialog";
 import { shortDate } from "@/components/ai-fields/ai-cells";
 import { useHeldChecking } from "@/components/ai-fields/column-menu";
-import { checkFieldAgainAction, removeAiFieldAction, setAiFieldPausedAction, showRuleAsColumnAction } from "@/app/(crm)/ai-fields";
+import { checkFieldAgainAction, removeAiFieldAction, setAiFieldPausedAction } from "@/app/(crm)/ai-fields";
 import { AI_FIELD_KIND_LABELS, AI_FIELD_REFRESH_LABELS, money, MONTHLY_LIMIT_USD, type AiField, type AiFieldStats, type CompanyView } from "@/lib/ai-fields/types";
 import { cn } from "@/lib/utils";
 import PlusIcon from "@/public/assets/images/_common/plus.svg";
-
-type Rule = { id: string; label: string; question: string; tagged: number };
 
 function scopeText(field: AiField) {
   if (field.scope === "fit") return "Fit Good or better";
@@ -127,63 +124,11 @@ function FieldRow({
   );
 }
 
-function FitRow() {
-  return (
-    <li className="border-border flex items-start justify-between gap-3 border-t py-3 first:border-t-0 first:pt-0">
-      <span className="flex min-w-0 flex-col gap-0.5">
-        <span className="text-foreground text-[13.5px] leading-5">
-          Fit<span className="text-subtle"> · Score 0 to 4 · Built in</span>
-        </span>
-        <span className="caption-style text-subtle leading-[1.4]">How well each company matches your ideal customer. Set up in Web checks below.</span>
-      </span>
-      <Button variant="ghost" size="sm" href="#web-checks">
-        Open
-      </Button>
-    </li>
-  );
-}
-
-function RuleRow({ rule, shown, canAdmin, onError }: { rule: Rule; shown: boolean; canAdmin: boolean; onError: (message: string | null) => void }) {
-  const router = useRouter();
-  const [busy, setBusy] = useState(false);
-  async function show() {
-    setBusy(true);
-    onError(null);
-    const result = await showRuleAsColumnAction(rule.id);
-    setBusy(false);
-    if ("error" in result) onError(result.error);
-    else router.refresh();
-  }
-  return (
-    <li className="border-border flex items-start justify-between gap-3 border-t py-2.5 first:border-t-0 first:pt-0">
-      <span className="flex min-w-0 flex-col gap-1">
-        <span className="flex items-center gap-2">
-          <RecordTag label={rule.label} />
-          <span className="caption-style text-subtle">{rule.tagged.toLocaleString("en-GB")} tagged</span>
-        </span>
-        <span className="caption-style text-subtle leading-[1.4]">{rule.question}</span>
-      </span>
-      {shown ? (
-        <span className="caption-style text-subtle shrink-0 pt-1">Shown as a column</span>
-      ) : (
-        canAdmin && (
-          <Button variant="secondary" size="sm" disabled={busy} onClick={() => void show()}>
-            {busy ? "Adding…" : "Show as column"}
-            <span className="sr-only"> for {rule.label}</span>
-          </Button>
-        )
-      )}
-    </li>
-  );
-}
-
 export default function AiFieldsSettings({
   fields,
   stats,
   spend,
   views,
-  rules,
-  fit,
   configured,
   canAdmin,
   children,
@@ -192,8 +137,6 @@ export default function AiFieldsSettings({
   stats: AiFieldStats[];
   spend: number;
   views: CompanyView[];
-  rules: Rule[];
-  fit: boolean;
   configured: boolean;
   canAdmin: boolean;
   children?: ReactNode;
@@ -211,20 +154,18 @@ export default function AiFieldsSettings({
     .filter((value): value is string => Boolean(value))
     .sort()[0];
   const refresh = next ? ` Next refresh ${shortDate(next)}.` : "";
-  const description = configured ? `Checked by Parallel. This month: ${money(spend)} so far, limit $${MONTHLY_LIMIT_USD}.${refresh}` : "Add PARALLEL_API_KEY in Vercel to fill AI fields.";
+  const description = configured ? `This month: ${money(spend)} of $${MONTHLY_LIMIT_USD}.${refresh}` : "Add PARALLEL_API_KEY in Vercel";
 
   return (
-    <SettingsPage title="AI fields" description="Questions answered for every company from the web, shown as columns on Companies." action={add}>
+    <SettingsPage title="AI fields" action={add}>
       {error && (
         <p role="alert" className="caption-style text-danger">
           {error}
         </p>
       )}
       <SettingsCard title="Fields" description={description}>
-        {fields.length === 0 && !fit ? (
-          <p className="caption-style text-subtle">
-            {canAdmin ? "No AI fields yet. Add one to ask a question about every company." : "No AI fields yet. Owners and admins can add them."}
-          </p>
+        {fields.length === 0 ? (
+          <p className="caption-style text-subtle">{canAdmin ? "No AI fields" : "No AI fields. Owners and admins can add them."}</p>
         ) : (
           <ul className="flex flex-col">
             {fields.map((field) => (
@@ -238,23 +179,9 @@ export default function AiFieldsSettings({
                 onError={setError}
               />
             ))}
-            {fit && <FitRow />}
           </ul>
         )}
-        {fields.length === 0 && fit && <p className="caption-style text-subtle">{canAdmin ? "Add an AI field to ask your own question about every company." : "Owners and admins can add AI fields."}</p>}
       </SettingsCard>
-      {rules.length > 0 && (
-        <SettingsCard
-          title="Tag rules"
-          description="Your tag rules in Web checks below still tag new companies. Show one as a column to see Yes, No or Unknown for every company, with sources. The rule keeps tagging."
-        >
-          <ul className="flex flex-col">
-            {rules.map((rule) => (
-              <RuleRow key={rule.id} rule={rule} shown={fields.some((field) => field.webCheckId === rule.id)} canAdmin={canAdmin} onError={setError} />
-            ))}
-          </ul>
-        </SettingsCard>
-      )}
       {children}
       {canAdmin && <AiFieldDialog open={dialog.open} field={dialog.field} views={views} onOpenChange={(open) => setDialog((current) => ({ ...current, open }))} />}
     </SettingsPage>

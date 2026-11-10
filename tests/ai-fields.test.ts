@@ -124,14 +124,12 @@ describe("AI fields", () => {
 
   it("works out the cost hint before saving", () => {
     const pick = costHint("pick", 61, "monthly");
-    assert.equal(pick.text, "About 61 web checks to fill it, $0.06, then about $0.06 a month.");
-    assert.match(pick.note, /share one check/);
+    assert.equal(pick.text, "$0.06 to fill (61 checks), then about $0.06 a month.");
     const staff = costHint("number", 214, "monthly");
-    assert.equal(staff.text, "About 214 web checks to fill it, $2.14, then about $2.14 a month.");
-    assert.match(staff.note, /\$0\.01 a company/);
-    assert.equal(costHint("yes_no", 300, "weekly").text, "About 300 web checks to fill it, $0.30, then about $1.30 a month.");
-    assert.equal(costHint("text", 1, "manual").text, "About 1 web check to fill it, $0.01, then only when you ask.");
-    assert.equal(costHint("yes_no", 3, "monthly").text, "About 3 web checks to fill it, under $0.01, then about under $0.01 a month.");
+    assert.equal(staff.text, "$2.14 to fill (214 checks), then about $2.14 a month.");
+    assert.equal(costHint("yes_no", 300, "weekly").text, "$0.30 to fill (300 checks), then about $1.30 a month.");
+    assert.equal(costHint("text", 1, "manual").text, "$0.01 to fill (1 check).");
+    assert.equal(costHint("yes_no", 3, "monthly").text, "Under $0.01 to fill (3 checks), then about under $0.01 a month.");
   });
 
   it("only lets owners and admins manage fields and views", async () => {
@@ -814,10 +812,10 @@ describe("AI fields: edits, costs and failures", () => {
     await markCompanyDue(owner, alpha);
     const capped = await runAiFields(owner, { deadline: SOON(), companyId: alpha, fetchImpl: broken.fetchImpl, env: ENV });
     const capMessage = checkNowMessage(capped);
-    assert.ok("error" in capMessage && /reached \$100/.test(capMessage.error));
+    assert.ok("error" in capMessage && /limit of \$100 reached/.test(capMessage.error));
     await getAdminPool().query("delete from crm.ai_field_spend where workspace_id = $1", [owner.workspaceId]);
     const nothing = await runAiFields(owner, { deadline: SOON(), companyId: alpha, fieldIds: ["3f0e2c1a-0000-4000-8000-000000000000"], fetchImpl: broken.fetchImpl, env: ENV });
-    assert.deepEqual(checkNowMessage(nothing), { ok: true, message: "Nothing to check. Answers set by hand and companies outside a field's companies aren't checked." });
+    assert.deepEqual(checkNowMessage(nothing), { ok: true, message: "Nothing to check" });
     await removeAll();
   });
 

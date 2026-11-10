@@ -18,7 +18,7 @@ export default function ConfirmDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
-  description: string;
+  description?: string;
   confirmLabel: string;
   tone?: "danger" | "neutral";
   onConfirm: () => void;
@@ -26,10 +26,10 @@ export default function ConfirmDialog({
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent {...(description ? {} : { "aria-describedby": undefined })}>
         <DialogHeader className="pr-12">
           <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>{description}</DialogDescription>
+          {description && <DialogDescription>{description}</DialogDescription>}
         </DialogHeader>
         {children}
         <DialogFooter>

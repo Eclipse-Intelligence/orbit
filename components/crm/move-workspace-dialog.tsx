@@ -16,7 +16,7 @@ const MATCHING = "";
 
 const PREVIEW_FAILED = "Couldn't check what moves.";
 
-const MOVE_FAILED = "That didn't move. Try again.";
+const MOVE_FAILED = "Couldn't move. Try again.";
 
 function counted(value: number, one: string, many: string) {
   return value > 0 ? `${value} ${value === 1 ? one : many}` : null;
@@ -39,7 +39,7 @@ function summaryLines(preview: MovePreview, copy: boolean, copyDeals: boolean) {
   const deals = copy ? (copyDeals ? preview.dealsAvailable : 0) : preview.deals;
   const parts = [
     counted(preview.contacts, "contact", "contacts"),
-    counted(deals, "deal", "deals"),
+    counted(deals, "opportunity", "opportunities"),
     counted(preview.activities, "activity", "activities"),
     copy ? null : counted(preview.tasks, "task", "tasks"),
     copy ? null : counted(preview.files, "file", "files"),
@@ -56,7 +56,7 @@ function summaryLines(preview: MovePreview, copy: boolean, copyDeals: boolean) {
     lines.push(`${listed(preview.proposalContacts)} ${preview.proposalContacts.length === 1 ? "goes" : "go"} too, named on a proposal.`);
   }
   if (!copy && preview.dealsLosingContact > 0) {
-    lines.push(preview.dealsLosingContact === 1 ? "1 deal loses its main contact." : `${preview.dealsLosingContact} deals lose their main contact.`);
+    lines.push(preview.dealsLosingContact === 1 ? "1 opportunity loses its main contact." : `${preview.dealsLosingContact} opportunities lose their main contact.`);
   }
   if (!copy && preview.boards.length > 0) lines.push(`Comes off ${listed(preview.boards)}.`);
   if (preview.aiFields.length > 0) lines.push(`Not carried over: AI fields ${listed(preview.aiFields)}.`);
@@ -246,7 +246,7 @@ function MoveBody({
           <Checkbox id={fieldIds.keep} checked={copy || mustCopy} disabled={busy || mustCopy} onCheckedChange={(value) => setCopy(value === true)} />
           Also keep in {currentWorkspace}
         </label>
-        {mustCopy && <p className="caption-style text-subtle -mt-2">Only owners and admins of {currentWorkspace} can move records out, so this copies them.</p>}
+        {mustCopy && <p className="caption-style text-subtle -mt-2">Only owners and admins can move records out. This copies them.</p>}
         {togetherLabel && (
           <label htmlFor={fieldIds.together} className="caption-style text-soft flex cursor-pointer items-start gap-2">
             <Checkbox
@@ -268,13 +268,13 @@ function MoveBody({
         {copy && hasDeals && (
           <label htmlFor={fieldIds.deals} className="caption-style text-soft flex cursor-pointer items-center gap-2">
             <Checkbox id={fieldIds.deals} checked={copyDeals} disabled={busy} onCheckedChange={(value) => setCopyDeals(value === true)} />
-            Copy deals too
+            Copy opportunities too
           </label>
         )}
         {showDeals && (
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="flex flex-col gap-2">
-              <Label htmlFor={fieldIds.pipeline}>Put deals on</Label>
+              <Label htmlFor={fieldIds.pipeline}>Put opportunities on</Label>
               <NativeSelect
                 id={fieldIds.pipeline}
                 value={pipelineId}
@@ -306,7 +306,7 @@ function MoveBody({
           </div>
         )}
         <div role="status" aria-live="polite" className="caption-style text-soft flex min-h-10 flex-col gap-1">
-          {!preview && loading ? <span>Checking what goes with it…</span> : lines.map((line) => <span key={line}>{line}</span>)}
+          {!preview && loading ? <span>Checking…</span> : lines.map((line) => <span key={line}>{line}</span>)}
         </div>
         {proposalBlocked && (
           <p role="alert" className="caption-style text-danger">
@@ -315,7 +315,7 @@ function MoveBody({
         )}
         {blocked && !proposalBlocked && (
           <p role="alert" className="caption-style text-danger">
-            {preview?.boardConflict} would have more than one card on {pipeline?.name}. Put the deals on the pipeline.
+            {preview?.boardConflict} would have more than one card on {pipeline?.name}. Put the opportunities on the pipeline.
           </p>
         )}
         {previewError && !error && (

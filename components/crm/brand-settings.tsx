@@ -9,17 +9,15 @@ import { Textarea } from "@/components/_ui/textarea";
 import { SettingsCard } from "@/components/crm/settings-ui";
 import { draftBrandAction, saveBrandProfileAction } from "@/app/(crm)/settings/brand/actions";
 import { BRAND_LIMITS, FORMER_NAME_LIMITS, type BrandProfile, type BrandProfileInput } from "@/lib/crm/brand-rules";
-import { SETTINGS_PATHS } from "@/lib/settings-nav";
 import { reloadIfStaleDeploy } from "@/lib/stale-deploy";
 import { cn } from "@/lib/utils";
-import ChevronRightIcon from "@/public/assets/images/_common/chevron-right.svg";
 
 type FormValues = BrandProfileInput & { formerNames: string };
 type Key = keyof FormValues;
 type DraftKey = Exclude<keyof BrandProfileInput, "website">;
 type Drafted = Partial<Record<DraftKey, string>>;
 
-const LABELS: Record<DraftKey, string> = { whatYouSell: "What you sell", whoItsFor: "Who it's for", tone: "How you write" };
+const LABELS: Record<DraftKey, string> = { whatYouSell: "What you sell", whoItsFor: "Ideal customer", tone: "Tone" };
 
 function profileOf(brand: BrandProfile): FormValues {
   return { website: brand.website, whatYouSell: brand.whatYouSell, whoItsFor: brand.whoItsFor, tone: brand.tone, formerNames: brand.formerNames.join(", ") };
@@ -29,29 +27,8 @@ function same(left: FormValues, right: FormValues) {
   return (Object.keys(left) as Key[]).every((key) => left[key].trim() === right[key].trim());
 }
 
-function shortDate(iso: string) {
-  return new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", timeZone: "Europe/London" }).format(new Date(iso));
-}
-
-function count(value: number, one: string, many: string) {
-  return `${value} ${value === 1 ? one : many}`;
-}
-
-export default function BrandSettings({
-  brand,
-  canEdit,
-  proofCount,
-  knowledgeCount,
-  multi,
-}: {
-  brand: BrandProfile;
-  canEdit: boolean;
-  proofCount: number;
-  knowledgeCount: number;
-  multi: boolean;
-}) {
+export default function BrandSettings({ brand, canEdit, learned }: { brand: BrandProfile; canEdit: boolean; learned: string | null }) {
   const router = useRouter();
-  const name = brand.workspaceName;
   const [saved, setSaved] = useState(() => profileOf(brand));
   const [values, setValues] = useState(() => profileOf(brand));
   const [errors, setErrors] = useState<Partial<Record<Key, string>>>({});
@@ -88,16 +65,16 @@ export default function BrandSettings({
     try {
       const result = await saveBrandProfileAction(values);
       if (result.error || !result.saved) {
-        fail(result.error ?? "Could not save the brand profile.", result.field);
+        fail(result.error ?? "Couldn't save. Try again.", result.field);
         return;
       }
       const next = profileOf(result.saved);
       setSaved(next);
       setValues(next);
-      setStatus("Saved. The assistant uses this from your next message.");
+      setStatus("Saved");
       router.refresh();
     } catch (problem) {
-      if (!reloadIfStaleDeploy(problem)) setError("That didn't save. Try again.");
+      if (!reloadIfStaleDeploy(problem)) setError("Couldn't save. Try again.");
     } finally {
       setPending(null);
     }
@@ -107,12 +84,12 @@ export default function BrandSettings({
     setPending("draft");
     setError(null);
     setReplace(null);
-    setStatus("Reading the website. This takes up to a minute.");
+    setStatus("Reading the website (up to a minute)");
     try {
       const result = await draftBrandAction({ website: values.website });
       if (result.error || !result.draft) {
         setStatus(null);
-        fail(result.error ?? "Could not draft from the website.", result.field);
+        fail(result.error ?? "Couldn't draft. Try again.", result.field);
         return;
       }
       const { draft: drafted, notes } = result.draft;
@@ -135,15 +112,13 @@ export default function BrandSettings({
       const extra = notes.length ? ` ${notes.join(" ")}` : "";
       if (differing.length) {
         setReplace(conflicts);
-        setStatus(
-          `Drafted. Empty fields are filled in. The draft is different for ${differing.map((key) => LABELS[key]).join(" and ")}, which you've already written.${extra}`,
-        );
+        setStatus(`Drafted. ${differing.map((key) => LABELS[key]).join(" and ")} differ from what you wrote.${extra}`);
       } else {
-        setStatus(`Drafted. Check it, change anything that isn't right, then save.${extra}`);
+        setStatus(`Drafted. Check it, then save.${extra}`);
       }
     } catch (problem) {
       setStatus(null);
-      if (!reloadIfStaleDeploy(problem)) setError("The draft didn't come back. Try again.");
+      if (!reloadIfStaleDeploy(problem)) setError("Couldn't draft. Try again.");
     } finally {
       setPending(null);
     }
@@ -153,43 +128,12 @@ export default function BrandSettings({
     if (!replace) return;
     setValues((current) => ({ ...current, ...replace }));
     setReplace(null);
-    setStatus("Replaced with the draft. Check it, then save.");
+    setStatus(null);
   }
-
-  const rows = [
-    {
-      title: "Proof list",
-      caption: proofCount ? `${count(proofCount, "client result", "client results")} the assistant may quote` : "No client results yet",
-      action: "Open",
-      href: `${SETTINGS_PATHS.knowledge}#proof`,
-    },
-    {
-      title: "Cold email playbook",
-      caption: brand.playbook.trim()
-        ? `How first emails to prospects are researched and written.${brand.playbookUpdatedAt ? ` Edited ${shortDate(brand.playbookUpdatedAt)}.` : ""}`
-        : "Not written yet. The assistant writes first emails from the brand profile.",
-      action: canEdit ? "Edit" : "Open",
-      href: `${SETTINGS_PATHS.brand}/playbook`,
-    },
-    {
-      title: "Knowledge",
-      caption: knowledgeCount ? count(knowledgeCount, "document or link", "documents and links") : "No documents or links yet",
-      action: "Open",
-      href: SETTINGS_PATHS.knowledge,
-    },
-  ];
 
   return (
     <>
-      <SettingsCard
-        id="brand-profile"
-        title="Brand profile"
-        description={
-          multi
-            ? `Used by the assistant in ${name} only. How you write, signatures and AI accounts are yours and stay the same in every workspace.`
-            : "Used by the assistant whenever it writes, researches or drafts for the business."
-        }
-      >
+      <SettingsCard id="brand-profile" title="Brand profile">
         <form className="flex flex-col gap-4" noValidate onSubmit={save}>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
             <Field label="Website" htmlFor="brand-website" error={errors.website} className="flex-1">
@@ -221,12 +165,7 @@ export default function BrandSettings({
               </Button>
             )}
           </div>
-          <Field
-            label="What you sell"
-            htmlFor="brand-sell"
-            error={errors.whatYouSell}
-            hint="Your offer, in a sentence or two. The assistant never pitches it back to a prospect who sells the same."
-          >
+          <Field label="What you sell" htmlFor="brand-sell" error={errors.whatYouSell}>
             <Textarea
               id="brand-sell"
               rows={3}
@@ -234,16 +173,23 @@ export default function BrandSettings({
               value={values.whatYouSell}
               readOnly={!canEdit || pending === "draft"}
               aria-invalid={errors.whatYouSell ? true : undefined}
-              aria-describedby={errors.whatYouSell ? "brand-sell-error" : "brand-sell-hint"}
+              aria-describedby={errors.whatYouSell ? "brand-sell-error" : undefined}
               onChange={(event) => update("whatYouSell", event.target.value)}
               className="field-sizing-content max-h-[24em]"
             />
           </Field>
           <Field
-            label="Who it's for"
+            label="Ideal customer"
             htmlFor="brand-who"
             error={errors.whoItsFor}
-            hint="Your ideal customer: size, sector, trigger and who signs. Web checks score companies against this too."
+            hint="Size, sector, trigger and who signs. Web checks score companies against this."
+            trailing={
+              canEdit && learned && learned !== values.whoItsFor.trim() ? (
+                <Button variant="ghost" size="sm" type="button" disabled={busy} onClick={() => update("whoItsFor", learned)}>
+                  Use what Orbit learned
+                </Button>
+              ) : undefined
+            }
           >
             <Textarea
               id="brand-who"
@@ -257,7 +203,7 @@ export default function BrandSettings({
               className="field-sizing-content max-h-[24em]"
             />
           </Field>
-          <Field label="How you write" htmlFor="brand-tone" error={errors.tone} hint={multi ? "Tone for email in this workspace. Adds to How you write in General." : "Tone for the business's email. Adds to How you write in General."}>
+          <Field label="Tone" htmlFor="brand-tone" error={errors.tone} hint="Adds to How you write in Settings › General.">
             <Textarea
               id="brand-tone"
               rows={2}
@@ -274,7 +220,7 @@ export default function BrandSettings({
             label="Former names"
             htmlFor="brand-former"
             error={errors.formerNames}
-            hint="Names the business used before, separated by commas. Cold email checks treat them as its own name."
+            hint="Separated by commas."
           >
             <Input
               id="brand-former"
@@ -295,12 +241,12 @@ export default function BrandSettings({
           {canEdit ? (
             <div className="flex flex-wrap items-center gap-3">
               <Button variant="primary" size="sm" type="submit" disabled={busy || !dirty}>
-                {pending === "save" ? "Saving…" : "Save brand profile"}
+                {pending === "save" ? "Saving…" : "Save"}
               </Button>
               {replace && !busy && (
                 <>
                   <Button variant="secondary" size="sm" type="button" onClick={useDraft}>
-                    Use the draft
+                    Use draft
                   </Button>
                   <Button variant="ghost" size="sm" type="button" onClick={() => setReplace(null)}>
                     Keep mine
@@ -309,7 +255,7 @@ export default function BrandSettings({
               )}
               {dirty && !busy && !replace && (
                 <Button variant="ghost" size="sm" type="button" onClick={() => setValues(saved)}>
-                  Undo changes
+                  Undo
                 </Button>
               )}
               <p role="status" className="caption-style text-subtle">
@@ -320,23 +266,6 @@ export default function BrandSettings({
             <p className="caption-style text-subtle">Only owners and admins can change the brand.</p>
           )}
         </form>
-      </SettingsCard>
-
-      <SettingsCard id="brand-material" title="Proof, playbook and Knowledge" description={multi ? `${name}'s own. Nothing here is shared with your other workspaces.` : undefined}>
-        <ul className="-my-1 flex flex-col">
-          {rows.map((row) => (
-            <li key={row.title} className="border-border flex items-center gap-3 border-b py-3 last:border-b-0">
-              <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <span className="truncate text-[14px] leading-5">{row.title}</span>
-                <span className="caption-style text-subtle">{row.caption}</span>
-              </span>
-              <Button variant="secondary" size="sm" href={row.href} aria-label={`${row.action} ${row.title}`}>
-                {row.action}
-                <ChevronRightIcon aria-hidden className="text-subtle size-3" />
-              </Button>
-            </li>
-          ))}
-        </ul>
       </SettingsCard>
     </>
   );

@@ -38,7 +38,7 @@ export async function listEmailTemplatesAction(): Promise<
   try {
     return { templates: await listEmailTemplates(user) };
   } catch (error) {
-    return failure(error, "Could not load your templates.");
+    return failure(error, "Couldn't load your templates. Try again.");
   }
 }
 
@@ -51,7 +51,7 @@ export async function createEmailTemplateAction(
     refresh();
     return { template };
   } catch (error) {
-    return failure(error, "Could not save the template.");
+    return failure(error, "Couldn't save the template. Try again.");
   }
 }
 
@@ -65,7 +65,7 @@ export async function updateEmailTemplateAction(
     refresh();
     return { template };
   } catch (error) {
-    return failure(error, "Could not save the template.");
+    return failure(error, "Couldn't save the template. Try again.");
   }
 }
 
@@ -78,7 +78,7 @@ export async function duplicateEmailTemplateAction(
     refresh();
     return { template };
   } catch (error) {
-    return failure(error, "Could not duplicate the template.");
+    return failure(error, "Couldn't duplicate the template. Try again.");
   }
 }
 
@@ -91,6 +91,6 @@ export async function deleteEmailTemplateAction(
     refresh();
     return result;
   } catch (error) {
-    return failure(error, "Could not delete the template.");
+    return failure(error, "Couldn't delete the template. Try again.");
   }
 }
