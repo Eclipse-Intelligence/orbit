@@ -61,7 +61,7 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
         const result = await syncMail(home, { budgetMs: 10_000, backfill: false });
         if (result.errors.length) console.error("Mail sync failed", result.errors.join("; "));
         await processDueMail(home);
-        await classifyCapture(home, { budgetMs: 20_000 }).catch((error) =>
+        await classifyCapture(home, { budgetMs: 20_000, gapSeconds: 60 }).catch((error) =>
           console.error("Sorting Capture email failed", error instanceof Error ? error.message : error),
         );
       } catch (error) {

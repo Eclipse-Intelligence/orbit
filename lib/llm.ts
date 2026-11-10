@@ -3,6 +3,7 @@ import { logUpstream, upstreamMessage } from "@/lib/upstream";
 import type { z } from "zod";
 
 const DEFAULT_BASE_URL = "https://api.llmapi.ai/v1";
+const nativeFetch = globalThis.fetch;
 const DEFAULT_MODEL = "claude-haiku-5-5";
 const TIMEOUT_MS = 25_000;
 const MAX_ATTEMPTS = 2;
@@ -48,6 +49,7 @@ type LlmJsonRequest<T> = {
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
   deadline?: number;
+  attempts?: number;
   model?: string;
   webSearch?: boolean;
   viewer?: Viewer;
@@ -194,14 +196,17 @@ async function attempt<T>(
 export async function completeJson<T>(request: LlmJsonRequest<T>): Promise<LlmJsonResult<T>> {
   const apiKey = process.env.LLM_API_KEY?.trim();
   if (!apiKey) throw missingKey(request.viewer);
+  if (process.env.NODE_TEST_CONTEXT && (request.fetchImpl ?? fetch) === nativeFetch) {
+    throw new LlmError("The AI isn't called for real in tests. Pass fetchImpl.");
+  }
   const model = request.model?.trim() || llmModel();
   let last: unknown;
-  for (let index = 0; index < MAX_ATTEMPTS; index += 1) {
+  for (let index = 0; index < Math.max(1, Math.min(request.attempts ?? MAX_ATTEMPTS, MAX_ATTEMPTS)); index += 1) {
     const limit = request.timeoutMs ?? TIMEOUT_MS;
     const remaining = request.deadline
       ? request.deadline - Date.now() - DEADLINE_MARGIN_MS
       : limit;
-    if (remaining < MIN_ATTEMPT_MS) {
+    if (remaining < (request.deadline ? MIN_ATTEMPT_MS : 1_000)) {
       if (last) throw last;
       throw new LlmError("Ran out of time. Try again.", true);
     }

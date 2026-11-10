@@ -60,15 +60,12 @@ export const LISTED_SENDERS: Record<ListedCategory, string[]> = {
     "paddle.com",
     "invoice2go.com",
     "bt.com",
-    "btinternet.com",
     "ee.co.uk",
     "vodafone.co.uk",
     "vodafone.com",
     "o2.co.uk",
     "three.co.uk",
-    "virginmedia.com",
     "virginmedia.co.uk",
-    "sky.com",
     "talktalk.co.uk",
     "plus.net",
     "britishgas.co.uk",
@@ -135,6 +132,7 @@ export const LISTED_SENDERS: Record<ListedCategory, string[]> = {
     "clearscore.com",
     "rightmove.co.uk",
     "zoopla.co.uk",
+    "police.uk",
   ],
   collections: [
     "lowell.co.uk",
@@ -162,12 +160,19 @@ export const LISTED_SENDERS: Record<ListedCategory, string[]> = {
   ],
 };
 
-const LISTED_SUFFIXES: [string, ListedCategory][] = [
-  [".nhs.uk", "personal"],
-  [".nhs.net", "personal"],
-  [".gov.uk", "personal"],
-  [".police.uk", "personal"],
-];
+export const SENDING_DOMAINS = new Map<string, ListedCategory>([
+  ["facebookmail.com", "service"],
+  ["amazonaws.com", "service"],
+  ["microsoftonline.com", "service"],
+  ["docusign.net", "service"],
+]);
+
+export const ROLE_SENDER =
+  "^(no-?reply|do-?not-?reply|donotreply|notifications?|notify|newsletters?|news|updates?|marketing|mailer|mailer-daemon|digest|alerts?|bounces?|automated|robot|billing|receipts?|invoices?|info|hello|team|accounts?|account-?security|security|support|help|helpdesk|service|services|customer-?service|customerservice|customer-?care|care|statements?|orders?|order-?update|shipping|delivery|deliveries|payments?|payment-?notification|verify|verification|confirm|confirmation|reminders?|appointments?|bookings?|reservations?|enquiries|enquiry|contact|admin|system|postmaster|feedback|messages?|mail|email|notices?|online|digital|banking|secure)([._+-][^@]*)?@";
+
+const SENDING_LABEL = /^(e|em|email|emails|mail|mailer|mailing|mg|news|newsletter|marketing|notifications?|notify|alerts?|updates?|bounce|post|accounts?|account|info|service|services|secure|comms|communications|messages?|no-?reply|txn|transactional|engage|reply|go|links?|t|m)$/;
+
+export type ListedSender = { category: ListedCategory; hide: boolean };
 
 const LISTED = new Map<string, ListedCategory>(
   (Object.entries(LISTED_SENDERS) as [ListedCategory, string[]][]).flatMap(([category, domains]) => domains.map((domain) => [domain, category] as const)),
@@ -178,15 +183,31 @@ export function domainOf(email: string) {
   return at >= 0 ? email.slice(at + 1).toLowerCase() : "";
 }
 
-export function listedCategory(email: string): ListedCategory | null {
-  const domain = domainOf(email);
-  if (!domain || isFreeMailDomain(domain)) return null;
+function listedParent(domain: string): { parent: string; category: ListedCategory } | null {
   const labels = domain.split(".");
   for (let index = 0; index < labels.length - 1; index += 1) {
-    const found = LISTED.get(labels.slice(index).join("."));
-    if (found) return found;
+    const parent = labels.slice(index).join(".");
+    const category = SENDING_DOMAINS.get(parent) ?? LISTED.get(parent);
+    if (category) return { parent, category };
   }
-  return LISTED_SUFFIXES.find(([suffix]) => domain.endsWith(suffix))?.[1] ?? null;
+  return null;
+}
+
+export function listedSender(email: string): ListedSender | null {
+  const address = email.toLowerCase();
+  const domain = domainOf(address);
+  if (!domain || isFreeMailDomain(domain)) return null;
+  const found = listedParent(domain);
+  if (!found) return null;
+  if (found.category === "collections" || SENDING_DOMAINS.has(found.parent)) return { category: found.category, hide: true };
+  const sub = domain === found.parent ? "" : domain.slice(0, domain.length - found.parent.length - 1);
+  const sendingSub = sub !== "" && SENDING_LABEL.test(sub.split(".")[0]);
+  const role = new RegExp(ROLE_SENDER, "i").test(address);
+  return { category: found.category, hide: role || sendingSub };
+}
+
+export function listedCategory(email: string): ListedCategory | null {
+  return listedSender(email)?.category ?? null;
 }
 
 type Header = { name: string; value: string };

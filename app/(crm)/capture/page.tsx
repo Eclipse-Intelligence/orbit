@@ -11,7 +11,7 @@ import { getGranolaStatus } from "@/lib/crm/granola";
 import { getMailbox, shouldSyncMailbox, syncMailbox } from "@/lib/crm/inbox";
 import { getTeamsTranscriptStatus } from "@/lib/crm/teams-transcripts";
 import type { CaptureSection } from "@/lib/crm/capture-format";
-import { classifyCapture, listUnknownMail } from "@/lib/mail/capture-filter";
+import { classifyCapture, listSenderRules, listUnknownMail } from "@/lib/mail/capture-filter";
 import { microsoftConfigured } from "@/lib/microsoft/oauth";
 
 export const dynamic = "force-dynamic";
@@ -54,18 +54,20 @@ export default async function CapturePage() {
       failed.add("followUps");
       return logged("Reading call follow-ups failed", [])(error);
     }),
-    listUnknownMail(user, openedAt.getTime(), { actors: context.actors, emails: context.unknown, skipped: context.skipped }).catch((error) => {
+    listUnknownMail(user, openedAt.getTime(), { actors: context.actors, emails: context.unknown, skipped: context.skipped, pending: context.held }).catch((error) => {
       failed.add("toFile");
       return logged("Reading email from new people failed", {
         emails: [],
         total: 0,
         notShown: [],
         notShownTotal: 0,
+        sorting: 0,
         workspaces: [{ id: user.workspaceId, name: user.workspaceName }],
       })(error);
     }),
     listWaitingOnOthers(user, openedAt).catch(logged("Reading approvals waiting on others failed", [])),
   ]);
+  const rules = await listSenderRules(user).catch(logged("Reading Capture rules failed", []));
   after(async () => {
     try {
       await markCaptureSeen(user, openedAt);
@@ -108,6 +110,8 @@ export default async function CapturePage() {
       }}
       toFileTotal={status?.sections.toFile ?? 0}
       notShownTotal={unknown.notShownTotal}
+      sorting={unknown.sorting}
+      rules={rules}
       failed={[...failed]}
       workspaces={unknown.workspaces}
       workspaceId={user.workspaceId}

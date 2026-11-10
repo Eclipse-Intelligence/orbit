@@ -33,7 +33,7 @@ export type CaptureContext = {
   actors: UserActor[];
   unknown: UnknownEmail[];
   skipped: SkippedEmail[];
-  held: string[];
+  held: UnknownEmail[];
   waiting: Waiting;
   failed: CaptureSection[];
 };
@@ -178,7 +178,7 @@ export function captureContext(actor: UserActor, now = Date.now(), options: { in
 }
 
 export function waitingHere(context: CaptureContext, workspaceId: string) {
-  return waitingIn(context.waiting, workspaceId, [...context.unknown.map((item) => item.key), ...context.skipped.map((item) => item.key), ...context.held]);
+  return waitingIn(context.waiting, workspaceId, [...context.unknown.map((item) => item.key), ...context.skipped.map((item) => item.key), ...context.held.map((item) => item.key)]);
 }
 
 export async function captureStatuses(actor: UserActor, now = Date.now()) {

@@ -385,7 +385,7 @@ export async function ignoreUnknownMail(actor: UserActor, threadKey: string) {
 async function captureSender(db: Db, actor: UserActor, sourceId: string, key: string) {
   const info = await threadInfo(db, actor, sourceId, key);
   if (!info.counterpart) throw new CrmError("not_found", "There's nobody on this email.", 404);
-  return { email: info.counterpart.email, messageId: info.latestId };
+  return { email: info.counterpart.email };
 }
 
 export async function neverAskUnknownMail(actor: UserActor, threadKey: string) {
@@ -407,7 +407,7 @@ export async function showUnknownMail(actor: UserActor, threadKey: string) {
     await storeThreadDecision(
       db,
       actor,
-      { key: threadKey, messageId: sender.messageId, email: sender.email, name: null, subject: null, snippet: null, address: "", workspaceId: actor.workspaceId },
+      { key: threadKey, email: sender.email, workspaceId: actor.workspaceId },
       { category: "business", engine: "shown", confidence: null, reason: null },
     );
     return { key: threadKey, sender: sender.email };

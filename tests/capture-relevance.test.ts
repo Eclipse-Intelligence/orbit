@@ -10,11 +10,15 @@ import { scopesForRole } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
 import { createWorkspace } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool } from "@/lib/db/pool";
+import { askJev } from "@/lib/jev";
 import { learnNow } from "@/lib/learning/nightly";
-import { classifyCapture, listUnknownMail } from "@/lib/mail/capture-filter";
+import { completeJson } from "@/lib/llm";
+import { classifyCapture, listSenderRules, listUnknownMail } from "@/lib/mail/capture-filter";
 import { createAndFileUnknown } from "@/lib/mail/filing";
+import { verdictFor } from "@/lib/mail/relevance";
 import { setAddressHome } from "@/lib/mail/routing";
-import { bulkHeaderCategory, isMeetingNoise, listedCategory } from "@/lib/mail/senders";
+import { bulkHeaderCategory, isMeetingNoise, listedSender } from "@/lib/mail/senders";
+import { z } from "zod";
 import { createUser, queryAsUser, resetDatabase } from "./helpers";
 
 delete process.env.TYPESAFE_API_KEY;
@@ -25,9 +29,10 @@ type State = {
   business: { name: string; whatItSells: string; idealCustomer: string; formerNames?: string[] };
   person: { name: string; role: string; aboutYou?: string };
   history: { mailWithSender: string; mailWithDomain: string; userHasWrittenToSender: boolean; userHasWrittenToDomain: boolean; meetings: number };
-  email: { fromName: string | null; fromAddress: string; receivedBy: string; subject: string | null; snippet: string | null; signature?: string };
+  email: { fromName: string | null; fromAddress: string; receivedBy: string; subject: string | null; snippet: string | null; signature?: string; senderDomainIs?: string };
 };
-type Answer = { category: string; confidence?: number; reason?: string } | "fail";
+type Answer = { category: string; confidence?: number | null; reason?: string } | "fail" | "garbage";
+type JevBody = { state: State; questions: Record<string, { type: string; criteria: unknown }> };
 
 const WEB = { operation: "capture_relevance_test", source: "web" };
 
@@ -35,15 +40,19 @@ function minutesAgo(minutes: number) {
   return new Date(Date.now() - minutes * 60_000).toISOString();
 }
 
-function gateway(options: { haiku?: (state: State) => Answer; jev?: (body: { state: State; questions: Record<string, { type: string; criteria: unknown }> }) => unknown }) {
+function gateway(options: { haiku?: (state: State) => Answer; jev?: (body: JevBody) => unknown; jevWaits?: boolean }) {
   const haiku: { model: string; system: string; state: State }[] = [];
-  const jev: { state: State; questions: Record<string, { type: string; criteria: unknown }> }[] = [];
+  const jev: JevBody[] = [];
   const learning: string[] = [];
+  const business: string[] = [];
   const fetchImpl: typeof fetch = async (input, init) => {
     const url = String(input);
     if (url.startsWith("https://api.typesafe.ai/")) {
       const body = JSON.parse(String(init?.body));
       jev.push(body);
+      if (options.jevWaits) {
+        await new Promise((_, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("timed out", "TimeoutError"))));
+      }
       const answer = options.jev?.(body);
       if (answer === "fail" || answer === undefined) return new Response("down", { status: 503 });
       return Response.json({ answers: answer });
@@ -55,10 +64,15 @@ function gateway(options: { haiku?: (state: State) => Answer; jev?: (body: { sta
         learning.push(user);
         return Response.json({ model: "test", choices: [{ message: { content: JSON.stringify({ add: [], update: [], archive: [] }) }, finish_reason: "stop" }] });
       }
+      if (system.includes("shared business memory")) {
+        business.push(user);
+        return Response.json({ model: "test", choices: [{ message: { content: JSON.stringify({ add: [], update: [], archive: [] }) }, finish_reason: "stop" }] });
+      }
       const state = JSON.parse(user) as State;
       haiku.push({ model: body.model, system, state });
       const answer = options.haiku?.(state) ?? "fail";
       if (answer === "fail") return new Response("broken", { status: 400 });
+      if (answer === "garbage") return Response.json({ model: body.model, choices: [{ message: { content: "not json at all" }, finish_reason: "stop" }] });
       return Response.json({
         model: body.model,
         choices: [{ message: { content: JSON.stringify({ confidence: 0.9, reason: "Test reason.", ...answer }) }, finish_reason: "stop" }],
@@ -66,7 +80,7 @@ function gateway(options: { haiku?: (state: State) => Answer; jev?: (body: { sta
     }
     return new Response("not here", { status: 404 });
   };
-  return { fetchImpl, haiku, jev, learning };
+  return { fetchImpl, haiku, jev, learning, business };
 }
 
 const BY_SUBJECT: Record<string, string> = {
@@ -77,6 +91,7 @@ const BY_SUBJECT: Record<string, string> = {
   "Final demand": "collections",
   "You won": "spam",
   "Spring sale": "newsletter",
+  Appointment: "personal",
 };
 
 function bySubject(state: State): Answer {
@@ -111,14 +126,15 @@ describe("Capture relevance", () => {
   async function addMessage(
     box: Box,
     values: { id: string; thread?: string; from: string; name?: string; to: string[]; subject: string; body?: string; at?: string; sent?: boolean; focused?: boolean },
+    owner: UserActor = eclipse,
   ) {
     const result = await getAdminPool().query<{ id: string }>(
       `insert into crm.mail_messages (workspace_id, user_id, source_id, folder_id, provider_message_id, internet_message_id, thread_key, subject, snippet, body_text,
          from_email, from_name, to_recipients, cc_recipients, sent_at, received_at, focused)
        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11, $12::jsonb, '[]'::jsonb, $13, $13, $14) returning id`,
       [
-        eclipse.workspaceId,
-        eclipse.userId,
+        owner.workspaceId,
+        owner.userId,
         box.sourceId,
         values.sent ? box.sent : box.inbox,
         values.id,
@@ -129,15 +145,15 @@ describe("Capture relevance", () => {
         values.from,
         values.name ?? null,
         JSON.stringify(values.to.map((address) => ({ name: "", address }))),
-        values.at ?? minutesAgo(30),
+        values.at ?? minutesAgo(2),
         values.focused ?? null,
       ],
     );
     return { id: result.rows[0].id, key: `${box.sourceId}|${values.thread ?? values.id}` };
   }
 
-  async function classify(fetchImpl: typeof fetch) {
-    return classifyCapture(eclipse, { deadline: Date.now() + 60_000, fetchImpl });
+  async function classify(fetchImpl: typeof fetch, extraOptions: Partial<Parameters<typeof classifyCapture>[1]> = {}) {
+    return classifyCapture(eclipse, { deadline: Date.now() + 60_000, fetchImpl, readHeaders: async () => [], ...extraOptions });
   }
 
   async function capture(actor: UserActor) {
@@ -159,6 +175,15 @@ describe("Capture relevance", () => {
       [sourceId, threadKey],
     );
     return result.rows[0] ?? null;
+  }
+
+  async function settleAll() {
+    process.env.LLM_API_KEY = "test-key";
+    const fake = gateway({ haiku: () => ({ category: "business" }) });
+    for (let round = 0; round < 6; round += 1) {
+      const result = await classify(fake.fetchImpl, { limit: 100 });
+      if (result.decided === 0) break;
+    }
   }
 
   before(async () => {
@@ -199,14 +224,24 @@ describe("Capture relevance", () => {
     await getAdminPool().end();
   });
 
-  it("knows service, billing, health and collections senders, bulk headers and meeting noise without a model", () => {
-    assert.equal(listedCategory("alerts@accounts.google.com"), "service");
-    assert.equal(listedCategory("sarah@stripe.com"), "supplier");
-    assert.equal(listedCategory("clinic@gp.nhs.uk"), "personal");
-    assert.equal(listedCategory("notices@hmrc.gov.uk"), "personal");
-    assert.equal(listedCategory("agent@lowell.co.uk"), "collections");
-    assert.equal(listedCategory("friend@gmail.com"), null);
-    assert.equal(listedCategory("nina@notgoogle.com"), null);
+  it("hides only role and sending addresses at listed domains, the whole collections list, and nothing that looks alike", () => {
+    assert.deepEqual(listedSender("alerts@accounts.google.com"), { category: "service", hide: true });
+    assert.deepEqual(listedSender("partners@google.com"), { category: "service", hide: false });
+    assert.deepEqual(listedSender("priya.shah@google.com"), { category: "service", hide: false });
+    assert.deepEqual(listedSender("accounts@stripe.com"), { category: "supplier", hide: true });
+    assert.deepEqual(listedSender("sarah@stripe.com"), { category: "supplier", hide: false });
+    assert.deepEqual(listedSender("notices@hmrc.gov.uk"), { category: "personal", hide: true });
+    assert.deepEqual(listedSender("jane.doe@hmrc.gov.uk"), { category: "personal", hide: false });
+    assert.deepEqual(listedSender("clinic@gp.nhs.uk"), { category: "personal", hide: false });
+    assert.deepEqual(listedSender("statements@email.barclays.co.uk"), { category: "personal", hide: true });
+    assert.deepEqual(listedSender("tom.reed@barclays.co.uk"), { category: "personal", hide: false });
+    assert.deepEqual(listedSender("agent@lowell.co.uk"), { category: "collections", hide: true });
+    assert.deepEqual(listedSender("kate@recoveries.lowell.co.uk"), { category: "collections", hide: true });
+    assert.deepEqual(listedSender("anything@facebookmail.com"), { category: "service", hide: true });
+    assert.equal(listedSender("x@google.com.evil.test"), null);
+    assert.equal(listedSender("nina@notgoogle.com"), null);
+    assert.equal(listedSender("friend@gmail.com"), null);
+    assert.equal(listedSender("me@btinternet.com"), null);
     assert.equal(bulkHeaderCategory([{ name: "Precedence", value: "bulk" }]), "newsletter");
     assert.equal(bulkHeaderCategory([{ name: "List-Id", value: "<news.brand.test>" }]), "newsletter");
     assert.equal(bulkHeaderCategory([{ name: "Auto-Submitted", value: "auto-generated" }]), "service");
@@ -217,31 +252,72 @@ describe("Capture relevance", () => {
     for (const person of ["jane@acme.com", "cal@acme.com", "pat@gmail.com"]) assert.equal(isMeetingNoise(person), false, person);
   });
 
-  it("drops listed senders and Outlook Other mail before any AI check, unless Mark has written to them", async () => {
+  it("shows only confident decisions: 0.8 and over hides, below or none shows", () => {
+    assert.equal(verdictFor({ category: "newsletter", confidence: 0.79, reason: null }, "haiku").state, "shown");
+    assert.equal(verdictFor({ category: "newsletter", confidence: 0.8, reason: null }, "haiku").state, "skipped");
+    assert.equal(verdictFor({ category: "newsletter", confidence: null, reason: null }, "jev").state, "shown");
+    assert.equal(verdictFor({ category: "newsletter", confidence: null, reason: null }, "cached").state, "shown");
+    assert.equal(verdictFor({ category: "newsletter", confidence: null, reason: null }, "headers").state, "skipped");
+    assert.equal(verdictFor({ category: "muted", confidence: null, reason: null }, "rule").state, "skipped");
+  });
+
+  it("refuses real AI calls under the test runner", async () => {
     process.env.LLM_API_KEY = "test-key";
-    const fake = gateway({ haiku: () => ({ category: "business" }) });
-    await addMessage(primary, { id: "stripe", from: "sarah@stripe.com", to: ["mark@geteclipse.co"], subject: "Your receipt" });
-    await addMessage(primary, { id: "nhs", from: "clinic@gp.nhs.uk", to: ["mark@geteclipse.co"], subject: "Appointment" });
+    process.env.TYPESAFE_API_KEY = "ts-test";
+    await assert.rejects(askJev({}, {}, { timeoutMs: 1_000 }), /isn't called for real in tests/);
+    await assert.rejects(completeJson({ system: "x", user: "y", schema: z.object({}) }), /isn't called for real in tests/);
+  });
+
+  it("hides role addresses at listed domains without the AI, asks about people there with a hint, and skips the list for domains Mark knows", async () => {
+    process.env.LLM_API_KEY = "test-key";
+    const fake = gateway({ haiku: bySubject });
+    await addMessage(primary, { id: "paypal", from: "accounts@paypal.com", to: ["mark@geteclipse.co"], subject: "Your receipt" });
+    await addMessage(primary, { id: "nhs", from: "clinic@gp.nhs.uk", to: ["mark@geteclipse.co"], subject: "Appointment reminder" });
     await addMessage(primary, { id: "lowell", from: "agent@lowell.co.uk", to: ["mark@geteclipse.co"], subject: "Account" });
     await addMessage(primary, { id: "quiet", from: "otto@quiet.test", to: ["mark@geteclipse.co"], subject: "Hello", focused: false });
-    await addMessage(primary, { id: "tom-old", from: "mark@geteclipse.co", to: ["tom@stripe.com"], subject: "Partner programme", sent: true, at: minutesAgo(60 * 24 * 20) });
-    await addMessage(primary, { id: "tom", from: "tom@stripe.com", to: ["mark@geteclipse.co"], subject: "Partner programme next steps" });
+    await addMessage(primary, { id: "google", from: "priya.shah@google.com", to: ["mark@geteclipse.co"], subject: "Partnership on Gemini visibility" });
+    await addMessage(primary, { id: "arrow-old", from: "mark@geteclipse.co", to: ["ops@arrowglobal.net"], subject: "Data partnership", sent: true, at: minutesAgo(60 * 24 * 20) });
+    await addMessage(primary, { id: "arrow", from: "kate@arrowglobal.net", to: ["mark@geteclipse.co"], subject: "Partnership follow up" });
+    await addMessage(primary, { id: "tom-old", from: "mark@geteclipse.co", to: ["tom@ebay-partners.test"], subject: "Partner programme", sent: true, at: minutesAgo(60 * 24 * 20) });
+    await addMessage(primary, { id: "tom", from: "tom@ebay-partners.test", to: ["mark@geteclipse.co"], subject: "Spring sale for partners" });
     await classify(fake.fetchImpl);
-    assert.equal(fake.haiku.length, 0);
-    assert.deepEqual(await skipped(eclipse), { "agent@lowell.co.uk": "collections", "clinic@gp.nhs.uk": "personal", "sarah@stripe.com": "supplier" });
-    assert.deepEqual(await shown(eclipse), ["tom@stripe.com"]);
-    assert.equal((await threadRow(`${primary.sourceId}|nhs`))?.category, "personal");
+    const asked = fake.haiku.map((call) => call.state.email.fromAddress).sort();
+    assert.deepEqual(asked, ["clinic@gp.nhs.uk", "kate@arrowglobal.net", "priya.shah@google.com"]);
+    assert.match(fake.haiku.find((call) => call.state.email.fromAddress === "clinic@gp.nhs.uk")!.state.email.senderDomainIs ?? "", /public sector/);
+    assert.match(fake.haiku.find((call) => call.state.email.fromAddress === "priya.shah@google.com")!.state.email.senderDomainIs ?? "", /platform/);
+    assert.equal(fake.haiku.find((call) => call.state.email.fromAddress === "kate@arrowglobal.net")!.state.email.senderDomainIs, undefined);
+    const left = await skipped(eclipse);
+    assert.equal(left["accounts@paypal.com"], "supplier");
+    assert.equal(left["agent@lowell.co.uk"], "collections");
+    assert.equal(left["clinic@gp.nhs.uk"], "personal");
+    const visible = await shown(eclipse);
+    assert.ok(visible.includes("priya.shah@google.com"));
+    assert.ok(visible.includes("kate@arrowglobal.net"));
+    assert.ok(visible.includes("tom@ebay-partners.test"));
+    assert.ok(!visible.includes("otto@quiet.test"));
+    assert.equal((await threadRow(`${primary.sourceId}|paypal`))?.engine, "listed");
+    assert.equal((await threadRow(`${primary.sourceId}|nhs`))?.engine, "haiku");
+    assert.equal((await threadRow(`${primary.sourceId}|tom`))?.engine, "history");
   });
 
   it("asks Haiku 5.5 with the workspace's brand and person, and shows only business", async () => {
     process.env.LLM_API_KEY = "test-key";
     const fake = gateway({ haiku: bySubject });
     const senders = ["ana@northwind.test", "bills@vendorco.test", "guard@platform.test", "clinic@healthy.test", "recovery@dues.test", "prize@winner.test", "deals@shopper.test"];
-    const subjects = Object.keys(BY_SUBJECT);
+    const subjects = ["Partnership", "Invoice", "Security alert", "Test results", "Final demand", "You won", "Spring sale"];
     for (const [index, sender] of senders.entries()) {
-      await addMessage(primary, { id: `cat-${index}`, from: sender, name: `Sender ${index}`, to: ["mark@geteclipse.co"], subject: `${subjects[index]} for you`, body: `Hello Mark\n\nThanks,\nSender ${index}\nHead of Things` });
+      await addMessage(primary, {
+        id: `cat-${index}`,
+        from: sender,
+        name: `Sender ${index}`,
+        to: ["mark@geteclipse.co"],
+        subject: `${subjects[index]} for you`,
+        body: `Hello Mark\n\nThanks,\nSender ${index}\nHead of Things\n\nOn Monday Someone wrote:\n> Quoted Signature Line`,
+      });
     }
-    await assert.deepEqual((await capture(eclipse)).emails.map((email) => email.email), ["tom@stripe.com"]);
+    const before = await capture(eclipse);
+    assert.ok(senders.every((sender) => !before.emails.some((email) => email.email === sender)));
+    assert.equal(before.sorting, 7);
     await classify(fake.fetchImpl);
     assert.equal(fake.haiku.length, 7);
     assert.ok(fake.haiku.every((call) => call.model === "claude-haiku-5-5"));
@@ -251,8 +327,8 @@ describe("Capture relevance", () => {
     assert.equal(first.state.business.idealCustomer, "Marketing leads at consumer brands.");
     assert.deepEqual(first.state.person, { name: "Mark Ridgeon", role: "Founder", aboutYou: "I run Eclipse." });
     assert.match(first.state.email.signature ?? "", /Head of Things/);
-    assert.match(first.system, /supplier/);
-    assert.deepEqual(await shown(eclipse), ["ana@northwind.test", "tom@stripe.com"]);
+    assert.doesNotMatch(first.state.email.signature ?? "", /Quoted Signature Line/);
+    assert.ok((await shown(eclipse)).includes("ana@northwind.test"));
     const left = await skipped(eclipse);
     assert.equal(left["bills@vendorco.test"], "supplier");
     assert.equal(left["guard@platform.test"], "service");
@@ -260,17 +336,24 @@ describe("Capture relevance", () => {
     assert.equal(left["recovery@dues.test"], "collections");
     assert.equal(left["prize@winner.test"], "spam");
     assert.equal(left["deals@shopper.test"], "newsletter");
-    assert.equal((await threadRow(`${primary.sourceId}|cat-1`))?.engine, "haiku");
+    assert.equal((await capture(eclipse)).sorting, 0);
   });
 
-  it("reuses a recent decision for the same sender in the same workspace", async () => {
+  it("asks once per sender in a run, reuses the decision after, and asks again once it is 60 days old", async () => {
     process.env.LLM_API_KEY = "test-key";
-    const fake = gateway({ haiku: bySubject });
-    await addMessage(primary, { id: "deals-2", from: "deals@shopper.test", to: ["mark@geteclipse.co"], subject: "Another offer" });
-    assert.equal((await skipped(eclipse))["deals@shopper.test"], "newsletter");
+    const fake = gateway({ haiku: () => ({ category: "newsletter" }) });
+    for (const index of [1, 2, 3]) await addMessage(primary, { id: `burst-${index}`, from: "blast@burst.test", to: ["mark@geteclipse.co"], subject: `Offer ${index}` });
     await classify(fake.fetchImpl);
-    assert.equal(fake.haiku.length, 0);
-    assert.equal((await threadRow(`${primary.sourceId}|deals-2`))?.engine, "cached");
+    assert.equal(fake.haiku.filter((call) => call.state.email.fromAddress === "blast@burst.test").length, 1);
+    await addMessage(primary, { id: "burst-4", from: "blast@burst.test", to: ["mark@geteclipse.co"], subject: "Offer 4" });
+    assert.equal((await skipped(eclipse))["blast@burst.test"], "newsletter");
+    await classify(fake.fetchImpl);
+    assert.equal(fake.haiku.length, 1);
+    assert.equal((await threadRow(`${primary.sourceId}|burst-4`))?.engine, "cached");
+    await getAdminPool().query("update crm.mail_sender_relevance set decided_at = now() - interval '61 days' where sender = 'blast@burst.test'");
+    await addMessage(primary, { id: "burst-5", from: "blast@burst.test", to: ["mark@geteclipse.co"], subject: "Offer 5" });
+    await classify(fake.fetchImpl);
+    assert.equal(fake.haiku.length, 2);
   });
 
   it("sorts the pending few inline when Capture opens", async () => {
@@ -291,17 +374,26 @@ describe("Capture relevance", () => {
     }
   });
 
-  it("keeps an unsorted email out until it's sorted, and shows it when the AI fails or isn't set up", async () => {
+  it("holds a new email briefly while it's sorted, shows it after five minutes, and shows it when sorting fails or isn't set up", async () => {
     process.env.LLM_API_KEY = "test-key";
-    await addMessage(primary, { id: "fail", from: "una@unsure.test", to: ["mark@geteclipse.co"], subject: "Question" });
-    assert.ok(!(await shown(eclipse)).includes("una@unsure.test"));
+    await addMessage(primary, { id: "fresh", from: "una@unsure.test", to: ["mark@geteclipse.co"], subject: "Question" });
+    await addMessage(primary, { id: "stale", from: "old@unsorted.test", to: ["mark@geteclipse.co"], subject: "Question", at: minutesAgo(6) });
+    const list = await capture(eclipse);
+    assert.ok(!list.emails.some((email) => email.email === "una@unsure.test"));
+    assert.ok(list.emails.some((email) => email.email === "old@unsorted.test"));
+    assert.equal(list.sorting, 1);
     const context = await captureContext(eclipse);
-    assert.ok(context.held.includes(`${primary.sourceId}|fail`));
+    assert.ok(context.held.some((item) => item.key === `${primary.sourceId}|fresh`));
+
     const fake = gateway({ haiku: () => "fail" });
     await classify(fake.fetchImpl);
-    assert.ok(fake.haiku.length >= 1);
     assert.ok((await shown(eclipse)).includes("una@unsure.test"));
-    assert.deepEqual(await threadRow(`${primary.sourceId}|fail`), { category: null, engine: "failed", workspace_id: eclipse.workspaceId });
+    assert.deepEqual(await threadRow(`${primary.sourceId}|fresh`), { category: null, engine: "failed", workspace_id: eclipse.workspaceId });
+
+    await addMessage(primary, { id: "garbled", from: "gus@garbled.test", to: ["mark@geteclipse.co"], subject: "Hello" });
+    await classify(gateway({ haiku: () => "garbage" }).fetchImpl);
+    assert.equal((await threadRow(`${primary.sourceId}|garbled`))?.engine, "failed");
+    assert.ok((await shown(eclipse)).includes("gus@garbled.test"));
 
     delete process.env.LLM_API_KEY;
     await addMessage(primary, { id: "nokey", from: "noel@nokey.test", to: ["mark@geteclipse.co"], subject: "Hello" });
@@ -311,15 +403,22 @@ describe("Capture relevance", () => {
     assert.ok((await shown(eclipse)).includes("noel@nokey.test"));
   });
 
-  it("uses Jev first with one choice question, and Haiku when Jev fails", async () => {
+  it("uses Jev first with one choice question, Haiku when Jev fails or times out, and shows the email when both fail", async () => {
     process.env.LLM_API_KEY = "test-key";
     process.env.TYPESAFE_API_KEY = "ts-test";
     const fake = gateway({
-      jev: (body) => (body.state.email.fromAddress === "jill@jevnews.test" ? { category: { type: "choice", choice: "newsletter" }, could_do_business: { type: "noul", noul: 0.1 } } : "fail"),
-      haiku: () => ({ category: "business" }),
+      jev: (body) =>
+        body.state.email.fromAddress === "jill@jevnews.test"
+          ? { category: { type: "choice", choice: "newsletter" }, could_do_business: { type: "noul", noul: 0.1 } }
+          : body.state.email.fromAddress === "nora@jevnull.test"
+            ? { category: { type: "choice", choice: "newsletter" } }
+            : "fail",
+      haiku: (state) => (state.email.fromAddress === "both@fail.test" ? "fail" : { category: "business" }),
     });
     await addMessage(primary, { id: "jev-1", from: "jill@jevnews.test", to: ["mark@geteclipse.co"], subject: "Weekly roundup" });
     await addMessage(primary, { id: "jev-2", from: "jack@jevdown.test", to: ["mark@geteclipse.co"], subject: "Intro" });
+    await addMessage(primary, { id: "jev-3", from: "nora@jevnull.test", to: ["mark@geteclipse.co"], subject: "Hi" });
+    await addMessage(primary, { id: "jev-4", from: "both@fail.test", to: ["mark@geteclipse.co"], subject: "Hi" });
     await classify(fake.fetchImpl);
     const asked = fake.jev.find((call) => call.state.email.fromAddress === "jill@jevnews.test")!;
     assert.equal(asked.questions.category.type, "choice");
@@ -329,10 +428,22 @@ describe("Capture relevance", () => {
     assert.equal((await threadRow(`${primary.sourceId}|jev-1`))?.engine, "jev");
     assert.equal((await skipped(eclipse))["jill@jevnews.test"], "newsletter");
     assert.equal((await threadRow(`${primary.sourceId}|jev-2`))?.engine, "haiku");
-    assert.ok((await shown(eclipse)).includes("jack@jevdown.test"));
+    assert.equal((await threadRow(`${primary.sourceId}|jev-3`))?.engine, "jev");
+    const visible = await shown(eclipse);
+    assert.ok(visible.includes("jack@jevdown.test"));
+    assert.ok(visible.includes("nora@jevnull.test"), "a Jev answer with no confidence shows");
+    assert.ok(visible.includes("both@fail.test"));
+    assert.equal((await threadRow(`${primary.sourceId}|jev-4`))?.engine, "failed");
+
+    const slow = gateway({ jevWaits: true, haiku: () => ({ category: "spam" }) });
+    await addMessage(primary, { id: "jev-slow", from: "sam@slowjev.test", to: ["mark@geteclipse.co"], subject: "Hi" });
+    await classifyCapture(eclipse, { deadline: Date.now() + 4_000, fetchImpl: slow.fetchImpl, readHeaders: async () => [] });
+    assert.equal(slow.jev.length, 1);
+    assert.equal(slow.haiku.length, 1);
+    assert.equal((await threadRow(`${primary.sourceId}|jev-slow`))?.engine, "haiku");
   });
 
-  it("judges the same sender with each workspace's own brand and person, and caches per workspace", async () => {
+  it("judges the same sender with each workspace's own brand and person, caches per workspace, and keeps rules to one workspace", async () => {
     process.env.LLM_API_KEY = "test-key";
     const fake = gateway({ haiku: (state) => ({ category: state.business.name === "Mark Ridgeon" ? "business" : "newsletter" }) });
     await addMessage(primary, { id: "lena-e", from: "lena@brightpath.test", to: ["mark@geteclipse.co"], subject: "Ops help" });
@@ -357,16 +468,28 @@ describe("Capture relevance", () => {
       { workspace_id: ridgeon.workspaceId, category: "business" },
       { workspace_id: eclipse.workspaceId, category: "newsletter" },
     ]);
+
+    const both = gateway({ haiku: () => ({ category: "business" }) });
+    const inEclipse = await addMessage(primary, { id: "max-e", from: "max@dualco.test", to: ["mark@geteclipse.co"], subject: "Hello" });
+    await addMessage(extra, { id: "max-r", from: "max@dualco.test", to: ["mark@markridgeon.com"], subject: "Hello" });
+    await classify(both.fetchImpl);
+    await runCaptureAction(eclipse, readCaptureAction({ kind: "email-never", key: inEclipse.key }));
+    await addMessage(primary, { id: "max-e2", from: "max@dualco.test", to: ["mark@geteclipse.co"], subject: "Again" });
+    await addMessage(extra, { id: "max-r2", from: "max@dualco.test", to: ["mark@markridgeon.com"], subject: "Again" });
+    await classify(both.fetchImpl);
+    assert.equal((await skipped(eclipse))["max@dualco.test"], "muted");
+    assert.ok((await shown(ridgeon)).includes("max@dualco.test"));
   });
 
-  it("passes past correspondence as counts and leans to business, and never hides someone Mark wrote to", async () => {
+  it("puts written-to and met senders first, over cached and thread decisions, and passes domain history to the model", async () => {
     process.env.LLM_API_KEY = "test-key";
     const fake = gateway({ haiku: (state) => ({ category: state.history.userHasWrittenToDomain ? "business" : "newsletter" }) });
     await addMessage(primary, { id: "harbour-old", from: "mark@geteclipse.co", to: ["ops@harbourline.test"], subject: "Proposal", sent: true, at: minutesAgo(60 * 24 * 40) });
     await addMessage(primary, { id: "harbour-reply", from: "ops@harbourline.test", to: ["mark@geteclipse.co"], subject: "Re: Proposal", at: minutesAgo(60 * 24 * 39) });
     await addMessage(primary, { id: "kim", from: "kim@harbourline.test", to: ["mark@geteclipse.co"], subject: "Following up" });
-    await addMessage(primary, { id: "joe-old", from: "mark@geteclipse.co", to: ["joe@gmail.com"], subject: "Lunch", sent: true, at: minutesAgo(60 * 24 * 10) });
-    await addMessage(primary, { id: "joe", from: "joe@gmail.com", to: ["mark@geteclipse.co"], subject: "Spring sale for you" });
+    await addMessage(primary, { id: "cara", from: "cara@caching.test", to: ["mark@geteclipse.co"], subject: "Catch up" });
+    await addMessage(primary, { id: "mel", from: "mel@meetings.test", to: ["mark@geteclipse.co"], subject: "Catch up" });
+    await addMessage(primary, { id: "relay", from: "rhea@relay.test", to: ["mark@geteclipse.co"], subject: "Catch up" });
     await classify(fake.fetchImpl);
     const kim = fake.haiku.find((call) => call.state.email.fromAddress === "kim@harbourline.test")!;
     assert.equal(kim.state.history.userHasWrittenToDomain, true);
@@ -374,12 +497,54 @@ describe("Capture relevance", () => {
     assert.match(kim.state.history.mailWithDomain, /^2 from the domain, 1 from the user to it, first \d{4}-\d{2}-\d{2}/);
     assert.doesNotMatch(JSON.stringify(kim.state), /Proposal/);
     assert.ok((await shown(eclipse)).includes("kim@harbourline.test"));
-    assert.equal(fake.haiku.some((call) => call.state.email.fromAddress === "joe@gmail.com"), false);
+    assert.equal((await skipped(eclipse))["cara@caching.test"], "newsletter");
+    assert.equal((await skipped(eclipse))["mel@meetings.test"], "newsletter");
+
+    await addMessage(primary, { id: "cara-sent", from: "mark@geteclipse.co", to: ["cara@caching.test"], subject: "Lunch?", sent: true, at: minutesAgo(1) });
+    assert.ok((await shown(eclipse)).includes("cara@caching.test"), "writing to them shows them again");
+    const admin = getAdminPool();
+    const calendar = await admin.query<{ id: string }>(
+      `insert into crm.calendars (workspace_id, user_id, connection_id, provider_calendar_id, name, color, use_for_crm)
+       values ($1, $2, $3, 'cal-history', 'History', '#000000', false) returning id`,
+      [eclipse.workspaceId, eclipse.userId, connectionId],
+    );
+    await admin.query(
+      `insert into crm.calendar_events (workspace_id, calendar_id, connection_id, user_id, provider_event_id, subject, starts_at, ends_at, attendees)
+       values ($1, $2, $3, $4, 'met-mel', 'Coffee', now() - interval '1 day', now() - interval '1 day' + interval '30 minutes', $5::jsonb)`,
+      [eclipse.workspaceId, calendar.rows[0].id, connectionId, eclipse.userId, JSON.stringify([{ name: "Mel", email: "mel@meetings.test" }])],
+    );
+    assert.ok((await shown(eclipse)).includes("mel@meetings.test"), "meeting them shows them");
+
+    assert.equal((await skipped(eclipse))["rhea@relay.test"], "newsletter");
+    await addMessage(primary, { id: "relay-2", thread: "relay", from: "dan@forwarded.test", to: ["mark@geteclipse.co"], subject: "Re: Catch up", at: minutesAgo(0) });
+    const context = await captureContext(eclipse);
+    assert.ok(context.held.some((item) => item.key === `${primary.sourceId}|relay`), "a thread decision about someone else no longer applies");
+
+    await addMessage(primary, { id: "joe-old", from: "mark@geteclipse.co", to: ["joe@gmail.com"], subject: "Lunch", sent: true, at: minutesAgo(60 * 24 * 10) });
+    await addMessage(primary, { id: "joe", from: "joe@gmail.com", to: ["mark@geteclipse.co"], subject: "Spring sale for you" });
+    const before = fake.haiku.length;
+    await classify(fake.fetchImpl);
+    assert.equal(fake.haiku.some((call, index) => index >= before && call.state.email.fromAddress === "joe@gmail.com"), false);
     assert.equal((await threadRow(`${primary.sourceId}|joe`))?.engine, "history");
     assert.ok((await shown(eclipse)).includes("joe@gmail.com"));
   });
 
-  it("lets Never ask and Show in Capture beat the AI", async () => {
+  it("keeps header decisions on the thread only", async () => {
+    process.env.LLM_API_KEY = "test-key";
+    const fake = gateway({ haiku: () => ({ category: "business" }) });
+    const first = await addMessage(primary, { id: "group-1", from: "gail@groupy.test", to: ["mark@geteclipse.co"], subject: "Group post" });
+    await classify(fake.fetchImpl, { readHeaders: async (item) => (item.key === first.key ? [{ name: "List-Id", value: "<group.groupy.test>" }] : []) });
+    assert.deepEqual(await threadRow(first.key), { category: "newsletter", engine: "headers", workspace_id: eclipse.workspaceId });
+    assert.equal((await skipped(eclipse))["gail@groupy.test"], "newsletter");
+    const cached = await getAdminPool().query("select 1 from crm.mail_sender_relevance where sender = 'gail@groupy.test'");
+    assert.equal(cached.rowCount, 0);
+    await addMessage(primary, { id: "group-2", from: "gail@groupy.test", to: ["mark@geteclipse.co"], subject: "Direct question" });
+    await classify(fake.fetchImpl);
+    assert.equal(fake.haiku.filter((call) => call.state.email.fromAddress === "gail@groupy.test").length, 1);
+    assert.equal((await threadRow(`${primary.sourceId}|group-2`))?.engine, "haiku");
+  });
+
+  it("lets Never ask and Show in Capture beat the AI, lists the rules and removes them", async () => {
     process.env.LLM_API_KEY = "test-key";
     const fake = gateway({ haiku: (state) => ({ category: state.email.fromAddress.endsWith("@vendorly.test") ? "business" : "newsletter" }) });
     const first = await addMessage(primary, { id: "vend-1", from: "rep@vendorly.test", to: ["mark@geteclipse.co"], subject: "Quick chat" });
@@ -388,7 +553,6 @@ describe("Capture relevance", () => {
     assert.ok((await shown(eclipse)).includes("rep@vendorly.test"));
     assert.equal((await skipped(eclipse))["maria@promo.test"], "newsletter");
 
-    assert.equal(readCaptureAction({ kind: "email-never", key: first.key }).kind, "email-never");
     await runCaptureAction(eclipse, readCaptureAction({ kind: "email-never", key: first.key }));
     await addMessage(primary, { id: "vend-2", from: "boss@vendorly.test", to: ["mark@geteclipse.co"], subject: "Following up" });
     const before = fake.haiku.length;
@@ -397,16 +561,22 @@ describe("Capture relevance", () => {
     const list = await capture(eclipse);
     assert.ok(!list.emails.some((email) => email.email.endsWith("@vendorly.test")));
     assert.equal(list.notShown.find((email) => email.email === "boss@vendorly.test")?.category, "muted");
-    assert.ok(!list.notShown.some((email) => email.key === first.key));
 
     await runCaptureAction(eclipse, readCaptureAction({ kind: "email-show", key: promo.key }));
     assert.ok((await shown(eclipse)).includes("maria@promo.test"));
-    await addMessage(primary, { id: "promo-2", from: "maria@promo.test", to: ["mark@geteclipse.co"], subject: "Spring sale" });
-    await classify(fake.fetchImpl);
     assert.deepEqual(
-      (await capture(eclipse)).emails.filter((email) => email.email === "maria@promo.test").map((email) => email.key).sort(),
-      [promo.key, `${primary.sourceId}|promo-2`].sort(),
+      (await listSenderRules(eclipse)).filter((rule) => ["@vendorly.test", "maria@promo.test"].includes(rule.sender)),
+      [
+        { sender: "@vendorly.test", kind: "never" },
+        { sender: "maria@promo.test", kind: "always" },
+      ],
     );
+    assert.equal(readCaptureAction({ kind: "rule-remove", sender: "@vendorly.test" }).kind, "rule-remove");
+    await runCaptureAction(eclipse, readCaptureAction({ kind: "rule-remove", sender: "@vendorly.test" }));
+    await assert.rejects(runCaptureAction(eclipse, readCaptureAction({ kind: "rule-remove", sender: "@vendorly.test" })), /That rule has gone/);
+    assert.ok(!(await listSenderRules(eclipse)).some((rule) => rule.sender === "@vendorly.test"));
+    await classify(fake.fetchImpl);
+    assert.ok((await shown(eclipse)).includes("boss@vendorly.test"));
   });
 
   it("records a filed sender as business for them and their domain", async () => {
@@ -422,16 +592,37 @@ describe("Capture relevance", () => {
     ]);
   });
 
-  it("tells the assistant how many were filtered without Personal subjects", async () => {
-    const result = (await runTool(eclipse, "get_capture", {})) as { toFile: { notShown: { count: number; emails: { from: string; subject?: string; category: string }[] } } };
+  it("classifies at most 25 a run, stops at the deadline, and runs one sort per person at a time", async () => {
+    await settleAll();
+    process.env.LLM_API_KEY = "test-key";
+    const fake = gateway({ haiku: () => ({ category: "business" }) });
+    for (let index = 0; index < 30; index += 1) await addMessage(primary, { id: `many-${index}`, from: `person${index}@many${index}.test`, to: ["mark@geteclipse.co"], subject: "Hello" });
+    const late = await classifyCapture(eclipse, { deadline: Date.now() + 1_000, fetchImpl: fake.fetchImpl, readHeaders: async () => [] });
+    assert.equal(late.decided, 0);
+    assert.equal(fake.haiku.length, 0);
+    const [first, second] = await Promise.all([classify(fake.fetchImpl), classify(fake.fetchImpl)]);
+    assert.equal([first, second].filter((run) => run.skipped).length, 1);
+    assert.equal((first.skipped ? second : first).decided, 25);
+    assert.equal(fake.haiku.length, 25);
+    const recent = await classify(fake.fetchImpl, { gapSeconds: 60 });
+    assert.equal(recent.skipped, true);
+    await classify(fake.fetchImpl);
+    assert.equal(fake.haiku.length, 30);
+  });
+
+  it("gives the assistant only counts for Personal and Collections email", async () => {
+    const result = (await runTool(eclipse, "get_capture", {})) as {
+      toFile: { notShown: { count: number; personalOrCollections: number; emails: { from: string; subject?: string; category: string }[] } };
+    };
     assert.ok(result.toFile.notShown.count >= 6);
-    const clinic = result.toFile.notShown.emails.find((email) => email.from === "clinic@gp.nhs.uk")!;
-    assert.equal(clinic.category, "Personal");
-    assert.equal(clinic.subject, undefined);
+    assert.ok(result.toFile.notShown.personalOrCollections >= 4);
+    const listed = JSON.stringify(result.toFile.notShown.emails);
+    for (const hidden of ["clinic@gp.nhs.uk", "clinic@healthy.test", "recovery@dues.test", "agent@lowell.co.uk"]) assert.doesNotMatch(listed, new RegExp(hidden));
+    assert.ok(result.toFile.notShown.emails.every((email) => email.category !== "Personal" && email.category !== "Collections"));
     assert.equal(result.toFile.notShown.emails.find((email) => email.from.includes("bills@vendorco.test"))?.subject, "Invoice for you");
   });
 
-  it("keeps Personal and Collections mail out of nightly learning", async () => {
+  it("keeps Personal and Collections mail out of nightly personal learning", async () => {
     process.env.LLM_API_KEY = "test-key";
     const admin = getAdminPool();
     const prepare = async (id: string, from: string, body: string) => {
@@ -443,18 +634,64 @@ describe("Capture relevance", () => {
       );
     };
     await prepare("learn-business", "dana@clientco.test", "BUSINESS-REPLY");
-    await prepare("learn-health", "clinic@healthy.test", "HEALTH-REPLY");
+    await prepare("learn-health", "doc@healthyplace.test", "HEALTH-REPLY");
     await prepare("learn-bank", "advisor@barclays.co.uk", "BANK-REPLY");
+    await prepare("learn-debt", "chaser@chasers.test", "DEBT-REPLY");
     await admin.query(
       `insert into crm.mail_thread_relevance (workspace_id, user_id, source_id, thread_key, sender, category, engine)
-       values ($1, $2, $3, 'learn-health', 'clinic@healthy.test', 'personal', 'haiku')`,
+       values ($1, $2, $3, 'learn-health', 'doc@healthyplace.test', 'personal', 'haiku')`,
       [eclipse.workspaceId, eclipse.userId, primary.sourceId],
+    );
+    await admin.query(
+      `insert into crm.mail_sender_relevance (workspace_id, user_id, sender, category, engine, confidence)
+       values ($1, $2, 'chaser@chasers.test', 'collections', 'haiku', 0.95)`,
+      [ridgeon.workspaceId, eclipse.userId],
     );
     const fake = gateway({});
     await learnNow(eclipse, { deadline: Date.now() + 60_000, fetchImpl: fake.fetchImpl, kinds: ["personal"] });
     assert.equal(fake.learning.length, 1);
     assert.match(fake.learning[0], /BUSINESS-REPLY/);
-    assert.doesNotMatch(fake.learning[0], /HEALTH-REPLY|BANK-REPLY/);
+    assert.doesNotMatch(fake.learning[0], /HEALTH-REPLY|BANK-REPLY|DEBT-REPLY/);
+  });
+
+  it("keeps another member's Personal email out of shared business learning", async () => {
+    process.env.LLM_API_KEY = "test-key";
+    const admin = getAdminPool();
+    const priya = await createUser("priya@geteclipse.co", "Priya Shah");
+    await admin.query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [eclipse.workspaceId, priya.userId]);
+    const theirConnection = await admin.query<{ id: string }>(
+      `insert into crm.mailbox_connections (workspace_id, user_id, provider, email, status, refresh_token)
+       values ($1, $2, 'microsoft', 'priya@geteclipse.co', 'connected', 'cipher') returning id`,
+      [eclipse.workspaceId, priya.userId],
+    );
+    const theirs = await source({ ...priya, workspaceId: eclipse.workspaceId }, "connection_id", theirConnection.rows[0].id, "priya@geteclipse.co");
+    const message = await addMessage(theirs, { id: "priya-gp", from: "gp@surgery.test", to: ["priya@geteclipse.co"], subject: "Results" }, { ...priya, workspaceId: eclipse.workspaceId });
+    await admin.query(
+      `insert into crm.mail_thread_relevance (workspace_id, user_id, source_id, thread_key, sender, category, engine)
+       values ($1, $2, $3, 'priya-gp', 'gp@surgery.test', 'personal', 'haiku')`,
+      [eclipse.workspaceId, priya.userId, theirs.sourceId],
+    );
+    const company = (await admin.query<{ id: string }>("insert into crm.companies (workspace_id, name, normalized_name) values ($1, 'Toneco', 'toneco') returning id", [eclipse.workspaceId])).rows[0].id;
+    const activity = async (title: string, metadata: Record<string, unknown>) =>
+      (
+        await admin.query<{ id: string }>(
+          "insert into crm.activities (workspace_id, company_id, type, title, occurred_at, metadata) values ($1, $2, 'email', $3, now() - interval '1 hour', $4::jsonb) returning id",
+          [eclipse.workspaceId, company, title, JSON.stringify(metadata)],
+        )
+      ).rows[0].id;
+    const hidden = await activity("PRIYA-HEALTH", { mailMessageId: message.id });
+    const kept = await activity("CLIENT-TONE", { mailMessageId: "not-a-uuid-------------------------" });
+    for (const [id, tone] of [
+      [hidden, "negative"],
+      [kept, "positive"],
+    ]) {
+      await admin.query("insert into crm.activity_tones (activity_id, workspace_id, tone, reason) values ($1, $2, $3, 'Test.')", [id, eclipse.workspaceId, tone]);
+    }
+    const fake = gateway({});
+    await learnNow(eclipse, { deadline: Date.now() + 60_000, fetchImpl: fake.fetchImpl, kinds: ["business"] });
+    assert.equal(fake.business.length, 1);
+    assert.match(fake.business[0], /CLIENT-TONE/);
+    assert.doesNotMatch(fake.business[0], /PRIYA-HEALTH/);
   });
 
   it("leaves rooms, groups, booking tools and no-reply addresses out of People you've met", async () => {
@@ -485,12 +722,14 @@ describe("Capture relevance", () => {
     assert.equal(status.sections.toFile, unfiled.total + 1);
   });
 
-  it("keeps sender and thread decisions private to their owner", async () => {
+  it("keeps sender and thread decisions private to their owner, and closed to agents", async () => {
     const other = await createUser("sam@elsewhere.test", "Sam Other");
     const theirs = await queryAsUser<{ total: number }>(other.userId, "select count(*)::int as total from crm.mail_sender_relevance");
     assert.equal(theirs[0].total, 0);
     const threads = await queryAsUser<{ total: number }>(other.userId, "select count(*)::int as total from crm.mail_thread_relevance");
     assert.equal(threads[0].total, 0);
+    const runs = await queryAsUser<{ total: number }>(other.userId, "select count(*)::int as total from crm.mail_relevance_runs");
+    assert.equal(runs[0].total, 0);
     const mine = await queryAsUser<{ total: number }>(eclipse.userId, "select count(*)::int as total from crm.mail_sender_relevance");
     assert.ok(mine[0].total > 0);
     await assert.rejects(
@@ -507,7 +746,35 @@ describe("Capture relevance", () => {
       ]),
       /row-level security/,
     );
-    const updated = await queryAsUser<{ id: string }>(other.userId, "update crm.mail_thread_relevance set category = 'business' returning id");
-    assert.equal(updated.length, 0);
+    assert.equal((await queryAsUser<{ id: string }>(other.userId, "update crm.mail_thread_relevance set category = 'business' returning id")).length, 0);
+    assert.equal((await queryAsUser<{ id: string }>(other.userId, "delete from crm.mail_sender_relevance returning id")).length, 0);
+    assert.equal((await queryAsUser<{ id: string }>(other.userId, "delete from crm.mail_thread_relevance returning id")).length, 0);
+    const client = await getAdminPool().connect();
+    try {
+      for (const table of ["mail_sender_relevance", "mail_thread_relevance", "mail_relevance_runs"]) {
+        await client.query("begin");
+        await client.query("set local role crm_agent");
+        await assert.rejects(client.query(`select count(*) from crm.${table}`), /permission denied/);
+        await client.query("rollback");
+      }
+    } finally {
+      client.release();
+    }
+  });
+
+  it("drops a workspace's decisions when its member leaves", async () => {
+    const admin = getAdminPool();
+    const before = await admin.query<{ total: number }>("select count(*)::int as total from crm.mail_sender_relevance where workspace_id = $1 and user_id = $2", [ridgeon.workspaceId, eclipse.userId]);
+    assert.ok(before.rows[0].total > 0);
+    const eclipseRows = await admin.query<{ total: number }>("select count(*)::int as total from crm.mail_sender_relevance where workspace_id = $1 and user_id = $2", [eclipse.workspaceId, eclipse.userId]);
+    await admin.query("select private.move_personal_rows($1, $2, $3)", [eclipse.userId, ridgeon.workspaceId, eclipse.workspaceId]);
+    const left = await admin.query<{ senders: number; threads: number }>(
+      `select (select count(*)::int from crm.mail_sender_relevance where workspace_id = $1 and user_id = $2) as senders,
+         (select count(*)::int from crm.mail_thread_relevance where workspace_id = $1 and user_id = $2) as threads`,
+      [ridgeon.workspaceId, eclipse.userId],
+    );
+    assert.deepEqual(left.rows[0], { senders: 0, threads: 0 });
+    const still = await admin.query<{ total: number }>("select count(*)::int as total from crm.mail_sender_relevance where workspace_id = $1 and user_id = $2", [eclipse.workspaceId, eclipse.userId]);
+    assert.equal(still.rows[0].total, eclipseRows.rows[0].total);
   });
 });

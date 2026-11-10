@@ -609,12 +609,13 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
               role={toast.tone === "alert" ? "alert" : "status"}
               className="bg-popover border-line-strong shadow-overlay animate-rise-in pointer-events-auto flex max-w-[min(36rem,100%)] items-center gap-3 rounded-full border py-1.5 pr-1.5 pl-4 text-[13px]"
             >
-              <span className={cn("min-w-0", toast.tone === "alert" ? "text-danger" : "text-foreground")}>{toast.message}</span>
+              <span className={cn(toast.extra ? "shrink-0 whitespace-nowrap" : "min-w-0", toast.tone === "alert" ? "text-danger" : "text-foreground")}>{toast.message}</span>
               {toast.extra && (
                 <Button
                   variant="ghost"
                   size="sm"
                   className="min-w-0 shrink"
+                  title={toast.extra.label}
                   onClick={() => {
                     toast.extra!.run();
                     dismiss(toast.id);

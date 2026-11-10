@@ -18,6 +18,7 @@ import {
   type ClearInstead,
 } from "@/components/capture/capture-items";
 import NotShown from "@/components/capture/not-shown";
+import { OFFLINE, postCapture } from "@/components/capture/capture-post";
 import { CaptureListContext, COLLAPSE_MS } from "@/components/capture/capture-row";
 import CaptureSeen from "@/components/crm/capture-seen";
 import SectionHeader from "@/components/crm/section-header";
@@ -33,6 +34,7 @@ import type { UnfiledImport } from "@/lib/crm/conversations";
 import type { FollowUpSuggestion } from "@/lib/crm/follow-ups";
 import { contactHref } from "@/lib/crm/hrefs";
 import type { SkippedEmail } from "@/lib/mail/capture-filter";
+import type { SenderRule } from "@/lib/mail/relevance";
 import type { UnknownEmail } from "@/lib/mail/filing";
 import type { WorkspaceChoiceRef } from "@/lib/mail/view";
 import type { WaitingNudge, WaitingReminder, WaitingReply } from "@/lib/mail/waiting";
@@ -44,7 +46,6 @@ import CheckIcon from "@/public/assets/images/assistant/check.svg";
 const UNDO_MS = 6_000;
 const FILING_MS = 30_000;
 const SETTLE_MS = 250;
-const OFFLINE = "That didn't save. Check your connection and try again.";
 
 const LABELS: Record<CaptureSectionId, string> = {
   approvals: "Approvals",
@@ -93,23 +94,6 @@ function EmptyState() {
   );
 }
 
-async function post(action: CaptureAction, workspaceId: string, keepalive: boolean) {
-  let response: Response;
-  try {
-    response = await fetch("/api/capture", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ...action, captureWorkspaceId: workspaceId }),
-      keepalive,
-    });
-  } catch {
-    throw new Error(OFFLINE);
-  }
-  const body = (await response.json().catch(() => ({}))) as Partial<CaptureOutcome> & { error?: string };
-  if (!response.ok) throw new Error(body.error ?? "That didn't save. Try again.");
-  return body;
-}
-
 function liveRows() {
   return [...document.querySelectorAll<HTMLElement>("[data-capture-row]")].filter(
     (row) => !row.hasAttribute("data-leaving") && row.getClientRects().length > 0,
@@ -154,6 +138,8 @@ export default function CaptureScreen({
   data,
   toFileTotal,
   notShownTotal,
+  sorting,
+  rules,
   failed,
   workspaces,
   workspaceId,
@@ -165,6 +151,8 @@ export default function CaptureScreen({
   data: CaptureData;
   toFileTotal: number;
   notShownTotal: number;
+  sorting: number;
+  rules: SenderRule[];
   failed: CaptureSectionId[];
   workspaces: WorkspaceChoiceRef[];
   workspaceId: string;
@@ -352,7 +340,7 @@ export default function CaptureScreen({
   function commit(item: Pending, keepalive: boolean) {
     dismissToast(item.toast);
     const filing = FILED.has(item.action.kind) && mounted.current ? showToast({ message: "Filing…", duration: FILING_MS }) : null;
-    post(item.action, workspaceId, keepalive)
+    postCapture(item.action, workspaceId, keepalive)
       .then((outcome) => {
         if (filing !== null) dismissToast(filing);
         filed(outcome, item.action);
@@ -467,7 +455,7 @@ export default function CaptureScreen({
   const showing = sections.filter((id) => view === "all" || view === id);
   const othersShown = data.others.length > 0 && (view === "all" || view === "approvals");
   const nothing = total === 0 && unread.size === 0;
-  const notShownHere = notShownTotal > 0 && (view === "all" || view === "toFile");
+  const notShownHere = (notShownTotal > 0 || rules.length > 0 || sorting > 0) && (view === "all" || view === "toFile");
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -551,7 +539,7 @@ export default function CaptureScreen({
                 })}
                 {othersShown && !showing.includes("approvals") && <OthersApprovals items={data.others} />}
               </KeyboardList>
-              {notShownHere && <NotShown items={data.notShown} total={notShownTotal} workspaceId={workspaceId} />}
+              {notShownHere && <NotShown items={data.notShown} total={notShownTotal} sorting={sorting} rules={rules} workspaceId={workspaceId} />}
             </ClearContext.Provider>
           </CaptureListContext.Provider>
         </div>

@@ -551,6 +551,13 @@ export function EmailItem({
     hint: "I",
     run: ignore,
   });
+  actions.push({
+    id: "never",
+    label: "Never ask",
+    variant: "ghost",
+    phoneMore: true,
+    run: () => onClear(`Won't ask about ${item.neverAsk}`, { kind: "email-never", key: item.key }),
+  });
   return (
     <CaptureRow
       rowId={clearId}
