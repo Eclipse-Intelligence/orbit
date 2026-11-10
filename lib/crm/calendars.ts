@@ -271,7 +271,7 @@ async function memberAddresses(workspaceId: string) {
 }
 
 function fromOutside(organizer: CalendarPerson | null, members: Set<string>) {
-  return organizer !== null && !members.has(organizer.email.toLowerCase());
+  return organizer === null || !members.has(organizer.email.toLowerCase());
 }
 
 export async function listCalendarItems(
@@ -280,7 +280,6 @@ export async function listCalendarItems(
   now = Date.now(),
 ): Promise<CalendarItem[]> {
   assertScope(actor.scopes, "crm:read");
-  const members = await memberAddresses(actor.workspaceId);
   return withActor(actor, async (db) => {
     const result = await db.query<ItemRow>(
       `select e.id, e.calendar_id, e.subject, e.starts_at, e.ends_at, e.is_all_day, e.show_as,
@@ -313,6 +312,7 @@ export async function listCalendarItems(
        limit ${EVENTS_SHOWN}`,
       [actor.userId, range.start.toISOString(), range.end.toISOString()],
     );
+    const members = result.rows.some((row) => row.notes !== null) ? await memberAddresses(actor.workspaceId) : new Set<string>();
     const emails = new Set<string>();
     for (const row of result.rows) {
       for (const person of [readPerson(row.organizer), ...readPeople(row.attendees)]) {

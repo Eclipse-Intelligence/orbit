@@ -90,6 +90,14 @@ describe("meeting links", () => {
       "https://chime.aws/download",
       "https://around.co/about",
       "https://8x8.vc/terms",
+      "https://meet.google.com/getstarted",
+      "https://meet.google.com/newmeeting",
+      "https://meet.google.com/landing",
+      "https://chime.aws/meetings",
+      "https://app.chime.aws/meetings/",
+      "https://whereby.com/join",
+      "https://meet.jit.si/new",
+      "https://teams.microsoft.com/meet/join",
     ];
     for (const page of pages) assert.equal(meetingLink(page), null, page);
     assert.equal(meetingLink("New to GoTo? https://meet.goto.com/install then https://meet.goto.com/123456789"), "https://meet.goto.com/123456789");
@@ -206,6 +214,8 @@ describe("event notes", () => {
     assert.equal(eventBodyText("<!DOCTYPE html><html><body>Agenda</body></html>", "html"), "Agenda");
     assert.equal(eventBodyText('<?xml version="1.0"?><p><![if !supportLists]>1.<![endif]> One</p><my-widget>x</my-widget>', "html"), "1. One\nx");
     assert.equal(eventBodyText("<p>  spaced   out  </p>", "html"), "spaced out");
+    assert.equal(eventBodyText("<p>a <! b > c and <? d > e</p>", "html"), "a <! b > c and <? d > e");
+    assert.equal(eventBodyText("<p>one<o:p></o:p>two<custom-el>three</custom-el>four</p>", "html"), "onetwo three four");
     assert.equal(eventBodyText("Mail <mark@example.com> or <https://zoom.us/j/1><br>bye"), "Mail <mark@example.com> or <https://zoom.us/j/1>\nbye");
   });
 

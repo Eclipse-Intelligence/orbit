@@ -92,7 +92,9 @@ describe("web reads after outside content", () => {
     assert.equal(after(calendar("Agenda from Juno", true)), true);
     assert.equal(after(JSON.stringify({ events: [{ subject: '"descriptionFromOutside":true', notes: "x", descriptionFromOutside: false }] })), false);
     assert.equal(outsideRead("get_overview", calendar("Agenda", true)), false);
-    assert.equal(outsideRead("list_calendar_events", "not json"), false);
+    assert.equal(outsideRead("list_calendar_events", "not json"), true);
+    assert.equal(outsideRead("list_calendar_events", JSON.stringify({ workspaces: [{ events: [{ notes: "x", descriptionFromOutside: true }] }] })), true);
+    assert.equal(outsideRead("list_calendar_events", JSON.stringify({ workspaces: [{ events: [{ notes: "x", descriptionFromOutside: false }] }] })), false);
     assert.deepEqual(webCard("read_web_page", { url: EVIL }), {
       title: `Open ${EVIL}?`,
       lines: ["This chat has read outside content, and this address didn't come from you or from Orbit. Check it before it's opened."],

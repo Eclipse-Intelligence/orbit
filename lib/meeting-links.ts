@@ -7,7 +7,23 @@ export const BODY_SCAN_MAX = 200_000;
 export const NOTES_MAX = 8000;
 
 const NOT_ROOMS = new Set([
+  "_meet",
   "about",
+  "app",
+  "calendar",
+  "dashboard",
+  "getstarted",
+  "join",
+  "landing",
+  "meeting",
+  "meetings",
+  "new",
+  "newmeeting",
+  "profile",
+  "recordings",
+  "schedule",
+  "start",
+  "webinar",
   "account",
   "apps",
   "blog",
@@ -52,7 +68,11 @@ const PROVIDERS: { host: RegExp; room: Room }[] = [
       (segments.length === 0 && /meetup-join/i.test(decoded(url.hash))),
   },
   { host: /(^|\.)zoom(gov)?\.(us|com)$/, room: (segments) => ["j", "my", "w", "wc"].includes(segments[0]) && room(segments[1]) },
-  { host: /^meet\.google\.com$/, room: (segments) => /^([a-z]{3}-[a-z]{4}-[a-z]{3}|[a-z]{10})$/i.test(segments[0] ?? "") || (segments[0] === "lookup" && room(segments[1])) },
+  {
+    host: /^meet\.google\.com$/,
+    room: (segments) =>
+      (/^([a-z]{3}-[a-z]{4}-[a-z]{3}|[a-z]{10})$/i.test(segments[0] ?? "") && room(segments[0])) || (segments[0] === "lookup" && room(segments[1])),
+  },
   { host: /(^|\.)whereby\.com$/, room: oneRoom },
   {
     host: /(^|\.)webex\.com$/,
@@ -263,8 +283,7 @@ export function htmlBodyText(html: string) {
       push(html.slice(open));
       break;
     }
-    const marker = html[open + 1];
-    if (marker === "!" || marker === "?") {
+    if (close - open <= TAG_MAX && /^(![a-z[-]|\?[a-z])/i.test(html.slice(open + 1, open + 3))) {
       index = close + 1;
       continue;
     }
@@ -309,7 +328,7 @@ export function htmlBodyText(html: string) {
     else if (tag === "li" && !closing) push(tail === "\n" ? "- " : "\n- ");
     else if (BLOCKS.has(tag)) {
       if (closing || tail !== "\n") push("\n");
-    } else if (!INLINE.has(tag) && !tag.includes(":") && !tag.includes("-")) push(" ");
+    } else if (!INLINE.has(tag) && !tag.includes(":")) push(" ");
   }
   return decodeEntities(parts.join(""))
     .replace(/[ \t\f\v\u00a0]+/g, " ")

@@ -286,6 +286,18 @@ describe("calendar notes and join links", () => {
           body: text(`${"Long agenda line\n".repeat(1000)}End`),
         }),
         graphEvent("bare", now + DAY, { onlineMeeting: null, body: null }),
+        graphEvent("orphan", now + DAY, { onlineMeeting: null, organizer: null, body: text("Feed text with no organiser") }),
+        graphEvent("legacy", now + DAY, {
+          onlineMeeting: null,
+          organizer: { emailAddress: { name: "Old Exchange", address: "/O=EXCHANGELABS/OU=EXCHANGE ADMINISTRATIVE GROUP/CN=RECIPIENTS/CN=X" } },
+          body: text("Legacy organiser text"),
+        }),
+        graphEvent("team", now + DAY, {
+          onlineMeeting: null,
+          location: { displayName: "Office" },
+          body: text("Team room https://whereby.com/orbit-notes-team"),
+          people: [{ email: "cara@client-notes.test" }, { email: "rooms@orbit-notes.test" }],
+        }),
         graphEvent("internal", now + DAY, {
           onlineMeeting: null,
           organizer: { emailAddress: { name: "Guest", address: "guest@orbit-notes.test" } },
@@ -296,7 +308,7 @@ describe("calendar notes and join links", () => {
     const calls: Call[] = [];
     const result = await syncCalendar(owner, { fetchImpl: graphStub(() => pages, calls), now });
     assert.equal(result.error, undefined);
-    assert.equal(result.saved, 7);
+    assert.equal(result.saved, 10);
     const view = calls.find((call) => !isCalendarList(call.url))!;
     assert.match(new URL(view.url).searchParams.get("$select") ?? "", /\bbody\b/);
     assert.match((view.init?.headers as Record<string, string>).prefer, /outlook\.body-content-type="text"/);
@@ -340,6 +352,8 @@ describe("calendar notes and join links", () => {
     assert.equal(internalItem.notes, "Team stand-up notes");
     assert.equal(internalItem.descriptionFromOutside, false);
     assert.equal(items.find((item) => item.subject === "Meeting bare")!.descriptionFromOutside, false);
+    assert.equal(items.find((item) => item.subject === "Meeting orphan")!.descriptionFromOutside, true);
+    assert.equal(items.find((item) => item.subject === "Meeting legacy")!.descriptionFromOutside, true);
 
     for (const member of [guest, bystander]) {
       const notes = await queryAsUser<{ count: number }>(member.userId, "select count(*)::int as count from crm.calendar_event_notes");
@@ -358,6 +372,18 @@ describe("calendar notes and join links", () => {
     await saveOtherEmails(bystander, ["cara@client-notes.test", "guest@orbit-notes.test"]);
     const claimed = await queryAsUser<{ count: number }>(bystander.userId, "select count(*)::int as count from crm.calendar_event_links");
     assert.equal(claimed[0].count, 0);
+    const connectAccount = (email: string) =>
+      getAdminPool().query(
+        "insert into crm.calendar_accounts (workspace_id, user_id, provider, email, status, refresh_token) values ($1, $2, 'microsoft', $3, 'connected', 'token')",
+        [owner.workspaceId, bystander.userId, email],
+      );
+    await connectAccount("cara@client-notes.test");
+    const spoofed = await queryAsUser<{ join_url: string }>(bystander.userId, "select join_url from crm.calendar_event_links");
+    assert.deepEqual(spoofed, []);
+    await connectAccount("rooms@orbit-notes.test");
+    const sameDomain = await queryAsUser<{ join_url: string }>(bystander.userId, "select join_url from crm.calendar_event_links");
+    assert.deepEqual(sameDomain.map((row) => row.join_url), ["https://whereby.com/orbit-notes-team"]);
+    await getAdminPool().query("delete from crm.calendar_accounts where user_id = $1", [bystander.userId]);
     const changed = await queryAsUser(guest.userId, "update crm.calendar_event_links set join_url = 'https://evil.example/x' returning event_id");
     assert.deepEqual(changed, []);
     const removed = await queryAsUser(guest.userId, "delete from crm.calendar_event_links returning event_id");

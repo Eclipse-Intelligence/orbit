@@ -30,12 +30,19 @@ export const OUTSIDE_TOOLS: ReadonlySet<string> = new Set([
   "read_chat_file",
 ]);
 
+function flaggedOutside(value: unknown, depth: number): boolean {
+  if (depth > 8 || !value || typeof value !== "object") return false;
+  if (Array.isArray(value)) return value.some((item) => flaggedOutside(item, depth + 1));
+  const record = value as Record<string, unknown>;
+  if (record.descriptionFromOutside === true) return true;
+  return Object.values(record).some((item) => flaggedOutside(item, depth + 1));
+}
+
 function outsideDescription(content: string) {
   try {
-    const parsed = JSON.parse(content) as { events?: unknown };
-    return Array.isArray(parsed.events) && parsed.events.some((event) => (event as { descriptionFromOutside?: unknown } | null)?.descriptionFromOutside === true);
+    return flaggedOutside(JSON.parse(content), 0);
   } catch {
-    return false;
+    return true;
   }
 }
 

@@ -46,25 +46,32 @@ create table if not exists crm.calendar_event_links (
 
 create index if not exists calendar_event_links_user_idx on crm.calendar_event_links (user_id);
 
-create or replace function private.proven_addresses(p_user uuid)
+drop function if exists private.proven_addresses(uuid);
+
+create or replace function private.proven_addresses(p_user uuid, p_workspace uuid)
 returns setof text
 language sql
 stable
 security definer
 set search_path = ''
 as $$
-  select distinct lower(btrim(address))
-  from (
-    select p.email as address from crm.profiles p where p.id = p_user
-    union all
-    select c.email from crm.mailbox_connections c where c.user_id = p_user
-    union all
-    select a.email from crm.calendar_accounts a where a.user_id = p_user
-  ) found
-  where address is not null and btrim(address) <> '';
+  with login_domains as (
+    select distinct split_part(lower(btrim(p.email)), '@', 2) as domain
+    from crm.workspace_members m
+    join crm.profiles p on p.id = m.user_id
+    where m.workspace_id = p_workspace and p.email like '%_@_%'
+  ), connected as (
+    select lower(btrim(c.email)) as address from crm.mailbox_connections c where c.user_id = p_user
+    union
+    select lower(btrim(a.email)) from crm.calendar_accounts a where a.user_id = p_user
+  )
+  select lower(btrim(p.email)) from crm.profiles p where p.id = p_user and p.email like '%_@_%'
+  union
+  select address from connected
+  where address like '%_@_%' and split_part(address, '@', 2) in (select domain from login_domains);
 $$;
 
-revoke all on function private.proven_addresses(uuid) from public;
+revoke all on function private.proven_addresses(uuid, uuid) from public;
 
 create or replace function private.workspace_member_addresses(p_workspace uuid)
 returns setof text
@@ -75,7 +82,7 @@ set search_path = ''
 as $$
   select distinct address
   from crm.workspace_members m
-  cross join lateral private.proven_addresses(m.user_id) as address
+  cross join lateral private.proven_addresses(m.user_id, p_workspace) as address
   where m.workspace_id = p_workspace;
 $$;
 
@@ -96,7 +103,7 @@ as $$
     and l.user_id <> (select private.session_user_id())
     and exists (
       select 1
-      from private.proven_addresses((select private.session_user_id())) as mine(email)
+      from private.proven_addresses((select private.session_user_id()), l.workspace_id) as mine(email)
       where lower(e.organizer ->> 'email') = mine.email
         or e.attendees @> jsonb_build_array(jsonb_build_object('email', mine.email))
     );
