@@ -59,11 +59,7 @@ export default function ConnectChromeForm({
     return (
       <div role="status" className="border-sidebar-border bg-sidebar-accent flex flex-col gap-2 rounded-xl border p-5">
         <h2>{done === "approved" ? "Connected" : "Cancelled"}</h2>
-        <p className="text-subtle">
-          {done === "approved"
-            ? "Go back to LinkedIn. The extension finishes connecting by itself, and you can close this tab."
-            : "Nothing was connected. You can close this tab."}
-        </p>
+        {done === "approved" && <p className="text-subtle">Go back to LinkedIn. You can close this tab.</p>}
       </div>
     );
   }
@@ -97,7 +93,7 @@ export default function ConnectChromeForm({
           }}
         />
         <span id={`${codeId}-hint`} className="caption-style text-subtle">
-          Only approve a code you see in your own browser&apos;s Orbit panel right now.
+          Only approve a code showing in your own browser now.
         </span>
       </div>
       <div className="flex flex-col gap-2">

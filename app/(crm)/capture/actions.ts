@@ -114,7 +114,7 @@ type ConversationActionState = { error?: string; ok?: boolean };
 
 export async function closeFollowUpAction(id: string, state: "used" | "dismissed"): Promise<ConversationActionState> {
   const user = await getUserActor();
-  if (!user) return { error: "Sign in to change follow-ups." };
+  if (!user) return { error: "Sign in again." };
   try {
     await closeFollowUp(user, id, state === "used" ? "used" : "dismissed");
   } catch (error) {
@@ -126,7 +126,7 @@ export async function closeFollowUpAction(id: string, state: "used" | "dismissed
 
 export async function prepareAttachmentAction(file: { name: string; size: number; contentType: string }): Promise<{ attachment?: PreparedAttachment; error?: string }> {
   const user = await getUserActor();
-  if (!user) return { error: "Sign in to attach files." };
+  if (!user) return { error: "Sign in again." };
   try {
     return { attachment: await prepareAttachment(user, file) };
   } catch (error) {
@@ -136,7 +136,7 @@ export async function prepareAttachmentAction(file: { name: string; size: number
 
 export async function saveSignatureAction(senderEmail: string, body: string): Promise<{ signature?: string | null; error?: string }> {
   const user = await getUserActor();
-  if (!user) return { error: "Sign in to change your signature." };
+  if (!user) return { error: "Sign in again." };
   try {
     return { signature: await saveSignature(user, senderEmail, body) };
   } catch (error) {
@@ -168,7 +168,7 @@ export async function sendContactEmailAction(
   },
 ) {
   const user = await getUserActor();
-  if (!user) return { error: "Sign in to send mail." };
+  if (!user) return { error: "Sign in again." };
   let warning: string | null;
   try {
     ({ warning } = await sendContactEmail(user, contactId, email));

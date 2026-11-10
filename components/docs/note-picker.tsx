@@ -34,7 +34,7 @@ type Option =
   | { type: "tag"; path: string; count: number }
   | { type: "record"; record: RecordRef };
 
-const RECORD_LABELS: Record<RecordRef["kind"], string> = { contact: "Person", company: "Company", task: "Task", opportunity: "Opportunity", proposal: "Proposal" };
+const RECORD_LABELS: Record<RecordRef["kind"], string> = { contact: "Contact", company: "Company", task: "Task", opportunity: "Opportunity", proposal: "Proposal" };
 
 function flatten(tags: TagNode[]): TagNode[] {
   return tags.flatMap((tag) => [tag, ...flatten(tag.children)]);
@@ -263,7 +263,7 @@ const NotePicker = forwardRef<PickerHandle, { view: EditorView; trigger: ActiveT
       detail: (
         <>
           {target.shared && <UsersIcon aria-hidden className="size-3 shrink-0 text-(--tag-blue-text)/80" />}
-          {[target.folderName ?? "No folder", edited].filter(Boolean).join(" · ")}
+          {[target.folderName ?? "Top level", edited].filter(Boolean).join(" · ")}
         </>
       ),
     };

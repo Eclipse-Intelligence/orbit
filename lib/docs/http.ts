@@ -46,7 +46,7 @@ import { MENTION_KINDS, type MentionKind } from "@/lib/mentions";
 
 const PROVENANCE: Provenance = { operation: "docs.app" };
 const SORTS: PageSort[] = ["edited", "created", "title"];
-const NOT_FOUND = "That note doesn't exist any more, or it's private to someone else.";
+const NOT_FOUND = "That note doesn't exist, or it's private to someone else.";
 const BODY_MAX = 8_000_000;
 const LIVE_TOO_LARGE = "This change is too big to send live. Orbit will save the note the usual way instead.";
 
@@ -89,7 +89,7 @@ async function limitedText(request: Request, limit: number, tooLarge: () => CrmE
 }
 
 function tooLargeBody() {
-  return new CrmError("too_large", "That request was too big for Docs. Split the note into smaller notes and try again.", 413);
+  return new CrmError("too_large", "That note is too big to save. Split it into smaller notes.", 413);
 }
 
 function tooLargeLive() {
@@ -112,7 +112,7 @@ function liveBytes(value: unknown, limit: number) {
   const bytes = decodeBytes(value);
   if (bytes && bytes.length > limit) throw tooLargeLive();
   if (value !== undefined && value !== null && value !== "" && !bytes) {
-    throw new CrmError("live_invalid", "That change couldn't be read, so it wasn't saved. Reload the note and try again.", 400);
+    throw new CrmError("live_invalid", "That change wasn't saved. Reload the note and try again.", 400);
   }
   return bytes;
 }
@@ -220,7 +220,7 @@ export const docsWrites = {
 };
 
 export async function docsRespond(actor: UserActor | null, run: (actor: UserActor) => Promise<unknown>): Promise<Response> {
-  if (!actor) return Response.json({ error: "Your session ended. Sign in again to keep working on Docs." }, { status: 401 });
+  if (!actor) return Response.json({ error: "Your session ended. Sign in again." }, { status: 401 });
   try {
     const result = await run(actor);
     if (result instanceof Response) return result;
@@ -233,7 +233,7 @@ export async function docsRespond(actor: UserActor | null, run: (actor: UserActo
 }
 
 export async function docsAction<T>(actor: UserActor | null, run: (actor: UserActor) => Promise<T>): Promise<DocsActionResult<T>> {
-  if (!actor) return { error: "Your session ended. Sign in again to keep working on Docs." };
+  if (!actor) return { error: "Your session ended. Sign in again." };
   try {
     return { data: await run(actor) };
   } catch (error) {

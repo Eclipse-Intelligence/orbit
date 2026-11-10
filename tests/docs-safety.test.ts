@@ -68,7 +68,7 @@ after(async () => {
 describe("edit without asking", () => {
   it("only lets the owner switch it on, and only honours it for the owner", async () => {
     const shared = await createDoc(mark, { title: "Mark's shared plan", content: "Plan", shared: true });
-    await assert.rejects(setAssistantCanEdit(priya, shared.id, true), /Only Mark Ridgeon can let the assistant edit this doc without asking/);
+    await assert.rejects(setAssistantCanEdit(priya, shared.id, true), /Only Mark Ridgeon can let the assistant edit this note without asking/);
     assert.equal(await assistantMayEdit(mark, shared.id), false);
     await assert.rejects(
       queryAsUser(priya.userId, "update crm.pages set assistant_can_edit = true where id = $1", [shared.id]),

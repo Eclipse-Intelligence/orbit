@@ -47,7 +47,7 @@ const ACTIVITY_POLL_MS = 20_000;
 const ACTIVITY_POLL_LIVE_MS = 45_000;
 const WRITING_LINGER_MS = 3_000;
 const WRITING_MAX_MS = 60_000;
-const OFFLINE = "Docs couldn't reach Orbit. Check your connection and try again.";
+const OFFLINE = "Couldn't reach Orbit. Check your connection.";
 
 async function failure(response: Response) {
   const payload = (await response.json().catch(() => null)) as { error?: string; code?: string; details?: Record<string, unknown> | null } | null;

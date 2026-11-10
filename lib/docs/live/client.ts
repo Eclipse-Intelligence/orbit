@@ -67,9 +67,9 @@ const SUMMARY_EVERY_MS = 400;
 const DRAFT_EVERY_MS = 800;
 const DRAFT_MAX_BYTES = 750_000;
 const EMPTY_UPDATE = new Uint8Array([0, 0]);
-export const UNAVAILABLE = "This note isn't available. It may have been archived, or it isn't shared with you.";
+export const UNAVAILABLE = "That note doesn't exist, or it's private to someone else.";
 const SIGNED_OUT = "Your session ended. Sign in again.";
-const UNREACHABLE = "Docs couldn't reach Orbit.";
+const UNREACHABLE = "Couldn't reach Orbit.";
 const NOT_KEPT = "Not kept on this device. Keep this tab open until it saves.";
 const WILL_SYNC = "Offline, changes will sync";
 

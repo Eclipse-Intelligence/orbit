@@ -238,7 +238,7 @@ export function LoadMore({ list, sort, loaded }: { list: PageFilter; sort: PageS
   return (
     <div className="flex flex-col items-start gap-2 px-3 py-3">
       <Button variant="secondary" size="sm" disabled={status === "loading"} onClick={() => void more()}>
-        {status === "loading" ? "Loading" : "Load more"}
+        {status === "loading" ? "Loading…" : "Load more"}
       </Button>
       {status === "failed" && (
         <p role="alert" className="caption-style text-danger">

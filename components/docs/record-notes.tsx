@@ -121,7 +121,7 @@ function Body({ list, failed, now, compact }: { list: SearchHit[] | null; failed
   if (list === null) {
     return (
       <p role="status" className="caption-style text-subtle">
-        Loading notes
+        Loading…
       </p>
     );
   }
@@ -132,7 +132,7 @@ function Body({ list, failed, now, compact }: { list: SearchHit[] | null; failed
       </p>
     );
   }
-  if (list.length === 0) return <p className="caption-style text-subtle">No notes yet.</p>;
+  if (list.length === 0) return <p className="caption-style text-subtle">No notes</p>;
   return <NoteList list={list} now={now} compact={compact} />;
 }
 

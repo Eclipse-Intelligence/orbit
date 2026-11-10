@@ -4,7 +4,7 @@ import { commitNow, useDocsStore } from "@/stores/docs-store";
 
 export const RENAME_SETTLE_MS = 800;
 export const TITLE_FORBIDDEN = /[#[\]|]/g;
-export const TITLE_RULE = "A title can't contain #, [, ] or |, because links use them.";
+export const TITLE_RULE = "A title can't contain #, [, ] or |.";
 const IDLE_WAIT_MS = 10_000;
 const IDLE_POLL_MS = 150;
 

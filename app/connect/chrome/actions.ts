@@ -6,7 +6,7 @@ import { decidePairing } from "@/lib/extension/pairing";
 
 export async function decideExtensionAction(input: { code: string; name?: string; workspaceIds?: string[]; approve: boolean }): Promise<{ error?: string; status?: string }> {
   const user = await getUserActor();
-  if (!user) return { error: "Sign in to Orbit first." };
+  if (!user) return { error: "Sign in again." };
   try {
     return { status: await decidePairing(user, input) };
   } catch (error) {

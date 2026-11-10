@@ -15,11 +15,11 @@ const field =
   "bg-card text-foreground placeholder:text-faint h-11 w-full rounded-xl px-3.5 text-[15px] shadow-[0_0_0_1px_var(--input)] outline-none focus-visible:shadow-[0_0_0_2px_var(--ring)]";
 
 const NOTICES: Partial<Record<PublicState, { title: string; body: string }>> = {
-  updating: { title: "Being updated", body: "The sender is making changes. Check back shortly to read and sign the new version." },
-  declined: { title: "Declined", body: "This was declined. If that was a mistake, reply to the email you were sent." },
-  withdrawn: { title: "Withdrawn", body: "The sender has withdrawn this. Reply to the email you were sent if you have questions." },
-  replaced: { title: "There's a newer version", body: "This version was replaced. Use the latest link you were sent." },
-  expired: { title: "This has expired", body: "It's past its valid-until date. Ask the sender for a new one." },
+  updating: { title: "Being updated", body: "The sender is making changes. Check back shortly." },
+  declined: { title: "Declined", body: "If that was a mistake, reply to the email you were sent." },
+  withdrawn: { title: "Withdrawn", body: "Reply to the email you were sent if you have questions." },
+  replaced: { title: "There's a newer version", body: "Use the latest link you were sent." },
+  expired: { title: "This has expired", body: "Ask the sender for a new one." },
 };
 
 export default function ProposalPage({ token, initial, preview }: { token: string; initial: PublicDocument; preview: boolean }) {
@@ -134,7 +134,7 @@ export default function ProposalPage({ token, initial, preview }: { token: strin
 
       {preview && (
         <p role="status" className="bg-[var(--tag-amber-bg)] px-5 py-2 text-center text-[13px] text-[var(--tag-amber-text)]">
-          You&apos;re signed in to Orbit, so this visit isn&apos;t counted and signing is off.
+          Preview. This visit isn&apos;t counted and signing is off.
         </p>
       )}
 
@@ -232,7 +232,7 @@ export default function ProposalPage({ token, initial, preview }: { token: strin
             <div className="bg-card flex flex-col gap-4 rounded-2xl p-5 shadow-[0_0_0_1px_rgba(0,0,0,0.06)] sm:p-7">
               <label className="flex flex-col gap-1.5">
                 <span className="text-[15px] font-semibold">Decline this {label}</span>
-                <span className="text-soft text-[14px]">Optional: tell {content.sender.name} why, so they can follow up.</span>
+                <span className="text-soft text-[14px]">Optional: tell {content.sender.name} why.</span>
                 <textarea
                   className={cn(field, "h-auto min-h-28 py-3")}
                   value={reason}
@@ -262,7 +262,7 @@ export default function ProposalPage({ token, initial, preview }: { token: strin
           )}
           {doc.state === "completed" && (
             <div role="status" className="bg-card flex flex-col items-start gap-3 rounded-2xl p-5 shadow-[0_0_0_1px_rgba(0,0,0,0.06)]">
-              <p className="doc-body">Signed by both sides. Keep a copy for your records.</p>
+              <p className="doc-body">Signed by both sides.</p>
               {doc.hasExecuted && (
                 <Button variant="primary" href={`/api/p/${token}/pdf?kind=signed`} style={{ backgroundColor: content.accent, color: accentText(content.accent) }}>
                   Download signed PDF

@@ -276,7 +276,7 @@ export async function clientSign(
     {
       key: `doc-signed:${signed.row.id}:${signed.versionId}`,
       title: `${name} signed ${signed.row.title}`,
-      body: `${signed.row.company_name}. Countersign it in Orbit to complete it.`,
+      body: `${signed.row.company_name}. Ready to countersign.`,
       href: documentHref(signed.row.id),
     },
     meta.push,

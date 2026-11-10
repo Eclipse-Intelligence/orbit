@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import Button from "@/components/_ui/button";
 import ConfirmDialog from "@/components/_ui/confirm-dialog";
 import { Dialog, DialogClose, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/_ui/dialog";
@@ -9,7 +9,8 @@ import { useDocsNavigate } from "@/components/docs/use-docs";
 import { listHref } from "@/lib/docs/routes";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/_ui/dropdown-menu";
 import { archiveFolder, canPlaceAtTop, descendantsOf, placeableFolders } from "@/components/docs/docs-manage";
-import { othersMoveText, useFolderSharing } from "@/components/docs/share-control";
+import { Popover, PopoverAnchor, PopoverContent } from "@/components/_ui/popover";
+import { FolderSharePanel, SHARE_POPOVER_CLASS } from "@/components/docs/share-control";
 import type { Folder } from "@/lib/docs/client-types";
 import { useDocsStore } from "@/stores/docs-store";
 import { cn } from "@/lib/utils";
@@ -18,8 +19,6 @@ import ChevronLeftIcon from "@/public/assets/images/_common/chevron-left.svg";
 import ChevronRightIcon from "@/public/assets/images/_common/chevron-right.svg";
 import MoreIcon from "@/public/assets/images/_common/more.svg";
 import FolderIcon from "@/public/assets/images/mail/folder.svg";
-
-type Confirm = "share" | "private" | "archive" | null;
 
 export default function FolderMenu({
   folder,
@@ -47,30 +46,23 @@ export default function FolderMenu({
   phone?: boolean;
 }) {
   const moveFolder = useDocsStore((state) => state.moveFolder);
-  const share = useDocsStore((state) => state.share);
-  const notify = useDocsStore((state) => state.notify);
   const [view, setView] = useState<"menu" | "move">("menu");
-  const [confirm, setConfirm] = useState<Confirm>(null);
+  const [archiving, setArchiving] = useState(false);
+  const [sharing, setSharing] = useState(false);
+  const shareNext = useRef(false);
   const owned = folder.owner.id === viewerId;
   const ownShared = folder.visibility === "shared";
   const placement = { ownerId: folder.owner.id, ownShared, viewerId, exclude: descendantsOf(folders, folder.id) };
   const targets = placeableFolders(folders, placement);
   const atTop = canPlaceAtTop(placement);
-  const counts = useFolderSharing(folder.id, confirm === "private", folder.visibility);
-  const othersInside = counts?.ownedByOthers ?? 0;
   const siblingsOf = (parentId: string | null) => folders.filter((item) => item.parentId === parentId && item.id !== folder.id).length;
 
   function later(action: () => void) {
     window.setTimeout(action, 0);
   }
 
-  async function changeSharing(visibility: "shared" | "private") {
-    const problem = await share({ kind: "folder", id: folder.id }, visibility);
-    if (problem) notify(problem, { tone: "alert" });
-  }
-
   return (
-    <>
+    <Popover open={sharing} onOpenChange={setSharing}>
       <DropdownMenu
         open={open}
         onOpenChange={(next) => {
@@ -78,19 +70,30 @@ export default function FolderMenu({
           if (!next) setView("menu");
         }}
       >
-        <DropdownMenuTrigger asChild>
-          <Button
-            variant={phone ? "secondary" : "ghost"}
-            size={phone ? "icon" : "icon-sm"}
-            tabIndex={phone ? undefined : -1}
-            aria-label={`${folder.name} options`}
-            title="Folder options"
-            className={cn(!phone && "size-5 rounded-md", className)}
-          >
-            <MoreIcon aria-hidden className={phone ? "size-3.5" : "size-3"} />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align={phone ? "end" : "start"} className="w-56">
+        <PopoverAnchor asChild>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant={phone ? "secondary" : "ghost"}
+              size={phone ? "icon" : "icon-sm"}
+              tabIndex={phone ? undefined : -1}
+              aria-label={`${folder.name} options`}
+              title="Folder options"
+              className={cn(!phone && "size-5 rounded-md", className)}
+            >
+              <MoreIcon aria-hidden className={phone ? "size-3.5" : "size-3"} />
+            </Button>
+          </DropdownMenuTrigger>
+        </PopoverAnchor>
+        <DropdownMenuContent
+          align={phone ? "end" : "start"}
+          className="w-56"
+          onCloseAutoFocus={(event) => {
+            if (!shareNext.current) return;
+            shareNext.current = false;
+            event.preventDefault();
+            setSharing(true);
+          }}
+        >
           {view === "move" ? (
             <>
               <DropdownMenuItem
@@ -117,7 +120,7 @@ export default function FolderMenu({
                   {folder.parentId === target.id && <CheckIcon aria-label="Current place" role="img" className="size-3.5" />}
                 </DropdownMenuItem>
               ))}
-              {!atTop && targets.length === 0 && <DropdownMenuLabel>Nowhere else it can go</DropdownMenuLabel>}
+              {!atTop && targets.length === 0 && <DropdownMenuLabel>No other folders</DropdownMenuLabel>}
             </>
           ) : (
             <>
@@ -134,38 +137,23 @@ export default function FolderMenu({
                 <span className="flex-1">Move to</span>
                 <ChevronRightIcon aria-hidden className="text-subtle size-3" />
               </DropdownMenuItem>
-              {owned && <DropdownMenuItem onSelect={() => later(() => setConfirm(ownShared ? "private" : "share"))}>{ownShared ? "Make private" : "Share with workspace"}</DropdownMenuItem>}
+              {owned && <DropdownMenuItem onSelect={() => (shareNext.current = true)}>Share</DropdownMenuItem>}
               <DropdownMenuSeparator />
-              <DropdownMenuItem className="text-danger" onSelect={() => later(() => setConfirm("archive"))}>
+              <DropdownMenuItem className="text-danger" onSelect={() => later(() => setArchiving(true))}>
                 Archive
               </DropdownMenuItem>
             </>
           )}
         </DropdownMenuContent>
       </DropdownMenu>
+      <PopoverContent align={phone ? "end" : "start"} side={phone ? "bottom" : "right"} sideOffset={10} className={SHARE_POPOVER_CLASS}>
+        <FolderSharePanel folder={folder} open={sharing} />
+      </PopoverContent>
       <ConfirmDialog
-        open={confirm === "share"}
-        onOpenChange={(next) => !next && setConfirm(null)}
-        tone="neutral"
-        title={`Share ${folder.name}?`}
-        description="Everyone in the workspace can find, read and edit its notes, including notes added later. The assistant and MCP agents follow the same rule."
-        confirmLabel="Share"
-        onConfirm={() => void changeSharing("shared")}
-      />
-      <ConfirmDialog
-        open={confirm === "private"}
-        onOpenChange={(next) => !next && setConfirm(null)}
-        tone="neutral"
-        title={`Make ${folder.name} private?`}
-        description={`Teammates and agents lose access to its notes, except notes and folders inside it that are shared on their own.${othersInside > 0 ? ` ${othersMoveText(othersInside)}` : ""}`}
-        confirmLabel="Make private"
-        onConfirm={() => void changeSharing("private")}
-      />
-      <ConfirmDialog
-        open={confirm === "archive"}
-        onOpenChange={(next) => !next && setConfirm(null)}
+        open={archiving}
+        onOpenChange={setArchiving}
         title={`Archive ${folder.name}?`}
-        description="It goes to Archived with every note and folder inside it, for everyone who can see it. You can restore it from Archived."
+        description="Archives every note and folder inside it, for everyone. Restore it from Archived."
         confirmLabel="Archive"
         onConfirm={() =>
           void archiveFolder(folder).then((done) => {
@@ -173,7 +161,7 @@ export default function FolderMenu({
           })
         }
       />
-    </>
+    </Popover>
   );
 }
 
