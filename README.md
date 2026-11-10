@@ -54,8 +54,8 @@ Settings › Team lists everyone in the current workspace. The owner and admins 
 | Role | Can |
 | --- | --- |
 | Owner | Everything. Can't be removed or demoted, and is the only one who can make admins or change roles. |
-| Admin | Everything except changing roles and removing the owner. Invites members, removes members, manages workspace settings (ClickUp, enrichment, webhooks). |
-| Member | Uses everything (companies, contacts, deals, boards, tasks, Mail, Capture, Calendar, the assistant, workflows) with their own Microsoft, calendar, Granola and AI connections. Can't change workspace settings or manage people. |
+| Admin | Also workspace settings (Brand, AI fields, Tools) and managing members. Only the owner changes roles or invites and removes admins. |
+| Member | Everything except Brand, AI fields, Tools, managing people and changing what others logged. Uses companies, contacts, opportunities, boards, tasks, Mail, Capture, Calendar, the assistant and workflows with their own Microsoft, calendar, Granola and AI connections. |
 
 What is shared and what is private:
 

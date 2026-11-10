@@ -80,7 +80,7 @@ export default function WebhooksSettings({
   }
 
   return (
-    <SettingsCard id="webhooks" title="Webhooks">
+    <SettingsCard id="webhooks" title="Webhooks" description="Retries for about three hours.">
       {endpoints.length === 0 ? (
         <p className="caption-style text-subtle">No webhooks</p>
       ) : (

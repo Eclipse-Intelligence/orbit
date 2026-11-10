@@ -233,7 +233,7 @@ export default function EnrichmentSettingsCard({
         {!logoLinkReady && (
           <div className="flex flex-wrap items-center justify-between gap-3">
             <span className="text-foreground text-[13.5px] leading-5">Logos in lists</span>
-            <Status on={false}>Add NEXT_PUBLIC_CONTEXT_LOGO_CLIENT_ID in Vercel (context.dev › Logo Link)</Status>
+            <Status on={false}>Add NEXT_PUBLIC_CONTEXT_LOGO_CLIENT_ID in Vercel (context.dev › Logo Link, restricted to orbit.geteclipse.co)</Status>
           </div>
         )}
         {error && <p className="caption-style text-danger leading-[1.4]">{error}</p>}

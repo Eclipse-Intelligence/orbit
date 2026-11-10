@@ -14,7 +14,7 @@ export type MoveKind = "company" | "contact";
 
 const MATCHING = "";
 
-const PREVIEW_FAILED = "Couldn't check what moves.";
+const PREVIEW_FAILED = "Couldn't check what moves. Try again.";
 
 const MOVE_FAILED = "Couldn't move. Try again.";
 

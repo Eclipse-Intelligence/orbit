@@ -56,7 +56,7 @@ export default function TeamSettings({
     const result = await inviteAction({ email, role, send: send && mailboxConnected }).catch(() => ({ error: GENERIC_ERROR, link: undefined, email: undefined, sent: undefined, sendError: undefined }));
     setPending(false);
     if (result.error || !result.link || !result.email) {
-      setError(result.error ?? "Couldn't create the invite.");
+      setError(result.error ?? "Couldn't create the invite. Try again.");
       return;
     }
     setSent({ link: result.link, email: result.email, sent: Boolean(result.sent), sendError: result.sendError });
@@ -74,10 +74,13 @@ export default function TeamSettings({
     router.refresh();
   }
 
-
   return (
     <>
-      <SettingsCard id="people" title="People">
+      <SettingsCard
+        id="people"
+        title="People"
+        description="Records and activity are shared. Inboxes and calendars are private. Tasks are seen by the person they're assigned to, whoever made them, and the owner and admins."
+      >
         {error && (
           <p role="alert" className="caption-style text-danger">
             {error}
@@ -205,7 +208,13 @@ export default function TeamSettings({
                     >
                       Invite again
                     </Button>
-                    <Button variant="ghost" size="sm" className="text-danger" onClick={() => void run(() => revokeInviteAction(item.id))}>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-danger"
+                      aria-label={`Cancel invite to ${item.email}`}
+                      onClick={() => void run(() => revokeInviteAction(item.id))}
+                    >
                       Cancel
                     </Button>
                   </li>
@@ -215,12 +224,9 @@ export default function TeamSettings({
           )}
           <SettingsDisclosure title="Roles">
             <ul className="caption-style text-subtle flex list-disc flex-col gap-1.5 pl-4 leading-[1.4]">
-              <li>Member: everything except workspace settings, managing people and changing what others logged.</li>
-              <li>Admin: everything except changing roles or inviting and removing admins. Nobody can remove the owner.</li>
-              <li>
-                Records and activity are shared. Inboxes and calendars are private. Tasks are seen by the person they&apos;re assigned to, whoever
-                made them, and the owner and admins.
-              </li>
+              <li>Member: everything except Brand, AI fields, Tools, managing people and changing what others logged.</li>
+              <li>Admin: also workspace settings and managing members. Only the owner changes roles or invites and removes admins.</li>
+              <li>Nobody can remove or demote the owner.</li>
             </ul>
           </SettingsDisclosure>
         </SettingsCard>

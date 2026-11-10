@@ -762,6 +762,7 @@ export default function OpportunitiesScreen({
             {settingsOpen && (
               <BoardSettings
                 board={{ ...board, stages: ordered }}
+                count={total}
                 onClose={() => setSettingsOpen(false)}
               />
             )}

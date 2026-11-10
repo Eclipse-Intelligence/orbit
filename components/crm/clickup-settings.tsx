@@ -80,9 +80,12 @@ export default function ClickUpSettings({
           </span>
           {view.shared.map((item) => (
             <span key={item.workspaceId} className="text-subtle">
-              {`${item.workspaceName} also watches ${item.listNames.join(", ")}.`}
+              {`${item.workspaceName} also watches ${item.listNames.join(", ")}. Tasks in a list both workspaces watch sync into both.`}
             </span>
           ))}
+          {view.teamId && !view.webhookEnabled && !httpsSite && (
+            <span className="text-subtle">Instant sync needs SITE_URL set to Orbit&apos;s https address.</span>
+          )}
           {(view.error || view.lastError) && (
             <span className="text-danger" role="alert">
               {view.error ?? view.lastError}
@@ -93,20 +96,15 @@ export default function ClickUpSettings({
       action={
         view.teamId && (
           <>
-            <span
-              className="flex items-center gap-2"
-              title={!view.webhookEnabled && !httpsSite ? "Set SITE_URL to Orbit's https address first." : undefined}
-            >
-              <span className="caption-style text-subtle" aria-hidden>
-                Instant sync
-              </span>
+            <label className="flex items-center gap-2">
+              <span className="caption-style text-subtle">Instant sync</span>
               <Switch
                 checked={view.webhookEnabled}
                 label="Instant sync"
                 disabled={!canAdmin || pending !== null || (!view.webhookEnabled && !httpsSite)}
                 onChange={(on) => run(on ? enableClickUpWebhookAction : disableClickUpWebhookAction)}
               />
-            </span>
+            </label>
             <Button
               variant="secondary"
               size="sm"

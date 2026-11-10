@@ -17,9 +17,11 @@ type StageRow = { key: string; id?: string; name: string };
 
 export default function BoardSettings({
   board,
+  count,
   onClose,
 }: {
   board: Board;
+  count: number;
   onClose: () => void;
 }) {
   const router = useRouter();
@@ -162,9 +164,11 @@ export default function BoardSettings({
           <HoldButton disabled={pending} onConfirm={() => void remove()}>
             Hold to delete
           </HoldButton>
-          <p className="caption-style text-subtle mt-2">
-            Its companies are not deleted.
-          </p>
+          {count > 0 && (
+            <p className="caption-style text-subtle mt-2">
+              {`Takes its ${count === 1 ? "1 company" : `${count} companies`} off. They are not deleted.`}
+            </p>
+          )}
         </div>
       </div>
       <SheetFooter>

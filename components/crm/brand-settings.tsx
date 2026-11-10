@@ -27,7 +27,7 @@ function same(left: FormValues, right: FormValues) {
   return (Object.keys(left) as Key[]).every((key) => left[key].trim() === right[key].trim());
 }
 
-export default function BrandSettings({ brand, canEdit, learned }: { brand: BrandProfile; canEdit: boolean; learned: string | null }) {
+export default function BrandSettings({ brand, canEdit, learned, multi }: { brand: BrandProfile; canEdit: boolean; learned: string | null; multi: boolean }) {
   const router = useRouter();
   const [saved, setSaved] = useState(() => profileOf(brand));
   const [values, setValues] = useState(() => profileOf(brand));
@@ -133,7 +133,7 @@ export default function BrandSettings({ brand, canEdit, learned }: { brand: Bran
 
   return (
     <>
-      <SettingsCard id="brand-profile" title="Brand profile">
+      <SettingsCard id="brand-profile" title="Brand profile" description={multi ? `Only in ${brand.workspaceName}.` : undefined}>
         <form className="flex flex-col gap-4" noValidate onSubmit={save}>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
             <Field label="Website" htmlFor="brand-website" error={errors.website} className="flex-1">
@@ -241,7 +241,13 @@ export default function BrandSettings({ brand, canEdit, learned }: { brand: Bran
           {canEdit ? (
             <div className="flex flex-wrap items-center gap-3">
               <Button variant="primary" size="sm" type="submit" disabled={busy || !dirty}>
-                {pending === "save" ? "Saving…" : "Save"}
+                {pending === "save" ? (
+                  "Saving…"
+                ) : (
+                  <>
+                    Save<span className="sr-only"> brand profile</span>
+                  </>
+                )}
               </Button>
               {replace && !busy && (
                 <>
@@ -255,7 +261,7 @@ export default function BrandSettings({ brand, canEdit, learned }: { brand: Bran
               )}
               {dirty && !busy && !replace && (
                 <Button variant="ghost" size="sm" type="button" onClick={() => setValues(saved)}>
-                  Undo
+                  Undo<span className="sr-only"> brand profile changes</span>
                 </Button>
               )}
               <p role="status" className="caption-style text-subtle">

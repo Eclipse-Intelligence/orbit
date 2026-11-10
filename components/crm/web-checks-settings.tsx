@@ -56,7 +56,7 @@ function ShowAsColumn({ check, column, canAdmin, onError }: { check: WebCheck; c
       if ("error" in result) onError(result.error);
       else router.refresh();
     } catch (problem) {
-      if (!reloadIfStaleDeploy(problem)) onError("Couldn't save. Try again.");
+      if (!reloadIfStaleDeploy(problem)) onError("Couldn't add the column. Try again.");
     } finally {
       setBusy(false);
     }
@@ -351,6 +351,7 @@ export default function WebChecksSettings({
         <div className="flex flex-col gap-3">
           <Toggle
             title="Tag new companies"
+            caption="Never removes tags."
             on={current.webTags}
             canAdmin={canAdmin}
             disabled={busy}
@@ -378,7 +379,11 @@ export default function WebChecksSettings({
           {current.webIcp && (
             <span className="caption-style text-subtle">
               <Button variant="link" size="none" href={`${SETTINGS_PATHS.brand}#brand-profile`} className="whitespace-normal">
-                {current.icpText?.trim() ? "Edit Ideal customer in Settings › Brand" : "Add your Ideal customer in Settings › Brand"}
+                {!canAdmin
+                  ? "Ideal customer is in Settings › Brand"
+                  : current.icpText?.trim()
+                    ? "Edit Ideal customer in Settings › Brand"
+                    : "Add your Ideal customer in Settings › Brand"}
               </Button>
             </span>
           )}

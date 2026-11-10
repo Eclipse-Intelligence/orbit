@@ -94,7 +94,7 @@ export function editHint(
     const checks = impact.web > 0 ? `Clears ${web} and rechecks them (${cost}).` : "Rechecks its companies.";
     return `${checks}${kept}`;
   }
-  if (questionChanged && impact.web > 0) return `Rechecks ${web} (${cost}).`;
+  if (questionChanged && impact.web > 0) return `Rechecks ${web} (${cost}). Hand-set answers stay as they are.`;
   return null;
 }
 

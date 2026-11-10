@@ -31,7 +31,7 @@ export default function NewWorkspaceDialog({
       const result = await createWorkspaceAction({ name });
       if (result.error || !result.id) {
         setPending(false);
-        setError(result.error ?? "Couldn't create the workspace.");
+        setError(result.error ?? "Couldn't create the workspace. Try again.");
         return;
       }
       onCreated();

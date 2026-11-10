@@ -14,7 +14,11 @@ function same(left: BrandPlaybookInput, right: BrandPlaybookInput) {
   return left.playbook.trim() === right.playbook.trim() && left.outreachBrief.trim() === right.outreachBrief.trim();
 }
 
-export default function PlaybookSettings({ brand, canEdit }: { brand: BrandProfile; canEdit: boolean }) {
+function shortDate(iso: string) {
+  return new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", timeZone: "Europe/London" }).format(new Date(iso));
+}
+
+export default function PlaybookSettings({ brand, canEdit, multi }: { brand: BrandProfile; canEdit: boolean; multi: boolean }) {
   const router = useRouter();
   const [saved, setSaved] = useState<BrandPlaybookInput>({ playbook: brand.playbook, outreachBrief: brand.outreachBrief });
   const [values, setValues] = useState<BrandPlaybookInput>(saved);
@@ -59,7 +63,13 @@ export default function PlaybookSettings({ brand, canEdit }: { brand: BrandProfi
     <SettingsCard
       id="playbook"
       title="Cold email playbook"
-      description="{{first_name}} and {{booking_url}} are filled in for whoever sends."
+      description={[
+        multi ? `Only in ${brand.workspaceName}.` : "",
+        "{{first_name}} and {{booking_url}} are filled in for whoever sends.",
+        brand.playbookUpdatedAt ? `Edited ${shortDate(brand.playbookUpdatedAt)}.` : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
     >
       <form className="flex flex-col gap-4" noValidate onSubmit={save}>
         <Field
@@ -107,11 +117,17 @@ export default function PlaybookSettings({ brand, canEdit }: { brand: BrandProfi
         {canEdit ? (
           <div className="flex flex-wrap items-center gap-3">
             <Button variant="primary" size="sm" type="submit" disabled={saving || !dirty}>
-              {saving ? "Saving…" : "Save"}
+              {saving ? (
+                "Saving…"
+              ) : (
+                <>
+                  Save<span className="sr-only"> playbook</span>
+                </>
+              )}
             </Button>
             {dirty && !saving && (
               <Button variant="ghost" size="sm" type="button" onClick={() => setValues(saved)}>
-                Undo
+                Undo<span className="sr-only"> playbook changes</span>
               </Button>
             )}
             <p role="status" className="caption-style text-subtle">

@@ -82,6 +82,6 @@ export async function cardContextAction(
     ]);
     return { activities: activities.data, tasks: tasks.data };
   } catch (error) {
-    return { activities: [], tasks: [], ...failure(error, "Couldn't load this company.") };
+    return { activities: [], tasks: [], ...failure(error, "Couldn't load this company. Try again.") };
   }
 }
