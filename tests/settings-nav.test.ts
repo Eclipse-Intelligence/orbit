@@ -109,7 +109,7 @@ describe("old settings addresses", () => {
       [SETTINGS_PATHS.aboutYou]: ["about-you"],
       [SETTINGS_PATHS.aiFields]: ["web-checks"],
       [SETTINGS_PATHS.learning]: ["learning", "notes", "watchlist", "market-notes", "grok"],
-      [SETTINGS_PATHS.tools]: ["clickup", "enrichment", "agent-mailbox", "linear", "agents", "webhooks"],
+      [SETTINGS_PATHS.tools]: ["clickup", "enrichment", "agent-mailbox", "meta-leads", "linear", "agents", "webhooks"],
     };
     for (const [page, ids] of Object.entries(cards)) {
       for (const id of ids) assert.equal(settingsHashTarget(`#${id}`), page, `#${id}`);

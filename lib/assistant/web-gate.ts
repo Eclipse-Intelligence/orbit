@@ -47,10 +47,21 @@ function outsideDescription(content: string) {
 }
 
 export function outsideRead(name: string, content: string) {
-  return OUTSIDE_TOOLS.has(name) || (name === "list_calendar_events" && outsideDescription(content));
+  return OUTSIDE_TOOLS.has(name) || (name === "list_calendar_events" && outsideDescription(content)) || hasOutsideRecord(content);
 }
 
 const PAGE_TOOLS: ReadonlySet<string> = new Set(["read_web_page", "map_website"]);
+
+const OUTSIDE_RECORD = /\\?"source\\?"\s*:\s*\\?"(?:meta_lead_ad|meta lead ad)\\?"/i;
+const OUTSIDE_SOURCE = /^(?:meta_lead_ad|meta lead ad)$/i;
+
+export function isLeadSource(source: unknown) {
+  return typeof source === "string" && OUTSIDE_SOURCE.test(source.trim());
+}
+
+export function hasOutsideRecord(content: string) {
+  return OUTSIDE_RECORD.test(content);
+}
 
 export const WEB_APPROVAL_MARK = "web";
 
@@ -137,7 +148,9 @@ function firstPartyHosts(content: string) {
       for (const item of value) walk(item, depth + 1);
       return;
     }
-    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    const record = value as Record<string, unknown>;
+    if (isLeadSource(record.source)) return;
+    for (const [key, item] of Object.entries(record)) {
       if (typeof item === "string" && FIRST_PARTY_FIELD.test(key)) {
         const host = hostOf(item);
         if (host) hosts.add(host);
